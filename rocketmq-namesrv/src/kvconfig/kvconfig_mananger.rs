@@ -25,12 +25,11 @@ use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::body::kv_table::KVTable;
 use rocketmq_remoting::protocol::RemotingDeserializable;
 use rocketmq_remoting::protocol::RemotingSerializable;
-use rocketmq_rust::ArcMut;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
 
-use crate::bootstrap::NameServerRuntimeInner;
+use crate::bootstrap::NameServerRuntimeHandle;
 use crate::kvconfig::KVConfigSerializeWrapper;
 
 /// Type alias for namespace in the KV configuration
@@ -54,11 +53,13 @@ pub struct KVConfigManager {
     /// Configuration storage: namespace -> (key -> value)
     pub(crate) config_table: Arc<dashmap::DashMap<Namespace, ConfigMap>>,
     /// Runtime inner for accessing configuration
-    pub(crate) name_server_runtime_inner: ArcMut<NameServerRuntimeInner>,
+    pub(crate) name_server_runtime_inner: NameServerRuntimeHandle,
     /// Counter for pending changes since last persistence
     pending_changes: Arc<std::sync::atomic::AtomicUsize>,
     /// Last persistence timestamp
     last_persist_time: Arc<parking_lot::Mutex<Instant>>,
+    /// Serializes file replacement while allowing concurrent table access.
+    persist_lock: parking_lot::Mutex<()>,
 }
 
 impl KVConfigManager {
@@ -71,12 +72,13 @@ impl KVConfigManager {
     /// # Returns
     ///
     /// A new `KVConfigManager` instance.
-    pub(crate) fn new(name_server_runtime_inner: ArcMut<NameServerRuntimeInner>) -> Self {
+    pub(crate) fn new(name_server_runtime_inner: NameServerRuntimeHandle) -> Self {
         Self {
             config_table: Arc::new(dashmap::DashMap::with_capacity(64)),
             name_server_runtime_inner,
             pending_changes: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             last_persist_time: Arc::new(parking_lot::Mutex::new(Instant::now())),
+            persist_lock: parking_lot::Mutex::new(()),
         }
     }
 
@@ -96,7 +98,7 @@ impl KVConfigManager {
     ///
     /// A reference to the Namesrv configuration.
     #[inline]
-    pub fn get_namesrv_config(&self) -> &NamesrvConfig {
+    pub fn get_namesrv_config(&self) -> Arc<NamesrvConfig> {
         self.name_server_runtime_inner.name_server_config()
     }
 
@@ -114,12 +116,9 @@ impl KVConfigManager {
     ///
     /// - `Ok(())` if loading succeeds or file doesn't exist
     /// - `Err(RocketMQError)` if deserialization fails
-    pub fn load(&mut self) -> RocketMQResult<()> {
-        let config_path = self
-            .name_server_runtime_inner
-            .name_server_config()
-            .kv_config_path
-            .as_str();
+    pub fn load(&self) -> RocketMQResult<()> {
+        let namesrv_config = self.name_server_runtime_inner.name_server_config();
+        let config_path = namesrv_config.kv_config_path.as_str();
 
         let content = match FileUtils::file_to_string(config_path) {
             Ok(content) if !content.is_empty() => content,
@@ -163,8 +162,8 @@ impl KVConfigManager {
     ///
     /// - `Ok(())` if update succeeds
     /// - `Err(String)` if update fails (legacy API)
-    pub fn update_namesrv_config(&mut self, updates: HashMap<CheetahString, CheetahString>) -> Result<(), String> {
-        let result = self.name_server_runtime_inner.name_server_config_mut().update(updates);
+    pub fn update_namesrv_config(&self, updates: HashMap<CheetahString, CheetahString>) -> Result<(), String> {
+        let result = self.name_server_runtime_inner.update_name_server_config(updates);
 
         if result.is_ok() {
             debug!("Namesrv configuration updated successfully");
@@ -182,12 +181,10 @@ impl KVConfigManager {
     ///
     /// - `Ok(())` if persistence succeeds
     /// - `Err(RocketMQError)` if serialization or file write fails
-    pub fn persist(&mut self) -> RocketMQResult<()> {
-        let config_path = self
-            .name_server_runtime_inner
-            .name_server_config()
-            .kv_config_path
-            .as_str();
+    pub fn persist(&self) -> RocketMQResult<()> {
+        let _persist_guard = self.persist_lock.lock();
+        let namesrv_config = self.name_server_runtime_inner.name_server_config();
+        let config_path = namesrv_config.kv_config_path.as_str();
 
         // Create a snapshot to minimize lock time
         let snapshot: dashmap::DashMap<Namespace, ConfigMap> = self
@@ -224,7 +221,7 @@ impl KVConfigManager {
     /// - `Ok(true)` if persistence was performed
     /// - `Ok(false)` if persistence was skipped
     /// - `Err(RocketMQError)` if persistence fails
-    pub fn persist_if_needed(&mut self) -> RocketMQResult<bool> {
+    pub fn persist_if_needed(&self) -> RocketMQResult<bool> {
         let pending = self.pending_changes.load(std::sync::atomic::Ordering::Relaxed);
         let elapsed = self.last_persist_time.lock().elapsed();
 
@@ -241,7 +238,7 @@ impl KVConfigManager {
     /// This should be called when shutting down or when immediate
     /// durability is required.
     #[inline]
-    pub fn force_persist(&mut self) -> RocketMQResult<()> {
+    pub fn force_persist(&self) -> RocketMQResult<()> {
         self.persist()
     }
 
@@ -255,7 +252,7 @@ impl KVConfigManager {
     /// * `namespace` - The namespace for the configuration
     /// * `key` - The configuration key
     /// * `value` - The configuration value
-    pub fn put_kv_config(&mut self, namespace: Namespace, key: Key, value: Value) -> RocketMQResult<()> {
+    pub fn put_kv_config(&self, namespace: Namespace, key: Key, value: Value) -> RocketMQResult<()> {
         let is_new = {
             let mut namespace_entry = self.config_table.entry(namespace.clone()).or_default();
             let pre_value = namespace_entry.insert(key.clone(), value.clone());
@@ -296,7 +293,7 @@ impl KVConfigManager {
     ///
     /// - `Ok(true)` if the key was deleted
     /// - `Ok(false)` if the key didn't exist
-    pub fn delete_kv_config(&mut self, namespace: &Namespace, key: &Key) -> RocketMQResult<bool> {
+    pub fn delete_kv_config(&self, namespace: &Namespace, key: &Key) -> RocketMQResult<bool> {
         let deleted_value = self
             .config_table
             .get_mut(namespace)
@@ -333,11 +330,7 @@ impl KVConfigManager {
     /// # Returns
     ///
     /// - `Ok(usize)` - Number of entries updated
-    pub fn batch_put_kv_config(
-        &mut self,
-        namespace: Namespace,
-        kv_pairs: HashMap<Key, Value>,
-    ) -> RocketMQResult<usize> {
+    pub fn batch_put_kv_config(&self, namespace: Namespace, kv_pairs: HashMap<Key, Value>) -> RocketMQResult<usize> {
         if kv_pairs.is_empty() {
             return Ok(0);
         }
@@ -371,7 +364,7 @@ impl KVConfigManager {
     /// # Returns
     ///
     /// - `Ok(usize)` - Number of entries deleted
-    pub fn batch_delete_kv_config(&mut self, namespace: &Namespace, keys: &[Key]) -> RocketMQResult<usize> {
+    pub fn batch_delete_kv_config(&self, namespace: &Namespace, keys: &[Key]) -> RocketMQResult<usize> {
         if keys.is_empty() {
             return Ok(0);
         }
@@ -411,7 +404,7 @@ impl KVConfigManager {
     /// # Returns
     ///
     /// - `Ok(usize)` - Number of keys deleted
-    pub fn delete_namespace(&mut self, namespace: &Namespace) -> RocketMQResult<usize> {
+    pub fn delete_namespace(&self, namespace: &Namespace) -> RocketMQResult<usize> {
         if let Some((_, kv_map)) = self.config_table.remove(namespace) {
             let count = kv_map.len();
 

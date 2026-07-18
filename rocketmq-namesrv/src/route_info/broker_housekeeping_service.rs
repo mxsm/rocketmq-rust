@@ -14,16 +14,15 @@
 
 use rocketmq_remoting::base::channel_event_listener::ChannelEventListener;
 use rocketmq_remoting::net::channel::Channel;
-use rocketmq_rust::ArcMut;
 
-use crate::bootstrap::NameServerRuntimeInner;
+use crate::bootstrap::NameServerRuntimeHandle;
 
 pub struct BrokerHousekeepingService {
-    name_server_runtime_inner: ArcMut<NameServerRuntimeInner>,
+    name_server_runtime_inner: NameServerRuntimeHandle,
 }
 
 impl BrokerHousekeepingService {
-    pub fn new(name_server_runtime_inner: ArcMut<NameServerRuntimeInner>) -> Self {
+    pub(crate) fn new(name_server_runtime_inner: NameServerRuntimeHandle) -> Self {
         Self {
             name_server_runtime_inner,
         }
@@ -38,23 +37,23 @@ impl ChannelEventListener for BrokerHousekeepingService {
 
     #[inline]
     fn on_channel_close(&self, _remote_addr: &str, channel: &Channel) {
-        self.name_server_runtime_inner
-            .route_info_manager()
-            .on_channel_destroy(channel)
+        if let Some(runtime) = self.name_server_runtime_inner.upgrade() {
+            runtime.route_info_manager().on_channel_destroy(channel);
+        }
     }
 
     #[inline]
     fn on_channel_exception(&self, _remote_addr: &str, channel: &Channel) {
-        self.name_server_runtime_inner
-            .route_info_manager()
-            .on_channel_destroy(channel)
+        if let Some(runtime) = self.name_server_runtime_inner.upgrade() {
+            runtime.route_info_manager().on_channel_destroy(channel);
+        }
     }
 
     #[inline]
     fn on_channel_idle(&self, _remote_addr: &str, channel: &Channel) {
-        self.name_server_runtime_inner
-            .route_info_manager()
-            .on_channel_destroy(channel)
+        if let Some(runtime) = self.name_server_runtime_inner.upgrade() {
+            runtime.route_info_manager().on_channel_destroy(channel);
+        }
     }
 
     #[inline]

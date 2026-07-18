@@ -54,38 +54,49 @@ use rocketmq_remoting::protocol::RemotingDeserializable;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
-use rocketmq_rust::ArcMut;
 use tracing::info;
 use tracing::warn;
 
-use crate::bootstrap::NameServerRuntimeInner;
+use crate::bootstrap::NameServerRuntimeHandle;
 use crate::processor::NAMESPACE_ORDER_TOPIC_CONFIG;
 
 pub struct DefaultRequestProcessor {
-    name_server_runtime_inner: ArcMut<NameServerRuntimeInner>,
+    name_server_runtime_inner: NameServerRuntimeHandle,
 }
 
 impl RequestProcessor for DefaultRequestProcessor {
     async fn process_request(
         &mut self,
         channel: Channel,
-        ctx: ConnectionHandlerContext,
+        _ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        self.handle_request(channel, request).await
+    }
+}
+
+impl DefaultRequestProcessor {
+    pub(crate) async fn handle_request(
+        &self,
+        channel: Channel,
+        request: &mut RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let _runtime_guard = self.name_server_runtime_inner.upgrade().ok_or_else(|| {
+            rocketmq_error::RocketMQError::not_initialized("NameServer runtime is no longer available")
+        })?;
         let request_code = RequestCode::from(request.code());
         info!(
             "Name server DefaultRequestProcessor Received request code: {:?}",
             request_code
         );
-        self.process_request_inner(channel, ctx, request_code, request)
+        self.process_request_inner(channel, request_code, request)
     }
 }
 
 impl DefaultRequestProcessor {
     pub fn process_request_inner(
-        &mut self,
+        &self,
         channel: Channel,
-        _ctx: ConnectionHandlerContext,
         request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -125,7 +136,7 @@ impl DefaultRequestProcessor {
 
 ///implementation put KV config
 impl DefaultRequestProcessor {
-    fn put_kv_config(&mut self, request: &mut RemotingCommand) -> rocketmq_error::RocketMQResult<RemotingCommand> {
+    fn put_kv_config(&self, request: &mut RemotingCommand) -> rocketmq_error::RocketMQResult<RemotingCommand> {
         let request_header = request.decode_command_custom_header::<PutKVConfigRequestHeader>()?;
         //check namespace and key, need?
         if request_header.namespace.is_empty() || request_header.key.is_empty() {
@@ -134,7 +145,7 @@ impl DefaultRequestProcessor {
             ));
         }
 
-        self.name_server_runtime_inner.kvconfig_manager_mut().put_kv_config(
+        self.name_server_runtime_inner.kvconfig_manager().put_kv_config(
             request_header.namespace,
             request_header.key,
             request_header.value,
@@ -160,18 +171,18 @@ impl DefaultRequestProcessor {
         )))
     }
 
-    fn delete_kv_config(&mut self, request: &mut RemotingCommand) -> rocketmq_error::RocketMQResult<RemotingCommand> {
+    fn delete_kv_config(&self, request: &mut RemotingCommand) -> rocketmq_error::RocketMQResult<RemotingCommand> {
         let request_header = request.decode_command_custom_header::<DeleteKVConfigRequestHeader>()?;
 
         let _ = self
             .name_server_runtime_inner
-            .kvconfig_manager_mut()
+            .kvconfig_manager()
             .delete_kv_config(&request_header.namespace, &request_header.key);
         Ok(RemotingCommand::create_response_command())
     }
 
     fn query_broker_topic_config(
-        &mut self,
+        &self,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
         let request_header = request.decode_command_custom_header::<QueryDataVersionRequestHeader>()?;
@@ -192,7 +203,7 @@ impl DefaultRequestProcessor {
 
         // Update broker timestamp
         self.name_server_runtime_inner
-            .route_info_manager_mut()
+            .route_info_manager()
             .update_broker_info_update_timestamp(
                 request_header.cluster_name.clone(),
                 request_header.broker_addr.clone(),
@@ -223,7 +234,7 @@ impl DefaultRequestProcessor {
 
 #[allow(clippy::new_without_default)]
 impl DefaultRequestProcessor {
-    pub(crate) fn new(name_server_runtime_inner: ArcMut<NameServerRuntimeInner>) -> Self {
+    pub(crate) fn new(name_server_runtime_inner: NameServerRuntimeHandle) -> Self {
         Self {
             name_server_runtime_inner,
         }
@@ -231,7 +242,7 @@ impl DefaultRequestProcessor {
 }
 impl DefaultRequestProcessor {
     fn process_register_broker(
-        &mut self,
+        &self,
         channel: Channel,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
@@ -291,7 +302,7 @@ impl DefaultRequestProcessor {
     }
 
     fn process_unregister_broker(
-        &mut self,
+        &self,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
         let request_header = request.decode_command_custom_header::<UnRegisterBrokerRequestHeader>()?;
@@ -311,25 +322,25 @@ impl DefaultRequestProcessor {
 
 impl DefaultRequestProcessor {
     fn process_broker_heartbeat(
-        &mut self,
+        &self,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
         let request_header = request.decode_command_custom_header::<BrokerHeartbeatRequestHeader>()?;
         self.name_server_runtime_inner
-            .route_info_manager_mut()
+            .route_info_manager()
             .update_broker_info_update_timestamp(request_header.cluster_name, request_header.broker_addr);
         Ok(RemotingCommand::create_response_command())
     }
 
     fn get_broker_member_group(
-        &mut self,
+        &self,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
         let request_header = request.decode_command_custom_header::<GetBrokerMemberGroupRequestHeader>()?;
 
         let broker_member_group = self
             .name_server_runtime_inner
-            .route_info_manager_mut()
+            .route_info_manager()
             .get_broker_member_group(request_header.cluster_name, request_header.broker_name);
         let response_body = GetBrokerMemberGroupResponseBody { broker_member_group };
         let body = response_body.encode()?;
@@ -349,26 +360,26 @@ impl DefaultRequestProcessor {
     }
 
     fn wipe_write_perm_of_broker(
-        &mut self,
+        &self,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
         let request_header = request.decode_command_custom_header::<WipeWritePermOfBrokerRequestHeader>()?;
         let wipe_topic_cnt = self
             .name_server_runtime_inner
-            .route_info_manager_mut()
+            .route_info_manager()
             .wipe_write_perm_of_broker_by_lock(&request_header.broker_name);
         Ok(RemotingCommand::create_response_command()
             .set_command_custom_header(WipeWritePermOfBrokerResponseHeader::new(wipe_topic_cnt)))
     }
 
     fn add_write_perm_of_broker(
-        &mut self,
+        &self,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
         let request_header = request.decode_command_custom_header::<AddWritePermOfBrokerRequestHeader>()?;
         let add_topic_cnt = self
             .name_server_runtime_inner
-            .route_info_manager_mut()
+            .route_info_manager()
             .add_write_perm_of_broker_by_lock(&request_header.broker_name);
         Ok(RemotingCommand::create_response_command()
             .set_command_custom_header(AddWritePermOfBrokerResponseHeader::new(add_topic_cnt)))
@@ -391,18 +402,18 @@ impl DefaultRequestProcessor {
     }
 
     fn delete_topic_in_name_srv(
-        &mut self,
+        &self,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
         let request_header = request.decode_command_custom_header::<DeleteTopicFromNamesrvRequestHeader>()?;
         self.name_server_runtime_inner
-            .route_info_manager_mut()
+            .route_info_manager()
             .delete_topic(request_header.topic, request_header.cluster_name);
         Ok(RemotingCommand::create_response_command())
     }
 
     fn register_topic_to_name_srv(
-        &mut self,
+        &self,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
         let request_header = request.decode_command_custom_header::<RegisterTopicRequestHeader>()?;
@@ -415,7 +426,7 @@ impl DefaultRequestProcessor {
             })?;
             if !topic_route_data.queue_datas.is_empty() {
                 self.name_server_runtime_inner
-                    .route_info_manager_mut()
+                    .route_info_manager()
                     .register_topic(request_header.topic, topic_route_data.queue_datas)
             }
         }
@@ -504,7 +515,7 @@ impl DefaultRequestProcessor {
         Ok(error_response::internal_error("disable"))
     }
 
-    fn update_config(&mut self, request: &mut RemotingCommand) -> rocketmq_error::RocketMQResult<RemotingCommand> {
+    fn update_config(&self, request: &mut RemotingCommand) -> rocketmq_error::RocketMQResult<RemotingCommand> {
         if let Some(body) = request.body() {
             let body_str = match str::from_utf8(body) {
                 Ok(s) => s,
@@ -525,7 +536,7 @@ impl DefaultRequestProcessor {
             };
             if validate_blacklist_config_exist(
                 &properties,
-                &build_effective_config_blacklist(self.name_server_runtime_inner.name_server_config()),
+                &build_effective_config_blacklist(&self.name_server_runtime_inner.name_server_config()),
             ) {
                 return Ok(error_response::no_permission_with_remark(
                     "Cannot update config in blacklist.",
@@ -544,7 +555,7 @@ impl DefaultRequestProcessor {
         )
     }
 
-    fn get_config(&mut self, request: &mut RemotingCommand) -> rocketmq_error::RocketMQResult<RemotingCommand> {
+    fn get_config(&self, request: &mut RemotingCommand) -> rocketmq_error::RocketMQResult<RemotingCommand> {
         if is_probe_only_namesrv_config_request(request) {
             return Ok(create_namesrv_config_success_response(None));
         }

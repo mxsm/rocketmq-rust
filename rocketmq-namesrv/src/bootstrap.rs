@@ -25,9 +25,11 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::OnceLock;
+use std::sync::Weak;
 use std::time::Duration;
 use std::time::Instant;
 
+use arc_swap::ArcSwap;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::controller::ControllerConfig;
 use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
@@ -292,7 +294,7 @@ pub struct Builder {
 ///
 /// Coordinates initialization, startup, and graceful shutdown of all components.
 struct NameServerRuntime {
-    inner: ArcMut<NameServerRuntimeInner>,
+    inner: Arc<NameServerRuntimeInner>,
     scheduled_tasks: Option<ScheduledTaskGroup>,
     shutdown_tx: Option<broadcast::Sender<()>>,
     shutdown_rx: Option<broadcast::Receiver<()>>,
@@ -306,8 +308,8 @@ struct NameServerRuntime {
 
 impl NameServerBootstrap {
     #[inline]
-    pub(crate) fn runtime_inner(&self) -> ArcMut<NameServerRuntimeInner> {
-        self.name_server_runtime.inner.clone()
+    pub(crate) fn runtime_inner(&self) -> Arc<NameServerRuntimeInner> {
+        Arc::clone(&self.name_server_runtime.inner)
     }
 
     /// Boot the NameServer and run until shutdown signal
@@ -565,7 +567,8 @@ impl NameServerRuntime {
                         reason: "controller config is missing".to_string(),
                     })?;
 
-            if controller_conflicts_with_namesrv(controller_config, self.inner.server_config()) {
+            let server_config = self.inner.server_config();
+            if controller_conflicts_with_namesrv(controller_config.as_ref(), server_config.as_ref()) {
                 return Err(RocketMQError::ConfigInvalidValue {
                     key: "enableControllerInNamesrv",
                     value: namesrv_config.enable_controller_in_namesrv.to_string(),
@@ -592,7 +595,7 @@ impl NameServerRuntime {
 
     async fn load_config(&mut self) -> RocketMQResult<()> {
         // KVConfigManager is now always initialized
-        self.inner.kvconfig_manager_mut().load().map_err(|e| {
+        self.inner.kvconfig_manager().load().map_err(|e| {
             error!("KV config load failed: {}", e);
             RocketMQError::storage_read_failed("kv_config", format!("Configuration load error: {}", e))
         })?;
@@ -607,9 +610,8 @@ impl NameServerRuntime {
             let controller_config = self
                 .inner
                 .controller_config()
-                .cloned()
                 .expect("controller config should exist when embedded controller is enabled");
-            let controller_manager = Arc::new(ControllerManager::new(controller_config).await?);
+            let controller_manager = Arc::new(ControllerManager::new((*controller_config).clone()).await?);
             let initialized = controller_manager.initialize().await?;
             if !initialized {
                 return Err(namesrv_startup_failed(
@@ -617,7 +619,7 @@ impl NameServerRuntime {
                     "controller manager initialization returned false",
                 ));
             }
-            self.inner.controller_manager = Some(controller_manager);
+            self.inner.install_controller_manager(controller_manager)?;
             debug!("Embedded controller initialized successfully");
         }
         Ok(())
@@ -625,7 +627,7 @@ impl NameServerRuntime {
 
     /// Initialize network server for handling client requests
     fn initialize_network_components(&mut self) {
-        let config = Arc::new(self.inner.server_config().clone());
+        let config = self.inner.server_config();
         let server = match self.inner.service_context.as_ref() {
             Some(context) => RocketMQServer::new_with_service_context(config, context.child("namesrv.remoting-server")),
             None => RocketMQServer::new(config),
@@ -642,7 +644,7 @@ impl NameServerRuntime {
     /// Schedules periodic broker health checks to detect and remove inactive brokers
     fn start_schedule_service(&mut self) -> RocketMQResult<()> {
         let scan_not_active_broker_interval = self.inner.name_server_config().scan_not_active_broker_interval;
-        let name_server_runtime_inner = self.inner.clone();
+        let name_server_runtime_inner = NameServerRuntimeHandle::new(&self.inner);
         let task_group = self
             .inner
             .task_group()
@@ -657,10 +659,11 @@ impl NameServerRuntime {
 
         scheduled_tasks
             .schedule_fixed_rate_no_overlap(config, move || {
-                let mut name_server_runtime_inner = name_server_runtime_inner.clone();
+                let name_server_runtime_inner = name_server_runtime_inner.clone();
                 async move {
                     debug!("Running scheduled broker health check");
-                    if let Some(route_info_manager) = name_server_runtime_inner.route_info_manager.as_mut() {
+                    if let Some(runtime) = name_server_runtime_inner.upgrade() {
+                        let route_info_manager = runtime.route_info_manager();
                         route_info_manager.scan_not_active_broker();
                     }
                 }
@@ -721,8 +724,7 @@ impl NameServerRuntime {
         self.inner.route_info_manager().start();
 
         // Get broker housekeeping service for server
-        let channel_event_listener =
-            Some(self.inner.broker_housekeeping_service().clone() as Arc<dyn ChannelEventListener>);
+        let channel_event_listener = Some(self.inner.broker_housekeeping_service() as Arc<dyn ChannelEventListener>);
 
         // Spawn server task and retain handle for graceful shutdown
         let mut server_shutdown_rx = self
@@ -774,7 +776,7 @@ impl NameServerRuntime {
         // Start remoting client directly (no spawn needed as it's managed by self.inner)
         self.inner.remoting_client.start(weak_arc_mut).await;
 
-        if let Some(controller_manager) = self.inner.controller_manager().cloned() {
+        if let Some(controller_manager) = self.inner.controller_manager() {
             if let Err(error) = controller_manager.start().await {
                 if let Some(shutdown_tx) = self.shutdown_tx.as_ref() {
                     let _ = shutdown_tx.send(());
@@ -883,7 +885,7 @@ impl NameServerRuntime {
         info!("Phase 4/5: Shutting down route info manager...");
         shutdown_report.route_unregistration = match tokio::time::timeout(
             deadline.remaining(),
-            self.inner.route_info_manager_mut().shutdown_unregister_service(),
+            self.inner.route_info_manager().shutdown_unregister_service(),
         )
         .await
         {
@@ -1013,17 +1015,18 @@ impl NameServerRuntime {
     /// - DefaultRequestProcessor: Handles all other requests
     #[inline]
     fn init_processors(&self) -> NameServerRequestProcessor {
+        let runtime_handle = NameServerRuntimeHandle::new(&self.inner);
         let route_request_processor = if self.inner.name_server_config().cluster_test {
-            NameServerRequestProcessorWrapper::ClusterTestRequestProcessor(ArcMut::new(
-                ClusterTestRequestProcessor::new(self.inner.clone()),
-            ))
+            NameServerRequestProcessorWrapper::ClusterTestRequestProcessor(Arc::new(ClusterTestRequestProcessor::new(
+                runtime_handle.clone(),
+            )))
         } else {
-            NameServerRequestProcessorWrapper::ClientRequestProcessor(ArcMut::new(ClientRequestProcessor::new(
-                self.inner.clone(),
+            NameServerRequestProcessorWrapper::ClientRequestProcessor(Arc::new(ClientRequestProcessor::new(
+                runtime_handle.clone(),
             )))
         };
         let default_request_processor =
-            crate::processor::default_request_processor::DefaultRequestProcessor::new(self.inner.clone());
+            crate::processor::default_request_processor::DefaultRequestProcessor::new(runtime_handle);
 
         let mut name_server_request_processor =
             NameServerRequestProcessor::new_with_in_flight_tracker(self.inner.in_flight_request_tracker());
@@ -1033,7 +1036,7 @@ impl NameServerRuntime {
 
         // Register default processor for all other requests
         name_server_request_processor.register_default_processor(
-            NameServerRequestProcessorWrapper::DefaultRequestProcessor(ArcMut::new(default_request_processor)),
+            NameServerRequestProcessorWrapper::DefaultRequestProcessor(Arc::new(default_request_processor)),
         );
 
         debug!("Request processor pipeline configured");
@@ -1168,42 +1171,48 @@ impl Builder {
             None => RocketmqDefaultClient::new(Arc::new(tokio_client_config.clone()), DefaultRemotingRequestProcessor),
         });
 
-        // Create inner with empty components first
-        let mut inner = ArcMut::new(NameServerRuntimeInner {
-            name_server_config: name_server_config.clone(),
-            tokio_client_config,
-            server_config,
-            route_info_manager: None,
-            kvconfig_manager: None,
-            remoting_client,
-            broker_housekeeping_service: None,
-            controller_config,
-            controller_manager: None,
-            cluster_test_route_lookup,
-            service_context,
-            task_group: OnceLock::new(),
-            in_flight_requests: Arc::new(InFlightRequestTracker::default()),
-        });
-
         // Check configuration flag for RouteInfoManager version
         let use_v2 = name_server_config.use_route_info_manager_v2;
+        let unregister_broker_queue_capacity = name_server_config.unregister_broker_queue_capacity as usize;
+        let initial_config = Arc::new(NameServerRuntimeConfig {
+            name_server_config: Arc::new(name_server_config),
+            tokio_client_config: Arc::new(tokio_client_config),
+            server_config: Arc::new(server_config),
+            controller_config: controller_config.map(Arc::new),
+        });
 
-        // Now initialize components with proper references
-        let route_info_manager = if use_v2 {
-            info!("Using RouteInfoManager V2 (DashMap-based, 5-50x faster)");
-            RouteInfoManagerWrapper::V2(Box::new(RouteInfoManagerV2::new(inner.clone())))
-        } else {
-            warn!("Using RouteInfoManager V1 (legacy). Consider V2 for better performance.");
-            RouteInfoManagerWrapper::V1(Box::new(RouteInfoManager::new(inner.clone())))
-        };
+        // Child services retain only a weak runtime handle. `Arc::new_cyclic` lets the
+        // root own every service without creating a service -> runtime strong cycle.
+        let inner = Arc::new_cyclic(|weak_inner| {
+            let runtime_handle = NameServerRuntimeHandle::from_weak(weak_inner.clone());
+            let route_info_manager = if use_v2 {
+                info!("Using RouteInfoManager V2 (DashMap-based, 5-50x faster)");
+                RouteInfoManagerWrapper::V2(Box::new(RouteInfoManagerV2::new(
+                    runtime_handle.clone(),
+                    unregister_broker_queue_capacity,
+                )))
+            } else {
+                warn!("Using RouteInfoManager V1 (legacy). Consider V2 for better performance.");
+                RouteInfoManagerWrapper::V1(Box::new(parking_lot::Mutex::new(RouteInfoManager::new(
+                    runtime_handle.clone(),
+                    unregister_broker_queue_capacity,
+                ))))
+            };
 
-        let kvconfig_manager = KVConfigManager::new(inner.clone());
-        let broker_housekeeping_service = Arc::new(BrokerHousekeepingService::new(inner.clone()));
-
-        // Assign initialized components
-        inner.route_info_manager = Some(route_info_manager);
-        inner.kvconfig_manager = Some(kvconfig_manager);
-        inner.broker_housekeeping_service = Some(broker_housekeeping_service);
+            NameServerRuntimeInner {
+                config: ArcSwap::from(Arc::clone(&initial_config)),
+                config_update_lock: parking_lot::Mutex::new(()),
+                route_info_manager: Arc::new(route_info_manager),
+                kvconfig_manager: Arc::new(KVConfigManager::new(runtime_handle.clone())),
+                remoting_client,
+                broker_housekeeping_service: Arc::new(BrokerHousekeepingService::new(runtime_handle)),
+                controller_manager: OnceLock::new(),
+                cluster_test_route_lookup,
+                service_context,
+                task_group: OnceLock::new(),
+                in_flight_requests: Arc::new(InFlightRequestTracker::default()),
+            }
+        });
 
         info!("NameServer bootstrap built successfully");
 
@@ -1224,33 +1233,100 @@ impl Builder {
 
 /// Internal runtime state shared across components
 ///
-/// Separates immutable from mutable components.
-/// Note: Config kept mutable to support runtime updates via management commands.
+/// Separates immutable components from explicitly synchronized runtime state.
+/// Configuration updates publish a new immutable composite snapshot.
 pub(crate) struct NameServerRuntimeInner {
-    // Configuration (mutable to support runtime updates)
-    name_server_config: NamesrvConfig,
-    tokio_client_config: TokioClientConfig,
-    server_config: ServerConfig,
-    controller_config: Option<ControllerConfig>,
-
-    // Mutable components (Option for delayed initialization)
-    route_info_manager: Option<RouteInfoManagerWrapper>,
-    kvconfig_manager: Option<KVConfigManager>,
+    config: ArcSwap<NameServerRuntimeConfig>,
+    config_update_lock: parking_lot::Mutex<()>,
+    route_info_manager: Arc<RouteInfoManagerWrapper>,
+    kvconfig_manager: Arc<KVConfigManager>,
     remoting_client: ArcMut<RocketmqDefaultClient>,
-    broker_housekeeping_service: Option<Arc<BrokerHousekeepingService>>,
-    controller_manager: Option<Arc<ControllerManager>>,
+    broker_housekeeping_service: Arc<BrokerHousekeepingService>,
+    controller_manager: OnceLock<Arc<ControllerManager>>,
     cluster_test_route_lookup: Option<Arc<dyn ClusterTestRouteLookup>>,
     service_context: Option<ServiceContext>,
     task_group: OnceLock<TaskGroup>,
     in_flight_requests: Arc<InFlightRequestTracker>,
 }
 
+struct NameServerRuntimeConfig {
+    name_server_config: Arc<NamesrvConfig>,
+    tokio_client_config: Arc<TokioClientConfig>,
+    server_config: Arc<ServerConfig>,
+    controller_config: Option<Arc<ControllerConfig>>,
+}
+
+/// Cloneable non-owning access to the NameServer runtime.
+///
+/// Runtime-owned child services use this handle so the service graph cannot
+/// keep its root alive after `NameServerRuntime` is dropped.
+#[derive(Clone)]
+pub(crate) struct NameServerRuntimeHandle {
+    inner: Weak<NameServerRuntimeInner>,
+}
+
+impl NameServerRuntimeHandle {
+    fn from_weak(inner: Weak<NameServerRuntimeInner>) -> Self {
+        Self { inner }
+    }
+
+    pub(crate) fn new(inner: &Arc<NameServerRuntimeInner>) -> Self {
+        Self::from_weak(Arc::downgrade(inner))
+    }
+
+    pub(crate) fn upgrade(&self) -> Option<Arc<NameServerRuntimeInner>> {
+        self.inner.upgrade()
+    }
+
+    fn runtime(&self) -> Arc<NameServerRuntimeInner> {
+        // Child services are shut down and awaited before the runtime root is
+        // released. Callers that may outlive that boundary use `upgrade`.
+        self.upgrade()
+            .expect("NameServer runtime must outlive its owned service")
+    }
+
+    pub(crate) fn name_server_config(&self) -> Arc<NamesrvConfig> {
+        self.runtime().name_server_config()
+    }
+
+    pub(crate) fn update_name_server_config(
+        &self,
+        updates: HashMap<CheetahString, CheetahString>,
+    ) -> Result<(), String> {
+        self.runtime().update_name_server_config(updates)
+    }
+
+    pub(crate) fn route_info_manager(&self) -> Arc<RouteInfoManagerWrapper> {
+        self.runtime().route_info_manager()
+    }
+
+    pub(crate) fn kvconfig_manager(&self) -> Arc<KVConfigManager> {
+        self.runtime().kvconfig_manager()
+    }
+
+    pub(crate) fn task_group(&self) -> Option<TaskGroup> {
+        self.runtime().task_group()
+    }
+
+    pub(crate) fn cluster_test_route_lookup(&self) -> Option<Arc<dyn ClusterTestRouteLookup>> {
+        self.runtime().cluster_test_route_lookup()
+    }
+
+    pub(crate) fn update_runtime_config(&self, updates: HashMap<CheetahString, CheetahString>) -> Result<(), String> {
+        self.runtime().update_runtime_config(updates)
+    }
+
+    pub(crate) fn get_all_configs_format_string(&self) -> Result<String, String> {
+        self.runtime().get_all_configs_format_string()
+    }
+}
+
 impl NameServerRuntimeInner {
     // Configuration accessors
 
     #[inline]
-    pub fn name_server_config(&self) -> &NamesrvConfig {
-        &self.name_server_config
+    pub fn name_server_config(&self) -> Arc<NamesrvConfig> {
+        Arc::clone(&self.config.load().name_server_config)
     }
 
     pub(crate) fn task_group(&self) -> Option<TaskGroup> {
@@ -1284,247 +1360,236 @@ impl NameServerRuntimeInner {
     }
 
     #[inline]
-    pub fn name_server_config_mut(&mut self) -> &mut NamesrvConfig {
-        &mut self.name_server_config
+    pub fn tokio_client_config(&self) -> Arc<TokioClientConfig> {
+        Arc::clone(&self.config.load().tokio_client_config)
     }
 
     #[inline]
-    pub fn tokio_client_config(&self) -> &TokioClientConfig {
-        &self.tokio_client_config
+    pub fn server_config(&self) -> Arc<ServerConfig> {
+        Arc::clone(&self.config.load().server_config)
     }
 
     #[inline]
-    pub fn tokio_client_config_mut(&mut self) -> &mut TokioClientConfig {
-        &mut self.tokio_client_config
+    pub fn controller_config(&self) -> Option<Arc<ControllerConfig>> {
+        self.config.load().controller_config.clone()
     }
 
-    #[inline]
-    pub fn server_config(&self) -> &ServerConfig {
-        &self.server_config
+    fn config_snapshot(&self) -> Arc<NameServerRuntimeConfig> {
+        self.config.load_full()
     }
 
-    #[inline]
-    pub fn server_config_mut(&mut self) -> &mut ServerConfig {
-        &mut self.server_config
-    }
-
-    #[inline]
-    pub fn controller_config(&self) -> Option<&ControllerConfig> {
-        self.controller_config.as_ref()
-    }
-
-    #[inline]
-    pub fn controller_config_mut(&mut self) -> Option<&mut ControllerConfig> {
-        self.controller_config.as_mut()
+    pub(crate) fn update_name_server_config(
+        &self,
+        updates: HashMap<CheetahString, CheetahString>,
+    ) -> Result<(), String> {
+        let _update_guard = self.config_update_lock.lock();
+        let current = self.config_snapshot();
+        let mut name_server_config = (*current.name_server_config).clone();
+        name_server_config.update(updates)?;
+        self.config.store(Arc::new(NameServerRuntimeConfig {
+            name_server_config: Arc::new(name_server_config),
+            tokio_client_config: Arc::clone(&current.tokio_client_config),
+            server_config: Arc::clone(&current.server_config),
+            controller_config: current.controller_config.clone(),
+        }));
+        Ok(())
     }
 
     pub fn get_all_configs_format_string(&self) -> Result<String, String> {
+        let config_snapshot = self.config_snapshot();
+        let name_server_config = &config_snapshot.name_server_config;
+        let server_config = &config_snapshot.server_config;
+        let tokio_client_config = &config_snapshot.tokio_client_config;
         let mut entries = Vec::with_capacity(41);
 
-        push_config_entry(&mut entries, "rocketmqHome", &self.name_server_config.rocketmq_home);
-        push_config_entry(&mut entries, "kvConfigPath", &self.name_server_config.kv_config_path);
-        push_config_entry(
-            &mut entries,
-            "configStorePath",
-            &self.name_server_config.config_store_path,
-        );
-        push_config_entry(
-            &mut entries,
-            "productEnvName",
-            &self.name_server_config.product_env_name,
-        );
-        push_config_entry(&mut entries, "clusterTest", self.name_server_config.cluster_test);
+        push_config_entry(&mut entries, "rocketmqHome", &name_server_config.rocketmq_home);
+        push_config_entry(&mut entries, "kvConfigPath", &name_server_config.kv_config_path);
+        push_config_entry(&mut entries, "configStorePath", &name_server_config.config_store_path);
+        push_config_entry(&mut entries, "productEnvName", &name_server_config.product_env_name);
+        push_config_entry(&mut entries, "clusterTest", name_server_config.cluster_test);
         push_config_entry(
             &mut entries,
             "orderMessageEnable",
-            self.name_server_config.order_message_enable,
+            name_server_config.order_message_enable,
         );
         push_config_entry(
             &mut entries,
             "returnOrderTopicConfigToBroker",
-            self.name_server_config.return_order_topic_config_to_broker,
+            name_server_config.return_order_topic_config_to_broker,
         );
         push_config_entry(
             &mut entries,
             "clientRequestThreadPoolNums",
-            self.name_server_config.client_request_thread_pool_nums,
+            name_server_config.client_request_thread_pool_nums,
         );
         push_config_entry(
             &mut entries,
             "defaultThreadPoolNums",
-            self.name_server_config.default_thread_pool_nums,
+            name_server_config.default_thread_pool_nums,
         );
         push_config_entry(
             &mut entries,
             "clientRequestThreadPoolQueueCapacity",
-            self.name_server_config.client_request_thread_pool_queue_capacity,
+            name_server_config.client_request_thread_pool_queue_capacity,
         );
         push_config_entry(
             &mut entries,
             "defaultThreadPoolQueueCapacity",
-            self.name_server_config.default_thread_pool_queue_capacity,
+            name_server_config.default_thread_pool_queue_capacity,
         );
         push_config_entry(
             &mut entries,
             "scanNotActiveBrokerInterval",
-            self.name_server_config.scan_not_active_broker_interval,
+            name_server_config.scan_not_active_broker_interval,
         );
         push_config_entry(
             &mut entries,
             "unRegisterBrokerQueueCapacity",
-            self.name_server_config.unregister_broker_queue_capacity,
+            name_server_config.unregister_broker_queue_capacity,
         );
         push_config_entry(
             &mut entries,
             "supportActingMaster",
-            self.name_server_config.support_acting_master,
+            name_server_config.support_acting_master,
         );
         push_config_entry(
             &mut entries,
             "enableAllTopicList",
-            self.name_server_config.enable_all_topic_list,
+            name_server_config.enable_all_topic_list,
         );
-        push_config_entry(
-            &mut entries,
-            "enableTopicList",
-            self.name_server_config.enable_topic_list,
-        );
+        push_config_entry(&mut entries, "enableTopicList", name_server_config.enable_topic_list);
         push_config_entry(
             &mut entries,
             "notifyMinBrokerIdChanged",
-            self.name_server_config.notify_min_broker_id_changed,
+            name_server_config.notify_min_broker_id_changed,
         );
         push_config_entry(
             &mut entries,
             "enableControllerInNamesrv",
-            self.name_server_config.enable_controller_in_namesrv,
+            name_server_config.enable_controller_in_namesrv,
         );
         push_config_entry(
             &mut entries,
             "needWaitForService",
-            self.name_server_config.need_wait_for_service,
+            name_server_config.need_wait_for_service,
         );
         push_config_entry(
             &mut entries,
             "waitSecondsForService",
-            self.name_server_config.wait_seconds_for_service,
+            name_server_config.wait_seconds_for_service,
         );
         push_config_entry(
             &mut entries,
             "deleteTopicWithBrokerRegistration",
-            self.name_server_config.delete_topic_with_broker_registration,
+            name_server_config.delete_topic_with_broker_registration,
         );
-        push_config_entry(
-            &mut entries,
-            "configBlackList",
-            &self.name_server_config.config_black_list,
-        );
+        push_config_entry(&mut entries, "configBlackList", &name_server_config.config_black_list);
         push_config_entry(
             &mut entries,
             "useRouteInfoManagerV2",
-            self.name_server_config.use_route_info_manager_v2,
+            name_server_config.use_route_info_manager_v2,
         );
 
-        push_config_entry(&mut entries, "listenPort", self.server_config.listen_port);
-        push_config_entry(&mut entries, "bindAddress", &self.server_config.bind_address);
-        for (key, value) in self.server_config.tls_config.java_property_entries() {
+        push_config_entry(&mut entries, "listenPort", server_config.listen_port);
+        push_config_entry(&mut entries, "bindAddress", &server_config.bind_address);
+        for (key, value) in server_config.tls_config.java_property_entries() {
             push_config_entry(&mut entries, key, value);
         }
 
         push_config_entry(
             &mut entries,
             "clientWorkerThreads",
-            self.tokio_client_config.client_worker_threads,
+            tokio_client_config.client_worker_threads,
         );
         push_config_entry(
             &mut entries,
             "clientCallbackExecutorThreads",
-            self.tokio_client_config.client_callback_executor_threads,
+            tokio_client_config.client_callback_executor_threads,
         );
         push_config_entry(
             &mut entries,
             "clientOnewaySemaphoreValue",
-            self.tokio_client_config.client_oneway_semaphore_value,
+            tokio_client_config.client_oneway_semaphore_value,
         );
         push_config_entry(
             &mut entries,
             "clientAsyncSemaphoreValue",
-            self.tokio_client_config.client_async_semaphore_value,
+            tokio_client_config.client_async_semaphore_value,
         );
         push_config_entry(
             &mut entries,
             "connectTimeoutMillis",
-            self.tokio_client_config.connect_timeout_millis,
+            tokio_client_config.connect_timeout_millis,
         );
         push_config_entry(
             &mut entries,
             "channelNotActiveInterval",
-            self.tokio_client_config.channel_not_active_interval,
+            tokio_client_config.channel_not_active_interval,
         );
         push_config_entry(
             &mut entries,
             "clientChannelMaxIdleTimeSeconds",
-            self.tokio_client_config.client_channel_max_idle_time_seconds,
+            tokio_client_config.client_channel_max_idle_time_seconds,
         );
         push_config_entry(
             &mut entries,
             "clientSocketSndBufSize",
-            self.tokio_client_config.client_socket_snd_buf_size,
+            tokio_client_config.client_socket_snd_buf_size,
         );
         push_config_entry(
             &mut entries,
             "clientSocketRcvBufSize",
-            self.tokio_client_config.client_socket_rcv_buf_size,
+            tokio_client_config.client_socket_rcv_buf_size,
         );
         push_config_entry(
             &mut entries,
             "clientPooledByteBufAllocatorEnable",
-            self.tokio_client_config.client_pooled_byte_buf_allocator_enable,
+            tokio_client_config.client_pooled_byte_buf_allocator_enable,
         );
         push_config_entry(
             &mut entries,
             "clientCloseSocketIfTimeout",
-            self.tokio_client_config.client_close_socket_if_timeout,
+            tokio_client_config.client_close_socket_if_timeout,
         );
         push_config_entry(
             &mut entries,
             "socksProxyConfig",
-            &self.tokio_client_config.socks_proxy_config,
+            &tokio_client_config.socks_proxy_config,
         );
         push_config_entry(
             &mut entries,
             "writeBufferHighWaterMark",
-            self.tokio_client_config.write_buffer_high_water_mark,
+            tokio_client_config.write_buffer_high_water_mark,
         );
         push_config_entry(
             &mut entries,
             "writeBufferLowWaterMark",
-            self.tokio_client_config.write_buffer_low_water_mark,
+            tokio_client_config.write_buffer_low_water_mark,
         );
         push_config_entry(
             &mut entries,
             "disableCallbackExecutor",
-            self.tokio_client_config.disable_callback_executor,
+            tokio_client_config.disable_callback_executor,
         );
         push_config_entry(
             &mut entries,
             "disableNettyWorkerGroup",
-            self.tokio_client_config.disable_netty_worker_group,
+            tokio_client_config.disable_netty_worker_group,
         );
         push_config_entry(
             &mut entries,
             "maxReconnectIntervalTimeSeconds",
-            self.tokio_client_config.max_reconnect_interval_time_seconds,
+            tokio_client_config.max_reconnect_interval_time_seconds,
         );
         push_config_entry(
             &mut entries,
             "enableReconnectForGoAway",
-            self.tokio_client_config.enable_reconnect_for_go_away,
+            tokio_client_config.enable_reconnect_for_go_away,
         );
         push_config_entry(
             &mut entries,
             "enableTransparentRetry",
-            self.tokio_client_config.enable_transparent_retry,
+            tokio_client_config.enable_transparent_retry,
         );
 
         entries.sort_by_key(|(key, _)| *key);
@@ -1548,7 +1613,12 @@ impl NameServerRuntimeInner {
         Ok(config)
     }
 
-    pub fn update_runtime_config(&mut self, updates: HashMap<CheetahString, CheetahString>) -> Result<(), String> {
+    pub fn update_runtime_config(&self, updates: HashMap<CheetahString, CheetahString>) -> Result<(), String> {
+        let _update_guard = self.config_update_lock.lock();
+        let current = self.config_snapshot();
+        let mut name_server_config = (*current.name_server_config).clone();
+        let mut tokio_client_config = (*current.tokio_client_config).clone();
+        let mut server_config = (*current.server_config).clone();
         let mut namesrv_updates = HashMap::new();
 
         for (key, value) in updates {
@@ -1579,107 +1649,98 @@ impl NameServerRuntimeInner {
                     namesrv_updates.insert(key, value);
                 }
                 "listenPort" => {
-                    self.server_config.listen_port = parse_config_value(&key, &value)?;
+                    server_config.listen_port = parse_config_value(&key, &value)?;
                 }
                 "bindAddress" => {
-                    self.server_config.bind_address = value.to_string();
+                    server_config.bind_address = value.to_string();
                 }
                 key if is_tls_config_key(key) => {
-                    self.server_config.tls_config.apply_java_property(key, value.as_str());
+                    server_config.tls_config.apply_java_property(key, value.as_str());
                 }
                 "clientWorkerThreads" => {
-                    self.tokio_client_config.client_worker_threads = parse_config_value(&key, &value)?;
+                    tokio_client_config.client_worker_threads = parse_config_value(&key, &value)?;
                 }
                 "clientCallbackExecutorThreads" => {
-                    self.tokio_client_config.client_callback_executor_threads = parse_config_value(&key, &value)?;
+                    tokio_client_config.client_callback_executor_threads = parse_config_value(&key, &value)?;
                 }
                 "clientOnewaySemaphoreValue" => {
-                    self.tokio_client_config.client_oneway_semaphore_value = parse_config_value(&key, &value)?;
+                    tokio_client_config.client_oneway_semaphore_value = parse_config_value(&key, &value)?;
                 }
                 "clientAsyncSemaphoreValue" => {
-                    self.tokio_client_config.client_async_semaphore_value = parse_config_value(&key, &value)?;
+                    tokio_client_config.client_async_semaphore_value = parse_config_value(&key, &value)?;
                 }
                 "connectTimeoutMillis" => {
-                    self.tokio_client_config.connect_timeout_millis = parse_config_value(&key, &value)?;
+                    tokio_client_config.connect_timeout_millis = parse_config_value(&key, &value)?;
                 }
                 "channelNotActiveInterval" => {
-                    self.tokio_client_config.channel_not_active_interval = parse_config_value(&key, &value)?;
+                    tokio_client_config.channel_not_active_interval = parse_config_value(&key, &value)?;
                 }
                 "clientChannelMaxIdleTimeSeconds" => {
-                    self.tokio_client_config.client_channel_max_idle_time_seconds = parse_config_value(&key, &value)?;
+                    tokio_client_config.client_channel_max_idle_time_seconds = parse_config_value(&key, &value)?;
                 }
                 "clientSocketSndBufSize" => {
-                    self.tokio_client_config.client_socket_snd_buf_size = parse_config_value(&key, &value)?;
+                    tokio_client_config.client_socket_snd_buf_size = parse_config_value(&key, &value)?;
                 }
                 "clientSocketRcvBufSize" => {
-                    self.tokio_client_config.client_socket_rcv_buf_size = parse_config_value(&key, &value)?;
+                    tokio_client_config.client_socket_rcv_buf_size = parse_config_value(&key, &value)?;
                 }
                 "clientPooledByteBufAllocatorEnable" => {
-                    self.tokio_client_config.client_pooled_byte_buf_allocator_enable =
-                        parse_config_value(&key, &value)?;
+                    tokio_client_config.client_pooled_byte_buf_allocator_enable = parse_config_value(&key, &value)?;
                 }
                 "clientCloseSocketIfTimeout" => {
-                    self.tokio_client_config.client_close_socket_if_timeout = parse_config_value(&key, &value)?;
+                    tokio_client_config.client_close_socket_if_timeout = parse_config_value(&key, &value)?;
                 }
                 "socksProxyConfig" => {
-                    self.tokio_client_config.socks_proxy_config = value.to_string();
+                    tokio_client_config.socks_proxy_config = value.to_string();
                 }
                 "writeBufferHighWaterMark" => {
-                    self.tokio_client_config.write_buffer_high_water_mark = parse_config_value(&key, &value)?;
+                    tokio_client_config.write_buffer_high_water_mark = parse_config_value(&key, &value)?;
                 }
                 "writeBufferLowWaterMark" => {
-                    self.tokio_client_config.write_buffer_low_water_mark = parse_config_value(&key, &value)?;
+                    tokio_client_config.write_buffer_low_water_mark = parse_config_value(&key, &value)?;
                 }
                 "disableCallbackExecutor" => {
-                    self.tokio_client_config.disable_callback_executor = parse_config_value(&key, &value)?;
+                    tokio_client_config.disable_callback_executor = parse_config_value(&key, &value)?;
                 }
                 "disableNettyWorkerGroup" => {
-                    self.tokio_client_config.disable_netty_worker_group = parse_config_value(&key, &value)?;
+                    tokio_client_config.disable_netty_worker_group = parse_config_value(&key, &value)?;
                 }
                 "maxReconnectIntervalTimeSeconds" => {
-                    self.tokio_client_config.max_reconnect_interval_time_seconds = parse_config_value(&key, &value)?;
+                    tokio_client_config.max_reconnect_interval_time_seconds = parse_config_value(&key, &value)?;
                 }
                 "enableReconnectForGoAway" => {
-                    self.tokio_client_config.enable_reconnect_for_go_away = parse_config_value(&key, &value)?;
+                    tokio_client_config.enable_reconnect_for_go_away = parse_config_value(&key, &value)?;
                 }
                 "enableTransparentRetry" => {
-                    self.tokio_client_config.enable_transparent_retry = parse_config_value(&key, &value)?;
+                    tokio_client_config.enable_transparent_retry = parse_config_value(&key, &value)?;
                 }
                 _ => {}
             }
         }
 
         if !namesrv_updates.is_empty() {
-            self.name_server_config.update(namesrv_updates)?;
+            name_server_config.update(namesrv_updates)?;
         }
 
+        self.config.store(Arc::new(NameServerRuntimeConfig {
+            name_server_config: Arc::new(name_server_config),
+            tokio_client_config: Arc::new(tokio_client_config),
+            server_config: Arc::new(server_config),
+            controller_config: current.controller_config.clone(),
+        }));
         Ok(())
     }
 
-    // Component accessors (with Option handling)
+    // Component accessors
 
     #[inline]
-    pub fn route_info_manager(&self) -> &RouteInfoManagerWrapper {
-        self.route_info_manager
-            .as_ref()
-            .expect("RouteInfoManager not initialized")
+    pub fn route_info_manager(&self) -> Arc<RouteInfoManagerWrapper> {
+        Arc::clone(&self.route_info_manager)
     }
 
     #[inline]
-    pub fn route_info_manager_mut(&mut self) -> &mut RouteInfoManagerWrapper {
-        self.route_info_manager
-            .as_mut()
-            .expect("RouteInfoManager not initialized")
-    }
-
-    #[inline]
-    pub fn kvconfig_manager(&self) -> &KVConfigManager {
-        self.kvconfig_manager.as_ref().expect("KVConfigManager not initialized")
-    }
-
-    #[inline]
-    pub fn kvconfig_manager_mut(&mut self) -> &mut KVConfigManager {
-        self.kvconfig_manager.as_mut().expect("KVConfigManager not initialized")
+    pub fn kvconfig_manager(&self) -> Arc<KVConfigManager> {
+        Arc::clone(&self.kvconfig_manager)
     }
 
     #[inline]
@@ -1688,25 +1749,24 @@ impl NameServerRuntimeInner {
     }
 
     #[inline]
-    pub fn remoting_client_mut(&mut self) -> &mut RocketmqDefaultClient {
-        &mut self.remoting_client
+    pub fn broker_housekeeping_service(&self) -> Arc<BrokerHousekeepingService> {
+        Arc::clone(&self.broker_housekeeping_service)
     }
 
     #[inline]
-    pub fn broker_housekeeping_service(&self) -> &Arc<BrokerHousekeepingService> {
-        self.broker_housekeeping_service
-            .as_ref()
-            .expect("BrokerHousekeepingService not initialized")
+    pub fn controller_manager(&self) -> Option<Arc<ControllerManager>> {
+        self.controller_manager.get().cloned()
+    }
+
+    fn install_controller_manager(&self, controller_manager: Arc<ControllerManager>) -> RocketMQResult<()> {
+        self.controller_manager
+            .set(controller_manager)
+            .map_err(|_| namesrv_runtime_state_error("embedded controller manager was already initialized"))
     }
 
     #[inline]
-    pub fn controller_manager(&self) -> Option<&Arc<ControllerManager>> {
-        self.controller_manager.as_ref()
-    }
-
-    #[inline]
-    pub fn cluster_test_route_lookup(&self) -> Option<&Arc<dyn ClusterTestRouteLookup>> {
-        self.cluster_test_route_lookup.as_ref()
+    pub fn cluster_test_route_lookup(&self) -> Option<Arc<dyn ClusterTestRouteLookup>> {
+        self.cluster_test_route_lookup.clone()
     }
 }
 
@@ -1834,7 +1894,7 @@ mod tests {
         namesrv_config.use_route_info_manager_v2 = true;
         let bootstrap = Builder::new().set_name_server_config(namesrv_config).build();
         assert!(matches!(
-            bootstrap.name_server_runtime.inner.route_info_manager(),
+            bootstrap.name_server_runtime.inner.route_info_manager().as_ref(),
             RouteInfoManagerWrapper::V2(_)
         ));
         bootstrap
@@ -1842,6 +1902,116 @@ mod tests {
 
     fn build_bootstrap_with_default_v2() -> NameServerBootstrap {
         build_bootstrap_with_v2_config(NamesrvConfig::default())
+    }
+
+    #[test]
+    fn runtime_config_failed_update_preserves_published_snapshot() {
+        let bootstrap = build_bootstrap_with_default_v2();
+        let runtime = bootstrap.runtime_inner();
+        let before = runtime.config_snapshot();
+        let before_port = before.server_config.listen_port;
+        let before_workers = before.tokio_client_config.client_worker_threads;
+
+        let result = runtime.update_runtime_config(HashMap::from([
+            (
+                CheetahString::from_static_str("listenPort"),
+                CheetahString::from_static_str("19876"),
+            ),
+            (
+                CheetahString::from_static_str("clientWorkerThreads"),
+                CheetahString::from_static_str("not-a-number"),
+            ),
+        ]));
+
+        assert!(result.is_err());
+        let after = runtime.config_snapshot();
+        assert!(Arc::ptr_eq(&before, &after));
+        assert_eq!(after.server_config.listen_port, before_port);
+        assert_eq!(after.tokio_client_config.client_worker_threads, before_workers);
+    }
+
+    #[test]
+    fn runtime_config_concurrent_readers_only_observe_complete_snapshots() {
+        let namesrv_config = NamesrvConfig {
+            enable_topic_list: true,
+            ..NamesrvConfig::default()
+        };
+        let server_config = ServerConfig {
+            listen_port: 10000,
+            ..ServerConfig::default()
+        };
+        let bootstrap = Builder::new()
+            .set_name_server_config(namesrv_config)
+            .set_server_config(server_config)
+            .build();
+        let runtime = bootstrap.runtime_inner();
+
+        let writer =
+            |runtime: Arc<NameServerRuntimeInner>, listen_port: &'static str, enable_topic_list: &'static str| {
+                std::thread::spawn(move || {
+                    for _ in 0..500 {
+                        runtime
+                            .update_runtime_config(HashMap::from([
+                                (
+                                    CheetahString::from_static_str("listenPort"),
+                                    CheetahString::from_static_str(listen_port),
+                                ),
+                                (
+                                    CheetahString::from_static_str("enableTopicList"),
+                                    CheetahString::from_static_str(enable_topic_list),
+                                ),
+                            ]))
+                            .expect("valid snapshot update should succeed");
+                    }
+                })
+            };
+
+        let first_writer = writer(Arc::clone(&runtime), "20001", "false");
+        let second_writer = writer(Arc::clone(&runtime), "20002", "true");
+        for _ in 0..10_000 {
+            let snapshot = runtime.config_snapshot();
+            let observed = (
+                snapshot.server_config.listen_port,
+                snapshot.name_server_config.enable_topic_list,
+            );
+            assert!(
+                matches!(observed, (10000, true) | (20001, false) | (20002, true)),
+                "reader observed a torn runtime configuration: {observed:?}"
+            );
+        }
+        first_writer.join().expect("first config writer should not panic");
+        second_writer.join().expect("second config writer should not panic");
+    }
+
+    #[test]
+    fn runtime_owned_service_clones_do_not_keep_root_alive() {
+        for use_route_info_manager_v2 in [false, true] {
+            let bootstrap = Builder::new()
+                .set_name_server_config(NamesrvConfig {
+                    use_route_info_manager_v2,
+                    ..NamesrvConfig::default()
+                })
+                .build();
+            let request_processor = bootstrap.name_server_runtime.init_processors();
+            let runtime = bootstrap.runtime_inner();
+            let runtime_handle = NameServerRuntimeHandle::new(&runtime);
+            let weak_runtime = Arc::downgrade(&runtime);
+            let route_info_manager = runtime.route_info_manager();
+            let kvconfig_manager = runtime.kvconfig_manager();
+            let broker_housekeeping_service = runtime.broker_housekeeping_service();
+
+            assert_eq!(route_info_manager.scan_not_active_broker(), 0);
+            drop(runtime);
+            drop(bootstrap);
+
+            assert!(weak_runtime.upgrade().is_none());
+            assert!(runtime_handle.upgrade().is_none());
+
+            drop(route_info_manager);
+            drop(kvconfig_manager);
+            drop(broker_housekeeping_service);
+            drop(request_processor);
+        }
     }
 
     #[test]
@@ -2006,7 +2176,8 @@ mod tests {
         harness: &LocalRequestHarness,
         request: &mut RemotingCommand,
     ) -> RemotingCommand {
-        let mut processor = DefaultRequestProcessor::new(bootstrap.name_server_runtime.inner.clone());
+        let mut processor =
+            DefaultRequestProcessor::new(NameServerRuntimeHandle::new(&bootstrap.name_server_runtime.inner));
         processor
             .process_request(harness.channel(), harness.context(), request)
             .await
@@ -2019,7 +2190,8 @@ mod tests {
         harness: &LocalRequestHarness,
         request: &mut RemotingCommand,
     ) -> RemotingCommand {
-        let mut processor = ClientRequestProcessor::new(bootstrap.name_server_runtime.inner.clone());
+        let mut processor =
+            ClientRequestProcessor::new(NameServerRuntimeHandle::new(&bootstrap.name_server_runtime.inner));
         processor
             .process_request(harness.channel(), harness.context(), request)
             .await
@@ -3005,7 +3177,7 @@ mod tests {
 
     #[tokio::test]
     async fn default_v2_scan_not_active_broker_cleans_route_views_via_batch_unregister() {
-        let mut bootstrap = build_bootstrap_with_default_v2();
+        let bootstrap = build_bootstrap_with_default_v2();
         let cluster_name = CheetahString::from_static_str("cluster-a");
         let broker_name = CheetahString::from_static_str("broker-a");
         let broker_addr = CheetahString::from_static_str("10.0.0.1:10911");
@@ -3034,7 +3206,7 @@ mod tests {
         let expired_count = bootstrap
             .name_server_runtime
             .inner
-            .route_info_manager_mut()
+            .route_info_manager()
             .scan_not_active_broker();
         assert_eq!(expired_count, 1);
 
@@ -3063,7 +3235,7 @@ mod tests {
 
     #[tokio::test]
     async fn default_v2_scan_not_active_broker_closes_expired_connection_before_batch_unregister() {
-        let mut bootstrap = build_bootstrap_with_default_v2();
+        let bootstrap = build_bootstrap_with_default_v2();
         let cluster_name = CheetahString::from_static_str("cluster-a");
         let broker_name = CheetahString::from_static_str("broker-a");
         let broker_addr = CheetahString::from_static_str("10.0.0.1:10911");
@@ -3093,7 +3265,7 @@ mod tests {
         let expired_count = bootstrap
             .name_server_runtime
             .inner
-            .route_info_manager_mut()
+            .route_info_manager()
             .scan_not_active_broker();
         assert_eq!(expired_count, 1);
 
@@ -3107,7 +3279,7 @@ mod tests {
 
     #[tokio::test]
     async fn default_v2_connection_disconnected_by_socket_addr_matches_channel_destroy_cleanup() {
-        let mut bootstrap = build_bootstrap_with_default_v2();
+        let bootstrap = build_bootstrap_with_default_v2();
         let cluster_name = CheetahString::from_static_str("cluster-a");
         let broker_name = CheetahString::from_static_str("broker-a");
         let broker_addr = CheetahString::from_static_str("10.0.0.1:10911");
@@ -3134,7 +3306,7 @@ mod tests {
         bootstrap
             .name_server_runtime
             .inner
-            .route_info_manager_mut()
+            .route_info_manager()
             .connection_disconnected(harness.remote_address());
 
         wait_until("socket disconnect cleanup", || {
@@ -3621,7 +3793,6 @@ mod tests {
             .name_server_runtime
             .inner
             .controller_manager()
-            .cloned()
             .expect("embedded controller should be initialized");
         assert!(controller_manager.is_initialized());
         assert!(!controller_manager.is_running());
@@ -3646,16 +3817,12 @@ mod tests {
     async fn default_v2_unsupported_request_code_returns_request_code_not_supported() {
         let bootstrap = build_bootstrap_with_default_v2();
         let harness = LocalRequestHarness::new().await.unwrap();
-        let mut processor = DefaultRequestProcessor::new(bootstrap.name_server_runtime.inner.clone());
+        let processor =
+            DefaultRequestProcessor::new(NameServerRuntimeHandle::new(&bootstrap.name_server_runtime.inner));
         let mut request = RemotingCommand::create_remoting_command(RequestCode::SendMessage);
 
         let response = processor
-            .process_request_inner(
-                harness.channel(),
-                harness.context(),
-                RequestCode::SendMessage,
-                &mut request,
-            )
+            .process_request_inner(harness.channel(), RequestCode::SendMessage, &mut request)
             .expect("request should be handled")
             .expect("processor should return a response");
 
@@ -3866,7 +4033,7 @@ mod tests {
 
     #[tokio::test]
     async fn default_v2_route_query_via_client_processor_returns_order_config_and_route_contract() {
-        let mut bootstrap = build_bootstrap_with_v2_config(NamesrvConfig {
+        let bootstrap = build_bootstrap_with_v2_config(NamesrvConfig {
             order_message_enable: true,
             ..NamesrvConfig::default()
         });
@@ -3897,7 +4064,7 @@ mod tests {
         bootstrap
             .name_server_runtime
             .inner
-            .kvconfig_manager_mut()
+            .kvconfig_manager()
             .put_kv_config(
                 CheetahString::from_static_str("ORDER_TOPIC_CONFIG"),
                 topic_name.clone(),

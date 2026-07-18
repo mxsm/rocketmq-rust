@@ -22,6 +22,7 @@
 //! `as_v1()` and `as_v2()` methods, along with common lifecycle methods.
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use rocketmq_remoting::net::channel::Channel;
@@ -51,7 +52,7 @@ use crate::route::route_info_manager_v2::RouteInfoManagerV2;
 /// This reduces stack allocation from 352 bytes to 16 bytes (8 byte pointer + 8 byte discriminant)
 pub enum RouteInfoManagerWrapper {
     /// Legacy implementation using RwLock-based tables
-    V1(Box<RouteInfoManager>),
+    V1(Box<parking_lot::Mutex<RouteInfoManager>>),
     /// New implementation using DashMap-based concurrent tables
     V2(Box<RouteInfoManagerV2>),
 }
@@ -63,7 +64,7 @@ impl RouteInfoManagerWrapper {
     /// Panics if the wrapper contains V2 instead of V1
     pub fn as_v1_mut(&mut self) -> &mut RouteInfoManager {
         match self {
-            RouteInfoManagerWrapper::V1(manager) => manager,
+            RouteInfoManagerWrapper::V1(manager) => manager.get_mut(),
             RouteInfoManagerWrapper::V2(_) => panic!("Expected V1, found V2"),
         }
     }
@@ -79,13 +80,13 @@ impl RouteInfoManagerWrapper {
         }
     }
 
-    /// Get an immutable reference to the underlying RouteInfoManager V1 implementation
+    /// Lock and access the underlying RouteInfoManager V1 implementation.
     ///
     /// # Panics
     /// Panics if the wrapper contains V2 instead of V1
-    pub fn as_v1(&self) -> &RouteInfoManager {
+    pub fn as_v1(&self) -> parking_lot::MutexGuard<'_, RouteInfoManager> {
         match self {
-            RouteInfoManagerWrapper::V1(manager) => manager,
+            RouteInfoManagerWrapper::V1(manager) => manager.lock(),
             RouteInfoManagerWrapper::V2(_) => panic!("Expected V1, found V2"),
         }
     }
@@ -104,9 +105,9 @@ impl RouteInfoManagerWrapper {
     /// Handle connection disconnection - called when a broker disconnects
     ///
     /// This method now delegates to on_channel_destroy for both v1 and v2
-    pub fn connection_disconnected(&mut self, socket_addr: SocketAddr) {
+    pub fn connection_disconnected(&self, socket_addr: SocketAddr) {
         match self {
-            RouteInfoManagerWrapper::V1(manager) => manager.connection_disconnected(socket_addr),
+            RouteInfoManagerWrapper::V1(manager) => manager.lock().connection_disconnected(socket_addr),
             RouteInfoManagerWrapper::V2(manager) => {
                 manager.connection_disconnected(socket_addr);
             }
@@ -116,7 +117,7 @@ impl RouteInfoManagerWrapper {
     /// Handle channel destroy event
     pub fn on_channel_destroy(&self, channel: &Channel) {
         match self {
-            RouteInfoManagerWrapper::V1(manager) => manager.on_channel_destroy(channel),
+            RouteInfoManagerWrapper::V1(manager) => manager.lock().on_channel_destroy(channel),
             RouteInfoManagerWrapper::V2(manager) => {
                 manager.on_channel_destroy(channel);
             }
@@ -129,7 +130,7 @@ impl RouteInfoManagerWrapper {
     /// V1 still uses the receiver-based approach for backward compatibility.
     pub fn start(&self) {
         match self {
-            RouteInfoManagerWrapper::V1(manager) => manager.start(),
+            RouteInfoManagerWrapper::V1(manager) => manager.lock().start(),
             RouteInfoManagerWrapper::V2(manager) => manager.start(),
         }
     }
@@ -137,15 +138,21 @@ impl RouteInfoManagerWrapper {
     /// Shutdown the route info manager
     pub async fn shutdown(&self) -> Option<ShutdownReport> {
         match self {
-            RouteInfoManagerWrapper::V1(manager) => manager.shutdown().await,
+            RouteInfoManagerWrapper::V1(manager) => {
+                let un_register_service = Arc::clone(&manager.lock().un_register_service);
+                un_register_service.shutdown().await
+            }
             RouteInfoManagerWrapper::V2(manager) => manager.shutdown().await,
         }
     }
 
     /// Shutdown unregister service (for bootstrap)
-    pub async fn shutdown_unregister_service(&mut self) -> Option<ShutdownReport> {
+    pub async fn shutdown_unregister_service(&self) -> Option<ShutdownReport> {
         match self {
-            RouteInfoManagerWrapper::V1(manager) => manager.un_register_service.shutdown().await,
+            RouteInfoManagerWrapper::V1(manager) => {
+                let un_register_service = Arc::clone(&manager.lock().un_register_service);
+                un_register_service.shutdown().await
+            }
             RouteInfoManagerWrapper::V2(manager) => {
                 // V2's shutdown already handles this
                 manager.shutdown().await
@@ -156,10 +163,10 @@ impl RouteInfoManagerWrapper {
     /// Scan for inactive brokers and clean them up
     ///
     /// Returns the number of brokers that were cleaned up
-    pub fn scan_not_active_broker(&mut self) -> usize {
+    pub fn scan_not_active_broker(&self) -> usize {
         let cleaned = match self {
             RouteInfoManagerWrapper::V1(manager) => {
-                manager.scan_not_active_broker();
+                manager.lock().scan_not_active_broker();
                 0 // V1 doesn't return count
             }
             RouteInfoManagerWrapper::V2(manager) => manager.scan_not_active_broker().unwrap_or(0),
@@ -184,7 +191,7 @@ impl RouteInfoManagerWrapper {
         channel: Channel,
     ) -> Option<RegisterBrokerResult> {
         let result = match self {
-            RouteInfoManagerWrapper::V1(manager) => manager.register_broker(
+            RouteInfoManagerWrapper::V1(manager) => manager.lock().register_broker(
                 cluster_name,
                 broker_addr,
                 broker_name,
@@ -222,14 +229,14 @@ impl RouteInfoManagerWrapper {
     /// Submit unregister broker request
     pub fn submit_unregister_broker_request(&self, request: UnRegisterBrokerRequestHeader) -> bool {
         match self {
-            RouteInfoManagerWrapper::V1(manager) => manager.submit_unregister_broker_request(request),
+            RouteInfoManagerWrapper::V1(manager) => manager.lock().submit_unregister_broker_request(request),
             RouteInfoManagerWrapper::V2(manager) => manager.submit_unregister_broker_request(request),
         }
     }
 
     /// Unregister a broker
     pub fn unregister_broker(
-        &mut self,
+        &self,
         cluster_name: CheetahString,
         broker_addr: CheetahString,
         broker_name: CheetahString,
@@ -246,7 +253,7 @@ impl RouteInfoManagerWrapper {
                     broker_name,
                     broker_id,
                 };
-                manager.un_register_broker(vec![header]);
+                manager.lock().un_register_broker(vec![header]);
                 Ok(())
             }
             RouteInfoManagerWrapper::V2(manager) => {
@@ -262,7 +269,7 @@ impl RouteInfoManagerWrapper {
     /// Get the number of brokers currently tracked as live.
     pub fn active_broker_count(&self) -> usize {
         match self {
-            RouteInfoManagerWrapper::V1(manager) => manager.broker_live_table.len(),
+            RouteInfoManagerWrapper::V1(manager) => manager.lock().broker_live_table.len(),
             RouteInfoManagerWrapper::V2(manager) => manager.active_broker_count(),
         }
     }
@@ -270,7 +277,7 @@ impl RouteInfoManagerWrapper {
     /// Pickup topic route data
     pub fn pickup_topic_route_data(&self, topic: &CheetahString) -> Option<TopicRouteData> {
         match self {
-            RouteInfoManagerWrapper::V1(manager) => manager.pickup_topic_route_data(topic),
+            RouteInfoManagerWrapper::V1(manager) => manager.lock().pickup_topic_route_data(topic),
             RouteInfoManagerWrapper::V2(manager) => manager.pickup_topic_route_data(topic).ok(),
         }
     }
@@ -284,7 +291,9 @@ impl RouteInfoManagerWrapper {
     ) -> bool {
         match self {
             RouteInfoManagerWrapper::V1(manager) => {
-                manager.is_broker_topic_config_changed(cluster_name, broker_addr, data_version)
+                manager
+                    .lock()
+                    .is_broker_topic_config_changed(cluster_name, broker_addr, data_version)
             }
             RouteInfoManagerWrapper::V2(manager) => {
                 manager.is_broker_topic_config_changed(cluster_name, broker_addr, data_version)
@@ -293,11 +302,11 @@ impl RouteInfoManagerWrapper {
     }
 
     /// Update broker info update timestamp
-    pub fn update_broker_info_update_timestamp(&mut self, cluster_name: CheetahString, broker_addr: CheetahString) {
+    pub fn update_broker_info_update_timestamp(&self, cluster_name: CheetahString, broker_addr: CheetahString) {
         match self {
-            RouteInfoManagerWrapper::V1(manager) => {
-                manager.update_broker_info_update_timestamp(cluster_name, broker_addr)
-            }
+            RouteInfoManagerWrapper::V1(manager) => manager
+                .lock()
+                .update_broker_info_update_timestamp(cluster_name, broker_addr),
             RouteInfoManagerWrapper::V2(manager) => {
                 manager.update_broker_info_update_timestamp(cluster_name, broker_addr)
             }
@@ -311,9 +320,10 @@ impl RouteInfoManagerWrapper {
         broker_addr: CheetahString,
     ) -> Option<DataVersion> {
         match self {
-            RouteInfoManagerWrapper::V1(manager) => {
-                manager.query_broker_topic_config(cluster_name, broker_addr).cloned()
-            }
+            RouteInfoManagerWrapper::V1(manager) => manager
+                .lock()
+                .query_broker_topic_config(cluster_name, broker_addr)
+                .cloned(),
             RouteInfoManagerWrapper::V2(manager) => manager.query_broker_topic_config(cluster_name, broker_addr),
         }
     }
@@ -321,7 +331,7 @@ impl RouteInfoManagerWrapper {
     /// Get all cluster info
     pub fn get_all_cluster_info(&self) -> ClusterInfo {
         match self {
-            RouteInfoManagerWrapper::V1(manager) => manager.get_all_cluster_info(),
+            RouteInfoManagerWrapper::V1(manager) => manager.lock().get_all_cluster_info(),
             RouteInfoManagerWrapper::V2(manager) => manager
                 .get_all_cluster_info()
                 .unwrap_or_else(|_| ClusterInfo::default()),
@@ -332,9 +342,9 @@ impl RouteInfoManagerWrapper {
     pub fn wipe_write_perm_of_broker_by_lock(&self, broker_name: &str) -> i32 {
         use cheetah_string::CheetahString;
         match self {
-            RouteInfoManagerWrapper::V1(manager) => {
-                manager.wipe_write_perm_of_broker_by_lock(&CheetahString::from_slice(broker_name))
-            }
+            RouteInfoManagerWrapper::V1(manager) => manager
+                .lock()
+                .wipe_write_perm_of_broker_by_lock(&CheetahString::from_slice(broker_name)),
             RouteInfoManagerWrapper::V2(manager) => manager
                 .wipe_write_perm_of_broker_by_lock(broker_name.to_string())
                 .unwrap_or(0),
@@ -345,9 +355,9 @@ impl RouteInfoManagerWrapper {
     pub fn add_write_perm_of_broker_by_lock(&self, broker_name: &str) -> i32 {
         use cheetah_string::CheetahString;
         match self {
-            RouteInfoManagerWrapper::V1(manager) => {
-                manager.add_write_perm_of_broker_by_lock(&CheetahString::from_slice(broker_name))
-            }
+            RouteInfoManagerWrapper::V1(manager) => manager
+                .lock()
+                .add_write_perm_of_broker_by_lock(&CheetahString::from_slice(broker_name)),
             RouteInfoManagerWrapper::V2(manager) => manager
                 .add_write_perm_of_broker_by_lock(broker_name.to_string())
                 .unwrap_or(0),
@@ -356,12 +366,12 @@ impl RouteInfoManagerWrapper {
 
     /// Get broker member group
     pub fn get_broker_member_group(
-        &mut self,
+        &self,
         cluster_name: CheetahString,
         broker_name: CheetahString,
     ) -> Option<BrokerMemberGroup> {
         match self {
-            RouteInfoManagerWrapper::V1(manager) => manager.get_broker_member_group(cluster_name, broker_name),
+            RouteInfoManagerWrapper::V1(manager) => manager.lock().get_broker_member_group(cluster_name, broker_name),
             RouteInfoManagerWrapper::V2(manager) => manager.get_broker_member_group(cluster_name, broker_name),
         }
     }
@@ -369,7 +379,7 @@ impl RouteInfoManagerWrapper {
     /// Get all topic list
     pub fn get_all_topic_list(&self) -> TopicList {
         match self {
-            RouteInfoManagerWrapper::V1(manager) => manager.get_all_topic_list(),
+            RouteInfoManagerWrapper::V1(manager) => manager.lock().get_all_topic_list(),
             RouteInfoManagerWrapper::V2(manager) => {
                 let topics = manager.get_all_topics();
                 TopicList {
@@ -381,10 +391,10 @@ impl RouteInfoManagerWrapper {
     }
 
     /// Delete topic
-    pub fn delete_topic(&mut self, topic: CheetahString, cluster_name: Option<CheetahString>) {
+    pub fn delete_topic(&self, topic: CheetahString, cluster_name: Option<CheetahString>) {
         match self {
             RouteInfoManagerWrapper::V1(manager) => {
-                manager.delete_topic(topic, cluster_name);
+                manager.lock().delete_topic(topic, cluster_name);
             }
             RouteInfoManagerWrapper::V2(manager) => {
                 manager.delete_topic(topic, cluster_name);
@@ -400,7 +410,7 @@ impl RouteInfoManagerWrapper {
     ) {
         match self {
             RouteInfoManagerWrapper::V1(manager) => {
-                manager.register_topic(topic, queue_data_vec);
+                manager.lock().register_topic(topic, queue_data_vec);
             }
             RouteInfoManagerWrapper::V2(manager) => {
                 manager.register_topic(topic, queue_data_vec);
@@ -411,7 +421,7 @@ impl RouteInfoManagerWrapper {
     /// Get system topic list
     pub fn get_system_topic_list(&self) -> TopicList {
         match self {
-            RouteInfoManagerWrapper::V1(manager) => manager.get_system_topic_list(),
+            RouteInfoManagerWrapper::V1(manager) => manager.lock().get_system_topic_list(),
             RouteInfoManagerWrapper::V2(manager) => manager.get_system_topic_list().unwrap_or_else(|_| TopicList {
                 topic_list: vec![],
                 broker_addr: None,
@@ -422,7 +432,7 @@ impl RouteInfoManagerWrapper {
     /// Get topics by cluster
     pub fn get_topics_by_cluster(&self, cluster: &CheetahString) -> TopicList {
         match self {
-            RouteInfoManagerWrapper::V1(manager) => manager.get_topics_by_cluster(cluster),
+            RouteInfoManagerWrapper::V1(manager) => manager.lock().get_topics_by_cluster(cluster),
             RouteInfoManagerWrapper::V2(manager) => {
                 let topics = manager.get_topics_by_cluster(cluster).unwrap_or_else(|_| vec![]);
                 TopicList {
@@ -436,7 +446,7 @@ impl RouteInfoManagerWrapper {
     /// Get unit topics
     pub fn get_unit_topics(&self) -> TopicList {
         match self {
-            RouteInfoManagerWrapper::V1(manager) => manager.get_unit_topics(),
+            RouteInfoManagerWrapper::V1(manager) => manager.lock().get_unit_topics(),
             RouteInfoManagerWrapper::V2(manager) => manager.get_unit_topics().unwrap_or_else(|_| TopicList {
                 topic_list: vec![],
                 broker_addr: None,
@@ -447,7 +457,7 @@ impl RouteInfoManagerWrapper {
     /// Get has unit sub topic list
     pub fn get_has_unit_sub_topic_list(&self) -> TopicList {
         match self {
-            RouteInfoManagerWrapper::V1(manager) => manager.get_has_unit_sub_topic_list(),
+            RouteInfoManagerWrapper::V1(manager) => manager.lock().get_has_unit_sub_topic_list(),
             RouteInfoManagerWrapper::V2(manager) => {
                 manager.get_has_unit_sub_topic_list().unwrap_or_else(|_| TopicList {
                     topic_list: vec![],
@@ -460,7 +470,7 @@ impl RouteInfoManagerWrapper {
     /// Get has unit sub un unit topic list
     pub fn get_has_unit_sub_un_unit_topic_list(&self) -> TopicList {
         match self {
-            RouteInfoManagerWrapper::V1(manager) => manager.get_has_unit_sub_un_unit_topic_list(),
+            RouteInfoManagerWrapper::V1(manager) => manager.lock().get_has_unit_sub_un_unit_topic_list(),
             RouteInfoManagerWrapper::V2(manager) => {
                 manager
                     .get_has_unit_sub_ununit_topic_list()
@@ -473,10 +483,10 @@ impl RouteInfoManagerWrapper {
     }
 
     /// Unregister broker (internal method)
-    pub fn un_register_broker(&mut self, requests: Vec<UnRegisterBrokerRequestHeader>) {
+    pub fn un_register_broker(&self, requests: Vec<UnRegisterBrokerRequestHeader>) {
         match self {
             RouteInfoManagerWrapper::V1(manager) => {
-                manager.un_register_broker(requests);
+                manager.lock().un_register_broker(requests);
             }
             RouteInfoManagerWrapper::V2(manager) => {
                 manager.un_register_broker(requests);

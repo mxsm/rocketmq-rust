@@ -257,6 +257,10 @@ Gate 与其他 owner 仍未完成。Controller Raft owner 随 Issue #8299 改为
 690 production/1,961 occurrence，Controller 降至 10 条/26 occurrence，Raft/OpenRaft `ArcMut` 清零。Controller
 request processor owner 随 Issue #8301 将业务 handler 收窄为共享 receiver、wrapper 改为 `Arc` 后，实际快照降至
 688 production/1,959 occurrence，Controller 降至 8 条/24 occurrence；总进度仍为 75/82。
+NameServer runtime/processor owner 随 Issue #8303 改为安全 `Arc` 根、`Weak` child handle、`ArcSwap` 配置快照和
+内部同步 batch/KV/V1 wrapper 后，实际快照降至 669 production/1,918 occurrence，NameServer 降至 28 条/58
+occurrence。剩余 NameServer 债务精确为 V1 tables 16/44、remoting client 4/7 和 `ConnectionHandlerContext` 8/7；
+总进度仍为 75/82，M11-12 父工作包未完成。
 
 ### 9.3 证据目录
 

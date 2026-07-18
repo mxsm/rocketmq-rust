@@ -29,16 +29,15 @@ use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
-use rocketmq_rust::ArcMut;
 use tracing::debug;
 use tracing::warn;
 
-use crate::bootstrap::NameServerRuntimeInner;
+use crate::bootstrap::NameServerRuntimeHandle;
 use crate::processor::NAMESPACE_ORDER_TOPIC_CONFIG;
 
 /// Client request processor for handling route info queries
 pub struct ClientRequestProcessor {
-    name_server_runtime_inner: ArcMut<NameServerRuntimeInner>,
+    name_server_runtime_inner: NameServerRuntimeHandle,
     need_check_namesrv_ready: AtomicBool,
     startup_time_millis: u64,
     // Cached configuration values (immutable after construction)
@@ -55,6 +54,18 @@ impl RequestProcessor for ClientRequestProcessor {
         _ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        self.handle_request(request).await
+    }
+}
+
+impl ClientRequestProcessor {
+    pub(crate) async fn handle_request(
+        &self,
+        request: &mut RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let _runtime_guard = self.name_server_runtime_inner.upgrade().ok_or_else(|| {
+            rocketmq_error::RocketMQError::not_initialized("NameServer runtime is no longer available")
+        })?;
         let request_code = RequestCode::from(request.code());
         debug!(
             "Name server ClientRequestProcessor Received request code: {:?}",
@@ -63,10 +74,8 @@ impl RequestProcessor for ClientRequestProcessor {
 
         self.get_route_info_by_topic(request)
     }
-}
 
-impl ClientRequestProcessor {
-    pub(crate) fn new(name_server_runtime_inner: ArcMut<NameServerRuntimeInner>) -> Self {
+    pub(crate) fn new(name_server_runtime_inner: NameServerRuntimeHandle) -> Self {
         let config = name_server_runtime_inner.name_server_config();
         let wait_seconds_millis = config.wait_seconds_for_service as u64 * 1000;
         let need_wait_for_service = config.need_wait_for_service;

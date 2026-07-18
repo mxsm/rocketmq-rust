@@ -17,33 +17,28 @@ use std::time::Duration;
 use rocketmq_remoting::protocol::header::namesrv::broker_request::UnRegisterBrokerRequestHeader;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
-use rocketmq_rust::ArcMut;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 use tracing::warn;
 
-use crate::bootstrap::NameServerRuntimeInner;
+use crate::bootstrap::NameServerRuntimeHandle;
 
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(crate) struct BatchUnregistrationService {
-    name_server_runtime_inner: ArcMut<NameServerRuntimeInner>,
+    name_server_runtime_inner: NameServerRuntimeHandle,
     tx: tokio::sync::mpsc::Sender<UnRegisterBrokerRequestHeader>,
-    rx: Option<tokio::sync::mpsc::Receiver<UnRegisterBrokerRequestHeader>>,
+    rx: parking_lot::Mutex<Option<tokio::sync::mpsc::Receiver<UnRegisterBrokerRequestHeader>>>,
     task_group: parking_lot::Mutex<Option<TaskGroup>>,
 }
 
 impl BatchUnregistrationService {
-    pub(crate) fn new(name_server_runtime_inner: ArcMut<NameServerRuntimeInner>) -> Self {
-        let (tx, rx) = tokio::sync::mpsc::channel::<UnRegisterBrokerRequestHeader>(
-            name_server_runtime_inner
-                .name_server_config()
-                .unregister_broker_queue_capacity as usize,
-        );
+    pub(crate) fn new(name_server_runtime_inner: NameServerRuntimeHandle, queue_capacity: usize) -> Self {
+        let (tx, rx) = tokio::sync::mpsc::channel::<UnRegisterBrokerRequestHeader>(queue_capacity);
         BatchUnregistrationService {
             name_server_runtime_inner,
             tx,
-            rx: Some(rx),
+            rx: parking_lot::Mutex::new(Some(rx)),
             task_group: parking_lot::Mutex::new(None),
         }
     }
@@ -56,7 +51,7 @@ impl BatchUnregistrationService {
         true
     }
 
-    pub fn start(&mut self) {
+    pub fn start(&self) {
         if self.task_group.lock().is_some() {
             return;
         }
@@ -70,12 +65,15 @@ impl BatchUnregistrationService {
             return;
         };
 
-        let mut name_server_runtime_inner = self.name_server_runtime_inner.clone();
-        let mut rx = self.rx.take().expect("rx is None");
+        let name_server_runtime_inner = self.name_server_runtime_inner.clone();
+        let Some(mut rx) = self.rx.lock().take() else {
+            warn!("BatchUnregistrationService receiver is unavailable");
+            return;
+        };
         let shutdown_token = task_group.cancellation_token();
         if let Err(error) = task_group.spawn_service("namesrv.batch-unregistration", async move {
             info!("BatchUnregistrationService started");
-            run_batch_unregistration_service(&mut name_server_runtime_inner, &mut rx, shutdown_token).await;
+            run_batch_unregistration_service(name_server_runtime_inner, &mut rx, shutdown_token).await;
         }) {
             warn!("BatchUnregistrationService cannot start because task spawn failed: {error}");
             return;
@@ -106,7 +104,7 @@ impl BatchUnregistrationService {
 }
 
 async fn run_batch_unregistration_service(
-    name_server_runtime_inner: &mut ArcMut<NameServerRuntimeInner>,
+    name_server_runtime_inner: NameServerRuntimeHandle,
     rx: &mut tokio::sync::mpsc::Receiver<UnRegisterBrokerRequestHeader>,
     shutdown_token: CancellationToken,
 ) {
@@ -126,9 +124,11 @@ async fn run_batch_unregistration_service(
                             unregistration_requests.push(req);
                         }
 
-                        name_server_runtime_inner
-                            .route_info_manager_mut()
-                            .un_register_broker(unregistration_requests);
+                        let Some(runtime) = name_server_runtime_inner.upgrade() else {
+                            info!("BatchUnregistrationService stopped because NameServer runtime was released");
+                            break;
+                        };
+                        runtime.route_info_manager().un_register_broker(unregistration_requests);
                     }
                     None => {
                         info!("BatchUnregistrationService channel closed");

@@ -86,7 +86,7 @@ use tracing::debug;
 use tracing::info;
 use tracing::warn;
 
-use crate::bootstrap::NameServerRuntimeInner;
+use crate::bootstrap::NameServerRuntimeHandle;
 use crate::route::batch_unregistration_service::BatchUnregistrationService;
 use crate::route_info::broker_addr_info::BrokerAddrInfo;
 use crate::route_info::broker_addr_info::BrokerLiveInfo;
@@ -109,15 +109,18 @@ pub struct RouteInfoManager {
     pub(crate) broker_live_table: BrokerLiveTable,
     pub(crate) filter_server_table: FilterServerTable,
     pub(crate) topic_queue_mapping_info_table: TopicQueueMappingInfoTable,
-    pub(crate) name_server_runtime_inner: ArcMut<NameServerRuntimeInner>,
-    pub(crate) un_register_service: ArcMut<BatchUnregistrationService>,
+    pub(crate) name_server_runtime_inner: NameServerRuntimeHandle,
+    pub(crate) un_register_service: Arc<BatchUnregistrationService>,
     lock: Arc<parking_lot::RwLock<()>>,
 }
 
 #[allow(private_interfaces)]
 impl RouteInfoManager {
-    pub fn new(name_server_runtime_inner: ArcMut<NameServerRuntimeInner>) -> Self {
-        let un_register_service = ArcMut::new(BatchUnregistrationService::new(name_server_runtime_inner.clone()));
+    pub(crate) fn new(name_server_runtime_inner: NameServerRuntimeHandle, queue_capacity: usize) -> Self {
+        let un_register_service = Arc::new(BatchUnregistrationService::new(
+            name_server_runtime_inner.clone(),
+            queue_capacity,
+        ));
         RouteInfoManager {
             topic_queue_table: ArcMut::new(HashMap::new()),
             broker_addr_table: ArcMut::new(HashMap::new()),
@@ -629,17 +632,19 @@ impl RouteInfoManager {
                 let broker_addr = broker_addr.clone();
 
                 if let Err(error) = task_group.spawn_service("namesrv.notify-min-broker-id", async move {
-                    let _ = remoting_client
-                        .remoting_client()
-                        .invoke_request_oneway(
-                            &broker_addr,
-                            RemotingCommand::create_request_command(
-                                RequestCode::NotifyMinBrokerIdChange,
-                                requst_header,
-                            ),
-                            3000,
-                        )
-                        .await;
+                    if let Some(runtime) = remoting_client.upgrade() {
+                        let _ = runtime
+                            .remoting_client()
+                            .invoke_request_oneway(
+                                &broker_addr,
+                                RemotingCommand::create_request_command(
+                                    RequestCode::NotifyMinBrokerIdChange,
+                                    requst_header,
+                                ),
+                                3000,
+                            )
+                            .await;
+                    }
                 }) {
                     warn!("failed to spawn min broker id notification task: {error}");
                 }
@@ -1122,7 +1127,7 @@ impl RouteInfoManager {
 impl RouteInfoManager {
     //! start client connection disconnected listener
     pub fn start(&self) {
-        self.un_register_service.mut_from_ref().start();
+        self.un_register_service.start();
     }
 
     pub async fn shutdown(&self) -> Option<rocketmq_runtime::ShutdownReport> {

@@ -22,11 +22,10 @@ use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
-use rocketmq_rust::ArcMut;
 use tracing::debug;
 use tracing::info;
 
-use crate::bootstrap::NameServerRuntimeInner;
+use crate::bootstrap::NameServerRuntimeHandle;
 use crate::processor::NAMESPACE_ORDER_TOPIC_CONFIG;
 
 mod route_lookup;
@@ -35,11 +34,11 @@ pub(crate) use route_lookup::ClusterTestRouteLookup;
 pub(crate) use route_lookup::TransportClusterTestRouteLookup;
 
 pub struct ClusterTestRequestProcessor {
-    name_server_runtime_inner: ArcMut<NameServerRuntimeInner>,
+    name_server_runtime_inner: NameServerRuntimeHandle,
 }
 
 impl ClusterTestRequestProcessor {
-    pub(crate) fn new(name_server_runtime_inner: ArcMut<NameServerRuntimeInner>) -> Self {
+    pub(crate) fn new(name_server_runtime_inner: NameServerRuntimeHandle) -> Self {
         Self {
             name_server_runtime_inner,
         }
@@ -95,15 +94,14 @@ impl ClusterTestRequestProcessor {
             )),
         ))
     }
-}
 
-impl RequestProcessor for ClusterTestRequestProcessor {
-    async fn process_request(
-        &mut self,
-        _channel: Channel,
-        _ctx: ConnectionHandlerContext,
+    pub(crate) async fn handle_request(
+        &self,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let _runtime_guard = self.name_server_runtime_inner.upgrade().ok_or_else(|| {
+            rocketmq_error::RocketMQError::not_initialized("NameServer runtime is no longer available")
+        })?;
         let request_code = RequestCode::from(request.code());
         debug!(
             "Name server ClusterTestRequestProcessor received request code: {:?}",
@@ -114,6 +112,17 @@ impl RequestProcessor for ClusterTestRequestProcessor {
     }
 }
 
+impl RequestProcessor for ClusterTestRequestProcessor {
+    async fn process_request(
+        &mut self,
+        _channel: Channel,
+        _ctx: ConnectionHandlerContext,
+        request: &mut RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        self.handle_request(request).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -121,6 +130,7 @@ mod tests {
 
     use super::*;
     use crate::bootstrap::Builder;
+    use crate::bootstrap::NameServerRuntimeHandle;
     use crate::route::route_info_manager_wrapper::RouteInfoManagerWrapper;
     use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
     use rocketmq_remoting::local::LocalRequestHarness;
@@ -185,12 +195,13 @@ mod tests {
             .build();
 
         assert!(matches!(
-            bootstrap.runtime_inner().route_info_manager(),
+            bootstrap.runtime_inner().route_info_manager().as_ref(),
             RouteInfoManagerWrapper::V2(_)
         ));
 
         let harness = LocalRequestHarness::new().await.unwrap();
-        let mut processor = ClusterTestRequestProcessor::new(bootstrap.runtime_inner());
+        let runtime = bootstrap.runtime_inner();
+        let mut processor = ClusterTestRequestProcessor::new(NameServerRuntimeHandle::new(&runtime));
         let mut request = RemotingCommand::create_request_command(
             RequestCode::GetRouteinfoByTopic,
             GetRouteInfoRequestHeader::new(CheetahString::from("missing-topic"), Some(true)),
