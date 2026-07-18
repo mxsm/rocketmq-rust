@@ -4489,6 +4489,7 @@ dependencies = [
  "serde_yaml",
  "sha1",
  "sha2 0.11.0",
+ "subtle",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -5002,6 +5003,7 @@ name = "rocketmq-security-api"
 version = "1.0.0"
 dependencies = [
  "cheetah-string",
+ "tempfile",
  "thiserror 2.0.18",
  "zeroize",
 ]

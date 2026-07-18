@@ -31,3 +31,6 @@ default = []
 cheetah-string.workspace = true
 thiserror.workspace = true
 zeroize.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

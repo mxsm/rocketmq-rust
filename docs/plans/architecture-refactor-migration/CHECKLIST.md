@@ -535,7 +535,14 @@ M09-04 再删除 MCP 未使用的 Auth/Error direct edges，并把承担 owned t
   - [x] Windows 在没有 owner-only ACL verifier 前拒绝启用；WSL/Linux 真实权限、加密、tamper、版本冲突测试通过
   - [x] [`M11-02 证据`](phase-3-production-readiness/11-secret-provider-evidence.md) 记录合同、平台测试、API 增量和回滚边界
   - [x] 66/82 已完成、16 未完成，下一工作包 PR-M11-03；安全默认值、M10/M11/Phase 3 Gate 均未提前宣称完成
-- [ ] PR-M11-03：实现 Secure Profile 与一次性 bootstrap
+- [x] PR-M11-03：实现 Secure Profile 与一次性 bootstrap
+  - [x] 新部署未指定 profile 时解析为 `secure`；已识别的既有部署保持 `compatibility` 并强制输出持久化迁移状态
+  - [x] unknown profile、缺 trust anchor/provider/身份引导、多个身份源、缺失或过期 bootstrap、非 TLS listener 和降级请求均 fail closed
+  - [x] 一次性 grant 使用至少 32B proof，绑定 cluster/listener/expiry 并以 constant-time digest 校验；原始 proof 不持久化
+  - [x] owner-only 状态按 available→claimed→consumed 原子推进；并发、重启、重放、损坏状态及 provisioner 失败均不重开
+  - [x] Windows 在没有 owner-only ACL verifier 前拒绝启用；WSL/Linux 真实原子文件、权限和并发测试 7/7 通过
+  - [x] [`M11-03 证据`](phase-3-production-readiness/11-secure-profile-bootstrap-evidence.md) 记录 profile、状态机、公共 API 和剩余边界
+  - [x] 67/82 已完成、15 未完成，下一工作包 PR-M11-04；M10/M11/Phase 3 Gate 均未提前宣称完成
 - [ ] PR-M11-04：实现 credential/certificate rotation 与原子 reload
 - [ ] PR-M11-05：完成 MCP HTTPS、JWKS 与 Principal 传播
 - [ ] PR-M11-06：完成 MCP Audit Writer 与 Shutdown Drain

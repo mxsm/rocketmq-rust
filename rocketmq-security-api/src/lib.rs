@@ -15,6 +15,7 @@
 //! Runtime-neutral security contracts.
 
 pub mod secret_provider;
+pub mod secure_deployment;
 
 pub use secret_provider::SecretAccess;
 pub use secret_provider::SecretIdentifierError;
@@ -29,6 +30,16 @@ pub use secret_provider::SecretProviderId;
 pub use secret_provider::SecretVersion;
 pub use secret_provider::SecretVersioning;
 pub use secret_provider::VersionedSecret;
+pub use secure_deployment::validate_deployment_security;
+pub use secure_deployment::BootstrapReadinessView;
+pub use secure_deployment::DeploymentOrigin;
+pub use secure_deployment::DeploymentSecurityConfigView;
+pub use secure_deployment::DeploymentSecurityFailure;
+pub use secure_deployment::DeploymentSecurityReport;
+pub use secure_deployment::SecurityMigrationStatus;
+pub use secure_deployment::SecurityProfileResolution;
+pub use secure_deployment::SecurityProfileSelection;
+pub use secure_deployment::SecurityProfileSelectionError;
 
 use std::collections::HashMap;
 use std::fmt;

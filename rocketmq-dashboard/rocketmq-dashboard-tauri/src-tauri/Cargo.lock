@@ -4100,6 +4100,7 @@ dependencies = [
  "serde_yaml",
  "sha1",
  "sha2 0.11.0",
+ "subtle",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
