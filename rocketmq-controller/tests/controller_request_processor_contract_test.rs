@@ -45,7 +45,6 @@ use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
-use rocketmq_rust::ArcMut;
 use tokio::time::sleep;
 
 const CLUSTER_NAME: &str = "contract-cluster";
@@ -97,7 +96,7 @@ impl ProcessorHarness {
         wait_for_leader(&manager).await;
 
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let processor = ControllerRequestProcessor::new(manager.clone());
         Self {
             manager,
@@ -297,8 +296,8 @@ async fn create_test_channel() -> Channel {
     drop(listener);
     let tcp_stream = tokio::net::TcpStream::from_std(std_stream).expect("convert tcp stream");
     let connection = Connection::new(tcp_stream);
-    let response_table = ArcMut::new(HashMap::<i32, ResponseFuture>::new());
-    let inner = ArcMut::new(ChannelInner::new(connection, response_table));
+    let response_table = Arc::new(parking_lot::Mutex::new(HashMap::<i32, ResponseFuture>::new()));
+    let inner = Arc::new(ChannelInner::new(connection, response_table));
     Channel::new(inner, local_addr, local_addr)
 }
 

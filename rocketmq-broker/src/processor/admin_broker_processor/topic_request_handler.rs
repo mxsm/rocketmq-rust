@@ -794,7 +794,6 @@ mod tests {
     use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
     use rocketmq_remoting::protocol::RemotingSerializable;
     use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
-    use rocketmq_rust::ArcMut;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
 
     use super::*;
@@ -832,8 +831,8 @@ mod tests {
         drop(listener);
         let tcp_stream = tokio::net::TcpStream::from_std(std_stream).expect("convert tcp stream");
         let connection = Connection::new(tcp_stream);
-        let response_table = ArcMut::new(HashMap::<i32, ResponseFuture>::new());
-        let inner = ArcMut::new(ChannelInner::new(connection, response_table));
+        let response_table = std::sync::Arc::new(parking_lot::Mutex::new(HashMap::<i32, ResponseFuture>::new()));
+        let inner = std::sync::Arc::new(ChannelInner::new(connection, response_table));
         Channel::new(inner, local_addr, local_addr)
     }
 
@@ -902,7 +901,7 @@ mod tests {
         request.make_custom_header_to_net();
         request.set_body_mut_ref(detail.encode().expect("encode topic queue mapping detail"));
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
 
         let response = handler
             .update_and_create_static_topic(channel, ctx, RequestCode::UpdateAndCreateStaticTopic, &mut request)

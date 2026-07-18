@@ -496,7 +496,7 @@ where
 
     async fn write_detached_fast_failure_response(
         response_result: Result<Option<RemotingCommand>, tokio::sync::oneshot::error::RecvError>,
-        mut ctx: ConnectionHandlerContext,
+        ctx: ConnectionHandlerContext,
         opaque: i32,
     ) {
         match response_result {

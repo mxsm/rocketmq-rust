@@ -36,7 +36,7 @@ use crate::base::pending_request_table::PendingRequestOwner;
 use crate::base::pending_request_table::PendingRequestTable;
 use crate::base::pending_request_table::PendingRequestToken;
 use crate::codec::remoting_command_codec::FrameLimits;
-use crate::connection::Connection;
+use crate::connection::ConnectionStateHandle;
 // Import error helpers for convenient error creation
 use crate::error_helpers::connection_invalid;
 use crate::error_helpers::remote_error;
@@ -101,8 +101,8 @@ impl<PR> ClientInner<PR> {
         let Some(owner) = channel_inner.pending_request_owner().cloned() else {
             return;
         };
-        let channel = Channel::new(ArcMut::new(channel_inner), session.local_addr(), session.remote_addr());
-        let context = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let channel = Channel::new(Arc::new(channel_inner), session.local_addr(), session.remote_addr());
+        let context = Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         self.sessions.insert(session.session_id(), context);
         if let Some(ready) = self.ready.lock().take() {
             let _ = ready.send((channel, owner, session));
@@ -124,10 +124,10 @@ impl<PR: RequestProcessor + Sync + 'static> TransportConnectionHandler for Clien
     ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         let mut cmd_handler = self.cmd_handler.clone();
         Box::pin(async move {
-            let Some((_, mut context)) = self.sessions.remove(&session.session_id()) else {
+            let Some((_, context)) = self.sessions.remove(&session.session_id()) else {
                 return;
             };
-            cmd_handler.process_message_received(&mut context, command).await;
+            cmd_handler.process_message_received(&context, command).await;
             self.sessions.insert(session.session_id(), context);
         })
     }
@@ -564,16 +564,12 @@ where
         report
     }
 
-    pub fn connection(&self) -> &Connection {
+    pub fn connection(&self) -> &ConnectionStateHandle {
         self.channel.connection_ref()
     }
 
     pub fn remote_address(&self) -> SocketAddr {
         self.channel.remote_address()
-    }
-
-    pub fn connection_mut(&mut self) -> &mut Connection {
-        self.channel.connection_mut()
     }
 
     pub(crate) fn retire_after_timeout(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {

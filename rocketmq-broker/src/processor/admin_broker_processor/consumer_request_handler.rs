@@ -1095,8 +1095,8 @@ mod tests {
         drop(listener);
         let tcp_stream = tokio::net::TcpStream::from_std(std_stream).expect("convert tcp stream");
         let connection = Connection::new(tcp_stream);
-        let response_table = ArcMut::new(HashMap::<i32, ResponseFuture>::new());
-        let inner = ArcMut::new(ChannelInner::new(connection, response_table));
+        let response_table = std::sync::Arc::new(parking_lot::Mutex::new(HashMap::<i32, ResponseFuture>::new()));
+        let inner = std::sync::Arc::new(ChannelInner::new(connection, response_table));
         Channel::new(inner, local_addr, local_addr)
     }
 
@@ -1145,7 +1145,7 @@ mod tests {
 
         let mut handler = ConsumerRequestHandler::new(inner.clone());
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request =
             RemotingCommand::create_request_command(RequestCode::GetAllMessageRequestMode, EmptyHeader {});
         let mut response = handler
@@ -1200,7 +1200,7 @@ mod tests {
         );
         request.make_custom_header_to_net();
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
 
         let mut response = handler
             .get_broker_consume_stats(channel, ctx, RequestCode::GetBrokerConsumeStats, &mut request)
@@ -1261,7 +1261,7 @@ mod tests {
         );
         request.make_custom_header_to_net();
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
 
         let mut response = handler
             .query_correction_offset(channel, ctx, RequestCode::QueryCorrectionOffset, &mut request)
@@ -1314,7 +1314,7 @@ mod tests {
         );
         request.make_custom_header_to_net();
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
 
         let response = handler
             .consume_message_directly(channel, ctx, RequestCode::ConsumeMessageDirectly, &mut request)
@@ -1348,7 +1348,7 @@ mod tests {
 
         let mut handler = ConsumerRequestHandler::new(inner.clone());
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request = RemotingCommand::create_request_command(
             RequestCode::InvokeBrokerToResetOffset,
             ResetOffsetRequestHeader {
@@ -1391,7 +1391,7 @@ mod tests {
         let inner = runtime.inner_for_test().clone();
         let mut handler = ConsumerRequestHandler::new(inner);
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request = RemotingCommand::create_request_command(
             RequestCode::InvokeBrokerToGetConsumerStatus,
             GetConsumerStatusRequestHeader::new(
@@ -1448,7 +1448,7 @@ mod tests {
 
         let mut handler = ConsumerRequestHandler::new(inner);
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request = RemotingCommand::create_request_command(
             RequestCode::QuerySubscriptionByConsumer,
             QuerySubscriptionByConsumerRequestHeader {
@@ -1504,7 +1504,7 @@ mod tests {
         );
         request.make_custom_header_to_net();
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
 
         let mut response = handler
             .query_consume_time_span(channel, ctx, RequestCode::QueryConsumeTimeSpan, &mut request)
@@ -1561,7 +1561,7 @@ mod tests {
         );
         request.make_custom_header_to_net();
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
 
         let response = handler
             .clone_group_offset(channel, ctx, RequestCode::CloneGroupOffset, &mut request)

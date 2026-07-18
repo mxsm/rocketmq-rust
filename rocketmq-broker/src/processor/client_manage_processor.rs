@@ -464,8 +464,8 @@ mod tests {
         drop(listener);
         let tcp_stream = TcpStream::from_std(std_stream).expect("convert tcp stream");
         let connection = Connection::new(tcp_stream);
-        let response_table = ArcMut::new(HashMap::<i32, ResponseFuture>::new());
-        let inner = ArcMut::new(ChannelInner::new(connection, response_table));
+        let response_table = std::sync::Arc::new(parking_lot::Mutex::new(HashMap::<i32, ResponseFuture>::new()));
+        let inner = std::sync::Arc::new(ChannelInner::new(connection, response_table));
         Channel::new(inner, local_addr, local_addr)
     }
 
@@ -556,7 +556,7 @@ mod tests {
         let mut runtime = new_test_runtime("heartbeat-v2-without-sub", false).await;
         let inner = runtime.inner_for_test().clone();
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let client_channel_info = ClientChannelInfo::new(channel.clone(), "client-id".into(), Default::default(), 0);
         let mut processor = ClientManageProcessor::new(inner.clone());
         processor

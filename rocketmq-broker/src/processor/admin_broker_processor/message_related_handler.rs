@@ -566,8 +566,11 @@ mod tests {
         drop(listener);
         let tcp_stream = tokio::net::TcpStream::from_std(std_stream).expect("convert tcp stream");
         let connection = Connection::new(tcp_stream);
-        let response_table = ArcMut::new(std::collections::HashMap::<i32, ResponseFuture>::new());
-        let inner = ArcMut::new(ChannelInner::new(connection, response_table));
+        let response_table = std::sync::Arc::new(parking_lot::Mutex::new(std::collections::HashMap::<
+            i32,
+            ResponseFuture,
+        >::new()));
+        let inner = std::sync::Arc::new(ChannelInner::new(connection, response_table));
         Channel::new(inner, local_addr, local_addr)
     }
 
@@ -611,7 +614,7 @@ mod tests {
 
         let mut handler = MessageRelatedHandler::new(inner.clone());
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request = RemotingCommand::create_request_command(
             RequestCode::ResumeCheckHalfMessage,
             ResumeCheckHalfMessageRequestHeader {
@@ -686,7 +689,7 @@ mod tests {
 
         let mut handler = MessageRelatedHandler::new(inner.clone());
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request = RemotingCommand::create_request_command(
             RequestCode::QueryConsumeQueue,
             QueryConsumeQueueRequestHeader {
@@ -753,7 +756,7 @@ mod tests {
 
         let mut handler = MessageRelatedHandler::new(inner.clone());
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request = RemotingCommand::create_request_command(RequestCode::PopRollback, EmptyHeader::default());
         request.make_custom_header_to_net();
 

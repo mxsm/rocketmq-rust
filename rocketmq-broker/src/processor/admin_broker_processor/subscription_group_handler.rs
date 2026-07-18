@@ -318,7 +318,6 @@ mod tests {
     use rocketmq_remoting::protocol::subscription::group_forbidden::GroupForbidden;
     use rocketmq_remoting::protocol::RemotingSerializable;
     use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
-    use rocketmq_rust::ArcMut;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
 
     use super::*;
@@ -356,8 +355,8 @@ mod tests {
         drop(listener);
         let tcp_stream = tokio::net::TcpStream::from_std(std_stream).expect("convert tcp stream");
         let connection = Connection::new(tcp_stream);
-        let response_table = ArcMut::new(HashMap::<i32, ResponseFuture>::new());
-        let inner = ArcMut::new(ChannelInner::new(connection, response_table));
+        let response_table = std::sync::Arc::new(parking_lot::Mutex::new(HashMap::<i32, ResponseFuture>::new()));
+        let inner = std::sync::Arc::new(ChannelInner::new(connection, response_table));
         Channel::new(inner, local_addr, local_addr)
     }
 
@@ -378,7 +377,7 @@ mod tests {
                 .set_body(body.encode().expect("encode subscription group list"));
 
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let response = handler
             .update_and_create_subscription_group_list(
                 channel,
@@ -441,7 +440,7 @@ mod tests {
         request.make_custom_header_to_net();
 
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let response = handler
             .delete_subscription_group(channel, ctx, RequestCode::DeleteSubscriptionGroup, &mut request)
             .await
@@ -484,7 +483,7 @@ mod tests {
         request.make_custom_header_to_net();
 
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut response = handler
             .update_and_get_group_forbidden(channel, ctx, RequestCode::UpdateAndGetGroupForbidden, &mut request)
             .await

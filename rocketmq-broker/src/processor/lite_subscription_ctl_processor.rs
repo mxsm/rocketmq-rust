@@ -441,8 +441,8 @@ mod tests {
         drop(listener);
         let tcp_stream = tokio::net::TcpStream::from_std(std_stream).expect("convert tcp stream");
         let connection = Connection::new(tcp_stream);
-        let response_table = ArcMut::new(HashMap::<i32, ResponseFuture>::new());
-        let inner = ArcMut::new(ChannelInner::new(connection, response_table));
+        let response_table = std::sync::Arc::new(parking_lot::Mutex::new(HashMap::<i32, ResponseFuture>::new()));
+        let inner = std::sync::Arc::new(ChannelInner::new(connection, response_table));
         Channel::new(inner, local_addr, local_addr)
     }
 
@@ -486,7 +486,7 @@ mod tests {
             .set_body(Bytes::from(serde_json::to_vec(&body).expect("serialize request body")));
 
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut processor = LiteSubscriptionCtlProcessor::new(inner.clone());
         let response = processor
             .process_request(channel, ctx, &mut request)
@@ -538,7 +538,7 @@ mod tests {
             .set_body(Bytes::from(serde_json::to_vec(&body).expect("serialize request body")));
 
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut processor = LiteSubscriptionCtlProcessor::new(inner.clone());
         let response = processor
             .process_request(channel.clone(), ctx.clone(), &mut request)
@@ -621,7 +621,7 @@ mod tests {
             .set_body(Bytes::from(serde_json::to_vec(&body).expect("serialize request body")));
 
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut processor = LiteSubscriptionCtlProcessor::new(inner.clone());
         let response = processor
             .process_request(channel, ctx, &mut request)
@@ -663,7 +663,7 @@ mod tests {
             .set_body(Bytes::from(serde_json::to_vec(&body).expect("serialize request body")));
 
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut processor = LiteSubscriptionCtlProcessor::new(inner.clone());
         let response = processor
             .process_request(channel, ctx, &mut request)
@@ -721,7 +721,7 @@ mod tests {
             .set_body(Bytes::from(serde_json::to_vec(&body).expect("serialize request body")));
 
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut processor = LiteSubscriptionCtlProcessor::new(inner.clone());
         let response = processor
             .process_request(channel, ctx, &mut request)
@@ -783,7 +783,7 @@ mod tests {
             .set_body(Bytes::from(serde_json::to_vec(&body).expect("serialize request body")));
 
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut processor = LiteSubscriptionCtlProcessor::new(inner.clone());
         let response = processor
             .process_request(channel, ctx, &mut request)

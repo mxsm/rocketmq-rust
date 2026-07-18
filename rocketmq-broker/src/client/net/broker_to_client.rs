@@ -58,10 +58,7 @@ impl Broker2Client {
         request: RemotingCommand,
         timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
-        channel
-            .channel_inner_mut()
-            .send_wait_response(request, timeout_millis)
-            .await
+        channel.send_wait_response(request, timeout_millis).await
     }
 
     /// Check producer transaction state.
@@ -94,7 +91,7 @@ impl Broker2Client {
             }
         }
         // Java uses timeout=10ms for oneway
-        if let Err(e) = channel.channel_inner_mut().send_oneway(request, 10).await {
+        if let Err(e) = channel.send_oneway(request, 10).await {
             error!(
                 "Check transaction failed because invoke producer exception. group={}, msgId={}, error={:?}",
                 group, msg_id, e
@@ -121,7 +118,7 @@ impl Broker2Client {
         let request = RemotingCommand::create_request_command(RequestCode::NotifyConsumerIdsChanged, request_header);
 
         // Java uses timeout=10ms for oneway
-        if let Err(e) = channel.channel_inner_mut().send_oneway(request, 10).await {
+        if let Err(e) = channel.send_oneway(request, 10).await {
             warn!(
                 "notifyConsumerIdsChanged exception. group={}, error={:?}",
                 consumer_group, e
@@ -142,7 +139,7 @@ impl Broker2Client {
         let client_id = request_header.client_id.clone();
         let request = RemotingCommand::create_request_command(RequestCode::NotifyUnsubscribeLite, request_header);
 
-        if let Err(e) = channel.channel_inner_mut().send_oneway(request, 100).await {
+        if let Err(e) = channel.send_oneway(request, 100).await {
             error!(
                 "notifyUnsubscribeLite failed. liteTopic={}, group={}, clientId={}, error={:?}",
                 lite_topic, consumer_group, client_id, e
@@ -314,9 +311,9 @@ impl Broker2Client {
                 for entry in channel_info_table.iter() {
                     let version = entry.value().version();
                     if version >= MIN_CLIENT_VERSION {
-                        let mut channel = entry.key().clone();
+                        let channel = entry.key().clone();
                         // Java uses timeout=5000ms for oneway
-                        if let Err(e) = channel.channel_inner_mut().send_oneway(request.clone(), 5000).await {
+                        if let Err(e) = channel.send_oneway(request.clone(), 5000).await {
                             error!(
                                 "[reset-offset] reset offset exception. topic={}, group={}, error={:?}",
                                 topic, group, e
@@ -436,13 +433,9 @@ impl Broker2Client {
                 .unwrap_or(true);
 
             if should_query {
-                let mut channel = entry.key().clone();
+                let channel = entry.key().clone();
                 // Java uses timeout=5000ms
-                match channel
-                    .channel_inner_mut()
-                    .send_wait_response(request.clone(), 5000)
-                    .await
-                {
+                match channel.send_wait_response(request.clone(), 5000).await {
                     Ok(response) => {
                         if response.code() == ResponseCode::Success as i32 {
                             if let Some(body_bytes) = response.body() {

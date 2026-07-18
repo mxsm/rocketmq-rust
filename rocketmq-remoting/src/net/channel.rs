@@ -18,8 +18,10 @@ use std::fmt::Display;
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
 
+use bytes::Bytes;
 use cheetah_string::CheetahString;
 // Use flume for high-performance async channel (40-60% faster than tokio::mpsc)
 // Lock-free design provides better throughput under high load
@@ -29,7 +31,6 @@ use rocketmq_error::RocketMQError;
 use rocketmq_runtime::RuntimeHandle;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
-use rocketmq_rust::ArcMut;
 use tracing::error;
 use uuid::Uuid;
 
@@ -38,11 +39,12 @@ use crate::base::pending_request_table::PendingRequestTable;
 use crate::base::pending_request_table::PendingRequestToken;
 use crate::base::response_future::ResponseFuture;
 use crate::connection::Connection;
+use crate::connection::ConnectionStateHandle;
 use crate::protocol::remoting_command::RemotingCommand;
 
 pub type ChannelId = CheetahString;
 
-pub type ArcChannel = ArcMut<Channel>;
+pub type ArcChannel = Arc<Channel>;
 
 /// High-level abstraction over a bidirectional network connection.
 ///
@@ -73,13 +75,14 @@ pub type ArcChannel = ArcMut<Channel>;
 /// ## Design Rationale
 ///
 /// - **Separation of concerns**: `Channel` handles identity/routing, `ChannelInner` handles I/O
-/// - **Clone-friendly**: Lightweight outer type can be cloned, shares inner state via `ArcMut`
+/// - **Clone-friendly**: Lightweight outer type can be cloned, shares explicitly synchronized inner
+///   state
 /// - **Equality/Hash**: Based on identity (addresses + ID), not inner state
 #[derive(Clone)]
 pub struct Channel {
     // === Core State ===
-    /// Shared mutable access to channel internals (connection, response tracking, etc.)
-    inner: ArcMut<ChannelInner>,
+    /// Shared access to channel internals with one serialized connection writer.
+    inner: Arc<ChannelInner>,
 
     // === Identity & Addressing ===
     /// Local socket address (our end of the connection)
@@ -106,7 +109,7 @@ impl Channel {
     /// # Returns
     ///
     /// A new channel with a randomly generated UUID as its ID.
-    pub fn new(inner: ArcMut<ChannelInner>, local_address: SocketAddr, remote_address: SocketAddr) -> Self {
+    pub fn new(inner: Arc<ChannelInner>, local_address: SocketAddr, remote_address: SocketAddr) -> Self {
         let channel_id = Uuid::new_v4().to_string().into();
         Self {
             inner,
@@ -195,27 +198,13 @@ impl Channel {
 
     // === Connection Access ===
 
-    /// Gets mutable access to the underlying connection.
+    /// Gets the connection lifecycle capability.
     ///
     /// # Returns
     ///
-    /// Mutable reference to the `Connection` for sending/receiving
-    ///
-    /// # Use Case
-    ///
-    /// Direct low-level I/O operations (receive_command, send_command)
+    /// The handle exposes health and close signaling without socket mutation.
     #[inline]
-    pub fn connection_mut(&mut self) -> &mut Connection {
-        self.inner.connection.as_mut()
-    }
-
-    /// Gets immutable access to the underlying connection.
-    ///
-    /// # Returns
-    ///
-    /// Immutable reference to the `Connection` for inspection
-    #[inline]
-    pub fn connection_ref(&self) -> &Connection {
+    pub fn connection_ref(&self) -> &ConnectionStateHandle {
         self.inner.connection_ref()
     }
 
@@ -230,17 +219,55 @@ impl Channel {
         self.inner.as_ref()
     }
 
-    /// Gets mutable access to the shared channel state.
-    ///
-    /// # Returns
-    ///
-    /// Mutable reference to `ChannelInner` for advanced operations
-    pub fn channel_inner_mut(&mut self) -> &mut ChannelInner {
-        self.inner.as_mut()
-    }
-
     pub(crate) fn pending_request_owner(&self) -> Option<&PendingRequestOwner> {
         self.inner.pending_request_owner()
+    }
+
+    /// Sends a command through the serialized connection writer.
+    pub async fn send_command(&self, command: RemotingCommand) -> rocketmq_error::RocketMQResult<()> {
+        self.inner.send_command(command).await
+    }
+
+    /// Sends a borrowed command through the serialized connection writer.
+    pub async fn send_command_ref(&self, command: &mut RemotingCommand) -> rocketmq_error::RocketMQResult<()> {
+        self.inner.send_command_ref(command).await
+    }
+
+    /// Sends pre-encoded bytes through the serialized connection writer.
+    pub async fn send_bytes(&self, bytes: Bytes) -> rocketmq_error::RocketMQResult<()> {
+        self.inner.send_bytes(bytes).await
+    }
+
+    /// Sends a request and waits for its correlated response.
+    pub async fn send_wait_response(
+        &self,
+        request: RemotingCommand,
+        timeout_millis: u64,
+    ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
+        self.inner.send_wait_response(request, timeout_millis).await
+    }
+
+    /// Enqueues a one-way request on the bounded outbound path.
+    pub async fn send_oneway(
+        &self,
+        request: RemotingCommand,
+        timeout_millis: u64,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        self.inner.send_oneway(request, timeout_millis).await
+    }
+
+    /// Enqueues a request without waiting for a response.
+    pub async fn send(
+        &self,
+        request: RemotingCommand,
+        timeout_millis: Option<u64>,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        self.inner.send(request, timeout_millis).await
+    }
+
+    /// Closes the channel-owned writer and waits for its task report.
+    pub async fn close_with_report(&self, timeout: Duration) -> ShutdownReport {
+        self.inner.close_with_report(timeout).await
     }
 }
 
@@ -312,11 +339,12 @@ enum ResponseReservation {
 }
 
 type ChannelMessage = (RemotingCommand, Option<ResponseReservation>);
+pub type LegacyResponseTable = Arc<parking_lot::Mutex<HashMap<i32, ResponseFuture>>>;
 
 /// Shared state for a `Channel` - handles I/O, async message queueing, and response tracking.
 ///
-/// `ChannelInner` is the "heavy" part of a channel that is shared via `ArcMut` across
-/// multiple `Channel` clones. It manages:
+/// `ChannelInner` is the "heavy" part of a channel shared through `Arc` across
+/// multiple `Channel` clones. Mutable resources are owned by explicit synchronization.
 ///
 /// - **Connection**: Low-level TCP I/O
 /// - **Send Queue**: Async message queueing to decouple caller from I/O backpressure
@@ -343,14 +371,14 @@ pub struct ChannelInner {
     ///
     /// Callers use this to enqueue commands for asynchronous sending.
     /// The receive half is owned by the background `handle_send` task.
-    outbound_queue_tx: Sender<ChannelMessage>,
+    outbound_queue_tx: parking_lot::Mutex<Option<Sender<ChannelMessage>>>,
 
     // === I/O Transport ===
-    /// Underlying network connection (shared, mutable).
-    ///
-    /// Wrapped in `ArcMut` to allow concurrent access by the send task
-    /// and potential direct access via `Channel::connection_mut()`.
-    pub(crate) connection: ArcMut<Connection>,
+    /// Underlying network connection serialized by one async writer lock.
+    connection: Arc<tokio::sync::Mutex<Connection>>,
+
+    /// Cloneable lifecycle state without connection mutation capability.
+    connection_state: ConnectionStateHandle,
 
     // === Response Tracking ===
     /// Map of pending request opaque IDs to their response futures.
@@ -367,7 +395,7 @@ pub struct ChannelInner {
     pending_request_owner: Option<PendingRequestOwner>,
 
     /// Compatibility backend retained by the legacy constructors.
-    legacy_response_table: Option<ArcMut<HashMap<i32, ResponseFuture>>>,
+    legacy_response_table: Option<LegacyResponseTable>,
 
     /// Tracks the outbound send task for shutdown diagnostics.
     send_task_group: TaskGroup,
@@ -399,10 +427,10 @@ pub struct ChannelInner {
 /// This would reduce per-message overhead and improve throughput by ~20-40%
 /// under high load, at the cost of slightly increased latency for small batches.
 async fn handle_send(
-    mut connection: ArcMut<Connection>,
+    connection: Arc<tokio::sync::Mutex<Connection>>,
     rx: Receiver<ChannelMessage>,
     response_table: PendingRequestTable,
-    mut legacy_response_table: Option<ArcMut<HashMap<i32, ResponseFuture>>>,
+    legacy_response_table: Option<LegacyResponseTable>,
 ) {
     // Loop until channel is closed or connection fails
     loop {
@@ -423,19 +451,22 @@ async fn handle_send(
             sender,
         }) = reservation.take()
         {
-            let Some(table) = legacy_response_table.as_mut() else {
+            let Some(table) = legacy_response_table.as_ref() else {
                 let _ = sender.send(Err(RocketMQError::network_connection_failed(
                     "channel",
                     "legacy response table is unavailable",
                 )));
                 continue;
             };
-            table.insert(opaque, ResponseFuture::new(opaque, timeout_millis, true, sender));
+            table
+                .lock()
+                .insert(opaque, ResponseFuture::new(opaque, timeout_millis, true, sender));
             reservation = Some(ResponseReservation::LegacyRegistered { opaque });
         }
 
         // Send command via connection
-        if let Err(error) = connection.send_command(send).await {
+        let send_result = connection.lock().await.send_command(send).await;
+        if let Err(error) = send_result {
             let connection_broken = matches!(error, rocketmq_error::RocketMQError::IO(_));
             error!(error = %error, "send request failed");
             match reservation {
@@ -443,7 +474,10 @@ async fn handle_send(
                     response_table.complete_token(reservation, Err(error));
                 }
                 Some(ResponseReservation::LegacyRegistered { opaque }) => {
-                    if let Some(future) = legacy_response_table.as_mut().and_then(|table| table.remove(&opaque)) {
+                    let future = legacy_response_table
+                        .as_ref()
+                        .and_then(|table| table.lock().remove(&opaque));
+                    if let Some(future) = future {
                         let _ = future.tx.send(Err(error));
                     }
                 }
@@ -483,14 +517,14 @@ impl ChannelInner {
     /// - Lock-free operations for most cases
     /// - ~40-60% higher throughput than tokio::mpsc
     /// - Better performance under contention
-    pub fn new(connection: Connection, response_table: ArcMut<HashMap<i32, ResponseFuture>>) -> Self {
+    pub fn new(connection: Connection, response_table: LegacyResponseTable) -> Self {
         Self::try_new(connection, response_table).expect("ChannelInner send task requires a Tokio runtime")
     }
 
     /// Creates a new `ChannelInner` and reports runtime/task startup failures.
     pub fn try_new(
         connection: Connection,
-        response_table: ArcMut<HashMap<i32, ResponseFuture>>,
+        response_table: LegacyResponseTable,
     ) -> rocketmq_error::RocketMQResult<Self> {
         let runtime = tokio::runtime::Handle::try_current().map_err(|error| {
             RocketMQError::network_connection_failed(
@@ -527,7 +561,7 @@ impl ChannelInner {
     /// Creates a new `ChannelInner` under the provided parent task group.
     pub fn try_new_with_task_group(
         connection: Connection,
-        response_table: ArcMut<HashMap<i32, ResponseFuture>>,
+        response_table: LegacyResponseTable,
         parent_task_group: TaskGroup,
     ) -> rocketmq_error::RocketMQResult<Self> {
         let task_group = parent_task_group.child("rocketmq-remoting.channel");
@@ -588,7 +622,7 @@ impl ChannelInner {
         connection: Connection,
         response_table: PendingRequestTable,
         pending_request_owner: Option<PendingRequestOwner>,
-        legacy_response_table: Option<ArcMut<HashMap<i32, ResponseFuture>>>,
+        legacy_response_table: Option<LegacyResponseTable>,
         task_group: TaskGroup,
         start_send_task: bool,
     ) -> rocketmq_error::RocketMQResult<Self> {
@@ -598,7 +632,8 @@ impl ChannelInner {
         // flume provides lock-free operations and better throughput than tokio::mpsc
         let (outbound_queue_tx, outbound_queue_rx) = flume::bounded(if start_send_task { QUEUE_CAPACITY } else { 0 });
 
-        let connection = ArcMut::new(connection);
+        let connection_state = connection.state_handle();
+        let connection = Arc::new(tokio::sync::Mutex::new(connection));
         if start_send_task {
             task_group
                 .spawn_service(
@@ -620,8 +655,9 @@ impl ChannelInner {
             drop(outbound_queue_rx);
         }
         Ok(Self {
-            outbound_queue_tx,
+            outbound_queue_tx: parking_lot::Mutex::new(Some(outbound_queue_tx)),
             connection,
+            connection_state,
             response_table,
             pending_request_owner,
             legacy_response_table,
@@ -630,11 +666,9 @@ impl ChannelInner {
     }
 
     /// Closes the outbound queue and waits for the send task shutdown report.
-    pub async fn close_with_report(&mut self, timeout: Duration) -> ShutdownReport {
-        let (replacement_tx, replacement_rx) = flume::bounded(0);
-        drop(replacement_rx);
-        let outbound_queue_tx = std::mem::replace(&mut self.outbound_queue_tx, replacement_tx);
-        drop(outbound_queue_tx);
+    pub async fn close_with_report(&self, timeout: Duration) -> ShutdownReport {
+        self.outbound_queue_tx.lock().take();
+        self.connection_state.close();
 
         let report = self.send_task_group.shutdown(timeout).await;
         if let Some(owner) = self.pending_request_owner.as_ref() {
@@ -650,6 +684,7 @@ impl ChannelInner {
 
 impl Drop for ChannelInner {
     fn drop(&mut self) {
+        self.outbound_queue_tx.get_mut().take();
         self.send_task_group.cancel();
         if let Some(owner) = self.pending_request_owner.as_ref() {
             self.response_table.close_owner(owner, || {
@@ -665,11 +700,20 @@ impl ChannelInner {
         self.pending_request_owner.as_ref()
     }
 
-    fn close_legacy_requests(&mut self, reason: &'static str) {
-        let Some(table) = self.legacy_response_table.as_mut() else {
+    fn outbound_queue_sender(&self) -> rocketmq_error::RocketMQResult<Sender<ChannelMessage>> {
+        self.outbound_queue_tx
+            .lock()
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| RocketMQError::network_connection_failed("channel", "outbound queue is closed"))
+    }
+
+    fn close_legacy_requests(&self, reason: &'static str) {
+        let Some(table) = self.legacy_response_table.as_ref() else {
             return;
         };
-        for (_, future) in std::mem::take(table.as_mut()) {
+        let pending = std::mem::take(&mut *table.lock());
+        for (_, future) in pending {
             let _ = future
                 .tx
                 .send(Err(RocketMQError::network_connection_failed("channel", reason)));
@@ -678,34 +722,29 @@ impl ChannelInner {
 
     // === Connection Accessors ===
 
-    /// Gets a cloned `ArcMut` handle to the connection.
+    /// Gets the connection lifecycle capability.
     ///
     /// # Returns
     ///
-    /// Shared mutable reference to the connection (cheap clone, increments refcount)
+    /// The handle cannot access transport buffers or socket halves.
     #[inline]
-    pub fn connection(&self) -> ArcMut<Connection> {
-        self.connection.clone()
+    pub fn connection_ref(&self) -> &ConnectionStateHandle {
+        &self.connection_state
     }
 
-    /// Gets an immutable reference to the connection.
-    ///
-    /// # Returns
-    ///
-    /// Immutable reference to the underlying `Connection`
-    #[inline]
-    pub fn connection_ref(&self) -> &Connection {
-        self.connection.as_ref()
+    /// Sends a command through the serialized writer capability.
+    pub async fn send_command(&self, command: RemotingCommand) -> rocketmq_error::RocketMQResult<()> {
+        self.connection.lock().await.send_command(command).await
     }
 
-    /// Gets a mutable reference to the connection.
-    ///
-    /// # Returns
-    ///
-    /// Mutable reference to the underlying `Connection`
-    #[inline]
-    pub fn connection_mut(&mut self) -> &mut Connection {
-        self.connection.as_mut()
+    /// Sends a borrowed command through the serialized writer capability.
+    pub async fn send_command_ref(&self, command: &mut RemotingCommand) -> rocketmq_error::RocketMQResult<()> {
+        self.connection.lock().await.send_command_ref(command).await
+    }
+
+    /// Sends pre-encoded bytes through the serialized writer capability.
+    pub async fn send_bytes(&self, bytes: Bytes) -> rocketmq_error::RocketMQResult<()> {
+        self.connection.lock().await.send_bytes(bytes).await
     }
 
     // === High-Level Send Methods ===
@@ -741,7 +780,7 @@ impl ChannelInner {
     /// println!("Got response: {:?}", response);
     /// ```
     pub async fn send_wait_response(
-        &mut self,
+        &self,
         request: RemotingCommand,
         timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
@@ -774,7 +813,8 @@ impl ChannelInner {
 
         // Enqueue request with response tracking
         // flume sender: use send_async() for async context
-        if let Err(err) = self.outbound_queue_tx.send_async((request, Some(reservation))).await {
+        let outbound_queue_tx = self.outbound_queue_sender()?;
+        if let Err(err) = outbound_queue_tx.send_async((request, Some(reservation))).await {
             return Err(RocketMQError::network_connection_failed(
                 "channel",
                 format!("send failed: {}", err),
@@ -795,11 +835,11 @@ impl ChannelInner {
                 if let Some(guard) = guard {
                     Err(guard.expire("channel_recv", timeout_millis))
                 } else {
-                    if let Some(future) = self
+                    let future = self
                         .legacy_response_table
-                        .as_mut()
-                        .and_then(|table| table.remove(&opaque))
-                    {
+                        .as_ref()
+                        .and_then(|table| table.lock().remove(&opaque));
+                    if let Some(future) = future {
                         let _ = future.tx.send(Err(RocketMQError::Timeout {
                             operation: "channel_recv",
                             timeout_ms: timeout_millis,
@@ -840,7 +880,8 @@ impl ChannelInner {
         let request = request.mark_oneway_rpc();
 
         // flume sender: use send_async() for async context
-        if let Err(err) = self.outbound_queue_tx.send_async((request, None)).await {
+        let outbound_queue_tx = self.outbound_queue_sender()?;
+        if let Err(err) = outbound_queue_tx.send_async((request, None)).await {
             error!("send oneway request failed: {}", err);
             return Err(RocketMQError::network_connection_failed(
                 "channel",
@@ -871,7 +912,8 @@ impl ChannelInner {
     ) -> rocketmq_error::RocketMQResult<()> {
         // flume sender: use send_async() for async context
         let _ = timeout_millis;
-        if let Err(err) = self.outbound_queue_tx.send_async((request, None)).await {
+        let outbound_queue_tx = self.outbound_queue_sender()?;
+        if let Err(err) = outbound_queue_tx.send_async((request, None)).await {
             error!("send request failed: {}", err);
             return Err(RocketMQError::network_connection_failed(
                 "channel",
@@ -891,7 +933,7 @@ impl ChannelInner {
     /// - `false`: Connection has failed, channel should be discarded
     #[inline]
     pub fn is_healthy(&self) -> bool {
-        self.connection.is_healthy()
+        self.connection_state.is_healthy()
     }
 
     /// Legacy alias for `is_healthy()` - kept for backward compatibility.
@@ -902,7 +944,7 @@ impl ChannelInner {
     #[inline]
     #[deprecated(since = "0.1.0", note = "Use `is_healthy()` instead")]
     pub fn is_ok(&self) -> bool {
-        self.connection.is_healthy()
+        self.connection_state.is_healthy()
     }
 }
 
@@ -928,7 +970,7 @@ mod tests {
 
         let error = match ChannelInner::try_new(
             Connection::new(stream),
-            ArcMut::new(HashMap::<i32, ResponseFuture>::new()),
+            Arc::new(parking_lot::Mutex::new(HashMap::<i32, ResponseFuture>::new())),
         ) {
             Ok(_) => panic!("try_new should report missing Tokio runtime instead of panicking"),
             Err(error) => error,
@@ -949,7 +991,7 @@ mod tests {
         let _client_stream = TcpStream::connect(addr).await.unwrap();
         let (socket, _) = listener.accept().await.unwrap();
 
-        let mut response_table = ArcMut::new(HashMap::<i32, ResponseFuture>::new());
+        let response_table = Arc::new(parking_lot::Mutex::new(HashMap::<i32, ResponseFuture>::new()));
         let channel_inner = ChannelInner::try_new_with_task_group(
             Connection::new(socket),
             response_table.clone(),
@@ -961,13 +1003,12 @@ mod tests {
         let request = RemotingCommand::create_remoting_command(1).set_opaque(73);
 
         let response_task = tokio::spawn(async move {
-            let mut channel_inner = channel_inner;
             let response = channel_inner.send_wait_response(request, 1_000).await;
             let report = channel_inner.close_with_report(Duration::from_secs(1)).await;
             (response, report)
         });
         tokio::time::timeout(Duration::from_millis(100), async {
-            while !response_table.contains_key(&73) {
+            while !response_table.lock().contains_key(&73) {
                 tokio::task::yield_now().await;
             }
         })
@@ -975,6 +1016,7 @@ mod tests {
         .expect("legacy response table should receive the pending request");
         let response = RemotingCommand::create_response_command_with_code(0).set_opaque(73);
         assert!(response_table
+            .lock()
             .remove(&73)
             .expect("legacy response future should remain registered")
             .tx
@@ -1003,7 +1045,7 @@ mod tests {
         let pending_requests = PendingRequestTable::new();
         let (sender, receiver) = tokio::sync::oneshot::channel();
 
-        let mut channel_inner =
+        let channel_inner =
             ChannelInner::try_new_with_pending_requests(Connection::new(socket), pending_requests.clone()).unwrap();
         let guard = pending_requests
             .register_for_owner(channel_inner.pending_request_owner().unwrap(), 91, 30_000, sender)
@@ -1033,7 +1075,7 @@ mod tests {
         let _second_client = TcpStream::connect(second_addr).await.unwrap();
         let (second_socket, _) = second_listener.accept().await.unwrap();
         let pending_requests = PendingRequestTable::new();
-        let mut first =
+        let first =
             ChannelInner::try_new_with_pending_requests(Connection::new(first_socket), pending_requests.clone())
                 .unwrap();
         let second =

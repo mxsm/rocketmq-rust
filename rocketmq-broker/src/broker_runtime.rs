@@ -6111,8 +6111,8 @@ accounts:
         drop(listener);
         let tcp_stream = tokio::net::TcpStream::from_std(std_stream).expect("convert tcp stream");
         let connection = Connection::new(tcp_stream);
-        let response_table = ArcMut::new(HashMap::<i32, ResponseFuture>::new());
-        let inner = ArcMut::new(ChannelInner::new(connection, response_table));
+        let response_table = std::sync::Arc::new(parking_lot::Mutex::new(HashMap::<i32, ResponseFuture>::new()));
+        let inner = std::sync::Arc::new(ChannelInner::new(connection, response_table));
         Channel::new(inner, local_addr, local_addr)
     }
 
@@ -6121,7 +6121,7 @@ accounts:
         request: &mut RemotingCommand,
     ) -> RemotingCommand {
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         processor
             .process_request(channel, ctx, request)
             .await
@@ -8223,7 +8223,7 @@ accounts:
 
         let (mut processor, _) = runtime.init_processor();
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request = RemotingCommand::create_request_command(RequestCode::LiteSubscriptionCtl, EmptyHeader {})
             .set_body(Bytes::from_static(b""));
         let response = processor
@@ -8246,7 +8246,7 @@ accounts:
 
         let (mut processor, _) = runtime.init_processor();
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request = RemotingCommand::create_request_command(RequestCode::GetBrokerLiteInfo, EmptyHeader {});
         let mut response = processor
             .process_request(channel, ctx, &mut request)
@@ -8302,7 +8302,7 @@ accounts:
         );
 
         let pop_channel = create_test_channel().await;
-        let pop_ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(pop_channel.clone()));
+        let pop_ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(pop_channel.clone()));
         let pop_header = PopLiteMessageRequestHeader {
             client_id: CheetahString::from_static_str("client-1"),
             consumer_group: CheetahString::from_static_str("group-a"),
@@ -8324,7 +8324,7 @@ accounts:
         assert_eq!(ResponseCode::from(pop_response.code()), ResponseCode::Success);
 
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request = RemotingCommand::create_request_command(RequestCode::GetBrokerLiteInfo, EmptyHeader {});
         let mut response = processor
             .process_request(channel, ctx, &mut request)
@@ -8353,7 +8353,7 @@ accounts:
 
         let (mut processor, _) = runtime.init_processor();
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let header = GetParentTopicInfoRequestHeader {
             topic: CheetahString::from_static_str("parent-topic"),
             rpc: None,
@@ -8397,7 +8397,7 @@ accounts:
 
         let (mut processor, _) = runtime.init_processor();
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let header = GetParentTopicInfoRequestHeader {
             topic: CheetahString::from_static_str("parent-topic"),
             rpc: None,
@@ -8423,7 +8423,7 @@ accounts:
 
         let (mut processor, _) = runtime.init_processor();
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let header = GetLiteTopicInfoRequestHeader {
             parent_topic: CheetahString::from_static_str("parent-topic"),
             lite_topic: CheetahString::from_static_str("child-b"),
@@ -8469,7 +8469,7 @@ accounts:
 
         let (mut processor, _) = runtime.init_processor();
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let header = GetLiteTopicInfoRequestHeader {
             parent_topic: CheetahString::from_static_str("parent-topic"),
             lite_topic: CheetahString::from_static_str("child-b"),
@@ -8503,7 +8503,7 @@ accounts:
 
         let (mut processor, _) = runtime.init_processor();
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let header = GetLiteTopicInfoRequestHeader {
             parent_topic: CheetahString::from_static_str("parent-topic"),
             lite_topic: CheetahString::from_static_str("child-b"),
@@ -8528,7 +8528,7 @@ accounts:
 
         let (mut processor, _) = runtime.init_processor();
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let header = GetLiteClientInfoRequestHeader {
             parent_topic: Some(CheetahString::from_static_str("parent-topic")),
             group: Some(CheetahString::from_static_str("group-a")),
@@ -8579,7 +8579,7 @@ accounts:
 
         let (mut processor, _) = runtime.init_processor();
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let header = GetLiteClientInfoRequestHeader {
             parent_topic: Some(CheetahString::from_static_str("parent-topic")),
             group: Some(CheetahString::from_static_str("group-a")),
@@ -8608,7 +8608,7 @@ accounts:
 
         let (mut processor, _) = runtime.init_processor();
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let header = GetLiteGroupInfoRequestHeader {
             group: CheetahString::from_static_str("group-a"),
             lite_topic: CheetahString::from_static_str("child-b"),
@@ -8656,7 +8656,7 @@ accounts:
 
         let (mut processor, _) = runtime.init_processor();
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let header = GetLiteGroupInfoRequestHeader {
             group: CheetahString::from_static_str("group-a"),
             lite_topic: CheetahString::from_static_str(""),
@@ -8706,7 +8706,7 @@ accounts:
 
         let (mut processor, _) = runtime.init_processor();
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let header = GetLiteGroupInfoRequestHeader {
             group: CheetahString::from_static_str("group-a"),
             lite_topic: CheetahString::from_static_str(""),
@@ -8756,7 +8756,7 @@ accounts:
 
         let (mut processor, _) = runtime.init_processor();
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let header = TriggerLiteDispatchRequestHeader {
             group: CheetahString::from_static_str("group-a"),
             client_id: Some(CheetahString::from_static_str("client-1")),
@@ -8772,7 +8772,7 @@ accounts:
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
 
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request = RemotingCommand::create_request_command(RequestCode::GetBrokerLiteInfo, EmptyHeader {});
         let mut response = processor
             .process_request(channel, ctx, &mut request)
@@ -8799,7 +8799,7 @@ accounts:
 
         let (mut processor, _) = runtime.init_processor();
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let header = TriggerLiteDispatchRequestHeader {
             group: CheetahString::from_static_str("group-a"),
             client_id: None,
@@ -8844,7 +8844,7 @@ accounts:
 
         let (mut processor, _) = runtime.init_processor();
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let header = TriggerLiteDispatchRequestHeader {
             group: CheetahString::from_static_str("group-a"),
             client_id: Some(CheetahString::from_static_str("client-1")),
@@ -8882,7 +8882,7 @@ accounts:
 
         let (mut processor, _) = runtime.init_processor();
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let header = PopLiteMessageRequestHeader {
             client_id: CheetahString::from_static_str("client-1"),
             consumer_group: CheetahString::from_static_str("group-a"),
@@ -8921,7 +8921,7 @@ accounts:
             .start();
 
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let header = PopLiteMessageRequestHeader {
             client_id: CheetahString::from_static_str("client-1"),
             consumer_group: CheetahString::from_static_str("group-a"),
@@ -8982,7 +8982,7 @@ accounts:
             .start();
 
         let pop_channel = create_test_channel().await;
-        let pop_ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(pop_channel.clone()));
+        let pop_ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(pop_channel.clone()));
         let pop_header = PopLiteMessageRequestHeader {
             client_id: CheetahString::from_static_str("client-1"),
             consumer_group: CheetahString::from_static_str("group-a"),
@@ -9006,7 +9006,7 @@ accounts:
         );
 
         let trigger_channel = create_test_channel().await;
-        let trigger_ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(trigger_channel.clone()));
+        let trigger_ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(trigger_channel.clone()));
         let trigger_header = TriggerLiteDispatchRequestHeader {
             group: CheetahString::from_static_str("group-a"),
             client_id: Some(CheetahString::from_static_str("client-1")),
@@ -9126,7 +9126,7 @@ accounts:
 
         let (mut processor, _) = runtime.init_processor();
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let pop_header = PopLiteMessageRequestHeader {
             client_id: CheetahString::from_static_str("client-1"),
             consumer_group: CheetahString::from_static_str("group-a"),
@@ -9196,7 +9196,7 @@ accounts:
         );
 
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let first_header = PopLiteMessageRequestHeader {
             client_id: CheetahString::from_static_str("client-1"),
             consumer_group: CheetahString::from_static_str("group-a"),
@@ -9226,7 +9226,7 @@ accounts:
         );
 
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let second_header = PopLiteMessageRequestHeader {
             client_id: CheetahString::from_static_str("client-1"),
             consumer_group: CheetahString::from_static_str("group-a"),
@@ -9281,7 +9281,7 @@ accounts:
         );
 
         let first_channel = create_test_channel().await;
-        let first_ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(first_channel.clone()));
+        let first_ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(first_channel.clone()));
         let first_header = PopLiteMessageRequestHeader {
             client_id: CheetahString::from_static_str("client-1"),
             consumer_group: CheetahString::from_static_str("group-a"),
@@ -9302,7 +9302,7 @@ accounts:
             .expect("first pop lite should return a response");
 
         let second_channel = create_test_channel().await;
-        let second_ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(second_channel.clone()));
+        let second_ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(second_channel.clone()));
         let second_header = PopLiteMessageRequestHeader {
             client_id: CheetahString::from_static_str("client-1"),
             consumer_group: CheetahString::from_static_str("group-a"),

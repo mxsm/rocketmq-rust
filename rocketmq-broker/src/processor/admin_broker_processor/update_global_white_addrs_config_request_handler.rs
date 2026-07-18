@@ -115,7 +115,6 @@ mod tests {
     use rocketmq_remoting::connection::Connection;
     use rocketmq_remoting::net::channel::ChannelInner;
     use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
-    use rocketmq_rust::ArcMut;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
 
     use super::*;
@@ -153,8 +152,8 @@ mod tests {
         drop(listener);
         let tcp_stream = tokio::net::TcpStream::from_std(std_stream).expect("convert tcp stream");
         let connection = Connection::new(tcp_stream);
-        let response_table = ArcMut::new(HashMap::<i32, ResponseFuture>::new());
-        let inner = ArcMut::new(ChannelInner::new(connection, response_table));
+        let response_table = std::sync::Arc::new(parking_lot::Mutex::new(HashMap::<i32, ResponseFuture>::new()));
+        let inner = std::sync::Arc::new(ChannelInner::new(connection, response_table));
         Channel::new(inner, local_addr, local_addr)
     }
 
@@ -178,7 +177,7 @@ mod tests {
         let auth_admin_service = Arc::new(AuthAdminService::with_provider_registry(provider_registry.clone()));
         let mut handler = UpdateGlobalWhiteAddrsConfigRequestHandler::new(inner.clone(), auth_admin_service);
         let channel = create_test_channel().await;
-        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
 
         let mut request = RemotingCommand::create_request_command(
             RequestCode::UpdateGlobalWhiteAddrsConfig,

@@ -1020,7 +1020,7 @@ where
         &self,
         mut pull_message_processor: ArcMut<PullMessageProcessor<MS>>,
         channel: Channel,
-        mut ctx: ConnectionHandlerContext,
+        ctx: ConnectionHandlerContext,
         mut request: RemotingCommand,
     ) {
         let locks = Arc::clone(&self.wakeup_write_locks);
@@ -1228,8 +1228,8 @@ mod tests {
         let server_stream = accept.await.expect("join accept task");
         drop(server_stream);
 
-        let response_table = ArcMut::new(HashMap::new());
-        let channel_inner = ArcMut::new(ChannelInner::new(Connection::new(stream), response_table));
+        let response_table = std::sync::Arc::new(parking_lot::Mutex::new(HashMap::new()));
+        let channel_inner = std::sync::Arc::new(ChannelInner::new(Connection::new(stream), response_table));
         let channel = Channel::new(channel_inner, local_addr, remote_addr);
         ClientChannelInfo::new(channel, client_id.into(), LanguageCode::JAVA, 1)
     }
