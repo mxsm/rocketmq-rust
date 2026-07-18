@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 3：性能、耐久引擎与云原生 |
-| 状态 | 实施中（PR-M11-01～07 已完成；下一工作包 PR-M11-08；部分依赖 M10 SLI） |
+| 状态 | 实施中（PR-M11-01～08 已完成；下一工作包 PR-M11-09；部分依赖 M10 SLI） |
 | 预计周期 | 4–6 周 |
 | 工作包 | 延续 WP01、WP03、WP05、WP07、WP14–WP16 |
 | 前置条件 | 32-package Gate；secure dry-run、ServiceContext、semantic owner、durability SLI 可用 |
@@ -148,11 +148,19 @@ M10 真实性能、M11 入口 `[ARCH]`/安全默认 `[HUMAN]`、M11 与 Phase 3 
 
 ### PR-M11-08：五个服务镜像入口
 
-- [ ] 入口：`[TEST]` 镜像基础模板通过；Broker/NameServer/Controller/Proxy/MCP各自启动/配置/信号合同已记录。
-- [ ] `[DEV]` 为五个服务分别建立entrypoint、config mount、data path、port和signal接线，不把服务打进单一镜像。
+- [ ] 入口：`[TEST]` 镜像基础模板通过；五服务启动/配置/信号合同已记录，但 M11-07 远端 build 暴露 slim runtime 缺 CA bundle，M11-08 已修复且尚未观察重跑成功，未签署动态 Gate。
+- [x] `[DEV]` 为五个服务分别建立entrypoint、config mount、data path、port和signal接线，不把服务打进单一镜像。
 - [ ] `[TEST]` focused test：每个镜像独立启动、配置错误退出、SIGTERM、只读rootfs和必要volume权限。
-- [ ] `[REV]` 检查镜像边界与crate/binary owner一致，无secret命令行参数。
-- [ ] 回滚点：单个服务独立回到上一签名镜像，不回滚其他服务或共享持久数据。
+- [x] `[REV]` 检查镜像边界与crate/binary owner一致，无secret命令行参数。
+- [x] 回滚点：单个服务独立回到上一签名镜像，不回滚其他服务或共享持久数据。
+
+完成证据：[`11-service-image-entrypoints-evidence.md`](11-service-image-entrypoints-evidence.md)。到期组合镜像与例外已删除，
+Broker/NameServer/Controller/Proxy/MCP 由五个显式 target 分别生成且 runtime 只含 owner binary；config/data/port/
+non-root/read-only/SIGTERM 合同进入 versioned policy。Controller、Proxy 与 MCP 补齐统一 SIGINT/SIGTERM 接线，五份
+smoke config 经真实二进制解析，静态 guard/9 组负向测试通过；M11-07 动态失败定位为 slim image 缺 CA bundle，
+本包以 Debian 签名 Release/package hash 引导 CA 后切回 HTTPS。workflow 已实现但本机无容器工具且不等待远端
+CI，故镜像 `[TEST]` 保持未签署。72/82 工作包完成，剩余 M11 4 个、M12 6 个，下一工作包为 PR-M11-09；
+M10 真实性能、M11 入口 `[ARCH]`/安全默认 `[HUMAN]`、M11 与 Phase 3 Gate 均未完成。
 
 ### PR-M11-09：Helm 与 Kustomize 资产
 

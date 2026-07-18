@@ -46,6 +46,11 @@ class ContainerFoundationTests(unittest.TestCase):
         cls.dockerfile = (ROOT / cls.policy["foundation_dockerfile"]).read_text(encoding="utf-8")
         cls.workflow = (ROOT / cls.policy["workflow"]["path"]).read_text(encoding="utf-8")
         cls.supply_script = (ROOT / "scripts" / "container-supply-chain.ps1").read_text(encoding="utf-8")
+        cls.service_script = (ROOT / cls.policy["service_contract_script"]).read_text(encoding="utf-8")
+        cls.signal_sources = {
+            name: (ROOT / path).read_text(encoding="utf-8")
+            for name, path in cls.policy["signal_sources"].items()
+        }
         cls.dockerfiles = GUARD.repository_dockerfiles()
 
     def audit(
@@ -55,6 +60,8 @@ class ContainerFoundationTests(unittest.TestCase):
         dockerfile=None,
         workflow=None,
         supply_script=None,
+        service_script=None,
+        signal_sources=None,
         dockerfiles=None,
     ):
         return GUARD.audit_foundation(
@@ -63,6 +70,8 @@ class ContainerFoundationTests(unittest.TestCase):
             workflow if workflow is not None else self.workflow,
             supply_script if supply_script is not None else self.supply_script,
             dockerfiles if dockerfiles is not None else self.dockerfiles,
+            service_script if service_script is not None else self.service_script,
+            signal_sources if signal_sources is not None else self.signal_sources,
         )
 
     def test_repository_foundation_contract_passes(self) -> None:
@@ -100,14 +109,21 @@ class ContainerFoundationTests(unittest.TestCase):
         weakened = self.supply_script.replace("--severity", "--ignore-unfixed --severity", 1)
         self.assertTrue(any("must not ignore unfixed" in finding for finding in self.audit(supply_script=weakened)))
 
-    def test_unregistered_dockerfile_or_extended_exception_is_rejected(self) -> None:
+    def test_unregistered_dockerfile_or_restored_legacy_exception_is_rejected(self) -> None:
         dockerfiles = set(self.dockerfiles)
         dockerfiles.add("docker/Dockerfile.unreviewed")
         self.assertTrue(any("unregistered Dockerfile" in finding for finding in self.audit(dockerfiles=dockerfiles)))
 
         policy = copy.deepcopy(self.policy)
-        policy["compatibility_exceptions"][0]["expires_at"] = "M11-12"
-        self.assertTrue(any("must expire at M11-08" in finding for finding in self.audit(policy=policy)))
+        policy["compatibility_exceptions"].append(
+            {
+                "path": "docker/Dockerfile",
+                "expires_at": "M11-12",
+                "reason": "restore combined image",
+            }
+        )
+        findings = self.audit(policy=policy, dockerfiles=dockerfiles | {"docker/Dockerfile"})
+        self.assertTrue(any("retire all legacy" in finding for finding in findings))
 
     def test_missing_read_only_or_signature_verification_is_rejected(self) -> None:
         no_read_only = self.supply_script.replace("--read-only", "--read-write", 1)
@@ -127,6 +143,54 @@ class ContainerFoundationTests(unittest.TestCase):
 
         missing_package = self.dockerfile.replace("    libssl3", "    removed-libssl3", 1)
         self.assertTrue(any("libssl3" in finding for finding in self.audit(dockerfile=missing_package)))
+
+        no_https_handoff = self.dockerfile.replace(
+            "sed -i 's#URIs: http://#URIs: https://#'",
+            "sed -i 's#URIs: http://#URIs: http://#'",
+            1,
+        )
+        self.assertTrue(any("switch snapshot transport" in finding for finding in self.audit(dockerfile=no_https_handoff)))
+
+    def test_missing_service_target_or_wrong_binary_owner_is_rejected(self) -> None:
+        missing_target = self.dockerfile.replace("FROM service-runtime AS proxy", "FROM service-runtime AS removed-proxy")
+        self.assertTrue(any("independent target: proxy" in finding for finding in self.audit(dockerfile=missing_target)))
+
+        wrong_owner = self.dockerfile.replace(
+            "/opt/rocketmq-binaries/rocketmq-controller-rust /usr/local/bin/rocketmq-controller-rust",
+            "/opt/rocketmq-binaries/rocketmq-broker-rust /usr/local/bin/rocketmq-controller-rust",
+            1,
+        )
+        self.assertTrue(any("controller image target missing" in finding for finding in self.audit(dockerfile=wrong_owner)))
+
+    def test_shell_dispatch_or_secret_command_is_rejected(self) -> None:
+        shell_entrypoint = self.dockerfile.replace(
+            'ENTRYPOINT ["/usr/local/bin/rocketmq-broker-rust"]',
+            'ENTRYPOINT ["/bin/sh", "-c", "rocketmq-start"]',
+            1,
+        )
+        findings = self.audit(dockerfile=shell_entrypoint)
+        self.assertTrue(any("direct binary entrypoint" in finding for finding in findings))
+
+        secret_command = self.dockerfile.replace(
+            'CMD ["--config", "/etc/rocketmq/mcp.toml", "--transport", "stdio"]',
+            'CMD ["--config", "/etc/rocketmq/mcp.toml", "--token", "inline-secret"]',
+            1,
+        )
+        findings = self.audit(dockerfile=secret_command)
+        self.assertTrue(any("secret arguments" in finding for finding in findings))
+
+    def test_ctrl_c_only_signal_or_weakened_service_smoke_is_rejected(self) -> None:
+        signal_sources = dict(self.signal_sources)
+        signal_sources["proxy"] = signal_sources["proxy"].replace(
+            "wait_for_signal_result().await",
+            "tokio::signal::ctrl_c().await",
+            1,
+        )
+        findings = self.audit(signal_sources=signal_sources)
+        self.assertTrue(any("Ctrl-C-only" in finding for finding in findings))
+
+        weakened = self.service_script.replace("docker stop --signal SIGTERM --timeout 30", "docker kill", 1)
+        self.assertTrue(any("docker stop --signal SIGTERM" in finding for finding in self.audit(service_script=weakened)))
 
 
 if __name__ == "__main__":

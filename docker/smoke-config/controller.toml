@@ -1,0 +1,37 @@
+# Copyright 2026 The RocketMQ Rust Authors
+# Licensed under the Apache License, Version 2.0.
+
+rocketmqHome = "/var/lib/rocketmq/controller"
+configStorePath = "/var/lib/rocketmq/controller/controller.properties"
+controllerType = "Raft"
+scanNotActiveBrokerInterval = 5000
+controllerThreadPoolNums = 16
+controllerRequestThreadPoolQueueCapacity = 50000
+mappedFileSize = 1048576
+controllerStorePath = "/var/lib/rocketmq/controller"
+electMasterMaxRetryCount = 3
+enableElectUncleanMaster = false
+isProcessReadEvent = false
+notifyBrokerRoleChanged = true
+scanInactiveMasterInterval = 5000
+raftScanWaitTimeoutMs = 1000
+metricsExporterType = "disable"
+metricsGrpcExporterTarget = ""
+metricsGrpcExporterHeader = ""
+metricGrpcExporterTimeOutInMills = 3000
+metricGrpcExporterIntervalInMills = 60000
+metricLoggingExporterIntervalInMills = 10000
+metricsPromExporterPort = 5557
+metricsPromExporterHost = ""
+metricsLabel = ""
+metricsInDelta = false
+configBlackList = "configBlackList;configStorePath"
+nodeId = 1
+listenAddr = "0.0.0.0:60109"
+raftPeers = []
+controllerPeers = []
+electionTimeoutMs = 1000
+heartbeatIntervalMs = 300
+storagePath = "/var/lib/rocketmq/controller"
+storageBackend = "Memory"
+enableElectUncleanMasterLocal = false

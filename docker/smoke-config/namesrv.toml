@@ -1,0 +1,7 @@
+# Copyright 2026 The RocketMQ Rust Authors
+# Licensed under the Apache License, Version 2.0.
+
+rocketmqHome = "/var/lib/rocketmq/namesrv"
+kvConfigPath = "/var/lib/rocketmq/namesrv/kvConfig.json"
+configStorePath = "/var/lib/rocketmq/namesrv/namesrv.properties"
+needWaitForService = false

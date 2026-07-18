@@ -1,0 +1,20 @@
+# Copyright 2026 The RocketMQ Rust Authors
+# Licensed under the Apache License, Version 2.0.
+
+[roles.read_only]
+allowed_clusters = ["*"]
+allow_tools = [
+  "rocketmq_get_cluster_overview",
+  "rocketmq_list_topics",
+  "rocketmq_describe_topic",
+  "rocketmq_get_topic_route",
+  "rocketmq_list_consumer_groups",
+  "rocketmq_get_consumer_lag",
+  "rocketmq_describe_broker",
+]
+deny_tools = ["*"]
+
+[roles.diagnose]
+include = ["read_only"]
+allowed_clusters = ["*"]
+allow_tools = ["rocketmq_diagnose_consumer_lag"]

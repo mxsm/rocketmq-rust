@@ -23,6 +23,7 @@ use rocketmq_proxy::ProxyError;
 use rocketmq_proxy::ProxyMode;
 use rocketmq_proxy::ProxyResult;
 use rocketmq_proxy::ProxyRuntime;
+use rocketmq_runtime::wait_for_signal_result;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 use rocketmq_runtime::ServiceContext;
@@ -95,8 +96,8 @@ async fn run(service_context: ServiceContext) -> ProxyResult<()> {
         .with_service_context(service_context)
         .build()
         .serve_with_shutdown(async {
-            if let Err(error) = tokio::signal::ctrl_c().await {
-                tracing::warn!(error = %error, "failed to listen for ctrl-c");
+            if let Err(error) = wait_for_signal_result().await {
+                tracing::warn!(error = %error, "failed to listen for process termination signal");
             }
         })
         .await;

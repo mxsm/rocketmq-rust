@@ -82,7 +82,9 @@ pub async fn serve_typed(app: McpApp) -> Result<(), McpError> {
 
     axum::serve(listener, router)
         .with_graceful_shutdown(async move {
-            let _ = tokio::signal::ctrl_c().await;
+            if let Err(error) = rocketmq_runtime::wait_for_signal_result().await {
+                tracing::warn!(error = %error, "failed to listen for MCP process termination signal");
+            }
             cancellation_token.cancel();
         })
         .await

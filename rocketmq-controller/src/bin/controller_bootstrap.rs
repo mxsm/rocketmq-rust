@@ -27,6 +27,7 @@ use rocketmq_controller::ControllerConfig;
 use rocketmq_controller::ControllerManager;
 use rocketmq_error::ControllerError;
 use rocketmq_remoting::protocol::remoting_command;
+use rocketmq_runtime::wait_for_signal_result;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 use rocketmq_runtime::ServiceContext;
@@ -161,7 +162,7 @@ async fn run_controller(config: ControllerConfig, service_context: ServiceContex
     info!("Controller is running. Press Ctrl+C to stop.");
 
     // Wait for shutdown signal
-    match tokio::signal::ctrl_c().await {
+    match wait_for_signal_result().await {
         Ok(()) => {
             info!("Received shutdown signal, shutting down controller...");
         }

@@ -24,6 +24,54 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 POLICY_PATH = ROOT / "docker" / "container-policy.json"
 
+EXPECTED_SERVICES: dict[str, dict[str, Any]] = {
+    "broker": {
+        "target": "broker",
+        "package": "rocketmq-broker",
+        "binary": "rocketmq-broker-rust",
+        "config_path": "/etc/rocketmq/broker.toml",
+        "data_path": "/var/lib/rocketmq/broker",
+        "ports": [10911, 10912],
+        "command": ["--configFile", "/etc/rocketmq/broker.toml"],
+    },
+    "namesrv": {
+        "target": "namesrv",
+        "package": "rocketmq-namesrv",
+        "binary": "rocketmq-namesrv-rust",
+        "config_path": "/etc/rocketmq/namesrv.toml",
+        "data_path": "/var/lib/rocketmq/namesrv",
+        "ports": [9876],
+        "command": ["--configFile", "/etc/rocketmq/namesrv.toml"],
+    },
+    "controller": {
+        "target": "controller",
+        "package": "rocketmq-controller",
+        "binary": "rocketmq-controller-rust",
+        "config_path": "/etc/rocketmq/controller.toml",
+        "data_path": "/var/lib/rocketmq/controller",
+        "ports": [60109],
+        "command": ["--config-file", "/etc/rocketmq/controller.toml"],
+    },
+    "proxy": {
+        "target": "proxy",
+        "package": "rocketmq-proxy",
+        "binary": "rocketmq-proxy-rust",
+        "config_path": "/etc/rocketmq/proxy.toml",
+        "data_path": "/var/lib/rocketmq/proxy",
+        "ports": [8080, 8081],
+        "command": ["--config", "/etc/rocketmq/proxy.toml"],
+    },
+    "mcp": {
+        "target": "mcp",
+        "package": "rocketmq-mcp",
+        "binary": "rocketmq-mcp",
+        "config_path": "/etc/rocketmq/mcp.toml",
+        "data_path": "/var/lib/rocketmq/mcp",
+        "ports": [8089],
+        "command": ["--config", "/etc/rocketmq/mcp.toml", "--transport", "stdio"],
+    },
+}
+
 
 def load_policy(path: Path = POLICY_PATH) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
@@ -35,23 +83,22 @@ def audit_foundation(
     workflow: str,
     supply_script: str,
     dockerfiles: set[str],
+    service_script: str = "",
+    signal_sources: dict[str, str] | None = None,
 ) -> list[str]:
     findings: list[str] = []
     if policy.get("schema_version") != 1:
         findings.append("container policy schema_version must be 1")
-    if policy.get("milestone") != "M11-07":
-        findings.append("container policy milestone must be M11-07")
+    if policy.get("milestone") != "M11-08":
+        findings.append("container policy milestone must be M11-08")
 
     foundation = policy.get("foundation_dockerfile")
     exceptions = policy.get("compatibility_exceptions", [])
     registered = {foundation}
+    if exceptions:
+        findings.append("M11-08 must retire all legacy Dockerfile compatibility exceptions")
     for exception in exceptions:
-        path = exception.get("path")
-        registered.add(path)
-        if exception.get("expires_at") != "M11-08":
-            findings.append(f"compatibility exception {path} must expire at M11-08")
-        if not str(exception.get("reason", "")).strip():
-            findings.append(f"compatibility exception {path} requires a reason")
+        registered.add(exception.get("path"))
     for path in sorted(dockerfiles - registered):
         findings.append(f"unregistered Dockerfile: {path}")
     for path in sorted(registered - dockerfiles):
@@ -75,6 +122,8 @@ def audit_foundation(
         "snapshot.debian.org/archive/debian/",
         "snapshot.debian.org/archive/debian-security/",
         "Acquire::Check-Valid-Until=false",
+        "apt-get install -y --no-install-recommends ca-certificates",
+        "sed -i 's#URIs: http://#URIs: https://#' /etc/apt/sources.list.d/rocketmq-snapshot.sources",
         f"USER {policy['runtime']['uid']}:{policy['runtime']['gid']}",
         'CMD ["/bin/true"]',
         "STOPSIGNAL SIGTERM",
@@ -85,9 +134,10 @@ def audit_foundation(
     for package in policy["build"]["builder_packages"] + policy["build"]["runtime_packages"]:
         if not re.search(rf"(?m)^\s*{re.escape(package)}(?:\s|\\|$)", dockerfile):
             findings.append(f"foundation Dockerfile missing pinned-snapshot package: {package}")
-    if re.search(r"(?im)^\s*ENTRYPOINT\b", dockerfile):
+    foundation_only = dockerfile.split("FROM builder-base AS service-builder", maxsplit=1)[0]
+    if re.search(r"(?im)^\s*ENTRYPOINT\b", foundation_only):
         findings.append("foundation Dockerfile must not define a shell or service entrypoint")
-    if re.search(r"(?im)^\s*COPY\s+\.\s", dockerfile):
+    if re.search(r"(?im)^\s*COPY\s+\.\s", foundation_only):
         findings.append("foundation runtime must not copy the repository source")
     if re.search(r"(?i)(?:^|[^a-z])latest(?:[^a-z]|$)", dockerfile):
         findings.append("foundation Dockerfile contains a mutable latest tag")
@@ -102,6 +152,93 @@ def audit_foundation(
         findings.append("container policy must require a read-only rootfs")
     if runtime.get("default_command") != ["/bin/true"]:
         findings.append("container foundation default command must remain /bin/true")
+
+    services = policy.get("services")
+    if services != EXPECTED_SERVICES:
+        findings.append("five-service package/binary/config/data/port/command contract drifted")
+    if policy.get("smoke_config_directory") != "docker/smoke-config":
+        findings.append("service smoke config directory drifted")
+    if policy.get("service_contract_script") != "scripts/service-image-contract.ps1":
+        findings.append("service image contract script path drifted")
+    if policy.get("build", {}).get("service_builder_target") != "service-builder":
+        findings.append("service builder target drifted")
+    if policy.get("build", {}).get("service_runtime_target") != "service-runtime":
+        findings.append("service runtime target drifted")
+    if policy.get("build", {}).get("default_target") != "container-contract-default":
+        findings.append("container default target drifted")
+    if policy.get("build", {}).get("snapshot_bootstrap_transport") != "http-with-signed-release-then-https":
+        findings.append("signed snapshot trust-bootstrap transport drifted")
+    if dockerfile.count("URIs: http://snapshot.debian.org/") != 4:
+        findings.append("both foundation stages must bootstrap CA from the signed snapshot over HTTP")
+    if dockerfile.count("sed -i 's#URIs: http://#URIs: https://#'") != 2:
+        findings.append("both foundation stages must switch snapshot transport back to HTTPS")
+    for fragment in (
+        "FROM builder-base AS service-builder",
+        "FROM runtime-base AS service-runtime",
+        "FROM runtime-base-smoke AS container-contract-default",
+        'VOLUME ["/var/lib/rocketmq"]',
+        "USER 10001:10001",
+    ):
+        if fragment not in dockerfile:
+            findings.append(f"service Dockerfile missing: {fragment}")
+    if "ROCKETMQ_COMPONENT" in dockerfile:
+        findings.append("service images must not use component-selector dispatch")
+    for service_name, contract in EXPECTED_SERVICES.items():
+        target = contract["target"]
+        match = re.search(
+            rf"(?ms)^FROM service-runtime AS {re.escape(target)}\s*(.*?)(?=^FROM |\Z)",
+            dockerfile,
+        )
+        if match is None:
+            findings.append(f"service Dockerfile missing independent target: {target}")
+            continue
+        section = match.group(1)
+        binary = contract["binary"]
+        ports = " ".join(str(port) for port in contract["ports"])
+        required_service_fragments = [
+            f"COPY --from=service-builder --chmod=0555 /opt/rocketmq-binaries/{binary} /usr/local/bin/{binary}",
+            f'io.rocketmq.image.role="{service_name}"',
+            f'io.rocketmq.service.binary="{binary}"',
+            f'io.rocketmq.service.config-path="{contract["config_path"]}"',
+            f'io.rocketmq.service.data-path="{contract["data_path"]}"',
+            f'io.rocketmq.service.ports="{",".join(str(port) for port in contract["ports"])}"',
+            'io.rocketmq.service.signal="SIGTERM"',
+            f"EXPOSE {ports}",
+            f'ENTRYPOINT ["/usr/local/bin/{binary}"]',
+            f"CMD {json.dumps(contract['command'])}",
+        ]
+        for fragment in required_service_fragments:
+            if fragment not in section:
+                findings.append(f"{service_name} image target missing: {fragment}")
+        if re.search(r"(?im)^\s*ENTRYPOINT\s+.*(?:/bin/(?:sh|bash)|rocketmq-start)", section):
+            findings.append(f"{service_name} image must use its direct binary entrypoint")
+        if re.search(
+            r"(?im)^\s*(?:ENTRYPOINT|CMD)\s+.*(?:password|secret|token|access[-_]?key)",
+            section,
+        ):
+            findings.append(f"{service_name} image command must not contain secret arguments")
+        if re.search(r"(?i)(?:password|secret|token|access[-_]?key)", " ".join(contract["command"])):
+            findings.append(f"{service_name} image command must not contain secret arguments")
+        build_pattern = (
+            rf"(?m)^cargo build .*--package {re.escape(contract['package'])}"
+            rf" .*--bin {re.escape(binary)}$"
+        )
+        if not re.search(build_pattern, dockerfile):
+            findings.append(f"service builder missing owner pair: {contract['package']}/{binary}")
+
+    expected_signal_sources = {
+        "controller": "rocketmq-controller/src/bin/controller_bootstrap.rs",
+        "proxy": "rocketmq-proxy/src/bin/rocketmq-proxy-rust.rs",
+        "mcp_stdio": "rocketmq-tools/rocketmq-mcp/src/main.rs",
+        "mcp_http": "rocketmq-tools/rocketmq-mcp/src/transport/streamable_http.rs",
+    }
+    if policy.get("signal_sources") != expected_signal_sources:
+        findings.append("service signal source registry drifted")
+    for name, source in (signal_sources or {}).items():
+        if "wait_for_signal_result" not in source:
+            findings.append(f"{name} entrypoint must use the shared SIGINT/SIGTERM waiter")
+        if "tokio::signal::ctrl_c" in source:
+            findings.append(f"{name} entrypoint must not use a Ctrl-C-only signal boundary")
 
     naming = policy["naming"]
     if naming.get("repository_prefix") != "ghcr.io/mxsm/rocketmq-rust":
@@ -158,7 +295,9 @@ def audit_foundation(
     for fragment in (
         "python scripts/container_image_guard.py",
         "scripts/container-supply-chain.ps1",
+        "scripts/service-image-contract.ps1",
         "target/container-foundation",
+        "target/service-images",
     ):
         if fragment not in workflow:
             findings.append(f"container workflow missing: {fragment}")
@@ -189,6 +328,27 @@ def audit_foundation(
             findings.append(f"container supply-chain script missing: {fragment}")
     if "--ignore-unfixed" in supply_script:
         findings.append("critical vulnerability gate must not ignore unfixed findings")
+
+    service_script_fragments = [
+        "docker buildx build",
+        "--target $service.target",
+        "--read-only",
+        "must fail closed when its required config mount is absent",
+        "docker stop --signal SIGTERM --timeout 30",
+        "{{.State.ExitCode}}",
+        "$service.data_path",
+        "find /usr/local/bin",
+        "cyclonedx-json",
+        "--severity CRITICAL",
+        "cosign sign-blob",
+        "cosign verify-blob",
+        "Remove-Item -LiteralPath $privateKey",
+    ]
+    for fragment in service_script_fragments:
+        if fragment not in service_script:
+            findings.append(f"service image contract script missing: {fragment}")
+    if "--ignore-unfixed" in service_script:
+        findings.append("service image CRITICAL vulnerability gate must not ignore unfixed findings")
     return findings
 
 
@@ -206,7 +366,19 @@ def main() -> int:
         dockerfile = (ROOT / policy["foundation_dockerfile"]).read_text(encoding="utf-8")
         workflow = (ROOT / policy["workflow"]["path"]).read_text(encoding="utf-8")
         supply_script = (ROOT / "scripts" / "container-supply-chain.ps1").read_text(encoding="utf-8")
-        findings = audit_foundation(policy, dockerfile, workflow, supply_script, repository_dockerfiles())
+        service_script = (ROOT / policy["service_contract_script"]).read_text(encoding="utf-8")
+        signal_sources = {
+            name: (ROOT / path).read_text(encoding="utf-8") for name, path in policy["signal_sources"].items()
+        }
+        findings = audit_foundation(
+            policy,
+            dockerfile,
+            workflow,
+            supply_script,
+            repository_dockerfiles(),
+            service_script,
+            signal_sources,
+        )
     except (OSError, KeyError, TypeError, json.JSONDecodeError) as error:
         print(f"CONTAINER_IMAGE_GUARD_FAILED {error}", file=sys.stderr)
         return 2
@@ -218,6 +390,7 @@ def main() -> int:
         "CONTAINER_IMAGE_GUARD_OK "
         f"dockerfiles={len(repository_dockerfiles())} "
         f"exceptions={len(policy['compatibility_exceptions'])} "
+        f"services={len(policy['services'])} "
         f"milestone={policy['milestone']}"
     )
     return 0

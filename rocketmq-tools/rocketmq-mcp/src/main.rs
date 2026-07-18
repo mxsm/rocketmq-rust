@@ -35,13 +35,23 @@ async fn main() -> Result<(), McpError> {
     );
 
     let result = match app.transport() {
-        TransportKind::Stdio => transport::stdio::serve_typed(app.clone()).await,
+        TransportKind::Stdio => serve_stdio(app.clone()).await,
         TransportKind::StreamableHttp => serve_streamable_http(app.clone()).await,
     };
     app.shutdown().await;
     result?;
 
     Ok(())
+}
+
+async fn serve_stdio(app: McpApp) -> Result<(), McpError> {
+    tokio::select! {
+        result = transport::stdio::serve_typed(app) => result,
+        result = rocketmq_runtime::wait_for_signal_result() => result.map_err(|source| McpError::Infrastructure {
+            operation: "wait for MCP process termination signal",
+            source: Box::new(source),
+        }),
+    }
 }
 
 async fn serve_streamable_http(app: McpApp) -> Result<(), McpError> {
