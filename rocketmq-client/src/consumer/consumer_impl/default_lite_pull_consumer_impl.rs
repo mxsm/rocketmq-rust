@@ -1386,7 +1386,7 @@ impl DefaultLitePullConsumerImpl {
     }
 
     /// Alias for poll with explicit timeout parameter naming.
-    pub async fn poll_with_timeout(&self, timeout_millis: u64) -> RocketMQResult<Vec<ArcMut<MessageExt>>> {
+    pub async fn poll_with_timeout(&self, timeout_millis: u64) -> RocketMQResult<Vec<Arc<MessageExt>>> {
         self.poll(timeout_millis).await
     }
 
@@ -1564,7 +1564,14 @@ impl DefaultLitePullConsumerImpl {
 
         match pull_result.pull_result.pull_status {
             PullStatus::Found => {
-                let messages = pull_result.pull_result.msg_found_list.take().unwrap_or_default();
+                let messages = pull_result
+                    .pull_result
+                    .msg_found_list
+                    .take()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(Arc::new)
+                    .collect::<Vec<_>>();
                 let lock = self.message_queue_lock(mq).await;
                 let _guard = lock.lock().await;
                 let result_is_current = self
@@ -1779,7 +1786,7 @@ impl DefaultLitePullConsumerImpl {
     }
 
     /// Polls for messages with the specified timeout.
-    pub async fn poll(&self, timeout_millis: u64) -> RocketMQResult<Vec<ArcMut<MessageExt>>> {
+    pub async fn poll(&self, timeout_millis: u64) -> RocketMQResult<Vec<Arc<MessageExt>>> {
         let _poll_guard = self.poll_lock.lock().await;
         self.make_sure_state_ok()?;
 
@@ -2034,7 +2041,7 @@ impl DefaultLitePullConsumerImpl {
     }
 
     /// Removes namespace from message topics if namespace is configured.
-    fn reset_topic(&self, messages: &mut [ArcMut<MessageExt>]) {
+    fn reset_topic(&self, messages: &mut [Arc<MessageExt>]) {
         if messages.is_empty() {
             return;
         }
@@ -2045,7 +2052,8 @@ impl DefaultLitePullConsumerImpl {
                     let topic = msg.message.topic().to_string();
                     let topic_without_namespace =
                         NamespaceUtil::without_namespace_with_namespace(&topic, namespace.as_str());
-                    msg.message
+                    Arc::make_mut(msg)
+                        .message
                         .set_topic(CheetahString::from_string(topic_without_namespace));
                 }
             }
@@ -3766,7 +3774,7 @@ mod tests {
             .get_process_queue(&mq)
             .await
             .expect("assigned queue should have a process queue");
-        let message = ArcMut::new(MessageExt {
+        let message = Arc::new(MessageExt {
             queue_offset: 7,
             ..Default::default()
         });
@@ -3814,11 +3822,11 @@ mod tests {
             .get_process_queue(&retained_mq)
             .await
             .expect("retained queue should have a process queue");
-        let cleared_message = ArcMut::new(MessageExt {
+        let cleared_message = Arc::new(MessageExt {
             queue_offset: 11,
             ..Default::default()
         });
-        let retained_message = ArcMut::new(MessageExt {
+        let retained_message = Arc::new(MessageExt {
             queue_offset: 22,
             ..Default::default()
         });
@@ -3881,7 +3889,7 @@ mod tests {
             .get_process_queue(&mq)
             .await
             .expect("assigned queue should have a process queue");
-        let message = ArcMut::new(MessageExt {
+        let message = Arc::new(MessageExt {
             queue_offset: 9,
             ..Default::default()
         });
@@ -3940,7 +3948,7 @@ mod tests {
             .get_process_queue(&mq)
             .await
             .expect("assigned queue should have a process queue");
-        let message = ArcMut::new(MessageExt {
+        let message = Arc::new(MessageExt {
             queue_offset: 11,
             ..Default::default()
         });
@@ -3988,11 +3996,11 @@ mod tests {
             .get_process_queue(&mq)
             .await
             .expect("assigned queue should have a process queue");
-        let first_message = ArcMut::new(MessageExt {
+        let first_message = Arc::new(MessageExt {
             queue_offset: 1,
             ..Default::default()
         });
-        let second_message = ArcMut::new(MessageExt {
+        let second_message = Arc::new(MessageExt {
             queue_offset: 2,
             ..Default::default()
         });
@@ -4072,7 +4080,7 @@ mod tests {
         let mq = MessageQueue::from_parts("topic-flow-control", "broker-a", 0);
         let process_queue = Arc::new(crate::consumer::consumer_impl::process_queue::ProcessQueue::new());
         process_queue.set_last_pull_timestamp(1);
-        let queued_messages = vec![ArcMut::new(MessageExt {
+        let queued_messages = vec![Arc::new(MessageExt {
             queue_offset: 0,
             ..Default::default()
         })];

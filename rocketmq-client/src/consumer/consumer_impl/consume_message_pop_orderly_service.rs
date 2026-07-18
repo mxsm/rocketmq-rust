@@ -301,7 +301,7 @@ impl ConsumeMessagePopOrderlyService {
             .unwrap_or_default()
     }
 
-    pub fn reset_namespace(&mut self, msgs: &mut [ArcMut<MessageExt>]) {
+    pub fn reset_namespace(&mut self, msgs: &mut [Arc<MessageExt>]) {
         let namespace = self.client_config.get_namespace().unwrap_or_default();
         if namespace.is_empty() {
             return;
@@ -309,7 +309,7 @@ impl ConsumeMessagePopOrderlyService {
 
         for msg in msgs {
             let topic = msg.topic().to_string();
-            msg.set_topic(CheetahString::from_string(
+            Arc::make_mut(msg).set_topic(CheetahString::from_string(
                 NamespaceUtil::without_namespace_with_namespace(topic.as_str(), namespace.as_str()),
             ));
         }
@@ -407,7 +407,7 @@ impl ConsumeMessagePopOrderlyService {
         }
     }
 
-    async fn check_reconsume_times(&self, msgs: &[ArcMut<MessageExt>]) -> bool {
+    async fn check_reconsume_times(&self, msgs: &mut [Arc<MessageExt>]) -> bool {
         let mut suspend = false;
         let max_times = self.get_max_reconsume_times();
 
@@ -415,16 +415,16 @@ impl ConsumeMessagePopOrderlyService {
             let reconsume_times = msg.reconsume_times;
             if reconsume_times >= max_times {
                 MessageAccessor::set_reconsume_time(
-                    msg.mut_from_ref(),
+                    Arc::make_mut(msg),
                     CheetahString::from_string(reconsume_times.to_string()),
                 );
                 if !self.send_message_back(msg.as_ref()).await {
                     suspend = true;
-                    msg.mut_from_ref().reconsume_times = reconsume_times + 1;
+                    Arc::make_mut(msg).reconsume_times = reconsume_times + 1;
                 }
             } else {
                 suspend = true;
-                msg.mut_from_ref().reconsume_times = reconsume_times + 1;
+                Arc::make_mut(msg).reconsume_times = reconsume_times + 1;
             }
         }
 
@@ -527,7 +527,7 @@ impl ConsumeMessagePopOrderlyService {
 
     async fn process_consume_result(
         &self,
-        msgs: &[ArcMut<MessageExt>],
+        msgs: &[Arc<MessageExt>],
         status: Result<ConsumeOrderlyStatus, rocketmq_error::RocketMQError>,
         context: &ConsumeOrderlyContext,
     ) -> bool {
@@ -680,7 +680,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopOrderlyService {
     ) -> ConsumeMessageDirectlyResult {
         info!("consumeMessageDirectly receive new message: {}", msg);
         let mq = MessageQueue::from_parts(msg.topic().clone(), broker_name.unwrap_or_default(), msg.queue_id());
-        let mut msgs = vec![ArcMut::new(msg)];
+        let mut msgs = vec![Arc::new(msg)];
         if let Some(default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_ref() {
             default_mqpush_consumer_impl
                 .mut_from_ref()
@@ -760,7 +760,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopOrderlyService {
     async fn submit_consume_request(
         &self,
         this: ArcMut<Self>,
-        msgs: Vec<ArcMut<MessageExt>>,
+        msgs: Vec<Arc<MessageExt>>,
         process_queue: Arc<ProcessQueue>,
         message_queue: MessageQueue,
         dispatch_to_consume: bool,
@@ -775,7 +775,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopOrderlyService {
         process_queue: &PopProcessQueue,
         message_queue: &MessageQueue,
     ) {
-        let arc_msgs: Vec<ArcMut<MessageExt>> = msgs.into_iter().map(ArcMut::new).collect();
+        let arc_msgs: Vec<Arc<MessageExt>> = msgs.into_iter().map(Arc::new).collect();
         let request = ConsumeRequest::new(Arc::new(process_queue.clone()), message_queue.clone(), arc_msgs);
         this.mut_from_ref().submit_consume_request(this.clone(), request, false);
     }
@@ -786,7 +786,7 @@ struct ConsumeRequest {
     process_queue: Arc<PopProcessQueue>,
     message_queue: MessageQueue,
     sharding_key_index: i32,
-    msgs: Vec<ArcMut<MessageExt>>,
+    msgs: Vec<Arc<MessageExt>>,
 }
 
 impl std::fmt::Debug for ConsumeRequest {
@@ -799,11 +799,7 @@ impl std::fmt::Debug for ConsumeRequest {
 }
 
 impl ConsumeRequest {
-    pub fn new(
-        process_queue: Arc<PopProcessQueue>,
-        message_queue: MessageQueue,
-        msgs: Vec<ArcMut<MessageExt>>,
-    ) -> Self {
+    pub fn new(process_queue: Arc<PopProcessQueue>, message_queue: MessageQueue, msgs: Vec<Arc<MessageExt>>) -> Self {
         Self {
             process_queue,
             message_queue,
@@ -828,7 +824,7 @@ impl ConsumeRequest {
             .await;
         let _guard = lock.lock().await;
 
-        let msgs = &self.msgs;
+        let msgs = &mut self.msgs;
 
         if msgs.is_empty() {
             consume_message_pop_orderly_service.submit_consume_request_later(
@@ -1209,9 +1205,9 @@ mod tests {
         service
             .client_config
             .set_namespace(CheetahString::from_static_str("ns"));
-        let mut msg = ArcMut::new(MessageExt::default());
+        let mut msg = MessageExt::default();
         msg.set_topic(CheetahString::from_static_str("ns%topic-a"));
-        let mut msgs = vec![msg];
+        let mut msgs = vec![Arc::new(msg)];
 
         service.reset_namespace(msgs.as_mut_slice());
 

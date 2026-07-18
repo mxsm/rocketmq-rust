@@ -6,7 +6,7 @@ M11-12 的最终目标是 production/public compatibility API 中不存在 `ArcM
 `mut_from_ref` 或 clone-safe `AsMut`/`DerefMut`，并让默认 workspace 在 stable Rust 下通过，同时把 Miri/Loom、
 soak、SLO fault、dashboard/runbook、rollback 和 Human Gate 绑定到同一候选快照。
 
-该目标尚未完成。本文件记录 M11-12a～l 子切片的真实下降，不把子切片计为第 76 个工作包，也不刷新
+该目标尚未完成。本文件记录 M11-12a～m 子切片的真实下降，不把子切片计为第 76 个工作包，也不刷新
 baseline 来掩盖剩余债务。父 Issue 为 #8292；M11-12a 子切片 Issue 为 #8293；分支为
 `mxsm/architecture-refactor-owned-values`。
 
@@ -42,6 +42,9 @@ M11-12k 的 Client ProduceAccumulator owner 由 Issue #8315 跟踪，分支为
 
 M11-12l 的 Client latency fault detector owner 由 Issue #8317 跟踪，分支为
 `mxsm/architecture-refactor-client-latency-fault`；它仍是同一 M11-12 工作包的子切片。
+
+M11-12m 的 Client message ownership 由 Issue #8319 跟踪，分支为
+`mxsm/architecture-refactor-client-pull-result`；它仍是同一 M11-12 工作包的子切片。
 
 ## 初始盘点
 
@@ -334,6 +337,33 @@ reviewed baseline 只删除三个 latency 文件中真实消失的 12 个 identi
 approval；baseline 744→732、occurrences 2,291→2,273，分类精确为 production 454/1,481、test 264/752、
 compatibility 14/40。
 
+## M11-12m Client message ownership
+
+| 目标 | 实现与证据 |
+|---|---|
+| owned pull result | `PullResult` 直接持有 `Vec<MessageExt>`；与 `PullOutcome<MessageExt>` 的 non-empty/empty/absent 转换均无失败分支，兼容错误名收敛为 `Infallible` |
+| 安全共享消息 | ProcessQueue/store、Push/Pop consume request、hook、trace 与 Lite zero-copy 全部使用标准 `Arc<MessageExt>`；Client production 不再出现 `ArcMut<MessageExt>` |
+| 局部写隔离 | retry topic、namespace、reconsume count 与 consume timestamp mutation 使用 `Arc::make_mut`；测试证明任务副本修改不会改变队列保留值 |
+| 生命周期元数据 | ProcessQueue 在既有 `RwLock` 状态内按 queue offset 跟踪 consume start timestamp；clean-expired 保留旧属性 fallback，remove/clear/replacement 同步清理元数据 |
+| 行为合同 | pull decode/tag filter/offset delta、ProcessQueue count/size/span/take/rollback/commit、Push retry 与 Lite poll 合同保持通过 |
+
+M11-12m 后实际快照为 709 个条目：production 440、test 255、compatibility 14；occurrence 精确为
+production 1,397、test 720、compatibility 40。相对 M11-12l 删除 14 个 production 条目/84 个 production
+occurrence，以及 9 个 test 条目/32 个 test occurrence；相对初始快照累计删除 320 个 production 条目和
+728 个 production occurrence。`rocketmq-client` production 债务从 134/575 降至 120/491；production
+`ArcMut<MessageExt>` 消息流清零。剩余 production 债务为：
+
+| crate | 条目 | occurrence |
+|---|---:|---:|
+| `rocketmq-broker` | 190 | 568 |
+| `rocketmq-client` | 120 | 491 |
+| `rocketmq-store` | 127 | 324 |
+| `rocketmq-tools` | 3 | 14 |
+
+reviewed baseline 从 732→709、occurrences 从 2,273→2,157。23 个删除 identity 均来自源码真实删除；另有
+9 个同 item、同 service-owner 参数的一对一 fingerprint 更新，因为相邻消息参数从 `ArcMut<MessageExt>` 改为
+`Arc<MessageExt>`，未增加或移动任何共享可变 occurrence。
+
 ## 已执行验证
 
 | 命令 | 结果 |
@@ -593,9 +623,31 @@ M11-12l 追加验证：
 | `.\scripts\check-agents-routing.ps1` | 通过；4 个 standalone Cargo、3 个 Node project、8 条 route |
 | `git diff --check` | 通过 |
 
+M11-12m 追加验证：
+
+| 命令 | 结果 |
+|---|---|
+| `cargo check -p rocketmq-client-rust --all-targets --all-features` | 通过 |
+| `cargo test -p rocketmq-client-rust pull_result --lib` | 11/11 通过；包含 owned non-empty round-trip、decode/filter/offset delta 与同步 pull error path |
+| `cargo test -p rocketmq-client-rust process_queue --lib` | 41/41 通过；包含 lifecycle timestamp 独立跟踪与全部 count/size/span/take/rollback/commit 合同 |
+| `cargo test -p rocketmq-client-rust try_reset_pop_retry_topic --lib` | 1/1 通过；验证 clone-on-write 后队列保留值不被任务副本修改 |
+| `cargo test -p rocketmq-client-rust --all-features --quiet` | 全部通过；library 960/960，其余 integration targets 全部通过（35 项既有外部环境测试忽略） |
+| reviewed baseline reduction | 23 个真实删除 identity；9 个同 item service-owner fingerprint 更新逐条审核；baseline 732→709、occurrences 2,273→2,157 |
+| `python scripts/arc_mut_guard.py` | 通过；Client production `ArcMut<MessageExt>` 定向扫描为零 |
+| `python -m unittest scripts.tests.test_arc_mut_guard` / `python scripts/arc_mut_guard.py --fixtures` | 67/67 单测、24/24 fixtures 通过 |
+| `cargo clean` | 磁盘仅剩约 32 MiB 后按授权清理 192.2 GiB workspace 构建缓存；清理后完整测试重新构建并通过 |
+| `cargo test -p rocketmq-admin-core --lib` / `cargo test -p rocketmq-admin-core --test boundary_source_guard` | 120/120 单测、3/3 adapter boundary tests 通过；owned PullResult 下游适配使用直接 clone/to_vec |
+| `rocketmq-example`: `cargo fmt --all -- --check` / `cargo clippy --all-targets -- -D warnings` | standalone 消费者通过新的 owned/standard-Arc Client API |
+| `cargo fmt --all -- --check` | 通过 |
+| `cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings` | 通过；Windows linker stdout 与既有 future-incompatibility note 不受 `-D warnings` 管辖 |
+| `.\scripts\runtime-audit.ps1 -SkipBaseline -EnforceBoundaryBaseline` | 通过；消费任务 owner 未改变，ProcessQueue lifecycle metadata 只经既有异步 `RwLock` 访问 |
+| architecture target/baseline 与 release guard | 通过；35/35 target edges、3/3 test edges、32/32 release topology |
+| `.\scripts\check-agents-routing.ps1` | 通过；4 个 standalone Cargo、3 个 Node project、8 条 route |
+| `git diff --check` | 通过 |
+
 ## 剩余切片与 Gate
 
-1. Client MQClientInstance、Producer/Admin、Push/Lite Consumer owner（134/575）。
+1. Client MQClientInstance、Producer/Admin、消费服务 lifecycle、Push/Lite Consumer owner（120/491）。
 2. Broker TopicConfig/offset、BrokerRuntimeInner、schedule/POP/processor/transaction owner（190/568）。
 3. Store TopicConfig snapshot、MappedFileQueue/ConsumeQueue、CommitLog/Flush、StoreHandle/Rocks/Timer 与 HA actor（127/324）。
 4. Tools 3/14、compatibility `arc_mut.rs` 和公开 re-export；移除其余 nightly feature，将 guard 切到 production/public zero。

@@ -1439,33 +1439,33 @@ impl DefaultMQPushConsumerImpl {
         }
     }
 
-    pub fn try_reset_pop_retry_topic(msgs: &mut [ArcMut<MessageExt>], consumer_group: &str) {
+    pub fn try_reset_pop_retry_topic(msgs: &mut [Arc<MessageExt>], consumer_group: &str) {
         let pop_retry_prefix = format!("{}{}_", mix_all::RETRY_GROUP_TOPIC_PREFIX, consumer_group);
         for msg in msgs.iter_mut() {
             if msg.topic().starts_with(&pop_retry_prefix) {
                 let normal_topic = KeyBuilder::parse_normal_topic(msg.topic(), consumer_group);
 
                 if !normal_topic.is_empty() {
-                    msg.set_topic(CheetahString::from_string(normal_topic));
+                    Arc::make_mut(msg).set_topic(CheetahString::from_string(normal_topic));
                 }
             }
         }
     }
 
-    pub fn reset_retry_and_namespace(&mut self, msgs: &mut [ArcMut<MessageExt>], consumer_group: &str) {
+    pub fn reset_retry_and_namespace(&mut self, msgs: &mut [Arc<MessageExt>], consumer_group: &str) {
         let group_topic = mix_all::get_retry_topic(consumer_group);
         let namespace = self.client_config.get_namespace().unwrap_or_default();
         for msg in msgs.iter_mut() {
             if let Some(retry_topic) = msg.property(&CheetahString::from_static_str(MessageConst::PROPERTY_RETRY_TOPIC))
             {
                 if group_topic == msg.topic().as_str() {
-                    msg.set_topic(retry_topic);
+                    Arc::make_mut(msg).set_topic(retry_topic);
                 }
             }
 
             if !namespace.is_empty() {
                 let topic = msg.topic().to_string();
-                msg.set_topic(CheetahString::from_string(
+                Arc::make_mut(msg).set_topic(CheetahString::from_string(
                     NamespaceUtil::without_namespace_with_namespace(topic.as_str(), namespace.as_str()),
                 ));
             }
@@ -2562,11 +2562,14 @@ mod tests {
     fn try_reset_pop_retry_topic_restores_java_v1_pop_retry_topic() {
         let mut message = MessageExt::default();
         message.set_topic(CheetahString::from_static_str("%RETRY%PushGroup_TopicA"));
-        let mut messages = vec![ArcMut::new(message)];
+        let queued_message = Arc::new(message);
+        let mut messages = vec![queued_message.clone()];
 
         DefaultMQPushConsumerImpl::try_reset_pop_retry_topic(&mut messages, "PushGroup");
 
         assert_eq!(messages[0].topic().as_str(), "TopicA");
+        assert_eq!(queued_message.topic().as_str(), "%RETRY%PushGroup_TopicA");
+        assert!(!Arc::ptr_eq(&messages[0], &queued_message));
     }
 
     #[tokio::test]
@@ -2682,7 +2685,7 @@ mod tests {
         };
         message.set_topic(topic.clone());
         message.set_body(Bytes::from_static(b"cached-body"));
-        pq.put_message(&[ArcMut::new(message)]).await;
+        pq.put_message(&[Arc::new(message)]).await;
         assert_eq!(pq.msg_count(), 1);
 
         consumer

@@ -101,7 +101,14 @@ impl PullCallback for DefaultPullCallback {
                 {
                     push_consumer_impl.execute_pull_request_immediately(pull_request).await;
                 } else {
-                    let msg_found_list = pull_result_ext.pull_result.msg_found_list.take().unwrap_or_default();
+                    let msg_found_list = pull_result_ext
+                        .pull_result
+                        .msg_found_list
+                        .take()
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(Arc::new)
+                        .collect::<Vec<_>>();
                     if msg_found_list.is_empty() {
                         push_consumer_impl.execute_pull_request_immediately(pull_request).await;
                         return;

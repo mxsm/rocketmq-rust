@@ -304,12 +304,12 @@ impl ConsumeMessageConcurrentlyService {
                         continue;
                     }
 
-                    let sent = self.send_message_back(&mut msg, context).await;
+                    let sent = self.send_message_back(Arc::make_mut(&mut msg), context).await;
                     if sent {
                         consume_request.msgs.push(msg);
                     } else {
                         let times = msg.reconsume_times() + 1;
-                        msg.set_reconsume_times(times);
+                        Arc::make_mut(&mut msg).set_reconsume_times(times);
                         msg_back_failed.push(msg);
                     }
                 }
@@ -350,7 +350,7 @@ impl ConsumeMessageConcurrentlyService {
 
     fn submit_consume_request_later(
         &self,
-        msgs: Vec<ArcMut<MessageExt>>,
+        msgs: Vec<Arc<MessageExt>>,
         this: ArcMut<Self>,
         process_queue: Arc<ProcessQueue>,
         message_queue: MessageQueue,
@@ -474,7 +474,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
         info!("consumeMessageDirectly receive new message: {}", msg);
         msg.broker_name = broker_name.unwrap_or_default();
         let mq = MessageQueue::from_parts(msg.topic().clone(), msg.broker_name.clone(), msg.queue_id());
-        let mut msgs = vec![ArcMut::new(msg)];
+        let mut msgs = vec![Arc::new(msg)];
         if let Some(default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_ref() {
             default_mqpush_consumer_impl
                 .mut_from_ref()
@@ -567,7 +567,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
     async fn submit_consume_request(
         &self,
         this: ArcMut<Self>,
-        msgs: Vec<ArcMut<MessageExt>>,
+        msgs: Vec<Arc<MessageExt>>,
         process_queue: Arc<ProcessQueue>,
         message_queue: MessageQueue,
         dispatch_to_consume: bool,
@@ -617,7 +617,7 @@ impl ConsumeMessageConcurrentlyService {
     fn spawn_consume_task(
         &self,
         this: ArcMut<Self>,
-        msgs: Vec<ArcMut<MessageExt>>,
+        msgs: Vec<Arc<MessageExt>>,
         process_queue: Arc<ProcessQueue>,
         message_queue: MessageQueue,
         dispatch_to_consume: bool,
@@ -661,7 +661,7 @@ impl ConsumeMessageConcurrentlyService {
 }
 
 struct ConsumeRequest {
-    msgs: Vec<ArcMut<MessageExt>>,
+    msgs: Vec<Arc<MessageExt>>,
     message_listener: ArcMessageListenerConcurrently,
     process_queue: Arc<ProcessQueue>,
     message_queue: MessageQueue,
@@ -713,9 +713,13 @@ impl ConsumeRequest {
         );
 
         if !self.msgs.is_empty() {
-            let start_ts = CheetahString::from_string(current_millis().to_string());
+            let start_timestamp = current_millis();
+            self.process_queue
+                .mark_messages_consuming(&self.msgs, start_timestamp)
+                .await;
+            let start_ts = CheetahString::from_string(start_timestamp.to_string());
             for msg in self.msgs.iter_mut() {
-                MessageAccessor::set_consume_start_time_stamp(msg.as_mut(), start_ts.clone());
+                MessageAccessor::set_consume_start_time_stamp(Arc::make_mut(msg), start_ts.clone());
             }
 
             if has_hook {
@@ -1005,7 +1009,7 @@ mod tests {
 
     fn consume_request(default_impl: Option<ArcMut<DefaultMQPushConsumerImpl>>) -> ConsumeRequest {
         ConsumeRequest {
-            msgs: vec![ArcMut::new(MessageExt::default())],
+            msgs: vec![Arc::new(MessageExt::default())],
             message_listener: listener(),
             process_queue: Arc::new(ProcessQueue::new()),
             message_queue: message_queue(),
@@ -1261,7 +1265,7 @@ mod tests {
 
         service.spawn_consume_task(
             ArcMut::new(new_service(None)),
-            vec![ArcMut::new(MessageExt::default())],
+            vec![Arc::new(MessageExt::default())],
             Arc::new(ProcessQueue::new()),
             message_queue(),
             true,
@@ -1274,7 +1278,7 @@ mod tests {
         let default_impl = new_default_impl();
         let mut service = new_service(Some(default_impl.clone()));
         let process_queue = Arc::new(ProcessQueue::new());
-        let msg = ArcMut::new(MessageExt::default());
+        let msg = Arc::new(MessageExt::default());
         let messages = vec![msg.clone()];
         process_queue.put_message(&messages).await;
         let mut request = ConsumeRequest {

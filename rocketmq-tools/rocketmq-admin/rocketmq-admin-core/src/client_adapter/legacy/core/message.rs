@@ -1290,7 +1290,7 @@ impl MessageService {
         let message = if pull_status == PullStatus::Found {
             pull_result
                 .msg_found_list()
-                .and_then(|messages| messages.first().map(|message| message.as_ref().clone()))
+                .and_then(|messages| messages.first().cloned())
         } else {
             None
         };
@@ -1671,7 +1671,7 @@ impl MessageService {
                             PullStatus::Found => {
                                 if let Some(messages) = result.msg_found_list() {
                                     sink(MessagePullEvent::Messages {
-                                        messages: messages.iter().map(|message| message.as_ref().clone()).collect(),
+                                        messages: messages.to_vec(),
                                     })?;
                                 }
                             }
@@ -1802,7 +1802,7 @@ impl MessageService {
                                 }
                                 if request.print_messages {
                                     sink(MessagePullEvent::Messages {
-                                        messages: messages.iter().map(|message| message.as_ref().clone()).collect(),
+                                        messages: messages.to_vec(),
                                     })?;
                                 }
                             }
@@ -2041,7 +2041,7 @@ impl MessageService {
                             sink(MessagePullEvent::ConsumeOk)?;
                             if let Some(messages) = result.msg_found_list() {
                                 sink(MessagePullEvent::Messages {
-                                    messages: messages.iter().map(|message| message.as_ref().clone()).collect(),
+                                    messages: messages.to_vec(),
                                 })?;
                             }
                         }

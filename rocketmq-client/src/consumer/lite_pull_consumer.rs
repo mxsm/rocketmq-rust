@@ -217,8 +217,8 @@ pub trait LitePullConsumerLocal: Sync {
 
     /// Fetches the next batch of messages without allocating owned copies.
     ///
-    /// Returns `ArcMut<MessageExt>` references to messages, providing shared mutable access
-    /// without heap allocation or deep cloning. The returned references remain valid until
+    /// Returns immutable `Arc<MessageExt>` handles without heap allocation or deep cloning.
+    /// The returned handles remain valid until
     /// they are dropped. Messages that need to outlive the poll scope must be cloned explicitly.
     ///
     /// This method uses the default poll timeout configured for the consumer.
@@ -246,7 +246,7 @@ pub trait LitePullConsumerLocal: Sync {
     ///
     /// Returns an empty vector if no messages are available within the default timeout period.
     /// This function does not block the calling thread.
-    async fn poll_zero_copy(&self) -> Vec<rocketmq_rust::ArcMut<MessageExt>>;
+    async fn poll_zero_copy(&self) -> Vec<std::sync::Arc<MessageExt>>;
 
     /// Fetches the next batch of messages without allocating owned copies, with a specified
     /// timeout.
@@ -266,7 +266,7 @@ pub trait LitePullConsumerLocal: Sync {
     ///
     /// Returns an empty vector if no messages are available before the timeout expires.
     /// This function does not block the calling thread.
-    async fn poll_with_timeout_zero_copy(&self, timeout: u64) -> Vec<rocketmq_rust::ArcMut<MessageExt>>;
+    async fn poll_with_timeout_zero_copy(&self, timeout: u64) -> Vec<std::sync::Arc<MessageExt>>;
 
     /// Fetches the next batch of messages, returning owned copies.
     ///

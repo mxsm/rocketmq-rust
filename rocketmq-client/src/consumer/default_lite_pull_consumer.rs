@@ -299,12 +299,12 @@ impl DefaultLitePullConsumer {
     }
 
     /// Polls messages without cloning message payloads.
-    pub async fn poll_zero_copy(&self) -> Vec<ArcMut<MessageExt>> {
+    pub async fn poll_zero_copy(&self) -> Vec<Arc<MessageExt>> {
         <Self as LitePullConsumer>::poll_zero_copy(self).await
     }
 
     /// Polls messages without cloning message payloads with a custom timeout.
-    pub async fn poll_with_timeout_zero_copy(&self, timeout: u64) -> Vec<ArcMut<MessageExt>> {
+    pub async fn poll_with_timeout_zero_copy(&self, timeout: u64) -> Vec<Arc<MessageExt>> {
         <Self as LitePullConsumer>::poll_with_timeout_zero_copy(self, timeout).await
     }
 
@@ -1186,7 +1186,7 @@ impl LitePullConsumer for DefaultLitePullConsumer {
     }
 
     /// Zero-copy implementation.
-    async fn poll_zero_copy(&self) -> Vec<ArcMut<MessageExt>> {
+    async fn poll_zero_copy(&self) -> Vec<Arc<MessageExt>> {
         match self.try_impl_() {
             Ok(impl_) => match impl_.poll(self.consumer_config.poll_timeout_millis).await {
                 Ok(messages) => messages,
@@ -1203,7 +1203,7 @@ impl LitePullConsumer for DefaultLitePullConsumer {
     }
 
     /// Zero-copy implementation with custom timeout.
-    async fn poll_with_timeout_zero_copy(&self, timeout: u64) -> Vec<ArcMut<MessageExt>> {
+    async fn poll_with_timeout_zero_copy(&self, timeout: u64) -> Vec<Arc<MessageExt>> {
         match self.try_impl_() {
             Ok(impl_) => match impl_.poll_with_timeout(timeout).await {
                 Ok(messages) => messages,

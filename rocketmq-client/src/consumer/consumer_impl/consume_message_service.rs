@@ -147,7 +147,7 @@ where
 
     pub async fn submit_consume_request(
         &self,
-        msgs: Vec<ArcMut<MessageExt>>,
+        msgs: Vec<Arc<MessageExt>>,
         process_queue: Arc<ProcessQueue>,
         message_queue: MessageQueue,
         dispatch_to_consume: bool,
@@ -392,7 +392,7 @@ pub trait ConsumeMessageServiceTrait {
     async fn submit_consume_request(
         &self,
         this: ArcMut<Self>,
-        msgs: Vec<ArcMut<MessageExt>>,
+        msgs: Vec<Arc<MessageExt>>,
         process_queue: Arc<ProcessQueue>,
         message_queue: MessageQueue,
         dispatch_to_consume: bool,
@@ -445,7 +445,7 @@ mod tests {
         async fn submit_consume_request(
             &self,
             _this: ArcMut<Self>,
-            _msgs: Vec<ArcMut<MessageExt>>,
+            _msgs: Vec<Arc<MessageExt>>,
             _process_queue: Arc<ProcessQueue>,
             _message_queue: MessageQueue,
             _dispatch_to_consume: bool,

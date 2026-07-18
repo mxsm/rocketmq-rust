@@ -14,22 +14,22 @@
 
 use std::collections::BTreeMap;
 use std::collections::VecDeque;
+use std::sync::Arc;
 
 use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_rust::ArcMut;
 
 pub(crate) struct ProcessQueueMessageStore {
     inner: PendingMessageStore,
 }
 
 enum PendingMessageStore {
-    BTree(BTreeMap<i64, ArcMut<MessageExt>>),
+    BTree(BTreeMap<i64, Arc<MessageExt>>),
     Contiguous(ContiguousOffsetStore),
 }
 
 struct ContiguousOffsetStore {
     base_offset: i64,
-    messages: VecDeque<ArcMut<MessageExt>>,
+    messages: VecDeque<Arc<MessageExt>>,
 }
 
 impl ProcessQueueMessageStore {
@@ -64,7 +64,7 @@ impl ProcessQueueMessageStore {
         }
     }
 
-    pub(crate) fn insert(&mut self, offset: i64, message: ArcMut<MessageExt>) -> Option<ArcMut<MessageExt>> {
+    pub(crate) fn insert(&mut self, offset: i64, message: Arc<MessageExt>) -> Option<Arc<MessageExt>> {
         match &mut self.inner {
             PendingMessageStore::BTree(messages) => {
                 if messages.is_empty() {
@@ -92,7 +92,7 @@ impl ProcessQueueMessageStore {
         }
     }
 
-    pub(crate) fn remove(&mut self, offset: &i64) -> Option<ArcMut<MessageExt>> {
+    pub(crate) fn remove(&mut self, offset: &i64) -> Option<Arc<MessageExt>> {
         match &mut self.inner {
             PendingMessageStore::BTree(messages) => messages.remove(offset),
             PendingMessageStore::Contiguous(messages) => {
@@ -110,14 +110,14 @@ impl ProcessQueueMessageStore {
         }
     }
 
-    pub(crate) fn pop_first(&mut self) -> Option<(i64, ArcMut<MessageExt>)> {
+    pub(crate) fn pop_first(&mut self) -> Option<(i64, Arc<MessageExt>)> {
         match &mut self.inner {
             PendingMessageStore::BTree(messages) => messages.pop_first(),
             PendingMessageStore::Contiguous(messages) => messages.pop_first(),
         }
     }
 
-    pub(crate) fn first(&self) -> Option<(i64, ArcMut<MessageExt>)> {
+    pub(crate) fn first(&self) -> Option<(i64, Arc<MessageExt>)> {
         match &self.inner {
             PendingMessageStore::BTree(messages) => messages
                 .first_key_value()
@@ -147,7 +147,7 @@ impl ProcessQueueMessageStore {
         }
     }
 
-    pub(crate) fn append_from_btree_map(&mut self, messages: &mut BTreeMap<i64, ArcMut<MessageExt>>) {
+    pub(crate) fn append_from_btree_map(&mut self, messages: &mut BTreeMap<i64, Arc<MessageExt>>) {
         let moved = std::mem::take(messages);
         for (offset, message) in moved {
             self.insert(offset, message);
@@ -167,7 +167,7 @@ impl ContiguousOffsetStore {
         }
     }
 
-    fn singleton(offset: i64, message: ArcMut<MessageExt>) -> Self {
+    fn singleton(offset: i64, message: Arc<MessageExt>) -> Self {
         let mut messages = VecDeque::with_capacity(1);
         messages.push_back(message);
         Self {
@@ -176,7 +176,7 @@ impl ContiguousOffsetStore {
         }
     }
 
-    fn from_btree_map(messages: BTreeMap<i64, ArcMut<MessageExt>>) -> Self {
+    fn from_btree_map(messages: BTreeMap<i64, Arc<MessageExt>>) -> Self {
         let base_offset = messages.first_key_value().map_or(0, |(offset, _)| *offset);
         Self {
             base_offset,
@@ -213,7 +213,7 @@ impl ContiguousOffsetStore {
             || self.base_offset.checked_sub(1) == Some(offset)
     }
 
-    fn can_represent_insert_map(messages: &BTreeMap<i64, ArcMut<MessageExt>>, offset: i64) -> bool {
+    fn can_represent_insert_map(messages: &BTreeMap<i64, Arc<MessageExt>>, offset: i64) -> bool {
         if messages.is_empty() {
             return true;
         }
@@ -228,7 +228,7 @@ impl ContiguousOffsetStore {
         (min..=max).contains(&offset) || max.checked_add(1) == Some(offset) || min.checked_sub(1) == Some(offset)
     }
 
-    fn insert_contiguous(&mut self, offset: i64, message: ArcMut<MessageExt>) -> Option<ArcMut<MessageExt>> {
+    fn insert_contiguous(&mut self, offset: i64, message: Arc<MessageExt>) -> Option<Arc<MessageExt>> {
         if self.messages.is_empty() {
             self.base_offset = offset;
             self.messages.push_back(message);
@@ -259,7 +259,7 @@ impl ContiguousOffsetStore {
         self.messages.is_empty() || offset == self.base_offset || Some(offset) == self.last_offset()
     }
 
-    fn remove_contiguous(&mut self, offset: i64) -> Option<ArcMut<MessageExt>> {
+    fn remove_contiguous(&mut self, offset: i64) -> Option<Arc<MessageExt>> {
         if !self.contains_key(offset) {
             return None;
         }
@@ -277,14 +277,14 @@ impl ContiguousOffsetStore {
         None
     }
 
-    fn pop_first(&mut self) -> Option<(i64, ArcMut<MessageExt>)> {
+    fn pop_first(&mut self) -> Option<(i64, Arc<MessageExt>)> {
         let offset = self.base_offset;
         let message = self.messages.pop_front()?;
         self.base_offset = self.base_offset.saturating_add(1);
         Some((offset, message))
     }
 
-    fn first(&self) -> Option<(i64, ArcMut<MessageExt>)> {
+    fn first(&self) -> Option<(i64, Arc<MessageExt>)> {
         self.messages.front().map(|message| (self.base_offset, message.clone()))
     }
 
@@ -299,7 +299,7 @@ impl ContiguousOffsetStore {
             .is_some_and(|index| index < self.messages.len())
     }
 
-    fn to_btree_map(&self) -> BTreeMap<i64, ArcMut<MessageExt>> {
+    fn to_btree_map(&self) -> BTreeMap<i64, Arc<MessageExt>> {
         self.messages
             .iter()
             .enumerate()
