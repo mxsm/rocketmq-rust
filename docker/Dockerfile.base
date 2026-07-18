@@ -226,10 +226,12 @@ LABEL org.opencontainers.image.title="RocketMQ Rust Controller" \
     io.rocketmq.service.binary="rocketmq-controller-rust" \
     io.rocketmq.service.config-path="/etc/rocketmq/controller.toml" \
     io.rocketmq.service.data-path="/var/lib/rocketmq/controller" \
-    io.rocketmq.service.ports="60109" \
+    io.rocketmq.service.ports="60109,60110" \
     io.rocketmq.service.signal="SIGTERM"
 
-EXPOSE 60109
+ENV ROCKETMQ_CONTROLLER_RAFT_BIND_ADDR=0.0.0.0:60110
+
+EXPOSE 60109 60110
 ENTRYPOINT ["/usr/local/bin/rocketmq-controller-rust"]
 CMD ["--config-file", "/etc/rocketmq/controller.toml"]
 

@@ -1,0 +1,394 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: rocketmq-broker
+  namespace: {{ .Release.Namespace }}
+  labels:
+{{ include "rocketmq.labels" (dict "root" . "service" "broker") | indent 4 }}
+spec:
+  serviceName: rocketmq-broker-headless
+  replicas: {{ .Values.services.broker.replicas }}
+  podManagementPolicy: OrderedReady
+  updateStrategy:
+    type: RollingUpdate
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
+  selector:
+    matchLabels:
+{{ include "rocketmq.selectorLabels" (dict "root" . "service" "broker") | indent 6 }}
+  template:
+    metadata:
+      labels:
+{{ include "rocketmq.labels" (dict "root" . "service" "broker") | indent 8 }}
+    spec:
+      serviceAccountName: rocketmq-runtime
+      automountServiceAccountToken: false
+{{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+{{- range . }}
+        - name: {{ . | quote }}
+{{- end }}
+{{- end }}
+      securityContext:
+{{ include "rocketmq.podSecurityContext" . | indent 8 }}
+{{ include "rocketmq.topology" (dict "root" . "service" "broker") | indent 6 }}
+      containers:
+        - name: broker
+          image: {{ include "rocketmq.image" (dict "root" . "service" "broker" "digest" .Values.services.broker.image.digest) | quote }}
+          imagePullPolicy: IfNotPresent
+          args: ["--configFile", "/etc/rocketmq/broker.toml"]
+          env:
+            - {name: ROCKETMQ_HOME, value: /var/lib/rocketmq/broker}
+            - {name: OTEL_SERVICE_NAME, value: rocketmq-broker}
+            - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: {{ .Values.global.otelEndpoint | quote }}}
+            - {name: OTEL_EXPORTER_OTLP_PROTOCOL, value: grpc}
+          ports:
+            - {name: remoting, containerPort: 10911, protocol: TCP}
+            - {name: ha, containerPort: 10912, protocol: TCP}
+          resources:
+{{ toYaml .Values.services.broker.resources | indent 12 }}
+          securityContext:
+{{ include "rocketmq.containerSecurityContext" . | indent 12 }}
+          volumeMounts:
+            - {name: config, mountPath: /etc/rocketmq/broker.toml, subPath: broker.toml, readOnly: true}
+            - {name: data, mountPath: /var/lib/rocketmq/broker}
+            - {name: runtime-secrets, mountPath: /var/run/secrets/rocketmq, readOnly: true}
+            - {name: tmp, mountPath: /tmp/rocketmq}
+      volumes:
+        - name: config
+          configMap:
+            name: rocketmq-broker-config
+        - name: runtime-secrets
+{{- include "rocketmq.secretVolume" . | nindent 10 }}
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Gi
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+{{ include "rocketmq.labels" (dict "root" . "service" "broker") | indent 10 }}
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: {{ required "services.broker.persistence.storageClassName is required" .Values.services.broker.persistence.storageClassName | quote }}
+        resources:
+          requests:
+            storage: {{ .Values.services.broker.persistence.size }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: rocketmq-namesrv
+  namespace: {{ .Release.Namespace }}
+  labels:
+{{ include "rocketmq.labels" (dict "root" . "service" "namesrv") | indent 4 }}
+spec:
+  serviceName: rocketmq-namesrv-headless
+  replicas: {{ .Values.services.namesrv.replicas }}
+  podManagementPolicy: Parallel
+  updateStrategy:
+    type: RollingUpdate
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
+  selector:
+    matchLabels:
+{{ include "rocketmq.selectorLabels" (dict "root" . "service" "namesrv") | indent 6 }}
+  template:
+    metadata:
+      labels:
+{{ include "rocketmq.labels" (dict "root" . "service" "namesrv") | indent 8 }}
+    spec:
+      serviceAccountName: rocketmq-runtime
+      automountServiceAccountToken: false
+{{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+{{- range . }}
+        - name: {{ . | quote }}
+{{- end }}
+{{- end }}
+      securityContext:
+{{ include "rocketmq.podSecurityContext" . | indent 8 }}
+{{ include "rocketmq.topology" (dict "root" . "service" "namesrv") | indent 6 }}
+      containers:
+        - name: namesrv
+          image: {{ include "rocketmq.image" (dict "root" . "service" "namesrv" "digest" .Values.services.namesrv.image.digest) | quote }}
+          imagePullPolicy: IfNotPresent
+          args: ["--configFile", "/etc/rocketmq/namesrv.toml"]
+          env:
+            - {name: ROCKETMQ_HOME, value: /var/lib/rocketmq/namesrv}
+            - {name: OTEL_SERVICE_NAME, value: rocketmq-namesrv}
+            - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: {{ .Values.global.otelEndpoint | quote }}}
+            - {name: OTEL_EXPORTER_OTLP_PROTOCOL, value: grpc}
+          ports:
+            - {name: remoting, containerPort: 9876, protocol: TCP}
+          resources:
+{{ toYaml .Values.services.namesrv.resources | indent 12 }}
+          securityContext:
+{{ include "rocketmq.containerSecurityContext" . | indent 12 }}
+          volumeMounts:
+            - {name: config, mountPath: /etc/rocketmq/namesrv.toml, subPath: namesrv.toml, readOnly: true}
+            - {name: data, mountPath: /var/lib/rocketmq/namesrv}
+            - {name: runtime-secrets, mountPath: /var/run/secrets/rocketmq, readOnly: true}
+            - {name: tmp, mountPath: /tmp/rocketmq}
+      volumes:
+        - name: config
+          configMap:
+            name: rocketmq-namesrv-config
+        - name: runtime-secrets
+{{- include "rocketmq.secretVolume" . | nindent 10 }}
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 256Mi
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+{{ include "rocketmq.labels" (dict "root" . "service" "namesrv") | indent 10 }}
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: {{ required "services.namesrv.persistence.storageClassName is required" .Values.services.namesrv.persistence.storageClassName | quote }}
+        resources:
+          requests:
+            storage: {{ .Values.services.namesrv.persistence.size }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: rocketmq-controller
+  namespace: {{ .Release.Namespace }}
+  labels:
+{{ include "rocketmq.labels" (dict "root" . "service" "controller") | indent 4 }}
+spec:
+  serviceName: rocketmq-controller-headless
+  replicas: {{ .Values.services.controller.replicas }}
+  podManagementPolicy: Parallel
+  updateStrategy:
+    type: RollingUpdate
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
+  selector:
+    matchLabels:
+{{ include "rocketmq.selectorLabels" (dict "root" . "service" "controller") | indent 6 }}
+  template:
+    metadata:
+      labels:
+{{ include "rocketmq.labels" (dict "root" . "service" "controller") | indent 8 }}
+    spec:
+      serviceAccountName: rocketmq-runtime
+      automountServiceAccountToken: false
+{{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+{{- range . }}
+        - name: {{ . | quote }}
+{{- end }}
+{{- end }}
+      securityContext:
+{{ include "rocketmq.podSecurityContext" . | indent 8 }}
+{{ include "rocketmq.topology" (dict "root" . "service" "controller") | indent 6 }}
+      containers:
+        - name: controller
+          image: {{ include "rocketmq.image" (dict "root" . "service" "controller" "digest" .Values.services.controller.image.digest) | quote }}
+          imagePullPolicy: IfNotPresent
+          args: ["--config-file", "/etc/rocketmq/controller.toml"]
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - {name: ROCKETMQ_HOME, value: /var/lib/rocketmq/controller}
+            - {name: ROCKETMQ_CONTROLLER_RAFT_BIND_ADDR, value: "0.0.0.0:60110"}
+            - {name: ROCKETMQ_CONTROLLER_AUTO_INITIALIZE_CLUSTER, value: "true"}
+            - {name: OTEL_SERVICE_NAME, value: rocketmq-controller}
+            - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: {{ .Values.global.otelEndpoint | quote }}}
+            - {name: OTEL_EXPORTER_OTLP_PROTOCOL, value: grpc}
+          ports:
+            - {name: remoting, containerPort: 60109, protocol: TCP}
+            - {name: raft, containerPort: 60110, protocol: TCP}
+          resources:
+{{ toYaml .Values.services.controller.resources | indent 12 }}
+          securityContext:
+{{ include "rocketmq.containerSecurityContext" . | indent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/rocketmq/controller.toml
+              subPathExpr: $(POD_NAME).toml
+              readOnly: true
+            - {name: data, mountPath: /var/lib/rocketmq/controller}
+            - {name: runtime-secrets, mountPath: /var/run/secrets/rocketmq, readOnly: true}
+            - {name: tmp, mountPath: /tmp/rocketmq}
+      volumes:
+        - name: config
+          configMap:
+            name: rocketmq-controller-config
+        - name: runtime-secrets
+{{- include "rocketmq.secretVolume" . | nindent 10 }}
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 512Mi
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+{{ include "rocketmq.labels" (dict "root" . "service" "controller") | indent 10 }}
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: {{ required "services.controller.persistence.storageClassName is required" .Values.services.controller.persistence.storageClassName | quote }}
+        resources:
+          requests:
+            storage: {{ .Values.services.controller.persistence.size }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rocketmq-proxy
+  namespace: {{ .Release.Namespace }}
+  labels:
+{{ include "rocketmq.labels" (dict "root" . "service" "proxy") | indent 4 }}
+spec:
+  replicas: {{ .Values.services.proxy.replicas }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxUnavailable: 0, maxSurge: 1}
+  selector:
+    matchLabels:
+{{ include "rocketmq.selectorLabels" (dict "root" . "service" "proxy") | indent 6 }}
+  template:
+    metadata:
+      labels:
+{{ include "rocketmq.labels" (dict "root" . "service" "proxy") | indent 8 }}
+    spec:
+      serviceAccountName: rocketmq-runtime
+      automountServiceAccountToken: false
+{{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+{{- range . }}
+        - name: {{ . | quote }}
+{{- end }}
+{{- end }}
+      securityContext:
+{{ include "rocketmq.podSecurityContext" . | indent 8 }}
+{{ include "rocketmq.topology" (dict "root" . "service" "proxy") | indent 6 }}
+      containers:
+        - name: proxy
+          image: {{ include "rocketmq.image" (dict "root" . "service" "proxy" "digest" .Values.services.proxy.image.digest) | quote }}
+          imagePullPolicy: IfNotPresent
+          args: ["--config", "/etc/rocketmq/proxy.toml"]
+          env:
+            - {name: ROCKETMQ_HOME, value: /var/lib/rocketmq/proxy}
+            - {name: OTEL_SERVICE_NAME, value: rocketmq-proxy}
+            - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: {{ .Values.global.otelEndpoint | quote }}}
+            - {name: OTEL_EXPORTER_OTLP_PROTOCOL, value: grpc}
+          ports:
+            - {name: remoting, containerPort: 8080, protocol: TCP}
+            - {name: grpc, containerPort: 8081, protocol: TCP}
+          resources:
+{{ toYaml .Values.services.proxy.resources | indent 12 }}
+          securityContext:
+{{ include "rocketmq.containerSecurityContext" . | indent 12 }}
+          volumeMounts:
+            - {name: config, mountPath: /etc/rocketmq/proxy.toml, subPath: proxy.toml, readOnly: true}
+            - {name: data, mountPath: /var/lib/rocketmq/proxy}
+            - {name: runtime-secrets, mountPath: /var/run/secrets/rocketmq, readOnly: true}
+            - {name: tmp, mountPath: /tmp/rocketmq}
+      volumes:
+        - name: config
+          configMap:
+            name: rocketmq-proxy-config
+        - name: data
+          emptyDir:
+            sizeLimit: 2Gi
+        - name: runtime-secrets
+{{- include "rocketmq.secretVolume" . | nindent 10 }}
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 512Mi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: rocketmq-mcp-audit
+  namespace: {{ .Release.Namespace }}
+  labels:
+{{ include "rocketmq.labels" (dict "root" . "service" "mcp") | indent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+    rocketmq.apache.org/persisted-format: mcp-audit-v1
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: {{ required "services.mcp.persistence.storageClassName is required" .Values.services.mcp.persistence.storageClassName | quote }}
+  resources:
+    requests:
+      storage: {{ .Values.services.mcp.persistence.size }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rocketmq-mcp
+  namespace: {{ .Release.Namespace }}
+  labels:
+{{ include "rocketmq.labels" (dict "root" . "service" "mcp") | indent 4 }}
+spec:
+  replicas: {{ .Values.services.mcp.replicas }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+{{ include "rocketmq.selectorLabels" (dict "root" . "service" "mcp") | indent 6 }}
+  template:
+    metadata:
+      labels:
+{{ include "rocketmq.labels" (dict "root" . "service" "mcp") | indent 8 }}
+    spec:
+      serviceAccountName: rocketmq-runtime
+      automountServiceAccountToken: false
+{{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+{{- range . }}
+        - name: {{ . | quote }}
+{{- end }}
+{{- end }}
+      securityContext:
+{{ include "rocketmq.podSecurityContext" . | indent 8 }}
+{{ include "rocketmq.topology" (dict "root" . "service" "mcp") | indent 6 }}
+      containers:
+        - name: mcp
+          image: {{ include "rocketmq.image" (dict "root" . "service" "mcp" "digest" .Values.services.mcp.image.digest) | quote }}
+          imagePullPolicy: IfNotPresent
+          args: ["--config", "/etc/rocketmq/mcp.toml", "--transport", "streamable-http"]
+          env:
+            - {name: ROCKETMQ_HOME, value: /var/lib/rocketmq/mcp}
+            - {name: OTEL_SERVICE_NAME, value: rocketmq-mcp}
+            - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: {{ .Values.global.otelEndpoint | quote }}}
+            - {name: OTEL_EXPORTER_OTLP_PROTOCOL, value: grpc}
+          ports:
+            - {name: https-mcp, containerPort: 8089, protocol: TCP}
+          resources:
+{{ toYaml .Values.services.mcp.resources | indent 12 }}
+          securityContext:
+{{ include "rocketmq.containerSecurityContext" . | indent 12 }}
+          volumeMounts:
+            - {name: config, mountPath: /etc/rocketmq/mcp.toml, subPath: mcp.toml, readOnly: true}
+            - {name: config, mountPath: /etc/rocketmq/permissions.toml, subPath: permissions.toml, readOnly: true}
+            - {name: audit, mountPath: /var/lib/rocketmq/mcp}
+            - {name: runtime-secrets, mountPath: /var/run/secrets/rocketmq, readOnly: true}
+            - {name: tmp, mountPath: /tmp/rocketmq}
+      volumes:
+        - name: config
+          configMap:
+            name: rocketmq-mcp-config
+        - name: audit
+          persistentVolumeClaim:
+            claimName: rocketmq-mcp-audit
+        - name: runtime-secrets
+{{- include "rocketmq.secretVolume" . | nindent 10 }}
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 256Mi

@@ -1,0 +1,10 @@
+apiVersion: v2
+name: rocketmq-rust
+description: Secure digest-only deployment assets for the five RocketMQ Rust services
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.32.0-0"
+annotations:
+  rocketmq.apache.org/architecture-milestone: M11-09
+  rocketmq.apache.org/image-policy: signed-digest-only

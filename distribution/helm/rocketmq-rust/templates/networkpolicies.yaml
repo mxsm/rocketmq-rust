@@ -1,0 +1,145 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rocketmq-default-deny
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/part-of: rocketmq-rust
+    rocketmq.apache.org/architecture-milestone: M11-09
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: rocketmq-rust
+  policyTypes:
+    - Ingress
+    - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rocketmq-intra-cluster
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/part-of: rocketmq-rust
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: rocketmq-rust
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/part-of: rocketmq-rust
+      ports:
+{{- range $port := list 10911 10912 9876 60109 60110 8080 8081 8089 }}
+        - {protocol: TCP, port: {{ $port }}}
+{{- end }}
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/part-of: rocketmq-rust
+      ports:
+{{- range $port := list 10911 10912 9876 60109 60110 8080 8081 8089 }}
+        - {protocol: TCP, port: {{ $port }}}
+{{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rocketmq-dns-egress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/part-of: rocketmq-rust
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: rocketmq-rust
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rocketmq-otel-egress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/part-of: rocketmq-rust
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: rocketmq-rust
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              {{ .Values.networkPolicy.observabilityNamespaceLabel }}: "true"
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: otel-collector
+      ports:
+        - {protocol: TCP, port: 4317}
+---
+{{- range $service := list "broker" "proxy" "mcp" }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rocketmq-{{ $service }}-client-ingress
+  namespace: {{ $.Release.Namespace }}
+  labels:
+{{ include "rocketmq.labels" (dict "root" $ "service" $service) | indent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+{{ include "rocketmq.selectorLabels" (dict "root" $ "service" $service) | indent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              {{ $.Values.networkPolicy.clientNamespaceLabel }}: "true"
+{{- if eq $service "broker" }}
+      ports:
+        - {protocol: TCP, port: 10911}
+{{- else if eq $service "proxy" }}
+      ports:
+        - {protocol: TCP, port: 8080}
+        - {protocol: TCP, port: 8081}
+{{- else }}
+      ports:
+        - {protocol: TCP, port: 8089}
+{{- end }}
+---
+{{- end }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rocketmq-mcp-jwks-egress
+  namespace: {{ .Release.Namespace }}
+  labels:
+{{ include "rocketmq.labels" (dict "root" . "service" "mcp") | indent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+{{ include "rocketmq.selectorLabels" (dict "root" . "service" "mcp") | indent 6 }}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - {protocol: TCP, port: 443}
+{{- end }}

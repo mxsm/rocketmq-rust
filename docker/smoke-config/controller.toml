@@ -35,3 +35,7 @@ heartbeatIntervalMs = 300
 storagePath = "/var/lib/rocketmq/controller"
 storageBackend = "Memory"
 enableElectUncleanMasterLocal = false
+
+[[raftPeers]]
+id = 1
+addr = "127.0.0.1:60110"

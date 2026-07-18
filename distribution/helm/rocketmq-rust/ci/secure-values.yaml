@@ -1,0 +1,33 @@
+# Rendering fixture only. These non-zero digests are deliberately non-publishable and must never be deployed.
+global:
+  secretRefs:
+    existingSecret: rocketmq-runtime-secrets
+
+services:
+  broker:
+    image:
+      digest: sha256:1111111111111111111111111111111111111111111111111111111111111111
+    persistence:
+      storageClassName: rocketmq-retain
+  namesrv:
+    image:
+      digest: sha256:2222222222222222222222222222222222222222222222222222222222222222
+    persistence:
+      storageClassName: rocketmq-retain
+  controller:
+    peerServiceClusterIPs:
+      - 10.96.0.201
+      - 10.96.0.202
+      - 10.96.0.203
+    image:
+      digest: sha256:3333333333333333333333333333333333333333333333333333333333333333
+    persistence:
+      storageClassName: rocketmq-retain
+  proxy:
+    image:
+      digest: sha256:4444444444444444444444444444444444444444444444444444444444444444
+  mcp:
+    image:
+      digest: sha256:5555555555555555555555555555555555555555555555555555555555555555
+    persistence:
+      storageClassName: rocketmq-retain

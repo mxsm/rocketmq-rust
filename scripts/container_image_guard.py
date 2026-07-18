@@ -49,7 +49,7 @@ EXPECTED_SERVICES: dict[str, dict[str, Any]] = {
         "binary": "rocketmq-controller-rust",
         "config_path": "/etc/rocketmq/controller.toml",
         "data_path": "/var/lib/rocketmq/controller",
-        "ports": [60109],
+        "ports": [60109, 60110],
         "command": ["--config-file", "/etc/rocketmq/controller.toml"],
     },
     "proxy": {

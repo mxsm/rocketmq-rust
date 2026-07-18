@@ -116,7 +116,7 @@ metricsInDelta = false
 configBlackList = "configBlackList;configStorePath"
 
 nodeId = 1
-listenAddr = "127.0.0.1:9878"
+listenAddr = "127.0.0.1:60109"
 controllerPeers = []
 electionTimeoutMs = 1000
 heartbeatIntervalMs = 300
@@ -126,11 +126,21 @@ enableElectUncleanMasterLocal = false
 
 [[raftPeers]]
 id = 1
-addr = "127.0.0.1:9878"
+addr = "127.0.0.1:60110"
 ```
 
 For a multi-node controller cluster, each node should use its own `nodeId`, `listenAddr`, and `storagePath`, while all
-nodes share the same `raftPeers` list.
+nodes share the same `raftPeers` list. `listenAddr` is the broker-facing remoting endpoint; each `raftPeers.addr` is the
+advertised OpenRaft gRPC endpoint and therefore must use a separate port.
+
+When the advertised Raft address is not bindable on the Pod or host, set
+`ROCKETMQ_CONTROLLER_RAFT_BIND_ADDR=<local-ip>:<raft-port>` (for example, `0.0.0.0:60110`). The advertised address remains
+the matching `raftPeers.addr`; the override changes only the local listener. Invalid socket-address values fail startup.
+
+A single-member configuration retains automatic bootstrap. Multi-member bootstrap is disabled unless
+`ROCKETMQ_CONTROLLER_AUTO_INITIALIZE_CLUSTER=true` (or `1`) is set. With that explicit opt-in, only the lowest configured
+node ID initializes the full membership, and existing committed state is never reinitialized. Operators must still
+verify that a leader and quorum formed; configuration and replica count alone are not quorum evidence.
 
 ## Quick Start
 

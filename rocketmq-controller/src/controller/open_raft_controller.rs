@@ -24,6 +24,8 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::env;
+use std::net::SocketAddr;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
@@ -82,6 +84,8 @@ use tokio::sync::oneshot;
 use tokio_stream::wrappers::TcpListenerStream;
 use tonic::transport::Server;
 use tracing::info;
+
+const CONTROLLER_RAFT_BIND_ADDR_ENV: &str = "ROCKETMQ_CONTROLLER_RAFT_BIND_ADDR";
 
 fn openraft_startup_failed(operation: &'static str, error: impl std::fmt::Display) -> RocketMQError {
     RocketMQError::Service(UnifiedServiceError::StartupFailed(format!(
@@ -552,10 +556,11 @@ impl OpenRaftController {
 
 impl Controller for OpenRaftController {
     async fn startup(&mut self) -> RocketMQResult<()> {
-        let raft_addr = self.config.local_raft_addr();
+        let advertised_raft_addr = self.config.local_raft_addr();
+        let raft_bind_addr = controller_raft_bind_addr(advertised_raft_addr)?;
         info!(
-            "Starting OpenRaft controller, remoting_addr={}, raft_addr={}",
-            self.config.listen_addr, raft_addr
+            "Starting OpenRaft controller, remoting_addr={}, raft_bind_addr={}, advertised_raft_addr={}",
+            self.config.listen_addr, raft_bind_addr, advertised_raft_addr
         );
 
         let node = Arc::new(RaftNodeManager::new(self.config.clone()).await?);
@@ -563,7 +568,7 @@ impl Controller for OpenRaftController {
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
-        let addr = raft_addr;
+        let addr = raft_bind_addr;
         let node_id = self.config.node_id;
         let listener = TcpListener::bind(addr).await.map_err(|error| {
             RocketMQError::network_connection_failed(
@@ -954,6 +959,25 @@ impl Controller for OpenRaftController {
     }
 }
 
+fn controller_raft_bind_addr(fallback: SocketAddr) -> RocketMQResult<SocketAddr> {
+    let Some(raw) = env::var_os(CONTROLLER_RAFT_BIND_ADDR_ENV) else {
+        return Ok(fallback);
+    };
+    let raw = raw.into_string().map_err(|_| {
+        ControllerError::ConfigError(format!("{CONTROLLER_RAFT_BIND_ADDR_ENV} must contain valid UTF-8"))
+    })?;
+    parse_controller_raft_bind_addr(&raw).map_err(|error| {
+        ControllerError::ConfigError(format!(
+            "{CONTROLLER_RAFT_BIND_ADDR_ENV} must be a socket address: {error}"
+        ))
+        .into()
+    })
+}
+
+fn parse_controller_raft_bind_addr(raw: &str) -> std::result::Result<SocketAddr, std::net::AddrParseError> {
+    raw.parse::<SocketAddr>()
+}
+
 #[cfg(test)]
 mod tests {
     use std::net::TcpListener as StdTcpListener;
@@ -980,6 +1004,15 @@ mod tests {
 
         assert_eq!(error.kind(), ErrorKind::Serialization);
         assert!(error.to_string().contains("OpenRaft inactive broker scan response"));
+    }
+
+    #[test]
+    fn controller_raft_bind_override_requires_a_socket_address() {
+        assert_eq!(
+            parse_controller_raft_bind_addr("0.0.0.0:60110").expect("valid Kubernetes Raft bind address"),
+            SocketAddr::from(([0, 0, 0, 0], 60110))
+        );
+        assert!(parse_controller_raft_bind_addr("rocketmq-controller:60110").is_err());
     }
 
     #[tokio::test]

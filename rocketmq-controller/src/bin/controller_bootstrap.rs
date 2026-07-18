@@ -55,6 +55,7 @@ use tracing::info;
 /// rocketmq-controller-rust --print-config-item
 /// ```
 const ENTRYPOINT_MAX_BLOCKING_THREADS: usize = 64;
+const CONTROLLER_AUTO_INITIALIZE_CLUSTER_ENV: &str = "ROCKETMQ_CONTROLLER_AUTO_INITIALIZE_CLUSTER";
 const LOGO: &str = r#"
         ______           _        _  ___  ________       ______          _     _____             _             _ _
         | ___ \         | |      | | |  \/  |  _  |      | ___ \        | |   /  __ \           | |           | | |
@@ -154,7 +155,7 @@ async fn run_controller(config: ControllerConfig, service_context: ServiceContex
     }
 
     ControllerManager::start(ArcMut::clone(&controller_manager)).await?;
-    initialize_single_node_cluster_if_configured(&controller_manager).await?;
+    initialize_cluster_if_configured(&controller_manager).await?;
 
     info!("Controller started successfully!");
     info!("  Node ID: {}", controller_manager.controller_config().node_id);
@@ -221,46 +222,104 @@ fn log_telemetry_bootstrap(
     );
 }
 
-async fn initialize_single_node_cluster_if_configured(controller_manager: &ArcMut<ControllerManager>) -> Result<()> {
+async fn initialize_cluster_if_configured(controller_manager: &ArcMut<ControllerManager>) -> Result<()> {
     let config = controller_manager.controller_config();
-    if config.raft_peers.len() != 1 {
+    if config.raft_peers.is_empty() {
         return Ok(());
     }
 
-    let peer = config.raft_peers[0].clone();
-    if peer.id != config.node_id {
+    let is_single_node = config.raft_peers.len() == 1;
+    if !is_single_node && !auto_initialize_cluster_enabled()? {
+        return Ok(());
+    }
+    let bootstrap_node_id = config
+        .raft_peers
+        .iter()
+        .map(|peer| peer.id)
+        .min()
+        .ok_or_else(|| ControllerError::ConfigError("Raft peer list unexpectedly became empty".to_string()))?;
+    if bootstrap_node_id != config.node_id {
         return Ok(());
     }
     if controller_manager.controller().has_committed_log()? {
-        info!("Single-node controller cluster already has committed logs; skip bootstrap");
+        info!(
+            node_id = config.node_id,
+            "Controller cluster already has committed logs; skip bootstrap"
+        );
         return Ok(());
     }
 
-    let mut nodes = BTreeMap::new();
-    nodes.insert(
-        peer.id,
-        Node {
-            node_id: peer.id,
-            rpc_addr: peer.addr.to_string(),
-        },
+    let nodes = config
+        .raft_peers
+        .iter()
+        .map(|peer| {
+            (
+                peer.id,
+                Node {
+                    node_id: peer.id,
+                    rpc_addr: peer.addr.to_string(),
+                },
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    info!(
+        node_id = config.node_id,
+        members = nodes.len(),
+        "Bootstrapping configured Controller cluster"
     );
-    info!("Bootstrapping single-node controller cluster with node {}", peer.id);
     controller_manager.controller().initialize_cluster(nodes).await?;
 
-    for _ in 0..30 {
+    let attempts = if is_single_node { 30 } else { 300 };
+    for _ in 0..attempts {
         if controller_manager.is_leader() {
-            info!("Single-node controller cluster elected local node as leader");
+            info!(node_id = config.node_id, "Controller bootstrap node became leader");
             return Ok(());
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
-    Err(ControllerError::Internal("single-node controller did not become leader after bootstrap".to_string()).into())
+    Err(ControllerError::Internal(format!(
+        "controller node {} did not become leader after bootstrap",
+        config.node_id
+    ))
+    .into())
+}
+
+fn auto_initialize_cluster_enabled() -> Result<bool> {
+    let Some(raw) = std::env::var_os(CONTROLLER_AUTO_INITIALIZE_CLUSTER_ENV) else {
+        return Ok(false);
+    };
+    let raw = raw.into_string().map_err(|_| {
+        ControllerError::ConfigError(format!(
+            "{CONTROLLER_AUTO_INITIALIZE_CLUSTER_ENV} must contain valid UTF-8"
+        ))
+    })?;
+    parse_auto_initialize_cluster_flag(&raw)
+}
+
+fn parse_auto_initialize_cluster_flag(raw: &str) -> Result<bool> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" => Ok(true),
+        "0" | "false" | "" => Ok(false),
+        _ => Err(ControllerError::ConfigError(format!(
+            "{CONTROLLER_AUTO_INITIALIZE_CLUSTER_ENV} must be true, false, 1, or 0"
+        ))
+        .into()),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn auto_initialize_cluster_flag_accepts_only_explicit_boolean_values() {
+        assert!(parse_auto_initialize_cluster_flag("true").unwrap());
+        assert!(parse_auto_initialize_cluster_flag("1").unwrap());
+        assert!(!parse_auto_initialize_cluster_flag("false").unwrap());
+        assert!(!parse_auto_initialize_cluster_flag("0").unwrap());
+        assert!(parse_auto_initialize_cluster_flag("yes").is_err());
+    }
 
     #[test]
     fn controller_telemetry_bootstrap_uses_required_logging_defaults() {

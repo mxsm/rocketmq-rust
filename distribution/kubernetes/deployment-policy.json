@@ -1,0 +1,234 @@
+{
+  "schema_version": 1,
+  "milestone": "M11-09",
+  "kubernetes_version": "1.32.0",
+  "helm_chart": "distribution/helm/rocketmq-rust",
+  "helm_secure_values": "distribution/helm/rocketmq-rust/ci/secure-values.yaml",
+  "kustomize_base": "distribution/kubernetes/base",
+  "kustomize_secure_overlay": "distribution/kubernetes/overlays/secure",
+  "image": {
+    "repository_prefix": "ghcr.io/mxsm/rocketmq-rust",
+    "digest_pattern": "^sha256:[0-9a-f]{64}$",
+    "unpublished_placeholder": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "secure_values_are_non_publishable_fixtures": true
+  },
+  "security": {
+    "profile": "restricted",
+    "uid": 10001,
+    "gid": 10001,
+    "read_only_rootfs": true,
+    "allow_privilege_escalation": false,
+    "drop_capabilities": [
+      "ALL"
+    ],
+    "seccomp_profile": "RuntimeDefault",
+    "service_account_token": false,
+    "inline_secret_kinds_forbidden": [
+      "Secret"
+    ],
+    "inline_secret_fields_forbidden": [
+      "data",
+      "stringData"
+    ],
+    "secret_mount_path": "/var/run/secrets/rocketmq"
+  },
+  "network": {
+    "default_deny": true,
+    "dns_ports": [
+      53
+    ],
+    "otel_endpoint": "http://otel-collector.observability.svc.cluster.local:4317",
+    "otel_port": 4317,
+    "client_namespace_label": "rocketmq.apache.org/client-access",
+    "observability_namespace_label": "rocketmq.apache.org/observability"
+  },
+  "topology": {
+    "default_key": "kubernetes.io/hostname",
+    "controller_keys": [
+      "kubernetes.io/hostname",
+      "topology.kubernetes.io/zone"
+    ]
+  },
+  "services": {
+    "broker": {
+      "repository": "ghcr.io/mxsm/rocketmq-rust/broker",
+      "workload_kind": "StatefulSet",
+      "replicas": 1,
+      "config_path": "/etc/rocketmq/broker.toml",
+      "data_path": "/var/lib/rocketmq/broker",
+      "ports": [
+        10911,
+        10912
+      ],
+      "persistence": {
+        "required": true,
+        "size": "100Gi",
+        "storage_class_required": true,
+        "retention": "Retain"
+      },
+      "pdb": {
+        "min_available": 1
+      },
+      "resources": {
+        "requests": {
+          "cpu": "1000m",
+          "memory": "2Gi"
+        },
+        "limits": {
+          "cpu": "4000m",
+          "memory": "8Gi"
+        }
+      }
+    },
+    "namesrv": {
+      "repository": "ghcr.io/mxsm/rocketmq-rust/namesrv",
+      "workload_kind": "StatefulSet",
+      "replicas": 3,
+      "config_path": "/etc/rocketmq/namesrv.toml",
+      "data_path": "/var/lib/rocketmq/namesrv",
+      "ports": [
+        9876
+      ],
+      "persistence": {
+        "required": true,
+        "size": "2Gi",
+        "storage_class_required": true,
+        "retention": "Retain"
+      },
+      "pdb": {
+        "min_available": 2
+      },
+      "resources": {
+        "requests": {
+          "cpu": "250m",
+          "memory": "256Mi"
+        },
+        "limits": {
+          "cpu": "1000m",
+          "memory": "1Gi"
+        }
+      }
+    },
+    "controller": {
+      "repository": "ghcr.io/mxsm/rocketmq-rust/controller",
+      "workload_kind": "StatefulSet",
+      "replicas": 3,
+      "quorum": 2,
+      "config_path": "/etc/rocketmq/controller.toml",
+      "data_path": "/var/lib/rocketmq/controller",
+      "ports": [
+        60109,
+        60110
+      ],
+      "raft_bind_address": "0.0.0.0:60110",
+      "auto_initialize_cluster": true,
+      "peer_service_ips_required": 3,
+      "peer_service_ip_fixture": [
+        "10.96.0.201",
+        "10.96.0.202",
+        "10.96.0.203"
+      ],
+      "persistence": {
+        "required": true,
+        "size": "10Gi",
+        "storage_class_required": true,
+        "retention": "Retain"
+      },
+      "pdb": {
+        "min_available": 2
+      },
+      "resources": {
+        "requests": {
+          "cpu": "500m",
+          "memory": "512Mi"
+        },
+        "limits": {
+          "cpu": "2000m",
+          "memory": "2Gi"
+        }
+      }
+    },
+    "proxy": {
+      "repository": "ghcr.io/mxsm/rocketmq-rust/proxy",
+      "workload_kind": "Deployment",
+      "replicas": 2,
+      "config_path": "/etc/rocketmq/proxy.toml",
+      "data_path": "/var/lib/rocketmq/proxy",
+      "ports": [
+        8080,
+        8081
+      ],
+      "persistence": {
+        "required": false
+      },
+      "pdb": {
+        "min_available": 1
+      },
+      "resources": {
+        "requests": {
+          "cpu": "500m",
+          "memory": "512Mi"
+        },
+        "limits": {
+          "cpu": "2000m",
+          "memory": "2Gi"
+        }
+      }
+    },
+    "mcp": {
+      "repository": "ghcr.io/mxsm/rocketmq-rust/mcp",
+      "workload_kind": "Deployment",
+      "replicas": 1,
+      "horizontal_scaling": false,
+      "config_path": "/etc/rocketmq/mcp.toml",
+      "data_path": "/var/lib/rocketmq/mcp",
+      "ports": [
+        8089
+      ],
+      "persistence": {
+        "required": true,
+        "scope": "audit",
+        "size": "10Gi",
+        "storage_class_required": true,
+        "retention": "Retain"
+      },
+      "pdb": {
+        "min_available": 1
+      },
+      "resources": {
+        "requests": {
+          "cpu": "250m",
+          "memory": "256Mi"
+        },
+        "limits": {
+          "cpu": "1000m",
+          "memory": "1Gi"
+        }
+      }
+    }
+  },
+  "tools": {
+    "helm": {
+      "version": "v4.2.3",
+      "linux_amd64_sha256": "e9b88b4ee95b18c706839c28d3a0220e5bc470e9cd9262410c90793c45ff8b7c",
+      "windows_amd64_sha256": "5ca7de684c92d48b93d5c34a029fdda57b38e1eac04bc8541bdf1eb249388679"
+    },
+    "kustomize": {
+      "version": "v5.8.1",
+      "linux_amd64_sha256": "029a7f0f4e1932c52a0476cf02a0fd855c0bb85694b82c338fc648dcb53a819d",
+      "windows_amd64_sha256": "8ec7f5e815e526d4622c06df0a7793d8cfb6eb1c74f816b46166097fef8b26c6"
+    },
+    "kubeconform": {
+      "version": "v0.8.0",
+      "linux_amd64_sha256": "9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883",
+      "windows_amd64_sha256": "e3f56102bcf4f50b034a567e2482a1c5330799983ddd655952310211aef73d93"
+    }
+  },
+  "workflow": {
+    "path": ".github/workflows/kubernetes-assets-ci.yml",
+    "actions": {
+      "actions/checkout": "9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0",
+      "actions/upload-artifact": "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
+    }
+  }
+}

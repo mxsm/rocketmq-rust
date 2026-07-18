@@ -1,0 +1,16 @@
+{{- $root := . -}}
+{{- range $service, $minAvailable := dict "broker" 1 "namesrv" 2 "controller" 2 "proxy" 1 "mcp" 1 }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: rocketmq-{{ $service }}
+  namespace: {{ $root.Release.Namespace }}
+  labels:
+{{ include "rocketmq.labels" (dict "root" $root "service" $service) | indent 4 }}
+spec:
+  minAvailable: {{ $minAvailable }}
+  selector:
+    matchLabels:
+{{ include "rocketmq.selectorLabels" (dict "root" $root "service" $service) | indent 6 }}
+---
+{{- end }}
