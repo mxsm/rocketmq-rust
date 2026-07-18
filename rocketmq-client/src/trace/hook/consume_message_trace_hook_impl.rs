@@ -19,7 +19,6 @@ use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_rust::ArcMut;
 
 use crate::consumer::listener::consume_return_type::ConsumeReturnType;
 use crate::hook::consume_message_context::ConsumeMessageContext;
@@ -51,7 +50,7 @@ impl ConsumeMessageTraceHookImpl {
     /// Messages with `PROPERTY_TRACE_SWITCH = "false"` are skipped. Returns `Some((beans,
     /// region_id))` if at least one message has tracing enabled, or `None` if all messages have
     /// tracing disabled.
-    fn build_trace_beans(&self, messages: &[ArcMut<MessageExt>]) -> Option<(Vec<TraceBean>, CheetahString)> {
+    fn build_trace_beans(&self, messages: &[Arc<MessageExt>]) -> Option<(Vec<TraceBean>, CheetahString)> {
         let mut beans = Vec::with_capacity(messages.len());
         let mut region_id = CheetahString::new();
 
@@ -272,7 +271,6 @@ mod tests {
 
     use rocketmq_common::common::message::message_ext::MessageExt;
     use rocketmq_common::common::message::MessageTrait;
-    use rocketmq_rust::ArcMut;
 
     use super::*;
     use crate::base::access_channel::AccessChannel;
@@ -322,7 +320,7 @@ mod tests {
         }
     }
 
-    fn message(topic: &str, msg_id: &str, region: &str, trace_on: Option<&str>) -> ArcMut<MessageExt> {
+    fn message(topic: &str, msg_id: &str, region: &str, trace_on: Option<&str>) -> Arc<MessageExt> {
         let mut msg = MessageExt::default();
         msg.set_topic(CheetahString::from_string(topic.to_string()));
         msg.set_msg_id(CheetahString::from_string(msg_id.to_string()));
@@ -336,7 +334,7 @@ mod tests {
                 CheetahString::from_string(trace_on.to_string()),
             );
         }
-        ArcMut::new(msg)
+        Arc::new(msg)
     }
 
     #[test]

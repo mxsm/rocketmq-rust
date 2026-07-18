@@ -12,41 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_rust::ArcMut;
-
 use crate::consumer::pull_status::PullStatus;
+use rocketmq_common::common::message::message_ext::MessageExt;
 
 /// Owned, runtime-neutral pull result used across crate boundaries.
 pub type PullOutcome = rocketmq_model::result::PullOutcome<MessageExt>;
 
-/// Failure converting an owned pull outcome back into the legacy shared-mutable result.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PullOutcomeAdapterError {
-    /// A non-empty owned batch cannot become `ArcMut` messages without introducing new unsafe
-    /// aliasing.
-    SharedMutableMessagesUnsupported { message_count: usize },
-}
-
-impl std::fmt::Display for PullOutcomeAdapterError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::SharedMutableMessagesUnsupported { message_count } => write!(
-                f,
-                "cannot convert {message_count} owned messages into the legacy shared-mutable PullResult"
-            ),
-        }
-    }
-}
-
-impl std::error::Error for PullOutcomeAdapterError {}
+/// Compatibility name for the now-infallible owned pull result adapter.
+pub type PullOutcomeAdapterError = std::convert::Infallible;
 
 pub struct PullResult {
     pub(crate) pull_status: PullStatus,
     pub(crate) next_begin_offset: u64,
     pub(crate) min_offset: u64,
     pub(crate) max_offset: u64,
-    pub(crate) msg_found_list: Option<Vec<ArcMut<MessageExt>>>,
+    pub(crate) msg_found_list: Option<Vec<MessageExt>>,
 }
 
 impl PullResult {
@@ -55,7 +35,7 @@ impl PullResult {
         next_begin_offset: u64,
         min_offset: u64,
         max_offset: u64,
-        msg_found_list: Option<Vec<ArcMut<MessageExt>>>,
+        msg_found_list: Option<Vec<MessageExt>>,
     ) -> Self {
         Self {
             pull_status,
@@ -87,22 +67,19 @@ impl PullResult {
     }
 
     #[inline]
-    pub fn msg_found_list(&self) -> Option<&Vec<ArcMut<MessageExt>>> {
-        self.msg_found_list.as_ref()
+    pub fn msg_found_list(&self) -> Option<&[MessageExt]> {
+        self.msg_found_list.as_deref()
     }
 
     #[inline]
-    pub fn set_msg_found_list(&mut self, msg_found_list: Option<Vec<ArcMut<MessageExt>>>) {
+    pub fn set_msg_found_list(&mut self, msg_found_list: Option<Vec<MessageExt>>) {
         self.msg_found_list = msg_found_list;
     }
 }
 
 impl From<&PullResult> for PullOutcome {
     fn from(value: &PullResult) -> Self {
-        let messages = value
-            .msg_found_list
-            .as_ref()
-            .map(|messages| messages.iter().map(|message| (**message).clone()).collect());
+        let messages = value.msg_found_list.clone();
         Self::new(
             value.pull_status,
             value.next_begin_offset,
@@ -113,30 +90,14 @@ impl From<&PullResult> for PullOutcome {
     }
 }
 
-impl TryFrom<PullOutcome> for PullResult {
-    type Error = PullOutcomeAdapterError;
-
-    fn try_from(value: PullOutcome) -> Result<Self, Self::Error> {
+impl From<PullOutcome> for PullResult {
+    fn from(value: PullOutcome) -> Self {
         let pull_status = value.pull_status();
         let next_begin_offset = value.next_begin_offset();
         let min_offset = value.min_offset();
         let max_offset = value.max_offset();
-        let messages = match value.into_messages() {
-            None => None,
-            Some(messages) if messages.is_empty() => Some(Vec::new()),
-            Some(messages) => {
-                return Err(PullOutcomeAdapterError::SharedMutableMessagesUnsupported {
-                    message_count: messages.len(),
-                });
-            }
-        };
-        Ok(Self::new(
-            pull_status,
-            next_begin_offset,
-            min_offset,
-            max_offset,
-            messages,
-        ))
+        let messages = value.into_messages();
+        Self::new(pull_status, next_begin_offset, min_offset, max_offset, messages)
     }
 }
 
@@ -166,5 +127,24 @@ mod tests {
             pull_result.to_string(),
             "PullResult [pullStatus=NO_NEW_MSG, nextBeginOffset=12, minOffset=3, maxOffset=45, msgFoundList=0]"
         );
+    }
+
+    #[test]
+    fn pull_outcome_round_trip_preserves_non_empty_owned_messages() {
+        let mut first = MessageExt::default();
+        first.set_queue_offset(10);
+        let mut second = MessageExt::default();
+        second.set_queue_offset(11);
+        let result = PullResult::new(PullStatus::Found, 12, 1, 20, Some(vec![first, second]));
+
+        let round_trip = PullResult::from(PullOutcome::from(&result));
+
+        let offsets = round_trip
+            .msg_found_list()
+            .expect("non-empty messages should remain present")
+            .iter()
+            .map(|message| message.queue_offset)
+            .collect::<Vec<_>>();
+        assert_eq!(offsets, vec![10, 11]);
     }
 }

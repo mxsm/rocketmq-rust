@@ -1320,9 +1320,7 @@ impl MQClientInstance {
         if result.pull_result.pull_status == PullStatus::Found {
             if let Some(mut message_binary) = result.message_binary.take() {
                 let messages = message_decoder::decodes_batch(&mut message_binary, true, true);
-                result
-                    .pull_result
-                    .set_msg_found_list(Some(messages.into_iter().map(ArcMut::new).collect()));
+                result.pull_result.set_msg_found_list(Some(messages));
             }
         }
 

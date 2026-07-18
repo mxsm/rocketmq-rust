@@ -53,7 +53,8 @@ pub static REBALANCE_LOCK_INTERVAL: LazyLock<u64> = LazyLock::new(|| {
 
 struct ProcessQueueStore {
     messages: ProcessQueueMessageStore,
-    consuming_msg_orderly_tree_map: BTreeMap<i64, ArcMut<MessageExt>>,
+    consuming_msg_orderly_tree_map: BTreeMap<i64, Arc<MessageExt>>,
+    consume_start_timestamps: BTreeMap<i64, u64>,
     queue_offset_max: i64,
 }
 
@@ -62,6 +63,7 @@ impl ProcessQueueStore {
         ProcessQueueStore {
             messages: ProcessQueueMessageStore::new(),
             consuming_msg_orderly_tree_map: BTreeMap::new(),
+            consume_start_timestamps: BTreeMap::new(),
             queue_offset_max: 0,
         }
     }
@@ -103,7 +105,7 @@ pub struct ProcessQueueOperationProbe {
 #[doc(hidden)]
 pub struct ProcessQueueOperationFixture {
     process_queue: ProcessQueue,
-    messages: Vec<ArcMut<MessageExt>>,
+    messages: Vec<Arc<MessageExt>>,
     message_count: usize,
     body_size: usize,
     dispatch_to_consume: bool,
@@ -201,18 +203,16 @@ impl ProcessQueue {
         for _ in 0..loop_ {
             let msg = {
                 let store = self.store.read().await;
-                if let Some((_, value)) = store.messages.first() {
-                    let consume_start_time_stamp = MessageAccessor::get_consume_start_time_stamp(value.as_ref());
-                    if let Some(ts_str) = consume_start_time_stamp {
-                        if let Ok(ts) = ts_str.parse::<u64>() {
-                            if current_millis() - ts > push_consumer.consumer_config.consume_timeout * 1000 * 60 {
-                                Some(value.clone())
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        }
+                if let Some((offset, value)) = store.messages.first() {
+                    let consume_start_timestamp = store.consume_start_timestamps.get(&offset).copied().or_else(|| {
+                        MessageAccessor::get_consume_start_time_stamp(value.as_ref())
+                            .and_then(|timestamp| timestamp.parse::<u64>().ok())
+                    });
+                    if consume_start_timestamp.is_some_and(|timestamp| {
+                        current_millis().saturating_sub(timestamp)
+                            > push_consumer.consumer_config.consume_timeout * 1000 * 60
+                    }) {
+                        Some(value.clone())
                     } else {
                         None
                     }
@@ -226,7 +226,7 @@ impl ProcessQueue {
                 None => break,
             };
 
-            let msg_inner = msg.as_mut();
+            let msg_inner = Arc::make_mut(&mut msg);
             let topic = push_consumer.client_config.with_namespace(msg_inner.topic());
             let queue_id = msg_inner.queue_id();
             let msg_id = msg_inner.msg_id().to_string();
@@ -255,7 +255,7 @@ impl ProcessQueue {
         }
     }
 
-    pub(crate) async fn put_message(&self, messages: &[ArcMut<MessageExt>]) -> bool {
+    pub(crate) async fn put_message(&self, messages: &[Arc<MessageExt>]) -> bool {
         let acc_total = if let Some(last_msg) = messages.last() {
             if let Some(property) =
                 last_msg.property(&CheetahString::from_static_str(MessageConst::PROPERTY_MAX_OFFSET))
@@ -279,6 +279,7 @@ impl ProcessQueue {
             store.messages.reserve(messages.len());
             for message in messages {
                 let queue_offset = message.queue_offset;
+                store.consume_start_timestamps.remove(&queue_offset);
                 let body_size = message.body().map_or(0, |body| body.len()) as u64;
                 match store.messages.insert(queue_offset, message.clone()) {
                     None => {
@@ -331,7 +332,16 @@ impl ProcessQueue {
         }
     }
 
-    pub(crate) async fn remove_message(&self, messages: &[ArcMut<MessageExt>]) -> i64 {
+    pub(crate) async fn mark_messages_consuming(&self, messages: &[Arc<MessageExt>], timestamp: u64) {
+        let mut store = self.store.write().await;
+        for message in messages {
+            if store.messages.contains_key(&message.queue_offset) {
+                store.consume_start_timestamps.insert(message.queue_offset, timestamp);
+            }
+        }
+    }
+
+    pub(crate) async fn remove_message(&self, messages: &[Arc<MessageExt>]) -> i64 {
         let now = current_millis();
         let mut store = self.store.write().await;
 
@@ -351,6 +361,7 @@ impl ProcessQueue {
         for message in messages {
             let queue_offset = message.queue_offset;
             if let Some(removed) = store.messages.remove(&queue_offset) {
+                store.consume_start_timestamps.remove(&queue_offset);
                 removed_cnt += 1;
                 removed_body_size += removed.body().map_or(0, |body| body.len()) as u64;
                 if !snapshot_touched {
@@ -412,7 +423,7 @@ impl ProcessQueue {
         offset
     }
 
-    pub(crate) async fn make_message_to_consume_again(&self, messages: &[ArcMut<MessageExt>]) {
+    pub(crate) async fn make_message_to_consume_again(&self, messages: &[Arc<MessageExt>]) {
         let mut store = self.store.write().await;
         for message in messages {
             store.consuming_msg_orderly_tree_map.remove(&message.queue_offset);
@@ -421,7 +432,7 @@ impl ProcessQueue {
         self.refresh_offset_snapshot(&store);
     }
 
-    pub(crate) async fn take_messages(&self, batch_size: u32) -> Vec<ArcMut<MessageExt>> {
+    pub(crate) async fn take_messages(&self, batch_size: u32) -> Vec<Arc<MessageExt>> {
         let mut messages = Vec::with_capacity(batch_size as usize);
         let now = current_millis();
         let mut store = self.store.write().await;
@@ -459,6 +470,7 @@ impl ProcessQueue {
         let mut store = self.store.write().await;
         store.messages.clear();
         store.consuming_msg_orderly_tree_map.clear();
+        store.consume_start_timestamps.clear();
         store.queue_offset_max = 0;
         self.msg_count.store(0, Ordering::Release);
         self.msg_size.store(0, Ordering::Release);
@@ -588,7 +600,7 @@ impl ProcessQueue {
     }
 }
 
-fn benchmark_messages(message_count: usize, body_size: usize) -> Vec<ArcMut<MessageExt>> {
+fn benchmark_messages(message_count: usize, body_size: usize) -> Vec<Arc<MessageExt>> {
     (0..message_count)
         .map(|index| {
             let message = Message::builder()
@@ -601,7 +613,7 @@ fn benchmark_messages(message_count: usize, body_size: usize) -> Vec<ArcMut<Mess
             message_ext.set_broker_name(CheetahString::from_static_str("benchmark-broker"));
             message_ext.set_queue_id(0);
             message_ext.set_queue_offset(index as i64);
-            ArcMut::new(message_ext)
+            Arc::new(message_ext)
         })
         .collect()
 }
@@ -715,7 +727,7 @@ mod tests {
     use cheetah_string::CheetahString;
     use rocketmq_common::common::message::MessageTrait;
 
-    fn create_test_messages(count: usize) -> Vec<ArcMut<MessageExt>> {
+    fn create_test_messages(count: usize) -> Vec<Arc<MessageExt>> {
         let mut messages = Vec::with_capacity(count);
         for i in 0..count {
             let mut msg = MessageExt {
@@ -724,12 +736,12 @@ mod tests {
             };
             msg.set_body(Bytes::from(vec![0u8; 100]));
             msg.set_topic(CheetahString::from_static_str("test_topic"));
-            messages.push(ArcMut::new(msg));
+            messages.push(Arc::new(msg));
         }
         messages
     }
 
-    fn create_test_messages_with_offsets(offsets: &[i64]) -> Vec<ArcMut<MessageExt>> {
+    fn create_test_messages_with_offsets(offsets: &[i64]) -> Vec<Arc<MessageExt>> {
         offsets
             .iter()
             .map(|offset| {
@@ -739,19 +751,19 @@ mod tests {
                 };
                 msg.set_body(Bytes::from(vec![0u8; 100]));
                 msg.set_topic(CheetahString::from_static_str("test_topic"));
-                ArcMut::new(msg)
+                Arc::new(msg)
             })
             .collect()
     }
 
-    fn create_test_message_with_body_size(offset: i64, body_size: usize) -> ArcMut<MessageExt> {
+    fn create_test_message_with_body_size(offset: i64, body_size: usize) -> Arc<MessageExt> {
         let mut msg = MessageExt {
             queue_offset: offset,
             ..Default::default()
         };
         msg.set_body(Bytes::from(vec![0u8; body_size]));
         msg.set_topic(CheetahString::from_static_str("test_topic"));
-        ArcMut::new(msg)
+        Arc::new(msg)
     }
 
     #[tokio::test]
@@ -798,6 +810,22 @@ mod tests {
 
         assert_eq!(pq.msg_count(), 5);
         assert_eq!(pq.msg_size(), 500);
+    }
+
+    #[tokio::test]
+    async fn mark_messages_consuming_tracks_lifecycle_without_mutating_message_values() {
+        let pq = ProcessQueue::new();
+        let messages = create_test_messages(1);
+        let shared_message = messages[0].clone();
+        pq.put_message(&messages).await;
+
+        pq.mark_messages_consuming(&messages, 42).await;
+
+        assert!(MessageAccessor::get_consume_start_time_stamp(shared_message.as_ref()).is_none());
+        assert_eq!(pq.store.read().await.consume_start_timestamps.get(&0), Some(&42));
+
+        pq.remove_message(&messages).await;
+        assert!(pq.store.read().await.consume_start_timestamps.is_empty());
     }
 
     #[tokio::test]
@@ -1051,7 +1079,7 @@ mod tests {
                 CheetahString::from_static_str(MessageConst::PROPERTY_MAX_OFFSET),
                 CheetahString::from(format!("{}", i + 100)),
             );
-            msgs.push(ArcMut::new(msg));
+            msgs.push(Arc::new(msg));
         }
 
         pq.put_message(&msgs).await;
@@ -1233,7 +1261,7 @@ mod tests {
             };
             msg.set_body(Bytes::from(vec![0u8; 100]));
             msg.set_topic(CheetahString::from_static_str("test_topic"));
-            msgs.push(ArcMut::new(msg));
+            msgs.push(Arc::new(msg));
         }
 
         pq.put_message(&msgs).await;

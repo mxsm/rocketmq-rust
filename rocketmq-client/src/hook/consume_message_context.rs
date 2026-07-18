@@ -20,7 +20,6 @@ use std::sync::Arc;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_rust::ArcMut;
 
 use crate::base::access_channel::AccessChannel;
 
@@ -47,7 +46,7 @@ pub struct ConsumeMessageContext<'a> {
     /// Consumer group name
     pub consumer_group: CheetahString,
     /// List of messages being consumed
-    pub msg_list: &'a [ArcMut<MessageExt>],
+    pub msg_list: &'a [Arc<MessageExt>],
     /// Target message queue
     pub mq: Option<MessageQueue>,
     /// Whether consumption succeeded
@@ -67,7 +66,7 @@ pub struct ConsumeMessageContext<'a> {
 impl<'a> ConsumeMessageContext<'a> {
     /// Creates a new consumption context.
     #[inline]
-    pub fn new(consumer_group: CheetahString, msg_list: &'a [ArcMut<MessageExt>]) -> Self {
+    pub fn new(consumer_group: CheetahString, msg_list: &'a [Arc<MessageExt>]) -> Self {
         Self {
             consumer_group,
             msg_list,
@@ -180,7 +179,7 @@ mod tests {
     #[test]
     fn consume_message_context_new() {
         let group = CheetahString::from("test_group");
-        let msg_list = vec![ArcMut::new(MessageExt::default())];
+        let msg_list = vec![Arc::new(MessageExt::default())];
         let context = ConsumeMessageContext::new(group.clone(), &msg_list);
 
         assert_eq!(context.consumer_group, group);

@@ -209,7 +209,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopConcurrentlyService {
         info!("consumeMessageDirectly receive new message: {}", msg);
 
         let mq = MessageQueue::from_parts(msg.topic().clone(), broker_name.unwrap_or_default(), msg.queue_id());
-        let mut msgs = vec![ArcMut::new(msg)];
+        let mut msgs = vec![Arc::new(msg)];
         let context = ConsumeConcurrentlyContext::new(mq);
         if let Some(default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_ref() {
             default_mqpush_consumer_impl
@@ -302,7 +302,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopConcurrentlyService {
     async fn submit_consume_request(
         &self,
         this: ArcMut<Self>,
-        msgs: Vec<ArcMut<MessageExt>>,
+        msgs: Vec<Arc<MessageExt>>,
         process_queue: Arc<ProcessQueue>,
         message_queue: MessageQueue,
         dispatch_to_consume: bool,
@@ -589,7 +589,7 @@ impl ConsumeMessagePopConcurrentlyService {
 }
 
 struct ConsumeRequest {
-    msgs: Vec<ArcMut<MessageExt>>,
+    msgs: Vec<Arc<MessageExt>>,
     process_queue: Arc<PopProcessQueue>,
     message_queue: MessageQueue,
     pop_time: u64,
@@ -623,7 +623,7 @@ impl ConsumeRequest {
             }
         }
 
-        let msgs_arc: Vec<ArcMut<MessageExt>> = msgs.into_iter().map(ArcMut::new).collect();
+        let msgs_arc: Vec<Arc<MessageExt>> = msgs.into_iter().map(Arc::new).collect();
 
         Self {
             msgs: msgs_arc,
@@ -707,7 +707,7 @@ impl ConsumeRequest {
         if !self.msgs.is_empty() {
             for msg in self.msgs.iter_mut() {
                 MessageAccessor::set_consume_start_time_stamp(
-                    msg.as_mut(),
+                    Arc::make_mut(msg),
                     CheetahString::from_string(current_millis().to_string()),
                 );
             }

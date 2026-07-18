@@ -15,7 +15,6 @@
 use rocketmq_client_rust::base::query_result::QueryResult as LegacyQueryResult;
 use rocketmq_client_rust::consumer::allocate_message_queue_strategy::AllocateMessageQueueStrategy as LegacyAllocationStrategy;
 use rocketmq_client_rust::consumer::pull_result::PullOutcome;
-use rocketmq_client_rust::consumer::pull_result::PullOutcomeAdapterError;
 use rocketmq_client_rust::consumer::pull_result::PullResult;
 use rocketmq_client_rust::consumer::pull_status::PullStatus as LegacyPullStatus;
 use rocketmq_client_rust::consumer::rebalance_strategy::allocate_message_queue_averagely::AllocateMessageQueueAveragely as LegacyAverage;
@@ -66,11 +65,11 @@ fn legacy_allocation_contract_is_the_canonical_model_contract() {
 #[test]
 fn pull_result_adapter_preserves_message_presence_and_order() {
     let absent = PullResult::new(PullStatus::Found, 12, 1, 20, None);
-    let absent_round_trip = PullResult::try_from(PullOutcome::from(&absent)).unwrap();
+    let absent_round_trip = PullResult::from(PullOutcome::from(&absent));
     assert!(absent_round_trip.msg_found_list().is_none());
 
     let present_empty = PullResult::new(PullStatus::Found, 12, 1, 20, Some(Vec::new()));
-    let present_empty_round_trip = PullResult::try_from(PullOutcome::from(&present_empty)).unwrap();
+    let present_empty_round_trip = PullResult::from(PullOutcome::from(&present_empty));
     assert_eq!(
         present_empty_round_trip
             .msg_found_list()
@@ -84,8 +83,12 @@ fn pull_result_adapter_preserves_message_presence_and_order() {
     let mut second = MessageExt::default();
     second.set_queue_offset(11);
     let present = PullOutcome::new(PullStatus::Found, 12, 1, 20, Some(vec![first, second]));
-    assert!(matches!(
-        PullResult::try_from(present),
-        Err(PullOutcomeAdapterError::SharedMutableMessagesUnsupported { message_count: 2 })
-    ));
+    let present_round_trip = PullResult::from(present);
+    let offsets = present_round_trip
+        .msg_found_list()
+        .expect("the non-empty message collection should remain present")
+        .iter()
+        .map(|message| message.queue_offset)
+        .collect::<Vec<_>>();
+    assert_eq!(offsets, vec![10, 11]);
 }

@@ -269,7 +269,7 @@ impl ConsumeMessageOrderlyService {
             .unwrap_or_default()
     }
 
-    pub fn reset_namespace(&mut self, msgs: &mut [ArcMut<MessageExt>]) {
+    pub fn reset_namespace(&mut self, msgs: &mut [Arc<MessageExt>]) {
         let namespace = self.client_config.get_namespace().unwrap_or_default();
         if namespace.is_empty() {
             return;
@@ -277,7 +277,7 @@ impl ConsumeMessageOrderlyService {
 
         for msg in msgs {
             let topic = msg.topic().to_string();
-            msg.set_topic(CheetahString::from_string(
+            Arc::make_mut(msg).set_topic(CheetahString::from_string(
                 NamespaceUtil::without_namespace_with_namespace(topic.as_str(), namespace.as_str()),
             ));
         }
@@ -457,23 +457,23 @@ impl ConsumeMessageOrderlyService {
         result.is_ok()
     }
 
-    async fn check_reconsume_times(&mut self, msgs: &mut [ArcMut<MessageExt>]) -> bool {
+    async fn check_reconsume_times(&mut self, msgs: &mut [Arc<MessageExt>]) -> bool {
         let mut suspend = false;
         if !msgs.is_empty() {
             for msg in msgs {
                 let reconsume_times = msg.reconsume_times;
                 if reconsume_times >= self.get_max_reconsume_times() {
                     MessageAccessor::set_reconsume_time(
-                        msg.as_mut(),
+                        Arc::make_mut(msg),
                         CheetahString::from_string(reconsume_times.to_string()),
                     );
                     if !self.send_message_back(msg).await {
                         suspend = true;
-                        msg.reconsume_times = reconsume_times + 1;
+                        Arc::make_mut(msg).reconsume_times = reconsume_times + 1;
                     }
                 } else {
                     suspend = true;
-                    msg.reconsume_times = reconsume_times + 1;
+                    Arc::make_mut(msg).reconsume_times = reconsume_times + 1;
                 }
             }
         }
@@ -483,7 +483,7 @@ impl ConsumeMessageOrderlyService {
     #[allow(deprecated)]
     async fn process_consume_result(
         &mut self,
-        mut msgs: Vec<ArcMut<MessageExt>>,
+        mut msgs: Vec<Arc<MessageExt>>,
         this: ArcMut<Self>,
         status: ConsumeOrderlyStatus,
         context: &ConsumeOrderlyContext,
@@ -695,7 +695,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessageOrderlyService {
     ) -> ConsumeMessageDirectlyResult {
         info!("consumeMessageDirectly receive new message: {}", msg);
         let mq = MessageQueue::from_parts(msg.topic().clone(), broker_name.unwrap_or_default(), msg.queue_id());
-        let mut msgs = vec![ArcMut::new(msg)];
+        let mut msgs = vec![Arc::new(msg)];
         let mut context = ConsumeOrderlyContext::new(mq);
         if let Some(default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_ref() {
             default_mqpush_consumer_impl
@@ -783,7 +783,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessageOrderlyService {
     async fn submit_consume_request(
         &self,
         this: ArcMut<Self>,
-        msgs: Vec<ArcMut<MessageExt>>,
+        msgs: Vec<Arc<MessageExt>>,
         process_queue: Arc<ProcessQueue>,
         message_queue: MessageQueue,
         dispatch_to_consume: bool,
@@ -1452,9 +1452,9 @@ mod tests {
         service
             .client_config
             .set_namespace(CheetahString::from_static_str("ns"));
-        let mut msg = ArcMut::new(MessageExt::default());
+        let mut msg = MessageExt::default();
         msg.set_topic(CheetahString::from_static_str("ns%topic-a"));
-        let mut msgs = vec![msg];
+        let mut msgs = vec![Arc::new(msg)];
 
         service.reset_namespace(msgs.as_mut_slice());
 
@@ -1481,7 +1481,7 @@ mod tests {
         let default_impl = new_default_impl();
         let mut service = new_service(Some(default_impl.clone()));
         let process_queue = Arc::new(ProcessQueue::new());
-        let messages = vec![ArcMut::new(MessageExt::default())];
+        let messages = vec![Arc::new(MessageExt::default())];
         process_queue.put_message(&messages).await;
         let msgs = process_queue.take_messages(1).await;
         let mut request = ConsumeRequest {

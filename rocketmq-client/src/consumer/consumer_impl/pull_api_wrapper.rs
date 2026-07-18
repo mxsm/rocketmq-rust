@@ -225,8 +225,7 @@ impl PullAPIWrapper {
                     msg.queue_offset += offset_delta;
                 }
             }
-            pull_result_ext.pull_result.msg_found_list =
-                Some(msg_list_filter_again.into_iter().map(ArcMut::new).collect::<Vec<_>>());
+            pull_result_ext.pull_result.msg_found_list = Some(msg_list_filter_again);
         }
         // Release the raw binary buffer unconditionally once processing is complete.
         pull_result_ext.message_binary = None;
@@ -663,7 +662,7 @@ mod tests {
         }
     }
 
-    fn found_messages(pull_result_ext: &PullResultExt) -> &[ArcMut<MessageExt>] {
+    fn found_messages(pull_result_ext: &PullResultExt) -> &[MessageExt] {
         pull_result_ext
             .pull_result
             .msg_found_list

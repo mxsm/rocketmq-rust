@@ -280,6 +280,12 @@ M11-12l 已把 Client latency fault detector 的 trait/strategy/filter/task capt
 lifecycle mutex 串行。实际快照累计降至 454 production/1,481 occurrences，Client 降至 134/575；其余 Client
 owner、Broker/Store、Tools/compatibility 与完整候选快照 Gate 仍保持开放。
 
+M11-12m 已把 Client 拉取与消费消息值从 `ArcMut<MessageExt>` 改为 owned `PullResult` 和标准
+`Arc<MessageExt>`：decode/filter/Admin/Client adapter 不再临时构造共享可变消息，ProcessQueue、consume request、
+hook、trace 与 Lite zero-copy 只共享不可变句柄；retry/namespace mutation 使用 clone-on-write，消费开始时间从消息
+别名写入迁到 ProcessQueue 受锁 lifecycle map。实际快照累计降至 440 production/1,397 occurrences，Client 降至
+120/491；Client lifecycle owner、Broker/Store、Tools/compatibility 与完整候选快照 Gate 仍保持开放。
+
 ## 公共兼容面
 
 - development/compatibility仍可显式选择；secure只作为新部署默认，不静默重解释旧配置。
