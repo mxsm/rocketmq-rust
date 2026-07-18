@@ -6606,7 +6606,7 @@ accounts:
         controller_peers: Vec<RaftPeer>,
         raft_peers: Vec<RaftPeer>,
         root: &Path,
-    ) -> ArcMut<TestControllerManager> {
+    ) -> Arc<TestControllerManager> {
         let node_id = controller_peer.id;
         let config = TestControllerConfig::default()
             .with_node_info(node_id, controller_peer.addr)
@@ -6624,28 +6624,21 @@ accounts:
             .with_enable_elect_unclean_master(true)
             .with_enable_elect_unclean_master_local(true);
 
-        let manager = ArcMut::new(
+        let manager = Arc::new(
             TestControllerManager::new(config)
                 .await
                 .expect("create controller manager"),
         );
         assert!(
-            manager
-                .clone()
-                .initialize()
-                .await
-                .expect("initialize controller manager"),
+            manager.initialize().await.expect("initialize controller manager"),
             "controller manager should initialize exactly once"
         );
-        manager.clone().start().await.expect("start controller manager");
+        manager.start().await.expect("start controller manager");
         wait_for_tcp_listener(controller_peer.addr, "controller remoting server to listen").await;
         manager
     }
 
-    async fn start_controller_cluster(
-        base_port: u16,
-        root: &Path,
-    ) -> (Vec<ArcMut<TestControllerManager>>, Vec<RaftPeer>) {
+    async fn start_controller_cluster(base_port: u16, root: &Path) -> (Vec<Arc<TestControllerManager>>, Vec<RaftPeer>) {
         let controller_peers = vec![
             RaftPeer {
                 id: 1,
@@ -6884,7 +6877,7 @@ accounts:
 
     async fn bootstrap_broker_against_controller(
         runtime: &mut BrokerRuntime,
-        controller_leader_manager: &ArcMut<TestControllerManager>,
+        controller_leader_manager: &Arc<TestControllerManager>,
     ) {
         let controller_leader = BrokerRuntimeInner::discover_controller_leader(&runtime.inner)
             .await
@@ -7012,7 +7005,7 @@ accounts:
         .expect("apply controller elect result");
     }
 
-    async fn shutdown_controller_cluster(controllers: &[ArcMut<TestControllerManager>]) {
+    async fn shutdown_controller_cluster(controllers: &[Arc<TestControllerManager>]) {
         let results = futures::future::join_all(controllers.iter().map(|controller| controller.shutdown())).await;
         for result in results {
             result.expect("shutdown controller manager");

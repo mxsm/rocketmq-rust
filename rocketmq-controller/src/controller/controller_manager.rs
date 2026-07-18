@@ -17,6 +17,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::Weak;
 use std::time::Duration;
 
 use super::raft_controller::RaftController;
@@ -69,9 +70,9 @@ use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskKind;
 use rocketmq_rust::ArcMut;
-use rocketmq_rust::WeakArcMut;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
+use tokio::sync::Mutex as AsyncMutex;
 use tokio::time::sleep;
 use tracing::error;
 use tracing::info;
@@ -136,11 +137,11 @@ impl NotifyTask {
 }
 
 struct BrokerInactiveListener {
-    controller_manager: WeakArcMut<ControllerManager>,
+    controller_manager: Weak<ControllerManager>,
 }
 
 impl BrokerInactiveListener {
-    fn new(controller_manager: WeakArcMut<ControllerManager>) -> Self {
+    fn new(controller_manager: Weak<ControllerManager>) -> Self {
         Self { controller_manager }
     }
 }
@@ -381,14 +382,14 @@ pub struct ControllerManager {
     metadata: Arc<MetadataStore>,
 
     /// Heartbeat manager for broker liveness detection
-    /// Uses Mutex instead of RwLock as it's always exclusively accessed
-    heartbeat_manager: ArcMut<DefaultBrokerHeartbeatManager>,
+    /// Shared safely; lifecycle slots and listeners are synchronized internally.
+    heartbeat_manager: Arc<DefaultBrokerHeartbeatManager>,
 
     /// Request processor manager
     processor: Arc<ProcessorManager>,
 
     /// Remoting server for inbound RPC requests
-    remoting_server: Option<RocketMQServer<ControllerRequestProcessor>>,
+    remoting_server: Mutex<Option<RocketMQServer<ControllerRequestProcessor>>>,
     remoting_server_shutdown_tx: Arc<Mutex<Option<oneshot::Sender<()>>>>,
     manager_task_group: Arc<Mutex<Option<TaskGroup>>>,
     leadership_watch_tasks: Arc<Mutex<Option<ScheduledTaskGroup>>>,
@@ -406,7 +407,10 @@ pub struct ControllerManager {
     /// Initialization state - uses AtomicBool for lock-free reads
     initialized: Arc<AtomicBool>,
 
-    broker_housekeeping_service: Option<Arc<BrokerHousekeepingService>>,
+    /// Serializes initialize, start, and graceful shutdown transitions.
+    lifecycle_lock: AsyncMutex<()>,
+
+    broker_housekeeping_service: Mutex<Option<Arc<BrokerHousekeepingService>>>,
     notify_dispatch_tx: Arc<Mutex<Option<mpsc::UnboundedSender<NotifyTask>>>>,
     notify_cache: Arc<RwLock<HashMap<NotifyCacheKey, NotifyCacheState>>>,
     pending_notify_state: Arc<RwLock<HashMap<NotifyCacheKey, NotifyCacheState>>>,
@@ -457,7 +461,7 @@ impl ControllerManager {
         info!("Creating controller manager with config: {:?}", config.snapshot());
 
         // Initialize heartbeat manager
-        let heartbeat_manager = ArcMut::new(match parent_task_group.as_ref() {
+        let heartbeat_manager = Arc::new(match parent_task_group.as_ref() {
             Some(parent_task_group) => {
                 DefaultBrokerHeartbeatManager::new_with_task_group(config.reader(), parent_task_group.clone())
             }
@@ -532,7 +536,7 @@ impl ControllerManager {
             metadata,
             heartbeat_manager,
             processor,
-            remoting_server,
+            remoting_server: Mutex::new(remoting_server),
             remoting_server_shutdown_tx: Arc::new(Mutex::new(None)),
             manager_task_group: Arc::new(Mutex::new(None)),
             leadership_watch_tasks: Arc::new(Mutex::new(None)),
@@ -541,7 +545,8 @@ impl ControllerManager {
             metrics_manager,
             running: Arc::new(AtomicBool::new(false)),
             initialized: Arc::new(AtomicBool::new(false)),
-            broker_housekeeping_service: None,
+            lifecycle_lock: AsyncMutex::new(()),
+            broker_housekeeping_service: Mutex::new(None),
             notify_dispatch_tx: Arc::new(Mutex::new(None)),
             notify_cache: Arc::new(RwLock::new(HashMap::new())),
             pending_notify_state: Arc::new(RwLock::new(HashMap::new())),
@@ -611,13 +616,10 @@ impl ControllerManager {
     /// # Thread Safety
     ///
     /// This method is idempotent - calling it multiple times is safe
-    pub async fn initialize(mut self: ArcMut<Self>) -> Result<bool> {
+    pub async fn initialize(self: &Arc<Self>) -> Result<bool> {
+        let _lifecycle_guard = self.lifecycle_lock.lock().await;
         // Check if already initialized using atomic operation
-        if self
-            .initialized
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-            .is_err()
-        {
+        if self.initialized.load(Ordering::Acquire) {
             warn!("Controller manager is already initialized");
             return Ok(false);
         }
@@ -626,15 +628,15 @@ impl ControllerManager {
 
         // Initialize heartbeat manager
         {
-            self.heartbeat_manager.initialize();
+            self.heartbeat_manager.initialize_shared();
             info!("Heartbeat manager initialized");
         }
 
         // Register broker lifecycle listeners
         {
-            let inactive_listener = Arc::new(BrokerInactiveListener::new(ArcMut::downgrade(&self)));
+            let inactive_listener = Arc::new(BrokerInactiveListener::new(Arc::downgrade(self)));
             self.heartbeat_manager
-                .register_broker_lifecycle_listener(inactive_listener.clone());
+                .register_broker_lifecycle_listener_shared(inactive_listener.clone());
             self.raft_controller
                 .register_broker_lifecycle_listener(inactive_listener);
             info!("Broker inactive listener registered");
@@ -642,10 +644,9 @@ impl ControllerManager {
 
         // Initialize broker housekeeping service
         {
-            let housekeeping_service = Arc::new(BrokerHousekeepingService::new_with_controller_manager(ArcMut::clone(
-                &self,
-            )));
-            self.broker_housekeeping_service = Some(housekeeping_service);
+            let housekeeping_service =
+                Arc::new(BrokerHousekeepingService::new_with_controller_manager(Arc::clone(self)));
+            *self.broker_housekeeping_service.lock() = Some(housekeeping_service);
 
             info!("Broker housekeeping service initialized");
         }
@@ -661,6 +662,7 @@ impl ControllerManager {
         #[cfg(feature = "metrics")]
         info!("Metrics manager is ready");
 
+        self.initialized.store(true, Ordering::Release);
         info!("Controller manager initialized successfully");
         Ok(true)
     }
@@ -703,7 +705,7 @@ impl ControllerManager {
     /// # Returns
     ///
     /// A configured ControllerRequestProcessor ready to handle requests
-    fn init_processors(controller_manager: ArcMut<ControllerManager>) -> ControllerRequestProcessor {
+    fn init_processors(controller_manager: Arc<ControllerManager>) -> ControllerRequestProcessor {
         ControllerRequestProcessor::new(controller_manager)
     }
 
@@ -735,7 +737,8 @@ impl ControllerManager {
     /// # Thread Safety
     ///
     /// This method is idempotent - calling it multiple times is safe
-    pub async fn start(mut self: ArcMut<Self>) -> Result<()> {
+    pub async fn start(self: &Arc<Self>) -> Result<()> {
+        let _lifecycle_guard = self.lifecycle_lock.lock().await;
         // Check if already running using atomic operation
         if self
             .running
@@ -760,43 +763,50 @@ impl ControllerManager {
         // Start Raft controller first (critical for leader election)
         if let Err(e) = self.raft_controller.mut_from_ref().startup().await {
             self.running.store(false, Ordering::SeqCst);
-            return Err(ControllerError::runtime_error(format!(
-                "Failed to start Raft controller: {e}"
-            )));
+            return Err(self
+                .cleanup_after_start_failure(ControllerError::runtime_error(format!(
+                    "Failed to start Raft controller: {e}"
+                )))
+                .await);
         }
         info!("Raft controller started");
 
         // Start heartbeat manager (for broker monitoring)
         {
-            self.heartbeat_manager.start();
+            self.heartbeat_manager.start_shared();
             info!("Heartbeat manager started");
         }
 
         // Start metadata store
-        if let Err(e) = self.metadata.start().await {
+        if let Err(error) = self.metadata.start().await {
             self.running.store(false, Ordering::SeqCst);
-            return Err(ControllerError::storage_source("start metadata store", e));
+            let error = ControllerError::storage_source("start metadata store", error);
+            return Err(self.cleanup_after_start_failure(error).await);
         }
         info!("Metadata store started");
 
         // Start processor manager (for request handling)
-        if let Err(e) = self.processor.start().await {
+        if let Err(error) = self.processor.start().await {
             self.running.store(false, Ordering::SeqCst);
-            return Err(ControllerError::runtime_error(format!(
-                "Failed to start processor manager: {e}"
-            )));
+            let error = ControllerError::runtime_error(format!("Failed to start processor manager: {error}"));
+            return Err(self.cleanup_after_start_failure(error).await);
         }
         info!("Processor manager started");
 
-        let manager_task_group = self.ensure_manager_task_group()?;
+        let manager_task_group = match self.ensure_manager_task_group() {
+            Ok(task_group) => task_group,
+            Err(error) => return Err(self.cleanup_after_start_failure(error).await),
+        };
 
         // Start remoting server (for inbound RPC requests)
         // Reference: NameServerRuntime.start() - register processors then start server
-        if let Some(mut server) = self.remoting_server.take() {
+        let remoting_server = self.remoting_server.lock().take();
+        if let Some(mut server) = remoting_server {
             // Create ControllerRequestProcessor using init_processors()
-            let request_processor = Self::init_processors(self.clone());
+            let request_processor = Self::init_processors(Arc::clone(self));
             let broker_housekeeping_service = self
                 .broker_housekeeping_service
+                .lock()
                 .take()
                 .map(|service| service as Arc<dyn ChannelEventListener>);
             let (shutdown_tx, shutdown_rx) = oneshot::channel();
@@ -818,9 +828,9 @@ impl ControllerManager {
                     _ => {}
                 }
             }) {
-                return Err(ControllerError::runtime_error(format!(
-                    "Failed to spawn controller remoting server task: {error}"
-                )));
+                let error =
+                    ControllerError::runtime_error(format!("Failed to spawn controller remoting server task: {error}"));
+                return Err(self.cleanup_after_start_failure(error).await);
             }
             info!("Remoting server started with ControllerRequestProcessor");
         }
@@ -832,8 +842,12 @@ impl ControllerManager {
             info!("Remoting client started");
         }
 
-        self.start_notify_worker_loop().await?;
-        self.start_leadership_watch_loop()?;
+        if let Err(error) = self.start_notify_worker_loop().await {
+            return Err(self.cleanup_after_start_failure(error).await);
+        }
+        if let Err(error) = self.start_leadership_watch_loop() {
+            return Err(self.cleanup_after_start_failure(error).await);
+        }
 
         // Metrics are already running if enabled
         #[cfg(feature = "metrics")]
@@ -841,6 +855,23 @@ impl ControllerManager {
 
         info!("Controller manager started successfully");
         Ok(())
+    }
+
+    /// Rolls back a partial start while the caller owns `lifecycle_lock`.
+    async fn cleanup_after_start_failure(&self, start_error: ControllerError) -> ControllerError {
+        self.running.store(true, Ordering::Release);
+        let deadline = ShutdownDeadline::after(Duration::from_secs(30));
+        let cleanup = tokio::time::timeout(deadline.remaining(), self.shutdown_inner(deadline)).await;
+
+        match cleanup {
+            Ok(Ok(())) => start_error,
+            Ok(Err(cleanup_error)) => ControllerError::runtime_error(format!(
+                "Controller startup failed: {start_error}; startup cleanup was unhealthy: {cleanup_error}"
+            )),
+            Err(_) => ControllerError::runtime_error(format!(
+                "Controller startup failed: {start_error}; startup cleanup exhausted its absolute deadline"
+            )),
+        }
     }
 
     /// Shutdown the controller manager
@@ -870,7 +901,11 @@ impl ControllerManager {
     ///
     /// Returns a typed runtime error when the deadline expires or a shutdown phase fails.
     pub async fn shutdown_until(&self, deadline: ShutdownDeadline) -> Result<()> {
-        match tokio::time::timeout(deadline.remaining(), self.shutdown_inner(deadline)).await {
+        let shutdown = async {
+            let _lifecycle_guard = self.lifecycle_lock.lock().await;
+            self.shutdown_inner(deadline).await
+        };
+        match tokio::time::timeout(deadline.remaining(), shutdown).await {
             Ok(result) => result,
             Err(_) => Err(ControllerError::runtime_error(
                 "Controller shutdown exhausted its absolute deadline",
@@ -888,7 +923,6 @@ impl ControllerManager {
             warn!("Controller manager is not running");
             return Ok(());
         }
-
         info!("Shutting down controller manager...");
         let mut failures = Vec::new();
 
@@ -917,7 +951,7 @@ impl ControllerManager {
 
         // Shutdown heartbeat manager
         {
-            self.heartbeat_manager.mut_from_ref().shutdown_gracefully().await;
+            self.heartbeat_manager.shutdown_gracefully().await;
             info!("Heartbeat manager shut down");
         }
 
@@ -1067,10 +1101,8 @@ impl ControllerManager {
     ///
     /// # Returns
     ///
-    /// A reference to the heartbeat manager (wrapped in Arc<Mutex>)
-    ///
-    /// Note: Caller must lock the mutex to access the manager
-    pub fn heartbeat_manager(&self) -> &ArcMut<DefaultBrokerHeartbeatManager> {
+    /// A shared reference to the internally synchronized heartbeat manager.
+    pub fn heartbeat_manager(&self) -> &Arc<DefaultBrokerHeartbeatManager> {
         &self.heartbeat_manager
     }
 
@@ -1119,8 +1151,8 @@ impl ControllerManager {
         self.raft_controller.set_runtime_elect_enabled(enabled)
     }
 
-    fn start_leadership_watch_loop(self: &ArcMut<Self>) -> Result<()> {
-        let weak_manager = ArcMut::downgrade(self);
+    fn start_leadership_watch_loop(self: &Arc<Self>) -> Result<()> {
+        let weak_manager = Arc::downgrade(self);
         let interval = Duration::from_millis(self.config.snapshot().heartbeat_interval_ms.max(100));
         let task_group = self.ensure_manager_task_group()?;
         let scheduled_tasks = ScheduledTaskGroup::new(task_group.child("leadership-watch"));
@@ -1334,11 +1366,11 @@ impl ControllerManager {
         }
     }
 
-    async fn start_notify_worker_loop(self: &ArcMut<Self>) -> Result<()> {
+    async fn start_notify_worker_loop(self: &Arc<Self>) -> Result<()> {
         let (sender, mut receiver) = mpsc::unbounded_channel();
         *self.notify_dispatch_tx.lock() = Some(sender);
 
-        let weak_manager = ArcMut::downgrade(self);
+        let weak_manager = Arc::downgrade(self);
         let task_group = self.ensure_manager_task_group()?;
         let shutdown_token = task_group.cancellation_token();
         task_group
@@ -1471,7 +1503,7 @@ impl Drop for ControllerManager {
             self.notify_generation.fetch_add(1, Ordering::SeqCst);
             self.pending_notify_state.write().clear();
             self.notify_cache.write().clear();
-            BrokerHeartbeatManager::shutdown(self.heartbeat_manager.as_mut());
+            self.heartbeat_manager.shutdown_shared();
             self.remoting_client.shutdown();
             self.leadership_watch_tasks.lock().take();
             if let Some(task_group) = self.manager_task_group.lock().take() {
@@ -1535,16 +1567,27 @@ mod tests {
         Channel::new(inner, local_addr, local_addr)
     }
 
+    fn reserve_controller_addresses() -> (SocketAddr, SocketAddr) {
+        let remoting = std::net::TcpListener::bind("127.0.0.1:0").expect("reserve remoting address");
+        let raft = std::net::TcpListener::bind("127.0.0.1:0").expect("reserve raft address");
+        let addresses = (
+            remoting.local_addr().expect("remoting address"),
+            raft.local_addr().expect("raft address"),
+        );
+        drop((remoting, raft));
+        addresses
+    }
+
     #[tokio::test]
     async fn test_manager_lifecycle() {
         let config = ControllerConfig::default().with_node_info(1, "127.0.0.1:9878".parse::<SocketAddr>().unwrap());
 
         let manager = ControllerManager::new(config).await.expect("Failed to create manager");
-        let manager_arc = ArcMut::new(manager);
+        let manager_arc = Arc::new(manager);
 
         // Test initialization state (should use non-async is_initialized now)
         assert!(!manager_arc.is_initialized());
-        assert!(manager_arc.clone().initialize().await.expect("Failed to initialize"));
+        assert!(manager_arc.initialize().await.expect("Failed to initialize"));
         assert!(manager_arc.is_initialized());
 
         // Test double initialization (should return Ok(false))
@@ -1562,14 +1605,83 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn concurrent_initialize_is_serialized_and_manager_handles_do_not_form_a_cycle() {
+        let config = ControllerConfig::default().with_node_info(1, reserve_controller_addresses().0);
+        let manager = Arc::new(ControllerManager::new(config).await.expect("create manager"));
+
+        let (first, second) = tokio::join!(manager.initialize(), manager.initialize());
+        let results = [first.expect("first initialize"), second.expect("second initialize")];
+        assert_eq!(results.into_iter().filter(|initialized| *initialized).count(), 1);
+        assert!(manager.broker_housekeeping_service.lock().is_some());
+
+        let processor = ControllerRequestProcessor::new(manager.clone());
+        let weak_manager = Arc::downgrade(&manager);
+        drop(manager);
+
+        assert!(weak_manager.upgrade().is_none());
+        drop(processor);
+    }
+
+    #[tokio::test]
+    async fn concurrent_start_waits_for_the_single_lifecycle_transition() {
+        let (remoting_addr, raft_addr) = reserve_controller_addresses();
+        let config = ControllerConfig::default()
+            .with_node_info(1, remoting_addr)
+            .with_raft_peers(vec![crate::config::RaftPeer { id: 1, addr: raft_addr }])
+            .with_storage_backend(crate::config::StorageBackendType::Memory);
+        let manager = Arc::new(ControllerManager::new(config).await.expect("create manager"));
+        manager.initialize().await.expect("initialize manager");
+
+        let (first, second) = tokio::join!(manager.start(), manager.start());
+        first.expect("first start");
+        second.expect("second start");
+        assert!(manager.is_running());
+
+        manager.shutdown().await.expect("shutdown manager");
+        assert!(!manager.is_running());
+        std::mem::forget(manager);
+    }
+
+    #[tokio::test]
+    async fn startup_failure_cleanup_stops_owned_components() {
+        let (remoting_addr, raft_addr) = reserve_controller_addresses();
+        let config = ControllerConfig::default()
+            .with_node_info(1, remoting_addr)
+            .with_raft_peers(vec![crate::config::RaftPeer { id: 1, addr: raft_addr }])
+            .with_storage_backend(crate::config::StorageBackendType::Memory);
+        let manager = Arc::new(ControllerManager::new(config).await.expect("create manager"));
+        manager.initialize().await.expect("initialize manager");
+        manager.start().await.expect("start manager before simulated failure");
+        assert!(manager.is_running());
+        assert_eq!(manager.heartbeat_manager.scan_task_count(), 1);
+
+        let _lifecycle_guard = manager.lifecycle_lock.lock().await;
+        let error = manager
+            .cleanup_after_start_failure(ControllerError::runtime_error(
+                "simulated failure after component startup",
+            ))
+            .await;
+
+        assert!(error.to_string().contains("simulated failure after component startup"));
+        assert!(!manager.is_running());
+        assert_eq!(manager.heartbeat_manager.scan_task_count(), 0);
+        assert!(manager.manager_task_group.lock().is_none());
+        drop(_lifecycle_guard);
+        manager
+            .shutdown()
+            .await
+            .expect("idempotent shutdown after startup cleanup");
+    }
+
+    #[tokio::test]
     async fn test_manager_shutdown() {
         let config = ControllerConfig::default().with_node_info(1, "127.0.0.1:9879".parse::<SocketAddr>().unwrap());
 
         let manager = ControllerManager::new(config).await.expect("Failed to create manager");
-        let manager_arc = ArcMut::new(manager);
+        let manager_arc = Arc::new(manager);
 
         // Initialize first
-        manager_arc.clone().initialize().await.expect("Failed to initialize");
+        manager_arc.initialize().await.expect("Failed to initialize");
 
         // Test shutdown without starting (should succeed)
         manager_arc.shutdown().await.expect("Failed to shutdown");
@@ -1583,10 +1695,10 @@ mod tests {
         let config = ControllerConfig::default().with_node_info(1, "127.0.0.1:9880".parse::<SocketAddr>().unwrap());
 
         let manager = ControllerManager::new(config).await.expect("Failed to create manager");
-        let manager_arc = ArcMut::new(manager);
+        let manager_arc = Arc::new(manager);
 
         // Try to start without initializing (should fail)
-        let result = manager_arc.clone().start().await;
+        let result = manager_arc.start().await;
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), ControllerError::NotInitialized(_)));
 
@@ -1725,9 +1837,9 @@ mod tests {
             .with_heartbeat_interval_ms(100)
             .with_election_timeout_ms(300);
 
-        let manager = ArcMut::new(ControllerManager::new(config).await.expect("Failed to create manager"));
-        manager.clone().initialize().await.expect("initialize manager");
-        manager.clone().start().await.expect("start manager");
+        let manager = Arc::new(ControllerManager::new(config).await.expect("Failed to create manager"));
+        manager.initialize().await.expect("initialize manager");
+        manager.start().await.expect("start manager");
 
         let mut nodes = BTreeMap::new();
         nodes.insert(
@@ -1769,9 +1881,9 @@ mod tests {
             .with_election_timeout_ms(300)
             .with_notify_broker_role_changed(false);
 
-        let manager = ArcMut::new(ControllerManager::new(config).await.expect("create manager"));
-        manager.clone().initialize().await.expect("initialize manager");
-        manager.clone().start().await.expect("start manager");
+        let manager = Arc::new(ControllerManager::new(config).await.expect("create manager"));
+        manager.initialize().await.expect("initialize manager");
+        manager.start().await.expect("start manager");
 
         let mut nodes = BTreeMap::new();
         nodes.insert(
@@ -1872,7 +1984,7 @@ mod tests {
             .expect("alter response");
         assert_eq!(alter_response.code(), ResponseCode::Success as i32);
 
-        let listener = BrokerInactiveListener::new(ArcMut::downgrade(&manager));
+        let listener = BrokerInactiveListener::new(Arc::downgrade(&manager));
         listener.on_broker_inactive(Some("test-cluster"), "broker-a", Some(2));
         sleep(Duration::from_millis(300)).await;
 
@@ -1946,9 +2058,9 @@ mod tests {
             .with_election_timeout_ms(300)
             .with_notify_broker_role_changed(true);
 
-        let manager = ArcMut::new(ControllerManager::new(config).await.expect("create manager"));
-        manager.clone().initialize().await.expect("initialize manager");
-        manager.clone().start().await.expect("start manager");
+        let manager = Arc::new(ControllerManager::new(config).await.expect("create manager"));
+        manager.initialize().await.expect("initialize manager");
+        manager.start().await.expect("start manager");
 
         let mut nodes = BTreeMap::new();
         nodes.insert(

@@ -60,7 +60,7 @@ impl RaftController {
     /// Create a new OpenRaft-based controller that shares a heartbeat manager.
     pub fn new_open_raft_with_heartbeat(
         config: ControllerConfigReader,
-        heartbeat_manager: ArcMut<DefaultBrokerHeartbeatManager>,
+        heartbeat_manager: Arc<DefaultBrokerHeartbeatManager>,
     ) -> Self {
         Self {
             inner: ArcMut::new(OpenRaftController::new_with_heartbeat(config, heartbeat_manager)),

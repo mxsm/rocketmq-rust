@@ -17,6 +17,7 @@ use std::sync::Arc;
 #[cfg(feature = "metrics")]
 use std::collections::HashMap;
 
+#[cfg(feature = "metrics")]
 use rocketmq_common::common::controller::ControllerConfig;
 
 use crate::config::ControllerConfigReader;

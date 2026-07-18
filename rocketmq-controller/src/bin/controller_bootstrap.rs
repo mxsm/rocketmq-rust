@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::bail;
@@ -33,7 +34,6 @@ use rocketmq_runtime::ServiceContext;
 use rocketmq_runtime::ServiceLifecycle;
 use rocketmq_runtime::ServiceLifecycleState;
 use rocketmq_runtime::ShutdownReason;
-use rocketmq_rust::ArcMut;
 use tracing::info;
 
 /// RocketMQ Controller Bootstrap
@@ -172,11 +172,11 @@ async fn run_controller(
     // Create controller manager
     info!("Creating Controller Manager...");
     let controller_manager = ControllerManager::new_with_service_context(config, service_context).await?;
-    let controller_manager = ArcMut::new(controller_manager);
+    let controller_manager = Arc::new(controller_manager);
     // Initialize controller
     info!("Initializing Controller...");
 
-    let init_result = match ControllerManager::initialize(ArcMut::clone(&controller_manager)).await {
+    let init_result = match controller_manager.initialize().await {
         Ok(result) => result,
         Err(error) => {
             shutdown_controller_after_startup_failure(&controller_manager, &lifecycle).await;
@@ -188,7 +188,7 @@ async fn run_controller(
         bail!("Controller initialization failed");
     }
 
-    if let Err(error) = ControllerManager::start(ArcMut::clone(&controller_manager)).await {
+    if let Err(error) = controller_manager.start().await {
         shutdown_controller_after_startup_failure(&controller_manager, &lifecycle).await;
         return Err(error.into());
     }
@@ -228,7 +228,7 @@ async fn run_controller(
 }
 
 async fn shutdown_controller_after_startup_failure(
-    controller_manager: &ArcMut<ControllerManager>,
+    controller_manager: &Arc<ControllerManager>,
     lifecycle: &ServiceLifecycle,
 ) {
     lifecycle.mark_failed();
@@ -282,7 +282,7 @@ fn log_telemetry_bootstrap(
     );
 }
 
-async fn initialize_cluster_if_configured(controller_manager: &ArcMut<ControllerManager>) -> Result<()> {
+async fn initialize_cluster_if_configured(controller_manager: &Arc<ControllerManager>) -> Result<()> {
     let config = controller_manager.controller_config();
     if config.raft_peers.is_empty() {
         return Ok(());

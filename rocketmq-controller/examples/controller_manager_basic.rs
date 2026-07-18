@@ -25,13 +25,13 @@
 //! cargo run --example controller_manager_basic
 //! ```
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use rocketmq_controller::config::ControllerConfig;
 use rocketmq_controller::config::RaftPeer;
 use rocketmq_controller::error::Result;
 use rocketmq_controller::manager::ControllerManager;
-use rocketmq_rust::ArcMut;
 use tracing::error;
 use tracing::info;
 
@@ -50,12 +50,12 @@ async fn main() -> Result<()> {
     info!("Creating ControllerManager...");
     let manager = ControllerManager::new(config).await?;
 
-    // Wrap in ArcMut for initialization and start
-    let manager = ArcMut::new(manager);
+    // Share the manager through a read-only ownership handle.
+    let manager = Arc::new(manager);
 
     // Initialize the manager
     info!("Initializing ControllerManager...");
-    if !manager.clone().initialize().await? {
+    if !manager.initialize().await? {
         error!("Failed to initialize ControllerManager");
         return Err(rocketmq_controller::error::ControllerError::InitializationFailed);
     }
@@ -63,7 +63,7 @@ async fn main() -> Result<()> {
 
     // Start the manager
     info!("Starting ControllerManager...");
-    manager.clone().start().await?;
+    manager.start().await?;
     info!(" Controller started successfully");
 
     // Query controller state

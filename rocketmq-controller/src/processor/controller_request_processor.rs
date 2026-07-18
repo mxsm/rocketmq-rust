@@ -85,6 +85,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::sync::Weak;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -111,7 +112,6 @@ use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::RemotingDeserializable;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
-use rocketmq_rust::ArcMut;
 use tracing::info;
 use tracing::warn;
 // Note: These types need to be implemented in their respective modules
@@ -135,10 +135,10 @@ const WAIT_TIMEOUT_SECONDS: u64 = 5;
 #[derive(Clone)]
 pub struct ControllerRequestProcessor {
     /// Reference to the controller manager
-    controller_manager: ArcMut<ControllerManager>,
+    controller_manager: Weak<ControllerManager>,
 
     /// Reference to the heartbeat manager
-    heartbeat_manager: ArcMut<DefaultBrokerHeartbeatManager>,
+    heartbeat_manager: Arc<DefaultBrokerHeartbeatManager>,
 
     /// Configuration blacklist - configs that cannot be dynamically updated
     config_blacklist: Arc<HashSet<String>>,
@@ -151,15 +151,19 @@ impl ControllerRequestProcessor {
     ///
     /// * `controller_manager` - Reference to the controller manager
     ///
+    /// The caller remains responsible for owning the manager lifecycle. The
+    /// processor keeps only a weak manager reference so the remoting task cannot
+    /// retain the complete service graph after shutdown.
+    ///
     /// # Returns
     ///
     /// A new instance of `ControllerRequestProcessor`
-    pub fn new(controller_manager: ArcMut<ControllerManager>) -> Self {
+    pub fn new(controller_manager: Arc<ControllerManager>) -> Self {
         let heartbeat_manager = controller_manager.heartbeat_manager().clone();
         let config_blacklist = Arc::new(Self::init_config_blacklist(&controller_manager));
 
         Self {
-            controller_manager,
+            controller_manager: Arc::downgrade(&controller_manager),
             heartbeat_manager,
             config_blacklist,
         }
@@ -194,6 +198,12 @@ impl ControllerRequestProcessor {
         }
 
         blacklist
+    }
+
+    fn controller_manager(&self) -> RocketMQResult<Arc<ControllerManager>> {
+        self.controller_manager
+            .upgrade()
+            .ok_or_else(|| RocketMQError::not_initialized("controller manager is no longer available"))
     }
 
     /// Handle incoming request and route to appropriate handler
@@ -305,7 +315,8 @@ impl ControllerRequestProcessor {
             ));
         };
 
-        self.controller_manager
+        let controller_manager = self.controller_manager()?;
+        controller_manager
             .controller()
             .alter_sync_state_set(&request_header, sync_state_set)
             .await
@@ -337,19 +348,15 @@ impl ControllerRequestProcessor {
                 RocketMQError::request_header_error(format!("Failed to decode ElectMasterRequestHeader: {:?}", e))
             })?;
 
-        let config = self.controller_manager.controller_config();
+        let controller_manager = self.controller_manager()?;
+        let config = controller_manager.controller_config();
 
         // Forward to Controller
-        let response = self
-            .controller_manager
-            .controller()
-            .elect_master(&request_header)
-            .await?;
+        let response = controller_manager.controller().elect_master(&request_header).await?;
 
         if let Some(response_command) = response.as_ref() {
             if response_command.code() == ResponseCode::Success as i32 && config.notify_broker_role_changed {
-                if let Err(error) = self
-                    .controller_manager
+                if let Err(error) = controller_manager
                     .notify_broker_role_changed(response_command.clone())
                     .await
                 {
@@ -388,10 +395,8 @@ impl ControllerRequestProcessor {
                 RocketMQError::request_header_error(format!("Failed to decode GetReplicaInfoRequestHeader: {:?}", e))
             })?;
 
-        self.controller_manager
-            .controller()
-            .get_replica_info(&request_header)
-            .await
+        let controller_manager = self.controller_manager()?;
+        controller_manager.controller().get_replica_info(&request_header).await
     }
 
     /// Handle GET_METADATA_INFO request
@@ -413,7 +418,8 @@ impl ControllerRequestProcessor {
         _ctx: ConnectionHandlerContext,
         _request: &mut RemotingCommand,
     ) -> RocketMQResult<Option<RemotingCommand>> {
-        self.controller_manager.controller().get_controller_metadata().await
+        let controller_manager = self.controller_manager()?;
+        controller_manager.controller().get_controller_metadata().await
     }
 
     /// Handle BROKER_HEARTBEAT request
@@ -453,7 +459,8 @@ impl ControllerRequestProcessor {
                 request_header.confirm_offset,
                 request_header.election_priority,
             );
-            self.controller_manager
+            let controller_manager = self.controller_manager()?;
+            controller_manager
                 .controller()
                 .record_broker_heartbeat(&request_header)
                 .await
@@ -487,11 +494,8 @@ impl ControllerRequestProcessor {
         if let Some(body) = request.body() {
             let broker_names: Vec<CheetahString> = serde_json::from_slice(body).unwrap_or_default();
             if !broker_names.is_empty() {
-                return self
-                    .controller_manager
-                    .controller()
-                    .get_sync_state_data(&broker_names)
-                    .await;
+                let controller_manager = self.controller_manager()?;
+                return controller_manager.controller().get_sync_state_data(&broker_names).await;
             }
         }
         Ok(Some(RemotingCommand::create_response_command()))
@@ -542,7 +546,8 @@ impl ControllerRequestProcessor {
         }
 
         // Apply configuration updates
-        self.controller_manager.update_config(properties).await?;
+        let controller_manager = self.controller_manager()?;
+        controller_manager.update_config(properties).await?;
 
         // Return success
         Ok(Some(RemotingCommand::create_response_command()))
@@ -584,7 +589,7 @@ impl ControllerRequestProcessor {
         _ctx: ConnectionHandlerContext,
         _request: &mut RemotingCommand,
     ) -> RocketMQResult<Option<RemotingCommand>> {
-        let controller_config = self.controller_manager.controller_config();
+        let controller_config = self.controller_manager()?.controller_config();
         let config_string = controller_config.to_properties_string();
 
         let response = RemotingCommand::create_response_command().set_body(config_string.into_bytes());
@@ -624,10 +629,8 @@ impl ControllerRequestProcessor {
             )));
         }
 
-        self.controller_manager
-            .controller()
-            .clean_broker_data(&request_header)
-            .await
+        let controller_manager = self.controller_manager()?;
+        controller_manager.controller().clean_broker_data(&request_header).await
     }
 
     /// Handle GET_NEXT_BROKER_ID request
@@ -681,8 +684,8 @@ impl ControllerRequestProcessor {
         }
 
         // Forward to controller to allocate next broker ID
-        let response: Option<RemotingCommand> = self
-            .controller_manager
+        let controller_manager = self.controller_manager()?;
+        let response: Option<RemotingCommand> = controller_manager
             .controller()
             .get_next_broker_id(&request_header)
             .await?;
@@ -796,11 +799,8 @@ impl ControllerRequestProcessor {
         }
 
         // Forward to controller for Raft consensus
-        let result = self
-            .controller_manager
-            .controller()
-            .apply_broker_id(&request_header)
-            .await;
+        let controller_manager = self.controller_manager()?;
+        let result = controller_manager.controller().apply_broker_id(&request_header).await;
 
         match &result {
             Ok(Some(response)) => {
@@ -873,10 +873,8 @@ impl ControllerRequestProcessor {
             )));
         }
 
-        self.controller_manager
-            .controller()
-            .register_broker(&request_header)
-            .await
+        let controller_manager = self.controller_manager()?;
+        controller_manager.controller().register_broker(&request_header).await
     }
 
     // ==================== Helper Methods ====================

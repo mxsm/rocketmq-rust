@@ -12,14 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::Arc;
+use std::sync::Weak;
+
 use crate::controller::broker_heartbeat_manager::BrokerHeartbeatManager;
 use crate::ControllerManager;
 use rocketmq_remoting::base::channel_event_listener::ChannelEventListener;
 use rocketmq_remoting::net::channel::Channel;
-use rocketmq_rust::ArcMut;
 
 pub struct BrokerHousekeepingService {
-    controller_manager: Option<ArcMut<ControllerManager>>,
+    controller_manager: Option<Weak<ControllerManager>>,
 }
 
 impl Default for BrokerHousekeepingService {
@@ -35,14 +37,16 @@ impl BrokerHousekeepingService {
         }
     }
 
-    pub fn new_with_controller_manager(controller_manager: ArcMut<ControllerManager>) -> Self {
+    /// Creates a service that observes the manager without keeping it alive.
+    pub fn new_with_controller_manager(controller_manager: Arc<ControllerManager>) -> Self {
         BrokerHousekeepingService {
-            controller_manager: Some(controller_manager),
+            controller_manager: Some(Arc::downgrade(&controller_manager)),
         }
     }
 
-    pub fn set_controller_manager(&mut self, controller_manager: ArcMut<ControllerManager>) {
-        self.controller_manager = Some(controller_manager);
+    /// Replaces the observed manager without taking ownership of its lifecycle.
+    pub fn set_controller_manager(&mut self, controller_manager: Arc<ControllerManager>) {
+        self.controller_manager = Some(Arc::downgrade(&controller_manager));
     }
 }
 
@@ -52,19 +56,19 @@ impl ChannelEventListener for BrokerHousekeepingService {
     }
 
     fn on_channel_close(&self, _remote_addr: &str, channel: &Channel) {
-        if let Some(controller_manager) = &self.controller_manager {
+        if let Some(controller_manager) = self.controller_manager.as_ref().and_then(Weak::upgrade) {
             controller_manager.heartbeat_manager().on_broker_channel_close(channel);
         }
     }
 
     fn on_channel_exception(&self, _remote_addr: &str, channel: &Channel) {
-        if let Some(controller_manager) = &self.controller_manager {
+        if let Some(controller_manager) = self.controller_manager.as_ref().and_then(Weak::upgrade) {
             controller_manager.heartbeat_manager().on_broker_channel_close(channel);
         }
     }
 
     fn on_channel_idle(&self, _remote_addr: &str, channel: &Channel) {
-        if let Some(controller_manager) = &self.controller_manager {
+        if let Some(controller_manager) = self.controller_manager.as_ref().and_then(Weak::upgrade) {
             controller_manager.heartbeat_manager().on_broker_channel_close(channel);
         }
     }
