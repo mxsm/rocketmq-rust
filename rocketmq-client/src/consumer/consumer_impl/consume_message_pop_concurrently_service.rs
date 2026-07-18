@@ -144,9 +144,9 @@ impl ConsumeMessagePopConcurrentlyService {
 }
 
 impl ConsumeMessageServiceTrait for ConsumeMessagePopConcurrentlyService {
-    fn start(&mut self, this: ArcMut<Self>) {}
+    fn start(&self, _this: Arc<Self>) {}
 
-    async fn shutdown(&mut self, await_terminate_millis: u64) {
+    async fn shutdown(&self, await_terminate_millis: u64) {
         info!(
             "{} ConsumeMessagePopConcurrentlyService shutdown started",
             self.consumer_group
@@ -301,7 +301,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopConcurrentlyService {
 
     async fn submit_consume_request(
         &self,
-        this: ArcMut<Self>,
+        this: Arc<Self>,
         msgs: Vec<Arc<MessageExt>>,
         process_queue: Arc<ProcessQueue>,
         message_queue: MessageQueue,
@@ -312,7 +312,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopConcurrentlyService {
 
     async fn submit_pop_consume_request(
         &self,
-        this: ArcMut<Self>,
+        this: Arc<Self>,
         msgs: Vec<MessageExt>,
         process_queue: &PopProcessQueue,
         message_queue: &MessageQueue,
@@ -402,7 +402,7 @@ impl ConsumeMessagePopConcurrentlyService {
     /// Submit consume request after 5 seconds delay for retry
     async fn submit_pop_consume_request_later(
         &self,
-        this: ArcMut<Self>,
+        this: Arc<Self>,
         msgs: Vec<MessageExt>,
         process_queue: Arc<PopProcessQueue>,
         message_queue: MessageQueue,
@@ -434,8 +434,8 @@ impl ConsumeMessagePopConcurrentlyService {
     }
 
     async fn process_consume_result(
-        &mut self,
-        this: ArcMut<Self>,
+        &self,
+        this: Arc<Self>,
         status: ConsumeConcurrentlyStatus,
         context: &ConsumeConcurrentlyContext,
         consume_request: &mut ConsumeRequest,
@@ -470,7 +470,7 @@ impl ConsumeMessagePopConcurrentlyService {
         if ack_index >= 0 {
             for i in 0..=ack_index {
                 let msg = &consume_request.msgs[i as usize];
-                if let Some(default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_mut() {
+                if let Some(mut default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_ref().cloned() {
                     default_mqpush_consumer_impl
                         .ack_async(msg.as_ref(), &self.consumer_group)
                         .await;
@@ -498,7 +498,7 @@ impl ConsumeMessagePopConcurrentlyService {
         }
     }
 
-    async fn check_need_ack_or_delay(&mut self, message: &MessageExt) {
+    async fn check_need_ack_or_delay(&self, message: &MessageExt) {
         let Some(mut default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_ref().cloned() else {
             warn!(
                 "pop consume retry handling skipped: DefaultMQPushConsumerImpl is not initialized, group={}, msg={}",
@@ -536,7 +536,7 @@ impl ConsumeMessagePopConcurrentlyService {
     }
 
     async fn change_pop_invisible_time(
-        &mut self,
+        &self,
         message: &MessageExt,
         consumer_group: &CheetahString,
         mut delay_level: i32,
@@ -645,7 +645,7 @@ impl ConsumeRequest {
         current_millis().saturating_sub(self.pop_time) >= self.invisible_time
     }
 
-    pub async fn run(mut self, mut consume_message_concurrently_service: ArcMut<ConsumeMessagePopConcurrentlyService>) {
+    pub async fn run(mut self, consume_message_concurrently_service: Arc<ConsumeMessagePopConcurrentlyService>) {
         if consume_message_concurrently_service.stopped.load(Ordering::Acquire) {
             warn!(
                 "run, service stopped, discard consume request for {}",
@@ -1064,7 +1064,7 @@ mod tests {
         service.stopped.store(true, Ordering::Release);
 
         futures::executor::block_on(service.submit_pop_consume_request(
-            ArcMut::new(new_service(None)),
+            Arc::new(new_service(None)),
             vec![pop_message()],
             &PopProcessQueue::new(),
             &message_queue(),
@@ -1082,7 +1082,7 @@ mod tests {
         service.stopped.store(true, Ordering::Release);
 
         futures::executor::block_on(service.submit_pop_consume_request(
-            ArcMut::new(new_service(None)),
+            Arc::new(new_service(None)),
             vec![pop_message(), pop_message()],
             &PopProcessQueue::new(),
             &message_queue(),
@@ -1096,7 +1096,7 @@ mod tests {
         service.stopped.store(true, Ordering::Release);
 
         futures::executor::block_on(service.submit_pop_consume_request_later(
-            ArcMut::new(new_service(None)),
+            Arc::new(new_service(None)),
             vec![pop_message()],
             Arc::new(PopProcessQueue::new()),
             message_queue(),
@@ -1160,7 +1160,7 @@ mod tests {
 
     #[tokio::test]
     async fn consume_request_without_default_impl_is_ignored_without_panic() {
-        let service = ArcMut::new(new_service(None));
+        let service = Arc::new(new_service(None));
         let process_queue = Arc::new(PopProcessQueue::new());
         let request = ConsumeRequest::new(
             vec![pop_message()],
@@ -1178,7 +1178,7 @@ mod tests {
 
     #[tokio::test]
     async fn shutdown_closes_concurrency_limiter_like_java_executor_shutdown() {
-        let mut service = new_service(None);
+        let service = new_service(None);
 
         service.shutdown(100).await;
 
@@ -1248,7 +1248,7 @@ mod tests {
 
     #[tokio::test]
     async fn process_consume_result_without_default_impl_does_not_panic() {
-        let mut service = new_service(None);
+        let service = new_service(None);
         let process_queue = Arc::new(PopProcessQueue::new());
         process_queue.inc_found_msg(1);
         let mut request = ConsumeRequest::new(
@@ -1263,7 +1263,7 @@ mod tests {
 
         service
             .process_consume_result(
-                ArcMut::new(new_service(None)),
+                Arc::new(new_service(None)),
                 ConsumeConcurrentlyStatus::ConsumeSuccess,
                 &context,
                 &mut request,
@@ -1276,7 +1276,7 @@ mod tests {
     #[tokio::test]
     async fn process_consume_result_without_client_instance_does_not_panic() {
         let default_impl = new_default_impl();
-        let mut service = new_service(Some(default_impl.clone()));
+        let service = new_service(Some(default_impl.clone()));
         let process_queue = Arc::new(PopProcessQueue::new());
         process_queue.inc_found_msg(1);
         let mut request = ConsumeRequest::new(
@@ -1291,7 +1291,7 @@ mod tests {
 
         service
             .process_consume_result(
-                ArcMut::new(new_service(None)),
+                Arc::new(new_service(None)),
                 ConsumeConcurrentlyStatus::ConsumeSuccess,
                 &context,
                 &mut request,

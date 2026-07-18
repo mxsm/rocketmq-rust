@@ -22,6 +22,7 @@ use std::time::Instant;
 
 use cheetah_string::CheetahString;
 use parking_lot::Mutex;
+use parking_lot::RwLock;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::MessageTrait;
@@ -57,7 +58,7 @@ use crate::runtime::spawn_client_tracked_task;
 use crate::runtime::ClientTrackedTaskHandle;
 
 pub struct ConsumeMessageConcurrentlyService {
-    pub(crate) default_mqpush_consumer_impl: Option<ArcMut<DefaultMQPushConsumerImpl>>,
+    pub(crate) default_mqpush_consumer_impl: RwLock<Option<ArcMut<DefaultMQPushConsumerImpl>>>,
     pub(crate) client_config: ArcMut<ClientConfig>,
     pub(crate) consumer_config: ArcMut<ConsumerConfig>,
     pub(crate) consumer_group: CheetahString,
@@ -176,7 +177,7 @@ impl ConsumeMessageConcurrentlyService {
     ) -> Self {
         let core_pool_size = consumer_config.consume_thread_min as usize;
         Self {
-            default_mqpush_consumer_impl,
+            default_mqpush_consumer_impl: RwLock::new(default_mqpush_consumer_impl),
             client_config,
             consumer_config,
             consumer_group,
@@ -219,8 +220,8 @@ impl ConsumeMessageConcurrentlyService {
 }
 
 impl ConsumeMessageConcurrentlyService {
-    async fn clean_expire_msg(&mut self) {
-        let Some(default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.clone() else {
+    async fn clean_expire_msg(&self) {
+        let Some(default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.read().clone() else {
             warn!(
                 "clean expired messages skipped: DefaultMQPushConsumerImpl is not initialized, group={}",
                 self.consumer_group
@@ -236,14 +237,14 @@ impl ConsumeMessageConcurrentlyService {
             .await;
         for process_queue in process_queue_table.values() {
             process_queue
-                .clean_expired_msg(self.default_mqpush_consumer_impl.clone())
+                .clean_expired_msg(Some(default_mqpush_consumer_impl.clone()))
                 .await;
         }
     }
 
     async fn process_consume_result(
-        &mut self,
-        this: ArcMut<Self>,
+        &self,
+        this: Arc<Self>,
         status: ConsumeConcurrentlyStatus,
         context: &ConsumeConcurrentlyContext,
         consume_request: &mut ConsumeRequest,
@@ -254,7 +255,7 @@ impl ConsumeMessageConcurrentlyService {
         let ack_index = normalize_ack_index(status, context.ack_index, consume_request.msgs.len());
 
         // Update per-topic/group consume throughput counters, split by ack index.
-        if let Some(impl_) = self.default_mqpush_consumer_impl.as_ref() {
+        if let Some(impl_) = self.default_mqpush_consumer_impl.read().clone() {
             if let Some(client_instance) = impl_.client_instance.as_ref() {
                 let mgr = client_instance.consumer_stats_manager();
                 let topic = consume_request.message_queue.topic().as_str();
@@ -328,7 +329,7 @@ impl ConsumeMessageConcurrentlyService {
             .remove_message(&consume_request.msgs)
             .await;
         if offset >= 0 && !consume_request.process_queue.is_dropped() {
-            let Some(default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_mut() else {
+            let Some(mut default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.read().clone() else {
                 warn!(
                     "consume offset update skipped: DefaultMQPushConsumerImpl is not initialized, group={}, mq={}",
                     self.consumer_group, consume_request.message_queue
@@ -351,7 +352,7 @@ impl ConsumeMessageConcurrentlyService {
     fn submit_consume_request_later(
         &self,
         msgs: Vec<Arc<MessageExt>>,
-        this: ArcMut<Self>,
+        this: Arc<Self>,
         process_queue: Arc<ProcessQueue>,
         message_queue: MessageQueue,
     ) {
@@ -372,11 +373,12 @@ impl ConsumeMessageConcurrentlyService {
         );
     }
 
-    pub async fn send_message_back(&mut self, msg: &mut MessageExt, context: &ConsumeConcurrentlyContext) -> bool {
+    pub async fn send_message_back(&self, msg: &mut MessageExt, context: &ConsumeConcurrentlyContext) -> bool {
         let delay_level = context.delay_level_when_next_consume;
-        msg.set_topic(self.client_config.with_namespace(msg.topic().as_str()));
+        let mut client_config = self.client_config.clone();
+        msg.set_topic(client_config.with_namespace(msg.topic().as_str()));
 
-        let Some(default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_mut() else {
+        let Some(mut default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.read().clone() else {
             error!(
                 "sendMessageBack skipped: DefaultMQPushConsumerImpl is not initialized, group: {} msg: {}",
                 self.consumer_group, msg
@@ -387,9 +389,7 @@ impl ConsumeMessageConcurrentlyService {
             .send_message_back(
                 msg,
                 delay_level,
-                &self
-                    .client_config
-                    .queue_with_namespace(context.get_message_queue().clone()),
+                &client_config.queue_with_namespace(context.get_message_queue().clone()),
             )
             .await
             .is_ok()
@@ -397,7 +397,7 @@ impl ConsumeMessageConcurrentlyService {
 }
 
 impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
-    fn start(&mut self, mut this: ArcMut<Self>) {
+    fn start(&self, this: Arc<Self>) {
         let shutdown_token = self.shutdown_token.clone();
         let handle = spawn_concurrent_lifecycle_task("rocketmq-client-concurrent-clean-expire", async move {
             let timeout = this.consumer_config.consume_timeout;
@@ -416,7 +416,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
         *self.clean_expire_task_handle.lock() = handle;
     }
 
-    async fn shutdown(&mut self, await_terminate_millis: u64) {
+    async fn shutdown(&self, await_terminate_millis: u64) {
         self.shutdown_token.cancel();
         self.consume_task_tracker.close();
         let shutdown_timeout = Duration::from_millis(await_terminate_millis);
@@ -475,7 +475,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
         msg.broker_name = broker_name.unwrap_or_default();
         let mq = MessageQueue::from_parts(msg.topic().clone(), msg.broker_name.clone(), msg.queue_id());
         let mut msgs = vec![Arc::new(msg)];
-        if let Some(default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_ref() {
+        if let Some(default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.read().clone() {
             default_mqpush_consumer_impl
                 .mut_from_ref()
                 .reset_retry_and_namespace(msgs.as_mut_slice(), self.consumer_group.as_str());
@@ -566,7 +566,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
 
     async fn submit_consume_request(
         &self,
-        this: ArcMut<Self>,
+        this: Arc<Self>,
         msgs: Vec<Arc<MessageExt>>,
         process_queue: Arc<ProcessQueue>,
         message_queue: MessageQueue,
@@ -601,7 +601,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
 
     async fn submit_pop_consume_request(
         &self,
-        this: ArcMut<Self>,
+        this: Arc<Self>,
         msgs: Vec<MessageExt>,
         process_queue: &PopProcessQueue,
         message_queue: &MessageQueue,
@@ -616,7 +616,7 @@ impl ConsumeMessageConcurrentlyService {
     /// retried after 5 s, matching the Java SDK's `RejectedExecutionException` path.
     fn spawn_consume_task(
         &self,
-        this: ArcMut<Self>,
+        this: Arc<Self>,
         msgs: Vec<Arc<MessageExt>>,
         process_queue: Arc<ProcessQueue>,
         message_queue: MessageQueue,
@@ -635,7 +635,7 @@ impl ConsumeMessageConcurrentlyService {
                     message_queue,
                     dispatch_to_consume,
                     consumer_group: self.consumer_group.clone(),
-                    default_mqpush_consumer_impl: self.default_mqpush_consumer_impl.clone(),
+                    default_mqpush_consumer_impl: self.default_mqpush_consumer_impl.read().clone(),
                 };
                 spawn_tracked_concurrent_task(
                     "rocketmq-client-concurrent-consume",
@@ -671,7 +671,7 @@ struct ConsumeRequest {
 }
 
 impl ConsumeRequest {
-    async fn run(&mut self, mut consume_message_concurrently_service: ArcMut<ConsumeMessageConcurrentlyService>) {
+    async fn run(&mut self, consume_message_concurrently_service: Arc<ConsumeMessageConcurrentlyService>) {
         if self.process_queue.is_dropped() {
             info!(
                 "the message queue not be able to consume, because it's dropped. group={} {}",
@@ -918,14 +918,14 @@ pub async fn run_concurrent_clean_expire_lifecycle_probe() -> ConcurrentCleanExp
         Arc::new(|_msgs: &[&MessageExt], _context: &ConsumeConcurrentlyContext| {
             Ok(ConsumeConcurrentlyStatus::ConsumeSuccess)
         });
-    let mut service = ConsumeMessageConcurrentlyService::new(
+    let service = ConsumeMessageConcurrentlyService::new(
         ArcMut::new(ClientConfig::default()),
         ArcMut::new(ConsumerConfig::default()),
         CheetahString::from_static_str("concurrent-clean-expire-probe"),
         listener.clone(),
         None,
     );
-    let this = ArcMut::new(ConsumeMessageConcurrentlyService::new(
+    let this = Arc::new(ConsumeMessageConcurrentlyService::new(
         ArcMut::new(ClientConfig::default()),
         ArcMut::new(ConsumerConfig::default()),
         CheetahString::from_static_str("concurrent-clean-expire-probe"),
@@ -1021,7 +1021,7 @@ mod tests {
 
     #[tokio::test]
     async fn send_message_back_without_default_impl_returns_false() {
-        let mut service = new_service(None);
+        let service = new_service(None);
         let mut msg = MessageExt::default();
         let context = ConsumeConcurrentlyContext::new(message_queue());
 
@@ -1117,9 +1117,19 @@ mod tests {
         assert!(matches!(result.consume_result(), Some(CMResult::CRSuccess)));
     }
 
+    #[test]
+    fn default_consumer_self_reference_can_be_refreshed_after_service_creation() {
+        let service = new_service(None);
+        assert!(service.default_mqpush_consumer_impl.read().is_none());
+
+        *service.default_mqpush_consumer_impl.write() = Some(new_default_impl());
+
+        assert!(service.default_mqpush_consumer_impl.read().is_some());
+    }
+
     #[tokio::test]
     async fn consume_request_without_default_impl_is_ignored_without_panic() {
-        let service = ArcMut::new(new_service(None));
+        let service = Arc::new(new_service(None));
         let mut request = consume_request(None);
 
         request.run(service).await;
@@ -1127,9 +1137,9 @@ mod tests {
 
     #[tokio::test]
     async fn shutdown_aborts_clean_expire_task_like_java_executor_shutdown() {
-        let mut service = new_service(None);
+        let service = new_service(None);
 
-        service.start(ArcMut::new(new_service(None)));
+        service.start(Arc::new(new_service(None)));
 
         assert!(service.clean_expire_task_handle.lock().is_some());
 
@@ -1237,9 +1247,9 @@ mod tests {
 
     #[test]
     fn start_without_tokio_runtime_does_not_spawn_panic() {
-        let mut service = new_service(None);
+        let service = new_service(None);
 
-        service.start(ArcMut::new(new_service(None)));
+        service.start(Arc::new(new_service(None)));
 
         assert!(service.clean_expire_task_handle.lock().is_some());
         service.shutdown_token.cancel();
@@ -1252,7 +1262,7 @@ mod tests {
     #[test]
     fn submit_consume_request_later_without_tokio_runtime_does_not_spawn_panic() {
         let service = new_service(None);
-        let this = ArcMut::new(new_service(None));
+        let this = Arc::new(new_service(None));
 
         service.submit_consume_request_later(vec![], this, Arc::new(ProcessQueue::new()), message_queue());
         service.shutdown_token.cancel();
@@ -1264,7 +1274,7 @@ mod tests {
         let service = new_service(None);
 
         service.spawn_consume_task(
-            ArcMut::new(new_service(None)),
+            Arc::new(new_service(None)),
             vec![Arc::new(MessageExt::default())],
             Arc::new(ProcessQueue::new()),
             message_queue(),
@@ -1276,7 +1286,7 @@ mod tests {
     #[tokio::test]
     async fn process_consume_result_without_offset_store_does_not_panic() {
         let default_impl = new_default_impl();
-        let mut service = new_service(Some(default_impl.clone()));
+        let service = new_service(Some(default_impl.clone()));
         let process_queue = Arc::new(ProcessQueue::new());
         let msg = Arc::new(MessageExt::default());
         let messages = vec![msg.clone()];
@@ -1294,7 +1304,7 @@ mod tests {
 
         service
             .process_consume_result(
-                ArcMut::new(new_service(None)),
+                Arc::new(new_service(None)),
                 ConsumeConcurrentlyStatus::ConsumeSuccess,
                 &context,
                 &mut request,

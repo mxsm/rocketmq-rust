@@ -201,13 +201,13 @@ impl ConsumeMessageOrderlyService {
         }
     }
 
-    pub async fn lock_mqperiodically(&mut self) {
+    pub async fn lock_mqperiodically(&self) {
         let lock = self.global_lock.lock().await;
         if self.stopped.load(Ordering::Acquire) {
             return;
         }
 
-        let Some(default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_mut() else {
+        let Some(mut default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_ref().cloned() else {
             warn!(
                 "lockMQPeriodically skipped: DefaultMQPushConsumerImpl is not initialized, group={}",
                 self.consumer_group
@@ -223,11 +223,11 @@ impl ConsumeMessageOrderlyService {
         drop(lock);
     }
 
-    pub async fn lock_mq_periodically(&mut self) {
+    pub async fn lock_mq_periodically(&self) {
         self.lock_mqperiodically().await;
     }
 
-    fn start_lock_periodic_with_schedule(&mut self, this: ArcMut<Self>, initial_delay: Duration, period: Duration) {
+    fn start_lock_periodic_with_schedule(&self, this: Arc<Self>, initial_delay: Duration, period: Duration) {
         let lock_handle = self.lock_periodic_task_handle.clone();
         let stopped = self.stopped.clone();
         let handle = schedule_client_fixed_delay_task(
@@ -236,7 +236,7 @@ impl ConsumeMessageOrderlyService {
             period,
             Duration::from_secs(5),
             move || {
-                let mut service = this.clone();
+                let service = this.clone();
                 let stopped = stopped.clone();
                 async move {
                     if !stopped.load(Ordering::Acquire) {
@@ -269,8 +269,9 @@ impl ConsumeMessageOrderlyService {
             .unwrap_or_default()
     }
 
-    pub fn reset_namespace(&mut self, msgs: &mut [Arc<MessageExt>]) {
-        let namespace = self.client_config.get_namespace().unwrap_or_default();
+    pub fn reset_namespace(&self, msgs: &mut [Arc<MessageExt>]) {
+        let mut client_config = self.client_config.clone();
+        let namespace = client_config.get_namespace().unwrap_or_default();
         if namespace.is_empty() {
             return;
         }
@@ -283,10 +284,10 @@ impl ConsumeMessageOrderlyService {
         }
     }
 
-    pub async fn unlock_all_mq(&mut self) {
+    pub async fn unlock_all_mq(&self) {
         let lock = self.global_lock.lock().await;
 
-        if let Some(default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_mut() {
+        if let Some(mut default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_ref().cloned() {
             default_mqpush_consumer_impl
                 .rebalance_impl
                 .rebalance_impl_inner
@@ -303,8 +304,8 @@ impl ConsumeMessageOrderlyService {
     }
 
     pub async fn try_lock_later_and_reconsume(
-        &mut self,
-        mut consume_message_orderly_service: ArcMut<Self>,
+        &self,
+        consume_message_orderly_service: Arc<Self>,
         message_queue: &MessageQueue,
         process_queue: Arc<ProcessQueue>,
         delay_mills: u64,
@@ -359,11 +360,11 @@ impl ConsumeMessageOrderlyService {
     }
 
     fn submit_consume_request_later(
-        &mut self,
+        &self,
         process_queue: Arc<ProcessQueue>,
         message_queue: MessageQueue,
         suspend_time_millis: i64,
-        this: ArcMut<Self>,
+        this: Arc<Self>,
     ) {
         let mut time_millis = suspend_time_millis;
         if time_millis == -1 {
@@ -404,7 +405,7 @@ impl ConsumeMessageOrderlyService {
         }
     }
 
-    pub async fn send_message_back(&mut self, msg: &MessageExt) -> bool {
+    pub async fn send_message_back(&self, msg: &MessageExt) -> bool {
         let mut new_msg = match Message::builder()
             .topic(mix_all::get_retry_topic(self.consumer_group.as_str()))
             .body(msg.get_body().cloned().unwrap_or_default())
@@ -457,7 +458,7 @@ impl ConsumeMessageOrderlyService {
         result.is_ok()
     }
 
-    async fn check_reconsume_times(&mut self, msgs: &mut [Arc<MessageExt>]) -> bool {
+    async fn check_reconsume_times(&self, msgs: &mut [Arc<MessageExt>]) -> bool {
         let mut suspend = false;
         if !msgs.is_empty() {
             for msg in msgs {
@@ -482,9 +483,9 @@ impl ConsumeMessageOrderlyService {
 
     #[allow(deprecated)]
     async fn process_consume_result(
-        &mut self,
+        &self,
         mut msgs: Vec<Arc<MessageExt>>,
-        this: ArcMut<Self>,
+        this: Arc<Self>,
         status: ConsumeOrderlyStatus,
         context: &ConsumeOrderlyContext,
         consume_request: &mut ConsumeRequest,
@@ -594,7 +595,7 @@ impl ConsumeMessageOrderlyService {
 }
 
 impl ConsumeMessageServiceTrait for ConsumeMessageOrderlyService {
-    fn start(&mut self, this: ArcMut<Self>) {
+    fn start(&self, this: Arc<Self>) {
         if MessageModel::Clustering == self.consumer_config.message_model {
             self.start_lock_periodic_with_schedule(
                 this,
@@ -604,7 +605,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessageOrderlyService {
         }
     }
 
-    async fn shutdown(&mut self, await_terminate_millis: u64) {
+    async fn shutdown(&self, await_terminate_millis: u64) {
         info!("{} ConsumeMessageOrderlyService shutdown started", self.consumer_group);
 
         self.stopped.store(true, Ordering::Release);
@@ -782,7 +783,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessageOrderlyService {
 
     async fn submit_consume_request(
         &self,
-        this: ArcMut<Self>,
+        this: Arc<Self>,
         msgs: Vec<Arc<MessageExt>>,
         process_queue: Arc<ProcessQueue>,
         message_queue: MessageQueue,
@@ -829,7 +830,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessageOrderlyService {
 
     async fn submit_pop_consume_request(
         &self,
-        this: ArcMut<Self>,
+        this: Arc<Self>,
         msgs: Vec<MessageExt>,
         process_queue: &crate::consumer::consumer_impl::pop_process_queue::PopProcessQueue,
         message_queue: &MessageQueue,
@@ -847,7 +848,7 @@ struct ConsumeRequest {
 
 impl ConsumeRequest {
     #[allow(deprecated)]
-    async fn run(&mut self, consume_message_orderly_service: ArcMut<ConsumeMessageOrderlyService>) {
+    async fn run(&mut self, consume_message_orderly_service: Arc<ConsumeMessageOrderlyService>) {
         if consume_message_orderly_service.stopped.load(Ordering::Acquire) {
             warn!(
                 "run, service stopped, discard consume request for {}",
@@ -881,7 +882,7 @@ impl ConsumeRequest {
 
         let _guard = TaskGuard { active_tasks };
 
-        let mut consume_message_orderly_service_inner = consume_message_orderly_service.clone();
+        let consume_message_orderly_service_inner = consume_message_orderly_service.clone();
         let lock = consume_message_orderly_service_inner
             .message_queue_lock
             .fetch_lock_object(&self.message_queue)
@@ -1171,7 +1172,7 @@ pub async fn run_orderly_lock_periodic_lifecycle_probe() -> OrderlyLockPeriodicL
     };
     let listener: ArcMessageListenerOrderly =
         Arc::new(|_msgs: &[&MessageExt], _context: &mut ConsumeOrderlyContext| Ok(ConsumeOrderlyStatus::Success));
-    let mut service = ArcMut::new(ConsumeMessageOrderlyService::new(
+    let service = Arc::new(ConsumeMessageOrderlyService::new(
         ArcMut::new(ClientConfig::default()),
         ArcMut::new(consumer_config),
         CheetahString::from_static_str("orderly_lock_periodic_probe_group"),
@@ -1277,7 +1278,7 @@ mod tests {
 
     #[tokio::test]
     async fn lock_paths_without_default_impl_do_not_panic() {
-        let mut service = new_service(None);
+        let service = new_service(None);
 
         service.lock_mqperiodically().await;
         service.lock_mq_periodically().await;
@@ -1298,14 +1299,14 @@ mod tests {
 
     #[tokio::test]
     async fn send_message_back_without_default_impl_returns_false() {
-        let mut service = new_service(None);
+        let service = new_service(None);
 
         assert!(!service.send_message_back(&MessageExt::default()).await);
     }
 
     #[tokio::test]
     async fn shutdown_closes_concurrency_limiter_like_java_executor_shutdown() {
-        let mut service = new_service(None);
+        let service = new_service(None);
 
         service.shutdown(100).await;
 
@@ -1389,7 +1390,7 @@ mod tests {
             message_model: MessageModel::Clustering,
             ..Default::default()
         };
-        let mut service = ArcMut::new(new_service_with_config(config));
+        let service = Arc::new(new_service_with_config(config));
         let this = service.clone();
 
         service.start(this);
@@ -1402,7 +1403,7 @@ mod tests {
 
     #[test]
     fn submit_consume_request_later_without_tokio_runtime_does_not_spawn_panic() {
-        let mut service = ArcMut::new(new_service(None));
+        let service = Arc::new(new_service(None));
         let this = service.clone();
 
         service.submit_consume_request_later(Arc::new(ProcessQueue::new()), message_queue(), 10, this);
@@ -1463,7 +1464,7 @@ mod tests {
 
     #[tokio::test]
     async fn consume_request_without_default_impl_is_ignored_without_panic() {
-        let service = ArcMut::new(new_service(None));
+        let service = Arc::new(new_service(None));
         let mut request = ConsumeRequest {
             process_queue: Arc::new(ProcessQueue::new()),
             message_queue: message_queue(),
@@ -1479,7 +1480,7 @@ mod tests {
     #[tokio::test]
     async fn process_consume_result_without_offset_store_does_not_panic() {
         let default_impl = new_default_impl();
-        let mut service = new_service(Some(default_impl.clone()));
+        let service = new_service(Some(default_impl.clone()));
         let process_queue = Arc::new(ProcessQueue::new());
         let messages = vec![Arc::new(MessageExt::default())];
         process_queue.put_message(&messages).await;
@@ -1495,7 +1496,7 @@ mod tests {
         let continue_consume = service
             .process_consume_result(
                 msgs,
-                ArcMut::new(new_service(None)),
+                Arc::new(new_service(None)),
                 ConsumeOrderlyStatus::Success,
                 &context,
                 &mut request,
