@@ -52,7 +52,6 @@ use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::remoting::RemotingService;
 use rocketmq_remoting::request_processor::default_request_processor::DefaultRemotingRequestProcessor;
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
-use rocketmq_rust::ArcMut;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
@@ -64,7 +63,7 @@ const STARTUP_RETRY_LIMIT: usize = 3;
 
 struct NamesrvHarness {
     addr: CheetahString,
-    client: ArcMut<RocketmqDefaultClient<DefaultRemotingRequestProcessor>>,
+    client: Arc<RocketmqDefaultClient<DefaultRemotingRequestProcessor>>,
     shutdown_tx: Option<oneshot::Sender<()>>,
     server_task: JoinHandle<RocketMQResult<()>>,
     runtime_context: rocketmq_runtime::RuntimeContext,
@@ -101,12 +100,12 @@ impl NamesrvHarness {
                     .await
             });
 
-            let client = ArcMut::new(RocketmqDefaultClient::new(
+            let client = Arc::new(RocketmqDefaultClient::new(
                 Arc::new(TokioClientConfig::default()),
                 DefaultRemotingRequestProcessor,
             ));
             client.update_name_server_address_list(vec![addr.clone()]).await;
-            let weak_client = ArcMut::downgrade(&client);
+            let weak_client = Arc::downgrade(&client);
             client.start(weak_client).await;
 
             match wait_until_ready(&addr, &client, &mut server_task).await {
@@ -122,7 +121,7 @@ impl NamesrvHarness {
                 Err(error) => {
                     last_error = Some(error);
                     let _ = shutdown_tx.send(());
-                    client.mut_from_ref().shutdown();
+                    client.shutdown();
                     if !server_task.is_finished() {
                         let _ = tokio::time::timeout(Duration::from_secs(1), &mut server_task).await;
                     }
@@ -148,7 +147,7 @@ impl NamesrvHarness {
         if let Some(shutdown_tx) = self.shutdown_tx.take() {
             let _ = shutdown_tx.send(());
         }
-        self.client.mut_from_ref().shutdown();
+        self.client.shutdown();
 
         let join_result = tokio::time::timeout(Duration::from_secs(10), &mut self.server_task)
             .await
@@ -168,7 +167,7 @@ impl Drop for NamesrvHarness {
         if let Some(shutdown_tx) = self.shutdown_tx.take() {
             let _ = shutdown_tx.send(());
         }
-        self.client.mut_from_ref().shutdown();
+        self.client.shutdown();
     }
 }
 
@@ -188,7 +187,7 @@ fn isolated_namesrv_data_dir(port: u16) -> PathBuf {
 
 async fn wait_until_ready(
     addr: &CheetahString,
-    client: &ArcMut<RocketmqDefaultClient<DefaultRemotingRequestProcessor>>,
+    client: &Arc<RocketmqDefaultClient<DefaultRemotingRequestProcessor>>,
     server_task: &mut JoinHandle<RocketMQResult<()>>,
 ) -> Result<(), String> {
     let deadline = Instant::now() + Duration::from_secs(10);

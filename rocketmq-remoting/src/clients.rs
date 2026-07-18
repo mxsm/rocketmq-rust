@@ -50,7 +50,7 @@ pub trait RemotingClient: RemotingService {
     ///
     /// # Returns
     /// A vector containing the current list of name remoting_server addresses.
-    fn get_name_server_address_list(&self) -> &[CheetahString];
+    fn get_name_server_address_list(&self) -> Vec<CheetahString>;
 
     /// Retrieves a list of available name remoting_server addresses.
     ///
@@ -100,15 +100,15 @@ pub trait RemotingClient: RemotingService {
     ///
     /// # Arguments
     /// * `addr` - The address to check for reachability.
-    fn is_address_reachable(&mut self, addr: &CheetahString);
+    fn is_address_reachable(&self, addr: &CheetahString);
 
     /// Closes clients connected to the specified addresses.
     ///
     /// # Arguments
     /// * `addrs` - A list of addresses whose clients should be closed.
-    fn close_clients(&mut self, addrs: Vec<String>);
+    fn close_clients(&self, addrs: Vec<String>);
 
-    fn register_processor(&mut self, processor: impl RequestProcessor + Sync);
+    fn register_processor(&self, processor: impl RequestProcessor + Sync);
 }
 
 impl<T> InvokeCallback for T

@@ -6522,11 +6522,11 @@ accounts:
         cluster_name: &CheetahString,
         broker_name: &CheetahString,
     ) -> BrokerMemberGroup {
-        let mut client = ArcMut::new(RocketmqDefaultClient::new(
+        let client = Arc::new(RocketmqDefaultClient::new(
             Arc::new(TokioClientConfig::default()),
             DefaultRemotingRequestProcessor,
         ));
-        let weak_client = ArcMut::downgrade(&client);
+        let weak_client = Arc::downgrade(&client);
         client.start(weak_client).await;
         let request_header = GetBrokerMemberGroupRequestHeader::new(cluster_name.clone(), broker_name.clone());
         let request = RemotingCommand::create_request_command(RequestCode::GetBrokerMemberGroup, request_header);

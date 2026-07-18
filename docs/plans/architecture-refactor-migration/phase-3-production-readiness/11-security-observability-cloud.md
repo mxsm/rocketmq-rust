@@ -255,6 +255,11 @@ M11-12g 已把 Remoting Channel/ConnectionHandlerContext 改为安全 `Arc` owne
 protocol/RPC、NameServer V1/remoting-client、Controller remoting-client 与 Tools。M11-12 总项、stable/SLO/HUMAN
 Gate 仍开放。
 
+M11-12h 已把 Remoting handler/client 改为安全 `Arc`/`Weak` owner、clone-local processor adapter、短临界区 hook
+快照与显式同步的 NameServer 选择状态；shutdown、hook 与 connection cleanup 不再要求 clone-safe mutable receiver。
+实际快照累计降至 488 production/1,559 occurrences，Controller production 债务清零，Remoting 仅剩 protocol
+compatibility 6/9，NameServer 仅剩 V1 tables 16/44。Broker/Client/Store owner 与完整候选快照 Gate 仍开放。
+
 ## 公共兼容面
 
 - development/compatibility仍可显式选择；secure只作为新部署默认，不静默重解释旧配置。

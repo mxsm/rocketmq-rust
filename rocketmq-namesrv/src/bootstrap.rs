@@ -58,7 +58,6 @@ use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::ShutdownReason;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
-use rocketmq_rust::ArcMut;
 use serde::Serialize;
 use tokio::sync::broadcast;
 use tokio::sync::oneshot;
@@ -767,14 +766,14 @@ impl NameServerRuntime {
 
         debug!("NameServer address: {}", namesrv);
 
-        let weak_arc_mut = ArcMut::downgrade(&self.inner.remoting_client);
+        let weak_client = Arc::downgrade(&self.inner.remoting_client);
         self.inner
             .remoting_client
             .update_name_server_address_list(vec![namesrv])
             .await;
 
         // Start remoting client directly (no spawn needed as it's managed by self.inner)
-        self.inner.remoting_client.start(weak_arc_mut).await;
+        self.inner.remoting_client.start(weak_client).await;
 
         if let Some(controller_manager) = self.inner.controller_manager() {
             if let Err(error) = controller_manager.start().await {
@@ -925,7 +924,6 @@ impl NameServerRuntime {
         let remoting_client_report = self
             .inner
             .remoting_client
-            .mut_from_ref()
             .shutdown_with_report(deadline.remaining().min(TASK_JOIN_TIMEOUT))
             .await;
         if !remoting_client_report.is_healthy() {
@@ -1162,7 +1160,7 @@ impl Builder {
         };
 
         // Create remoting client
-        let remoting_client = ArcMut::new(match service_context.as_ref() {
+        let remoting_client = Arc::new(match service_context.as_ref() {
             Some(context) => RocketmqDefaultClient::new_with_service_context(
                 Arc::new(tokio_client_config.clone()),
                 DefaultRemotingRequestProcessor,
@@ -1240,7 +1238,7 @@ pub(crate) struct NameServerRuntimeInner {
     config_update_lock: parking_lot::Mutex<()>,
     route_info_manager: Arc<RouteInfoManagerWrapper>,
     kvconfig_manager: Arc<KVConfigManager>,
-    remoting_client: ArcMut<RocketmqDefaultClient>,
+    remoting_client: Arc<RocketmqDefaultClient>,
     broker_housekeeping_service: Arc<BrokerHousekeepingService>,
     controller_manager: OnceLock<Arc<ControllerManager>>,
     cluster_test_route_lookup: Option<Arc<dyn ClusterTestRouteLookup>>,

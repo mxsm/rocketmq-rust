@@ -13,8 +13,7 @@
 // limitations under the License.
 
 use std::sync::Arc;
-
-use rocketmq_rust::WeakArcMut;
+use std::sync::Weak;
 
 use crate::base::response_future::ResponseFuture;
 use crate::protocol::remoting_command::RemotingCommand;
@@ -36,14 +35,14 @@ pub trait RemotingService: Send {
     /// This function should initialize and start the service, making it ready to handle incoming
     /// or outgoing remote procedure calls. The exact implementation details, such as opening
     /// network connections or preparing internal state, are left to the implementor.
-    async fn start(&self, this: WeakArcMut<Self>);
+    async fn start(&self, this: Weak<Self>);
 
     /// Shuts down the remoting service.
     ///
     /// This function is responsible for gracefully shutting down the service. It should ensure
     /// that all resources are released, and any ongoing operations are completed or aborted
     /// appropriately before the service stops.
-    fn shutdown(&mut self);
+    fn shutdown(&self);
 
     /// Registers an RPC hook.
     ///
@@ -53,14 +52,14 @@ pub trait RemotingService: Send {
     ///
     /// # Arguments
     /// * `hook` - An implementation of the `RPCHook` trait that will be registered.
-    fn register_rpc_hook(&mut self, hook: Arc<dyn RPCHook>);
+    fn register_rpc_hook(&self, hook: Arc<dyn RPCHook>);
 
     /// Clears all registered RPC hooks.
     ///
     /// This function removes all previously registered RPC hooks, returning the service to its
     /// default state without any hooks. This can be useful for cleanup or when changing the
     /// configuration of the service.
-    fn clear_rpc_hook(&mut self);
+    fn clear_rpc_hook(&self);
 }
 pub trait InvokeCallback {
     fn operation_complete(&self, response_future: ResponseFuture);
@@ -90,15 +89,27 @@ pub(crate) mod inner {
 
     pub(crate) struct RemotingGeneralHandler<RP> {
         pub(crate) request_processor: RP,
-        pub(crate) rpc_hooks: Vec<Arc<dyn RPCHook>>,
+        rpc_hooks: parking_lot::RwLock<Vec<Arc<dyn RPCHook>>>,
         pub(crate) response_table: PendingRequestTable,
     }
 
     impl<RP> RemotingGeneralHandler<RP>
     where
-        RP: RequestProcessor + Sync + 'static,
+        RP: RequestProcessor + Sync + Clone + 'static,
     {
-        pub async fn process_message_received(&mut self, ctx: &ConnectionHandlerContext, cmd: RemotingCommand) {
+        pub(crate) fn new(
+            request_processor: RP,
+            rpc_hooks: Vec<Arc<dyn RPCHook>>,
+            response_table: PendingRequestTable,
+        ) -> Self {
+            Self {
+                request_processor,
+                rpc_hooks: parking_lot::RwLock::new(rpc_hooks),
+                response_table,
+            }
+        }
+
+        pub async fn process_message_received(&self, ctx: &ConnectionHandlerContext, cmd: RemotingCommand) {
             match cmd.get_type() {
                 RemotingCommandType::REQUEST => match self.process_request_command(ctx, cmd).await {
                     Ok(_) => {}
@@ -122,7 +133,7 @@ pub(crate) mod inner {
             )
         )]
         async fn process_request_command(
-            &mut self,
+            &self,
             ctx: &ConnectionHandlerContext,
             mut cmd: RemotingCommand,
         ) -> RocketMQResult<()> {
@@ -133,7 +144,8 @@ pub(crate) mod inner {
                 cmd.body().map_or(0, |body| body.len() as u64),
                 is_long_polling_request(cmd.code()),
             );
-            let reject_request = self.request_processor.reject_request(cmd.code());
+            let mut request_processor = self.request_processor.clone();
+            let reject_request = request_processor.reject_request(cmd.code());
             const REJECT_REQUEST_MSG: &str = "[REJECT REQUEST]system busy, start flow control for a while";
             if reject_request.0 {
                 let response = if let Some(response) = reject_request.1 {
@@ -175,7 +187,7 @@ pub(crate) mod inner {
             let mut response = {
                 let channel = ctx.channel().clone();
                 let ctx = ctx.clone();
-                match self.request_processor.process_request(channel, ctx, &mut cmd).await {
+                match request_processor.process_request(channel, ctx, &mut cmd).await {
                     Ok(result) => result,
                     Err(_err) => {
                         #[cfg(feature = "observability")]
@@ -231,7 +243,7 @@ pub(crate) mod inner {
             Ok(())
         }
 
-        fn process_response_command(&mut self, ctx: &ConnectionHandlerContext, cmd: RemotingCommand) {
+        fn process_response_command(&self, ctx: &ConnectionHandlerContext, cmd: RemotingCommand) {
             let opaque = cmd.opaque();
             let code = cmd.code();
             let completed = match ctx.channel().pending_request_owner() {
@@ -272,7 +284,8 @@ pub(crate) mod inner {
             request: Option<&mut RemotingCommand>,
         ) -> rocketmq_error::RocketMQResult<()> {
             if let Some(request) = request {
-                for hook in self.rpc_hooks.iter() {
+                let hooks = self.rpc_hooks.read().clone();
+                for hook in &hooks {
                     hook.do_before_request(remote_address, request)?;
                 }
             }
@@ -286,7 +299,8 @@ pub(crate) mod inner {
             response: Option<&mut RemotingCommand>,
         ) -> rocketmq_error::RocketMQResult<()> {
             if let Some(response) = response {
-                for hook in self.rpc_hooks.iter() {
+                let hooks = self.rpc_hooks.read().clone();
+                for hook in &hooks {
                     hook.do_after_response(remote_address, request, response)?;
                 }
             }
@@ -294,15 +308,15 @@ pub(crate) mod inner {
         }
 
         pub fn has_rpc_hooks(&self) -> bool {
-            !self.rpc_hooks.is_empty()
+            !self.rpc_hooks.read().is_empty()
         }
 
-        pub fn register_rpc_hook(&mut self, hook: Arc<dyn RPCHook>) {
-            self.rpc_hooks.push(hook);
+        pub fn register_rpc_hook(&self, hook: Arc<dyn RPCHook>) {
+            self.rpc_hooks.write().push(hook);
         }
 
-        pub fn clear_rpc_hook(&mut self) {
-            self.rpc_hooks.clear();
+        pub fn clear_rpc_hook(&self) {
+            self.rpc_hooks.write().clear();
         }
     }
 
