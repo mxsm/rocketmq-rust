@@ -23,7 +23,6 @@ use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_remoting::runtime::processor::RejectRequestResponse;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
-use rocketmq_rust::ArcMut;
 
 pub use self::client_request_processor::ClientRequestProcessor;
 pub use self::cluster_test_request_processor::ClusterTestRequestProcessor;
@@ -40,27 +39,27 @@ const NAMESPACE_ORDER_TOPIC_CONFIG: &str = "ORDER_TOPIC_CONFIG";
 
 #[derive(Clone)]
 pub enum NameServerRequestProcessorWrapper {
-    ClientRequestProcessor(ArcMut<ClientRequestProcessor>),
-    ClusterTestRequestProcessor(ArcMut<ClusterTestRequestProcessor>),
-    DefaultRequestProcessor(ArcMut<DefaultRequestProcessor>),
+    ClientRequestProcessor(Arc<ClientRequestProcessor>),
+    ClusterTestRequestProcessor(Arc<ClusterTestRequestProcessor>),
+    DefaultRequestProcessor(Arc<DefaultRequestProcessor>),
 }
 
 impl RequestProcessor for NameServerRequestProcessorWrapper {
     async fn process_request(
         &mut self,
         channel: Channel,
-        ctx: ConnectionHandlerContext,
+        _ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         match self {
             NameServerRequestProcessorWrapper::ClientRequestProcessor(processor) => {
-                processor.process_request(channel, ctx, request).await
+                processor.handle_request(request).await
             }
             NameServerRequestProcessorWrapper::ClusterTestRequestProcessor(processor) => {
-                processor.process_request(channel, ctx, request).await
+                processor.handle_request(request).await
             }
             NameServerRequestProcessorWrapper::DefaultRequestProcessor(processor) => {
-                processor.process_request(channel, ctx, request).await
+                processor.handle_request(channel, request).await
             }
         }
     }

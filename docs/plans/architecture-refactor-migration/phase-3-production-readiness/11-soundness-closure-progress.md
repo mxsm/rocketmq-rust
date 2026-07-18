@@ -6,7 +6,7 @@ M11-12 的最终目标是 production/public compatibility API 中不存在 `ArcM
 `mut_from_ref` 或 clone-safe `AsMut`/`DerefMut`，并让默认 workspace 在 stable Rust 下通过，同时把 Miri/Loom、
 soak、SLO fault、dashboard/runbook、rollback 和 Human Gate 绑定到同一候选快照。
 
-该目标尚未完成。本文件记录 M11-12a～e 子切片的真实下降，不把子切片计为第 76 个工作包，也不刷新
+该目标尚未完成。本文件记录 M11-12a～f 子切片的真实下降，不把子切片计为第 76 个工作包，也不刷新
 baseline 来掩盖剩余债务。父 Issue 为 #8292；M11-12a 子切片 Issue 为 #8293；分支为
 `mxsm/architecture-refactor-owned-values`。
 
@@ -21,6 +21,9 @@ M11-12d 的 Controller Raft owner 由 Issue #8299 跟踪，分支为
 
 M11-12e 的 Controller request processor owner 由 Issue #8301 跟踪，分支为
 `mxsm/architecture-refactor-controller-processor`；它仍是同一 M11-12 工作包的子切片。
+
+M11-12f 的 NameServer runtime/processor owner 由 Issue #8303 跟踪，分支为
+`mxsm/architecture-refactor-namesrv-runtime`；它仍是同一 M11-12 工作包的子切片。
 
 ## 初始盘点
 
@@ -124,6 +127,27 @@ reviewed baseline 为 1,029 条、production 688/1,962 occurrences。临时 ADR-
 receiver 收窄和 1 个相邻 import token context 的一对一 relocation，approval 不提交；默认 guard 仍精确失败切片前
 6 项既有 Controller/NameServer lifecycle source drift。
 
+## M11-12f NameServer runtime/processor owner
+
+| 目标 | 实现与证据 |
+|---|---|
+| 安全 runtime 根 | `NameServerRuntimeInner` 由 `ArcMut` 改为安全 `Arc`；`Arc::new_cyclic` 只把 `Weak` handle 注入 runtime-owned child，根仍单向拥有完整服务图 |
+| 原子配置快照 | Namesrv/Tokio client/server/controller config 组合为单一 `ArcSwap` immutable snapshot；同步 writer 串行 clone、解析、应用并一次发布，失败保持 pointer 与全部 active 值不变 |
+| child owner 收口 | KV、V2 route、housekeeping、batch-unregistration、client/cluster/default processor 均退出 `ArcMut<NameServerRuntimeInner>`；batch receiver/task slot 和 KV persistence 使用显式内部同步 |
+| processor capability | NameServer processor wrapper payload 改为 `Arc`，业务 handler 使用共享 receiver；remoting trait 的 mutable receiver 不再传播 runtime 可变 capability |
+| legacy V1 外层串行 | V1 wrapper 以短临界区 Mutex 串行 legacy mutable API；shutdown 先 clone service handle 再 await，不跨 `.await` 持同步锁；V1 tables 自身 `ArcMut` 明确保留给后续切片 |
+| owner/config 合同 | 新增失败更新 pointer equality、并发读者只观察完整配置组合，以及同时持有 V1/V2 route、KV、housekeeping、processor clone 时 runtime 根仍可释放的回归测试 |
+
+M11-12f 后实际快照为 1,008 个条目：production 669、test 325、compatibility 14；production occurrence 为
+1,918。相对 M11-12e 删除 19 个 production 条目和 41 个 production occurrence；相对初始快照累计删除
+91 个 production 条目和 207 个 production occurrence。`rocketmq-namesrv` production 债务由 47 条/99 occurrence
+降至 28 条/58 occurrence；剩余项精确为 V1 tables 16/44、remoting client 4/7 和
+`ConnectionHandlerContext` boundary 8/7。
+
+reviewed baseline 为 1,008 条、production 669/1,921 occurrences。临时 ADR-013 approval 只批准 9 条同 item
+一对一 relocation，approval 不提交；baseline 1,029→1,008、occurrence 2,942→2,899。默认 guard 仍精确失败切片前
+6 项既有 Controller/NameServer lifecycle source drift，未将其吸收为基线。
+
 ## 已执行验证
 
 | 命令 | 结果 |
@@ -225,10 +249,30 @@ M11-12e 追加验证：
 | `python scripts/arc_mut_guard.py --fixtures` / guard unit tests | 24/24 fixtures、67/67 单测通过 |
 | `.\scripts\check-agents-routing.ps1` | 通过；4 个 standalone Cargo、3 个 Node project、8 条 route |
 
+M11-12f 追加验证：
+
+| 命令 | 结果 |
+|---|---|
+| `cargo check -p rocketmq-namesrv --all-targets --all-features` | 通过 |
+| `cargo test -p rocketmq-namesrv runtime_config_ --all-features -- --nocapture` | 2/2 通过；失败更新不发布、并发读者不观察 torn snapshot |
+| `cargo test -p rocketmq-namesrv runtime_owned_service_clones_do_not_keep_root_alive --all-features -- --nocapture` | 1/1 通过；V1/V2 route、KV、housekeeping、processor clone 均不保活 runtime 根 |
+| `cargo test -p rocketmq-namesrv --all-features` | 全部通过；library 182/182，bin 1/1，integration 7/7、6/6、2/2、4/4，doc 7 通过/1 忽略 |
+| targeted NameServer runtime/processor/batch/V2 `ArcMut` scan | `NO_TARGETED_ARCMUT` |
+| `python scripts/arc_mut_guard.py --bootstrap target/m11-12f-namesrv-runtime-after.json` | 实际 1,008 条；production 669/1,918、test 325/938、compatibility 14/40 occurrences |
+| reviewed baseline reduction（临时 ADR-013 approval） | 仅批准 9 条同 item 一对一 relocation；baseline 1,029→1,008、occurrences 2,942→2,899；approval 不提交 |
+| `python scripts/arc_mut_guard.py` | 仍精确失败切片前 6 项 Controller/NameServer lifecycle drift；未写入 baseline |
+| `cargo fmt --all -- --check` | 通过 |
+| `cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings` | 通过；Windows linker stdout 与既有 future-incompatibility note 不受 `-D warnings` 管辖 |
+| `.\scripts\runtime-audit.ps1 -SkipBaseline -EnforceBoundaryBaseline` | 通过 |
+| architecture target/baseline 与 release guard | 通过；35/35 target edges、3/3 test edges、32/32 release topology |
+| `python scripts/arc_mut_guard.py --fixtures` / guard unit tests | 24/24 fixtures、67/67 单测通过 |
+| `.\scripts\check-agents-routing.ps1` | 通过；4 个 standalone Cargo、3 个 Node project、8 条 route |
+| `git diff --check` | 通过 |
+
 ## 剩余切片与 Gate
 
 1. Remoting Channel/ConnectionHandlerContext 单 writer owner 和有界发送 capability。
-2. Controller remoting-client owner 与 NameServer v1 tables/runtime 安全 owner；Manager/heartbeat/Raft/request-processor shell 已完成。
+2. Controller/NameServer remoting-client owner 与 NameServer V1 table owner；NameServer runtime/KV/V2 route/batch/housekeeping/request-processor shell 已完成。
 3. Client owned-message、MQClientInstance、Producer/Admin、Push/Lite Consumer owner。
 4. Broker TopicConfig/offset、BrokerRuntimeInner、schedule/POP/processor/transaction owner。
 5. Store TopicConfig snapshot、MappedFileQueue/ConsumeQueue、CommitLog/Flush、StoreHandle/Rocks/Timer 与 HA actor。

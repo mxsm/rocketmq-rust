@@ -621,12 +621,14 @@ M09-04 再删除 MCP 未使用的 Auth/Error direct edges，并把承担 owned t
   - [x] M11-12c Controller manager/heartbeat lifecycle owner：Manager 根对象改为 `Arc`，initialize/start/shutdown 串行；heartbeat 生命周期内部同步；request processor 与 housekeeping 使用 `Weak` 断开服务图强引用环
   - [x] M11-12d Controller Raft owner：OpenRaft lifecycle 由异步 transition lock 与短临界区状态锁串行，`RaftController`/Manager/Processor 全链路改用安全 `Arc`，共享启动/关闭幂等且不跨 `.await` 持有同步锁
   - [x] M11-12e Controller request processor owner：13 个业务 handler 收窄为共享 receiver，wrapper payload 改为 `Arc`；remoting trait 的 `&mut self` 仅保留为无可变 capability 的兼容适配
-  - [x] [`M11-12 进度证据`](phase-3-production-readiness/11-soundness-closure-progress.md) 记录父 Issue #8292、子切片 Issue #8293/#8295/#8297/#8299/#8301 与每次真实下降
+  - [x] M11-12f NameServer runtime/processor owner：根对象改为安全 `Arc`，配置以串行 copy/validate/publish 的 `ArcSwap` 不可变快照发布；route/KV/housekeeping/batch/processor 使用 `Weak` handle 断开服务图强引用环
+  - [x] [`M11-12 进度证据`](phase-3-production-readiness/11-soundness-closure-progress.md) 记录父 Issue #8292、子切片 Issue #8293/#8295/#8297/#8299/#8301/#8303 与每次真实下降
   - [x] Issue #8295 后累计降至 711 production/2,029 occurrence；Controller 配置债务清零但其他 Controller owner 仍有 31 条 production 债务
   - [x] Issue #8297 后实际快照降至 697 production/1,986 occurrence；Controller 降至 17 条/51 occurrence，Manager/heartbeat/embedded-NameServer owner 已退出 `ArcMut`
   - [x] Issue #8299 后实际快照降至 690 production/1,961 occurrence；Controller 降至 10 条/26 occurrence，Raft/OpenRaft owner 与 Manager Raft `mut_from_ref` 已清零
   - [x] Issue #8301 后实际快照降至 688 production/1,959 occurrence；Controller 降至 8 条/24 occurrence，request processor wrapper 已退出 `ArcMut`
-  - [ ] M11-12f～i：Remoting Channel/Context owner、Controller remoting-client 与 NameServer 其余 owner、Client、Broker、Store/HA、compatibility 删除、stable/Miri/Loom/soak/SLO 与同一候选快照 Gate 仍待完成
+  - [x] Issue #8303 后实际快照降至 669 production/1,918 occurrence；NameServer 降至 28 条/58 occurrence，runtime/KV/V2 route/batch/housekeeping/request-processor owner 已退出 `ArcMut`
+  - [ ] M11-12g～i：Remoting Channel/Context owner、Controller/NameServer remoting-client 与 NameServer V1 tables、Client、Broker、Store/HA、compatibility 删除、stable/Miri/Loom/soak/SLO 与同一候选快照 Gate 仍待完成
   - [ ] 总进度仍为 75/82；本子切片不提前计作完成工作包，M10/Kind-K3d/container dynamic/HUMAN Gate 保持开放
 - [ ] 对应任务文档的 Exit Checklist 全部通过
 

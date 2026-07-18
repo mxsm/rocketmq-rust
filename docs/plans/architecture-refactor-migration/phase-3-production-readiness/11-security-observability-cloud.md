@@ -243,6 +243,12 @@ M11-12e 已将 Controller request processor 的 13 个业务 handler 从 `&mut s
 688 production/1,959 occurrences，Controller 降至 8 条/24 occurrences；remoting-client、`ConnectionHandlerContext`、
 NameServer 其余 owner 与总 Gate 仍开放。
 
+M11-12f 已将 `NameServerRuntimeInner` 根改为安全 `Arc`，以 `ArcSwap` 不可变快照和串行 writer 发布 runtime config；
+route、KV、housekeeping、batch-unregistration 与 processor 只持有 `Weak` runtime handle，processor wrapper 改用 `Arc`，
+legacy V1 route wrapper 以显式 Mutex 串行可变入口且不跨 `.await` 持锁。实际快照累计降至 669 production/1,918
+occurrences，NameServer 降至 28 条/58 occurrences；V1 tables、remoting-client、`ConnectionHandlerContext` 与总 Gate
+仍开放。
+
 ## 公共兼容面
 
 - development/compatibility仍可显式选择；secure只作为新部署默认，不静默重解释旧配置。

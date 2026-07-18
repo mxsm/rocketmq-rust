@@ -41,12 +41,11 @@ use rocketmq_remoting::protocol::route::route_data_view::BrokerData;
 use rocketmq_remoting::protocol::route::route_data_view::QueueData;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_remoting::protocol::DataVersion;
-use rocketmq_rust::ArcMut;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
 
-use crate::bootstrap::NameServerRuntimeInner;
+use crate::bootstrap::NameServerRuntimeHandle;
 use crate::route::batch_unregistration_service::BatchUnregistrationService;
 use crate::route::error::RocketMQError;
 use crate::route::error::RouteResult;
@@ -118,14 +117,17 @@ pub struct RouteInfoManagerV2 {
     topic_locks: SegmentedLock,
 
     // Legacy components
-    name_server_runtime_inner: ArcMut<NameServerRuntimeInner>,
-    un_register_service: ArcMut<BatchUnregistrationService>,
+    name_server_runtime_inner: NameServerRuntimeHandle,
+    un_register_service: Arc<BatchUnregistrationService>,
 }
 
 impl RouteInfoManagerV2 {
     /// Create a new RouteInfoManager with DashMap-based tables and segmented locks
-    pub(crate) fn new(name_server_runtime_inner: ArcMut<NameServerRuntimeInner>) -> Self {
-        let un_register_service = ArcMut::new(BatchUnregistrationService::new(name_server_runtime_inner.clone()));
+    pub(crate) fn new(name_server_runtime_inner: NameServerRuntimeHandle, queue_capacity: usize) -> Self {
+        let un_register_service = Arc::new(BatchUnregistrationService::new(
+            name_server_runtime_inner.clone(),
+            queue_capacity,
+        ));
 
         Self {
             // Initialize with estimated capacities based on typical cluster sizes
@@ -148,7 +150,7 @@ impl RouteInfoManagerV2 {
     /// Start the route manager
     pub fn start(&self) {
         info!("Starting RouteInfoManager v2 with DashMap tables");
-        self.un_register_service.mut_from_ref().start();
+        self.un_register_service.start();
     }
 
     /// Find broker info by channel identity
@@ -829,10 +831,12 @@ impl RouteInfoManagerV2 {
             let broker_addr = broker_addr.clone();
 
             if let Err(error) = task_group.spawn_service("namesrv.notify-min-broker-id", async move {
-                let _ = remoting_client
-                    .remoting_client()
-                    .invoke_request_oneway(&broker_addr, request, 3000)
-                    .await;
+                if let Some(runtime) = remoting_client.upgrade() {
+                    let _ = runtime
+                        .remoting_client()
+                        .invoke_request_oneway(&broker_addr, request, 3000)
+                        .await;
+                }
             }) {
                 warn!("failed to spawn min broker id notification task: {error}");
             }
@@ -973,7 +977,7 @@ impl RouteInfoManagerV2 {
     ///
     /// This ensures consistent deletion without race conditions with register_topic
     /// or register_broker operations.
-    pub(crate) fn delete_topic(&mut self, topic: CheetahString, cluster_name: Option<CheetahString>) {
+    pub(crate) fn delete_topic(&self, topic: CheetahString, cluster_name: Option<CheetahString>) {
         // Acquire topic write lock to prevent concurrent modifications
         let _topic_lock = self.topic_locks.write_lock(&topic);
 

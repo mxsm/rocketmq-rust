@@ -44,6 +44,7 @@ rocketmq-runtime       = { workspace = true }
 
 
 anyhow.workspace = true
+arc-swap = "1.9"
 
 tokio.workspace = true
 tokio-util.workspace = true

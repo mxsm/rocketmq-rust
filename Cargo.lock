@@ -4767,6 +4767,7 @@ name = "rocketmq-namesrv"
 version = "1.0.0"
 dependencies = [
  "anyhow",
+ "arc-swap",
  "cheetah-string",
  "clap",
  "config",
