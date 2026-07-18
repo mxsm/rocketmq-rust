@@ -6,7 +6,7 @@ M11-12 的最终目标是 production/public compatibility API 中不存在 `ArcM
 `mut_from_ref` 或 clone-safe `AsMut`/`DerefMut`，并让默认 workspace 在 stable Rust 下通过，同时把 Miri/Loom、
 soak、SLO fault、dashboard/runbook、rollback 和 Human Gate 绑定到同一候选快照。
 
-该目标尚未完成。本文件记录 M11-12a～o 子切片的真实下降，不把子切片计为第 76 个工作包，也不刷新
+该目标尚未完成。本文件记录 M11-12a～p 子切片的真实下降，不把子切片计为第 76 个工作包，也不刷新
 baseline 来掩盖剩余债务。父 Issue 为 #8292；M11-12a 子切片 Issue 为 #8293；分支为
 `mxsm/architecture-refactor-owned-values`。
 
@@ -51,6 +51,9 @@ M11-12n 的 Client consume service lifecycle 由 Issue #8321 跟踪，分支为
 
 M11-12o 的 Client send hook/trace context owner 由 Issue #8323 跟踪，分支为
 `mxsm/architecture-refactor-client-hook-trace-boundary`；它仍是同一 M11-12 工作包的子切片。
+
+M11-12p 的 Client Admin facade self owner 由 Issue #8325 跟踪，分支为
+`mxsm/architecture-refactor-client-admin-facade-owner`；它仍是同一 M11-12 工作包的子切片。
 
 ## 初始盘点
 
@@ -424,6 +427,32 @@ occurrence，以及 1 个 test 条目/1 个 test occurrence；相对初始快照
 reviewed baseline 从 703→698、occurrences 从 2,074→2,065。5 个 identity 和同一 Client API item 中的 1 个
 occurrence 均因源码真实删除而下降；没有新增、relocation approval 或 shared-mutation 替代包装。
 
+## M11-12p Client Admin facade self owner
+
+| 目标 | 实现与证据 |
+|---|---|
+| facade 独占 owner | Client 与 admin-core 的 `DefaultMQAdminExt` 直接拥有 `DefaultMQAdminExtImpl`，`Deref`/`DerefMut`、`AsRef`/`AsMut` 与 lifecycle 委托只使用普通 Rust 引用 |
+| 单一配置 owner | `ClientConfig` 由实现独占；facade 的 nameserver/TLS/config access 直接委托同一值，不再维护两个共享可变别名 |
+| owner-free 注册 | `MQAdminExtInnerImpl` 收窄为空 marker；ClientInstance admin table 继续按 group 执行重复检测和注销，但不再保活或暴露完整 Admin 实现 |
+| forwarding compatibility | 批量 trait 转发直接传递 `inner()`/`inner_mut()` 的普通引用，保留既有 Admin API 且不产生 shared-reference mutation |
+| lifecycle 合同 | 旧“缺 self owner 必须失败”测试改为正向合同：直接拥有的 impl 无需自引用即可 start、register、shutdown，并到达 Running/ShutdownAlready |
+
+M11-12p 后实际快照为 688 个条目：production 424、test 250、compatibility 14；occurrence 精确为
+production 1,295、test 694、compatibility 40。相对 M11-12o 删除 8 个 production 条目/34 个 production
+occurrence，以及 2 个 test 条目/2 个 test occurrence；相对初始快照累计删除 336 个 production 条目和
+830 个 production occurrence。`rocketmq-client` production 债务从 112/423 降至 107/403，`rocketmq-tools`
+production 债务从 3/14 清零。剩余 production
+债务为：
+
+| crate | 条目 | occurrence |
+|---|---:|---:|
+| `rocketmq-broker` | 190 | 568 |
+| `rocketmq-client` | 107 | 403 |
+| `rocketmq-store` | 127 | 324 |
+
+reviewed baseline 从 698→688、occurrences 从 2,065→2,029。10 个 identity 和 36 个 occurrence 均因源码
+真实删除而下降；没有新增、relocation approval 或替代 shared-mutation wrapper。
+
 ## 已执行验证
 
 | 命令 | 结果 |
@@ -742,12 +771,33 @@ M11-12o 追加验证：
 | `.\scripts\check-agents-routing.ps1` | 通过；4 个 standalone Cargo、3 个 Node project、8 条 route |
 | `git diff --check` | 通过 |
 
+M11-12p 追加验证：
+
+| 命令 | 结果 |
+|---|---|
+| `cargo check -p rocketmq-client-rust --all-targets --all-features` | 通过 |
+| `cargo test -p rocketmq-client-rust directly_owned_impl_starts_and_stops_without_self_reference --lib` | 1/1 通过；直接 owned impl 无需 self reference 即可启动和关闭 |
+| `cargo test -p rocketmq-client-rust admin::default_mq_admin_ext --lib` | 69/69 通过；facade/config/lifecycle 与全部 Admin helper 合同通过 |
+| `cargo test -p rocketmq-client-rust --all-features --quiet` | 全部通过；library 962/962，其余 integration targets 全部通过（35 项既有外部环境测试忽略） |
+| `cargo test -p rocketmq-admin-core --lib --test legacy_surface_compile --test boundary_source_guard` | 120/120 library、2/2 legacy surface、3/3 boundary tests 通过 |
+| reviewed baseline reduction | 无 relocation approval；删除 10 个 identity 和 36 个真实 occurrence，baseline 698→688、occurrences 2,065→2,029 |
+| `python scripts/arc_mut_guard.py` | 通过；Admin facade/config/registration 自引用 owner 定向扫描为零，Client production 降至 107/403、Tools production 清零 |
+| `python -m unittest scripts.tests.test_arc_mut_guard` / `python scripts/arc_mut_guard.py --fixtures` | 67/67 单测、24/24 fixtures 通过 |
+| `cargo fmt --all -- --check` | 通过 |
+| `cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings` | 通过；Windows linker stdout 与既有 future-incompatibility note 不受 `-D warnings` 管辖 |
+| `rocketmq-example`: `cargo fmt --all -- --check` / `cargo clippy --all-targets -- -D warnings` | standalone consumer 通过直接 owned Admin facade API |
+| `.\scripts\runtime-audit.ps1 -SkipBaseline -EnforceBoundaryBaseline` | 通过；Admin lifecycle owner 改造未新增 detached task、运行时或跨 await 同步 guard |
+| architecture target/baseline 与 release guard | 通过；35/35 target edges、3/3 test edges、32/32 release topology |
+| `.\scripts\check-agents-routing.ps1` | 通过；4 个 standalone Cargo、3 个 Node project、8 条 route |
+| Admin self-owner 定向扫描 | 零匹配；`ArcMut<ClientConfig>`、`ArcMut<DefaultMQAdminExtImpl>`、`set_inner` 与冗余 inner `as_ref`/`as_mut` 均已删除 |
+| `git diff --check` | 通过 |
+
 ## 剩余切片与 Gate
 
-1. Client MQClientInstance、Producer/Admin、Push/Lite Consumer owner（112/423）。
+1. Client MQClientInstance、Producer、Push/Lite Consumer 与 Admin ClientInstance/API owner（107/403）。
 2. Broker TopicConfig/offset、BrokerRuntimeInner、schedule/POP/processor/transaction owner（190/568）。
 3. Store TopicConfig snapshot、MappedFileQueue/ConsumeQueue、CommitLog/Flush、StoreHandle/Rocks/Timer 与 HA actor（127/324）。
-4. Tools 3/14、compatibility `arc_mut.rs` 和公开 re-export；移除其余 nightly feature，将 guard 切到 production/public zero。
+4. 删除 compatibility `arc_mut.rs` 和公开 re-export；移除其余 nightly feature，将 guard 切到 production/public zero。
 5. 对同一候选快照执行 stable feature matrix、Miri/Loom 可用切片、soak/SLO fault、dashboard/runbook、动态
    Kind/K3d/container、M10 固定硬件和 Human Gate。
 
