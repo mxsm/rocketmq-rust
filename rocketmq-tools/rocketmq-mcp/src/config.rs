@@ -148,6 +148,21 @@ impl McpConfig {
                 "audit.queue_capacity must be greater than zero".to_string(),
             ));
         }
+        if self.audit.max_record_bytes == 0 {
+            return Err(McpError::InvalidConfig(
+                "audit.max_record_bytes must be greater than zero".to_string(),
+            ));
+        }
+        if self.audit.queue_max_bytes < self.audit.max_record_bytes {
+            return Err(McpError::InvalidConfig(
+                "audit.queue_max_bytes must be at least audit.max_record_bytes".to_string(),
+            ));
+        }
+        if self.audit.queue_max_bytes > u32::MAX as usize {
+            return Err(McpError::InvalidConfig(
+                "audit.queue_max_bytes must not exceed u32::MAX".to_string(),
+            ));
+        }
 
         self.server.http.auth.validate()?;
         if self.server.transport == TransportKind::StreamableHttp {
@@ -448,6 +463,18 @@ pub struct AuditConfig {
     pub sink: String,
     pub path: String,
     pub queue_capacity: usize,
+    #[serde(default = "default_audit_max_record_bytes")]
+    pub max_record_bytes: usize,
+    #[serde(default = "default_audit_queue_max_bytes")]
+    pub queue_max_bytes: usize,
+}
+
+const fn default_audit_max_record_bytes() -> usize {
+    16 * 1024
+}
+
+const fn default_audit_queue_max_bytes() -> usize {
+    1024 * 1024
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -531,6 +558,8 @@ mod tests {
         assert_eq!(config.clusters[0].namesrv_addr, "127.0.0.1:9876");
         assert_eq!(config.diagnosis.consumer_lag_policy_profile, "production-default");
         assert_eq!(config.diagnosis.consumer_lag_threshold, 1_000);
+        assert_eq!(config.audit.max_record_bytes, 16 * 1024);
+        assert_eq!(config.audit.queue_max_bytes, 1024 * 1024);
     }
 
     #[test]
@@ -580,6 +609,29 @@ mod tests {
         let error = config.validate().unwrap_err();
 
         assert!(error.to_string().contains("cache.max_entries"));
+    }
+
+    #[test]
+    fn audit_capacity_requires_one_bounded_record_and_u32_byte_accounting() {
+        let mut config = McpConfig::load(example_config_path()).unwrap();
+        config.audit.max_record_bytes = 0;
+        assert!(config
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("audit.max_record_bytes"));
+
+        let mut config = McpConfig::load(example_config_path()).unwrap();
+        config.audit.queue_max_bytes = config.audit.max_record_bytes - 1;
+        assert!(config
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("at least audit.max_record_bytes"));
+
+        let mut config = McpConfig::load(example_config_path()).unwrap();
+        config.audit.queue_max_bytes = u32::MAX as usize + 1;
+        assert!(config.validate().unwrap_err().to_string().contains("u32::MAX"));
     }
 
     #[cfg(feature = "streamable-http")]

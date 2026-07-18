@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 3：性能、耐久引擎与云原生 |
-| 状态 | 实施中（PR-M11-01～05 已完成；下一工作包 PR-M11-06；部分依赖 M10 SLI） |
+| 状态 | 实施中（PR-M11-01～06 已完成；下一工作包 PR-M11-07；部分依赖 M10 SLI） |
 | 预计周期 | 4–6 周 |
 | 工作包 | 延续 WP01、WP03、WP05、WP07、WP14–WP16 |
 | 前置条件 | 32-package Gate；secure dry-run、ServiceContext、semantic owner、durability SLI 可用 |
@@ -118,10 +118,17 @@ last-known-good；verified principal 经真实 protocol handler 进入 RBAC/rate
 ### PR-M11-06：MCP Audit Writer 与 Shutdown Drain
 
 - [ ] 入口：`[ARCH]` audit schema、count+byte上限、overflow policy、绝对deadline和flush报告已冻结。
-- [ ] `[DEV]` audit writer按count+bytes有界，记录稳定principal/action/outcome，shutdown在同一deadline内drain/flush并报告未完成项。
-- [ ] `[TEST]` focused test：overflow、sink timeout/failure、进程取消、deadline、redaction和audit ordering。
-- [ ] `[REV]` 检查audit故障不阻塞数据面、敏感字段不落盘、未完成记录可观测。
-- [ ] 回滚点：回到上一通过同一audit corpus的writer；否则关闭HTTP管理入口并保留核心stdio/人工运维。
+- [x] `[DEV]` audit writer按count+bytes有界，记录稳定principal/action/outcome，shutdown在同一deadline内drain/flush并报告未完成项。
+- [x] `[TEST]` focused test：overflow、sink timeout/failure、进程取消、deadline、redaction和audit ordering。
+- [x] `[REV]` 检查audit故障不阻塞数据面、敏感字段不落盘、未完成记录可观测。
+- [x] 回滚点：回到上一通过同一audit corpus的writer；否则关闭HTTP管理入口并保留核心stdio/人工运维。
+
+完成证据：[`11-mcp-audit-drain-evidence.md`](11-mcp-audit-drain-evidence.md)。生产者按已脱敏 NDJSON 的真实
+字节数与记录数分别执行无等待准入，writer 由 `ServiceContext` 持有且所有文件 I/O 只经过
+`BlockingExecutor`。关闭先停止准入，再在同一绝对 deadline 内完成 FIFO drain/flush，随后把剩余预算交给
+runtime shutdown；超时、取消、drop、sink/flush failure 与 pending count/bytes 均进入报告。70/82 工作包完成，
+剩余 M11 6 个、M12 6 个，下一工作包为 PR-M11-07。M11 入口 `[ARCH]`、安全默认 `[HUMAN]`、M10
+真实性能与 `[HUMAN]`、M11 和 Phase 3 Gate 均保持未完成。
 
 ### PR-M11-07：容器镜像基础
 

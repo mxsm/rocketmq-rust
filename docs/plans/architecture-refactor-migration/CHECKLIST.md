@@ -29,15 +29,15 @@
 
 | 指标 | 已完成 | 进行中 | 未开始/未完成 | 目标 |
 |---|---:|---:|---:|---:|
-| PR 级工作包 | 69 | 0 | 13 未开始；合计 13 尚未完成 | 82 |
+| PR 级工作包 | 70 | 0 | 12 未开始；合计 12 尚未完成 | 82 |
 | 里程碑 | 9（M01–M09） | 2（M10 待验收、M11 实施中） | 1（M12） | 12 |
 | 新增边界 crate | 10 | 0 | 0 | 10 |
 | 根 workspace package | 32 | — | 0 | 32 |
 | Phase Gate | 2 | 1（Phase 3） | 1（Phase 4） | 4 |
 
-剩余 13 个未开始工作包分布：M10 为 0 个、M11 为 7 个、M12 为 6 个。
+剩余 12 个未开始工作包分布：M10 为 0 个、M11 为 6 个、M12 为 6 个。
 PR-M10-05 已完成性能门禁实现；真实固定硬件 baseline/candidate 与 HUMAN M10 Gate 尚未完成，因此 M10 为
-`待验收`而非`已完成`。M11 为`实施中`，当前下一工作包为 PR-M11-06。
+`待验收`而非`已完成`。M11 为`实施中`，当前下一工作包为 PR-M11-07。
 
 目标态依赖债务不能与工作包计数混用：`architecture_dependency_guard.py --mode target` 当前严格通过，
 表示未登记的目标 DAG finding 为 0；它不表示 R0 兼容依赖已经物理删除。现存边分为 35 条精确
@@ -561,7 +561,15 @@ M09-04 再删除 MCP 未使用的 Auth/Error direct edges，并把承担 owned t
   - [x] 默认 stdio 与 `--all-features` 均通过；`change-planning` 仍只产生 `mutates_cluster: false` 计划，没有 Apply/`dangerous-tools`
   - [x] [`M11-05 证据`](phase-3-production-readiness/11-mcp-https-jwks-evidence.md) 记录 TLS/JWKS/principal、公共 API、验证矩阵和回滚边界
   - [x] 69/82 已完成、13 未完成，下一工作包 PR-M11-06；M10/M11/Phase 3/HUMAN Gate 均未提前宣称完成
-- [ ] PR-M11-06：完成 MCP Audit Writer 与 Shutdown Drain
+- [x] PR-M11-06：完成 MCP Audit Writer 与 Shutdown Drain
+  - [x] audit schema 固定为 `schema_version = 1`，principal/action/outcome/error 等变长字段先脱敏、清理控制字符并按 UTF-8 字节确定性截断
+  - [x] 生产端只使用 `try_acquire_many_owned` + `try_send`；最大单条、队列条数与队列字节分别有界，overflow/oversized/closed 均独立计量
+  - [x] writer 在 `ServiceContext` 下 FIFO 写入；文件创建、append 与 `sync_all` 全部经注入的 `BlockingExecutor`，sink 失败不输出底层路径或 I/O 错误
+  - [x] `shutdown_with_deadline` 按“关闭准入→drain→flush→runtime shutdown”执行，所有阶段复用同一个绝对 `ShutdownDeadline` 并返回 accepted/written/dropped/pending/failure 报告
+  - [x] count/byte overflow、oversized/redaction、FIFO、sink/flush failure、stall/deadline、运行时取消和真实文件 flush 共 7 项 focused test 通过
+  - [x] 默认 82 tests 与 all-features 104 tests 通过；stdio/HTTPS/JWKS/principal 与无副作用 `change-planning` 合同保持不变
+  - [x] [`M11-06 证据`](phase-3-production-readiness/11-mcp-audit-drain-evidence.md) 记录实现、API 增量、验证矩阵、回滚和未签署 Gate
+  - [x] 70/82 已完成、12 未完成，下一工作包 PR-M11-07；M10/M11/Phase 3/HUMAN/ARCH Gate 均未提前宣称完成
 - [ ] PR-M11-07：建立容器镜像基础
 - [ ] PR-M11-08：交付五个服务镜像入口
 - [ ] PR-M11-09：交付 Helm 与 Kustomize 资产
