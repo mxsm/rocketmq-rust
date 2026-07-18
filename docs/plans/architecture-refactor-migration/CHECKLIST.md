@@ -29,15 +29,15 @@
 
 | 指标 | 已完成 | 进行中 | 未开始/未完成 | 目标 |
 |---|---:|---:|---:|---:|
-| PR 级工作包 | 70 | 0 | 12 未开始；合计 12 尚未完成 | 82 |
+| PR 级工作包 | 71 | 0 | 11 未开始；合计 11 尚未完成 | 82 |
 | 里程碑 | 9（M01–M09） | 2（M10 待验收、M11 实施中） | 1（M12） | 12 |
 | 新增边界 crate | 10 | 0 | 0 | 10 |
 | 根 workspace package | 32 | — | 0 | 32 |
 | Phase Gate | 2 | 1（Phase 3） | 1（Phase 4） | 4 |
 
-剩余 12 个未开始工作包分布：M10 为 0 个、M11 为 6 个、M12 为 6 个。
+剩余 11 个未开始工作包分布：M10 为 0 个、M11 为 5 个、M12 为 6 个。
 PR-M10-05 已完成性能门禁实现；真实固定硬件 baseline/candidate 与 HUMAN M10 Gate 尚未完成，因此 M10 为
-`待验收`而非`已完成`。M11 为`实施中`，当前下一工作包为 PR-M11-07。
+`待验收`而非`已完成`。M11 为`实施中`，当前下一工作包为 PR-M11-08。
 
 目标态依赖债务不能与工作包计数混用：`architecture_dependency_guard.py --mode target` 当前严格通过，
 表示未登记的目标 DAG finding 为 0；它不表示 R0 兼容依赖已经物理删除。现存边分为 35 条精确
@@ -570,7 +570,15 @@ M09-04 再删除 MCP 未使用的 Auth/Error direct edges，并把承担 owned t
   - [x] 默认 82 tests 与 all-features 104 tests 通过；stdio/HTTPS/JWKS/principal 与无副作用 `change-planning` 合同保持不变
   - [x] [`M11-06 证据`](phase-3-production-readiness/11-mcp-audit-drain-evidence.md) 记录实现、API 增量、验证矩阵、回滚和未签署 Gate
   - [x] 70/82 已完成、12 未完成，下一工作包 PR-M11-07；M10/M11/Phase 3/HUMAN/ARCH Gate 均未提前宣称完成
-- [ ] PR-M11-07：建立容器镜像基础
+- [x] PR-M11-07：建立容器镜像基础
+  - [x] 新增独立 `Dockerfile.base`，builder/runtime manifest 使用 reviewed digest，Rust nightly 与 Debian package snapshot 固定日期；旧组合镜像行为不变并登记为 M11-08 到期例外
+  - [x] runtime foundation 只从 pinned Debian runtime stage 构建，固定 UID/GID 10001、read-only rootfs、data volume/tmpfs、SIGTERM 和 OCI label 合同，无 shell/service entrypoint
+  - [x] `container-policy.json` 冻结五服务 GHCR 命名、immutable tag、工具版本、零 CRITICAL、Sigstore bundle 与 digest-only keyless image signature 规则
+  - [x] 静态 guard 与 6 组正向/故意违规测试通过，覆盖 mutable base、root、未固定 action、弱化 scanner/signature、未登记 Dockerfile、过期例外和 snapshot package 漂移
+  - [x] workflow action 全部按 40 位 SHA 固定；PowerShell AST、Actionlint v1.7.12、Hadolint v2.14.0 与 AGENTS routing 检查通过
+  - [x] Ubuntu workflow 已交付 build、non-root/read-only smoke、CycloneDX SBOM、Trivy、Cosign bundle 与 provenance artifact；本机/WSL 缺少容器和供应链工具，未把远端 workflow 写成已执行
+  - [x] [`M11-07 证据`](phase-3-production-readiness/11-container-foundation-evidence.md) 记录 immutable 输入、策略、验证边界、兼容例外与回滚
+  - [x] 71/82 已完成、11 未完成，下一工作包 PR-M11-08；M10/M11/Phase 3/HUMAN/ARCH 及容器动态 `[TEST]` Gate 均未提前宣称完成
 - [ ] PR-M11-08：交付五个服务镜像入口
 - [ ] PR-M11-09：交付 Helm 与 Kustomize 资产
 - [ ] PR-M11-10：统一 Probe、PreStop 与 Drain

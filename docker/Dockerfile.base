@@ -1,0 +1,131 @@
+# syntax=docker/dockerfile:1.7
+
+# Copyright 2026 The RocketMQ Rust Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+ARG BUILDER_IMAGE=docker.io/library/rust:slim-bookworm@sha256:99e09cb2284e2ddbb73a995deee3e91783fd04d177602ccf6eab326d778ee777
+ARG RUNTIME_IMAGE=docker.io/library/debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818
+ARG DEBIAN_SNAPSHOT=20260717T000000Z
+ARG ROCKETMQ_RUST_TOOLCHAIN=nightly-2026-07-05
+
+FROM ${BUILDER_IMAGE} AS builder-base
+
+ARG DEBIAN_SNAPSHOT
+ARG ROCKETMQ_RUST_TOOLCHAIN
+
+# The timestamped Debian snapshot makes package resolution immutable for this foundation revision.
+# hadolint ignore=DL3008
+RUN <<EOF
+set -eux
+rm -f /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources
+cat > /etc/apt/sources.list.d/rocketmq-snapshot.sources <<SOURCES
+Types: deb
+URIs: https://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT}/
+Suites: bookworm bookworm-updates
+Components: main
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+Check-Valid-Until: no
+
+Types: deb
+URIs: https://snapshot.debian.org/archive/debian-security/${DEBIAN_SNAPSHOT}/
+Suites: bookworm-security
+Components: main
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+Check-Valid-Until: no
+SOURCES
+apt-get -o Acquire::Check-Valid-Until=false update
+apt-get install -y --no-install-recommends \
+    build-essential \
+    ca-certificates \
+    clang \
+    cmake \
+    git \
+    libclang-dev \
+    libssl-dev \
+    llvm \
+    make \
+    ninja-build \
+    pkg-config \
+    protobuf-compiler
+rm -rf /var/lib/apt/lists/*
+rustup toolchain install "${ROCKETMQ_RUST_TOOLCHAIN}" \
+    --profile minimal \
+    --component clippy,rustfmt
+EOF
+
+ENV CC=clang \
+    CXX=clang++ \
+    RUSTUP_TOOLCHAIN=${ROCKETMQ_RUST_TOOLCHAIN}
+
+WORKDIR /workspace
+
+FROM ${RUNTIME_IMAGE} AS runtime-base
+
+ARG DEBIAN_SNAPSHOT
+ARG SOURCE_REVISION=unknown
+ARG SOURCE_VERSION=0.0.0-dev
+
+# The timestamped Debian snapshot makes package resolution immutable for this foundation revision.
+# hadolint ignore=DL3008
+RUN <<EOF
+set -eux
+rm -f /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources
+cat > /etc/apt/sources.list.d/rocketmq-snapshot.sources <<SOURCES
+Types: deb
+URIs: https://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT}/
+Suites: bookworm bookworm-updates
+Components: main
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+Check-Valid-Until: no
+
+Types: deb
+URIs: https://snapshot.debian.org/archive/debian-security/${DEBIAN_SNAPSHOT}/
+Suites: bookworm-security
+Components: main
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+Check-Valid-Until: no
+SOURCES
+apt-get -o Acquire::Check-Valid-Until=false update
+apt-get install -y --no-install-recommends \
+    ca-certificates \
+    libssl3
+rm -rf /var/lib/apt/lists/*
+groupadd --gid 10001 rocketmq
+useradd --uid 10001 --gid 10001 --home-dir /home/rocketmq --create-home --shell /usr/sbin/nologin rocketmq
+install -d -o 10001 -g 10001 /opt/rocketmq /var/lib/rocketmq /tmp/rocketmq
+EOF
+
+LABEL org.opencontainers.image.source="https://github.com/mxsm/rocketmq-rust" \
+    org.opencontainers.image.licenses="Apache-2.0" \
+    org.opencontainers.image.vendor="RocketMQ Rust Authors" \
+    org.opencontainers.image.title="RocketMQ Rust runtime foundation" \
+    org.opencontainers.image.version=${SOURCE_VERSION} \
+    org.opencontainers.image.revision=${SOURCE_REVISION} \
+    io.rocketmq.image.role="runtime-base" \
+    io.rocketmq.runtime.uid="10001" \
+    io.rocketmq.runtime.gid="10001" \
+    io.rocketmq.runtime.read-only-rootfs="required" \
+    io.rocketmq.runtime.data-path="/var/lib/rocketmq" \
+    io.rocketmq.runtime.tmpfs-path="/tmp/rocketmq"
+
+ENV HOME=/home/rocketmq \
+    TMPDIR=/tmp/rocketmq
+
+STOPSIGNAL SIGTERM
+USER 10001:10001
+WORKDIR /opt/rocketmq
+
+FROM runtime-base AS runtime-base-smoke
+
+CMD ["/bin/true"]

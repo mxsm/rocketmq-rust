@@ -1,0 +1,111 @@
+{
+  "schema_version": 1,
+  "milestone": "M11-07",
+  "foundation_dockerfile": "docker/Dockerfile.base",
+  "base_images": {
+    "builder": {
+      "reference": "docker.io/library/rust:slim-bookworm@sha256:99e09cb2284e2ddbb73a995deee3e91783fd04d177602ccf6eab326d778ee777",
+      "source": "https://hub.docker.com/_/rust"
+    },
+    "runtime": {
+      "reference": "docker.io/library/debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818",
+      "source": "https://hub.docker.com/_/debian"
+    }
+  },
+  "build": {
+    "rust_toolchain": "nightly-2026-07-05",
+    "debian_snapshot": "20260717T000000Z",
+    "builder_packages": [
+      "build-essential",
+      "ca-certificates",
+      "clang",
+      "cmake",
+      "git",
+      "libclang-dev",
+      "libssl-dev",
+      "llvm",
+      "make",
+      "ninja-build",
+      "pkg-config",
+      "protobuf-compiler"
+    ],
+    "runtime_packages": [
+      "ca-certificates",
+      "libssl3"
+    ],
+    "builder_target": "builder-base",
+    "runtime_target": "runtime-base",
+    "smoke_target": "runtime-base-smoke"
+  },
+  "runtime": {
+    "uid": 10001,
+    "gid": 10001,
+    "read_only_rootfs_required": true,
+    "writable_data_path": "/var/lib/rocketmq",
+    "tmpfs_path": "/tmp/rocketmq",
+    "default_command": [
+      "/bin/true"
+    ],
+    "required_labels": {
+      "io.rocketmq.image.role": "runtime-base",
+      "io.rocketmq.runtime.uid": "10001",
+      "io.rocketmq.runtime.gid": "10001",
+      "io.rocketmq.runtime.read-only-rootfs": "required",
+      "io.rocketmq.runtime.data-path": "/var/lib/rocketmq",
+      "io.rocketmq.runtime.tmpfs-path": "/tmp/rocketmq"
+    }
+  },
+  "naming": {
+    "repository_prefix": "ghcr.io/mxsm/rocketmq-rust",
+    "services": [
+      "broker",
+      "namesrv",
+      "controller",
+      "proxy",
+      "mcp"
+    ],
+    "immutable_tag_pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+-[0-9a-f]{12}$",
+    "forbidden_tags": [
+      "latest",
+      "main",
+      "master"
+    ]
+  },
+  "supply_chain": {
+    "syft_version": "v1.48.0",
+    "trivy_version": "v0.72.0",
+    "cosign_version": "v3.1.2",
+    "sbom_format": "cyclonedx-json",
+    "critical_vulnerability_policy": {
+      "severity": "CRITICAL",
+      "maximum_findings": 0,
+      "ignore_unfixed": false
+    },
+    "signature": {
+      "format": "sigstore-bundle",
+      "ephemeral_test_key": true,
+      "private_key_must_be_deleted": true,
+      "published_digest_pattern": "^ghcr\\.io/mxsm/rocketmq-rust/(broker|namesrv|controller|proxy|mcp)@sha256:[0-9a-f]{64}$",
+      "certificate_identity_regexp": "^https://github\\.com/mxsm/rocketmq-rust/\\.github/workflows/[A-Za-z0-9._/-]+@refs/(heads/main|tags/[A-Za-z0-9._-]+)$",
+      "certificate_oidc_issuer": "https://token.actions.githubusercontent.com"
+    }
+  },
+  "workflow": {
+    "path": ".github/workflows/container-foundation-ci.yml",
+    "actions": {
+      "actions/checkout": "9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0",
+      "docker/setup-buildx-action": "bb05f3f5519dd87d3ba754cc423b652a5edd6d2c",
+      "anchore/sbom-action/download-syft": "e22c389904149dbc22b58101806040fa8d37a610",
+      "aquasecurity/setup-trivy": "81e514348e19b6112ce2a7e3ecbafe19c1e1f567",
+      "sigstore/cosign-installer": "6f9f17788090df1f26f669e9d70d6ae9567deba6",
+      "actions/upload-artifact": "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
+    }
+  },
+  "compatibility_exceptions": [
+    {
+      "path": "docker/Dockerfile",
+      "expires_at": "M11-08",
+      "reason": "Existing combined service image remains unchanged until five independent service entrypoints are delivered."
+    }
+  ]
+}
