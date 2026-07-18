@@ -30,7 +30,6 @@ use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskKind;
-use rocketmq_rust::ArcMut;
 use tokio::net::TcpListener;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
@@ -144,7 +143,7 @@ struct ConnectionListener<RP> {
     ///
     /// Contains request processor, RPC hooks, and response routing table.
     /// Arc-wrapped to share across all connection handlers efficiently.
-    cmd_handler: ArcMut<RemotingGeneralHandler<RP>>,
+    cmd_handler: Arc<RemotingGeneralHandler<RP>>,
 
     /// TLS mode and acceptor state for newly accepted connections.
     tls_runtime: TlsServerRuntime,
@@ -251,7 +250,7 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
 struct ConnectionHandler<RP> {
     shutdown_complete_tx: mpsc::Sender<()>,
     conn_disconnect_notify: Option<broadcast::Sender<SocketAddr>>,
-    cmd_handler: ArcMut<RemotingGeneralHandler<RP>>,
+    cmd_handler: Arc<RemotingGeneralHandler<RP>>,
     event_tx: mpsc::Sender<TokioEvent>,
     sessions: dashmap::DashMap<u64, RemotingSession<ConnectionHandlerContext>>,
 }
@@ -271,7 +270,7 @@ enum RemotingSessionAction {
     Command(rocketmq_protocol::protocol::remoting_command::RemotingCommand),
 }
 
-impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
+impl<RP: RequestProcessor + Sync + Clone + 'static> ConnectionHandler<RP> {
     async fn run(
         &self,
         session: rocketmq_transport::server::SessionHandle,
@@ -337,7 +336,7 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
                         return;
                     }
                 }
-                let mut cmd_handler = self.cmd_handler.clone();
+                let cmd_handler = self.cmd_handler.clone();
                 cmd_handler
                     .process_message_received(&remoting_session.context, command)
                     .await;
@@ -346,7 +345,7 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
     }
 }
 
-impl<RP: RequestProcessor + Sync + 'static> TransportConnectionHandler for ConnectionHandler<RP> {
+impl<RP: RequestProcessor + Sync + Clone + 'static> TransportConnectionHandler for ConnectionHandler<RP> {
     fn connected(
         &self,
         session: rocketmq_transport::server::SessionHandle,
@@ -394,7 +393,7 @@ impl<RP: RequestProcessor + Sync + 'static> TransportConnectionHandler for Conne
     }
 }
 
-impl<RP: RequestProcessor + Sync + 'static> TransportConnectionHandler for InterceptingConnectionHandler<RP> {
+impl<RP: RequestProcessor + Sync + Clone + 'static> TransportConnectionHandler for InterceptingConnectionHandler<RP> {
     fn connected(
         &self,
         session: rocketmq_transport::server::SessionHandle,
@@ -719,12 +718,7 @@ async fn run_with_tls_config_report<RP: RequestProcessor + Sync + 'static + Clon
         }
     };
     // Initialize the connection listener state
-    let handler = RemotingGeneralHandler {
-        request_processor,
-        //shutdown: Shutdown::new(notify_shutdown.subscribe()),
-        rpc_hooks,
-        response_table: PendingRequestTable::with_capacity(512),
-    };
+    let handler = RemotingGeneralHandler::new(request_processor, rpc_hooks, PendingRequestTable::with_capacity(512));
     let mut admission_limits = AdmissionLimits::default();
     admission_limits.connections = ResourceLimit {
         count: DEFAULT_MAX_CONNECTIONS,
@@ -740,7 +734,7 @@ async fn run_with_tls_config_report<RP: RequestProcessor + Sync + 'static + Clon
         shutdown_complete_tx,
         conn_disconnect_notify,
         channel_event_listener,
-        cmd_handler: ArcMut::new(handler),
+        cmd_handler: Arc::new(handler),
         tls_runtime,
         task_group: task_group.clone(),
         admission: admission.unwrap_or_else(|| Arc::new(AdmissionController::new(admission_limits))),
@@ -1097,7 +1091,7 @@ mod tests {
             Vec::new(),
             None,
         ));
-        let mut client =
+        let client =
             RocketmqDefaultClient::new(Arc::new(TokioClientConfig::default()), DefaultRemotingRequestProcessor);
         let remote_addr = cheetah_string::CheetahString::from_string(addr.to_string());
         let request = crate::protocol::remoting_command::RemotingCommand::create_remoting_command(105);
@@ -1438,7 +1432,7 @@ mod tests {
         });
         tokio::time::sleep(Duration::from_millis(25)).await;
 
-        let mut client =
+        let client =
             RocketmqDefaultClient::new(Arc::new(TokioClientConfig::default()), DefaultRemotingRequestProcessor)
                 .with_transport_security(Arc::new(rocketmq_transport::security::TransportSecurity::new(
                     None,

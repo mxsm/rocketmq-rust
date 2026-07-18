@@ -114,7 +114,7 @@ use tracing::info;
 use tracing::warn;
 
 pub struct BrokerOuterAPI {
-    remoting_client: ArcMut<RocketmqDefaultClient<DefaultRemotingRequestProcessor>>,
+    remoting_client: Arc<RocketmqDefaultClient<DefaultRemotingRequestProcessor>>,
     name_server_address: Option<String>,
     rpc_client: RpcClientImpl,
     client_metadata: Arc<ClientMetadata>,
@@ -122,7 +122,7 @@ pub struct BrokerOuterAPI {
 
 impl BrokerOuterAPI {
     pub fn new(tokio_client_config: Arc<TokioClientConfig>) -> Self {
-        let client = ArcMut::new(RocketmqDefaultClient::new(
+        let client = Arc::new(RocketmqDefaultClient::new(
             tokio_client_config,
             DefaultRemotingRequestProcessor,
         ));
@@ -136,7 +136,7 @@ impl BrokerOuterAPI {
     }
 
     pub fn new_with_hook(tokio_client_config: Arc<TokioClientConfig>, rpc_hook: Option<Arc<dyn RPCHook>>) -> Self {
-        let mut client = ArcMut::new(RocketmqDefaultClient::new(
+        let client = Arc::new(RocketmqDefaultClient::new(
             tokio_client_config,
             DefaultRemotingRequestProcessor,
         ));
@@ -178,7 +178,7 @@ impl BrokerOuterAPI {
 
 impl BrokerOuterAPI {
     pub async fn start(&self) {
-        let wrapper = ArcMut::downgrade(&self.remoting_client);
+        let wrapper = Arc::downgrade(&self.remoting_client);
         self.remoting_client.start(wrapper).await;
     }
 
@@ -1583,7 +1583,7 @@ impl BrokerOuterAPI {
     }
 
     pub fn close_channel(&self, addr_list: Vec<String>) {
-        self.remoting_client.mut_from_ref().close_clients(addr_list);
+        self.remoting_client.close_clients(addr_list);
     }
 }
 

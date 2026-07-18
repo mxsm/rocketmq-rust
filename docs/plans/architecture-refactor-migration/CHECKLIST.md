@@ -623,7 +623,8 @@ M09-04 再删除 MCP 未使用的 Auth/Error direct edges，并把承担 owned t
   - [x] M11-12e Controller request processor owner：13 个业务 handler 收窄为共享 receiver，wrapper payload 改为 `Arc`；remoting trait 的 `&mut self` 仅保留为无可变 capability 的兼容适配
   - [x] M11-12f NameServer runtime/processor owner：根对象改为安全 `Arc`，配置以串行 copy/validate/publish 的 `ArcSwap` 不可变快照发布；route/KV/housekeeping/batch/processor 使用 `Weak` handle 断开服务图强引用环
   - [x] M11-12g Remoting Channel/Context owner：`Connection` 只通过 cloneable lifecycle handle 暴露状态，以异步 Mutex 串行唯一 writer；`ChannelInner`、legacy response table 与 handler context 改用安全 `Arc`/显式同步，删除共享引用取得 socket/channel 可变引用的入口
-  - [x] [`M11-12 进度证据`](phase-3-production-readiness/11-soundness-closure-progress.md) 记录父 Issue #8292、子切片 Issue #8293/#8295/#8297/#8299/#8301/#8303/#8307 与每次真实下降
+  - [x] M11-12h Remoting client/handler owner：handler 以安全 `Arc` 共享、每请求 clone-local processor adapter 并以短 `RwLock` 快照管理 hooks；client lifecycle 改为标准 `Arc`/`Weak`，NameServer 选择状态显式同步，shutdown/hook/health capability 收窄为共享引用
+  - [x] [`M11-12 进度证据`](phase-3-production-readiness/11-soundness-closure-progress.md) 记录父 Issue #8292、子切片 Issue #8293/#8295/#8297/#8299/#8301/#8303/#8307/#8309 与每次真实下降
   - [x] Issue #8295 后累计降至 711 production/2,029 occurrence；Controller 配置债务清零但其他 Controller owner 仍有 31 条 production 债务
   - [x] Issue #8297 后实际快照降至 697 production/1,986 occurrence；Controller 降至 17 条/51 occurrence，Manager/heartbeat/embedded-NameServer owner 已退出 `ArcMut`
   - [x] Issue #8299 后实际快照降至 690 production/1,961 occurrence；Controller 降至 10 条/26 occurrence，Raft/OpenRaft owner 与 Manager Raft `mut_from_ref` 已清零
@@ -631,7 +632,8 @@ M09-04 再删除 MCP 未使用的 Auth/Error direct edges，并把承担 owned t
   - [x] Issue #8303 后实际快照降至 669 production/1,918 occurrence；NameServer 降至 28 条/58 occurrence（V1 tables 16/44、remoting client 4/5、Context 8/9），runtime/KV/V2 route/batch/housekeeping/request-processor owner 已退出 `ArcMut`
   - [x] Issue #8305 按实际快照校正 NameServer 子类别分配；28 条/58 occurrence 总量与 reviewed baseline 不变
   - [x] Issue #8307 后实际快照降至 514 production/1,612 occurrence；Remoting Channel/Context 债务清零，Auth/Proxy 的 Context 传播债务同步清零，NameServer 降至 20/49、Controller 降至 4/6
-  - [ ] M11-12h 及后续：Controller/NameServer/remoting client、NameServer V1 tables、Client、Broker、Store/HA、compatibility 删除、stable/Miri/Loom/soak/SLO 与同一候选快照 Gate 仍待完成
+  - [x] Issue #8309 后实际快照降至 488 production/1,559 occurrence；Remoting client/handler owner 清零，Controller production 债务清零，NameServer 仅剩 V1 tables 16/44，Remoting 仅剩 protocol compatibility 6/9
+  - [ ] M11-12i 及后续：NameServer V1 tables、Remoting protocol compatibility、Client、Broker、Store/HA、compatibility 删除、stable/Miri/Loom/soak/SLO 与同一候选快照 Gate 仍待完成
   - [ ] 总进度仍为 75/82；本子切片不提前计作完成工作包，M10/Kind-K3d/container dynamic/HUMAN Gate 保持开放
 - [ ] 对应任务文档的 Exit Checklist 全部通过
 

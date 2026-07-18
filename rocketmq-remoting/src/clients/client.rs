@@ -28,7 +28,6 @@ use rocketmq_runtime::ServiceContext;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskGroupChildLease;
-use rocketmq_rust::ArcMut;
 use tokio::sync::broadcast;
 
 use crate::base::connection_net_event::ConnectionNetEvent;
@@ -84,7 +83,7 @@ struct ClientTaskLifecycle {
 }
 
 struct ClientInner<PR> {
-    cmd_handler: ArcMut<RemotingGeneralHandler<PR>>,
+    cmd_handler: Arc<RemotingGeneralHandler<PR>>,
     sessions: dashmap::DashMap<u64, ConnectionHandlerContext>,
     ready: parking_lot::Mutex<Option<tokio::sync::oneshot::Sender<(Channel, PendingRequestOwner, SessionHandle)>>>,
 }
@@ -110,7 +109,7 @@ impl<PR> ClientInner<PR> {
     }
 }
 
-impl<PR: RequestProcessor + Sync + 'static> TransportConnectionHandler for ClientInner<PR> {
+impl<PR: RequestProcessor + Sync + Clone + 'static> TransportConnectionHandler for ClientInner<PR> {
     fn connected(&self, session: SessionHandle) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         Box::pin(async move {
             self.connect(session);
@@ -122,7 +121,7 @@ impl<PR: RequestProcessor + Sync + 'static> TransportConnectionHandler for Clien
         session: SessionHandle,
         command: RemotingCommand,
     ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
-        let mut cmd_handler = self.cmd_handler.clone();
+        let cmd_handler = self.cmd_handler.clone();
         Box::pin(async move {
             let Some((_, context)) = self.sessions.remove(&session.session_id()) else {
                 return;
@@ -185,7 +184,7 @@ impl<PR> Drop for Client<PR> {
 
 fn connect<PR>(
     addr: String,
-    cmd_handler: ArcMut<RemotingGeneralHandler<PR>>,
+    cmd_handler: Arc<RemotingGeneralHandler<PR>>,
     tx: Option<tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
     _notify: broadcast::Receiver<()>,
     _send_notify: broadcast::Receiver<()>,
@@ -193,7 +192,7 @@ fn connect<PR>(
     task_group: TaskGroup,
 ) -> ClientConnectFuture
 where
-    PR: RequestProcessor + Sync + 'static,
+    PR: RequestProcessor + Sync + Clone + 'static,
 {
     Box::pin(async move {
         let connected = rocketmq_transport::client::connect_with_config(
@@ -239,7 +238,7 @@ where
 
 impl<PR> Client<PR>
 where
-    PR: RequestProcessor + Sync + 'static,
+    PR: RequestProcessor + Sync + Clone + 'static,
 {
     /// Creates a new `Client` instance and connects to the specified address.
     ///
@@ -252,7 +251,7 @@ where
     /// A new `Client` instance wrapped in a `Result`. Returns an error if the connection fails.
     pub(crate) async fn connect(
         addr: String,
-        cmd_handler: ArcMut<RemotingGeneralHandler<PR>>,
+        cmd_handler: Arc<RemotingGeneralHandler<PR>>,
         tx: Option<&tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
         tls_config: TlsConfig,
     ) -> RocketMQResult<Client<PR>> {
@@ -263,7 +262,7 @@ where
     pub(crate) async fn connect_with_service_context(
         context: &ServiceContext,
         addr: String,
-        cmd_handler: ArcMut<RemotingGeneralHandler<PR>>,
+        cmd_handler: Arc<RemotingGeneralHandler<PR>>,
         tx: Option<&tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
         tls_config: TlsConfig,
     ) -> RocketMQResult<Client<PR>> {
@@ -273,7 +272,7 @@ where
 
     async fn connect_with_task_group(
         addr: String,
-        cmd_handler: ArcMut<RemotingGeneralHandler<PR>>,
+        cmd_handler: Arc<RemotingGeneralHandler<PR>>,
         tx: Option<&tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
         tls_config: TlsConfig,
         task_group: TaskGroup,
@@ -614,11 +613,11 @@ mod lifecycle_tests {
             let (_socket, _) = listener.accept().await.expect("accept client");
             time::sleep(Duration::from_secs(5)).await;
         });
-        let cmd_handler = ArcMut::new(RemotingGeneralHandler {
-            request_processor: DefaultRemotingRequestProcessor,
-            rpc_hooks: vec![],
-            response_table: PendingRequestTable::new(),
-        });
+        let cmd_handler = Arc::new(RemotingGeneralHandler::new(
+            DefaultRemotingRequestProcessor,
+            vec![],
+            PendingRequestTable::new(),
+        ));
 
         let mut client = Client::connect(addr.to_string(), cmd_handler, None, TlsConfig::default())
             .await
@@ -656,11 +655,11 @@ mod lifecycle_tests {
             let (_socket, _) = listener.accept().await.expect("accept client");
             time::sleep(Duration::from_secs(5)).await;
         });
-        let cmd_handler = ArcMut::new(RemotingGeneralHandler {
-            request_processor: DefaultRemotingRequestProcessor,
-            rpc_hooks: vec![],
-            response_table: PendingRequestTable::new(),
-        });
+        let cmd_handler = Arc::new(RemotingGeneralHandler::new(
+            DefaultRemotingRequestProcessor,
+            vec![],
+            PendingRequestTable::new(),
+        ));
 
         let mut client = Client::connect(addr.to_string(), cmd_handler, None, TlsConfig::default())
             .await
@@ -717,11 +716,11 @@ mod lifecycle_tests {
             time::sleep(Duration::from_secs(5)).await;
         });
         let response_table = PendingRequestTable::new();
-        let cmd_handler = ArcMut::new(RemotingGeneralHandler {
-            request_processor: DefaultRemotingRequestProcessor,
-            rpc_hooks: vec![],
-            response_table: response_table.clone(),
-        });
+        let cmd_handler = Arc::new(RemotingGeneralHandler::new(
+            DefaultRemotingRequestProcessor,
+            vec![],
+            response_table.clone(),
+        ));
 
         let client =
             Client::connect_with_service_context(&service, addr.to_string(), cmd_handler, None, TlsConfig::default())

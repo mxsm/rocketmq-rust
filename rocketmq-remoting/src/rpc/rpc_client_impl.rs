@@ -55,7 +55,6 @@ use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_error::RocketMQResult;
 use rocketmq_error::RpcClientError;
 use rocketmq_runtime::TaskId;
-use rocketmq_rust::ArcMut;
 use tracing::error;
 use tracing::trace;
 
@@ -122,7 +121,7 @@ pub struct RpcClientImpl {
     /// Client metadata for broker address resolution
     client_metadata: Arc<ClientMetadata>,
     /// Underlying remoting client for network communication
-    remoting_client: ArcMut<RocketmqDefaultClient<DefaultRemotingRequestProcessor>>,
+    remoting_client: Arc<RocketmqDefaultClient<DefaultRemotingRequestProcessor>>,
     /// Registered client hooks for request interception
     client_hook_list: Vec<RpcClientHookFn>,
 }
@@ -136,7 +135,7 @@ impl RpcClientImpl {
     /// * `remoting_client` - Network client for sending requests
     pub fn new(
         client_metadata: Arc<ClientMetadata>,
-        remoting_client: ArcMut<RocketmqDefaultClient<DefaultRemotingRequestProcessor>>,
+        remoting_client: Arc<RocketmqDefaultClient<DefaultRemotingRequestProcessor>>,
     ) -> Self {
         RpcClientImpl {
             client_metadata,
@@ -545,7 +544,7 @@ mod tests {
     #[tokio::test]
     async fn invoke_without_broker_name_returns_typed_error_instead_of_panicking() {
         let client_metadata = Arc::new(ClientMetadata::new());
-        let remoting_client = ArcMut::new(RocketmqDefaultClient::new(
+        let remoting_client = Arc::new(RocketmqDefaultClient::new(
             Arc::new(TokioClientConfig::default()),
             DefaultRemotingRequestProcessor,
         ));
@@ -573,7 +572,7 @@ mod tests {
     #[tokio::test]
     async fn invoke_with_callback_uses_remoting_worker_task_group() {
         let client_metadata = Arc::new(ClientMetadata::new());
-        let remoting_client = ArcMut::new(RocketmqDefaultClient::new(
+        let remoting_client = Arc::new(RocketmqDefaultClient::new(
             Arc::new(TokioClientConfig::default()),
             DefaultRemotingRequestProcessor,
         ));
@@ -607,7 +606,7 @@ mod tests {
         );
         assert_eq!(worker_task_group.task_count(), 0);
 
-        remoting_client.mut_from_ref().shutdown();
+        remoting_client.shutdown();
 
         assert_eq!(
             worker_task_group.lifecycle_state(),

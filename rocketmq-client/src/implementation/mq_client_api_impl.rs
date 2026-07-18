@@ -341,7 +341,7 @@ impl AsyncRetryRequest {
 }
 
 pub struct MQClientAPIImpl {
-    remoting_client: ArcMut<RocketmqDefaultClient<ClientRemotingProcessor>>,
+    remoting_client: Arc<RocketmqDefaultClient<ClientRemotingProcessor>>,
     top_addressing: Arc<Box<dyn TopAddressing>>,
     name_srv_addr: Option<String>,
     client_config: Arc<ClientConfig>,
@@ -364,7 +364,7 @@ impl MQClientAPIImpl {
         for name_srv_addr in name_server_address_list {
             let response = self
                 .remoting_client
-                .invoke_request(Some(name_srv_addr), request.clone(), timeout_millis)
+                .invoke_request(Some(&name_srv_addr), request.clone(), timeout_millis)
                 .await?;
             match ResponseCode::from(response.code()) {
                 ResponseCode::Success => {
@@ -411,7 +411,7 @@ impl MQClientAPIImpl {
         for name_srv_addr in name_server_address_list {
             let response = self
                 .remoting_client
-                .invoke_request(Some(name_srv_addr), request.clone(), timeout_millis)
+                .invoke_request(Some(&name_srv_addr), request.clone(), timeout_millis)
                 .await?;
             match ResponseCode::from(response.code()) {
                 ResponseCode::Success => {}
@@ -484,7 +484,7 @@ impl MQClientAPIImpl {
         for name_srv_addr in name_server_address_list {
             let response = self
                 .remoting_client
-                .invoke_request(Some(name_srv_addr), request.clone(), timeout_millis)
+                .invoke_request(Some(&name_srv_addr), request.clone(), timeout_millis)
                 .await?;
             match ResponseCode::from(response.code()) {
                 ResponseCode::Success => {}
@@ -925,10 +925,10 @@ impl MQClientAPIImpl {
             if !name_servers.is_empty() {
                 name_servers
             } else {
-                Vec::from(self.get_name_server_address_list())
+                self.get_name_server_address_list()
             }
         } else {
-            Vec::from(self.get_name_server_address_list())
+            self.get_name_server_address_list()
         };
         if invoke_name_servers.is_empty() {
             return Ok(());
@@ -2112,14 +2112,14 @@ impl MQClientAPIImpl {
         remoting_config.use_tls = client_config.use_tls;
         remoting_config.tls_config = client_config.tls_config.clone();
         remoting_config.tls_config.enable = client_config.use_tls;
-        let mut default_client =
+        let default_client =
             RocketmqDefaultClient::new_with_cl(Arc::new(remoting_config), client_remoting_processor, tx);
         if let Some(hook) = rpc_hook {
             default_client.register_rpc_hook(hook);
         }
 
         MQClientAPIImpl {
-            remoting_client: ArcMut::new(default_client),
+            remoting_client: Arc::new(default_client),
             top_addressing: Arc::new(Box::new(DefaultTopAddressing::new(
                 mix_all::get_ws_addr().into(),
                 client_config.unit_name.clone(),
@@ -2133,7 +2133,7 @@ impl MQClientAPIImpl {
     }
 
     pub async fn start(&self) {
-        let client = ArcMut::downgrade(&self.remoting_client);
+        let client = Arc::downgrade(&self.remoting_client);
         self.remoting_client.start(client).await;
     }
 
@@ -2151,7 +2151,7 @@ impl MQClientAPIImpl {
             .is_ok()
     }
 
-    pub fn get_remoting_client(&self) -> ArcMut<RocketmqDefaultClient<ClientRemotingProcessor>> {
+    pub fn get_remoting_client(&self) -> Arc<RocketmqDefaultClient<ClientRemotingProcessor>> {
         self.remoting_client.clone()
     }
 
@@ -2294,7 +2294,7 @@ impl MQClientAPIImpl {
         }
     }
 
-    pub fn get_name_server_address_list(&self) -> &[CheetahString] {
+    pub fn get_name_server_address_list(&self) -> Vec<CheetahString> {
         self.remoting_client.get_name_server_address_list()
     }
 
@@ -2576,7 +2576,7 @@ impl MQClientAPIImpl {
     /// Background task implementation for async message sending.
     #[allow(clippy::type_complexity)]
     async fn send_message_async_impl(
-        remoting_client: ArcMut<RocketmqDefaultClient<ClientRemotingProcessor>>,
+        remoting_client: Arc<RocketmqDefaultClient<ClientRemotingProcessor>>,
         client_config: Arc<ClientConfig>,
         mq_fault_strategy: ArcMut<MQFaultStrategy>,
         mut current_addr: CheetahString,

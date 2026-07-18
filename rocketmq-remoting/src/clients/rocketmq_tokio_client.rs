@@ -15,11 +15,13 @@
 use std::collections::HashSet;
 use std::future::Future;
 use std::sync::Arc;
+use std::sync::Weak;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use parking_lot::Mutex;
+use parking_lot::RwLock;
 use rocketmq_runtime::RuntimeHandle;
 use rocketmq_runtime::RuntimeResult;
 use rocketmq_runtime::ServiceContext;
@@ -28,8 +30,6 @@ use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskGroupLifecycleState;
 use rocketmq_runtime::TaskId;
-use rocketmq_rust::ArcMut;
-use rocketmq_rust::WeakArcMut;
 use serde::Serialize;
 use tokio::time;
 use tokio_util::sync::CancellationToken;
@@ -144,17 +144,17 @@ pub struct RocketmqDefaultClient<PR = DefaultRemotingRequestProcessor> {
     /// List of all nameserver addresses (in priority order)
     ///
     /// Updated via `update_name_server_address_list()`
-    namesrv_addr_list: ArcMut<Vec<CheetahString>>,
+    namesrv_addr_list: Arc<RwLock<Vec<CheetahString>>>,
 
     /// Currently selected nameserver (cached for fast path)
     ///
     /// May be `None` if no nameserver available or all unhealthy
-    namesrv_addr_choosed: ArcMut<Option<CheetahString>>,
+    namesrv_addr_choosed: Arc<RwLock<Option<CheetahString>>>,
 
     /// Set of healthy/reachable nameservers
     ///
     /// Updated asynchronously by health check task (`scan_available_name_srv`)
-    available_namesrv_addr_set: ArcMut<HashSet<CheetahString>>,
+    available_namesrv_addr_set: Arc<RwLock<HashSet<CheetahString>>>,
 
     /// Latency tracker for smart nameserver selection
     ///
@@ -194,7 +194,7 @@ pub struct RocketmqDefaultClient<PR = DefaultRemotingRequestProcessor> {
     /// Shared command handler (processor + response table)
     ///
     /// Arc-wrapped to share across all `Client` instances
-    cmd_handler: ArcMut<RemotingGeneralHandler<PR>>,
+    cmd_handler: Arc<RemotingGeneralHandler<PR>>,
 
     /// Optional connection event broadcaster
     ///
@@ -284,17 +284,13 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
         tx: Option<tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
         service_context: Option<ServiceContext>,
     ) -> Self {
-        let handler = RemotingGeneralHandler {
-            request_processor: processor,
-            rpc_hooks: vec![],
-            response_table: PendingRequestTable::with_capacity(512),
-        };
+        let handler = RemotingGeneralHandler::new(processor, vec![], PendingRequestTable::with_capacity(512));
         Self {
             tokio_client_config,
             connection_tables: Arc::new(DashMap::with_capacity(64)),
-            namesrv_addr_list: ArcMut::new(Default::default()),
-            namesrv_addr_choosed: ArcMut::new(Default::default()),
-            available_namesrv_addr_set: ArcMut::new(Default::default()),
+            namesrv_addr_list: Arc::new(RwLock::new(Default::default())),
+            namesrv_addr_choosed: Arc::new(RwLock::new(Default::default())),
+            available_namesrv_addr_set: Arc::new(RwLock::new(Default::default())),
             latency_tracker: LatencyTracker::new(),
             circuit_breakers: Arc::new(DashMap::with_capacity(64)),
             connection_pool: None,
@@ -302,7 +298,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
             background_task_group: Arc::new(Mutex::new(None)),
             worker_task_group: Arc::new(Mutex::new(None)),
             service_context,
-            cmd_handler: ArcMut::new(handler),
+            cmd_handler: Arc::new(handler),
             tx,
             transport_security: None,
         }
@@ -331,21 +327,10 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
             return;
         }
 
-        let mut update = false;
-
-        {
-            let current: &Vec<CheetahString> = &self.namesrv_addr_list;
-            if current.is_empty() || addrs.len() != current.len() {
-                update = true;
-            } else {
-                for addr in &addrs {
-                    if !current.contains(addr) {
-                        update = true;
-                        break;
-                    }
-                }
-            }
-        }
+        let update = {
+            let current = self.namesrv_addr_list.read();
+            current.is_empty() || addrs.len() != current.len() || addrs.iter().any(|addr| !current.contains(addr))
+        };
 
         if !update {
             return;
@@ -354,21 +339,19 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
         info!(
             "name server address updated. NEW : {:?} , OLD: {:?}",
             addrs,
-            self.namesrv_addr_list.as_ref() as &Vec<CheetahString>
+            self.namesrv_addr_list.read().as_slice()
         );
 
         use rand::seq::SliceRandom;
         let mut shuffled = addrs.clone();
         shuffled.shuffle(&mut rand::rng());
 
-        let list = self.namesrv_addr_list.mut_from_ref();
-        list.clear();
-        list.extend(shuffled);
+        *self.namesrv_addr_list.write() = shuffled;
 
-        let stale_addr = self.namesrv_addr_choosed.as_ref().clone();
+        let stale_addr = self.namesrv_addr_choosed.read().clone();
         if let Some(namesrv_addr) = stale_addr {
             if !addrs.contains(&namesrv_addr) {
-                self.namesrv_addr_choosed.mut_from_ref().take();
+                self.namesrv_addr_choosed.write().take();
 
                 self.connection_tables.remove(&namesrv_addr);
             }
@@ -568,7 +551,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
     /// * `Some(client)` - Connected to healthy nameserver
     /// * `None` - No nameservers available or all unhealthy
     async fn get_and_create_nameserver_client(&self) -> Option<Client<PR>> {
-        let cached_addr = self.namesrv_addr_choosed.as_ref().clone();
+        let cached_addr = self.namesrv_addr_choosed.read().clone();
 
         if let Some(ref addr) = cached_addr {
             // Quick lookup in connection pool (lock-free with DashMap)
@@ -581,7 +564,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
             }
         }
 
-        let addr_list = self.namesrv_addr_list.as_ref();
+        let addr_list = self.namesrv_addr_list.read().clone();
 
         if addr_list.is_empty() {
             warn!("No nameservers configured in namesrv_addr_list");
@@ -589,13 +572,13 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
         }
 
         // Use latency tracker to select best nameserver
-        let selected_addr = match self.latency_tracker.select_best(addr_list) {
+        let selected_addr = match self.latency_tracker.select_best(&addr_list) {
             Some(addr) => addr,
             None => {
+                let available = self.available_namesrv_addr_set.read().clone();
                 error!(
                     "Failed to select healthy nameserver. Available list: {:?}, Available set: {:?}",
-                    addr_list,
-                    self.available_namesrv_addr_set.as_ref()
+                    addr_list, available
                 );
                 return None;
             }
@@ -611,7 +594,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
         );
 
         // Update cached selection
-        self.namesrv_addr_choosed.mut_from_ref().replace(selected_addr.clone());
+        self.namesrv_addr_choosed.write().replace(selected_addr.clone());
 
         self.create_client(
             selected_addr,
@@ -898,7 +881,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
     /// T+3s:  Next scan begins...
     /// ```
     async fn scan_available_name_srv(&self) {
-        let addr_list = self.namesrv_addr_list.as_ref();
+        let addr_list = self.namesrv_addr_list.read().clone();
 
         if addr_list.is_empty() {
             debug!("No nameservers configured, skipping availability scan");
@@ -908,7 +891,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
         // Collect addresses to remove (avoid holding borrow during mutation)
         let stale_addrs: Vec<CheetahString> = self
             .available_namesrv_addr_set
-            .as_ref()
+            .read()
             .iter()
             .filter(|addr| !addr_list.contains(addr))
             .cloned()
@@ -916,7 +899,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
 
         for stale_addr in stale_addrs {
             warn!("Removing stale nameserver from available set: {}", stale_addr);
-            self.available_namesrv_addr_set.mut_from_ref().remove(&stale_addr);
+            self.available_namesrv_addr_set.write().remove(&stale_addr);
         }
 
         // Parallel probing reduces total scan time
@@ -940,16 +923,12 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
         for (namesrv_addr, is_available) in results {
             if is_available {
                 // Connection successful - mark as available
-                if self
-                    .available_namesrv_addr_set
-                    .mut_from_ref()
-                    .insert(namesrv_addr.clone())
-                {
+                if self.available_namesrv_addr_set.write().insert(namesrv_addr.clone()) {
                     info!("Nameserver {} is now available", namesrv_addr);
                 }
             } else {
                 // Connection failed - mark as unavailable
-                if self.available_namesrv_addr_set.mut_from_ref().remove(&namesrv_addr) {
+                if self.available_namesrv_addr_set.write().remove(&namesrv_addr) {
                     warn!("Nameserver {} is now unavailable", namesrv_addr);
                 }
             }
@@ -957,7 +936,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
 
         debug!(
             "Availability scan complete: {}/{} nameservers available",
-            self.available_namesrv_addr_set.as_ref().len(),
+            self.available_namesrv_addr_set.read().len(),
             addr_list.len()
         );
     }
@@ -1007,7 +986,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
         }
     }
 
-    pub async fn shutdown_with_report(&mut self, timeout: Duration) -> RemotingClientShutdownReport {
+    pub async fn shutdown_with_report(&self, timeout: Duration) -> RemotingClientShutdownReport {
         let deadline = ShutdownDeadline::after(timeout);
         self.shutdown_token.cancel();
 
@@ -1023,7 +1002,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
             None => None,
         };
 
-        if let Some(pool) = self.connection_pool.take() {
+        if let Some(pool) = self.connection_pool.as_ref() {
             pool.clear();
         }
 
@@ -1041,8 +1020,9 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
             connections.push(RemotingClientConnectionShutdownReport { addr, report });
         }
 
-        self.namesrv_addr_list.clear();
-        self.available_namesrv_addr_set.clear();
+        self.namesrv_addr_list.write().clear();
+        self.namesrv_addr_choosed.write().take();
+        self.available_namesrv_addr_set.write().clear();
 
         RemotingClientShutdownReport {
             background,
@@ -1054,7 +1034,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
 
 #[allow(unused_variables)]
 impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingService for RocketmqDefaultClient<PR> {
-    async fn start(&self, this: WeakArcMut<Self>) {
+    async fn start(&self, this: Weak<Self>) {
         if let Some(client) = this.upgrade() {
             let task_group = {
                 let mut task_group_guard = self.background_task_group.lock();
@@ -1122,7 +1102,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingService for Rocketmq
         }
     }
 
-    fn shutdown(&mut self) {
+    fn shutdown(&self) {
         self.shutdown_token.cancel();
         if let Some(task_group) = self.background_task_group.lock().take() {
             let report = task_group.shutdown_now();
@@ -1142,21 +1122,22 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingService for Rocketmq
                 );
             }
         }
-        if let Some(pool) = self.connection_pool.take() {
+        if let Some(pool) = self.connection_pool.as_ref() {
             pool.clear();
         }
         self.connection_tables.clear();
-        self.namesrv_addr_list.clear();
-        self.available_namesrv_addr_set.clear();
+        self.namesrv_addr_list.write().clear();
+        self.namesrv_addr_choosed.write().take();
+        self.available_namesrv_addr_set.write().clear();
 
         info!("RemotingClient shutdown complete");
     }
 
-    fn register_rpc_hook(&mut self, hook: Arc<dyn RPCHook>) {
+    fn register_rpc_hook(&self, hook: Arc<dyn RPCHook>) {
         self.cmd_handler.register_rpc_hook(hook);
     }
 
-    fn clear_rpc_hook(&mut self) {
+    fn clear_rpc_hook(&self) {
         self.cmd_handler.clear_rpc_hook();
     }
 }
@@ -1167,12 +1148,12 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
         self.update_name_server_address_list_sync(addrs);
     }
 
-    fn get_name_server_address_list(&self) -> &[CheetahString] {
-        self.namesrv_addr_list.as_ref()
+    fn get_name_server_address_list(&self) -> Vec<CheetahString> {
+        self.namesrv_addr_list.read().clone()
     }
 
     fn get_available_name_srv_list(&self) -> Vec<CheetahString> {
-        self.available_namesrv_addr_set.as_ref().clone().into_iter().collect()
+        self.available_namesrv_addr_set.read().iter().cloned().collect()
     }
 
     /// Send request and wait for response with timeout.
@@ -1222,18 +1203,21 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
         let start = time::Instant::now();
 
         // Determine target address (for metrics recording)
-        let target_addr = addr.cloned().or_else(|| self.namesrv_addr_choosed.as_ref().clone());
+        let target_addr = addr.cloned().or_else(|| self.namesrv_addr_choosed.read().clone());
 
         let mut client = self.get_and_create_client(addr).await.ok_or_else(|| {
             let target = addr.map(|a| a.as_str()).unwrap_or("<nameserver>");
 
             if target == "<nameserver>" {
+                let configured_list = self.namesrv_addr_list.read().clone();
+                let available_set = self.available_namesrv_addr_set.read().clone();
+                let cached_choice = self.namesrv_addr_choosed.read().clone();
                 error!(
                     "Failed to get client for <nameserver>. Diagnostics: configured_list={:?}, available_set={:?}, \
                      cached_choice={:?}, connections={}",
-                    self.namesrv_addr_list.as_ref(),
-                    self.available_namesrv_addr_set.as_ref(),
-                    self.namesrv_addr_choosed.as_ref(),
+                    configured_list,
+                    available_set,
+                    cached_choice,
                     self.connection_tables.len()
                 );
             } else {
@@ -1459,7 +1443,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
         }
     }
 
-    fn is_address_reachable(&mut self, addr: &CheetahString) {
+    fn is_address_reachable(&self, addr: &CheetahString) {
         if let Some(client_ref) = self.connection_tables.get(addr) {
             if client_ref.value().connection().is_healthy() {
                 return;
@@ -1473,7 +1457,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
         }
     }
 
-    fn close_clients(&mut self, addrs: Vec<String>) {
+    fn close_clients(&self, addrs: Vec<String>) {
         for addr in &addrs {
             let key = CheetahString::from(addr.as_str());
             if let Some((_, _client)) = self.connection_tables.remove(&key) {
@@ -1482,7 +1466,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
         }
     }
 
-    fn register_processor(&mut self, processor: impl RequestProcessor + Sync) {
+    fn register_processor(&self, processor: impl RequestProcessor + Sync) {
         let _ = &processor;
         warn!("dynamic request processor registration is not supported by RocketmqDefaultClient after construction");
     }
@@ -1556,11 +1540,11 @@ mod tests {
             channel_not_active_interval: 10,
             ..Default::default()
         };
-        let client = ArcMut::new(RocketmqDefaultClient::new(
+        let client = Arc::new(RocketmqDefaultClient::new(
             Arc::new(config),
             DefaultRemotingRequestProcessor,
         ));
-        let weak_client = ArcMut::downgrade(&client);
+        let weak_client = Arc::downgrade(&client);
 
         client.start(weak_client).await;
 
@@ -1573,9 +1557,64 @@ mod tests {
         assert_eq!(task_group.lifecycle_state(), TaskGroupLifecycleState::Open);
         assert_eq!(task_group.task_count(), 2);
 
-        client.mut_from_ref().shutdown();
+        client.start(Arc::downgrade(&client)).await;
+        let repeated_start_group = client
+            .background_task_group
+            .lock()
+            .as_ref()
+            .cloned()
+            .expect("background task group after repeated start");
+        assert_eq!(repeated_start_group.id(), task_group.id());
+        assert_eq!(repeated_start_group.task_count(), 2);
+
+        client.shutdown();
 
         assert_eq!(task_group.lifecycle_state(), TaskGroupLifecycleState::ShutdownCompleted);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn concurrent_nameserver_updates_publish_complete_owned_snapshots() {
+        let client = Arc::new(RocketmqDefaultClient::new(
+            Arc::new(TokioClientConfig::default()),
+            DefaultRemotingRequestProcessor,
+        ));
+        let first = client.clone();
+        let second = client.clone();
+
+        let first_updates = tokio::spawn(async move {
+            for _ in 0..64 {
+                first.update_name_server_address_list_sync(vec!["ns-a:9876".into(), "ns-b:9876".into()]);
+                tokio::task::yield_now().await;
+            }
+        });
+        let second_updates = tokio::spawn(async move {
+            for _ in 0..64 {
+                second.update_name_server_address_list_sync(vec!["ns-c:9876".into(), "ns-d:9876".into()]);
+                tokio::task::yield_now().await;
+            }
+        });
+
+        for _ in 0..128 {
+            let snapshot = client.get_name_server_address_list();
+            assert!(snapshot.is_empty() || snapshot.len() == 2);
+            if let Some(first) = snapshot.first() {
+                let first_group = first.as_str().starts_with("ns-a") || first.as_str().starts_with("ns-b");
+                assert!(snapshot.iter().all(|address| {
+                    let address = address.as_str();
+                    if first_group {
+                        address.starts_with("ns-a") || address.starts_with("ns-b")
+                    } else {
+                        address.starts_with("ns-c") || address.starts_with("ns-d")
+                    }
+                }));
+            }
+            tokio::task::yield_now().await;
+        }
+
+        first_updates.await.expect("first updater should finish");
+        second_updates.await.expect("second updater should finish");
+        assert_eq!(client.get_name_server_address_list().len(), 2);
+        client.shutdown();
     }
 
     #[tokio::test]
@@ -1587,12 +1626,12 @@ mod tests {
             channel_not_active_interval: 10,
             ..Default::default()
         };
-        let client = ArcMut::new(RocketmqDefaultClient::new_with_service_context(
+        let client = Arc::new(RocketmqDefaultClient::new_with_service_context(
             Arc::new(config),
             DefaultRemotingRequestProcessor,
             service.clone(),
         ));
-        let weak_client = ArcMut::downgrade(&client);
+        let weak_client = Arc::downgrade(&client);
 
         client.start(weak_client).await;
         client
@@ -1615,7 +1654,7 @@ mod tests {
         assert_eq!(background_task_group.parent_id(), Some(service.task_group().id()));
         assert_eq!(worker_task_group.parent_id(), Some(service.task_group().id()));
 
-        client.mut_from_ref().shutdown();
+        client.shutdown();
         let report = service.task_group().shutdown(Duration::from_secs(1)).await;
         assert!(report.is_healthy(), "{}", report.to_json());
     }
@@ -1645,7 +1684,7 @@ mod tests {
         });
 
         let hook = Arc::new(CountingHook::default());
-        let mut client =
+        let client =
             RocketmqDefaultClient::new(Arc::new(TokioClientConfig::default()), DefaultRemotingRequestProcessor);
         client.register_rpc_hook(hook.clone());
 
@@ -1702,7 +1741,7 @@ mod tests {
                 .expect("send replacement response");
         });
 
-        let mut client =
+        let client =
             RocketmqDefaultClient::new(Arc::new(TokioClientConfig::default()), DefaultRemotingRequestProcessor);
         let target = CheetahString::from_string(addr.to_string());
         assert!(client
@@ -1752,7 +1791,7 @@ mod tests {
         });
 
         let hook = Arc::new(CountingHook::default());
-        let mut client =
+        let client =
             RocketmqDefaultClient::new(Arc::new(TokioClientConfig::default()), DefaultRemotingRequestProcessor);
         client.register_rpc_hook(hook.clone());
 
@@ -1794,7 +1833,7 @@ mod tests {
             let (_socket, _) = listener.accept().await.expect("accept client");
             time::sleep(Duration::from_secs(5)).await;
         });
-        let mut client =
+        let client =
             RocketmqDefaultClient::new(Arc::new(TokioClientConfig::default()), DefaultRemotingRequestProcessor);
 
         let target = CheetahString::from_string(addr.to_string());

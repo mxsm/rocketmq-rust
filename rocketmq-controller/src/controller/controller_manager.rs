@@ -69,7 +69,6 @@ use rocketmq_runtime::ServiceContext;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskKind;
-use rocketmq_rust::ArcMut;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::sync::Mutex as AsyncMutex;
@@ -395,7 +394,7 @@ pub struct ControllerManager {
     leadership_watch_tasks: Arc<Mutex<Option<ScheduledTaskGroup>>>,
 
     /// Remoting client for outbound RPC calls
-    remoting_client: ArcMut<RocketmqDefaultClient>,
+    remoting_client: Arc<RocketmqDefaultClient>,
 
     /// Metrics manager (optional, enabled with "metrics" feature)
     #[cfg(feature = "metrics")]
@@ -512,7 +511,7 @@ impl ControllerManager {
 
         // Initialize remoting client for outbound RPC
         let client_config = TokioClientConfig::default();
-        let remoting_client = ArcMut::new(RocketmqDefaultClient::new(
+        let remoting_client = Arc::new(RocketmqDefaultClient::new(
             Arc::new(client_config),
             DefaultRemotingRequestProcessor,
         ));
@@ -837,7 +836,7 @@ impl ControllerManager {
 
         // Start remoting client (for outbound RPC calls)
         {
-            let weak_client = ArcMut::downgrade(&self.remoting_client);
+            let weak_client = Arc::downgrade(&self.remoting_client);
             self.remoting_client.start(weak_client).await;
             info!("Remoting client started");
         }
@@ -965,7 +964,7 @@ impl ControllerManager {
 
         // Shutdown remoting client
         {
-            self.remoting_client.mut_from_ref().shutdown();
+            self.remoting_client.shutdown();
             info!("Remoting client shut down");
         }
 
@@ -1111,7 +1110,7 @@ impl ControllerManager {
     /// # Returns
     ///
     /// A clone of the Arc-wrapped remoting client for making outbound RPC calls
-    pub fn remoting_client(&self) -> ArcMut<RocketmqDefaultClient> {
+    pub fn remoting_client(&self) -> Arc<RocketmqDefaultClient> {
         self.remoting_client.clone()
     }
 

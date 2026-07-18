@@ -266,6 +266,11 @@ writer 后，实际快照降至 514 production/1,612 occurrence；Channel/Contex
 Broker/Client/Controller/NameServer/Auth/Proxy 中由旧 Context 别名传播的条目。剩余 production 债务为 Broker
 192/574、Client 147/604、Store 127/324、Remoting 21/41、NameServer 20/49、Controller 4/6、Tools 3/14；
 总进度仍为 75/82，后续 owner、compatibility、stable/SLO/HUMAN Gate 保持开放。
+Remoting client/handler owner 随 Issue #8309 改为安全 `Arc` handler、每请求 clone-local processor adapter、显式
+同步的 hook/NameServer 选择状态与标准 `Arc`/`Weak` lifecycle 后，实际快照降至 488 production/1,559
+occurrence。Controller production 债务清零，NameServer 仅剩 V1 tables 16/44，Remoting 仅剩 protocol
+compatibility 6/9；剩余为 Broker 190/569、Client 146/599、Store 127/324、NameServer 16/44、Remoting
+6/9、Tools 3/14。总进度仍为 75/82，M11-12 总 Gate 未关闭。
 
 ### 9.3 证据目录
 

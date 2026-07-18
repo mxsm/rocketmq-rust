@@ -2208,7 +2208,7 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
             let mq_client_api = mq_client_instance.get_mq_client_api_impl()?;
             let timeout_millis = self.remoting_timeout_millis()?;
             let controller_servers =
-                controller_servers_or_namesrv(controller_servers, mq_client_api.get_name_server_address_list());
+                controller_servers_or_namesrv(controller_servers, &mq_client_api.get_name_server_address_list());
 
             for controller_addr in controller_servers {
                 let config = mq_client_api
