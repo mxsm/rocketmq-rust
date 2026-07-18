@@ -1614,11 +1614,17 @@ mod tests {
         assert_eq!(results.into_iter().filter(|initialized| *initialized).count(), 1);
         assert!(manager.broker_housekeeping_service.lock().is_some());
 
-        let processor = ControllerRequestProcessor::new(manager.clone());
+        let processor = Arc::new(ControllerRequestProcessor::new(manager.clone()));
+        let wrapper =
+            crate::processor::ControllerRequestProcessorWrapper::ControllerRequestProcessor(processor.clone());
+        let wrapper_clone = wrapper.clone();
+        assert_eq!(Arc::strong_count(&processor), 3);
         let weak_manager = Arc::downgrade(&manager);
         drop(manager);
 
         assert!(weak_manager.upgrade().is_none());
+        drop(wrapper_clone);
+        drop(wrapper);
         drop(processor);
     }
 

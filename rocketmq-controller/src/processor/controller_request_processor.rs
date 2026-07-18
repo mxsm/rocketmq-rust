@@ -84,6 +84,7 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::future::Future;
 use std::sync::Arc;
 use std::sync::Weak;
 use std::time::Duration;
@@ -216,8 +217,8 @@ impl ControllerRequestProcessor {
     /// # Returns
     ///
     /// Result containing the response command or error
-    async fn handle_request(
-        &mut self,
+    pub(super) async fn handle_request(
+        &self,
         channel: Channel,
         ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
@@ -289,7 +290,7 @@ impl ControllerRequestProcessor {
     ///
     /// **TODO**: Implement Controller::alter_sync_state_set() in the controller layer
     async fn handle_alter_sync_state_set(
-        &mut self,
+        &self,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
@@ -336,7 +337,7 @@ impl ControllerRequestProcessor {
     ///
     /// Result containing response command with new master information
     async fn handle_elect_master(
-        &mut self,
+        &self,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
@@ -382,7 +383,7 @@ impl ControllerRequestProcessor {
     ///
     /// Result containing replica information
     async fn handle_get_replica_info(
-        &mut self,
+        &self,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request: &mut RemotingCommand,
@@ -413,7 +414,7 @@ impl ControllerRequestProcessor {
     ///
     /// Result containing controller metadata
     async fn handle_get_metadata_info(
-        &mut self,
+        &self,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request: &mut RemotingCommand,
@@ -436,7 +437,7 @@ impl ControllerRequestProcessor {
     ///
     /// Result containing acknowledgment
     async fn handle_broker_heartbeat(
-        &mut self,
+        &self,
         channel: Channel,
         _ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
@@ -486,7 +487,7 @@ impl ControllerRequestProcessor {
     ///
     /// Result containing sync state data
     async fn handle_get_sync_state_data(
-        &mut self,
+        &self,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
@@ -515,7 +516,7 @@ impl ControllerRequestProcessor {
     ///
     /// Result containing success or error response
     async fn handle_update_controller_config(
-        &mut self,
+        &self,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
@@ -584,7 +585,7 @@ impl ControllerRequestProcessor {
     ///
     /// Result containing configuration string
     async fn handle_get_controller_config(
-        &mut self,
+        &self,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request: &mut RemotingCommand,
@@ -610,7 +611,7 @@ impl ControllerRequestProcessor {
     ///
     /// Result containing success or error response
     async fn handle_clean_broker_data(
-        &mut self,
+        &self,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
@@ -647,7 +648,7 @@ impl ControllerRequestProcessor {
     ///
     /// Result containing the allocated broker ID
     async fn handle_get_next_broker_id(
-        &mut self,
+        &self,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
@@ -747,7 +748,7 @@ impl ControllerRequestProcessor {
     /// - Controller is not the leader
     /// - Raft consensus fails
     async fn handle_apply_broker_id(
-        &mut self,
+        &self,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
@@ -847,7 +848,7 @@ impl ControllerRequestProcessor {
     ///
     /// Result containing registration response
     async fn handle_register_broker(
-        &mut self,
+        &self,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
@@ -898,24 +899,18 @@ impl ControllerRequestProcessor {
     }
 }
 
-// ==================== RequestProcessor Implementation ====================
-
-impl RequestProcessor for ControllerRequestProcessor {
-    async fn process_request(
-        &mut self,
-        channel: Channel,
-        ctx: ConnectionHandlerContext,
-        request: &mut RemotingCommand,
-    ) -> RocketMQResult<Option<RemotingCommand>> {
-        let request_code = RequestCode::from(request.code());
-        let request_name = request_code.get_controller_request_name();
+impl ControllerRequestProcessor {
+    pub(super) async fn complete_request<F>(
+        &self,
+        request_name: Option<&'static str>,
+        dispatch: F,
+    ) -> RocketMQResult<Option<RemotingCommand>>
+    where
+        F: Future<Output = RocketMQResult<Option<RemotingCommand>>>,
+    {
         let start = Instant::now();
 
-        let result = tokio::time::timeout(
-            Duration::from_secs(WAIT_TIMEOUT_SECONDS),
-            self.handle_request(channel, ctx, request),
-        )
-        .await;
+        let result = tokio::time::timeout(Duration::from_secs(WAIT_TIMEOUT_SECONDS), dispatch).await;
 
         let latency_us = start.elapsed().as_micros().try_into().unwrap_or(u64::MAX);
         match result {
@@ -952,6 +947,21 @@ impl RequestProcessor for ControllerRequestProcessor {
                 )))
             }
         }
+    }
+}
+
+// ==================== RequestProcessor Implementation ====================
+
+impl RequestProcessor for ControllerRequestProcessor {
+    async fn process_request(
+        &mut self,
+        channel: Channel,
+        ctx: ConnectionHandlerContext,
+        request: &mut RemotingCommand,
+    ) -> RocketMQResult<Option<RemotingCommand>> {
+        let request_name = RequestCode::from(request.code()).get_controller_request_name();
+        let dispatch = self.handle_request(channel, ctx, request);
+        self.complete_request(request_name, dispatch).await
     }
 }
 
