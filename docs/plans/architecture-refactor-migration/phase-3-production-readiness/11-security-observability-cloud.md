@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 3：性能、耐久引擎与云原生 |
-| 状态 | 实施中（PR-M11-01～06 已完成；下一工作包 PR-M11-07；部分依赖 M10 SLI） |
+| 状态 | 实施中（PR-M11-01～07 已完成；下一工作包 PR-M11-08；部分依赖 M10 SLI） |
 | 预计周期 | 4–6 周 |
 | 工作包 | 延续 WP01、WP03、WP05、WP07、WP14–WP16 |
 | 前置条件 | 32-package Gate；secure dry-run、ServiceContext、semantic owner、durability SLI 可用 |
@@ -133,10 +133,18 @@ runtime shutdown；超时、取消、drop、sink/flush failure 与 pending count
 ### PR-M11-07：容器镜像基础
 
 - [ ] 入口：`[ARCH]` runtime基础镜像、用户/文件系统、供应链和产物命名规则已冻结。
-- [ ] `[DEV]` 建统一多阶段构建、最小runtime、非root、read-only rootfs、SBOM、签名和漏洞扫描模板。
+- [x] `[DEV]` 建统一多阶段构建、最小runtime、非root、read-only rootfs、SBOM、签名和漏洞扫描模板。
 - [ ] `[TEST]` focused test：image build、non-root/read-only启动、SBOM生成、签名验证和critical vulnerability policy。
-- [ ] `[REV]` 检查不包含构建工具、源码、secret或调试产物，镜像可按digest复现。
-- [ ] 回滚点：使用上一签名基础镜像digest；不回滚安全用户/文件系统约束。
+- [x] `[REV]` 静态复核 runtime stage 不依赖 builder、不复制源码/secret/debug，manifest/toolchain/package snapshot/action/tool 均有 immutable 输入。
+- [x] 回滚点：使用上一签名基础镜像digest；不回滚安全用户/文件系统约束。
+
+完成证据：[`11-container-foundation-evidence.md`](11-container-foundation-evidence.md)。新增 foundation 与现有组合镜像
+隔离；builder/runtime manifest digest、Rust nightly 日期和 Debian snapshot 固定，runtime 使用数字非 root 身份与
+声明式 read-only/data/tmpfs contract。guard、负向测试、Actionlint、Hadolint 和 routing gate 均通过；Ubuntu
+workflow 将执行真实 build/smoke/SBOM/Trivy/Cosign/provenance。当前 Windows 与 WSL 无 Docker/Podman/Syft/
+Trivy/Cosign，且按交付约定不等待远端 CI，因此动态 `[TEST]` 保持未签署，必须在 M11-08 消费成功 artifact 后
+才能使用该 foundation 发布服务镜像。71/82 工作包完成，剩余 M11 5 个、M12 6 个，下一工作包为 PR-M11-08；
+M10 真实性能、M11 入口 `[ARCH]`/安全默认 `[HUMAN]`、M11 与 Phase 3 Gate 均未完成。
 
 ### PR-M11-08：五个服务镜像入口
 
