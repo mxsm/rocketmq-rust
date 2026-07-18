@@ -5,7 +5,7 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 3：性能、耐久引擎与云原生 |
-| 状态 | 实施中（PR-M11-01～03 已完成；下一工作包 PR-M11-04；部分依赖 M10 SLI） |
+| 状态 | 实施中（PR-M11-01～04 已完成；下一工作包 PR-M11-05；部分依赖 M10 SLI） |
 | 预计周期 | 4–6 周 |
 | 工作包 | 延续 WP01、WP03、WP05、WP07、WP14–WP16 |
 | 前置条件 | 32-package Gate；secure dry-run、ServiceContext、semantic owner、durability SLI 可用 |
@@ -90,10 +90,16 @@ Phase 3 Gate 均保持未完成。
 ### PR-M11-04：Credential/Certificate Rotation 与原子 Reload
 
 - [ ] 入口：`[ARCH]` overlap窗口、active identity、撤销、last-known-good和break-glass审计状态机已冻结。
-- [ ] `[DEV]` 实现新旧材料重叠验证→切active→撤销旧材料；reload先完整解析/验证再原子交换。
-- [ ] `[TEST]` focused test：kid/cert rotation、并发请求、reload partial/invalid、旧材料撤销、break-glass启停与审计。
-- [ ] `[REV]` 检查失败保留last-known-good或fail closed，不应用半份配置，不丢审计。
-- [ ] 回滚点：原子指回已验证的last-known-good credential version；已撤销材料不得静默复活。
+- [x] `[DEV]` 实现新旧材料重叠验证→切active→撤销旧材料；reload先完整解析/验证再原子交换。
+- [x] `[TEST]` focused test：kid/cert rotation、并发请求、reload partial/invalid、旧材料撤销、break-glass启停与审计。
+- [x] `[REV]` 检查失败保留last-known-good或fail closed，不应用半份配置，不丢审计。
+- [x] 回滚点：原子指回已验证的last-known-good credential version；已撤销材料不得静默复活。
+
+完成证据：[`11-credential-rotation-evidence.md`](11-credential-rotation-evidence.md)。Auth owner 以 audit-first、不可变
+generation 快照完成 active/retiring/revoked/break-glass 状态机；TLS owner 把 certificate/key/trust 完整构建结果与
+generation 一起原子发布，并串行化手动 reload 与 watcher 写者。Windows 与 WSL/Linux 的 credential、真实证书、
+partial/invalid、last-known-good 和并发 reload 测试通过。68/82 工作包完成，剩余 M11 8 个、M12 6 个，下一工作包为
+PR-M11-05。M11 入口 `[ARCH]`、安全默认值 `[HUMAN]`、M10 真实性能、M11 与 Phase 3 Gate 均保持未完成。
 
 ### PR-M11-05：MCP HTTPS、JWKS 与 Principal 传播
 

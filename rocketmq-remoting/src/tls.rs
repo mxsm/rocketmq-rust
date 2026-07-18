@@ -35,6 +35,7 @@ pub use rocketmq_transport::tls::load_certificates;
 pub use rocketmq_transport::tls::tls_disabled_error;
 pub use rocketmq_transport::tls::TlsConfig;
 pub use rocketmq_transport::tls::TlsMode;
+pub use rocketmq_transport::tls::TlsReloadReport;
 pub use rocketmq_transport::tls::TLS_DISABLED_ERROR_REASON;
 use tokio::net::TcpStream;
 #[cfg(feature = "tls")]
@@ -119,6 +120,15 @@ impl TlsServerRuntime {
 
     pub fn mode(&self) -> TlsMode {
         self.inner.mode()
+    }
+
+    pub fn active_generation(&self) -> u64 {
+        self.inner.active_generation()
+    }
+
+    #[cfg(feature = "tls")]
+    pub async fn reload_now_with_report(&self) -> rocketmq_error::RocketMQResult<TlsReloadReport> {
+        self.inner.reload_now_with_report().await
     }
 
     pub(crate) fn transport_runtime(&self) -> rocketmq_transport::tls::TlsServerRuntime {
