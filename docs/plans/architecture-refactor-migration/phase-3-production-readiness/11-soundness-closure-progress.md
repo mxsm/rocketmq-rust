@@ -6,7 +6,7 @@ M11-12 的最终目标是 production/public compatibility API 中不存在 `ArcM
 `mut_from_ref` 或 clone-safe `AsMut`/`DerefMut`，并让默认 workspace 在 stable Rust 下通过，同时把 Miri/Loom、
 soak、SLO fault、dashboard/runbook、rollback 和 Human Gate 绑定到同一候选快照。
 
-该目标尚未完成。本文件记录 M11-12a～i 子切片的真实下降，不把子切片计为第 76 个工作包，也不刷新
+该目标尚未完成。本文件记录 M11-12a～j 子切片的真实下降，不把子切片计为第 76 个工作包，也不刷新
 baseline 来掩盖剩余债务。父 Issue 为 #8292；M11-12a 子切片 Issue 为 #8293；分支为
 `mxsm/architecture-refactor-owned-values`。
 
@@ -33,6 +33,9 @@ M11-12h 的 Remoting client/handler owner 由 Issue #8309 跟踪，分支为
 
 M11-12i 的 NameServer V1 table owner 由 Issue #8311 跟踪，分支为
 `mxsm/architecture-refactor-namesrv-v1-tables`；它仍是同一 M11-12 工作包的子切片。
+
+M11-12j 的 Remoting protocol compatibility 由 Issue #8313 跟踪，分支为
+`mxsm/architecture-refactor-remoting-protocol-compat`；它仍是同一 M11-12 工作包的子切片。
 
 ## 初始盘点
 
@@ -246,6 +249,33 @@ reviewed baseline 删除 `route_info_manager.rs` 中真实消失的 16 个 produ
 occurrence 2,357→2,311，分类精确为 production 472/1,515、test 267/756、compatibility 14/40。默认
 `python scripts/arc_mut_guard.py` 通过。
 
+## M11-12j Remoting protocol compatibility
+
+| 目标 | 实现与证据 |
+|---|---|
+| canonical wire owner | Remoting topic-config wrapper 不再维护 `DashMap<CheetahString, ArcMut<_>>` 镜像，直接 re-export `rocketmq-protocol` 的 owned `HashMap` DTO；Serde 字段名和 register-broker 编码仍由同一 canonical 类型负责 |
+| header capability | 删除固定接受 `ArcMut<Box<dyn CommandCustomHeader>>` 的 deprecated facade；RPC response 使用 owned boxed-header setter，header materialize/decode 保持完整 |
+| mapping mutation | 删除接受 `ArcMut<TopicQueueMappingDetail>` 的 deprecated helper；canonical mapping detail 只通过 `&mut` 独占引用变更 |
+| consumer migration | Broker 把内部 TopicConfig/mapping manager 的共享值克隆成 owned protocol snapshot；NameServer V1/V2 使用普通 `HashMap` 键值迭代，不再依赖 DashMap guard API |
+| compatibility contract | M04 测试改为 canonical DTO 类型同一性、Serde round-trip 与独占 mapping mutation；删除只固化危险签名的 legacy header test |
+
+M11-12j 后实际快照为 747 个条目：production 466、test 267、compatibility 14；production occurrence 为
+1,505。相对 M11-12i 删除 6 个 production 条目和 10 个 production occurrence；相对初始快照累计删除
+294 个 production 条目和 620 个 production occurrence。`rocketmq-remoting` production 债务从 6/9 降至零，
+Broker 的增量注册 wire snapshot 同步减少 1 个 occurrence。剩余 production 债务为：
+
+| crate | 条目 | occurrence |
+|---|---:|---:|
+| `rocketmq-broker` | 190 | 568 |
+| `rocketmq-client` | 146 | 599 |
+| `rocketmq-store` | 127 | 324 |
+| `rocketmq-tools` | 3 | 14 |
+
+reviewed baseline 删除三个 Remoting protocol compatibility 文件中真实消失的 6 个 identity/9 个 occurrence，
+以及 Broker wire-wrapper 的 1 个 occurrence，不需要 relocation approval；baseline 753→747、occurrence
+2,311→2,301，分类精确为 production 466/1,505、test 267/756、compatibility 14/40。默认
+`python scripts/arc_mut_guard.py` 通过。
+
 ## 已执行验证
 
 | 命令 | 结果 |
@@ -441,14 +471,39 @@ M11-12i 追加验证：
 | `.\scripts\check-agents-routing.ps1` | 通过；4 个 standalone Cargo、3 个 Node project、8 条 route |
 | `git diff --check` | 通过 |
 
+M11-12j 追加验证：
+
+| 命令 | 结果 |
+|---|---|
+| `cargo check -p rocketmq-remoting -p rocketmq-broker -p rocketmq-namesrv --all-targets --all-features` | 通过；canonical DTO 的全部直接消费者完成编译 |
+| `cargo test -p rocketmq-remoting --test m04_compatibility_facades --all-features --quiet` | 9/9 通过；owned DTO 同一性、Serde round-trip 与独占 mapping mutation 通过 |
+| `cargo test -p rocketmq-remoting rpc_response_command_preserves_owned_boxed_header --lib --all-features --quiet` | 1/1 通过；首次测试错误假设既有带-header路径保留非零 response code，收窄为本切片 owned header 合同后通过，production response-code 语义未修改 |
+| `cargo test -p rocketmq-protocol --all-features --quiet` | 全部通过；library 1,369/1,369，integration 4/4 |
+| `cargo test -p rocketmq-remoting --all-features --quiet` | 全部通过；library 121/121，全部 integration 与 doc targets 通过（按既有设置忽略 1 项 integration、21 项 doc） |
+| `cargo test -p rocketmq-namesrv --all-features --quiet` | 全部通过；library 182/182，其余 bin/integration/doc targets 全部通过（doc 1 忽略） |
+| `cargo test -p rocketmq-namesrv --test route_info_manager_integration --all-features --quiet` | 最终 canonical identity 清理后 7/7 通过 |
+| `cargo test -p rocketmq-broker register_broker_request_parts_preserves_compression_header_and_body --lib --all-features --quiet` | 1/1 通过；压缩/非压缩 register body 均可解码 |
+| `cargo test -p rocketmq-broker phase3_topic_config_admin_processor_returns_decodable_bodies --lib --all-features --quiet` | 1/1 通过；管理端 topic-config/mapping body 可解码 |
+| `rocketmq-example`: `cargo fmt --all -- --check` / `cargo clippy --all-targets -- -D warnings` | standalone 消费者通过 |
+| targeted Remoting `ArcMut`/`WeakArcMut`/`mut_from_ref` scan | `NO_TARGETED_ARCMUT`；Remoting production 债务为零 |
+| `python scripts/arc_mut_guard.py --bootstrap target/m11-12j-remoting-protocol-after.json` | 实际 747 条；production 466/1,505、test 267/756、compatibility 14/40 occurrences |
+| reviewed baseline reduction | 无 relocation approval；删除 Remoting 6 个 identity/9 occurrences 与 Broker wire-wrapper 1 occurrence，baseline 753→747、occurrences 2,311→2,301 |
+| `python scripts/arc_mut_guard.py` | 通过 |
+| `python -m unittest scripts.tests.test_arc_mut_guard -v` | 67/67 通过 |
+| `python scripts/arc_mut_guard.py --fixtures` | 24/24 通过 |
+| `cargo fmt --all -- --check` | 通过 |
+| `cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings` | 前两次分别捕获测试 `contains_key` lint 与 canonical identity 冗余 `.into()`，修复后通过；Windows linker stdout 与既有 future-incompatibility note 不受 `-D warnings` 管辖 |
+| architecture target/baseline 与 release guard | 通过；35/35 target edges、3/3 test edges、32/32 release topology |
+| `.\scripts\check-agents-routing.ps1` | 通过；4 个 standalone Cargo、3 个 Node project、8 条 route |
+| `git diff --check` | 通过 |
+
 ## 剩余切片与 Gate
 
-1. Remoting protocol compatibility 6/9；Channel/Context 与 client/handler/server/RPC owner 已完成并定向清零。
-2. Client owned-message、MQClientInstance、Producer/Admin、Push/Lite Consumer owner（146/599）。
-3. Broker TopicConfig/offset、BrokerRuntimeInner、schedule/POP/processor/transaction owner（190/569）。
-4. Store TopicConfig snapshot、MappedFileQueue/ConsumeQueue、CommitLog/Flush、StoreHandle/Rocks/Timer 与 HA actor（127/324）。
-5. Tools 3/14、compatibility `arc_mut.rs` 和公开 re-export；移除其余 nightly feature，将 guard 切到 production/public zero。
-6. 对同一候选快照执行 stable feature matrix、Miri/Loom 可用切片、soak/SLO fault、dashboard/runbook、动态
+1. Client owned-message、MQClientInstance、Producer/Admin、Push/Lite Consumer owner（146/599）。
+2. Broker TopicConfig/offset、BrokerRuntimeInner、schedule/POP/processor/transaction owner（190/568）。
+3. Store TopicConfig snapshot、MappedFileQueue/ConsumeQueue、CommitLog/Flush、StoreHandle/Rocks/Timer 与 HA actor（127/324）。
+4. Tools 3/14、compatibility `arc_mut.rs` 和公开 re-export；移除其余 nightly feature，将 guard 切到 production/public zero。
+5. 对同一候选快照执行 stable feature matrix、Miri/Loom 可用切片、soak/SLO fault、dashboard/runbook、动态
    Kind/K3d/container、M10 固定硬件和 Human Gate。
 
 任何切片失败都只回滚对应独立 PR，不扩大 baseline，不删除 durability/fault 证据，也不把 fixture 当作动态 PASS。

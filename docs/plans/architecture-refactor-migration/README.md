@@ -275,6 +275,9 @@ NameServer V1 tables 随 Issue #8311 从 `ArcMut<HashMap>` 改为 manager 独占
 既有 `Mutex<RouteInfoManager>` wrapper 串行并要求 `&mut self`；实际快照降至 472 production/1,515
 occurrence，NameServer production 债务清零。剩余为 Broker 190/569、Client 146/599、Store 127/324、
 Remoting protocol compatibility 6/9 与 Tools 3/14；总进度仍为 75/82。
+Remoting protocol compatibility 随 Issue #8313 删除固定 `ArcMut` header/mapping-detail facade，并直接 re-export
+Protocol canonical owned wire DTO；实际快照降至 466 production/1,505 occurrence，Remoting production 债务
+清零。剩余为 Broker 190/568、Client 146/599、Store 127/324 与 Tools 3/14；总进度仍为 75/82。
 
 ### 9.3 证据目录
 

@@ -97,42 +97,34 @@ fn legacy_subscription_wrapper_keeps_dashmap_arc_mutation_semantics() {
 }
 
 #[test]
-fn legacy_mapping_wrapper_keeps_dashmap_arcmut_fields() {
-    let canonical = rocketmq_protocol::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper {
+fn mapping_wrapper_is_the_canonical_owned_wire_dto() {
+    let wrapper = TopicConfigAndMappingSerializeWrapper {
         topic_queue_mapping_detail_map: HashMap::from([(
             CheetahString::from_static_str("topic"),
             TopicQueueMappingDetail::default(),
         )]),
         ..Default::default()
     };
-    let wrapper = TopicConfigAndMappingSerializeWrapper::from(canonical);
-    assert!(wrapper.topic_queue_mapping_detail_map.get("topic").is_some());
-
     let canonical: rocketmq_protocol::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper =
-        (&wrapper).into();
-    let round_trip = TopicConfigAndMappingSerializeWrapper::from(canonical);
-    assert!(round_trip.topic_queue_mapping_detail_map.get("topic").is_some());
+        wrapper.clone();
+    let encoded = serde_json::to_vec(&canonical).unwrap();
+    let round_trip: TopicConfigAndMappingSerializeWrapper = serde_json::from_slice(&encoded).unwrap();
+    assert!(round_trip.topic_queue_mapping_detail_map.contains_key("topic"));
 }
 
 #[test]
-#[allow(deprecated)]
-fn legacy_static_topic_adapter_mutates_arcmut_detail() {
-    let canonical = rocketmq_protocol::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper {
+fn canonical_static_topic_detail_requires_exclusive_mutation() {
+    let mut wrapper = TopicConfigAndMappingSerializeWrapper {
         topic_queue_mapping_detail_map: HashMap::from([(
             CheetahString::from_static_str("topic"),
             TopicQueueMappingDetail::default(),
         )]),
         ..Default::default()
     };
-    let wrapper = TopicConfigAndMappingSerializeWrapper::from(canonical);
-    let detail = wrapper.topic_queue_mapping_detail_map.get("topic").unwrap().clone();
-    rocketmq_remoting::protocol::static_topic::put_mapping_info(
-        detail.clone(),
-        3,
-        vec![LogicQueueMappingItem::default()],
-    );
+    let detail = wrapper.topic_queue_mapping_detail_map.get_mut("topic").unwrap();
+    TopicQueueMappingDetail::put_mapping_info(detail, 3, vec![LogicQueueMappingItem::default()]);
 
-    assert!(TopicQueueMappingDetail::get_mapping_info(detail.as_ref(), 3).is_some());
+    assert!(TopicQueueMappingDetail::get_mapping_info(detail, 3).is_some());
 }
 
 #[test]
