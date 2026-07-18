@@ -29,15 +29,15 @@
 
 | 指标 | 已完成 | 进行中 | 未开始/未完成 | 目标 |
 |---|---:|---:|---:|---:|
-| PR 级工作包 | 64 | 0 | 18 未开始；合计 18 尚未完成 | 82 |
-| 里程碑 | 9（M01–M09） | 1（M10，工作包完成、Gate 待验收） | 2（M11–M12） | 12 |
+| PR 级工作包 | 65 | 0 | 17 未开始；合计 17 尚未完成 | 82 |
+| 里程碑 | 9（M01–M09） | 2（M10 待验收、M11 实施中） | 1（M12） | 12 |
 | 新增边界 crate | 10 | 0 | 0 | 10 |
 | 根 workspace package | 32 | — | 0 | 32 |
 | Phase Gate | 2 | 1（Phase 3） | 1（Phase 4） | 4 |
 
-剩余 18 个未开始工作包分布：M10 为 0 个、M11 为 12 个、M12 为 6 个。
+剩余 17 个未开始工作包分布：M10 为 0 个、M11 为 11 个、M12 为 6 个。
 PR-M10-05 已完成性能门禁实现；真实固定硬件 baseline/candidate 与 HUMAN M10 Gate 尚未完成，因此 M10 为
-`待验收`而非`已完成`。当前下一工作包为 PR-M11-01。
+`待验收`而非`已完成`。M11 为`实施中`，当前下一工作包为 PR-M11-02。
 
 目标态依赖债务不能与工作包计数混用：`architecture_dependency_guard.py --mode target` 当前严格通过，
 表示未登记的目标 DAG finding 为 0；它不表示 R0 兼容依赖已经物理删除。现存边分为 35 条精确
@@ -518,7 +518,14 @@ M09-04 再删除 MCP 未使用的 Auth/Error direct edges，并把承担 owned t
 
 任务文档：[`11-security-observability-cloud.md`](phase-3-production-readiness/11-security-observability-cloud.md)
 
-- [ ] PR-M11-01：建立 Telemetry semantic registry
+- [x] PR-M11-01：建立 Telemetry semantic registry
+  - [x] 119 个 metric、4 个 span、7 个 stable log event 与 66 个 attribute 进入 versioned registry
+  - [x] guard 与 Rust semantic/catalog/span/event/outage 常量双向同步，拒绝未知信号、隐私/基数/采样/deprecation 漂移
+  - [x] 7 类故意违规 fixture 与 7 个 guard 单测通过；全架构 guard 132/132 通过并接入 Linux/Windows CI
+  - [x] collector outage queue 同时限制 count/bytes/record，`try_enqueue` 不等待并计量 drop；provider 共享绝对关闭预算
+  - [x] observability 精确 7 组 feature matrix 的 workspace check、strict Clippy 和 package test 全部通过
+  - [x] [`M11-01 证据`](phase-3-production-readiness/11-telemetry-semantic-registry-evidence.md) 记录 API、验证、失败修复与回滚边界
+  - [x] 65/82 已完成、17 未完成，下一工作包 PR-M11-02；M10/M11/Phase 3 Gate 均未提前宣称完成
 - [ ] PR-M11-02：实现 SecretProvider 基础合同与本地 adapter
 - [ ] PR-M11-03：实现 Secure Profile 与一次性 bootstrap
 - [ ] PR-M11-04：实现 credential/certificate rotation 与原子 reload

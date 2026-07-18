@@ -23,9 +23,11 @@ pub enum MetricKind {
     UpDownCounter,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MetricSource {
     Broker,
+    Client,
+    NameServer,
     Pop,
     Remoting,
     Store,
@@ -143,6 +145,7 @@ const CONTROLLER_DLEDGER_LABELS: &[&str] = &[
     labels::DLEDGER_OPERATION_STATUS,
 ];
 const CONTROLLER_ELECTION_LABELS: &[&str] = &[labels::ADDRESS, labels::GROUP, labels::PEER_ID, labels::ELECTION_RESULT];
+const BROKER_LABEL_DROPPED_LABELS: &[&str] = &[labels::CLUSTER, labels::NODE_TYPE, labels::NODE_ID, labels::LABEL_KEY];
 
 pub const JAVA_METRICS: &[MetricDescriptor] = &[
     MetricDescriptor {
@@ -809,8 +812,198 @@ pub const JAVA_METRICS: &[MetricDescriptor] = &[
     },
 ];
 
+/// Rust-native metrics that are not part of the Java compatibility catalog.
+pub const RUST_METRICS: &[MetricDescriptor] = &[
+    MetricDescriptor {
+        name: metrics::SEND_MESSAGE_LATENCY,
+        kind: MetricKind::Histogram,
+        unit: "ms",
+        labels: BROKER_TOPIC_LABELS,
+        source: MetricSource::Broker,
+    },
+    MetricDescriptor {
+        name: metrics::METRICS_LABEL_DROPPED_TOTAL,
+        kind: MetricKind::Counter,
+        unit: "{label}",
+        labels: BROKER_LABEL_DROPPED_LABELS,
+        source: MetricSource::Broker,
+    },
+    MetricDescriptor {
+        name: metrics::STORE_APPEND_LATENCY,
+        kind: MetricKind::Histogram,
+        unit: "ms",
+        labels: &[],
+        source: MetricSource::Store,
+    },
+    MetricDescriptor {
+        name: metrics::STORE_FLUSH_LATENCY,
+        kind: MetricKind::Histogram,
+        unit: "ms",
+        labels: &[],
+        source: MetricSource::Store,
+    },
+    MetricDescriptor {
+        name: metrics::STORE_DISPATCH_LATENCY,
+        kind: MetricKind::Histogram,
+        unit: "ms",
+        labels: &[],
+        source: MetricSource::Store,
+    },
+    MetricDescriptor {
+        name: metrics::STORE_DISK_USAGE,
+        kind: MetricKind::ObservableGauge,
+        unit: "By",
+        labels: &[],
+        source: MetricSource::Store,
+    },
+    MetricDescriptor {
+        name: metrics::REMOTING_REQUESTS_TOTAL,
+        kind: MetricKind::Counter,
+        unit: "{request}",
+        labels: &[],
+        source: MetricSource::Remoting,
+    },
+    MetricDescriptor {
+        name: metrics::REMOTING_REQUEST_LATENCY,
+        kind: MetricKind::Histogram,
+        unit: "ms",
+        labels: &[],
+        source: MetricSource::Remoting,
+    },
+    MetricDescriptor {
+        name: metrics::REMOTING_NETWORK_BYTES,
+        kind: MetricKind::Counter,
+        unit: "By",
+        labels: &[],
+        source: MetricSource::Remoting,
+    },
+    MetricDescriptor {
+        name: metrics::CLIENT_SEND_TOTAL,
+        kind: MetricKind::Counter,
+        unit: "{message}",
+        labels: &[],
+        source: MetricSource::Client,
+    },
+    MetricDescriptor {
+        name: metrics::CLIENT_SEND_LATENCY,
+        kind: MetricKind::Histogram,
+        unit: "ms",
+        labels: &[],
+        source: MetricSource::Client,
+    },
+    MetricDescriptor {
+        name: metrics::CLIENT_CONSUME_TOTAL,
+        kind: MetricKind::Counter,
+        unit: "{message}",
+        labels: &[],
+        source: MetricSource::Client,
+    },
+    MetricDescriptor {
+        name: metrics::CLIENT_CONSUME_LATENCY,
+        kind: MetricKind::Histogram,
+        unit: "ms",
+        labels: &[],
+        source: MetricSource::Client,
+    },
+    MetricDescriptor {
+        name: metrics::CLIENT_REBALANCE_TOTAL,
+        kind: MetricKind::Counter,
+        unit: "{event}",
+        labels: &[],
+        source: MetricSource::Client,
+    },
+    MetricDescriptor {
+        name: metrics::NAMESRV_ROUTE_REQUEST_TOTAL,
+        kind: MetricKind::Counter,
+        unit: "{request}",
+        labels: &[],
+        source: MetricSource::NameServer,
+    },
+    MetricDescriptor {
+        name: metrics::NAMESRV_ROUTE_REQUEST_LATENCY,
+        kind: MetricKind::Histogram,
+        unit: "ms",
+        labels: &[],
+        source: MetricSource::NameServer,
+    },
+    MetricDescriptor {
+        name: metrics::NAMESRV_BROKER_REGISTRATIONS,
+        kind: MetricKind::Counter,
+        unit: "{registration}",
+        labels: &[],
+        source: MetricSource::NameServer,
+    },
+    MetricDescriptor {
+        name: metrics::NAMESRV_ACTIVE_BROKERS,
+        kind: MetricKind::ObservableGauge,
+        unit: "{broker}",
+        labels: &[],
+        source: MetricSource::NameServer,
+    },
+    MetricDescriptor {
+        name: metrics::CONTROLLER_ELECTION_TOTAL,
+        kind: MetricKind::Counter,
+        unit: "{election}",
+        labels: &[],
+        source: MetricSource::Controller,
+    },
+    MetricDescriptor {
+        name: metrics::CONTROLLER_ELECTION_LATENCY,
+        kind: MetricKind::Histogram,
+        unit: "ms",
+        labels: &[],
+        source: MetricSource::Controller,
+    },
+    MetricDescriptor {
+        name: metrics::CONTROLLER_LEADER_CHANGES_TOTAL,
+        kind: MetricKind::Counter,
+        unit: "{change}",
+        labels: &[],
+        source: MetricSource::Controller,
+    },
+    MetricDescriptor {
+        name: metrics::CONTROLLER_ACTIVE_BROKERS,
+        kind: MetricKind::ObservableGauge,
+        unit: "{broker}",
+        labels: &[],
+        source: MetricSource::Controller,
+    },
+    MetricDescriptor {
+        name: metrics::PROXY_GRPC_REQUESTS_TOTAL,
+        kind: MetricKind::Counter,
+        unit: "{request}",
+        labels: &[],
+        source: MetricSource::Proxy,
+    },
+    MetricDescriptor {
+        name: metrics::PROXY_GRPC_REQUEST_LATENCY,
+        kind: MetricKind::Histogram,
+        unit: "ms",
+        labels: &[],
+        source: MetricSource::Proxy,
+    },
+    MetricDescriptor {
+        name: metrics::PROXY_FORWARD_LATENCY,
+        kind: MetricKind::Histogram,
+        unit: "ms",
+        labels: &[],
+        source: MetricSource::Proxy,
+    },
+    MetricDescriptor {
+        name: metrics::PROXY_ACTIVE_CONNECTIONS,
+        kind: MetricKind::ObservableGauge,
+        unit: "{connection}",
+        labels: &[],
+        source: MetricSource::Proxy,
+    },
+];
+
 pub const fn java_metrics() -> &'static [MetricDescriptor] {
     JAVA_METRICS
+}
+
+pub const fn rust_metrics() -> &'static [MetricDescriptor] {
+    RUST_METRICS
 }
 
 #[cfg(test)]
@@ -925,6 +1118,35 @@ mod tests {
 
         assert_eq!(actual, expected);
         assert_eq!(JAVA_METRICS.len(), actual.len(), "duplicate metric names in catalog");
+    }
+
+    #[test]
+    fn combined_catalog_contains_every_semantic_metric_once() {
+        let combined = JAVA_METRICS
+            .iter()
+            .chain(RUST_METRICS)
+            .map(|descriptor| descriptor.name)
+            .collect::<HashSet<_>>();
+
+        assert_eq!(JAVA_METRICS.len(), 93);
+        assert_eq!(RUST_METRICS.len(), 26);
+        assert_eq!(combined.len(), 119, "duplicate metric names across catalogs");
+    }
+
+    #[test]
+    fn rust_catalog_covers_native_sources() {
+        let sources = RUST_METRICS
+            .iter()
+            .map(|descriptor| descriptor.source)
+            .collect::<HashSet<_>>();
+
+        assert!(sources.contains(&MetricSource::Broker));
+        assert!(sources.contains(&MetricSource::Client));
+        assert!(sources.contains(&MetricSource::NameServer));
+        assert!(sources.contains(&MetricSource::Remoting));
+        assert!(sources.contains(&MetricSource::Store));
+        assert!(sources.contains(&MetricSource::Proxy));
+        assert!(sources.contains(&MetricSource::Controller));
     }
 
     #[test]

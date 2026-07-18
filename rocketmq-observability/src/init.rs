@@ -81,11 +81,28 @@ impl TelemetryGuard {
     }
 
     pub fn shutdown(self) -> Result<(), ObservabilityError> {
-        self.shutdown_with_report().into_result()
+        self.shutdown_with_timeout(std::time::Duration::from_millis(
+            crate::exporter::outage::DEFAULT_SHUTDOWN_TIMEOUT_MILLIS,
+        ))
+    }
+
+    /// Shuts down every telemetry provider within one shared timeout budget.
+    ///
+    /// Later providers receive only the time remaining from the original absolute deadline, so a
+    /// collector outage cannot multiply the shutdown delay by the number of enabled signals.
+    ///
+    /// # Errors
+    ///
+    /// Returns an exporter-specific [`ObservabilityError`] when a provider fails or exhausts the
+    /// shared timeout budget.
+    pub fn shutdown_with_timeout(self, timeout: std::time::Duration) -> Result<(), ObservabilityError> {
+        self.shutdown_inner(timeout).into_result()
     }
 
     pub(crate) fn shutdown_with_report(self) -> TelemetryProviderShutdownReport {
-        self.shutdown_inner()
+        self.shutdown_inner(std::time::Duration::from_millis(
+            crate::exporter::outage::DEFAULT_SHUTDOWN_TIMEOUT_MILLIS,
+        ))
     }
 
     pub fn subscriber_install_status(&self) -> SubscriberInstallStatus {
@@ -97,12 +114,13 @@ impl TelemetryGuard {
     }
 
     #[cfg(any(feature = "otel-metrics", feature = "otel-traces", feature = "otel-logs"))]
-    fn shutdown_inner(mut self) -> TelemetryProviderShutdownReport {
+    fn shutdown_inner(mut self, timeout: std::time::Duration) -> TelemetryProviderShutdownReport {
         let mut report = TelemetryProviderShutdownReport::default();
+        let started_at = std::time::Instant::now();
 
         #[cfg(feature = "otel-logs")]
         if let Some(provider) = self.logger_provider.take() {
-            if let Err(error) = provider.shutdown() {
+            if let Err(error) = provider.shutdown_with_timeout(timeout.saturating_sub(started_at.elapsed())) {
                 report.logs_shutdown_ok = false;
                 report.logs_shutdown_error = Some(error.to_string());
             }
@@ -110,7 +128,7 @@ impl TelemetryGuard {
 
         #[cfg(feature = "otel-traces")]
         if let Some(provider) = self.tracer_provider.take() {
-            if let Err(error) = provider.shutdown() {
+            if let Err(error) = provider.shutdown_with_timeout(timeout.saturating_sub(started_at.elapsed())) {
                 report.traces_shutdown_ok = false;
                 report.traces_shutdown_error = Some(error.to_string());
             }
@@ -118,7 +136,7 @@ impl TelemetryGuard {
 
         #[cfg(feature = "otel-metrics")]
         if let Some(provider) = self.meter_provider.take() {
-            if let Err(error) = provider.shutdown() {
+            if let Err(error) = provider.shutdown_with_timeout(timeout.saturating_sub(started_at.elapsed())) {
                 report.metrics_shutdown_ok = false;
                 report.metrics_shutdown_error = Some(error.to_string());
             }
@@ -133,7 +151,7 @@ impl TelemetryGuard {
     }
 
     #[cfg(not(any(feature = "otel-metrics", feature = "otel-traces", feature = "otel-logs")))]
-    fn shutdown_inner(self) -> TelemetryProviderShutdownReport {
+    fn shutdown_inner(self, _timeout: std::time::Duration) -> TelemetryProviderShutdownReport {
         TelemetryProviderShutdownReport::default()
     }
 
@@ -572,6 +590,13 @@ mod tests {
             }
         );
         guard.shutdown().expect("noop shutdown should succeed");
+    }
+
+    #[test]
+    fn noop_guard_accepts_an_explicit_absolute_shutdown_budget() {
+        TelemetryGuard::noop()
+            .shutdown_with_timeout(std::time::Duration::ZERO)
+            .expect("noop shutdown should not consume a timeout budget");
     }
 
     #[test]

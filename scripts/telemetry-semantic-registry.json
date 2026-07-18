@@ -1,0 +1,4068 @@
+{
+  "schema_version": 1,
+  "registry_version": "1.0.0",
+  "milestone": "M11-01",
+  "description": "Canonical telemetry semantics and collector-outage behavior for RocketMQ Rust.",
+  "required_families": [
+    "auth-mcp",
+    "connection-bytes",
+    "exporter",
+    "recovery-cache",
+    "request",
+    "task",
+    "watermark-lag"
+  ],
+  "attributes": [
+    {
+      "id": "address",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "aggregation",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "broker_set",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "category",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "cluster",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "component",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "consume_mode",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "consumer_group",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "dLedger_operation_status",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "decision",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "dledger_operation",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "dropped_count",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "election_result",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "engine",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "errno",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "file_type",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "from",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "group",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "invocation_status",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "is_long_polling",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "is_retry",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "is_system",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "label_key",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "language",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "message_type",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "messaging.consumer.group.name",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "messaging.destination.name",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "messaging.destination.partition.id",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "messaging.message.body.size",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "messaging.message.id",
+      "cardinality": "high",
+      "privacy": "sensitive",
+      "max_distinct": 1000,
+      "max_value_bytes": 512,
+      "default_enabled": false,
+      "redaction": "hash"
+    },
+    {
+      "id": "messaging.operation.name",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "messaging.rocketmq.message.keys",
+      "cardinality": "high",
+      "privacy": "sensitive",
+      "max_distinct": 1000,
+      "max_value_bytes": 512,
+      "default_enabled": false,
+      "redaction": "hash"
+    },
+    {
+      "id": "messaging.system",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "node_id",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "node_type",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "operation",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "path",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "peer_id",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "processor",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "protocol_type",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "proxy_mode",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "put_status",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "queue_id",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "queued_bytes",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "queued_items",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "reason",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "request_code",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "request_handle_status",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "request_type",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "response_code",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "result",
+      "cardinality": "bounded",
+      "privacy": "public",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "revive_message_type",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "rocketmq.batch.message_count",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "rocketmq.consume.mode",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "server.address",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "signal_type",
+      "cardinality": "bounded",
+      "privacy": "public",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "state",
+      "cardinality": "bounded",
+      "privacy": "public",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "storage_medium",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "storage_type",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "success",
+      "cardinality": "bounded",
+      "privacy": "public",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "task_type",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "timer_bound_s",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "to",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "topic",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "type",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "version",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    }
+  ],
+  "signals": [
+    {
+      "id": "rocketmq_processor_watermark",
+      "source_symbol": "PROCESSOR_WATERMARK",
+      "signal_type": "metric",
+      "kind": "observable_gauge",
+      "unit": "{request}",
+      "owner": "broker",
+      "catalog": "java",
+      "family": "watermark-lag",
+      "stability": "stable",
+      "attributes": [
+        "cluster",
+        "node_type",
+        "node_id",
+        "processor"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_broker_permission",
+      "source_symbol": "BROKER_PERMISSION",
+      "signal_type": "metric",
+      "kind": "observable_gauge",
+      "unit": "1",
+      "owner": "broker",
+      "catalog": "java",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "cluster",
+        "node_type",
+        "node_id"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_topic_number",
+      "source_symbol": "TOPIC_NUMBER",
+      "signal_type": "metric",
+      "kind": "observable_gauge",
+      "unit": "{topic}",
+      "owner": "broker",
+      "catalog": "java",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "cluster",
+        "node_type",
+        "node_id"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_consumer_group_number",
+      "source_symbol": "CONSUMER_GROUP_NUMBER",
+      "signal_type": "metric",
+      "kind": "observable_gauge",
+      "unit": "{consumer_group}",
+      "owner": "broker",
+      "catalog": "java",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "cluster",
+        "node_type",
+        "node_id"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_messages_in_total",
+      "source_symbol": "MESSAGES_IN_TOTAL",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "{message}",
+      "owner": "broker",
+      "catalog": "java",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "cluster",
+        "node_type",
+        "node_id",
+        "topic",
+        "message_type",
+        "is_system"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_messages_out_total",
+      "source_symbol": "MESSAGES_OUT_TOTAL",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "{message}",
+      "owner": "broker",
+      "catalog": "java",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "cluster",
+        "node_type",
+        "node_id",
+        "topic",
+        "consumer_group",
+        "is_retry",
+        "is_system"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_throughput_in_total",
+      "source_symbol": "THROUGHPUT_IN_TOTAL",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "By",
+      "owner": "broker",
+      "catalog": "java",
+      "family": "connection-bytes",
+      "stability": "stable",
+      "attributes": [
+        "cluster",
+        "node_type",
+        "node_id",
+        "topic"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_throughput_out_total",
+      "source_symbol": "THROUGHPUT_OUT_TOTAL",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "By",
+      "owner": "broker",
+      "catalog": "java",
+      "family": "connection-bytes",
+      "stability": "stable",
+      "attributes": [
+        "cluster",
+        "node_type",
+        "node_id",
+        "topic",
+        "consumer_group",
+        "is_retry",
+        "is_system"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_message_size",
+      "source_symbol": "MESSAGE_SIZE",
+      "signal_type": "metric",
+      "kind": "histogram",
+      "unit": "By",
+      "owner": "broker",
+      "catalog": "java",
+      "family": "connection-bytes",
+      "stability": "stable",
+      "attributes": [
+        "cluster",
+        "node_type",
+        "node_id",
+        "topic",
+        "message_type"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_topic_create_execution_time",
+      "source_symbol": "TOPIC_CREATE_EXECUTION_TIME",
+      "signal_type": "metric",
+      "kind": "histogram",
+      "unit": "ms",
+      "owner": "broker",
+      "catalog": "java",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "cluster",
+        "node_type",
+        "node_id"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_consumer_group_create_execution_time",
+      "source_symbol": "CONSUMER_GROUP_CREATE_EXECUTION_TIME",
+      "signal_type": "metric",
+      "kind": "histogram",
+      "unit": "ms",
+      "owner": "broker",
+      "catalog": "java",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "cluster",
+        "node_type",
+        "node_id"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_producer_connections",
+      "source_symbol": "PRODUCER_CONNECTIONS",
+      "signal_type": "metric",
+      "kind": "observable_gauge",
+      "unit": "{connection}",
+      "owner": "broker",
+      "catalog": "java",
+      "family": "connection-bytes",
+      "stability": "stable",
+      "attributes": [
+        "cluster",
+        "node_type",
+        "node_id",
+        "language",
+        "version",
+        "protocol_type"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_consumer_connections",
+      "source_symbol": "CONSUMER_CONNECTIONS",
+      "signal_type": "metric",
+      "kind": "observable_gauge",
+      "unit": "{connection}",
+      "owner": "broker",
+      "catalog": "java",
+      "family": "connection-bytes",
+      "stability": "stable",
+      "attributes": [
+        "cluster",
+        "node_type",
+        "node_id",
+        "consumer_group",
+        "language",
+        "version",
+        "protocol_type",
+        "consume_mode",
+        "is_system"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_consumer_lag_messages",
+      "source_symbol": "CONSUMER_LAG_MESSAGES",
+      "signal_type": "metric",
+      "kind": "observable_gauge",
+      "unit": "{message}",
+      "owner": "broker",
+      "catalog": "java",
+      "family": "watermark-lag",
+      "stability": "stable",
+      "attributes": [
+        "cluster",
+        "node_type",
+        "node_id",
+        "topic",
+        "consumer_group",
+        "is_retry",
+        "is_system"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_consumer_lag_latency",
+      "source_symbol": "CONSUMER_LAG_LATENCY",
+      "signal_type": "metric",
+      "kind": "observable_gauge",
+      "unit": "ms",
+      "owner": "broker",
+      "catalog": "java",
+      "family": "watermark-lag",
+      "stability": "stable",
+      "attributes": [
+        "cluster",
+        "node_type",
+        "node_id",
+        "topic",
+        "consumer_group",
+        "is_retry",
+        "is_system"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_consumer_inflight_messages",
+      "source_symbol": "CONSUMER_INFLIGHT_MESSAGES",
+      "signal_type": "metric",
+      "kind": "observable_gauge",
+      "unit": "{message}",
+      "owner": "broker",
+      "catalog": "java",
+      "family": "watermark-lag",
+      "stability": "stable",
+      "attributes": [
+        "cluster",
+        "node_type",
+        "node_id",
+        "topic",
+        "consumer_group",
+        "is_retry",
+        "is_system"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_consumer_queueing_latency",
+      "source_symbol": "CONSUMER_QUEUEING_LATENCY",
+      "signal_type": "metric",
+      "kind": "observable_gauge",
+      "unit": "ms",
+      "owner": "broker",
+      "catalog": "java",
+      "family": "watermark-lag",
+      "stability": "stable",
+      "attributes": [
+        "cluster",
+        "node_type",
+        "node_id",
+        "topic",
+        "consumer_group",
+        "is_retry",
+        "is_system"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_consumer_ready_messages",
+      "source_symbol": "CONSUMER_READY_MESSAGES",
+      "signal_type": "metric",
+      "kind": "observable_gauge",
+      "unit": "{message}",
+      "owner": "broker",
+      "catalog": "java",
+      "family": "watermark-lag",
+      "stability": "stable",
+      "attributes": [
+        "cluster",
+        "node_type",
+        "node_id",
+        "topic",
+        "consumer_group",
+        "is_retry",
+        "is_system"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_send_to_dlq_messages_total",
+      "source_symbol": "SEND_TO_DLQ_MESSAGES_TOTAL",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "{message}",
+      "owner": "broker",
+      "catalog": "java",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "cluster",
+        "node_type",
+        "node_id",
+        "topic",
+        "consumer_group",
+        "is_retry",
+        "is_system"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_commit_messages_total",
+      "source_symbol": "COMMIT_MESSAGES_TOTAL",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "{message}",
+      "owner": "broker",
+      "catalog": "java",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "cluster",
+        "node_type",
+        "node_id",
+        "topic"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_rollback_messages_total",
+      "source_symbol": "ROLLBACK_MESSAGES_TOTAL",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "{message}",
+      "owner": "broker",
+      "catalog": "java",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "cluster",
+        "node_type",
+        "node_id",
+        "topic"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_finish_message_latency",
+      "source_symbol": "FINISH_MESSAGE_LATENCY",
+      "signal_type": "metric",
+      "kind": "histogram",
+      "unit": "ms",
+      "owner": "broker",
+      "catalog": "java",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "cluster",
+        "node_type",
+        "node_id",
+        "topic"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_half_messages",
+      "source_symbol": "HALF_MESSAGES",
+      "signal_type": "metric",
+      "kind": "observable_gauge",
+      "unit": "{message}",
+      "owner": "broker",
+      "catalog": "java",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "cluster",
+        "node_type",
+        "node_id",
+        "topic"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_pop_buffer_scan_time_consume",
+      "source_symbol": "POP_BUFFER_SCAN_TIME_CONSUME",
+      "signal_type": "metric",
+      "kind": "histogram",
+      "unit": "ms",
+      "owner": "pop",
+      "catalog": "java",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "cluster",
+        "node_type",
+        "node_id"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_pop_revive_in_message_total",
+      "source_symbol": "POP_REVIVE_IN_MESSAGE_TOTAL",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "{message}",
+      "owner": "pop",
+      "catalog": "java",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "cluster",
+        "node_type",
+        "node_id",
+        "consumer_group",
+        "topic",
+        "revive_message_type",
+        "put_status"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_pop_revive_out_message_total",
+      "source_symbol": "POP_REVIVE_OUT_MESSAGE_TOTAL",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "{message}",
+      "owner": "pop",
+      "catalog": "java",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "cluster",
+        "node_type",
+        "node_id",
+        "consumer_group",
+        "topic",
+        "queue_id",
+        "revive_message_type"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_pop_revive_retry_messages_total",
+      "source_symbol": "POP_REVIVE_RETRY_MESSAGES_TOTAL",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "{message}",
+      "owner": "pop",
+      "catalog": "java",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "cluster",
+        "node_type",
+        "node_id",
+        "consumer_group",
+        "topic",
+        "revive_message_type",
+        "put_status"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_pop_revive_lag",
+      "source_symbol": "POP_REVIVE_LAG",
+      "signal_type": "metric",
+      "kind": "observable_gauge",
+      "unit": "{message}",
+      "owner": "pop",
+      "catalog": "java",
+      "family": "watermark-lag",
+      "stability": "stable",
+      "attributes": [
+        "cluster",
+        "node_type",
+        "node_id",
+        "queue_id"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_pop_revive_latency",
+      "source_symbol": "POP_REVIVE_LATENCY",
+      "signal_type": "metric",
+      "kind": "observable_gauge",
+      "unit": "ms",
+      "owner": "pop",
+      "catalog": "java",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "cluster",
+        "node_type",
+        "node_id",
+        "queue_id"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_pop_offset_buffer_size",
+      "source_symbol": "POP_OFFSET_BUFFER_SIZE",
+      "signal_type": "metric",
+      "kind": "observable_gauge",
+      "unit": "{offset}",
+      "owner": "pop",
+      "catalog": "java",
+      "family": "connection-bytes",
+      "stability": "stable",
+      "attributes": [
+        "cluster",
+        "node_type",
+        "node_id"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_pop_checkpoint_buffer_size",
+      "source_symbol": "POP_CHECKPOINT_BUFFER_SIZE",
+      "signal_type": "metric",
+      "kind": "observable_gauge",
+      "unit": "{checkpoint}",
+      "owner": "pop",
+      "catalog": "java",
+      "family": "connection-bytes",
+      "stability": "stable",
+      "attributes": [
+        "cluster",
+        "node_type",
+        "node_id"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_rpc_latency",
+      "source_symbol": "RPC_LATENCY",
+      "signal_type": "metric",
+      "kind": "histogram",
+      "unit": "ms",
+      "owner": "remoting",
+      "catalog": "java",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "protocol_type",
+        "request_code",
+        "response_code",
+        "is_long_polling",
+        "result"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_storage_size",
+      "source_symbol": "STORAGE_SIZE",
+      "signal_type": "metric",
+      "kind": "observable_gauge",
+      "unit": "By",
+      "owner": "store",
+      "catalog": "java",
+      "family": "connection-bytes",
+      "stability": "stable",
+      "attributes": [
+        "storage_type",
+        "storage_medium"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_storage_flush_behind_bytes",
+      "source_symbol": "STORAGE_FLUSH_BEHIND_BYTES",
+      "signal_type": "metric",
+      "kind": "observable_gauge",
+      "unit": "By",
+      "owner": "store",
+      "catalog": "java",
+      "family": "watermark-lag",
+      "stability": "stable",
+      "attributes": [
+        "storage_type",
+        "storage_medium"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_storage_dispatch_behind_bytes",
+      "source_symbol": "STORAGE_DISPATCH_BEHIND_BYTES",
+      "signal_type": "metric",
+      "kind": "observable_gauge",
+      "unit": "By",
+      "owner": "store",
+      "catalog": "java",
+      "family": "watermark-lag",
+      "stability": "stable",
+      "attributes": [
+        "storage_type",
+        "storage_medium"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_storage_message_reserve_time",
+      "source_symbol": "STORAGE_MESSAGE_RESERVE_TIME",
+      "signal_type": "metric",
+      "kind": "observable_gauge",
+      "unit": "ms",
+      "owner": "store",
+      "catalog": "java",
+      "family": "recovery-cache",
+      "stability": "stable",
+      "attributes": [
+        "storage_type",
+        "storage_medium"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_delay_message_latency",
+      "source_symbol": "DELAY_MESSAGE_LATENCY",
+      "signal_type": "metric",
+      "kind": "histogram",
+      "unit": "seconds",
+      "owner": "store",
+      "catalog": "java",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "storage_type",
+        "storage_medium",
+        "topic"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_store_commitlog_segment_lease_active",
+      "source_symbol": "STORE_COMMITLOG_SEGMENT_LEASE_ACTIVE",
+      "signal_type": "metric",
+      "kind": "observable_gauge",
+      "unit": "{lease}",
+      "owner": "store",
+      "catalog": "java",
+      "family": "recovery-cache",
+      "stability": "stable",
+      "attributes": [],
+      "cardinality_budget": 1,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_store_ha_ack_latency_millis",
+      "source_symbol": "STORE_HA_ACK_LATENCY_MILLIS",
+      "signal_type": "metric",
+      "kind": "histogram",
+      "unit": "ms",
+      "owner": "store",
+      "catalog": "java",
+      "family": "recovery-cache",
+      "stability": "stable",
+      "attributes": [],
+      "cardinality_budget": 1,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_store_ha_replication_lag_bytes",
+      "source_symbol": "STORE_HA_REPLICATION_LAG_BYTES",
+      "signal_type": "metric",
+      "kind": "observable_gauge",
+      "unit": "By",
+      "owner": "store",
+      "catalog": "java",
+      "family": "watermark-lag",
+      "stability": "stable",
+      "attributes": [],
+      "cardinality_budget": 1,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_store_linux_sendfile_bytes_total",
+      "source_symbol": "STORE_LINUX_SENDFILE_BYTES_TOTAL",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "By",
+      "owner": "store",
+      "catalog": "java",
+      "family": "connection-bytes",
+      "stability": "stable",
+      "attributes": [],
+      "cardinality_budget": 1,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_store_linux_mlock_bytes",
+      "source_symbol": "STORE_LINUX_MLOCK_BYTES",
+      "signal_type": "metric",
+      "kind": "observable_gauge",
+      "unit": "By",
+      "owner": "store",
+      "catalog": "java",
+      "family": "connection-bytes",
+      "stability": "stable",
+      "attributes": [],
+      "cardinality_budget": 1,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_store_linux_mlock_attempt_total",
+      "source_symbol": "STORE_LINUX_MLOCK_ATTEMPT_TOTAL",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "{operation}",
+      "owner": "store",
+      "catalog": "java",
+      "family": "recovery-cache",
+      "stability": "stable",
+      "attributes": [
+        "category"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_store_linux_mlock_success_total",
+      "source_symbol": "STORE_LINUX_MLOCK_SUCCESS_TOTAL",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "{operation}",
+      "owner": "store",
+      "catalog": "java",
+      "family": "recovery-cache",
+      "stability": "stable",
+      "attributes": [
+        "category"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_store_linux_mlock_failure_total",
+      "source_symbol": "STORE_LINUX_MLOCK_FAILURE_TOTAL",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "{operation}",
+      "owner": "store",
+      "catalog": "java",
+      "family": "recovery-cache",
+      "stability": "stable",
+      "attributes": [
+        "category",
+        "errno"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_store_linux_mlock_skipped_total",
+      "source_symbol": "STORE_LINUX_MLOCK_SKIPPED_TOTAL",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "{operation}",
+      "owner": "store",
+      "catalog": "java",
+      "family": "recovery-cache",
+      "stability": "stable",
+      "attributes": [
+        "category",
+        "reason"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_store_linux_locked_bytes",
+      "source_symbol": "STORE_LINUX_LOCKED_BYTES",
+      "signal_type": "metric",
+      "kind": "observable_gauge",
+      "unit": "By",
+      "owner": "store",
+      "catalog": "java",
+      "family": "connection-bytes",
+      "stability": "stable",
+      "attributes": [
+        "category"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_store_linux_munlock_failure_total",
+      "source_symbol": "STORE_LINUX_MUNLOCK_FAILURE_TOTAL",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "{operation}",
+      "owner": "store",
+      "catalog": "java",
+      "family": "recovery-cache",
+      "stability": "stable",
+      "attributes": [
+        "category",
+        "errno"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_store_linux_page_cache_warmup_millis",
+      "source_symbol": "STORE_LINUX_PAGE_CACHE_WARMUP_MILLIS",
+      "signal_type": "metric",
+      "kind": "histogram",
+      "unit": "ms",
+      "owner": "store",
+      "catalog": "java",
+      "family": "recovery-cache",
+      "stability": "stable",
+      "attributes": [],
+      "cardinality_budget": 1,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_store_linux_storage_degradation_total",
+      "source_symbol": "STORE_LINUX_STORAGE_DEGRADATION_TOTAL",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "{operation}",
+      "owner": "store",
+      "catalog": "java",
+      "family": "recovery-cache",
+      "stability": "stable",
+      "attributes": [
+        "operation",
+        "reason",
+        "errno"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_store_transfer_batch_total",
+      "source_symbol": "STORE_TRANSFER_BATCH_TOTAL",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "{batch}",
+      "owner": "store",
+      "catalog": "java",
+      "family": "recovery-cache",
+      "stability": "stable",
+      "attributes": [],
+      "cardinality_budget": 1,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_store_transfer_bytes_total",
+      "source_symbol": "STORE_TRANSFER_BYTES_TOTAL",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "By",
+      "owner": "store",
+      "catalog": "java",
+      "family": "connection-bytes",
+      "stability": "stable",
+      "attributes": [],
+      "cardinality_budget": 1,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_store_transfer_engine_total",
+      "source_symbol": "STORE_TRANSFER_ENGINE_TOTAL",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "{transfer}",
+      "owner": "store",
+      "catalog": "java",
+      "family": "recovery-cache",
+      "stability": "stable",
+      "attributes": [
+        "engine"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_store_transfer_fallback_total",
+      "source_symbol": "STORE_TRANSFER_FALLBACK_TOTAL",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "{fallback}",
+      "owner": "store",
+      "catalog": "java",
+      "family": "recovery-cache",
+      "stability": "stable",
+      "attributes": [
+        "from",
+        "to",
+        "reason"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_store_transfer_partial_write_total",
+      "source_symbol": "STORE_TRANSFER_PARTIAL_WRITE_TOTAL",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "{write}",
+      "owner": "store",
+      "catalog": "java",
+      "family": "recovery-cache",
+      "stability": "stable",
+      "attributes": [],
+      "cardinality_budget": 1,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_timer_enqueue_lag",
+      "source_symbol": "TIMER_ENQUEUE_LAG",
+      "signal_type": "metric",
+      "kind": "observable_gauge",
+      "unit": "ms",
+      "owner": "timer",
+      "catalog": "java",
+      "family": "watermark-lag",
+      "stability": "stable",
+      "attributes": [
+        "storage_type",
+        "storage_medium",
+        "timer_bound_s"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_timer_enqueue_latency",
+      "source_symbol": "TIMER_ENQUEUE_LATENCY",
+      "signal_type": "metric",
+      "kind": "observable_gauge",
+      "unit": "ms",
+      "owner": "timer",
+      "catalog": "java",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "storage_type",
+        "storage_medium",
+        "timer_bound_s"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_timer_dequeue_lag",
+      "source_symbol": "TIMER_DEQUEUE_LAG",
+      "signal_type": "metric",
+      "kind": "observable_gauge",
+      "unit": "ms",
+      "owner": "timer",
+      "catalog": "java",
+      "family": "watermark-lag",
+      "stability": "stable",
+      "attributes": [
+        "storage_type",
+        "storage_medium",
+        "timer_bound_s"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_timer_dequeue_latency",
+      "source_symbol": "TIMER_DEQUEUE_LATENCY",
+      "signal_type": "metric",
+      "kind": "observable_gauge",
+      "unit": "ms",
+      "owner": "timer",
+      "catalog": "java",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "storage_type",
+        "storage_medium",
+        "timer_bound_s"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_timing_messages",
+      "source_symbol": "TIMING_MESSAGES",
+      "signal_type": "metric",
+      "kind": "observable_gauge",
+      "unit": "{message}",
+      "owner": "timer",
+      "catalog": "java",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "storage_type",
+        "storage_medium",
+        "timer_bound_s"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_timer_enqueue_total",
+      "source_symbol": "TIMER_ENQUEUE_TOTAL",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "{message}",
+      "owner": "timer",
+      "catalog": "java",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "storage_type",
+        "storage_medium",
+        "topic"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_timer_dequeue_total",
+      "source_symbol": "TIMER_DEQUEUE_TOTAL",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "{message}",
+      "owner": "timer",
+      "catalog": "java",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "storage_type",
+        "storage_medium",
+        "topic"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_timer_message_snapshot",
+      "source_symbol": "TIMER_MESSAGE_SNAPSHOT",
+      "signal_type": "metric",
+      "kind": "observable_gauge",
+      "unit": "{message}",
+      "owner": "timer",
+      "catalog": "java",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "storage_type",
+        "storage_medium",
+        "timer_bound_s"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_rocksdb_bytes_written",
+      "source_symbol": "ROCKSDB_BYTES_WRITTEN",
+      "signal_type": "metric",
+      "kind": "observable_gauge",
+      "unit": "By",
+      "owner": "rocks-db",
+      "catalog": "java",
+      "family": "connection-bytes",
+      "stability": "stable",
+      "attributes": [
+        "storage_type",
+        "storage_medium",
+        "type"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_rocksdb_bytes_read",
+      "source_symbol": "ROCKSDB_BYTES_READ",
+      "signal_type": "metric",
+      "kind": "observable_gauge",
+      "unit": "By",
+      "owner": "rocks-db",
+      "catalog": "java",
+      "family": "connection-bytes",
+      "stability": "stable",
+      "attributes": [
+        "storage_type",
+        "storage_medium",
+        "type"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_rocksdb_times_written_self",
+      "source_symbol": "ROCKSDB_TIMES_WRITTEN_SELF",
+      "signal_type": "metric",
+      "kind": "observable_gauge",
+      "unit": "{operation}",
+      "owner": "rocks-db",
+      "catalog": "java",
+      "family": "recovery-cache",
+      "stability": "stable",
+      "attributes": [
+        "storage_type",
+        "storage_medium",
+        "type"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_rocksdb_times_written_other",
+      "source_symbol": "ROCKSDB_TIMES_WRITTEN_OTHER",
+      "signal_type": "metric",
+      "kind": "observable_gauge",
+      "unit": "{operation}",
+      "owner": "rocks-db",
+      "catalog": "java",
+      "family": "recovery-cache",
+      "stability": "stable",
+      "attributes": [
+        "storage_type",
+        "storage_medium",
+        "type"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_rocksdb_rate_cache_hit",
+      "source_symbol": "ROCKSDB_RATE_CACHE_HIT",
+      "signal_type": "metric",
+      "kind": "observable_gauge",
+      "unit": "1",
+      "owner": "rocks-db",
+      "catalog": "java",
+      "family": "recovery-cache",
+      "stability": "stable",
+      "attributes": [
+        "storage_type",
+        "storage_medium",
+        "type"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_rocksdb_times_compressed",
+      "source_symbol": "ROCKSDB_TIMES_COMPRESSED",
+      "signal_type": "metric",
+      "kind": "observable_gauge",
+      "unit": "{operation}",
+      "owner": "rocks-db",
+      "catalog": "java",
+      "family": "recovery-cache",
+      "stability": "stable",
+      "attributes": [
+        "storage_type",
+        "storage_medium",
+        "type"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_rocksdb_read_amplification_bytes",
+      "source_symbol": "ROCKSDB_READ_AMPLIFICATION_BYTES",
+      "signal_type": "metric",
+      "kind": "observable_gauge",
+      "unit": "By",
+      "owner": "rocks-db",
+      "catalog": "java",
+      "family": "connection-bytes",
+      "stability": "stable",
+      "attributes": [
+        "storage_type",
+        "storage_medium",
+        "type"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_rocksdb_times_read",
+      "source_symbol": "ROCKSDB_TIMES_READ",
+      "signal_type": "metric",
+      "kind": "observable_gauge",
+      "unit": "{operation}",
+      "owner": "rocks-db",
+      "catalog": "java",
+      "family": "recovery-cache",
+      "stability": "stable",
+      "attributes": [
+        "storage_type",
+        "storage_medium",
+        "type"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_tiered_store_messages_dispatch_total",
+      "source_symbol": "TIERED_STORE_MESSAGES_DISPATCH_TOTAL",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "{message}",
+      "owner": "tiered-store",
+      "catalog": "java",
+      "family": "recovery-cache",
+      "stability": "stable",
+      "attributes": [
+        "topic",
+        "queue_id",
+        "file_type"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_tiered_store_messages_out_total",
+      "source_symbol": "TIERED_STORE_MESSAGES_OUT_TOTAL",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "{message}",
+      "owner": "tiered-store",
+      "catalog": "java",
+      "family": "recovery-cache",
+      "stability": "stable",
+      "attributes": [
+        "topic",
+        "group"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_tiered_store_get_message_fallback_total",
+      "source_symbol": "TIERED_STORE_GET_MESSAGE_FALLBACK_TOTAL",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "{request}",
+      "owner": "tiered-store",
+      "catalog": "java",
+      "family": "recovery-cache",
+      "stability": "stable",
+      "attributes": [
+        "topic",
+        "group"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_tiered_store_provider_upload_bytes",
+      "source_symbol": "TIERED_STORE_PROVIDER_UPLOAD_BYTES",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "By",
+      "owner": "tiered-store",
+      "catalog": "java",
+      "family": "connection-bytes",
+      "stability": "stable",
+      "attributes": [
+        "operation",
+        "success",
+        "path"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_tiered_store_provider_download_bytes",
+      "source_symbol": "TIERED_STORE_PROVIDER_DOWNLOAD_BYTES",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "By",
+      "owner": "tiered-store",
+      "catalog": "java",
+      "family": "connection-bytes",
+      "stability": "stable",
+      "attributes": [
+        "operation",
+        "success",
+        "path"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_tiered_store_provider_rpc_latency",
+      "source_symbol": "TIERED_STORE_PROVIDER_RPC_LATENCY",
+      "signal_type": "metric",
+      "kind": "histogram",
+      "unit": "ms",
+      "owner": "tiered-store",
+      "catalog": "java",
+      "family": "recovery-cache",
+      "stability": "stable",
+      "attributes": [
+        "operation",
+        "success",
+        "path"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_tiered_store_api_latency",
+      "source_symbol": "TIERED_STORE_API_LATENCY",
+      "signal_type": "metric",
+      "kind": "histogram",
+      "unit": "ms",
+      "owner": "tiered-store",
+      "catalog": "java",
+      "family": "recovery-cache",
+      "stability": "stable",
+      "attributes": [
+        "operation",
+        "success"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_tiered_store_dispatch_latency",
+      "source_symbol": "TIERED_STORE_DISPATCH_LATENCY",
+      "signal_type": "metric",
+      "kind": "histogram",
+      "unit": "ms",
+      "owner": "tiered-store",
+      "catalog": "java",
+      "family": "recovery-cache",
+      "stability": "stable",
+      "attributes": [
+        "topic",
+        "queue_id",
+        "file_type"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_tiered_store_dispatch_behind",
+      "source_symbol": "TIERED_STORE_DISPATCH_BEHIND",
+      "signal_type": "metric",
+      "kind": "observable_gauge",
+      "unit": "{message}",
+      "owner": "tiered-store",
+      "catalog": "java",
+      "family": "watermark-lag",
+      "stability": "stable",
+      "attributes": [
+        "topic",
+        "queue_id",
+        "file_type"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_tiered_store_read_ahead_cache_count",
+      "source_symbol": "TIERED_STORE_READ_AHEAD_CACHE_COUNT",
+      "signal_type": "metric",
+      "kind": "observable_gauge",
+      "unit": "{entry}",
+      "owner": "tiered-store",
+      "catalog": "java",
+      "family": "recovery-cache",
+      "stability": "stable",
+      "attributes": [],
+      "cardinality_budget": 1,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_tiered_store_read_ahead_cache_bytes",
+      "source_symbol": "TIERED_STORE_READ_AHEAD_CACHE_BYTES",
+      "signal_type": "metric",
+      "kind": "observable_gauge",
+      "unit": "By",
+      "owner": "tiered-store",
+      "catalog": "java",
+      "family": "connection-bytes",
+      "stability": "stable",
+      "attributes": [],
+      "cardinality_budget": 1,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_tiered_store_read_ahead_cache_access_total",
+      "source_symbol": "TIERED_STORE_READ_AHEAD_CACHE_ACCESS_TOTAL",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "{access}",
+      "owner": "tiered-store",
+      "catalog": "java",
+      "family": "recovery-cache",
+      "stability": "stable",
+      "attributes": [
+        "success"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_tiered_store_read_ahead_cache_hit_total",
+      "source_symbol": "TIERED_STORE_READ_AHEAD_CACHE_HIT_TOTAL",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "{hit}",
+      "owner": "tiered-store",
+      "catalog": "java",
+      "family": "recovery-cache",
+      "stability": "stable",
+      "attributes": [
+        "success"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_proxy_up",
+      "source_symbol": "PROXY_UP",
+      "signal_type": "metric",
+      "kind": "observable_gauge",
+      "unit": "1",
+      "owner": "proxy",
+      "catalog": "java",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "node_type",
+        "cluster",
+        "node_id",
+        "proxy_mode"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "role",
+      "source_symbol": "CONTROLLER_ROLE",
+      "signal_type": "metric",
+      "kind": "up_down_counter",
+      "unit": "1",
+      "owner": "controller",
+      "catalog": "java",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "address",
+        "group",
+        "peer_id"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "dledger_disk_usage",
+      "source_symbol": "CONTROLLER_DLEDGER_DISK_USAGE",
+      "signal_type": "metric",
+      "kind": "observable_gauge",
+      "unit": "By",
+      "owner": "controller",
+      "catalog": "java",
+      "family": "connection-bytes",
+      "stability": "stable",
+      "attributes": [
+        "address",
+        "group",
+        "peer_id"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "active_broker_num",
+      "source_symbol": "CONTROLLER_ACTIVE_BROKER_NUM",
+      "signal_type": "metric",
+      "kind": "observable_gauge",
+      "unit": "{broker}",
+      "owner": "controller",
+      "catalog": "java",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "address",
+        "group",
+        "peer_id"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "request_total",
+      "source_symbol": "CONTROLLER_REQUEST_TOTAL",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "{request}",
+      "owner": "controller",
+      "catalog": "java",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "address",
+        "group",
+        "peer_id",
+        "request_type",
+        "request_handle_status"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "dledger_op_total",
+      "source_symbol": "CONTROLLER_DLEDGER_OP_TOTAL",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "{operation}",
+      "owner": "controller",
+      "catalog": "java",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "address",
+        "group",
+        "peer_id",
+        "dledger_operation",
+        "dLedger_operation_status"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "election_total",
+      "source_symbol": "CONTROLLER_ELECTION_TOTAL_JAVA",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "{election}",
+      "owner": "controller",
+      "catalog": "java",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "address",
+        "group",
+        "peer_id",
+        "election_result"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "request_latency",
+      "source_symbol": "CONTROLLER_REQUEST_LATENCY",
+      "signal_type": "metric",
+      "kind": "histogram",
+      "unit": "us",
+      "owner": "controller",
+      "catalog": "java",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "address",
+        "group",
+        "peer_id",
+        "request_type"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "dledger_op_latency",
+      "source_symbol": "CONTROLLER_DLEDGER_OP_LATENCY",
+      "signal_type": "metric",
+      "kind": "histogram",
+      "unit": "us",
+      "owner": "controller",
+      "catalog": "java",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "address",
+        "group",
+        "peer_id",
+        "dledger_operation"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_send_message_latency",
+      "source_symbol": "SEND_MESSAGE_LATENCY",
+      "signal_type": "metric",
+      "kind": "histogram",
+      "unit": "ms",
+      "owner": "broker",
+      "catalog": "rust",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "cluster",
+        "node_type",
+        "node_id",
+        "topic"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_metrics_label_dropped_total",
+      "source_symbol": "METRICS_LABEL_DROPPED_TOTAL",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "{label}",
+      "owner": "broker",
+      "catalog": "rust",
+      "family": "exporter",
+      "stability": "stable",
+      "attributes": [
+        "cluster",
+        "node_type",
+        "node_id",
+        "label_key"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_store_append_latency",
+      "source_symbol": "STORE_APPEND_LATENCY",
+      "signal_type": "metric",
+      "kind": "histogram",
+      "unit": "ms",
+      "owner": "store",
+      "catalog": "rust",
+      "family": "recovery-cache",
+      "stability": "stable",
+      "attributes": [],
+      "cardinality_budget": 1,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_store_flush_latency",
+      "source_symbol": "STORE_FLUSH_LATENCY",
+      "signal_type": "metric",
+      "kind": "histogram",
+      "unit": "ms",
+      "owner": "store",
+      "catalog": "rust",
+      "family": "recovery-cache",
+      "stability": "stable",
+      "attributes": [],
+      "cardinality_budget": 1,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_store_dispatch_latency",
+      "source_symbol": "STORE_DISPATCH_LATENCY",
+      "signal_type": "metric",
+      "kind": "histogram",
+      "unit": "ms",
+      "owner": "store",
+      "catalog": "rust",
+      "family": "recovery-cache",
+      "stability": "stable",
+      "attributes": [],
+      "cardinality_budget": 1,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_store_disk_usage",
+      "source_symbol": "STORE_DISK_USAGE",
+      "signal_type": "metric",
+      "kind": "observable_gauge",
+      "unit": "By",
+      "owner": "store",
+      "catalog": "rust",
+      "family": "connection-bytes",
+      "stability": "stable",
+      "attributes": [],
+      "cardinality_budget": 1,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_remoting_requests_total",
+      "source_symbol": "REMOTING_REQUESTS_TOTAL",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "{request}",
+      "owner": "remoting",
+      "catalog": "rust",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [],
+      "cardinality_budget": 1,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_remoting_request_latency",
+      "source_symbol": "REMOTING_REQUEST_LATENCY",
+      "signal_type": "metric",
+      "kind": "histogram",
+      "unit": "ms",
+      "owner": "remoting",
+      "catalog": "rust",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [],
+      "cardinality_budget": 1,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_remoting_network_bytes",
+      "source_symbol": "REMOTING_NETWORK_BYTES",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "By",
+      "owner": "remoting",
+      "catalog": "rust",
+      "family": "connection-bytes",
+      "stability": "stable",
+      "attributes": [],
+      "cardinality_budget": 1,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_client_send_total",
+      "source_symbol": "CLIENT_SEND_TOTAL",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "{message}",
+      "owner": "client",
+      "catalog": "rust",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [],
+      "cardinality_budget": 1,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_client_send_latency",
+      "source_symbol": "CLIENT_SEND_LATENCY",
+      "signal_type": "metric",
+      "kind": "histogram",
+      "unit": "ms",
+      "owner": "client",
+      "catalog": "rust",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [],
+      "cardinality_budget": 1,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_client_consume_total",
+      "source_symbol": "CLIENT_CONSUME_TOTAL",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "{message}",
+      "owner": "client",
+      "catalog": "rust",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [],
+      "cardinality_budget": 1,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_client_consume_latency",
+      "source_symbol": "CLIENT_CONSUME_LATENCY",
+      "signal_type": "metric",
+      "kind": "histogram",
+      "unit": "ms",
+      "owner": "client",
+      "catalog": "rust",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [],
+      "cardinality_budget": 1,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_client_rebalance_total",
+      "source_symbol": "CLIENT_REBALANCE_TOTAL",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "{event}",
+      "owner": "client",
+      "catalog": "rust",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [],
+      "cardinality_budget": 1,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_namesrv_route_request_total",
+      "source_symbol": "NAMESRV_ROUTE_REQUEST_TOTAL",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "{request}",
+      "owner": "name-server",
+      "catalog": "rust",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [],
+      "cardinality_budget": 1,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_namesrv_route_request_latency",
+      "source_symbol": "NAMESRV_ROUTE_REQUEST_LATENCY",
+      "signal_type": "metric",
+      "kind": "histogram",
+      "unit": "ms",
+      "owner": "name-server",
+      "catalog": "rust",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [],
+      "cardinality_budget": 1,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_namesrv_broker_registrations",
+      "source_symbol": "NAMESRV_BROKER_REGISTRATIONS",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "{registration}",
+      "owner": "name-server",
+      "catalog": "rust",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [],
+      "cardinality_budget": 1,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_namesrv_active_brokers",
+      "source_symbol": "NAMESRV_ACTIVE_BROKERS",
+      "signal_type": "metric",
+      "kind": "observable_gauge",
+      "unit": "{broker}",
+      "owner": "name-server",
+      "catalog": "rust",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [],
+      "cardinality_budget": 1,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_controller_election_total",
+      "source_symbol": "CONTROLLER_ELECTION_TOTAL",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "{election}",
+      "owner": "controller",
+      "catalog": "rust",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [],
+      "cardinality_budget": 1,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_controller_election_latency",
+      "source_symbol": "CONTROLLER_ELECTION_LATENCY",
+      "signal_type": "metric",
+      "kind": "histogram",
+      "unit": "ms",
+      "owner": "controller",
+      "catalog": "rust",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [],
+      "cardinality_budget": 1,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_controller_leader_changes_total",
+      "source_symbol": "CONTROLLER_LEADER_CHANGES_TOTAL",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "{change}",
+      "owner": "controller",
+      "catalog": "rust",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [],
+      "cardinality_budget": 1,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_controller_active_brokers",
+      "source_symbol": "CONTROLLER_ACTIVE_BROKERS",
+      "signal_type": "metric",
+      "kind": "observable_gauge",
+      "unit": "{broker}",
+      "owner": "controller",
+      "catalog": "rust",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [],
+      "cardinality_budget": 1,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_proxy_grpc_requests_total",
+      "source_symbol": "PROXY_GRPC_REQUESTS_TOTAL",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "{request}",
+      "owner": "proxy",
+      "catalog": "rust",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [],
+      "cardinality_budget": 1,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_proxy_grpc_request_latency",
+      "source_symbol": "PROXY_GRPC_REQUEST_LATENCY",
+      "signal_type": "metric",
+      "kind": "histogram",
+      "unit": "ms",
+      "owner": "proxy",
+      "catalog": "rust",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [],
+      "cardinality_budget": 1,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_proxy_forward_latency",
+      "source_symbol": "PROXY_FORWARD_LATENCY",
+      "signal_type": "metric",
+      "kind": "histogram",
+      "unit": "ms",
+      "owner": "proxy",
+      "catalog": "rust",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [],
+      "cardinality_budget": 1,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_proxy_active_connections",
+      "source_symbol": "PROXY_ACTIVE_CONNECTIONS",
+      "signal_type": "metric",
+      "kind": "observable_gauge",
+      "unit": "{connection}",
+      "owner": "proxy",
+      "catalog": "rust",
+      "family": "connection-bytes",
+      "stability": "stable",
+      "attributes": [],
+      "cardinality_budget": 1,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "RocketMQ BROKER RECEIVE_SEND",
+      "source_symbol": "BROKER_RECEIVE_SEND",
+      "signal_type": "span",
+      "owner": "broker",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "messaging.system",
+        "messaging.operation.name",
+        "messaging.destination.name",
+        "server.address",
+        "messaging.destination.partition.id"
+      ],
+      "cardinality_budget": 1000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "ratio",
+        "default_ratio": 0.01,
+        "max_events_per_operation": 0
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "RocketMQ STORE APPEND",
+      "source_symbol": "STORE_APPEND",
+      "signal_type": "span",
+      "owner": "store",
+      "family": "recovery-cache",
+      "stability": "stable",
+      "attributes": [
+        "messaging.system",
+        "messaging.operation.name",
+        "messaging.destination.name",
+        "messaging.message.body.size"
+      ],
+      "cardinality_budget": 1000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "ratio",
+        "default_ratio": 0.01,
+        "max_events_per_operation": 0
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "RocketMQ PRODUCER SEND",
+      "source_symbol": "PRODUCER_SEND",
+      "signal_type": "span",
+      "owner": "client",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "messaging.system",
+        "messaging.operation.name",
+        "messaging.destination.name",
+        "messaging.message.id",
+        "messaging.message.body.size",
+        "messaging.rocketmq.message.keys"
+      ],
+      "cardinality_budget": 1000,
+      "privacy": "sensitive",
+      "sampling": {
+        "strategy": "ratio",
+        "default_ratio": 0.01,
+        "max_events_per_operation": 0
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "RocketMQ CONSUMER PROCESS",
+      "source_symbol": "CONSUMER_PROCESS",
+      "signal_type": "span",
+      "owner": "client",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "messaging.system",
+        "messaging.operation.name",
+        "messaging.destination.name",
+        "messaging.consumer.group.name",
+        "server.address",
+        "messaging.destination.partition.id",
+        "rocketmq.consume.mode",
+        "rocketmq.batch.message_count",
+        "messaging.message.id",
+        "messaging.message.body.size",
+        "messaging.rocketmq.message.keys"
+      ],
+      "cardinality_budget": 1000,
+      "privacy": "sensitive",
+      "sampling": {
+        "strategy": "ratio",
+        "default_ratio": 0.01,
+        "max_events_per_operation": 0
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq.auth.decision",
+      "source_symbol": "AUTH_DECISION",
+      "signal_type": "log",
+      "owner": "security",
+      "family": "auth-mcp",
+      "stability": "stable",
+      "attributes": [
+        "operation",
+        "decision",
+        "result",
+        "reason"
+      ],
+      "cardinality_budget": 1000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "rate_limit",
+        "max_per_second": 100,
+        "max_events_per_operation": 1
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq.auth.reload",
+      "source_symbol": "AUTH_RELOAD",
+      "signal_type": "log",
+      "owner": "security",
+      "family": "auth-mcp",
+      "stability": "stable",
+      "attributes": [
+        "result",
+        "reason"
+      ],
+      "cardinality_budget": 1000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "rate_limit",
+        "max_per_second": 100,
+        "max_events_per_operation": 1
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq.mcp.action",
+      "source_symbol": "MCP_ACTION",
+      "signal_type": "log",
+      "owner": "mcp",
+      "family": "auth-mcp",
+      "stability": "stable",
+      "attributes": [
+        "operation",
+        "result",
+        "reason"
+      ],
+      "cardinality_budget": 1000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "rate_limit",
+        "max_per_second": 100,
+        "max_events_per_operation": 1
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq.task.lifecycle",
+      "source_symbol": "TASK_LIFECYCLE",
+      "signal_type": "log",
+      "owner": "runtime",
+      "family": "task",
+      "stability": "stable",
+      "attributes": [
+        "task_type",
+        "state",
+        "result",
+        "reason"
+      ],
+      "cardinality_budget": 1000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "rate_limit",
+        "max_per_second": 100,
+        "max_events_per_operation": 1
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq.recovery.state",
+      "source_symbol": "RECOVERY_STATE",
+      "signal_type": "log",
+      "owner": "storage",
+      "family": "recovery-cache",
+      "stability": "stable",
+      "attributes": [
+        "component",
+        "state",
+        "result",
+        "reason"
+      ],
+      "cardinality_budget": 1000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "rate_limit",
+        "max_per_second": 100,
+        "max_events_per_operation": 1
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq.exporter.drop",
+      "source_symbol": "EXPORTER_DROP",
+      "signal_type": "log",
+      "owner": "observability",
+      "family": "exporter",
+      "stability": "stable",
+      "attributes": [
+        "reason",
+        "signal_type",
+        "dropped_count"
+      ],
+      "cardinality_budget": 1000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "rate_limit",
+        "max_per_second": 100,
+        "max_events_per_operation": 1
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq.exporter.shutdown",
+      "source_symbol": "EXPORTER_SHUTDOWN",
+      "signal_type": "log",
+      "owner": "observability",
+      "family": "exporter",
+      "stability": "stable",
+      "attributes": [
+        "result",
+        "reason",
+        "queued_items",
+        "queued_bytes",
+        "dropped_count"
+      ],
+      "cardinality_budget": 1000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "rate_limit",
+        "max_per_second": 100,
+        "max_events_per_operation": 1
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    }
+  ],
+  "outage_policy": {
+    "max_queue_items": 2048,
+    "max_queue_bytes": 8388608,
+    "max_record_bytes": 65536,
+    "max_export_batch_items": 512,
+    "scheduled_delay_millis": 5000,
+    "export_timeout_millis": 3000,
+    "shutdown_timeout_millis": 5000,
+    "enqueue": "try_enqueue",
+    "overflow": "drop_newest",
+    "shutdown_deadline": "absolute",
+    "data_plane_blocking": false,
+    "drop_signal": "rocketmq.exporter.drop",
+    "shutdown_signal": "rocketmq.exporter.shutdown",
+    "measurements": [
+      "accepted",
+      "drained",
+      "dropped_by_reason",
+      "queued_items",
+      "queued_bytes"
+    ]
+  }
+}
