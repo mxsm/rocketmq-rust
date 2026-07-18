@@ -10,14 +10,13 @@ use std::any::Any;
 
 use rocketmq_error::RocketMQError;
 use rocketmq_protocol::rpc::rpc_response::RpcResponse as CanonicalRpcResponse;
-use rocketmq_rust::ArcMut;
 
 use crate::protocol::command_custom_header::CommandCustomHeader;
 
 #[derive(Default)]
 pub struct RpcResponse {
     pub code: i32,
-    pub header: Option<ArcMut<Box<dyn CommandCustomHeader + Send + Sync + 'static>>>,
+    pub header: Option<Box<dyn CommandCustomHeader + Send + Sync + 'static>>,
     pub body: Option<Box<dyn Any>>,
     pub exception: Option<RocketMQError>,
 }
@@ -27,29 +26,14 @@ impl RpcResponse {
     where
         T: CommandCustomHeader + Send + Sync + 'static,
     {
-        self.header.as_ref()?.as_ref().as_any().downcast_ref::<T>()
+        self.header.as_ref()?.as_any().downcast_ref::<T>()
     }
 
     pub fn get_header_mut<T>(&mut self) -> Option<&mut T>
     where
         T: CommandCustomHeader + Send + Sync + 'static,
     {
-        match self.header.as_mut() {
-            Some(value) if value.strong_count() == 1 => value.as_mut().as_any_mut().downcast_mut::<T>(),
-            _ => None,
-        }
-    }
-
-    /// Compatibility facade for the removed shared-reference mutation escape.
-    ///
-    /// Returning a mutable reference from `&self` cannot be made sound. Callers
-    /// must migrate to [`Self::get_header_mut`], which requires exclusive access.
-    #[deprecated(note = "use get_header_mut; shared-reference mutation is no longer supported")]
-    pub fn get_header_mut_from_ref<T>(&self) -> Option<&mut T>
-    where
-        T: CommandCustomHeader + Send + Sync + 'static,
-    {
-        None
+        self.header.as_mut()?.as_any_mut().downcast_mut::<T>()
     }
 
     pub fn new_exception(exception: Option<RocketMQError>) -> Self {
@@ -71,7 +55,7 @@ impl RpcResponse {
     ) -> Self {
         Self {
             code,
-            header: Some(ArcMut::new(header)),
+            header: Some(header),
             body,
             exception: None,
         }
@@ -93,20 +77,6 @@ impl RpcResponse {
             body,
             exception,
         } = self;
-        let header = match header {
-            Some(header) => match header.try_unwrap() {
-                Ok(header) => Some(header),
-                Err(header) => {
-                    return Err(Self {
-                        code,
-                        header: Some(header),
-                        body,
-                        exception,
-                    });
-                }
-            },
-            None => None,
-        };
         Ok(CanonicalRpcResponse {
             code,
             header,
@@ -129,5 +99,50 @@ impl RpcResponse {
                 exception: value.exception,
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use cheetah_string::CheetahString;
+
+    use super::RpcResponse;
+    use crate::protocol::header::client_request_header::GetRouteInfoRequestHeader;
+
+    #[test]
+    fn header_mutation_requires_exclusive_response_access() {
+        let mut response = RpcResponse::new(0, Box::new(GetRouteInfoRequestHeader::new("before", Some(true))), None);
+
+        response
+            .get_header_mut::<GetRouteInfoRequestHeader>()
+            .expect("typed header must be present")
+            .topic = CheetahString::from_static_str("after");
+
+        assert_eq!(
+            response
+                .get_header::<GetRouteInfoRequestHeader>()
+                .expect("typed header must remain present")
+                .topic,
+            CheetahString::from_static_str("after")
+        );
+    }
+
+    #[test]
+    fn canonical_conversion_preserves_owned_header() {
+        let response = RpcResponse::new(17, Box::new(GetRouteInfoRequestHeader::new("topic", None)), None);
+
+        let canonical = match response.try_into_canonical() {
+            Ok(response) => response,
+            Err(_) => panic!("owned response conversion must not fail"),
+        };
+
+        assert_eq!(canonical.code, 17);
+        assert_eq!(
+            canonical
+                .get_header::<GetRouteInfoRequestHeader>()
+                .expect("typed header must survive conversion")
+                .topic,
+            CheetahString::from_static_str("topic")
+        );
     }
 }

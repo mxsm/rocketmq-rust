@@ -616,6 +616,10 @@ M09-04 再删除 MCP 未使用的 Auth/Error direct edges，并把承担 owned t
   - [x] [`M11-11 证据`](phase-3-production-readiness/11-kind-k3d-fault-matrix-evidence.md) 记录完成边界、验证结果、未签署动态 Gate 与不删除 PVC/WAL 的回滚策略
   - [x] 75/82 已完成、7 未完成，下一工作包 PR-M11-12；M10/M11/Phase 3/HUMAN 与真实 fault Gate 均未提前宣称完成
 - [ ] PR-M11-12：完成 ArcMut、stable 与 SLO Phase 3 收口
+  - [x] M11-12a owned-value leaf：Common 只读 TopicConfig helper 解除 ArcMut 类型绑定并移除本 crate `sync_unsafe_cell`；Remoting `RpcResponse` header 改为独占 `Box`，删除无效 shared-ref mutation facade
+  - [x] [`M11-12 进度证据`](phase-3-production-readiness/11-soundness-closure-progress.md) 记录 Issue #8292/#8293、初始 760 production/2,125 occurrence 与本切片后 733/2,082 的真实下降
+  - [ ] M11-12b～i：Remoting Channel/Context owner、Controller/NameServer、Client、Broker、Store/HA、compatibility 删除、stable/Miri/Loom/soak/SLO 与同一候选快照 Gate 仍待完成
+  - [ ] 总进度仍为 75/82；本子切片不提前计作完成工作包，M10/Kind-K3d/container dynamic/HUMAN Gate 保持开放
 - [ ] 对应任务文档的 Exit Checklist 全部通过
 
 ### Phase 3 Gate

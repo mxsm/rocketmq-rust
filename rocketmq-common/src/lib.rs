@@ -14,17 +14,7 @@
 
 #![allow(dead_code)]
 #![allow(unused_imports)]
-#![feature(sync_unsafe_cell)]
 #![allow(unused_variables)]
-
-use std::borrow::Borrow;
-use std::cell::SyncUnsafeCell;
-use std::hash::Hash;
-use std::hash::Hasher;
-use std::ops::Deref;
-use std::ops::DerefMut;
-use std::sync::Arc;
-use std::sync::Weak;
 
 pub use rocketmq_error::RocketMQError;
 pub use rocketmq_error::RocketMQResult;

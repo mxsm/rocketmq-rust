@@ -219,6 +219,12 @@ M12 6 个，下一工作包为 PR-M11-12；真实 Kind/K3d、M10、M11/Phase 3/H
 - [ ] 回滚点：任一失败返回对应独立PR修复并冻结新快照，不扩大baseline或跳过Gate。
 - [ ] `[HUMAN]` 对同一冻结快照批准Phase 3 Gate。
 
+当前进展：M11-12a owned-value leaf 已解除 Common 只读 TopicConfig helper 的 ArcMut 具体类型依赖，移除
+`rocketmq-common` 自身未使用的 `sync_unsafe_cell` feature，并将 Remoting `RpcResponse` header 从共享可变 owner
+改为独占 `Box`；typed header mutation 仅允许 `&mut self`。ArcMut guard 的 production 条目由 760 降为 733，
+production occurrence 由 2,125 降为 2,082；M11-12 总项、stable workspace、其余 owner 与全部动态/HUMAN
+Gate 仍未完成。详见 [`11-soundness-closure-progress.md`](11-soundness-closure-progress.md)。
+
 ## 公共兼容面
 
 - development/compatibility仍可显式选择；secure只作为新部署默认，不静默重解释旧配置。
