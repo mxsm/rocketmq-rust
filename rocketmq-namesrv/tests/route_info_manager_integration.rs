@@ -494,6 +494,96 @@ async fn namesrv_register_query_unregister_route_roundtrip_works_over_remoting()
     harness.shutdown().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn namesrv_v1_serializes_concurrent_route_table_mutations_over_remoting() {
+    let harness = NamesrvHarness::start(NamesrvConfig {
+        use_route_info_manager_v2: false,
+        ..NamesrvConfig::default()
+    })
+    .await;
+
+    let cluster_name = CheetahString::from_static_str("v1-concurrent-cluster");
+    let first_broker = CheetahString::from_static_str("v1-concurrent-broker-a");
+    let first_addr = CheetahString::from_static_str("10.30.0.1:10911");
+    let first_topic = CheetahString::from_static_str("v1-concurrent-topic-a");
+    let first_aux_topic = CheetahString::from_static_str("v1-concurrent-topic-a-aux");
+    let second_broker = CheetahString::from_static_str("v1-concurrent-broker-b");
+    let second_addr = CheetahString::from_static_str("10.30.0.2:10911");
+    let second_topic = CheetahString::from_static_str("v1-concurrent-topic-b");
+    let second_aux_topic = CheetahString::from_static_str("v1-concurrent-topic-b-aux");
+
+    let (first_register, second_register) = tokio::join!(
+        harness.request(register_broker_request_with_options(
+            &cluster_name,
+            &first_broker,
+            &first_addr,
+            MASTER_ID,
+            &[&first_topic, &first_aux_topic],
+            None,
+            Vec::new(),
+        )),
+        harness.request(register_broker_request_with_options(
+            &cluster_name,
+            &second_broker,
+            &second_addr,
+            MASTER_ID,
+            &[&second_topic, &second_aux_topic],
+            None,
+            Vec::new(),
+        )),
+    );
+    assert_eq!(
+        ResponseCode::from(first_register.expect("first V1 registration should complete").code()),
+        ResponseCode::Success
+    );
+    assert_eq!(
+        ResponseCode::from(second_register.expect("second V1 registration should complete").code()),
+        ResponseCode::Success
+    );
+
+    for (topic, broker, addr) in [
+        (&first_topic, &first_broker, &first_addr),
+        (&second_topic, &second_broker, &second_addr),
+    ] {
+        let response = harness.request(route_request(topic)).await.unwrap();
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+        let route = TopicRouteData::decode(response.body().expect("V1 route response should include a body")).unwrap();
+        assert_eq!(route.queue_datas.len(), 1);
+        assert_eq!(route.broker_datas.len(), 1);
+        assert_eq!(route.queue_datas[0].broker_name(), broker);
+        assert_eq!(route.broker_datas[0].broker_addrs().get(&MASTER_ID), Some(addr));
+    }
+
+    let (first_unregister, second_unregister) = tokio::join!(
+        harness.request(unregister_broker_request(&cluster_name, &first_broker, &first_addr)),
+        harness.request(unregister_broker_request(&cluster_name, &second_broker, &second_addr,)),
+    );
+    assert_eq!(
+        ResponseCode::from(first_unregister.expect("first V1 unregister should complete").code()),
+        ResponseCode::Success
+    );
+    assert_eq!(
+        ResponseCode::from(second_unregister.expect("second V1 unregister should complete").code()),
+        ResponseCode::Success
+    );
+
+    for topic in [&first_topic, &second_topic] {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let response = harness.request(route_request(topic)).await.unwrap();
+            match ResponseCode::from(response.code()) {
+                ResponseCode::TopicNotExist => break,
+                ResponseCode::Success if Instant::now() < deadline => {
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+                code => panic!("expected V1 topic cleanup after unregister, got {code:?}"),
+            }
+        }
+    }
+
+    harness.shutdown().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn namesrv_zone_route_filters_removed_zone_and_keeps_master_down_broker_over_remoting() {
     let harness = NamesrvHarness::start(default_v2_namesrv_config()).await;
