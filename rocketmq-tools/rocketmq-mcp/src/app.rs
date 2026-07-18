@@ -19,7 +19,31 @@ use crate::adapter::query_facade::QueryFacade;
 use crate::config::Args;
 use crate::config::McpConfig;
 use crate::config::TransportKind;
+use crate::guard::audit::AuditDrainReport;
 use crate::guard::Guard;
+
+#[derive(Debug, Clone)]
+pub struct McpShutdownReport {
+    pub audit: AuditDrainReport,
+    pub runtime: Option<rocketmq_runtime::ShutdownReport>,
+}
+
+impl McpShutdownReport {
+    pub fn is_healthy(&self) -> bool {
+        self.audit.is_healthy()
+            && self
+                .runtime
+                .as_ref()
+                .is_none_or(rocketmq_runtime::ShutdownReport::is_healthy)
+    }
+
+    pub fn log_if_unhealthy(&self) {
+        self.audit.log_if_unhealthy();
+        if let Some(runtime) = &self.runtime {
+            runtime.log_if_unhealthy();
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct McpApp {
@@ -93,8 +117,17 @@ impl McpApp {
             cache_invalidations = metrics.invalidations,
             cache_coalesced_waiters = metrics.coalesced_waiters,
             audit_queued = audit.queued,
+            audit_accepted = audit.accepted,
+            audit_written = audit.written,
             audit_dropped = audit.dropped,
+            audit_oversized = audit.oversized,
+            audit_count_capacity_drops = audit.count_capacity_drops,
+            audit_byte_capacity_drops = audit.byte_capacity_drops,
+            audit_closed_drops = audit.closed_drops,
             audit_sink_failures = audit.sink_failures,
+            audit_flush_failures = audit.flush_failures,
+            audit_pending_records = audit.pending_records,
+            audit_pending_bytes = audit.pending_bytes,
             "rocketmq-mcp cache metrics"
         );
     }
@@ -109,10 +142,26 @@ impl McpApp {
     }
 
     pub async fn shutdown(&self) {
-        if let Some(runtime_context) = &self.runtime_context {
-            let report = runtime_context.shutdown_tasks(std::time::Duration::from_secs(10)).await;
-            report.log_if_unhealthy();
-        }
+        let report = self
+            .shutdown_with_deadline(rocketmq_runtime::ShutdownDeadline::after(
+                std::time::Duration::from_secs(10),
+            ))
+            .await;
+        report.log_if_unhealthy();
+    }
+
+    /// Closes audit admission, drains accepted records, and then shuts down all owned runtime work.
+    ///
+    /// The same absolute `deadline` bounds both phases, so audit draining cannot reset the runtime
+    /// shutdown budget.
+    pub async fn shutdown_with_deadline(&self, deadline: rocketmq_runtime::ShutdownDeadline) -> McpShutdownReport {
+        let audit = self.guard.audit_log().close_and_drain(deadline).await;
+        let runtime = if let Some(runtime_context) = &self.runtime_context {
+            Some(runtime_context.shutdown_tasks_until(deadline).await)
+        } else {
+            None
+        };
+        McpShutdownReport { audit, runtime }
     }
 
     fn start_background_services(&mut self) -> Result<(), crate::error::McpError> {

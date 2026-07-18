@@ -80,9 +80,9 @@
     },
     "rocketmq-mcp": {
       "crate_version": "1.0.0",
-      "public_path_count": 210,
-      "public_path_sha256": "1adf3bd1edbb5303001350b9b5649471e0a8f50a0acb3a75f094eae91efe3483",
-      "rustdoc_json_sha256": "d598a69858edb4c3622d170067d8c39ae4f64486dd2a093ff7824ce9ee527c7c",
+      "public_path_count": 217,
+      "public_path_sha256": "ec51fdf9aa133bfb1d64e5392f9665693ac0b8776cc4f74eaee6aa17a5f14643",
+      "rustdoc_json_sha256": "5a4627a1214fb0fe8dde7bd971fd63ab62a065e569934d8636fd7971182a9c9a",
       "target": "rocketmq_mcp"
     },
     "rocketmq-model": {
@@ -220,7 +220,7 @@
     }
   },
   "schema_version": 1,
-  "source_commit": "760986f17312c13b74990b92a20242872cf64e54",
+  "source_commit": "45cfb8c3854613b6c2c42b74590f5e053f2aac84",
   "toolchain": {
     "cargo": "cargo 1.99.0-nightly (2f0e7011e 2026-07-05)",
     "rustc": "rustc 1.99.0-nightly (3659db0d3 2026-07-05)",

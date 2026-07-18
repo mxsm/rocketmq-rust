@@ -100,7 +100,10 @@ Important fields:
 - `security.max_concurrent_requests_per_cluster`: bounded concurrent Tool and Resource work per configured cluster.
 - `security.rate_limit_per_minute`: per-principal, per-cluster, per-operation limit.
 - `audit.sink`: `memory`, `file`, or `tracing`.
-- `audit.queue_capacity`: bounded audit writer queue. Queue drops and sink failures are emitted as trace metrics.
+- `audit.queue_capacity`: maximum number of accepted records waiting for the asynchronous writer.
+- `audit.max_record_bytes`: maximum serialized NDJSON record size after redaction and deterministic field bounds.
+- `audit.queue_max_bytes`: maximum bytes retained by the writer queue. Record-count and byte admission are enforced
+  independently with non-blocking `try` semantics.
 - `cache.enabled`: enables or bypasses the shared query cache.
 - `cache.max_entries`: maximum number of in-memory entries; it must be greater than zero when caching is enabled.
 - `cache.*_ttl_ms`: per-query-family freshness windows for overview, topic, broker, and consumer-lag data.
@@ -108,6 +111,12 @@ Important fields:
 - `diagnosis.consumer_lag_threshold`: server-owned threshold used by consumer-lag rules.
 
 Cache keys include the schema version, visibility class, query kind, resolved cluster, and normalized query parameters. Failures are not cached. Concurrent misses for the same key are coalesced, and `cache_status` reports `miss`, `hit`, or `bypass`. Embedders can call `McpApp::invalidate_cache()` to clear all entries explicitly. Cumulative hit, miss, bypass, eviction, invalidation, and coalesced-waiter counters are emitted at trace level after Tool and Resource requests.
+
+Audit records use `schema_version = 1`, redact sensitive assignments and control characters before admission, and
+bound every variable-length field. Shutdown closes admission, drains accepted records in FIFO order, flushes the sink,
+and then shuts down runtime tasks against the same absolute deadline. Embedders that need machine-readable lifecycle
+evidence can call `McpApp::shutdown_with_deadline()` and inspect `McpShutdownReport`; `McpApp::shutdown()` retains the
+ten-second compatibility wrapper and logs unhealthy reports.
 
 Command-line overrides:
 
@@ -273,4 +282,6 @@ Cluster and RocketMQ entity names are UTF-8 percent-encoded as URI path or query
 - HTTP `429`: raise `security.rate_limit_per_minute` only after reviewing client retry behavior.
 - Empty or invalid stdio responses: ensure no wrapper script writes logs or banners to stdout.
 - No cluster data: verify `clusters[].namesrv_addr`, local network access, and RocketMQ namesrv availability.
-- Audit file errors: create the audit directory or use `audit.sink = "memory"` for local tests. Check `audit_sink_failures` and `audit_dropped` trace metrics before increasing queue capacity.
+- Audit file errors: create the audit directory or use `audit.sink = "memory"` for local tests. Check accepted/written,
+  count-capacity drops, byte-capacity drops, oversized records, sink/flush failures, and pending records/bytes before
+  changing either queue limit.

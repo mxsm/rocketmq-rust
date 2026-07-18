@@ -952,6 +952,8 @@ mod tests {
                 sink: "memory".to_string(),
                 path: String::new(),
                 queue_capacity: 16,
+                max_record_bytes: 16 * 1024,
+                queue_max_bytes: 1024 * 1024,
             },
             &[ClusterConfig {
                 name: "local-dev".to_string(),

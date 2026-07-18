@@ -51,6 +51,8 @@ enabled = true
 sink = "file"
 path = "./logs/rocketmq-mcp-audit.log"
 queue_capacity = 1024
+max_record_bytes = 16384
+queue_max_bytes = 1048576
 
 [cache]
 enabled = true
