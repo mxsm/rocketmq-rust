@@ -17,14 +17,15 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use dashmap::DashMap;
-use rocketmq_rust::ArcMut;
 use serde::Deserialize;
 use serde::Serialize;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
 
+#[cfg(test)]
 use crate::config::ControllerConfig;
+use crate::config::ControllerConfigReader;
 use crate::error::Result;
 
 /// Replica role
@@ -217,9 +218,6 @@ impl SyncStateSet {
 /// - ISR (In-Sync Replicas) management
 /// - Master election and failover
 pub struct ReplicasManager {
-    /// Configuration
-    config: ArcMut<ControllerConfig>,
-
     /// Replicas: broker_name -> (broker_id -> BrokerReplicaInfo)
     replicas: Arc<DashMap<String, HashMap<u64, BrokerReplicaInfo>>>,
 
@@ -229,9 +227,8 @@ pub struct ReplicasManager {
 
 impl ReplicasManager {
     /// Create a new replicas manager
-    pub fn new(config: ArcMut<ControllerConfig>) -> Self {
+    pub fn new(_config: ControllerConfigReader) -> Self {
         Self {
-            config,
             replicas: Arc::new(DashMap::new()),
             sync_state_sets: Arc::new(DashMap::new()),
         }
@@ -520,7 +517,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_replicas_manager() {
-        let config = ArcMut::new(ControllerConfig::new_node(1, "127.0.0.1:9876".parse().unwrap()));
+        let config = ControllerConfigReader::new(ControllerConfig::new_node(1, "127.0.0.1:9876".parse().unwrap()));
         let manager = ReplicasManager::new(config);
 
         // Register master

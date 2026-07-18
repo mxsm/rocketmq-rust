@@ -20,6 +20,7 @@ use std::path::Path;
 
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_controller::config::ControllerConfig;
+use rocketmq_controller::config::ControllerConfigReader;
 use rocketmq_controller::config::StorageBackendType;
 use rocketmq_controller::openraft::RaftNodeManager;
 use rocketmq_controller::openraft::StateMachine;
@@ -30,10 +31,9 @@ use rocketmq_controller::typ::ControllerRequest;
 use rocketmq_controller::typ::ControllerResponseHeader;
 use rocketmq_controller::typ::Node;
 use rocketmq_remoting::code::response_code::ResponseCode;
-use rocketmq_rust::ArcMut;
 
-fn test_config(port: u16) -> ArcMut<ControllerConfig> {
-    ArcMut::new(
+fn test_config(port: u16) -> ControllerConfigReader {
+    ControllerConfigReader::new(
         ControllerConfig::default()
             .with_node_info(1, format!("127.0.0.1:{port}").parse().expect("valid socket addr"))
             .with_election_timeout_ms(1000)
@@ -41,8 +41,8 @@ fn test_config(port: u16) -> ArcMut<ControllerConfig> {
     )
 }
 
-fn persistent_test_config(port: u16, storage_path: &Path) -> ArcMut<ControllerConfig> {
-    ArcMut::new(
+fn persistent_test_config(port: u16, storage_path: &Path) -> ControllerConfigReader {
+    ControllerConfigReader::new(
         ControllerConfig::default()
             .with_node_info(1, format!("127.0.0.1:{port}").parse().expect("valid socket addr"))
             .with_election_timeout_ms(1000)

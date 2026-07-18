@@ -473,6 +473,69 @@ class ArcMutBaselineTests(unittest.TestCase):
             {issue.code for issue in guard.compare_findings(findings, pruned, "M01")},
         )
 
+    def test_reviewed_reduction_applies_only_approved_moves_and_real_deletions(self):
+        guard = load_guard()
+        retained = self.entry("retained", "M04")
+        retained["occurrences"] = [
+            {"id": "same", "fingerprint": "same", "item": "fn same", "line": 1},
+            {"id": "move-old", "fingerprint": "old", "item": "fn moved", "line": 2},
+            {"id": "drift-old", "fingerprint": "old", "item": "fn drifted", "line": 3},
+            {"id": "deleted", "fingerprint": "old", "item": "fn deleted", "line": 4},
+        ]
+        deletion = self.entry("deletion", "M04")
+        deletion["occurrences"] = [
+            {"id": "kept", "fingerprint": "same", "item": "fn kept", "line": 1},
+            {"id": "deleted-only", "fingerprint": "old", "item": "fn deleted", "line": 2},
+        ]
+        resolved = self.entry("resolved", "M04")
+        baseline = self.baseline([retained, deletion, resolved])
+        findings = [
+            guard.Finding(
+                "retained",
+                "a/src/lib.rs",
+                "ArcMut",
+                "type_reference",
+                "production",
+                (
+                    {"id": "same", "fingerprint": "same", "item": "fn same", "line": 10},
+                    {"id": "move-new", "fingerprint": "new", "item": "fn moved", "line": 20},
+                    {"id": "drift-new", "fingerprint": "new", "item": "fn drifted", "line": 30},
+                ),
+            ),
+            guard.Finding(
+                "deletion",
+                "a/src/lib.rs",
+                "ArcMut",
+                "type_reference",
+                "production",
+                ({"id": "kept", "fingerprint": "same", "item": "fn kept", "line": 10},),
+            ),
+        ]
+        approvals = {
+            ("retained", "move-new"): {
+                "from": "move-old",
+                "reason": "reviewed same-item move",
+                "adr": "ADR-013",
+            }
+        }
+
+        reduced = guard.apply_reviewed_reductions(findings, baseline, approvals)
+
+        self.assertEqual(["retained", "deletion"], [entry["identity"] for entry in reduced["entries"]])
+        self.assertEqual(
+            {"same", "move-new", "drift-old"},
+            {occurrence["id"] for occurrence in reduced["entries"][0]["occurrences"]},
+        )
+        self.assertEqual(
+            {"kept"},
+            {occurrence["id"] for occurrence in reduced["entries"][1]["occurrences"]},
+        )
+        self.assertEqual([], guard.compare_baselines(baseline, reduced, approvals))
+        self.assertEqual(
+            {"NEW", "STALE"},
+            {issue.code for issue in guard.compare_findings(findings, reduced, "M01")},
+        )
+
     def test_promote_rejects_identity_or_occurrence_expansion(self):
         guard = load_guard()
         old = self.baseline([self.entry("a", "M04")])

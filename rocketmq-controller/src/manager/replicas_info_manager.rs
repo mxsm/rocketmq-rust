@@ -57,12 +57,13 @@ use rocketmq_remoting::protocol::header::controller::get_replica_info_response_h
 use rocketmq_remoting::protocol::header::controller::register_broker_to_controller_response_header::RegisterBrokerToControllerResponseHeader;
 use rocketmq_remoting::protocol::header::elect_master_response_header::ElectMasterResponseHeader;
 use rocketmq_remoting::protocol::RemotingSerializable;
-use rocketmq_rust::ArcMut;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
 
+#[cfg(test)]
 use crate::config::ControllerConfig;
+use crate::config::ControllerConfigReader;
 use crate::elect::elect_policy::ElectPolicy;
 use crate::error::ControllerError;
 use crate::error::Result;
@@ -99,7 +100,7 @@ struct SerializedState {
 /// All methods are thread-safe and can be called concurrently from multiple threads.
 pub struct ReplicasInfoManager {
     /// Controller configuration
-    config: ArcMut<ControllerConfig>,
+    config: ControllerConfigReader,
 
     /// Replica information table: broker_name -> BrokerReplicaInfo
     /// Thread-safe concurrent map
@@ -116,7 +117,7 @@ pub struct ReplicasInfoManager {
 
 impl ReplicasInfoManager {
     /// Create a new ReplicasInfoManager with the given configuration
-    pub fn new(config: ArcMut<ControllerConfig>) -> Self {
+    pub fn new(config: ControllerConfigReader) -> Self {
         Self {
             config,
             replica_info_table: Arc::new(DashMap::new()),
@@ -323,7 +324,7 @@ impl ReplicasInfoManager {
 
         // Elect by policy if not first time or new_master is None
         if new_master.is_none() {
-            let all_replica_brokers = if self.config.enable_elect_unclean_master {
+            let all_replica_brokers = if self.config.snapshot().enable_elect_unclean_master {
                 Some(broker_replica_info.get_all_broker())
             } else {
                 None
@@ -1292,7 +1293,7 @@ mod tests {
 
     #[test]
     fn test_replicas_info_manager_creation() {
-        let config = ArcMut::new(ControllerConfig::new_node(1, "127.0.0.1:9876".parse().unwrap()));
+        let config = ControllerConfigReader::new(ControllerConfig::new_node(1, "127.0.0.1:9876".parse().unwrap()));
         let manager = ReplicasInfoManager::new(config);
         assert_eq!(manager.replica_info_table.len(), 0);
         assert_eq!(manager.sync_state_set_info_table.len(), 0);

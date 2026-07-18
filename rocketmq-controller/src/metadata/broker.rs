@@ -25,14 +25,15 @@ use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
-use rocketmq_rust::ArcMut;
 use serde::Deserialize;
 use serde::Serialize;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
 
+#[cfg(test)]
 use crate::config::ControllerConfig;
+use crate::config::ControllerConfigReader;
 use crate::error::ControllerError;
 use crate::error::Result;
 
@@ -76,9 +77,6 @@ pub struct BrokerManager {
     /// Registered brokers: broker_name -> BrokerInfo
     brokers: Arc<DashMap<String, BrokerInfo>>,
 
-    /// Configuration
-    config: ArcMut<ControllerConfig>,
-
     /// Heartbeat timeout duration
     heartbeat_timeout: Duration,
 
@@ -93,18 +91,17 @@ pub struct BrokerManager {
 
 impl BrokerManager {
     /// Create a new broker manager
-    pub fn new(config: ArcMut<ControllerConfig>) -> Self {
+    pub fn new(config: ControllerConfigReader) -> Self {
         Self::new_with_optional_task_group(config, None)
     }
 
-    pub fn new_with_task_group(config: ArcMut<ControllerConfig>, parent_task_group: TaskGroup) -> Self {
+    pub fn new_with_task_group(config: ControllerConfigReader, parent_task_group: TaskGroup) -> Self {
         Self::new_with_optional_task_group(config, Some(parent_task_group))
     }
 
-    fn new_with_optional_task_group(config: ArcMut<ControllerConfig>, parent_task_group: Option<TaskGroup>) -> Self {
+    fn new_with_optional_task_group(_config: ControllerConfigReader, parent_task_group: Option<TaskGroup>) -> Self {
         Self {
             brokers: Arc::new(DashMap::new()),
-            config,
             heartbeat_timeout: Duration::from_secs(30),
             task_group: Mutex::new(None),
             scheduled_tasks: Mutex::new(None),
@@ -306,7 +303,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_broker_registration() {
-        let config = ArcMut::new(ControllerConfig::test_config());
+        let config = ControllerConfigReader::new(ControllerConfig::test_config());
 
         let manager = BrokerManager::new(config);
 
@@ -327,7 +324,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn heartbeat_checker_uses_scheduled_task_group_and_shutdowns_cleanly() {
-        let config = ArcMut::new(ControllerConfig::test_config());
+        let config = ControllerConfigReader::new(ControllerConfig::test_config());
         let manager = BrokerManager::new(config);
         let info = BrokerInfo {
             name: "broker-expired".to_string(),

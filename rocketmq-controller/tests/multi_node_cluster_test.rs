@@ -28,6 +28,7 @@ use openraft::async_runtime::WatchReceiver;
 use openraft::ServerState;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_controller::config::ControllerConfig;
+use rocketmq_controller::config::ControllerConfigReader;
 use rocketmq_controller::config::RaftPeer;
 use rocketmq_controller::config::StorageBackendType;
 use rocketmq_controller::openraft::GrpcRaftService;
@@ -42,7 +43,6 @@ use rocketmq_controller::typ::RaftMetrics;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::protocol::body::sync_state_set_body::SyncStateSet;
 use rocketmq_remoting::protocol::RemotingDeserializable;
-use rocketmq_rust::ArcMut;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tonic::transport::Server;
@@ -186,7 +186,7 @@ fn managed_refs(nodes: &[ManagedNode]) -> Vec<(u64, Arc<RaftNodeManager>)> {
 async fn start_managed_node(config: ControllerConfig, enable_runtime: bool) -> ManagedNode {
     let node_id = config.node_id;
     let addr = config.listen_addr;
-    let node = Arc::new(RaftNodeManager::new(ArcMut::new(config)).await.unwrap());
+    let node = Arc::new(RaftNodeManager::new(ControllerConfigReader::new(config)).await.unwrap());
     let service = GrpcRaftService::new(node.raft());
     let (server_shutdown_tx, server_shutdown_rx) = oneshot::channel();
     let server_handle = tokio::spawn(async move {
@@ -495,7 +495,7 @@ async fn start_node(
         .with_heartbeat_interval_ms(300)
         .with_raft_peers(peers);
 
-    let node = Arc::new(RaftNodeManager::new(ArcMut::new(config)).await.unwrap());
+    let node = Arc::new(RaftNodeManager::new(ControllerConfigReader::new(config)).await.unwrap());
 
     if !seed_known_peers {
         node.raft().runtime_config().heartbeat(false);

@@ -21,12 +21,11 @@ use openraft::EntryPayload;
 use openraft::OptionalSend;
 use openraft::RaftSnapshotBuilder;
 use rocketmq_remoting::code::response_code::ResponseCode;
-use rocketmq_rust::ArcMut;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use tokio::sync::RwLock;
 
-use crate::config::ControllerConfig;
+use crate::config::ControllerConfigReader;
 use crate::event::controller_result::ControllerResult;
 use crate::manager::replicas_info_manager::ReplicasInfoManager;
 use crate::storage::SharedStorageBackend;
@@ -100,7 +99,7 @@ pub struct StateMachine {
 }
 
 impl StateMachine {
-    pub fn new(config: ArcMut<ControllerConfig>) -> Self {
+    pub fn new(config: ControllerConfigReader) -> Self {
         Self {
             replicas_info_manager: Arc::new(ReplicasInfoManager::new(config)),
             last_applied: Arc::new(RwLock::new(None)),
@@ -110,7 +109,7 @@ impl StateMachine {
         }
     }
 
-    pub async fn open(config: ArcMut<ControllerConfig>, backend: SharedStorageBackend) -> Result<Self, std::io::Error> {
+    pub async fn open(config: ControllerConfigReader, backend: SharedStorageBackend) -> Result<Self, std::io::Error> {
         let state_machine = Self {
             replicas_info_manager: Arc::new(ReplicasInfoManager::new(config)),
             last_applied: Arc::new(RwLock::new(load_json(&backend, LAST_APPLIED_KEY).await?)),
@@ -498,8 +497,9 @@ mod tests {
     use rocketmq_remoting::code::response_code::ResponseCode;
 
     fn new_state_machine() -> StateMachine {
-        let config =
-            ArcMut::new(ControllerConfig::default().with_node_info(1, "127.0.0.1:39876".parse().expect("valid addr")));
+        let config = ControllerConfigReader::new(
+            ControllerConfig::default().with_node_info(1, "127.0.0.1:39876".parse().expect("valid addr")),
+        );
         StateMachine::new(config)
     }
 

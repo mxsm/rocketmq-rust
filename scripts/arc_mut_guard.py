@@ -1138,6 +1138,87 @@ def prune_resolved_findings(findings: list[Finding], baseline: dict) -> dict:
     return pruned
 
 
+def apply_reviewed_reductions(
+    findings: list[Finding],
+    baseline: dict,
+    relocation_approvals: dict | None = None,
+) -> dict:
+    """Apply deletions and reviewed relocations without accepting other drift."""
+    validate_baseline(baseline)
+    approvals = validate_relocation_approvals(relocation_approvals)
+    observed = {finding.identity: finding for finding in findings}
+    entries = []
+
+    for entry in baseline["entries"]:
+        finding = observed.get(entry["identity"])
+        if finding is None:
+            continue
+
+        old_occurrences = {occurrence["id"]: occurrence for occurrence in entry["occurrences"]}
+        current_occurrences = {occurrence["id"]: occurrence for occurrence in finding.occurrences}
+        accepted_current_ids: set[str] = set()
+        consumed_old_ids: set[str] = set()
+        next_occurrences = []
+
+        for occurrence in finding.occurrences:
+            previous = old_occurrences.get(occurrence["id"])
+            approval = approvals.get((entry["identity"], occurrence["id"]))
+            if previous is not None:
+                unchanged = all(previous[field] == occurrence[field] for field in ("fingerprint", "item"))
+                if unchanged:
+                    next_occurrences.append(occurrence)
+                    accepted_current_ids.add(occurrence["id"])
+                elif approval is not None and approval["from"] == occurrence["id"] and previous["item"] == occurrence["item"]:
+                    next_occurrences.append(occurrence)
+                    accepted_current_ids.add(occurrence["id"])
+                    consumed_old_ids.add(previous["id"])
+                continue
+
+            source = old_occurrences.get(approval["from"]) if approval else None
+            if (
+                source is not None
+                and approval["from"] not in current_occurrences
+                and source["item"] == occurrence["item"]
+            ):
+                next_occurrences.append(occurrence)
+                accepted_current_ids.add(occurrence["id"])
+                consumed_old_ids.add(source["id"])
+
+        unaccepted_current_items = {
+            occurrence["item"]
+            for occurrence in finding.occurrences
+            if occurrence["id"] not in accepted_current_ids
+        }
+        has_unaccepted_current = bool(unaccepted_current_items)
+        identity_has_approvals = any(identity == entry["identity"] for identity, _ in approvals)
+        for occurrence in entry["occurrences"]:
+            if occurrence["id"] in consumed_old_ids or occurrence["id"] in accepted_current_ids:
+                continue
+            if (
+                occurrence["id"] in current_occurrences
+                or occurrence["item"] in unaccepted_current_items
+            ):
+                next_occurrences.append(occurrence)
+
+        if has_unaccepted_current and not identity_has_approvals:
+            next_occurrences = list(entry["occurrences"])
+        if not next_occurrences:
+            continue
+        entries.append({**entry, "occurrences": next_occurrences})
+
+    reduced = {
+        "schema_version": baseline["schema_version"],
+        "current_milestone": baseline["current_milestone"],
+        "entries": entries,
+    }
+    validate_baseline(reduced)
+    issues = compare_baselines(baseline, reduced, approvals)
+    if issues:
+        details = "; ".join(f"{issue.code}: {issue.detail}" for issue in issues)
+        raise BaselineError(f"reviewed baseline reduction is not monotonic: {details}")
+    return reduced
+
+
 def _write_below_target(data: dict, output: Path, root: Path, option: str) -> None:
     target = (root / "target").resolve()
     try:
@@ -1261,6 +1342,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--bootstrap", type=Path)
     parser.add_argument("--promote-baseline", type=Path)
     parser.add_argument("--prune-resolved", type=Path)
+    parser.add_argument("--apply-reviewed-reductions", type=Path)
     parser.add_argument("--compare-baseline", type=Path)
     parser.add_argument("--relocation-approvals", type=Path)
     parser.add_argument("--fixtures", action="store_true")
@@ -1289,6 +1371,23 @@ def main(argv: list[str] | None = None) -> int:
                 print(
                     f"BASELINE_PRUNED {args.prune_resolved} "
                     f"entries={len(baseline['entries'])}->{len(pruned['entries'])} "
+                    f"occurrences={old_occurrences}->{new_occurrences}"
+                )
+                return 0
+            if args.apply_reviewed_reductions:
+                baseline = _load(args.baseline)
+                reduced = apply_reviewed_reductions(findings, baseline, relocation_approvals)
+                _write_below_target(
+                    reduced,
+                    args.apply_reviewed_reductions,
+                    args.root.resolve(),
+                    "--apply-reviewed-reductions",
+                )
+                old_occurrences = sum(len(entry["occurrences"]) for entry in baseline["entries"])
+                new_occurrences = sum(len(entry["occurrences"]) for entry in reduced["entries"])
+                print(
+                    f"BASELINE_REDUCED {args.apply_reviewed_reductions} "
+                    f"entries={len(baseline['entries'])}->{len(reduced['entries'])} "
                     f"occurrences={old_occurrences}->{new_occurrences}"
                 )
                 return 0

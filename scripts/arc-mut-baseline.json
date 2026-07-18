@@ -20393,120 +20393,6 @@
       "adr": "ADR-002"
     },
     {
-      "identity": "5cdbc05f97d5eb1aaabf0f51",
-      "path": "rocketmq-controller/examples/controller_metrics_example.rs",
-      "symbol": "ArcMut",
-      "kind": "constructor",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "8c5ee9bc3a7461e8efd3bda0",
-          "fingerprint": "676816516b3c988f6a2cd240",
-          "item": "fn main",
-          "line": 41
-        }
-      ],
-      "owner": "controller",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "272ac1f229e6dbfe49ec5578",
-      "path": "rocketmq-controller/examples/controller_metrics_example.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "d8349a811ce1837065a5a79f",
-          "fingerprint": "ff25b3564f6a746b3298e661",
-          "item": "<module>",
-          "line": 29
-        }
-      ],
-      "owner": "controller",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "4175271fbdbd3b2d9952dcf4",
-      "path": "rocketmq-controller/examples/single_node.rs",
-      "symbol": "ArcMut",
-      "kind": "constructor",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "1be9ad00630016b45c968bf4",
-          "fingerprint": "bf4170ffd95c10b8a61bd1ed",
-          "item": "fn run",
-          "line": 44
-        }
-      ],
-      "owner": "controller",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "f8bcd6375c15ce7e4631dba8",
-      "path": "rocketmq-controller/examples/single_node.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "939d32ccf46f6517f0d2969f",
-          "fingerprint": "d090fd8baa2e34838800c4cf",
-          "item": "<module>",
-          "line": 24
-        }
-      ],
-      "owner": "controller",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "e0c60f19b8c820cbc1fb2c99",
-      "path": "rocketmq-controller/examples/three_node_cluster.rs",
-      "symbol": "ArcMut",
-      "kind": "constructor",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "3ee03d7364ff100852efebd5",
-          "fingerprint": "c4a0a5d19ec1969961dfe862",
-          "item": "fn main",
-          "line": 63
-        }
-      ],
-      "owner": "controller",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "032caabb106413a37ec419c6",
-      "path": "rocketmq-controller/examples/three_node_cluster.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "2b4ed75df269e8af06294d8c",
-          "fingerprint": "9c4aa1a58f6638c872818333",
-          "item": "<module>",
-          "line": 26
-        }
-      ],
-      "owner": "controller",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
       "identity": "e9a60c434a96c32273ae26e8",
       "path": "rocketmq-controller/src/bin/controller_bootstrap.rs",
       "symbol": "*",
@@ -20655,7 +20541,7 @@
           "id": "63a55a13985f5673c26ece1c",
           "fingerprint": "4afbc7660fc6b9c1074510f6",
           "item": "mod tests",
-          "line": 1436
+          "line": 1492
         }
       ],
       "owner": "controller",
@@ -20671,34 +20557,28 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "041f0c176d467d0e4a2bc526",
-          "fingerprint": "e41413f23bb96e2cda5d5dcc",
+          "id": "ef47d06c28ef099e03ab55cc",
+          "fingerprint": "b10058e9845acda6539d6efa",
           "item": "fn new_with_optional_runtime_context",
-          "line": 448
+          "line": 459
         },
         {
-          "id": "d991a47e380c0c7183dc0428",
-          "fingerprint": "196d3e24ac8a5ce603429673",
+          "id": "ea19abbb66b7e6c7d9f85ede",
+          "fingerprint": "23c7ad901013bc5b23335943",
           "item": "fn new_with_optional_runtime_context",
-          "line": 457
-        },
-        {
-          "id": "93fd88a4e9731eccd3dfd049",
-          "fingerprint": "0dce383ac62f461ee3711b73",
-          "item": "fn new_with_optional_runtime_context",
-          "line": 470
+          "line": 472
         },
         {
           "id": "c0c5343f06da625d6f0c9421",
           "fingerprint": "d6c41095f32b0f508ac1a909",
           "item": "fn new_with_optional_runtime_context",
-          "line": 508
+          "line": 510
         },
         {
           "id": "d32e5a31201d295e4711532b",
           "fingerprint": "d2b7ecc1655159597d275bcd",
           "item": "fn initialize",
-          "line": 641
+          "line": 644
         }
       ],
       "owner": "controller",
@@ -20717,55 +20597,55 @@
           "id": "2cbdb5940d53f3c29396f05e",
           "fingerprint": "ad961926a6b3fa8e3506899e",
           "item": "fn create_test_channel",
-          "line": 1476
+          "line": 1532
         },
         {
           "id": "0fc969e98d55b36f854affad",
           "fingerprint": "7d426f36baa73733431a25b9",
           "item": "fn create_test_channel",
-          "line": 1477
+          "line": 1533
         },
         {
           "id": "55509b959a804f221cfc4b73",
           "fingerprint": "1a3920c851ba5893434fa7f7",
           "item": "fn test_manager_lifecycle",
-          "line": 1486
+          "line": 1542
         },
         {
           "id": "327e77dca29b14b16c17ba99",
           "fingerprint": "9925fd905f82b4413389618a",
           "item": "fn test_manager_shutdown",
-          "line": 1512
+          "line": 1568
         },
         {
           "id": "f597fc2ec24ce989cfd1cf59",
           "fingerprint": "d017a07b1696b243dca8c1be",
           "item": "fn test_start_without_initialize",
-          "line": 1529
+          "line": 1585
         },
         {
           "id": "f6ed8eb83ce562f0993b5247",
           "fingerprint": "ef35b163ed35a9512d43098f",
           "item": "fn test_leadership_watch_enables_scheduling_for_openraft_leader",
-          "line": 1671
+          "line": 1727
         },
         {
           "id": "e32a410751da5b31e816f547",
           "fingerprint": "24b5afe7dee19830e207fd11",
           "item": "fn inactive_slave_does_not_elect_but_inactive_master_does",
-          "line": 1715
+          "line": 1771
         },
         {
           "id": "cad6485a65ece3e6559a56d0",
           "fingerprint": "cc815c792e45d509768434d4",
           "item": "fn processor_successful_manual_election_records_role_change_notification",
-          "line": 1892
+          "line": 1948
         },
         {
           "id": "cbc96784b3e5103d9b67fc87",
           "fingerprint": "ff9e54c943e4b542ca1b5706",
           "item": "fn processor_successful_manual_election_records_role_change_notification",
-          "line": 2015
+          "line": 2071
         }
       ],
       "owner": "controller",
@@ -20784,7 +20664,7 @@
           "id": "de820a7a562142764f66c911",
           "fingerprint": "4bf31c88b173c462c6dca92c",
           "item": "<module>",
-          "line": 69
+          "line": 71
         }
       ],
       "owner": "controller",
@@ -20800,106 +20680,94 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "e292f2494c66e899c168cb1b",
-          "fingerprint": "c114a92192dacfdf4cecf332",
+          "id": "6ca4a88236aa76dded99b7f8",
+          "fingerprint": "6146d925c1a30a2d49ee5c05",
           "item": "struct ControllerManager",
-          "line": 371
-        },
-        {
-          "id": "7398486fa17a739ad8f7b29e",
-          "fingerprint": "b5072b6f4913a0d46b3cbbcb",
-          "item": "struct ControllerManager",
-          "line": 375
+          "line": 377
         },
         {
           "id": "e587bdef4a55503bc2d7ab68",
           "fingerprint": "4aeb9e1e02178274ae7206a7",
           "item": "struct ControllerManager",
-          "line": 382
+          "line": 384
         },
         {
           "id": "f4bf22a1fb9b9be808789e6e",
           "fingerprint": "7d57199cee4536c4096d11c5",
           "item": "struct ControllerManager",
-          "line": 394
+          "line": 396
+        },
+        {
+          "id": "cb95faf53d6787447def229b",
+          "fingerprint": "08c3b44c5944cdc748dc9476",
+          "item": "fn initialize",
+          "line": 634
+        },
+        {
+          "id": "581f703a3fd6efc67c110b2a",
+          "fingerprint": "a543fd9045c77afa74996434",
+          "item": "fn init_processors",
+          "line": 705
+        },
+        {
+          "id": "8c2cfa8301c33866004d66da",
+          "fingerprint": "a90ff3d920d6209bcc91bb47",
+          "item": "fn start",
+          "line": 737
+        },
+        {
+          "id": "ead45a98fa5e7b2b27e794e9",
+          "fingerprint": "77669f86c9fe33e4c05bbd4e",
+          "item": "fn start",
+          "line": 829
+        },
+        {
+          "id": "ad06e5ab9f44608195a30884",
+          "fingerprint": "6e0efcbbad3f16691325cd36",
+          "item": "fn heartbeat_manager",
+          "line": 1072
+        },
+        {
+          "id": "5196bf8df7b548490c01ea21",
+          "fingerprint": "473bd4323bca66bc956b48d5",
+          "item": "fn remoting_client",
+          "line": 1081
+        },
+        {
+          "id": "df1fe2a1ed575c25457f9555",
+          "fingerprint": "9692b7feb34be9b3711b1da5",
+          "item": "fn controller",
+          "line": 1085
+        },
+        {
+          "id": "7ba7364a732440ea683ddbb5",
+          "fingerprint": "feb02bd0968ae34c4b27ef6d",
+          "item": "fn start_leadership_watch_loop",
+          "line": 1121
+        },
+        {
+          "id": "fb496f06a95ee0f4435816a2",
+          "fingerprint": "771b975438f8728783980a3c",
+          "item": "fn start_leadership_watch_loop",
+          "line": 1122
+        },
+        {
+          "id": "6a00d265da5499e818e226bb",
+          "fingerprint": "0b8a08e29add81cda86ccb0c",
+          "item": "fn start_notify_worker_loop",
+          "line": 1336
+        },
+        {
+          "id": "9718ede82fe43d788efcefff",
+          "fingerprint": "18cb3d624106d6891a9efb73",
+          "item": "fn start_notify_worker_loop",
+          "line": 1340
         },
         {
           "id": "5e747c2c62b238a25dc6b5fa",
           "fingerprint": "d6eb46a22e5898969caf1746",
           "item": "fn initialize",
           "line": 610
-        },
-        {
-          "id": "cb95faf53d6787447def229b",
-          "fingerprint": "08c3b44c5944cdc748dc9476",
-          "item": "fn initialize",
-          "line": 631
-        },
-        {
-          "id": "581f703a3fd6efc67c110b2a",
-          "fingerprint": "a543fd9045c77afa74996434",
-          "item": "fn init_processors",
-          "line": 702
-        },
-        {
-          "id": "8c2cfa8301c33866004d66da",
-          "fingerprint": "a90ff3d920d6209bcc91bb47",
-          "item": "fn start",
-          "line": 734
-        },
-        {
-          "id": "ead45a98fa5e7b2b27e794e9",
-          "fingerprint": "77669f86c9fe33e4c05bbd4e",
-          "item": "fn start",
-          "line": 826
-        },
-        {
-          "id": "931090d0e690a8bf690dea72",
-          "fingerprint": "0ebfdd7f77c74b9640685ffb",
-          "item": "fn config",
-          "line": 987
-        },
-        {
-          "id": "50c026c2a7781df50ce435f5",
-          "fingerprint": "29f7bd2c0861b4d13e6892fe",
-          "item": "fn heartbeat_manager",
-          "line": 1019
-        },
-        {
-          "id": "5196bf8df7b548490c01ea21",
-          "fingerprint": "473bd4323bca66bc956b48d5",
-          "item": "fn remoting_client",
-          "line": 1028
-        },
-        {
-          "id": "df1fe2a1ed575c25457f9555",
-          "fingerprint": "9692b7feb34be9b3711b1da5",
-          "item": "fn controller",
-          "line": 1032
-        },
-        {
-          "id": "7ba7364a732440ea683ddbb5",
-          "fingerprint": "feb02bd0968ae34c4b27ef6d",
-          "item": "fn start_leadership_watch_loop",
-          "line": 1068
-        },
-        {
-          "id": "fb496f06a95ee0f4435816a2",
-          "fingerprint": "771b975438f8728783980a3c",
-          "item": "fn start_leadership_watch_loop",
-          "line": 1069
-        },
-        {
-          "id": "6a00d265da5499e818e226bb",
-          "fingerprint": "0b8a08e29add81cda86ccb0c",
-          "item": "fn start_notify_worker_loop",
-          "line": 1280
-        },
-        {
-          "id": "9718ede82fe43d788efcefff",
-          "fingerprint": "18cb3d624106d6891a9efb73",
-          "item": "fn start_notify_worker_loop",
-          "line": 1284
         }
       ],
       "owner": "controller",
@@ -20918,7 +20786,7 @@
           "id": "91472dbead8cf4925c0175d4",
           "fingerprint": "568b53771d0a247bcfe4ccfb",
           "item": "fn inactive_slave_does_not_elect_but_inactive_master_does",
-          "line": 1818
+          "line": 1874
         }
       ],
       "owner": "controller",
@@ -20937,7 +20805,7 @@
           "id": "5962900ec093406d25cd4f78",
           "fingerprint": "dd8c31ef11aa0d45ae8aae8c",
           "item": "<module>",
-          "line": 70
+          "line": 72
         }
       ],
       "owner": "controller",
@@ -20956,13 +20824,13 @@
           "id": "847d06fa3fbc0d029a482885",
           "fingerprint": "164906d0ff6cd82260e0d46a",
           "item": "struct BrokerInactiveListener",
-          "line": 137
+          "line": 139
         },
         {
           "id": "548b20def6eca0fcb891e6b4",
           "fingerprint": "1c3030850cfce08aac353ccb",
           "item": "fn new",
-          "line": 141
+          "line": 143
         }
       ],
       "owner": "controller",
@@ -21015,35 +20883,16 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "6b7679e4387d175a58c0ee17",
-          "fingerprint": "1ec87574a540b9aea9115068",
+          "id": "1969c3641ceda79f605917f5",
+          "fingerprint": "efa8231d6ce2dcdf2bdf102b",
           "item": "fn new",
-          "line": 127
+          "line": 131
         },
         {
-          "id": "fdd44d5d48c6154ede48d79b",
-          "fingerprint": "16a5da216bca65b856cb1274",
+          "id": "0103bad7a24e9c4134e5ca92",
+          "fingerprint": "f9421125394fa289a8b6022e",
           "item": "fn new_with_task_group",
-          "line": 132
-        }
-      ],
-      "owner": "controller",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "1572f596353ffb98985f64cb",
-      "path": "rocketmq-controller/src/controller/open_raft_controller.rs",
-      "symbol": "ArcMut",
-      "kind": "constructor",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "cd511dc0a15f346d6340494f",
-          "fingerprint": "e36351b57d5e94e7c50a84a2",
-          "item": "fn startup_binds_grpc_listener_before_returning",
-          "line": 994
+          "line": 136
         }
       ],
       "owner": "controller",
@@ -21062,26 +20911,7 @@
           "id": "3fe42c09398cca2d2c279a0c",
           "fingerprint": "0ae50020e656a3adb2e605da",
           "item": "<module>",
-          "line": 79
-        }
-      ],
-      "owner": "controller",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "96a8136c8e8fdbec3ccd8657",
-      "path": "rocketmq-controller/src/controller/open_raft_controller.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "05121afae8297eb78acc32d1",
-          "fingerprint": "c1c6f40a1499ab121be10840",
-          "item": "mod tests",
-          "line": 964
+          "line": 81
         }
       ],
       "owner": "controller",
@@ -21097,64 +20927,28 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "9e7175815b64dfe749964b2b",
-          "fingerprint": "c5d28095e424b4c04355e56e",
-          "item": "struct OpenRaftController",
-          "line": 108
-        },
-        {
           "id": "8f68c13062a92fac139d4b23",
           "fingerprint": "5e37647559f2664960beacc7",
           "item": "struct OpenRaftController",
-          "line": 118
+          "line": 122
         },
         {
-          "id": "3429cc3fdc4ded65c9bfadc0",
-          "fingerprint": "65c608bd468c2479958121d2",
-          "item": "fn new",
-          "line": 126
-        },
-        {
-          "id": "2cbfbb38ecc923a371710cdd",
-          "fingerprint": "a133165fcd6ff1f63d97b00b",
-          "item": "fn new_with_task_group",
-          "line": 131
-        },
-        {
-          "id": "ebe158911d795657ade91015",
-          "fingerprint": "cbe0429580d0500d8e4f3ff8",
+          "id": "53794a99beb41989c31d9875",
+          "fingerprint": "2de273e8fa7ade4ff239fe5f",
           "item": "fn new_with_heartbeat",
-          "line": 140
+          "line": 145
         },
         {
-          "id": "686885d2d431dca58ff26149",
-          "fingerprint": "fb162b44a7492f4ab71f792d",
-          "item": "fn new_with_heartbeat",
-          "line": 141
-        },
-        {
-          "id": "ad29f3f97efc82fb12b72d3a",
-          "fingerprint": "fa6af34ef762f6e0459563f6",
+          "id": "6b80bbc001acdf72caab61f3",
+          "fingerprint": "3b71307685bc6d8763b9c834",
           "item": "fn new_with_heartbeat_and_task_group",
-          "line": 147
+          "line": 152
         },
         {
-          "id": "92e86802465b6c4705da97ff",
-          "fingerprint": "0010d29b97e453d0f4f402dd",
-          "item": "fn new_with_heartbeat_and_task_group",
-          "line": 148
-        },
-        {
-          "id": "e2c78a5c826819bdd1c587e5",
-          "fingerprint": "7598d6933ed3a34a39545ff5",
+          "id": "ce091d3f3c30d18007f20c56",
+          "fingerprint": "6b1a432acac8dcd8027a5524",
           "item": "fn new_with_heartbeat_and_optional_task_group",
-          "line": 155
-        },
-        {
-          "id": "7d4747e054cdb1f7fc72304b",
-          "fingerprint": "a91bbf1987d276da2cab4424",
-          "item": "fn new_with_heartbeat_and_optional_task_group",
-          "line": 156
+          "line": 160
         }
       ],
       "owner": "controller",
@@ -21170,8 +20964,8 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "3d956148d6d0c1bcb0391fb6",
-          "fingerprint": "305cb8cc3a1aa93cbe746e7c",
+          "id": "a4db124866af9233ab767277",
+          "fingerprint": "3a7bed6b1d4b6936c70b29a1",
           "item": "fn new_open_raft",
           "line": 56
         },
@@ -21195,10 +20989,10 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "6324f07b0bee94628284212e",
-          "fingerprint": "057db31f4de3f8c46da04406",
+          "id": "578cadd28eac5db9616d006e",
+          "fingerprint": "b087d17105a042b75f737f0f",
           "item": "<module>",
-          "line": 34
+          "line": 33
         }
       ],
       "owner": "controller",
@@ -21220,20 +21014,8 @@
           "line": 49
         },
         {
-          "id": "fba9c2fac2bf8820bae7a0e0",
-          "fingerprint": "ef1ea6338db7322d27bc98c1",
-          "item": "fn new_open_raft",
-          "line": 54
-        },
-        {
-          "id": "3961d8dc6c56ce684e508930",
-          "fingerprint": "9ab211727b07349e70d40521",
-          "item": "fn new_open_raft_with_heartbeat",
-          "line": 62
-        },
-        {
-          "id": "bbe8173128d5a2fd5f1b64b4",
-          "fingerprint": "984f85d034ebb459065f24a8",
+          "id": "d51e95e8f170a0f4209117f9",
+          "fingerprint": "d7fe76cf6a33892cdc3af6a1",
           "item": "fn new_open_raft_with_heartbeat",
           "line": 63
         }
@@ -21288,112 +21070,6 @@
       "adr": "ADR-002"
     },
     {
-      "identity": "84e1ed2398d092c579dfd9ad",
-      "path": "rocketmq-controller/src/heartbeat/default_broker_heartbeat_manager.rs",
-      "symbol": "*",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "7c873115b1ba88d362601222",
-          "fingerprint": "918030347486d5f6e7475830",
-          "item": "mod tests",
-          "line": 478
-        }
-      ],
-      "owner": "controller",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "99f020dd535db428be061d49",
-      "path": "rocketmq-controller/src/heartbeat/default_broker_heartbeat_manager.rs",
-      "symbol": "ArcMut",
-      "kind": "constructor",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "45a25c7facde2e3d1eafd40e",
-          "fingerprint": "42be49773bda0f13de152350",
-          "item": "fn test_default_broker_heartbeat_manager_creation",
-          "line": 512
-        },
-        {
-          "id": "a6e37c68843e5057cf7235b3",
-          "fingerprint": "592e1351cdaeeb93c6176fd9",
-          "item": "fn start_without_tokio_runtime_does_not_leave_scan_task_group",
-          "line": 519
-        },
-        {
-          "id": "6171213e243a015c32a15f70",
-          "fingerprint": "367134f6b1a0176e5b3be174",
-          "item": "fn sync_shutdown_clears_scan_task_group",
-          "line": 529
-        }
-      ],
-      "owner": "controller",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "f9582cb5f8da32aeea7d3327",
-      "path": "rocketmq-controller/src/heartbeat/default_broker_heartbeat_manager.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "bec6c7e5c469089a2b7be84c",
-          "fingerprint": "f0220eabf8547de2061a0e6c",
-          "item": "<module>",
-          "line": 30
-        }
-      ],
-      "owner": "controller",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "733f20375f6d4d8a43e8e4b9",
-      "path": "rocketmq-controller/src/heartbeat/default_broker_heartbeat_manager.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "c4bb6e0b88c83320a5933d74",
-          "fingerprint": "fb6a441b65ed3baf2b9d3ef2",
-          "item": "struct DefaultBrokerHeartbeatManager",
-          "line": 70
-        },
-        {
-          "id": "db968dca7de98ec674b5e0f9",
-          "fingerprint": "3be1cdb7f425983d9630df05",
-          "item": "fn new",
-          "line": 97
-        },
-        {
-          "id": "335a4974775ad088183cd8ef",
-          "fingerprint": "e60ecefbb1dd9fe63abc137a",
-          "item": "fn new_with_task_group",
-          "line": 101
-        },
-        {
-          "id": "6238fd0b3328333a731ccda5",
-          "fingerprint": "1512930ea4181cbbe198e207",
-          "item": "fn new_with_optional_task_group",
-          "line": 105
-        }
-      ],
-      "owner": "controller",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
       "identity": "0edf5f6dbc043db7b6d357a0",
       "path": "rocketmq-controller/src/lib.rs",
       "symbol": "ArcMut",
@@ -21401,28 +21077,10 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "d8f5ebd68c6c251e43e934fc",
-          "fingerprint": "4cd3618aafbd1b4b347cbad8",
-          "item": "fn run_controller_heartbeat_lifecycle_probe",
-          "line": 197
-        },
-        {
-          "id": "2bbb0d7f8bb67f1513cfad99",
-          "fingerprint": "bfb15e6136c48d2d837c1833",
-          "item": "fn run_controller_broker_metadata_lifecycle_probe",
-          "line": 244
-        },
-        {
           "id": "12a287ec6847803410efaa0c",
           "fingerprint": "ef35b163ed35a9512d43098f",
           "item": "fn run_controller_leadership_watch_lifecycle_probe",
-          "line": 327
-        },
-        {
-          "id": "9b1e4541eb823a5826961b92",
-          "fingerprint": "bd83ba8c98491b00c6d21f87",
-          "item": "fn run_controller_openraft_scan_lifecycle_probe",
-          "line": 417
+          "line": 330
         }
       ],
       "owner": "controller",
@@ -21441,697 +21099,11 @@
           "id": "11a203b20c4fc032d73de5b9",
           "fingerprint": "1bef135bbaf9abad23337926",
           "item": "mod bench_support",
-          "line": 128
+          "line": 129
         }
       ],
       "owner": "controller",
       "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "484ce9188db690a29a8dd9fc",
-      "path": "rocketmq-controller/src/manager/replicas_info_manager.rs",
-      "symbol": "*",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "9db5e6bef8105170c9a87aa8",
-          "fingerprint": "4fe9c6f52c40345c6b34d414",
-          "item": "mod tests",
-          "line": 1279
-        }
-      ],
-      "owner": "controller",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "650875387c4815154fb589e1",
-      "path": "rocketmq-controller/src/manager/replicas_info_manager.rs",
-      "symbol": "ArcMut",
-      "kind": "constructor",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "0694ded82762994aae3d32a7",
-          "fingerprint": "4428aac2f1790042963b8790",
-          "item": "fn test_replicas_info_manager_creation",
-          "line": 1295
-        }
-      ],
-      "owner": "controller",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "a1d9b880d8094721471b071e",
-      "path": "rocketmq-controller/src/manager/replicas_info_manager.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "e762cd45ebb562cce8f176eb",
-          "fingerprint": "e22bb7d07a96a2cbc58154ed",
-          "item": "<module>",
-          "line": 60
-        }
-      ],
-      "owner": "controller",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "053c62f428ed953a5a8d4ce1",
-      "path": "rocketmq-controller/src/manager/replicas_info_manager.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "1917e87857a29f9bca1c45a8",
-          "fingerprint": "789359f6b482a51a7f93fe35",
-          "item": "struct ReplicasInfoManager",
-          "line": 102
-        },
-        {
-          "id": "577f8dfb3f1c4512e74b8b4e",
-          "fingerprint": "c1be891af24df1161b97b548",
-          "item": "fn new",
-          "line": 119
-        }
-      ],
-      "owner": "controller",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "d876dc9d02a852cf2fa6f36b",
-      "path": "rocketmq-controller/src/metadata/broker.rs",
-      "symbol": "*",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "04fbd1768723870587578b8b",
-          "fingerprint": "21ee2fa6fe4f9b988fd759b3",
-          "item": "mod tests",
-          "line": 305
-        }
-      ],
-      "owner": "controller",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "37292c555ccc3e67c8ad73e0",
-      "path": "rocketmq-controller/src/metadata/broker.rs",
-      "symbol": "ArcMut",
-      "kind": "constructor",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "22cabd785ff23eac9b4e3a34",
-          "fingerprint": "c6d253f4221f578529f6b11b",
-          "item": "fn test_broker_registration",
-          "line": 309
-        },
-        {
-          "id": "76ebf83ce4a72b079dc71053",
-          "fingerprint": "5acfcd390efb96ca62fbb23a",
-          "item": "fn heartbeat_checker_uses_scheduled_task_group_and_shutdowns_cleanly",
-          "line": 330
-        }
-      ],
-      "owner": "controller",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "d39e433dc073119b802f6a81",
-      "path": "rocketmq-controller/src/metadata/broker.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "c06561f2dc2ac536e4b0f8f6",
-          "fingerprint": "1e20c3edc60d65d5cb882f80",
-          "item": "<module>",
-          "line": 28
-        }
-      ],
-      "owner": "controller",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "d7b63089914584a9dabbe84e",
-      "path": "rocketmq-controller/src/metadata/broker.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "63f04731b5bdbbd246d0991f",
-          "fingerprint": "545bf5c1b6a287c5d157b3e6",
-          "item": "struct BrokerManager",
-          "line": 80
-        },
-        {
-          "id": "5ba61710e4957e4cb56e3f9f",
-          "fingerprint": "dc80dd4f54051a6a25bc6af0",
-          "item": "fn new",
-          "line": 96
-        },
-        {
-          "id": "921ca6091814918ae2e3d3c2",
-          "fingerprint": "e60ecefbb1dd9fe63abc137a",
-          "item": "fn new_with_task_group",
-          "line": 100
-        },
-        {
-          "id": "3761bdadc01822c46bf4bbaf",
-          "fingerprint": "1512930ea4181cbbe198e207",
-          "item": "fn new_with_optional_task_group",
-          "line": 104
-        }
-      ],
-      "owner": "controller",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "7eb53e3b47425e0b8717fa0f",
-      "path": "rocketmq-controller/src/metadata/config.rs",
-      "symbol": "*",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "437452e5d1f936a93e0c2b9e",
-          "fingerprint": "b74b445e47a9dee936daafa5",
-          "item": "mod tests",
-          "line": 113
-        }
-      ],
-      "owner": "controller",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "4a41a296e9ae47dafe9a5013",
-      "path": "rocketmq-controller/src/metadata/config.rs",
-      "symbol": "ArcMut",
-      "kind": "constructor",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "749cd3b86b32b42f5349bf48",
-          "fingerprint": "0fb4be45cfc59bc2e4a00ae0",
-          "item": "fn test_config_management",
-          "line": 117
-        }
-      ],
-      "owner": "controller",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "16cff01305ec7b269386f0f6",
-      "path": "rocketmq-controller/src/metadata/config.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "35d31264789353e57a3be3f0",
-          "fingerprint": "86e9ff0b13352d81d848ecd0",
-          "item": "<module>",
-          "line": 18
-        }
-      ],
-      "owner": "controller",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "269876a27dfc235dbfa04d49",
-      "path": "rocketmq-controller/src/metadata/config.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "a3b50dd6cf7c3d2a2a7fc507",
-          "fingerprint": "97f9454b99e05474c9f6958d",
-          "item": "struct ConfigManager",
-          "line": 47
-        },
-        {
-          "id": "718b87d0522a8fd663b4b871",
-          "fingerprint": "c8ee6f97c39aa589dba98c31",
-          "item": "fn new",
-          "line": 52
-        }
-      ],
-      "owner": "controller",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "48a141e72ec82f592f6098ed",
-      "path": "rocketmq-controller/src/metadata/mod.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "6768fca91e53d4984b5bc0f9",
-          "fingerprint": "b9f63c2f7eea9739a59fcfb8",
-          "item": "mod topic",
-          "line": 31
-        }
-      ],
-      "owner": "controller",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "37e65d57ca56efe328feb750",
-      "path": "rocketmq-controller/src/metadata/mod.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "68bf6b665df019e00ff6cf61",
-          "fingerprint": "d11ab93719b225a5f867348c",
-          "item": "fn new",
-          "line": 65
-        }
-      ],
-      "owner": "controller",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "065bcc56d30f44380a6ee443",
-      "path": "rocketmq-controller/src/metadata/replica.rs",
-      "symbol": "*",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "67e4168514c9ad7a38460182",
-          "fingerprint": "4bb70197ad4da75d33e50aac",
-          "item": "mod tests",
-          "line": 473
-        }
-      ],
-      "owner": "controller",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "36db01909fcd8e3ec97c5f9a",
-      "path": "rocketmq-controller/src/metadata/replica.rs",
-      "symbol": "ArcMut",
-      "kind": "constructor",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "2c7c0dcb7e59530090ca8487",
-          "fingerprint": "fc1c3f295db60f176091ed27",
-          "item": "fn test_replicas_manager",
-          "line": 523
-        }
-      ],
-      "owner": "controller",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "7705edab256e8f2de324aaf8",
-      "path": "rocketmq-controller/src/metadata/replica.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "8b9f26fc6f825a05d017d887",
-          "fingerprint": "a1feea5cbe7112d2f3bb8411",
-          "item": "<module>",
-          "line": 20
-        }
-      ],
-      "owner": "controller",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "6ec7190c2895d81f0a763137",
-      "path": "rocketmq-controller/src/metadata/replica.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "3d95dcb308e15a5f6562cbe1",
-          "fingerprint": "0e6e1c636d1bcfe2553179e4",
-          "item": "struct ReplicasManager",
-          "line": 221
-        },
-        {
-          "id": "6418ee0ab4d2590646a58a6e",
-          "fingerprint": "c168836e8373553188663699",
-          "item": "fn new",
-          "line": 232
-        }
-      ],
-      "owner": "controller",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "339654303ab3d1eaa471dece",
-      "path": "rocketmq-controller/src/metadata/topic.rs",
-      "symbol": "*",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "36d61b5d0d32b7b7c3d3e098",
-          "fingerprint": "6e92a48966fe74137630e286",
-          "item": "mod tests",
-          "line": 227
-        }
-      ],
-      "owner": "controller",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "92cda4ae2eef3db3d1131fba",
-      "path": "rocketmq-controller/src/metadata/topic.rs",
-      "symbol": "ArcMut",
-      "kind": "constructor",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "184c333ee58a464b143122ba",
-          "fingerprint": "8fa31e3c330470e80f5a720c",
-          "item": "fn test_topic_creation",
-          "line": 231
-        }
-      ],
-      "owner": "controller",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "811d6488eb107b4e7bca67d0",
-      "path": "rocketmq-controller/src/metadata/topic.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "79bbcd12790f602c587da188",
-          "fingerprint": "86e9ff0b13352d81d848ecd0",
-          "item": "<module>",
-          "line": 18
-        }
-      ],
-      "owner": "controller",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "025e99ec8da95eed28ea3091",
-      "path": "rocketmq-controller/src/metadata/topic.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "056be8ab7e13a6467a7fb3bd",
-          "fingerprint": "ca8fe7a2efa18bec1ce17058",
-          "item": "struct TopicManager",
-          "line": 87
-        },
-        {
-          "id": "f047b019295e9dfddcbb0e86",
-          "fingerprint": "504d8ce6a63791951c1e8924",
-          "item": "fn new",
-          "line": 92
-        }
-      ],
-      "owner": "controller",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "289677e5277b1be880babccc",
-      "path": "rocketmq-controller/src/metrics/controller_metrics_manager.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "1604ac7bc5dab4b798c477b7",
-          "fingerprint": "be98af87644db77bd6e89c92",
-          "item": "<module>",
-          "line": 21
-        }
-      ],
-      "owner": "controller",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "aab8e48a719f3154f7d190e8",
-      "path": "rocketmq-controller/src/metrics/controller_metrics_manager.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "f5bcbd7d8f5fb9b6ae169b37",
-          "fingerprint": "52cd251a18304d534c99ff27",
-          "item": "fn get_instance",
-          "line": 77
-        },
-        {
-          "id": "afa6bff6b1dbd64c0918581b",
-          "fingerprint": "0a015148038824b4fdd9bcdc",
-          "item": "fn get_instance_with_active_broker_source",
-          "line": 82
-        },
-        {
-          "id": "d479b388c5d7a4fd127fcec5",
-          "fingerprint": "6eee454ca74287d527c659e5",
-          "item": "fn get_instance",
-          "line": 142
-        },
-        {
-          "id": "59c85252f06749dcc2cf1f03",
-          "fingerprint": "71c5863ff7d71be240d686d0",
-          "item": "fn get_instance_with_active_broker_source",
-          "line": 147
-        }
-      ],
-      "owner": "controller",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "1c80acdeb1e1f9f18cd8b9ce",
-      "path": "rocketmq-controller/src/openraft/node.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "540daccd5475f0793b9385e2",
-          "fingerprint": "dfe55e7d44350a6c095089c3",
-          "item": "<module>",
-          "line": 24
-        }
-      ],
-      "owner": "controller",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "e68d3d6a7e858a6048df60c3",
-      "path": "rocketmq-controller/src/openraft/node.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "ade56d98a12eed93dd7a165c",
-          "fingerprint": "416bddc9e667fdab7286ca5e",
-          "item": "fn new",
-          "line": 55
-        }
-      ],
-      "owner": "controller",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "2a6018ecc049561c9a3c7ec4",
-      "path": "rocketmq-controller/src/openraft/state_machine.rs",
-      "symbol": "*",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "edc8ba439a1e6303b5d7da91",
-          "fingerprint": "1828a8755e4423768ff7dbc1",
-          "item": "mod tests",
-          "line": 494
-        }
-      ],
-      "owner": "controller",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "a4ba2d0aca9a138dc0f8e9c8",
-      "path": "rocketmq-controller/src/openraft/state_machine.rs",
-      "symbol": "ArcMut",
-      "kind": "constructor",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "403667d7dd6d7ecbc3a32399",
-          "fingerprint": "55893004d1e48af1cfe4ddba",
-          "item": "fn new_state_machine",
-          "line": 502
-        }
-      ],
-      "owner": "controller",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "58a8c8a392c65dcc4a215809",
-      "path": "rocketmq-controller/src/openraft/state_machine.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "5dc990d9d1813ed60df70b21",
-          "fingerprint": "0be04aa006c50389645e7863",
-          "item": "<module>",
-          "line": 24
-        }
-      ],
-      "owner": "controller",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "2953d8c61e3be095a85b8c9b",
-      "path": "rocketmq-controller/src/openraft/state_machine.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "06a3e275edcb3e5e667a0ec5",
-          "fingerprint": "73c4fb65e3367ba8427fa52b",
-          "item": "fn new",
-          "line": 103
-        },
-        {
-          "id": "25c9e3f332b80a4ddb2214b5",
-          "fingerprint": "f37bcb51f87ac5619d97eb46",
-          "item": "fn open",
-          "line": 113
-        }
-      ],
-      "owner": "controller",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "4a0de80a39465f2a9fc09af0",
-      "path": "rocketmq-controller/src/openraft/storage.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "c4a3e7aa6310dcd6fa4ba018",
-          "fingerprint": "9b5f461aac23466a23f50767",
-          "item": "<module>",
-          "line": 22
-        }
-      ],
-      "owner": "controller",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "308b82ee80e2c1b6ec54727f",
-      "path": "rocketmq-controller/src/openraft/storage.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "d38512be652e628d5379079c",
-          "fingerprint": "85b51911b289faf7bac44d30",
-          "item": "fn new",
-          "line": 45
-        },
-        {
-          "id": "9cbb2e6a09aef37c758dc5f5",
-          "fingerprint": "9f3eb8910db10b174f64a1d9",
-          "item": "fn open",
-          "line": 52
-        }
-      ],
-      "owner": "controller",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
       "remove_by": "M06",
       "adr": "ADR-002"
     },
@@ -22302,49 +21274,49 @@
           "id": "ba673373b55b3969e312d14a",
           "fingerprint": "5f0d53dda78923dd1691a10a",
           "item": "fn handle_request",
-          "line": 211
+          "line": 212
         },
         {
           "id": "30dfff8fa501ad68d0ccdc17",
           "fingerprint": "dc8db71e75846c79651da26b",
           "item": "fn handle_alter_sync_state_set",
-          "line": 283
+          "line": 284
         },
         {
           "id": "57b461ac97ba493d803dc102",
           "fingerprint": "e942544914453f587f4c4b4d",
           "item": "fn handle_elect_master",
-          "line": 329
+          "line": 330
         },
         {
           "id": "6fd78b3a15fed8d4cc42908b",
           "fingerprint": "77c22c4d5d2024e21f78d333",
           "item": "fn handle_get_replica_info",
-          "line": 379
+          "line": 380
         },
         {
           "id": "4169af266bae870ffd71ae60",
           "fingerprint": "d65b56959ce38ac9e880a2db",
           "item": "fn handle_get_metadata_info",
-          "line": 412
+          "line": 413
         },
         {
           "id": "36dd03fa63221c71a86c150b",
           "fingerprint": "5beaa8ea1b3273a1be43af52",
           "item": "fn handle_broker_heartbeat",
-          "line": 434
+          "line": 435
         },
         {
           "id": "6c0b97147031be20e705acef",
           "fingerprint": "7ac54c298ac609a62c973d49",
           "item": "fn handle_get_sync_state_data",
-          "line": 483
+          "line": 484
         },
         {
           "id": "983d165ce9cc0492ecb7d71d",
           "fingerprint": "c359f3b15eeb0827231bdae0",
           "item": "fn handle_update_controller_config",
-          "line": 515
+          "line": 516
         },
         {
           "id": "18bc418a306ea114c11c8c53",
@@ -22385,44 +21357,6 @@
       ],
       "owner": "controller",
       "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "6e7334038517cc171b23a42f",
-      "path": "rocketmq-controller/src/processor/metadata_processor.rs",
-      "symbol": "ArcMut",
-      "kind": "constructor",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "ec0f4745772e506254469773",
-          "fingerprint": "a280e954350b503e9ef8962c",
-          "item": "fn test_get_metadata_processor",
-          "line": 98
-        }
-      ],
-      "owner": "controller",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "71da63919852888a937782c4",
-      "path": "rocketmq-controller/src/processor/metadata_processor.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "bb149e8c204b1ec5fbb42108",
-          "fingerprint": "d05d5762d69e7b7d55045721",
-          "item": "mod tests",
-          "line": 91
-        }
-      ],
-      "owner": "controller",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
       "remove_by": "M06",
       "adr": "ADR-002"
     },
@@ -22521,34 +21455,22 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "6dc74c52f014dd5bfa665f74",
-          "fingerprint": "3844752b93695575776bc29d",
+          "id": "ad3114e56de26d514b081bc6",
+          "fingerprint": "a1d655cde355e5b5d2016894",
           "item": "struct ProcessorManager",
           "line": 62
         },
         {
-          "id": "0ed9acbd0fe97c0e90a3780d",
-          "fingerprint": "2c003a01f78d3a066baa263c",
-          "item": "struct ProcessorManager",
-          "line": 65
-        },
-        {
-          "id": "6e172e1b1d99c443ce50f64e",
-          "fingerprint": "b5a4508ee3db9c76bd5cddc6",
+          "id": "1532089ed6551ae19d393f67",
+          "fingerprint": "eee8f1db1b6d878245eb9ad6",
           "item": "fn new",
-          "line": 76
-        },
-        {
-          "id": "1fe122196eebe52e52bfbd66",
-          "fingerprint": "14351c793504ed3d72f6f2f2",
-          "item": "fn new",
-          "line": 76
+          "line": 73
         },
         {
           "id": "cc93b0b15498ba2ab546eaa3",
           "fingerprint": "c557195b13068a12dbd8468a",
           "item": "enum ControllerRequestProcessorWrapper",
-          "line": 157
+          "line": 153
         }
       ],
       "owner": "controller",
@@ -22586,13 +21508,13 @@
           "id": "d36ecc937fd4c96de3883634",
           "fingerprint": "f20c4029acdc5537be4b952b",
           "item": "fn process_request",
-          "line": 164
+          "line": 160
         },
         {
           "id": "6e4e6b2d7e13f602561389bc",
           "fingerprint": "f20c4029acdc5537be4b952b",
           "item": "fn process_request",
-          "line": 204
+          "line": 200
         }
       ],
       "owner": "controller",
@@ -22720,357 +21642,6 @@
       "adr": "ADR-002"
     },
     {
-      "identity": "44813a5c135cdf5017645c7a",
-      "path": "rocketmq-controller/tests/metrics_quick_reference_test.rs",
-      "symbol": "ArcMut",
-      "kind": "constructor",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "23a22479771052f9ca7a7495",
-          "fingerprint": "3217f18ca0b96e72c9eae08a",
-          "item": "fn test_initialization",
-          "line": 28
-        },
-        {
-          "id": "3136789a14cb3276fe749199",
-          "fingerprint": "a158a7e5655de626c27afc66",
-          "item": "fn test_request_metrics",
-          "line": 41
-        },
-        {
-          "id": "4780b146676ef2c6df96168b",
-          "fingerprint": "1fe0c8cfdad2fda6b2bcbdd4",
-          "item": "fn test_dledger_metrics",
-          "line": 53
-        },
-        {
-          "id": "7fd692c0abd8fe92882b0355",
-          "fingerprint": "ad898896ed01945b8e37b5ae",
-          "item": "fn test_election_metrics",
-          "line": 65
-        },
-        {
-          "id": "83681246b89e710cf3a87f64",
-          "fingerprint": "88cfa7954f879c8f4181b883",
-          "item": "fn test_request_with_timing",
-          "line": 76
-        },
-        {
-          "id": "4906da48d667143409211504",
-          "fingerprint": "1972311ff8e082d038d9ef59",
-          "item": "fn test_all_request_statuses",
-          "line": 91
-        },
-        {
-          "id": "513fde69b0f449ac1ea5a0b8",
-          "fingerprint": "87cebc52bcf133e02d7dc35d",
-          "item": "fn test_all_dledger_statuses",
-          "line": 101
-        },
-        {
-          "id": "427a7c1345f20267d71a6d54",
-          "fingerprint": "c0f36276dcd359dbe061d496",
-          "item": "fn test_all_election_results",
-          "line": 111
-        },
-        {
-          "id": "42cc98cd3ca9c4d1209041d8",
-          "fingerprint": "8b2fa3f11d7104bc2530e6cb",
-          "item": "fn test_thread_safety",
-          "line": 123
-        }
-      ],
-      "owner": "controller",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "52794c48a025c96d1da02ae7",
-      "path": "rocketmq-controller/tests/metrics_quick_reference_test.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "5eec6f6c771db3d8a4b79ad5",
-          "fingerprint": "51ee08a12becd6c2c1368295",
-          "item": "mod quick_reference_tests",
-          "line": 24
-        }
-      ],
-      "owner": "controller",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "46188a36ce76d9ccc99cd8ad",
-      "path": "rocketmq-controller/tests/multi_node_cluster_test.rs",
-      "symbol": "ArcMut",
-      "kind": "constructor",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "044649a1f423fb14a1408f3d",
-          "fingerprint": "1fe1ba30a4463cae1016c851",
-          "item": "fn start_managed_node",
-          "line": 189
-        },
-        {
-          "id": "4e09234db2b1b1a565c5ff3b",
-          "fingerprint": "1fe1ba30a4463cae1016c851",
-          "item": "fn start_node",
-          "line": 498
-        }
-      ],
-      "owner": "controller",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "914803b1938fef879e892b94",
-      "path": "rocketmq-controller/tests/multi_node_cluster_test.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "f974e0f3b4bde0f335c719a8",
-          "fingerprint": "9df816f29f453cfc8e7dc239",
-          "item": "<module>",
-          "line": 45
-        }
-      ],
-      "owner": "controller",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "c5008935bcb9173fa3fe7aa3",
-      "path": "rocketmq-controller/tests/openraft_integration_test.rs",
-      "symbol": "ArcMut",
-      "kind": "constructor",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "e07ceef18f7d258755785b2f",
-          "fingerprint": "4027f3014a207d8eaaec3e38",
-          "item": "fn test_config",
-          "line": 36
-        },
-        {
-          "id": "9791faf4d9d294043380453c",
-          "fingerprint": "4a6d5c928a0fb777a91787b2",
-          "item": "fn persistent_test_config",
-          "line": 45
-        }
-      ],
-      "owner": "controller",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "4b6e4928c7a1711a78c3a84b",
-      "path": "rocketmq-controller/tests/openraft_integration_test.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "c5d4ac760d899c30835729ca",
-          "fingerprint": "aa6042081d95098c60db6e8b",
-          "item": "<module>",
-          "line": 33
-        }
-      ],
-      "owner": "controller",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "45b3ba35d84be149c45ea5ff",
-      "path": "rocketmq-controller/tests/openraft_integration_test.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "d226889e2138cce1f3a28a33",
-          "fingerprint": "682f55f734e3efcc972ce22d",
-          "item": "fn test_config",
-          "line": 35
-        },
-        {
-          "id": "3cdf9c1c5f217d65c86f9305",
-          "fingerprint": "7460425c29fece6edbc30dfe",
-          "item": "fn persistent_test_config",
-          "line": 44
-        }
-      ],
-      "owner": "controller",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "95b91e7b70ed13428c7ae7d5",
-      "path": "rocketmq-controller/tests/raft_controller_test.rs",
-      "symbol": "ArcMut",
-      "kind": "constructor",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "b661450183b720a9532031a2",
-          "fingerprint": "4027f3014a207d8eaaec3e38",
-          "item": "fn test_config",
-          "line": 25
-        }
-      ],
-      "owner": "controller",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "7e5e2eb04dc5e7b8fdd64211",
-      "path": "rocketmq-controller/tests/raft_controller_test.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "05fdc899437bdf57f005d167",
-          "fingerprint": "0bc50a090114359c0f43455b",
-          "item": "<module>",
-          "line": 22
-        }
-      ],
-      "owner": "controller",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "b8f7e9262e2382127704ae37",
-      "path": "rocketmq-controller/tests/raft_controller_test.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "ae43dc1b3fd0cfbcb1386080",
-          "fingerprint": "682f55f734e3efcc972ce22d",
-          "item": "fn test_config",
-          "line": 24
-        }
-      ],
-      "owner": "controller",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "fd6525bb9df1dc8c0a78546b",
-      "path": "rocketmq-controller/tests/simple_cluster_test.rs",
-      "symbol": "ArcMut",
-      "kind": "constructor",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "50b81c790acb50850c9a0672",
-          "fingerprint": "1fe1ba30a4463cae1016c851",
-          "item": "fn test_simple_cluster_setup",
-          "line": 63
-        }
-      ],
-      "owner": "controller",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "b7c0568e39b28d4b78b4e8ec",
-      "path": "rocketmq-controller/tests/simple_cluster_test.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "dd7ed48e9ee7f826baaa1cff",
-          "fingerprint": "d8a632bab107f929aedc3711",
-          "item": "<module>",
-          "line": 27
-        }
-      ],
-      "owner": "controller",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "74284623f7472ea56e994403",
-      "path": "rocketmq-controller/tests/snapshot_test.rs",
-      "symbol": "ArcMut",
-      "kind": "constructor",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "0a43ae5435635d2f32804a75",
-          "fingerprint": "4027f3014a207d8eaaec3e38",
-          "item": "fn test_config",
-          "line": 37
-        }
-      ],
-      "owner": "controller",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "020deb832fba03a7d7e73f1c",
-      "path": "rocketmq-controller/tests/snapshot_test.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "eca50606f8da039b254beaa4",
-          "fingerprint": "e6c907deb369a4bf7a511137",
-          "item": "<module>",
-          "line": 34
-        }
-      ],
-      "owner": "controller",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "3a5ce04f7ae7578b685c441c",
-      "path": "rocketmq-controller/tests/snapshot_test.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "e1509e647f53c3edbcea2681",
-          "fingerprint": "682f55f734e3efcc972ce22d",
-          "item": "fn test_config",
-          "line": 36
-        }
-      ],
-      "owner": "controller",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M06",
-      "adr": "ADR-002"
-    },
-    {
       "identity": "9aaa5a94c8c2a3b216a834e3",
       "path": "rocketmq-namesrv/src/bootstrap.rs",
       "symbol": "*",
@@ -23081,7 +21652,7 @@
           "id": "57e21c47291e158baa830ec1",
           "fingerprint": "a3d65ad288cfbe3bd370021a",
           "item": "mod tests",
-          "line": 1715
+          "line": 1829
         }
       ],
       "owner": "namesrv",
@@ -23100,37 +21671,37 @@
           "id": "383c385f8b84f857044b2168",
           "fingerprint": "1fcdbf85d4bda6610db92e1b",
           "item": "fn load_config",
-          "line": 546
+          "line": 612
         },
         {
           "id": "82de1b6c93eb4438b7b3672c",
           "fingerprint": "7ddf036f067e94b08b839419",
           "item": "fn init_processors",
-          "line": 903
+          "line": 1017
         },
         {
           "id": "4ef40af893b64f85523602c9",
           "fingerprint": "81cdce066ea4d4637c0f6284",
           "item": "fn init_processors",
-          "line": 907
+          "line": 1021
         },
         {
           "id": "590347983192a6d8b1227b9e",
           "fingerprint": "9b6d2210c3be9e38ae318643",
           "item": "fn init_processors",
-          "line": 922
+          "line": 1036
         },
         {
           "id": "59830353e1ae781bff5b8497",
           "fingerprint": "92ac77692dd9da19386f6153",
           "item": "fn build",
-          "line": 1048
+          "line": 1162
         },
         {
           "id": "aaff676ff03e4ddc391149b8",
           "fingerprint": "53e14577cb6f440eee10a16c",
           "item": "fn build",
-          "line": 1058
+          "line": 1172
         }
       ],
       "owner": "namesrv",
@@ -23149,7 +21720,7 @@
           "id": "21be6cbed7f342e511d2d3b2",
           "fingerprint": "f1b53009cb211386ffd5f24c",
           "item": "<module>",
-          "line": 56
+          "line": 59
         }
       ],
       "owner": "namesrv",
@@ -23168,37 +21739,37 @@
           "id": "292b64cfc2e03a1f94c49123",
           "fingerprint": "67e454710cb76722889b5cd3",
           "item": "struct NameServerRuntime",
-          "line": 286
+          "line": 295
         },
         {
           "id": "9f1faf457195953eb3f20af2",
           "fingerprint": "f0a2e0ef8e6f581df5dbf9b5",
           "item": "fn runtime_inner",
-          "line": 300
+          "line": 309
         },
         {
           "id": "46797e7e37e4b76d37170238",
           "fingerprint": "e500dad1ead635b74f88c2d9",
           "item": "fn start_with_shutdown_report",
-          "line": 699
+          "line": 768
         },
         {
           "id": "9805d999fa9fb056b67b7275",
           "fingerprint": "4089f5ed1265509d71eff1b3",
           "item": "struct NameServerRuntimeInner",
-          "line": 1125
+          "line": 1239
         },
         {
           "id": "c797782132914fa6a0a43c0b",
           "fingerprint": "5672e3f157d30b54a7e13247",
           "item": "struct NameServerRuntimeInner",
-          "line": 1127
+          "line": 1241
         },
         {
           "id": "7d6f3efb639394b3fbc93f08",
           "fingerprint": "c031179469fcd01a18d7b1e1",
           "item": "fn controller_manager",
-          "line": 1589
+          "line": 1703
         }
       ],
       "owner": "namesrv",
@@ -29347,13 +27918,13 @@
           "id": "41cfbce8951a575089c25d86",
           "fingerprint": "1db69a6201259e16b3e3de6d",
           "item": "fn get_consume_queue",
-          "line": 3373
+          "line": 3374
         },
         {
           "id": "fb117dcbd6c98f3fc8307c10",
           "fingerprint": "eac0977e97367bb08379fd51",
           "item": "fn find_consume_queue",
-          "line": 3380
+          "line": 3381
         }
       ],
       "owner": "store",
@@ -29415,67 +27986,67 @@
           "id": "fe6ed215f742b0b7382f046f",
           "fingerprint": "3228e710dd3b2f82289ce6e0",
           "item": "fn new_configured_test_store_with_broker",
-          "line": 5598
+          "line": 5599
         },
         {
           "id": "a784257a9eea3ca2888a65d6",
           "fingerprint": "730edc6c382a5095a5566f80",
           "item": "fn new_unwired_test_store",
-          "line": 5636
+          "line": 5637
         },
         {
           "id": "ea80384d3d04734ae9e31340",
           "fingerprint": "bc019fd36449638f708552dc",
           "item": "fn set_message_store_arc_initializes_timer_message_store_when_timer_wheel_enabled",
-          "line": 5916
+          "line": 5917
         },
         {
           "id": "c10b456359e577355ad93172",
           "fingerprint": "a8128514745e5b5b0f573a04",
           "item": "fn compaction_topic_dispatches_and_reads_from_compaction_store",
-          "line": 6312
+          "line": 6313
         },
         {
           "id": "1e66c7b54d88ce1b95508c4c",
           "fingerprint": "a8128514745e5b5b0f573a04",
           "item": "fn rocksdb_store_type_with_rocksdb_cq_topic_uses_compat_local_queue_path",
-          "line": 6358
+          "line": 6359
         },
         {
           "id": "6eca838ea25456a66bfe1e87",
           "fingerprint": "c5e5f216d6f09ac7bc48c9e3",
           "item": "fn sync_broker_role_in_controller_mode_refreshes_confirm_offset_for_master",
-          "line": 7225
+          "line": 7226
         },
         {
           "id": "7ad9c617a9ab2369224ba894",
           "fingerprint": "c5e5f216d6f09ac7bc48c9e3",
           "item": "fn flush_consume_queue_service_start_persists_logic_checkpoint_to_disk",
-          "line": 7570
+          "line": 7571
         },
         {
           "id": "a90459da038304a8d37b178a",
           "fingerprint": "c5e5f216d6f09ac7bc48c9e3",
           "item": "fn do_recheck_reput_offset_from_dispatchers_rewinds_to_dispatched_commitlog_offset",
-          "line": 8122
+          "line": 8123
         },
         {
           "id": "4bf08ba5d315432b007618ef",
           "fingerprint": "c5e5f216d6f09ac7bc48c9e3",
           "item": "fn do_recheck_reput_offset_from_dispatchers_uses_minimum_progress_across_cq_and_index",
-          "line": 8172
+          "line": 8173
         },
         {
           "id": "6d4ec8cb2eb76b205899a719",
           "fingerprint": "c5e5f216d6f09ac7bc48c9e3",
           "item": "fn get_dispatch_recovery_offset_respects_controller_epoch_start_offset",
-          "line": 8233
+          "line": 8234
         },
         {
           "id": "f55a020f1bb78baf0d9c9841",
           "fingerprint": "c5e5f216d6f09ac7bc48c9e3",
           "item": "fn do_recheck_reput_offset_from_dispatchers_respects_controller_epoch_start_offset_floor",
-          "line": 8258
+          "line": 8259
         }
       ],
       "owner": "store",
@@ -29513,7 +28084,7 @@
           "id": "73d704c7294a4ad3c853d582",
           "fingerprint": "2140089977a37314c7c94030",
           "item": "mod tests",
-          "line": 5497
+          "line": 5498
         }
       ],
       "owner": "store",
@@ -29604,109 +28175,109 @@
           "id": "fe18a5aea3534e4ebfc6a76c",
           "fingerprint": "69a8d585bf49df024e8d71a4",
           "item": "fn start",
-          "line": 4061
+          "line": 4062
         },
         {
           "id": "0e882c172d4250fa64b76ab0",
           "fingerprint": "e040ac0df878d7a0f9be8577",
           "item": "struct BackgroundIndexRebuildWorker",
-          "line": 4155
+          "line": 4156
         },
         {
           "id": "4582701031e93158c6d3eff9",
           "fingerprint": "1c93f8e3f0ced7d79afddcc8",
           "item": "fn start",
-          "line": 4391
+          "line": 4392
         },
         {
           "id": "3041a4b81382e6207f108fdf",
           "fingerprint": "e3fa09bd49504f076da1a918",
           "item": "fn start",
-          "line": 4394
+          "line": 4395
         },
         {
           "id": "f7fa186b77201d41b312b3ac",
           "fingerprint": "25308b92853a7656193b065e",
           "item": "fn start",
-          "line": 4396
+          "line": 4397
         },
         {
           "id": "66b95ed4a446ae74aa052cc7",
           "fingerprint": "96c1f62b398174e21a5554b8",
           "item": "fn run_once",
-          "line": 4565
+          "line": 4566
         },
         {
           "id": "d3d641e8d0b6ae2a13fbe2ad",
           "fingerprint": "e3fa09bd49504f076da1a918",
           "item": "fn run_once",
-          "line": 4568
+          "line": 4569
         },
         {
           "id": "fab45978fcb0c29d61780058",
           "fingerprint": "5c304b2651587cadb336e9a6",
           "item": "fn run_once",
-          "line": 4570
+          "line": 4571
         },
         {
           "id": "b34a21bf98770e31f4a165b4",
           "fingerprint": "6456002e767075c2a111a438",
           "item": "struct ReputMessageServiceInner",
-          "line": 4646
+          "line": 4647
         },
         {
           "id": "e0683262788f978bff01a307",
           "fingerprint": "e3fa09bd49504f076da1a918",
           "item": "struct ReputMessageServiceInner",
-          "line": 4649
+          "line": 4650
         },
         {
           "id": "5225e46ff563c824304d8ab6",
           "fingerprint": "384947f17b5bac7593610153",
           "item": "struct ReputMessageServiceInner",
-          "line": 4651
+          "line": 4652
         },
         {
           "id": "f8587bafc2ac2f561ea493bb",
           "fingerprint": "f5b90ca5c266723a95147fa1",
           "item": "fn dispatch_reput_batch",
-          "line": 4655
+          "line": 4656
         },
         {
           "id": "59b6f3a63c8c6592eeac6514",
           "fingerprint": "05a30ded732ed2c1c89ad3f3",
           "item": "fn dispatch_reput_batch",
-          "line": 4656
+          "line": 4657
         },
         {
           "id": "d8037a2bd068cdcd2c5f00db",
           "fingerprint": "545c9b46ab33535af90503fe",
           "item": "struct CleanCommitLogService",
-          "line": 5013
+          "line": 5014
         },
         {
           "id": "d583a5819be1a1a66fc207ab",
           "fingerprint": "eb5c006d884d32a8e0b5e9b8",
           "item": "struct CleanConsumeQueueService",
-          "line": 5232
+          "line": 5233
         },
         {
           "id": "95946ce5d0633d5bb0eb512b",
           "fingerprint": "2d17eb4b45a953b52bfc11a9",
           "item": "fn new",
-          "line": 5238
+          "line": 5239
         },
         {
           "id": "61cc2f3dbf65ad4e6a3025ec",
           "fingerprint": "2ff84019b2e3a42a1d431022",
           "item": "struct CorrectLogicOffsetService",
-          "line": 5272
+          "line": 5273
         },
         {
           "id": "b5b3d3b4a047150fa61686c4",
           "fingerprint": "ac08876c41b7c0d7270e69a9",
           "item": "fn new",
-          "line": 5277
+          "line": 5278
         }
       ],
       "owner": "store",
@@ -29725,115 +28296,115 @@
           "id": "0272eb6f065fcadde2433cc9",
           "fingerprint": "07f48c3f324369a987bcd9ed",
           "item": "fn new",
-          "line": 5027
+          "line": 5028
         },
         {
           "id": "818e23254f48bf96c011502d",
           "fingerprint": "06808e60c57a588d963a39d1",
           "item": "fn new_test_store",
-          "line": 5554
+          "line": 5555
         },
         {
           "id": "bd75d2fc21441146137a1fa7",
           "fingerprint": "2c50adbb8bb3601aa9696f99",
           "item": "fn new_configured_test_store",
-          "line": 5588
+          "line": 5589
         },
         {
           "id": "a4565850138c33457cb4503f",
           "fingerprint": "ddaaf51b7e9e8a6d5a7fa862",
           "item": "fn new_configured_test_store_with_broker",
-          "line": 5596
+          "line": 5597
         },
         {
           "id": "82ea5c873c16992c9150a787",
           "fingerprint": "a59864eb9429d10129008663",
           "item": "fn new_configured_test_store_with_broker",
-          "line": 5601
+          "line": 5602
         },
         {
           "id": "e300821df2b0dcc5a7ec4518",
           "fingerprint": "1240b98bd3ace44c67fb31a5",
           "item": "fn new_unwired_test_store",
-          "line": 5631
+          "line": 5632
         },
         {
           "id": "03de0f2c94675977dc93bc33",
           "fingerprint": "4409877677a2ab1aa08a3793",
           "item": "fn new_unwired_test_store",
-          "line": 5639
+          "line": 5640
         },
         {
           "id": "f405d52da628e924dba63dd5",
           "fingerprint": "9594ea63f3c6dfc2a4f8dadb",
           "item": "fn reput_inner_for_store",
-          "line": 5697
+          "line": 5698
         },
         {
           "id": "2bc785020cffc531f67851d5",
           "fingerprint": "65fc444d08793f252677b512",
           "item": "fn new_async_flush_test_store",
-          "line": 5795
+          "line": 5796
         },
         {
           "id": "d3c97c8726298454fce74c15",
           "fingerprint": "7666f2a4683b6bb72bf1c3ee",
           "item": "fn append_encoded_test_message",
-          "line": 5846
+          "line": 5847
         },
         {
           "id": "f82cfea3d0ea6119b10efdb0",
           "fingerprint": "09110b2e53b7eb82a0456a37",
           "item": "fn append_encoded_test_message_with_key",
-          "line": 5856
+          "line": 5857
         },
         {
           "id": "12312895c95000e25723ccbe",
           "fingerprint": "4409877677a2ab1aa08a3793",
           "item": "fn set_message_store_arc_initializes_timer_message_store_when_timer_wheel_enabled",
-          "line": 5919
+          "line": 5920
         },
         {
           "id": "9b6981b75d6d8201e9a8365d",
           "fingerprint": "30e084e32d538c30720ff9b6",
           "item": "fn sync_broker_role_in_controller_mode_refreshes_confirm_offset_for_master",
-          "line": 7236
+          "line": 7237
         },
         {
           "id": "a8e3d703ddc770393aa8d072",
           "fingerprint": "4409877677a2ab1aa08a3793",
           "item": "fn master_store_in_process_round_trips_concrete_store_reference",
-          "line": 7275
+          "line": 7276
         },
         {
           "id": "832e44c796a4cee0ae67a7dd",
           "fingerprint": "4409877677a2ab1aa08a3793",
           "item": "fn flush_consume_queue_service_start_persists_logic_checkpoint_to_disk",
-          "line": 7578
+          "line": 7579
         },
         {
           "id": "189e90157c3a3241f6b72456",
           "fingerprint": "30e084e32d538c30720ff9b6",
           "item": "fn do_recheck_reput_offset_from_dispatchers_rewinds_to_dispatched_commitlog_offset",
-          "line": 8132
+          "line": 8133
         },
         {
           "id": "7b87fd1be059d112aaa2ecc3",
           "fingerprint": "30e084e32d538c30720ff9b6",
           "item": "fn do_recheck_reput_offset_from_dispatchers_uses_minimum_progress_across_cq_and_index",
-          "line": 8182
+          "line": 8183
         },
         {
           "id": "e0986b3022b078d47dfc7fdc",
           "fingerprint": "30e084e32d538c30720ff9b6",
           "item": "fn get_dispatch_recovery_offset_respects_controller_epoch_start_offset",
-          "line": 8243
+          "line": 8244
         },
         {
           "id": "dbd3ad2b6d465c9f58ff2af5",
           "fingerprint": "30e084e32d538c30720ff9b6",
           "item": "fn do_recheck_reput_offset_from_dispatchers_respects_controller_epoch_start_offset_floor",
-          "line": 8268
+          "line": 8269
         }
       ],
       "owner": "store",
@@ -29852,61 +28423,61 @@
           "id": "72afb08dd84823802eddf156",
           "fingerprint": "7322e8445966d188ee7fd92d",
           "item": "fn new_configured_test_store_with_broker",
-          "line": 5598
+          "line": 5599
         },
         {
           "id": "a4fff833b2fce8cc031cd4c0",
           "fingerprint": "338645fde00ddca9b9407106",
           "item": "fn new_unwired_test_store",
-          "line": 5636
+          "line": 5637
         },
         {
           "id": "0fb3aca56be2c7b8686d0093",
           "fingerprint": "98775f57bdf0972c76ba7d6d",
           "item": "fn set_message_store_arc_initializes_timer_message_store_when_timer_wheel_enabled",
-          "line": 5916
+          "line": 5917
         },
         {
           "id": "7c7647aaebb9f5e60713f098",
           "fingerprint": "c11a0ed2016e5f22d0681b8d",
           "item": "fn sync_broker_role_in_controller_mode_refreshes_confirm_offset_for_master",
-          "line": 7225
+          "line": 7226
         },
         {
           "id": "532385187ca9a0a1d26b5ad9",
           "fingerprint": "3592b529ab80ca668d418994",
           "item": "fn master_store_in_process_round_trips_concrete_store_reference",
-          "line": 7264
+          "line": 7265
         },
         {
           "id": "c6b0b2d54151b046598a4eac",
           "fingerprint": "c11a0ed2016e5f22d0681b8d",
           "item": "fn flush_consume_queue_service_start_persists_logic_checkpoint_to_disk",
-          "line": 7570
+          "line": 7571
         },
         {
           "id": "0ef117a8762354e66adc13ba",
           "fingerprint": "c11a0ed2016e5f22d0681b8d",
           "item": "fn do_recheck_reput_offset_from_dispatchers_rewinds_to_dispatched_commitlog_offset",
-          "line": 8122
+          "line": 8123
         },
         {
           "id": "ef577de87e7470e8528bf219",
           "fingerprint": "c11a0ed2016e5f22d0681b8d",
           "item": "fn do_recheck_reput_offset_from_dispatchers_uses_minimum_progress_across_cq_and_index",
-          "line": 8172
+          "line": 8173
         },
         {
           "id": "2e2dbf0ae36fa13c563d8440",
           "fingerprint": "c11a0ed2016e5f22d0681b8d",
           "item": "fn get_dispatch_recovery_offset_respects_controller_epoch_start_offset",
-          "line": 8233
+          "line": 8234
         },
         {
           "id": "fea9d18dd6124ff2f461ca3f",
           "fingerprint": "c11a0ed2016e5f22d0681b8d",
           "item": "fn do_recheck_reput_offset_from_dispatchers_respects_controller_epoch_start_offset_floor",
-          "line": 8258
+          "line": 8259
         }
       ],
       "owner": "store",
@@ -29925,7 +28496,7 @@
           "id": "3dd2d02171a16f9cda183c72",
           "fingerprint": "0d4bb512c707f673d304374f",
           "item": "mod tests",
-          "line": 5520
+          "line": 5521
         }
       ],
       "owner": "store",
@@ -30011,37 +28582,37 @@
           "id": "dd7d2ca979e7321a0531cad8",
           "fingerprint": "0716072c66ac8246e6711921",
           "item": "fn start",
-          "line": 4396
+          "line": 4397
         },
         {
           "id": "cd8634aab722ed70fbbb60d4",
           "fingerprint": "2ae53147e701a16cb0e446b7",
           "item": "fn run_once",
-          "line": 4570
+          "line": 4571
         },
         {
           "id": "0dd1883d3024e576e97c64a6",
           "fingerprint": "b675292f3c2244dccaa81c69",
           "item": "struct ReputMessageServiceInner",
-          "line": 4651
+          "line": 4652
         },
         {
           "id": "0084947673da00b358eda490",
           "fingerprint": "90fec4925e7650a4d7a58a5d",
           "item": "fn dispatch_reput_batch",
-          "line": 4656
+          "line": 4657
         },
         {
           "id": "17a40d2b55a9ccc512c7286c",
           "fingerprint": "468eb0a73148a232b93b9dbd",
           "item": "fn do_reput",
-          "line": 4790
+          "line": 4791
         },
         {
           "id": "c22cad79c43f8dc4b5793c0c",
           "fingerprint": "ec470e270ac9362bd7c04ed3",
           "item": "fn read_and_parse_batch",
-          "line": 4948
+          "line": 4949
         }
       ],
       "owner": "store",
@@ -30060,85 +28631,85 @@
           "id": "b51abb9cdd4277835643fb3a",
           "fingerprint": "613631996c689785a0c6b2cf",
           "item": "fn is_space_to_delete",
-          "line": 5154
+          "line": 5155
         },
         {
           "id": "6a112e4551e45cd0ec64422b",
           "fingerprint": "e80b3e9ee2dffe26e070244d",
           "item": "fn min_physic_disk_ratio",
-          "line": 5194
+          "line": 5195
         },
         {
           "id": "4170a65b94468400f103d66a",
           "fingerprint": "80a2a65128a715e4690f9234",
           "item": "fn new_test_store",
-          "line": 5554
+          "line": 5555
         },
         {
           "id": "ecef5dc452b331aa59ee2e0c",
           "fingerprint": "65d2f136242a67e39970048c",
           "item": "fn new_configured_test_store",
-          "line": 5588
+          "line": 5589
         },
         {
           "id": "f4167e9cdb317f920eee8481",
           "fingerprint": "09828229447f9c27eca62b69",
           "item": "fn new_configured_test_store_with_broker",
-          "line": 5596
+          "line": 5597
         },
         {
           "id": "e0aa33305e95db168c92764e",
           "fingerprint": "a83fce1e061e676764384245",
           "item": "fn new_unwired_test_store",
-          "line": 5631
+          "line": 5632
         },
         {
           "id": "a5b4a4beeff33840a0fc01c7",
           "fingerprint": "cbc997c17eb8e6ca0bfde016",
           "item": "fn install_recording_arriving_listener",
-          "line": 5687
+          "line": 5688
         },
         {
           "id": "740811ee3ad741abaa452675",
           "fingerprint": "1173b84cce36bf29492ae20f",
           "item": "fn reput_inner_for_store",
-          "line": 5697
+          "line": 5698
         },
         {
           "id": "952561de7f9c1082ab5972bd",
           "fingerprint": "f05584a3e8f30f1765f4faa7",
           "item": "fn new_async_flush_test_store",
-          "line": 5795
+          "line": 5796
         },
         {
           "id": "b6d69ce623a4436bf9946d9b",
           "fingerprint": "1096c9bed13b8b6a0e6add8c",
           "item": "fn encode_tiered_test_message",
-          "line": 5823
+          "line": 5824
         },
         {
           "id": "ebc61622bb5d0eed7de2b3c5",
           "fingerprint": "2be67fb1f1aa0fd31c8d50cb",
           "item": "fn append_encoded_test_message",
-          "line": 5846
+          "line": 5847
         },
         {
           "id": "9a402b7ec18071dc55b33a0b",
           "fingerprint": "b1b766dcf50e538cdd500bc1",
           "item": "fn append_encoded_test_message_with_key",
-          "line": 5856
+          "line": 5857
         },
         {
           "id": "0dab0a2327068f084dad3638",
           "fingerprint": "f705056c61af1cd82f726a9c",
           "item": "fn master_store_in_process_round_trips_concrete_store_reference",
-          "line": 7283
+          "line": 7284
         },
         {
           "id": "57088fa6a3447b30555d062b",
           "fingerprint": "5602f91428927b4c07a845d2",
           "item": "fn clean_commit_log_service_run_deletes_when_disk_usage_is_unavailable",
-          "line": 8777
+          "line": 8778
         }
       ],
       "owner": "store",
@@ -30157,25 +28728,25 @@
           "id": "47767c8e5ca840205a963aeb",
           "fingerprint": "0db97432516266903a225050",
           "item": "fn reset_write_offset",
-          "line": 3310
+          "line": 3311
         },
         {
           "id": "2732429f59b892a7989c9385",
           "fingerprint": "1536b864d3d6678585c2bd31",
           "item": "fn get_commit_log_mut_from_ref",
-          "line": 3442
+          "line": 3443
         },
         {
           "id": "eea893960dd7e04dd261bdd0",
           "fingerprint": "f5378b1857786f892cf9849d",
           "item": "fn truncate_files",
-          "line": 3658
+          "line": 3659
         },
         {
           "id": "3459e3572b6f2b66ed8b8e65",
           "fingerprint": "470c1a7982c2bfa430ed8b87",
           "item": "fn get_last_mapped_file",
-          "line": 3709
+          "line": 3710
         }
       ],
       "owner": "store",
@@ -30194,13 +28765,13 @@
           "id": "0d94c53f509642321269d6a1",
           "fingerprint": "47dde9b29fa10781ebc41bb0",
           "item": "fn run",
-          "line": 5058
+          "line": 5059
         },
         {
           "id": "63278d5eba087cd7f1369da9",
           "fingerprint": "a465cc592854aa5addc3bd2c",
           "item": "fn run",
-          "line": 5084
+          "line": 5085
         }
       ],
       "owner": "store",

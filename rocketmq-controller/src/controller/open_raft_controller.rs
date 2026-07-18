@@ -32,6 +32,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::config::ControllerConfigReader;
 use crate::controller::broker_heartbeat_manager::DEFAULT_BROKER_CHANNEL_EXPIRED_TIME;
 use crate::controller::Controller;
 use crate::error::ControllerError;
@@ -52,7 +53,6 @@ use crate::ReplicasInfoManager;
 use cheetah_string::CheetahString;
 use parking_lot::Mutex;
 use parking_lot::RwLock;
-use rocketmq_common::common::controller::ControllerConfig;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
@@ -109,7 +109,7 @@ fn openraft_response_decode_failed(error: serde_json::Error) -> RocketMQError {
 /// 2. Waits for Raft node to shutdown cleanly
 /// 3. Waits for gRPC server task to complete (with 10s timeout)
 pub struct OpenRaftController {
-    config: ArcMut<ControllerConfig>,
+    config: ControllerConfigReader,
     /// Raft node manager
     node: Option<Arc<RaftNodeManager>>,
     /// gRPC server and scheduling task groups
@@ -127,12 +127,12 @@ pub struct OpenRaftController {
 }
 
 impl OpenRaftController {
-    pub fn new(config: ArcMut<ControllerConfig>) -> Self {
+    pub fn new(config: ControllerConfigReader) -> Self {
         let heartbeat_manager = ArcMut::new(DefaultBrokerHeartbeatManager::new(config.clone()));
         Self::new_with_heartbeat(config, heartbeat_manager)
     }
 
-    pub fn new_with_task_group(config: ArcMut<ControllerConfig>, parent_task_group: TaskGroup) -> Self {
+    pub fn new_with_task_group(config: ControllerConfigReader, parent_task_group: TaskGroup) -> Self {
         let heartbeat_manager = ArcMut::new(DefaultBrokerHeartbeatManager::new_with_task_group(
             config.clone(),
             parent_task_group.clone(),
@@ -141,14 +141,14 @@ impl OpenRaftController {
     }
 
     pub fn new_with_heartbeat(
-        config: ArcMut<ControllerConfig>,
+        config: ControllerConfigReader,
         heartbeat_manager: ArcMut<DefaultBrokerHeartbeatManager>,
     ) -> Self {
         Self::new_with_heartbeat_and_optional_task_group(config, heartbeat_manager, None)
     }
 
     pub fn new_with_heartbeat_and_task_group(
-        config: ArcMut<ControllerConfig>,
+        config: ControllerConfigReader,
         heartbeat_manager: ArcMut<DefaultBrokerHeartbeatManager>,
         parent_task_group: TaskGroup,
     ) -> Self {
@@ -156,7 +156,7 @@ impl OpenRaftController {
     }
 
     fn new_with_heartbeat_and_optional_task_group(
-        config: ArcMut<ControllerConfig>,
+        config: ControllerConfigReader,
         heartbeat_manager: ArcMut<DefaultBrokerHeartbeatManager>,
         parent_task_group: Option<TaskGroup>,
     ) -> Self {
@@ -283,7 +283,7 @@ impl OpenRaftController {
 
         use openraft::async_runtime::WatchReceiver;
         let metrics = node.raft().metrics().borrow_watched().clone();
-        metrics.current_leader == Some(self.config.node_id)
+        metrics.current_leader == Some(self.config.snapshot().node_id)
     }
 
     fn not_leader_response(&self) -> Option<RemotingCommand> {
@@ -556,11 +556,12 @@ impl OpenRaftController {
 
 impl Controller for OpenRaftController {
     async fn startup(&mut self) -> RocketMQResult<()> {
-        let advertised_raft_addr = self.config.local_raft_addr();
+        let startup_config = self.config.snapshot();
+        let advertised_raft_addr = startup_config.local_raft_addr();
         let raft_bind_addr = controller_raft_bind_addr(advertised_raft_addr)?;
         info!(
             "Starting OpenRaft controller, remoting_addr={}, raft_bind_addr={}, advertised_raft_addr={}",
-            self.config.listen_addr, raft_bind_addr, advertised_raft_addr
+            startup_config.listen_addr, raft_bind_addr, advertised_raft_addr
         );
 
         let node = Arc::new(RaftNodeManager::new(self.config.clone()).await?);
@@ -569,7 +570,7 @@ impl Controller for OpenRaftController {
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
         let addr = raft_bind_addr;
-        let node_id = self.config.node_id;
+        let node_id = startup_config.node_id;
         let listener = TcpListener::bind(addr).await.map_err(|error| {
             RocketMQError::network_connection_failed(
                 addr.to_string(),
@@ -649,13 +650,14 @@ impl Controller for OpenRaftController {
         };
 
         let config = self.config.clone();
+        let initial_config = config.snapshot();
         let listeners = self.lifecycle_listeners.clone();
         let scheduling = self.scheduling.clone();
         let first_received_heartbeat_time = self.first_received_heartbeat_time.clone();
         let scheduled_tasks = self.start_scan_task_group().await?;
         let mut task_config = ScheduledTaskConfig::fixed_delay(
             "controller.openraft.scan-not-active-broker",
-            Duration::from_millis(config.scan_not_active_broker_interval.max(1)),
+            Duration::from_millis(initial_config.scan_not_active_broker_interval.max(1)),
         );
         task_config.initial_delay = Duration::from_millis(2000);
         if let Err(error) = scheduled_tasks.schedule_fixed_delay(task_config, move || {
@@ -671,6 +673,7 @@ impl Controller for OpenRaftController {
 
                 use openraft::async_runtime::WatchReceiver;
                 let metrics = node.raft().metrics().borrow_watched().clone();
+                let config = config.snapshot();
                 if metrics.current_leader != Some(config.node_id) {
                     return;
                 }
@@ -902,9 +905,9 @@ impl Controller for OpenRaftController {
 
     async fn get_controller_metadata(&self) -> RocketMQResult<Option<RemotingCommand>> {
         let controller_metadata_info: GetMetaDataResponseHeader = {
+            let config = self.config.snapshot();
             let peers: Option<CheetahString> = {
-                let joined = self
-                    .config
+                let joined = config
                     .controller_peer_addrs()
                     .iter()
                     .map(std::string::ToString::to_string)
@@ -922,10 +925,10 @@ impl Controller for OpenRaftController {
             };
 
             let controller_leader_address: Option<CheetahString> = controller_leader_id
-                .and_then(|leader_node_id| self.config.controller_addr_for(leader_node_id))
+                .and_then(|leader_node_id| config.controller_addr_for(leader_node_id))
                 .map(|addr| CheetahString::from(addr.to_string()));
 
-            let is_leader = controller_leader_id.map(|id| self.config.node_id == id);
+            let is_leader = controller_leader_id.map(|id| config.node_id == id);
 
             let controller_leader_id: Option<CheetahString> =
                 controller_leader_id.map(|id| CheetahString::from(id.to_string()));
@@ -985,9 +988,14 @@ mod tests {
     use rocketmq_common::common::controller::controller_config::RaftPeer;
     use rocketmq_common::common::controller::ControllerConfig;
     use rocketmq_error::ErrorKind;
-    use rocketmq_rust::ArcMut;
 
-    use super::*;
+    use super::openraft_response_decode_failed;
+    use super::openraft_startup_failed;
+    use super::parse_controller_raft_bind_addr;
+    use super::OpenRaftController;
+    use crate::config::ControllerConfigReader;
+    use crate::controller::Controller;
+    use std::net::SocketAddr;
 
     #[test]
     fn openraft_startup_failed_uses_service_error_kind() {
@@ -1024,7 +1032,7 @@ mod tests {
         let config = ControllerConfig::default()
             .with_node_info(1, addr)
             .with_raft_peers(vec![RaftPeer { id: 1, addr }]);
-        let mut controller = OpenRaftController::new(ArcMut::new(config));
+        let mut controller = OpenRaftController::new(ControllerConfigReader::new(config));
 
         controller.startup().await.expect("start OpenRaft controller");
         assert!(

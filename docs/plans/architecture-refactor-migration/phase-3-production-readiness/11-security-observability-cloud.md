@@ -225,6 +225,10 @@ M12 6 个，下一工作包为 PR-M11-12；真实 Kind/K3d、M10、M11/Phase 3/H
 production occurrence 由 2,125 降为 2,082；M11-12 总项、stable workspace、其余 owner 与全部动态/HUMAN
 Gate 仍未完成。详见 [`11-soundness-closure-progress.md`](11-soundness-closure-progress.md)。
 
+M11-12b 已将 Controller 动态配置改为 `ArcSwap` 不可变快照：唯一写入口串行 clone、应用、整体校验并原子发布，
+解析或整体校验失败保持旧指针和值不变；各读操作固定单一 `Arc<ControllerConfig>` 快照。全仓 production 条目累计
+降至 711、occurrence 降至 2,029，Controller 配置相关 `ArcMut` 清零；其他 Controller owner 与总 Gate 仍开放。
+
 ## 公共兼容面
 
 - development/compatibility仍可显式选择；secure只作为新部署默认，不静默重解释旧配置。

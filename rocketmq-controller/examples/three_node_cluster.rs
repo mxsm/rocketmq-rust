@@ -19,11 +19,11 @@ use std::collections::HashSet;
 
 use clap::Parser;
 use rocketmq_controller::config::ControllerConfig;
+use rocketmq_controller::config::ControllerConfigReader;
 use rocketmq_controller::config::RaftPeer;
 use rocketmq_controller::openraft::RaftNodeManager;
 use rocketmq_controller::typ::ControllerRequest;
 use rocketmq_controller::typ::Node;
-use rocketmq_rust::ArcMut;
 
 #[derive(Parser, Debug)]
 #[clap(name = "three-node-cluster")]
@@ -60,7 +60,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .iter()
         .find(|peer| peer.id == args.node_id)
         .ok_or("invalid node id")?;
-    let config = ArcMut::new(
+    let config = ControllerConfigReader::new(
         ControllerConfig::new_node(args.node_id, current_peer.addr)
             .with_election_timeout_ms(1000)
             .with_heartbeat_interval_ms(300)

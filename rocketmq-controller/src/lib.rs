@@ -98,6 +98,7 @@ pub mod protobuf {
 pub use cli::parse_command_line;
 pub use cli::ControllerCli;
 pub use config::ControllerConfig;
+pub use config::ControllerConfigReader;
 pub use controller::open_raft_controller::OpenRaftController;
 pub use controller::raft_controller::RaftController;
 pub use controller::Controller;
@@ -129,6 +130,7 @@ pub mod bench_support {
     use serde::Serialize;
 
     use crate::config::ControllerConfig;
+    use crate::config::ControllerConfigReader;
     use crate::controller::broker_heartbeat_manager::BrokerHeartbeatManager;
     use crate::controller::open_raft_controller::OpenRaftController;
     use crate::controller::Controller;
@@ -194,7 +196,8 @@ pub mod bench_support {
 
     pub async fn run_controller_heartbeat_lifecycle_probe() -> ControllerHeartbeatLifecycleProbe {
         let mut manager =
-            DefaultBrokerHeartbeatManager::new(ArcMut::new(ControllerConfig::test_config())).with_scan_interval_ms(1);
+            DefaultBrokerHeartbeatManager::new(ControllerConfigReader::new(ControllerConfig::test_config()))
+                .with_scan_interval_ms(1);
 
         manager.start();
         let mut snapshots = manager.scan_schedule_snapshot();
@@ -241,7 +244,7 @@ pub mod bench_support {
     }
 
     pub async fn run_controller_broker_metadata_lifecycle_probe() -> ControllerBrokerMetadataLifecycleProbe {
-        let manager = BrokerManager::new(ArcMut::new(ControllerConfig::test_config()));
+        let manager = BrokerManager::new(ControllerConfigReader::new(ControllerConfig::test_config()));
         let expired = BrokerInfo {
             name: "metadata-expired-broker".to_string(),
             broker_id: 0,
@@ -414,7 +417,7 @@ pub mod bench_support {
             .with_raft_scan_wait_timeout_ms(0)
             .with_heartbeat_interval_ms(100)
             .with_election_timeout_ms(300);
-        let mut controller = OpenRaftController::new(ArcMut::new(config));
+        let mut controller = OpenRaftController::new(ControllerConfigReader::new(config));
         controller
             .startup()
             .await

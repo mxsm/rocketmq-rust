@@ -15,12 +15,13 @@
 use std::sync::Arc;
 
 use dashmap::DashMap;
-use rocketmq_rust::ArcMut;
 use serde::Deserialize;
 use serde::Serialize;
 use tracing::info;
 
+#[cfg(test)]
 use crate::config::ControllerConfig;
+use crate::config::ControllerConfigReader;
 use crate::error::ControllerError;
 use crate::error::Result;
 
@@ -81,18 +82,13 @@ pub struct TopicInfo {
 pub struct TopicManager {
     /// Topics: topic_name -> TopicInfo
     topics: Arc<DashMap<String, TopicInfo>>,
-
-    /// Configuration
-    #[allow(dead_code)]
-    config: ArcMut<ControllerConfig>,
 }
 
 impl TopicManager {
     /// Create a new topic manager
-    pub fn new(config: ArcMut<ControllerConfig>) -> Self {
+    pub fn new(_config: ControllerConfigReader) -> Self {
         Self {
             topics: Arc::new(DashMap::new()),
-            config,
         }
     }
 
@@ -228,7 +224,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_topic_creation() {
-        let config = ArcMut::new(ControllerConfig::test_config());
+        let config = ControllerConfigReader::new(ControllerConfig::test_config());
 
         let manager = TopicManager::new(config);
 

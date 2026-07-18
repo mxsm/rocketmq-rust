@@ -16,13 +16,13 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use rocketmq_common::common::controller::ControllerConfig;
+use rocketmq_controller::config::ControllerConfigReader;
 use rocketmq_controller::typ::Node;
 use rocketmq_controller::Controller;
 use rocketmq_controller::RaftController;
-use rocketmq_rust::ArcMut;
 
-fn test_config(port: u16) -> ArcMut<ControllerConfig> {
-    ArcMut::new(
+fn test_config(port: u16) -> ControllerConfigReader {
+    ControllerConfigReader::new(
         ControllerConfig::default()
             .with_node_info(1, format!("127.0.0.1:{port}").parse().expect("valid test address"))
             .with_election_timeout_ms(300)

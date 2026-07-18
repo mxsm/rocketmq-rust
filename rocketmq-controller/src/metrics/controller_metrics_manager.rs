@@ -18,7 +18,8 @@ use std::sync::Arc;
 use std::collections::HashMap;
 
 use rocketmq_common::common::controller::ControllerConfig;
-use rocketmq_rust::ArcMut;
+
+use crate::config::ControllerConfigReader;
 
 #[cfg(feature = "metrics")]
 use rocketmq_observability::config::MetricsExporter;
@@ -74,19 +75,20 @@ pub(crate) fn active_broker_count_from_snapshot(snapshot: &HashMap<String, HashM
 
 #[cfg(feature = "metrics")]
 impl ControllerMetricsManager {
-    pub fn get_instance(config: ArcMut<ControllerConfig>) -> Arc<Self> {
+    pub fn get_instance(config: ControllerConfigReader) -> Arc<Self> {
         Self::get_instance_with_active_broker_source(config, || 0)
     }
 
     pub fn get_instance_with_active_broker_source<F>(
-        config: ArcMut<ControllerConfig>,
+        config: ControllerConfigReader,
         active_broker_source: F,
     ) -> Arc<Self>
     where
         F: Fn() -> u64 + Send + Sync + 'static,
     {
+        let snapshot = config.snapshot();
         let inner = ObservabilityControllerMetricsManager::get_instance_with_active_broker_source(
-            controller_metrics_config(config.as_ref()),
+            controller_metrics_config(&snapshot),
             active_broker_source,
         );
         Arc::new(Self { inner })
@@ -139,12 +141,12 @@ impl ControllerMetricsManager {
 
 #[cfg(not(feature = "metrics"))]
 impl ControllerMetricsManager {
-    pub fn get_instance(_config: ArcMut<ControllerConfig>) -> Arc<Self> {
+    pub fn get_instance(_config: ControllerConfigReader) -> Arc<Self> {
         Arc::new(Self)
     }
 
     pub fn get_instance_with_active_broker_source<F>(
-        _config: ArcMut<ControllerConfig>,
+        _config: ControllerConfigReader,
         _active_broker_source: F,
     ) -> Arc<Self>
     where

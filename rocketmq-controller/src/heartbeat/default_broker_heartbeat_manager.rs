@@ -27,11 +27,12 @@ use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
-use rocketmq_rust::ArcMut;
 use tracing::info;
 use tracing::warn;
 
+#[cfg(test)]
 use crate::config::ControllerConfig;
+use crate::config::ControllerConfigReader;
 use crate::controller::broker_heartbeat_manager::BrokerHeartbeatManager;
 use crate::controller::broker_heartbeat_manager::DEFAULT_BROKER_CHANNEL_EXPIRED_TIME;
 use crate::heartbeat::broker_identity_info::BrokerIdentityInfo;
@@ -51,13 +52,12 @@ const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 /// # Example
 ///
 /// ```no_run,ignore
-/// use std::sync::Arc;
-/// use rocketmq_controller::config::ControllerConfig;
+/// use rocketmq_controller::config::{ControllerConfig, ControllerConfigReader};
 /// use rocketmq_controller::heartbeat::default_broker_heartbeat_manager::DefaultBrokerHeartbeatManager;
 /// use rocketmq_controller::controller::broker_heartbeat_manager::BrokerHeartbeatManager;
 ///
 /// # async fn example() {
-/// let config = Arc::new(ControllerConfig::test_config());
+/// let config = ControllerConfigReader::new(ControllerConfig::test_config());
 /// let mut manager = DefaultBrokerHeartbeatManager::new(config);
 /// manager.initialize();
 /// manager.start();
@@ -66,9 +66,6 @@ const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 /// # }
 /// ```
 pub struct DefaultBrokerHeartbeatManager {
-    /// Controller configuration
-    config: ArcMut<ControllerConfig>,
-
     /// Broker live information table
     /// Key: BrokerIdentityInfo, Value: BrokerLiveInfo
     broker_live_table: Arc<DashMap<BrokerIdentityInfo, BrokerLiveInfo>>,
@@ -94,18 +91,17 @@ impl DefaultBrokerHeartbeatManager {
     /// # Arguments
     ///
     /// * `config` - Controller configuration
-    pub fn new(config: ArcMut<ControllerConfig>) -> Self {
+    pub fn new(config: ControllerConfigReader) -> Self {
         Self::new_with_optional_task_group(config, None)
     }
 
-    pub fn new_with_task_group(config: ArcMut<ControllerConfig>, parent_task_group: TaskGroup) -> Self {
+    pub fn new_with_task_group(config: ControllerConfigReader, parent_task_group: TaskGroup) -> Self {
         Self::new_with_optional_task_group(config, Some(parent_task_group))
     }
 
-    fn new_with_optional_task_group(config: ArcMut<ControllerConfig>, parent_task_group: Option<TaskGroup>) -> Self {
-        let scan_interval_ms = config.scan_not_active_broker_interval.max(1);
+    fn new_with_optional_task_group(config: ControllerConfigReader, parent_task_group: Option<TaskGroup>) -> Self {
+        let scan_interval_ms = config.snapshot().scan_not_active_broker_interval.max(1);
         Self {
-            config,
             broker_live_table: Arc::new(DashMap::with_capacity(256)),
             lifecycle_listeners: Vec::new(),
             scan_task_group: None,
@@ -509,14 +505,17 @@ mod tests {
 
     #[test]
     fn test_default_broker_heartbeat_manager_creation() {
-        let config = ArcMut::new(ControllerConfig::test_config());
+        let config = ControllerConfigReader::new(ControllerConfig::test_config());
         let manager = DefaultBrokerHeartbeatManager::new(config.clone());
-        assert_eq!(manager.scan_interval_ms, config.scan_not_active_broker_interval);
+        assert_eq!(
+            manager.scan_interval_ms,
+            config.snapshot().scan_not_active_broker_interval
+        );
     }
 
     #[test]
     fn start_without_tokio_runtime_does_not_leave_scan_task_group() {
-        let config = ArcMut::new(ControllerConfig::test_config());
+        let config = ControllerConfigReader::new(ControllerConfig::test_config());
         let mut manager = DefaultBrokerHeartbeatManager::new(config);
 
         manager.start();
@@ -526,7 +525,7 @@ mod tests {
 
     #[tokio::test]
     async fn sync_shutdown_clears_scan_task_group() {
-        let config = ArcMut::new(ControllerConfig::test_config());
+        let config = ControllerConfigReader::new(ControllerConfig::test_config());
         let mut manager = DefaultBrokerHeartbeatManager::new(config).with_scan_interval_ms(1);
 
         manager.start();
