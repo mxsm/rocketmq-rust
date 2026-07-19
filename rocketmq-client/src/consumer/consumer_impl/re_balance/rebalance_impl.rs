@@ -34,7 +34,6 @@ use rocketmq_remoting::protocol::filter::filter_api::FilterAPI;
 use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
-use rocketmq_rust::ArcMut;
 use tokio::sync::RwLock;
 use tracing::error;
 use tracing::info;
@@ -100,7 +99,7 @@ pub(crate) struct RebalanceImpl<R> {
 
     /// Client transport handle is snapshotted separately so network work never holds the
     /// synchronous metadata lock across an await point.
-    client_instance: StdRwLock<Option<ArcMut<MQClientInstance>>>,
+    client_instance: StdRwLock<Option<Arc<MQClientInstance>>>,
 
     /// Weak reference to the concrete rebalance implementation (e.g., `RebalancePushImpl`),
     /// enabling abstract callbacks without creating reference cycles.
@@ -133,7 +132,7 @@ where
         consumer_group: Option<CheetahString>,
         message_model: Option<MessageModel>,
         allocate_message_queue_strategy: Option<Arc<dyn AllocateMessageQueueStrategy>>,
-        mqclient_instance: Option<ArcMut<MQClientInstance>>,
+        mqclient_instance: Option<Arc<MQClientInstance>>,
     ) -> Self {
         RebalanceImpl {
             process_queue_table: Arc::new(RwLock::new(HashMap::with_capacity(64))),
@@ -162,7 +161,7 @@ where
         self.subscription_inner.remove(topic);
     }
 
-    pub fn get_mq_client_factory(&self) -> Option<ArcMut<MQClientInstance>> {
+    pub fn get_mq_client_factory(&self) -> Option<Arc<MQClientInstance>> {
         self.client_instance
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -173,7 +172,7 @@ where
         self.metadata_snapshot().allocate_message_queue_strategy
     }
 
-    pub fn set_mq_client_factory(&self, client_instance: ArcMut<MQClientInstance>) {
+    pub fn set_mq_client_factory(&self, client_instance: Arc<MQClientInstance>) {
         *self
             .client_instance
             .write()
@@ -318,7 +317,7 @@ where
         let Some(message_model) = self.message_model_value("tryQueryAssignment") else {
             return false;
         };
-        let Some(mut client_instance) = self.get_mq_client_factory() else {
+        let Some(client_instance) = self.get_mq_client_factory() else {
             error!("tryQueryAssignment error: client_instance is None for topic: {}", topic);
             return false;
         };
@@ -461,7 +460,7 @@ where
         let Some(message_model) = self.message_model_value("getRebalanceResultFromBroker") else {
             return false;
         };
-        let Some(mut client_instance) = self.get_mq_client_factory() else {
+        let Some(client_instance) = self.get_mq_client_factory() else {
             error!("get_rebalance_result_from_broker error: client_instance is None.");
             return false;
         };
@@ -760,7 +759,7 @@ where
             }
 
             if !all_mq_locked {
-                if let Some(mut client_instance) = self.get_mq_client_factory() {
+                if let Some(client_instance) = self.get_mq_client_factory() {
                     client_instance.rebalance_later(500);
                 } else {
                     warn!("rebalance_later skipped: client_instance is not initialized");
@@ -955,7 +954,7 @@ where
         }
 
         if !all_mq_locked {
-            if let Some(mut client_instance) = self.get_mq_client_factory() {
+            if let Some(client_instance) = self.get_mq_client_factory() {
                 client_instance.rebalance_later(500);
             } else {
                 warn!("rebalance_later skipped: client_instance is not initialized");
@@ -1006,7 +1005,7 @@ where
                 let Some(consumer_group) = self.consumer_group_ref("rebalanceByTopic") else {
                     return false;
                 };
-                let cid_all = if let Some(mut client_instance) = self.get_mq_client_factory() {
+                let cid_all = if let Some(client_instance) = self.get_mq_client_factory() {
                     client_instance.find_consumer_id_list(topic, &consumer_group).await
                 } else {
                     warn!(
@@ -1149,7 +1148,7 @@ where
                 ..Default::default()
             };
             request_body.mq_set.insert(mq.clone());
-            let Some(mq_client_api_impl) = client.mq_client_api_impl.as_ref() else {
+            let Some(mq_client_api_impl) = client.mq_client_api_impl.load_full() else {
                 warn!("lockWith skipped: MQClientAPIImpl is not initialized, mq={}", mq);
                 return false;
             };
@@ -1209,7 +1208,7 @@ where
                             mq_set: mqs.clone(),
                             ..Default::default()
                         };
-                        let Some(mq_client_api_impl) = client_instance.mq_client_api_impl.as_ref() else {
+                        let Some(mq_client_api_impl) = client_instance.mq_client_api_impl.load_full() else {
                             warn!(
                                 "lockAll skipped broker {}: MQClientAPIImpl is not initialized",
                                 broker_name
@@ -1278,7 +1277,7 @@ where
                     mq_set: mqs.clone(),
                     ..Default::default()
                 };
-                let Some(mq_client_api_impl) = client.mq_client_api_impl.as_ref() else {
+                let Some(mq_client_api_impl) = client.mq_client_api_impl.load_full() else {
                     warn!(
                         "unlockAll skipped broker {}: MQClientAPIImpl is not initialized",
                         broker_name

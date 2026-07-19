@@ -249,7 +249,6 @@ use rocketmq_remoting::rpc::topic_request_header::TopicRequestHeader;
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
 use rocketmq_remoting::runtime::RPCHook;
 use rocketmq_remoting::ConsumerConnection;
-use rocketmq_rust::ArcMut;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
@@ -2325,7 +2324,7 @@ impl MQClientAPIImpl {
         communication_mode: CommunicationMode,
         send_callback: Option<ArcSendCallback>,
         topic_publish_info: Option<&TopicPublishInfo>,
-        instance: Option<ArcMut<MQClientInstance>>,
+        instance: Option<Arc<MQClientInstance>>,
         retry_times_when_send_failed: u32,
         context: &mut Option<SendMessageContext<'_>>,
         producer: &DefaultMQProducerImpl,
@@ -2509,7 +2508,7 @@ impl MQClientAPIImpl {
         request: RemotingCommand,
         send_callback: Option<ArcSendCallback>,
         topic_publish_info: Option<&TopicPublishInfo>,
-        instance: Option<ArcMut<MQClientInstance>>,
+        instance: Option<Arc<MQClientInstance>>,
         retry_times_when_send_failed: u32,
         context: &mut Option<SendMessageContext<'_>>,
         producer: &DefaultMQProducerImpl,
@@ -2604,7 +2603,7 @@ impl MQClientAPIImpl {
         current_request: RemotingCommand,
         send_callback: Option<ArcSendCallback>,
         topic_publish_info: Option<TopicPublishInfo>,
-        instance: Option<ArcMut<MQClientInstance>>,
+        instance: Option<Arc<MQClientInstance>>,
         retry_times_when_send_failed: u32,
         context_data: Option<AsyncSendHookContext>,
         callback_executor: Option<tokio::runtime::Handle>,
@@ -2795,7 +2794,7 @@ impl MQClientAPIImpl {
     async fn select_async_retry_target(
         mq_fault_strategy: &MQFaultStrategy,
         topic_publish_info: Option<&TopicPublishInfo>,
-        instance: Option<&ArcMut<MQClientInstance>>,
+        instance: Option<&Arc<MQClientInstance>>,
         broker_name: &CheetahString,
         current_addr: &CheetahString,
     ) -> Option<(CheetahString, CheetahString)> {
@@ -2995,7 +2994,7 @@ impl MQClientAPIImpl {
         msg: &T,
         request: &mut RemotingCommand,
         topic_publish_info: Option<&TopicPublishInfo>,
-        instance: Option<&ArcMut<MQClientInstance>>,
+        instance: Option<&Arc<MQClientInstance>>,
         producer: &DefaultMQProducerImpl,
     ) -> Option<(CheetahString, CheetahString)> {
         let mut retry_broker_name = broker_name.clone();

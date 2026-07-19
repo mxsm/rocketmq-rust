@@ -448,7 +448,7 @@ impl ConsumeMessageOrderlyService {
             );
             return false;
         };
-        let Some(mut client_instance) = default_mqpush_consumer_impl.get_mq_client_factory() else {
+        let Some(client_instance) = default_mqpush_consumer_impl.get_mq_client_factory() else {
             warn!(
                 "sendMessageBack skipped: MQClientInstance is not initialized, group={} msg={}",
                 self.consumer_group, msg
@@ -456,7 +456,7 @@ impl ConsumeMessageOrderlyService {
             return false;
         };
 
-        let result = client_instance.default_producer.send(new_msg).await;
+        let result = client_instance.send_with_default_producer(new_msg).await;
         result.is_ok()
     }
 

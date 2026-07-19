@@ -57,7 +57,6 @@ use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_remoting::rpc::rpc_request_header::RpcRequestHeader;
 use rocketmq_remoting::rpc::topic_request_header::TopicRequestHeader;
 use rocketmq_remoting::runtime::RPCHook;
-use rocketmq_rust::ArcMut;
 use tokio::sync::Mutex;
 use tracing::error;
 use tracing::info;
@@ -126,7 +125,7 @@ pub struct DefaultMQPushConsumerImpl {
     consume_message_hook_list: StdRwLock<Vec<ConsumeMessageHookArc>>,
     rpc_hook: Option<Arc<dyn RPCHook>>,
     service_state: StdRwLock<ServiceState>,
-    client_instance: StdRwLock<Option<ArcMut<MQClientInstance>>>,
+    client_instance: StdRwLock<Option<Arc<MQClientInstance>>>,
     pull_api_wrapper: StdRwLock<Option<Arc<PullAPIWrapper>>>,
     pause: Arc<AtomicBool>,
     consume_orderly: AtomicBool,
@@ -209,7 +208,7 @@ impl DefaultMQPushConsumerImpl {
         }
     }
 
-    pub fn get_mq_client_factory(&self) -> Option<ArcMut<MQClientInstance>> {
+    pub fn get_mq_client_factory(&self) -> Option<Arc<MQClientInstance>> {
         self.component_snapshot(&self.client_instance)
     }
 
@@ -220,7 +219,7 @@ impl DefaultMQPushConsumerImpl {
             .map(|client_instance| client_instance.client_id.clone())
     }
 
-    pub fn set_mq_client_factory(&self, client_instance: ArcMut<MQClientInstance>) {
+    pub fn set_mq_client_factory(&self, client_instance: Arc<MQClientInstance>) {
         self.rebalance_impl.set_mq_client_factory(client_instance.clone());
         self.set_component(&self.client_instance, Some(client_instance));
     }
@@ -374,7 +373,7 @@ impl DefaultMQPushConsumerImpl {
                     });
                 }
                 let client_config = self.client_config_snapshot();
-                let mut client_instance = MQClientManager::get_instance()
+                let client_instance = MQClientManager::get_instance()
                     .get_or_create_mq_client_instance(client_config.as_ref().clone(), self.rpc_hook.clone());
                 self.set_component(&self.client_instance, Some(client_instance.clone()));
                 self.rebalance_impl
@@ -531,8 +530,7 @@ impl DefaultMQPushConsumerImpl {
                         FAQUrl::suggest_todo(FAQUrl::GROUP_NAME_DUPLICATE_URL)
                     )));
                 }
-                let client_instance_clone = client_instance.clone();
-                client_instance.start(client_instance_clone).await?;
+                client_instance.start().await?;
                 info!(
                     "the consumer [{}] start OK, message_model={}, isUnitMode={}",
                     consumer_config.consumer_group, consumer_config.message_model, consumer_config.unit_mode
@@ -569,7 +567,7 @@ impl DefaultMQPushConsumerImpl {
 
     async fn run_startup_after_running_checks(&self) -> rocketmq_error::RocketMQResult<()> {
         self.update_topic_subscribe_info_when_subscription_changed().await;
-        let mut client_instance = self
+        let client_instance = self
             .get_mq_client_factory()
             .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("MQClientInstance"))?;
         client_instance.check_client_in_broker().await?;
@@ -608,7 +606,7 @@ impl DefaultMQPushConsumerImpl {
                     }
                 }
                 let consumer_group = self.consumer_config_snapshot().consumer_group.clone();
-                if let Some(mut client) = self.get_mq_client_factory() {
+                if let Some(client) = self.get_mq_client_factory() {
                     client.unregister_consumer(consumer_group.as_str()).await;
                     client.shutdown().await;
                 } else {
@@ -1681,7 +1679,7 @@ impl DefaultMQPushConsumerImpl {
             let max_consume_retry_times = self.get_max_reconsume_times();
             let consumer_group = self.consumer_config_snapshot().consumer_group.clone();
             let result = if let Some(client_instance) = self.get_mq_client_factory() {
-                if let Some(mq_client_api_impl) = client_instance.mq_client_api_impl.as_ref() {
+                if let Some(mq_client_api_impl) = client_instance.mq_client_api_impl.load_full() {
                     mq_client_api_impl
                         .consumer_send_message_back(
                             broker_addr.as_str(),
@@ -1754,8 +1752,7 @@ impl DefaultMQPushConsumerImpl {
         let new_msg = self.build_retry_message_for_send_back(msg)?;
         self.get_mq_client_factory()
             .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("MQClientInstance"))?
-            .default_producer
-            .send(new_msg)
+            .send_with_default_producer(new_msg)
             .await?;
         Ok(())
     }
@@ -1863,7 +1860,7 @@ impl DefaultMQPushConsumerImpl {
 
             fn on_exception(&self, _e: rocketmq_error::RocketMQError) {}
         }
-        let Some(mq_client_api_impl) = client_instance.mq_client_api_impl.as_ref() else {
+        let Some(mq_client_api_impl) = client_instance.mq_client_api_impl.load_full() else {
             error!("ackAsync error: MQClientAPIImpl is not initialized");
             return;
         };
@@ -2460,7 +2457,6 @@ mod tests {
         let existing_consumer = new_startable_push_consumer(client_config.clone(), group.clone());
         assert!(
             client_instance
-                .mut_from_ref()
                 .register_consumer(&group, MQConsumerInnerImpl::from_push(existing_consumer))
                 .await
         );
@@ -2477,7 +2473,7 @@ mod tests {
             .and_then(|service| service.get_consume_message_concurrently_service())
             .is_some_and(|service| service.is_shutdown()));
 
-        client_instance.mut_from_ref().unregister_consumer(group).await;
+        client_instance.unregister_consumer(group).await;
         MQClientManager::get_instance().remove_client_factory(&client_id);
     }
 
@@ -2507,14 +2503,13 @@ mod tests {
             .put_subscription_data(topic.clone(), subscription);
         assert!(
             client_instance
-                .mut_from_ref()
                 .register_consumer(&group, MQConsumerInnerImpl::from_push(consumer.clone()))
                 .await
         );
 
         let mut broker_addrs = HashMap::new();
         broker_addrs.insert(mix_all::MASTER_ID, CheetahString::from_static_str("127.0.0.1:10911"));
-        client_instance.mut_from_ref().topic_route_table.insert(
+        client_instance.topic_route_table.insert(
             topic,
             TopicRouteData {
                 broker_datas: vec![BrokerData::new(
@@ -2526,7 +2521,7 @@ mod tests {
                 ..Default::default()
             },
         );
-        client_instance.mut_from_ref().mq_client_api_impl = None;
+        client_instance.mq_client_api_impl.store(None);
 
         let error = consumer
             .complete_startup_after_running()
@@ -2540,12 +2535,11 @@ mod tests {
         let replacement = new_startable_push_consumer(ClientConfig::default(), group.clone());
         assert!(
             client_instance
-                .mut_from_ref()
                 .register_consumer(&group, MQConsumerInnerImpl::from_push(replacement))
                 .await,
             "shutdown rollback should unregister the failed consumer group"
         );
-        client_instance.mut_from_ref().unregister_consumer(group).await;
+        client_instance.unregister_consumer(group).await;
     }
 
     #[test]

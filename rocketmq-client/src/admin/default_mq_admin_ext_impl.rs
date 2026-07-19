@@ -129,7 +129,6 @@ use rocketmq_remoting::protocol::subscription::group_forbidden::GroupForbidden;
 use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 use rocketmq_remoting::rpc::rpc_request_header::RpcRequestHeader;
 use rocketmq_remoting::runtime::RPCHook;
-use rocketmq_rust::ArcMut;
 use tracing::info;
 use tracing::warn;
 
@@ -527,7 +526,7 @@ fn lite_pull_topic_config(
 
 pub struct DefaultMQAdminExtImpl {
     service_state: ServiceState,
-    client_instance: Option<ArcMut<MQClientInstance>>,
+    client_instance: Option<Arc<MQClientInstance>>,
     rpc_hook: Option<Arc<dyn RPCHook>>,
     timeout_millis: Duration,
     kv_namespace_to_delete_list: Vec<CheetahString>,
@@ -935,7 +934,7 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
                 self.client_instance
                     .as_mut()
                     .ok_or(rocketmq_error::RocketMQError::ClientNotStarted)?
-                    .start(arc_mut)
+                    .start()
                     .await?;
                 self.service_state = ServiceState::Running;
                 info!("the adminExt [{}] start OK", self.admin_ext_group);

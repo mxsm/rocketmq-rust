@@ -397,6 +397,12 @@ Client Rebalance root ownership 随 Issue #8367 将 Push/LitePull concrete rebal
 self-reference 不会保活 root。实际快照降至 368 production/982 occurrence，Client owner 降至 50/89；剩余为 Broker
 190/568、Client 50/89、Proxy 1/1 与 Store 127/324，总进度仍为 75/82。下一子切片为 M11-12al Client
 MQClientInstance root ownership，M11-12 父工作包未完成。
+Client MQClientInstance root ownership 随 Issue #8369 将 Manager/Proxy compatibility handle 与
+Admin/Producer/Consumer/Rebalance/API/OffsetStore 持有链统一改为标准 `Arc<MQClientInstance>`，Remoting/Admin
+回指统一为标准 `Weak`；lifecycle transition、API slot 与 connection task handle 使用显式同步，运行路径收窄为共享
+receiver。实际快照降至 326 production/909 occurrence，Client owner 降至 9/17、Client test 降至 12/83，Proxy
+production 债务清零；剩余为 Broker 190/568、Client 9/17 与 Store 127/324，总进度仍为 75/82。下一子切片为
+M11-12am Client Producer root ownership，M11-12 父工作包未完成。
 
 ### 9.3 证据目录
 

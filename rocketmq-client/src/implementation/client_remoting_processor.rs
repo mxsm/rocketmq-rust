@@ -15,6 +15,8 @@
 use std::backtrace::Backtrace;
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::sync::Arc;
+use std::sync::Weak;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::compression::compressor_factory::CompressorFactory;
@@ -45,7 +47,6 @@ use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_remoting::runtime::processor::RejectRequestResponse;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
-use rocketmq_rust::ArcMut;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
@@ -55,12 +56,20 @@ use crate::producer::request_future_holder::REQUEST_FUTURE_HOLDER;
 
 #[derive(Clone)]
 pub struct ClientRemotingProcessor {
-    pub(crate) client_instance: ArcMut<MQClientInstance>,
+    client_instance: Weak<MQClientInstance>,
 }
 
 impl ClientRemotingProcessor {
-    pub fn new(client_instance: ArcMut<MQClientInstance>) -> Self {
-        Self { client_instance }
+    pub fn new(client_instance: &Arc<MQClientInstance>) -> Self {
+        Self {
+            client_instance: Arc::downgrade(client_instance),
+        }
+    }
+
+    fn client_instance(&self) -> rocketmq_error::RocketMQResult<Arc<MQClientInstance>> {
+        self.client_instance
+            .upgrade()
+            .ok_or(rocketmq_error::RocketMQError::ClientNotStarted)
     }
 }
 
@@ -279,7 +288,7 @@ impl ClientRemotingProcessor {
             request_header.consumer_group
         );
 
-        self.client_instance.re_balance_immediately();
+        self.client_instance()?.re_balance_immediately();
 
         Ok(None)
     }
@@ -325,7 +334,7 @@ impl ClientRemotingProcessor {
             }
         };
 
-        self.client_instance
+        self.client_instance()?
             .reset_offset(&request_header.topic, &request_header.group, offset_table)
             .await;
         Ok(None)
@@ -347,7 +356,7 @@ impl ClientRemotingProcessor {
         };
 
         match self
-            .client_instance
+            .client_instance()?
             .get_consumer_status(&request_header.topic, &request_header.group)
             .await
         {
@@ -387,7 +396,7 @@ impl ClientRemotingProcessor {
         };
 
         match self
-            .client_instance
+            .client_instance()?
             .consumer_running_info(&request_header.consumer_group)
             .await
         {
@@ -431,10 +440,10 @@ impl ClientRemotingProcessor {
         };
         let message_ext = MessageDecoder::decode(body, true, true, false, false, false);
         if let Some(mut message_ext) = message_ext {
-            if let Some(namespace) = self
-                .client_instance
+            let client_instance = self.client_instance()?;
+            if let Some(namespace) = client_instance
                 .client_config
-                .get_namespace()
+                .resolved_namespace()
                 .filter(|namespace| !namespace.is_empty())
             {
                 let topic = Self::transaction_check_topic(message_ext.topic(), &namespace);
@@ -450,7 +459,7 @@ impl ClientRemotingProcessor {
             }
             let group = message_ext.property(&CheetahString::from_static_str(MessageConst::PROPERTY_PRODUCER_GROUP));
             if let Some(group) = group {
-                let producer = self.client_instance.select_producer(&group).await;
+                let producer = client_instance.select_producer(&group).await;
                 if let Some(producer) = producer {
                     let addr = CheetahString::from_string(channel.remote_address().to_string());
                     producer.check_transaction_state(&addr, message_ext, request_header);
@@ -512,7 +521,7 @@ impl ClientRemotingProcessor {
         };
 
         let result = self
-            .client_instance
+            .client_instance()?
             .consume_message_directly(msg, &request_header.consumer_group, request_header.broker_name.clone())
             .await;
         if let Some(result) = result {
@@ -561,10 +570,25 @@ mod tests {
     use crate::consumer::store::read_offset_type::ReadOffsetType;
     use crate::producer::request_response_future::RequestResponseFuture;
 
+    #[test]
+    fn processor_weak_reference_does_not_keep_client_alive() {
+        let client_instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "weak-processor-client", None);
+        let processor = ClientRemotingProcessor::new(&client_instance);
+        let weak = Arc::downgrade(&client_instance);
+
+        drop(client_instance);
+
+        assert!(weak.upgrade().is_none());
+        assert!(matches!(
+            processor.client_instance(),
+            Err(rocketmq_error::RocketMQError::ClientNotStarted)
+        ));
+    }
+
     async fn client_with_push_consumer(
         group: CheetahString,
         client_id: &str,
-    ) -> (ArcMut<MQClientInstance>, Arc<DefaultMQPushConsumerImpl>) {
+    ) -> (Arc<MQClientInstance>, Arc<DefaultMQPushConsumerImpl>) {
         let client_instance = MQClientInstance::new_arc(ClientConfig::default(), 0, client_id, None);
         let consumer_config = ConsumerConfig {
             consumer_group: group.clone(),
@@ -579,7 +603,6 @@ mod tests {
         consumer_impl.set_offset_store(Some(Arc::new(OffsetStore::new_test())));
 
         let registered = client_instance
-            .mut_from_ref()
             .register_consumer(&group, MQConsumerInnerImpl::from_push(consumer_impl.clone()))
             .await;
         assert!(registered, "test consumer should register");
@@ -594,7 +617,7 @@ mod tests {
             ..Default::default()
         };
         let client_instance = MQClientInstance::new_arc(client_config, 0, "reject-request-test", None);
-        let processor = ClientRemotingProcessor::new(client_instance);
+        let processor = ClientRemotingProcessor::new(&client_instance);
 
         let (rejected, response) =
             RequestProcessor::reject_request(&processor, RequestCode::CheckTransactionState as i32);
@@ -638,7 +661,7 @@ mod tests {
         let group = CheetahString::from_static_str("reset-group");
         let (client_instance, consumer_impl) =
             client_with_push_consumer(group.clone(), "reset-consumer-offset-test").await;
-        let mut processor = ClientRemotingProcessor::new(client_instance);
+        let mut processor = ClientRemotingProcessor::new(&client_instance);
         let harness = LocalRequestHarness::new()
             .await
             .expect("local remoting harness should start");
@@ -698,7 +721,7 @@ mod tests {
         let topic = CheetahString::from_static_str("reset-missing-body-topic");
         let group = CheetahString::from_static_str("reset-missing-body-group");
         let (client_instance, _) = client_with_push_consumer(group.clone(), "reset-missing-body-test").await;
-        let mut processor = ClientRemotingProcessor::new(client_instance);
+        let mut processor = ClientRemotingProcessor::new(&client_instance);
         let harness = LocalRequestHarness::new()
             .await
             .expect("local remoting harness should start");
@@ -739,7 +762,7 @@ mod tests {
             .update_offset(&mq, 456, false)
             .await;
 
-        let mut processor = ClientRemotingProcessor::new(client_instance);
+        let mut processor = ClientRemotingProcessor::new(&client_instance);
         let harness = LocalRequestHarness::new()
             .await
             .expect("local remoting harness should start");
@@ -770,7 +793,7 @@ mod tests {
     async fn get_consumer_status_from_client_missing_group_returns_empty_success_like_java() {
         let client_instance =
             MQClientInstance::new_arc(ClientConfig::default(), 0, "consumer-status-missing-test", None);
-        let mut processor = ClientRemotingProcessor::new(client_instance);
+        let mut processor = ClientRemotingProcessor::new(&client_instance);
         let harness = LocalRequestHarness::new()
             .await
             .expect("local remoting harness should start");
@@ -801,7 +824,7 @@ mod tests {
     async fn consume_message_directly_with_malformed_header_returns_system_error() {
         let client_instance =
             MQClientInstance::new_arc(ClientConfig::default(), 0, "consume-direct-malformed-header-test", None);
-        let mut processor = ClientRemotingProcessor::new(client_instance);
+        let mut processor = ClientRemotingProcessor::new(&client_instance);
         let harness = LocalRequestHarness::new()
             .await
             .expect("local remoting harness should start");
@@ -823,7 +846,7 @@ mod tests {
     async fn consume_message_directly_with_missing_body_returns_system_error() {
         let client_instance =
             MQClientInstance::new_arc(ClientConfig::default(), 0, "consume-direct-missing-body-test", None);
-        let mut processor = ClientRemotingProcessor::new(client_instance);
+        let mut processor = ClientRemotingProcessor::new(&client_instance);
         let harness = LocalRequestHarness::new()
             .await
             .expect("local remoting harness should start");
@@ -852,7 +875,7 @@ mod tests {
     async fn consume_message_directly_with_malformed_body_returns_system_error() {
         let client_instance =
             MQClientInstance::new_arc(ClientConfig::default(), 0, "consume-direct-malformed-body-test", None);
-        let mut processor = ClientRemotingProcessor::new(client_instance);
+        let mut processor = ClientRemotingProcessor::new(&client_instance);
         let harness = LocalRequestHarness::new()
             .await
             .expect("local remoting harness should start");
@@ -907,7 +930,7 @@ mod tests {
     #[tokio::test]
     async fn push_reply_message_with_malformed_header_returns_system_error() {
         let client_instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "reply-malformed-test", None);
-        let mut processor = ClientRemotingProcessor::new(client_instance);
+        let mut processor = ClientRemotingProcessor::new(&client_instance);
         let harness = LocalRequestHarness::new()
             .await
             .expect("local remoting harness should start");
@@ -928,7 +951,7 @@ mod tests {
     #[tokio::test]
     async fn push_reply_message_with_compressed_missing_body_returns_system_error() {
         let client_instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "reply-missing-body-test", None);
-        let mut processor = ClientRemotingProcessor::new(client_instance);
+        let mut processor = ClientRemotingProcessor::new(&client_instance);
         let harness = LocalRequestHarness::new()
             .await
             .expect("local remoting harness should start");
@@ -960,7 +983,7 @@ mod tests {
 
         let client_instance =
             MQClientInstance::new_arc(ClientConfig::default(), 0, "reply-unknown-compression-test", None);
-        let mut processor = ClientRemotingProcessor::new(client_instance);
+        let mut processor = ClientRemotingProcessor::new(&client_instance);
         let harness = LocalRequestHarness::new()
             .await
             .expect("local remoting harness should start");
@@ -1006,7 +1029,7 @@ mod tests {
             .await;
 
         let client_instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "reply-roundtrip-test", None);
-        let mut processor = ClientRemotingProcessor::new(client_instance);
+        let mut processor = ClientRemotingProcessor::new(&client_instance);
         let harness = LocalRequestHarness::new()
             .await
             .expect("local remoting harness should start");
@@ -1037,7 +1060,7 @@ mod tests {
     #[tokio::test]
     async fn notify_unsubscribe_lite_callback_is_explicit_oneway_noop() {
         let client_instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "notify-lite-test", None);
-        let mut processor = ClientRemotingProcessor::new(client_instance);
+        let mut processor = ClientRemotingProcessor::new(&client_instance);
         let harness = LocalRequestHarness::new()
             .await
             .expect("local remoting harness should start");
@@ -1054,7 +1077,7 @@ mod tests {
     #[tokio::test]
     async fn notify_unsubscribe_lite_callback_with_valid_header_is_oneway_noop() {
         let client_instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "notify-lite-valid-test", None);
-        let mut processor = ClientRemotingProcessor::new(client_instance);
+        let mut processor = ClientRemotingProcessor::new(&client_instance);
         let harness = LocalRequestHarness::new()
             .await
             .expect("local remoting harness should start");
@@ -1080,7 +1103,7 @@ mod tests {
     #[tokio::test]
     async fn notify_consumer_ids_changed_with_malformed_header_is_oneway_noop() {
         let client_instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "notify-consumer-test", None);
-        let mut processor = ClientRemotingProcessor::new(client_instance);
+        let mut processor = ClientRemotingProcessor::new(&client_instance);
         let harness = LocalRequestHarness::new()
             .await
             .expect("local remoting harness should start");
@@ -1100,7 +1123,7 @@ mod tests {
     #[tokio::test]
     async fn check_transaction_state_with_malformed_header_is_oneway_noop() {
         let client_instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "tx-malformed-test", None);
-        let mut processor = ClientRemotingProcessor::new(client_instance);
+        let mut processor = ClientRemotingProcessor::new(&client_instance);
         let harness = LocalRequestHarness::new()
             .await
             .expect("local remoting harness should start");
@@ -1120,7 +1143,7 @@ mod tests {
     #[tokio::test]
     async fn check_transaction_state_with_missing_body_is_oneway_noop() {
         let client_instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "tx-missing-body-test", None);
-        let mut processor = ClientRemotingProcessor::new(client_instance);
+        let mut processor = ClientRemotingProcessor::new(&client_instance);
         let harness = LocalRequestHarness::new()
             .await
             .expect("local remoting harness should start");
@@ -1171,7 +1194,7 @@ mod tests {
     async fn get_consumer_running_info_returns_consumer_snapshot_body() {
         let group = CheetahString::from_static_str("running-info-group");
         let (client_instance, _consumer_impl) = client_with_push_consumer(group.clone(), "running-info-client").await;
-        let mut processor = ClientRemotingProcessor::new(client_instance);
+        let mut processor = ClientRemotingProcessor::new(&client_instance);
         let harness = LocalRequestHarness::new()
             .await
             .expect("local remoting harness should start");
@@ -1211,7 +1234,7 @@ mod tests {
     #[tokio::test]
     async fn get_consumer_running_info_missing_group_returns_system_error() {
         let client_instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "running-info-missing-test", None);
-        let mut processor = ClientRemotingProcessor::new(client_instance);
+        let mut processor = ClientRemotingProcessor::new(&client_instance);
         let harness = LocalRequestHarness::new()
             .await
             .expect("local remoting harness should start");

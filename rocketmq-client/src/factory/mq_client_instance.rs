@@ -17,9 +17,13 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::atomic::AtomicI64;
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
+use std::sync::RwLock as StdRwLock;
+use std::sync::Weak;
 use std::time::Duration;
 use std::time::Instant;
 
+use arc_swap::ArcSwapOption;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use futures::future;
@@ -33,6 +37,7 @@ use rocketmq_common::common::message::message_decoder;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::message_queue_assignment::MessageQueueAssignment;
+use rocketmq_common::common::message::message_single::Message;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::common::mq_version::CURRENT_VERSION;
 use rocketmq_common::TimeUtils::current_millis;
@@ -64,8 +69,8 @@ use rocketmq_remoting::runtime::RPCHook;
 use rocketmq_runtime::schedule::simple_scheduler::ScheduledTaskManager;
 use rocketmq_rust::ArcMut;
 use rocketmq_rust::RocketMQTokioMutex;
-use rocketmq_rust::WeakArcMut;
 use serde::Serialize;
+use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use tracing::error;
@@ -92,6 +97,7 @@ use crate::producer::default_mq_producer::DefaultMQProducer;
 use crate::producer::default_mq_producer::ProducerConfig;
 use crate::producer::producer_impl::mq_producer_inner::MQProducerInnerImpl;
 use crate::producer::producer_impl::topic_publish_info::TopicPublishInfo;
+use crate::producer::send_result::SendResult;
 use crate::runtime::spawn_client_task;
 use crate::runtime::spawn_client_tracked_task;
 use crate::runtime::ClientTrackedTaskHandle;
@@ -128,7 +134,7 @@ fn get_topic_config_request_header(topic: CheetahString) -> GetTopicConfigReques
 
 async fn run_connection_net_event_listener(
     mut rx: tokio::sync::broadcast::Receiver<ConnectionNetEvent>,
-    weak_instance: WeakArcMut<MQClientInstance>,
+    weak_instance: Weak<MQClientInstance>,
     shutdown_token: CancellationToken,
 ) {
     loop {
@@ -168,7 +174,7 @@ async fn run_connection_net_event_listener(
 
 fn spawn_connection_net_event_listener(
     rx: tokio::sync::broadcast::Receiver<ConnectionNetEvent>,
-    weak_instance: WeakArcMut<MQClientInstance>,
+    weak_instance: Weak<MQClientInstance>,
     shutdown_token: CancellationToken,
 ) -> Option<ClientTrackedTaskHandle> {
     match spawn_client_tracked_task(
@@ -220,7 +226,7 @@ fn schedule_rebalance_wakeup(
 }
 
 pub struct MQClientInstance {
-    pub(crate) client_config: ArcMut<ClientConfig>,
+    pub(crate) client_config: Arc<ClientConfig>,
     pub(crate) client_id: CheetahString,
     boot_timestamp: u64,
     /**
@@ -238,17 +244,19 @@ pub struct MQClientInstance {
      * adminExtGroup.
      */
     admin_ext_table: AdminExtTable,
-    pub(crate) mq_client_api_impl: Option<Arc<MQClientAPIImpl>>,
+    pub(crate) mq_client_api_impl: ArcSwapOption<MQClientAPIImpl>,
     pub(crate) mq_admin_impl: Arc<MQAdminImpl>,
     pub(crate) topic_route_table: TopicRouteTable,
     topic_end_points_table: TopicEndPointsTable,
     lock_namesrv: Arc<RocketMQTokioMutex<()>>,
     lock_heartbeat: Arc<RocketMQTokioMutex<()>>,
 
-    service_state: ServiceState,
+    lifecycle_transition: Mutex<()>,
+    service_state: StdRwLock<ServiceState>,
     pub(crate) pull_message_service: ArcMut<PullMessageService>,
     rebalance_service: RebalanceService,
     pub(crate) default_producer: ArcMut<DefaultMQProducer>,
+    default_producer_transition: Mutex<()>,
     broker_addr_table: BrokerAddrTable,
     broker_version_table: BrokerVersionTable,
     send_heartbeat_times_total: Arc<AtomicI64>,
@@ -260,7 +268,7 @@ pub struct MQClientInstance {
     route_refresh_state: TopicRouteRefreshState,
     consumer_stats_manager: ConsumerStatsManager,
     connection_event_shutdown: CancellationToken,
-    connection_event_task_handle: Option<ClientTrackedTaskHandle>,
+    connection_event_task_handle: StdMutex<Option<ClientTrackedTaskHandle>>,
     rebalance_delay_tasks: TaskTracker,
     rebalance_delay_shutdown: CancellationToken,
 }
@@ -322,9 +330,9 @@ impl MQClientInstance {
         _instance_index: i32,
         client_id: impl Into<CheetahString>,
         rpc_hook: Option<Arc<dyn RPCHook>>,
-    ) -> ArcMut<MQClientInstance> {
+    ) -> Arc<MQClientInstance> {
         let client_id = client_id.into();
-        let shared_config = ArcMut::new(client_config.clone());
+        let shared_config = Arc::new(client_config.clone());
 
         let broker_addr_table = Arc::new(DashMap::default());
         let producer_table = Arc::new(DashMap::default());
@@ -342,25 +350,27 @@ impl MQClientInstance {
                 .client_config(client_config.clone())
                 .build(),
         );
-        let mut instance = ArcMut::new(MQClientInstance {
+        let instance = Arc::new(MQClientInstance {
             client_config: shared_config,
             client_id,
             boot_timestamp: current_millis(),
             producer_table,
             consumer_table,
             admin_ext_table,
-            mq_client_api_impl: None,
+            mq_client_api_impl: ArcSwapOption::empty(),
             mq_admin_impl: Arc::new(MQAdminImpl::new()),
             topic_route_table,
             topic_end_points_table,
             lock_namesrv: Arc::default(),
             lock_heartbeat: Arc::default(),
-            service_state: ServiceState::CreateJust,
+            lifecycle_transition: Mutex::new(()),
+            service_state: StdRwLock::new(ServiceState::CreateJust),
             pull_message_service: ArcMut::new(PullMessageService::with_shards(
                 client_config.pull_message_service_shards,
             )),
             rebalance_service: RebalanceService::new(),
             default_producer,
+            default_producer_transition: Mutex::new(()),
             broker_addr_table,
             broker_version_table,
             send_heartbeat_times_total: Arc::new(AtomicI64::new(0)),
@@ -370,21 +380,19 @@ impl MQClientInstance {
             route_refresh_state: TopicRouteRefreshState::default(),
             consumer_stats_manager: ConsumerStatsManager::new(),
             connection_event_shutdown: CancellationToken::new(),
-            connection_event_task_handle: None,
+            connection_event_task_handle: StdMutex::new(None),
             rebalance_delay_tasks: TaskTracker::new(),
             rebalance_delay_shutdown: CancellationToken::new(),
         });
 
-        // Clone instance first to avoid borrow checker issues
-        let instance_clone = instance.clone();
-        let client_bound = instance.mq_admin_impl.set_client(instance_clone);
+        let client_bound = instance.mq_admin_impl.set_client(&instance);
         debug_assert!(client_bound, "MQAdminImpl client must only be bound once");
 
         let (tx, rx) = tokio::sync::broadcast::channel::<ConnectionNetEvent>(16);
 
         let mq_client_api_impl = Arc::new(MQClientAPIImpl::new(
             Arc::new(TokioClientConfig::default()),
-            ClientRemotingProcessor::new(instance.clone()),
+            ClientRemotingProcessor::new(&instance),
             rpc_hook,
             Arc::new(client_config.clone()),
             Some(tx),
@@ -394,19 +402,77 @@ impl MQClientInstance {
             mq_client_api_impl.update_name_server_address_list_sync(namesrv_addr);
         }
 
-        instance.mq_client_api_impl = Some(mq_client_api_impl);
+        instance.mq_client_api_impl.store(Some(mq_client_api_impl));
 
         // Use weak reference to avoid circular dependencies
-        let weak_instance = ArcMut::downgrade(&instance);
+        let weak_instance = Arc::downgrade(&instance);
         let connection_event_shutdown = instance.connection_event_shutdown.clone();
-        instance.connection_event_task_handle =
+        *instance
+            .connection_event_task_handle
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) =
             spawn_connection_net_event_listener(rx, weak_instance, connection_event_shutdown);
         instance
+    }
+
+    fn service_state(&self) -> ServiceState {
+        *self
+            .service_state
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn set_service_state(&self, state: ServiceState) {
+        *self
+            .service_state
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = state;
     }
 
     /// Returns a reference to the [`ConsumerStatsManager`] held by this instance.
     pub fn consumer_stats_manager(&self) -> &ConsumerStatsManager {
         &self.consumer_stats_manager
+    }
+
+    async fn start_default_producer(&self) -> rocketmq_error::RocketMQResult<()> {
+        let _transition = self.default_producer_transition.lock().await;
+        let Some(producer_impl) = self.default_producer.default_mqproducer_impl.as_ref() else {
+            return Err(mq_client_err!("default producer impl is None"));
+        };
+        let mut producer_impl = producer_impl.clone();
+        producer_impl.start_with_factory(false).await
+    }
+
+    async fn shutdown_default_producer(&self) -> rocketmq_error::RocketMQResult<()> {
+        let _transition = self.default_producer_transition.lock().await;
+        let Some(producer_impl) = self.default_producer.default_mqproducer_impl.as_ref() else {
+            return Ok(());
+        };
+        let mut producer_impl = producer_impl.clone();
+        Box::pin(producer_impl.shutdown_with_factory(false)).await
+    }
+
+    pub(crate) async fn send_with_default_producer(
+        &self,
+        message: Message,
+    ) -> rocketmq_error::RocketMQResult<Option<SendResult>> {
+        let _transition = self.default_producer_transition.lock().await;
+        let mut default_producer = self.default_producer.clone();
+        default_producer.send(message).await
+    }
+
+    pub(crate) async fn send_with_default_producer_impl(
+        &self,
+        message: &mut Message,
+    ) -> rocketmq_error::RocketMQResult<Option<SendResult>> {
+        let _transition = self.default_producer_transition.lock().await;
+        let producer_impl = self
+            .default_producer
+            .default_mqproducer_impl
+            .as_ref()
+            .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("DefaultMQProducerImpl"))?;
+        let mut producer_impl = producer_impl.clone();
+        producer_impl.send(message).await
     }
 
     pub fn on_channel_connect(&self, _remote_addr: &str) {}
@@ -455,43 +521,41 @@ impl MQClientInstance {
         );
     }
 
-    pub async fn start(&mut self, this: ArcMut<Self>) -> rocketmq_error::RocketMQResult<()> {
-        match self.service_state {
+    pub async fn start(self: &Arc<Self>) -> rocketmq_error::RocketMQResult<()> {
+        let _transition = self.lifecycle_transition.lock().await;
+        match self.service_state() {
             ServiceState::CreateJust => {
-                self.service_state = ServiceState::StartFailed;
+                self.set_service_state(ServiceState::StartFailed);
                 // If not specified,looking address from name remoting_server
                 if self.client_config.namesrv_addr.is_none() {
-                    let Some(mq_client_api_impl) = self.mq_client_api_impl.as_ref() else {
+                    let Some(mq_client_api_impl) = self.mq_client_api_impl.load_full() else {
                         return Err(mq_client_err!("mq_client_api_impl is None"));
                     };
                     mq_client_api_impl.fetch_name_server_addr().await;
                 }
                 // Start request-response channel
-                let Some(mq_client_api_impl) = self.mq_client_api_impl.as_ref() else {
+                let Some(mq_client_api_impl) = self.mq_client_api_impl.load_full() else {
                     return Err(mq_client_err!("mq_client_api_impl is None"));
                 };
                 mq_client_api_impl.start().await;
                 // Start various schedule tasks
-                self.start_scheduled_task(this.clone())?;
+                self.start_scheduled_task(self.clone())?;
                 // Start pull service
-                let instance = this.clone();
+                let instance = self.clone();
                 if let Err(e) = self.pull_message_service.start(instance).await {
                     error!("Failed to start pull message service: {:?}", e);
                 }
                 // Start rebalance service
-                if let Err(e) = self.rebalance_service.start(this).await {
+                if let Err(e) = self.rebalance_service.start(self.clone()).await {
                     error!("Failed to start rebalance service: {:?}", e);
                 }
                 // Start push service
 
-                let Some(default_producer_impl) = self.default_producer.default_mqproducer_impl.as_mut() else {
-                    return Err(mq_client_err!("default producer impl is None"));
-                };
-                default_producer_impl.start_with_factory(false).await?;
+                self.start_default_producer().await?;
                 // Start consumer stats manager
                 self.consumer_stats_manager.start();
                 info!("the client factory[{}] start OK", self.client_id);
-                self.service_state = ServiceState::Running;
+                self.set_service_state(ServiceState::Running);
             }
             ServiceState::Running => {}
             ServiceState::ShutdownAlready => {}
@@ -505,14 +569,15 @@ impl MQClientInstance {
         Ok(())
     }
 
-    pub async fn shutdown(&mut self) {
-        match self.service_state {
+    pub async fn shutdown(&self) {
+        let _transition = self.lifecycle_transition.lock().await;
+        match self.service_state() {
             ServiceState::CreateJust | ServiceState::ShutdownAlready => {
                 warn!(
                     "MQClientInstance shutdown called but state is {:?}, ignoring shutdown request",
-                    self.service_state
+                    self.service_state()
                 );
-                if let Some(mq_client_api_impl) = self.mq_client_api_impl.as_ref() {
+                if let Some(mq_client_api_impl) = self.mq_client_api_impl.load_full() {
                     if !mq_client_api_impl
                         .shutdown_background_tasks(Duration::from_secs(1))
                         .await
@@ -559,11 +624,8 @@ impl MQClientInstance {
         self.persist_all_consumer_offset().await;
 
         info!("MQClientInstance[{}] shutting down default producer", self.client_id);
-        if let Some(producer_impl) = self.default_producer.default_mqproducer_impl.as_mut() {
-            let shutdown_future = producer_impl.shutdown_with_factory(false);
-            if let Err(e) = Box::pin(shutdown_future).await {
-                warn!("Failed to shutdown default producer: {:?}", e);
-            }
+        if let Err(e) = self.shutdown_default_producer().await {
+            warn!("Failed to shutdown default producer: {:?}", e);
         }
 
         info!("MQClientInstance[{}] unregistering all consumers", self.client_id);
@@ -572,7 +634,7 @@ impl MQClientInstance {
         info!("MQClientInstance[{}] unregistering all producers", self.client_id);
         self.unregister_all_producers().await;
 
-        if let Some(mq_client_api_impl) = self.mq_client_api_impl.as_ref() {
+        if let Some(mq_client_api_impl) = self.mq_client_api_impl.load_full() {
             info!(
                 "MQClientInstance[{}] shutting down client API background tasks and network client",
                 self.client_id
@@ -627,14 +689,19 @@ impl MQClientInstance {
         self.broker_addr_table.clear();
         self.broker_version_table.clear();
 
-        self.service_state = ServiceState::ShutdownAlready;
+        self.set_service_state(ServiceState::ShutdownAlready);
 
         info!("MQClientInstance[{}] shutdown completed successfully", self.client_id);
     }
 
-    async fn shutdown_connection_event_listener(&mut self, timeout: Duration) {
+    async fn shutdown_connection_event_listener(&self, timeout: Duration) {
         self.connection_event_shutdown.cancel();
-        let Some(handle) = self.connection_event_task_handle.take() else {
+        let handle = self
+            .connection_event_task_handle
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+        let Some(handle) = handle else {
             return;
         };
 
@@ -650,6 +717,8 @@ impl MQClientInstance {
 
     fn connection_event_task_count(&self) -> usize {
         self.connection_event_task_handle
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .as_ref()
             .map(ClientTrackedTaskHandle::task_count)
             .unwrap_or_default()
@@ -670,7 +739,7 @@ impl MQClientInstance {
     }
 
     /// Unregister all producers from broker
-    async fn unregister_all_producers(&mut self) {
+    async fn unregister_all_producers(&self) {
         // Get all producer groups before removing from table
         let producer_groups: Vec<CheetahString> = self.producer_table.iter().map(|entry| entry.key().clone()).collect();
 
@@ -682,7 +751,7 @@ impl MQClientInstance {
     }
 
     /// Unregister all consumers from broker
-    async fn unregister_all_consumers(&mut self) {
+    async fn unregister_all_consumers(&self) {
         // Get all consumer groups before removing from table
         let consumer_groups: Vec<CheetahString> = self.consumer_table.iter().map(|entry| entry.key().clone()).collect();
 
@@ -705,7 +774,7 @@ impl MQClientInstance {
         true
     }
 
-    pub async fn register_admin_ext(&mut self, group: &str, admin: MQAdminExtInnerImpl) -> bool {
+    pub async fn register_admin_ext(&self, group: &str, admin: MQAdminExtInnerImpl) -> bool {
         if group.is_empty() {
             return false;
         }
@@ -717,11 +786,11 @@ impl MQClientInstance {
         true
     }
 
-    fn start_scheduled_task(&mut self, this: ArcMut<Self>) -> rocketmq_error::RocketMQResult<()> {
+    fn start_scheduled_task(&self, this: Arc<Self>) -> rocketmq_error::RocketMQResult<()> {
         info!("Starting scheduled tasks with ScheduledTaskManager");
 
         if self.client_config.namesrv_addr.is_none() {
-            if let Some(mq_client_api_impl) = self.mq_client_api_impl.as_ref().cloned() {
+            if let Some(mq_client_api_impl) = self.mq_client_api_impl.load_full() {
                 self.scheduled_task_manager
                     .add_fixed_rate_task_async(Duration::from_secs(10), Duration::from_secs(120), async move |_token| {
                         info!("ScheduledTask: fetchNameServerAddr");
@@ -759,7 +828,7 @@ impl MQClientInstance {
                 Duration::from_secs(1),
                 Duration::from_millis(heartbeat_broker_interval as u64),
                 async move |_token| {
-                    let mut instance = client_instance.clone();
+                    let instance = client_instance.clone();
                     info!("ScheduledTask: clean_offline_broker and send_heartbeat");
                     instance.clean_offline_broker().await;
                     instance.send_heartbeat_to_all_broker_with_lock().await;
@@ -775,7 +844,7 @@ impl MQClientInstance {
                 Duration::from_secs(10),
                 Duration::from_millis(persist_consumer_offset_interval),
                 async move |_token| {
-                    let mut instance = client_instance.clone();
+                    let instance = client_instance.clone();
                     info!("ScheduledTask: persistAllConsumerOffset");
                     instance.persist_all_consumer_offset().await;
                     Ok(())
@@ -821,7 +890,7 @@ impl MQClientInstance {
     }
 
     pub async fn find_consumer_id_list(
-        &mut self,
+        &self,
         topic: &CheetahString,
         group: &CheetahString,
     ) -> Option<Vec<CheetahString>> {
@@ -831,7 +900,7 @@ impl MQClientInstance {
             broker_addr = self.find_broker_addr_by_topic(topic).await;
         }
         if let Some(broker_addr) = broker_addr {
-            if let Some(mq_client_api_impl) = self.mq_client_api_impl.as_ref() {
+            if let Some(mq_client_api_impl) = self.mq_client_api_impl.load_full() {
                 match mq_client_api_impl
                     .get_consumer_id_list_by_group(
                         broker_addr.as_str(),
@@ -910,7 +979,7 @@ impl MQClientInstance {
         let started = Instant::now();
         let request_version = self.topic_route_version(topic);
 
-        let Some(mq_client_api_impl) = self.mq_client_api_impl.as_ref() else {
+        let Some(mq_client_api_impl) = self.mq_client_api_impl.load_full() else {
             error!(
                 "updateTopicRouteInfoFromNameServer skipped because mq_client_api_impl is None, Topic: {}. [{}]",
                 topic, self.client_id
@@ -1199,13 +1268,13 @@ impl MQClientInstance {
         false
     }
 
-    pub async fn persist_all_consumer_offset(&mut self) {
+    pub async fn persist_all_consumer_offset(&self) {
         for entry in self.consumer_table.iter() {
             entry.value().persist_consumer_offset().await;
         }
     }
 
-    pub async fn clean_offline_broker(&mut self) {
+    pub async fn clean_offline_broker(&self) {
         let lock = self
             .lock_namesrv
             .try_lock_timeout(Duration::from_millis(LOCK_TIMEOUT_MILLIS))
@@ -1282,8 +1351,7 @@ impl MQClientInstance {
 
     pub fn get_mq_client_api_impl(&self) -> rocketmq_error::RocketMQResult<Arc<MQClientAPIImpl>> {
         self.mq_client_api_impl
-            .as_ref()
-            .cloned()
+            .load_full()
             .ok_or(rocketmq_error::RocketMQError::ClientNotStarted)
     }
 
@@ -1303,7 +1371,7 @@ impl MQClientInstance {
 
         let api_impl = self
             .mq_client_api_impl
-            .as_ref()
+            .load_full()
             .ok_or(rocketmq_error::RocketMQError::ClientNotStarted)?;
 
         let mut result = MQClientAPIImpl::pull_message(
@@ -1335,7 +1403,7 @@ impl MQClientInstance {
     ) -> rocketmq_error::RocketMQResult<i64> {
         let api_impl = self
             .mq_client_api_impl
-            .as_ref()
+            .load_full()
             .ok_or(rocketmq_error::RocketMQError::ClientNotStarted)?;
         api_impl
             .clone()
@@ -1351,7 +1419,7 @@ impl MQClientInstance {
     ) -> rocketmq_error::RocketMQResult<()> {
         let api_impl = self
             .mq_client_api_impl
-            .as_ref()
+            .load_full()
             .ok_or(rocketmq_error::RocketMQError::ClientNotStarted)?;
         api_impl
             .clone()
@@ -1360,7 +1428,7 @@ impl MQClientInstance {
     }
 
     pub async fn consumer_send_message_back(
-        &mut self,
+        &self,
         broker_addr: &str,
         broker_name: Option<&str>,
         message: &MessageExt,
@@ -1371,7 +1439,7 @@ impl MQClientInstance {
     ) -> rocketmq_error::RocketMQResult<()> {
         let api_impl = self
             .mq_client_api_impl
-            .as_ref()
+            .load_full()
             .ok_or(rocketmq_error::RocketMQError::ClientNotStarted)?;
         api_impl
             .clone()
@@ -1395,7 +1463,7 @@ impl MQClientInstance {
     ) -> rocketmq_error::RocketMQResult<i64> {
         let api_impl = self
             .mq_client_api_impl
-            .as_ref()
+            .load_full()
             .ok_or(rocketmq_error::RocketMQError::ClientNotStarted)?;
         api_impl
             .clone()
@@ -1411,7 +1479,7 @@ impl MQClientInstance {
     ) -> rocketmq_error::RocketMQResult<i64> {
         let api_impl = self
             .mq_client_api_impl
-            .as_ref()
+            .load_full()
             .ok_or(rocketmq_error::RocketMQError::ClientNotStarted)?;
         api_impl
             .clone()
@@ -1429,7 +1497,7 @@ impl MQClientInstance {
     ) -> rocketmq_error::RocketMQResult<i64> {
         let api_impl = self
             .mq_client_api_impl
-            .as_ref()
+            .load_full()
             .ok_or(rocketmq_error::RocketMQError::ClientNotStarted)?;
         api_impl
             .clone()
@@ -1446,7 +1514,7 @@ impl MQClientInstance {
         let request_header = get_topic_config_request_header(topic);
         let api_impl = self
             .mq_client_api_impl
-            .as_ref()
+            .load_full()
             .ok_or(rocketmq_error::RocketMQError::ClientNotStarted)?;
         let topic_mapping = api_impl
             .get_topic_config(broker_addr, request_header, timeout_millis)
@@ -1462,7 +1530,7 @@ impl MQClientInstance {
     ) -> rocketmq_error::RocketMQResult<SubscriptionGroupConfig> {
         let api_impl = self
             .mq_client_api_impl
-            .as_ref()
+            .load_full()
             .ok_or(rocketmq_error::RocketMQError::ClientNotStarted)?;
         api_impl
             .get_subscription_group_config(broker_addr, group, timeout_millis)
@@ -1472,7 +1540,7 @@ impl MQClientInstance {
     pub async fn get_broker_cluster_info(&self, timeout_millis: u64) -> rocketmq_error::RocketMQResult<ClusterInfo> {
         let api_impl = self
             .mq_client_api_impl
-            .as_ref()
+            .load_full()
             .ok_or(rocketmq_error::RocketMQError::ClientNotStarted)?;
         api_impl.get_broker_cluster_info(timeout_millis).await
     }
@@ -1485,7 +1553,7 @@ impl MQClientInstance {
     ) -> rocketmq_error::RocketMQResult<Option<UserInfo>> {
         let api_impl = self
             .mq_client_api_impl
-            .as_ref()
+            .load_full()
             .ok_or(rocketmq_error::RocketMQError::ClientNotStarted)?;
         api_impl.get_user(broker_addr, username, timeout_millis).await
     }
@@ -1498,7 +1566,7 @@ impl MQClientInstance {
     ) -> rocketmq_error::RocketMQResult<Option<AclInfo>> {
         let api_impl = self
             .mq_client_api_impl
-            .as_ref()
+            .load_full()
             .ok_or(rocketmq_error::RocketMQError::ClientNotStarted)?;
         let acl_infos = api_impl
             .list_acl(broker_addr, subject.clone(), CheetahString::default(), timeout_millis)
@@ -1674,7 +1742,7 @@ impl MQClientInstance {
 
         // Collect all heartbeat futures without spawning detached runtime tasks.
         let mut tasks = Vec::new();
-        let Some(mq_client_api) = self.mq_client_api_impl.as_ref().cloned() else {
+        let Some(mq_client_api) = self.mq_client_api_impl.load_full() else {
             warn!("send heartbeat concurrently skipped because mq_client_api_impl is None");
             return false;
         };
@@ -1903,7 +1971,7 @@ impl MQClientInstance {
         addr: &CheetahString,
         heartbeat_data: &HeartbeatData,
     ) -> (bool, Option<bool>) {
-        let Some(mq_client_api_impl) = self.mq_client_api_impl.as_ref() else {
+        let Some(mq_client_api_impl) = self.mq_client_api_impl.load_full() else {
             warn!(
                 "send heart beat to broker[{} {} {}] skipped because mq_client_api_impl is None",
                 broker_name, id, addr
@@ -1998,7 +2066,7 @@ impl MQClientInstance {
         true
     }
 
-    pub async fn check_client_in_broker(&mut self) -> rocketmq_error::RocketMQResult<()> {
+    pub async fn check_client_in_broker(&self) -> rocketmq_error::RocketMQResult<()> {
         for entry in self.consumer_table.iter() {
             let subscription_inner = entry.value().subscriptions();
             if subscription_inner.is_empty() {
@@ -2010,7 +2078,7 @@ impl MQClientInstance {
                 }
                 let addr = self.find_broker_addr_by_topic(subscription_data.topic.as_str()).await;
                 if let Some(addr) = addr {
-                    let Some(mq_client_api_impl) = self.mq_client_api_impl.as_ref() else {
+                    let Some(mq_client_api_impl) = self.mq_client_api_impl.load_full() else {
                         return Err(rocketmq_error::RocketMQError::ClientNotStarted);
                     };
                     match mq_client_api_impl
@@ -2046,7 +2114,7 @@ impl MQClientInstance {
         Ok(())
     }
 
-    pub async fn do_rebalance(&mut self) -> RocketMQResult<bool> {
+    pub async fn do_rebalance(&self) -> RocketMQResult<bool> {
         let mut balanced = true;
         for entry in self.consumer_table.iter() {
             match entry.value().try_rebalance().await {
@@ -2068,7 +2136,7 @@ impl MQClientInstance {
         Ok(balanced)
     }
 
-    pub fn rebalance_later(&mut self, delay_millis: u64) {
+    pub fn rebalance_later(&self, delay_millis: u64) {
         schedule_rebalance_wakeup(
             self.rebalance_service.clone(),
             Duration::from_millis(delay_millis),
@@ -2207,7 +2275,7 @@ impl MQClientInstance {
         self.producer_table.get(group).map(|entry| entry.value().clone())
     }
 
-    pub async fn unregister_consumer(&mut self, group: impl Into<CheetahString>) -> bool {
+    pub async fn unregister_consumer(&self, group: impl Into<CheetahString>) -> bool {
         let group = group.into();
         if group.is_empty() {
             warn!("unregister_consumer: group name is empty");
@@ -2226,7 +2294,7 @@ impl MQClientInstance {
         }
     }
 
-    pub async fn unregister_producer(&mut self, group: impl Into<CheetahString>) -> bool {
+    pub async fn unregister_producer(&self, group: impl Into<CheetahString>) -> bool {
         let group = group.into();
         if group.is_empty() {
             warn!("unregister_producer: group name is empty");
@@ -2245,15 +2313,11 @@ impl MQClientInstance {
         }
     }
 
-    pub async fn unregister_admin_ext(&mut self, group: impl Into<CheetahString>) {
+    pub async fn unregister_admin_ext(&self, group: impl Into<CheetahString>) {
         let _ = self.admin_ext_table.remove(&group.into());
     }
-    async fn unregister_client(
-        &mut self,
-        producer_group: Option<CheetahString>,
-        consumer_group: Option<CheetahString>,
-    ) {
-        let Some(mq_client_api_impl) = self.mq_client_api_impl.as_ref() else {
+    async fn unregister_client(&self, producer_group: Option<CheetahString>, consumer_group: Option<CheetahString>) {
+        let Some(mq_client_api_impl) = self.mq_client_api_impl.load_full() else {
             warn!(
                 "unregister client[Producer: {:?} Consumer: {:?}] skipped because mq_client_api_impl is None",
                 producer_group, consumer_group
@@ -2307,7 +2371,7 @@ impl MQClientInstance {
     /// A `Result` containing an `Option` with a `HashSet` of `MessageQueueAssignment` if the query
     /// is successful, or an error if it fails.
     pub async fn query_assignment(
-        &mut self,
+        &self,
         topic: &CheetahString,
         consumer_group: &CheetahString,
         strategy_name: &CheetahString,
@@ -2324,7 +2388,7 @@ impl MQClientInstance {
         }
         if let Some(broker_addr) = broker_addr {
             let client_id = self.client_id.clone();
-            match self.mq_client_api_impl.as_ref() {
+            match self.mq_client_api_impl.load_full() {
                 Some(api_impl) => {
                     api_impl
                         .query_assignment(
@@ -2478,7 +2542,7 @@ pub async fn run_connection_event_listener_lifecycle_probe() -> ConnectionEventL
         namesrv_addr: None,
         ..Default::default()
     };
-    let mut instance = MQClientInstance::new_arc(client_config, 0, "connection-event-listener-probe", None);
+    let instance = MQClientInstance::new_arc(client_config, 0, "connection-event-listener-probe", None);
     let task_count_before_shutdown = instance.connection_event_task_count();
 
     let shutdown_started = Instant::now();
@@ -2692,12 +2756,22 @@ mod tests {
 
     #[tokio::test]
     async fn get_mq_client_api_impl_returns_client_not_started_instead_of_panicking() {
-        let mut instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "test-client", None);
-        instance.mq_client_api_impl = None;
+        let instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "test-client", None);
+        instance.mq_client_api_impl.store(None);
 
         let result = instance.get_mq_client_api_impl();
 
         assert!(matches!(result, Err(RocketMQError::ClientNotStarted)));
+    }
+
+    #[tokio::test]
+    async fn standard_weak_callbacks_do_not_keep_client_root_alive() {
+        let instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "weak-client-root", None);
+        let weak = Arc::downgrade(&instance);
+
+        assert!(weak.upgrade().is_some());
+        drop(instance);
+        assert!(weak.upgrade().is_none());
     }
 
     #[tokio::test]
@@ -2766,7 +2840,7 @@ mod tests {
             namesrv_addr: None,
             ..Default::default()
         };
-        let mut instance = MQClientInstance::new_arc(client_config, 0, "no-runtime-rebalance-test", None);
+        let instance = MQClientInstance::new_arc(client_config, 0, "no-runtime-rebalance-test", None);
 
         instance.re_balance_later(Duration::from_millis(1));
         instance.rebalance_later(1);
@@ -2780,9 +2854,9 @@ mod tests {
             namesrv_addr: None,
             ..Default::default()
         };
-        let mut instance = MQClientInstance::new_arc(client_config, 0, "scheduled-shutdown-test", None);
-        instance.service_state = ServiceState::Running;
-        assert!(instance.connection_event_task_handle.is_some());
+        let instance = MQClientInstance::new_arc(client_config, 0, "scheduled-shutdown-test", None);
+        instance.set_service_state(ServiceState::Running);
+        assert!(instance.connection_event_task_count() > 0);
         instance
             .scheduled_task_manager
             .add_fixed_delay_task(Duration::from_secs(60), Duration::from_secs(60), |_token| async {
@@ -2794,9 +2868,9 @@ mod tests {
 
         instance.shutdown().await;
 
-        assert_eq!(instance.service_state, ServiceState::ShutdownAlready);
+        assert_eq!(instance.service_state(), ServiceState::ShutdownAlready);
         assert_eq!(instance.scheduled_task_manager.task_count(), 0);
-        assert!(instance.connection_event_task_handle.is_none());
+        assert_eq!(instance.connection_event_task_count(), 0);
     }
 
     #[tokio::test]
@@ -2805,18 +2879,18 @@ mod tests {
             namesrv_addr: None,
             ..Default::default()
         };
-        let mut instance = MQClientInstance::new_arc(client_config, 0, "pre-start-shutdown-test", None);
+        let instance = MQClientInstance::new_arc(client_config, 0, "pre-start-shutdown-test", None);
 
-        assert_eq!(instance.service_state, ServiceState::CreateJust);
-        assert!(instance.connection_event_task_handle.is_some());
+        assert_eq!(instance.service_state(), ServiceState::CreateJust);
+        assert!(instance.connection_event_task_count() > 0);
         instance.re_balance_later(Duration::from_secs(60));
         instance.rebalance_later(60_000);
         tokio::task::yield_now().await;
 
         instance.shutdown().await;
 
-        assert_eq!(instance.service_state, ServiceState::CreateJust);
-        assert!(instance.connection_event_task_handle.is_none());
+        assert_eq!(instance.service_state(), ServiceState::CreateJust);
+        assert_eq!(instance.connection_event_task_count(), 0);
         assert!(instance.rebalance_delay_shutdown.is_cancelled());
         tokio::time::timeout(Duration::from_secs(1), instance.rebalance_delay_tasks.wait())
             .await
@@ -3024,7 +3098,7 @@ mod tests {
             namesrv_addr: None,
             ..Default::default()
         };
-        let mut instance = MQClientInstance::new_arc(client_config, 0, "heartbeat-clean-index-test", None);
+        let instance = MQClientInstance::new_arc(client_config, 0, "heartbeat-clean-index-test", None);
         let broker_name = CheetahString::from_static_str("heartbeat-offline-broker");
         let broker_addr = CheetahString::from_static_str("127.0.0.12:10911");
         let mut broker_addrs = HashMap::new();
@@ -3237,11 +3311,11 @@ mod tests {
             namesrv_addr: Some(CheetahString::from_static_str("127.0.0.1:9876")),
             ..Default::default()
         };
-        let mut instance = MQClientInstance::new_arc(client_config, 0, "partial-start-shutdown", None);
-        instance.service_state = ServiceState::StartFailed;
+        let instance = MQClientInstance::new_arc(client_config, 0, "partial-start-shutdown", None);
+        instance.set_service_state(ServiceState::StartFailed);
 
         instance.shutdown().await;
 
-        assert_eq!(instance.service_state, ServiceState::ShutdownAlready);
+        assert_eq!(instance.service_state(), ServiceState::ShutdownAlready);
     }
 }

@@ -29,7 +29,6 @@ use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_remoting::protocol::RemotingDeserializable;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_runtime::ScheduledTaskSnapshot;
-use rocketmq_rust::ArcMut;
 use serde::Serialize;
 use std::sync::LazyLock;
 use tokio::fs;
@@ -78,7 +77,7 @@ enum PersistCommand {
 }
 
 pub struct LocalFileOffsetStore {
-    client_instance: ArcMut<MQClientInstance>,
+    client_instance: Arc<MQClientInstance>,
     group_name: CheetahString,
     store_path: CheetahString,
     offset_table: Arc<DashMap<MessageQueue, ControllableOffset>>,
@@ -204,7 +203,7 @@ pub struct LocalFileOffsetStoreLifecycleProbe {
 }
 
 impl LocalFileOffsetStore {
-    pub fn new(client_instance: ArcMut<MQClientInstance>, group_name: CheetahString) -> Self {
+    pub fn new(client_instance: Arc<MQClientInstance>, group_name: CheetahString) -> Self {
         let store_path = LOCAL_OFFSET_STORE_DIR
             .clone()
             .join(client_instance.client_id.as_str())

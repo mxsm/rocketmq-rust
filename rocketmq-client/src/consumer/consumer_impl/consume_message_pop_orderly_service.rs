@@ -477,16 +477,12 @@ impl ConsumeMessagePopOrderlyService {
 
         if let Some(impl_) = self.consumer_impl() {
             if let Some(client_factory) = impl_.get_mq_client_factory() {
-                if let Some(producer_impl) = client_factory.default_producer.default_mqproducer_impl.as_ref() {
-                    match producer_impl.mut_from_ref().send(&mut new_msg).await {
-                        Ok(_) => true,
-                        Err(e) => {
-                            error!("sendMessageBack failed: {:?}, msg: {:?}", e, msg);
-                            false
-                        }
+                match client_factory.send_with_default_producer_impl(&mut new_msg).await {
+                    Ok(_) => true,
+                    Err(e) => {
+                        error!("sendMessageBack failed: {:?}, msg: {:?}", e, msg);
+                        false
                     }
-                } else {
-                    false
                 }
             } else {
                 false

@@ -20,14 +20,13 @@ use std::sync::LazyLock;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use rocketmq_remoting::runtime::RPCHook;
-use rocketmq_rust::ArcMut;
 use tracing::info;
 
 use crate::base::client_config::ClientConfig;
 use crate::factory::mq_client_instance::MQClientInstance;
 use crate::producer::produce_accumulator::ProduceAccumulator;
 
-type ClientInstanceHashMap = DashMap<CheetahString /* clientId */, ArcMut<MQClientInstance>>;
+type ClientInstanceHashMap = DashMap<CheetahString /* clientId */, Arc<MQClientInstance>>;
 type AccumulatorHashMap = DashMap<CheetahString /* clientId */, Arc<ProduceAccumulator>>;
 
 #[derive(Default)]
@@ -56,7 +55,7 @@ impl MQClientManager {
         &self,
         client_config: ClientConfig,
         rpc_hook: Option<Arc<dyn RPCHook>>,
-    ) -> ArcMut<MQClientInstance> {
+    ) -> Arc<MQClientInstance> {
         let client_id = CheetahString::from_string(client_config.build_mq_client_id());
 
         self.factory_table
@@ -90,7 +89,7 @@ impl MQClientManager {
     pub(crate) fn remove_client_factory_if_same(&self, client_id: &CheetahString, expected: *const ()) -> bool {
         self.factory_table
             .remove_if(client_id, |_, current| {
-                std::ptr::addr_eq(Arc::as_ptr(current.get_inner()).cast::<()>(), expected)
+                std::ptr::addr_eq(Arc::as_ptr(current).cast::<()>(), expected)
             })
             .is_some()
     }

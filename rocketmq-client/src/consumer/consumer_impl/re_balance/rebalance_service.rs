@@ -17,6 +17,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::RwLock as StdRwLock;
 use std::time::Duration;
 
 use rocketmq_common::TimeUtils::current_millis;
@@ -24,9 +25,9 @@ use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_error::UnifiedServiceError;
 use rocketmq_runtime::Shutdown;
-use rocketmq_rust::ArcMut;
 use serde::Serialize;
 use tokio::select;
+use tokio::sync::Mutex;
 use tokio::sync::Notify;
 use tokio::time::Instant;
 use tracing::error;
@@ -179,9 +180,10 @@ impl RebalanceConfig {
 #[derive(Clone)]
 pub struct RebalanceService {
     config: RebalanceConfig,
+    lifecycle_transition: Arc<Mutex<()>>,
     notify: Arc<Notify>,
     stopped_notify: Arc<Notify>,
-    tx_shutdown: Option<tokio::sync::broadcast::Sender<()>>,
+    tx_shutdown: Arc<StdRwLock<Option<tokio::sync::broadcast::Sender<()>>>>,
     started: Arc<AtomicBool>,
     task_handle: Arc<tokio::sync::Mutex<Option<ClientTrackedTaskHandle>>>,
     // Health check and metrics
@@ -218,9 +220,10 @@ impl RebalanceService {
 
         RebalanceService {
             config,
+            lifecycle_transition: Arc::new(Mutex::new(())),
             notify: Arc::new(Notify::new()),
             stopped_notify: Arc::new(Notify::new()),
-            tx_shutdown: None,
+            tx_shutdown: Arc::new(StdRwLock::new(None)),
             started: Arc::new(AtomicBool::new(false)),
             task_handle: Arc::new(tokio::sync::Mutex::new(None)),
             last_success_timestamp: Arc::new(AtomicU64::new(0)),
@@ -235,7 +238,8 @@ impl RebalanceService {
         &self.config
     }
 
-    pub async fn start(&mut self, mut instance: ArcMut<MQClientInstance>) -> RocketMQResult<()> {
+    pub async fn start(&self, instance: Arc<MQClientInstance>) -> RocketMQResult<()> {
+        let _transition = self.lifecycle_transition.lock().await;
         // Prevent duplicate starts
         if self.started.swap(true, Ordering::SeqCst) {
             warn!("RebalanceService already started, ignoring duplicate start call");
@@ -245,7 +249,10 @@ impl RebalanceService {
         let notify = self.notify.clone();
         let stopped_notify = self.stopped_notify.clone();
         let (mut shutdown, tx_shutdown) = Shutdown::new(1);
-        self.tx_shutdown = Some(tx_shutdown);
+        *self
+            .tx_shutdown
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(tx_shutdown);
 
         let started_clone = self.started.clone();
         let last_success_ts = self.last_success_timestamp.clone();
@@ -334,7 +341,10 @@ impl RebalanceService {
             Ok(task_handle) => task_handle,
             Err(error) => {
                 self.started.store(false, Ordering::SeqCst);
-                self.tx_shutdown = None;
+                self.tx_shutdown
+                    .write()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .take();
                 return Err(rebalance_service_startup_failed(error));
             }
         };
@@ -357,6 +367,7 @@ impl RebalanceService {
     }
 
     pub async fn shutdown(&self, timeout_ms: u64) -> RocketMQResult<()> {
+        let _transition = self.lifecycle_transition.lock().await;
         // If not started, return directly
         if !self.started.load(Ordering::SeqCst) {
             info!("RebalanceService not started, shutdown skipped");
@@ -364,7 +375,12 @@ impl RebalanceService {
         }
 
         // Send shutdown signal
-        if let Some(tx_shutdown) = &self.tx_shutdown {
+        let tx_shutdown = self
+            .tx_shutdown
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        if let Some(tx_shutdown) = tx_shutdown {
             if let Err(e) = tx_shutdown.send(()) {
                 warn!("Failed to send shutdown signal to RebalanceService, error: {:?}", e);
             }
@@ -478,8 +494,8 @@ pub async fn run_rebalance_service_lifecycle_probe() -> RebalanceServiceLifecycl
         min_interval_ms: 1,
         enable_dynamic_interval: true,
     };
-    let mut service = RebalanceService::with_config(config);
-    let mut instance = MQClientInstance::new_arc(
+    let service = RebalanceService::with_config(config);
+    let instance = MQClientInstance::new_arc(
         crate::base::client_config::ClientConfig::default(),
         0,
         "rebalance-service-probe",
@@ -624,7 +640,7 @@ mod tests {
             min_interval_ms: 1,
             enable_dynamic_interval: true,
         };
-        let mut service = RebalanceService::with_config(config);
+        let service = RebalanceService::with_config(config);
         let instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "rebalance-no-runtime-client", None);
 
         futures::executor::block_on(service.start(instance))
@@ -639,7 +655,9 @@ mod tests {
         let stopped = service.stopped_notify.notified();
         let tx_shutdown = service
             .tx_shutdown
-            .as_ref()
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
             .expect("start should install shutdown sender");
         let _ = tx_shutdown.send(());
 
@@ -653,9 +671,12 @@ mod tests {
 
     #[tokio::test]
     async fn shutdown_without_task_handle_waits_for_stop_notification() {
-        let mut service = RebalanceService::new();
+        let service = RebalanceService::new();
         let (mut shutdown, tx_shutdown) = Shutdown::new(1);
-        service.tx_shutdown = Some(tx_shutdown);
+        *service
+            .tx_shutdown
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(tx_shutdown);
         service.started.store(true, Ordering::SeqCst);
 
         let started = service.started.clone();
@@ -681,7 +702,7 @@ mod tests {
             min_interval_ms: 1,
             enable_dynamic_interval: true,
         };
-        let mut service = RebalanceService::with_config(config);
+        let service = RebalanceService::with_config(config);
         let instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "rebalance-join-client", None);
 
         service.start(instance).await.expect("rebalance service should start");

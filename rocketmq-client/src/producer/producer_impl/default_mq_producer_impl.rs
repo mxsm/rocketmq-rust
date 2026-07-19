@@ -59,8 +59,6 @@ use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::rpc::rpc_request_header::RpcRequestHeader;
 use rocketmq_remoting::rpc::topic_request_header::TopicRequestHeader;
 use rocketmq_remoting::runtime::RPCHook;
-use rocketmq_rust::ArcMut;
-use rocketmq_rust::WeakArcMut;
 use tokio::sync::watch;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
@@ -324,13 +322,13 @@ pub struct DefaultMQProducerImpl {
     topic_publish_info_table: Arc<DashMap<Topic, TopicPublishInfoSnapshot>>,
 
     rpc_hook: Option<Arc<dyn RPCHook>>,
-    client_instance: Option<ArcMut<MQClientInstance>>,
+    client_instance: Option<Arc<MQClientInstance>>,
     pub(crate) mq_fault_strategy: MQFaultStrategy,
 
     // ===== Backpressure control =====
     semaphore_async_send_num: Arc<Semaphore>,
     semaphore_async_send_size: Arc<Semaphore>,
-    default_mqproducer_impl_inner: Option<WeakArcMut<DefaultMQProducerImpl>>,
+    default_mqproducer_impl_inner: Option<rocketmq_rust::WeakArcMut<DefaultMQProducerImpl>>,
     transaction_listener: Option<ArcTransactionListener>,
     transaction_executor_service: Option<tokio::runtime::Handle>,
     transaction_check_env: Option<TransactionCheckEnv>,
@@ -496,14 +494,14 @@ impl DefaultMQProducerImpl {
     }
 
     #[inline]
-    fn client_instance(&self) -> rocketmq_error::RocketMQResult<ArcMut<MQClientInstance>> {
+    fn client_instance(&self) -> rocketmq_error::RocketMQResult<Arc<MQClientInstance>> {
         self.client_instance
             .as_ref()
             .cloned()
             .ok_or_else(|| mq_client_err!("MQClientInstance is not available; producer has not been started"))
     }
 
-    pub fn get_mq_client_factory(&self) -> rocketmq_error::RocketMQResult<ArcMut<MQClientInstance>> {
+    pub fn get_mq_client_factory(&self) -> rocketmq_error::RocketMQResult<Arc<MQClientInstance>> {
         self.client_instance()
     }
 
@@ -2024,7 +2022,7 @@ impl DefaultMQProducerImpl {
         let client_instance = self.client_instance()?;
         let mq_client_api_impl = client_instance
             .mq_client_api_impl
-            .clone()
+            .load_full()
             .ok_or_else(|| mq_client_err!("MQClientAPIImpl is not available; producer has not been started"))?;
         client_instance
             .mq_admin_impl
@@ -2701,7 +2699,7 @@ impl DefaultMQProducerImpl {
             .as_mut()
             .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("MQClientInstance"))?
             .mq_client_api_impl
-            .as_mut()
+            .load_full()
             .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("MQClientAPIImpl"))?
             .end_transaction_oneway(
                 &broker_addr,
@@ -2776,7 +2774,7 @@ impl DefaultMQProducerImpl {
 
     pub fn set_default_mqproducer_impl_inner(
         &mut self,
-        default_mqproducer_impl_inner: WeakArcMut<DefaultMQProducerImpl>,
+        default_mqproducer_impl_inner: rocketmq_rust::WeakArcMut<DefaultMQProducerImpl>,
     ) {
         self.default_mqproducer_impl_inner = Some(default_mqproducer_impl_inner);
     }
@@ -2919,7 +2917,7 @@ impl MQProducerInner for DefaultMQProducerImpl {
                 tracing::warn!("endTransactionOneway skipped: client instance is not available");
                 return;
             };
-            let Some(mq_client_api_impl) = client_instance.mq_client_api_impl.as_ref() else {
+            let Some(mq_client_api_impl) = client_instance.mq_client_api_impl.load_full() else {
                 tracing::warn!("endTransactionOneway skipped: MQClientAPIImpl is not available");
                 return;
             };
@@ -3037,7 +3035,7 @@ impl DefaultMQProducerImpl {
                     )));
                 }
                 if start_factory {
-                    if let Err(error) = Box::pin(client_instance.mut_from_ref().start(client_instance.clone())).await {
+                    if let Err(error) = Box::pin(client_instance.start()).await {
                         self.store_state(ProducerState::StartFailed, Ordering::SeqCst);
                         return Err(error);
                     }
@@ -3520,7 +3518,7 @@ impl DefaultMQProducerImpl {
 }
 
 pub(crate) struct DefaultServiceDetector {
-    client_instance: ArcMut<MQClientInstance>,
+    client_instance: Arc<MQClientInstance>,
     topic_publish_info_table: Arc<DashMap<CheetahString /* topic */, TopicPublishInfoSnapshot>>,
 }
 
@@ -3540,7 +3538,7 @@ impl ServiceDetector for DefaultServiceDetector {
         let client_instance = self.client_instance.clone();
 
         let result = tokio::time::timeout(Duration::from_millis(timeout_millis), async move {
-            match client_instance.mq_client_api_impl.as_ref() {
+            match client_instance.mq_client_api_impl.load_full() {
                 Some(api) => api.get_max_offset(endpoint, &mq, timeout_millis).await.is_ok(),
                 None => false,
             }
@@ -3609,7 +3607,7 @@ where
 }
 
 pub(crate) struct DefaultResolver {
-    client_instance: ArcMut<MQClientInstance>,
+    client_instance: Arc<MQClientInstance>,
 }
 
 impl Resolver for DefaultResolver {
@@ -3623,11 +3621,12 @@ mod tests {
     use std::sync::atomic::AtomicBool;
     use std::sync::atomic::AtomicUsize;
 
-    use bytes::Bytes;
+    use rocketmq_rust::ArcMut;
 
     use super::*;
     use crate::producer::default_mq_producer::DefaultMQProducer;
     use crate::producer::transaction_listener::TransactionListener;
+    use bytes::Bytes;
 
     struct CountingCompressor {
         calls: AtomicUsize,

@@ -15,7 +15,14 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::OnceLock;
+use std::sync::Weak;
 
+use crate::base::client_config::ClientConfig;
+use crate::base::query_result::QueryResult;
+use crate::base::validators::Validators;
+use crate::factory::mq_client_instance;
+use crate::factory::mq_client_instance::MQClientInstance;
+use crate::implementation::mq_client_api_impl::MQClientAPIImpl;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::attribute::attribute_parser::AttributeParser;
 use rocketmq_common::common::boundary_type::BoundaryType;
@@ -34,18 +41,10 @@ use rocketmq_remoting::protocol::header::query_message_request_header::QueryMess
 use rocketmq_remoting::protocol::header::view_message_request_header::ViewMessageRequestHeader;
 use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_remoting::protocol::route_facade::BrokerDataExt;
-use rocketmq_rust::ArcMut;
-
-use crate::base::client_config::ClientConfig;
-use crate::base::query_result::QueryResult;
-use crate::base::validators::Validators;
-use crate::factory::mq_client_instance;
-use crate::factory::mq_client_instance::MQClientInstance;
-use crate::implementation::mq_client_api_impl::MQClientAPIImpl;
 
 pub struct MQAdminImpl {
     timeout_millis: u64,
-    client: OnceLock<ArcMut<MQClientInstance>>,
+    client: OnceLock<Weak<MQClientInstance>>,
 }
 
 impl MQAdminImpl {
@@ -56,14 +55,14 @@ impl MQAdminImpl {
         }
     }
 
-    pub fn set_client(&self, client: ArcMut<MQClientInstance>) -> bool {
-        self.client.set(client).is_ok()
+    pub fn set_client(&self, client: &Arc<MQClientInstance>) -> bool {
+        self.client.set(Arc::downgrade(client)).is_ok()
     }
 
-    fn client(&self) -> rocketmq_error::RocketMQResult<ArcMut<MQClientInstance>> {
+    fn client(&self) -> rocketmq_error::RocketMQResult<Arc<MQClientInstance>> {
         self.client
             .get()
-            .cloned()
+            .and_then(Weak::upgrade)
             .ok_or_else(|| RocketMQError::not_initialized("MQClientInstance"))
     }
 
@@ -179,7 +178,7 @@ impl MQAdminImpl {
         let client = self.client()?;
         let api_impl = client
             .mq_client_api_impl
-            .clone()
+            .load_full()
             .ok_or_else(|| RocketMQError::not_initialized("MQClientAPIImpl"))?;
         let route_data = api_impl
             .get_topic_route_info_from_name_server(key, self.timeout_millis)
@@ -301,7 +300,7 @@ impl MQAdminImpl {
         if let Some(ref broker_addr) = broker_addr {
             return client
                 .mq_client_api_impl
-                .as_ref()
+                .load_full()
                 .ok_or_else(|| RocketMQError::not_initialized("MQClientAPIImpl"))?
                 .get_max_offset(broker_addr, mq, self.timeout_millis)
                 .await;
@@ -331,7 +330,7 @@ impl MQAdminImpl {
         if let Some(ref broker_addr) = broker_addr {
             return client
                 .mq_client_api_impl
-                .as_ref()
+                .load_full()
                 .ok_or_else(|| RocketMQError::not_initialized("MQClientAPIImpl"))?
                 .search_offset_by_timestamp(broker_addr, mq, timestamp, BoundaryType::Lower, self.timeout_millis)
                 .await;
@@ -351,7 +350,7 @@ impl MQAdminImpl {
         if let Some(ref broker_addr) = broker_addr {
             return client
                 .mq_client_api_impl
-                .as_ref()
+                .load_full()
                 .ok_or_else(|| RocketMQError::not_initialized("MQClientAPIImpl"))?
                 .get_min_offset(broker_addr, mq, self.timeout_millis)
                 .await;
@@ -371,7 +370,7 @@ impl MQAdminImpl {
         if let Some(ref broker_addr) = broker_addr {
             return client
                 .mq_client_api_impl
-                .as_ref()
+                .load_full()
                 .ok_or_else(|| RocketMQError::not_initialized("MQClientAPIImpl"))?
                 .get_earliest_msg_store_time(broker_addr, mq, self.timeout_millis)
                 .await;
@@ -394,7 +393,7 @@ impl MQAdminImpl {
         };
         self.client()?
             .mq_client_api_impl
-            .as_ref()
+            .load_full()
             .ok_or_else(|| RocketMQError::not_initialized("MQClientAPIImpl"))?
             .view_message(&broker_addr, request_header, self.timeout_millis)
             .await
@@ -424,7 +423,7 @@ impl MQAdminImpl {
         let client = self.client()?;
         let api_impl = client
             .mq_client_api_impl
-            .clone()
+            .load_full()
             .ok_or_else(|| RocketMQError::not_initialized("MQClientAPIImpl"))?;
         let route_data = api_impl
             .get_topic_route_info_from_name_server(topic, self.timeout_millis)
@@ -511,12 +510,17 @@ mod tests {
         let instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "admin-client-binding", None);
         let admin = MQAdminImpl::new();
 
-        assert!(admin.set_client(instance.clone()));
-        assert!(!admin.set_client(instance));
+        assert!(admin.set_client(&instance));
+        assert!(!admin.set_client(&instance));
         assert_eq!(
             admin.client().expect("bound client should remain available").client_id,
             "admin-client-binding"
         );
+
+        let weak = Arc::downgrade(&instance);
+        drop(instance);
+        assert!(weak.upgrade().is_none());
+        assert!(matches!(admin.client(), Err(RocketMQError::NotInitialized(_))));
     }
 
     #[test]
