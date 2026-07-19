@@ -448,6 +448,12 @@ guard，checkpoint 清理使用 observed Arc identity 条件删除，commit-offs
 production/764 occurrences、167 test/464 occurrences，Broker owner 降至 176/456；compatibility 14/40 不增。
 下一子切片 M11-12ar 处理 Broker POP processor/long-poll lifecycle ownership，完整候选快照与 HUMAN Gate 仍保持开放。
 
+M11-12ar 已将 `PopMessageProcessor`、`NotificationProcessor` 与 `PopLongPollingService` root 改为标准 `Arc`；
+processor/service 回边与 service/scan-task 回边改为标准 `Weak`。共享 wake-up trait 经 `&self` 分发恢复请求，cleanup
+时间使用原子发布，异步 lifecycle gate 串行 start/shutdown/restart 并在 spawn 前发布 TaskGroup。实际快照降至 296
+production/738 occurrences、166 test/463 occurrences，Broker owner 降至 174/430；compatibility 14/40 不增。
+下一子切片 M11-12as 处理 Broker POP Lite processor/long-poll lifecycle ownership，完整候选快照与 HUMAN Gate 仍保持开放。
+
 ## 公共兼容面
 
 - development/compatibility仍可显式选择；secure只作为新部署默认，不静默重解释旧配置。

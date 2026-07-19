@@ -70,6 +70,7 @@ use rocketmq_store::pop::batch_ack_msg::BatchAckMsg;
 use rocketmq_store::pop::pop_check_point::PopCheckPoint;
 use rocketmq_store::pop::AckMessage;
 use tokio::select;
+use tokio::sync::Mutex as AsyncMutex;
 use tokio::sync::Notify;
 use tokio::sync::RwLock;
 use tracing::info;
@@ -77,6 +78,7 @@ use tracing::warn;
 
 use crate::broker_runtime::BrokerRuntimeInner;
 use crate::filter::expression_message_filter::ExpressionMessageFilter;
+use crate::long_polling::long_polling_service::pop_long_polling_service::PopLongPollingRequestProcessor;
 use crate::long_polling::long_polling_service::pop_long_polling_service::PopLongPollingService;
 use crate::long_polling::polling_header::PollingHeader;
 use crate::long_polling::polling_result::PollingResult;
@@ -91,15 +93,16 @@ const QUEUE_LOCK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub struct PopMessageProcessor<MS: MessageStore> {
     ck_message_number: AtomicI64,
-    pop_long_polling_service: ArcMut<PopLongPollingService<MS, PopMessageProcessor<MS>>>,
+    pop_long_polling_service: Arc<PopLongPollingService<MS, PopMessageProcessor<MS>>>,
     pop_buffer_merge_service: Arc<PopBufferMergeService<MS>>,
     queue_lock_manager: QueueLockManager,
     revive_topic: CheetahString,
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+    lifecycle: AsyncMutex<()>,
 }
 
 impl<MS: MessageStore> PopMessageProcessor<MS> {
-    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
+    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Arc<Self> {
         let revive_topic = CheetahString::from_string(PopAckConstants::build_cluster_revive_topic(
             broker_runtime_inner
                 .broker_config()
@@ -108,53 +111,29 @@ impl<MS: MessageStore> PopMessageProcessor<MS> {
                 .as_str(),
         ));
         let queue_lock_manager = queue_lock_manager_for_broker(&broker_runtime_inner);
-        PopMessageProcessor {
+        let pop_buffer_merge_service = Self::new_pop_buffer_merge_service(
+            revive_topic.clone(),
+            queue_lock_manager.clone(),
+            broker_runtime_inner.clone(),
+        );
+        Arc::new_cyclic(|processor| PopMessageProcessor {
             ck_message_number: Default::default(),
-            pop_long_polling_service: ArcMut::new(PopLongPollingService::new(broker_runtime_inner.clone(), false)),
-            pop_buffer_merge_service: Self::new_pop_buffer_merge_service(
-                revive_topic.clone(),
-                queue_lock_manager.clone(),
+            pop_long_polling_service: Arc::new(PopLongPollingService::new(
                 broker_runtime_inner.clone(),
-            ),
-
+                false,
+                processor.clone(),
+            )),
+            pop_buffer_merge_service,
             queue_lock_manager,
             revive_topic,
-
             broker_runtime_inner,
-        }
+            lifecycle: AsyncMutex::new(()),
+        })
     }
 
-    pub fn new_arc_mut(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> ArcMut<Self> {
-        let revive_topic = CheetahString::from_string(PopAckConstants::build_cluster_revive_topic(
-            broker_runtime_inner
-                .broker_config()
-                .broker_identity
-                .broker_cluster_name
-                .as_str(),
-        ));
-        let queue_lock_manager = queue_lock_manager_for_broker(&broker_runtime_inner);
-        let processor = PopMessageProcessor {
-            ck_message_number: Default::default(),
-            pop_long_polling_service: ArcMut::new(PopLongPollingService::new(broker_runtime_inner.clone(), false)),
-            pop_buffer_merge_service: Self::new_pop_buffer_merge_service(
-                revive_topic.clone(),
-                queue_lock_manager.clone(),
-                broker_runtime_inner.clone(),
-            ),
-
-            queue_lock_manager,
-            revive_topic,
-
-            broker_runtime_inner,
-        };
-        let mut processor_inner = ArcMut::new(processor);
-        let cloned = processor_inner.clone();
-        processor_inner.pop_long_polling_service.set_processor(cloned);
-        processor_inner
-    }
-
-    pub fn start(&mut self) {
-        PopLongPollingService::start(self.pop_long_polling_service.clone());
+    pub async fn start(&self) {
+        let _lifecycle = self.lifecycle.lock().await;
+        PopLongPollingService::start(&self.pop_long_polling_service).await;
         PopBufferMergeService::start(self.pop_buffer_merge_service.clone());
         self.queue_lock_manager.start();
     }
@@ -227,8 +206,21 @@ where
         ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let request_code = RequestCode::from(request.code());
-        self._process_request(channel, ctx, request_code, request).await
+        self.process_request_shared(channel, ctx, request).await
+    }
+}
+
+impl<MS> PopLongPollingRequestProcessor for PopMessageProcessor<MS>
+where
+    MS: MessageStore,
+{
+    async fn process_request_when_wakeup(
+        &self,
+        channel: Channel,
+        ctx: ConnectionHandlerContext,
+        mut request: RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        self.process_request_shared(channel, ctx, &mut request).await
     }
 }
 
@@ -236,8 +228,18 @@ impl<MS> PopMessageProcessor<MS>
 where
     MS: MessageStore,
 {
+    pub(crate) async fn process_request_shared(
+        &self,
+        channel: Channel,
+        ctx: ConnectionHandlerContext,
+        request: &mut RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let request_code = RequestCode::from(request.code());
+        self._process_request(channel, ctx, request_code, request).await
+    }
+
     pub async fn _process_request(
-        &mut self,
+        &self,
         channel: Channel,
         ctx: ConnectionHandlerContext,
         request_code: RequestCode,
@@ -1392,7 +1394,7 @@ where
     /// # Returns
     /// A reference to the PopLongPollingService instance
     #[inline]
-    pub fn pop_long_polling_service(&self) -> Option<&ArcMut<PopLongPollingService<MS, PopMessageProcessor<MS>>>> {
+    pub fn pop_long_polling_service(&self) -> Option<&Arc<PopLongPollingService<MS, PopMessageProcessor<MS>>>> {
         Some(&self.pop_long_polling_service)
     }
 
@@ -1435,7 +1437,8 @@ where
         Some(bytes_mut.freeze())
     }
 
-    pub async fn shutdown(&mut self) {
+    pub async fn shutdown(&self) {
+        let _lifecycle = self.lifecycle.lock().await;
         self.pop_long_polling_service.shutdown().await;
         self.pop_buffer_merge_service.shutdown();
         if let Err(error) = self
@@ -1996,6 +1999,85 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn pop_long_polling_service_uses_weak_processor_back_reference() {
+        fn assert_send_sync<T: Send + Sync>(_: &T) {}
+
+        let broker_config = Arc::new(BrokerConfig::default());
+        let message_store_config = Arc::new(MessageStoreConfig::default());
+        let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
+        let processor = PopMessageProcessor::new(runtime.inner_for_test().clone());
+        let processor_weak = Arc::downgrade(&processor);
+        let service = processor.pop_long_polling_service.clone();
+
+        assert_send_sync(&processor);
+        drop(processor);
+
+        assert!(processor_weak.upgrade().is_none());
+        assert_eq!(Arc::strong_count(&service), 1);
+    }
+
+    #[tokio::test]
+    async fn pop_long_polling_service_start_shutdown_and_restart_are_serialized() {
+        let broker_config = Arc::new(BrokerConfig::default());
+        let message_store_config = Arc::new(MessageStoreConfig::default());
+        let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
+        let processor = PopMessageProcessor::new(runtime.inner_for_test().clone());
+        let service = processor.pop_long_polling_service.clone();
+
+        PopLongPollingService::start(&service).await;
+        let first_task_group = service
+            .task_group_for_test()
+            .expect("long-polling task group should be installed");
+        PopLongPollingService::start(&service).await;
+        assert_eq!(
+            service
+                .task_group_for_test()
+                .expect("duplicate start should retain the task group")
+                .task_count(),
+            1
+        );
+        assert_eq!(first_task_group.task_count(), 1);
+        assert!(service.is_running());
+
+        service.shutdown().await;
+        assert!(!service.is_running());
+        assert!(service.task_group_for_test().is_none());
+
+        PopLongPollingService::start(&service).await;
+        let restarted_task_group = service
+            .task_group_for_test()
+            .expect("restart should install a task group");
+        assert_eq!(restarted_task_group.task_count(), 1);
+        assert!(!restarted_task_group.cancellation_token().is_cancelled());
+        service.shutdown().await;
+        assert!(!service.is_running());
+    }
+
+    #[tokio::test]
+    async fn active_pop_long_polling_scan_does_not_keep_owner_alive() {
+        let broker_config = Arc::new(BrokerConfig::default());
+        let message_store_config = Arc::new(MessageStoreConfig::default());
+        let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
+        let processor = PopMessageProcessor::new(runtime.inner_for_test().clone());
+        let service = processor.pop_long_polling_service.clone();
+        let processor_weak = Arc::downgrade(&processor);
+        let service_weak = Arc::downgrade(&service);
+
+        PopLongPollingService::start(&service).await;
+        drop(processor);
+        drop(service);
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while service_weak.upgrade().is_some() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("scan task should release the service owner");
+        assert!(processor_weak.upgrade().is_none());
+    }
+
+    #[tokio::test]
     async fn build_lock_key_formats_correctly() {
         let topic = CheetahString::from_static_str("test_topic");
         let consumer_group = CheetahString::from_static_str("test_group");
@@ -2011,7 +2093,7 @@ mod tests {
         let inner = runtime.inner_for_test();
         seed_topic_and_group(inner, "topic-a", "group-a");
 
-        let mut processor = PopMessageProcessor::new(inner.clone());
+        let processor = PopMessageProcessor::new(inner.clone());
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let request_header = pop_request("topic-a", "group-a", Some("color = 'blue'"));
@@ -2039,7 +2121,7 @@ mod tests {
         let inner = runtime.inner_for_test();
         seed_topic_and_group(inner, "topic-a", "group-a");
 
-        let mut processor = PopMessageProcessor::new(inner.clone());
+        let processor = PopMessageProcessor::new(inner.clone());
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let request_header = pop_request("topic-a", "group-a", Some("color ="));

@@ -1302,7 +1302,7 @@ impl BrokerRuntime {
 
         let pop_started = Instant::now();
         let mut pop_services_present = false;
-        if let Some(pop_message_processor) = self.inner.pop_message_processor.as_mut() {
+        if let Some(pop_message_processor) = self.inner.pop_message_processor.as_ref() {
             pop_services_present = true;
             pop_message_processor.shutdown().await;
         }
@@ -1324,7 +1324,7 @@ impl BrokerRuntime {
             transactional_message_service.shutdown().await;
         }
 
-        if let Some(notification_processor) = self.inner.notification_processor.as_mut() {
+        if let Some(notification_processor) = self.inner.notification_processor.as_ref() {
             pop_services_present = true;
             notification_processor.shutdown().await;
         }
@@ -2230,7 +2230,7 @@ impl BrokerRuntime {
             .unwrap()
             .set_message_arriving_listener(Some(Arc::new(Box::new(NotifyMessageArrivingListener::new(inner)))));
 
-        let pop_message_processor = PopMessageProcessor::new_arc_mut(self.inner.clone());
+        let pop_message_processor = PopMessageProcessor::new(self.inner.clone());
         self.inner.pop_message_processor = Some(pop_message_processor.clone());
         let pop_lite_message_processor = PopLiteMessageProcessor::new_arc_mut(self.inner.clone());
         self.inner.pop_lite_message_processor = Some(pop_lite_message_processor.clone());
@@ -2811,8 +2811,8 @@ impl BrokerRuntime {
         }
         self.remoting_server_task_group = Some(remoting_server_task_group);
 
-        if let Some(pop_message_processor) = self.inner.pop_message_processor.as_mut() {
-            pop_message_processor.start();
+        if let Some(pop_message_processor) = self.inner.pop_message_processor.as_ref() {
+            pop_message_processor.start().await;
         }
         if let Some(pop_lite_message_processor) = self.inner.pop_lite_message_processor.as_mut() {
             pop_lite_message_processor.start();
@@ -2821,8 +2821,8 @@ impl BrokerRuntime {
             ack_message_processor.start();
         }
 
-        if let Some(notification_processor) = self.inner.notification_processor.as_mut() {
-            notification_processor.start();
+        if let Some(notification_processor) = self.inner.notification_processor.as_ref() {
+            notification_processor.start().await;
         }
 
         if let Some(topic_queue_mapping_clean_service) = self.inner.topic_queue_mapping_clean_service.as_mut() {
@@ -3357,10 +3357,10 @@ pub(crate) struct BrokerRuntimeInner<MS: MessageStore> {
     is_transaction_check_service_start: Arc<AtomicBool>,
     client_housekeeping_service: Option<Arc<ClientHousekeepingService<MS>>>,
     //Processor
-    pop_message_processor: Option<ArcMut<PopMessageProcessor<MS>>>,
+    pop_message_processor: Option<Arc<PopMessageProcessor<MS>>>,
     pop_lite_message_processor: Option<ArcMut<PopLiteMessageProcessor<MS>>>,
     ack_message_processor: Option<ArcMut<AckMessageProcessor<MS>>>,
-    notification_processor: Option<ArcMut<NotificationProcessor<MS>>>,
+    notification_processor: Option<Arc<NotificationProcessor<MS>>>,
     query_assignment_processor: Option<ArcMut<QueryAssignmentProcessor<MS>>>,
     auth_runtime: Option<Arc<AuthRuntime>>,
     broker_attached_plugins: Vec<Arc<dyn BrokerAttachedPlugin>>,
@@ -4717,11 +4717,11 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         }
     }
 
-    pub fn pop_message_processor(&self) -> Option<&ArcMut<PopMessageProcessor<MS>>> {
+    pub fn pop_message_processor(&self) -> Option<&Arc<PopMessageProcessor<MS>>> {
         self.pop_message_processor.as_ref()
     }
 
-    pub fn pop_message_processor_unchecked(&self) -> &ArcMut<PopMessageProcessor<MS>> {
+    pub fn pop_message_processor_unchecked(&self) -> &Arc<PopMessageProcessor<MS>> {
         unsafe { self.pop_message_processor.as_ref().unwrap_unchecked() }
     }
 
@@ -4729,7 +4729,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         unsafe { self.ack_message_processor.as_ref().unwrap_unchecked() }
     }
 
-    pub fn notification_processor_unchecked(&self) -> &ArcMut<NotificationProcessor<MS>> {
+    pub fn notification_processor_unchecked(&self) -> &Arc<NotificationProcessor<MS>> {
         unsafe { self.notification_processor.as_ref().unwrap_unchecked() }
     }
 

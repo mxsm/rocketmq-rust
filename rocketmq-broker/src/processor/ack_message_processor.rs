@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::cmp::Ordering;
+use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use futures::future::join_all;
@@ -55,7 +56,7 @@ use crate::processor::pop_message_processor::QueueLockManager;
 use crate::processor::processor_service::pop_revive_service::PopReviveService;
 
 pub struct AckMessageProcessor<MS: MessageStore> {
-    pop_message_processor: ArcMut<PopMessageProcessor<MS>>,
+    pop_message_processor: Arc<PopMessageProcessor<MS>>,
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
     revive_topic: CheetahString,
     pop_revive_services: Vec<ArcMut<PopReviveService<MS>>>,
@@ -95,7 +96,7 @@ where
 {
     pub fn new(
         broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
-        pop_message_processor: ArcMut<PopMessageProcessor<MS>>,
+        pop_message_processor: Arc<PopMessageProcessor<MS>>,
     ) -> AckMessageProcessor<MS> {
         let revive_topic = CheetahString::from_string(PopAckConstants::build_cluster_revive_topic(
             broker_runtime_inner

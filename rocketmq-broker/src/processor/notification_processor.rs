@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use rand::RngExt;
@@ -30,36 +31,43 @@ use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerCon
 use rocketmq_remoting::runtime::processor::RequestProcessor;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
+use tokio::sync::Mutex as AsyncMutex;
 use tracing::error;
 use tracing::warn;
 
 use crate::broker_runtime::BrokerRuntimeInner;
+use crate::long_polling::long_polling_service::pop_long_polling_service::PopLongPollingRequestProcessor;
 use crate::long_polling::long_polling_service::pop_long_polling_service::PopLongPollingService;
 use crate::long_polling::polling_header::PollingHeader;
 use crate::long_polling::polling_result::PollingResult;
 
 pub struct NotificationProcessor<MS: MessageStore> {
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
-    pop_long_polling_service: ArcMut<PopLongPollingService<MS, NotificationProcessor<MS>>>,
+    pop_long_polling_service: Arc<PopLongPollingService<MS, NotificationProcessor<MS>>>,
+    lifecycle: AsyncMutex<()>,
 }
 
 impl<MS: MessageStore> NotificationProcessor<MS> {
     pub const BORN_TIME: &'static str = "bornTime";
-    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> ArcMut<Self> {
-        let mut this = ArcMut::new(Self {
+    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Arc<Self> {
+        Arc::new_cyclic(|processor| Self {
             broker_runtime_inner: broker_runtime_inner.clone(),
-            pop_long_polling_service: ArcMut::new(PopLongPollingService::new(broker_runtime_inner, true)),
-        });
-        let this_clone = this.clone();
-        this.pop_long_polling_service.set_processor(this_clone);
-        this
+            pop_long_polling_service: Arc::new(PopLongPollingService::new(
+                broker_runtime_inner.clone(),
+                true,
+                processor.clone(),
+            )),
+            lifecycle: AsyncMutex::new(()),
+        })
     }
 
-    pub fn start(&mut self) {
-        PopLongPollingService::start(self.pop_long_polling_service.clone())
+    pub async fn start(&self) {
+        let _lifecycle = self.lifecycle.lock().await;
+        PopLongPollingService::start(&self.pop_long_polling_service).await
     }
 
-    pub async fn shutdown(&mut self) {
+    pub async fn shutdown(&self) {
+        let _lifecycle = self.lifecycle.lock().await;
         self.pop_long_polling_service.shutdown().await;
     }
 
@@ -183,12 +191,12 @@ impl<MS: MessageStore> NotificationProcessor<MS> {
     }
 }
 
-impl<MS> RequestProcessor for NotificationProcessor<MS>
+impl<MS> NotificationProcessor<MS>
 where
     MS: MessageStore,
 {
-    async fn process_request(
-        &mut self,
+    pub(crate) async fn process_request_shared(
+        &self,
         _channel: Channel,
         ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
@@ -368,5 +376,62 @@ where
         response.set_command_custom_header_ref(NotificationResponseHeader { has_msg, polling_full });
 
         Ok(Some(response))
+    }
+}
+
+impl<MS> PopLongPollingRequestProcessor for NotificationProcessor<MS>
+where
+    MS: MessageStore,
+{
+    async fn process_request_when_wakeup(
+        &self,
+        channel: Channel,
+        ctx: ConnectionHandlerContext,
+        mut request: RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        self.process_request_shared(channel, ctx, &mut request).await
+    }
+}
+
+impl<MS> RequestProcessor for NotificationProcessor<MS>
+where
+    MS: MessageStore,
+{
+    async fn process_request(
+        &mut self,
+        channel: Channel,
+        ctx: ConnectionHandlerContext,
+        request: &mut RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        self.process_request_shared(channel, ctx, request).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use rocketmq_common::common::broker::broker_config::BrokerConfig;
+    use rocketmq_store::config::message_store_config::MessageStoreConfig;
+
+    use super::NotificationProcessor;
+    use crate::broker_runtime::BrokerRuntime;
+
+    #[tokio::test]
+    async fn notification_long_polling_service_uses_weak_processor_back_reference() {
+        fn assert_send_sync<T: Send + Sync>(_: &T) {}
+
+        let broker_config = Arc::new(BrokerConfig::default());
+        let message_store_config = Arc::new(MessageStoreConfig::default());
+        let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
+        let processor = NotificationProcessor::new(runtime.inner_for_test().clone());
+        let processor_weak = Arc::downgrade(&processor);
+        let service = processor.pop_long_polling_service.clone();
+
+        assert_send_sync(&processor);
+        drop(processor);
+
+        assert!(processor_weak.upgrade().is_none());
+        assert_eq!(Arc::strong_count(&service), 1);
     }
 }
