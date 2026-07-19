@@ -987,6 +987,7 @@ impl DefaultMQPushConsumer {
 
     pub fn set_consume_from_where(&mut self, consume_from_where: ConsumeFromWhere) {
         self.consumer_config.set_consume_from_where(consume_from_where);
+        self.sync_rebalance_consumer_config();
     }
 
     pub fn consume_message_batch_max_size(&self) -> u32 {
@@ -1053,6 +1054,7 @@ impl DefaultMQPushConsumer {
 
     pub fn set_message_model(&mut self, message_model: MessageModel) {
         self.consumer_config.set_message_model(message_model);
+        self.sync_rebalance_consumer_config();
     }
 
     pub fn pull_batch_size(&self) -> u32 {
@@ -1090,6 +1092,7 @@ impl DefaultMQPushConsumer {
     pub fn set_pull_threshold_for_queue(&mut self, pull_threshold_for_queue: u32) {
         self.consumer_config
             .set_pull_threshold_for_queue(pull_threshold_for_queue);
+        self.sync_rebalance_consumer_config();
     }
 
     pub fn pop_threshold_for_queue(&self) -> u32 {
@@ -1116,6 +1119,7 @@ impl DefaultMQPushConsumer {
     pub fn set_pull_threshold_for_topic(&mut self, pull_threshold_for_topic: i32) {
         self.consumer_config
             .set_pull_threshold_for_topic(pull_threshold_for_topic);
+        self.sync_rebalance_consumer_config();
     }
 
     pub fn pull_threshold_size_for_queue(&self) -> u32 {
@@ -1129,6 +1133,7 @@ impl DefaultMQPushConsumer {
     pub fn set_pull_threshold_size_for_queue(&mut self, pull_threshold_size_for_queue: u32) {
         self.consumer_config
             .set_pull_threshold_size_for_queue(pull_threshold_size_for_queue);
+        self.sync_rebalance_consumer_config();
     }
 
     pub fn pull_threshold_size_for_topic(&self) -> i32 {
@@ -1142,6 +1147,7 @@ impl DefaultMQPushConsumer {
     pub fn set_pull_threshold_size_for_topic(&mut self, pull_threshold_size_for_topic: i32) {
         self.consumer_config
             .set_pull_threshold_size_for_topic(pull_threshold_size_for_topic);
+        self.sync_rebalance_consumer_config();
     }
 
     pub fn consume_timestamp(&self) -> Option<CheetahString> {
@@ -1155,10 +1161,12 @@ impl DefaultMQPushConsumer {
     pub fn set_consume_timestamp(&mut self, consume_timestamp: impl Into<CheetahString>) {
         self.consumer_config
             .set_consume_timestamp(Some(consume_timestamp.into()));
+        self.sync_rebalance_consumer_config();
     }
 
     pub fn clear_consume_timestamp(&mut self) {
         self.consumer_config.set_consume_timestamp(None);
+        self.sync_rebalance_consumer_config();
     }
 
     pub fn is_post_subscription_when_pull(&self) -> bool {
@@ -1328,6 +1336,7 @@ impl DefaultMQPushConsumer {
 
     pub fn set_client_rebalance(&mut self, client_rebalance: bool) {
         self.consumer_config.set_client_rebalance(client_rebalance);
+        self.sync_rebalance_consumer_config();
     }
 
     pub fn message_queue_listener(&self) -> Option<ArcMessageQueueListener> {
@@ -1340,10 +1349,18 @@ impl DefaultMQPushConsumer {
 
     pub fn set_message_queue_listener(&mut self, message_queue_listener: Option<ArcMessageQueueListener>) {
         self.consumer_config.set_message_queue_listener(message_queue_listener);
+        self.sync_rebalance_consumer_config();
     }
 
     pub fn apply_tuning_profile(&mut self, profile: ConsumerTuningProfile) {
         self.consumer_config.mut_from_ref().apply_tuning_profile(profile);
+        self.sync_rebalance_consumer_config();
+    }
+
+    fn sync_rebalance_consumer_config(&self) {
+        if let Some(consumer_impl) = self.default_mqpush_consumer_impl.as_ref() {
+            consumer_impl.sync_rebalance_consumer_config(self.consumer_config.as_ref().clone());
+        }
     }
 
     pub fn new(client_config: ClientConfig, consumer_config: ConsumerConfig) -> DefaultMQPushConsumer {
@@ -1909,8 +1926,40 @@ mod tests {
         assert!(!impl_config.client_rebalance);
         assert!(impl_config.message_queue_listener.is_some());
 
+        let rebalance_config = consumer
+            .default_mqpush_consumer_impl
+            .as_ref()
+            .expect("push consumer impl should exist")
+            .rebalance_impl
+            .consumer_config
+            .load_full();
+        assert_eq!(
+            rebalance_config.consume_from_where,
+            ConsumeFromWhere::ConsumeFromFirstOffset
+        );
+        assert_eq!(rebalance_config.message_model, MessageModel::Broadcasting);
+        assert_eq!(rebalance_config.pull_threshold_for_queue, 2048);
+        assert_eq!(rebalance_config.pull_threshold_for_topic, 4096);
+        assert_eq!(rebalance_config.pull_threshold_size_for_queue, 256);
+        assert_eq!(rebalance_config.pull_threshold_size_for_topic, 512);
+        assert_eq!(
+            rebalance_config.consume_timestamp.as_ref().map(CheetahString::as_str),
+            Some("20260610101010")
+        );
+        assert!(!rebalance_config.client_rebalance);
+        assert!(rebalance_config.message_queue_listener.is_some());
+
         consumer.clear_consume_timestamp();
         assert!(consumer.consume_timestamp().is_none());
+        assert!(consumer
+            .default_mqpush_consumer_impl
+            .as_ref()
+            .expect("push consumer impl should exist")
+            .rebalance_impl
+            .consumer_config
+            .load_full()
+            .consume_timestamp
+            .is_none());
     }
 
     #[test]

@@ -376,6 +376,11 @@ Client Push consume service config snapshots 随 Issue #8359 将 concurrent/orde
 运行状态的 callback 继续通过 Push implementation owner 访问。实际快照降至 398 production/1,054 occurrence，Client owner
 降至 80/161，另有 Proxy 1/1；剩余为 Broker 190/568、Client 80/161、Proxy 1/1 与 Store 127/324，总进度仍为
 75/82，M11-12 父工作包未完成。
+Client Push rebalance config snapshots 随 Issue #8361 将 RebalancePush 的共享可变 consumer config 改为 `ArcSwap` 完整
+不可变代际；相关 facade setter 显式同步，queue-count 变化只通过 Push implementation owner 回写两个 per-queue threshold，
+listener 与 offset 策略读取不再依赖整份配置的共享写别名。实际快照为 398 production/1,052 occurrence，Client owner
+降至 80/159，另有 Proxy 1/1；剩余为 Broker 190/568、Client 80/159、Proxy 1/1 与 Store 127/324，总进度仍为
+75/82，M11-12 父工作包未完成。
 
 ### 9.3 证据目录
 

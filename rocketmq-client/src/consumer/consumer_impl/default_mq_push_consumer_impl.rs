@@ -145,12 +145,13 @@ impl DefaultMQPushConsumerImpl {
         consumer_config: ArcMut<ConsumerConfig>,
         rpc_hook: Option<Arc<dyn RPCHook>>,
     ) -> Self {
+        let rebalance_consumer_config = consumer_config.as_ref().clone();
         let mut this = Self {
             global_lock: Arc::new(Default::default()),
             pull_time_delay_mills_when_exception: 3_000,
             client_config: ArcMut::new(client_config.clone()),
             consumer_config: consumer_config.clone(),
-            rebalance_impl: ArcMut::new(RebalancePushImpl::new(client_config, consumer_config)),
+            rebalance_impl: ArcMut::new(RebalancePushImpl::new(client_config, rebalance_consumer_config)),
             filter_message_hook_list: vec![],
             consume_message_hook_list: vec![],
             rpc_hook,
@@ -227,6 +228,23 @@ impl DefaultMQPushConsumerImpl {
 
     pub fn set_offset_store(&mut self, offset_store: Option<Arc<OffsetStore>>) {
         self.offset_store = offset_store;
+    }
+
+    pub(crate) fn sync_rebalance_consumer_config(&self, consumer_config: ConsumerConfig) {
+        self.rebalance_impl.replace_consumer_config(consumer_config);
+    }
+
+    pub(crate) fn update_pull_thresholds_from_rebalance(
+        &mut self,
+        pull_threshold_for_queue: Option<u32>,
+        pull_threshold_size_for_queue: Option<u32>,
+    ) {
+        if let Some(value) = pull_threshold_for_queue {
+            self.consumer_config.pull_threshold_for_queue = value;
+        }
+        if let Some(value) = pull_threshold_size_for_queue {
+            self.consumer_config.pull_threshold_size_for_queue = value;
+        }
     }
 }
 
@@ -2224,6 +2242,16 @@ mod tests {
         let wrapper = consumer.clone();
         consumer.set_default_mqpush_consumer_impl(wrapper);
         consumer
+    }
+
+    #[test]
+    fn rebalance_threshold_updates_publish_to_owner_config() {
+        let mut consumer = new_unstarted_impl();
+
+        consumer.update_pull_thresholds_from_rebalance(Some(25), Some(10));
+
+        assert_eq!(consumer.consumer_config.pull_threshold_for_queue, 25);
+        assert_eq!(consumer.consumer_config.pull_threshold_size_for_queue, 10);
     }
 
     fn message_queue() -> MessageQueue {
