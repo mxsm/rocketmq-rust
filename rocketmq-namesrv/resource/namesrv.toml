@@ -13,4 +13,24 @@
 # limitations under the License.
 
 
-rocketmqHome=11111
+# RocketMQ Name Server Configuration File (TOML Format)
+# Development baseline: a small set of keys worth overriding for a local,
+# throw-away NameServer run. Every key left unset here falls back to its
+# built-in default.
+#
+# For a fully annotated reference of every available key, see
+# namesrv-example.toml. For a production-oriented starting point, see
+# namesrv-production.toml.
+
+# RocketMQ installation directory.
+# Default: $ROCKETMQ_HOME / $ROCKETMQ_HOME_PROPERTY env var, or empty.
+# Pointed at a scratch directory so a local dev run is self-contained.
+rocketmqHome = "/tmp/rocketmq"
+
+# Key-Value configuration file path (persisted broker/topic KV data).
+# Default: ~/rocketmq-namesrv/kvConfig.json
+kvConfigPath = "/tmp/rocketmq/kvConfig.json"
+
+# Configuration persistence file path.
+# Default: ~/rocketmq-namesrv/rocketmq-namesrv.properties
+configStorePath = "/tmp/rocketmq/rocketmq-namesrv.properties"

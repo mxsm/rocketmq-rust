@@ -99,18 +99,30 @@ cargo run -p rocketmq-namesrv --bin rocketmq-namesrv-rust -- \
   --bindAddress 0.0.0.0
 ```
 
-Start from the example configuration file:
+Start from a config file. Three examples are provided under `resource/`,
+depending on what you need (see [Configuration](#configuration) below for the
+difference between them):
 
 ```bash
+# Small dev baseline - only the keys worth overriding locally are set.
+cargo run -p rocketmq-namesrv --bin rocketmq-namesrv-rust -- \
+  -c rocketmq-namesrv/resource/namesrv.toml
+
+# Every available key, fully annotated with defaults - a reference, not
+# meant to be run as-is without reviewing the paths it sets.
 cargo run -p rocketmq-namesrv --bin rocketmq-namesrv-rust -- \
   -c rocketmq-namesrv/resource/namesrv-example.toml
+
+# Production-oriented baseline with larger thread pool/queue sizes.
+cargo run -p rocketmq-namesrv --bin rocketmq-namesrv-rust -- \
+  -c rocketmq-namesrv/resource/namesrv-production.toml
 ```
 
 Print the merged configuration and exit:
 
 ```bash
 cargo run -p rocketmq-namesrv --bin rocketmq-namesrv-rust -- \
-  -c rocketmq-namesrv/resource/namesrv-example.toml \
+  -c rocketmq-namesrv/resource/namesrv.toml \
   -p
 ```
 
@@ -123,10 +135,17 @@ Configuration precedence is:
 
 ## Configuration
 
-The example file
-[`resource/namesrv-example.toml`](resource/namesrv-example.toml) documents the
-supported keys. The configuration model accepts Java-style camelCase keys and
-Rust-style field names where serde aliases are defined.
+Three example config files are provided under `resource/`, each serving a
+different purpose:
+
+| File | Purpose |
+| ---- | ------- |
+| [`resource/namesrv.toml`](resource/namesrv.toml) | Small dev baseline - only the keys you're likely to change for a local run; everything else falls back to its built-in default. |
+| [`resource/namesrv-example.toml`](resource/namesrv-example.toml) | Fully annotated reference documenting every supported key and its default. Not meant to be run unmodified - review the paths it sets first. |
+| [`resource/namesrv-production.toml`](resource/namesrv-production.toml) | Production-oriented baseline with thread-pool and queue sizes raised above the defaults; review against your own capacity plan before deploying. |
+
+The configuration model accepts Java-style camelCase keys and Rust-style
+field names where serde aliases are defined.
 
 | Key | Default | Purpose |
 | --- | ------- | ------- |
