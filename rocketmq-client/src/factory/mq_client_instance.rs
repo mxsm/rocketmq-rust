@@ -25,6 +25,7 @@ use std::time::Instant;
 
 use arc_swap::ArcSwapOption;
 use cheetah_string::CheetahString;
+use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use futures::future;
 use rand::seq::IndexedRandom;
@@ -233,6 +234,8 @@ pub struct MQClientInstance {
      * producerGroup.
      */
     producer_table: ProducerTable,
+    producer_registration_admission: StdMutex<bool>,
+    producer_registry_transition: Mutex<()>,
     /**
      * The container of the consumer in the current client. The key is the name of
      * consumer_group.
@@ -353,6 +356,8 @@ impl MQClientInstance {
             client_id,
             boot_timestamp: current_millis(),
             producer_table,
+            producer_registration_admission: StdMutex::new(true),
+            producer_registry_transition: Mutex::new(()),
             consumer_table,
             admin_ext_table,
             mq_client_api_impl: ArcSwapOption::empty(),
@@ -515,6 +520,18 @@ impl MQClientInstance {
 
     pub async fn start(self: &Arc<Self>) -> rocketmq_error::RocketMQResult<()> {
         let _transition = self.lifecycle_transition.lock().await;
+        {
+            let admission = self
+                .producer_registration_admission
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if !*admission {
+                return Err(mq_client_err!(format!(
+                    "The Factory object[{}] cannot start because producer registration admission is closed.",
+                    self.client_id
+                )));
+            }
+        }
         match self.service_state() {
             ServiceState::CreateJust => {
                 self.set_service_state(ServiceState::StartFailed);
@@ -563,6 +580,10 @@ impl MQClientInstance {
 
     pub async fn shutdown(&self) {
         let _transition = self.lifecycle_transition.lock().await;
+        *self
+            .producer_registration_admission
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = false;
         match self.service_state() {
             ServiceState::CreateJust | ServiceState::ShutdownAlready => {
                 warn!(
@@ -732,13 +753,15 @@ impl MQClientInstance {
 
     /// Unregister all producers from broker
     async fn unregister_all_producers(&self) {
-        // Get all producer groups before removing from table
-        let producer_groups: Vec<CheetahString> = self.producer_table.iter().map(|entry| entry.key().clone()).collect();
+        let producer_registrations: Vec<(CheetahString, MQProducerInnerImpl)> = self
+            .producer_table
+            .iter()
+            .map(|entry| (entry.key().clone(), entry.value().clone()))
+            .collect();
 
-        // Unregister each producer (removes from table and notifies broker)
-        for group in producer_groups {
+        for (group, expected_owner) in producer_registrations {
             info!("Unregistering producer group: {}", group);
-            self.unregister_producer(group).await;
+            self.unregister_producer_if_owner(group, &expected_owner).await;
         }
     }
 
@@ -758,12 +781,49 @@ impl MQClientInstance {
         if group.is_empty() {
             return false;
         }
-        if self.producer_table.contains_key(group) {
-            warn!("the producer group[{}] exist already.", group);
+
+        let _transition = self.producer_registry_transition.lock().await;
+        let admission = self
+            .producer_registration_admission
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if !*admission {
+            warn!(
+                "the producer group[{}] cannot register because producer registration admission is closed.",
+                group
+            );
             return false;
         }
-        self.producer_table.insert(group.into(), producer);
-        true
+
+        // Keep admission held through the entry mutation so shutdown closing the
+        // gate and producer registration have a single ordering point.
+        if !producer.is_alive() {
+            warn!("the producer group[{}] has no live producer root.", group);
+            return false;
+        }
+
+        match self.producer_table.entry(group.into()) {
+            Entry::Vacant(entry) => {
+                entry.insert(producer);
+                true
+            }
+            Entry::Occupied(mut entry) => {
+                if entry.get().points_to_same_producer(&producer) {
+                    return true;
+                }
+                if !entry.get().is_alive() {
+                    entry.insert(producer);
+                    return true;
+                }
+
+                warn!("the producer group[{}] exist already.", group);
+                false
+            }
+        }
+    }
+
+    fn prune_dead_producers(&self) {
+        self.producer_table.retain(|_, producer| producer.is_alive());
     }
 
     pub async fn register_admin_ext(&self, group: &str, admin: MQAdminExtInnerImpl) -> bool {
@@ -1042,6 +1102,7 @@ impl MQClientInstance {
     }
 
     fn collect_registered_route_topics(&self) -> Vec<CheetahString> {
+        self.prune_dead_producers();
         let mut topic_list = HashSet::new();
 
         for entry in self.producer_table.iter() {
@@ -1151,9 +1212,10 @@ impl MQClientInstance {
 
         let mut publish_info = topic_route_data2topic_publish_info(topic, topic_route_data);
         publish_info.have_topic_router_info = true;
-        for mut entry in self.producer_table.iter_mut() {
+        self.prune_dead_producers();
+        for entry in self.producer_table.iter() {
             entry
-                .value_mut()
+                .value()
                 .update_topic_publish_info(topic.to_string(), Some(publish_info.clone()));
         }
 
@@ -1246,6 +1308,7 @@ impl MQClientInstance {
     }
 
     async fn is_need_update_topic_route_info(&self, topic: &CheetahString) -> bool {
+        self.prune_dead_producers();
         for entry in self.producer_table.iter() {
             if entry.value().is_publish_topic_need_update(topic) {
                 return true;
@@ -2018,6 +2081,7 @@ impl MQClientInstance {
     }
 
     async fn prepare_heartbeat_data(&self, is_without_sub: bool) -> HeartbeatData {
+        self.prune_dead_producers();
         let mut heartbeat_data = HeartbeatData {
             client_id: self.client_id.clone(),
             ..Default::default()
@@ -2264,7 +2328,13 @@ impl MQClientInstance {
     }
 
     pub async fn select_producer(&self, group: &str) -> Option<MQProducerInnerImpl> {
-        self.producer_table.get(group).map(|entry| entry.value().clone())
+        let producer = self.producer_table.get(group).map(|entry| entry.value().clone())?;
+        if producer.is_alive() {
+            return Some(producer);
+        }
+
+        self.producer_table.remove_if(group, |_, current| !current.is_alive());
+        None
     }
 
     pub async fn unregister_consumer(&self, group: impl Into<CheetahString>) -> bool {
@@ -2286,6 +2356,10 @@ impl MQClientInstance {
         }
     }
 
+    /// Removes the current producer registration unconditionally by group.
+    ///
+    /// Producer lifecycle cleanup should use [`Self::unregister_producer_if_owner`]
+    /// so a delayed cleanup cannot remove a replacement producer.
     pub async fn unregister_producer(&self, group: impl Into<CheetahString>) -> bool {
         let group = group.into();
         if group.is_empty() {
@@ -2293,6 +2367,10 @@ impl MQClientInstance {
             return false;
         }
 
+        // Keep replacement registration behind the corresponding broker
+        // unregister notification. Otherwise a new owner could enter the table
+        // after removal and then be invalidated by the old owner's late RPC.
+        let _transition = self.producer_registry_transition.lock().await;
         let removed = self.producer_table.remove(&group).is_some();
 
         if removed {
@@ -2301,6 +2379,40 @@ impl MQClientInstance {
             true
         } else {
             warn!("unregister producer [{}] failed: not found in producer table", group);
+            false
+        }
+    }
+
+    /// Removes a producer only while the group still belongs to `expected_owner`.
+    pub(crate) async fn unregister_producer_if_owner(
+        &self,
+        group: impl Into<CheetahString>,
+        expected_owner: &MQProducerInnerImpl,
+    ) -> bool {
+        let group = group.into();
+        if group.is_empty() {
+            warn!("unregister_producer_if_owner: group name is empty");
+            return false;
+        }
+
+        // Serialize the table identity check, removal, and broker notification
+        // with replacement registration. This closes the post-remove/pre-RPC
+        // window while retaining owner-aware protection for late cleanup.
+        let _transition = self.producer_registry_transition.lock().await;
+        let removed = self
+            .producer_table
+            .remove_if(&group, |_, current| current.points_to_same_producer(expected_owner))
+            .is_some();
+
+        if removed {
+            info!("unregister producer [{}] for expected owner OK", group);
+            self.unregister_client(Some(group), None).await;
+            true
+        } else {
+            warn!(
+                "unregister producer [{}] for expected owner skipped: not found or owner changed",
+                group
+            );
             false
         }
     }
@@ -2715,12 +2827,12 @@ pub fn run_heartbeat_route_index_probe(
 
 #[cfg(test)]
 mod tests {
+    use futures::FutureExt;
     use rocketmq_error::ErrorKind;
     use rocketmq_error::RocketMQError;
     use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
     use rocketmq_remoting::protocol::route::route_data_view::BrokerData;
     use rocketmq_remoting::protocol::route::route_data_view::QueueData;
-    use rocketmq_rust::ArcMut;
 
     use super::*;
     use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
@@ -2765,6 +2877,167 @@ mod tests {
         assert!(weak.upgrade().is_some());
         drop(instance);
         assert!(weak.upgrade().is_none());
+    }
+
+    #[tokio::test]
+    async fn same_live_producer_registration_is_idempotent_and_rejects_different_root() {
+        let instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "producer-idempotent", None);
+        let producer = Arc::new(DefaultMQProducerImpl::new(
+            ClientConfig::default(),
+            ProducerConfig::default(),
+            None,
+        ));
+        let same = MQProducerInnerImpl::new(Arc::downgrade(&producer));
+        let same_again = MQProducerInnerImpl::new(Arc::downgrade(&producer));
+        let other_producer = Arc::new(DefaultMQProducerImpl::new(
+            ClientConfig::default(),
+            ProducerConfig::default(),
+            None,
+        ));
+        let other = MQProducerInnerImpl::new(Arc::downgrade(&other_producer));
+
+        assert!(instance.register_producer("producer-group", same.clone()).await);
+        assert!(instance.register_producer("producer-group", same_again).await);
+        assert!(!instance.register_producer("producer-group", other).await);
+
+        let selected = instance
+            .select_producer("producer-group")
+            .await
+            .expect("the original live producer should stay registered");
+        assert!(selected.points_to_same_producer(&same));
+        assert_eq!(instance.producer_table.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn producer_registration_waits_for_registry_transition() {
+        let instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "producer-transition", None);
+        let producer = Arc::new(DefaultMQProducerImpl::new(
+            ClientConfig::default(),
+            ProducerConfig::default(),
+            None,
+        ));
+        let owner = MQProducerInnerImpl::new(Arc::downgrade(&producer));
+        let transition = instance.producer_registry_transition.lock().await;
+        let mut registration = Box::pin(instance.register_producer("producer-group", owner));
+
+        assert!(
+            registration.as_mut().now_or_never().is_none(),
+            "registration must not overtake an unregister transition"
+        );
+        drop(transition);
+
+        assert!(registration.await);
+    }
+
+    #[tokio::test]
+    async fn dead_producer_registration_is_pruned_and_atomically_replaced() {
+        let instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "producer-replace", None);
+        let producer = Arc::new(DefaultMQProducerImpl::new(
+            ClientConfig::default(),
+            ProducerConfig::default(),
+            None,
+        ));
+        let dead = MQProducerInnerImpl::new(Arc::downgrade(&producer));
+        assert!(instance.register_producer("producer-group", dead).await);
+
+        drop(producer);
+        let replacement_root = Arc::new(DefaultMQProducerImpl::new(
+            ClientConfig::default(),
+            ProducerConfig::default(),
+            None,
+        ));
+        let replacement = MQProducerInnerImpl::new(Arc::downgrade(&replacement_root));
+        assert!(instance.register_producer("producer-group", replacement.clone()).await);
+
+        let selected = instance
+            .select_producer("producer-group")
+            .await
+            .expect("a live producer should replace the dead registry entry");
+        assert!(selected.points_to_same_producer(&replacement));
+
+        let heartbeat = instance.prepare_heartbeat_data(false).await;
+        assert_eq!(heartbeat.producer_data_set.len(), 1);
+
+        drop(replacement_root);
+        let heartbeat = instance.prepare_heartbeat_data(false).await;
+        assert!(heartbeat.producer_data_set.is_empty());
+        assert!(!instance.producer_table.contains_key("producer-group"));
+        assert!(instance.select_producer("producer-group").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn late_owner_aware_unregister_does_not_remove_replacement() {
+        let instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "producer-owner-guard", None);
+        let old_root = Arc::new(DefaultMQProducerImpl::new(
+            ClientConfig::default(),
+            ProducerConfig::default(),
+            None,
+        ));
+        let old_owner = MQProducerInnerImpl::new(Arc::downgrade(&old_root));
+        assert!(instance.register_producer("producer-group", old_owner).await);
+        let old_owner_snapshot = instance
+            .producer_table
+            .get("producer-group")
+            .expect("the old owner should be registered")
+            .value()
+            .clone();
+
+        drop(old_root);
+        let replacement_root = Arc::new(DefaultMQProducerImpl::new(
+            ClientConfig::default(),
+            ProducerConfig::default(),
+            None,
+        ));
+        let replacement = MQProducerInnerImpl::new(Arc::downgrade(&replacement_root));
+        assert!(instance.register_producer("producer-group", replacement.clone()).await);
+
+        assert!(
+            !instance
+                .unregister_producer_if_owner("producer-group", &old_owner_snapshot)
+                .await
+        );
+        let selected = instance
+            .select_producer("producer-group")
+            .await
+            .expect("late cleanup from the old owner must preserve the replacement");
+        assert!(selected.points_to_same_producer(&replacement));
+    }
+
+    #[tokio::test]
+    async fn producer_registration_remains_open_during_start_transition() {
+        let instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "producer-start-admission", None);
+        let _transition = instance.lifecycle_transition.lock().await;
+        let producer = Arc::new(DefaultMQProducerImpl::new(
+            ClientConfig::default(),
+            ProducerConfig::default(),
+            None,
+        ));
+        let owner = MQProducerInnerImpl::new(Arc::downgrade(&producer));
+
+        assert!(instance.register_producer("producer-group", owner).await);
+    }
+
+    #[tokio::test]
+    async fn shutdown_closes_producer_registration_and_prevents_later_start() {
+        let instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "producer-shutdown-admission", None);
+
+        instance.shutdown().await;
+
+        let producer = Arc::new(DefaultMQProducerImpl::new(
+            ClientConfig::default(),
+            ProducerConfig::default(),
+            None,
+        ));
+        let owner = MQProducerInnerImpl::new(Arc::downgrade(&producer));
+        assert!(!instance.register_producer("producer-group", owner).await);
+        assert!(!instance.producer_table.contains_key("producer-group"));
+
+        let error = instance
+            .start()
+            .await
+            .expect_err("a client whose registration admission is closed must not start");
+        assert!(error.to_string().contains("producer registration admission is closed"));
+        assert_eq!(instance.service_state(), ServiceState::CreateJust);
     }
 
     #[tokio::test]
@@ -2950,14 +3223,12 @@ mod tests {
         let instance = MQClientInstance::new_arc(client_config, 0, "route-refresh-apply-test", None);
         let topic = CheetahString::from_static_str("route-refresh-topic");
 
-        let producer = ArcMut::new(DefaultMQProducerImpl::new(
+        let producer = Arc::new(DefaultMQProducerImpl::new(
             ClientConfig::default(),
             ProducerConfig::default(),
             None,
         ));
-        let producer_inner = MQProducerInnerImpl {
-            default_mqproducer_impl_inner: Some(producer.clone()),
-        };
+        let producer_inner = MQProducerInnerImpl::new(Arc::downgrade(&producer));
         assert!(producer.is_publish_topic_need_update(&topic));
         assert!(
             instance

@@ -111,6 +111,9 @@ M11-12al 的 Client MQClientInstance root ownership 由 Issue #8369 跟踪，分
 M11-12am 的 Client internal child ownership 由 Issue #8371 跟踪，分支为
 `mxsm/architecture-refactor-client-internal-child-ownership`；它仍是同一 M11-12 工作包的子切片。
 
+M11-12an 的 Client Producer root ownership 由 Issue #8375 跟踪，分支为
+`mxsm/architecture-refactor-client-producer-root-ownership`；它仍是同一 M11-12 工作包的子切片。
+
 ## 初始盘点
 
 在 main `86719f1bc77c2e78ff32195262bad820145f271b` 上生成当前源码快照：
@@ -971,6 +974,31 @@ ADR-013 临时审核且 approval 不提交；3 个 production identity/5 occurre
 必须一次完成 facade/implementation/registry 的标准 Arc/Weak、config snapshot、task admission 与 Client/fault
 resolver 强环拆除，不能用全局 impl mutex 串行发送；75/82 总进度不变。
 
+## M11-12an Client Producer root ownership
+
+| 目标 | 实现与证据 |
+|---|---|
+| standard root 与 registry | `DefaultMQProducer` facade 统一持有标准 `Arc<DefaultMQProducerImpl>`，self-reference、Client、resolver 与 detector 回边统一为标准 `Weak`；`MQProducerInnerImpl` registry 只持 weak owner，dead entry 可安全裁剪和原子替换 |
+| coherent configuration | implementation 以单一 `ArcSwap<ProducerRuntimeSnapshot>` 同时发布 Client/Producer/send 配置，所有写入由短 `config_update` 锁串行；发送、重试和 kernel 路径传递同一 runtime snapshot，不使用全局 impl mutex 串行发送 |
+| facade clone compatibility | clone-shared append-only immutable `StableConfig` 从最新完整代际 copy-update-publish，消除 clone 间 lost update；旧代际只追加不修改或删除，保留 `&ProducerConfig`/`&[u64]` 借用 API，旧 slice 在另一 clone 连续更新 128 次后仍有效 |
+| lifecycle 与 task admission | Tokio lifecycle mutex 串行 start/shutdown，取消后的 `Starting`/`Stopping` 可恢复清理；启动配置在 config lock 下重新加载，所有异步初始化完成后才发布 `Running`；task admission 与 tracker close 在同一短锁内排序 |
+| owner-aware cleanup | producer registration admission 与 shutdown 关闭同序，独立异步 registry transition 将 table identity check/removal、broker unregister 与 replacement registration 排序；迟到的旧 owner cleanup 使用 identity-aware `remove_if`，不会删除同 group replacement，dead callback 返回空/false/no-op |
+| compatibility 决策 | 公开 getter carrier 从 `Option<&ArcMut<DefaultMQProducerImpl>>` 迁移为 `Option<&Arc<DefaultMQProducerImpl>>`，显式类型标注和 `mut_from_ref` 调用需要迁移；这是 production unsafe capability 清零所需的有意 source break，public API compile test 固定新的标准 Arc carrier，其余 producer/transaction/hook/request/reply/retry/timeout/namespace/shutdown 行为保持 |
+| regression evidence | Producer implementation focused tests 47/47；Client all-features library 1,002/1,002、全部 integration targets 与 doc tests 通过；共享 facade config、稳定借用、Weak drop、dead replacement、迟到 cleanup、registry transition、启动取消、Running 发布顺序与 task admission 均有确定性覆盖 |
+
+M11-12an 后实际快照为 527 个条目：production 317、test 196、compatibility 14；occurrence 精确为 production
+892、test 559、compatibility 40。相对 M11-12am 删除 6 个 production identity/12 occurrence 与 8 个 test
+identity/12 occurrence；Client production 从 6/12 清零，Client test 从 12/83 降至 4/71。剩余 production 债务为：
+
+| owner | 条目 | occurrence |
+|---|---:|---:|
+| Broker | 190 | 568 |
+| Store | 127 | 324 |
+
+reviewed baseline 从 541→527、occurrences 从 1,515→1,491；全部 14 个 identity/24 个 occurrence 都是源码真实删除，
+无 identity/occurrence relocation，因此不需要 ADR-013 临时 approval。下一子切片 M11-12ao 进入 Broker owner 收口；
+75/82 总进度不变。
+
 ## 已执行验证
 
 | 命令 | 结果 |
@@ -1755,14 +1783,32 @@ M11-12am 追加验证：
 | MQClientInstance child ArcMut 定向扫描 | production factory 文件中 PullMessageService/default producer ArcMut owner 零匹配；仅 test module 保留显式 test-only ArcMut fixture |
 | `git diff --check` | 通过；仅报告工作树 CRLF 转换提示，无 whitespace error |
 
+M11-12an 追加验证：
+
+| 命令 | 结果 |
+|---|---|
+| `cargo check -p rocketmq-client-rust --all-targets --all-features` | 通过；标准 Producer root、Weak registry 与全部 Client targets 编译通过 |
+| `cargo clippy -p rocketmq-client-rust --all-targets --all-features -- -D warnings` | 通过；仅有被 Rust 明确排除于 `-D warnings` 的 Windows linker stdout 提示 |
+| Producer implementation focused tests | 47/47 通过；覆盖 Weak drop、resolver/detector Weak、task admission、取消恢复、config lock reload、Running 发布顺序与 latency coherent snapshot |
+| `cargo test -p rocketmq-client-rust --all-features` | 退出码 0；library 1,002/1,002、全部 integration targets 与 doc tests 通过，35 项既有外部环境测试忽略 |
+| reviewed baseline reduction | 删除 6 个 production identity/12 occurrence 与 8 个 test identity/12 occurrence，无 relocation；baseline 541/1,515→527/1,491 |
+| `python scripts/arc_mut_guard.py` | 通过；production 317/892、test 196/559、compatibility 14/40；Client production 0/0、Client test 4/71 |
+| `python -m unittest scripts.tests.test_arc_mut_guard -v` / `python scripts/arc_mut_guard.py --fixtures` | 67/67 单测、24/24 fixtures 通过 |
+| `cargo fmt --all -- --check` / root workspace strict Clippy | 通过；root workspace 32 个 package 的 all-targets/all-features `-D warnings` profile 通过 |
+| standalone Example / Tauri Rust backend / Web backend | 各自 fmt + strict Clippy 通过；Web backend `cargo build --all-targets --all-features` 通过 |
+| `./scripts/runtime-audit.ps1 -SkipBaseline -EnforceBoundaryBaseline` | 通过；lifecycle/task admission 由已登记 owner 管理，无新 detached runtime/task 边界 |
+| architecture target/baseline 与 release guard | 通过；35/35 target edges、3/3 test edges、32/32 release topology、10/10 R0 crates，guard 单测 60/60 通过 |
+| `./scripts/check-agents-routing.ps1` | 通过；4 个 standalone Cargo、3 个 Node project、8 条 route |
+| Client Producer ArcMut 定向扫描 | facade/implementation/registry 的 production ArcMut/WeakArcMut/constructor/`mut_from_ref` 零匹配，Client production 总量清零 |
+| `git diff --check` | 通过；仅报告工作树 CRLF 转换提示，无 whitespace error |
+
 ## 剩余切片与 Gate
 
-1. Client DefaultMQProducer facade/implementation/registry 的标准 Arc/Weak root、配置快照、生命周期与任务接纳边界，
-   并拆除 producer/client/registry 强引用环（Client owner 6/12）；下一子切片 M11-12an 完成该 Producer root。
-2. Broker TopicConfig/offset、BrokerRuntimeInner、schedule/POP/processor/transaction owner（190/568）。
-3. Store TopicConfig snapshot、MappedFileQueue/ConsumeQueue、CommitLog/Flush、StoreHandle/Rocks/Timer 与 HA actor（127/324）。
-4. 删除 compatibility `arc_mut.rs` 和公开 re-export；移除其余 nightly feature，将 guard 切到 production/public zero。
-5. 对同一候选快照执行 stable feature matrix、Miri/Loom 可用切片、soak/SLO fault、dashboard/runbook、动态
+1. Broker TopicConfig/offset、BrokerRuntimeInner、schedule/POP/processor/transaction owner（190/568）；下一子切片
+   M11-12ao 从 Broker owner 开始。
+2. Store TopicConfig snapshot、MappedFileQueue/ConsumeQueue、CommitLog/Flush、StoreHandle/Rocks/Timer 与 HA actor（127/324）。
+3. 删除 compatibility `arc_mut.rs` 和公开 re-export；移除其余 nightly feature，将 guard 切到 production/public zero。
+4. 对同一候选快照执行 stable feature matrix、Miri/Loom 可用切片、soak/SLO fault、dashboard/runbook、动态
    Kind/K3d/container、M10 固定硬件和 Human Gate。
 
 任何切片失败都只回滚对应独立 PR，不扩大 baseline，不删除 durability/fault 证据，也不把 fixture 当作动态 PASS。

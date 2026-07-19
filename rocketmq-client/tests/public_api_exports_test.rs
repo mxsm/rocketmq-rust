@@ -319,7 +319,10 @@ fn crate_root_exports_modern_client_facades_and_traits() {
     let producer = DefaultMQProducer::builder()
         .producer_group("public-api-producer")
         .build();
-    assert!(producer.get_default_mq_producer_impl().is_some());
+    let producer_impl = producer
+        .get_default_mq_producer_impl()
+        .expect("the public producer facade should expose its implementation root");
+    assert_eq!(Arc::strong_count(producer_impl), 1);
     let _transaction_producer = TransactionMQProducer::builder()
         .producer_group("public-api-transaction-producer")
         .build();
