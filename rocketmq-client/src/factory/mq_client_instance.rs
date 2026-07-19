@@ -2901,10 +2901,10 @@ mod tests {
         let consumer_group = CheetahString::from_static_str("route-refresh-consumer");
         let mut consumer = ArcMut::new(DefaultMQPushConsumerImpl::new(
             ClientConfig::default(),
-            ArcMut::new(ConsumerConfig {
+            ConsumerConfig {
                 consumer_group: consumer_group.clone(),
                 ..Default::default()
-            }),
+            },
             None,
         ));
         consumer.rebalance_impl.put_subscription_data(

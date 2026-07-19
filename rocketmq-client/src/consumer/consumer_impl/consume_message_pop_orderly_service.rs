@@ -939,10 +939,10 @@ impl Hash for ConsumeRequest {
 pub async fn run_pop_orderly_lock_refresh_lifecycle_probe() -> PopOrderlyLockRefreshLifecycleProbe {
     let default_impl = ArcMut::new(DefaultMQPushConsumerImpl::new(
         ClientConfig::default(),
-        ArcMut::new(ConsumerConfig {
+        ConsumerConfig {
             message_model: MessageModel::Clustering,
             ..Default::default()
-        }),
+        },
         None,
     ));
     let listener: ArcMessageListenerOrderly =
@@ -1061,7 +1061,7 @@ mod tests {
     }
 
     fn new_default_impl() -> ArcMut<DefaultMQPushConsumerImpl> {
-        let consumer_config = ArcMut::new(ConsumerConfig::default());
+        let consumer_config = ConsumerConfig::default();
         ArcMut::new(DefaultMQPushConsumerImpl::new(
             ClientConfig::default(),
             consumer_config,

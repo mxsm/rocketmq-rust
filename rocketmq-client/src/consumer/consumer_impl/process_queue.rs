@@ -199,6 +199,7 @@ impl ProcessQueue {
             return;
         }
 
+        let consume_timeout = push_consumer.consumer_config_snapshot().consume_timeout;
         let loop_ = 16.min(self.store.read().await.messages.len());
         for _ in 0..loop_ {
             let msg = {
@@ -209,8 +210,7 @@ impl ProcessQueue {
                             .and_then(|timestamp| timestamp.parse::<u64>().ok())
                     });
                     if consume_start_timestamp.is_some_and(|timestamp| {
-                        current_millis().saturating_sub(timestamp)
-                            > push_consumer.consumer_config.consume_timeout * 1000 * 60
+                        current_millis().saturating_sub(timestamp) > consume_timeout * 1000 * 60
                     }) {
                         Some(value.clone())
                     } else {

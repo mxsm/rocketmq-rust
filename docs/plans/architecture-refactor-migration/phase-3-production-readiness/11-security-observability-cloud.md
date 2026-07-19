@@ -395,6 +395,11 @@ queue-count 变化只通过 Push implementation owner 回写两个动态 thresho
 occurrences，Client owner 降至 80/159，另有 Proxy 1/1；其余 Client/Broker/Store、compatibility 与完整候选快照 Gate
 仍保持开放。
 
+M11-12ai 已将 Push facade/implementation 的根 consumer config 改为共享 `ArcSwap` 完整不可变代际；facade setter、
+implementation threshold 更新与 trace dispatcher 通过 clone-update-publish 原子发布，启动、回调与 diagnostics 固定读取
+稳定 `Arc` 快照。实际快照降至 397 production/1,045 occurrences，Client owner 降至 79/152，Client test 降至
+47/132，另有 Proxy 1/1；其余 Client/Broker/Store、compatibility 与完整候选快照 Gate 仍保持开放。
+
 ## 公共兼容面
 
 - development/compatibility仍可显式选择；secure只作为新部署默认，不静默重解释旧配置。

@@ -570,7 +570,6 @@ mod tests {
             consumer_group: group.clone(),
             ..Default::default()
         };
-        let consumer_config = ArcMut::new(consumer_config);
         let mut consumer_impl = ArcMut::new(DefaultMQPushConsumerImpl::new(
             ClientConfig::default(),
             consumer_config,

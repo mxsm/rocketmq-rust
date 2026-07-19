@@ -21,6 +21,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
+use arc_swap::ArcSwap;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::base::service_state::ServiceState;
 use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
@@ -115,7 +116,7 @@ pub struct DefaultMQPushConsumerImpl {
     pub(crate) global_lock: Arc<Mutex<()>>,
     pub(crate) pull_time_delay_mills_when_exception: u64,
     pub(crate) client_config: ArcMut<ClientConfig>,
-    pub(crate) consumer_config: ArcMut<ConsumerConfig>,
+    pub(crate) consumer_config: Arc<ArcSwap<ConsumerConfig>>,
     pub(crate) rebalance_impl: ArcMut<RebalancePushImpl>,
     filter_message_hook_list: Vec<Arc<dyn FilterMessageHook + Send + Sync>>,
     consume_message_hook_list: Vec<ConsumeMessageHookArc>,
@@ -142,10 +143,11 @@ pub struct DefaultMQPushConsumerImpl {
 impl DefaultMQPushConsumerImpl {
     pub fn new(
         client_config: ClientConfig,
-        consumer_config: ArcMut<ConsumerConfig>,
+        consumer_config: ConsumerConfig,
         rpc_hook: Option<Arc<dyn RPCHook>>,
     ) -> Self {
-        let rebalance_consumer_config = consumer_config.as_ref().clone();
+        let consumer_config = Arc::new(ArcSwap::from_pointee(consumer_config));
+        let rebalance_consumer_config = (*consumer_config.load_full()).clone();
         let mut this = Self {
             global_lock: Arc::new(Default::default()),
             pull_time_delay_mills_when_exception: 3_000,
@@ -174,6 +176,17 @@ impl DefaultMQPushConsumerImpl {
         };
         let wrapper = ArcMut::downgrade(&this.rebalance_impl);
         this.rebalance_impl.set_rebalance_impl(wrapper);
+        this
+    }
+
+    pub(crate) fn new_with_config_store(
+        client_config: ClientConfig,
+        consumer_config: Arc<ArcSwap<ConsumerConfig>>,
+        rpc_hook: Option<Arc<dyn RPCHook>>,
+    ) -> Self {
+        let initial_config = (*consumer_config.load_full()).clone();
+        let mut this = Self::new(client_config, initial_config, rpc_hook);
+        this.consumer_config = consumer_config;
         this
     }
 
@@ -234,17 +247,31 @@ impl DefaultMQPushConsumerImpl {
         self.rebalance_impl.replace_consumer_config(consumer_config);
     }
 
+    pub(crate) fn consumer_config_snapshot(&self) -> Arc<ConsumerConfig> {
+        self.consumer_config.load_full()
+    }
+
+    fn update_consumer_config(&self, update: impl Fn(&mut ConsumerConfig)) {
+        self.consumer_config.rcu(|current| {
+            let mut next = (**current).clone();
+            update(&mut next);
+            Arc::new(next)
+        });
+    }
+
     pub(crate) fn update_pull_thresholds_from_rebalance(
-        &mut self,
+        &self,
         pull_threshold_for_queue: Option<u32>,
         pull_threshold_size_for_queue: Option<u32>,
     ) {
-        if let Some(value) = pull_threshold_for_queue {
-            self.consumer_config.pull_threshold_for_queue = value;
-        }
-        if let Some(value) = pull_threshold_size_for_queue {
-            self.consumer_config.pull_threshold_size_for_queue = value;
-        }
+        self.update_consumer_config(|consumer_config| {
+            if let Some(value) = pull_threshold_for_queue {
+                consumer_config.pull_threshold_for_queue = value;
+            }
+            if let Some(value) = pull_threshold_size_for_queue {
+                consumer_config.pull_threshold_size_for_queue = value;
+            }
+        });
     }
 }
 
@@ -252,65 +279,62 @@ impl DefaultMQPushConsumerImpl {
     pub async fn start(&mut self) -> rocketmq_error::RocketMQResult<()> {
         match *self.service_state {
             ServiceState::CreateJust => {
+                let consumer_config = self.consumer_config_snapshot();
                 info!(
                     "the consumer [{}] start beginning. message_model={}, isUnitMode={}",
-                    self.consumer_config.consumer_group,
-                    self.consumer_config.message_model,
-                    self.consumer_config.unit_mode
+                    consumer_config.consumer_group, consumer_config.message_model, consumer_config.unit_mode
                 );
                 *self.service_state = ServiceState::StartFailed;
                 // check all config
                 self.check_config()?;
                 //copy_subscription is can be removed
                 self.copy_subscription().await?;
-                if self.consumer_config.message_model() == MessageModel::Clustering {
+                if consumer_config.message_model() == MessageModel::Clustering {
                     self.client_config.change_instance_name_to_pid();
                 }
                 let mut client_instance = MQClientManager::get_instance()
                     .get_or_create_mq_client_instance(self.client_config.as_ref().clone(), self.rpc_hook.clone());
                 self.client_instance = Some(client_instance.clone());
                 self.rebalance_impl
-                    .set_consumer_group(self.consumer_config.consumer_group.clone());
-                self.rebalance_impl
-                    .set_message_model(self.consumer_config.message_model);
+                    .set_consumer_group(consumer_config.consumer_group.clone());
+                self.rebalance_impl.set_message_model(consumer_config.message_model);
                 self.rebalance_impl.set_allocate_message_queue_strategy(
-                    self.consumer_config
-                        .allocate_message_queue_strategy
-                        .clone()
-                        .ok_or_else(|| {
-                            mq_client_err!("allocate_message_queue_strategy is null, please set it before start")
-                        })?,
+                    consumer_config.allocate_message_queue_strategy.clone().ok_or_else(|| {
+                        mq_client_err!("allocate_message_queue_strategy is null, please set it before start")
+                    })?,
                 );
                 self.rebalance_impl.set_mq_client_factory(client_instance.clone());
                 if self.pull_api_wrapper.is_none() {
                     self.pull_api_wrapper = Some(Arc::new(PullAPIWrapper::new(
                         client_instance.clone(),
-                        self.consumer_config.consumer_group.clone(),
-                        self.consumer_config.unit_mode,
+                        consumer_config.consumer_group.clone(),
+                        consumer_config.unit_mode,
                     )));
                 }
                 if let Some(pull_api_wrapper) = self.pull_api_wrapper.as_ref() {
                     pull_api_wrapper.register_filter_message_hook(self.filter_message_hook_list.clone());
                 }
-                if let Some(offset_store) = self.consumer_config.offset_store() {
+                if let Some(offset_store) = consumer_config.offset_store() {
                     self.offset_store = Some(offset_store);
                 } else {
-                    match self.consumer_config.message_model {
+                    match consumer_config.message_model {
                         MessageModel::Broadcasting => {
                             self.offset_store = Some(Arc::new(OffsetStore::new_with_local(LocalFileOffsetStore::new(
                                 client_instance.clone(),
-                                self.consumer_config.consumer_group.clone(),
+                                consumer_config.consumer_group.clone(),
                             ))));
                         }
                         MessageModel::Clustering => {
                             self.offset_store =
                                 Some(Arc::new(OffsetStore::new_with_remote(RemoteBrokerOffsetStore::new(
                                     client_instance.clone(),
-                                    self.consumer_config.consumer_group.clone(),
+                                    consumer_config.consumer_group.clone(),
                                 ))));
                         }
                     }
-                    self.consumer_config.set_offset_store(self.offset_store.clone());
+                    self.update_consumer_config(|consumer_config| {
+                        consumer_config.set_offset_store(self.offset_store.clone())
+                    });
                 }
                 self.offset_store
                     .as_mut()
@@ -320,7 +344,7 @@ impl DefaultMQPushConsumerImpl {
 
                 if let Some(message_listener) = self.message_listener.as_ref() {
                     let client_config_snapshot = Arc::new(self.client_config.as_ref().clone());
-                    let consumer_config_snapshot = Arc::new(self.consumer_config.as_ref().clone());
+                    let consumer_config_snapshot = Arc::new(consumer_config.as_ref().clone());
                     if let Some(listener) = message_listener.message_listener_concurrently.clone() {
                         self.consume_orderly = false;
                         let consume_message_concurrently_service = Arc::new(ConsumeMessageConcurrentlyService::new(
@@ -388,7 +412,7 @@ impl DefaultMQPushConsumerImpl {
                     .ok_or_else(|| mq_client_err!("default_mqpush_consumer_impl is None"))?;
                 let register_ok = client_instance
                     .register_consumer(
-                        self.consumer_config.consumer_group.as_ref(),
+                        consumer_config.consumer_group.as_ref(),
                         MQConsumerInnerImpl::from_push(default_mqpush_consumer_impl),
                     )
                     .await;
@@ -396,17 +420,17 @@ impl DefaultMQPushConsumerImpl {
                     *self.service_state = ServiceState::CreateJust;
                     if let Some(consume_message_service) = self.consume_message_service.as_ref() {
                         consume_message_service
-                            .shutdown(self.consumer_config.await_termination_millis_when_shutdown)
+                            .shutdown(consumer_config.await_termination_millis_when_shutdown)
                             .await;
                     }
                     if let Some(consume_message_pop_service) = self.consume_message_pop_service.as_ref() {
                         consume_message_pop_service
-                            .shutdown(self.consumer_config.await_termination_millis_when_shutdown)
+                            .shutdown(consumer_config.await_termination_millis_when_shutdown)
                             .await;
                     }
                     return Err(mq_client_err!(format!(
                         "The consumer group[{}] has been created before, specify another name please.{}",
-                        self.consumer_config.consumer_group,
+                        consumer_config.consumer_group,
                         FAQUrl::suggest_todo(FAQUrl::GROUP_NAME_DUPLICATE_URL)
                     )));
                 }
@@ -414,9 +438,7 @@ impl DefaultMQPushConsumerImpl {
                 client_instance.start(client_instance_clone).await?;
                 info!(
                     "the consumer [{}] start OK, message_model={}, isUnitMode={}",
-                    self.consumer_config.consumer_group,
-                    self.consumer_config.message_model,
-                    self.consumer_config.unit_mode
+                    consumer_config.consumer_group, consumer_config.message_model, consumer_config.unit_mode
                 );
                 *self.service_state = ServiceState::Running;
             }
@@ -438,12 +460,10 @@ impl DefaultMQPushConsumerImpl {
     }
 
     async fn complete_startup_after_running(&mut self) -> rocketmq_error::RocketMQResult<()> {
+        let consumer_config = self.consumer_config_snapshot();
         if let Err(error) = self.run_startup_after_running_checks().await {
-            warn!(
-                "Start the consumer {} fail. {}",
-                self.consumer_config.consumer_group, error
-            );
-            self.shutdown(self.consumer_config.await_termination_millis_when_shutdown)
+            warn!("Start the consumer {} fail. {}", consumer_config.consumer_group, error);
+            self.shutdown(consumer_config.await_termination_millis_when_shutdown)
                 .await;
             return Err(error);
         }
@@ -469,7 +489,7 @@ impl DefaultMQPushConsumerImpl {
             ServiceState::CreateJust => {
                 warn!(
                     "the consumer [{}] do not start, so do nothing",
-                    self.consumer_config.consumer_group
+                    self.consumer_config_snapshot().consumer_group
                 );
             }
             ServiceState::Running => {
@@ -483,24 +503,23 @@ impl DefaultMQPushConsumerImpl {
                     if !offset_store.shutdown(OFFSET_STORE_SHUTDOWN_TIMEOUT).await {
                         warn!(
                             "consumer [{}] offset store did not stop before timeout",
-                            self.consumer_config.consumer_group
+                            self.consumer_config_snapshot().consumer_group
                         );
                     }
                 }
+                let consumer_group = self.consumer_config_snapshot().consumer_group.clone();
                 if let Some(client) = self.client_instance.as_mut() {
-                    client
-                        .unregister_consumer(self.consumer_config.consumer_group.as_str())
-                        .await;
+                    client.unregister_consumer(consumer_group.as_str()).await;
                     client.shutdown().await;
                 } else {
                     warn!(
                         "consumer [{}] shutdown skipped client cleanup because MQClientInstance is not initialized",
-                        self.consumer_config.consumer_group
+                        self.consumer_config_snapshot().consumer_group
                     );
                 }
                 info!(
                     "the consumer [{}] shutdown OK",
-                    self.consumer_config.consumer_group.as_str()
+                    self.consumer_config_snapshot().consumer_group.as_str()
                 );
                 self.rebalance_impl.destroy();
                 *self.service_state = ServiceState::ShutdownAlready;
@@ -508,13 +527,13 @@ impl DefaultMQPushConsumerImpl {
             ServiceState::ShutdownAlready => {
                 warn!(
                     "the consumer [{}] has been shutdown, do nothing",
-                    self.consumer_config.consumer_group
+                    self.consumer_config_snapshot().consumer_group
                 );
             }
             ServiceState::StartFailed => {
                 warn!(
                     "the consumer [{}] start failed, do nothing",
-                    self.consumer_config.consumer_group
+                    self.consumer_config_snapshot().consumer_group
                 );
             }
         }
@@ -531,7 +550,7 @@ impl DefaultMQPushConsumerImpl {
         let Some(client) = self.client_instance.as_mut() else {
             warn!(
                 "update topic subscribe info skipped because MQClientInstance is not initialized. group={}",
-                self.consumer_config.consumer_group
+                self.consumer_config_snapshot().consumer_group
             );
             return;
         };
@@ -541,15 +560,16 @@ impl DefaultMQPushConsumerImpl {
     }
 
     fn check_config(&mut self) -> rocketmq_error::RocketMQResult<()> {
-        Validators::check_group(self.consumer_config.consumer_group.as_str())?;
-        if self.consumer_config.consumer_group.is_empty() {
+        let consumer_config = self.consumer_config_snapshot();
+        Validators::check_group(consumer_config.consumer_group.as_str())?;
+        if consumer_config.consumer_group.is_empty() {
             return Err(mq_client_err!(format!(
                 "consumer_group is empty, {}",
                 FAQUrl::suggest_todo(FAQUrl::CLIENT_PARAMETER_CHECK_URL)
             )));
         }
 
-        if self.consumer_config.consumer_group == DEFAULT_CONSUMER_GROUP {
+        if consumer_config.consumer_group == DEFAULT_CONSUMER_GROUP {
             return Err(mq_client_err!(format!(
                 "consumer_group can not equal {} please specify another one.{}",
                 DEFAULT_CONSUMER_GROUP,
@@ -557,21 +577,21 @@ impl DefaultMQPushConsumerImpl {
             )));
         }
 
-        if self.consumer_config.allocate_message_queue_strategy.is_none() {
+        if consumer_config.allocate_message_queue_strategy.is_none() {
             return Err(mq_client_err!(format!(
                 "allocate_message_queue_strategy is null{}",
                 FAQUrl::suggest_todo(FAQUrl::CLIENT_PARAMETER_CHECK_URL)
             )));
         }
 
-        if self.consumer_config.message_listener.is_none() {
+        if consumer_config.message_listener.is_none() {
             return Err(mq_client_err!(format!(
                 "messageListener is null{}",
                 FAQUrl::suggest_todo(FAQUrl::CLIENT_PARAMETER_CHECK_URL)
             )));
         }
 
-        let message_listener = self.consumer_config.message_listener.as_ref().ok_or_else(|| {
+        let message_listener = consumer_config.message_listener.as_ref().ok_or_else(|| {
             mq_client_err!(format!(
                 "messageListener is null{}",
                 FAQUrl::suggest_todo(FAQUrl::CLIENT_PARAMETER_CHECK_URL)
@@ -587,7 +607,7 @@ impl DefaultMQPushConsumerImpl {
         }
 
         let valid_consume_timestamp = self
-            .consumer_config
+            .consumer_config_snapshot()
             .consume_timestamp
             .as_deref()
             .and_then(|timestamp| util_all::parse_date_to_millis(timestamp, util_all::YYYYMMDDHHMMSS))
@@ -595,13 +615,13 @@ impl DefaultMQPushConsumerImpl {
         if !valid_consume_timestamp {
             return Err(mq_client_err!(format!(
                 "consumeTimestamp is invalid, the valid format is yyyyMMddHHmmss,but received {} {}",
-                self.consumer_config.consume_timestamp.as_deref().unwrap_or("null"),
+                consumer_config.consume_timestamp.as_deref().unwrap_or("null"),
                 FAQUrl::suggest_todo(FAQUrl::CLIENT_PARAMETER_CHECK_URL)
             )));
         }
 
-        let consume_thread_min = self.consumer_config.consume_thread_min;
-        let consume_thread_max = self.consumer_config.consume_thread_max;
+        let consume_thread_min = consumer_config.consume_thread_min;
+        let consume_thread_max = consumer_config.consume_thread_max;
         if !(1..=1000).contains(&consume_thread_min) {
             return Err(mq_client_err!(format!(
                 "consumeThreadMin Out of range [1, 1000]{}",
@@ -621,25 +641,22 @@ impl DefaultMQPushConsumerImpl {
             )));
         }
 
-        if self.consumer_config.consume_concurrently_max_span < 1
-            || self.consumer_config.consume_concurrently_max_span > 65535
-        {
+        if consumer_config.consume_concurrently_max_span < 1 || consumer_config.consume_concurrently_max_span > 65535 {
             return Err(mq_client_err!(format!(
                 "consumeConcurrentlyMaxSpan Out of range [1, 65535]{}",
                 FAQUrl::suggest_todo(FAQUrl::CLIENT_PARAMETER_CHECK_URL)
             )));
         }
 
-        if self.consumer_config.pull_threshold_for_queue < 1 || self.consumer_config.pull_threshold_for_queue > 65535 {
+        if consumer_config.pull_threshold_for_queue < 1 || consumer_config.pull_threshold_for_queue > 65535 {
             return Err(mq_client_err!(format!(
                 "pullThresholdForQueue Out of range [1, 65535]{}",
                 FAQUrl::suggest_todo(FAQUrl::CLIENT_PARAMETER_CHECK_URL)
             )));
         }
 
-        if self.consumer_config.pull_threshold_for_topic != -1
-            && (self.consumer_config.pull_threshold_for_topic < 1
-                || self.consumer_config.pull_threshold_for_topic > 6553500)
+        if consumer_config.pull_threshold_for_topic != -1
+            && (consumer_config.pull_threshold_for_topic < 1 || consumer_config.pull_threshold_for_topic > 6553500)
         {
             return Err(mq_client_err!(format!(
                 "pullThresholdForTopic Out of range [1, 65535]{}",
@@ -647,18 +664,16 @@ impl DefaultMQPushConsumerImpl {
             )));
         }
 
-        if self.consumer_config.pull_threshold_size_for_queue < 1
-            || self.consumer_config.pull_threshold_size_for_queue > 1024
-        {
+        if consumer_config.pull_threshold_size_for_queue < 1 || consumer_config.pull_threshold_size_for_queue > 1024 {
             return Err(mq_client_err!(format!(
                 "pullThresholdSizeForQueue Out of range [1, 1024]{}",
                 FAQUrl::suggest_todo(FAQUrl::CLIENT_PARAMETER_CHECK_URL)
             )));
         }
 
-        if self.consumer_config.pull_threshold_size_for_topic != -1
-            && (self.consumer_config.pull_threshold_size_for_topic < 1
-                || self.consumer_config.pull_threshold_size_for_topic > 102400)
+        if consumer_config.pull_threshold_size_for_topic != -1
+            && (consumer_config.pull_threshold_size_for_topic < 1
+                || consumer_config.pull_threshold_size_for_topic > 102400)
         {
             return Err(mq_client_err!(format!(
                 "pullThresholdSizeForTopic Out of range [1, 102400]{}",
@@ -666,31 +681,29 @@ impl DefaultMQPushConsumerImpl {
             )));
         }
 
-        if self.consumer_config.pull_interval > 65535 {
+        if consumer_config.pull_interval > 65535 {
             return Err(mq_client_err!(format!(
                 "pullInterval Out of range [0, 65535]{}",
                 FAQUrl::suggest_todo(FAQUrl::CLIENT_PARAMETER_CHECK_URL)
             )));
         }
 
-        if self.consumer_config.consume_message_batch_max_size < 1
-            || self.consumer_config.consume_message_batch_max_size > 1024
-        {
+        if consumer_config.consume_message_batch_max_size < 1 || consumer_config.consume_message_batch_max_size > 1024 {
             return Err(mq_client_err!(format!(
                 "consumeMessageBatchMaxSize Out of range [1, 1024]{}",
                 FAQUrl::suggest_todo(FAQUrl::CLIENT_PARAMETER_CHECK_URL)
             )));
         }
 
-        if self.consumer_config.pull_batch_size < 1 || self.consumer_config.pull_batch_size > 1024 {
+        if consumer_config.pull_batch_size < 1 || consumer_config.pull_batch_size > 1024 {
             return Err(mq_client_err!(format!(
                 "pullBatchSize Out of range [1, 1024]{}",
                 FAQUrl::suggest_todo(FAQUrl::CLIENT_PARAMETER_CHECK_URL)
             )));
         }
 
-        if self.consumer_config.pop_invisible_time < MIN_POP_INVISIBLE_TIME
-            || self.consumer_config.pop_invisible_time > MAX_POP_INVISIBLE_TIME
+        if consumer_config.pop_invisible_time < MIN_POP_INVISIBLE_TIME
+            || consumer_config.pop_invisible_time > MAX_POP_INVISIBLE_TIME
         {
             return Err(mq_client_err!(format!(
                 "popInvisibleTime Out of range [{}, {}]{}",
@@ -700,7 +713,7 @@ impl DefaultMQPushConsumerImpl {
             )));
         }
 
-        if self.consumer_config.pop_batch_nums < 1 || self.consumer_config.pop_batch_nums > 32 {
+        if consumer_config.pop_batch_nums < 1 || consumer_config.pop_batch_nums > 32 {
             return Err(mq_client_err!(format!(
                 "popBatchNums Out of range [1, 32]{}",
                 FAQUrl::suggest_todo(FAQUrl::CLIENT_PARAMETER_CHECK_URL)
@@ -711,7 +724,7 @@ impl DefaultMQPushConsumerImpl {
     }
 
     async fn copy_subscription(&mut self) -> rocketmq_error::RocketMQResult<()> {
-        let sub = self.consumer_config.subscription();
+        let sub = self.consumer_config_snapshot().subscription();
         if !sub.is_empty() {
             for (topic, sub_expression) in sub.as_ref() {
                 let subscription_data = FilterAPI::build_subscription_data(topic, sub_expression)
@@ -721,14 +734,15 @@ impl DefaultMQPushConsumerImpl {
             }
         }
         if self.message_listener.is_none() {
-            self.message_listener = self.consumer_config.message_listener.clone();
+            self.message_listener = self.consumer_config_snapshot().message_listener.clone();
         }
 
-        match self.consumer_config.message_model {
+        match self.consumer_config_snapshot().message_model {
             MessageModel::Broadcasting => {}
             MessageModel::Clustering => {
-                let retry_topic =
-                    CheetahString::from_string(mix_all::get_retry_topic(self.consumer_config.consumer_group.as_str()));
+                let retry_topic = CheetahString::from_string(mix_all::get_retry_topic(
+                    self.consumer_config_snapshot().consumer_group.as_str(),
+                ));
                 let subscription_data = FilterAPI::build_subscription_data(
                     retry_topic.as_ref(),
                     &CheetahString::from_static_str(SubscriptionData::SUB_ALL),
@@ -1082,13 +1096,15 @@ impl DefaultMQPushConsumerImpl {
         if self.pause.load(Ordering::Acquire) {
             warn!(
                 "consumer was paused, execute pull request later. instanceName={}, group={}",
-                self.client_config.instance_name, self.consumer_config.consumer_group
+                self.client_config.instance_name,
+                self.consumer_config_snapshot().consumer_group
             );
             self.execute_pop_request_later(pop_request, PULL_TIME_DELAY_MILLS_WHEN_SUSPEND);
             return;
         }
 
-        let pop_threshold_for_queue = i32::try_from(self.consumer_config.pop_threshold_for_queue).unwrap_or(i32::MAX);
+        let pop_threshold_for_queue =
+            i32::try_from(self.consumer_config_snapshot().pop_threshold_for_queue).unwrap_or(i32::MAX);
         if process_queue.get_wai_ack_msg_count() > pop_threshold_for_queue {
             self.execute_pop_request_later(pop_request, PULL_TIME_DELAY_MILLS_WHEN_CACHE_FLOW_CONTROL);
             return;
@@ -1106,14 +1122,14 @@ impl DefaultMQPushConsumerImpl {
         };
         let expression_type = subscription_data.expression_type.clone();
         let sub_string = subscription_data.sub_string.clone();
-        let mut invisible_time = self.consumer_config.pop_invisible_time;
+        let mut invisible_time = self.consumer_config_snapshot().pop_invisible_time;
         if !(MIN_POP_INVISIBLE_TIME..=MAX_POP_INVISIBLE_TIME).contains(&invisible_time) {
             invisible_time = 60_000;
         }
         let mq = pop_request.get_message_queue().clone();
         let consumer_group = pop_request.get_consumer_group().clone();
         let init_mode = pop_request.get_init_mode();
-        let pop_batch_nums = self.consumer_config.pop_batch_nums;
+        let pop_batch_nums = self.consumer_config_snapshot().pop_batch_nums;
         let Some(this) = self.default_mqpush_consumer_impl.clone() else {
             warn!(
                 "pop_message delayed: DefaultMQPushConsumerImpl self reference is not initialized, {}",
@@ -1175,20 +1191,21 @@ impl DefaultMQPushConsumerImpl {
         if self.pause.load(Ordering::Acquire) {
             warn!(
                 "consumer was paused, execute pull request later. instanceName={}, group={}",
-                self.client_config.instance_name, self.consumer_config.consumer_group
+                self.client_config.instance_name,
+                self.consumer_config_snapshot().consumer_group
             );
             self.execute_pull_request_later(pull_request, PULL_TIME_DELAY_MILLS_WHEN_SUSPEND);
             return;
         }
         let cached_message_count = pull_request.process_queue.msg_count();
         let cached_message_size_in_mib = pull_request.process_queue.msg_size() / _1MB;
-        if cached_message_count > self.consumer_config.pull_threshold_for_queue as u64 {
+        if cached_message_count > self.consumer_config_snapshot().pull_threshold_for_queue as u64 {
             if self.queue_flow_control_times.is_multiple_of(1000) {
                 if let Some((min_offset, max_offset)) = pull_request.process_queue.get_offset_span().await {
                     warn!(
                         "the cached message count exceeds the threshold {}, so do flow control, minOffset={}, \
                          maxOffset={}, count={}, size={} MiB, pullRequest={}, flowControlTimes={}",
-                        self.consumer_config.pull_threshold_for_queue,
+                        self.consumer_config_snapshot().pull_threshold_for_queue,
                         min_offset,
                         max_offset,
                         cached_message_count,
@@ -1204,13 +1221,13 @@ impl DefaultMQPushConsumerImpl {
             return;
         }
 
-        if cached_message_size_in_mib > self.consumer_config.pull_threshold_size_for_queue as u64 {
+        if cached_message_size_in_mib > self.consumer_config_snapshot().pull_threshold_size_for_queue as u64 {
             if self.queue_flow_control_times.is_multiple_of(1000) {
                 if let Some((min_offset, max_offset)) = pull_request.process_queue.get_offset_span().await {
                     warn!(
                         "the cached message size exceeds the threshold {} MiB, so do flow control, minOffset={}, \
                          maxOffset={}, count={}, size={} MiB, pullRequest={}, flowControlTimes={}",
-                        self.consumer_config.pull_threshold_size_for_queue,
+                        self.consumer_config_snapshot().pull_threshold_size_for_queue,
                         min_offset,
                         max_offset,
                         cached_message_count,
@@ -1227,7 +1244,7 @@ impl DefaultMQPushConsumerImpl {
 
         if !self.consume_orderly {
             let max_span = pull_request.process_queue.get_max_span().await;
-            if max_span > self.consumer_config.consume_concurrently_max_span as u64 {
+            if max_span > self.consumer_config_snapshot().consume_concurrently_max_span as u64 {
                 if self.queue_max_span_flow_control_times.is_multiple_of(1000) {
                     if let Some((min_offset, max_offset)) = pull_request.process_queue.get_offset_span().await {
                         warn!(
@@ -1297,7 +1314,8 @@ impl DefaultMQPushConsumerImpl {
         let Some(subscription_data) = inner.get(message_queue.topic_str()).map(|v| v.value().clone()) else {
             error!(
                 "find the consumer's subscription failed, {}, {}",
-                message_queue, self.consumer_config.consumer_group
+                message_queue,
+                self.consumer_config_snapshot().consumer_group
             );
             self.execute_pull_request_later(pull_request, self.pull_time_delay_mills_when_exception);
             return;
@@ -1309,7 +1327,7 @@ impl DefaultMQPushConsumerImpl {
         let next_offset = pull_request.next_offset;
         let mut commit_offset_enable = false;
         let mut commit_offset_value = 0;
-        if MessageModel::Clustering == self.consumer_config.message_model {
+        if MessageModel::Clustering == self.consumer_config_snapshot().message_model {
             let Some(offset_store) = self.offset_store.as_ref() else {
                 warn!("pullMessage delayed: OffsetStore is not initialized, {}", pull_request);
                 self.execute_pull_request_later(pull_request, self.pull_time_delay_mills_when_exception);
@@ -1323,7 +1341,7 @@ impl DefaultMQPushConsumerImpl {
             }
         }
         let mut sub_expression = None;
-        if self.consumer_config.post_subscription_when_pull && !subscription_data.class_filter_mode {
+        if self.consumer_config_snapshot().post_subscription_when_pull && !subscription_data.class_filter_mode {
             sub_expression = Some(subscription_data.sub_string.clone());
         }
         let class_filter = subscription_data.class_filter_mode;
@@ -1336,8 +1354,8 @@ impl DefaultMQPushConsumerImpl {
             self.execute_pull_request_later(pull_request, self.pull_time_delay_mills_when_exception);
             return;
         };
-        let pull_batch_size = self.consumer_config.pull_batch_size as i32;
-        let pull_batch_size_in_bytes = self.consumer_config.pull_batch_size_in_bytes as i32;
+        let pull_batch_size = self.consumer_config_snapshot().pull_batch_size as i32;
+        let pull_batch_size_in_bytes = self.consumer_config_snapshot().pull_batch_size_in_bytes as i32;
         let sub_expression = sub_expression.unwrap_or_default();
         let expression_type = subscription_data.expression_type.clone();
         let sub_version = subscription_data.sub_version;
@@ -1406,7 +1424,7 @@ impl DefaultMQPushConsumerImpl {
                 };
             if !self.filter_message_hook_list.is_empty() {
                 let context = FilterMessageContext {
-                    unit_mode: self.consumer_config.unit_mode,
+                    unit_mode: self.consumer_config_snapshot().unit_mode,
                     msg_list: &msg_list_filter_again,
                     ..Default::default()
                 };
@@ -1417,7 +1435,7 @@ impl DefaultMQPushConsumerImpl {
             let mut final_msg_list = Vec::with_capacity(msg_list_filter_again.len());
             for msg in msg_list_filter_again {
                 if msg.reconsume_times > self.get_max_reconsume_times() {
-                    let consumer_group = self.consumer_config.consumer_group().clone();
+                    let consumer_group = self.consumer_config_snapshot().consumer_group().clone();
                     self.ack_async(&msg, &consumer_group).await;
                 } else {
                     final_msg_list.push(msg);
@@ -1577,6 +1595,7 @@ impl DefaultMQPushConsumerImpl {
             };
             let broker_name_str = broker_name.as_ref().map(|name| name.as_str());
             let max_consume_retry_times = self.get_max_reconsume_times();
+            let consumer_group = self.consumer_config_snapshot().consumer_group.clone();
             let result = if let Some(client_instance) = self.client_instance.as_mut() {
                 if let Some(mq_client_api_impl) = client_instance.mq_client_api_impl.as_ref() {
                     mq_client_api_impl
@@ -1584,7 +1603,7 @@ impl DefaultMQPushConsumerImpl {
                             broker_addr.as_str(),
                             broker_name_str,
                             msg,
-                            self.consumer_config.consumer_group.as_str(),
+                            consumer_group.as_str(),
                             delay_level,
                             5000,
                             max_consume_retry_times,
@@ -1615,7 +1634,7 @@ impl DefaultMQPushConsumerImpl {
     }
 
     fn build_retry_message_for_send_back(&self, msg: &MessageExt) -> rocketmq_error::RocketMQResult<Message> {
-        let topic = mix_all::get_retry_topic(self.consumer_config.consumer_group());
+        let topic = mix_all::get_retry_topic(self.consumer_config_snapshot().consumer_group());
         let body = msg.get_body().cloned();
         let mut new_msg = if let Some(body) = body {
             Message::builder().topic(topic.as_str()).body(body).build()?
@@ -1656,10 +1675,10 @@ impl DefaultMQPushConsumerImpl {
     }
 
     pub fn get_max_reconsume_times(&self) -> i32 {
-        if self.consumer_config.max_reconsume_times == -1 {
+        if self.consumer_config_snapshot().max_reconsume_times == -1 {
             16
         } else {
-            self.consumer_config.max_reconsume_times
+            self.consumer_config_snapshot().max_reconsume_times
         }
     }
 
@@ -1874,7 +1893,8 @@ impl DefaultMQPushConsumerImpl {
         self.pause.store(true, Ordering::Release);
         info!(
             "Suspend the consumer, instanceName={}, group={}",
-            self.client_config.instance_name, self.consumer_config.consumer_group
+            self.client_config.instance_name,
+            self.consumer_config_snapshot().consumer_group
         );
     }
 
@@ -1883,18 +1903,19 @@ impl DefaultMQPushConsumerImpl {
         self.do_rebalance().await;
         info!(
             "Resume the consumer, instanceName={}, group={}",
-            self.client_config.instance_name, self.consumer_config.consumer_group
+            self.client_config.instance_name,
+            self.consumer_config_snapshot().consumer_group
         );
     }
 }
 
 impl MQConsumerInner for DefaultMQPushConsumerImpl {
     fn group_name(&self) -> CheetahString {
-        self.consumer_config.consumer_group().clone()
+        self.consumer_config_snapshot().consumer_group().clone()
     }
 
     fn message_model(&self) -> MessageModel {
-        self.consumer_config.message_model
+        self.consumer_config_snapshot().message_model
     }
 
     fn consume_type(&self) -> ConsumeType {
@@ -1902,7 +1923,7 @@ impl MQConsumerInner for DefaultMQPushConsumerImpl {
     }
 
     fn consume_from_where(&self) -> ConsumeFromWhere {
-        self.consumer_config.consume_from_where
+        self.consumer_config_snapshot().consume_from_where
     }
 
     fn subscriptions(&self) -> HashSet<SubscriptionData> {
@@ -1921,7 +1942,8 @@ impl MQConsumerInner for DefaultMQPushConsumerImpl {
             if !rebalance {
                 warn!(
                     "rebalance failed, maybe the consumer was paused during rebalance. instanceName={}, group={}",
-                    self.client_config.instance_name, self.consumer_config.consumer_group
+                    self.client_config.instance_name,
+                    self.consumer_config_snapshot().consumer_group
                 );
             }
         }
@@ -1942,7 +1964,8 @@ impl MQConsumerInner for DefaultMQPushConsumerImpl {
         if let Err(err) = self.make_sure_state_ok() {
             error!(
                 "group: {} persistConsumerOffset exception:{}",
-                self.consumer_config.consumer_group, err
+                self.consumer_config_snapshot().consumer_group,
+                err
             );
         } else {
             let guard = self
@@ -1955,7 +1978,7 @@ impl MQConsumerInner for DefaultMQPushConsumerImpl {
             let Some(offset_store) = self.offset_store.as_ref() else {
                 warn!(
                     "group: {} persistConsumerOffset skipped: OffsetStore is not initialized",
-                    self.consumer_config.consumer_group
+                    self.consumer_config_snapshot().consumer_group
                 );
                 return;
             };
@@ -1989,14 +2012,15 @@ impl MQConsumerInner for DefaultMQPushConsumerImpl {
     }
 
     fn is_unit_mode(&self) -> bool {
-        self.consumer_config.unit_mode
+        self.consumer_config_snapshot().unit_mode
     }
 
     async fn reset_offsets(&self, topic: &CheetahString, offsets: HashMap<MessageQueue, i64>) {
         let Some(offset_store) = self.offset_store.as_ref() else {
             warn!(
                 "reset offset ignored because offset store is not initialized. group={}, topic={}",
-                self.consumer_config.consumer_group, topic
+                self.consumer_config_snapshot().consumer_group,
+                topic
             );
             return;
         };
@@ -2050,7 +2074,10 @@ impl MQConsumerInner for DefaultMQPushConsumerImpl {
 
             info!(
                 "reset offset completed. group={}, topic={}, mq={}, offset={}",
-                self.consumer_config.consumer_group, topic, mq, offset
+                self.consumer_config_snapshot().consumer_group,
+                topic,
+                mq,
+                offset
             );
         }
 
@@ -2061,7 +2088,8 @@ impl MQConsumerInner for DefaultMQPushConsumerImpl {
         let Some(offset_store) = self.offset_store.as_ref() else {
             warn!(
                 "consumer status is empty because offset store is not initialized. group={}, topic={}",
-                self.consumer_config.consumer_group, topic
+                self.consumer_config_snapshot().consumer_group,
+                topic
             );
             return HashMap::new();
         };
@@ -2070,6 +2098,7 @@ impl MQConsumerInner for DefaultMQPushConsumerImpl {
     }
 
     async fn consumer_running_info(&self) -> ConsumerRunningInfo {
+        let consumer_config = self.consumer_config_snapshot();
         let mut info = ConsumerRunningInfo::new();
         info.consume_type = self.consume_type();
         info.consume_orderly = self.consume_orderly;
@@ -2080,14 +2109,14 @@ impl MQConsumerInner for DefaultMQPushConsumerImpl {
             self.consume_message_service
                 .as_ref()
                 .map(|service| service.get_core_pool_size().to_string())
-                .unwrap_or_else(|| self.consumer_config.consume_thread_min.to_string()),
+                .unwrap_or_else(|| consumer_config.consume_thread_min.to_string()),
         );
-        info.set_property("consumeThreadMin", self.consumer_config.consume_thread_min.to_string());
-        info.set_property("consumeThreadMax", self.consumer_config.consume_thread_max.to_string());
-        info.set_property("pullBatchSize", self.consumer_config.pull_batch_size.to_string());
+        info.set_property("consumeThreadMin", consumer_config.consume_thread_min.to_string());
+        info.set_property("consumeThreadMax", consumer_config.consume_thread_max.to_string());
+        info.set_property("pullBatchSize", consumer_config.pull_batch_size.to_string());
         info.set_property(
             "consumeMessageBatchMaxSize",
-            self.consumer_config.consume_message_batch_max_size.to_string(),
+            consumer_config.consume_message_batch_max_size.to_string(),
         );
 
         for entry in self.rebalance_impl.get_subscription_inner().iter() {
@@ -2097,7 +2126,7 @@ impl MQConsumerInner for DefaultMQPushConsumerImpl {
         if let Some(client_instance) = self.client_instance.as_ref() {
             for subscription_data in &info.subscription_set {
                 let status = client_instance.consumer_stats_manager().consume_status(
-                    self.consumer_config.consumer_group.as_str(),
+                    consumer_config.consumer_group.as_str(),
                     subscription_data.topic.as_str(),
                 );
                 info.status_table.insert(subscription_data.topic.to_string(), status);
@@ -2152,19 +2181,17 @@ impl MQConsumerInner for DefaultMQPushConsumerImpl {
 
         info.user_consumer_info.insert(
             "consumeThreadMin".to_string(),
-            self.consumer_config.consume_thread_min.to_string(),
+            consumer_config.consume_thread_min.to_string(),
         );
         info.user_consumer_info.insert(
             "consumeThreadMax".to_string(),
-            self.consumer_config.consume_thread_max.to_string(),
+            consumer_config.consume_thread_max.to_string(),
         );
-        info.user_consumer_info.insert(
-            "pullBatchSize".to_string(),
-            self.consumer_config.pull_batch_size.to_string(),
-        );
+        info.user_consumer_info
+            .insert("pullBatchSize".to_string(), consumer_config.pull_batch_size.to_string());
         info.user_consumer_info.insert(
             "consumeMessageBatchMaxSize".to_string(),
-            self.consumer_config.consume_message_batch_max_size.to_string(),
+            consumer_config.consume_message_batch_max_size.to_string(),
         );
 
         info
@@ -2188,7 +2215,7 @@ mod tests {
     use crate::consumer::listener::message_listener_concurrently::MessageListenerConcurrently;
 
     fn new_unstarted_impl() -> DefaultMQPushConsumerImpl {
-        DefaultMQPushConsumerImpl::new(ClientConfig::default(), ArcMut::new(ConsumerConfig::default()), None)
+        DefaultMQPushConsumerImpl::new(ClientConfig::default(), ConsumerConfig::default(), None)
     }
 
     fn new_running_impl() -> DefaultMQPushConsumerImpl {
@@ -2219,7 +2246,7 @@ mod tests {
             Some(Arc::new(NoopConcurrentListener)),
             None,
         )));
-        DefaultMQPushConsumerImpl::new(ClientConfig::default(), ArcMut::new(consumer_config), None)
+        DefaultMQPushConsumerImpl::new(ClientConfig::default(), consumer_config, None)
     }
 
     fn new_startable_push_consumer(
@@ -2234,11 +2261,7 @@ mod tests {
             Some(Arc::new(NoopConcurrentListener)),
             None,
         )));
-        let mut consumer = ArcMut::new(DefaultMQPushConsumerImpl::new(
-            client_config,
-            ArcMut::new(consumer_config),
-            None,
-        ));
+        let mut consumer = ArcMut::new(DefaultMQPushConsumerImpl::new(client_config, consumer_config, None));
         let wrapper = consumer.clone();
         consumer.set_default_mqpush_consumer_impl(wrapper);
         consumer
@@ -2246,12 +2269,17 @@ mod tests {
 
     #[test]
     fn rebalance_threshold_updates_publish_to_owner_config() {
-        let mut consumer = new_unstarted_impl();
+        let consumer = new_unstarted_impl();
+        let initial_config = consumer.consumer_config_snapshot();
 
         consumer.update_pull_thresholds_from_rebalance(Some(25), Some(10));
 
-        assert_eq!(consumer.consumer_config.pull_threshold_for_queue, 25);
-        assert_eq!(consumer.consumer_config.pull_threshold_size_for_queue, 10);
+        let consumer_config = consumer.consumer_config_snapshot();
+        assert!(!Arc::ptr_eq(&initial_config, &consumer_config));
+        assert_eq!(initial_config.pull_threshold_for_queue, 1000);
+        assert_eq!(initial_config.pull_threshold_size_for_queue, 100);
+        assert_eq!(consumer_config.pull_threshold_for_queue, 25);
+        assert_eq!(consumer_config.pull_threshold_size_for_queue, 10);
     }
 
     fn message_queue() -> MessageQueue {
@@ -2471,8 +2499,8 @@ mod tests {
 
     #[test]
     fn send_back_retry_message_preserves_existing_origin_message_id_like_java() {
-        let mut consumer = new_unstarted_impl();
-        consumer.consumer_config.consumer_group = CheetahString::from_static_str("PushGroup");
+        let consumer = new_unstarted_impl();
+        consumer.update_consumer_config(|config| config.consumer_group = CheetahString::from_static_str("PushGroup"));
         let mut msg = message_ext_for_send_back("ns%TopicA");
         MessageAccessor::set_origin_message_id(&mut msg, CheetahString::from_static_str("origin-msg-id"));
 
@@ -2515,8 +2543,8 @@ mod tests {
 
     #[test]
     fn send_back_retry_message_uses_msg_id_when_origin_missing_like_java() {
-        let mut consumer = new_unstarted_impl();
-        consumer.consumer_config.consumer_group = CheetahString::from_static_str("PushGroup");
+        let consumer = new_unstarted_impl();
+        consumer.update_consumer_config(|config| config.consumer_group = CheetahString::from_static_str("PushGroup"));
         let msg = message_ext_for_send_back("TopicA");
 
         let retry_message = consumer
@@ -2557,7 +2585,7 @@ mod tests {
             consumer_group: CheetahString::from_static_str("PushGroup"),
             ..Default::default()
         };
-        let mut consumer = DefaultMQPushConsumerImpl::new(client_config, ArcMut::new(consumer_config), None);
+        let mut consumer = DefaultMQPushConsumerImpl::new(client_config, consumer_config, None);
         let mut msg = message_ext_for_send_back("ns%TopicA");
 
         let error = consumer
@@ -2602,7 +2630,7 @@ mod tests {
             namespace: Some(CheetahString::from_static_str("ns")),
             ..Default::default()
         };
-        let mut consumer = DefaultMQPushConsumerImpl::new(client_config, ArcMut::new(ConsumerConfig::default()), None);
+        let mut consumer = DefaultMQPushConsumerImpl::new(client_config, ConsumerConfig::default(), None);
         let topic = CheetahString::from_static_str("ns%TopicA");
         let cached_queues = HashSet::from([
             MessageQueue::from_parts("ns%TopicA", "broker-b", 1),
@@ -2695,7 +2723,7 @@ mod tests {
         let wrapper = consumer.clone();
         consumer.set_default_mqpush_consumer_impl(wrapper);
         consumer.set_consume_orderly(true);
-        consumer.consumer_config.consumer_group = CheetahString::from_static_str("ResetGroup");
+        consumer.update_consumer_config(|config| config.consumer_group = CheetahString::from_static_str("ResetGroup"));
 
         let offset_store = Arc::new(OffsetStore::new_test());
         consumer.offset_store = Some(offset_store.clone());
@@ -2742,7 +2770,9 @@ mod tests {
         let topic = CheetahString::from_static_str("TopicSnapshotCopy");
         let expression = CheetahString::from_static_str("TagA || TagB");
         let mut consumer = new_check_config_consumer(None);
-        consumer.consumer_config.subscription = Arc::new(HashMap::from([(topic.clone(), expression.clone())]));
+        consumer.update_consumer_config(|config| {
+            config.subscription = Arc::new(HashMap::from([(topic.clone(), expression.clone())]))
+        });
 
         consumer
             .copy_subscription()
