@@ -17,6 +17,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
+use arc_swap::ArcSwap;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use rocketmq_common::common::constant::consume_init_mode::ConsumeInitMode;
@@ -59,19 +60,31 @@ static UNLOCK_DELAY_TIME_MILLS: LazyLock<u64> = LazyLock::new(|| {
 
 pub struct RebalancePushImpl {
     pub(crate) client_config: ClientConfig,
-    pub(crate) consumer_config: ArcMut<ConsumerConfig>,
+    pub(crate) consumer_config: ArcSwap<ConsumerConfig>,
     pub(crate) rebalance_impl_inner: RebalanceImpl<RebalancePushImpl>,
     pub(crate) default_mqpush_consumer_impl: Option<ArcMut<DefaultMQPushConsumerImpl>>,
 }
 
 impl RebalancePushImpl {
-    pub fn new(client_config: ClientConfig, consumer_config: ArcMut<ConsumerConfig>) -> Self {
+    pub fn new(client_config: ClientConfig, consumer_config: ConsumerConfig) -> Self {
         RebalancePushImpl {
             client_config,
-            consumer_config,
+            consumer_config: ArcSwap::from_pointee(consumer_config),
             rebalance_impl_inner: RebalanceImpl::new(None, None, None, None),
             default_mqpush_consumer_impl: None,
         }
+    }
+
+    pub(crate) fn replace_consumer_config(&self, consumer_config: ConsumerConfig) {
+        self.consumer_config.store(Arc::new(consumer_config));
+    }
+
+    fn update_consumer_config(&self, update: impl Fn(&mut ConsumerConfig)) {
+        self.consumer_config.rcu(|current| {
+            let mut next = (**current).clone();
+            update(&mut next);
+            Arc::new(next)
+        });
     }
 }
 
@@ -159,6 +172,7 @@ impl Rebalance for RebalancePushImpl {
         mq_all: &HashSet<MessageQueue>,
         mq_divided: &HashSet<MessageQueue>,
     ) {
+        let consumer_config = self.consumer_config.load_full();
         {
             let Some(mut subscription_data) = self.rebalance_impl_inner.subscription_inner.get_mut(topic) else {
                 warn!("Subscription data not found for topic: {}", topic);
@@ -177,23 +191,39 @@ impl Rebalance for RebalancePushImpl {
             process_queue_table.len()
         };
         if current_queue_count != 0 {
-            let pull_threshold_for_topic = self.consumer_config.pull_threshold_for_topic;
+            let mut pull_threshold_for_queue = None;
+            let mut pull_threshold_size_for_queue = None;
+            let pull_threshold_for_topic = consumer_config.pull_threshold_for_topic;
             if pull_threshold_for_topic != -1 {
                 let new_val = 1.max(pull_threshold_for_topic / current_queue_count as i32);
                 info!(
                     "The pullThresholdForQueue is changed from {} to {}",
-                    self.consumer_config.pull_threshold_for_queue, new_val
+                    consumer_config.pull_threshold_for_queue, new_val
                 );
-                self.consumer_config.pull_threshold_for_queue = new_val as u32;
+                pull_threshold_for_queue = Some(new_val as u32);
             }
-            let pull_threshold_size_for_topic = self.consumer_config.pull_threshold_size_for_topic;
+            let pull_threshold_size_for_topic = consumer_config.pull_threshold_size_for_topic;
             if pull_threshold_size_for_topic != -1 {
                 let new_val = 1.max(pull_threshold_size_for_topic / current_queue_count as i32);
                 info!(
                     "The pullThresholdSizeForQueue is changed from {} to {}",
-                    self.consumer_config.pull_threshold_size_for_queue, new_val
+                    consumer_config.pull_threshold_size_for_queue, new_val
                 );
-                self.consumer_config.pull_threshold_size_for_queue = new_val as u32;
+                pull_threshold_size_for_queue = Some(new_val as u32);
+            }
+            if pull_threshold_for_queue.is_some() || pull_threshold_size_for_queue.is_some() {
+                self.update_consumer_config(|config| {
+                    if let Some(value) = pull_threshold_for_queue {
+                        config.pull_threshold_for_queue = value;
+                    }
+                    if let Some(value) = pull_threshold_size_for_queue {
+                        config.pull_threshold_size_for_queue = value;
+                    }
+                });
+                if let Some(mut consumer_impl) = self.default_mqpush_consumer_impl.as_ref().cloned() {
+                    consumer_impl
+                        .update_pull_thresholds_from_rebalance(pull_threshold_for_queue, pull_threshold_size_for_queue);
+                }
             }
         }
 
@@ -201,12 +231,13 @@ impl Rebalance for RebalancePushImpl {
         if let Some(client_instance) = self.rebalance_impl_inner.client_instance.as_ref() {
             let _ = client_instance.send_heartbeat_to_all_broker_with_lock_v2(true).await;
         }
-        if let Some(ref message_queue_listener) = self.consumer_config.message_queue_listener {
+        if let Some(ref message_queue_listener) = consumer_config.message_queue_listener {
             message_queue_listener.message_queue_changed(topic, mq_all, mq_divided);
         }
     }
 
     async fn remove_unnecessary_message_queue(&mut self, mq: &MessageQueue, pq: &ProcessQueue) -> bool {
+        let consumer_config = self.consumer_config.load_full();
         let Some(ref default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl else {
             error!("DefaultMQPushConsumerImpl not initialized");
             return false;
@@ -218,7 +249,7 @@ impl Rebalance for RebalancePushImpl {
         };
         let offset_store = offset_store;
 
-        if consume_orderly && MessageModel::Clustering == self.consumer_config.message_model {
+        if consume_orderly && MessageModel::Clustering == consumer_config.message_model {
             offset_store.persist(mq).await;
             self.try_remove_order_message_queue(mq, pq).await
         } else {
@@ -252,7 +283,8 @@ impl Rebalance for RebalancePushImpl {
         &mut self,
         mq: &MessageQueue,
     ) -> rocketmq_error::RocketMQResult<i64> {
-        let consume_from_where = self.consumer_config.consume_from_where;
+        let consumer_config = self.consumer_config.load_full();
+        let consume_from_where = consumer_config.consume_from_where;
         let default_mqpush_consumer_impl = self.default_mqpush_consumer_impl.as_ref().ok_or_else(|| {
             error!("DefaultMQPushConsumerImpl not initialized for mq: {}", mq);
             mq_client_err!(
@@ -332,10 +364,8 @@ impl Rebalance for RebalancePushImpl {
                                 format!("Client instance not initialized for mq: {}", mq)
                             ));
                         };
-                        let timestamp = super::parse_consume_timestamp_millis(
-                            self.consumer_config.consume_timestamp.as_deref(),
-                            mq,
-                        )?;
+                        let timestamp =
+                            super::parse_consume_timestamp_millis(consumer_config.consume_timestamp.as_deref(), mq)?;
                         client_instance.mq_admin_impl.search_offset(mq, timestamp).await?
                     }
                 } else {
@@ -368,7 +398,7 @@ impl Rebalance for RebalancePushImpl {
     }
 
     fn get_consume_init_mode(&self) -> i32 {
-        let consume_from_where = self.consumer_config.consume_from_where;
+        let consume_from_where = self.consumer_config.load_full().consume_from_where;
         if consume_from_where == ConsumeFromWhere::ConsumeFromFirstOffset {
             ConsumeInitMode::MIN
         } else {
@@ -525,7 +555,7 @@ impl Rebalance for RebalancePushImpl {
     fn client_rebalance(&mut self, topic: &str) -> bool {
         //Pop message mode, order message consumer not implement, it's use
         // ConsumeMessageOrderlyService to consume
-        self.consumer_config.client_rebalance
+        self.consumer_config.load_full().client_rebalance
             || self.rebalance_impl_inner.message_model == Some(MessageModel::Broadcasting)
             || self
                 .default_mqpush_consumer_impl
@@ -712,4 +742,110 @@ async fn unlock_all_impl(
         })
         .collect::<Vec<_>>();
     futures::future::join_all(map).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
+
+    use cheetah_string::CheetahString;
+    use rocketmq_common::common::message::message_queue::MessageQueue;
+    use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
+
+    use super::RebalancePushImpl;
+    use crate::base::client_config::ClientConfig;
+    use crate::consumer::consumer_impl::process_queue::ProcessQueue;
+    use crate::consumer::consumer_impl::re_balance::Rebalance;
+    use crate::consumer::default_mq_push_consumer::ConsumerConfig;
+    use crate::consumer::message_queue_listener::MessageQueueListener;
+
+    struct CountingMessageQueueListener(Arc<AtomicUsize>);
+
+    impl MessageQueueListener for CountingMessageQueueListener {
+        fn message_queue_changed(
+            &self,
+            _topic: &str,
+            _mq_all: &HashSet<MessageQueue>,
+            _mq_assigned: &HashSet<MessageQueue>,
+        ) {
+            self.0.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    #[test]
+    fn constructor_keeps_an_immutable_config_generation() {
+        let mut source = ConsumerConfig {
+            client_rebalance: false,
+            ..Default::default()
+        };
+        let rebalance = RebalancePushImpl::new(ClientConfig::default(), source.clone());
+
+        source.client_rebalance = true;
+
+        assert!(!rebalance.consumer_config.load_full().client_rebalance);
+    }
+
+    #[tokio::test]
+    async fn queue_change_publishes_recomputed_threshold_snapshot() {
+        let topic = CheetahString::from_static_str("topic-a");
+        let config = ConsumerConfig {
+            pull_threshold_for_topic: 100,
+            pull_threshold_size_for_topic: 40,
+            pull_threshold_for_queue: 1_000,
+            pull_threshold_size_for_queue: 100,
+            ..Default::default()
+        };
+        let mut rebalance = RebalancePushImpl::new(ClientConfig::default(), config);
+        rebalance
+            .rebalance_impl_inner
+            .subscription_inner
+            .insert(topic.clone(), SubscriptionData::default());
+        let mut queues = HashSet::new();
+        {
+            let mut process_queues = rebalance.rebalance_impl_inner.process_queue_table.write().await;
+            for queue_id in 0..4 {
+                let mq = MessageQueue::from_parts(topic.clone(), "broker-a", queue_id);
+                queues.insert(mq.clone());
+                process_queues.insert(mq, Arc::new(ProcessQueue::new()));
+            }
+        }
+
+        rebalance.message_queue_changed(topic.as_str(), &queues, &queues).await;
+
+        let published = rebalance.consumer_config.load_full();
+        assert_eq!(published.pull_threshold_for_queue, 25);
+        assert_eq!(published.pull_threshold_size_for_queue, 10);
+    }
+
+    #[tokio::test]
+    async fn replaced_config_generation_drives_listener_callback() {
+        let topic = CheetahString::from_static_str("topic-a");
+        let old_calls = Arc::new(AtomicUsize::new(0));
+        let new_calls = Arc::new(AtomicUsize::new(0));
+        let mut rebalance = RebalancePushImpl::new(
+            ClientConfig::default(),
+            ConsumerConfig {
+                message_queue_listener: Some(Arc::new(CountingMessageQueueListener(old_calls.clone()))),
+                ..Default::default()
+            },
+        );
+        rebalance
+            .rebalance_impl_inner
+            .subscription_inner
+            .insert(topic.clone(), SubscriptionData::default());
+        rebalance.replace_consumer_config(ConsumerConfig {
+            message_queue_listener: Some(Arc::new(CountingMessageQueueListener(new_calls.clone()))),
+            ..Default::default()
+        });
+
+        rebalance
+            .message_queue_changed(topic.as_str(), &HashSet::new(), &HashSet::new())
+            .await;
+
+        assert_eq!(old_calls.load(Ordering::Relaxed), 0);
+        assert_eq!(new_calls.load(Ordering::Relaxed), 1);
+    }
 }

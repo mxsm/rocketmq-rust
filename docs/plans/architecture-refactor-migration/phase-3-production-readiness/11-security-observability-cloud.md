@@ -390,6 +390,11 @@ M11-12ag 已将 concurrent/orderly 与 POP concurrent/orderly 四类 Push consum
 实际快照降至 398 production/1,054 occurrences，Client owner 降至 80/161，另有 Proxy 1/1；其余 Client/Broker/Store、
 compatibility 与完整候选快照 Gate 仍保持开放。
 
+M11-12ah 已将 RebalancePush consumer config 改为 `ArcSwap` 完整不可变代际；相关 facade setter 显式发布新快照，
+queue-count 变化只通过 Push implementation owner 回写两个动态 threshold。实际快照为 398 production/1,052
+occurrences，Client owner 降至 80/159，另有 Proxy 1/1；其余 Client/Broker/Store、compatibility 与完整候选快照 Gate
+仍保持开放。
+
 ## 公共兼容面
 
 - development/compatibility仍可显式选择；secure只作为新部署默认，不静默重解释旧配置。

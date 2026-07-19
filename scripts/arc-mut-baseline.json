@@ -9527,7 +9527,7 @@
           "id": "2e1a28fe9c0918e52bdf56a5",
           "fingerprint": "d715357faf1d89e33d16251a",
           "item": "mod tests",
-          "line": 2165
+          "line": 2183
         }
       ],
       "owner": "client",
@@ -9546,19 +9546,19 @@
           "id": "ac48842a72ce3b93b2caa41f",
           "fingerprint": "5e557a7df4c287f0047afbc7",
           "item": "fn new",
-          "line": 151
+          "line": 152
         },
         {
-          "id": "2525e402bad638eb45f98eef",
-          "fingerprint": "8becd99a2bfae29e9ab4e0c5",
+          "id": "30c25dd436f4edff591e28e0",
+          "fingerprint": "ba5893640c237abb38a22baf",
           "item": "fn new",
-          "line": 153
+          "line": 154
         },
         {
           "id": "9d8683f94805a42c955b3ff8",
           "fingerprint": "c9a9484e7fcafaf098dd24d7",
           "item": "fn new",
-          "line": 157
+          "line": 158
         }
       ],
       "owner": "client",
@@ -9577,43 +9577,43 @@
           "id": "94dc438e686953c42c2f194c",
           "fingerprint": "1c06f98cf22dbf5b11ff652d",
           "item": "fn new_unstarted_impl",
-          "line": 2173
+          "line": 2191
         },
         {
           "id": "bed96c1972704abacbb50d54",
           "fingerprint": "f2c8ab11b61d8b619ad064f2",
           "item": "fn new_check_config_consumer",
-          "line": 2204
+          "line": 2222
         },
         {
           "id": "c68059f4dfcdd96ba79265bc",
           "fingerprint": "12958be49d7ef666805e01b4",
           "item": "fn new_startable_push_consumer",
-          "line": 2219
+          "line": 2237
         },
         {
           "id": "636e2f5a281e1663e32dd1bd",
           "fingerprint": "6f3d48a79817be1c040a073a",
           "item": "fn new_startable_push_consumer",
-          "line": 2221
+          "line": 2239
         },
         {
           "id": "6ce2a74fbdc815d3daa5e333",
           "fingerprint": "75cd163ada2c71fc9e1b44b3",
           "item": "fn send_message_back_restores_topic_when_retry_fallback_errors_like_java_finally",
-          "line": 2532
+          "line": 2560
         },
         {
           "id": "3b7754c0715f31ce69f43972",
           "fingerprint": "7e868a3beeee278a476a26c6",
           "item": "fn fetch_subscribe_message_queues_prefers_cached_route_like_java",
-          "line": 2577
+          "line": 2605
         },
         {
           "id": "cbb4cac982e2146c24ee895d",
           "fingerprint": "bed922d3f405df26ffbe730e",
           "item": "fn reset_offsets_drops_clears_persists_and_removes_assigned_queue_like_java",
-          "line": 2666
+          "line": 2694
         }
       ],
       "owner": "client",
@@ -9693,25 +9693,25 @@
           "id": "6bde2bb69a82a456377d874e",
           "fingerprint": "324398df6442d6680f5d10e3",
           "item": "fn new",
-          "line": 174
+          "line": 175
         },
         {
           "id": "2bc609e8de95d82d434aa84b",
           "fingerprint": "6337932804b5ac18b4e50e3e",
           "item": "fn set_default_mqpush_consumer_impl",
-          "line": 181
+          "line": 182
         },
         {
           "id": "24fa17371eb2663627047926",
           "fingerprint": "c3923db59875c44ba57d8139",
           "item": "fn get_mq_client_factory",
-          "line": 193
+          "line": 194
         },
         {
           "id": "e8f37285186cca9c332a73da",
           "fingerprint": "6ea020e77dd8adced283cd03",
           "item": "fn set_mq_client_factory",
-          "line": 204
+          "line": 205
         }
       ],
       "owner": "client",
@@ -9730,7 +9730,7 @@
           "id": "0f0d044708edfca1ae1d4c67",
           "fingerprint": "86496c78cf33892adc754a67",
           "item": "fn new_startable_push_consumer",
-          "line": 2210
+          "line": 2228
         }
       ],
       "owner": "client",
@@ -9749,19 +9749,19 @@
           "id": "9d26f62019a525168341ca45",
           "fingerprint": "e3987d672ac08e83a36ffd11",
           "item": "fn do_rebalance",
-          "line": 1902
+          "line": 1920
         },
         {
           "id": "5b17b28d8bdeb32d3de2e6df",
           "fingerprint": "6a81898545cbdf5fae40e0b7",
           "item": "fn try_rebalance",
-          "line": 1916
+          "line": 1934
         },
         {
           "id": "394cfb5961273a9eb01c2a2e",
           "fingerprint": "8aa3de4d8cec698b3866a14b",
           "item": "fn reset_offsets",
-          "line": 2022
+          "line": 2040
         }
       ],
       "owner": "client",
@@ -9780,43 +9780,43 @@
           "id": "1b636421d5ecbfe9f697118b",
           "fingerprint": "ed934938abbd94ebf3ebbef8",
           "item": "fn start_duplicate_consumer_group_rolls_back_like_java",
-          "line": 2284
+          "line": 2312
         },
         {
           "id": "4366210318539c2a7edb2dad",
           "fingerprint": "69343b618ff42492b938e65c",
           "item": "fn start_duplicate_consumer_group_rolls_back_like_java",
-          "line": 2302
+          "line": 2330
         },
         {
           "id": "1c3107c6e26e46a083528afa",
           "fingerprint": "330c5301f067e7c751d78eae",
           "item": "fn startup_after_running_failure_shutdowns_and_unregisters_like_java",
-          "line": 2332
+          "line": 2360
         },
         {
           "id": "860b3bf5713fe264936bc6d1",
           "fingerprint": "dfd6ebf478835de6e623371d",
           "item": "fn startup_after_running_failure_shutdowns_and_unregisters_like_java",
-          "line": 2339
+          "line": 2367
         },
         {
           "id": "70f393815241dacc87e7422f",
           "fingerprint": "ef56c22737c574751b2011fe",
           "item": "fn startup_after_running_failure_shutdowns_and_unregisters_like_java",
-          "line": 2351
+          "line": 2379
         },
         {
           "id": "3a80af2c5eb310032f5e64a4",
           "fingerprint": "ed934938abbd94ebf3ebbef8",
           "item": "fn startup_after_running_failure_shutdowns_and_unregisters_like_java",
-          "line": 2365
+          "line": 2393
         },
         {
           "id": "616daffd00e6d2e9b21ad31d",
           "fingerprint": "ea89c3fc97c837d10c858c78",
           "item": "fn startup_after_running_failure_shutdowns_and_unregisters_like_java",
-          "line": 2370
+          "line": 2398
         }
       ],
       "owner": "client",
@@ -10194,7 +10194,7 @@
           "id": "5ce1ac35d371431c3141b45e",
           "fingerprint": "3102db85cd77738b347a2dce",
           "item": "<module>",
-          "line": 32
+          "line": 33
         }
       ],
       "owner": "client",
@@ -10210,52 +10210,40 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "552843eaf5693118af49ea88",
-          "fingerprint": "3ed55bb9622ad9506c4b5f87",
-          "item": "struct RebalancePushImpl",
-          "line": 62
-        },
-        {
           "id": "966cdadf732cb9a9129a53e0",
           "fingerprint": "1c5fb6f2d1db8071d1b621d3",
           "item": "struct RebalancePushImpl",
-          "line": 64
-        },
-        {
-          "id": "387af4621327924d8d945d38",
-          "fingerprint": "9a1290a5e81f4b293fcceb36",
-          "item": "fn new",
-          "line": 68
+          "line": 65
         },
         {
           "id": "64d6dcb35a7607f27b604811",
           "fingerprint": "3f18fd64fbee357501ba0646",
           "item": "fn set_default_mqpush_consumer_impl",
-          "line": 85
+          "line": 98
         },
         {
           "id": "1e7b3dcb6016848d7213b8f5",
           "fingerprint": "490aeec1231884ed10807dc8",
           "item": "fn set_mq_client_factory",
-          "line": 105
+          "line": 118
         },
         {
           "id": "b5285b7f6c85a4359a1d02e9",
           "fingerprint": "a1646a5f680f703d98e34012",
           "item": "fn build_process_queue_table_by_broker_name",
-          "line": 567
+          "line": 597
         },
         {
           "id": "57ae5b411b2ae52c9a35399a",
           "fingerprint": "0fdba8aa8161e45fff2cff9a",
           "item": "fn lock_all_impl",
-          "line": 586
+          "line": 616
         },
         {
           "id": "ae37eef15f023a2b35bca26c",
           "fingerprint": "283dbe2c1e78bebdff1680ee",
           "item": "fn unlock_all_impl",
-          "line": 658
+          "line": 794
         }
       ],
       "owner": "client",
@@ -10274,7 +10262,7 @@
           "id": "357c73f00c681f8d36f002d6",
           "fingerprint": "66a075fa50c8e0cfef3f523c",
           "item": "<module>",
-          "line": 33
+          "line": 34
         }
       ],
       "owner": "client",
@@ -10293,7 +10281,7 @@
           "id": "fbae69f300996293d31d9908",
           "fingerprint": "4fc19a14536b9dc10e65af05",
           "item": "fn set_rebalance_impl",
-          "line": 116
+          "line": 129
         }
       ],
       "owner": "client",
@@ -10369,7 +10357,7 @@
           "id": "4bd3be26494abb96bc9e260f",
           "fingerprint": "9826bc7f2484e61a6aa6eff9",
           "item": "mod tests",
-          "line": 1382
+          "line": 1399
         }
       ],
       "owner": "client",
@@ -10388,13 +10376,13 @@
           "id": "193975bf1b4d9fc7783cbb1a",
           "fingerprint": "ea3b5033b309243a6ce382c7",
           "item": "fn new",
-          "line": 1350
+          "line": 1367
         },
         {
           "id": "29d9f3c04da2d0fe1f257605",
           "fingerprint": "72b089cf1222118e8b971ce6",
           "item": "fn new",
-          "line": 1351
+          "line": 1368
         }
       ],
       "owner": "client",
@@ -10478,10 +10466,10 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "f6c9b70bcfec6b2a6fb3751e",
-          "fingerprint": "9917c687cec0f810ea80cc6b",
+          "id": "7a488b3e40a99ff4155c2b43",
+          "fingerprint": "5eaa37068f371800913cdf8a",
           "item": "fn apply_tuning_profile",
-          "line": 1346
+          "line": 1356
         }
       ],
       "owner": "client",
