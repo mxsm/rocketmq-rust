@@ -239,7 +239,7 @@ pub struct MQClientInstance {
      */
     admin_ext_table: AdminExtTable,
     pub(crate) mq_client_api_impl: Option<Arc<MQClientAPIImpl>>,
-    pub(crate) mq_admin_impl: ArcMut<MQAdminImpl>,
+    pub(crate) mq_admin_impl: Arc<MQAdminImpl>,
     pub(crate) topic_route_table: TopicRouteTable,
     topic_end_points_table: TopicEndPointsTable,
     lock_namesrv: Arc<RocketMQTokioMutex<()>>,
@@ -350,7 +350,7 @@ impl MQClientInstance {
             consumer_table,
             admin_ext_table,
             mq_client_api_impl: None,
-            mq_admin_impl: ArcMut::new(MQAdminImpl::new()),
+            mq_admin_impl: Arc::new(MQAdminImpl::new()),
             topic_route_table,
             topic_end_points_table,
             lock_namesrv: Arc::default(),
@@ -377,7 +377,8 @@ impl MQClientInstance {
 
         // Clone instance first to avoid borrow checker issues
         let instance_clone = instance.clone();
-        instance.mq_admin_impl.set_client(instance_clone);
+        let client_bound = instance.mq_admin_impl.set_client(instance_clone);
+        debug_assert!(client_bound, "MQAdminImpl client must only be bound once");
 
         let (tx, rx) = tokio::sync::broadcast::channel::<ConnectionNetEvent>(16);
 

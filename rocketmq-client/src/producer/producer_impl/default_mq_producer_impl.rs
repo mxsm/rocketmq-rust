@@ -984,7 +984,6 @@ impl DefaultMQProducerImpl {
             if topic_publish_info.ok() {
                 let client_instance = self.client_instance()?;
                 let message_queue_list = client_instance
-                    .mut_from_ref()
                     .mq_admin_impl
                     .parse_publish_message_queues(&topic_publish_info.message_queue_list, &mut self.client_config);
                 let message_queue = Self::select_message_queue_with_user_message(
@@ -1977,7 +1976,6 @@ impl DefaultMQProducerImpl {
             if topic_publish_info.ok() {
                 let client_instance = self.client_instance()?;
                 let message_queue_list = client_instance
-                    .mut_from_ref()
                     .mq_admin_impl
                     .parse_publish_message_queues(&topic_publish_info.message_queue_list, &mut self.client_config);
                 let message_queue = Self::select_message_queue_with_user_message(
@@ -2031,7 +2029,6 @@ impl DefaultMQProducerImpl {
             .clone()
             .ok_or_else(|| mq_client_err!("MQClientAPIImpl is not available; producer has not been started"))?;
         client_instance
-            .mut_from_ref()
             .mq_admin_impl
             .fetch_publish_message_queues(topic, mq_client_api_impl, &mut self.client_config)
             .await
@@ -2047,7 +2044,6 @@ impl DefaultMQProducerImpl {
     ) -> rocketmq_error::RocketMQResult<()> {
         self.make_sure_state_ok()?;
         self.client_instance()?
-            .mut_from_ref()
             .mq_admin_impl
             .create_topic(key, new_topic, queue_num, topic_sys_flag, attributes)
             .await
@@ -2057,7 +2053,6 @@ impl DefaultMQProducerImpl {
         self.make_sure_state_ok()?;
         let mq = self.client_config.queue_with_namespace(mq.clone());
         self.client_instance()?
-            .mut_from_ref()
             .mq_admin_impl
             .search_offset(&mq, timestamp)
             .await
@@ -2066,31 +2061,19 @@ impl DefaultMQProducerImpl {
     pub async fn max_offset(&mut self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
         self.make_sure_state_ok()?;
         let mq = self.client_config.queue_with_namespace(mq.clone());
-        self.client_instance()?
-            .mut_from_ref()
-            .mq_admin_impl
-            .max_offset(&mq)
-            .await
+        self.client_instance()?.mq_admin_impl.max_offset(&mq).await
     }
 
     pub async fn min_offset(&mut self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
         self.make_sure_state_ok()?;
         let mq = self.client_config.queue_with_namespace(mq.clone());
-        self.client_instance()?
-            .mut_from_ref()
-            .mq_admin_impl
-            .min_offset(&mq)
-            .await
+        self.client_instance()?.mq_admin_impl.min_offset(&mq).await
     }
 
     pub async fn earliest_msg_store_time(&mut self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
         self.make_sure_state_ok()?;
         let mq = self.client_config.queue_with_namespace(mq.clone());
-        self.client_instance()?
-            .mut_from_ref()
-            .mq_admin_impl
-            .earliest_msg_store_time(&mq)
-            .await
+        self.client_instance()?.mq_admin_impl.earliest_msg_store_time(&mq).await
     }
 
     pub async fn query_message(
@@ -2103,7 +2086,6 @@ impl DefaultMQProducerImpl {
     ) -> rocketmq_error::RocketMQResult<QueryResult> {
         self.make_sure_state_ok()?;
         self.client_instance()?
-            .mut_from_ref()
             .mq_admin_impl
             .query_message(topic, key, max_num, begin, end)
             .await
@@ -2118,7 +2100,6 @@ impl DefaultMQProducerImpl {
         let begin = current_millis().saturating_sub(QUERY_UNIQ_KEY_LOOKBACK_MILLIS);
         let result = self
             .client_instance()?
-            .mut_from_ref()
             .mq_admin_impl
             .query_message_with_unique_flag(topic, uniq_key, 32, begin, i64::MAX as u64, true)
             .await?;
@@ -2131,11 +2112,7 @@ impl DefaultMQProducerImpl {
 
     pub async fn view_message(&mut self, topic: &str, msg_id: &str) -> rocketmq_error::RocketMQResult<MessageExt> {
         self.make_sure_state_ok()?;
-        self.client_instance()?
-            .mut_from_ref()
-            .mq_admin_impl
-            .view_message(topic, msg_id)
-            .await
+        self.client_instance()?.mq_admin_impl.view_message(topic, msg_id).await
     }
 
     pub async fn request_with_selector<M, S, T>(

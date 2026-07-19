@@ -14,6 +14,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::attribute::attribute_parser::AttributeParser;
@@ -44,24 +45,24 @@ use crate::implementation::mq_client_api_impl::MQClientAPIImpl;
 
 pub struct MQAdminImpl {
     timeout_millis: u64,
-    client: Option<ArcMut<MQClientInstance>>,
+    client: OnceLock<ArcMut<MQClientInstance>>,
 }
 
 impl MQAdminImpl {
     pub fn new() -> Self {
         MQAdminImpl {
             timeout_millis: 60000,
-            client: None,
+            client: OnceLock::new(),
         }
     }
 
-    pub fn set_client(&mut self, client: ArcMut<MQClientInstance>) {
-        self.client = Some(client);
+    pub fn set_client(&self, client: ArcMut<MQClientInstance>) -> bool {
+        self.client.set(client).is_ok()
     }
 
-    fn client(&mut self) -> rocketmq_error::RocketMQResult<ArcMut<MQClientInstance>> {
+    fn client(&self) -> rocketmq_error::RocketMQResult<ArcMut<MQClientInstance>> {
         self.client
-            .as_ref()
+            .get()
             .cloned()
             .ok_or_else(|| RocketMQError::not_initialized("MQClientInstance"))
     }
@@ -162,7 +163,7 @@ impl MQAdminImpl {
 
 impl MQAdminImpl {
     pub async fn create_topic(
-        &mut self,
+        &self,
         key: &str,
         new_topic: &str,
         queue_num: i32,
@@ -241,7 +242,7 @@ impl MQAdminImpl {
     }
 
     pub fn parse_publish_message_queues(
-        &mut self,
+        &self,
         message_queue_array: &[MessageQueue],
         client_config: &mut ClientConfig,
     ) -> Vec<MessageQueue> {
@@ -260,7 +261,7 @@ impl MQAdminImpl {
     }
 
     pub async fn fetch_publish_message_queues(
-        &mut self,
+        &self,
         topic: &str,
         mq_client_api_impl: Arc<MQClientAPIImpl>,
         client_config: &mut ClientConfig,
@@ -288,11 +289,8 @@ impl MQAdminImpl {
     /// # Errors
     ///
     /// Returns an error if the broker address cannot be resolved or the remote call fails.
-    pub async fn max_offset(&mut self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
-        let client = self
-            .client
-            .as_mut()
-            .ok_or_else(|| RocketMQError::not_initialized("MQClientInstance"))?;
+    pub async fn max_offset(&self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
+        let mut client = self.client()?;
         let broker_name = client.get_broker_name_from_message_queue(mq).await;
         let mut broker_addr = client.find_broker_address_in_publish(broker_name.as_ref());
         if broker_addr.is_none() {
@@ -303,7 +301,7 @@ impl MQAdminImpl {
         if let Some(ref broker_addr) = broker_addr {
             return client
                 .mq_client_api_impl
-                .as_mut()
+                .as_ref()
                 .ok_or_else(|| RocketMQError::not_initialized("MQClientAPIImpl"))?
                 .get_max_offset(broker_addr, mq, self.timeout_millis)
                 .await;
@@ -320,12 +318,9 @@ impl MQAdminImpl {
     /// # Errors
     ///
     /// Returns an error if the broker address cannot be resolved or the remote call fails.
-    pub async fn search_offset(&mut self, mq: &MessageQueue, timestamp: u64) -> rocketmq_error::RocketMQResult<i64> {
+    pub async fn search_offset(&self, mq: &MessageQueue, timestamp: u64) -> rocketmq_error::RocketMQResult<i64> {
         let timestamp = Self::timestamp_to_java_long("searchOffset", timestamp)?;
-        let client = self
-            .client
-            .as_mut()
-            .ok_or_else(|| RocketMQError::not_initialized("MQClientInstance"))?;
+        let mut client = self.client()?;
         let broker_name = client.get_broker_name_from_message_queue(mq).await;
         let mut broker_addr = client.find_broker_address_in_publish(broker_name.as_ref());
         if broker_addr.is_none() {
@@ -336,7 +331,7 @@ impl MQAdminImpl {
         if let Some(ref broker_addr) = broker_addr {
             return client
                 .mq_client_api_impl
-                .as_mut()
+                .as_ref()
                 .ok_or_else(|| RocketMQError::not_initialized("MQClientAPIImpl"))?
                 .search_offset_by_timestamp(broker_addr, mq, timestamp, BoundaryType::Lower, self.timeout_millis)
                 .await;
@@ -344,11 +339,8 @@ impl MQAdminImpl {
         Err(mq_client_err!(format!("The broker[{}] not exist", mq.broker_name())))
     }
 
-    pub async fn min_offset(&mut self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
-        let client = self
-            .client
-            .as_mut()
-            .ok_or_else(|| RocketMQError::not_initialized("MQClientInstance"))?;
+    pub async fn min_offset(&self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
+        let mut client = self.client()?;
         let broker_name = client.get_broker_name_from_message_queue(mq).await;
         let mut broker_addr = client.find_broker_address_in_publish(broker_name.as_ref());
         if broker_addr.is_none() {
@@ -359,7 +351,7 @@ impl MQAdminImpl {
         if let Some(ref broker_addr) = broker_addr {
             return client
                 .mq_client_api_impl
-                .as_mut()
+                .as_ref()
                 .ok_or_else(|| RocketMQError::not_initialized("MQClientAPIImpl"))?
                 .get_min_offset(broker_addr, mq, self.timeout_millis)
                 .await;
@@ -367,11 +359,8 @@ impl MQAdminImpl {
         Err(mq_client_err!(format!("The broker[{}] not exist", mq.broker_name())))
     }
 
-    pub async fn earliest_msg_store_time(&mut self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
-        let client = self
-            .client
-            .as_mut()
-            .ok_or_else(|| RocketMQError::not_initialized("MQClientInstance"))?;
+    pub async fn earliest_msg_store_time(&self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
+        let mut client = self.client()?;
         let broker_name = client.get_broker_name_from_message_queue(mq).await;
         let mut broker_addr = client.find_broker_address_in_publish(broker_name.as_ref());
         if broker_addr.is_none() {
@@ -382,7 +371,7 @@ impl MQAdminImpl {
         if let Some(ref broker_addr) = broker_addr {
             return client
                 .mq_client_api_impl
-                .as_mut()
+                .as_ref()
                 .ok_or_else(|| RocketMQError::not_initialized("MQClientAPIImpl"))?
                 .get_earliest_msg_store_time(broker_addr, mq, self.timeout_millis)
                 .await;
@@ -390,7 +379,7 @@ impl MQAdminImpl {
         Err(mq_client_err!(format!("The broker[{}] not exist", mq.broker_name())))
     }
 
-    pub async fn view_message(&mut self, topic: &str, msg_id: &str) -> rocketmq_error::RocketMQResult<MessageExt> {
+    pub async fn view_message(&self, topic: &str, msg_id: &str) -> rocketmq_error::RocketMQResult<MessageExt> {
         let message_id = message_decoder::decode_message_id(msg_id).map_err(|_| {
             mq_client_err!(
                 rocketmq_remoting::code::response_code::ResponseCode::NoMessage as i32,
@@ -405,14 +394,14 @@ impl MQAdminImpl {
         };
         self.client()?
             .mq_client_api_impl
-            .as_mut()
+            .as_ref()
             .ok_or_else(|| RocketMQError::not_initialized("MQClientAPIImpl"))?
             .view_message(&broker_addr, request_header, self.timeout_millis)
             .await
     }
 
     pub async fn query_message(
-        &mut self,
+        &self,
         topic: &str,
         key: &str,
         max_num: i32,
@@ -424,7 +413,7 @@ impl MQAdminImpl {
     }
 
     pub async fn query_message_with_unique_flag(
-        &mut self,
+        &self,
         topic: &str,
         key: &str,
         max_num: i32,
@@ -516,6 +505,19 @@ impl MQAdminImpl {
 mod tests {
     use super::*;
     use rocketmq_remoting::protocol::command_custom_header::CommandCustomHeader;
+
+    #[test]
+    fn client_binding_is_one_time_and_shared() {
+        let instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "admin-client-binding", None);
+        let admin = MQAdminImpl::new();
+
+        assert!(admin.set_client(instance.clone()));
+        assert!(!admin.set_client(instance));
+        assert_eq!(
+            admin.client().expect("bound client should remain available").client_id,
+            "admin-client-binding"
+        );
+    }
 
     #[test]
     fn query_message_request_header_sets_java_index_type_for_key_query() {
