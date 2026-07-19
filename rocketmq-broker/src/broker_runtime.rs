@@ -1289,7 +1289,7 @@ impl BrokerRuntime {
 
         let started = Instant::now();
         let mut pull_request_hold_present = false;
-        if let Some(pull_request_hold_service) = self.inner.pull_request_hold_service.as_mut() {
+        if let Some(pull_request_hold_service) = self.inner.pull_request_hold_service.as_ref() {
             pull_request_hold_present = true;
             pull_request_hold_service.shutdown().await;
         }
@@ -2207,21 +2207,20 @@ impl BrokerRuntime {
             self.inner.transactional_message_service.as_ref().unwrap().clone(),
             self.inner.clone(),
         );
-        let pull_message_result_handler = ArcMut::new(DefaultPullMessageResultHandler::new(
+        let pull_message_result_handler = Arc::new(DefaultPullMessageResultHandler::new(
             Arc::new(Default::default()), //optimize
             self.inner.clone(),
         ));
 
-        let pull_message_processor = ArcMut::new(PullMessageProcessor::new(
+        let pull_message_processor = Arc::new(PullMessageProcessor::new(
             pull_message_result_handler,
             self.inner.clone(),
         ));
 
         let consumer_manage_processor = ConsumerManageProcessor::new(self.inner.clone());
-        self.inner.pull_request_hold_service = Some(PullRequestHoldService::new(
-            pull_message_processor.clone(),
-            self.inner.clone(),
-        ));
+        self.inner.pull_request_hold_service = Some(Arc::new(PullRequestHoldService::new(Arc::downgrade(
+            &pull_message_processor,
+        ))));
 
         let inner = self.inner.clone();
         self.inner
@@ -2252,9 +2251,7 @@ impl BrokerRuntime {
             )
         });
         if let Some(task_group) = request_processor_task_group.clone() {
-            pull_message_processor
-                .mut_from_ref()
-                .set_wakeup_task_group(task_group.clone());
+            pull_message_processor.set_wakeup_task_group(task_group.clone());
             broker_request_processor.set_request_task_group(task_group);
         }
         self.request_processor_task_group = request_processor_task_group;
@@ -2829,9 +2826,15 @@ impl BrokerRuntime {
             topic_queue_mapping_clean_service.start();
         }
 
-        let inner = self.inner.clone();
-        if let Some(pull_request_hold_service) = self.inner.pull_request_hold_service.as_mut() {
-            pull_request_hold_service.start(inner);
+        let pull_request_hold_task_group = self.broker_task_group_or_current(
+            "rocketmq-broker.long-polling.pull-request-hold",
+            "failed to start PullRequestHoldService outside Tokio runtime",
+        );
+        if let (Some(pull_request_hold_service), Some(task_group)) = (
+            self.inner.pull_request_hold_service.as_ref(),
+            pull_request_hold_task_group,
+        ) {
+            PullRequestHoldService::start(pull_request_hold_service, task_group).await;
         }
 
         if let Some(broker_stats_manager) = self.inner.broker_stats_manager.as_mut() {
@@ -3337,7 +3340,7 @@ pub(crate) struct BrokerRuntimeInner<MS: MessageStore> {
     update_master_haserver_addr_periodically: bool,
     should_start_time: Arc<AtomicU64>,
     is_isolated: Arc<AtomicBool>,
-    pull_request_hold_service: Option<PullRequestHoldService<MS>>,
+    pull_request_hold_service: Option<Arc<PullRequestHoldService<MS>>>,
     rebalance_lock_manager: RebalanceLockManager,
     broker_member_group: BrokerMemberGroup,
     transactional_message_check_listener: Option<DefaultTransactionalMessageCheckListener<MS>>,
@@ -3518,11 +3521,6 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     #[inline]
     pub fn update_master_haserver_addr_periodically_mut(&mut self) -> &mut bool {
         &mut self.update_master_haserver_addr_periodically
-    }
-
-    #[inline]
-    pub fn pull_request_hold_service_mut(&mut self) -> Option<&mut PullRequestHoldService<MS>> {
-        self.pull_request_hold_service.as_mut()
     }
 
     #[inline]
@@ -3805,12 +3803,12 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
 
     #[inline]
     pub fn pull_request_hold_service(&self) -> Option<&PullRequestHoldService<MS>> {
-        self.pull_request_hold_service.as_ref()
+        self.pull_request_hold_service.as_deref()
     }
 
     #[inline]
     pub fn pull_request_hold_service_unchecked(&self) -> &PullRequestHoldService<MS> {
-        unsafe { self.pull_request_hold_service.as_ref().unwrap_unchecked() }
+        unsafe { self.pull_request_hold_service.as_deref().unwrap_unchecked() }
     }
 
     #[inline]
@@ -4004,7 +4002,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn set_pull_request_hold_service(&mut self, pull_request_hold_service: PullRequestHoldService<MS>) {
+    pub fn set_pull_request_hold_service(&mut self, pull_request_hold_service: Arc<PullRequestHoldService<MS>>) {
         self.pull_request_hold_service = Some(pull_request_hold_service);
     }
 
@@ -5006,7 +5004,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
 
         // notify PullRequest on hold to pull from master.
         if self.min_broker_id_in_group.load(Ordering::SeqCst) == MASTER_ID {
-            self.pull_request_hold_service_unchecked().notify_master_online().await;
+            self.pull_request_hold_service_unchecked().notify_master_online();
         }
     }
 

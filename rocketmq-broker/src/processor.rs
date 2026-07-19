@@ -79,7 +79,7 @@ pub(crate) mod send_message_processor;
 
 pub enum BrokerProcessorType<MS: MessageStore, TS> {
     Send(ArcMut<SendMessageProcessor<MS, TS>>),
-    Pull(ArcMut<PullMessageProcessor<MS>>),
+    Pull(Arc<PullMessageProcessor<MS>>),
     Peek(ArcMut<PeekMessageProcessor<MS>>),
     Pop(Arc<PopMessageProcessor<MS>>),
     PopLite(Arc<PopLiteMessageProcessor<MS>>),
@@ -171,7 +171,7 @@ where
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         match self {
             BrokerProcessorType::Send(processor) => processor.process_request(channel, ctx, request).await,
-            BrokerProcessorType::Pull(processor) => processor.process_request(channel, ctx, request).await,
+            BrokerProcessorType::Pull(processor) => processor.process_request_shared(channel, ctx, request).await,
             BrokerProcessorType::Peek(processor) => processor.process_request(channel, ctx, request).await,
             BrokerProcessorType::Pop(processor) => processor.process_request_shared(channel, ctx, request).await,
             BrokerProcessorType::PopLite(processor) => processor.process_request_shared(channel, ctx, request).await,
@@ -199,7 +199,7 @@ where
     fn reject_request(&self, code: i32) -> RejectRequestResponse {
         match self {
             BrokerProcessorType::Send(processor) => processor.reject_request(code),
-            BrokerProcessorType::Pull(processor) => processor.reject_request(code),
+            BrokerProcessorType::Pull(processor) => processor.reject_request_shared(),
             BrokerProcessorType::Peek(processor) => processor.reject_request(code),
             BrokerProcessorType::Pop(processor) => processor.reject_request(code),
             BrokerProcessorType::PopLite(processor) => processor.reject_request(code),

@@ -18,6 +18,7 @@ use std::hash::Hash;
 use std::hash::Hasher;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::broker::broker_role::BrokerRole;
@@ -69,6 +70,7 @@ use crate::coldctr::cold_data_pull_request_hold_service::NO_SUSPEND_KEY;
 use crate::filter::consumer_filter_data::ConsumerFilterData;
 use crate::filter::expression_for_retry_message_filter::ExpressionForRetryMessageFilter;
 use crate::filter::expression_message_filter::ExpressionMessageFilter;
+use crate::long_polling::long_polling_service::pull_request_hold_service::PullRequestProcessor;
 use crate::processor::default_pull_message_result_handler::DefaultPullMessageResultHandler;
 use crate::processor::pull_message_result_handler::PullMessageResultHandler;
 
@@ -119,12 +121,12 @@ fn store_read_max_msg_bytes(max_msg_bytes: Option<i32>) -> i32 {
 /// - PUSH consumers receive `SYSTEM_BUSY` immediately
 /// - PULL consumers are either suspended or limited to 1 message
 pub struct PullMessageProcessor<MS: MessageStore> {
-    pull_message_result_handler: ArcMut<DefaultPullMessageResultHandler<MS>>,
+    pull_message_result_handler: Arc<DefaultPullMessageResultHandler<MS>>,
     /// Sharded write guards used only for suspended-pull wakeup responses.
     /// Same-channel responses map to the same guard; unrelated channels can write in parallel.
     wakeup_write_locks: Arc<Vec<Arc<Mutex<()>>>>,
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
-    wakeup_task_group: Option<TaskGroup>,
+    wakeup_task_group: OnceLock<TaskGroup>,
 }
 
 impl<MS> RequestProcessor for PullMessageProcessor<MS>
@@ -133,6 +135,24 @@ where
 {
     async fn process_request(
         &mut self,
+        channel: Channel,
+        ctx: ConnectionHandlerContext,
+        request: &mut RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        self.process_request_shared(channel, ctx, request).await
+    }
+
+    fn reject_request(&self, _code: i32) -> RejectRequestResponse {
+        self.reject_request_shared()
+    }
+}
+
+impl<MS> PullMessageProcessor<MS>
+where
+    MS: MessageStore,
+{
+    pub(crate) async fn process_request_shared(
+        &self,
         channel: Channel,
         ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
@@ -155,7 +175,7 @@ where
         }
     }
 
-    fn reject_request(&self, _code: i32) -> RejectRequestResponse {
+    pub(crate) fn reject_request_shared(&self) -> RejectRequestResponse {
         if !self.broker_runtime_inner.broker_config().slave_read_enable
             && self.broker_runtime_inner.message_store_config().broker_role == BrokerRole::Slave
         {
@@ -182,19 +202,21 @@ where
     MS: MessageStore,
 {
     pub fn new(
-        pull_message_result_handler: ArcMut<DefaultPullMessageResultHandler<MS>>,
+        pull_message_result_handler: Arc<DefaultPullMessageResultHandler<MS>>,
         broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
     ) -> Self {
         Self {
             pull_message_result_handler,
             wakeup_write_locks: new_wakeup_write_locks(),
             broker_runtime_inner,
-            wakeup_task_group: None,
+            wakeup_task_group: OnceLock::new(),
         }
     }
 
-    pub(crate) fn set_wakeup_task_group(&mut self, task_group: TaskGroup) {
-        self.wakeup_task_group = Some(task_group);
+    pub(crate) fn set_wakeup_task_group(&self, task_group: TaskGroup) {
+        if self.wakeup_task_group.set(task_group).is_err() {
+            warn!("PullMessageProcessor wake-up task group is already initialized");
+        }
     }
 
     /// Creates an error response with the given code and remark.
@@ -620,7 +642,7 @@ where
 {
     /// Processes a pull message request with all the entry point options.
     pub async fn process_request_(
-        &mut self,
+        &self,
         channel: Channel,
         ctx: ConnectionHandlerContext,
         request_code: RequestCode,
@@ -653,7 +675,7 @@ where
     /// * `Ok(None)` - Request was suspended (cold data flow control or long polling)
     #[allow(unused_assignments)]
     async fn process_request_inner(
-        &mut self,
+        &self,
         request_code: RequestCode,
         channel: Channel,
         ctx: ConnectionHandlerContext,
@@ -976,7 +998,7 @@ where
     }
 
     fn query_broadcast_pull_init_offset(
-        &mut self,
+        &self,
         topic: &CheetahString,
         group: &CheetahString,
         queue_id: i32,
@@ -1017,12 +1039,12 @@ where
     }
 
     pub fn execute_request_when_wakeup(
-        &self,
-        mut pull_message_processor: ArcMut<PullMessageProcessor<MS>>,
+        self: &Arc<Self>,
         channel: Channel,
         ctx: ConnectionHandlerContext,
         mut request: RemotingCommand,
     ) {
+        let pull_message_processor = Arc::clone(self);
         let locks = Arc::clone(&self.wakeup_write_locks);
         let task = async move {
             let broker_allow_flow_ctr_suspend =
@@ -1048,7 +1070,34 @@ where
                 drop(guard);
             }
         };
-        spawn_wakeup_pull_task(self.wakeup_task_group.as_ref(), task);
+        spawn_wakeup_pull_task(self.wakeup_task_group.get(), task);
+    }
+}
+
+impl<MS> PullRequestProcessor for PullMessageProcessor<MS>
+where
+    MS: MessageStore + Send + Sync + 'static,
+{
+    fn long_polling_scan_config(&self) -> (bool, u64) {
+        (
+            self.broker_runtime_inner.broker_config().long_polling_enable,
+            self.broker_runtime_inner.broker_config().short_polling_time_mills,
+        )
+    }
+
+    fn max_offset_in_queue(&self, topic: &CheetahString, queue_id: i32) -> Option<i64> {
+        self.broker_runtime_inner
+            .message_store()
+            .map(|message_store| message_store.get_max_offset_in_queue(topic, queue_id))
+    }
+
+    fn execute_request_when_wakeup(
+        self: Arc<Self>,
+        channel: Channel,
+        ctx: ConnectionHandlerContext,
+        request: RemotingCommand,
+    ) {
+        PullMessageProcessor::execute_request_when_wakeup(&self, channel, ctx, request);
     }
 }
 
@@ -1178,7 +1227,7 @@ mod tests {
     }
 
     fn new_processor<MS: MessageStore>(inner: ArcMut<BrokerRuntimeInner<MS>>) -> PullMessageProcessor<MS> {
-        let handler = ArcMut::new(DefaultPullMessageResultHandler::new(Arc::new(vec![]), inner.clone()));
+        let handler = Arc::new(DefaultPullMessageResultHandler::new(Arc::new(vec![]), inner.clone()));
         PullMessageProcessor::new(handler, inner)
     }
 

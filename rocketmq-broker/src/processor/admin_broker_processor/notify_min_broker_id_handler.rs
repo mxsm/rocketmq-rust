@@ -129,12 +129,13 @@ impl<MS: MessageStore> NotifyMinBrokerChangeIdHandler<MS> {
             min_broker_addr
         );
 
-        let mut lock_guard = self.lock.write().await;
-        lock_guard.min_broker_id_in_group = Some(min_broker_id);
-        lock_guard.min_broker_addr_in_group = Arc::new(CheetahString::from_slice(min_broker_addr));
+        {
+            let mut lock_guard = self.lock.write().await;
+            lock_guard.min_broker_id_in_group = Some(min_broker_id);
+            lock_guard.min_broker_addr_in_group = Arc::new(CheetahString::from_slice(min_broker_addr));
+        }
 
-        let should_start = self.broker_runtime_inner.get_min_broker_id_in_group()
-            == self.lock.read().await.min_broker_id_in_group.unwrap();
+        let should_start = self.broker_runtime_inner.get_min_broker_id_in_group() == min_broker_id;
 
         self.change_special_service_status(should_start).await;
 
@@ -154,10 +155,10 @@ impl<MS: MessageStore> NotifyMinBrokerChangeIdHandler<MS> {
             self.on_master_on_line(min_broker_addr, master_ha_addr).await;
         }
 
-        if self.lock.read().await.min_broker_id_in_group.unwrap() == MASTER_ID {
+        if min_broker_id == MASTER_ID {
             let pull_request_hold_service = self.broker_runtime_inner.pull_request_hold_service();
             if let Some(pull_request_hold_service) = pull_request_hold_service {
-                pull_request_hold_service.notify_master_online().await;
+                pull_request_hold_service.notify_master_online();
             } else {
                 error!("pull_request_hold_service is empty");
             }

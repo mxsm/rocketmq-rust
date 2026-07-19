@@ -461,6 +461,13 @@ start/shutdown/restart。实际快照降至 294 production/725 occurrences、165
 172/417；compatibility 14/40 不增。下一子切片 M11-12at 处理 Broker Pull processor/request-hold lifecycle ownership，
 完整候选快照与 HUMAN Gate 仍保持开放。
 
+M11-12at 已将 `PullMessageProcessor`、`DefaultPullMessageResultHandler`、`PullRequestHoldService` 与 Broker carrier 改为
+标准 `Arc`，hold service 和 scan task 只持标准 `Weak` 回边；service 通过窄 processor capability 获取动态配置和 Store
+offset，不再强持有 BrokerRuntimeInner。异步 lifecycle gate 串行 start/shutdown/restart，停止状态拒绝新挂起并清空请求，
+deadline 发布与 master-change lock 顺序已收紧。实际快照为 289 production/706 occurrences、162 test/458 occurrences，
+Broker owner 为 167/398；compatibility 14/40 不增。下一子切片 M11-12au 处理 Broker ConsumerOffsetManager ownership，
+完整候选快照与 HUMAN Gate 仍保持开放。
+
 ## 公共兼容面
 
 - development/compatibility仍可显式选择；secure只作为新部署默认，不静默重解释旧配置。
