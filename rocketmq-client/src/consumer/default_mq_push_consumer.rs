@@ -70,7 +70,7 @@ pub struct ConsumerConfig {
     pub(crate) subscription: ArcMut<HashMap<CheetahString, CheetahString>>,
     pub(crate) message_listener: Option<ArcMut<MessageListener>>,
     pub(crate) message_queue_listener: Option<ArcMessageQueueListener>,
-    pub(crate) offset_store: Option<ArcMut<OffsetStore>>,
+    pub(crate) offset_store: Option<Arc<OffsetStore>>,
     pub(crate) consume_thread_min: u32,
     pub(crate) consume_thread_max: u32,
     pub(crate) adjust_thread_pool_nums_threshold: u64,
@@ -130,7 +130,7 @@ impl ConsumerConfig {
         &self.message_queue_listener
     }*/
 
-    pub fn offset_store(&self) -> Option<ArcMut<OffsetStore>> {
+    pub fn offset_store(&self) -> Option<Arc<OffsetStore>> {
         self.offset_store.clone()
     }
 
@@ -309,7 +309,7 @@ impl ConsumerConfig {
         self.message_queue_listener = message_queue_listener;
     }
 
-    pub fn set_offset_store(&mut self, offset_store: Option<ArcMut<OffsetStore>>) {
+    pub fn set_offset_store(&mut self, offset_store: Option<Arc<OffsetStore>>) {
         self.offset_store = offset_store;
     }
 
@@ -1291,7 +1291,7 @@ impl DefaultMQPushConsumer {
         }
     }
 
-    pub fn offset_store(&self) -> Option<ArcMut<OffsetStore>> {
+    pub fn offset_store(&self) -> Option<Arc<OffsetStore>> {
         self.consumer_config.offset_store().or_else(|| {
             self.default_mqpush_consumer_impl
                 .as_ref()
@@ -1299,11 +1299,11 @@ impl DefaultMQPushConsumer {
         })
     }
 
-    pub fn get_offset_store(&self) -> Option<ArcMut<OffsetStore>> {
+    pub fn get_offset_store(&self) -> Option<Arc<OffsetStore>> {
         self.offset_store()
     }
 
-    pub fn set_offset_store(&mut self, offset_store: Option<ArcMut<OffsetStore>>) {
+    pub fn set_offset_store(&mut self, offset_store: Option<Arc<OffsetStore>>) {
         self.consumer_config.set_offset_store(offset_store.clone());
         if let Some(consumer_impl) = self.default_mqpush_consumer_impl.as_mut() {
             consumer_impl.set_offset_store(offset_store);
@@ -1648,7 +1648,7 @@ mod tests {
         let mut consumer = DefaultMQPushConsumer::builder()
             .consumer_group("push_java_getter_group")
             .build();
-        let offset_store = ArcMut::new(OffsetStore::new_test());
+        let offset_store = Arc::new(OffsetStore::new_test());
 
         consumer.set_message_model(MessageModel::Broadcasting);
         consumer.set_consume_from_where(ConsumeFromWhere::ConsumeFromFirstOffset);
@@ -1696,7 +1696,7 @@ mod tests {
         let mut consumer = DefaultMQPushConsumer::builder()
             .consumer_group("push_offset_store_facade_group")
             .build();
-        let offset_store = ArcMut::new(OffsetStore::new_test());
+        let offset_store = Arc::new(OffsetStore::new_test());
         let mq = MessageQueue::from_parts("TopicOffset", "broker-a", 0);
 
         assert!(consumer.offset_store().is_none());

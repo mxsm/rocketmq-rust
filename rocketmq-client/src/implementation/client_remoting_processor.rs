@@ -545,6 +545,7 @@ impl ClientRemotingProcessor {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::sync::Arc;
 
     use bytes::Bytes;
     use rocketmq_common::common::message::message_queue::MessageQueue;
@@ -577,7 +578,7 @@ mod tests {
         ));
         let wrapper = consumer_impl.clone();
         consumer_impl.set_default_mqpush_consumer_impl(wrapper);
-        consumer_impl.offset_store = Some(ArcMut::new(OffsetStore::new_test()));
+        consumer_impl.offset_store = Some(Arc::new(OffsetStore::new_test()));
 
         let registered = client_instance
             .mut_from_ref()

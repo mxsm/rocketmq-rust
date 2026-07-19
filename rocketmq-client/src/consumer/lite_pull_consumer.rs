@@ -22,7 +22,6 @@ use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
-use rocketmq_rust::ArcMut;
 
 use crate::consumer::allocate_message_queue_strategy::AllocateMessageQueueStrategy;
 use crate::consumer::message_queue_listener::ArcMessageQueueListener;
@@ -353,14 +352,14 @@ pub trait LitePullConsumerLocal: Sync {
     async fn set_message_queue_listener(&self, message_queue_listener: Option<ArcMessageQueueListener>);
 
     /// Returns the configured offset store, if one has been set or initialized.
-    async fn offset_store(&self) -> Option<ArcMut<OffsetStore>>;
+    async fn offset_store(&self) -> Option<Arc<OffsetStore>>;
 
     /// Sets the offset store used by the consumer.
     ///
     /// This mirrors Java `DefaultLitePullConsumer.setOffsetStore`. The store
     /// should be set before startup so load, rebalance, and commit paths share
     /// the same backend.
-    async fn set_offset_store(&self, offset_store: Option<ArcMut<OffsetStore>>) -> rocketmq_error::RocketMQResult<()>;
+    async fn set_offset_store(&self, offset_store: Option<Arc<OffsetStore>>) -> rocketmq_error::RocketMQResult<()>;
 
     /// Returns the topic metadata check interval in milliseconds.
     async fn topic_metadata_check_interval_millis(&self) -> u64;

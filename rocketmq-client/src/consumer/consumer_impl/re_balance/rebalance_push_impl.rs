@@ -219,7 +219,7 @@ impl Rebalance for RebalancePushImpl {
             error!("Offset store not initialized");
             return false;
         };
-        let mut offset_store = offset_store;
+        let offset_store = offset_store;
 
         if consume_orderly && MessageModel::Clustering == self.consumer_config.message_model {
             offset_store.persist(mq).await;

@@ -458,7 +458,7 @@ pub struct DefaultLitePullConsumerImpl {
     client_instance: Option<ArcMut<MQClientInstance>>,
     rebalance_impl: ArcMut<RebalanceLitePullImpl>,
     pull_api_wrapper: Option<ArcMut<PullAPIWrapper>>,
-    offset_store: Option<ArcMut<OffsetStore>>,
+    offset_store: Option<Arc<OffsetStore>>,
     rpc_hook: Option<Arc<dyn RPCHook>>,
 
     // Queue management
@@ -610,12 +610,12 @@ impl DefaultLitePullConsumerImpl {
     }
 
     /// Returns the active or preconfigured offset store.
-    pub fn offset_store(&self) -> Option<ArcMut<OffsetStore>> {
+    pub fn offset_store(&self) -> Option<Arc<OffsetStore>> {
         self.offset_store.clone()
     }
 
     /// Updates the offset store before startup and keeps rebalance state in sync.
-    pub fn set_offset_store(&mut self, offset_store: Option<ArcMut<OffsetStore>>) -> RocketMQResult<()> {
+    pub fn set_offset_store(&mut self, offset_store: Option<Arc<OffsetStore>>) -> RocketMQResult<()> {
         if *self.service_state != ServiceState::CreateJust {
             return Err(crate::mq_client_err!(
                 "offsetStore can not be changed after the lite pull consumer has started."
@@ -949,7 +949,7 @@ impl DefaultLitePullConsumerImpl {
                 }
 
                 let offset_store = self.offset_store.clone().unwrap_or_else(|| {
-                    ArcMut::new(match self.consumer_config.message_model {
+                    Arc::new(match self.consumer_config.message_model {
                         MessageModel::Broadcasting => OffsetStore::new_with_local(LocalFileOffsetStore::new(
                             client_instance.clone(),
                             self.consumer_config.consumer_group.clone(),
@@ -1210,12 +1210,8 @@ impl DefaultLitePullConsumerImpl {
                 drop(handles);
 
                 self.persist_consumer_offset().await;
-                if let Some(offset_store) = self.offset_store.as_mut() {
-                    if !offset_store
-                        .mut_from_ref()
-                        .shutdown(OFFSET_STORE_SHUTDOWN_TIMEOUT)
-                        .await
-                    {
+                if let Some(offset_store) = self.offset_store.as_ref() {
+                    if !offset_store.shutdown(OFFSET_STORE_SHUTDOWN_TIMEOUT).await {
                         warn!(
                             "lite pull consumer [{}] offset store did not stop before timeout",
                             self.consumer_config.consumer_group
@@ -1930,7 +1926,7 @@ impl DefaultLitePullConsumerImpl {
             if let Some(ref offset_store) = self.offset_store {
                 let mut mqs = HashSet::new();
                 mqs.insert(mq.clone());
-                offset_store.mut_from_ref().persist_all(&mqs).await;
+                offset_store.persist_all(&mqs).await;
             }
         }
 
@@ -1973,7 +1969,7 @@ impl DefaultLitePullConsumerImpl {
 
         if persist {
             if let Some(ref offset_store) = self.offset_store {
-                offset_store.mut_from_ref().persist_all(message_queues).await;
+                offset_store.persist_all(message_queues).await;
             }
         }
 
@@ -2010,7 +2006,7 @@ impl DefaultLitePullConsumerImpl {
 
         if persist {
             if let Some(ref offset_store) = self.offset_store {
-                offset_store.mut_from_ref().persist_all(&mqs_to_persist).await;
+                offset_store.persist_all(&mqs_to_persist).await;
             }
         }
 
@@ -2837,7 +2833,7 @@ impl MQConsumerInner for DefaultLitePullConsumerImpl {
 
         if !mqs.is_empty() {
             if let Some(ref offset_store) = self.offset_store {
-                offset_store.mut_from_ref().persist_all(&mqs).await;
+                offset_store.persist_all(&mqs).await;
             }
         }
     }
@@ -3292,7 +3288,7 @@ mod tests {
                 ..Default::default()
             }),
         );
-        let offset_store = ArcMut::new(OffsetStore::new_test());
+        let offset_store = Arc::new(OffsetStore::new_test());
 
         impl_
             .set_offset_store(Some(offset_store))
@@ -3311,7 +3307,7 @@ mod tests {
         *impl_.service_state = ServiceState::Running;
 
         let error = impl_
-            .set_offset_store(Some(ArcMut::new(OffsetStore::new_test())))
+            .set_offset_store(Some(Arc::new(OffsetStore::new_test())))
             .expect_err("offset store changes after running should be rejected");
 
         assert!(error
@@ -3687,7 +3683,7 @@ mod tests {
         impl_.assigned_message_queue.put(mq.clone()).await;
         impl_.assigned_message_queue.update_consume_offset(&mq, 100).await;
 
-        let offset_store = ArcMut::new(OffsetStore::new_test());
+        let offset_store = Arc::new(OffsetStore::new_test());
         offset_store.update_offset(&mq, 5, false).await;
         impl_.offset_store = Some(offset_store.clone());
 
@@ -3713,7 +3709,7 @@ mod tests {
         impl_.assigned_message_queue.put(mq.clone()).await;
         impl_.assigned_message_queue.update_consume_offset(&mq, 100).await;
 
-        let offset_store = ArcMut::new(OffsetStore::new_test());
+        let offset_store = Arc::new(OffsetStore::new_test());
         offset_store.update_offset(&mq, 5, false).await;
         impl_.offset_store = Some(offset_store.clone());
 
@@ -3743,7 +3739,7 @@ mod tests {
         impl_.assigned_message_queue.put(mq.clone()).await;
         impl_.assigned_message_queue.update_consume_offset(&mq, 100).await;
 
-        let offset_store = ArcMut::new(OffsetStore::new_test());
+        let offset_store = Arc::new(OffsetStore::new_test());
         impl_.offset_store = Some(offset_store.clone());
 
         let queues = HashSet::from([mq]);

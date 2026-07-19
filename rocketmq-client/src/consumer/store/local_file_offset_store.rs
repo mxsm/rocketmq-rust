@@ -24,6 +24,7 @@ use std::time::Duration;
 
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
+use parking_lot::Mutex;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_remoting::protocol::RemotingDeserializable;
 use rocketmq_remoting::protocol::RemotingSerializable;
@@ -83,7 +84,7 @@ pub struct LocalFileOffsetStore {
     offset_table: Arc<DashMap<MessageQueue, ControllableOffset>>,
     dirty_flag: Arc<AtomicBool>,
     persist_tx: mpsc::UnboundedSender<PersistCommand>,
-    persist_handle: PersistTaskHandle,
+    persist_handle: Mutex<PersistTaskHandle>,
 }
 
 enum PersistTaskHandle {
@@ -236,7 +237,7 @@ impl LocalFileOffsetStore {
             offset_table,
             dirty_flag,
             persist_tx,
-            persist_handle,
+            persist_handle: Mutex::new(persist_handle),
         }
     }
 
@@ -323,21 +324,24 @@ impl LocalFileOffsetStore {
         }
     }
 
-    pub async fn shutdown(&mut self) -> bool {
+    pub async fn shutdown(&self) -> bool {
         self.shutdown_with_timeout(PERSIST_TASK_SHUTDOWN_TIMEOUT).await
     }
 
-    pub async fn shutdown_with_timeout(&mut self, timeout: Duration) -> bool {
-        let handle = std::mem::replace(&mut self.persist_handle, PersistTaskHandle::NotStarted);
+    pub async fn shutdown_with_timeout(&self, timeout: Duration) -> bool {
+        let handle = {
+            let mut persist_handle = self.persist_handle.lock();
+            std::mem::replace(&mut *persist_handle, PersistTaskHandle::NotStarted)
+        };
         handle.shutdown(&self.persist_tx, timeout).await
     }
 
     fn persist_task_count(&self) -> usize {
-        self.persist_handle.task_count()
+        self.persist_handle.lock().task_count()
     }
 
     fn periodic_persist_snapshot(&self) -> Vec<ScheduledTaskSnapshot> {
-        self.persist_handle.schedule_snapshot()
+        self.persist_handle.lock().schedule_snapshot()
     }
 
     async fn read_local_offset(&self) -> rocketmq_error::RocketMQResult<Option<OffsetSerializeWrapper>> {
@@ -585,7 +589,7 @@ impl OffsetStoreTrait for LocalFileOffsetStore {
         }
     }
 
-    async fn persist_all(&mut self, mqs: &HashSet<MessageQueue>) {
+    async fn persist_all(&self, mqs: &HashSet<MessageQueue>) {
         if mqs.is_empty() {
             return;
         }
@@ -604,7 +608,7 @@ impl OffsetStoreTrait for LocalFileOffsetStore {
         }
     }
 
-    async fn persist(&mut self, mq: &MessageQueue) {
+    async fn persist(&self, mq: &MessageQueue) {
         // Send persist command and wait for completion to maintain original semantics
         let mut set = HashSet::new();
         set.insert(mq.clone());
@@ -638,7 +642,7 @@ impl OffsetStoreTrait for LocalFileOffsetStore {
     }
 
     async fn update_consume_offset_to_broker(
-        &mut self,
+        &self,
         mq: &MessageQueue,
         offset: i64,
         is_oneway: bool,
@@ -651,7 +655,7 @@ impl Drop for LocalFileOffsetStore {
     fn drop(&mut self) {
         // Send shutdown command to background task
         self.persist_tx.send(PersistCommand::Shutdown).ok();
-        let handle = std::mem::replace(&mut self.persist_handle, PersistTaskHandle::NotStarted);
+        let handle = std::mem::replace(self.persist_handle.get_mut(), PersistTaskHandle::NotStarted);
         handle.shutdown_now();
         // Note: We can't await the command worker in Drop (it's not async).
         // The worker receives Shutdown and performs the final persist best-effort.
@@ -689,14 +693,14 @@ pub async fn run_local_file_offset_store_lifecycle_probe() -> LocalFileOffsetSto
         persist_rx,
         Duration::from_millis(1),
     );
-    let mut store = LocalFileOffsetStore {
+    let store = LocalFileOffsetStore {
         client_instance,
         group_name: CheetahString::from_static_str("local_offset_store_probe_group"),
         store_path: CheetahString::from(store_path.clone()),
         offset_table,
         dirty_flag,
         persist_tx,
-        persist_handle,
+        persist_handle: Mutex::new(persist_handle),
     };
     let mq = MessageQueue::from_parts("local-offset-store-probe-topic", "broker-a", 0);
     store.update_offset(&mq, 66, false).await;
@@ -760,6 +764,7 @@ mod tests {
 
     use cheetah_string::CheetahString;
     use dashmap::DashMap;
+    use parking_lot::Mutex;
     use rocketmq_common::common::message::message_queue::MessageQueue;
     use rocketmq_remoting::protocol::RemotingDeserializable;
     use rocketmq_remoting::protocol::RemotingSerializable;
@@ -816,14 +821,14 @@ mod tests {
             store_path.clone(),
             persist_rx,
         );
-        let mut store = LocalFileOffsetStore {
+        let store = LocalFileOffsetStore {
             client_instance,
             group_name: group,
             store_path: CheetahString::from(store_path),
             offset_table,
             dirty_flag,
             persist_tx,
-            persist_handle,
+            persist_handle: Mutex::new(persist_handle),
         };
         let mq = MessageQueue::from_parts("local-offset-store-topic", "broker-a", 0);
 
@@ -866,14 +871,14 @@ mod tests {
             store_path.clone(),
             persist_rx,
         );
-        let mut store = LocalFileOffsetStore {
+        let store = LocalFileOffsetStore {
             client_instance,
             group_name: group,
             store_path: CheetahString::from(store_path.clone()),
             offset_table,
             dirty_flag,
             persist_tx,
-            persist_handle,
+            persist_handle: Mutex::new(persist_handle),
         };
         let mq = MessageQueue::from_parts("local-offset-store-shutdown-topic", "broker-a", 0);
 
@@ -883,7 +888,8 @@ mod tests {
         store.update_offset(&mq, 88, false).await;
 
         assert!(store.shutdown().await);
-        assert!(store.persist_handle.is_finished());
+        assert!(store.shutdown().await, "repeated shutdown should remain healthy");
+        assert!(store.persist_handle.lock().is_finished());
 
         let content = tokio::fs::read(&store_path).await.unwrap();
         let persisted = OffsetSerialize::decode(&content).expect("shutdown should persist offsets");

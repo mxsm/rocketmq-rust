@@ -65,7 +65,7 @@ pub struct RebalanceLitePullImpl {
     /// optional [`MessageQueueListener`][crate::consumer::message_queue_listener::MessageQueueListener].
     pub(crate) consumer_config: ArcMut<ConsumerConfig>,
     /// The active offset storage backend, injected after the consumer starts.
-    pub(crate) offset_store: Option<ArcMut<OffsetStore>>,
+    pub(crate) offset_store: Option<Arc<OffsetStore>>,
 }
 
 impl RebalanceLitePullImpl {
@@ -131,7 +131,7 @@ impl RebalanceLitePullImpl {
     }
 
     /// Sets the offset store backend used to persist and query per-queue consume offsets.
-    pub fn set_offset_store(&mut self, offset_store: ArcMut<OffsetStore>) {
+    pub fn set_offset_store(&mut self, offset_store: Arc<OffsetStore>) {
         self.offset_store = Some(offset_store);
     }
 }
@@ -162,7 +162,7 @@ impl Rebalance for RebalanceLitePullImpl {
     /// LitePull consumers have no ordering lock, so the queue can always be removed immediately.
     /// Returns `true` unconditionally.
     async fn remove_unnecessary_message_queue(&mut self, mq: &MessageQueue, _pq: &ProcessQueue) -> bool {
-        let Some(ref mut offset_store) = self.offset_store else {
+        let Some(ref offset_store) = self.offset_store else {
             warn!("Offset store not initialised; skipping persist/remove for {}", mq);
             return true;
         };
@@ -180,7 +180,7 @@ impl Rebalance for RebalanceLitePullImpl {
     ///
     /// Called to discard a stale offset before a fresh initial-offset computation.
     async fn remove_dirty_offset(&mut self, mq: &MessageQueue) {
-        let Some(ref mut offset_store) = self.offset_store else {
+        let Some(ref offset_store) = self.offset_store else {
             warn!("Offset store not initialised; cannot remove dirty offset for {}", mq);
             return;
         };
