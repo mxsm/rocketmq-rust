@@ -303,6 +303,11 @@ owner-free marker，不再保活完整 Admin 实现。实际快照累计降至 4
 降至 107/403 且 Tools production 债务清零；其余 Client Instance/API/Producer/Consumer owner、Broker/Store、
 compatibility 与完整候选快照 Gate 仍保持开放。
 
+M11-12q 已删除 Client Producer fault strategy 的 `ArcMut` owner：Producer 直接拥有策略，异步发送回调按发送时刻
+克隆延迟阈值快照，只共享 concurrency-safe detector 与原子运行时开关。实际快照累计降至 423
+production/1,292 occurrences，Client 降至 106/400；其余 Client Instance/API/Producer/Consumer owner、
+Broker/Store、compatibility 与完整候选快照 Gate 仍保持开放。
+
 ## 公共兼容面
 
 - development/compatibility仍可显式选择；secure只作为新部署默认，不静默重解释旧配置。

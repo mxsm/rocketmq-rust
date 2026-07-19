@@ -8424,7 +8424,7 @@
           "id": "359b0af7317c25b2dfab54cc",
           "fingerprint": "fdacb2c5d33b8875b9bb8dff",
           "item": "fn mq_client_api",
-          "line": 595
+          "line": 583
         }
       ],
       "owner": "client",
@@ -13310,12 +13310,6 @@
           "line": 2496
         },
         {
-          "id": "6fdc2ff50a2b8e9051cc8da9",
-          "fingerprint": "5e94ca02aec26acf5f74c523",
-          "item": "fn send_message_async_impl",
-          "line": 2581
-        },
-        {
           "id": "b707cabfb0ac55855f1b0180",
           "fingerprint": "5a67d1e294ce8f269bed92e1",
           "item": "fn send_message_async_impl",
@@ -13728,25 +13722,6 @@
       "adr": "ADR-002"
     },
     {
-      "identity": "153c434808bb6f950f6105fa",
-      "path": "rocketmq-client/src/producer/producer_impl/default_mq_producer_impl.rs",
-      "symbol": "ArcMut",
-      "kind": "constructor",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "5b17d0645666b0df747d2325",
-          "fingerprint": "7ec3125a183230ee649ace61",
-          "item": "fn new",
-          "line": 379
-        }
-      ],
-      "owner": "client",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
       "identity": "5e670f69aff88a2e2dc94ccb",
       "path": "rocketmq-client/src/producer/producer_impl/default_mq_producer_impl.rs",
       "symbol": "ArcMut",
@@ -13792,16 +13767,10 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "d1832cee30378641a5522674",
-          "fingerprint": "c259fed63ecb8f2f9fa7c5d6",
+          "id": "e79256d601200eac98e5068e",
+          "fingerprint": "4d3a3d736cc488c4afc80b45",
           "item": "struct DefaultMQProducerImpl",
           "line": 327
-        },
-        {
-          "id": "1ca351fef3b97903513525ee",
-          "fingerprint": "757bda2cb2924c152e4e31ba",
-          "item": "struct DefaultMQProducerImpl",
-          "line": 328
         },
         {
           "id": "f191254954997718012ea998",
