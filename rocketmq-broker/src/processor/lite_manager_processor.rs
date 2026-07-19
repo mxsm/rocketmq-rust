@@ -128,13 +128,7 @@ impl<MS: MessageStore> LiteManagerProcessor<MS> {
                 .map_or(0, |processor| processor.order_info_count()),
         );
         body.set_cq_table_size(cq_table_size);
-        body.set_offset_table_size(
-            self.broker_runtime_inner
-                .consumer_offset_manager()
-                .offset_table()
-                .read()
-                .len() as i32,
-        );
+        body.set_offset_table_size(self.broker_runtime_inner.consumer_offset_manager().offset_table_len() as i32);
         body.set_event_map_size(self.broker_runtime_inner.lite_event_dispatcher().event_map_size() as i32);
         body.set_topic_meta(topic_meta);
         body.set_group_meta(group_meta);

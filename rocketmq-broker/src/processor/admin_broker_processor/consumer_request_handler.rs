@@ -518,7 +518,7 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
         _request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut response = RemotingCommand::create_response_command();
-        let content = self.broker_runtime_inner.consumer_offset_manager_mut().encode();
+        let content = self.broker_runtime_inner.consumer_offset_manager().encode();
         if !content.is_empty() {
             response.set_body_mut_ref(content);
             Ok(Some(response))

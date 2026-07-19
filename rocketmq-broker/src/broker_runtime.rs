@@ -3429,11 +3429,6 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn consumer_offset_manager_mut(&mut self) -> &mut ConsumerOffsetManager<MS> {
-        &mut self.consumer_offset_manager
-    }
-
-    #[inline]
     pub fn subscription_group_manager_mut(&mut self) -> &mut SubscriptionGroupManager<MS> {
         self.subscription_group_manager.as_mut().unwrap()
     }
@@ -3911,11 +3906,6 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     #[inline]
     pub fn set_topic_queue_mapping_manager(&mut self, topic_queue_mapping_manager: TopicQueueMappingManager) {
         self.topic_queue_mapping_manager = topic_queue_mapping_manager;
-    }
-
-    #[inline]
-    pub fn set_consumer_offset_manager(&mut self, consumer_offset_manager: ConsumerOffsetManager<MS>) {
-        self.consumer_offset_manager = consumer_offset_manager;
     }
 
     #[inline]

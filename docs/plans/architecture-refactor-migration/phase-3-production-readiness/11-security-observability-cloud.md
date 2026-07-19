@@ -468,6 +468,13 @@ deadline 发布与 master-change lock 顺序已收紧。实际快照为 289 prod
 Broker owner 为 167/398；compatibility 14/40 不增。下一子切片 M11-12au 处理 Broker ConsumerOffsetManager ownership，
 完整候选快照与 HUMAN Gate 仍保持开放。
 
+M11-12au 已将 ConsumerOffsetManager 的 `DataVersion` 改为 `ArcSwap` 不可变代际，并由单一短 transition 串行
+offset 表写入、版本计数和发布。主从同步、JSON/RocksDB load/persist 使用 manager 窄 API 和 owned snapshot；
+失败解析不再先发布新版本，空主表仍恢复 reset/pull 表。可写 offset table escape、manager/wrapper Clone 与只读
+encode 所需的 runtime mutable accessor 已删除；`ArcMut<MessageStore>` 明确保留给 Store/root 后续切片。实际快照为
+287 production/699 occurrences、160 test/455 occurrences，Broker owner 为 165/391；compatibility 14/40 不增。
+下一子切片 M11-12av 处理 Broker `ScheduleMessageService` 内部状态 ownership，完整候选快照与 HUMAN Gate 仍保持开放。
+
 ## 公共兼容面
 
 - development/compatibility仍可显式选择；secure只作为新部署默认，不静默重解释旧配置。
