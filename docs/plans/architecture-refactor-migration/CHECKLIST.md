@@ -647,7 +647,8 @@ M09-04 再删除 MCP 未使用的 Auth/Error direct edges，并把承担 owned t
   - [x] M11-12ac Client Lite Pull root lifecycle：facade、consumer inner、callback 与 task root 改用标准 `Arc`/`Weak`；专用异步 lifecycle mutex 串行 start/shutdown/订阅控制面，组件槽位使用短锁快照；Rebalance offset store 改为 `ArcSwapOption`
   - [x] M11-12ad Client PullAPIWrapper immutable access：Lite/Push wrapper owner 改用标准 `Arc`；运行参数使用原子发布、filter hook 使用 `ArcSwap` 整代快照，pull/POP/filter-server receiver 收窄为 `&self`
   - [x] M11-12ae Client Push message listener ownership：facade config、implementation 与 Java-compatible getter/setter 改持标准 `Arc<MessageListener>`，concurrent/orderly 注册与替换不再传播共享可变 wrapper
-  - [x] [`M11-12 进度证据`](phase-3-production-readiness/11-soundness-closure-progress.md) 记录父 Issue #8292、子切片 Issue #8293/#8295/#8297/#8299/#8301/#8303/#8307/#8309/#8311/#8313/#8315/#8317/#8319/#8321/#8323/#8325/#8327/#8329/#8331/#8333/#8335/#8337/#8339/#8341/#8343/#8345/#8347/#8349/#8351/#8353/#8355 与每次真实下降
+  - [x] M11-12af Client Push subscription snapshots：deprecated startup subscription map 改持标准 `Arc<HashMap>`，config/builder/Java-compatible getter/setter 返回 immutable owned snapshot；dynamic rebalance table 不变
+  - [x] [`M11-12 进度证据`](phase-3-production-readiness/11-soundness-closure-progress.md) 记录父 Issue #8292、子切片 Issue #8293/#8295/#8297/#8299/#8301/#8303/#8307/#8309/#8311/#8313/#8315/#8317/#8319/#8321/#8323/#8325/#8327/#8329/#8331/#8333/#8335/#8337/#8339/#8341/#8343/#8345/#8347/#8349/#8351/#8353/#8355/#8357 与每次真实下降
   - [x] Issue #8295 后累计降至 711 production/2,029 occurrence；Controller 配置债务清零但其他 Controller owner 仍有 31 条 production 债务
   - [x] Issue #8297 后实际快照降至 697 production/1,986 occurrence；Controller 降至 17 条/51 occurrence，Manager/heartbeat/embedded-NameServer owner 已退出 `ArcMut`
   - [x] Issue #8299 后实际快照降至 690 production/1,961 occurrence；Controller 降至 10 条/26 occurrence，Raft/OpenRaft owner 与 Manager Raft `mut_from_ref` 已清零
@@ -679,7 +680,8 @@ M09-04 再删除 MCP 未使用的 Auth/Error direct edges，并把承担 owned t
   - [x] Issue #8351 后实际快照降至 402 production/1,102 occurrence；Client crate 降至 85/210，Lite Pull root lifecycle 的 6 个 production identity、27 个 production occurrence 与 5 个 test identity、15 个 test occurrence 退出
   - [x] Issue #8353 后 production identity 保持 402、occurrence 降至 1,095；Client 为 85/203，PullAPIWrapper 的 7 个 production occurrence 与 1 个 test occurrence 退出共享可变边界
   - [x] Issue #8355 后 production identity 保持 402、occurrence 降至 1,086；Client 为 85/194，Push MessageListener 的 9 个 production occurrence 与 3 个 test occurrence 退出，1 个 test identity 删除
-  - [ ] M11-12af 及后续：Client 其余 MQClientInstance/Producer/Push/Rebalance owner、Broker、Store/HA、compatibility 删除、stable/Miri/Loom/soak/SLO 与同一候选快照 Gate 仍待完成
+  - [x] Issue #8357 后实际快照降至 400 production/1,078 occurrence；Client 降至 83/186，Push startup subscription snapshot 的 2 个 production identity/8 occurrence 与 1 个 test identity/1 occurrence 退出
+  - [ ] M11-12ag 及后续：Client 其余 MQClientInstance/Producer/Push/Rebalance owner、Broker、Store/HA、compatibility 删除、stable/Miri/Loom/soak/SLO 与同一候选快照 Gate 仍待完成
   - [ ] 总进度仍为 75/82；本子切片不提前计作完成工作包，M10/Kind-K3d/container dynamic/HUMAN Gate 保持开放
 - [ ] 对应任务文档的 Exit Checklist 全部通过
 

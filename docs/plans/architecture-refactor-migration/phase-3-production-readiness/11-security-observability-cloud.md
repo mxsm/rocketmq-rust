@@ -381,6 +381,10 @@ M11-12ae 已将 Push facade config、implementation 与 Java-compatible getter/s
 标准 `Arc`；concurrent/orderly 注册、替换与清除语义保持。实际快照为 402 production/1,086 occurrences，Client
 为 85/194；其余 Client/Broker/Store、compatibility 与完整候选快照 Gate 仍保持开放。
 
+M11-12af 已将 Push deprecated startup subscription map 改为标准 `Arc<HashMap>`；config/builder/getter/setter 发布
+immutable owned snapshot，启动时只读复制到独立 dynamic rebalance table。实际快照降至 400 production/1,078
+occurrences，Client 降至 83/186；其余 Client/Broker/Store、compatibility 与完整候选快照 Gate 仍保持开放。
+
 ## 公共兼容面
 
 - development/compatibility仍可显式选择；secure只作为新部署默认，不静默重解释旧配置。

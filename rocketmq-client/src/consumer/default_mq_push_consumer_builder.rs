@@ -19,7 +19,6 @@ use cheetah_string::CheetahString;
 use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::runtime::RPCHook;
-use rocketmq_rust::ArcMut;
 
 use crate::base::client_config::ClientConfig;
 use crate::consumer::allocate_message_queue_strategy::AllocateMessageQueueStrategy;
@@ -37,7 +36,7 @@ pub struct DefaultMQPushConsumerBuilder {
     consume_from_where: Option<ConsumeFromWhere>,
     consume_timestamp: Option<CheetahString>,
     allocate_message_queue_strategy: Option<Arc<dyn AllocateMessageQueueStrategy>>,
-    subscription: Option<ArcMut<HashMap<CheetahString, CheetahString>>>,
+    subscription: Option<Arc<HashMap<CheetahString, CheetahString>>>,
 
     message_queue_listener: Option<ArcMessageQueueListener>,
 
