@@ -2316,7 +2316,7 @@ impl MQClientAPIImpl {
     }
 
     pub async fn send_message<T>(
-        &mut self,
+        &self,
         addr: &CheetahString,
         broker_name: &CheetahString,
         msg: &mut T,
@@ -2443,7 +2443,7 @@ impl MQClientAPIImpl {
     /// - Real-time telemetry
     /// - High-frequency event streaming
     pub async fn send_oneway_unbounded(
-        &mut self,
+        &self,
         addr: &CheetahString,
         request: RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<()> {
@@ -2452,7 +2452,7 @@ impl MQClientAPIImpl {
     }
 
     pub async fn send_message_simple<T>(
-        &mut self,
+        &self,
         addr: &CheetahString,
         broker_name: &CheetahString,
         msg: &mut T,
@@ -2483,7 +2483,7 @@ impl MQClientAPIImpl {
     }
 
     async fn send_message_sync<T>(
-        &mut self,
+        &self,
         addr: &CheetahString,
         broker_name: &CheetahString,
         msg: &T,
@@ -2501,7 +2501,7 @@ impl MQClientAPIImpl {
     }
 
     async fn send_message_async<T: MessageTrait>(
-        &mut self,
+        &self,
         addr: &CheetahString,
         broker_name: &CheetahString,
         msg: &T,
@@ -2913,7 +2913,7 @@ impl MQClientAPIImpl {
     }
 
     fn process_send_response<T>(
-        &mut self,
+        &self,
         broker_name: &CheetahString,
         msg: &T,
         response: &RemotingCommand,
@@ -3024,7 +3024,7 @@ impl MQClientAPIImpl {
     }
 
     pub async fn send_heartbeat(
-        &mut self,
+        &self,
         addr: &CheetahString,
         heartbeat_data: &HeartbeatData,
         timeout_millis: u64,
@@ -3045,7 +3045,7 @@ impl MQClientAPIImpl {
     }
 
     pub async fn send_heartbeat_async(
-        &mut self,
+        &self,
         addr: &CheetahString,
         heartbeat_data: &HeartbeatData,
         timeout_millis: u64,
@@ -3056,7 +3056,7 @@ impl MQClientAPIImpl {
     }
 
     pub async fn send_heartbeat_oneway(
-        &mut self,
+        &self,
         addr: &CheetahString,
         heartbeat_data: &HeartbeatData,
         timeout_millis: u64,
@@ -3069,7 +3069,7 @@ impl MQClientAPIImpl {
     }
 
     pub async fn register_client(
-        &mut self,
+        &self,
         addr: &CheetahString,
         heartbeat_data: &HeartbeatData,
         timeout_millis: u64,
@@ -3083,7 +3083,7 @@ impl MQClientAPIImpl {
     }
 
     pub async fn send_heartbeat_v2(
-        &mut self,
+        &self,
         addr: &CheetahString,
         heartbeat_data: &HeartbeatData,
         timeout_millis: u64,
@@ -3104,7 +3104,7 @@ impl MQClientAPIImpl {
     }
 
     pub async fn check_client_in_broker(
-        &mut self,
+        &self,
         broker_addr: &str,
         consumer_group: &str,
         client_id: &str,
@@ -3136,7 +3136,7 @@ impl MQClientAPIImpl {
     }
 
     pub async fn recall_message(
-        &mut self,
+        &self,
         addr: &str,
         request_header: RecallMessageRequestHeader,
         timeout_millis: u64,
@@ -3220,7 +3220,7 @@ impl MQClientAPIImpl {
     }
 
     pub async fn get_consumer_id_list_by_group(
-        &mut self,
+        &self,
         addr: &str,
         consumer_group: &str,
         timeout_millis: u64,
@@ -3266,7 +3266,7 @@ impl MQClientAPIImpl {
     }
 
     pub async fn get_consumer_connection_list(
-        &mut self,
+        &self,
         addr: &str,
         consumer_group: CheetahString,
         timeout_millis: u64,
@@ -3307,7 +3307,7 @@ impl MQClientAPIImpl {
     }
 
     pub async fn get_producer_connection_list(
-        &mut self,
+        &self,
         addr: &str,
         producer_group: CheetahString,
         timeout_millis: u64,
@@ -3347,7 +3347,7 @@ impl MQClientAPIImpl {
     }
 
     pub async fn invoke_broker_to_get_consumer_status(
-        &mut self,
+        &self,
         addr: &str,
         topic: CheetahString,
         group: CheetahString,
@@ -3394,7 +3394,7 @@ impl MQClientAPIImpl {
     }
 
     pub async fn get_all_producer_info(
-        &mut self,
+        &self,
         addr: &str,
         timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<ProducerTableInfo> {
@@ -3429,7 +3429,7 @@ impl MQClientAPIImpl {
     }
 
     pub async fn update_consumer_offset_oneway(
-        &mut self,
+        &self,
         addr: &str,
         request_header: UpdateConsumerOffsetRequestHeader,
         timeout_millis: u64,
@@ -3446,7 +3446,7 @@ impl MQClientAPIImpl {
     }
 
     pub async fn update_consumer_offset_one_way(
-        &mut self,
+        &self,
         addr: &str,
         request_header: UpdateConsumerOffsetRequestHeader,
         timeout_millis: u64,
@@ -3456,7 +3456,7 @@ impl MQClientAPIImpl {
     }
 
     pub async fn update_consumer_offset(
-        &mut self,
+        &self,
         addr: &CheetahString,
         request_header: UpdateConsumerOffsetRequestHeader,
         timeout_millis: u64,
@@ -3478,7 +3478,7 @@ impl MQClientAPIImpl {
     }
 
     pub async fn update_consumer_offset_async(
-        &mut self,
+        &self,
         addr: &CheetahString,
         request_header: UpdateConsumerOffsetRequestHeader,
         timeout_millis: u64,
@@ -3487,7 +3487,7 @@ impl MQClientAPIImpl {
     }
 
     pub async fn query_consumer_offset(
-        &mut self,
+        &self,
         addr: &str,
         request_header: QueryConsumerOffsetRequestHeader,
         timeout_millis: u64,
@@ -3529,7 +3529,7 @@ impl MQClientAPIImpl {
     }
 
     pub async fn query_consumer_offset_with_future(
-        &mut self,
+        &self,
         addr: &str,
         request_header: QueryConsumerOffsetRequestHeader,
         timeout_millis: u64,
@@ -3538,7 +3538,7 @@ impl MQClientAPIImpl {
     }
 
     pub async fn query_message(
-        this: &ArcMut<Self>,
+        this: &Arc<Self>,
         addr: &CheetahString,
         request_header: QueryMessageRequestHeader,
         unique_key_flag: bool,
@@ -3573,7 +3573,7 @@ impl MQClientAPIImpl {
     }
 
     pub async fn pull_message<PCB>(
-        mut this: ArcMut<Self>,
+        this: Arc<Self>,
         addr: CheetahString,
         request_header: PullMessageRequestHeader,
         timeout_millis: u64,
@@ -3613,7 +3613,7 @@ impl MQClientAPIImpl {
     }
 
     async fn pull_message_sync(
-        &mut self,
+        &self,
         addr: &CheetahString,
         request: RemotingCommand,
         timeout_millis: u64,
@@ -3626,7 +3626,7 @@ impl MQClientAPIImpl {
     }
 
     async fn pull_message_async<PCB>(
-        &mut self,
+        &self,
         addr: &CheetahString,
         request: RemotingCommand,
         timeout_millis: u64,
@@ -3659,7 +3659,7 @@ impl MQClientAPIImpl {
     }
 
     async fn process_pull_response(
-        &mut self,
+        &self,
         mut response: RemotingCommand,
         addr: &CheetahString,
     ) -> rocketmq_error::RocketMQResult<PullResultExt> {
@@ -3697,7 +3697,7 @@ impl MQClientAPIImpl {
     }
 
     pub async fn consumer_send_message_back(
-        &mut self,
+        &self,
         addr: &str,
         broker_name: Option<&str>,
         msg: &MessageExt,
@@ -3762,7 +3762,7 @@ impl MQClientAPIImpl {
     }
 
     pub async fn send_message_back_async(
-        &mut self,
+        &self,
         addr: &CheetahString,
         request_header: ConsumerSendMsgBackRequestHeader,
         timeout_millis: u64,
@@ -3774,7 +3774,7 @@ impl MQClientAPIImpl {
     }
 
     pub async fn unregister_client(
-        &mut self,
+        &self,
         addr: &CheetahString,
         client_id: CheetahString,
         producer_group: Option<CheetahString>,
@@ -3804,7 +3804,7 @@ impl MQClientAPIImpl {
     }
 
     pub async fn unlock_batch_mq(
-        &mut self,
+        &self,
         addr: &CheetahString,
         request_body: UnlockBatchRequestBody,
         timeout_millis: u64,
@@ -3843,7 +3843,7 @@ impl MQClientAPIImpl {
     }
 
     pub async fn unlock_batch_mq_oneway(
-        &mut self,
+        &self,
         addr: &CheetahString,
         request_body: UnlockBatchRequestBody,
         timeout_millis: u64,
@@ -3852,7 +3852,7 @@ impl MQClientAPIImpl {
     }
 
     pub async fn lock_batch_mq(
-        &mut self,
+        &self,
         addr: &str,
         request_body: LockBatchRequestBody,
         timeout_millis: u64,
@@ -3893,7 +3893,7 @@ impl MQClientAPIImpl {
     }
 
     pub async fn lock_batch_mq_with_future(
-        &mut self,
+        &self,
         addr: &str,
         request_body: LockBatchRequestBody,
         timeout_millis: u64,
@@ -3902,7 +3902,7 @@ impl MQClientAPIImpl {
     }
 
     pub async fn end_transaction_oneway(
-        &mut self,
+        &self,
         addr: &CheetahString,
         request_header: EndTransactionRequestHeader,
         remark: CheetahString,
@@ -3918,7 +3918,7 @@ impl MQClientAPIImpl {
     }
 
     pub async fn get_max_offset(
-        &mut self,
+        &self,
         addr: &str,
         message_queue: &MessageQueue,
         timeout_millis: u64,
@@ -3961,7 +3961,7 @@ impl MQClientAPIImpl {
     }
 
     pub async fn get_min_offset(
-        &mut self,
+        &self,
         addr: &str,
         message_queue: &MessageQueue,
         timeout_millis: u64,
@@ -4003,7 +4003,7 @@ impl MQClientAPIImpl {
     }
 
     pub async fn get_earliest_msg_store_time(
-        &mut self,
+        &self,
         addr: &str,
         message_queue: &MessageQueue,
         timeout_millis: u64,
@@ -4045,7 +4045,7 @@ impl MQClientAPIImpl {
     }
 
     pub async fn get_earliest_msg_storetime(
-        &mut self,
+        &self,
         addr: &str,
         message_queue: &MessageQueue,
         timeout_millis: u64,
@@ -4066,7 +4066,7 @@ impl MQClientAPIImpl {
     ///
     /// Returns an error if the broker returns a non-success response code or is unreachable.
     pub async fn search_offset_by_timestamp(
-        &mut self,
+        &self,
         addr: &str,
         message_queue: &MessageQueue,
         timestamp: i64,
@@ -4111,7 +4111,7 @@ impl MQClientAPIImpl {
     }
 
     pub async fn search_offset(
-        &mut self,
+        &self,
         addr: &str,
         message_queue: &MessageQueue,
         timestamp: i64,
@@ -4123,7 +4123,7 @@ impl MQClientAPIImpl {
     }
 
     pub async fn set_message_request_mode(
-        &mut self,
+        &self,
         broker_addr: &CheetahString,
         topic: &CheetahString,
         consumer_group: &CheetahString,
@@ -4160,7 +4160,7 @@ impl MQClientAPIImpl {
     }
 
     pub async fn query_assignment(
-        &mut self,
+        &self,
         addr: &CheetahString,
         topic: CheetahString,
         consumer_group: CheetahString,
@@ -5640,7 +5640,7 @@ impl MQClientAPIImpl {
     }
 
     pub async fn view_message(
-        &mut self,
+        &self,
         addr: &CheetahString,
         request_header: ViewMessageRequestHeader,
         timeout_millis: u64,

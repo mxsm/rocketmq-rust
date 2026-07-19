@@ -238,7 +238,7 @@ pub struct MQClientInstance {
      * adminExtGroup.
      */
     admin_ext_table: AdminExtTable,
-    pub(crate) mq_client_api_impl: Option<ArcMut<MQClientAPIImpl>>,
+    pub(crate) mq_client_api_impl: Option<Arc<MQClientAPIImpl>>,
     pub(crate) mq_admin_impl: ArcMut<MQAdminImpl>,
     pub(crate) topic_route_table: TopicRouteTable,
     topic_end_points_table: TopicEndPointsTable,
@@ -381,7 +381,7 @@ impl MQClientInstance {
 
         let (tx, rx) = tokio::sync::broadcast::channel::<ConnectionNetEvent>(16);
 
-        let mq_client_api_impl = ArcMut::new(MQClientAPIImpl::new(
+        let mq_client_api_impl = Arc::new(MQClientAPIImpl::new(
             Arc::new(TokioClientConfig::default()),
             ClientRemotingProcessor::new(instance.clone()),
             rpc_hook,
@@ -460,13 +460,13 @@ impl MQClientInstance {
                 self.service_state = ServiceState::StartFailed;
                 // If not specified,looking address from name remoting_server
                 if self.client_config.namesrv_addr.is_none() {
-                    let Some(mq_client_api_impl) = self.mq_client_api_impl.as_mut() else {
+                    let Some(mq_client_api_impl) = self.mq_client_api_impl.as_ref() else {
                         return Err(mq_client_err!("mq_client_api_impl is None"));
                     };
                     mq_client_api_impl.fetch_name_server_addr().await;
                 }
                 // Start request-response channel
-                let Some(mq_client_api_impl) = self.mq_client_api_impl.as_mut() else {
+                let Some(mq_client_api_impl) = self.mq_client_api_impl.as_ref() else {
                     return Err(mq_client_err!("mq_client_api_impl is None"));
                 };
                 mq_client_api_impl.start().await;
@@ -511,7 +511,7 @@ impl MQClientInstance {
                     "MQClientInstance shutdown called but state is {:?}, ignoring shutdown request",
                     self.service_state
                 );
-                if let Some(mq_client_api_impl) = self.mq_client_api_impl.as_mut() {
+                if let Some(mq_client_api_impl) = self.mq_client_api_impl.as_ref() {
                     if !mq_client_api_impl
                         .shutdown_background_tasks(Duration::from_secs(1))
                         .await
@@ -571,7 +571,7 @@ impl MQClientInstance {
         info!("MQClientInstance[{}] unregistering all producers", self.client_id);
         self.unregister_all_producers().await;
 
-        if let Some(mq_client_api_impl) = self.mq_client_api_impl.as_mut() {
+        if let Some(mq_client_api_impl) = self.mq_client_api_impl.as_ref() {
             info!(
                 "MQClientInstance[{}] shutting down client API background tasks and network client",
                 self.client_id
@@ -830,7 +830,7 @@ impl MQClientInstance {
             broker_addr = self.find_broker_addr_by_topic(topic).await;
         }
         if let Some(broker_addr) = broker_addr {
-            if let Some(mq_client_api_impl) = self.mq_client_api_impl.as_mut() {
+            if let Some(mq_client_api_impl) = self.mq_client_api_impl.as_ref() {
                 match mq_client_api_impl
                     .get_consumer_id_list_by_group(
                         broker_addr.as_str(),
@@ -1279,7 +1279,7 @@ impl MQClientInstance {
         }
     }
 
-    pub fn get_mq_client_api_impl(&self) -> rocketmq_error::RocketMQResult<ArcMut<MQClientAPIImpl>> {
+    pub fn get_mq_client_api_impl(&self) -> rocketmq_error::RocketMQResult<Arc<MQClientAPIImpl>> {
         self.mq_client_api_impl
             .as_ref()
             .cloned()
@@ -1688,11 +1688,7 @@ impl MQClientInstance {
 
             // Returns: (broker_name, addr, version, success)
             let task = async move {
-                match mq_client_api
-                    .mut_from_ref()
-                    .send_heartbeat(&addr, &heartbeat_data, timeout)
-                    .await
-                {
+                match mq_client_api.send_heartbeat(&addr, &heartbeat_data, timeout).await {
                     Ok((version, _response)) => {
                         let times = send_heartbeat_times_total.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         if times % 20 == 0 {
@@ -1915,7 +1911,6 @@ impl MQClientInstance {
         };
 
         match mq_client_api_impl
-            .mut_from_ref()
             .send_heartbeat(addr, heartbeat_data, self.client_config.mq_client_api_timeout)
             .await
         {
@@ -2014,7 +2009,7 @@ impl MQClientInstance {
                 }
                 let addr = self.find_broker_addr_by_topic(subscription_data.topic.as_str()).await;
                 if let Some(addr) = addr {
-                    let Some(mq_client_api_impl) = self.mq_client_api_impl.as_mut() else {
+                    let Some(mq_client_api_impl) = self.mq_client_api_impl.as_ref() else {
                         return Err(rocketmq_error::RocketMQError::ClientNotStarted);
                     };
                     match mq_client_api_impl
@@ -2257,7 +2252,7 @@ impl MQClientInstance {
         producer_group: Option<CheetahString>,
         consumer_group: Option<CheetahString>,
     ) {
-        let Some(mq_client_api_impl) = self.mq_client_api_impl.as_mut() else {
+        let Some(mq_client_api_impl) = self.mq_client_api_impl.as_ref() else {
             warn!(
                 "unregister client[Producer: {:?} Consumer: {:?}] skipped because mq_client_api_impl is None",
                 producer_group, consumer_group
@@ -2328,7 +2323,7 @@ impl MQClientInstance {
         }
         if let Some(broker_addr) = broker_addr {
             let client_id = self.client_id.clone();
-            match self.mq_client_api_impl.as_mut() {
+            match self.mq_client_api_impl.as_ref() {
                 Some(api_impl) => {
                     api_impl
                         .query_assignment(
@@ -2711,7 +2706,7 @@ mod tests {
         client_config.set_tls_client_trust_cert_path("/certs/ca.pem");
 
         let instance = MQClientInstance::new_arc(client_config, 0, "test-client-tls", None);
-        let api_impl = instance
+        let api_impl: Arc<MQClientAPIImpl> = instance
             .get_mq_client_api_impl()
             .expect("MQClientInstance should initialize MQClientAPIImpl");
 

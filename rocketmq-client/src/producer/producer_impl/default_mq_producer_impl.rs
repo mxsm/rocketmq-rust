@@ -824,7 +824,7 @@ impl DefaultMQProducerImpl {
 
             // Fire and forget (use unbounded method for maximum batch throughput)
             match client_instance.get_mq_client_api_impl() {
-                Ok(mut mq_client_api) => {
+                Ok(mq_client_api) => {
                     let send_start = Instant::now();
                     if let Err(e) = mq_client_api.send_oneway_unbounded(&broker_addr, request).await {
                         tracing::debug!("Oneway batch send failed: {:?}", e);
@@ -2947,7 +2947,7 @@ impl MQProducerInner for DefaultMQProducerImpl {
                 tracing::warn!("endTransactionOneway skipped: client instance is not available");
                 return;
             };
-            let Some(mq_client_api_impl) = client_instance.mq_client_api_impl.as_mut() else {
+            let Some(mq_client_api_impl) = client_instance.mq_client_api_impl.as_ref() else {
                 tracing::warn!("endTransactionOneway skipped: MQClientAPIImpl is not available");
                 return;
             };
@@ -3566,10 +3566,10 @@ impl ServiceDetector for DefaultServiceDetector {
         };
 
         let mq = MessageQueue::from_parts(topic.as_str(), endpoint, 0);
-        let mut client_instance = self.client_instance.clone();
+        let client_instance = self.client_instance.clone();
 
         let result = tokio::time::timeout(Duration::from_millis(timeout_millis), async move {
-            match client_instance.mq_client_api_impl.as_mut() {
+            match client_instance.mq_client_api_impl.as_ref() {
                 Some(api) => api.get_max_offset(endpoint, &mq, timeout_millis).await.is_ok(),
                 None => false,
             }

@@ -101,7 +101,7 @@ impl RemoteBrokerOffsetStore {
                 }),
             };
             let client_instance = self.client_instance.mut_from_ref();
-            let Some(mq_client_api_impl) = client_instance.mq_client_api_impl.as_mut() else {
+            let Some(mq_client_api_impl) = client_instance.mq_client_api_impl.as_ref() else {
                 return Err(rocketmq_error::RocketMQError::not_initialized("MQClientAPIImpl"));
             };
             mq_client_api_impl
@@ -324,7 +324,7 @@ impl OffsetStoreTrait for RemoteBrokerOffsetStore {
                     }),
                 }),
             };
-            let Some(mq_client_api_impl) = self.client_instance.mq_client_api_impl.as_mut() else {
+            let Some(mq_client_api_impl) = self.client_instance.mq_client_api_impl.as_ref() else {
                 return Err(rocketmq_error::RocketMQError::not_initialized("MQClientAPIImpl"));
             };
             if is_oneway {

@@ -8409,22 +8409,10 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "da4b2eb9d56be9ffa345b92f",
-          "fingerprint": "35d0f86db0262321d4537850",
-          "item": "fn execute",
-          "line": 404
-        },
-        {
           "id": "15c48ce6502ef46b0740462f",
           "fingerprint": "5aa7da33ae472a5906b6348c",
           "item": "struct DefaultMQAdminExtImpl",
           "line": 530
-        },
-        {
-          "id": "359b0af7317c25b2dfab54cc",
-          "fingerprint": "fdacb2c5d33b8875b9bb8dff",
-          "item": "fn mq_client_api",
-          "line": 583
         }
       ],
       "owner": "client",
@@ -12709,7 +12697,7 @@
           "id": "9cbe2d507037ccc178f23eb8",
           "fingerprint": "d26a6e9d75c77b5c7069d839",
           "item": "mod tests",
-          "line": 2672
+          "line": 2667
         }
       ],
       "owner": "client",
@@ -12753,12 +12741,6 @@
           "fingerprint": "c0ddefea53f3b900e3c3b432",
           "item": "impl Into",
           "line": 359
-        },
-        {
-          "id": "baa062ddb95e2a50ca6c15ef",
-          "fingerprint": "a0a21ec0b394556213bb06ec",
-          "item": "impl Into",
-          "line": 384
         }
       ],
       "owner": "client",
@@ -12777,19 +12759,19 @@
           "id": "3537a7f5e9f85fea0a9ca95a",
           "fingerprint": "1e1dd2485b87b679d56fce30",
           "item": "fn apply_route_refresh_updates_producer_and_consumer_views",
-          "line": 2890
+          "line": 2885
         },
         {
           "id": "a88e0cd463d27dc0b3e0d37a",
           "fingerprint": "6ee6af86f91a5447266fe14a",
           "item": "fn apply_route_refresh_updates_producer_and_consumer_views",
-          "line": 2906
+          "line": 2901
         },
         {
           "id": "954bf9f99136644e81c88b1c",
           "fingerprint": "6448cd2aa913551fd4d328c0",
           "item": "fn apply_route_refresh_updates_producer_and_consumer_views",
-          "line": 2908
+          "line": 2903
         }
       ],
       "owner": "client",
@@ -12830,14 +12812,8 @@
           "line": 223
         },
         {
-          "id": "46a458040fa36d6760325e56",
-          "fingerprint": "a927c45cbadb2211dde8dcf5",
-          "item": "struct MQClientInstance",
-          "line": 241
-        },
-        {
-          "id": "af152446db1b3d79a47c5368",
-          "fingerprint": "c574f7c7e75b435afb6a0494",
+          "id": "6e9bcce24cb87675c79171d5",
+          "fingerprint": "9aeea7db1321ac3a0d248571",
           "item": "struct MQClientInstance",
           "line": 242
         },
@@ -12876,12 +12852,6 @@
           "fingerprint": "601870d525a9d7fa55d52273",
           "item": "fn start_scheduled_task",
           "line": 719
-        },
-        {
-          "id": "2eb723a5fa37aea763cefc10",
-          "fingerprint": "a257d1fbfb0d07f9b5701185",
-          "item": "fn get_mq_client_api_impl",
-          "line": 1282
         }
       ],
       "owner": "client",
@@ -12930,31 +12900,6 @@
       ],
       "owner": "client",
       "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "94fd3e9a36ecda00c4c752d3",
-      "path": "rocketmq-client/src/factory/mq_client_instance.rs",
-      "symbol": "mut_from_ref",
-      "kind": "mut_from_ref_call",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "1a0b0fbc78abb02216825dd8",
-          "fingerprint": "849cca6d45fc8601d5ec19c9",
-          "item": "fn send_heartbeat_to_all_broker_concurrently",
-          "line": 1692
-        },
-        {
-          "id": "6c837b9baff5a33bb9b7ae7a",
-          "fingerprint": "76ea1402c1e48bd63cda20ec",
-          "item": "fn send_heartbeat_to_broker_inner",
-          "line": 1918
-        }
-      ],
-      "owner": "client",
-      "reason": "Legacy safe mutable-reference escape pending ownership migration",
       "remove_by": "M05",
       "adr": "ADR-002"
     },
@@ -13107,7 +13052,7 @@
           "id": "cce69073596954299718616e",
           "fingerprint": "7aa586045540d1bc5fe92dca",
           "item": "mod tests",
-          "line": 516
+          "line": 517
         }
       ],
       "owner": "client",
@@ -13126,7 +13071,7 @@
           "id": "b9b19ef630ce5a0ef38a202a",
           "fingerprint": "c0f596ea777dc3b7d5b42f00",
           "item": "<module>",
-          "line": 35
+          "line": 36
         }
       ],
       "owner": "client",
@@ -13145,25 +13090,19 @@
           "id": "e91fd2c900994c8ab68d05b1",
           "fingerprint": "05867ad6f19989f6fdcc97a1",
           "item": "struct MQAdminImpl",
-          "line": 46
+          "line": 47
         },
         {
           "id": "48d4239d5a156c7bf8974d2b",
           "fingerprint": "f08e5d2746e4bdc05bc77e6d",
           "item": "fn set_client",
-          "line": 57
+          "line": 58
         },
         {
           "id": "d2407aa57dd63d6977aa0f99",
           "fingerprint": "91285f2b7090e214aa5d6d49",
           "item": "fn client",
-          "line": 61
-        },
-        {
-          "id": "67dc28be9c3431ae5e6a80d2",
-          "fingerprint": "8231e742edfaf593dead63d2",
-          "item": "fn fetch_publish_message_queues",
-          "line": 264
+          "line": 62
         }
       ],
       "owner": "client",
@@ -13245,18 +13184,6 @@
           "fingerprint": "40dc5b96b47ff465d6f09212",
           "item": "fn prepare_retry",
           "line": 2998
-        },
-        {
-          "id": "df27cb64d10db4409ddb1f36",
-          "fingerprint": "00b171d7639490dec8a50391",
-          "item": "fn query_message",
-          "line": 3541
-        },
-        {
-          "id": "89711f779f800d933a3e2bb4",
-          "fingerprint": "0cf022187d5515c349ebe9ed",
-          "item": "fn pull_message",
-          "line": 3576
         }
       ],
       "owner": "client",
