@@ -121,7 +121,7 @@ pub struct DefaultMQPushConsumerImpl {
     pub(crate) pull_time_delay_mills_when_exception: u64,
     client_config: ArcSwap<ClientConfig>,
     pub(crate) consumer_config: Arc<ArcSwap<ConsumerConfig>>,
-    pub(crate) rebalance_impl: ArcMut<RebalancePushImpl>,
+    pub(crate) rebalance_impl: Arc<RebalancePushImpl>,
     filter_message_hook_list: StdRwLock<Vec<Arc<dyn FilterMessageHook + Send + Sync>>>,
     consume_message_hook_list: StdRwLock<Vec<ConsumeMessageHookArc>>,
     rpc_hook: Option<Arc<dyn RPCHook>>,
@@ -161,7 +161,7 @@ impl DefaultMQPushConsumerImpl {
             pull_time_delay_mills_when_exception: 3_000,
             client_config: ArcSwap::from_pointee(client_config.clone()),
             consumer_config: consumer_config.clone(),
-            rebalance_impl: ArcMut::new(RebalancePushImpl::new(client_config, rebalance_consumer_config)),
+            rebalance_impl: Arc::new(RebalancePushImpl::new(client_config, rebalance_consumer_config)),
             filter_message_hook_list: StdRwLock::new(vec![]),
             consume_message_hook_list: StdRwLock::new(vec![]),
             rpc_hook,
@@ -182,7 +182,7 @@ impl DefaultMQPushConsumerImpl {
             ]),
             self_reference: OnceLock::new(),
         };
-        let wrapper = ArcMut::downgrade(&this.rebalance_impl);
+        let wrapper = Arc::downgrade(&this.rebalance_impl);
         this.rebalance_impl.set_rebalance_impl(wrapper);
         this
     }

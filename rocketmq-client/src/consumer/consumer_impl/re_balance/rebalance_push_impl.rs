@@ -33,7 +33,6 @@ use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_rust::ArcMut;
-use rocketmq_rust::WeakArcMut;
 use std::sync::LazyLock;
 use tokio::sync::RwLock;
 use tracing::error;
@@ -138,7 +137,7 @@ impl RebalancePushImpl {
             .insert(topic, subscription_data);
     }
 
-    pub fn set_rebalance_impl(&self, rebalance_impl: WeakArcMut<RebalancePushImpl>) {
+    pub fn set_rebalance_impl(&self, rebalance_impl: Weak<RebalancePushImpl>) {
         let _ = self.rebalance_impl_inner.sub_rebalance_impl.set(rebalance_impl);
     }
 
@@ -786,6 +785,20 @@ mod tests {
         ) {
             self.0.fetch_add(1, Ordering::Relaxed);
         }
+    }
+
+    #[test]
+    fn standard_weak_self_reference_does_not_keep_rebalance_alive() {
+        let rebalance = Arc::new(RebalancePushImpl::new(
+            ClientConfig::default(),
+            ConsumerConfig::default(),
+        ));
+        let weak = Arc::downgrade(&rebalance);
+        rebalance.set_rebalance_impl(weak.clone());
+
+        assert!(weak.upgrade().is_some());
+        drop(rebalance);
+        assert!(weak.upgrade().is_none());
     }
 
     #[test]

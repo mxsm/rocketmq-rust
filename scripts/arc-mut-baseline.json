@@ -8459,25 +8459,6 @@
       "adr": "ADR-002"
     },
     {
-      "identity": "a1df0fd49553a78ee5f5d6f2",
-      "path": "rocketmq-client/src/consumer/consumer_impl/default_lite_pull_consumer_impl.rs",
-      "symbol": "ArcMut",
-      "kind": "constructor",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "19983da6a29ced80471c529c",
-          "fingerprint": "91c09c442fee0f8ccff25fc0",
-          "item": "fn new",
-          "line": 531
-        }
-      ],
-      "owner": "client",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
       "identity": "501907cd2bf1b3766e62e4b8",
       "path": "rocketmq-client/src/consumer/consumer_impl/default_lite_pull_consumer_impl.rs",
       "symbol": "ArcMut",
@@ -8925,22 +8906,10 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "b67671d8e98b7ab8ce6dccf7",
-          "fingerprint": "c471f4a226da3185282b928a",
+          "id": "500010ea88bc0fcebba906c6",
+          "fingerprint": "a49bbbb059f2026e71176675",
           "item": "struct DefaultLitePullConsumerImpl",
           "line": 462
-        },
-        {
-          "id": "ce9eb3c69f70708a3187406a",
-          "fingerprint": "f6f1a01a102a2475031a52c7",
-          "item": "struct DefaultLitePullConsumerImpl",
-          "line": 463
-        },
-        {
-          "id": "b581537dd861caf67957a04a",
-          "fingerprint": "91ac1d086910c431643d6072",
-          "item": "fn new",
-          "line": 557
         }
       ],
       "owner": "client",
@@ -8987,25 +8956,6 @@
       "adr": "ADR-002"
     },
     {
-      "identity": "f3bb43b8b7c6e2c0471618a7",
-      "path": "rocketmq-client/src/consumer/consumer_impl/default_mq_push_consumer_impl.rs",
-      "symbol": "ArcMut",
-      "kind": "constructor",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "30c25dd436f4edff591e28e0",
-          "fingerprint": "ba5893640c237abb38a22baf",
-          "item": "fn new",
-          "line": 164
-        }
-      ],
-      "owner": "client",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
       "identity": "5d8d34299181478755cdf2e1",
       "path": "rocketmq-client/src/consumer/consumer_impl/default_mq_push_consumer_impl.rs",
       "symbol": "ArcMut",
@@ -9032,22 +8982,10 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "36cd349120bf5f89dfc9ea63",
-          "fingerprint": "0890f33f1bdf988966a3845a",
-          "item": "struct DefaultMQPushConsumerImpl",
-          "line": 124
-        },
-        {
           "id": "c8341d9d6bc438c7d3a777da",
           "fingerprint": "bfb0f073ea81599b95c38e62",
           "item": "struct DefaultMQPushConsumerImpl",
           "line": 129
-        },
-        {
-          "id": "425bb71f964fa35d058b48df",
-          "fingerprint": "91ac1d086910c431643d6072",
-          "item": "fn new",
-          "line": 185
         },
         {
           "id": "f9672439d6944372b5a25971",
@@ -9256,10 +9194,10 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "48c20c160ce82cf3b476c0d4",
-          "fingerprint": "461e6fdecac0e12eb03d7f33",
+          "id": "8bb7ccaa44344d5d1bc71425",
+          "fingerprint": "42550c6f71d3e6db57708c8b",
           "item": "<module>",
-          "line": 36
+          "line": 37
         }
       ],
       "owner": "client",
@@ -9297,50 +9235,6 @@
           "fingerprint": "9cc55439cdb120a32b1ab044",
           "item": "fn set_mq_client_factory",
           "line": 176
-        },
-        {
-          "id": "22fbe542f7d32581c79e27e7",
-          "fingerprint": "a234a018f9574e4de690d283",
-          "item": "fn upgrade_sub_rebalance",
-          "line": 239
-        }
-      ],
-      "owner": "client",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "988f765accb1e510c6a78cc8",
-      "path": "rocketmq-client/src/consumer/consumer_impl/re_balance/rebalance_impl.rs",
-      "symbol": "WeakArcMut",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "c23c8341139f44a721010451",
-          "fingerprint": "92561e16d9dc1dcac686e617",
-          "item": "<module>",
-          "line": 37
-        }
-      ],
-      "owner": "client",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "541a77d0f456f1b1c812f780",
-      "path": "rocketmq-client/src/consumer/consumer_impl/re_balance/rebalance_impl.rs",
-      "symbol": "WeakArcMut",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "e73571b9d69ec0663cfbf238",
-          "fingerprint": "8fe688d1f903571524456b61",
-          "item": "struct RebalanceImpl",
-          "line": 107
         }
       ],
       "owner": "client",
@@ -9356,10 +9250,10 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "c0344f3af9451cbbdb6f2000",
-          "fingerprint": "9f0f2bf0aa42cf91fbad20fb",
+          "id": "dfe48e514f65aab7ec8f4947",
+          "fingerprint": "cb716d4a8aa989b3613889f2",
           "item": "<module>",
-          "line": 42
+          "line": 43
         }
       ],
       "owner": "client",
@@ -9387,44 +9281,6 @@
       "adr": "ADR-002"
     },
     {
-      "identity": "ae6eac30bdf2bf36ea636d95",
-      "path": "rocketmq-client/src/consumer/consumer_impl/re_balance/rebalance_lite_pull_impl.rs",
-      "symbol": "WeakArcMut",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "28572033882f85cc92630b14",
-          "fingerprint": "310c3b2bb473057ad9cdb526",
-          "item": "<module>",
-          "line": 43
-        }
-      ],
-      "owner": "client",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "0836495bda34064c4f1cf3e0",
-      "path": "rocketmq-client/src/consumer/consumer_impl/re_balance/rebalance_lite_pull_impl.rs",
-      "symbol": "WeakArcMut",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "d5c147c7afe48f12b4af53a8",
-          "fingerprint": "2ca46f474aa3fbb7c64c3132",
-          "item": "fn set_rebalance_impl",
-          "line": 173
-        }
-      ],
-      "owner": "client",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
       "identity": "82dd21bb07d35dcda220d113",
       "path": "rocketmq-client/src/consumer/consumer_impl/re_balance/rebalance_push_impl.rs",
       "symbol": "ArcMut",
@@ -9432,8 +9288,8 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "5ce1ac35d371431c3141b45e",
-          "fingerprint": "3102db85cd77738b347a2dce",
+          "id": "49d2821d385cf8bc99631cb6",
+          "fingerprint": "3fc627945656873f8d8f5379",
           "item": "<module>",
           "line": 35
         }
@@ -9454,63 +9310,25 @@
           "id": "c4bc84529d3f712b130340d4",
           "fingerprint": "90db19f48145b50b5d741612",
           "item": "fn set_mq_client_factory",
-          "line": 130
+          "line": 129
         },
         {
           "id": "b5285b7f6c85a4359a1d02e9",
           "fingerprint": "a1646a5f680f703d98e34012",
           "item": "fn build_process_queue_table_by_broker_name",
-          "line": 610
+          "line": 609
         },
         {
           "id": "57ae5b411b2ae52c9a35399a",
           "fingerprint": "0fdba8aa8161e45fff2cff9a",
           "item": "fn lock_all_impl",
-          "line": 629
+          "line": 628
         },
         {
           "id": "ae37eef15f023a2b35bca26c",
           "fingerprint": "283dbe2c1e78bebdff1680ee",
           "item": "fn unlock_all_impl",
-          "line": 701
-        }
-      ],
-      "owner": "client",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "3cd72da4300f8fd47d9e7589",
-      "path": "rocketmq-client/src/consumer/consumer_impl/re_balance/rebalance_push_impl.rs",
-      "symbol": "WeakArcMut",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "357c73f00c681f8d36f002d6",
-          "fingerprint": "66a075fa50c8e0cfef3f523c",
-          "item": "<module>",
-          "line": 36
-        }
-      ],
-      "owner": "client",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "93c5e04b9b913c8ac0df475c",
-      "path": "rocketmq-client/src/consumer/consumer_impl/re_balance/rebalance_push_impl.rs",
-      "symbol": "WeakArcMut",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "c13bf3a633c8a4dd02da9698",
-          "fingerprint": "d003f3047ff30cc6c06a233a",
-          "item": "fn set_rebalance_impl",
-          "line": 141
+          "line": 700
         }
       ],
       "owner": "client",
