@@ -80,6 +80,24 @@ where
     pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
         Self { broker_runtime_inner }
     }
+
+    pub async fn process_request_shared(
+        &self,
+        channel: Channel,
+        ctx: ConnectionHandlerContext,
+        request: &mut RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let mut processor = self.clone();
+        processor.process_request(channel, ctx, request).await
+    }
+}
+
+impl<MS: MessageStore> Clone for ConsumerManageProcessor<MS> {
+    fn clone(&self) -> Self {
+        Self {
+            broker_runtime_inner: self.broker_runtime_inner.clone(),
+        }
+    }
 }
 
 #[allow(unused_variables)]

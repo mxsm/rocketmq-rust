@@ -492,6 +492,13 @@ startup root 改为标准 `Arc`；共享入口为每个请求复制轻量 capabi
 总进度仍为 75/82，下一子切片 M11-12az 继续拆分 transaction bridge/listener capability 与其他 Broker owner，
 M11-12 父工作包未完成。
 
+Broker core request processor roots 随 Issue #8400 将 peek、polling-info、recall、query-message、client-manage、
+consumer-manage 与 query-assignment 的 variant/startup root 改为标准 `Arc`，query-assignment runtime slot 同步退出
+`ArcMut`。共享入口按请求复制只含共享 capability 的轻量句柄；Peek 直接使用共享 receiver，保持唯一原子序列状态且不引入
+全局请求锁。实际快照为 273 production/605 occurrence，test 保持 156/451，Broker production 为 151/297；
+compatibility 保持 14/40。总进度仍为 75/82，下一子切片 M11-12ba 配对拆分 transaction bridge/listener 与
+TopicConfigManager runtime capability carrier，并继续收口 Broker admin/其他 processor；M11-12 父工作包未完成。
+
 ### 9.3 证据目录
 
 - 运行期生成物：`target/architecture-refactor/Mxx/<run-id>/`，不提交 Git。

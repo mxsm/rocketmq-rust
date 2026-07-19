@@ -66,8 +66,17 @@ impl<MS: MessageStore> RequestProcessor for PeekMessageProcessor<MS> {
 }
 
 impl<MS: MessageStore> PeekMessageProcessor<MS> {
+    pub async fn process_request_shared(
+        &self,
+        channel: Channel,
+        ctx: ConnectionHandlerContext,
+        request: &mut RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        self.process_request_internal(channel, ctx, request, true).await
+    }
+
     async fn process_request_internal(
-        &mut self,
+        &self,
         channel: Channel,
         _ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,

@@ -25,6 +25,7 @@ use tracing::info;
 
 use crate::broker_path_config_helper;
 
+#[derive(Clone)]
 pub(crate) struct MessageRequestModeManager {
     message_store_config: Arc<MessageStoreConfig>,
     message_request_mode_map: Arc<parking_lot::Mutex<MessageRequestModeMap>>,

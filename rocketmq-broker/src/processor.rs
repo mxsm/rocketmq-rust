@@ -80,19 +80,19 @@ pub(crate) mod send_message_processor;
 pub enum BrokerProcessorType<MS: MessageStore, TS> {
     Send(Arc<SendMessageProcessor<MS, TS>>),
     Pull(Arc<PullMessageProcessor<MS>>),
-    Peek(ArcMut<PeekMessageProcessor<MS>>),
+    Peek(Arc<PeekMessageProcessor<MS>>),
     Pop(Arc<PopMessageProcessor<MS>>),
     PopLite(Arc<PopLiteMessageProcessor<MS>>),
     Ack(ArcMut<AckMessageProcessor<MS>>),
     ChangeInvisible(ArcMut<ChangeInvisibleTimeProcessor<MS>>),
     Notification(Arc<NotificationProcessor<MS>>),
-    PollingInfo(ArcMut<PollingInfoProcessor<MS>>),
+    PollingInfo(Arc<PollingInfoProcessor<MS>>),
     Reply(Arc<ReplyMessageProcessor<MS, TS>>),
-    Recall(ArcMut<RecallMessageProcessor<MS>>),
-    QueryMessage(ArcMut<QueryMessageProcessor<MS>>),
-    ClientManage(ArcMut<ClientManageProcessor<MS>>),
-    ConsumerManage(ArcMut<ConsumerManageProcessor<MS>>),
-    QueryAssignment(ArcMut<QueryAssignmentProcessor<MS>>),
+    Recall(Arc<RecallMessageProcessor<MS>>),
+    QueryMessage(Arc<QueryMessageProcessor<MS>>),
+    ClientManage(Arc<ClientManageProcessor<MS>>),
+    ConsumerManage(Arc<ConsumerManageProcessor<MS>>),
+    QueryAssignment(Arc<QueryAssignmentProcessor<MS>>),
     LiteManager(ArcMut<LiteManagerProcessor<MS>>),
     LiteSubscriptionCtl(ArcMut<LiteSubscriptionCtlProcessor<MS>>),
     EndTransaction(Arc<EndTransactionProcessor<TS, MS>>),
@@ -172,7 +172,7 @@ where
         match self {
             BrokerProcessorType::Send(processor) => processor.process_request_shared(channel, ctx, request).await,
             BrokerProcessorType::Pull(processor) => processor.process_request_shared(channel, ctx, request).await,
-            BrokerProcessorType::Peek(processor) => processor.process_request(channel, ctx, request).await,
+            BrokerProcessorType::Peek(processor) => processor.process_request_shared(channel, ctx, request).await,
             BrokerProcessorType::Pop(processor) => processor.process_request_shared(channel, ctx, request).await,
             BrokerProcessorType::PopLite(processor) => processor.process_request_shared(channel, ctx, request).await,
             BrokerProcessorType::Ack(processor) => processor.process_request(channel, ctx, request).await,
@@ -180,13 +180,23 @@ where
             BrokerProcessorType::Notification(processor) => {
                 processor.process_request_shared(channel, ctx, request).await
             }
-            BrokerProcessorType::PollingInfo(processor) => processor.process_request(channel, ctx, request).await,
+            BrokerProcessorType::PollingInfo(processor) => {
+                processor.process_request_shared(channel, ctx, request).await
+            }
             BrokerProcessorType::Reply(processor) => processor.process_request_shared(channel, ctx, request).await,
-            BrokerProcessorType::Recall(processor) => processor.process_request(channel, ctx, request).await,
-            BrokerProcessorType::QueryMessage(processor) => processor.process_request(channel, ctx, request).await,
-            BrokerProcessorType::ClientManage(processor) => processor.process_request(channel, ctx, request).await,
-            BrokerProcessorType::ConsumerManage(processor) => processor.process_request(channel, ctx, request).await,
-            BrokerProcessorType::QueryAssignment(processor) => processor.process_request(channel, ctx, request).await,
+            BrokerProcessorType::Recall(processor) => processor.process_request_shared(channel, ctx, request).await,
+            BrokerProcessorType::QueryMessage(processor) => {
+                processor.process_request_shared(channel, ctx, request).await
+            }
+            BrokerProcessorType::ClientManage(processor) => {
+                processor.process_request_shared(channel, ctx, request).await
+            }
+            BrokerProcessorType::ConsumerManage(processor) => {
+                processor.process_request_shared(channel, ctx, request).await
+            }
+            BrokerProcessorType::QueryAssignment(processor) => {
+                processor.process_request_shared(channel, ctx, request).await
+            }
             BrokerProcessorType::LiteManager(processor) => processor.process_request(channel, ctx, request).await,
             BrokerProcessorType::LiteSubscriptionCtl(processor) => {
                 processor.process_request(channel, ctx, request).await
@@ -691,6 +701,41 @@ mod tests {
         assert!(!runtime_source.contains(concat!("ArcMut::new(", "send_message_processor")));
         assert!(!runtime_source.contains(concat!("ArcMut::new(", "reply_message_processor")));
         assert!(!runtime_source.contains(concat!("EndTransaction(ArcMut::new(", "EndTransactionProcessor")));
+    }
+
+    #[test]
+    fn core_processor_roots_use_standard_arc() {
+        let processor_source = include_str!("processor.rs");
+        let runtime_source = include_str!("broker_runtime.rs");
+
+        for (variant, processor) in [
+            ("Peek", "PeekMessageProcessor"),
+            ("PollingInfo", "PollingInfoProcessor"),
+            ("Recall", "RecallMessageProcessor"),
+            ("QueryMessage", "QueryMessageProcessor"),
+            ("ClientManage", "ClientManageProcessor"),
+            ("ConsumerManage", "ConsumerManageProcessor"),
+            ("QueryAssignment", "QueryAssignmentProcessor"),
+        ] {
+            let legacy_variant = format!("{variant}({}<", concat!("Arc", "Mut"));
+            assert!(
+                !processor_source.contains(&legacy_variant),
+                "{processor} root regressed"
+            );
+            let legacy_constructor = format!("{}::new({processor}::new", concat!("Arc", "Mut"));
+            assert!(
+                !runtime_source.contains(&legacy_constructor),
+                "{processor} startup root regressed"
+            );
+        }
+
+        assert!(!runtime_source.contains(concat!(
+            "query_assignment_processor: Option<ArcMut<",
+            "QueryAssignmentProcessor"
+        )));
+        assert!(!runtime_source.contains(concat!("ArcMut::new(", "consumer_manage_processor")));
+        assert!(!runtime_source.contains("query_assignment_processor_mut("));
+        assert!(!runtime_source.contains("query_assignment_processor_unchecked_mut("));
     }
 
     #[tokio::test]

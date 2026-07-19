@@ -127,6 +127,26 @@ impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
     pub fn message_request_mode_manager(&self) -> &MessageRequestModeManager {
         &self.message_request_mode_manager
     }
+
+    pub async fn process_request_shared(
+        &self,
+        channel: Channel,
+        ctx: ConnectionHandlerContext,
+        request: &mut RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let mut processor = self.clone();
+        processor.process_request(channel, ctx, request).await
+    }
+}
+
+impl<MS: MessageStore> Clone for QueryAssignmentProcessor<MS> {
+    fn clone(&self) -> Self {
+        Self {
+            message_request_mode_manager: self.message_request_mode_manager.clone(),
+            load_strategy: self.load_strategy.clone(),
+            broker_runtime_inner: self.broker_runtime_inner.clone(),
+        }
+    }
 }
 
 impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
