@@ -18,6 +18,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::RwLock as StdRwLock;
+use std::sync::Weak;
 
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
@@ -34,7 +35,6 @@ use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_rust::ArcMut;
-use rocketmq_rust::WeakArcMut;
 use tokio::sync::RwLock;
 use tracing::error;
 use tracing::info;
@@ -104,7 +104,7 @@ pub(crate) struct RebalanceImpl<R> {
 
     /// Weak reference to the concrete rebalance implementation (e.g., `RebalancePushImpl`),
     /// enabling abstract callbacks without creating reference cycles.
-    pub(crate) sub_rebalance_impl: OnceLock<WeakArcMut<R>>,
+    pub(crate) sub_rebalance_impl: OnceLock<Weak<R>>,
 
     /// Topics for which `queryAssignment` returned a valid broker-side assignment.
     /// Lock-free concurrent map; entries are added on successful assignment and
@@ -236,7 +236,7 @@ where
         }
     }
 
-    fn upgrade_sub_rebalance(&self, operation: &str) -> Option<ArcMut<R>> {
+    fn upgrade_sub_rebalance(&self, operation: &str) -> Option<Arc<R>> {
         match self.sub_rebalance_impl.get().and_then(|weak| weak.upgrade()) {
             Some(rebalance) => Some(rebalance),
             None => {

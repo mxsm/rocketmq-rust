@@ -460,7 +460,7 @@ pub struct DefaultLitePullConsumerImpl {
 
     // Core components
     client_instance: StdRwLock<Option<ArcMut<MQClientInstance>>>,
-    rebalance_impl: ArcMut<RebalanceLitePullImpl>,
+    rebalance_impl: Arc<RebalanceLitePullImpl>,
     pull_api_wrapper: StdRwLock<Option<Arc<PullAPIWrapper>>>,
     offset_store: StdRwLock<Option<Arc<OffsetStore>>>,
     rpc_hook: StdRwLock<Option<Arc<dyn RPCHook>>>,
@@ -528,7 +528,7 @@ impl DefaultLitePullConsumerImpl {
             subscription_type: Arc::new(RwLock::new(SubscriptionType::None)),
             consumer_start_timestamp: AtomicI64::new(current_millis() as i64),
             client_instance: StdRwLock::new(None),
-            rebalance_impl: ArcMut::new(RebalanceLitePullImpl::new(rebalance_config)),
+            rebalance_impl: Arc::new(RebalanceLitePullImpl::new(rebalance_config)),
             pull_api_wrapper: StdRwLock::new(None),
             offset_store: StdRwLock::new(None),
             rpc_hook: StdRwLock::new(None),
@@ -554,7 +554,7 @@ impl DefaultLitePullConsumerImpl {
             rebalance_listener_shutdown: CancellationToken::new(),
             self_reference: OnceLock::new(),
         };
-        let wrapper = ArcMut::downgrade(&this.rebalance_impl);
+        let wrapper = Arc::downgrade(&this.rebalance_impl);
         this.rebalance_impl.set_rebalance_impl(wrapper);
         this
     }

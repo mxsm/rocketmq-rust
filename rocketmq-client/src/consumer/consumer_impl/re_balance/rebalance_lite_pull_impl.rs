@@ -28,6 +28,7 @@
 
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::sync::Weak;
 
 use arc_swap::ArcSwap;
 use arc_swap::ArcSwapOption;
@@ -40,7 +41,6 @@ use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_rust::ArcMut;
-use rocketmq_rust::WeakArcMut;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -168,9 +168,9 @@ impl RebalanceLitePullImpl {
 
     /// Registers this [`RebalanceLitePullImpl`] as its own sub-rebalance implementation.
     ///
-    /// The weak reference prevents a reference cycle between the outer `ArcMut` wrapper and
-    /// the inner rebalance core.
-    pub fn set_rebalance_impl(&self, rebalance_impl: WeakArcMut<RebalanceLitePullImpl>) {
+    /// The weak reference prevents a reference cycle between the outer `Arc` root and the
+    /// inner rebalance core.
+    pub fn set_rebalance_impl(&self, rebalance_impl: Weak<RebalanceLitePullImpl>) {
         let _ = self.rebalance_impl_inner.sub_rebalance_impl.set(rebalance_impl);
     }
 
@@ -452,5 +452,24 @@ impl Rebalance for RebalanceLitePullImpl {
                 "destroy: could not acquire write lock on pop_process_queue_table; queues may not be dropped cleanly"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::RebalanceLitePullImpl;
+    use crate::consumer::default_mq_push_consumer::ConsumerConfig;
+
+    #[test]
+    fn standard_weak_self_reference_does_not_keep_rebalance_alive() {
+        let rebalance = Arc::new(RebalanceLitePullImpl::new(ConsumerConfig::default()));
+        let weak = Arc::downgrade(&rebalance);
+        rebalance.set_rebalance_impl(weak.clone());
+
+        assert!(weak.upgrade().is_some());
+        drop(rebalance);
+        assert!(weak.upgrade().is_none());
     }
 }

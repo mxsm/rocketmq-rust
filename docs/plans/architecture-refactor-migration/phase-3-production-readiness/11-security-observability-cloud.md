@@ -406,6 +406,11 @@ M11-12aj 已将 Push implementation 根 owner、consumer registry、pull/pop cal
 376 production/995 occurrences，Client owner 降至 58/102，Client test 降至 25/102，另有 Proxy 1/1；下一子切片
 处理 Rebalance root ownership，其余 Client/Broker/Store、compatibility 与完整候选快照 Gate 仍保持开放。
 
+M11-12ak 已将 Push/LitePull concrete Rebalance root 从 `ArcMut` 改为标准 `Arc`，core self-reference 与 concrete
+setter 从 `WeakArcMut` 改为标准 `Weak`；不改变 queue assignment、startup/shutdown 或公开 consumer API，仍使用
+`ArcMut<MQClientInstance>` 的位置明确保留给下一 owner 切片。实际快照降至 368 production/982 occurrences，Client
+owner 降至 50/89，另有 Proxy 1/1；其余 Client/Broker/Store、compatibility 与完整候选快照 Gate 仍保持开放。
+
 ## 公共兼容面
 
 - development/compatibility仍可显式选择；secure只作为新部署默认，不静默重解释旧配置。
