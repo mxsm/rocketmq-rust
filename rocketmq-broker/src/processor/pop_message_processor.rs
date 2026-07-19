@@ -92,7 +92,7 @@ const QUEUE_LOCK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 pub struct PopMessageProcessor<MS: MessageStore> {
     ck_message_number: AtomicI64,
     pop_long_polling_service: ArcMut<PopLongPollingService<MS, PopMessageProcessor<MS>>>,
-    pop_buffer_merge_service: ArcMut<PopBufferMergeService<MS>>,
+    pop_buffer_merge_service: Arc<PopBufferMergeService<MS>>,
     queue_lock_manager: QueueLockManager,
     revive_topic: CheetahString,
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
@@ -163,11 +163,11 @@ impl<MS: MessageStore> PopMessageProcessor<MS> {
         revive_topic: CheetahString,
         queue_lock_manager: QueueLockManager,
         broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
-    ) -> ArcMut<PopBufferMergeService<MS>> {
+    ) -> Arc<PopBufferMergeService<MS>> {
         #[cfg(feature = "rocksdb_store")]
         {
             let pop_consumer_store = Self::open_pop_consumer_rocksdb_store(&broker_runtime_inner);
-            ArcMut::new(PopBufferMergeService::new(
+            Arc::new(PopBufferMergeService::new(
                 revive_topic,
                 queue_lock_manager,
                 broker_runtime_inner,
@@ -177,7 +177,7 @@ impl<MS: MessageStore> PopMessageProcessor<MS> {
 
         #[cfg(not(feature = "rocksdb_store"))]
         {
-            ArcMut::new(PopBufferMergeService::new(
+            Arc::new(PopBufferMergeService::new(
                 revive_topic,
                 queue_lock_manager,
                 broker_runtime_inner,
@@ -1118,7 +1118,6 @@ where
                             );
                         } else {
                             self.pop_buffer_merge_service
-                                .mut_from_ref()
                                 .add_ck_mock(
                                     request_header.consumer_group.clone(),
                                     topic.clone(),
@@ -1249,14 +1248,14 @@ where
         for msg_queue_offset in get_message_tmp_result.message_queue_offset() {
             ck.add_diff(((*msg_queue_offset) as i64 - offset) as i32);
         }
-        let pop_buffer_merge_service_ref_mut = self.pop_buffer_merge_service.mut_from_ref();
-
-        match pop_buffer_merge_service_ref_mut
+        match self
+            .pop_buffer_merge_service
             .add_ck(&ck, revive_qid, -1, get_message_tmp_result.next_begin_offset())
             .await
         {
-            Ok(_) => true,
-            Err(_) => pop_buffer_merge_service_ref_mut
+            Ok(()) => true,
+            Err(_) => self
+                .pop_buffer_merge_service
                 .add_ck_just_offset(ck, revive_qid, -1, get_message_tmp_result.next_begin_offset())
                 .await
                 .is_ok(),
@@ -1515,12 +1514,8 @@ impl<MS: MessageStore> PopMessageProcessor<MS> {
         )
     }
 
-    pub fn pop_buffer_merge_service(&self) -> &ArcMut<PopBufferMergeService<MS>> {
+    pub fn pop_buffer_merge_service(&self) -> &Arc<PopBufferMergeService<MS>> {
         &self.pop_buffer_merge_service
-    }
-
-    pub fn pop_buffer_merge_service_mut(&mut self) -> &mut ArcMut<PopBufferMergeService<MS>> {
-        &mut self.pop_buffer_merge_service
     }
 
     pub fn build_ck_msg(

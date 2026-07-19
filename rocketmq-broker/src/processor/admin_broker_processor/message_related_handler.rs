@@ -744,8 +744,8 @@ mod tests {
         pop_message_processor.mut_from_ref().start();
 
         let service = pop_message_processor.pop_buffer_merge_service().clone();
+        crate::processor::processor_service::pop_buffer_merge_service::PopBufferMergeService::start(service.clone());
         service
-            .mut_from_ref()
             .add_ck_mock(
                 CheetahString::from_static_str("group-a"),
                 CheetahString::from_static_str("topic-a"),

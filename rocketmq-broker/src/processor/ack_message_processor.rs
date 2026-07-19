@@ -410,7 +410,7 @@ where
         ack_msg.set_broker_name(broker_name);
         if self
             .pop_message_processor
-            .pop_buffer_merge_service_mut()
+            .pop_buffer_merge_service()
             .add_ack(r_qid, ack_msg.as_ref())
         {
             self.broker_runtime_inner

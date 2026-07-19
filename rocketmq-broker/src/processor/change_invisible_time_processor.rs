@@ -262,7 +262,7 @@ where
         );
         if self
             .pop_message_processor
-            .pop_buffer_merge_service_mut()
+            .pop_buffer_merge_service()
             .add_ack(rq_id, &ack_msg)
         {
             return Ok(());
