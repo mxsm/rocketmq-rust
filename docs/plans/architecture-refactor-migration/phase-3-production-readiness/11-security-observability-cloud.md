@@ -442,6 +442,12 @@ M11-12ap 已将 Broker TopicConfig table/snapshot 与 Store carrier 改为不可
 122/308；compatibility 14/40 不增。下一子切片 M11-12aq 处理 Broker POP buffer merge service ownership，完整候选
 快照与 HUMAN Gate 仍保持开放。
 
+M11-12aq 已将 `PopBufferMergeService`、checkpoint buffer 与 commit-offset queue element 改为标准 `Arc`；checkpoint
+状态由原子字段发布，扫描 task 独占复用 batch-ACK scratch 并以原子计数保持既有 cadence。异步持久化前释放 DashMap
+guard，checkpoint 清理使用 observed Arc identity 条件删除，commit-offset FIFO 保留至按序提交。实际快照降至 298
+production/764 occurrences、167 test/464 occurrences，Broker owner 降至 176/456；compatibility 14/40 不增。
+下一子切片 M11-12ar 处理 Broker POP processor/long-poll lifecycle ownership，完整候选快照与 HUMAN Gate 仍保持开放。
+
 ## 公共兼容面
 
 - development/compatibility仍可显式选择；secure只作为新部署默认，不静默重解释旧配置。

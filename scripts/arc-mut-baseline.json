@@ -3037,12 +3037,6 @@
           "fingerprint": "64c4e36737f73c09f7721f45",
           "item": "fn pop_rollback_drains_pop_buffer_and_restarts_service",
           "line": 744
-        },
-        {
-          "id": "c5b832c5c437e364bc9432dd",
-          "fingerprint": "a5732a3c4ea76d83a0f8676e",
-          "item": "fn pop_rollback_drains_pop_buffer_and_restarts_service",
-          "line": 748
         }
       ],
       "owner": "broker",
@@ -4500,18 +4494,6 @@
           "line": 150
         },
         {
-          "id": "624827ad0c49638bf64f71c8",
-          "fingerprint": "261bc38041ff39f96c041fcd",
-          "item": "fn new_pop_buffer_merge_service",
-          "line": 170
-        },
-        {
-          "id": "560c23608911fb421c86f17d",
-          "fingerprint": "1ac58530bf8311edcd60d5a5",
-          "item": "fn new_pop_buffer_merge_service",
-          "line": 180
-        },
-        {
           "id": "6f4b29273d4c81de1a7be44a",
           "fingerprint": "7330032772928ecb3e5dd3d0",
           "item": "fn _process_request",
@@ -4553,7 +4535,7 @@
           "id": "53446f16209e4482d6f2e5b4",
           "fingerprint": "429b1048a1916defc57ca8d1",
           "item": "mod tests",
-          "line": 1757
+          "line": 1752
         }
       ],
       "owner": "broker",
@@ -4573,12 +4555,6 @@
           "fingerprint": "6c0e01fd7b2cd2e1ebe0b15e",
           "item": "struct PopMessageProcessor",
           "line": 94
-        },
-        {
-          "id": "ac52bee43d45156029a0d4a7",
-          "fingerprint": "e5de938754b4ba9ac6d9f8a4",
-          "item": "struct PopMessageProcessor",
-          "line": 95
         },
         {
           "id": "6d7d360dfabb0cc400204598",
@@ -4605,16 +4581,10 @@
           "line": 127
         },
         {
-          "id": "4f82d5a4ea49ea4a3da5be7e",
-          "fingerprint": "9f28d70b6576258ee4bb4831",
+          "id": "fe4536375047c32b5cfbf4e4",
+          "fingerprint": "d47cd82fd44bee08b84fe98a",
           "item": "fn new_pop_buffer_merge_service",
           "line": 165
-        },
-        {
-          "id": "9821d979a677ea2035cf27bd",
-          "fingerprint": "b80f25ec0e3be931f6d6b053",
-          "item": "fn new_pop_buffer_merge_service",
-          "line": 166
         },
         {
           "id": "05488e48d3006c4f500c29d3",
@@ -4644,25 +4614,13 @@
           "id": "d2f29969c9994fd2100f1ed9",
           "fingerprint": "c20a88acf806b503e241b52c",
           "item": "fn pop_long_polling_service",
-          "line": 1396
+          "line": 1395
         },
         {
           "id": "35dc361c32ad737ae13311ad",
           "fingerprint": "6a9eb794688b0a2545a08465",
           "item": "fn queue_lock_manager_for_broker",
-          "line": 1454
-        },
-        {
-          "id": "622d3810607a3191ff2722f4",
-          "fingerprint": "596602aa59c984caaec84eb8",
-          "item": "fn pop_buffer_merge_service",
-          "line": 1518
-        },
-        {
-          "id": "11ec179ef7f50fde417ce1a8",
-          "fingerprint": "d67ba64ba7c0d7c0e49373bc",
-          "item": "fn pop_buffer_merge_service_mut",
-          "line": 1522
+          "line": 1453
         }
       ],
       "owner": "broker",
@@ -4681,7 +4639,7 @@
           "id": "b40c673c619b80f1dec5b263",
           "fingerprint": "72046c14aa1ee6a5c306710f",
           "item": "fn seed_topic_and_group",
-          "line": 1803
+          "line": 1798
         }
       ],
       "owner": "broker",
@@ -4700,7 +4658,7 @@
           "id": "837dd009014eae224bf33bcf",
           "fingerprint": "02781f1bbf9343ee9adf2d71",
           "item": "mod tests",
-          "line": 1759
+          "line": 1754
         }
       ],
       "owner": "broker",
@@ -4719,94 +4677,19 @@
           "id": "46f8e863629d37e0e96362bb",
           "fingerprint": "3bab5bd0bf2c30841a60f6cf",
           "item": "fn gen_ack_unique_id_formats_correctly",
-          "line": 1846
+          "line": 1841
         },
         {
           "id": "1eed520b932967556b6ef449",
           "fingerprint": "c6c6353593ec4d9949db5a40",
           "item": "fn gen_batch_ack_unique_id_formats_correctly",
-          "line": 1866
+          "line": 1861
         },
         {
           "id": "1e1baf0a2a3c758246b21dc5",
           "fingerprint": "c372489f9efbcd5785a8a55d",
           "item": "fn gen_ck_unique_id_formats_correctly",
-          "line": 1887
-        }
-      ],
-      "owner": "broker",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "d7ee1c87e47879ba60720de1",
-      "path": "rocketmq-broker/src/processor/pop_message_processor.rs",
-      "symbol": "mut_from_ref",
-      "kind": "mut_from_ref_call",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "6e4203bd6ac03d5349972601",
-          "fingerprint": "19b04cfa94b1db980d859336",
-          "item": "fn pop_msg_from_queue",
-          "line": 1121
-        },
-        {
-          "id": "fb4fe667c96429d55ead8fd1",
-          "fingerprint": "369a1720659e27f64bbb130d",
-          "item": "fn append_check_point",
-          "line": 1252
-        }
-      ],
-      "owner": "broker",
-      "reason": "Legacy safe mutable-reference escape pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "9b48c4cafa0ed9e73c250414",
-      "path": "rocketmq-broker/src/processor/processor_service/pop_buffer_merge_service.rs",
-      "symbol": "*",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "8bc5111738ee11dd498e0f38",
-          "fingerprint": "ddb03795f1685a3c38f00c58",
-          "item": "mod tests",
-          "line": 1408
-        }
-      ],
-      "owner": "broker",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "d9a8a1df4a9091ff6da88696",
-      "path": "rocketmq-broker/src/processor/processor_service/pop_buffer_merge_service.rs",
-      "symbol": "ArcMut",
-      "kind": "constructor",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "bed1b88e8104cd30fa93d678",
-          "fingerprint": "d1f45e0d774032b8ae4e8793",
-          "item": "fn add_ck",
-          "line": 182
-        },
-        {
-          "id": "cee2954c731483404eac2263",
-          "fingerprint": "a7edb74de5965280512a0328",
-          "item": "fn add_ck_just_offset",
-          "line": 252
-        },
-        {
-          "id": "3f331851a6bc4cbcef7c7fac",
-          "fingerprint": "b98734e44ee697a63191ae1a",
-          "item": "fn add_ck_mock",
-          "line": 846
+          "line": 1882
         }
       ],
       "owner": "broker",
@@ -4841,46 +4724,16 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "3565e39ccf16c821b90b9fe7",
-          "fingerprint": "242b8dda5af855485c646ec8",
-          "item": "struct PopBufferMergeService",
-          "line": 71
-        },
-        {
-          "id": "8395ea32ff8bac2a8906de09",
-          "fingerprint": "033396624a0cf988798ab300",
-          "item": "struct PopBufferMergeService",
-          "line": 72
-        },
-        {
           "id": "b8901325b40643b40cd42ab1",
           "fingerprint": "8fe22c5119d72dad410634e0",
           "item": "struct PopBufferMergeService",
-          "line": 90
+          "line": 89
         },
         {
           "id": "c45e6659a6e18f64ff897729",
           "fingerprint": "94be72e74ae9b23aeb800d04",
           "item": "fn new",
-          "line": 99
-        },
-        {
-          "id": "0b58bcb0bf196bb688ffaee6",
-          "fingerprint": "ead182079db43864e1425a4a",
-          "item": "fn start",
-          "line": 651
-        },
-        {
-          "id": "964fc4b6da109351fe5d79db",
-          "fingerprint": "552df468c791618004527131",
-          "item": "fn drain_remaining_for_shutdown",
-          "line": 737
-        },
-        {
-          "id": "85dce8f3c6bc6ca617c94ee6",
-          "fingerprint": "02b28a298a937b5198084b58",
-          "item": "fn put_offset_queue",
-          "line": 848
+          "line": 98
         }
       ],
       "owner": "broker",
@@ -4896,40 +4749,22 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "c9497bdba48a3f63c340c866",
-          "fingerprint": "898c45891c27436d97a3831b",
-          "item": "fn start",
-          "line": 704
-        },
-        {
-          "id": "a5790cd51b9b196581366c75",
-          "fingerprint": "e7dd0ab067f44dfbe19ceaac",
-          "item": "fn start",
-          "line": 706
-        },
-        {
-          "id": "fcbfae2386bedfe918a9e3dc",
-          "fingerprint": "2341f52dbb71c219da43e784",
-          "item": "fn drain_remaining_for_shutdown",
-          "line": 739
-        },
-        {
           "id": "d3f49eea209aebd8eaf1b9e7",
           "fingerprint": "a061170c102cfc05398b87ba",
           "item": "fn put_ck_to_store",
-          "line": 900
+          "line": 929
         },
         {
           "id": "9cf7cc335b5ce805d8680469",
           "fingerprint": "163265f50cf7452d2c6ace2f",
           "item": "fn put_batch_ack_to_store",
-          "line": 1010
+          "line": 1039
         },
         {
           "id": "6458601f7f17c1e7a919d7dc",
           "fingerprint": "163265f50cf7452d2c6ace2f",
           "item": "fn put_ack_to_store",
-          "line": 1050
+          "line": 1079
         }
       ],
       "owner": "broker",

@@ -1879,13 +1879,40 @@ Broker TopicConfig ownership 随 Issue #8379 完成以下边界收敛：
 | `./scripts/check-agents-routing.ps1` | 通过；4 个 standalone Cargo、3 个 Node project、8 条 route |
 | TopicConfig ArcMut 定向扫描 / `git diff --check` | Broker/Store 的 `ArcMut<TopicConfig>`、constructor 和旧 DataVersion reference accessor 零匹配；diff check 无 whitespace error，仅报告 CRLF 转换提示 |
 
-下一子切片 M11-12aq 处理 `PopBufferMergeService`/checkpoint wrapper owner；75/82 总进度不变，Broker/Store、
-compatibility 与完整候选快照 Gate 仍保持开放。
+## M11-12aq 实现
+
+Broker POP buffer ownership 随 Issue #8381 完成以下边界收敛：
+
+- `PopBufferMergeService` root、checkpoint buffer 与 commit-offset queue element 统一改用标准 `Arc`；`PopCheckPointWrapper` 的 revive offset、ACK bits、stored bits 与 stored flag 继续通过原子字段发布，调用方不再获得共享可变引用。
+- `add_ack`、scan/garbage collection、mock checkpoint 与 drain 路径收窄为 `&self`；扫描计数改用 `AtomicU64` 且保持原有 pre-increment log、post-increment 30 秒/分钟归零 cadence，批量 ACK scratch 由单一扫描 task 独占并跨扫描复用。
+- scan 在异步持久化前克隆 `(merge key, Arc<checkpoint>)` 完整代际并释放 DashMap guard；删除使用 `Arc::ptr_eq` 条件发布，拒绝旧扫描删除并发新代际。commit-offset FIFO 不再随 buffer checkpoint 清理而整队删除，queue handle 在 `.await` 前从 DashMap guard 中克隆。
+- `PopMessageProcessor` 的 construction/start/append/accessor/shutdown 与 ACK/change-invisible/admin 路径使用标准 service handle；既有 rollback test 追加重复 start，验证 running CAS 保持启动幂等且 shutdown-drain-restart 顺序不变。
+- reviewed baseline 从 482 identities / 1,289 occurrences 降至 479 / 1,268；production 从 300/783 降至 298/764，test 从 168/466 降至 167/464，compatibility 保持 14/40。Broker 为 176/456；净删除 2 个 production identity/19 occurrence 与 1 个 test identity/2 occurrence，无新增 identity。
+
+## M11-12aq 验证
+
+| 命令 | 结果 |
+|---|---|
+| `cargo check -p rocketmq-broker --all-targets --all-features` / Broker strict Clippy | 通过；标准 Arc service/checkpoint carrier、共享 receiver、scan lifecycle 与全部 Broker targets/features 编译及 lint 通过 |
+| POP buffer focused tests / rollback lifecycle test | 12/12、1/1 通过；覆盖标准 Arc 跨线程原子状态可见性、key/offset wrapper、RocksDB record 映射、重复 start 与 graceful drain/restart |
+| RocksDB specialized gates | Store/Broker strict Clippy 通过；foundation 82/82、semantics 9/9、Broker `rocksdb` 20/20、`pop_consumer` 4/4 通过 |
+| `cargo test -p rocketmq-broker --all-features --lib -- --test-threads=1` | 558 passed、24 failed、1 ignored；失败名是上一 main 已记录 25 项失败集合的严格子集，本切片 focused tests 全通过，故不能把全套记为通过，也未新增 baseline failure |
+| reviewed baseline reduction | baseline 482/1,289→479/1,268；1 个保留的 BrokerRuntimeInner 参数 occurrence 因相邻 return carrier 变更发生指纹位移，以临时 ADR-013 approval 审核且 approval 不提交 |
+| `python scripts/arc_mut_guard.py` | 通过；production 298/764、test 167/464、compatibility 14/40，Broker production 176/456；没有新增 identity |
+| `python -m unittest scripts.tests.test_arc_mut_guard -v` / `python scripts/arc_mut_guard.py --fixtures` | 67/67 单测、24/24 fixtures 通过 |
+| `cargo fmt --all -- --check` / root workspace strict Clippy | 通过；root workspace 32 个 package 的 all-targets/all-features `-D warnings` profile 通过 |
+| architecture target/baseline/release guards | 通过；35/35 target edges、3/3 test edges、32/32 release topology、10/10 R0 crates，dependency/release/performance guard 单测 60/60 通过 |
+| `./scripts/runtime-audit.ps1 -SkipBaseline -EnforceBoundaryBaseline` | 通过；scan task 仍由 TaskGroup 所有，running CAS、shutdown/drain/restart 未新增 detached task/runtime 边界 |
+| `./scripts/check-agents-routing.ps1` | 通过；4 个 standalone Cargo、3 个 Node project、8 条 route |
+| POP buffer ArcMut 定向扫描 / `git diff --check` | service/checkpoint carrier、constructor 与 service-self `mut_from_ref` 零匹配；保留 BrokerRuntimeInner root boundary 与 3 个 escape bridge 调用供后续切片，diff check 无 whitespace error |
+
+下一子切片 M11-12ar 处理 `PopMessageProcessor`/`PopLongPollingService` lifecycle owner；75/82 总进度不变，
+Broker/Store、compatibility 与完整候选快照 Gate 仍保持开放。
 
 ## 剩余切片与 Gate
 
-1. Broker offset、BrokerRuntimeInner、schedule/POP/processor/transaction owner（178/475）；下一子切片 M11-12aq
-   处理 PopBufferMergeService/checkpoint wrapper ownership。
+1. Broker offset、BrokerRuntimeInner、schedule/POP/processor/transaction owner（176/456）；下一子切片 M11-12ar
+   处理 PopMessageProcessor/PopLongPollingService lifecycle ownership。
 2. Store MappedFileQueue/ConsumeQueue、CommitLog/Flush、StoreHandle/Rocks/Timer 与 HA actor（122/308）。
 3. 删除 compatibility `arc_mut.rs` 和公开 re-export；移除其余 nightly feature，将 guard 切到 production/public zero。
 4. 对同一候选快照执行 stable feature matrix、Miri/Loom 可用切片、soak/SLO fault、dashboard/runbook、动态
