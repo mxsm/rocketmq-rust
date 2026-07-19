@@ -21,7 +21,6 @@ use cheetah_string::CheetahString;
 use rand::RngExt;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
-use rocketmq_rust::ArcMut;
 use serde::Serialize;
 use tokio::sync::Notify;
 use tokio::time::Duration;
@@ -35,7 +34,7 @@ use crate::runtime::ClientTrackedTaskHandle;
 pub struct MQClientAPIFactory {
     nameserver_access_config: NameserverAccessConfig,
     name_prefix: CheetahString,
-    clients: Vec<ArcMut<MQClientAPIImpl>>,
+    clients: Vec<Arc<MQClientAPIImpl>>,
     namesrv_refresh_task: Option<NamesrvRefreshTaskHandle>,
 }
 
@@ -98,7 +97,7 @@ impl MQClientAPIFactory {
     pub fn new(
         nameserver_access_config: NameserverAccessConfig,
         name_prefix: impl Into<CheetahString>,
-        clients: Vec<ArcMut<MQClientAPIImpl>>,
+        clients: Vec<Arc<MQClientAPIImpl>>,
     ) -> RocketMQResult<Self> {
         validate_nameserver_access_config(&nameserver_access_config)?;
         if clients.is_empty() {
@@ -131,11 +130,11 @@ impl MQClientAPIFactory {
     }
 
     #[inline]
-    pub fn get_clients(&self) -> &[ArcMut<MQClientAPIImpl>] {
+    pub fn get_clients(&self) -> &[Arc<MQClientAPIImpl>] {
         &self.clients
     }
 
-    pub fn get_client(&self) -> RocketMQResult<ArcMut<MQClientAPIImpl>> {
+    pub fn get_client(&self) -> RocketMQResult<Arc<MQClientAPIImpl>> {
         match self.clients.len() {
             0 => Err(RocketMQError::not_initialized("MQClientAPIFactory clients")),
             1 => Ok(self.clients[0].clone()),
@@ -149,7 +148,7 @@ impl MQClientAPIFactory {
     pub async fn create_and_start(
         nameserver_access_config: NameserverAccessConfig,
         name_prefix: impl Into<CheetahString>,
-        clients: Vec<ArcMut<MQClientAPIImpl>>,
+        clients: Vec<Arc<MQClientAPIImpl>>,
     ) -> RocketMQResult<Self> {
         let mut factory = Self::new(nameserver_access_config, name_prefix, clients)?;
         factory.start().await?;
@@ -167,14 +166,14 @@ impl MQClientAPIFactory {
 
     pub fn shutdown(&mut self) {
         self.stop_nameserver_domain_refresh();
-        for client in &mut self.clients {
+        for client in &self.clients {
             client.shutdown();
         }
     }
 
     pub async fn on_name_server_address_change(&mut self, namesrv_address: impl Into<String>) {
         let namesrv_address = namesrv_address.into();
-        for client in &mut self.clients {
+        for client in &self.clients {
             client
                 .on_name_server_address_change(Some(namesrv_address.clone()))
                 .await;
@@ -184,7 +183,7 @@ impl MQClientAPIFactory {
     pub async fn apply_nameserver_access_config(&mut self) -> RocketMQResult<()> {
         validate_nameserver_access_config(&self.nameserver_access_config)?;
         if !self.nameserver_access_config.namesrv_domain().is_empty() {
-            for client in &mut self.clients {
+            for client in &self.clients {
                 client.fetch_name_server_addr().await;
             }
             return Ok(());
@@ -217,7 +216,6 @@ impl MQClientAPIFactory {
 
                 loop {
                     for client in &clients {
-                        let mut client = client.clone();
                         client.fetch_name_server_addr().await;
                     }
 

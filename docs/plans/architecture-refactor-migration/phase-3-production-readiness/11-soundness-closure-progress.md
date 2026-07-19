@@ -6,7 +6,7 @@ M11-12 的最终目标是 production/public compatibility API 中不存在 `ArcM
 `mut_from_ref` 或 clone-safe `AsMut`/`DerefMut`，并让默认 workspace 在 stable Rust 下通过，同时把 Miri/Loom、
 soak、SLO fault、dashboard/runbook、rollback 和 Human Gate 绑定到同一候选快照。
 
-该目标尚未完成。本文件记录 M11-12a～q 子切片的真实下降，不把子切片计为第 76 个工作包，也不刷新
+该目标尚未完成。本文件记录 M11-12a～r 子切片的真实下降，不把子切片计为第 76 个工作包，也不刷新
 baseline 来掩盖剩余债务。父 Issue 为 #8292；M11-12a 子切片 Issue 为 #8293；分支为
 `mxsm/architecture-refactor-owned-values`。
 
@@ -57,6 +57,9 @@ M11-12p 的 Client Admin facade self owner 由 Issue #8325 跟踪，分支为
 
 M11-12q 的 Client Producer fault strategy owner 由 Issue #8327 跟踪，分支为
 `mxsm/architecture-refactor-client-fault-strategy-owner`；它仍是同一 M11-12 工作包的子切片。
+
+M11-12r 的 Client API factory owner 由 Issue #8329 跟踪，分支为
+`mxsm/architecture-refactor-client-api-factory-owner`；它仍是同一 M11-12 工作包的子切片。
 
 ## 初始盘点
 
@@ -481,6 +484,32 @@ reviewed baseline 从 688→687、occurrences 从 2,029→2,026。`DefaultMQProd
 `MQClientInstance` 字段因相邻 fault-strategy 字段删除发生 1 条一对一 fingerprint relocation，按 ADR-013
 临时审核且 approval 不提交；除此之外只删除真实消失的 3 个 occurrence，没有新增或替代 shared-mutation wrapper。
 
+## M11-12r Client API factory owner
+
+| 目标 | 实现与证据 |
+|---|---|
+| factory 标准 owner | `MQClientAPIFactory` 的 client 列表、构造/访问 API 与名称服务器周期刷新任务统一使用普通 `Arc<MQClientAPIImpl>` |
+| 共享引用 capability | `MQClientAPIImpl::shutdown`、`fetch_name_server_addr` 与 `on_name_server_address_change` 收窄为 `&self`；调用方不再为 lifecycle/address 操作取得可变 owner |
+| 地址缓存同步 | `name_srv_addr` 改为异步 `RwLock<Option<String>>`；相同地址的判重、remoting 地址列表发布与缓存替换在同一短写锁临界区内完成，且临界区内没有 `.await` |
+| task capture | factory 周期刷新与 `MQClientInstance` 定时刷新直接捕获共享 API client handle，不再制造仅为调用 `&mut self` 的可变 clone |
+| compatibility | 静态/域名 NameServer 配置、刷新任务启动/停止、重复地址判重以及 shutdown 等待合同保持不变 |
+
+M11-12r 后实际快照为 684 个条目：production 421、test 249、compatibility 14；occurrence 精确为
+production 1,286、test 693、compatibility 40。相对 M11-12q 删除 2 个 production identity/6 个 production
+occurrence，并删除 1 个随 factory `ArcMut` 导入消失的 test identity/occurrence；相对初始快照累计删除 339 个
+production 条目和 839 个 production occurrence。`rocketmq-client` production 债务从 106/400 降至 104/394。
+剩余 production 债务为：
+
+| crate | 条目 | occurrence |
+|---|---:|---:|
+| `rocketmq-broker` | 190 | 568 |
+| `rocketmq-client` | 104 | 394 |
+| `rocketmq-store` | 127 | 324 |
+
+reviewed baseline 从 687→684、occurrences 从 2,026→2,019。全部 3 个 identity/7 个 occurrence 均因源码真实
+删除而下降；`MQClientAPIImpl` 的既有 `ArcMut` import 因相邻新增 `RwLock` import 发生 1 条同 module 一对一
+fingerprint relocation，按 ADR-013 临时审核且 approval 不提交；没有新增或替代 shared-mutation wrapper。
+
 ## 已执行验证
 
 | 命令 | 结果 |
@@ -841,9 +870,29 @@ M11-12q 追加验证：
 | `ArcMut<MQFaultStrategy>` 定向扫描 | 零匹配 |
 | `git diff --check` | 通过 |
 
+M11-12r 追加验证：
+
+| 命令 | 结果 |
+|---|---|
+| `cargo check -p rocketmq-client-rust --all-targets --all-features` | 通过 |
+| `cargo test -p rocketmq-client-rust name_server_cache_serializes_shared_updates --lib` | 1/1 通过；并发重复地址只发布一次，后续新地址正常替换 |
+| `cargo test -p rocketmq-client-rust implementation::mq_client_api_factory --lib` | 11/11 通过；静态/域名配置、刷新任务启动/停止与 shutdown 等待合同保持 |
+| `cargo test -p rocketmq-client-rust --all-features --quiet` | 重跑以退出码 0 全部通过；library 964/964，其余 integration targets 全部通过（35 项既有外部环境测试忽略） |
+| reviewed baseline reduction（临时 ADR-013 approval） | 仅批准 1 条同 module 相邻 import fingerprint relocation，删除 3 个 identity/7 个 occurrence；baseline 687→684、occurrences 2,026→2,019；approval 不提交 |
+| `python scripts/arc_mut_guard.py` | 通过；factory shared-mutation owner 与 refresh mutable clone 定向扫描均为零，Client production 降至 104/394 |
+| `python -m unittest scripts.tests.test_arc_mut_guard` / `python scripts/arc_mut_guard.py --fixtures` | 67/67 单测、24/24 fixtures 通过 |
+| `cargo fmt --all -- --check` | 通过 |
+| `cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings` | 通过；Windows linker stdout 与既有 future-incompatibility note 不受 `-D warnings` 管辖 |
+| `rocketmq-example`: `cargo fmt --all -- --check` / `cargo clippy --all-targets -- -D warnings` | standalone Client API consumer 通过 |
+| `.\scripts\runtime-audit.ps1 -SkipBaseline -EnforceBoundaryBaseline` | 通过；刷新任务只捕获共享 API client handle，地址缓存临界区无 `.await`，未新增 detached task 或运行时 |
+| architecture target/baseline 与 release guard | 通过；35/35 target edges、3/3 test edges、32/32 release topology |
+| `.\scripts\check-agents-routing.ps1` | 通过；4 个 standalone Cargo、3 个 Node project、8 条 route |
+| factory shared-mutation owner / refresh mutable clone 定向扫描 | 均零匹配 |
+| `git diff --check` | 通过 |
+
 ## 剩余切片与 Gate
 
-1. Client MQClientInstance、Producer、Push/Lite Consumer 与 Admin ClientInstance/API owner（106/400）。
+1. Client 其余 MQClientInstance、Producer、Push/Lite Consumer 与 Admin ClientInstance/API owner（104/394）。
 2. Broker TopicConfig/offset、BrokerRuntimeInner、schedule/POP/processor/transaction owner（190/568）。
 3. Store TopicConfig snapshot、MappedFileQueue/ConsumeQueue、CommitLog/Flush、StoreHandle/Rocks/Timer 与 HA actor（127/324）。
 4. 删除 compatibility `arc_mut.rs` 和公开 re-export；移除其余 nightly feature，将 guard 切到 production/public zero。

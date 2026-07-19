@@ -250,6 +250,7 @@ use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
 use rocketmq_remoting::runtime::RPCHook;
 use rocketmq_remoting::ConsumerConnection;
 use rocketmq_rust::ArcMut;
+use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use tracing::error;
@@ -344,10 +345,23 @@ impl AsyncRetryRequest {
 pub struct MQClientAPIImpl {
     remoting_client: Arc<RocketmqDefaultClient<ClientRemotingProcessor>>,
     top_addressing: Arc<Box<dyn TopAddressing>>,
-    name_srv_addr: Option<String>,
+    name_srv_addr: RwLock<Option<String>>,
     client_config: Arc<ClientConfig>,
     background_tasks: TaskTracker,
     background_shutdown: CancellationToken,
+}
+
+async fn update_cached_name_server_addr<F>(cache: &RwLock<Option<String>>, addrs: &str, update: F) -> bool
+where
+    F: FnOnce(&str),
+{
+    let mut current = cache.write().await;
+    if current.as_deref() == Some(addrs) {
+        return false;
+    }
+    update(addrs);
+    *current = Some(addrs.to_owned());
+    true
 }
 
 impl MQClientAPIImpl {
@@ -2126,7 +2140,7 @@ impl MQClientAPIImpl {
                 client_config.unit_name.clone(),
             ))),
             //client_remoting_processor,
-            name_srv_addr: None,
+            name_srv_addr: RwLock::new(None),
             client_config,
             background_tasks: TaskTracker::new(),
             background_shutdown: CancellationToken::new(),
@@ -2138,7 +2152,7 @@ impl MQClientAPIImpl {
         self.remoting_client.start(client).await;
     }
 
-    pub fn shutdown(&mut self) {
+    pub fn shutdown(&self) {
         self.background_shutdown.cancel();
         self.background_tasks.close();
         self.remoting_client.shutdown();
@@ -2161,33 +2175,35 @@ impl MQClientAPIImpl {
         self.remoting_client.is_use_tls()
     }
 
-    pub async fn fetch_name_server_addr(&mut self) -> Option<String> {
+    pub async fn fetch_name_server_addr(&self) -> Option<String> {
         let top_addressing = self.top_addressing.clone();
         let addrs = spawn_client_blocking_io("client.fetch_name_server_addr", move || top_addressing.fetch_ns_addr())
             .await
             .unwrap_or_default();
 
         if let Some(addrs) = addrs.as_ref().filter(|addr| !addr.is_empty()) {
-            let notify = self.name_srv_addr.as_deref() != Some(addrs.as_str());
-            if notify {
-                self.name_srv_addr = Some(addrs.clone());
-                self.update_name_server_address_list(addrs.as_str()).await;
+            if update_cached_name_server_addr(&self.name_srv_addr, addrs, |addrs| {
+                self.update_name_server_address_list_sync(addrs);
+            })
+            .await
+            {
                 return Some(addrs.clone());
             }
         }
-        self.name_srv_addr.clone()
+        self.name_srv_addr.read().await.clone()
     }
 
-    pub async fn on_name_server_address_change(&mut self, namesrv_address: Option<String>) -> String {
+    pub async fn on_name_server_address_change(&self, namesrv_address: Option<String>) -> String {
         if let Some(addrs) = namesrv_address.as_ref().filter(|addr| !addr.is_empty()) {
-            let changed = self.name_srv_addr.as_deref() != Some(addrs.as_str());
-            if changed {
-                self.name_srv_addr = Some(addrs.clone());
-                self.update_name_server_address_list(addrs.as_str()).await;
+            if update_cached_name_server_addr(&self.name_srv_addr, addrs, |addrs| {
+                self.update_name_server_address_list_sync(addrs);
+            })
+            .await
+            {
                 return addrs.clone();
             }
         }
-        self.name_srv_addr.clone().unwrap_or_default()
+        self.name_srv_addr.read().await.clone().unwrap_or_default()
     }
 
     pub async fn update_name_server_address_list(&self, addrs: &str) {
@@ -7177,6 +7193,35 @@ mod tests {
             error.as_deref(),
             Some("Response send_callback failed: Send failed to broker-a: callback failure")
         );
+    }
+
+    #[tokio::test]
+    async fn name_server_cache_serializes_shared_updates() {
+        let cache = RwLock::new(None);
+        let updates = AtomicUsize::new(0);
+        let address = "127.0.0.1:9876";
+
+        let (first, duplicate) = tokio::join!(
+            update_cached_name_server_addr(&cache, address, |_| {
+                updates.fetch_add(1, AtomicOrdering::Relaxed);
+            }),
+            update_cached_name_server_addr(&cache, address, |_| {
+                updates.fetch_add(1, AtomicOrdering::Relaxed);
+            })
+        );
+
+        assert_ne!(first, duplicate);
+        assert_eq!(updates.load(AtomicOrdering::Relaxed), 1);
+        assert_eq!(cache.read().await.as_deref(), Some(address));
+
+        assert!(
+            update_cached_name_server_addr(&cache, "127.0.0.2:9876", |_| {
+                updates.fetch_add(1, AtomicOrdering::Relaxed);
+            })
+            .await
+        );
+        assert_eq!(updates.load(AtomicOrdering::Relaxed), 2);
+        assert_eq!(cache.read().await.as_deref(), Some("127.0.0.2:9876"));
     }
 
     #[tokio::test]

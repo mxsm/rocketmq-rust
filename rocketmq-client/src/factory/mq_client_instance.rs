@@ -723,9 +723,8 @@ impl MQClientInstance {
             if let Some(mq_client_api_impl) = self.mq_client_api_impl.as_ref().cloned() {
                 self.scheduled_task_manager
                     .add_fixed_rate_task_async(Duration::from_secs(10), Duration::from_secs(120), async move |_token| {
-                        let mut api = mq_client_api_impl.clone();
                         info!("ScheduledTask: fetchNameServerAddr");
-                        api.fetch_name_server_addr().await;
+                        mq_client_api_impl.fetch_name_server_addr().await;
                         Ok(())
                     })
                     .map_err(|error| client_scheduled_task_startup_failed("fetchNameServerAddr", error))?;
