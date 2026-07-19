@@ -360,6 +360,12 @@ copy-update-publish，异步 pull/rebalance/metadata/diagnostics 读取完整代
 入口、namespace、trace、pull、offset 与 Java 配置同步行为保持。实际快照为 410 production/1,169 occurrences，
 Client 为 93/277；Lite Pull facade/root lifecycle、其余 Client/Broker/Store、compatibility 与完整候选快照 Gate 仍保持开放。
 
+M11-12ab 已将 Lite Pull facade 的 client/consumer config owner 改为共享 `ArcSwap`；公开 getter 返回 immutable
+owned `Arc` snapshot，consumer group 返回 owned value，构造边界接收 owned config，builder 不再传播 `ArcMut`。
+这是退出 production/public compatibility API 不安全可变逃逸的显式 API 迁移；facade 路径、builder、Java-compatible
+方法名与 namespace/TLS/trace/pull/offset 行为保持。实际快照降至 408 production/1,129 occurrences，Client 降至
+91/237；Lite Pull root lifecycle、其余 Client/Broker/Store、compatibility 与完整候选快照 Gate 仍保持开放。
+
 ## 公共兼容面
 
 - development/compatibility仍可显式选择；secure只作为新部署默认，不静默重解释旧配置。

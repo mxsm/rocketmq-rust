@@ -9788,18 +9788,6 @@
           "line": 504
         },
         {
-          "id": "a8c8535eed9a68a8aa638ace",
-          "fingerprint": "296f584ecac9a95c6765e5bb",
-          "item": "fn new",
-          "line": 509
-        },
-        {
-          "id": "2e8cf50213f72a28a03a676d",
-          "fingerprint": "d6b752bc752540f90c6cc4e6",
-          "item": "fn new",
-          "line": 510
-        },
-        {
           "id": "3f1b9da8b6bbbd4009bc9db0",
           "fingerprint": "6eec3682a67a414ecf4d804c",
           "item": "fn new",
@@ -10870,10 +10858,10 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "1adeb7a562a6edf2d4dad02d",
-          "fingerprint": "1335c3f86e8943d59dec7f68",
+          "id": "4f71489cfa6f3fdf3f96aabb",
+          "fingerprint": "3c7bbceb60cd3394ff22ef54",
           "item": "fn get_or_init_impl",
-          "line": 1012
+          "line": 1050
         }
       ],
       "owner": "client",
@@ -10889,58 +10877,22 @@
       "category": "test",
       "occurrences": [
         {
-          "id": "5f2be2b6ee19fc16d7e49a31",
-          "fingerprint": "fbbb0d5e58693e8b627c9ce2",
+          "id": "853b9e7c408ad143bfa92467",
+          "fingerprint": "da88f4ae94e3c46934de038a",
           "item": "fn new_namespaced_consumer_with_impl",
-          "line": 1817
+          "line": 1858
         },
         {
-          "id": "e957b60044a61617ae855c16",
-          "fingerprint": "ce0e5b296f90f800b29b597f",
-          "item": "fn lite_pull_use_tls_facade_updates_async_trace_dispatcher",
-          "line": 2547
-        },
-        {
-          "id": "884085a3757528b93996a6d3",
-          "fingerprint": "339869160bd18fb701332ee2",
-          "item": "fn lite_pull_use_tls_facade_updates_async_trace_dispatcher",
-          "line": 2548
-        },
-        {
-          "id": "0377e41740afb5f208f9da57",
-          "fingerprint": "de020737b904f39e7de1bc28",
+          "id": "f4a20cf83af5356976065f69",
+          "fingerprint": "f5ca98c4826f0ccd77e487dc",
           "item": "fn trace_init_uses_configured_batch_num_like_java",
-          "line": 2572
+          "line": 2671
         },
         {
-          "id": "b2d8586bd71c465c8ff0b199",
-          "fingerprint": "e2b98217454a72a59bd034d7",
-          "item": "fn trace_init_uses_configured_batch_num_like_java",
-          "line": 2573
-        },
-        {
-          "id": "784629bcfc73325d3db04904",
-          "fingerprint": "663014275b26f26f8b8e4ad1",
-          "item": "fn trace_init_uses_configured_batch_num_like_java",
-          "line": 2582
-        },
-        {
-          "id": "e90495138ac8c2ca7f73c964",
-          "fingerprint": "8dd2164698a37ca15a660d68",
+          "id": "16a40581fa45906d1564ce31",
+          "fingerprint": "85c5f7fa8486e00a90b9d00d",
           "item": "fn trace_init_registers_custom_dispatcher_and_starts_with_client_config",
-          "line": 2615
-        },
-        {
-          "id": "21b2ca7d4c22abeb44d2e35f",
-          "fingerprint": "e2b98217454a72a59bd034d7",
-          "item": "fn trace_init_registers_custom_dispatcher_and_starts_with_client_config",
-          "line": 2616
-        },
-        {
-          "id": "009f829b7bea9e4862d83156",
-          "fingerprint": "5ee07761ccdaea9110ee48eb",
-          "item": "fn trace_init_registers_custom_dispatcher_and_starts_with_client_config",
-          "line": 2625
+          "line": 2714
         }
       ],
       "owner": "client",
@@ -10975,46 +10927,10 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "ed4b381dc4eaa9ebd2042d36",
-          "fingerprint": "03f3e1fe9734b0d70d79a0aa",
+          "id": "25c1e20d9b407e5f8186d5e8",
+          "fingerprint": "3e714b60a962d407274bb1cf",
           "item": "struct DefaultLitePullConsumer",
-          "line": 147
-        },
-        {
-          "id": "05c6eba5024a9c04bdae1a37",
-          "fingerprint": "c20704e6c62bde82fc3f46d1",
-          "item": "struct DefaultLitePullConsumer",
-          "line": 150
-        },
-        {
-          "id": "47bd010b3edb424b44cb943e",
-          "fingerprint": "781a85e7a453bd89e50b3090",
-          "item": "struct DefaultLitePullConsumer",
-          "line": 153
-        },
-        {
-          "id": "534ce82d3480ae4c0d232c98",
-          "fingerprint": "107442454428ebb55a5117cd",
-          "item": "fn new",
-          "line": 179
-        },
-        {
-          "id": "f972c0a8689b63c250450f03",
-          "fingerprint": "8d8d1f0d36b102dc562dbc0e",
-          "item": "fn new",
-          "line": 180
-        },
-        {
-          "id": "f3519ae73d3d3bebc20aa40e",
-          "fingerprint": "ef086333937198945b68e87e",
-          "item": "fn client_config",
-          "line": 886
-        },
-        {
-          "id": "3fe4fc152d94945b77983624",
-          "fingerprint": "1e9712ff5469b19b0313c928",
-          "item": "fn consumer_config",
-          "line": 891
+          "line": 154
         },
         {
           "id": "efe04b731f64726aeb477696",
@@ -11073,54 +10989,6 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "0321d2eba96698c5702e0b35",
-          "fingerprint": "18a459a1087bfb162cf87db2",
-          "item": "impl Into",
-          "line": 820
-        },
-        {
-          "id": "75cbfa5e1004098c814826b5",
-          "fingerprint": "268ed55d6ebe9862b9cb7a0a",
-          "item": "fn namespace",
-          "line": 827
-        },
-        {
-          "id": "effd6b62998abefb995a93f8",
-          "fingerprint": "00533a4272a87708aef10249",
-          "item": "fn set_use_tls",
-          "line": 867
-        },
-        {
-          "id": "e803feac3bd21d9788a6a175",
-          "fingerprint": "827f6bb71fc9e030e91db86e",
-          "item": "fn with_namespace",
-          "line": 898
-        },
-        {
-          "id": "fc7d3b34f0bb34cd33fbb5cb",
-          "fingerprint": "e155434b87c52d74868c6ba2",
-          "item": "fn without_namespace",
-          "line": 904
-        },
-        {
-          "id": "8bc4033da4027409d3cd0932",
-          "fingerprint": "f05f83c5a1ed3ed9f00db3dd",
-          "item": "fn consumer_group_with_namespace",
-          "line": 915
-        },
-        {
-          "id": "1b38a8f37f340bd00afa6992",
-          "fingerprint": "e9030bcaae9e0b0475343c20",
-          "item": "fn queue_with_namespace",
-          "line": 921
-        },
-        {
-          "id": "a10636964d9bef7b2362f536",
-          "fingerprint": "5bf26db57e9f0d412890c32b",
-          "item": "fn queue_without_namespace",
-          "line": 926
-        },
-        {
           "id": "71de0d55300cc11f301c0e60",
           "fingerprint": "947bfc3da1282aac365c71cd",
           "item": "fn init_trace_dispatcher_internal",
@@ -11175,203 +11043,14 @@
           "line": 1160
         },
         {
-          "id": "9a56489aad2cfe012f28f9f6",
-          "fingerprint": "0d8ff4e5c18ca8b17efc9cfa",
-          "item": "fn set_message_model",
-          "line": 1245
-        },
-        {
-          "id": "abf1c8c29f747a6ff36e8584",
-          "fingerprint": "fef38cd8b8df6511c172a8a9",
-          "item": "fn set_consume_from_where",
-          "line": 1257
-        },
-        {
-          "id": "65e76d22276d5da0e64a286f",
-          "fingerprint": "6b0c3ed5021a658fe89d0d8b",
-          "item": "fn set_consume_timestamp",
-          "line": 1269
-        },
-        {
-          "id": "86eae523db17997204a99e0e",
-          "fingerprint": "2c00061cbdf9de82373585a7",
-          "item": "fn set_allocate_message_queue_strategy",
-          "line": 1286
-        },
-        {
           "id": "bf8fa5a78a675857039d9704",
           "fingerprint": "784d23362f42e08683cf6151",
           "item": "fn set_offset_store",
           "line": 1315
-        },
-        {
-          "id": "f77537bb99b9cce073497d0c",
-          "fingerprint": "0dfefb0a9afda532e71d2585",
-          "item": "fn set_topic_metadata_check_interval_millis",
-          "line": 1326
-        },
-        {
-          "id": "d98cfc038c3c4301df9f0d48",
-          "fingerprint": "03ec8044d8ac1f07f89da85d",
-          "item": "fn set_poll_timeout_millis",
-          "line": 1337
-        },
-        {
-          "id": "f41c1a5aca39a18e67f74247",
-          "fingerprint": "0e41db480c782eac8a69e3a9",
-          "item": "fn set_broker_suspend_max_time_millis",
-          "line": 1348
-        },
-        {
-          "id": "bfedb4c0ac572a265f4ad1f1",
-          "fingerprint": "4a5330c23c69c14948c7a42e",
-          "item": "fn set_consumer_timeout_millis_when_suspend",
-          "line": 1359
-        },
-        {
-          "id": "4c06dee3e8d02b2985828c38",
-          "fingerprint": "f7d5bb5f8e7a794815c278e3",
-          "item": "fn set_consumer_pull_timeout_millis",
-          "line": 1370
-        },
-        {
-          "id": "efccefbe2725d39ef61c5532",
-          "fingerprint": "40f423b9f1e579ae383b2a37",
-          "item": "fn set_pull_batch_size",
-          "line": 1381
-        },
-        {
-          "id": "72a2cd5a7ddcf533794d1a49",
-          "fingerprint": "25a70a9447fbb10ef2e4f807",
-          "item": "fn set_pull_thread_nums",
-          "line": 1392
-        },
-        {
-          "id": "dc08e6e768b45f568a65416e",
-          "fingerprint": "e16a8a6c44ad021853832a5d",
-          "item": "fn set_pull_threshold_for_all",
-          "line": 1403
-        },
-        {
-          "id": "3190fad17c29a91b99495ef3",
-          "fingerprint": "53227fb616d01a703601566d",
-          "item": "fn set_pull_threshold_for_queue",
-          "line": 1414
-        },
-        {
-          "id": "2bf8f0ceb44c817ad26343a5",
-          "fingerprint": "f638e966e424c7fbd87ceb53",
-          "item": "fn set_pull_threshold_size_for_queue",
-          "line": 1425
-        },
-        {
-          "id": "08b6722f4bbf000bb03cb9b2",
-          "fingerprint": "c4040a12c3d9daad5fd31781",
-          "item": "fn set_consume_max_span",
-          "line": 1436
-        },
-        {
-          "id": "be1f5e764aa8b23862004156",
-          "fingerprint": "ce214ce90601809b5325c697",
-          "item": "fn set_connect_broker_by_user",
-          "line": 1451
-        },
-        {
-          "id": "42ee3244ab2dfe56fb725e48",
-          "fingerprint": "5e2bbe3ea4eee83ae9111d66",
-          "item": "fn set_default_broker_id",
-          "line": 1466
-        },
-        {
-          "id": "26a2a51d83f09dc8f330d7e8",
-          "fingerprint": "66ad55f6f26b5b8b52acb3fa",
-          "item": "fn set_auto_commit",
-          "line": 1547
-        },
-        {
-          "id": "cf19b17b47fd9f7b6a65c7bb",
-          "fingerprint": "c4ad21384b5b7c08a8cb1da0",
-          "item": "fn set_unit_mode",
-          "line": 1558
-        },
-        {
-          "id": "fda6e31d9fe82371a14538d1",
-          "fingerprint": "9d32899897ca8f8661f74609",
-          "item": "fn set_auto_commit_interval_millis",
-          "line": 1572
-        },
-        {
-          "id": "28a67b012f3c74fe2b4bc835",
-          "fingerprint": "d194f8e13c77b672fa814aaa",
-          "item": "fn update_name_server_address",
-          "line": 1644
         }
       ],
       "owner": "client",
       "reason": "Legacy safe mutable-reference escape pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "25b929b98663d7f740311369",
-      "path": "rocketmq-client/src/consumer/default_lite_pull_consumer_builder.rs",
-      "symbol": "*",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "7f4fe3c631d1bc380cee10d9",
-          "fingerprint": "8e5571a0f1f5868e851fda3d",
-          "item": "mod tests",
-          "line": 444
-        }
-      ],
-      "owner": "client",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "b7c8619894a93dc58aca7716",
-      "path": "rocketmq-client/src/consumer/default_lite_pull_consumer_builder.rs",
-      "symbol": "ArcMut",
-      "kind": "constructor",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "b8411e3b6ac6664db55d680a",
-          "fingerprint": "77cdb39304484a46dbfa98ee",
-          "item": "fn build",
-          "line": 432
-        },
-        {
-          "id": "812123a410a51c51a41f8269",
-          "fingerprint": "7cb75a475dc3ee3df1f17c6f",
-          "item": "fn build",
-          "line": 433
-        }
-      ],
-      "owner": "client",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "afecf983a9c2c4c7ba720900",
-      "path": "rocketmq-client/src/consumer/default_lite_pull_consumer_builder.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "cfb872e2ce8d10f1a7082f29",
-          "fingerprint": "cd821fcf8ab820780f893e90",
-          "item": "<module>",
-          "line": 24
-        }
-      ],
-      "owner": "client",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
       "remove_by": "M05",
       "adr": "ADR-002"
     },

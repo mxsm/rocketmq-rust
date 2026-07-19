@@ -507,7 +507,11 @@ pub struct DefaultLitePullConsumerImpl {
 
 impl DefaultLitePullConsumerImpl {
     /// Creates a new lite pull consumer implementation.
-    pub fn new(client_config: ArcMut<ClientConfig>, consumer_config: ArcMut<LitePullConsumerConfig>) -> Self {
+    pub fn new<C, L>(client_config: C, consumer_config: L) -> Self
+    where
+        C: AsRef<ClientConfig>,
+        L: AsRef<LitePullConsumerConfig>,
+    {
         let client_config = client_config.as_ref().clone();
         let consumer_config = consumer_config.as_ref().clone();
         let (tx, rx) = mpsc::unbounded_channel();

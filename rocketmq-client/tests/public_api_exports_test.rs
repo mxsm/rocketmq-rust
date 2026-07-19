@@ -326,10 +326,15 @@ fn crate_root_exports_modern_client_facades_and_traits() {
     let _push_consumer = DefaultMQPushConsumer::builder()
         .consumer_group("public-api-push-consumer")
         .build();
-    let _lite_pull_consumer = DefaultLitePullConsumer::builder()
+    let lite_pull_consumer = DefaultLitePullConsumer::builder()
         .consumer_group("public-api-lite-pull-consumer")
         .build()
         .expect("lite pull consumer should build");
+    let client_config: Arc<_> = lite_pull_consumer.client_config();
+    let consumer_config: Arc<_> = lite_pull_consumer.consumer_config();
+    let consumer_group: CheetahString = lite_pull_consumer.consumer_group();
+    assert!(!client_config.is_use_tls());
+    assert_eq!(consumer_config.consumer_group, consumer_group);
 
     let selector = MessageSelector::by_tag("TagA || TagB");
     assert_eq!(selector.get_expression().as_str(), "TagA || TagB");

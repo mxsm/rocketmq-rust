@@ -21,7 +21,6 @@ use rocketmq_common::common::mix_all;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::runtime::RPCHook;
-use rocketmq_rust::ArcMut;
 
 use crate::base::client_config::ClientConfig;
 use crate::consumer::allocate_message_queue_strategy::AllocateMessageQueueStrategy;
@@ -429,8 +428,8 @@ impl DefaultLitePullConsumerBuilder {
         };
 
         Ok(DefaultLitePullConsumer::new(
-            ArcMut::new(client_config),
-            ArcMut::new(consumer_config),
+            client_config,
+            consumer_config,
             self.rpc_hook,
             self.trace_dispatcher,
             self.enable_msg_trace,
@@ -618,8 +617,8 @@ mod tests {
             .consumer_group("lite_pull_group")
             .build()
             .expect("builder should use Java default consume timestamp");
-        let timestamp = consumer
-            .consumer_config()
+        let consumer_config = consumer.consumer_config();
+        let timestamp = consumer_config
             .consume_timestamp
             .as_ref()
             .expect("Java LitePull default consume timestamp should be present");

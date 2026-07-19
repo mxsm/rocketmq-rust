@@ -17,6 +17,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::RwLock as StdRwLock;
 
+use arc_swap::ArcSwap;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_common::common::message::message_decoder;
@@ -144,10 +145,10 @@ use crate::trace::trace_dispatcher::Type;
 #[derive(Clone)]
 pub struct DefaultLitePullConsumer {
     /// Client configuration (network, instance name, etc.)
-    client_config: ArcMut<ClientConfig>,
+    client_config: Arc<ArcSwap<ClientConfig>>,
 
     /// Consumer-specific configuration (pull batch size, flow control, etc.)
-    consumer_config: ArcMut<LitePullConsumerConfig>,
+    consumer_config: Arc<ArcSwap<LitePullConsumerConfig>>,
 
     /// Core implementation (lazy-initialized on start using OnceCell)
     default_lite_pull_consumer_impl: Arc<OnceCell<ArcMut<DefaultLitePullConsumerImpl>>>,
@@ -176,16 +177,16 @@ impl DefaultLitePullConsumer {
     ///
     /// Most users should use [`builder()`](Self::builder) instead.
     pub fn new(
-        client_config: ArcMut<ClientConfig>,
-        consumer_config: ArcMut<LitePullConsumerConfig>,
+        client_config: ClientConfig,
+        consumer_config: LitePullConsumerConfig,
         rpc_hook: Option<Arc<dyn RPCHook>>,
         trace_dispatcher: Option<Arc<dyn TraceDispatcher + Send + Sync>>,
         enable_msg_trace: bool,
         custom_trace_topic: Option<CheetahString>,
     ) -> Self {
         Self {
-            client_config,
-            consumer_config,
+            client_config: Arc::new(ArcSwap::from_pointee(client_config)),
+            consumer_config: Arc::new(ArcSwap::from_pointee(consumer_config)),
             default_lite_pull_consumer_impl: Arc::new(OnceCell::new()),
             rpc_hook,
             trace_dispatcher: Arc::new(RwLock::new(trace_dispatcher)),
@@ -194,6 +195,30 @@ impl DefaultLitePullConsumer {
             message_queue_listener: Arc::new(StdRwLock::new(None)),
             offset_store: Arc::new(StdRwLock::new(None)),
         }
+    }
+
+    fn client_config_snapshot(&self) -> Arc<ClientConfig> {
+        self.client_config.load_full()
+    }
+
+    fn consumer_config_snapshot(&self) -> Arc<LitePullConsumerConfig> {
+        self.consumer_config.load_full()
+    }
+
+    fn update_client_config(&self, update: impl Fn(&mut ClientConfig)) {
+        self.client_config.rcu(|current| {
+            let mut next = (**current).clone();
+            update(&mut next);
+            Arc::new(next)
+        });
+    }
+
+    fn update_consumer_config(&self, update: impl Fn(&mut LitePullConsumerConfig)) {
+        self.consumer_config.rcu(|current| {
+            let mut next = (**current).clone();
+            update(&mut next);
+            Arc::new(next)
+        });
     }
 
     /// Returns a builder for creating a consumer with custom configuration.
@@ -796,13 +821,13 @@ impl DefaultLitePullConsumer {
         <Self as LitePullConsumer>::register_topic_message_queue_change_listener(self, topic, listener).await
     }
 
-    /// Returns the consumer group name.
-    pub fn consumer_group(&self) -> &CheetahString {
-        &self.consumer_config.consumer_group
+    /// Returns the consumer group name from the current immutable configuration snapshot.
+    pub fn consumer_group(&self) -> CheetahString {
+        self.consumer_config.load().consumer_group.clone()
     }
 
     /// Java-compatible getter alias for the consumer group name.
-    pub fn get_consumer_group(&self) -> &CheetahString {
+    pub fn get_consumer_group(&self) -> CheetahString {
         self.consumer_group()
     }
 
@@ -817,13 +842,13 @@ impl DefaultLitePullConsumer {
         if let Some(impl_) = self.default_lite_pull_consumer_impl.get() {
             impl_.set_consumer_group(consumer_group.clone())?;
         }
-        self.consumer_config.mut_from_ref().consumer_group = consumer_group;
+        self.update_consumer_config(|config| config.consumer_group = consumer_group.clone());
         Ok(())
     }
 
     /// Returns the namespace (if configured).
     pub fn namespace(&self) -> Option<CheetahString> {
-        self.client_config.mut_from_ref().get_namespace()
+        self.client_config.load().resolved_namespace()
     }
 
     /// Returns the custom trace topic, if configured.
@@ -858,12 +883,12 @@ impl DefaultLitePullConsumer {
 
     /// Returns whether outbound remoting connections should use TLS.
     pub fn is_use_tls(&self) -> bool {
-        self.client_config.is_use_tls()
+        self.client_config.load().is_use_tls()
     }
 
-    /// Enables or disables TLS on the shared client configuration and trace dispatcher.
+    /// Enables or disables TLS on the published client configuration and trace dispatcher.
     pub async fn set_use_tls(&self, use_tls: bool) {
-        self.client_config.mut_from_ref().set_use_tls(use_tls);
+        self.update_client_config(|config| config.set_use_tls(use_tls));
         if let Some(impl_) = self.default_lite_pull_consumer_impl.get() {
             impl_.set_use_tls(use_tls);
         }
@@ -884,26 +909,30 @@ impl DefaultLitePullConsumer {
         self.trace_dispatcher().await
     }
 
-    /// Returns the client configuration.
-    pub fn client_config(&self) -> &ArcMut<ClientConfig> {
-        &self.client_config
+    /// Returns the current immutable client configuration snapshot.
+    pub fn client_config(&self) -> Arc<ClientConfig> {
+        self.client_config_snapshot()
     }
 
-    /// Returns the consumer configuration.
-    pub fn consumer_config(&self) -> &ArcMut<LitePullConsumerConfig> {
-        &self.consumer_config
+    /// Returns the current immutable consumer configuration snapshot.
+    pub fn consumer_config(&self) -> Arc<LitePullConsumerConfig> {
+        self.consumer_config_snapshot()
     }
 
     /// Wraps a topic name with the namespace (if configured).
     fn with_namespace(&self, resource: &str) -> CheetahString {
-        self.client_config
-            .mut_from_ref()
-            .with_namespace(CheetahString::from(resource))
+        let resource = CheetahString::from(resource);
+        let namespace = self.client_config.load().resolved_namespace().unwrap_or_default();
+        if namespace.is_empty() || NamespaceUtil::is_already_with_namespace(resource.as_str(), namespace.as_str()) {
+            resource
+        } else {
+            NamespaceUtil::wrap_namespace(namespace, resource)
+        }
     }
 
     /// Removes namespace from a topic name (if configured).
     fn without_namespace(&self, resource: &str) -> CheetahString {
-        match self.client_config.mut_from_ref().get_namespace() {
+        match self.client_config.load().resolved_namespace() {
             Some(namespace) if !namespace.is_empty() => {
                 NamespaceUtil::without_namespace_with_namespace(resource, namespace.as_str()).into()
             }
@@ -913,19 +942,24 @@ impl DefaultLitePullConsumer {
 
     /// Wraps the consumer group with namespace before startup, matching Java LitePull start().
     fn consumer_group_with_namespace(&self) -> CheetahString {
-        self.client_config
-            .mut_from_ref()
-            .with_namespace(self.consumer_config.consumer_group.clone())
+        let consumer_group = self.consumer_config.load().consumer_group.clone();
+        let namespace = self.client_config.load().resolved_namespace().unwrap_or_default();
+        if namespace.is_empty() || NamespaceUtil::is_already_with_namespace(consumer_group.as_str(), namespace.as_str())
+        {
+            consumer_group
+        } else {
+            NamespaceUtil::wrap_namespace(namespace, consumer_group)
+        }
     }
 
     /// Wraps a message queue with namespace.
     fn queue_with_namespace(&self, mq: &MessageQueue) -> MessageQueue {
-        self.client_config.mut_from_ref().queue_with_namespace(mq.clone())
+        self.client_config.load().queue_with_resolved_namespace(mq.clone())
     }
 
     /// Removes namespace from a message queue.
     fn queue_without_namespace(&self, mq: &MessageQueue) -> MessageQueue {
-        match self.client_config.mut_from_ref().get_namespace() {
+        match self.client_config.load().resolved_namespace() {
             Some(namespace) if !namespace.is_empty() => {
                 let unwrapped_topic = NamespaceUtil::without_namespace_with_namespace(mq.topic(), namespace.as_str());
                 MessageQueue::from_parts(unwrapped_topic, mq.broker_name().clone(), mq.queue_id())
@@ -945,6 +979,8 @@ impl DefaultLitePullConsumer {
             if let Some(dispatcher) = dispatcher_guard.as_ref() {
                 dispatcher.clone()
             } else {
+                let client_config = self.client_config_snapshot();
+                let consumer_config = self.consumer_config_snapshot();
                 let trace_topic = self
                     .custom_trace_topic
                     .as_ref()
@@ -952,14 +988,14 @@ impl DefaultLitePullConsumer {
                     .unwrap_or(TopicValidator::RMQ_SYS_TRACE_TOPIC);
 
                 let dispatcher = AsyncTraceDispatcher::new(
-                    self.consumer_config.consumer_group.as_str(),
+                    consumer_config.consumer_group.as_str(),
                     Type::Consume,
-                    self.client_config.trace_msg_batch_num,
+                    client_config.trace_msg_batch_num,
                     trace_topic,
                     self.rpc_hook.clone(),
                 );
-                dispatcher.set_namespace_v2(self.client_config.namespace_v2.clone());
-                dispatcher.set_use_tls(self.client_config.use_tls);
+                dispatcher.set_namespace_v2(client_config.namespace_v2.clone());
+                dispatcher.set_use_tls(client_config.use_tls);
 
                 let dispatcher_arc: Arc<dyn TraceDispatcher + Send + Sync> = Arc::new(dispatcher);
                 *dispatcher_guard = Some(dispatcher_arc.clone());
@@ -984,13 +1020,13 @@ impl DefaultLitePullConsumer {
             return;
         };
 
-        let name_server_addr = self
-            .client_config
+        let client_config = self.client_config_snapshot();
+        let name_server_addr = client_config
             .namesrv_addr
             .as_ref()
             .map(|addr| addr.as_str())
             .unwrap_or_default();
-        if let Err(error) = dispatcher.start(name_server_addr, self.client_config.access_channel) {
+        if let Err(error) = dispatcher.start(name_server_addr, client_config.access_channel) {
             tracing::warn!("trace dispatcher start failed: {}", error);
         }
     }
@@ -1012,8 +1048,8 @@ impl DefaultLitePullConsumer {
         self.default_lite_pull_consumer_impl
             .get_or_try_init(|| async {
                 let mut impl_ = ArcMut::new(DefaultLitePullConsumerImpl::new(
-                    self.client_config.clone(),
-                    self.consumer_config.clone(),
+                    self.client_config_snapshot(),
+                    self.consumer_config_snapshot(),
                 ));
                 let wrapper = impl_.clone();
                 impl_.set_default_lite_pull_consumer_impl(wrapper);
@@ -1191,8 +1227,9 @@ impl LitePullConsumer for DefaultLitePullConsumer {
 
     /// Zero-copy implementation.
     async fn poll_zero_copy(&self) -> Vec<Arc<MessageExt>> {
+        let poll_timeout_millis = self.consumer_config.load().poll_timeout_millis;
         match self.try_impl_() {
-            Ok(impl_) => match impl_.poll(self.consumer_config.poll_timeout_millis).await {
+            Ok(impl_) => match impl_.poll(poll_timeout_millis).await {
                 Ok(messages) => messages,
                 Err(e) => {
                     tracing::error!(error = %e, "poll failed");
@@ -1242,23 +1279,23 @@ impl LitePullConsumer for DefaultLitePullConsumer {
     }
 
     async fn message_model(&self) -> MessageModel {
-        self.consumer_config.message_model
+        self.consumer_config.load().message_model
     }
 
     async fn set_message_model(&self, message_model: MessageModel) {
-        self.consumer_config.mut_from_ref().message_model = message_model;
+        self.update_consumer_config(|config| config.message_model = message_model);
         if let Some(impl_) = self.default_lite_pull_consumer_impl.get() {
             impl_.set_message_model(message_model);
         }
     }
 
     async fn consume_from_where(&self) -> ConsumeFromWhere {
-        self.consumer_config.consume_from_where
+        self.consumer_config.load().consume_from_where
     }
 
     async fn set_consume_from_where(&self, consume_from_where: ConsumeFromWhere) -> RocketMQResult<()> {
         validate_lite_pull_consume_from_where(consume_from_where)?;
-        self.consumer_config.mut_from_ref().consume_from_where = consume_from_where;
+        self.update_consumer_config(|config| config.consume_from_where = consume_from_where);
         if let Some(impl_) = self.default_lite_pull_consumer_impl.get() {
             impl_.set_consume_from_where(consume_from_where)?;
         }
@@ -1266,28 +1303,30 @@ impl LitePullConsumer for DefaultLitePullConsumer {
     }
 
     async fn consume_timestamp(&self) -> Option<CheetahString> {
-        self.consumer_config.consume_timestamp.clone()
+        self.consumer_config.load().consume_timestamp.clone()
     }
 
     async fn set_consume_timestamp(&self, consume_timestamp: Option<CheetahString>) {
-        self.consumer_config.mut_from_ref().consume_timestamp = consume_timestamp.clone();
+        self.update_consumer_config(|config| config.consume_timestamp = consume_timestamp.clone());
         if let Some(impl_) = self.default_lite_pull_consumer_impl.get() {
             impl_.set_consume_timestamp(consume_timestamp);
         }
     }
 
     async fn allocate_message_queue_strategy(&self) -> Arc<dyn AllocateMessageQueueStrategy + Send + Sync> {
-        self.default_lite_pull_consumer_impl.get().map_or_else(
-            || self.consumer_config.allocate_message_queue_strategy.clone(),
-            |impl_| impl_.allocate_message_queue_strategy(),
-        )
+        let configured_strategy = self.consumer_config.load().allocate_message_queue_strategy.clone();
+        self.default_lite_pull_consumer_impl
+            .get()
+            .map_or_else(|| configured_strategy, |impl_| impl_.allocate_message_queue_strategy())
     }
 
     async fn set_allocate_message_queue_strategy(
         &self,
         allocate_message_queue_strategy: Arc<dyn AllocateMessageQueueStrategy + Send + Sync>,
     ) {
-        self.consumer_config.mut_from_ref().allocate_message_queue_strategy = allocate_message_queue_strategy.clone();
+        self.update_consumer_config(|config| {
+            config.allocate_message_queue_strategy = allocate_message_queue_strategy.clone();
+        });
         if let Some(impl_) = self.default_lite_pull_consumer_impl.get() {
             impl_.set_allocate_message_queue_strategy(allocate_message_queue_strategy);
         }
@@ -1323,151 +1362,149 @@ impl LitePullConsumer for DefaultLitePullConsumer {
     }
 
     async fn topic_metadata_check_interval_millis(&self) -> u64 {
-        self.consumer_config.topic_metadata_check_interval_millis
+        self.consumer_config.load().topic_metadata_check_interval_millis
     }
 
     async fn set_topic_metadata_check_interval_millis(&self, interval_millis: u64) {
-        self.consumer_config.mut_from_ref().topic_metadata_check_interval_millis = interval_millis;
+        self.update_consumer_config(|config| config.topic_metadata_check_interval_millis = interval_millis);
         if let Some(impl_) = self.default_lite_pull_consumer_impl.get() {
             impl_.set_topic_metadata_check_interval_millis(interval_millis);
         }
     }
 
     async fn poll_timeout_millis(&self) -> u64 {
-        self.consumer_config.poll_timeout_millis
+        self.consumer_config.load().poll_timeout_millis
     }
 
     async fn set_poll_timeout_millis(&self, timeout_millis: u64) {
-        self.consumer_config.mut_from_ref().poll_timeout_millis = timeout_millis;
+        self.update_consumer_config(|config| config.poll_timeout_millis = timeout_millis);
         if let Some(impl_) = self.default_lite_pull_consumer_impl.get() {
             impl_.set_poll_timeout_millis(timeout_millis);
         }
     }
 
     async fn broker_suspend_max_time_millis(&self) -> u64 {
-        self.consumer_config.broker_suspend_max_time_millis
+        self.consumer_config.load().broker_suspend_max_time_millis
     }
 
     async fn set_broker_suspend_max_time_millis(&self, timeout_millis: u64) {
-        self.consumer_config.mut_from_ref().broker_suspend_max_time_millis = timeout_millis;
+        self.update_consumer_config(|config| config.broker_suspend_max_time_millis = timeout_millis);
         if let Some(impl_) = self.default_lite_pull_consumer_impl.get() {
             impl_.set_broker_suspend_max_time_millis(timeout_millis);
         }
     }
 
     async fn consumer_timeout_millis_when_suspend(&self) -> u64 {
-        self.consumer_config.consumer_timeout_millis_when_suspend
+        self.consumer_config.load().consumer_timeout_millis_when_suspend
     }
 
     async fn set_consumer_timeout_millis_when_suspend(&self, timeout_millis: u64) {
-        self.consumer_config.mut_from_ref().consumer_timeout_millis_when_suspend = timeout_millis;
+        self.update_consumer_config(|config| config.consumer_timeout_millis_when_suspend = timeout_millis);
         if let Some(impl_) = self.default_lite_pull_consumer_impl.get() {
             impl_.set_consumer_timeout_millis_when_suspend(timeout_millis);
         }
     }
 
     async fn consumer_pull_timeout_millis(&self) -> u64 {
-        self.consumer_config.consumer_pull_timeout_millis
+        self.consumer_config.load().consumer_pull_timeout_millis
     }
 
     async fn set_consumer_pull_timeout_millis(&self, timeout_millis: u64) {
-        self.consumer_config.mut_from_ref().consumer_pull_timeout_millis = timeout_millis;
+        self.update_consumer_config(|config| config.consumer_pull_timeout_millis = timeout_millis);
         if let Some(impl_) = self.default_lite_pull_consumer_impl.get() {
             impl_.set_consumer_pull_timeout_millis(timeout_millis);
         }
     }
 
     async fn pull_batch_size(&self) -> i32 {
-        self.consumer_config.pull_batch_size
+        self.consumer_config.load().pull_batch_size
     }
 
     async fn set_pull_batch_size(&self, pull_batch_size: i32) {
-        self.consumer_config.mut_from_ref().pull_batch_size = pull_batch_size;
+        self.update_consumer_config(|config| config.pull_batch_size = pull_batch_size);
         if let Some(impl_) = self.default_lite_pull_consumer_impl.get() {
             impl_.set_pull_batch_size(pull_batch_size);
         }
     }
 
     async fn pull_thread_nums(&self) -> usize {
-        self.consumer_config.pull_thread_nums
+        self.consumer_config.load().pull_thread_nums
     }
 
     async fn set_pull_thread_nums(&self, pull_thread_nums: usize) {
-        self.consumer_config.mut_from_ref().pull_thread_nums = pull_thread_nums;
+        self.update_consumer_config(|config| config.pull_thread_nums = pull_thread_nums);
         if let Some(impl_) = self.default_lite_pull_consumer_impl.get() {
             impl_.set_pull_thread_nums(pull_thread_nums);
         }
     }
 
     async fn pull_threshold_for_all(&self) -> i64 {
-        self.consumer_config.pull_threshold_for_all
+        self.consumer_config.load().pull_threshold_for_all
     }
 
     async fn set_pull_threshold_for_all(&self, pull_threshold_for_all: i64) {
-        self.consumer_config.mut_from_ref().pull_threshold_for_all = pull_threshold_for_all;
+        self.update_consumer_config(|config| config.pull_threshold_for_all = pull_threshold_for_all);
         if let Some(impl_) = self.default_lite_pull_consumer_impl.get() {
             impl_.set_pull_threshold_for_all(pull_threshold_for_all);
         }
     }
 
     async fn pull_threshold_for_queue(&self) -> i64 {
-        self.consumer_config.pull_threshold_for_queue
+        self.consumer_config.load().pull_threshold_for_queue
     }
 
     async fn set_pull_threshold_for_queue(&self, pull_threshold_for_queue: i64) {
-        self.consumer_config.mut_from_ref().pull_threshold_for_queue = pull_threshold_for_queue;
+        self.update_consumer_config(|config| config.pull_threshold_for_queue = pull_threshold_for_queue);
         if let Some(impl_) = self.default_lite_pull_consumer_impl.get() {
             impl_.set_pull_threshold_for_queue(pull_threshold_for_queue);
         }
     }
 
     async fn pull_threshold_size_for_queue(&self) -> i32 {
-        self.consumer_config.pull_threshold_size_for_queue
+        self.consumer_config.load().pull_threshold_size_for_queue
     }
 
     async fn set_pull_threshold_size_for_queue(&self, pull_threshold_size_for_queue: i32) {
-        self.consumer_config.mut_from_ref().pull_threshold_size_for_queue = pull_threshold_size_for_queue;
+        self.update_consumer_config(|config| config.pull_threshold_size_for_queue = pull_threshold_size_for_queue);
         if let Some(impl_) = self.default_lite_pull_consumer_impl.get() {
             impl_.set_pull_threshold_size_for_queue(pull_threshold_size_for_queue);
         }
     }
 
     async fn consume_max_span(&self) -> i64 {
-        self.consumer_config.consume_max_span
+        self.consumer_config.load().consume_max_span
     }
 
     async fn set_consume_max_span(&self, consume_max_span: i64) {
-        self.consumer_config.mut_from_ref().consume_max_span = consume_max_span;
+        self.update_consumer_config(|config| config.consume_max_span = consume_max_span);
         if let Some(impl_) = self.default_lite_pull_consumer_impl.get() {
             impl_.set_consume_max_span(consume_max_span);
         }
     }
 
     async fn is_connect_broker_by_user(&self) -> bool {
+        let configured = self.consumer_config.load().connect_broker_by_user;
         self.default_lite_pull_consumer_impl
             .get()
-            .map_or(self.consumer_config.connect_broker_by_user, |impl_| {
-                impl_.is_connect_broker_by_user()
-            })
+            .map_or(configured, |impl_| impl_.is_connect_broker_by_user())
     }
 
     async fn set_connect_broker_by_user(&self, connect_broker_by_user: bool) {
-        self.consumer_config.mut_from_ref().connect_broker_by_user = connect_broker_by_user;
+        self.update_consumer_config(|config| config.connect_broker_by_user = connect_broker_by_user);
         if let Some(impl_) = self.default_lite_pull_consumer_impl.get() {
             impl_.set_connect_broker_by_user(connect_broker_by_user);
         }
     }
 
     async fn default_broker_id(&self) -> u64 {
+        let configured = self.consumer_config.load().default_broker_id;
         self.default_lite_pull_consumer_impl
             .get()
-            .map_or(self.consumer_config.default_broker_id, |impl_| {
-                impl_.default_broker_id()
-            })
+            .map_or(configured, |impl_| impl_.default_broker_id())
     }
 
     async fn set_default_broker_id(&self, broker_id: u64) {
-        self.consumer_config.mut_from_ref().default_broker_id = broker_id;
+        self.update_consumer_config(|config| config.default_broker_id = broker_id);
         if let Some(impl_) = self.default_lite_pull_consumer_impl.get() {
             impl_.set_default_broker_id(broker_id);
         }
@@ -1544,36 +1581,36 @@ impl LitePullConsumer for DefaultLitePullConsumer {
     }
 
     async fn is_auto_commit(&self) -> bool {
-        self.consumer_config.auto_commit
+        self.consumer_config.load().auto_commit
     }
 
     async fn set_auto_commit(&self, auto_commit: bool) {
-        self.consumer_config.mut_from_ref().auto_commit = auto_commit;
+        self.update_consumer_config(|config| config.auto_commit = auto_commit);
         if let Some(impl_) = self.default_lite_pull_consumer_impl.get() {
             impl_.set_auto_commit(auto_commit);
         }
     }
 
     async fn is_unit_mode(&self) -> bool {
-        self.consumer_config.unit_mode
+        self.consumer_config.load().unit_mode
     }
 
     async fn set_unit_mode(&self, unit_mode: bool) {
-        self.consumer_config.mut_from_ref().unit_mode = unit_mode;
+        self.update_consumer_config(|config| config.unit_mode = unit_mode);
         if let Some(impl_) = self.default_lite_pull_consumer_impl.get() {
             impl_.set_unit_mode(unit_mode);
         }
     }
 
     async fn auto_commit_interval_millis(&self) -> u64 {
-        self.consumer_config.auto_commit_interval_millis
+        self.consumer_config.load().auto_commit_interval_millis
     }
 
     async fn set_auto_commit_interval_millis(&self, interval_millis: u64) {
         if interval_millis < MIN_AUTOCOMMIT_INTERVAL_MILLIS {
             return;
         }
-        self.consumer_config.mut_from_ref().auto_commit_interval_millis = interval_millis;
+        self.update_consumer_config(|config| config.auto_commit_interval_millis = interval_millis);
         if let Some(impl_) = self.default_lite_pull_consumer_impl.get() {
             impl_.set_auto_commit_interval_millis(interval_millis);
         }
@@ -1644,9 +1681,9 @@ impl LitePullConsumer for DefaultLitePullConsumer {
     }
 
     async fn update_name_server_address(&self, name_server_address: &str) {
-        self.client_config
-            .mut_from_ref()
-            .set_namesrv_addr(CheetahString::from_slice(name_server_address));
+        self.update_client_config(|config| {
+            config.set_namesrv_addr(CheetahString::from_slice(name_server_address));
+        });
 
         if let Some(impl_) = self.default_lite_pull_consumer_impl.get() {
             let addresses: Vec<String> = name_server_address
@@ -1819,8 +1856,8 @@ mod tests {
             .build()
             .expect("builder should create namespaced consumer");
         let mut impl_ = ArcMut::new(DefaultLitePullConsumerImpl::new(
-            consumer.client_config.clone(),
-            consumer.consumer_config.clone(),
+            consumer.client_config_snapshot(),
+            consumer.consumer_config_snapshot(),
         ));
         let wrapper = impl_.clone();
         impl_.set_default_lite_pull_consumer_impl(wrapper);
@@ -2467,6 +2504,54 @@ mod tests {
         assert_eq!(impl_.consume_max_span(), 4_000);
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_facade_updates_publish_complete_immutable_snapshots() {
+        let consumer = Arc::new(new_unstarted_consumer());
+        let original = consumer.consumer_config();
+        let barrier = Arc::new(tokio::sync::Barrier::new(4));
+
+        let batch_consumer = consumer.clone();
+        let batch_barrier = barrier.clone();
+        let batch = tokio::spawn(async move {
+            batch_barrier.wait().await;
+            batch_consumer.set_pull_batch_size(64).await;
+        });
+
+        let threads_consumer = consumer.clone();
+        let threads_barrier = barrier.clone();
+        let threads = tokio::spawn(async move {
+            threads_barrier.wait().await;
+            threads_consumer.set_pull_thread_nums(12).await;
+        });
+
+        let threshold_consumer = consumer.clone();
+        let threshold_barrier = barrier.clone();
+        let threshold = tokio::spawn(async move {
+            threshold_barrier.wait().await;
+            threshold_consumer.set_pull_threshold_for_all(20_000).await;
+        });
+
+        let span_consumer = consumer.clone();
+        let span = tokio::spawn(async move {
+            barrier.wait().await;
+            span_consumer.set_consume_max_span(4_000).await;
+        });
+
+        for update in [batch, threads, threshold, span] {
+            update.await.expect("facade config update should complete");
+        }
+
+        let current = consumer.consumer_config();
+        assert_eq!(current.pull_batch_size, 64);
+        assert_eq!(current.pull_thread_nums, 12);
+        assert_eq!(current.pull_threshold_for_all, 20_000);
+        assert_eq!(current.consume_max_span, 4_000);
+        assert_ne!(original.pull_batch_size, current.pull_batch_size);
+        assert_ne!(original.pull_thread_nums, current.pull_thread_nums);
+        assert_ne!(original.pull_threshold_for_all, current.pull_threshold_for_all);
+        assert_ne!(original.consume_max_span, current.consume_max_span);
+    }
+
     #[tokio::test]
     async fn broker_selection_setters_update_facade_config_like_java() {
         let (consumer, impl_) = new_namespaced_consumer_with_impl();
@@ -2548,11 +2633,11 @@ mod tests {
             None,
         ));
         let consumer = DefaultLitePullConsumer::new(
-            ArcMut::new(ClientConfig::default()),
-            ArcMut::new(LitePullConsumerConfig {
+            ClientConfig::default(),
+            LitePullConsumerConfig {
                 consumer_group: CheetahString::from_static_str("lite_pull_tls_trace_group"),
                 ..Default::default()
-            }),
+            },
             None,
             Some(dispatcher.clone()),
             true,
@@ -2573,19 +2658,19 @@ mod tests {
         let mut client_config = ClientConfig::default();
         client_config.set_trace_msg_batch_num(6);
         let consumer = DefaultLitePullConsumer::new(
-            ArcMut::new(client_config),
-            ArcMut::new(LitePullConsumerConfig {
+            client_config,
+            LitePullConsumerConfig {
                 consumer_group: CheetahString::from_static_str("lite_pull_trace_batch_group"),
                 ..Default::default()
-            }),
+            },
             None,
             None,
             true,
             None,
         );
         let mut impl_ = ArcMut::new(DefaultLitePullConsumerImpl::new(
-            consumer.client_config.clone(),
-            consumer.consumer_config.clone(),
+            consumer.client_config_snapshot(),
+            consumer.consumer_config_snapshot(),
         ));
         let wrapper = impl_.clone();
         impl_.set_default_lite_pull_consumer_impl(wrapper);
@@ -2616,19 +2701,19 @@ mod tests {
         client_config.set_access_channel(AccessChannel::Cloud);
 
         let consumer = DefaultLitePullConsumer::new(
-            ArcMut::new(client_config),
-            ArcMut::new(LitePullConsumerConfig {
+            client_config,
+            LitePullConsumerConfig {
                 consumer_group: CheetahString::from_static_str("lite_pull_trace_group"),
                 ..Default::default()
-            }),
+            },
             None,
             Some(dispatcher.clone()),
             true,
             None,
         );
         let mut impl_ = ArcMut::new(DefaultLitePullConsumerImpl::new(
-            consumer.client_config.clone(),
-            consumer.consumer_config.clone(),
+            consumer.client_config_snapshot(),
+            consumer.consumer_config_snapshot(),
         ));
         let wrapper = impl_.clone();
         impl_.set_default_lite_pull_consumer_impl(wrapper);
