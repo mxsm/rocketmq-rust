@@ -9245,12 +9245,6 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "126c94c81e0a61ee9b1da2d9",
-          "fingerprint": "8e63f64e890a4e18ec5155d0",
-          "item": "fn to_consumer_config",
-          "line": 404
-        },
-        {
           "id": "19983da6a29ced80471c529c",
           "fingerprint": "91c09c442fee0f8ccff25fc0",
           "item": "fn new",
@@ -10657,12 +10651,6 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "b55454ca12c76495ed769a1d",
-          "fingerprint": "5dd0cf2f350e3a806d87ebf5",
-          "item": "fn default",
-          "line": 425
-        },
-        {
           "id": "193975bf1b4d9fc7783cbb1a",
           "fingerprint": "ea3b5033b309243a6ce382c7",
           "item": "fn new",
@@ -10707,24 +10695,6 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "5c58395a184ac4650e515ad1",
-          "fingerprint": "db40f275e31e87b4ab40da9a",
-          "item": "struct ConsumerConfig",
-          "line": 70
-        },
-        {
-          "id": "8a705a9b473fef5e34f7fee0",
-          "fingerprint": "3f9e056e9c329f84fa2d52ae",
-          "item": "fn subscription",
-          "line": 121
-        },
-        {
-          "id": "db548bccb442ea5423709787",
-          "fingerprint": "4acd9a82716ad04f75fc515e",
-          "item": "fn set_subscription",
-          "line": 297
-        },
-        {
           "id": "8e71dee88535713cc61a8f8f",
           "fingerprint": "6ac2314c35eecc84209c55e1",
           "item": "struct DefaultMQPushConsumer",
@@ -10759,12 +10729,6 @@
           "fingerprint": "cf650ba060bcd7e822754772",
           "item": "fn get_default_mq_push_consumer_impl",
           "line": 928
-        },
-        {
-          "id": "315000fd48a55b2e44f231e8",
-          "fingerprint": "212e374c20456f6e1aa1a2dc",
-          "item": "fn get_subscription",
-          "line": 1013
         }
       ],
       "owner": "client",
@@ -10788,63 +10752,6 @@
       ],
       "owner": "client",
       "reason": "Legacy safe mutable-reference escape pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "522d5235db4f255b7517ae30",
-      "path": "rocketmq-client/src/consumer/default_mq_push_consumer_builder.rs",
-      "symbol": "*",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "2b93456d3501179a753283c6",
-          "fingerprint": "50ff3d9c6e4a7c50a2a55b12",
-          "item": "mod tests",
-          "line": 393
-        }
-      ],
-      "owner": "client",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "0a8f4444cacca1dea958571f",
-      "path": "rocketmq-client/src/consumer/default_mq_push_consumer_builder.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "150b2ed79460ffcb2869cbaf",
-          "fingerprint": "cd821fcf8ab820780f893e90",
-          "item": "<module>",
-          "line": 22
-        }
-      ],
-      "owner": "client",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "d5f9f89e1b820d8ac843e9e3",
-      "path": "rocketmq-client/src/consumer/default_mq_push_consumer_builder.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "360b2665391d5b72a7a961a2",
-          "fingerprint": "e4206814ceac7354d2fcea71",
-          "item": "struct DefaultMQPushConsumerBuilder",
-          "line": 40
-        }
-      ],
-      "owner": "client",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
       "remove_by": "M05",
       "adr": "ADR-002"
     },

@@ -401,7 +401,7 @@ impl LitePullConsumerConfig {
             consume_from_where: self.consume_from_where,
             consume_timestamp: self.consume_timestamp.clone(),
             allocate_message_queue_strategy: Some(self.allocate_message_queue_strategy.clone()),
-            subscription: ArcMut::new(HashMap::new()),
+            subscription: Arc::new(HashMap::new()),
             message_listener: None,
             message_queue_listener: None,
             offset_store: None,

@@ -67,7 +67,7 @@ pub struct ConsumerConfig {
     pub(crate) consume_timestamp: Option<CheetahString>,
     pub(crate) allocate_message_queue_strategy: Option<Arc<dyn AllocateMessageQueueStrategy>>,
     //this field will be removed in a certain version after April 5, 2020
-    pub(crate) subscription: ArcMut<HashMap<CheetahString, CheetahString>>,
+    pub(crate) subscription: Arc<HashMap<CheetahString, CheetahString>>,
     pub(crate) message_listener: Option<Arc<MessageListener>>,
     pub(crate) message_queue_listener: Option<ArcMessageQueueListener>,
     pub(crate) offset_store: Option<Arc<OffsetStore>>,
@@ -118,8 +118,8 @@ impl ConsumerConfig {
         self.allocate_message_queue_strategy.clone()
     }
 
-    pub fn subscription(&self) -> &ArcMut<HashMap<CheetahString, CheetahString>> {
-        &self.subscription
+    pub fn subscription(&self) -> Arc<HashMap<CheetahString, CheetahString>> {
+        self.subscription.clone()
     }
 
     /*    pub fn message_listener(&self) -> &Option<Arc<MessageListener>> {
@@ -294,7 +294,7 @@ impl ConsumerConfig {
      * This method will be removed in a certain version after April 5, 2020, so please do not
      * use this method.
      */
-    pub fn set_subscription(&mut self, subscription: ArcMut<HashMap<CheetahString, CheetahString>>) {
+    pub fn set_subscription(&mut self, subscription: Arc<HashMap<CheetahString, CheetahString>>) {
         self.subscription = subscription;
     }
 
@@ -422,7 +422,7 @@ impl Default for ConsumerConfig {
                 (current_millis() - (1000 * 60 * 30)) as i64,
             ))),
             allocate_message_queue_strategy: Some(Arc::new(AllocateMessageQueueAveragely)),
-            subscription: ArcMut::new(HashMap::new()),
+            subscription: Arc::new(HashMap::new()),
             message_listener: None,
             message_queue_listener: None,
             offset_store: None,
@@ -1010,8 +1010,8 @@ impl DefaultMQPushConsumer {
         self.consumer_group()
     }
 
-    pub fn get_subscription(&self) -> &ArcMut<HashMap<CheetahString, CheetahString>> {
-        &self.consumer_config.subscription
+    pub fn get_subscription(&self) -> Arc<HashMap<CheetahString, CheetahString>> {
+        self.consumer_config.subscription()
     }
 
     #[inline]
@@ -1632,6 +1632,32 @@ mod tests {
 
         assert!(consumer.message_listener().is_none());
         assert!(consumer.consumer_config.message_listener.is_none());
+    }
+
+    #[test]
+    fn push_subscription_facade_preserves_owned_snapshot_identity() {
+        let mut consumer = DefaultMQPushConsumer::builder()
+            .consumer_group("push_subscription_snapshot_group")
+            .build();
+        let first_snapshot = Arc::new(HashMap::from([(
+            CheetahString::from_static_str("TopicSnapshot"),
+            CheetahString::from_static_str("TagA"),
+        )]));
+
+        consumer.consumer_config.set_subscription(first_snapshot.clone());
+
+        let observed = consumer.get_subscription();
+        assert!(Arc::ptr_eq(&first_snapshot, &observed));
+        assert_eq!(observed.get("TopicSnapshot").map(CheetahString::as_str), Some("TagA"));
+
+        let second_snapshot = Arc::new(HashMap::new());
+        consumer.consumer_config.set_subscription(second_snapshot.clone());
+
+        assert!(Arc::ptr_eq(&second_snapshot, &consumer.get_subscription()));
+        assert_eq!(
+            first_snapshot.get("TopicSnapshot").map(CheetahString::as_str),
+            Some("TagA")
+        );
     }
 
     #[test]

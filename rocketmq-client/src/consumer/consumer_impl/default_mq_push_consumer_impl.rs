@@ -2706,4 +2706,23 @@ mod tests {
         assert_eq!(offset_store.test_persisted_offset(&mq), Some(321));
         assert_eq!(offset_store.test_persist_all_count(), 2);
     }
+
+    #[tokio::test]
+    async fn copy_subscription_reads_immutable_config_snapshot() {
+        let topic = CheetahString::from_static_str("TopicSnapshotCopy");
+        let expression = CheetahString::from_static_str("TagA || TagB");
+        let mut consumer = new_check_config_consumer(None);
+        consumer.consumer_config.subscription = Arc::new(HashMap::from([(topic.clone(), expression.clone())]));
+
+        consumer
+            .copy_subscription()
+            .await
+            .expect("subscription snapshot should copy into rebalance state");
+
+        let subscriptions = consumer.rebalance_impl.get_subscription_inner();
+        let copied = subscriptions
+            .get(&topic)
+            .expect("configured topic should be present after copy");
+        assert_eq!(copied.sub_string, expression);
+    }
 }

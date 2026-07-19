@@ -367,6 +367,10 @@ Client Push message listener ownership 随 Issue #8355 将 facade config、imple
 中的 listener handle 改为标准 `Arc<MessageListener>`；concurrent/orderly 注册、替换和清除语义保持，公开 API 不再暴露
 共享可变 wrapper。实际快照为 402 production/1,086 occurrence，Client 为 85/194；剩余为 Broker 190/568、Client
 85/194 与 Store 127/324，总进度仍为 75/82，M11-12 父工作包未完成。
+Client Push subscription snapshots 随 Issue #8357 将 deprecated startup subscription map 改为标准
+`Arc<HashMap>`；config、builder 和 Java-compatible getter/setter 使用 immutable owned snapshot，启动时只读复制到
+独立 dynamic rebalance table。实际快照降至 400 production/1,078 occurrence，Client 降至 83/186；剩余为 Broker
+190/568、Client 83/186 与 Store 127/324，总进度仍为 75/82，M11-12 父工作包未完成。
 
 ### 9.3 证据目录
 
