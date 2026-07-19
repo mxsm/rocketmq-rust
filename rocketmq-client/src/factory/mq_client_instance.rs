@@ -67,7 +67,6 @@ use rocketmq_remoting::rpc::client_metadata::ClientMetadata;
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
 use rocketmq_remoting::runtime::RPCHook;
 use rocketmq_runtime::schedule::simple_scheduler::ScheduledTaskManager;
-use rocketmq_rust::ArcMut;
 use rocketmq_rust::RocketMQTokioMutex;
 use serde::Serialize;
 use tokio::sync::Mutex;
@@ -253,10 +252,9 @@ pub struct MQClientInstance {
 
     lifecycle_transition: Mutex<()>,
     service_state: StdRwLock<ServiceState>,
-    pub(crate) pull_message_service: ArcMut<PullMessageService>,
+    pub(crate) pull_message_service: Arc<PullMessageService>,
     rebalance_service: RebalanceService,
-    pub(crate) default_producer: ArcMut<DefaultMQProducer>,
-    default_producer_transition: Mutex<()>,
+    pub(crate) default_producer: Mutex<DefaultMQProducer>,
     broker_addr_table: BrokerAddrTable,
     broker_version_table: BrokerVersionTable,
     send_heartbeat_times_total: Arc<AtomicI64>,
@@ -344,7 +342,7 @@ impl MQClientInstance {
         let broker_heartbeat_fingerprint_table = Arc::new(DashMap::default());
         let broker_support_v2_heartbeat_set = Arc::new(DashMap::default());
 
-        let default_producer = ArcMut::new(
+        let default_producer = Mutex::new(
             DefaultMQProducer::builder()
                 .producer_group(mix_all::CLIENT_INNER_PRODUCER_GROUP)
                 .client_config(client_config.clone())
@@ -365,12 +363,11 @@ impl MQClientInstance {
             lock_heartbeat: Arc::default(),
             lifecycle_transition: Mutex::new(()),
             service_state: StdRwLock::new(ServiceState::CreateJust),
-            pull_message_service: ArcMut::new(PullMessageService::with_shards(
+            pull_message_service: Arc::new(PullMessageService::with_shards(
                 client_config.pull_message_service_shards,
             )),
             rebalance_service: RebalanceService::new(),
             default_producer,
-            default_producer_transition: Mutex::new(()),
             broker_addr_table,
             broker_version_table,
             send_heartbeat_times_total: Arc::new(AtomicI64::new(0)),
@@ -435,20 +432,18 @@ impl MQClientInstance {
     }
 
     async fn start_default_producer(&self) -> rocketmq_error::RocketMQResult<()> {
-        let _transition = self.default_producer_transition.lock().await;
-        let Some(producer_impl) = self.default_producer.default_mqproducer_impl.as_ref() else {
+        let mut default_producer = self.default_producer.lock().await;
+        let Some(producer_impl) = default_producer.default_mqproducer_impl.as_mut() else {
             return Err(mq_client_err!("default producer impl is None"));
         };
-        let mut producer_impl = producer_impl.clone();
         producer_impl.start_with_factory(false).await
     }
 
     async fn shutdown_default_producer(&self) -> rocketmq_error::RocketMQResult<()> {
-        let _transition = self.default_producer_transition.lock().await;
-        let Some(producer_impl) = self.default_producer.default_mqproducer_impl.as_ref() else {
+        let mut default_producer = self.default_producer.lock().await;
+        let Some(producer_impl) = default_producer.default_mqproducer_impl.as_mut() else {
             return Ok(());
         };
-        let mut producer_impl = producer_impl.clone();
         Box::pin(producer_impl.shutdown_with_factory(false)).await
     }
 
@@ -456,8 +451,7 @@ impl MQClientInstance {
         &self,
         message: Message,
     ) -> rocketmq_error::RocketMQResult<Option<SendResult>> {
-        let _transition = self.default_producer_transition.lock().await;
-        let mut default_producer = self.default_producer.clone();
+        let mut default_producer = self.default_producer.lock().await;
         default_producer.send(message).await
     }
 
@@ -465,13 +459,11 @@ impl MQClientInstance {
         &self,
         message: &mut Message,
     ) -> rocketmq_error::RocketMQResult<Option<SendResult>> {
-        let _transition = self.default_producer_transition.lock().await;
-        let producer_impl = self
-            .default_producer
+        let mut default_producer = self.default_producer.lock().await;
+        let producer_impl = default_producer
             .default_mqproducer_impl
-            .as_ref()
+            .as_mut()
             .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("DefaultMQProducerImpl"))?;
-        let mut producer_impl = producer_impl.clone();
         producer_impl.send(message).await
     }
 
@@ -2728,6 +2720,7 @@ mod tests {
     use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
     use rocketmq_remoting::protocol::route::route_data_view::BrokerData;
     use rocketmq_remoting::protocol::route::route_data_view::QueueData;
+    use rocketmq_rust::ArcMut;
 
     use super::*;
     use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
