@@ -377,6 +377,10 @@ M11-12ad 已将 Lite/Push 共用 `PullAPIWrapper` owner 改为标准 `Arc`；uni
 402 production/1,095 occurrences，Client 为 85/203；其余 Client/Broker/Store、compatibility 与完整候选快照 Gate
 仍保持开放。
 
+M11-12ae 已将 Push facade config、implementation 与 Java-compatible getter/setter 中的 `MessageListener` handle 改为
+标准 `Arc`；concurrent/orderly 注册、替换与清除语义保持。实际快照为 402 production/1,086 occurrences，Client
+为 85/194；其余 Client/Broker/Store、compatibility 与完整候选快照 Gate 仍保持开放。
+
 ## 公共兼容面
 
 - development/compatibility仍可显式选择；secure只作为新部署默认，不静默重解释旧配置。

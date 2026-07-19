@@ -363,6 +363,10 @@ Client PullAPIWrapper immutable access 随 Issue #8353 将 Lite/Push 的 wrapper
 user-broker selection 与 broker id 使用原子发布，filter hook 列表使用 `ArcSwap` 整代快照，pull/POP/filter-server
 调用收窄为 `&self` 并复用 immutable MQ client API accessor。实际快照为 402 production/1,095 occurrence，Client
 为 85/203；剩余为 Broker 190/568、Client 85/203 与 Store 127/324，总进度仍为 75/82，M11-12 父工作包未完成。
+Client Push message listener ownership 随 Issue #8355 将 facade config、implementation 与 Java-compatible getter/setter
+中的 listener handle 改为标准 `Arc<MessageListener>`；concurrent/orderly 注册、替换和清除语义保持，公开 API 不再暴露
+共享可变 wrapper。实际快照为 402 production/1,086 occurrence，Client 为 85/194；剩余为 Broker 190/568、Client
+85/194 与 Store 127/324，总进度仍为 75/82，M11-12 父工作包未完成。
 
 ### 9.3 证据目录
 

@@ -68,7 +68,7 @@ pub struct ConsumerConfig {
     pub(crate) allocate_message_queue_strategy: Option<Arc<dyn AllocateMessageQueueStrategy>>,
     //this field will be removed in a certain version after April 5, 2020
     pub(crate) subscription: ArcMut<HashMap<CheetahString, CheetahString>>,
-    pub(crate) message_listener: Option<ArcMut<MessageListener>>,
+    pub(crate) message_listener: Option<Arc<MessageListener>>,
     pub(crate) message_queue_listener: Option<ArcMessageQueueListener>,
     pub(crate) offset_store: Option<Arc<OffsetStore>>,
     pub(crate) consume_thread_min: u32,
@@ -122,7 +122,7 @@ impl ConsumerConfig {
         &self.subscription
     }
 
-    /*    pub fn message_listener(&self) -> &Option<ArcMut<MessageListener>> {
+    /*    pub fn message_listener(&self) -> &Option<Arc<MessageListener>> {
         &self.message_listener
     }*/
 
@@ -300,7 +300,7 @@ impl ConsumerConfig {
 
     /*    pub fn set_message_listener(
         &mut self,
-        message_listener: Option<ArcMut<MessageListener>>,
+        message_listener: Option<Arc<MessageListener>>,
     ) {
         self.message_listener = message_listener;
     }*/
@@ -630,7 +630,7 @@ impl MQPushConsumer for DefaultMQPushConsumer {
             message_listener_concurrently: Some(Arc::new(message_listener)),
             message_listener_orderly: None,
         };
-        self.consumer_config.message_listener = Some(ArcMut::new(message_listener));
+        self.consumer_config.message_listener = Some(Arc::new(message_listener));
         if let Some(default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_mut() {
             default_mqpush_consumer_impl.register_message_listener(self.consumer_config.message_listener.clone());
         } else {
@@ -646,7 +646,7 @@ impl MQPushConsumer for DefaultMQPushConsumer {
             message_listener_concurrently: None,
             message_listener_orderly: Some(Arc::new(message_listener)),
         };
-        self.consumer_config.message_listener = Some(ArcMut::new(message_listener));
+        self.consumer_config.message_listener = Some(Arc::new(message_listener));
         if let Some(default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_mut() {
             default_mqpush_consumer_impl.register_message_listener(self.consumer_config.message_listener.clone());
         } else {
@@ -929,22 +929,22 @@ impl DefaultMQPushConsumer {
         self.default_mq_push_consumer_impl()
     }
 
-    pub fn message_listener(&self) -> Option<ArcMut<MessageListener>> {
+    pub fn message_listener(&self) -> Option<Arc<MessageListener>> {
         self.consumer_config.message_listener.clone()
     }
 
-    pub fn get_message_listener(&self) -> Option<ArcMut<MessageListener>> {
+    pub fn get_message_listener(&self) -> Option<Arc<MessageListener>> {
         self.message_listener()
     }
 
-    pub fn set_message_listener(&mut self, message_listener: Option<ArcMut<MessageListener>>) {
+    pub fn set_message_listener(&mut self, message_listener: Option<Arc<MessageListener>>) {
         self.consumer_config.message_listener = message_listener.clone();
         if let Some(consumer_impl) = self.default_mqpush_consumer_impl.as_mut() {
             consumer_impl.register_message_listener(message_listener);
         }
     }
 
-    pub fn register_message_listener(&mut self, message_listener: Option<ArcMut<MessageListener>>) {
+    pub fn register_message_listener(&mut self, message_listener: Option<Arc<MessageListener>>) {
         self.set_message_listener(message_listener);
     }
 
@@ -1383,6 +1383,8 @@ mod tests {
     use crate::base::access_channel::AccessChannel;
     use crate::consumer::listener::consume_concurrently_context::ConsumeConcurrentlyContext;
     use crate::consumer::listener::consume_concurrently_status::ConsumeConcurrentlyStatus;
+    use crate::consumer::listener::consume_orderly_context::ConsumeOrderlyContext;
+    use crate::consumer::listener::consume_orderly_status::ConsumeOrderlyStatus;
     use crate::consumer::message_queue_listener::MessageQueueListener;
     use crate::consumer::mq_consumer_inner::MQConsumerInner;
     use crate::consumer::store::read_offset_type::ReadOffsetType;
@@ -1600,23 +1602,31 @@ mod tests {
         let mut consumer = DefaultMQPushConsumer::builder()
             .consumer_group("push_listener_facade_group")
             .build();
-        let listener = ArcMut::new(MessageListener::new(Some(Arc::new(TestConcurrentListener)), None));
+        let listener = Arc::new(MessageListener::new(Some(Arc::new(TestConcurrentListener)), None));
 
         assert!(consumer.default_mq_push_consumer_impl().is_some());
         assert!(consumer.message_listener().is_none());
 
         consumer.set_message_listener(Some(listener.clone()));
 
-        assert!(consumer
-            .message_listener()
-            .expect("listener should be set")
-            .is_concurrently());
+        let observed_listener = consumer.message_listener().expect("listener should be set");
+        assert!(Arc::ptr_eq(&listener, &observed_listener));
+        assert!(observed_listener.is_concurrently());
         assert!(consumer
             .consumer_config
             .message_listener
             .as_ref()
             .expect("config listener should be set")
             .is_concurrently());
+
+        consumer.register_message_listener_orderly(
+            |_messages: &[&MessageExt], _context: &mut ConsumeOrderlyContext| Ok(ConsumeOrderlyStatus::Success),
+        );
+
+        assert!(consumer
+            .message_listener()
+            .expect("orderly listener should replace concurrent listener")
+            .is_orderly());
 
         consumer.register_message_listener(None);
 
