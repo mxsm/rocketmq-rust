@@ -22,27 +22,18 @@ use rocketmq_remoting::protocol::body::acl_info::AclInfo;
 use rocketmq_remoting::protocol::header::create_acl_request_header::CreateAclRequestHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::RemotingDeserializable;
-use rocketmq_store::base::message_store::MessageStore;
 
 use crate::auth::acl_converter::AclConverter;
 use crate::auth::auth_admin_service::AuthAdminService;
-use crate::broker_runtime::BrokerRuntimeInner;
 
 #[derive(Clone)]
-pub struct CreateAclRequestHandler<MS: MessageStore> {
-    _broker_runtime_inner: rocketmq_rust::ArcMut<BrokerRuntimeInner<MS>>,
+pub struct CreateAclRequestHandler {
     auth_admin_service: Arc<AuthAdminService>,
 }
 
-impl<MS: MessageStore> CreateAclRequestHandler<MS> {
-    pub fn new(
-        broker_runtime_inner: rocketmq_rust::ArcMut<BrokerRuntimeInner<MS>>,
-        auth_admin_service: Arc<AuthAdminService>,
-    ) -> Self {
-        Self {
-            _broker_runtime_inner: broker_runtime_inner,
-            auth_admin_service,
-        }
+impl CreateAclRequestHandler {
+    pub fn new(auth_admin_service: Arc<AuthAdminService>) -> Self {
+        Self { auth_admin_service }
     }
 
     pub async fn create_acl(

@@ -8,26 +8,17 @@ use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::header::delete_user_request_header::DeleteUserRequestHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_store::base::message_store::MessageStore;
 
 use crate::auth::auth_admin_service::AuthAdminService;
-use crate::broker_runtime::BrokerRuntimeInner;
 
 #[derive(Clone)]
-pub struct DeleteUserRequestHandler<MS: MessageStore> {
-    _broker_runtime_inner: rocketmq_rust::ArcMut<BrokerRuntimeInner<MS>>,
+pub struct DeleteUserRequestHandler {
     auth_admin_service: Arc<AuthAdminService>,
 }
 
-impl<MS: MessageStore> DeleteUserRequestHandler<MS> {
-    pub fn new(
-        broker_runtime_inner: rocketmq_rust::ArcMut<BrokerRuntimeInner<MS>>,
-        auth_admin_service: Arc<AuthAdminService>,
-    ) -> Self {
-        Self {
-            _broker_runtime_inner: broker_runtime_inner,
-            auth_admin_service,
-        }
+impl DeleteUserRequestHandler {
+    pub fn new(auth_admin_service: Arc<AuthAdminService>) -> Self {
+        Self { auth_admin_service }
     }
 
     pub async fn delete_user(

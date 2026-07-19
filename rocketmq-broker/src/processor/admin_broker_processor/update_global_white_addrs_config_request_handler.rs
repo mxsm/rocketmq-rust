@@ -20,26 +20,17 @@ use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::header::update_global_white_addrs_config_request_header::UpdateGlobalWhiteAddrsConfigRequestHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_store::base::message_store::MessageStore;
 
 use crate::auth::auth_admin_service::AuthAdminService;
-use crate::broker_runtime::BrokerRuntimeInner;
 
 #[derive(Clone)]
-pub struct UpdateGlobalWhiteAddrsConfigRequestHandler<MS: MessageStore> {
-    _broker_runtime_inner: rocketmq_rust::ArcMut<BrokerRuntimeInner<MS>>,
+pub struct UpdateGlobalWhiteAddrsConfigRequestHandler {
     auth_admin_service: Arc<AuthAdminService>,
 }
 
-impl<MS: MessageStore> UpdateGlobalWhiteAddrsConfigRequestHandler<MS> {
-    pub fn new(
-        broker_runtime_inner: rocketmq_rust::ArcMut<BrokerRuntimeInner<MS>>,
-        auth_admin_service: Arc<AuthAdminService>,
-    ) -> Self {
-        Self {
-            _broker_runtime_inner: broker_runtime_inner,
-            auth_admin_service,
-        }
+impl UpdateGlobalWhiteAddrsConfigRequestHandler {
+    pub fn new(auth_admin_service: Arc<AuthAdminService>) -> Self {
+        Self { auth_admin_service }
     }
 
     pub async fn update_global_white_addrs_config(
@@ -175,7 +166,7 @@ mod tests {
         })
         .expect("create provider registry");
         let auth_admin_service = Arc::new(AuthAdminService::with_provider_registry(provider_registry.clone()));
-        let mut handler = UpdateGlobalWhiteAddrsConfigRequestHandler::new(inner.clone(), auth_admin_service);
+        let mut handler = UpdateGlobalWhiteAddrsConfigRequestHandler::new(auth_admin_service);
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
 

@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::auth::auth_admin_service::AuthAdminService;
-use crate::broker_runtime::BrokerRuntimeInner;
 use rocketmq_error::RocketMQError;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
@@ -22,25 +21,16 @@ use rocketmq_remoting::protocol::header::list_users_request_header::ListUsersReq
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_rust::ArcMut;
-use rocketmq_store::base::message_store::MessageStore;
 use std::sync::Arc;
 
 #[derive(Clone)]
-pub struct ListUsersRequestHandler<MS: MessageStore> {
-    _broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+pub struct ListUsersRequestHandler {
     auth_admin_service: Arc<AuthAdminService>,
 }
 
-impl<MS: MessageStore> ListUsersRequestHandler<MS> {
-    pub fn new(
-        broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
-        auth_admin_service: Arc<AuthAdminService>,
-    ) -> Self {
-        Self {
-            _broker_runtime_inner: broker_runtime_inner,
-            auth_admin_service,
-        }
+impl ListUsersRequestHandler {
+    pub fn new(auth_admin_service: Arc<AuthAdminService>) -> Self {
+        Self { auth_admin_service }
     }
 
     pub async fn list_users(

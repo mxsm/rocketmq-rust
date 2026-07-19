@@ -10,27 +10,18 @@ use rocketmq_remoting::protocol::header::create_user_request_header::CreateUserR
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::RemotingDeserializable;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_store::base::message_store::MessageStore;
 
 use crate::auth::auth_admin_service::AuthAdminService;
 use crate::auth::user_converter::UserConverter;
-use crate::broker_runtime::BrokerRuntimeInner;
 
 #[derive(Clone)]
-pub struct CreateUserRequestHandler<MS: MessageStore> {
-    _broker_runtime_inner: rocketmq_rust::ArcMut<BrokerRuntimeInner<MS>>,
+pub struct CreateUserRequestHandler {
     auth_admin_service: Arc<AuthAdminService>,
 }
 
-impl<MS: MessageStore> CreateUserRequestHandler<MS> {
-    pub fn new(
-        broker_runtime_inner: rocketmq_rust::ArcMut<BrokerRuntimeInner<MS>>,
-        auth_admin_service: Arc<AuthAdminService>,
-    ) -> Self {
-        Self {
-            _broker_runtime_inner: broker_runtime_inner,
-            auth_admin_service,
-        }
+impl CreateUserRequestHandler {
+    pub fn new(auth_admin_service: Arc<AuthAdminService>) -> Self {
+        Self { auth_admin_service }
     }
 
     pub async fn create_user(

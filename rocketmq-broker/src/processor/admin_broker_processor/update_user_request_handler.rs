@@ -1,6 +1,5 @@
 use crate::auth::auth_admin_service::AuthAdminService;
 use crate::auth::user_converter::UserConverter;
-use crate::broker_runtime::BrokerRuntimeInner;
 use rocketmq_auth::authentication::enums::user_type::UserType;
 use rocketmq_error::RocketMQError;
 use rocketmq_remoting::code::request_code::RequestCode;
@@ -11,25 +10,16 @@ use rocketmq_remoting::protocol::header::update_user_request_header::UpdateUserR
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::RemotingDeserializable;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_rust::ArcMut;
-use rocketmq_store::base::message_store::MessageStore;
 use std::sync::Arc;
 
 #[derive(Clone)]
-pub struct UpdateUserRequestHandler<MS: MessageStore> {
-    _broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+pub struct UpdateUserRequestHandler {
     auth_admin_service: Arc<AuthAdminService>,
 }
 
-impl<MS: MessageStore> UpdateUserRequestHandler<MS> {
-    pub fn new(
-        broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
-        auth_admin_service: Arc<AuthAdminService>,
-    ) -> Self {
-        Self {
-            _broker_runtime_inner: broker_runtime_inner,
-            auth_admin_service,
-        }
+impl UpdateUserRequestHandler {
+    pub fn new(auth_admin_service: Arc<AuthAdminService>) -> Self {
+        Self { auth_admin_service }
     }
 
     pub async fn update_user(
