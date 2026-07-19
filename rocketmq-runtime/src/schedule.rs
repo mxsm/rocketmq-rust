@@ -229,6 +229,15 @@ pub mod simple_scheduler {
             Ok(new_group)
         }
 
+        /// Returns the task group owned by this compatibility scheduler.
+        ///
+        /// New production services should use an injected parent [`TaskGroup`]. This accessor is
+        /// reserved for compatibility adapters that already share this scheduler boundary and
+        /// need to parent additional owned child groups under it.
+        pub fn compatibility_task_group(&self) -> Result<TaskGroup> {
+            self.task_group("ScheduledTaskManager::compatibility_task_group")
+        }
+
         /// Adds a fixed-rate scheduled task to the task manager.
         ///
         /// # Arguments

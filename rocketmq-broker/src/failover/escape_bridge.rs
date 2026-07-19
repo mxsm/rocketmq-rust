@@ -107,17 +107,22 @@ impl<MS: MessageStore> EscapeBridge<MS> {
         }
     }
 
-    pub fn start(&mut self /* message_store: Option<ArcMut<MS>> */) {
-        if self.broker_runtime_inner.broker_config().enable_slave_acting_master
-            && self.broker_runtime_inner.broker_config().enable_remote_escape
+    pub fn start(&self /* message_store: Option<ArcMut<MS>> */) {
+        let broker_runtime_inner = &self.broker_runtime_inner;
+        if broker_runtime_inner.broker_config().enable_slave_acting_master
+            && broker_runtime_inner.broker_config().enable_remote_escape
         {
 
             //self.message_store = message_store;
         }
     }
 
-    pub fn shutdown(&mut self) {
+    pub fn shutdown(&self) {
         warn!("EscapeBridge shutdown not implemented");
+    }
+
+    pub(crate) fn with_message_store<R>(&self, operation: impl FnOnce(&MS) -> R) -> R {
+        operation(self.broker_runtime_inner.message_store_unchecked().as_ref())
     }
 }
 
@@ -125,16 +130,13 @@ impl<MS> EscapeBridge<MS>
 where
     MS: MessageStore,
 {
-    pub async fn put_message(&mut self, mut message_ext: MessageExtBrokerInner) -> PutMessageResult {
-        if self.broker_runtime_inner.broker_config().broker_identity.broker_id == mix_all::MASTER_ID {
-            self.broker_runtime_inner
-                .message_store_mut()
-                .as_mut()
-                .unwrap()
-                .put_message(message_ext)
-                .await
-        } else if self.broker_runtime_inner.broker_config().enable_slave_acting_master
-            && self.broker_runtime_inner.broker_config().enable_remote_escape
+    pub async fn put_message(&self, mut message_ext: MessageExtBrokerInner) -> PutMessageResult {
+        let broker_runtime_inner = self.broker_runtime_inner.clone();
+        if broker_runtime_inner.broker_config().broker_identity.broker_id == mix_all::MASTER_ID {
+            let mut message_store = broker_runtime_inner.message_store_unchecked().clone();
+            message_store.put_message(message_ext).await
+        } else if broker_runtime_inner.broker_config().enable_slave_acting_master
+            && broker_runtime_inner.broker_config().enable_remote_escape
         {
             message_ext.set_wait_store_msg_ok(false);
             match self.put_message_to_remote_broker(message_ext, None).await {
@@ -147,20 +149,20 @@ where
         } else {
             warn!(
                 "Put message failed, enableSlaveActingMaster={}, enableRemoteEscape={}.",
-                self.broker_runtime_inner.broker_config().enable_slave_acting_master,
-                self.broker_runtime_inner.broker_config().enable_remote_escape
+                broker_runtime_inner.broker_config().enable_slave_acting_master,
+                broker_runtime_inner.broker_config().enable_remote_escape
             );
             PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable)
         }
     }
 
     pub async fn put_message_to_remote_broker(
-        &mut self,
+        &self,
         message_ext: MessageExtBrokerInner,
         mut broker_name_to_send: Option<CheetahString>,
     ) -> rocketmq_error::RocketMQResult<Option<SendResult>> {
-        let broker_name = self
-            .broker_runtime_inner
+        let broker_runtime_inner = self.broker_runtime_inner.clone();
+        let broker_name = broker_runtime_inner
             .broker_config()
             .broker_identity
             .broker_name
@@ -175,8 +177,7 @@ where
         } else {
             message_ext
         };
-        let topic_publish_info = self
-            .broker_runtime_inner
+        let topic_publish_info = broker_runtime_inner
             .topic_route_info_manager()
             .try_to_find_topic_publish_info(message_to_put.get_topic())
             .await;
@@ -195,8 +196,7 @@ where
                 .unwrap();
             message_to_put.message_ext_inner.queue_id = mq.queue_id();
             broker_name_to_send = Some(mq.broker_name().clone());
-            if self
-                .broker_runtime_inner
+            if broker_runtime_inner
                 .broker_config()
                 .broker_identity
                 .broker_name
@@ -219,8 +219,7 @@ where
                 message_to_put.queue_id(),
             )
         };
-        let broker_addr_to_send = self
-            .broker_runtime_inner
+        let broker_addr_to_send = broker_runtime_inner
             .topic_route_info_manager()
             .find_broker_address_in_publish(broker_name_to_send.as_ref());
         if broker_addr_to_send.is_none() {
@@ -233,8 +232,7 @@ where
             return Ok(None);
         }
         let producer_group = self.get_producer_group(&message_to_put);
-        let result = self
-            .broker_runtime_inner
+        let result = broker_runtime_inner
             .broker_outer_api()
             .send_message_to_specific_broker(
                 broker_addr_to_send.as_ref().unwrap(),
@@ -259,20 +257,16 @@ where
         }
     }
 
-    pub async fn async_put_message(&mut self, mut message_ext: MessageExtBrokerInner) -> PutMessageResult {
-        if self.broker_runtime_inner.broker_config().broker_identity.broker_id == mix_all::MASTER_ID {
-            self.broker_runtime_inner
-                .message_store_mut()
-                .as_mut()
-                .unwrap()
-                .put_message(message_ext)
-                .await
-        } else if self.broker_runtime_inner.broker_config().enable_slave_acting_master
-            && self.broker_runtime_inner.broker_config().enable_remote_escape
+    pub async fn async_put_message(&self, mut message_ext: MessageExtBrokerInner) -> PutMessageResult {
+        let broker_runtime_inner = self.broker_runtime_inner.clone();
+        if broker_runtime_inner.broker_config().broker_identity.broker_id == mix_all::MASTER_ID {
+            let mut message_store = broker_runtime_inner.message_store_unchecked().clone();
+            message_store.put_message(message_ext).await
+        } else if broker_runtime_inner.broker_config().enable_slave_acting_master
+            && broker_runtime_inner.broker_config().enable_remote_escape
         {
             message_ext.set_wait_store_msg_ok(false);
-            let topic_publish_info = self
-                .broker_runtime_inner
+            let topic_publish_info = broker_runtime_inner
                 .topic_route_info_manager()
                 .try_to_find_topic_publish_info(message_ext.get_topic())
                 .await;
@@ -287,13 +281,11 @@ where
             let message_queue = mq_selected.unwrap();
             message_ext.message_ext_inner.queue_id = message_queue.queue_id();
             let broker_name_to_send = message_queue.broker_name();
-            let broker_addr_to_send = self
-                .broker_runtime_inner
+            let broker_addr_to_send = broker_runtime_inner
                 .topic_route_info_manager()
                 .find_broker_address_in_publish(Some(broker_name_to_send));
             let producer_group = self.get_producer_group(&message_ext);
-            let result = self
-                .broker_runtime_inner
+            let result = broker_runtime_inner
                 .broker_outer_api()
                 .send_message_to_specific_broker(
                     broker_addr_to_send.as_ref().unwrap(),
@@ -309,20 +301,16 @@ where
         }
     }
 
-    pub async fn put_message_to_specific_queue(&mut self, mut message_ext: MessageExtBrokerInner) -> PutMessageResult {
-        if self.broker_runtime_inner.broker_config().broker_identity.broker_id == mix_all::MASTER_ID {
-            self.broker_runtime_inner
-                .message_store_mut()
-                .as_mut()
-                .unwrap()
-                .put_message(message_ext)
-                .await
-        } else if self.broker_runtime_inner.broker_config().enable_slave_acting_master
-            && self.broker_runtime_inner.broker_config().enable_remote_escape
+    pub async fn put_message_to_specific_queue(&self, mut message_ext: MessageExtBrokerInner) -> PutMessageResult {
+        let broker_runtime_inner = self.broker_runtime_inner.clone();
+        if broker_runtime_inner.broker_config().broker_identity.broker_id == mix_all::MASTER_ID {
+            let mut message_store = broker_runtime_inner.message_store_unchecked().clone();
+            message_store.put_message(message_ext).await
+        } else if broker_runtime_inner.broker_config().enable_slave_acting_master
+            && broker_runtime_inner.broker_config().enable_remote_escape
         {
             message_ext.set_wait_store_msg_ok(false);
-            let topic_publish_info = self
-                .broker_runtime_inner
+            let topic_publish_info = broker_runtime_inner
                 .topic_route_info_manager()
                 .try_to_find_topic_publish_info(message_ext.get_topic())
                 .await;
@@ -345,13 +333,11 @@ where
             let message_queue = topic_publish_info.message_queues()[index].clone();
             message_ext.message_ext_inner.queue_id = message_queue.queue_id();
             let broker_name_to_send = message_queue.broker_name();
-            let broker_addr_to_send = self
-                .broker_runtime_inner
+            let broker_addr_to_send = broker_runtime_inner
                 .topic_route_info_manager()
                 .find_broker_address_in_publish(Some(broker_name_to_send));
             let producer_group = self.get_producer_group(&message_ext);
-            match self
-                .broker_runtime_inner
+            match broker_runtime_inner
                 .broker_outer_api()
                 .send_message_to_specific_broker(
                     broker_addr_to_send.as_ref().unwrap(),
@@ -371,8 +357,8 @@ where
         } else {
             warn!(
                 "Put message failed, enableSlaveActingMaster={}, enableRemoteEscape={}.",
-                self.broker_runtime_inner.broker_config().enable_slave_acting_master,
-                self.broker_runtime_inner.broker_config().enable_remote_escape
+                broker_runtime_inner.broker_config().enable_slave_acting_master,
+                broker_runtime_inner.broker_config().enable_remote_escape
             );
             PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable)
         }
@@ -386,12 +372,15 @@ where
         broker_name: &CheetahString,
         de_compress_body: bool,
     ) -> BoxFuture<'_, (Option<MessageExt>, String, bool)> {
-        let message_store = self.broker_runtime_inner.message_store().unwrap();
+        let broker_runtime_inner = self.broker_runtime_inner.clone();
+        let Some(message_store) = broker_runtime_inner.message_store().cloned() else {
+            return async { (None, "message store is unavailable".to_string(), false) }.boxed();
+        };
         let inner_consumer_group_name = self.inner_consumer_group_name.clone();
         let topic = topic.clone();
         let broker_name = broker_name.clone();
 
-        if self.broker_runtime_inner.broker_config().broker_identity.broker_name == broker_name {
+        if broker_runtime_inner.broker_config().broker_identity.broker_name == broker_name {
             async move {
                 let result = message_store
                     .get_message(&inner_consumer_group_name, &topic, queue_id, offset, 1, None)
@@ -429,22 +418,22 @@ where
         queue_id: i32,
         broker_name: &CheetahString,
     ) -> BoxFuture<'_, (Option<MessageExt>, String, bool)> {
-        let broker_runtime_inner_ = self.broker_runtime_inner.clone();
+        let broker_runtime_inner = self.broker_runtime_inner.clone();
         let inner_consumer_group_name = self.inner_consumer_group_name.clone();
         let topic = topic.clone();
         let broker_name = broker_name.clone();
 
         async move {
-            let mut broker_addr = broker_runtime_inner_
+            let mut broker_addr = broker_runtime_inner
                 .topic_route_info_manager()
                 .find_broker_address_in_subscribe(Some(&broker_name), 0, false);
 
             if broker_addr.is_none() {
-                broker_runtime_inner_
+                broker_runtime_inner
                     .topic_route_info_manager()
                     .update_topic_route_info_from_name_server_ext(&topic, true, false)
                     .await;
-                broker_addr = broker_runtime_inner_
+                broker_addr = broker_runtime_inner
                     .topic_route_info_manager()
                     .find_broker_address_in_subscribe(Some(&broker_name), 0, false);
 
@@ -455,7 +444,7 @@ where
             }
 
             let broker_addr = broker_addr.unwrap();
-            match broker_runtime_inner_
+            match broker_runtime_inner
                 .broker_outer_api()
                 .pull_message_from_specific_broker_async(
                     &broker_name,

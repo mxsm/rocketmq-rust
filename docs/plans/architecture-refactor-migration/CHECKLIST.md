@@ -678,7 +678,8 @@ M09-04 再删除 MCP 未使用的 Auth/Error direct edges，并把承担 owned t
   - [x] M11-12at Broker Pull lifecycle ownership：`PullMessageProcessor`/result handler/request-hold service 与 Broker carrier 改用标准 `Arc`，hold service 与 scan task 改用标准 `Weak`；共享 processor 能力、异步 lifecycle gate、停止准入/清理与锁内 deadline 发布消除强引用环、共享可变别名和 start/shutdown/deadline 竞态
   - [x] M11-12au Broker ConsumerOffsetManager ownership：`DataVersion` 以 `ArcSwap` 发布不可变代际，单一 transition 串行 offset/version 更新；主从 merge 与 JSON/RocksDB 恢复只发布完整 snapshot，删除可写 table escape、无用 Clone/runtime mutable accessor，并修复并发阈值与零步长 panic
   - [x] M11-12av Broker ScheduleMessageService internal-state ownership：delay table/max level 以单一 `ArcSwap` 配置代际发布，offset/version/cadence 由短 transition 串行；远端 snapshot 整表替换，status 原子发布，pending queue/resend 不持锁跨 I/O 且不会越过重试队首
-  - [x] [`M11-12 进度证据`](phase-3-production-readiness/11-soundness-closure-progress.md) 记录父 Issue #8292、子切片 Issue #8293/#8295/#8297/#8299/#8301/#8303/#8307/#8309/#8311/#8313/#8315/#8317/#8319/#8321/#8323/#8325/#8327/#8329/#8331/#8333/#8335/#8337/#8339/#8341/#8343/#8345/#8347/#8349/#8351/#8353/#8355/#8357/#8359/#8361/#8363/#8365/#8367/#8369/#8371/#8375/#8377/#8379/#8381/#8383/#8385/#8387/#8389/#8391 与每次真实下降
+  - [x] M11-12aw Broker Schedule root/lifecycle ownership：Schedule root 改用标准 `Arc`，EscapeBridge 以 outer strong owner/inner `Weak` 回边拆环；fresh generation TaskGroup、Weak task capture、cancellation-aware wait、串行 lifecycle/persistence、BlockingExecutor I/O、legacy Builder 复用 audited scheduler root、peer disk-before-memory 和 store-before-schedule shutdown/role ordering 形成可重试边界
+  - [x] [`M11-12 进度证据`](phase-3-production-readiness/11-soundness-closure-progress.md) 记录父 Issue #8292、子切片 Issue #8293/#8295/#8297/#8299/#8301/#8303/#8307/#8309/#8311/#8313/#8315/#8317/#8319/#8321/#8323/#8325/#8327/#8329/#8331/#8333/#8335/#8337/#8339/#8341/#8343/#8345/#8347/#8349/#8351/#8353/#8355/#8357/#8359/#8361/#8363/#8365/#8367/#8369/#8371/#8375/#8377/#8379/#8381/#8383/#8385/#8387/#8389/#8391/#8393 与每次真实下降
   - [x] Issue #8295 后累计降至 711 production/2,029 occurrence；Controller 配置债务清零但其他 Controller owner 仍有 31 条 production 债务
   - [x] Issue #8297 后实际快照降至 697 production/1,986 occurrence；Controller 降至 17 条/51 occurrence，Manager/heartbeat/embedded-NameServer owner 已退出 `ArcMut`
   - [x] Issue #8299 后实际快照降至 690 production/1,961 occurrence；Controller 降至 10 条/26 occurrence，Raft/OpenRaft owner 与 Manager Raft `mut_from_ref` 已清零
@@ -727,7 +728,8 @@ M09-04 再删除 MCP 未使用的 Auth/Error direct edges，并把承担 owned t
   - [x] Issue #8387 后实际快照降至 289 production/706 occurrence、162 test/458 occurrence；Broker 降至 167/398，Pull lifecycle 共删除 5 个 production identity/19 occurrence 与 3 个 test identity/4 occurrence，compatibility 14/40 不增
   - [x] Issue #8389 后实际快照降至 287 production/699 occurrence、160 test/455 occurrence；Broker 降至 165/391，ConsumerOffset DataVersion owner 共删除 2 个 production identity/7 occurrence 与 2 个 test identity/3 occurrence，无 relocation，compatibility 14/40 不增
   - [x] Issue #8391 后实际快照为 287 production/680 occurrence、158 test/453 occurrence；Broker 为 165/372，Schedule 内部 owner 与无用 runtime accessors 共删除 19 个 production occurrence、2 个 test identity/2 occurrence；3 个保留 occurrence 经临时 ADR-013 一对一 relocation 审核，compatibility 14/40 不增
-  - [ ] M11-12aw 及后续：Broker Schedule root capability/task generation/shutdown/persistence、其他 processor/transaction、Store/HA、compatibility 删除、stable/Miri/Loom/soak/SLO 与同一候选快照 Gate 仍待完成
+  - [x] Issue #8393 后实际快照降至 282 production/654 occurrence、157 test/452 occurrence；Broker 降至 160/346，Schedule root/lifecycle 与 EscapeBridge 调用边界共删除 5 个 production identity/26 occurrence 与 1 个 test identity/1 occurrence；1 个保留 occurrence 经临时 ADR-013 一对一 relocation 审核，compatibility 14/40 不增
+  - [ ] M11-12ax 及后续：Broker 其他 processor/transaction、Store/HA、compatibility 删除、stable/Miri/Loom/soak/SLO 与同一候选快照 Gate 仍待完成
   - [ ] 总进度仍为 75/82；本子切片不提前计作完成工作包，M10/Kind-K3d/container dynamic/HUMAN Gate 保持开放
 - [ ] 对应任务文档的 Exit Checklist 全部通过
 

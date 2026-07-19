@@ -22,7 +22,6 @@ use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::common::mix_all::MASTER_ID;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
-use rocketmq_common::FileUtils::string_to_file;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::common::remoting_helper::RemotingHelper;
 use rocketmq_remoting::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
@@ -34,7 +33,6 @@ use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::ha::ha_connection_state_notification_request::HAConnectionStateNotificationRequest;
 use rocketmq_store::ha::ha_service::HAService;
-use rocketmq_store::store_path_config_helper;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -266,27 +264,14 @@ where
                     Ok(delay_offset_wrapper) => {
                         let local_version = self.broker_runtime_inner.schedule_message_service().get_data_version();
                         if should_sync_from_peer(&local_version, delay_offset_wrapper.data_version()) {
-                            let file_name = store_path_config_helper::get_delay_offset_store_path(
-                                self.broker_runtime_inner
-                                    .message_store_config()
-                                    .store_path_root_dir
-                                    .as_str(),
-                            );
-                            match string_to_file(delay_offset.as_str(), file_name.as_str()) {
-                                Ok(_) => {
-                                    if let Err(e) = self
-                                        .broker_runtime_inner
-                                        .schedule_message_service()
-                                        .load_when_sync_delay_offset(&delay_offset_wrapper)
-                                    {
-                                        error!("LoadWhenSyncDelayOffset reverse error, {}: {:?}", broker_addr, e);
-                                        success = false;
-                                    }
-                                }
-                                Err(e) => {
-                                    error!("Write reverse delay offset file error, {}: {:?}", broker_addr, e);
-                                    success = false;
-                                }
+                            if let Err(e) = self
+                                .broker_runtime_inner
+                                .schedule_message_service()
+                                .sync_delay_offset_from_peer(delay_offset.as_str(), &delay_offset_wrapper)
+                                .await
+                            {
+                                error!("Sync reverse delay offset error, {}: {:?}", broker_addr, e);
+                                success = false;
                             }
                         }
                     }

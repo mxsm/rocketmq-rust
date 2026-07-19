@@ -466,6 +466,16 @@ Broker ScheduleMessageService 内部状态 ownership 随 Issue #8391 将 delay t
 容量变化丢失跟踪。实际快照为 287 production/680 occurrence、158 test/453 occurrence，Broker production 为
 165/372；compatibility 保持 14/40。总进度仍为 75/82，下一子切片 M11-12aw 处理 Schedule root capability、
 task generation、shutdown ordering 与 blocking persistence ownership，M11-12 父工作包未完成。
+Broker Schedule root/lifecycle ownership 随 Issue #8393 将 `ScheduleMessageService` 根 owner 改为标准 `Arc`，
+以 Broker outer-owned `Arc<EscapeBridge>` 和 inner `Weak` 回边拆除运行时强引用环；Schedule、POP、ACK 与事务调用链
+不再通过 EscapeBridge mutable root 跨 `.await`。每次 start 创建独立 generation TaskGroup child lease，任务只捕获
+service `Weak`、generation 和 cancellation token，停止后先阻止重调度、取消并 drain，再执行唯一最终持久化；启动、停止、
+重启和 peer snapshot 写入由 lifecycle/persistence gate 串行。生产 load、周期/最终/peer 写入均走 BlockingExecutor；
+未显式注入 context 的公开 Builder 兼容路径复用既有 audited scheduler root 并在其下创建 owned blocking child。peer
+写盘失败不发布内存 snapshot；Broker shutdown 在 message-store 前完成 schedule drain，控制器降级在 Store 仍为 Master 时
+先完成 schedule 停止并传播失败。实际快照降至 282 production/654 occurrence、157 test/452 occurrence，Broker
+production 降至 160/346；compatibility 保持 14/40。总进度仍为 75/82，下一子切片 M11-12ax 继续处理 Broker
+其他 processor/transaction owner，M11-12 父工作包未完成。
 
 ### 9.3 证据目录
 

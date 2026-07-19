@@ -153,7 +153,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
         self.add_retry_topic_if_not_exist(&retry_topic, &pop_check_point.cid);
         let put_message_result = self
             .broker_runtime_inner
-            .escape_bridge_mut()
+            .escape_bridge()
             .put_message_to_specific_queue(msg_inner)
             .await;
         if put_message_result.append_message_result().is_none()
