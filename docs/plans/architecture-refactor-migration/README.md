@@ -325,6 +325,10 @@ Client OffsetStore owner 随 Issue #8337 从 Push/Lite facade、实现、rebalan
 普通 `Arc<OffsetStore>`；Remote/Local persistence capability 收窄为 `&self`，Local background task handle 以显式
 lifecycle mutex 串行并在 await 前取出。实际快照降至 418 production/1,224 occurrence，Client 降至 101/332；
 剩余为 Broker 190/568、Client 101/332 与 Store 127/324，总进度仍为 75/82，M11-12 父工作包未完成。
+Client accumulator batch producer owner 随 Issue #8339 改为每个 `MessageAccumulation` 直接持有 owned
+`DefaultMQProducer` clone；flush 在 batch mutex 内克隆 producer、释放锁后以局部可变值发送，删除该文件全部
+ArcMut 构造、类型与 import。实际快照降至 415 production/1,219 occurrence，Client 降至 98/327；剩余为
+Broker 190/568、Client 98/327 与 Store 127/324，总进度仍为 75/82，M11-12 父工作包未完成。
 
 ### 9.3 证据目录
 

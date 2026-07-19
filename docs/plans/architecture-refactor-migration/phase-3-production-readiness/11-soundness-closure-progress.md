@@ -6,7 +6,7 @@ M11-12 的最终目标是 production/public compatibility API 中不存在 `ArcM
 `mut_from_ref` 或 clone-safe `AsMut`/`DerefMut`，并让默认 workspace 在 stable Rust 下通过，同时把 Miri/Loom、
 soak、SLO fault、dashboard/runbook、rollback 和 Human Gate 绑定到同一候选快照。
 
-该目标尚未完成。本文件记录 M11-12a～v 子切片的真实下降，不把子切片计为第 76 个工作包，也不刷新
+该目标尚未完成。本文件记录 M11-12a～w 子切片的真实下降，不把子切片计为第 76 个工作包，也不刷新
 baseline 来掩盖剩余债务。父 Issue 为 #8292；M11-12a 子切片 Issue 为 #8293；分支为
 `mxsm/architecture-refactor-owned-values`。
 
@@ -72,6 +72,9 @@ M11-12u 的 Client route registry owner 由 Issue #8335 跟踪，分支为
 
 M11-12v 的 Client OffsetStore owner 由 Issue #8337 跟踪，分支为
 `mxsm/architecture-refactor-client-offset-store-owner`；它仍是同一 M11-12 工作包的子切片。
+
+M11-12w 的 Client accumulator batch producer owner 由 Issue #8339 跟踪，分支为
+`mxsm/architecture-refactor-client-accumulator-producer-owner`；它仍是同一 M11-12 工作包的子切片。
 
 ## 初始盘点
 
@@ -622,6 +625,31 @@ reviewed baseline 从 683→681、occurrences 从 1,992→1,947。`DefaultLitePu
 `offset_store` 字段由 `ArcMut` 改为 `Arc` 发生 1 条同 struct 同字段 fingerprint relocation，按 ADR-013 临时审核且
 approval 不提交；其余变化均为真实删除，未新增或替代 shared-mutation wrapper。
 
+## M11-12w Client accumulator batch producer owner
+
+| 目标 | 实现与证据 |
+|---|---|
+| owned producer | `MessageAccumulation` 直接持有 owned `DefaultMQProducer` clone，删除 producer 外层 `ArcMut` |
+| lock boundary | sync/async/guard flush 在 batch mutex 内提取消息并克隆 producer，释放 batch mutex 后才调用 `send_direct`；发送期间不持有 batch lock |
+| debt 清零 | `produce_accumulator.rs` 的 production/test ArcMut constructor、type-reference 与 import identity 全部删除 |
+| compatibility | aggregation key、batch message encoding、hold-size accounting、callback fan-out、failure propagation、deadline guard 与 shutdown pending-batch 语义保持不变 |
+
+M11-12w 后实际快照为 676 个条目：production 415、test 247、compatibility 14；occurrence 精确为
+production 1,219、test 676、compatibility 40。相对 M11-12v 真实删除 3 个 production identity、5 个 production
+occurrence，以及 2 个 test identity、7 个 test occurrence；相对初始快照累计删除 345 个 production 条目和
+906 个 production occurrence。`rocketmq-client` production 债务从 101/332 降至 98/327。剩余 production
+债务为：
+
+| crate | 条目 | occurrence |
+|---|---:|---:|
+| `rocketmq-broker` | 190 | 568 |
+| `rocketmq-client` | 98 | 327 |
+| `rocketmq-store` | 127 | 324 |
+
+reviewed baseline 从 681→676、occurrences 从 1,947→1,935。guard 只报告 accumulator 中 5 个已删除 identity，
+没有新增或 fingerprint relocation；因此本切片不使用 relocation approval，也没有新增或替代 shared-mutation
+wrapper。
+
 ## 已执行验证
 
 | 命令 | 结果 |
@@ -1079,9 +1107,28 @@ M11-12v 追加验证：
 | `ArcMut<OffsetStore>` / offset-store `mut_from_ref` / persistence `&mut self` 定向扫描 | 均零匹配；baseline 与 reviewed output 的 identity/id/fingerprint/item 语义集合一致 |
 | `git diff --check` | 通过 |
 
+M11-12w 追加验证：
+
+| 命令 | 结果 |
+|---|---|
+| `cargo check -p rocketmq-client-rust --all-targets --all-features` | 通过；accumulator sync/async/guard flush 使用 owned producer clone 且无可变性 warning |
+| `cargo test -p rocketmq-client-rust producer::produce_accumulator --lib --all-features` | 25/25 通过；覆盖 batch 构造/关闭竞争、sync guard、callback/hold-size 回收、shutdown 与 task lifecycle |
+| `cargo test -p rocketmq-client-rust --all-features --quiet` | 退出码 0 全部通过；library 965/965，其余 integration targets 全部通过（35 项既有外部环境测试忽略） |
+| reviewed baseline reduction | guard 只报告 5 个已删除 identity，无新增和 relocation；baseline 681/1,947→676/1,935 |
+| `python scripts/arc_mut_guard.py` | 通过；production 415/1,219，Client 98/327 |
+| `python -m unittest scripts.tests.test_arc_mut_guard` / `python scripts/arc_mut_guard.py --fixtures` | 67/67 单测、24/24 fixtures 通过 |
+| `cargo fmt --all -- --check` | 通过 |
+| `cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings` | 通过；Windows linker stdout 与既有 future-incompatibility note 不受 `-D warnings` 管辖 |
+| `rocketmq-example`: `cargo fmt --all -- --check` / `cargo clippy --all-targets -- -D warnings` | standalone producer/consumer 通过 |
+| `.\scripts\runtime-audit.ps1 -SkipBaseline -EnforceBoundaryBaseline` | 通过；batch mutex 在 send await 前释放，未新增 detached task、运行时或跨 await 同步 guard |
+| architecture target/baseline 与 release guard | 通过；35/35 target edges、3/3 test edges、32/32 release topology |
+| `.\scripts\check-agents-routing.ps1` | 通过；4 个 standalone Cargo、3 个 Node project、8 条 route |
+| accumulator `ArcMut` / `WeakArcMut` / `mut_from_ref` 定向扫描 | production/test 均零匹配；baseline 与 reviewed output 的 identity/id/fingerprint/item 语义集合一致 |
+| `git diff --check` | 通过 |
+
 ## 剩余切片与 Gate
 
-1. Client 其余 MQClientInstance、Producer、Push/Lite Consumer owner（101/332）。
+1. Client 其余 MQClientInstance、Producer、Push/Lite Consumer owner（98/327）。
 2. Broker TopicConfig/offset、BrokerRuntimeInner、schedule/POP/processor/transaction owner（190/568）。
 3. Store TopicConfig snapshot、MappedFileQueue/ConsumeQueue、CommitLog/Flush、StoreHandle/Rocks/Timer 与 HA actor（127/324）。
 4. 删除 compatibility `arc_mut.rs` 和公开 re-export；移除其余 nightly feature，将 guard 切到 production/public zero。
