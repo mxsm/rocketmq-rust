@@ -2120,9 +2120,33 @@ Broker transaction service ownership 随 Issue #8395 完成以下边界收敛：
 下一子切片 M11-12ay 继续处理 Broker 其他 processor 及 transaction bridge/listener carrier；75/82 总进度不变，
 Store、compatibility、stable/Miri/Loom/soak/SLO 与完整候选快照 Gate 仍保持开放。
 
+## M11-12ay 实现
+
+Broker transaction processor root ownership 随 Issue #8398 完成以下边界收敛：
+
+- send/reply/end-transaction processor 在 `BrokerProcessorType` 与 Broker startup 的 root 从 `ArcMut` 迁移为标准 `Arc`；每个 processor 提供共享入口，按请求复制只含共享 capability 的轻量句柄后执行既有可变 receiver 路径，不复制业务状态、不引入 processor 级全局 mutex，也不串行并发请求。
+- `BrokerRequestProcessor` 的 request table 与 default processor 从 `ArcMut` 迁移为标准 `Arc`；启动期 `register_processor` 使用 `Arc::make_mut` copy-on-write，server clone 后只共享不可变路由表。
+- source ownership contract 固定三个 transaction-related variant、对应 startup constructor 与 registry carrier 必须使用标准 `Arc`，防止后续回退到共享可变 root。
+- reviewed baseline 从 444 identities / 1,125 occurrences 降至 443 / 1,115；production 从 274/634 降至 273/624，test 保持 156/451，compatibility 保持 14/40。Broker production 从 152/326 降至 151/316；净删除 1 个 production identity/10 occurrence。2 个 retained processor variant 因相邻 transaction root 删除发生一对一 fingerprint relocation，经临时 ADR-013 approval 审核且 approval 不提交。
+
+## M11-12ay 验证
+
+| 命令 | 结果 |
+|---|---|
+| `cargo check -p rocketmq-broker --all-features` / Broker strict Clippy | 通过；标准 processor root、per-request capability clone 与 immutable registry 在 all-features/all-targets 下编译和 lint 通过 |
+| transaction processor ownership / transaction focused tests | ownership source contract 1/1、transaction 25/25 通过；覆盖标准 root/constructor/registry 与既有 transaction decision/listener/conversion 行为 |
+| `cargo test -p rocketmq-broker --all-features --lib -- --test-threads=1` | 585 passed、25 failed、1 ignored；25 个失败与 main 已登记失败名单一致，本切片新增 ownership test 通过且未新增 baseline failure，故不能把全套记为通过 |
+| reviewed baseline reduction / `python scripts/arc_mut_guard.py` | baseline 444/1,125→443/1,115；2 个 retained occurrence 经临时 ADR-013 一对一 relocation 审核，approval 不提交；guard 通过，production 273/624、test 156/451、compatibility 14/40，Broker production 151/316 |
+| ArcMut / architecture guard tests | ArcMut 67/67、fixtures 24/24、architecture dependency/release/performance 60/60 通过；target/baseline/release/performance profiles 全绿 |
+| `cargo fmt --all -- --check` / root workspace strict Clippy | 通过；root workspace 32 个 package 的 all-targets/all-features `-D warnings` profile 通过 |
+| runtime audit / AGENTS routing / `git diff --check` | runtime boundary 与 routing 通过；4 个 standalone Cargo、3 个 Node project、8 条 route；diff check 无 whitespace error |
+
+下一子切片 M11-12az 继续处理 transaction bridge/listener capability 与其他 Broker owner；75/82 总进度不变，
+Store、compatibility、stable/Miri/Loom/soak/SLO 与完整候选快照 Gate 仍保持开放。
+
 ## 剩余切片与 Gate
 
-1. Broker BrokerRuntimeInner、其他 processor 与 transaction bridge/listener carrier（152/326）；下一子切片 M11-12ay 继续拆分 Broker owner。
+1. Broker BrokerRuntimeInner、其他 processor 与 transaction bridge/listener capability（151/316）；下一子切片 M11-12az 继续拆分 Broker owner。
 2. Store MappedFileQueue/ConsumeQueue、CommitLog/Flush、StoreHandle/Rocks/Timer 与 HA actor（122/308）。
 3. 删除 compatibility `arc_mut.rs` 和公开 re-export；移除其余 nightly feature，将 guard 切到 production/public zero。
 4. 对同一候选快照执行 stable feature matrix、Miri/Loom 可用切片、soak/SLO fault、dashboard/runbook、动态

@@ -502,6 +502,11 @@ occurrences、156 test/451 occurrences，Broker owner 为 152/326，transaction 
 不增。下一子切片 M11-12ay 继续处理 Broker 其他 processor 及 transaction bridge/listener carrier，完整候选快照与
 HUMAN Gate 仍保持开放。
 
+M11-12ay 已将 send/reply/end-transaction processor root 与 immutable request registry 改为标准 `Arc`；共享入口按请求
+复制轻量 capability 句柄，不新增全局 mutex 或串行请求瓶颈。实际快照降至 273 production/624 occurrences，test 保持
+156/451，Broker owner 降至 151/316；compatibility 14/40 不增。下一子切片 M11-12az 继续处理 transaction
+bridge/listener capability 与其他 Broker owner，完整候选快照与 HUMAN Gate 仍未满足。
+
 ## 公共兼容面
 
 - development/compatibility仍可显式选择；secure只作为新部署默认，不静默重解释旧配置。

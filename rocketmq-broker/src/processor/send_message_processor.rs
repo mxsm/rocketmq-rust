@@ -115,6 +115,15 @@ pub struct SendMessageProcessor<MS: MessageStore, TS> {
     store_host: SocketAddr,
 }
 
+impl<MS: MessageStore, TS> Clone for SendMessageProcessor<MS, TS> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            store_host: self.store_host,
+        }
+    }
+}
+
 impl<MS, TS> RequestProcessor for SendMessageProcessor<MS, TS>
 where
     MS: MessageStore,
@@ -138,23 +147,7 @@ where
         ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let request_code = RequestCode::from(request.code());
-        debug!("SendMessageProcessor received request code: {:?}", request_code);
-        match request_code {
-            RequestCode::SendMessage
-            | RequestCode::SendMessageV2
-            | RequestCode::SendBatchMessage
-            | RequestCode::ConsumerSendMsgBack => self.process_request_inner(channel, ctx, request_code, request).await,
-            _ => {
-                warn!("SendMessageProcessor received unknown request code: {:?}", request_code);
-                let response = error_response::request_code_not_supported_with_remark_and_opaque(
-                    request.code(),
-                    format!("request code {} not supported", request.code()),
-                    request.opaque(),
-                );
-                Ok(Some(response))
-            }
-        }
+        self.process_request_mut(channel, ctx, request).await
     }
 
     fn reject_request(&self, _code: i32) -> RejectRequestResponse {
@@ -188,6 +181,59 @@ where
         }
 
         (false, None)
+    }
+}
+
+impl<MS, TS> SendMessageProcessor<MS, TS>
+where
+    MS: MessageStore,
+    TS: TransactionalMessageService,
+{
+    #[tracing::instrument(
+        level = "debug",
+        name = "RocketMQ BROKER RECEIVE_SEND",
+        skip_all,
+        fields(
+            rocketmq.request.code = request.code(),
+            rocketmq.request.opaque = request.opaque(),
+            messaging.message.id = tracing::field::Empty,
+            messaging.message.body.size = tracing::field::Empty,
+            messaging.rocketmq.message.keys = tracing::field::Empty,
+        )
+    )]
+    pub async fn process_request_shared(
+        &self,
+        channel: Channel,
+        ctx: ConnectionHandlerContext,
+        request: &mut RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let mut processor = self.clone();
+        processor.process_request_mut(channel, ctx, request).await
+    }
+
+    async fn process_request_mut(
+        &mut self,
+        channel: Channel,
+        ctx: ConnectionHandlerContext,
+        request: &mut RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let request_code = RequestCode::from(request.code());
+        debug!("SendMessageProcessor received request code: {:?}", request_code);
+        match request_code {
+            RequestCode::SendMessage
+            | RequestCode::SendMessageV2
+            | RequestCode::SendBatchMessage
+            | RequestCode::ConsumerSendMsgBack => self.process_request_inner(channel, ctx, request_code, request).await,
+            _ => {
+                warn!("SendMessageProcessor received unknown request code: {:?}", request_code);
+                let response = error_response::request_code_not_supported_with_remark_and_opaque(
+                    request.code(),
+                    format!("request code {} not supported", request.code()),
+                    request.opaque(),
+                );
+                Ok(Some(response))
+            }
+        }
     }
 }
 
