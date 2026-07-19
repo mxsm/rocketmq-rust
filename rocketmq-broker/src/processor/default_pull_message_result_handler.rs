@@ -44,7 +44,6 @@ use rocketmq_store::base::get_message_result::GetMessageResult;
 use rocketmq_store::base::message_status_enum::GetMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::filter::ArcMessageFilter;
-use rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore;
 use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
 use rocketmq_store::stats::stats_type::StatsType;
 use tracing::debug;
@@ -73,14 +72,6 @@ impl<MS: MessageStore> DefaultPullMessageResultHandler<MS> {
             broker_runtime_inner,
             consume_message_hook_list,
         }
-    }
-
-    pub fn set_pull_request_hold_service(
-        &mut self,
-        //pull_request_hold_service: Option<ArcMut<PullRequestHoldService<DefaultMessageStore>>>,
-        _inner: ArcMut<BrokerRuntimeInner<LocalFileMessageStore>>,
-    ) {
-        //self.pull_request_hold_service = pull_request_hold_service;
     }
 }
 
@@ -244,12 +235,15 @@ impl<MS: MessageStore> PullMessageResultHandler for DefaultPullMessageResultHand
                         subscription_data,
                         message_filter,
                     );
-                    self.broker_runtime_inner
+                    let suspended = self
+                        .broker_runtime_inner
                         .pull_request_hold_service()
                         .as_ref()
                         .unwrap()
                         .suspend_pull_request(topic, queue_id, pull_request);
-                    return None;
+                    if suspended {
+                        return None;
+                    }
                 }
                 Some(response)
             }

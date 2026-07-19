@@ -18,6 +18,7 @@
 //! architecture to the new Core + Plugin + GAT design.
 
 use std::future::Future;
+use std::sync::Arc;
 
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::net::channel::Channel;
@@ -75,12 +76,12 @@ where
 
 /// Wrapper for PullMessageProcessor
 pub struct PullMessageProcessorV2<MS: MessageStore> {
-    inner: ArcMut<crate::processor::pull_message_processor::PullMessageProcessor<MS>>,
+    inner: Arc<crate::processor::pull_message_processor::PullMessageProcessor<MS>>,
 }
 
 impl<MS: MessageStore> PullMessageProcessorV2<MS> {
     pub fn new(
-        inner: ArcMut<crate::processor::pull_message_processor::PullMessageProcessor<MS>>,
+        inner: Arc<crate::processor::pull_message_processor::PullMessageProcessor<MS>>,
     ) -> Self {
         Self { inner }
     }
@@ -101,8 +102,7 @@ where
         request: &'a mut RemotingCommand,
     ) -> Self::Fut<'a> {
         async move {
-            use rocketmq_remoting::runtime::processor::RequestProcessor;
-            self.inner.process_request(channel, ctx, request).await
+            self.inner.process_request_shared(channel, ctx, request).await
         }
     }
 }
@@ -168,7 +168,7 @@ where
 {
     pub fn new(
         send_processor: ArcMut<crate::processor::send_message_processor::SendMessageProcessor<MS, TS>>,
-        pull_processor: ArcMut<crate::processor::pull_message_processor::PullMessageProcessor<MS>>,
+        pull_processor: Arc<crate::processor::pull_message_processor::PullMessageProcessor<MS>>,
         admin_processor: ArcMut<crate::processor::admin_broker_processor::AdminBrokerProcessor<MS>>,
     ) -> Self {
         // Wrap existing processors
@@ -244,7 +244,7 @@ mod integration_example {
     async fn example_broker_runtime_integration() {
         // Assume we have existing processor instances
         // let send_processor = ArcMut::new(SendMessageProcessor::new(...));
-        // let pull_processor = ArcMut::new(PullMessageProcessor::new(...));
+        // let pull_processor = Arc::new(PullMessageProcessor::new(...));
         // let admin_processor = ArcMut::new(AdminBrokerProcessor::new(...));
 
         // Create V2 processor dispatcher

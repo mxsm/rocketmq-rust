@@ -1974,10 +1974,40 @@ Broker POP Lite lifecycle ownership 随 Issue #8385 完成以下边界收敛：
 下一子切片 M11-12at 处理 `PullMessageProcessor`/`PullRequestHoldService` lifecycle owner；75/82 总进度不变，
 Broker/Store、compatibility 与完整候选快照 Gate 仍保持开放。
 
+## M11-12at 实现
+
+Broker Pull lifecycle ownership 随 Issue #8387 完成以下边界收敛：
+
+- `PullMessageProcessor`、`DefaultPullMessageResultHandler`、`PullRequestHoldService`、Broker processor enum/runtime carrier 与未启用的 V2 migration example 统一改用标准 `Arc`；remoting `RequestProcessor` 只保留无可变 capability 的兼容 adapter，实际 Pull/LitePull 分发使用共享 `&self` 入口。
+- hold service 只保留 processor 标准 `Weak` 回边，并通过 crate-private 窄 capability 读取 long-polling 配置、Store max offset 与提交 wake-up；service 不再强持有 BrokerRuntimeInner，processor/service/runtime 强引用环已拆除。
+- scan task 只捕获 service `Weak`、schedule signal 和 cancellation token；每轮等待前释放升级得到的 service owner。异步 lifecycle gate 串行 start/shutdown/restart，TaskGroup 在 spawn 前发布且失败回滚，shutdown 停止准入、等待 scan 并清空挂起请求与 deadline。
+- suspend 在 table write guard 内检查 running 与 processor 存活，停止或 processor 已释放时返回原 `PullNotFound` response，避免请求进入无 scanner 队列；deadline rebuild 在 table read guard 内完成 atomic publish，避免覆盖并发新 deadline。
+- master-online wake-up 先移出 owned requests、锁外提交；`NotifyMinBrokerChangeIdHandler` 更新 snapshot 后立即释放 Tokio RwLock write guard，不再写锁内重入 read lock 或跨后续 `.await` 持锁。
+- reviewed baseline 从 473 identities / 1,227 occurrences 降至 465 / 1,204；production 从 294/725 降至 289/706，test 从 165/462 降至 162/458，compatibility 保持 14/40。Broker production 为 167/398、test 为 62/77；净删除 5 个 production identity/19 occurrence 与 3 个 test identity/4 occurrence，无新增 identity。
+
+## M11-12at 验证
+
+| 命令 | 结果 |
+|---|---|
+| `cargo check -p rocketmq-broker --all-targets --all-features` | 通过；标准 Arc/Weak owner、共享 request handler、异步 lifecycle、stopped admission 与全部 Broker targets/features 编译通过 |
+| Pull hold-service / processor / Broker dispatch focused tests | 5/5、14/14、1/1 通过；覆盖 weak back-reference、活动 scan owner drop、start/shutdown/restart、spawn failure rollback、TaskGroup wake-up worker、Pull 处理逻辑和 request-code 注册 |
+| `cargo test -p rocketmq-broker --all-features --lib -- --test-threads=1` | 567 passed、25 failed、1 ignored；25 个失败与上一 main 已记录失败名单完全一致，本切片新增净 3 个 lifecycle 测试均通过，故不能把全套记为通过，也未新增 baseline failure |
+| RocksDB specialized gates | Store/Broker strict Clippy 通过；foundation 82/82、semantics 9/9、Broker `rocksdb` 20/20、`pop_consumer` 4/4 通过 |
+| reviewed baseline reduction | baseline 473/1,227→465/1,204；3 个保留 occurrence 因相邻 carrier 变化发生一对一指纹位移，以临时 ADR-013 approval 逐项审核且 approval 不提交 |
+| `python scripts/arc_mut_guard.py` | 通过；production 289/706、test 162/458、compatibility 14/40，Broker production 167/398；没有新增 identity |
+| `python -m unittest scripts.tests.test_arc_mut_guard -v` / `python scripts/arc_mut_guard.py --fixtures` | 67/67 单测、24/24 fixtures 通过 |
+| `cargo fmt --all -- --check` / root workspace strict Clippy | 通过；root workspace 32 个 package 的 all-targets/all-features `-D warnings` profile 通过 |
+| architecture target/baseline/release/performance guards | 通过；35/35 target edges、3/3 test edges、32/32 release topology、10/10 R0 crates、8 profiles/11 variants/50 metric contracts，dependency/release/performance guard 单测 60/60 通过 |
+| `./scripts/runtime-audit.ps1 -SkipBaseline -EnforceBoundaryBaseline` | 通过；scan task 由 TaskGroup 所有，Weak capture 与串行 lifecycle transition 未新增 detached task/runtime 边界 |
+| `./scripts/check-agents-routing.ps1` / `git diff --check` | routing 通过；4 个 standalone Cargo、3 个 Node project、8 条 route；diff check 无 whitespace error |
+
+下一子切片 M11-12au 处理 `ConsumerOffsetManager` immutable/serialized ownership；75/82 总进度不变，Broker/Store、
+compatibility、stable/Miri/Loom/soak/SLO 与完整候选快照 Gate 仍保持开放。
+
 ## 剩余切片与 Gate
 
-1. Broker offset、BrokerRuntimeInner、schedule/其他 processor/transaction owner（172/417）；下一子切片 M11-12at
-   处理 PullMessageProcessor/PullRequestHoldService lifecycle ownership。
+1. Broker offset、BrokerRuntimeInner、schedule/其他 processor/transaction owner（167/398）；下一子切片 M11-12au
+   处理 ConsumerOffsetManager immutable/serialized ownership。
 2. Store MappedFileQueue/ConsumeQueue、CommitLog/Flush、StoreHandle/Rocks/Timer 与 HA actor（122/308）。
 3. 删除 compatibility `arc_mut.rs` 和公开 re-export；移除其余 nightly feature，将 guard 切到 production/public zero。
 4. 对同一候选快照执行 stable feature matrix、Miri/Loom 可用切片、soak/SLO fault、dashboard/runbook、动态

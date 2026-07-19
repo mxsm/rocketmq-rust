@@ -446,6 +446,13 @@ Broker POP Lite lifecycle ownership 随 Issue #8385 将 `PopLiteMessageProcessor
 经 `&self` 分发请求，每次成功 start 创建新 channel 并发布 sender，双层异步 lifecycle gate 串行 start/shutdown/restart，
 停止状态拒绝新增挂起。实际快照降至 294 production/725 occurrence、165 test/462 occurrence，Broker 降至 172/417；
 总进度仍为 75/82，下一子切片 M11-12at 处理 Broker Pull processor/request-hold lifecycle ownership，M11-12 父工作包未完成。
+Broker Pull lifecycle ownership 随 Issue #8387 将 `PullMessageProcessor`、`DefaultPullMessageResultHandler` 与
+`PullRequestHoldService` carrier 改为标准 `Arc`，hold service 只保留 processor 标准 `Weak` 回边并通过窄 trait 获取动态
+scan/store 能力，不再强持有 BrokerRuntimeInner；scan task 只捕获 service `Weak`。异步 lifecycle gate 串行
+start/shutdown/restart，停止状态拒绝新挂起并清空既有请求，deadline 重建在 table read 边界内发布，master-change 路径不再
+重入同一 Tokio RwLock。实际快照降至 289 production/706 occurrence、162 test/458 occurrence，Broker production 降至
+167/398；compatibility 保持 14/40。总进度仍为 75/82，下一子切片 M11-12au 处理 Broker ConsumerOffsetManager
+ownership，M11-12 父工作包未完成。
 
 ### 9.3 证据目录
 
