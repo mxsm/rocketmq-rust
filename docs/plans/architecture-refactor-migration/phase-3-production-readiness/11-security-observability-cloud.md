@@ -475,6 +475,14 @@ encode 所需的 runtime mutable accessor 已删除；`ArcMut<MessageStore>` 明
 287 production/699 occurrences、160 test/455 occurrences，Broker owner 为 165/391；compatibility 14/40 不增。
 下一子切片 M11-12av 处理 Broker `ScheduleMessageService` 内部状态 ownership，完整候选快照与 HUMAN Gate 仍保持开放。
 
+M11-12av 已将 delay table/max level 合并为单一 `ArcSwap` 不可变配置代际，并将 offset table、版本 cadence 与
+`DataVersion` 收敛到一致短 transition；更新只单调推进，精确阈值和零步长均有确定行为。配置与 peer snapshot
+先完整解析后发布，remote offset 以整表替换而非 extend。`ProcessStatus` 改为原子状态，pending queue、DashMap guard
+和重试协调状态均在外部 I/O 前释放；已提交的 put result 始终入队，同 level 重试不会被另一 handler 越过。实际快照为
+287 production/680 occurrences、158 test/453 occurrences，Broker owner 为 165/372；compatibility 14/40 不增。
+下一子切片 M11-12aw 处理 Schedule root capability、task generation、shutdown ordering 与 blocking persistence，
+完整候选快照与 HUMAN Gate 仍保持开放。
+
 ## 公共兼容面
 
 - development/compatibility仍可显式选择；secure只作为新部署默认，不静默重解释旧配置。

@@ -277,7 +277,7 @@ where
                                     if let Err(e) = self
                                         .broker_runtime_inner
                                         .schedule_message_service()
-                                        .load_when_sync_delay_offset()
+                                        .load_when_sync_delay_offset(&delay_offset_wrapper)
                                     {
                                         error!("LoadWhenSyncDelayOffset reverse error, {}: {:?}", broker_addr, e);
                                         success = false;

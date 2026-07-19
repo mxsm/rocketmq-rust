@@ -1387,7 +1387,7 @@ impl BrokerRuntime {
             }
         }
 
-        if let Some(mut schedule_message_service) = self.inner.schedule_message_service.take() {
+        if let Some(schedule_message_service) = self.inner.schedule_message_service.take() {
             let persist_service = schedule_message_service.clone();
             let persist_result = if let Some(service_context) = self.inner.service_context.as_ref() {
                 run_shutdown_blocking_operation(
@@ -3469,16 +3469,6 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn schedule_message_service_mut(&mut self) -> &mut ArcMut<ScheduleMessageService<MS>> {
-        self.schedule_message_service.as_mut().unwrap()
-    }
-
-    #[inline]
-    pub fn schedule_message_service_unchecked_mut(&mut self) -> &mut ArcMut<ScheduleMessageService<MS>> {
-        unsafe { self.schedule_message_service.as_mut().unwrap_unchecked() }
-    }
-
-    #[inline]
     pub fn timer_message_store_mut(&mut self) -> &mut Option<Arc<TimerMessageStore>> {
         &mut self.timer_message_store
     }
@@ -3931,11 +3921,6 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     #[inline]
     pub fn set_broker_stats(&mut self, broker_stats: BrokerStats<MS>) {
         self.broker_stats = Some(broker_stats);
-    }
-
-    #[inline]
-    pub fn set_schedule_message_service(&mut self, schedule_message_service: ScheduleMessageService<MS>) {
-        self.schedule_message_service = Some(ArcMut::new(schedule_message_service));
     }
 
     #[inline]
