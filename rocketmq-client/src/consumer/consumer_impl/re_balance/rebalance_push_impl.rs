@@ -32,7 +32,6 @@ use rocketmq_remoting::protocol::body::unlock_batch_request_body::UnlockBatchReq
 use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
-use rocketmq_rust::ArcMut;
 use std::sync::LazyLock;
 use tokio::sync::RwLock;
 use tracing::error;
@@ -126,7 +125,7 @@ impl RebalancePushImpl {
             .set_allocate_message_queue_strategy(allocate_message_queue_strategy);
     }
 
-    pub fn set_mq_client_factory(&self, client_instance: ArcMut<MQClientInstance>) {
+    pub fn set_mq_client_factory(&self, client_instance: Arc<MQClientInstance>) {
         self.rebalance_impl_inner.set_mq_client_factory(client_instance);
     }
 
@@ -494,7 +493,7 @@ impl Rebalance for RebalancePushImpl {
                 ..Default::default()
             };
             request_body.mq_set.insert(mq.clone());
-            let Some(mq_client_api_impl) = client.mq_client_api_impl.as_ref() else {
+            let Some(mq_client_api_impl) = client.mq_client_api_impl.load_full() else {
                 warn!("unlockBatchMQ skipped: MQClientAPIImpl is not initialized, mq={}", mq);
                 return;
             };
@@ -606,7 +605,7 @@ impl Rebalance for RebalancePushImpl {
 
 async fn build_process_queue_table_by_broker_name(
     process_queue_table: &Arc<RwLock<HashMap<MessageQueue, Arc<ProcessQueue>>>>,
-    client: &ArcMut<MQClientInstance>,
+    client: &Arc<MQClientInstance>,
 ) -> HashMap<CheetahString, HashSet<MessageQueue>> {
     let mut result = HashMap::new();
     let process_queue_table_read = process_queue_table.read().await;
@@ -625,7 +624,7 @@ async fn lock_all_impl(
     broker_mqs: HashMap<CheetahString, HashSet<MessageQueue>>,
     process_queue_table: Arc<RwLock<HashMap<MessageQueue, Arc<ProcessQueue>>>>,
     consumer_group: Option<CheetahString>,
-    client_instance: ArcMut<MQClientInstance>,
+    client_instance: Arc<MQClientInstance>,
 ) {
     use rocketmq_remoting::protocol::body::request::lock_batch_request_body::LockBatchRequestBody;
 
@@ -649,7 +648,7 @@ async fn lock_all_impl(
                         mq_set: mqs.clone(),
                         ..Default::default()
                     };
-                    let Some(mq_client_api_impl) = client_instance.mq_client_api_impl.as_ref() else {
+                    let Some(mq_client_api_impl) = client_instance.mq_client_api_impl.load_full() else {
                         warn!(
                             "lockBatchMQ skipped: MQClientAPIImpl is not initialized for broker {}",
                             broker_name
@@ -697,7 +696,7 @@ async fn unlock_all_impl(
     broker_mqs: HashMap<CheetahString, HashSet<MessageQueue>>,
     process_queue_table: Arc<RwLock<HashMap<MessageQueue, Arc<ProcessQueue>>>>,
     consumer_group: Option<CheetahString>,
-    client_instance: ArcMut<MQClientInstance>,
+    client_instance: Arc<MQClientInstance>,
     oneway: bool,
 ) {
     let map = broker_mqs
@@ -720,7 +719,7 @@ async fn unlock_all_impl(
                         mq_set: mqs.clone(),
                         ..Default::default()
                     };
-                    let Some(mq_client_api_impl) = client_instance.mq_client_api_impl.as_ref() else {
+                    let Some(mq_client_api_impl) = client_instance.mq_client_api_impl.load_full() else {
                         warn!(
                             "unlockBatchMQ skipped: MQClientAPIImpl is not initialized for broker {}",
                             broker_name

@@ -84,9 +84,10 @@ fn client_rebalance_service_uses_typed_errors() {
     let mq_client_instance = include_str!("../src/factory/mq_client_instance.rs");
     let rebalance_service = include_str!("../src/consumer/consumer_impl/re_balance/rebalance_service.rs");
 
-    assert!(mq_client_instance.contains("pub async fn do_rebalance(&mut self) -> RocketMQResult<bool>"));
-    assert!(rebalance_service
-        .contains("pub async fn start(&mut self, mut instance: ArcMut<MQClientInstance>) -> RocketMQResult<()>"));
+    assert!(mq_client_instance.contains("pub async fn do_rebalance(&self) -> RocketMQResult<bool>"));
+    assert!(
+        rebalance_service.contains("pub async fn start(&self, instance: Arc<MQClientInstance>) -> RocketMQResult<()>")
+    );
     assert!(rebalance_service.contains("pub async fn shutdown(&self, timeout_ms: u64) -> RocketMQResult<()>"));
     assert!(!mq_client_instance.contains("do_rebalance(&mut self) -> Result<bool, Box<dyn std::error::Error"));
     assert!(!rebalance_service.contains("Box<dyn std::error::Error + Send + Sync>"));

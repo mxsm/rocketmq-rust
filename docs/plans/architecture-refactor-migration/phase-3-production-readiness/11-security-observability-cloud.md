@@ -411,6 +411,12 @@ setter 从 `WeakArcMut` 改为标准 `Weak`；不改变 queue assignment、start
 `ArcMut<MQClientInstance>` 的位置明确保留给下一 owner 切片。实际快照降至 368 production/982 occurrences，Client
 owner 降至 50/89，另有 Proxy 1/1；其余 Client/Broker/Store、compatibility 与完整候选快照 Gate 仍保持开放。
 
+M11-12al 已将 MQClientManager/Proxy compatibility handle 与 Admin/Producer/Consumer/Rebalance/API/OffsetStore
+持有的 `MQClientInstance` root 统一改为标准 `Arc`，Remoting/Admin 回指改为标准 `Weak`；lifecycle、API slot 与
+connection task handle 使用显式同步，start/shutdown 与 default producer 兼容入口串行。实际快照降至 326
+production/909 occurrences，Client owner 降至 9/17、Client test 降至 12/83，Proxy production 债务清零；其余
+Client Producer/PullMessageService、Broker/Store、compatibility 与完整候选快照 Gate 仍保持开放。
+
 ## 公共兼容面
 
 - development/compatibility仍可显式选择；secure只作为新部署默认，不静默重解释旧配置。

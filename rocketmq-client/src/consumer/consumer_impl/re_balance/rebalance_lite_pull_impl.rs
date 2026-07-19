@@ -40,7 +40,6 @@ use rocketmq_common::common::mix_all;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
-use rocketmq_rust::ArcMut;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -152,7 +151,7 @@ impl RebalanceLitePullImpl {
         consumer_group: CheetahString,
         message_model: rocketmq_remoting::protocol::heartbeat::message_model::MessageModel,
         strategy: Arc<dyn crate::consumer::allocate_message_queue_strategy::AllocateMessageQueueStrategy>,
-        client_instance: ArcMut<MQClientInstance>,
+        client_instance: Arc<MQClientInstance>,
     ) {
         self.rebalance_impl_inner.set_consumer_group(consumer_group.clone());
         self.rebalance_impl_inner.set_message_model(message_model);

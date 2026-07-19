@@ -173,8 +173,8 @@ async fn run_sharded_pull_workers(request_count: usize, shard_count: usize) -> S
         pull_message_service_shards: shard_count,
         ..Default::default()
     };
-    let mut instance = MQClientInstance::new_arc(client_config, 0, "client-pull-scheduler-sharded-bench", None);
-    let mut service = PullMessageService::with_capacity_and_shards(request_count.next_power_of_two(), shard_count);
+    let instance = MQClientInstance::new_arc(client_config, 0, "client-pull-scheduler-sharded-bench", None);
+    let service = PullMessageService::with_capacity_and_shards(request_count.next_power_of_two(), shard_count);
     service
         .start(instance.clone())
         .await

@@ -23,6 +23,7 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
+use std::sync::RwLock as StdRwLock;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -31,9 +32,9 @@ use rocketmq_common::common::message::message_enum::MessageRequestMode;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::UnifiedServiceError;
 use rocketmq_runtime::Shutdown;
-use rocketmq_rust::ArcMut;
 use serde::Serialize;
 use tokio::sync::mpsc;
+use tokio::sync::Mutex;
 use tokio::time::Instant as TokioInstant;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
@@ -79,11 +80,13 @@ type MessageRequestSender = tokio::sync::mpsc::Sender<BoxedMessageRequest>;
 /// - Delayed tasks check `is_stopped()` before execution
 #[derive(Clone)]
 pub struct PullMessageService {
+    lifecycle_transition: Arc<Mutex<()>>,
+
     /// Message request channel sender
-    tx: Option<tokio::sync::mpsc::Sender<Box<dyn MessageRequest + Send + 'static>>>,
+    tx: Arc<StdRwLock<Option<MessageRequestSender>>>,
 
     /// Shutdown signal broadcaster
-    tx_shutdown: Option<tokio::sync::broadcast::Sender<()>>,
+    tx_shutdown: Arc<StdRwLock<Option<tokio::sync::broadcast::Sender<()>>>>,
 
     /// Service stopped flag (for fast check)
     stopped: Arc<AtomicBool>,
@@ -485,7 +488,7 @@ async fn run_pull_request_shard_worker(
     index: usize,
     mut rx: mpsc::Receiver<PullRequest>,
     mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
-    mut instance: ArcMut<MQClientInstance>,
+    instance: Arc<MQClientInstance>,
     metrics: Arc<PullRequestShardMetrics>,
 ) {
     info!(shard_index = index, "PullMessageService shard worker started");
@@ -496,7 +499,7 @@ async fn run_pull_request_shard_worker(
                 break;
             }
             Some(request) = rx.recv() => {
-                PullMessageService::pull_message(request, &mut instance).await;
+                PullMessageService::pull_message(request, instance.as_ref()).await;
                 metrics.record_processed();
             }
             else => {
@@ -532,8 +535,9 @@ impl PullMessageService {
             .collect();
 
         PullMessageService {
-            tx: None,
-            tx_shutdown: None,
+            lifecycle_transition: Arc::new(Mutex::new(())),
+            tx: Arc::new(StdRwLock::new(None)),
+            tx_shutdown: Arc::new(StdRwLock::new(None)),
             stopped: Arc::new(AtomicBool::new(false)),
             queue_capacity,
             shard_count,
@@ -579,15 +583,21 @@ impl PullMessageService {
     ///
     /// # Errors
     /// Returns error if service is already started
-    pub async fn start(&mut self, instance: ArcMut<MQClientInstance>) -> Result<(), RocketMQError> {
-        if self.tx.is_some() {
+    pub async fn start(&self, instance: Arc<MQClientInstance>) -> Result<(), RocketMQError> {
+        let _transition = self.lifecycle_transition.lock().await;
+        if self
+            .tx
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_some()
+        {
             warn!("{} already started", self.get_service_name());
             return Ok(());
         }
 
         let (tx, mut rx) = tokio::sync::mpsc::channel::<Box<dyn MessageRequest + Send + 'static>>(self.queue_capacity);
         let (mut shutdown, tx_shutdown) = Shutdown::new(1);
-        let mut pop_instance = instance.clone();
+        let pop_instance = instance.clone();
 
         let handle = spawn_client_tracked_task("rocketmq-client-pull-message-service", async move {
             info!("{} service started", "PullMessageService");
@@ -600,7 +610,7 @@ impl PullMessageService {
                     }
                     Some(request) = rx.recv() => {
                         // Process request with exception handling
-                        if let Err(e) = Self::process_request(request, &mut pop_instance).await {
+                        if let Err(e) = Self::process_request(request, pop_instance.as_ref()).await {
                             error!("{} failed to process request: {:?}", "PullMessageService", e);
                         }
                     }
@@ -643,8 +653,11 @@ impl PullMessageService {
             });
         }
 
-        self.tx = Some(tx);
-        self.tx_shutdown = Some(tx_shutdown);
+        *self.tx.write().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(tx);
+        *self
+            .tx_shutdown
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(tx_shutdown);
         self.stopped.store(false, Ordering::Release);
         *self.main_task_handle.lock().await = Some(handle);
         *self.pull_shard_task_handles.lock().await = pull_handles;
@@ -768,7 +781,7 @@ impl PullMessageService {
     /// Returns error if request processing fails
     async fn process_request(
         request: Box<dyn MessageRequest + Send + 'static>,
-        instance: &mut MQClientInstance,
+        instance: &MQClientInstance,
     ) -> Result<(), RocketMQError> {
         match request.get_message_request_mode() {
             MessageRequestMode::Pull => {
@@ -792,7 +805,7 @@ impl PullMessageService {
     }
 
     /// Handles pull message request
-    async fn pull_message(request: PullRequest, instance: &mut MQClientInstance) {
+    async fn pull_message(request: PullRequest, instance: &MQClientInstance) {
         if let Some(mut consumer) = instance.select_consumer(request.get_consumer_group()).await {
             consumer.pull_message(request).await;
         } else {
@@ -801,7 +814,7 @@ impl PullMessageService {
     }
 
     /// Handles pop message request
-    async fn pop_message(request: PopRequest, instance: &mut MQClientInstance) {
+    async fn pop_message(request: PopRequest, instance: &MQClientInstance) {
         if let Some(mut consumer) = instance.select_consumer(request.get_consumer_group()).await {
             consumer.pop_message(request).await;
         } else {
@@ -863,7 +876,7 @@ impl PullMessageService {
         self.submit_delayed(
             DelayedSchedulePayload::Pop {
                 request: pop_request,
-                tx: self.tx.clone(),
+                tx: self.tx.read().unwrap_or_else(|poisoned| poisoned.into_inner()).clone(),
             },
             time_delay,
         );
@@ -876,7 +889,8 @@ impl PullMessageService {
             return;
         }
 
-        if let Some(tx) = &self.tx {
+        let tx = self.tx.read().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
+        if let Some(tx) = tx {
             if let Err(e) = tx.send(Box::new(pop_request)).await {
                 error!(
                     "executePopPullRequestImmediately messageRequestQueue.put error: {:?}",
@@ -936,6 +950,7 @@ impl PullMessageService {
     /// - Cancels all scheduled tasks
     /// - Waits for main loop to finish (with timeout)
     pub async fn shutdown(&self, timeout_ms: u64) -> Result<(), RocketMQError> {
+        let _transition = self.lifecycle_transition.lock().await;
         if self.is_stopped() {
             warn!("{} already stopped", self.get_service_name());
             return Ok(());
@@ -956,7 +971,12 @@ impl PullMessageService {
             .take();
 
         // 2. Send shutdown signal
-        if let Some(tx_shutdown) = &self.tx_shutdown {
+        let tx_shutdown = self
+            .tx_shutdown
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        if let Some(tx_shutdown) = tx_shutdown {
             tx_shutdown
                 .send(())
                 .map_err(|_| pull_message_service_shutdown_signal_failed())?;
@@ -1018,8 +1038,8 @@ impl Default for PullMessageService {
 
 #[doc(hidden)]
 pub async fn run_pull_message_service_lifecycle_probe() -> PullMessageServiceLifecycleProbe {
-    let mut service = PullMessageService::new();
-    let mut instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "pull-message-service-probe", None);
+    let service = PullMessageService::new();
+    let instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "pull-message-service-probe", None);
 
     let start_result = service.start(instance.clone()).await;
     let task_count_before_shutdown = service.main_task_count().await;
@@ -1125,9 +1145,10 @@ mod tests {
     }
 
     async fn process_mismatched_request(mode: MessageRequestMode) -> RocketMQError {
-        let mut instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "pull-message-mismatch-test", None);
+        let instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "pull-message-mismatch-test", None);
 
-        match PullMessageService::process_request(Box::new(MismatchedMessageRequest { mode }), &mut instance).await {
+        match PullMessageService::process_request(Box::new(MismatchedMessageRequest { mode }), instance.as_ref()).await
+        {
             Ok(_) => panic!("mismatched message request should be rejected"),
             Err(error) => error,
         }
@@ -1209,10 +1230,13 @@ mod tests {
 
     #[tokio::test]
     async fn shutdown_reports_closed_shutdown_receiver_as_client_invalid_state() {
-        let mut service = PullMessageService::new();
+        let service = PullMessageService::new();
         let (tx_shutdown, rx_shutdown) = tokio::sync::broadcast::channel(1);
         drop(rx_shutdown);
-        service.tx_shutdown = Some(tx_shutdown);
+        *service
+            .tx_shutdown
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(tx_shutdown);
 
         let error = match service.shutdown(100).await {
             Ok(_) => panic!("closed shutdown receiver should be rejected"),

@@ -23,7 +23,6 @@ use rocketmq_remoting::protocol::header::namesrv::topic_operation_header::TopicR
 use rocketmq_remoting::protocol::header::query_consumer_offset_request_header::QueryConsumerOffsetRequestHeader;
 use rocketmq_remoting::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader;
 use rocketmq_remoting::rpc::rpc_request_header::RpcRequestHeader;
-use rocketmq_rust::ArcMut;
 use tokio::sync::Mutex;
 use tracing::error;
 use tracing::info;
@@ -35,14 +34,14 @@ use crate::consumer::store::read_offset_type::ReadOffsetType;
 use crate::factory::mq_client_instance::MQClientInstance;
 
 pub struct RemoteBrokerOffsetStore {
-    client_instance: ArcMut<MQClientInstance>,
+    client_instance: Arc<MQClientInstance>,
     group_name: CheetahString,
     offset_table: Arc<Mutex<HashMap<MessageQueue, ControllableOffset>>>,
     persisted_offset_table: Arc<Mutex<HashMap<MessageQueue, i64>>>,
 }
 
 impl RemoteBrokerOffsetStore {
-    pub fn new(client_instance: ArcMut<MQClientInstance>, group_name: CheetahString) -> Self {
+    pub fn new(client_instance: Arc<MQClientInstance>, group_name: CheetahString) -> Self {
         Self {
             client_instance,
             group_name,
@@ -97,7 +96,7 @@ impl RemoteBrokerOffsetStore {
                     }),
                 }),
             };
-            let Some(mq_client_api_impl) = self.client_instance.mq_client_api_impl.as_ref() else {
+            let Some(mq_client_api_impl) = self.client_instance.mq_client_api_impl.load_full() else {
                 return Err(rocketmq_error::RocketMQError::not_initialized("MQClientAPIImpl"));
             };
             mq_client_api_impl
@@ -320,7 +319,7 @@ impl OffsetStoreTrait for RemoteBrokerOffsetStore {
                     }),
                 }),
             };
-            let Some(mq_client_api_impl) = self.client_instance.mq_client_api_impl.as_ref() else {
+            let Some(mq_client_api_impl) = self.client_instance.mq_client_api_impl.load_full() else {
                 return Err(rocketmq_error::RocketMQError::not_initialized("MQClientAPIImpl"));
             };
             if is_oneway {

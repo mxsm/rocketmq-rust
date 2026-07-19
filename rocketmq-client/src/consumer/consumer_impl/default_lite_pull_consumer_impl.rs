@@ -47,7 +47,6 @@ use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_remoting::runtime::RPCHook;
-use rocketmq_rust::ArcMut;
 use serde::Serialize;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
@@ -459,7 +458,7 @@ pub struct DefaultLitePullConsumerImpl {
     consumer_start_timestamp: AtomicI64,
 
     // Core components
-    client_instance: StdRwLock<Option<ArcMut<MQClientInstance>>>,
+    client_instance: StdRwLock<Option<Arc<MQClientInstance>>>,
     rebalance_impl: Arc<RebalanceLitePullImpl>,
     pull_api_wrapper: StdRwLock<Option<Arc<PullAPIWrapper>>>,
     offset_store: StdRwLock<Option<Arc<OffsetStore>>>,
@@ -1096,8 +1095,7 @@ impl DefaultLitePullConsumerImpl {
                     )));
                 }
 
-                let client_instance_clone = client_instance.clone();
-                client_instance.mut_from_ref().start(client_instance_clone).await?;
+                client_instance.start().await?;
 
                 self.set_service_state(ServiceState::Running);
 
@@ -1144,7 +1142,7 @@ impl DefaultLitePullConsumerImpl {
 
         self.refresh_registered_topic_message_queue_snapshots().await?;
 
-        let mut client_instance = self
+        let client_instance = self
             .component_snapshot(&self.client_instance)
             .ok_or_else(|| crate::mq_client_err!("Client instance not initialized"))?;
         client_instance.check_client_in_broker().await
@@ -1344,7 +1342,7 @@ impl DefaultLitePullConsumerImpl {
                     .write()
                     .unwrap_or_else(|poisoned| poisoned.into_inner())
                     .take();
-                if let Some(mut client) = client {
+                if let Some(client) = client {
                     client.unregister_consumer(&consumer_group).await;
                     client.shutdown().await;
                 }
@@ -1445,7 +1443,7 @@ impl DefaultLitePullConsumerImpl {
         });
 
         if let Some(client_instance) = self.component_snapshot(&self.client_instance) {
-            if let Some(api_impl) = client_instance.mq_client_api_impl.as_ref() {
+            if let Some(api_impl) = client_instance.mq_client_api_impl.load_full() {
                 api_impl.update_name_server_address_list(&joined_addr).await;
             }
         }
@@ -2412,7 +2410,7 @@ impl DefaultLitePullConsumerImpl {
         // Fetch topic route data from name server
         let topic_route_data = client_instance
             .mq_client_api_impl
-            .as_ref()
+            .load_full()
             .ok_or_else(|| crate::mq_client_err!("MQClientAPIImpl not initialized"))?
             .get_topic_route_info_from_name_server_detail(topic.as_str(), 3000, true)
             .await?;
@@ -2827,7 +2825,7 @@ impl DefaultLitePullConsumerImpl {
 
         client_instance
             .mq_client_api_impl
-            .as_ref()
+            .load_full()
             .ok_or_else(|| crate::mq_client_err!("MQClientAPIImpl not initialized"))?
             .get_max_offset(broker_result.broker_addr.as_str(), message_queue, 3000)
             .await
@@ -2849,7 +2847,7 @@ impl DefaultLitePullConsumerImpl {
 
         client_instance
             .mq_client_api_impl
-            .as_ref()
+            .load_full()
             .ok_or_else(|| crate::mq_client_err!("MQClientAPIImpl not initialized"))?
             .get_min_offset(broker_result.broker_addr.as_str(), message_queue, 3000)
             .await
@@ -3100,6 +3098,8 @@ mod tests {
     use std::sync::atomic::Ordering as AtomicOrdering;
     use std::sync::Barrier;
     use std::sync::Mutex as StdMutex;
+
+    use rocketmq_rust::ArcMut;
 
     use super::*;
     use crate::base::access_channel::AccessChannel;
@@ -3723,7 +3723,7 @@ mod tests {
             .expect("client instance should be initialized");
         let api_impl = client_instance
             .mq_client_api_impl
-            .as_ref()
+            .load_full()
             .expect("client api should be initialized");
         let mut actual_addresses = api_impl.get_name_server_address_list().to_vec();
         actual_addresses.sort();

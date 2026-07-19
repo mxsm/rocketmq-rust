@@ -34,10 +34,8 @@ use rocketmq_client_rust::consumer::consumer_impl::pull_message_service::PullMes
 use rocketmq_client_rust::consumer::consumer_impl::pull_request::PullRequest;
 use rocketmq_client_rust::factory::mq_client_instance::MQClientInstance;
 use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_rust::ArcMut;
-
 /// Creates a mock MQClientInstance for testing
-fn create_mock_client_instance() -> ArcMut<MQClientInstance> {
+fn create_mock_client_instance() -> Arc<MQClientInstance> {
     let client_config = ClientConfig::default();
     MQClientInstance::new_arc(client_config, 0, CheetahString::from_static_str("test_client"), None)
 }
@@ -89,7 +87,7 @@ fn test_same_queue_maps_to_same_pull_shard() {
 
 #[tokio::test]
 async fn test_service_start_and_shutdown() {
-    let mut service = PullMessageService::new();
+    let service = PullMessageService::new();
     let instance = create_mock_client_instance();
 
     // Start service
@@ -105,7 +103,7 @@ async fn test_service_start_and_shutdown() {
 
 #[tokio::test]
 async fn test_start_spawns_configured_pull_workers() {
-    let mut service = PullMessageService::with_capacity_and_shards(1024, 4);
+    let service = PullMessageService::with_capacity_and_shards(1024, 4);
     let instance = create_mock_client_instance();
 
     service.start(instance).await.unwrap();
@@ -128,7 +126,7 @@ async fn test_start_spawns_configured_pull_workers() {
 
 #[tokio::test]
 async fn test_double_start_warning() {
-    let mut service = PullMessageService::new();
+    let service = PullMessageService::new();
     let instance = create_mock_client_instance();
 
     // First start should succeed
@@ -140,7 +138,7 @@ async fn test_double_start_warning() {
 
 #[tokio::test]
 async fn test_double_shutdown_warning() {
-    let mut service = PullMessageService::new();
+    let service = PullMessageService::new();
     let instance = create_mock_client_instance();
 
     service.start(instance).await.unwrap();
@@ -154,7 +152,7 @@ async fn test_double_shutdown_warning() {
 
 #[tokio::test]
 async fn test_execute_pull_request_immediately() {
-    let mut service = PullMessageService::new();
+    let service = PullMessageService::new();
     let instance = create_mock_client_instance();
     service.start(instance).await.unwrap();
 
@@ -171,7 +169,7 @@ async fn test_execute_pull_request_immediately() {
 
 #[tokio::test]
 async fn test_execute_pull_request_after_shutdown() {
-    let mut service = PullMessageService::new();
+    let service = PullMessageService::new();
     let instance = create_mock_client_instance();
     service.start(instance).await.unwrap();
     service.shutdown(100).await.unwrap();
@@ -184,7 +182,7 @@ async fn test_execute_pull_request_after_shutdown() {
 
 #[tokio::test]
 async fn test_execute_pull_request_later() {
-    let mut service = PullMessageService::new();
+    let service = PullMessageService::new();
     let instance = create_mock_client_instance();
     service.start(instance).await.unwrap();
 
@@ -201,7 +199,7 @@ async fn test_execute_pull_request_later() {
 
 #[tokio::test]
 async fn test_delayed_task_cancelled_after_shutdown() {
-    let mut service = PullMessageService::new();
+    let service = PullMessageService::new();
     let instance = create_mock_client_instance();
     service.start(instance).await.unwrap();
 
@@ -220,7 +218,7 @@ async fn test_delayed_task_cancelled_after_shutdown() {
 
 #[tokio::test]
 async fn test_delayed_requests_use_single_scheduler_task() {
-    let mut service = PullMessageService::new();
+    let service = PullMessageService::new();
     let instance = create_mock_client_instance();
     service.start(instance).await.unwrap();
 
@@ -250,7 +248,7 @@ async fn test_delayed_requests_use_single_scheduler_task() {
 
 #[tokio::test]
 async fn test_execute_task() {
-    let mut service = PullMessageService::new();
+    let service = PullMessageService::new();
     let instance = create_mock_client_instance();
     service.start(instance).await.unwrap();
 
@@ -271,7 +269,7 @@ async fn test_execute_task() {
 
 #[tokio::test]
 async fn test_execute_task_later() {
-    let mut service = PullMessageService::new();
+    let service = PullMessageService::new();
     let instance = create_mock_client_instance();
     service.start(instance).await.unwrap();
 
@@ -338,7 +336,7 @@ async fn test_delayed_tasks_with_same_deadline_keep_insert_order() {
 
 #[tokio::test]
 async fn test_execute_task_after_shutdown() {
-    let mut service = PullMessageService::new();
+    let service = PullMessageService::new();
     let instance = create_mock_client_instance();
     service.start(instance).await.unwrap();
     service.shutdown(100).await.unwrap();
@@ -357,7 +355,7 @@ async fn test_execute_task_after_shutdown() {
 
 #[tokio::test]
 async fn test_concurrent_execute_immediately() {
-    let mut service = PullMessageService::new();
+    let service = PullMessageService::new();
     let instance = create_mock_client_instance();
     service.start(instance).await.unwrap();
 
@@ -386,7 +384,7 @@ async fn test_concurrent_execute_immediately() {
 
 #[tokio::test]
 async fn test_concurrent_delayed_requests() {
-    let mut service = PullMessageService::new();
+    let service = PullMessageService::new();
     let instance = create_mock_client_instance();
     service.start(instance).await.unwrap();
 
@@ -405,7 +403,7 @@ async fn test_concurrent_delayed_requests() {
 
 #[tokio::test]
 async fn test_shutdown_timeout() {
-    let mut service = PullMessageService::new();
+    let service = PullMessageService::new();
     let instance = create_mock_client_instance();
     service.start(instance).await.unwrap();
 
@@ -417,7 +415,7 @@ async fn test_shutdown_timeout() {
 
 #[tokio::test]
 async fn test_graceful_shutdown_with_pending_requests() {
-    let mut service = PullMessageService::new();
+    let service = PullMessageService::new();
     let instance = create_mock_client_instance();
     service.start(instance).await.unwrap();
 
@@ -435,7 +433,7 @@ async fn test_graceful_shutdown_with_pending_requests() {
 
 #[tokio::test]
 async fn test_is_stopped_flag() {
-    let mut service = PullMessageService::new();
+    let service = PullMessageService::new();
     let instance = create_mock_client_instance();
 
     // Before start
@@ -452,7 +450,7 @@ async fn test_is_stopped_flag() {
 
 #[tokio::test]
 async fn test_default_shutdown() {
-    let mut service = PullMessageService::new();
+    let service = PullMessageService::new();
     let instance = create_mock_client_instance();
     service.start(instance).await.unwrap();
 
@@ -464,7 +462,7 @@ async fn test_default_shutdown() {
 
 #[tokio::test]
 async fn test_service_clone() {
-    let mut service = PullMessageService::new();
+    let service = PullMessageService::new();
     let instance = create_mock_client_instance();
     service.start(instance).await.unwrap();
 
@@ -480,7 +478,7 @@ async fn test_service_clone() {
 
 #[tokio::test]
 async fn test_high_throughput() {
-    let mut service = PullMessageService::with_capacity(10000);
+    let service = PullMessageService::with_capacity(10000);
     let instance = create_mock_client_instance();
     service.start(instance).await.unwrap();
 
@@ -503,7 +501,7 @@ async fn test_high_throughput() {
 
 #[tokio::test]
 async fn test_mixed_immediate_and_delayed_requests() {
-    let mut service = PullMessageService::new();
+    let service = PullMessageService::new();
     let instance = create_mock_client_instance();
     service.start(instance).await.unwrap();
 

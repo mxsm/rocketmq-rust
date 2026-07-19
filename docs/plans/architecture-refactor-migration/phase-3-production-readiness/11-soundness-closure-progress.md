@@ -105,6 +105,9 @@ M11-12aj 的 Client Push implementation root ownership 由 Issue #8365 跟踪，
 M11-12ak 的 Client Rebalance root ownership 由 Issue #8367 跟踪，分支为
 `mxsm/architecture-refactor-rebalance-root-ownership`；它仍是同一 M11-12 工作包的子切片。
 
+M11-12al 的 Client MQClientInstance root ownership 由 Issue #8369 跟踪，分支为
+`mxsm/architecture-refactor-mq-client-instance-root-ownership`；它仍是同一 M11-12 工作包的子切片。
+
 ## 初始盘点
 
 在 main `86719f1bc77c2e78ff32195262bad820145f271b` 上生成当前源码快照：
@@ -914,6 +917,32 @@ approval 不提交；其余 8 个 identity/13 个 occurrence 为真实删除。r
 `ArcMut<RebalanceLitePullImpl>`、对应 constructor 与 `WeakArcMut` self-reference 已零匹配。下一子切片 M11-12al
 处理 `MQClientInstance` root ownership；75/82 总进度不变。
 
+## M11-12al Client MQClientInstance root ownership
+
+| 目标 | 实现与证据 |
+|---|---|
+| standard root | `MQClientManager`、Proxy compatibility handle 与 Admin/Producer/Consumer/Rebalance/API/OffsetStore 全链路统一持有标准 `Arc<MQClientInstance>`；repository 中目标 root 的 `ArcMut`/`WeakArcMut` 零匹配 |
+| cycle breaking | `ClientRemotingProcessor` 与 `MQAdminImpl` 仅保存标准 `Weak<MQClientInstance>`；构造 API 借用外部 `Arc` 后 downgrade，drop root 后 weak upgrade 返回 `None` |
+| lifecycle publication | `start`/`shutdown` 使用单一异步 transition mutex；service state 使用短 `RwLock`，API slot 使用 `ArcSwapOption`，connection task handle 使用短 `Mutex` 并在 await 前取出 |
+| child compatibility | 尚未迁移的 DefaultProducer/PullMessageService child owner 保留在显式 lifecycle mutex 后；共享 receiver 通过 clone-local child handle 调用，不新增 production `mut_from_ref` |
+| regression evidence | MQClientInstance 30/30、Remoting 22/22、Admin 7/7、Pull 10/10、Rebalance 24/24、Pull integration 28/28 与 typed-error 5/5 定向测试通过；Client 全量 library 984/984 及全部 integration targets 通过 |
+
+M11-12al 后实际快照为 544 个条目：production 326、test 204、compatibility 14；occurrence 精确为 production
+909、test 571、compatibility 40。相对 M11-12ak 删除 42 个 production identity/73 occurrence、13 个 test
+identity/19 occurrence，compatibility 不增加；Client owner 从 50/89 降至 9/17，Client test 从 25/102 降至
+12/83，Proxy production 从 1/1 降至零。剩余 production 债务为：
+
+| owner | 条目 | occurrence |
+|---|---:|---:|
+| Broker | 190 | 568 |
+| Client | 9 | 17 |
+| Store | 127 | 324 |
+
+reviewed baseline 从 599→544、occurrences 从 1,612→1,520。6 个同 identity/same item occurrence 与 2 个
+test-only import identity relocation 逐条按 ADR-013 临时审核且 approval 不提交；其余为真实删除。repository 中
+`ArcMut<MQClientInstance>`、`WeakArcMut<MQClientInstance>`、对应 constructor 与 root `mut_from_ref` 已零匹配。
+下一子切片 M11-12am 处理 DefaultMQProducer root/Weak self owner；75/82 总进度不变。
+
 ## 已执行验证
 
 | 命令 | 结果 |
@@ -1660,11 +1689,29 @@ M11-12ak 追加验证：
 | Rebalance root ArcMut 定向扫描 | repository 中 Push/LitePull concrete Rebalance `ArcMut`/constructor 与 `WeakArcMut` self-reference 零匹配 |
 | `git diff --check` | 通过；仅报告工作树 CRLF 转换提示，无 whitespace error |
 
+M11-12al 追加验证：
+
+| 命令 | 结果 |
+|---|---|
+| `cargo check -p rocketmq-client-rust --all-targets --all-features` | 通过；标准 MQClientInstance root 与所有 Client target 编译通过 |
+| MQClientInstance/Remoting/Admin/Pull/Rebalance focused tests | 30/30、22/22、7/7、10/10、24/24 通过；Pull integration 28/28、typed-error 5/5 通过 |
+| `cargo test -p rocketmq-client-rust --all-features --quiet` | 退出码 0 全部通过；library 984/984，其余 integration targets 全部通过，35 项既有外部环境测试忽略 |
+| reviewed baseline promotion（临时 ADR-013 approval） | 42 个 production identity/73 occurrence、13 个 test identity/19 occurrence 净删除；6 个同 identity occurrence 与 2 个 test import identity relocation 逐条审核，approval 不提交；baseline 599/1,612→544/1,520 |
+| `python scripts/arc_mut_guard.py` | 通过；production 326/909、test 204/571、compatibility 14/40；Client owner 9/17、Client test 12/83，Proxy production 清零；没有新增 production `mut_from_ref` |
+| `python -m unittest scripts.tests.test_arc_mut_guard -v` / `python scripts/arc_mut_guard.py --fixtures` | 67/67 单测、24/24 fixtures 通过 |
+| `cargo fmt --all -- --check` | 通过 |
+| Client package / root workspace strict Clippy | `cargo clippy -p rocketmq-client-rust --no-deps --all-targets --all-features -- -D warnings` 与 root workspace profile 均通过 |
+| standalone Example / Tauri Rust backend / Web backend | 各自 fmt + strict Clippy 通过；Web backend `cargo build --all-targets --all-features` 通过 |
+| `./scripts/runtime-audit.ps1 -SkipBaseline -EnforceBoundaryBaseline` | 通过；root、Pull/Rebalance service 与 default producer transition 串行，短同步锁不跨 `.await` |
+| architecture target/baseline 与 release guard | 通过；35/35 target edges、3/3 test edges、32/32 release topology、10/10 R0 crates，guard 单测 49/49 通过 |
+| `./scripts/check-agents-routing.ps1` | 通过；4 个 standalone Cargo、3 个 Node project、8 条 route |
+| MQClientInstance root ArcMut 定向扫描 | repository 中 `ArcMut<MQClientInstance>` / `WeakArcMut<MQClientInstance>` / 对应 constructor 零匹配；root 文件无 `mut_from_ref` |
+| `git diff --check` | 通过；仅报告工作树 CRLF 转换提示，无 whitespace error |
+
 ## 剩余切片与 Gate
 
-1. Client MQClientInstance root/consumer handles、Producer self owner 与剩余可变 receiver（Client owner 50/89，另有
-   Proxy 1/1）；下一子切片 M11-12al 先统一 MQClientManager、Admin/Producer/Consumer/Rebalance/API/offset store 持有的
-   `MQClientInstance` owner，并收窄其剩余可变 receiver。
+1. Client DefaultMQProducer self owner、PullMessageService child owner 与剩余可变 receiver（Client owner 9/17）；
+   下一子切片 M11-12am 先统一 Producer facade/implementation/registry/callback 的 root 与 standard-weak self owner。
 2. Broker TopicConfig/offset、BrokerRuntimeInner、schedule/POP/processor/transaction owner（190/568）。
 3. Store TopicConfig snapshot、MappedFileQueue/ConsumeQueue、CommitLog/Flush、StoreHandle/Rocks/Timer 与 HA actor（127/324）。
 4. 删除 compatibility `arc_mut.rs` 和公开 re-export；移除其余 nightly feature，将 guard 切到 production/public zero。

@@ -38,7 +38,6 @@ use rocketmq_remoting::protocol::header::pop_message_request_header::PopMessageR
 use rocketmq_remoting::protocol::header::pull_message_request_header::PullMessageRequestHeader;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_remoting::rpc::rpc_request_header::RpcRequestHeader;
-use rocketmq_rust::ArcMut;
 
 use crate::consumer::consumer_impl::pull_request_ext::PullResultExt;
 use crate::consumer::pop_callback::PopCallback;
@@ -89,7 +88,7 @@ fn decode_pull_messages(
 }
 
 pub struct PullAPIWrapper {
-    client_instance: ArcMut<MQClientInstance>,
+    client_instance: Arc<MQClientInstance>,
     consumer_group: CheetahString,
     unit_mode: AtomicBool,
     pull_from_which_node_table: Arc<DashMap<MessageQueue, AtomicU64>>,
@@ -99,7 +98,7 @@ pub struct PullAPIWrapper {
 }
 
 impl PullAPIWrapper {
-    pub fn new(mq_client_factory: ArcMut<MQClientInstance>, consumer_group: CheetahString, unit_mode: bool) -> Self {
+    pub fn new(mq_client_factory: Arc<MQClientInstance>, consumer_group: CheetahString, unit_mode: bool) -> Self {
         Self {
             client_instance: mq_client_factory,
             consumer_group,

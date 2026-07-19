@@ -163,11 +163,10 @@ pub mod proxy_adapter_compat {
     /// Opaque compatibility handle for the Client instance owned by the Proxy
     /// Cluster worker.
     ///
-    /// The raw shared-mutation carrier remains private to Client; the Cluster
-    /// adapter can only use the instance API and must keep cloned handles on
-    /// its single managed worker.
+    /// The standard shared owner remains private to Client; the Cluster adapter
+    /// can only use the instance API and keeps cloned handles on its managed worker.
     pub struct ClientInstanceHandle {
-        inner: rocketmq_rust::ArcMut<crate::factory::mq_client_instance::MQClientInstance>,
+        inner: Arc<crate::factory::mq_client_instance::MQClientInstance>,
         owner: ManagedClientOwner,
     }
 
@@ -263,8 +262,7 @@ pub mod proxy_adapter_compat {
 
         pub async fn start(&self) -> rocketmq_error::RocketMQResult<()> {
             let _operation = self.operation().await;
-            let mut instance = self.inner.clone();
-            instance.start(self.inner.clone()).await
+            self.inner.start().await
         }
 
         pub async fn topic_route(
@@ -472,8 +470,7 @@ pub mod proxy_adapter_compat {
             max_consume_retry_times: i32,
         ) -> rocketmq_error::RocketMQResult<()> {
             let _operation = self.operation().await;
-            let mut instance = self.inner.clone();
-            instance
+            self.inner
                 .consumer_send_message_back(
                     broker_addr,
                     broker_name,
@@ -602,8 +599,7 @@ pub mod proxy_adapter_compat {
                 return;
             }
             let _operation = self.operation().await;
-            let mut instance = self.inner.clone();
-            instance.shutdown().await;
+            self.inner.shutdown().await;
         }
 
         fn release_managed(&self) -> bool {
@@ -625,7 +621,7 @@ pub mod proxy_adapter_compat {
                 return false;
             }
 
-            let expected = Arc::as_ptr(self.inner.get_inner()).cast::<()>();
+            let expected = Arc::as_ptr(&self.inner).cast::<()>();
             crate::implementation::mq_client_manager::MQClientManager::get_instance()
                 .remove_client_factory_if_same(&self.owner.key.client_id, expected);
             entry.remove();
@@ -849,7 +845,7 @@ pub mod proxy_adapter_compat {
             let first = ClientInstanceHandle::get_or_create(domain_id, config.clone(), None).unwrap();
             let second = ClientInstanceHandle::get_or_create(domain_id, config, None).unwrap();
 
-            assert!(Arc::ptr_eq(first.inner.get_inner(), second.inner.get_inner(),));
+            assert!(Arc::ptr_eq(&first.inner, &second.inner));
             assert_eq!(
                 MANAGED_CLIENTS
                     .get(&key)
@@ -910,7 +906,7 @@ pub mod proxy_adapter_compat {
             let first = ClientInstanceHandle::get_or_create(first_domain, config.clone(), None).unwrap();
             let second = ClientInstanceHandle::get_or_create(second_domain, config, None).unwrap();
 
-            assert!(!Arc::ptr_eq(first.inner.get_inner(), second.inner.get_inner(),));
+            assert!(!Arc::ptr_eq(&first.inner, &second.inner));
             assert_eq!(
                 MANAGED_CLIENTS
                     .get(&first_key)
@@ -968,7 +964,7 @@ pub mod proxy_adapter_compat {
             first.shutdown_owned().await;
 
             let second = ClientInstanceHandle::get_or_create(71_008, config, None).unwrap();
-            assert!(!Arc::ptr_eq(first.inner.get_inner(), second.inner.get_inner()));
+            assert!(!Arc::ptr_eq(&first.inner, &second.inner));
             second.shutdown_owned().await;
         }
     }
