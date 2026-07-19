@@ -403,6 +403,11 @@ Admin/Producer/Consumer/Rebalance/API/OffsetStore 持有链统一改为标准 `A
 receiver。实际快照降至 326 production/909 occurrence，Client owner 降至 9/17、Client test 降至 12/83，Proxy
 production 债务清零；剩余为 Broker 190/568、Client 9/17 与 Store 127/324，总进度仍为 75/82。下一子切片为
 M11-12am Client Producer root ownership，M11-12 父工作包未完成。
+Client internal child ownership 随 Issue #8371 将 `MQClientInstance::pull_message_service` 改为标准 `Arc`，并以
+单一 Tokio Mutex 直接拥有 internal DefaultMQProducer，取代原本在完整 start/shutdown/send future 上持有的独立
+transition mutex；序列化范围与锁顺序不变。实际快照降至 323 production/904 occurrence，Client owner 降至 6/12；
+剩余为 Broker 190/568、Client 6/12 与 Store 127/324，总进度仍为 75/82。下一子切片为 M11-12an 完整 Producer
+root/registry/standard-weak 与强引用环拆除，M11-12 父工作包未完成。
 
 ### 9.3 证据目录
 

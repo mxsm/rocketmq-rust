@@ -417,6 +417,11 @@ connection task handle 使用显式同步，start/shutdown 与 default producer 
 production/909 occurrences，Client owner 降至 9/17、Client test 降至 12/83，Proxy production 债务清零；其余
 Client Producer/PullMessageService、Broker/Store、compatibility 与完整候选快照 Gate 仍保持开放。
 
+M11-12am 已将 `MQClientInstance` 内部 PullMessageService child 改为标准 `Arc`，internal DefaultMQProducer 改由
+单一 Tokio Mutex 所有；该 mutex 直接取代旧 default-producer transition，保持完整 start/shutdown/send future 的
+既有串行边界，且没有同步 guard 跨 `.await`。实际快照降至 323 production/904 occurrences，Client owner 降至
+6/12；完整 Producer root/registry/standard-weak、Broker/Store、compatibility 与候选快照 Gate 仍保持开放。
+
 ## 公共兼容面
 
 - development/compatibility仍可显式选择；secure只作为新部署默认，不静默重解释旧配置。

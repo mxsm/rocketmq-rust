@@ -108,6 +108,9 @@ M11-12ak 的 Client Rebalance root ownership 由 Issue #8367 跟踪，分支为
 M11-12al 的 Client MQClientInstance root ownership 由 Issue #8369 跟踪，分支为
 `mxsm/architecture-refactor-mq-client-instance-root-ownership`；它仍是同一 M11-12 工作包的子切片。
 
+M11-12am 的 Client internal child ownership 由 Issue #8371 跟踪，分支为
+`mxsm/architecture-refactor-client-internal-child-ownership`；它仍是同一 M11-12 工作包的子切片。
+
 ## 初始盘点
 
 在 main `86719f1bc77c2e78ff32195262bad820145f271b` 上生成当前源码快照：
@@ -943,6 +946,31 @@ test-only import identity relocation 逐条按 ADR-013 临时审核且 approval 
 `ArcMut<MQClientInstance>`、`WeakArcMut<MQClientInstance>`、对应 constructor 与 root `mut_from_ref` 已零匹配。
 下一子切片 M11-12am 处理 DefaultMQProducer root/Weak self owner；75/82 总进度不变。
 
+## M11-12am Client internal child ownership
+
+| 目标 | 实现与证据 |
+|---|---|
+| Pull child owner | `MQClientInstance::pull_message_service` 从 `ArcMut` 改为标准 `Arc<PullMessageService>`；其 start/shutdown/dispatch API 已是共享 receiver，内部 Clone 只共享原子与同步句柄 |
+| internal producer owner | `MQClientInstance::default_producer` 从 `ArcMut` 改为 `tokio::sync::Mutex<DefaultMQProducer>`；start/shutdown/send 在同一异步 guard 内完成 |
+| lifecycle equivalence | 新 owner mutex 直接替代 `default_producer_transition`；旧 transition 本来就在完整 future 上持有，因此串行范围与 `MQClientInstance lifecycle → default producer` 锁顺序均不扩大 |
+| production boundary | `mq_client_instance.rs` production 不再包含 ArcMut import/type/constructor；测试所需 ArcMut 显式留在 `#[cfg(test)]` module |
+| regression evidence | MQClientInstance 30/30、Pull service 10/10、Pull integration 28/28 与 typed-error 5/5 定向测试通过；Client 全量 library 984/984 及全部 integration targets 通过 |
+
+M11-12am 后实际快照为 541 个条目：production 323、test 204、compatibility 14；occurrence 精确为 production
+904、test 571、compatibility 40。相对 M11-12al 删除 3 个 production identity/5 occurrence，test 与 compatibility
+不增加；Client owner 从 9/17 降至 6/12，Client test 保持 12/83。剩余 production 债务为：
+
+| owner | 条目 | occurrence |
+|---|---:|---:|
+| Broker | 190 | 568 |
+| Client | 6 | 12 |
+| Store | 127 | 324 |
+
+reviewed baseline 从 544→541、occurrences 从 1,520→1,515。1 个 test-only import identity relocation 按
+ADR-013 临时审核且 approval 不提交；3 个 production identity/5 occurrence 为真实删除。下一子切片 M11-12an
+必须一次完成 facade/implementation/registry 的标准 Arc/Weak、config snapshot、task admission 与 Client/fault
+resolver 强环拆除，不能用全局 impl mutex 串行发送；75/82 总进度不变。
+
 ## 已执行验证
 
 | 命令 | 结果 |
@@ -1708,10 +1736,29 @@ M11-12al 追加验证：
 | MQClientInstance root ArcMut 定向扫描 | repository 中 `ArcMut<MQClientInstance>` / `WeakArcMut<MQClientInstance>` / 对应 constructor 零匹配；root 文件无 `mut_from_ref` |
 | `git diff --check` | 通过；仅报告工作树 CRLF 转换提示，无 whitespace error |
 
+M11-12am 追加验证：
+
+| 命令 | 结果 |
+|---|---|
+| `cargo check -p rocketmq-client-rust --all-targets --all-features` | 通过；标准 PullMessageService child 与 internal producer mutex owner 在所有 Client target 编译通过 |
+| MQClientInstance / PullMessageService focused tests | 30/30、10/10 通过；Pull integration 28/28、typed-error 5/5 通过 |
+| `cargo test -p rocketmq-client-rust --all-features --quiet` | 退出码 0 全部通过；library 984/984，其余 integration targets 全部通过，35 项既有外部环境测试忽略 |
+| reviewed baseline promotion（临时 ADR-013 approval） | 删除 3 个 production identity/5 occurrence；1 个 test import identity relocation 逐条审核且 approval 不提交；baseline 544/1,520→541/1,515 |
+| `python scripts/arc_mut_guard.py` | 通过；production 323/904、test 204/571、compatibility 14/40；Client owner 6/12、Client test 12/83；没有新增 production `mut_from_ref` |
+| `python -m unittest scripts.tests.test_arc_mut_guard -v` / `python scripts/arc_mut_guard.py --fixtures` | 67/67 单测、24/24 fixtures 通过 |
+| `cargo fmt --all -- --check` | 通过 |
+| Client package / root workspace strict Clippy | `cargo clippy -p rocketmq-client-rust --no-deps --all-targets --all-features -- -D warnings` 与 root workspace profile 均通过 |
+| standalone Example / Tauri Rust backend / Web backend | 各自 fmt + strict Clippy 通过；Web backend `cargo build --all-targets --all-features` 通过 |
+| `./scripts/runtime-audit.ps1 -SkipBaseline -EnforceBoundaryBaseline` | 通过；internal producer 的异步 owner 保持原 start/shutdown/send 串行范围，Pull child 使用标准共享 owner |
+| architecture target/baseline 与 release guard | 通过；35/35 target edges、3/3 test edges、32/32 release topology、10/10 R0 crates，guard 单测 60/60 通过 |
+| `./scripts/check-agents-routing.ps1` | 通过；4 个 standalone Cargo、3 个 Node project、8 条 route |
+| MQClientInstance child ArcMut 定向扫描 | production factory 文件中 PullMessageService/default producer ArcMut owner 零匹配；仅 test module 保留显式 test-only ArcMut fixture |
+| `git diff --check` | 通过；仅报告工作树 CRLF 转换提示，无 whitespace error |
+
 ## 剩余切片与 Gate
 
-1. Client DefaultMQProducer self owner、PullMessageService child owner 与剩余可变 receiver（Client owner 9/17）；
-   下一子切片 M11-12am 先统一 Producer facade/implementation/registry/callback 的 root 与 standard-weak self owner。
+1. Client DefaultMQProducer facade/implementation/registry 的标准 Arc/Weak root、配置快照、生命周期与任务接纳边界，
+   并拆除 producer/client/registry 强引用环（Client owner 6/12）；下一子切片 M11-12an 完成该 Producer root。
 2. Broker TopicConfig/offset、BrokerRuntimeInner、schedule/POP/processor/transaction owner（190/568）。
 3. Store TopicConfig snapshot、MappedFileQueue/ConsumeQueue、CommitLog/Flush、StoreHandle/Rocks/Timer 与 HA actor（127/324）。
 4. 删除 compatibility `arc_mut.rs` 和公开 re-export；移除其余 nightly feature，将 guard 切到 production/public zero。
