@@ -4,7 +4,8 @@
 > 设计依据：[`docs/architecture-refactor-design.md`](../../architecture-refactor-design.md)
 > 架构审计基线：`f545d638`
 > crate 与源码迁移复核基线：`6d152248`
-> 当前复核状态：根 workspace 已达到目标 32 个 package；75/82 工作包完成，剩余 7 个
+> 当前复核状态：根 workspace 已达到目标 32 个 package；75/82 工作包完成，PR-M11-12 进行中，
+> PR-M12-01～06 未开始，合计剩余 7 个
 
 ## 1. 使用方式
 

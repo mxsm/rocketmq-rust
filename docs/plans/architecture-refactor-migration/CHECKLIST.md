@@ -23,21 +23,35 @@
 | Phase 3 | M10–M11 | 进行中 | Codex 执行组 | 8–12 周 | — | [`phase-3-production-readiness/`](phase-3-production-readiness/) |
 | Phase 4 | M12 | 未开始 | 待分配 | 8–12 周 | — | — |
 
-### 2.1 剩余重构盘点（2026-07-18）
+### 2.1 剩余重构盘点（2026-07-19）
 
 > 统计口径：只统计 82 个顶层 `PR-Mxx-yy` 工作包；M06-03a～ah 等内部迁移证据不重复计数。
 
 | 指标 | 已完成 | 进行中 | 未开始/未完成 | 目标 |
 |---|---:|---:|---:|---:|
-| PR 级工作包 | 75 | 0 | 7 未开始；合计 7 尚未完成 | 82 |
+| PR 级工作包 | 75 | 1（PR-M11-12） | 6（PR-M12-01～06）；合计 7 尚未完成 | 82 |
 | 里程碑 | 9（M01–M09） | 2（M10 待验收、M11 实施中） | 1（M12） | 12 |
 | 新增边界 crate | 10 | 0 | 0 | 10 |
 | 根 workspace package | 32 | — | 0 | 32 |
 | Phase Gate | 2 | 1（Phase 3） | 1（Phase 4） | 4 |
 
-剩余 7 个未开始工作包分布：M10 为 0 个、M11 为 1 个、M12 为 6 个。
+剩余 7 个工作包分布：M10 为 0 个、M11 为 1 个且正在实施、M12 为 6 个且尚未开始。
 PR-M10-05 已完成性能门禁实现；真实固定硬件 baseline/candidate 与 HUMAN M10 Gate 尚未完成，因此 M10 为
 `待验收`而非`已完成`。M11 为`实施中`，当前下一工作包为 PR-M11-12。
+
+PR-M11-12 的内部子切片不重复计入 82 个顶层工作包。Issue #8371 / PR #8372 合并后，当前 ArcMut reviewed
+baseline 为 541 identities / 1,515 occurrences，其中 production 为 323/904、test 为 204/571、compatibility
+为 14/40。production 剩余分布和完成目标如下：
+
+| owner | identity / occurrence | PR-M11-12 完成目标 |
+|---|---:|---|
+| Client | 6 / 12 | 完成 DefaultMQProducer facade/implementation/registry 标准 Arc/Weak、配置快照、生命周期/任务接纳边界，并拆除强引用环 |
+| Broker | 190 / 568 | 完成 BrokerRuntime、topic/offset、schedule/POP/processor/transaction owner 安全化 |
+| Store | 127 / 324 | 完成 message store、CommitLog/Flush、queue、Rocks/Timer 与 HA owner/actor 安全化 |
+
+ArcMut production/public compatibility 清零之后，PR-M11-12 还必须在同一冻结候选快照完成 stable feature matrix、
+Miri/Loom 可用切片、soak/SLO fault、dashboard/runbook/rollback 证据；M10 固定硬件性能、五镜像动态验证、
+Kind/K3d 七场景与 `[ARCH]`/`[REV]`/`[TEST]`/`[HUMAN]` 签署是验收 Gate，不额外增加顶层工作包数量。
 
 目标态依赖债务不能与工作包计数混用：`architecture_dependency_guard.py --mode target` 当前严格通过，
 表示未登记的目标 DAG finding 为 0；它不表示 R0 兼容依赖已经物理删除。现存边分为 35 条精确
