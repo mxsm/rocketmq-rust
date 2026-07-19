@@ -64,8 +64,8 @@ use crate::runtime::ClientScheduledTaskHandle;
 
 pub struct ConsumeMessagePopOrderlyService {
     pub(crate) default_mqpush_consumer_impl: Option<ArcMut<DefaultMQPushConsumerImpl>>,
-    pub(crate) client_config: ArcMut<ClientConfig>,
-    pub(crate) consumer_config: ArcMut<ConsumerConfig>,
+    pub(crate) client_config: Arc<ClientConfig>,
+    pub(crate) consumer_config: Arc<ConsumerConfig>,
     pub(crate) consumer_group: CheetahString,
     pub(crate) message_listener: ArcMessageListenerOrderly,
     pub(crate) concurrency_limiter: Arc<Semaphore>,
@@ -198,8 +198,8 @@ fn record_orderly_process_event<E>(
 
 impl ConsumeMessagePopOrderlyService {
     pub fn new(
-        client_config: ArcMut<ClientConfig>,
-        consumer_config: ArcMut<ConsumerConfig>,
+        client_config: Arc<ClientConfig>,
+        consumer_config: Arc<ConsumerConfig>,
         consumer_group: CheetahString,
         message_listener: ArcMessageListenerOrderly,
         default_mqpush_consumer_impl: Option<ArcMut<DefaultMQPushConsumerImpl>>,
@@ -948,8 +948,8 @@ pub async fn run_pop_orderly_lock_refresh_lifecycle_probe() -> PopOrderlyLockRef
     let listener: ArcMessageListenerOrderly =
         Arc::new(|_msgs: &[&MessageExt], _context: &mut ConsumeOrderlyContext| Ok(ConsumeOrderlyStatus::Success));
     let service = Arc::new(ConsumeMessagePopOrderlyService::new(
-        ArcMut::new(ClientConfig::default()),
-        ArcMut::new(ConsumerConfig {
+        Arc::new(ClientConfig::default()),
+        Arc::new(ConsumerConfig {
             message_model: MessageModel::Clustering,
             ..Default::default()
         }),
@@ -1032,8 +1032,8 @@ mod tests {
 
     fn new_service(default_impl: Option<ArcMut<DefaultMQPushConsumerImpl>>) -> ConsumeMessagePopOrderlyService {
         ConsumeMessagePopOrderlyService::new(
-            ArcMut::new(ClientConfig::default()),
-            ArcMut::new(ConsumerConfig::default()),
+            Arc::new(ClientConfig::default()),
+            Arc::new(ConsumerConfig::default()),
             CheetahString::from_static_str("group"),
             listener(),
             default_impl,
@@ -1042,8 +1042,18 @@ mod tests {
 
     fn new_service_with_config(consumer_config: ConsumerConfig) -> ConsumeMessagePopOrderlyService {
         ConsumeMessagePopOrderlyService::new(
-            ArcMut::new(ClientConfig::default()),
-            ArcMut::new(consumer_config),
+            Arc::new(ClientConfig::default()),
+            Arc::new(consumer_config),
+            CheetahString::from_static_str("group"),
+            listener(),
+            None,
+        )
+    }
+
+    fn new_service_with_client_config(client_config: ClientConfig) -> ConsumeMessagePopOrderlyService {
+        ConsumeMessagePopOrderlyService::new(
+            Arc::new(client_config),
+            Arc::new(ConsumerConfig::default()),
             CheetahString::from_static_str("group"),
             listener(),
             None,
@@ -1201,10 +1211,9 @@ mod tests {
 
     #[test]
     fn reset_namespace_removes_configured_namespace_like_java() {
-        let mut service = new_service(None);
-        service
-            .client_config
-            .set_namespace(CheetahString::from_static_str("ns"));
+        let mut client_config = ClientConfig::default();
+        client_config.set_namespace(CheetahString::from_static_str("ns"));
+        let service = new_service_with_client_config(client_config);
         let mut msg = MessageExt::default();
         msg.set_topic(CheetahString::from_static_str("ns%topic-a"));
         let mut msgs = vec![Arc::new(msg)];

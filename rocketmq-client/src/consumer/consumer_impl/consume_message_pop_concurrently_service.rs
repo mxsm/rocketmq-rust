@@ -82,8 +82,8 @@ fn spawn_tracked_pop_concurrent_task<F>(
 
 pub struct ConsumeMessagePopConcurrentlyService {
     pub(crate) default_mqpush_consumer_impl: Option<ArcMut<DefaultMQPushConsumerImpl>>,
-    pub(crate) client_config: ArcMut<ClientConfig>,
-    pub(crate) consumer_config: ArcMut<ConsumerConfig>,
+    pub(crate) client_config: Arc<ClientConfig>,
+    pub(crate) consumer_config: Arc<ConsumerConfig>,
     pub(crate) consumer_group: CheetahString,
     pub(crate) message_listener: ArcMessageListenerConcurrently,
     pub(crate) stopped: Arc<AtomicBool>,
@@ -97,8 +97,8 @@ pub struct ConsumeMessagePopConcurrentlyService {
 
 impl ConsumeMessagePopConcurrentlyService {
     pub fn new(
-        client_config: ArcMut<ClientConfig>,
-        consumer_config: ArcMut<ConsumerConfig>,
+        client_config: Arc<ClientConfig>,
+        consumer_config: Arc<ConsumerConfig>,
         consumer_group: CheetahString,
         message_listener: ArcMessageListenerConcurrently,
         default_mqpush_consumer_impl: Option<ArcMut<DefaultMQPushConsumerImpl>>,
@@ -934,8 +934,8 @@ mod tests {
 
     fn new_service(default_impl: Option<ArcMut<DefaultMQPushConsumerImpl>>) -> ConsumeMessagePopConcurrentlyService {
         ConsumeMessagePopConcurrentlyService::new(
-            ArcMut::new(ClientConfig::default()),
-            ArcMut::new(ConsumerConfig::default()),
+            Arc::new(ClientConfig::default()),
+            Arc::new(ConsumerConfig::default()),
             consumer_group(),
             listener(),
             default_impl,
@@ -944,8 +944,8 @@ mod tests {
 
     fn new_service_with_config(consumer_config: ConsumerConfig) -> ConsumeMessagePopConcurrentlyService {
         ConsumeMessagePopConcurrentlyService::new(
-            ArcMut::new(ClientConfig::default()),
-            ArcMut::new(consumer_config),
+            Arc::new(ClientConfig::default()),
+            Arc::new(consumer_config),
             consumer_group(),
             listener(),
             None,

@@ -59,8 +59,8 @@ use crate::runtime::ClientTrackedTaskHandle;
 
 pub struct ConsumeMessageConcurrentlyService {
     pub(crate) default_mqpush_consumer_impl: RwLock<Option<ArcMut<DefaultMQPushConsumerImpl>>>,
-    pub(crate) client_config: ArcMut<ClientConfig>,
-    pub(crate) consumer_config: ArcMut<ConsumerConfig>,
+    pub(crate) client_config: Arc<ClientConfig>,
+    pub(crate) consumer_config: Arc<ConsumerConfig>,
     pub(crate) consumer_group: CheetahString,
     pub(crate) message_listener: ArcMessageListenerConcurrently,
     /// Semaphore used for two purposes:
@@ -169,8 +169,8 @@ fn spawn_tracked_concurrent_task<F>(
 
 impl ConsumeMessageConcurrentlyService {
     pub fn new(
-        client_config: ArcMut<ClientConfig>,
-        consumer_config: ArcMut<ConsumerConfig>,
+        client_config: Arc<ClientConfig>,
+        consumer_config: Arc<ConsumerConfig>,
         consumer_group: CheetahString,
         message_listener: ArcMessageListenerConcurrently,
         default_mqpush_consumer_impl: Option<ArcMut<DefaultMQPushConsumerImpl>>,
@@ -375,7 +375,7 @@ impl ConsumeMessageConcurrentlyService {
 
     pub async fn send_message_back(&self, msg: &mut MessageExt, context: &ConsumeConcurrentlyContext) -> bool {
         let delay_level = context.delay_level_when_next_consume;
-        let mut client_config = self.client_config.clone();
+        let mut client_config = (*self.client_config).clone();
         msg.set_topic(client_config.with_namespace(msg.topic().as_str()));
 
         let Some(mut default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.read().clone() else {
@@ -917,15 +917,15 @@ pub async fn run_concurrent_clean_expire_lifecycle_probe() -> ConcurrentCleanExp
             Ok(ConsumeConcurrentlyStatus::ConsumeSuccess)
         });
     let service = ConsumeMessageConcurrentlyService::new(
-        ArcMut::new(ClientConfig::default()),
-        ArcMut::new(ConsumerConfig::default()),
+        Arc::new(ClientConfig::default()),
+        Arc::new(ConsumerConfig::default()),
         CheetahString::from_static_str("concurrent-clean-expire-probe"),
         listener.clone(),
         None,
     );
     let this = Arc::new(ConsumeMessageConcurrentlyService::new(
-        ArcMut::new(ClientConfig::default()),
-        ArcMut::new(ConsumerConfig::default()),
+        Arc::new(ClientConfig::default()),
+        Arc::new(ConsumerConfig::default()),
         CheetahString::from_static_str("concurrent-clean-expire-probe"),
         listener,
         None,
@@ -978,8 +978,8 @@ mod tests {
 
     fn new_service(default_impl: Option<ArcMut<DefaultMQPushConsumerImpl>>) -> ConsumeMessageConcurrentlyService {
         ConsumeMessageConcurrentlyService::new(
-            ArcMut::new(ClientConfig::default()),
-            ArcMut::new(ConsumerConfig::default()),
+            Arc::new(ClientConfig::default()),
+            Arc::new(ConsumerConfig::default()),
             consumer_group(),
             listener(),
             default_impl,
@@ -988,12 +988,28 @@ mod tests {
 
     fn new_service_with_config(consumer_config: ConsumerConfig) -> ConsumeMessageConcurrentlyService {
         ConsumeMessageConcurrentlyService::new(
-            ArcMut::new(ClientConfig::default()),
-            ArcMut::new(consumer_config),
+            Arc::new(ClientConfig::default()),
+            Arc::new(consumer_config),
             consumer_group(),
             listener(),
             None,
         )
+    }
+
+    #[test]
+    fn service_keeps_shared_startup_config_generation() {
+        let client_config = Arc::new(ClientConfig::default());
+        let consumer_config = Arc::new(ConsumerConfig::default());
+        let service = ConsumeMessageConcurrentlyService::new(
+            client_config.clone(),
+            consumer_config.clone(),
+            consumer_group(),
+            listener(),
+            None,
+        );
+
+        assert!(Arc::ptr_eq(&client_config, &service.client_config));
+        assert!(Arc::ptr_eq(&consumer_config, &service.consumer_config));
     }
 
     fn new_default_impl() -> ArcMut<DefaultMQPushConsumerImpl> {

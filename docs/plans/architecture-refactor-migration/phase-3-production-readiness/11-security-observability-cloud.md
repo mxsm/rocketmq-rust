@@ -385,6 +385,11 @@ M11-12af 已将 Push deprecated startup subscription map 改为标准 `Arc<HashM
 immutable owned snapshot，启动时只读复制到独立 dynamic rebalance table。实际快照降至 400 production/1,078
 occurrences，Client 降至 83/186；其余 Client/Broker/Store、compatibility 与完整候选快照 Gate 仍保持开放。
 
+M11-12ag 已将 concurrent/orderly 与 POP concurrent/orderly 四类 Push consume service 的 client/consumer config 改为
+同一启动代的 immutable `Arc` 快照；服务不再持有配置共享写入口，callback 的实时 Push implementation owner 保持不变。
+实际快照降至 398 production/1,054 occurrences，Client owner 降至 80/161，另有 Proxy 1/1；其余 Client/Broker/Store、
+compatibility 与完整候选快照 Gate 仍保持开放。
+
 ## 公共兼容面
 
 - development/compatibility仍可显式选择；secure只作为新部署默认，不静默重解释旧配置。
