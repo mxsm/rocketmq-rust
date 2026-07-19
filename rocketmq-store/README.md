@@ -92,7 +92,7 @@ use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore;
 
 async fn start_store() -> Result<(), rocketmq_store::store_error::StoreError> {
-    let topic_table: Arc<DashMap<CheetahString, ArcMut<TopicConfig>>> = Arc::new(DashMap::new());
+    let topic_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>> = Arc::new(DashMap::new());
     let mut store = ArcMut::new(LocalFileMessageStore::new(
         Arc::new(MessageStoreConfig::default()),
         Arc::new(BrokerConfig::default()),

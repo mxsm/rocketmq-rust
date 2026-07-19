@@ -42,7 +42,7 @@ fn new_test_store_with_broker_config(
     message_store_config: MessageStoreConfig,
     broker_config: BrokerConfig,
 ) -> ArcMut<LocalFileMessageStore> {
-    let topic_table: Arc<DashMap<CheetahString, ArcMut<TopicConfig>>> = Arc::new(DashMap::new());
+    let topic_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>> = Arc::new(DashMap::new());
 
     let mut store = ArcMut::new(LocalFileMessageStore::new(
         Arc::new(message_store_config),

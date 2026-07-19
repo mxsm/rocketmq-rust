@@ -58,7 +58,7 @@ static FIRST_RECOVERY_BODY: [u8; 120] = [0x41; 120];
 fn new_test_store(temp_dir: &TempDir, mut message_store_config: MessageStoreConfig) -> ArcMut<LocalFileMessageStore> {
     message_store_config.store_path_root_dir = temp_dir.path().to_string_lossy().to_string().into();
     let broker_config = Arc::new(BrokerConfig::default());
-    let topic_table: Arc<DashMap<CheetahString, ArcMut<TopicConfig>>> = Arc::new(DashMap::new());
+    let topic_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>> = Arc::new(DashMap::new());
 
     let mut store = ArcMut::new(LocalFileMessageStore::new(
         Arc::new(message_store_config),

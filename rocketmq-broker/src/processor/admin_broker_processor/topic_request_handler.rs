@@ -176,7 +176,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
             }
         };
 
-        let topic_config = ArcMut::new(TopicConfig {
+        let topic_config = TopicConfig {
             topic_name: Some(topic.clone()),
             read_queue_nums: request_header.read_queue_nums as u32,
             write_queue_nums: request_header.write_queue_nums as u32,
@@ -189,7 +189,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
             },
             order: request_header.order,
             attributes,
-        });
+        };
         if topic_config.get_topic_message_type() == TopicMessageType::Mixed
             && !self.broker_runtime_inner.broker_config().enable_mixed_message_type
         {
@@ -203,9 +203,8 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
         let topic_config_origin = self
             .broker_runtime_inner
             .topic_config_manager()
-            .get_topic_config(topic.as_str())
-            .clone();
-        if topic_config_origin.is_some() && topic_config == topic_config_origin.unwrap() {
+            .get_topic_config(topic.as_str());
+        if topic_config_origin.as_deref() == Some(&topic_config) {
             info!(
                 "Broker receive request to update or create topic={}, but topicConfig has  no changes , so \
                  idempotent, caller address={}",
@@ -214,25 +213,22 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
             );
             return Ok(Some(response.set_code(ResponseCode::Success)));
         }
-        self.broker_runtime_inner
+        let update = self
+            .broker_runtime_inner
             .topic_config_manager_mut()
-            .update_topic_config(topic_config.clone());
+            .update_topic_config(topic_config);
 
         if self.broker_runtime_inner.broker_config().enable_single_topic_register {
             self.broker_runtime_inner
                 .topic_config_manager()
                 .broker_runtime_inner()
-                .register_single_topic_all(topic_config.clone())
+                .register_single_topic_all(update.topic_config)
                 .await;
         } else {
             BrokerRuntimeInner::<MS>::register_increment_broker_data(
                 self.broker_runtime_inner.clone(),
-                vec![topic_config],
-                self.broker_runtime_inner
-                    .topic_config_manager()
-                    .data_version()
-                    .as_ref()
-                    .clone(),
+                vec![update.topic_config],
+                update.data_version,
             )
             .await;
         }
@@ -306,7 +302,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
             }
         };
 
-        let topic_config = ArcMut::new(TopicConfig {
+        let topic_config = TopicConfig {
             topic_name: Some(topic.clone()),
             read_queue_nums: request_header.read_queue_nums as u32,
             write_queue_nums: request_header.write_queue_nums as u32,
@@ -315,10 +311,11 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
             topic_sys_flag: request_header.topic_sys_flag.unwrap_or_default() as u32,
             order: request_header.order,
             attributes,
-        });
-        self.broker_runtime_inner
+        };
+        let update = self
+            .broker_runtime_inner
             .topic_config_manager_mut()
-            .update_topic_config(topic_config.clone());
+            .update_topic_config(topic_config);
 
         topic_queue_mapping_detail.topic_queue_mapping_info.topic = Some(topic.clone());
         if topic_queue_mapping_detail.topic_queue_mapping_info.total_queues <= 0 {
@@ -334,12 +331,8 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
 
         BrokerRuntimeInner::<MS>::register_increment_broker_data(
             self.broker_runtime_inner.clone(),
-            vec![topic_config],
-            self.broker_runtime_inner
-                .topic_config_manager()
-                .data_version()
-                .as_ref()
-                .clone(),
+            vec![update.topic_config],
+            update.data_version,
         )
         .await;
 
@@ -408,21 +401,9 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
             }
         }
 
-        let mut topic_config_list = request_body
-            .topic_config_list
-            .into_iter()
-            .map(|config| {
-                // Empty topic names are rejected by the manager, so this yields a fresh legacy handle.
-                let mut shared = self
-                    .broker_runtime_inner
-                    .topic_config_manager()
-                    .select_topic_config(&CheetahString::from_static_str(""))
-                    .unwrap_or_default();
-                *shared = config;
-                shared
-            })
-            .collect::<Vec<_>>();
-        self.broker_runtime_inner
+        let mut topic_config_list = request_body.topic_config_list;
+        let (topic_config_list, data_version) = self
+            .broker_runtime_inner
             .topic_config_manager_mut()
             .update_topic_config_list(topic_config_list.as_mut_slice());
         if self.broker_runtime_inner.broker_config().enable_single_topic_register {
@@ -437,11 +418,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
             BrokerRuntimeInner::<MS>::register_increment_broker_data(
                 self.broker_runtime_inner.clone(),
                 topic_config_list,
-                self.broker_runtime_inner
-                    .topic_config_manager()
-                    .data_version()
-                    .as_ref()
-                    .clone(),
+                data_version,
             )
             .await;
         }
@@ -522,6 +499,8 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
         _request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut response = RemotingCommand::create_response_command();
+        let (topic_config_table, topic_config_data_version) =
+            self.broker_runtime_inner.topic_config_manager().metadata_snapshot();
         let topic_config_and_mapping_serialize_wrapper = TopicConfigAndMappingSerializeWrapper {
             topic_queue_mapping_detail_map: self
                 .broker_runtime_inner
@@ -537,16 +516,8 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
                 .lock()
                 .clone(),
             topic_config_serialize_wrapper: TopicConfigSerializeWrapper {
-                data_version: self
-                    .broker_runtime_inner
-                    .topic_config_manager()
-                    .data_version()
-                    .as_ref()
-                    .clone(),
-                topic_config_table: self
-                    .broker_runtime_inner
-                    .topic_config_manager()
-                    .topic_config_table_hash_map(),
+                data_version: topic_config_data_version,
+                topic_config_table,
             },
             ..Default::default()
         };

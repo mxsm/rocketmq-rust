@@ -81,6 +81,7 @@ use rocketmq_store::store_error::StoreError;
 use rocketmq_store::timer::timer_message_store::TimerMessageStore;
 use tokio::sync::oneshot;
 use tokio::sync::Mutex;
+use tracing::debug;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -1137,7 +1138,7 @@ impl BrokerRuntime {
         let _ = self.init_processor();
     }
 
-    pub(crate) fn topic_config(&self, topic: &CheetahString) -> Option<ArcMut<TopicConfig>> {
+    pub(crate) fn topic_config(&self, topic: &CheetahString) -> Option<Arc<TopicConfig>> {
         self.inner.topic_config_manager().select_topic_config(topic)
     }
 
@@ -3108,13 +3109,30 @@ impl BrokerRuntime {
 }
 
 impl<MS: MessageStore> BrokerRuntimeInner<MS> {
-    pub async fn register_single_topic_all(&self, topic_config: ArcMut<TopicConfig>) {
-        let mut topic_config = topic_config;
+    fn topic_config_for_registration(&self, topic_config: &TopicConfig) -> TopicConfig {
+        let mut topic_config = topic_config.clone();
         if !PermName::is_writeable(self.broker_config.broker_permission)
             || !PermName::is_readable(self.broker_config.broker_permission)
         {
             topic_config.perm &= self.broker_config.broker_permission;
         }
+        topic_config
+    }
+
+    pub async fn register_single_topic_all(&self, topic_config: Arc<TopicConfig>) {
+        let Some(topic_name) = topic_config.topic_name.clone() else {
+            warn!("Skip single-topic registration for config without topic name");
+            return;
+        };
+        let topic_config_manager = self.topic_config_manager();
+        let _registration = topic_config_manager.topic_registration_guard().await;
+        let (mut current_configs, _) =
+            topic_config_manager.topic_registration_snapshot(std::slice::from_ref(&topic_name));
+        let Some(current) = current_configs.pop() else {
+            info!(topic = %topic_name, "Skip stale single-topic registration after topic removal");
+            return;
+        };
+        let topic_config = self.topic_config_for_registration(current.as_ref());
         self.broker_outer_api
             .register_single_topic_all(
                 self.broker_config.broker_identity.broker_name.clone(),
@@ -3126,12 +3144,27 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
 
     pub async fn register_increment_broker_data(
         this: ArcMut<BrokerRuntimeInner<MS>>,
-        topic_config_list: Vec<ArcMut<TopicConfig>>,
+        topic_config_list: Vec<Arc<TopicConfig>>,
         data_version: DataVersion,
     ) {
+        let topic_names = topic_config_list
+            .iter()
+            .filter_map(|topic_config| topic_config.topic_name.clone())
+            .collect::<Vec<_>>();
+        let registration_owner = this.clone();
+        let topic_config_manager = registration_owner.topic_config_manager();
+        let _registration = topic_config_manager.topic_registration_guard().await;
+        let (topic_config_list, current_data_version) = topic_config_manager.topic_registration_snapshot(&topic_names);
+        if current_data_version != data_version {
+            debug!(
+                requested = ?data_version,
+                current = ?current_data_version,
+                "resample incremental topic registration after a newer metadata commit"
+            );
+        }
         let mut serialize_wrapper = TopicConfigAndMappingSerializeWrapper {
             topic_config_serialize_wrapper: TopicConfigSerializeWrapper {
-                data_version: data_version.clone(),
+                data_version: current_data_version,
                 topic_config_table: Default::default(),
             },
             ..Default::default()
@@ -3139,16 +3172,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
 
         let mut topic_config_table = HashMap::new();
         for topic_config in topic_config_list.iter() {
-            let register_topic_config = if !PermName::is_writeable(this.broker_config().broker_permission)
-                || !PermName::is_readable(this.broker_config().broker_permission)
-            {
-                TopicConfig {
-                    perm: topic_config.perm & this.broker_config().broker_permission,
-                    ..topic_config.as_ref().clone()
-                }
-            } else {
-                topic_config.as_ref().clone()
-            };
+            let register_topic_config = this.topic_config_for_registration(topic_config.as_ref());
             topic_config_table.insert(
                 register_topic_config.topic_name.as_ref().unwrap().clone(),
                 register_topic_config,
@@ -4070,36 +4094,39 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             return;
         }
 
-        let mut topic_config_table = HashMap::new();
         let Some(topic_config_manager) = self.topic_config_manager.as_ref() else {
             warn!("Skip broker registration because topic config manager is not initialized");
             return;
         };
-        let table = topic_config_manager.topic_config_table();
-        for topic_config in table.iter() {
-            let new_topic_config = if !PermName::is_writeable(self.broker_config.broker_permission)
-                || !PermName::is_readable(self.broker_config.broker_permission)
-            {
-                TopicConfig {
-                    topic_name: topic_config.topic_name.clone(),
-                    read_queue_nums: topic_config.read_queue_nums,
-                    write_queue_nums: topic_config.write_queue_nums,
-                    perm: topic_config.perm & self.broker_config.broker_permission,
-                    ..TopicConfig::default()
-                }
-            } else {
-                topic_config.as_ref().clone()
-            };
-            topic_config_table.insert(new_topic_config.topic_name.as_ref().unwrap().clone(), new_topic_config);
-        }
+        let registration_owner = this.clone();
+        let _registration = registration_owner
+            .topic_config_manager()
+            .topic_registration_guard()
+            .await;
+        let (raw_topic_config_table, split_data_version, final_data_version) = topic_config_manager
+            .full_registration_snapshot(
+                self.broker_config.enable_split_registration,
+                self.broker_config.split_registration_size,
+            );
+        let mut topic_config_table = raw_topic_config_table
+            .into_values()
+            .map(|topic_config| {
+                let topic_config = self.topic_config_for_registration(&topic_config);
+                (
+                    topic_config
+                        .topic_name
+                        .clone()
+                        .expect("registered topic config requires topic_name"),
+                    topic_config,
+                )
+            })
+            .collect::<HashMap<_, _>>();
 
         // Handle split registration logic
-        if self.broker_config.enable_split_registration
-            && topic_config_table.len() as i32 >= self.broker_config.split_registration_size
-        {
+        if let Some(split_data_version) = split_data_version {
             let topic_config_wrapper = this
                 .topic_config_manager()
-                .build_serialize_wrapper(topic_config_table.clone());
+                .build_serialize_wrapper(topic_config_table.clone(), split_data_version);
             BrokerRuntimeInner::<MS>::do_register_broker_all(
                 this.clone(),
                 check_order_config,
@@ -4126,7 +4153,11 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
 
         let topic_config_wrapper = this
             .topic_config_manager()
-            .build_serialize_wrapper_with_topic_queue_map(topic_config_table, topic_queue_mapping_info_map);
+            .build_serialize_wrapper_with_topic_queue_map(
+                topic_config_table,
+                topic_queue_mapping_info_map,
+                final_data_version,
+            );
 
         let should_register = self.broker_config.enable_split_registration
             || force_register
@@ -5965,7 +5996,7 @@ accounts:
         message_store_config: Arc<MessageStoreConfig>,
     ) -> ArcMut<LocalFileMessageStore> {
         std::fs::create_dir_all(root).expect("create temp store dir");
-        let topic_table: Arc<DashMap<CheetahString, ArcMut<TopicConfig>>> = Arc::new(DashMap::new());
+        let topic_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>> = Arc::new(DashMap::new());
         let mut store = ArcMut::new(LocalFileMessageStore::new(
             message_store_config,
             broker_config,
@@ -6179,6 +6210,33 @@ accounts:
         ))
     }
 
+    #[test]
+    fn registration_permission_mask_does_not_mutate_stored_topic_generation() {
+        let temp_root = lite_test_root("registration-permission-mask");
+        let broker_config = Arc::new(BrokerConfig {
+            store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+            broker_permission: PermName::PERM_READ,
+            ..BrokerConfig::default()
+        });
+        let message_store_config = Arc::new(MessageStoreConfig {
+            store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+            ..MessageStoreConfig::default()
+        });
+        let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
+        let stored = Arc::new(TopicConfig::with_perm(
+            "PermissionTopic",
+            1,
+            1,
+            PermName::PERM_READ | PermName::PERM_WRITE,
+        ));
+
+        let masked = runtime.inner_for_test().topic_config_for_registration(stored.as_ref());
+
+        assert_eq!(stored.perm, PermName::PERM_READ | PermName::PERM_WRITE);
+        assert_eq!(masked.perm, PermName::PERM_READ);
+        let _ = std::fs::remove_dir_all(temp_root);
+    }
+
     async fn new_lite_test_runtime(label: &str) -> BrokerRuntime {
         let temp_root = lite_test_root(label);
         let broker_config = Arc::new(BrokerConfig {
@@ -6305,9 +6363,7 @@ accounts:
             )),
             CheetahString::from_static_str("LITE"),
         );
-        inner
-            .topic_config_manager_mut()
-            .update_topic_config(ArcMut::new(topic_config));
+        inner.topic_config_manager_mut().update_topic_config(topic_config);
 
         for group in ["group-a", "group-b"] {
             let mut config = SubscriptionGroupConfig::new(CheetahString::from_static_str(group));
@@ -6369,12 +6425,17 @@ accounts:
             .topic_config_manager()
             .select_topic_config(&CheetahString::from_static_str("parent-topic"))
             .expect("parent topic should exist");
-        topic_config.mut_from_ref().attributes.insert(
+        let mut replacement = topic_config.as_ref().clone();
+        replacement.attributes.insert(
             TopicAttributes::TopicAttributes::topic_message_type_attribute()
                 .name()
                 .clone(),
             CheetahString::from_string(message_type.to_string()),
         );
+        runtime
+            .inner_for_test()
+            .topic_config_manager()
+            .update_topic_config(replacement);
     }
 
     fn set_parent_topic_lite_expiration(runtime: &mut BrokerRuntime, expiration: i32) {
@@ -6383,12 +6444,17 @@ accounts:
             .topic_config_manager()
             .select_topic_config(&CheetahString::from_static_str("parent-topic"))
             .expect("parent topic should exist");
-        topic_config.mut_from_ref().attributes.insert(
+        let mut replacement = topic_config.as_ref().clone();
+        replacement.attributes.insert(
             TopicAttributes::TopicAttributes::lite_topic_expiration_attribute()
                 .name()
                 .clone(),
             CheetahString::from_string(expiration.to_string()),
         );
+        runtime
+            .inner_for_test()
+            .topic_config_manager()
+            .update_topic_config(replacement);
     }
 
     fn seed_lite_bound_group(runtime: &mut BrokerRuntime, group: &str) {
@@ -7196,7 +7262,7 @@ accounts:
         runtime
             .inner_for_test()
             .topic_config_manager_mut()
-            .update_topic_config(ArcMut::new(TopicConfig::with_queues(topic.clone(), 1, 1)));
+            .update_topic_config(TopicConfig::with_queues(topic.clone(), 1, 1));
 
         let (mut processor, _) = runtime.init_processor();
         let send_header = SendMessageRequestHeader {
@@ -7269,7 +7335,7 @@ accounts:
         runtime
             .inner_for_test()
             .topic_config_manager_mut()
-            .update_topic_config(ArcMut::new(TopicConfig::with_queues(topic.clone(), 1, 1)));
+            .update_topic_config(TopicConfig::with_queues(topic.clone(), 1, 1));
         runtime
             .inner_for_test()
             .subscription_group_manager_mut()
@@ -7369,7 +7435,7 @@ accounts:
         runtime
             .inner_for_test()
             .topic_config_manager_mut()
-            .update_topic_config(ArcMut::new(TopicConfig::with_queues(topic.clone(), 2, 3)));
+            .update_topic_config(TopicConfig::with_queues(topic.clone(), 2, 3));
 
         let (mut processor, _) = runtime.init_processor();
         let mut all_config_request = RemotingCommand::create_remoting_command(RequestCode::GetAllTopicConfig);
@@ -7469,7 +7535,7 @@ accounts:
         runtime
             .inner_for_test()
             .topic_config_manager_mut()
-            .update_topic_config(ArcMut::new(TopicConfig::with_queues(topic.clone(), 1, 1)));
+            .update_topic_config(TopicConfig::with_queues(topic.clone(), 1, 1));
 
         let mut group_config = SubscriptionGroupConfig::new(group.clone());
         runtime
@@ -7747,7 +7813,7 @@ accounts:
         runtime
             .inner_for_test()
             .topic_config_manager_mut()
-            .update_topic_config(ArcMut::new(TopicConfig::with_queues(topic.clone(), 2, 2)));
+            .update_topic_config(TopicConfig::with_queues(topic.clone(), 2, 2));
         let mut group_config = SubscriptionGroupConfig::new(group.clone());
         runtime
             .inner_for_test()
@@ -7897,7 +7963,7 @@ accounts:
         runtime
             .inner_for_test()
             .topic_config_manager_mut()
-            .update_topic_config(ArcMut::new(TopicConfig::with_queues(topic.clone(), 1, 1)));
+            .update_topic_config(TopicConfig::with_queues(topic.clone(), 1, 1));
 
         let (mut processor, _) = runtime.init_processor();
         let send_response_header = send_message_through_broker_processor(
@@ -9468,11 +9534,9 @@ accounts:
             new_metadata_config_runtime(&temp_root, StoreType::LocalFile, use_single_rocksdb_for_all_configs);
         {
             let inner = file_runtime.inner_for_test();
-            let topic_config = ArcMut::new(TopicConfig::with_queues(topic.clone(), 3, 5));
-            inner.topic_config_manager_mut().put_topic_config(topic_config.clone());
             inner
-                .topic_config_manager_mut()
-                .persist_with_topic(topic.as_str(), Box::new(topic_config));
+                .topic_config_manager()
+                .update_topic_config(TopicConfig::with_queues(topic.clone(), 3, 5));
             inner.consumer_offset_manager().commit_offset(
                 CheetahString::from_static_str("127.0.0.1:10911"),
                 &group,

@@ -142,7 +142,7 @@ impl RocksDBMessageStore {
     pub fn try_new(
         message_store_config: Arc<MessageStoreConfig>,
         broker_config: Arc<BrokerConfig>,
-        topic_config_table: Arc<DashMap<CheetahString, ArcMut<TopicConfig>>>,
+        topic_config_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>>,
         broker_stats_manager: Option<Arc<BrokerStatsManager>>,
         notify_message_arrive_in_batch: bool,
     ) -> Result<Self, StoreError> {

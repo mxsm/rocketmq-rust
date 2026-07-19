@@ -493,10 +493,12 @@ mod tests {
     use rocketmq_remoting::protocol::header::get_earliest_msg_storetime_response_header::GetEarliestMsgStoretimeResponseHeader;
     use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
     use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
-    use rocketmq_rust::ArcMut;
+    use rocketmq_store::base::message_store::MessageStore;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
 
-    use super::*;
+    use super::static_topic_offset_broker_name_missing;
+    use super::static_topic_offset_mapping_missing;
+    use super::OffsetRequestHandler;
     use crate::broker_runtime::BrokerRuntime;
 
     fn temp_test_root(label: &str) -> std::path::PathBuf {
@@ -554,9 +556,9 @@ mod tests {
     async fn get_earliest_msg_store_time_returns_store_timestamp() {
         let mut runtime = new_test_runtime("earliest-time").await;
         let mut inner = runtime.inner_for_test().clone();
-        inner
+        let _ = inner
             .topic_config_manager_mut()
-            .update_topic_config(ArcMut::new(TopicConfig::with_queues("topic-a", 1, 1)));
+            .update_topic_config(TopicConfig::with_queues("topic-a", 1, 1));
 
         let expected_timestamp = inner
             .message_store()

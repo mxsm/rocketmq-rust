@@ -156,7 +156,7 @@ impl BrokerOuterAPI {
         self.remoting_client.register_rpc_hook(rpc_hook);
     }
 
-    fn create_request(broker_name: CheetahString, topic_config: ArcMut<TopicConfig>) -> RemotingCommand {
+    fn create_request(broker_name: CheetahString, topic_config: &TopicConfig) -> RemotingCommand {
         let request_header = RegisterTopicRequestHeader::new(topic_config.topic_name.as_ref().cloned().unwrap());
         let queue_data = QueueData::new(
             broker_name,
@@ -325,10 +325,10 @@ impl BrokerOuterAPI {
     pub async fn register_single_topic_all(
         &self,
         broker_name: CheetahString,
-        topic_config: ArcMut<TopicConfig>,
+        topic_config: TopicConfig,
         timeout_mills: u64,
     ) {
-        let request = Self::create_request(broker_name, topic_config);
+        let request = Self::create_request(broker_name, &topic_config);
         let name_server_address_list = self.remoting_client.get_available_name_srv_list();
         let futures = name_server_address_list.iter().map(|namesrv_addr| {
             let cloned_request = request.clone();

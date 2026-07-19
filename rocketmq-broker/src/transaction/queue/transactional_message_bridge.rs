@@ -164,7 +164,7 @@ where
         }
     }
 
-    pub async fn select_topic_config(&mut self, topic: &CheetahString) -> Option<ArcMut<TopicConfig>> {
+    pub async fn select_topic_config(&mut self, topic: &CheetahString) -> Option<Arc<TopicConfig>> {
         let mut topic_config = self
             .broker_runtime_inner
             .topic_config_manager()

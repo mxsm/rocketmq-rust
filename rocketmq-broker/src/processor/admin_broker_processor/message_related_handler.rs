@@ -506,11 +506,15 @@ mod tests {
     use std::time::SystemTime;
 
     use bytes::Bytes;
+    use cheetah_string::CheetahString;
     use rocketmq_common::common::broker::broker_config::BrokerConfig;
     use rocketmq_common::common::config::TopicConfig;
     use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+    use rocketmq_common::common::message::MessageConst;
+    use rocketmq_common::common::message::MessageTrait;
     use rocketmq_error::ErrorKind;
     use rocketmq_remoting::base::response_future::ResponseFuture;
+    use rocketmq_remoting::code::request_code::RequestCode;
     use rocketmq_remoting::code::response_code::ResponseCode;
     use rocketmq_remoting::connection::Connection;
     use rocketmq_remoting::net::channel::Channel;
@@ -522,17 +526,19 @@ mod tests {
     use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
     use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
     use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
+    use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
     use rocketmq_remoting::protocol::LanguageCode;
     use rocketmq_remoting::protocol::RemotingDeserializable;
     use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
-    use rocketmq_rust::ArcMut;
     use rocketmq_store::base::dispatch_request::DispatchRequest;
     use rocketmq_store::base::message_store::MessageStore;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
 
-    use super::*;
+    use super::cq_ext_unit_response_serialize_error;
+    use super::MessageRelatedHandler;
     use crate::broker_runtime::BrokerRuntime;
     use crate::client::client_channel_info::ClientChannelInfo;
+    use crate::transaction::queue::transactional_message_util::TransactionalMessageUtil;
 
     fn temp_test_root(label: &str) -> std::path::PathBuf {
         let millis = SystemTime::now()
@@ -640,9 +646,9 @@ mod tests {
     async fn query_consume_queue_returns_queue_data_and_online_subscription() {
         let mut runtime = new_test_runtime("query-consume-queue").await;
         let mut inner = runtime.inner_for_test().clone();
-        inner
+        let _ = inner
             .topic_config_manager_mut()
-            .update_topic_config(ArcMut::new(TopicConfig::with_queues("topic-a", 1, 1)));
+            .update_topic_config(TopicConfig::with_queues("topic-a", 1, 1));
         inner
             .message_store_mut()
             .as_mut()

@@ -117,6 +117,9 @@ M11-12an 的 Client Producer root ownership 由 Issue #8375 跟踪，分支为
 M11-12ao 的 Broker topic metadata table ownership 由 Issue #8377 跟踪，分支为
 `mxsm/architecture-refactor-broker-topic-metadata-ownership`；它仍是同一 M11-12 工作包的子切片。
 
+M11-12ap 的 Broker topic configuration ownership 由 Issue #8379 跟踪，分支为
+`mxsm/architecture-refactor-broker-topic-config-ownership`；它仍是同一 M11-12 工作包的子切片。
+
 ## 初始盘点
 
 在 main `86719f1bc77c2e78ff32195262bad820145f271b` 上生成当前源码快照：
@@ -1845,11 +1848,45 @@ M11-12ao 追加验证：
 | `./scripts/check-agents-routing.ps1` | 通过；4 个 standalone Cargo、3 个 Node project、8 条 route |
 | Broker topic metadata ArcMut 定向扫描 | `TopicQueueMappingManager` production/test ArcMut 清零；`TopicRouteInfoManager` 仅保留待 Broker root 切片处理的 `ArcMut<BrokerRuntimeInner>` 回边，四张表 owner 与 `mut_from_ref` 清零 |
 
+## M11-12ap 实现
+
+Broker TopicConfig ownership 随 Issue #8379 完成以下边界收敛：
+
+- `TopicConfigManager` 的 live table、读快照和 Store 注入 carrier 统一为 `Arc<TopicConfig>` 不可变整值代际，旧读者在替换后继续观察稳定旧代际，调用方不能通过共享 handle 原地修改配置。
+- TopicConfig table 写入、ArcSwap snapshot 发布和 DataVersion 推进由单一 `metadata_transition` 串行；派生 flag/order 更新在 transition 内重读最新代际再 copy-update-publish，避免并发更新丢失。
+- full/single/incremental NameServer 注册共用异步发送顺序锁；请求在获得锁后重新采样当前 TopicConfig/DataVersion，权限掩码只作用于 owned clone，迟到触发不会覆盖更新代际或修改 Broker 存储值。
+- JSON/RocksDB 持久化在同一 metadata snapshot 中捕获 table/value 与 DataVersion，I/O 由单一 persistence lock 串行且同步 guard 不跨 I/O/`.await`；slave sync 通过 manager API 一次替换完整表和版本，mapping-only 同步不再重写 TopicConfig table。
+- reviewed baseline 从 520 identities / 1,464 occurrences 降至 482 / 1,289；production 从 312/873 降至 300/783，test 从 194/551 降至 168/466，compatibility 保持 14/40。Broker 为 178/475，Store 为 122/308；净删除 12 个 production identity/90 occurrence 与 26 个 test identity/85 occurrence，无新增 identity。
+
+## M11-12ap 验证
+
+| 命令 | 结果 |
+|---|---|
+| `cargo check -p rocketmq-broker --all-features --all-targets` | 通过；Broker/Store TopicConfig carrier、注册、持久化和 slave replacement 在全部 target 编译通过 |
+| `cargo clippy -p rocketmq-broker --all-targets --all-features -- -D warnings` | 通过；仅有 Rust 明确排除于 `-D warnings` 的 Windows linker stdout 提示 |
+| TopicConfigManager focused tests | 9/9 通过；覆盖不可变代际、并发提交/持久化、master replacement、split version reservation 与 stale registration 重采样 |
+| Broker permission-mask / RocksDB config focused tests | 1/1、2/2 通过；权限掩码不修改存储代际，RocksDB load/delete 保持表值与版本语义 |
+| Broker TopicConfig admin endpoint focused test | 1/1 通过；GetAll/GetTopicConfig body 可解码，table 与 DataVersion 来自同一 metadata snapshot |
+| Store all-target/all-feature check + strict Clippy | 通过；22 个 Store source/test/bench carrier 迁移为标准 `Arc<TopicConfig>` |
+| RocksDB specialized gates | Store/Broker strict Clippy 通过；foundation 82/82、semantics 9/9、Broker `rocksdb` 20/20、`pop_consumer` 4/4 通过 |
+| `cargo test -p rocketmq-broker --all-features --lib -- --test-threads=1` | 556 passed、25 failed、1 ignored；隔离 `main@3586348b2` 为 550 passed、25 failed、1 ignored，失败测试名完全一致，本切片新增 6 个测试均通过，故不能把全套记为通过，也未新增 baseline failure |
+| reviewed baseline reduction | baseline 520/1,464→482/1,289；8 个保留对象指纹位移逐项以临时 ADR-013 approval 审核且 approval 不提交 |
+| `python scripts/arc_mut_guard.py` | 通过；production 300/783、test 168/466、compatibility 14/40；没有新增 identity |
+| `python -m unittest scripts.tests.test_arc_mut_guard -v` / `python scripts/arc_mut_guard.py --fixtures` | 67/67 单测、24/24 fixtures 通过 |
+| `cargo fmt --all -- --check` / root workspace strict Clippy | 通过；root workspace 32 个 package 的 all-targets/all-features `-D warnings` profile 通过 |
+| architecture target/baseline/release guards | 通过；35/35 target edges、3/3 test edges、32/32 release topology、10/10 R0 crates，dependency/release/performance guard 单测 60/60 通过 |
+| `./scripts/runtime-audit.ps1 -SkipBaseline -EnforceBoundaryBaseline` | 通过；metadata transition、registration send ordering 与 persistence serialization 未新增 detached task/runtime 边界 |
+| `./scripts/check-agents-routing.ps1` | 通过；4 个 standalone Cargo、3 个 Node project、8 条 route |
+| TopicConfig ArcMut 定向扫描 / `git diff --check` | Broker/Store 的 `ArcMut<TopicConfig>`、constructor 和旧 DataVersion reference accessor 零匹配；diff check 无 whitespace error，仅报告 CRLF 转换提示 |
+
+下一子切片 M11-12aq 处理 `PopBufferMergeService`/checkpoint wrapper owner；75/82 总进度不变，Broker/Store、
+compatibility 与完整候选快照 Gate 仍保持开放。
+
 ## 剩余切片与 Gate
 
-1. Broker TopicConfig/offset、BrokerRuntimeInner、schedule/POP/processor/transaction owner（185/549）；下一子切片
-   M11-12ap 处理 TopicConfig value/DataVersion ownership。
-2. Store TopicConfig snapshot、MappedFileQueue/ConsumeQueue、CommitLog/Flush、StoreHandle/Rocks/Timer 与 HA actor（127/324）。
+1. Broker offset、BrokerRuntimeInner、schedule/POP/processor/transaction owner（178/475）；下一子切片 M11-12aq
+   处理 PopBufferMergeService/checkpoint wrapper ownership。
+2. Store MappedFileQueue/ConsumeQueue、CommitLog/Flush、StoreHandle/Rocks/Timer 与 HA actor（122/308）。
 3. 删除 compatibility `arc_mut.rs` 和公开 re-export；移除其余 nightly feature，将 guard 切到 production/public zero。
 4. 对同一候选快照执行 stable feature matrix、Miri/Loom 可用切片、soak/SLO fault、dashboard/runbook、动态
    Kind/K3d/container、M10 固定硬件和 Human Gate。

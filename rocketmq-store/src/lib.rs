@@ -1175,7 +1175,7 @@ pub mod bench_support {
         let mut store = ArcMut::new(LocalFileMessageStore::new(
             Arc::new(config),
             Arc::new(BrokerConfig::default()),
-            Arc::new(DashMap::<CheetahString, ArcMut<TopicConfig>>::new()),
+            Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
             None,
             false,
         ));

@@ -423,6 +423,12 @@ subscribe 四张共享表改为标准 `Arc<DashMap>`，并将 `TopicQueueMapping
 实际快照降至 312 production/873 occurrence、194 test/551 occurrence，Broker 降至 185/549；剩余为 Broker
 TopicConfig/offset/root/schedule/POP/processor/transaction 与 Store 127/324。总进度仍为 75/82，下一子切片
 M11-12ap 处理 Broker TopicConfig value/DataVersion ownership，M11-12 父工作包未完成。
+Broker topic configuration ownership 随 Issue #8379 将 TopicConfig table/snapshot/Store carrier 改为不可变标准 `Arc`
+整值代际；表写入、快照和 DataVersion 在单一 metadata transition 中原子提交，派生更新在锁内重读当前代际以避免
+lost update。全量、单 Topic 与增量注册共用异步发送顺序锁并在取锁后重采样当前配置/版本；持久化捕获同一提交，
+slave replacement 一次替换完整表和版本。实际快照降至 300 production/783 occurrence、168 test/466 occurrence，
+Broker 降至 178/475、Store 降至 122/308；总进度仍为 75/82，下一子切片 M11-12aq 处理 Broker POP buffer
+merge service ownership，M11-12 父工作包未完成。
 
 ### 9.3 证据目录
 

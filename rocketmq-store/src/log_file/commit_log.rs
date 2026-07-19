@@ -269,7 +269,7 @@ fn parse_property_crc(properties_map: &HashMap<CheetahString, CheetahString>) ->
 }
 
 pub fn get_cq_type(
-    topic_config_table: &Arc<DashMap<CheetahString, ArcMut<TopicConfig>>>,
+    topic_config_table: &Arc<DashMap<CheetahString, Arc<TopicConfig>>>,
     msg_inner: &MessageExtBrokerInner,
 ) -> CQType {
     let binding = topic_config_table.get(msg_inner.topic());
@@ -277,7 +277,7 @@ pub fn get_cq_type(
 }
 
 pub fn get_message_num(
-    topic_config_table: &Arc<DashMap<CheetahString, ArcMut<TopicConfig>>>,
+    topic_config_table: &Arc<DashMap<CheetahString, Arc<TopicConfig>>>,
     msg_inner: &MessageExtBrokerInner,
 ) -> i16 {
     let mut message_num = 1i16;
@@ -338,8 +338,7 @@ mod adapter {
         pub(super) append_message_callback: super::Arc<super::DefaultAppendMessageCallback>,
         pub(super) put_message_lock: super::Arc<tokio::sync::Mutex<()>>,
         pub(super) topic_queue_lock: super::Arc<super::TopicQueueLock>,
-        pub(super) topic_config_table:
-            super::Arc<super::DashMap<super::CheetahString, super::ArcMut<super::TopicConfig>>>,
+        pub(super) topic_config_table: super::Arc<super::DashMap<super::CheetahString, super::Arc<super::TopicConfig>>>,
         pub(super) consume_queue_store: super::ConsumeQueueStore,
         pub(super) flush_manager: super::ArcMut<super::DefaultFlushManager>,
         pub(super) cold_data_check_service: super::Arc<super::ColdDataCheckService>,
@@ -369,7 +368,7 @@ impl CommitLog {
         broker_config: Arc<BrokerConfig>,
         dispatcher: ArcMut<CommitLogDispatcherDefault>,
         store_checkpoint: Arc<StoreCheckpoint>,
-        topic_config_table: Arc<DashMap<CheetahString, ArcMut<TopicConfig>>>,
+        topic_config_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>>,
         consume_queue_store: ConsumeQueueStore,
         allocate_mapped_file_service: AllocateMappedFileService,
     ) -> Self {
@@ -3040,7 +3039,7 @@ mod tests {
         message_store_config.all_ack_in_sync_state_set = all_ack_in_sync_state_set;
         message_store_config.store_path_root_dir = root.to_string_lossy().into_owned().into();
         let message_store_config = Arc::new(message_store_config);
-        let topic_table: Arc<DashMap<CheetahString, ArcMut<TopicConfig>>> = Arc::new(DashMap::new());
+        let topic_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>> = Arc::new(DashMap::new());
         let mut store = ArcMut::new(LocalFileMessageStore::new(
             message_store_config,
             broker_config,

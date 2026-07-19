@@ -20,7 +20,6 @@ use dashmap::DashMap;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::message::MessageConst;
-use rocketmq_rust::ArcMut;
 use rocketmq_store::base::commit_log_dispatcher::CommitLogDispatcher;
 use rocketmq_store::base::dispatch_request::DispatchRequest;
 use rocketmq_store::base::message_store::MessageStore;
@@ -386,7 +385,7 @@ fn rocksdb_message_store_try_new_opens_real_rocksdb_consume_queue_backend() {
     let message_store = RocksDBMessageStore::try_new(
         Arc::clone(&message_store_config),
         Arc::new(BrokerConfig::default()),
-        Arc::new(DashMap::<CheetahString, ArcMut<TopicConfig>>::new()),
+        Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
         None,
         true,
     )
@@ -450,7 +449,7 @@ fn rocksdb_message_store_try_new_rejects_conflicting_consume_queue_path() {
     let error = RocksDBMessageStore::try_new(
         message_store_config,
         Arc::new(BrokerConfig::default()),
-        Arc::new(DashMap::<CheetahString, ArcMut<TopicConfig>>::new()),
+        Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
         None,
         true,
     )
@@ -472,7 +471,7 @@ fn rocksdb_message_store_close_closes_consume_queue_and_message_rocksdb() {
     let message_store = RocksDBMessageStore::try_new(
         Arc::clone(&message_store_config),
         Arc::new(BrokerConfig::default()),
-        Arc::new(DashMap::<CheetahString, ArcMut<TopicConfig>>::new()),
+        Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
         None,
         true,
     )
@@ -513,7 +512,7 @@ fn rocksdb_message_store_try_new_rejects_non_rocksdb_store_type() {
     let error = RocksDBMessageStore::try_new(
         message_store_config,
         Arc::new(BrokerConfig::default()),
-        Arc::new(DashMap::<CheetahString, ArcMut<TopicConfig>>::new()),
+        Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
         None,
         true,
     )
@@ -2964,7 +2963,7 @@ fn rocksdb_message_store_dispatcher_dual_writes_commitlog_dispatch_to_rocksdb_cq
         ..MessageStoreConfig::default()
     });
     let broker_config = Arc::new(BrokerConfig::default());
-    let topic_table: Arc<DashMap<CheetahString, ArcMut<TopicConfig>>> = Arc::new(DashMap::new());
+    let topic_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>> = Arc::new(DashMap::new());
     let mut message_store = RocksDBMessageStore::try_new(message_store_config, broker_config, topic_table, None, false)
         .expect("rocksdb message store should open");
     let mut request = dispatch_request("TopicA", 3, 7, 1024, 128, 7, 1_700_000_000_000);
@@ -3171,7 +3170,7 @@ fn rocksdb_message_store_delete_topics_removes_rocksdb_consume_queue_state() {
         ..MessageStoreConfig::default()
     });
     let broker_config = Arc::new(BrokerConfig::default());
-    let topic_table: Arc<DashMap<CheetahString, ArcMut<TopicConfig>>> = Arc::new(DashMap::new());
+    let topic_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>> = Arc::new(DashMap::new());
     let mut message_store = RocksDBMessageStore::try_new(message_store_config, broker_config, topic_table, None, false)
         .expect("rocksdb message store should open");
     let topic = CheetahString::from_static_str("TopicA");
@@ -3199,7 +3198,7 @@ fn rocksdb_message_store_truncate_dirty_logic_files_corrects_rocksdb_consume_que
         ..MessageStoreConfig::default()
     });
     let broker_config = Arc::new(BrokerConfig::default());
-    let topic_table: Arc<DashMap<CheetahString, ArcMut<TopicConfig>>> = Arc::new(DashMap::new());
+    let topic_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>> = Arc::new(DashMap::new());
     let mut message_store = RocksDBMessageStore::try_new(message_store_config, broker_config, topic_table, None, false)
         .expect("rocksdb message store should open");
     let topic = CheetahString::from_static_str("TopicA");
@@ -3232,7 +3231,7 @@ async fn rocksdb_message_store_clean_expired_consumer_queue_triggers_background_
         ..MessageStoreConfig::default()
     });
     let broker_config = Arc::new(BrokerConfig::default());
-    let topic_table: Arc<DashMap<CheetahString, ArcMut<TopicConfig>>> = Arc::new(DashMap::new());
+    let topic_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>> = Arc::new(DashMap::new());
     let mut message_store = RocksDBMessageStore::try_new(message_store_config, broker_config, topic_table, None, false)
         .expect("rocksdb message store should open");
     let mut request = dispatch_request("TopicA", 3, 0, 100, 10, 1, 1_700_000_000_000);
