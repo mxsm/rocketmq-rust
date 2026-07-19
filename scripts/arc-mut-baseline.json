@@ -12360,43 +12360,6 @@
       "adr": "ADR-002"
     },
     {
-      "identity": "445c96478bd56beecf9d77e3",
-      "path": "rocketmq-client/src/consumer/store/remote_broker_offset_store.rs",
-      "symbol": "mut_from_ref",
-      "kind": "mut_from_ref_call",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "c2c26022c86b0bb541b95655",
-          "fingerprint": "16d4cd62dae8939d7c024383",
-          "item": "fn fetch_consume_offset_from_broker",
-          "line": 71
-        },
-        {
-          "id": "3166f0ca9ffd4d1c72828ef4",
-          "fingerprint": "f366fdc9a226c4b5e344c21f",
-          "item": "fn fetch_consume_offset_from_broker",
-          "line": 77
-        },
-        {
-          "id": "4c241dee9b403322970f7b69",
-          "fingerprint": "813531dcd0de02ae88366889",
-          "item": "fn fetch_consume_offset_from_broker",
-          "line": 83
-        },
-        {
-          "id": "8e0e85f2669ba529af8e2b56",
-          "fingerprint": "bc0f09fd5ad832ca701fbb77",
-          "item": "fn fetch_consume_offset_from_broker",
-          "line": 103
-        }
-      ],
-      "owner": "client",
-      "reason": "Legacy safe mutable-reference escape pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
       "identity": "9b3a63491f45dc351868c027",
       "path": "rocketmq-client/src/factory/mq_client_instance.rs",
       "symbol": "*",

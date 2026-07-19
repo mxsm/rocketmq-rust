@@ -338,6 +338,11 @@ clone，flush 在 batch mutex 内克隆、锁外发送。实际快照降至 415 
 98/327，accumulator production/test ArcMut 债务清零；其余 Client owner、Broker/Store、compatibility 与完整
 候选快照 Gate 仍保持开放。
 
+M11-12x 已删除 `RemoteBrokerOffsetStore` 只读 broker lookup、route refresh 与 client API access 的 4 个过时
+`mut_from_ref`。实际快照降至 414 production/1,215 occurrences，Client 降至 97/323；查询 header、route-miss
+重试、timeout 与错误映射不变，其余 MQClientInstance owner、Client/Broker/Store、compatibility 与完整候选
+快照 Gate 仍保持开放。
+
 ## 公共兼容面
 
 - development/compatibility仍可显式选择；secure只作为新部署默认，不静默重解释旧配置。

@@ -68,19 +68,16 @@ impl RemoteBrokerOffsetStore {
         let broker_name = self.client_instance.get_broker_name_from_message_queue(mq).await;
         let mut find_broker_result = self
             .client_instance
-            .mut_from_ref()
             .find_broker_address_in_subscribe(&broker_name, mix_all::MASTER_ID, true)
             .await;
 
         if find_broker_result.is_none() {
             self.client_instance
-                .mut_from_ref()
                 .update_topic_route_info_from_name_server_topic(mq.topic())
                 .await;
             let broker_name = self.client_instance.get_broker_name_from_message_queue(mq).await;
             find_broker_result = self
                 .client_instance
-                .mut_from_ref()
                 .find_broker_address_in_subscribe(&broker_name, mix_all::MASTER_ID, false)
                 .await;
         }
@@ -100,8 +97,7 @@ impl RemoteBrokerOffsetStore {
                     }),
                 }),
             };
-            let client_instance = self.client_instance.mut_from_ref();
-            let Some(mq_client_api_impl) = client_instance.mq_client_api_impl.as_ref() else {
+            let Some(mq_client_api_impl) = self.client_instance.mq_client_api_impl.as_ref() else {
                 return Err(rocketmq_error::RocketMQError::not_initialized("MQClientAPIImpl"));
             };
             mq_client_api_impl

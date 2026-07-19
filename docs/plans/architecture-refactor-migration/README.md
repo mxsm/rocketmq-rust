@@ -329,6 +329,10 @@ Client accumulator batch producer owner 随 Issue #8339 改为每个 `MessageAcc
 `DefaultMQProducer` clone；flush 在 batch mutex 内克隆 producer、释放锁后以局部可变值发送，删除该文件全部
 ArcMut 构造、类型与 import。实际快照降至 415 production/1,219 occurrence，Client 降至 98/327；剩余为
 Broker 190/568、Client 98/327 与 Store 127/324，总进度仍为 75/82，M11-12 父工作包未完成。
+Client remote offset read access 随 Issue #8341 删除 `RemoteBrokerOffsetStore` 的 4 个过时 `mut_from_ref`：
+broker lookup、route miss refresh 与 client API 读取直接使用 immutable `MQClientInstance` access，查询 header、
+重试、timeout 与错误映射不变。实际快照降至 414 production/1,215 occurrence，Client 降至 97/323；剩余为
+Broker 190/568、Client 97/323 与 Store 127/324，总进度仍为 75/82，M11-12 父工作包未完成。
 
 ### 9.3 证据目录
 
