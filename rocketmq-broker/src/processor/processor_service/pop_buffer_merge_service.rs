@@ -926,8 +926,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
         );
         let put_message_result = self
             .broker_runtime_inner
-            .mut_from_ref()
-            .escape_bridge_mut()
+            .escape_bridge()
             .put_message_to_specific_queue(msg_inner)
             .await;
         if !matches!(
@@ -1036,8 +1035,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
 
         let put_message_result = self
             .broker_runtime_inner
-            .mut_from_ref()
-            .escape_bridge_mut()
+            .escape_bridge()
             .put_message_to_specific_queue(msg)
             .await;
         matches!(
@@ -1076,8 +1074,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
 
         let put_message_result = self
             .broker_runtime_inner
-            .mut_from_ref()
-            .escape_bridge_mut()
+            .escape_bridge()
             .put_message_to_specific_queue(msg)
             .await;
         matches!(

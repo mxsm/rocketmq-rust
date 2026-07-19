@@ -21,15 +21,19 @@ use std::fmt::Formatter;
 use std::future::Future;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI32;
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicU8;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::OnceLock;
+use std::sync::Weak;
 use std::time::Duration;
 
 use arc_swap::ArcSwap;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use parking_lot::Mutex as ParkingMutex;
+use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
@@ -49,23 +53,30 @@ use rocketmq_error::UnifiedServiceError;
 use rocketmq_remoting::protocol::data_version_facade::DataVersionExt;
 use rocketmq_remoting::protocol::DataVersion;
 use rocketmq_remoting::protocol::RemotingSerializable;
+use rocketmq_runtime::schedule::simple_scheduler::ScheduledTaskManager;
+use rocketmq_runtime::BlockingExecutor;
+use rocketmq_runtime::BlockingPoolPolicy;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
+use rocketmq_runtime::ServiceContext;
 use rocketmq_runtime::TaskGroup;
-use rocketmq_rust::ArcMut;
+use rocketmq_runtime::TaskGroupChildLease;
 use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
+use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use rocketmq_store::queue::consume_queue_store::ConsumeQueueStoreTrait;
 use rocketmq_store::queue::local_file_consume_queue_store::ConsumeQueueStore;
 use rocketmq_store::store_path_config_helper::get_delay_offset_store_path;
+use tokio::sync::watch;
 use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
 
-use crate::broker_runtime::BrokerRuntimeInner;
+use crate::failover::escape_bridge::EscapeBridge;
 use crate::schedule::delay_offset_serialize_wrapper::DelayOffsetSerializeWrapper;
 
 // Constants
@@ -85,6 +96,31 @@ const INITIAL_QUEUE_CAPACITY: usize = 128;
 const MAX_PENDING_QUEUE_SIZE: usize = 10000;
 
 pub type DeliverPendingTable<MS> = Arc<DashMap<i32, Arc<Mutex<VecDeque<PutResultProcess<MS>>>>>>;
+
+struct ScheduleLifecycle {
+    next_generation: u64,
+    run: Option<ScheduleRun>,
+    finalized: bool,
+}
+
+struct ScheduleRun {
+    generation: u64,
+    _lease: TaskGroupChildLease,
+    task_group: TaskGroup,
+    scheduled_tasks: ScheduledTaskGroup,
+}
+
+#[derive(Clone)]
+struct ScheduleRunContext {
+    generation: u64,
+    task_group: TaskGroup,
+    cancellation: CancellationToken,
+}
+
+struct ScheduleRuntimeCapabilities {
+    task_group: TaskGroup,
+    blocking: BlockingExecutor,
+}
 
 #[derive(Default)]
 struct DelayLevelConfig {
@@ -267,43 +303,137 @@ pub struct ScheduleMessageService<MS: MessageStore> {
     delay_level_config: ArcSwap<DelayLevelConfig>,
     offset_state: ScheduleOffsetState,
     started: AtomicBool,
-    /// Flag to signal graceful shutdown
-    shutdown_requested: Arc<AtomicBool>,
+    active_generation: AtomicU64,
     enable_async_deliver: bool,
     deliver_pending_table: DeliverPendingTable<MS>,
     deliver_resend_in_progress: Arc<DashMap<i32, Arc<AtomicBool>>>,
-    broker_controller: ArcMut<BrokerRuntimeInner<MS>>,
-    /// Tracks all scheduled delivery and persistence tasks for graceful shutdown.
-    task_group: ParkingMutex<Option<TaskGroup>>,
-    scheduled_tasks: ParkingMutex<Option<ScheduledTaskGroup>>,
+    broker_config: Arc<BrokerConfig>,
+    message_store_config: Arc<MessageStoreConfig>,
+    escape_bridge: Weak<EscapeBridge<MS>>,
+    runtime_capabilities: OnceLock<ScheduleRuntimeCapabilities>,
+    compatibility_scheduler: ScheduledTaskManager,
+    lifecycle: Mutex<ScheduleLifecycle>,
+    persistence_gate: Mutex<()>,
+}
+
+fn schedule_message_service_shutdown_failed(error: impl Display) -> RocketMQError {
+    RocketMQError::Service(UnifiedServiceError::ShutdownFailed(format!(
+        "ScheduleMessageService: {error}"
+    )))
+}
+
+fn schedule_message_service_interrupted() -> RocketMQError {
+    RocketMQError::Service(UnifiedServiceError::Interrupted)
+}
+
+async fn wait_for_schedule_activation(
+    activation: &mut watch::Receiver<bool>,
+    cancellation: &CancellationToken,
+) -> bool {
+    loop {
+        if *activation.borrow() {
+            return true;
+        }
+        tokio::select! {
+            _ = cancellation.cancelled() => return false,
+            changed = activation.changed() => {
+                if changed.is_err() {
+                    return false;
+                }
+            }
+        }
+    }
+}
+
+async fn schedule_sleep(cancellation: &CancellationToken, duration: Duration) -> bool {
+    tokio::select! {
+        _ = cancellation.cancelled() => false,
+        _ = tokio::time::sleep(duration) => true,
+    }
 }
 
 impl<MS: MessageStore> ScheduleMessageService<MS> {
-    pub fn new(broker_controller: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
-        let enable_async_deliver = broker_controller.message_store_config().enable_schedule_async_deliver;
+    pub(crate) fn new(
+        broker_config: Arc<BrokerConfig>,
+        message_store_config: Arc<MessageStoreConfig>,
+        escape_bridge: Weak<EscapeBridge<MS>>,
+        service_context: Option<ServiceContext>,
+        compatibility_scheduler: ScheduledTaskManager,
+    ) -> Self {
+        let enable_async_deliver = message_store_config.enable_schedule_async_deliver;
+        let runtime_capabilities = OnceLock::new();
+        if let Some(service_context) = service_context {
+            runtime_capabilities
+                .set(ScheduleRuntimeCapabilities {
+                    task_group: service_context.task_group().clone(),
+                    blocking: service_context.blocking().clone(),
+                })
+                .unwrap_or_else(|_| unreachable!("new ScheduleMessageService capability cell must be empty"));
+        }
 
         Self {
             delay_level_config: ArcSwap::from_pointee(DelayLevelConfig::default()),
             offset_state: ScheduleOffsetState::new(),
             started: AtomicBool::new(false),
-            shutdown_requested: Arc::new(AtomicBool::new(false)),
+            active_generation: AtomicU64::new(0),
             enable_async_deliver,
             deliver_pending_table: Arc::new(DashMap::new()),
             deliver_resend_in_progress: Arc::new(DashMap::new()),
-            broker_controller,
-            task_group: ParkingMutex::new(None),
-            scheduled_tasks: ParkingMutex::new(None),
+            broker_config,
+            message_store_config,
+            escape_bridge,
+            runtime_capabilities,
+            compatibility_scheduler,
+            lifecycle: Mutex::new(ScheduleLifecycle {
+                next_generation: 1,
+                run: None,
+                finalized: false,
+            }),
+            persistence_gate: Mutex::new(()),
         }
+    }
+
+    fn delivery_runtime(&self) -> Arc<EscapeBridge<MS>> {
+        self.escape_bridge
+            .upgrade()
+            .expect("EscapeBridge owner must outlive ScheduleMessageService")
+    }
+
+    fn runtime_capabilities(&self) -> Result<&ScheduleRuntimeCapabilities, String> {
+        if let Some(runtime_capabilities) = self.runtime_capabilities.get() {
+            return Ok(runtime_capabilities);
+        }
+
+        // Public Broker builder compatibility: reuse the already-audited legacy scheduler root
+        // rather than creating another current-runtime adapter in the Broker crate.
+        let task_group = self
+            .compatibility_scheduler
+            .compatibility_task_group()
+            .map_err(|error| error.to_string())?;
+        let blocking = BlockingExecutor::new(
+            BlockingPoolPolicy::default(),
+            task_group.child("schedule-message.blocking-reaper"),
+        )
+        .map_err(|error| error.to_string())?;
+        let _ = self
+            .runtime_capabilities
+            .set(ScheduleRuntimeCapabilities { task_group, blocking });
+
+        self.runtime_capabilities
+            .get()
+            .ok_or_else(|| "failed to install schedule runtime capabilities".to_string())
     }
 
     pub fn build_running_stats(&self, stats: &mut HashMap<String, String>) {
         let (offset_table, _) = self.offset_state.snapshot();
         for (delay_level, delay_offset) in offset_table {
             let queue_id = delay_level_to_queue_id(delay_level);
-            let max_offset = self.broker_controller.message_store().unwrap().get_max_offset_in_queue(
-                &CheetahString::from_static_str(TopicValidator::RMQ_SYS_SCHEDULE_TOPIC),
-                queue_id,
-            );
+            let max_offset = self.delivery_runtime().with_message_store(|message_store| {
+                message_store.get_max_offset_in_queue(
+                    &CheetahString::from_static_str(TopicValidator::RMQ_SYS_SCHEDULE_TOPIC),
+                    queue_id,
+                )
+            });
 
             let value = format!("{delay_offset},{max_offset}");
             let key = format!("{}_{}", RunningStats::ScheduleMessageOffset.as_str(), delay_level);
@@ -322,13 +452,12 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
     /// * `offset` - The new offset value
     fn update_offset(&self, delay_level: i32, offset: i64) {
         let state_machine_version = self
-            .broker_controller
-            .message_store_unchecked()
-            .get_state_machine_version();
+            .delivery_runtime()
+            .with_message_store(MessageStore::get_state_machine_version);
         let (old_offset, version_counter, version_updated) = self.offset_state.update_offset(
             delay_level,
             offset,
-            self.broker_controller.broker_config().delay_offset_update_version_step,
+            self.broker_config.delay_offset_update_version_step,
             state_machine_version,
         );
 
@@ -370,185 +499,213 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
     /// # Returns
     ///
     /// `Ok(())` on successful start, error otherwise
-    pub fn start(this: ArcMut<Self>) -> RocketMQResult<()> {
-        Self::start_with_persist_initial_delay(this, Duration::from_millis(PERSIST_DELAY_INITIAL_DELAY))
+    pub async fn start(this: Arc<Self>) -> RocketMQResult<()> {
+        Self::start_with_persist_initial_delay(this, Duration::from_millis(PERSIST_DELAY_INITIAL_DELAY)).await
     }
 
-    pub(crate) fn start_with_persist_initial_delay(
-        this: ArcMut<Self>,
+    pub(crate) async fn start_with_persist_initial_delay(
+        this: Arc<Self>,
         persist_initial_delay: Duration,
     ) -> RocketMQResult<()> {
-        if this
-            .started
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed)
-            == Ok(false)
-        {
-            info!("Starting ScheduleMessageService...");
-            this.load();
+        Self::start_internal(this, persist_initial_delay, true).await
+    }
 
-            let scheduled_tasks = match Self::install_task_groups(&this) {
-                Ok(scheduled_tasks) => scheduled_tasks,
-                Err(error) => {
-                    this.started.store(false, Ordering::SeqCst);
-                    return Err(error);
-                }
-            };
+    pub(crate) async fn start_persist_task_for_probe(
+        this: Arc<Self>,
+        persist_initial_delay: Duration,
+    ) -> RocketMQResult<()> {
+        Self::start_internal(this, persist_initial_delay, false).await
+    }
 
-            let delay_config = this.delay_level_config.load_full();
-            for level in delay_config.table.keys().copied() {
-                let offset = this.offset_state.offset(level).unwrap_or(0);
+    async fn start_internal(
+        this: Arc<Self>,
+        persist_initial_delay: Duration,
+        start_delivery: bool,
+    ) -> RocketMQResult<()> {
+        let mut lifecycle = this.lifecycle.lock().await;
+        if lifecycle.finalized {
+            return Err(schedule_message_service_startup_failed("service is already finalized"));
+        }
+        if lifecycle.run.is_some() {
+            return Ok(());
+        }
 
-                // Spawn async delivery handler task
-                if this.enable_async_deliver {
-                    let level_copy = level;
-                    let service = this.clone();
-                    let shutdown_flag = Arc::clone(&this.shutdown_requested);
+        let runtime_capabilities = this
+            .runtime_capabilities()
+            .map_err(schedule_message_service_startup_failed)?;
+        let generation = lifecycle.next_generation;
+        lifecycle.next_generation = lifecycle.next_generation.checked_add(1).unwrap_or(1);
+        let lease = runtime_capabilities
+            .task_group
+            .try_child_lease(format!("rocketmq-broker.schedule.generation-{generation}"))
+            .map_err(schedule_message_service_startup_failed)?;
+        let task_group = lease.group().clone();
+        let scheduled_group = task_group
+            .try_child("scheduled")
+            .map_err(schedule_message_service_startup_failed)?;
+        let scheduled_tasks = ScheduledTaskGroup::new(scheduled_group);
+        let run_context = ScheduleRunContext {
+            generation,
+            cancellation: task_group.cancellation_token(),
+            task_group: task_group.clone(),
+        };
+        let (activation, activation_rx) = watch::channel(false);
 
-                    this.spawn_schedule_task("broker.schedule.handle-put-result", async move {
-                        tokio::time::sleep(Duration::from_millis(FIRST_DELAY_TIME)).await;
-                        let task = HandlePutResultTask::new(level_copy, service, shutdown_flag);
+        info!(generation, "Starting ScheduleMessageService generation");
+        let delay_config = this.delay_level_config.load_full();
+        let install_result = async {
+            if start_delivery {
+                for level in delay_config.table.keys().copied() {
+                    let offset = this.offset_state.offset(level).unwrap_or(0);
+                    if this.enable_async_deliver {
+                        let service = Arc::downgrade(&this);
+                        let context = run_context.clone();
+                        let mut activation = activation_rx.clone();
+                        Self::spawn_schedule_task(&run_context, "broker.schedule.handle-put-result", async move {
+                            if !wait_for_schedule_activation(&mut activation, &context.cancellation).await
+                                || !schedule_sleep(&context.cancellation, Duration::from_millis(FIRST_DELAY_TIME)).await
+                            {
+                                return;
+                            }
+                            let task = HandlePutResultTask::new(level, service, context);
+                            task.run().await;
+                        })?;
+                    }
+
+                    let service = Arc::downgrade(&this);
+                    let context = run_context.clone();
+                    let mut activation = activation_rx.clone();
+                    Self::spawn_schedule_task(&run_context, "broker.schedule.deliver-delayed-message", async move {
+                        if !wait_for_schedule_activation(&mut activation, &context.cancellation).await
+                            || !schedule_sleep(&context.cancellation, Duration::from_millis(FIRST_DELAY_TIME)).await
+                        {
+                            return;
+                        }
+                        let task = DeliverDelayedMessageTimerTask::new(level, offset, service, context);
                         task.run().await;
-                    });
+                    })?;
                 }
-
-                // Spawn delivery timer task
-                let level_copy = level;
-                let offset_copy = offset;
-                let service = this.clone();
-                let shutdown_flag = Arc::clone(&this.shutdown_requested);
-
-                this.spawn_schedule_task("broker.schedule.deliver-delayed-message", async move {
-                    let task = DeliverDelayedMessageTimerTask::new(level_copy, offset_copy, service, shutdown_flag);
-                    tokio::time::sleep(Duration::from_millis(FIRST_DELAY_TIME)).await;
-                    task.run().await;
-                });
             }
-
-            Self::schedule_persist_task(&this, &scheduled_tasks, persist_initial_delay);
-
-            info!(
-                "ScheduleMessageService started successfully with {} delay levels",
-                delay_config.table.len()
-            );
-        }
-
-        Ok(())
-    }
-
-    pub(crate) fn start_persist_task_for_probe(
-        this: ArcMut<Self>,
-        persist_initial_delay: Duration,
-    ) -> RocketMQResult<()> {
-        if this
-            .started
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed)
-            == Ok(false)
-        {
-            let scheduled_tasks = match Self::install_task_groups(&this) {
-                Ok(scheduled_tasks) => scheduled_tasks,
-                Err(error) => {
-                    this.started.store(false, Ordering::SeqCst);
-                    return Err(error);
-                }
-            };
-            Self::schedule_persist_task(&this, &scheduled_tasks, persist_initial_delay);
-        }
-
-        Ok(())
-    }
-
-    fn install_task_groups(this: &ArcMut<Self>) -> RocketMQResult<ScheduledTaskGroup> {
-        let task_group = this
-            .broker_controller
-            .broker_task_group_or_current(
-                "rocketmq-broker.schedule",
-                "failed to start ScheduleMessageService outside Tokio runtime",
+            Self::schedule_persist_task(
+                &this,
+                &run_context,
+                &scheduled_tasks,
+                activation_rx,
+                persist_initial_delay,
             )
-            .ok_or_else(|| schedule_message_service_startup_failed("outside Tokio runtime"))?;
-        let scheduled_tasks = ScheduledTaskGroup::new(task_group.child("scheduled"));
-        *this.task_group.lock() = Some(task_group);
-        *this.scheduled_tasks.lock() = Some(scheduled_tasks.clone());
-        Ok(scheduled_tasks)
+        }
+        .await;
+
+        if let Err(error) = install_result {
+            task_group.cancel();
+            let _ = task_group.shutdown(Duration::from_millis(WAIT_FOR_SHUTDOWN)).await;
+            return Err(error);
+        }
+
+        lifecycle.run = Some(ScheduleRun {
+            generation,
+            _lease: lease,
+            task_group,
+            scheduled_tasks,
+        });
+        this.active_generation.store(generation, Ordering::Release);
+        this.started.store(true, Ordering::Release);
+        let _ = activation.send(true);
+        info!(
+            generation,
+            delay_levels = delay_config.table.len(),
+            "ScheduleMessageService generation started"
+        );
+        Ok(())
     }
 
-    fn schedule_persist_task(this: &ArcMut<Self>, scheduled_tasks: &ScheduledTaskGroup, initial_delay: Duration) {
-        let service = this.clone();
-        let shutdown_flag = Arc::clone(&this.shutdown_requested);
-        let period = Duration::from_millis(
-            this.broker_controller
-                .message_store_config()
-                .flush_delay_offset_interval
-                .max(1),
-        );
+    fn schedule_persist_task(
+        this: &Arc<Self>,
+        run_context: &ScheduleRunContext,
+        scheduled_tasks: &ScheduledTaskGroup,
+        activation: watch::Receiver<bool>,
+        initial_delay: Duration,
+    ) -> RocketMQResult<()> {
+        let service = Arc::downgrade(this);
+        let context = run_context.clone();
+        let period = Duration::from_millis(this.message_store_config.flush_delay_offset_interval.max(1));
         let mut config = ScheduledTaskConfig::fixed_delay("broker.schedule.persist-delay-offset", period);
         config.initial_delay = initial_delay;
         config.shutdown_timeout = Duration::from_millis(WAIT_FOR_SHUTDOWN);
 
-        if let Err(error) = scheduled_tasks.schedule_fixed_delay(config, move || {
-            let service = service.clone();
-            let shutdown_flag = Arc::clone(&shutdown_flag);
-            async move {
-                if shutdown_flag.load(Ordering::Relaxed) || !service.is_started() {
-                    return;
+        scheduled_tasks
+            .schedule_fixed_delay(config, move || {
+                let service = service.clone();
+                let context = context.clone();
+                let mut activation = activation.clone();
+                async move {
+                    if !wait_for_schedule_activation(&mut activation, &context.cancellation).await {
+                        return;
+                    }
+                    let Some(service) = service.upgrade() else {
+                        return;
+                    };
+                    if let Err(error) = service.persist_generation(&context).await {
+                        warn!(
+                            ?error,
+                            generation = context.generation,
+                            "failed to persist schedule offsets"
+                        );
+                    }
                 }
-                service.persist();
-            }
-        }) {
-            warn!(?error, "failed to spawn ScheduleMessageService persist task");
-        }
+            })
+            .map(|_| ())
+            .map_err(schedule_message_service_startup_failed)
     }
 
     /// Gracefully shuts down the schedule message service.
     ///
     /// Signals all tasks to stop, waits for them to complete, and persists final state.
-    pub async fn shutdown(&self) {
-        info!("Shutting down ScheduleMessageService...");
-
-        self.shutdown_requested.store(true, Ordering::SeqCst);
-        self.stop();
-        self.shutdown_tasks().await;
-
-        info!("ScheduleMessageService shutdown complete");
+    pub async fn shutdown(&self) -> RocketMQResult<()> {
+        self.stop_inner(true).await.map(|_| ())
     }
 
-    pub(crate) async fn shutdown_without_persist(&self) {
-        warn!("Shutting down ScheduleMessageService without persistence because no blocking executor is available");
-        self.shutdown_requested.store(true, Ordering::SeqCst);
-        self.started.store(false, Ordering::SeqCst);
-        self.shutdown_tasks().await;
-
-        info!("ScheduleMessageService shutdown complete without persistence");
+    pub async fn stop(&self) -> RocketMQResult<bool> {
+        self.stop_inner(false).await
     }
 
-    async fn shutdown_tasks(&self) {
-        self.scheduled_tasks.lock().take();
-        let task_group = self.task_group.lock().take();
-        let Some(task_group) = task_group else {
-            warn!("No schedule task group found during shutdown");
-            return;
-        };
+    async fn stop_inner(&self, finalize: bool) -> RocketMQResult<bool> {
+        let mut lifecycle = self.lifecycle.lock().await;
+        if lifecycle.finalized {
+            return Ok(true);
+        }
 
-        let report = task_group.shutdown(Duration::from_millis(WAIT_FOR_SHUTDOWN)).await;
-        if !report.is_healthy() {
-            warn!(
-                report = %report.to_json(),
-                "ScheduleMessageService shutdown report is unhealthy"
+        let run = lifecycle.run.take();
+        self.started.store(false, Ordering::Release);
+        self.active_generation.store(0, Ordering::Release);
+
+        if let Some(run) = run {
+            info!(
+                generation = run.generation,
+                finalize, "Stopping ScheduleMessageService generation"
             );
-        }
-    }
+            run.task_group.cancel();
 
-    pub fn stop(&self) -> bool {
-        if self
-            .started
-            .compare_exchange(true, false, Ordering::SeqCst, Ordering::Relaxed)
-            .is_ok()
-        {
-            info!("Stopping ScheduleMessageService and persisting state...");
-            self.persist();
-            info!("ScheduleMessageService stopped");
+            // Wait for any already-submitted blocking write. Periodic writers waiting for this
+            // gate observe cancellation and leave without writing.
+            drop(self.persistence_gate.lock().await);
+            let report = run.task_group.shutdown(Duration::from_millis(WAIT_FOR_SHUTDOWN)).await;
+            if !report.is_healthy() {
+                warn!(
+                    generation = run.generation,
+                    report = %report.to_json(),
+                    "ScheduleMessageService generation shutdown report is unhealthy"
+                );
+            }
         }
 
-        true
+        self.persist_current().await?;
+        lifecycle.finalized = finalize;
+        info!(
+            finalize,
+            "ScheduleMessageService stopped after final offset persistence"
+        );
+        Ok(true)
     }
 
     pub fn is_started(&self) -> bool {
@@ -556,42 +713,78 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
     }
 
     pub(crate) fn task_count(&self) -> usize {
-        let root_count = self
-            .task_group
-            .lock()
-            .as_ref()
-            .map(TaskGroup::task_count)
-            .unwrap_or_default();
-        let scheduled_count = self
-            .scheduled_tasks
-            .lock()
-            .as_ref()
-            .map(|scheduled_tasks| scheduled_tasks.group().task_count())
-            .unwrap_or_default();
-        root_count + scheduled_count
-    }
-
-    pub(crate) fn schedule_snapshot(&self) -> Vec<ScheduledTaskSnapshot> {
-        self.scheduled_tasks
-            .lock()
-            .as_ref()
-            .map(ScheduledTaskGroup::snapshot)
+        self.lifecycle
+            .try_lock()
+            .ok()
+            .and_then(|lifecycle| {
+                lifecycle
+                    .run
+                    .as_ref()
+                    .map(|run| run.task_group.task_count() + run.scheduled_tasks.group().task_count())
+            })
             .unwrap_or_default()
     }
 
-    fn spawn_schedule_task<F>(&self, task_name: &'static str, future: F)
+    pub(crate) fn schedule_snapshot(&self) -> Vec<ScheduledTaskSnapshot> {
+        self.lifecycle
+            .try_lock()
+            .ok()
+            .and_then(|lifecycle| lifecycle.run.as_ref().map(|run| run.scheduled_tasks.snapshot()))
+            .unwrap_or_default()
+    }
+
+    fn spawn_schedule_task<F>(
+        run_context: &ScheduleRunContext,
+        task_name: &'static str,
+        future: F,
+    ) -> RocketMQResult<()>
     where
         F: Future<Output = ()> + Send + 'static,
     {
-        let task_group = self.task_group.lock().as_ref().cloned();
-        let Some(task_group) = task_group else {
-            warn!(task = task_name, "ScheduleMessageService task group is not initialized");
-            return;
-        };
+        run_context
+            .task_group
+            .spawn_service(task_name, future)
+            .map(|_| ())
+            .map_err(schedule_message_service_startup_failed)
+    }
 
-        if let Err(error) = task_group.spawn_service(task_name, future) {
-            warn!(?error, task = task_name, "failed to spawn ScheduleMessageService task");
+    fn is_generation_active(&self, generation: u64) -> bool {
+        self.started.load(Ordering::Acquire)
+            && generation != 0
+            && self.active_generation.load(Ordering::Acquire) == generation
+    }
+
+    async fn persist_generation(&self, run_context: &ScheduleRunContext) -> RocketMQResult<()> {
+        let _guard = tokio::select! {
+            _ = run_context.cancellation.cancelled() => return Ok(()),
+            guard = self.persistence_gate.lock() => guard,
+        };
+        if !self.is_generation_active(run_context.generation) || run_context.cancellation.is_cancelled() {
+            return Ok(());
         }
+        self.persist_current_locked().await
+    }
+
+    async fn persist_current(&self) -> RocketMQResult<()> {
+        let _guard = self.persistence_gate.lock().await;
+        self.persist_current_locked().await
+    }
+
+    async fn persist_current_locked(&self) -> RocketMQResult<()> {
+        let runtime_capabilities = self
+            .runtime_capabilities()
+            .map_err(schedule_message_service_shutdown_failed)?;
+        let json = self.encode_pretty(true);
+        let file_name = self.config_file_path();
+        runtime_capabilities
+            .blocking
+            .spawn_io("broker.schedule.persist-delay-offset", move || {
+                FileUtils::string_to_file(json.as_str(), file_name.as_str())
+            })
+            .await
+            .map_err(schedule_message_service_shutdown_failed)?
+            .map_err(schedule_message_service_shutdown_failed)?;
+        Ok(())
     }
 
     pub fn get_max_delay_level(&self) -> i32 {
@@ -627,13 +820,13 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
         let delay_config = self.delay_level_config.load_full();
         for delay_level in delay_config.table.keys().copied() {
             let queue_id = delay_level_to_queue_id(delay_level);
-            let cq = self
-                .broker_controller
-                .message_store_unchecked()
-                .get_queue_store()
-                .downcast_ref::<ConsumeQueueStore>()
-                .expect("Failed to downcast to ConsumeQueueStore")
-                .find_or_create_consume_queue(&topic, queue_id);
+            let cq = self.delivery_runtime().with_message_store(|message_store| {
+                message_store
+                    .get_queue_store()
+                    .downcast_ref::<ConsumeQueueStore>()
+                    .expect("Failed to downcast to ConsumeQueueStore")
+                    .find_or_create_consume_queue(&topic, queue_id)
+            });
 
             if let Some(current_delay_offset) = self.offset_state.offset(delay_level) {
                 let mut correct_delay_offset = current_delay_offset;
@@ -691,11 +884,7 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
     /// # Returns
     /// `true` if parsing succeeds, `false` otherwise
     pub fn parse_delay_level(&self) -> bool {
-        let level_string = self
-            .broker_controller
-            .message_store_config()
-            .message_delay_level
-            .as_str();
+        let level_string = self.message_store_config.message_delay_level.as_str();
 
         info!("Parsing delay level configuration: {}", level_string);
         let delay_config = match parse_delay_level_config(level_string) {
@@ -733,7 +922,7 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
         true
     }
 
-    fn message_time_up(&self, msg_ext: MessageExt) -> MessageExtBrokerInner {
+    fn message_time_up(msg_ext: MessageExt) -> MessageExtBrokerInner {
         let mut inner = MessageExtBrokerInner::default();
         let sys_flag = msg_ext.sys_flag();
         let born_timestamp = msg_ext.born_timestamp();
@@ -786,6 +975,64 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
         inner
     }
 
+    pub(crate) async fn load_async(&self) -> RocketMQResult<bool> {
+        let runtime_capabilities = self
+            .runtime_capabilities()
+            .map_err(schedule_message_service_startup_failed)?;
+        let file_name = self.config_file_path();
+        let load_result = runtime_capabilities
+            .blocking
+            .spawn_io(
+                "broker.schedule.load-delay-offset",
+                move || match FileUtils::file_to_string(file_name.as_str()) {
+                    Ok(content) if !content.is_empty() => (true, Some(content)),
+                    Ok(_) | Err(_) => match FileUtils::file_to_string(format!("{file_name}.bak").as_str()) {
+                        Ok(content) if !content.is_empty() => (true, Some(content)),
+                        Ok(_) => (true, None),
+                        Err(_) => (false, None),
+                    },
+                },
+            )
+            .await
+            .map_err(schedule_message_service_startup_failed)?;
+
+        if let Some(content) = load_result.1 {
+            self.decode(&content);
+        }
+        Ok(load_result.0 && self.parse_delay_level() && self.correct_delay_offset())
+    }
+
+    pub(crate) async fn sync_delay_offset_from_peer(
+        &self,
+        encoded_snapshot: &str,
+        snapshot: &DelayOffsetSerializeWrapper,
+    ) -> RocketMQResult<bool> {
+        let lifecycle = self.lifecycle.lock().await;
+        if lifecycle.run.is_some() {
+            return Err(schedule_message_service_shutdown_failed(
+                "peer delay-offset synchronization requires a stopped delivery generation",
+            ));
+        }
+        let runtime_capabilities = self
+            .runtime_capabilities()
+            .map_err(schedule_message_service_shutdown_failed)?;
+        let _persist_guard = self.persistence_gate.lock().await;
+        let file_name = self.config_file_path();
+        let encoded_snapshot = encoded_snapshot.to_owned();
+        runtime_capabilities
+            .blocking
+            .spawn_io("broker.schedule.persist-peer-delay-offset", move || {
+                FileUtils::string_to_file(encoded_snapshot.as_str(), file_name.as_str())
+            })
+            .await
+            .map_err(schedule_message_service_shutdown_failed)?
+            .map_err(schedule_message_service_shutdown_failed)?;
+
+        let result = self.load_when_sync_delay_offset(snapshot);
+        drop(lifecycle);
+        result
+    }
+
     /// Gets a copy of the current offset table.
     ///
     /// # Returns
@@ -822,7 +1069,7 @@ impl<MS: MessageStore> ConfigManager for ScheduleMessageService<MS> {
     }
 
     fn config_file_path(&self) -> String {
-        get_delay_offset_store_path(self.broker_controller.broker_config().store_path_root_dir.as_str())
+        get_delay_offset_store_path(self.broker_config.store_path_root_dir.as_str())
     }
 
     fn encode_pretty(&self, pretty_format: bool) -> String {
@@ -890,32 +1137,34 @@ pub struct DeliverDelayedMessageTimerTask<MS: MessageStore> {
     offset: i64,
 
     /// Reference to the parent service
-    schedule_service: ArcMut<ScheduleMessageService<MS>>,
-
-    /// Shutdown signal to gracefully stop the task
-    shutdown_flag: Arc<AtomicBool>,
+    schedule_service: Weak<ScheduleMessageService<MS>>,
+    run_context: ScheduleRunContext,
 }
 
 impl<MS: MessageStore> DeliverDelayedMessageTimerTask<MS> {
     /// Create a new timer task for delivering delayed messages
-    pub fn new(
+    fn new(
         delay_level: i32,
         offset: i64,
-        schedule_service: ArcMut<ScheduleMessageService<MS>>,
-        shutdown_flag: Arc<AtomicBool>,
+        schedule_service: Weak<ScheduleMessageService<MS>>,
+        run_context: ScheduleRunContext,
     ) -> Self {
         Self {
             delay_level,
             offset,
             schedule_service,
-            shutdown_flag,
+            run_context,
         }
     }
 
     /// Execute the task
     pub async fn run(&self) {
-        // Check shutdown flag first
-        if self.shutdown_flag.load(Ordering::Relaxed) || !self.schedule_service.is_started() {
+        let Some(schedule_service) = self.schedule_service.upgrade() else {
+            return;
+        };
+        if self.run_context.cancellation.is_cancelled()
+            || !schedule_service.is_generation_active(self.run_context.generation)
+        {
             info!("Delivery task for level {} received shutdown signal", self.delay_level);
             return;
         }
@@ -953,7 +1202,10 @@ impl<MS: MessageStore> DeliverDelayedMessageTimerTask<MS> {
     /// let corrected = task.correct_deliver_timestamp(current_millis, tags_code);
     /// ```
     fn correct_deliver_timestamp(&self, now: i64, deliver_timestamp: i64) -> i64 {
-        let delay_config = self.schedule_service.delay_level_config.load();
+        let Some(schedule_service) = self.schedule_service.upgrade() else {
+            return now;
+        };
+        let delay_config = schedule_service.delay_level_config.load();
         let delay_time = *delay_config.table.get(&self.delay_level).unwrap();
         let max_timestamp = now + delay_time;
 
@@ -970,16 +1222,19 @@ impl<MS: MessageStore> DeliverDelayedMessageTimerTask<MS> {
 
     /// Execute when the scheduled time is up for messages
     async fn execute_on_time_up(&self) -> RocketMQResult<()> {
+        let schedule_service = self
+            .schedule_service
+            .upgrade()
+            .ok_or_else(schedule_message_service_interrupted)?;
+        let delivery_runtime = schedule_service.delivery_runtime();
         // Get the consume queue for this delay level
         let queue_id = delay_level_to_queue_id(self.delay_level);
-        let cq = self
-            .schedule_service
-            .broker_controller
-            .message_store_unchecked()
-            .get_consume_queue(
+        let cq = delivery_runtime.with_message_store(|message_store| {
+            message_store.get_consume_queue(
                 &CheetahString::from_static_str(TopicValidator::RMQ_SYS_SCHEDULE_TOPIC),
                 queue_id,
-            );
+            )
+        });
         if cq.is_none() {
             self.schedule_next_timer_task(self.offset, DELAY_FOR_A_WHILE);
             return Ok(());
@@ -1017,7 +1272,9 @@ impl<MS: MessageStore> DeliverDelayedMessageTimerTask<MS> {
         let mut next_offset = self.offset;
 
         // Process each message in the consume queue
-        while self.schedule_service.is_started() && !self.shutdown_flag.load(Ordering::Relaxed) {
+        while schedule_service.is_generation_active(self.run_context.generation)
+            && !self.run_context.cancellation.is_cancelled()
+        {
             let cq_unit = if let Some(unit) = buffer_cq.next() {
                 unit
             } else {
@@ -1034,16 +1291,13 @@ impl<MS: MessageStore> DeliverDelayedMessageTimerTask<MS> {
                     tags_code, physical_offset, physical_size
                 );
 
-                let msg_store_time = self
-                    .schedule_service
-                    .broker_controller
-                    .message_store_unchecked()
-                    .get_commit_log()
-                    .pickup_store_timestamp(physical_offset, physical_size);
+                let msg_store_time = delivery_runtime.with_message_store(|message_store| {
+                    message_store
+                        .get_commit_log()
+                        .pickup_store_timestamp(physical_offset, physical_size)
+                });
 
-                tags_code = self
-                    .schedule_service
-                    .compute_deliver_timestamp(self.delay_level, msg_store_time);
+                tags_code = schedule_service.compute_deliver_timestamp(self.delay_level, msg_store_time);
             }
 
             // Check if it's time to deliver the message
@@ -1072,18 +1326,15 @@ impl<MS: MessageStore> DeliverDelayedMessageTimerTask<MS> {
                         );
                     }
                     self.schedule_next_timer_task(curr_offset, DELAY_FOR_A_WHILE);
-                    self.schedule_service.update_offset(self.delay_level, curr_offset);
+                    schedule_service.update_offset(self.delay_level, curr_offset);
                     return Ok(());
                 }
             }
 
             // Look up the actual message
-            let msg_ext = match self
-                .schedule_service
-                .broker_controller
-                .message_store_unchecked()
-                .look_message_by_offset_with_size(physical_offset, physical_size)
-            {
+            let msg_ext = match delivery_runtime.with_message_store(|message_store| {
+                message_store.look_message_by_offset_with_size(physical_offset, physical_size)
+            }) {
                 Some(msg) => msg,
                 None => {
                     warn!(
@@ -1095,7 +1346,7 @@ impl<MS: MessageStore> DeliverDelayedMessageTimerTask<MS> {
             };
             let msg_id = msg_ext.msg_id().clone();
             // Process the message for delivery
-            let msg_inner = self.schedule_service.message_time_up(msg_ext);
+            let msg_inner = ScheduleMessageService::<MS>::message_time_up(msg_ext);
 
             // Check for transaction half messages which should be discarded
             if msg_inner.get_topic() == TopicValidator::RMQ_SYS_TRANS_HALF_TOPIC {
@@ -1108,7 +1359,7 @@ impl<MS: MessageStore> DeliverDelayedMessageTimerTask<MS> {
             }
 
             // Deliver the message
-            let deliver_suc = if self.schedule_service.enable_async_deliver {
+            let deliver_suc = if schedule_service.enable_async_deliver {
                 self.async_deliver(msg_inner, msg_id, curr_offset, physical_offset, physical_size)
                     .await?
             } else {
@@ -1130,21 +1381,38 @@ impl<MS: MessageStore> DeliverDelayedMessageTimerTask<MS> {
 
     /// Schedule the next timer task
     fn schedule_next_timer_task(&self, offset: i64, delay: u64) {
-        if self.shutdown_flag.load(Ordering::Relaxed) || !self.schedule_service.is_started() {
+        let Some(schedule_service) = self.schedule_service.upgrade() else {
+            return;
+        };
+        if self.run_context.cancellation.is_cancelled()
+            || !schedule_service.is_generation_active(self.run_context.generation)
+        {
             return;
         }
 
         let schedule_service = self.schedule_service.clone();
         let delay_level = self.delay_level;
-        let shutdown_flag = Arc::clone(&self.shutdown_flag);
-        let spawner = self.schedule_service.clone();
+        let context = self.run_context.clone();
 
         // Schedule the next task after the specified delay
-        spawner.spawn_schedule_task("broker.schedule.deliver-delayed-message", async move {
-            tokio::time::sleep(Duration::from_millis(delay)).await;
-            let task = DeliverDelayedMessageTimerTask::new(delay_level, offset, schedule_service, shutdown_flag);
-            task.run().await;
-        });
+        let spawn_result = ScheduleMessageService::<MS>::spawn_schedule_task(
+            &self.run_context,
+            "broker.schedule.deliver-delayed-message",
+            async move {
+                if !schedule_sleep(&context.cancellation, Duration::from_millis(delay)).await {
+                    return;
+                }
+                let task = DeliverDelayedMessageTimerTask::new(delay_level, offset, schedule_service, context);
+                task.run().await;
+            },
+        );
+        if let Err(error) = spawn_result {
+            warn!(
+                ?error,
+                generation = self.run_context.generation,
+                "failed to reschedule delayed delivery"
+            );
+        }
     }
 
     /// Deliver a message synchronously
@@ -1165,8 +1433,9 @@ impl<MS: MessageStore> DeliverDelayedMessageTimerTask<MS> {
         let send_status = result.put_message_status() == PutMessageStatus::PutOk;
 
         if send_status {
-            self.schedule_service
-                .update_offset(self.delay_level, result_process.get_next_offset());
+            if let Some(schedule_service) = self.schedule_service.upgrade() {
+                schedule_service.update_offset(self.delay_level, result_process.get_next_offset());
+            }
         }
 
         Ok(send_status)
@@ -1181,14 +1450,16 @@ impl<MS: MessageStore> DeliverDelayedMessageTimerTask<MS> {
         offset_py: i64,
         size_py: i32,
     ) -> RocketMQResult<bool> {
-        let processes_queue = self
+        let schedule_service = self
             .schedule_service
+            .upgrade()
+            .ok_or_else(schedule_message_service_interrupted)?;
+        let processes_queue = schedule_service
             .deliver_pending_table
             .get(&self.delay_level)
             .map(|entry| Arc::clone(entry.value()))
             .expect("delay-level pending queue should be initialized");
-        let resend_in_progress = self
-            .schedule_service
+        let resend_in_progress = schedule_service
             .deliver_resend_in_progress
             .get(&self.delay_level)
             .map(|entry| Arc::clone(entry.value()))
@@ -1202,10 +1473,8 @@ impl<MS: MessageStore> DeliverDelayedMessageTimerTask<MS> {
             return Ok(false);
         }
 
-        let max_pending_limit = self
-            .schedule_service
-            .broker_controller
-            .message_store_config()
+        let max_pending_limit = schedule_service
+            .message_store_config
             .schedule_async_deliver_max_pending_limit;
         {
             let queue = processes_queue.lock().await;
@@ -1260,27 +1529,34 @@ impl<MS: MessageStore> DeliverDelayedMessageTimerTask<MS> {
         // Create a channel for the async result
 
         let topic = msg_inner.get_topic().clone();
-        // Send the message asynchronously
-        let result = self
+        let schedule_service = self
             .schedule_service
-            .broker_controller
-            .mut_from_ref()
-            .escape_bridge_mut()
-            .async_put_message(msg_inner)
-            .await;
+            .upgrade()
+            .ok_or_else(schedule_message_service_interrupted)?;
+        let escape_bridge = schedule_service
+            .escape_bridge
+            .upgrade()
+            .ok_or_else(schedule_message_service_interrupted)?;
+        // Send the message asynchronously
+        let result = escape_bridge.async_put_message(msg_inner).await;
 
         // Create and return the process tracking object
-        let result_process = PutResultProcess::new(ArcMut::clone(&self.schedule_service.broker_controller))
-            .set_topic(topic)
-            .set_delay_level(self.delay_level)
-            .set_offset(offset)
-            .set_physic_offset(offset_py)
-            .set_physic_size(size_py)
-            .set_msg_id(msg_id.to_string())
-            .set_auto_resend(auto_resend)
-            .set_put_message_result(result)
-            .then_process()
-            .await;
+        let result_process = PutResultProcess::new(
+            schedule_service.escape_bridge.clone(),
+            schedule_service
+                .message_store_config
+                .schedule_async_deliver_max_resend_num2_blocked,
+        )
+        .set_topic(topic)
+        .set_delay_level(self.delay_level)
+        .set_offset(offset)
+        .set_physic_offset(offset_py)
+        .set_physic_size(size_py)
+        .set_msg_id(msg_id.to_string())
+        .set_auto_resend(auto_resend)
+        .set_put_message_result(result)
+        .then_process()
+        .await;
 
         Ok(result_process)
     }
@@ -1323,12 +1599,13 @@ pub struct PutResultProcess<MS: MessageStore> {
     put_message_result: Option<PutMessageResult>,
     resend_count: AtomicI32,
     status: ProcessStatusCell,
-    broker_controller: ArcMut<BrokerRuntimeInner<MS>>,
+    escape_bridge: Weak<EscapeBridge<MS>>,
+    max_resend_num2_blocked: usize,
 }
 
 impl<MS: MessageStore> PutResultProcess<MS> {
     /// Create a new PutResultProcess instance
-    pub fn new(broker_controller: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
+    pub(crate) fn new(escape_bridge: Weak<EscapeBridge<MS>>, max_resend_num2_blocked: usize) -> Self {
         Self {
             topic: CheetahString::empty(),
             offset: 0,
@@ -1340,7 +1617,8 @@ impl<MS: MessageStore> PutResultProcess<MS> {
             put_message_result: None,
             resend_count: AtomicI32::new(0),
             status: ProcessStatusCell::new(ProcessStatus::Running),
-            broker_controller,
+            escape_bridge,
+            max_resend_num2_blocked,
         }
     }
 
@@ -1457,106 +1735,8 @@ impl<MS: MessageStore> PutResultProcess<MS> {
     }
 
     /// Handle a successful put operation
-    pub fn on_success(&self, result: &PutMessageResult) {
+    pub fn on_success(&self, _result: &PutMessageResult) {
         self.status.store(ProcessStatus::Success);
-
-        if self
-            .broker_controller
-            .message_store_config()
-            .enable_schedule_message_stats
-            && !result.remote_put()
-        {
-            /*// Update stats in broker controller
-            let broker_stats_manager = self.broker_controller.get_broker_stats_manager();
-            broker_stats_manager.inc_queue_get_nums(
-                MixAll::SCHEDULE_CONSUMER_GROUP,
-                TopicValidator::RMQ_SYS_SCHEDULE_TOPIC,
-                self.delay_level - 1,
-                result.get_append_message_result().get_msg_num(),
-            );
-
-            broker_stats_manager.inc_queue_get_size(
-                MixAll::SCHEDULE_CONSUMER_GROUP,
-                TopicValidator::RMQ_SYS_SCHEDULE_TOPIC,
-                self.delay_level - 1,
-                result.get_append_message_result().get_wrote_bytes(),
-            );
-
-            broker_stats_manager.inc_group_get_nums(
-                MixAll::SCHEDULE_CONSUMER_GROUP,
-                TopicValidator::RMQ_SYS_SCHEDULE_TOPIC,
-                result.get_append_message_result().get_msg_num(),
-            );
-
-            broker_stats_manager.inc_group_get_size(
-                MixAll::SCHEDULE_CONSUMER_GROUP,
-                TopicValidator::RMQ_SYS_SCHEDULE_TOPIC,
-                result.get_append_message_result().get_wrote_bytes(),
-            );
-
-            // Update metrics
-            let attributes = BrokerMetricsManager::new_attributes_builder()
-                .put(LABEL_TOPIC, TopicValidator::RMQ_SYS_SCHEDULE_TOPIC)
-                .put(LABEL_CONSUMER_GROUP, MixAll::SCHEDULE_CONSUMER_GROUP)
-                .put(LABEL_IS_SYSTEM, true)
-                .build();
-
-            BrokerMetricsManager::messages_out_total().add(
-                result.get_append_message_result().get_msg_num() as i64,
-                &attributes,
-            );
-
-            BrokerMetricsManager::throughput_out_total().add(
-                result.get_append_message_result().get_wrote_bytes() as i64,
-                &attributes,
-            );
-
-            // Update topic stats
-            broker_stats_manager.inc_topic_put_nums(
-                &self.topic,
-                result.get_append_message_result().get_msg_num(),
-                1,
-            );
-
-            broker_stats_manager.inc_topic_put_size(
-                &self.topic,
-                result.get_append_message_result().get_wrote_bytes(),
-            );
-
-            broker_stats_manager.inc_broker_put_nums(
-                &self.topic,
-                result.get_append_message_result().get_msg_num(),
-            );
-
-            // Update message in metrics
-            let attributes = BrokerMetricsManager::new_attributes_builder()
-                .put(LABEL_TOPIC, &self.topic)
-                .put(
-                    LABEL_MESSAGE_TYPE,
-                    TopicMessageType::Delay.get_metrics_value(),
-                )
-                .put(
-                    LABEL_IS_SYSTEM,
-                    TopicValidator::is_system_topic(&self.topic),
-                )
-                .build();
-
-            BrokerMetricsManager::messages_in_total().add(
-                result.get_append_message_result().get_msg_num() as i64,
-                &attributes,
-            );
-
-            BrokerMetricsManager::throughput_in_total().add(
-                result.get_append_message_result().get_wrote_bytes() as i64,
-                &attributes,
-            );
-
-            BrokerMetricsManager::message_size().record(
-                result.get_append_message_result().get_wrote_bytes() as f64
-                    / result.get_append_message_result().get_msg_num() as f64,
-                &attributes,
-            );*/
-        }
     }
 
     /// Handle an exception during processing
@@ -1584,31 +1764,33 @@ impl<MS: MessageStore> PutResultProcess<MS> {
     }
 
     /// Resend the message
-    pub async fn do_resend(&self) {
+    pub async fn do_resend(&self, cancellation: &CancellationToken) -> bool {
         info!("Resend message, info: {}", self);
 
         // Gradually increase the resend interval
         let sleep_time = std::cmp::min((self.resend_count.fetch_add(1, Ordering::SeqCst) + 1) * 100, 60 * 1000);
-        tokio::time::sleep(Duration::from_millis(sleep_time as u64)).await;
+        if !schedule_sleep(cancellation, Duration::from_millis(sleep_time as u64)).await {
+            return false;
+        }
 
+        let Some(escape_bridge) = self.escape_bridge.upgrade() else {
+            self.status.store(if self.need2_skip() {
+                ProcessStatus::Skip
+            } else {
+                ProcessStatus::Exception
+            });
+            return true;
+        };
         // Look up the message and resend it
-        match self
-            .broker_controller
-            .message_store_unchecked()
-            .look_message_by_offset_with_size(self.physic_offset, self.physic_size)
-        {
+        match escape_bridge.with_message_store(|message_store| {
+            message_store.look_message_by_offset_with_size(self.physic_offset, self.physic_size)
+        }) {
             Some(msg_ext) => {
                 // Convert to inner message
-                let schedule_service = self.broker_controller.schedule_message_service();
-                let msg_inner = schedule_service.message_time_up(msg_ext);
+                let msg_inner = ScheduleMessageService::<MS>::message_time_up(msg_ext);
 
                 // Try to put the message
-                let result = self
-                    .broker_controller
-                    .mut_from_ref()
-                    .escape_bridge_mut()
-                    .put_message(msg_inner)
-                    .await;
+                let result = escape_bridge.put_message(msg_inner).await;
 
                 self.handle_result(&result);
             }
@@ -1621,26 +1803,17 @@ impl<MS: MessageStore> PutResultProcess<MS> {
                 });
             }
         }
+        true
     }
 
     /// Check if processing needs to be blocked
     pub fn need2_blocked(&self) -> bool {
-        let max_resend_num2_blocked = self
-            .broker_controller
-            .message_store_config()
-            .schedule_async_deliver_max_resend_num2_blocked;
-
-        self.resend_count.load(Ordering::Relaxed) > max_resend_num2_blocked as i32
+        self.resend_count.load(Ordering::Relaxed) > self.max_resend_num2_blocked as i32
     }
 
     /// Check if processing needs to be skipped
     pub fn need2_skip(&self) -> bool {
-        let max_resend_num2_blocked = self
-            .broker_controller
-            .message_store_config()
-            .schedule_async_deliver_max_resend_num2_blocked;
-
-        self.resend_count.load(Ordering::Relaxed) > (max_resend_num2_blocked * 2) as i32
+        self.resend_count.load(Ordering::Relaxed) > (self.max_resend_num2_blocked * 2) as i32
     }
 }
 
@@ -1705,30 +1878,32 @@ pub struct HandlePutResultTask<MS: MessageStore> {
     delay_level: i32,
 
     /// Reference to the parent service
-    schedule_service: ArcMut<ScheduleMessageService<MS>>,
-
-    /// Shutdown signal to gracefully stop the task
-    shutdown_flag: Arc<AtomicBool>,
+    schedule_service: Weak<ScheduleMessageService<MS>>,
+    run_context: ScheduleRunContext,
 }
 
 impl<MS: MessageStore> HandlePutResultTask<MS> {
     /// Create a new task for handling put results at the specified delay level
-    pub fn new(
+    fn new(
         delay_level: i32,
-        schedule_service: ArcMut<ScheduleMessageService<MS>>,
-        shutdown_flag: Arc<AtomicBool>,
+        schedule_service: Weak<ScheduleMessageService<MS>>,
+        run_context: ScheduleRunContext,
     ) -> Self {
         Self {
             delay_level,
             schedule_service,
-            shutdown_flag,
+            run_context,
         }
     }
 
     /// Execute the task to process pending results
     pub async fn run(&self) {
-        // Check shutdown flag
-        if self.shutdown_flag.load(Ordering::Relaxed) {
+        let Some(schedule_service) = self.schedule_service.upgrade() else {
+            return;
+        };
+        if self.run_context.cancellation.is_cancelled()
+            || !schedule_service.is_generation_active(self.run_context.generation)
+        {
             info!(
                 "HandlePutResultTask for level {} received shutdown signal",
                 self.delay_level
@@ -1737,7 +1912,7 @@ impl<MS: MessageStore> HandlePutResultTask<MS> {
         }
 
         // Get the pending queue for this delay level
-        let pending_queue = match self.schedule_service.deliver_pending_table.get(&self.delay_level) {
+        let pending_queue = match schedule_service.deliver_pending_table.get(&self.delay_level) {
             Some(queue) => Arc::clone(queue.value()),
             None => {
                 // If queue doesn't exist, schedule next task and return
@@ -1745,7 +1920,7 @@ impl<MS: MessageStore> HandlePutResultTask<MS> {
                 return;
             }
         };
-        let resend_in_progress = match self.schedule_service.deliver_resend_in_progress.get(&self.delay_level) {
+        let resend_in_progress = match schedule_service.deliver_resend_in_progress.get(&self.delay_level) {
             Some(flag) => Arc::clone(flag.value()),
             None => {
                 self.schedule_next_task();
@@ -1796,7 +1971,7 @@ impl<MS: MessageStore> HandlePutResultTask<MS> {
             match action {
                 PendingQueueAction::Empty => break,
                 PendingQueueAction::Advance(next_offset) => {
-                    self.schedule_service.update_offset(self.delay_level, next_offset);
+                    schedule_service.update_offset(self.delay_level, next_offset);
                 }
                 PendingQueueAction::Wait => {
                     // If any process is still running, schedule next task and return
@@ -1805,7 +1980,9 @@ impl<MS: MessageStore> HandlePutResultTask<MS> {
                 }
                 PendingQueueAction::Resend(process) => {
                     // If service is stopped, don't continue processing
-                    if !self.schedule_service.is_started() {
+                    if !schedule_service.is_generation_active(self.run_context.generation)
+                        || self.run_context.cancellation.is_cancelled()
+                    {
                         warn!("HandlePutResultTask shutdown, info={}", &process);
                         pending_queue.lock().await.push_front(process);
                         resend_in_progress.store(false, Ordering::Release);
@@ -1814,7 +1991,11 @@ impl<MS: MessageStore> HandlePutResultTask<MS> {
 
                     // Otherwise log warning and try resending
                     warn!("putResultProcess error, info={}", &process);
-                    process.do_resend().await;
+                    if !process.do_resend(&self.run_context.cancellation).await {
+                        pending_queue.lock().await.push_front(process);
+                        resend_in_progress.store(false, Ordering::Release);
+                        return;
+                    }
                     pending_queue.lock().await.push_front(process);
                     resend_in_progress.store(false, Ordering::Release);
                     break;
@@ -1833,18 +2014,35 @@ impl<MS: MessageStore> HandlePutResultTask<MS> {
     /// Schedule the next execution of the handler task
     fn schedule_next_task(&self) {
         // Only schedule if the service is still running and not shutting down
-        if self.schedule_service.is_started() && !self.shutdown_flag.load(Ordering::Relaxed) {
+        let Some(schedule_service) = self.schedule_service.upgrade() else {
+            return;
+        };
+        if schedule_service.is_generation_active(self.run_context.generation)
+            && !self.run_context.cancellation.is_cancelled()
+        {
             let delay_level = self.delay_level;
-            let schedule_service = ArcMut::clone(&self.schedule_service);
-            let shutdown_flag = Arc::clone(&self.shutdown_flag);
-            let spawner = ArcMut::clone(&self.schedule_service);
+            let schedule_service = self.schedule_service.clone();
+            let context = self.run_context.clone();
 
-            // Schedule after a short delay
-            spawner.spawn_schedule_task("broker.schedule.handle-put-result", async move {
-                tokio::time::sleep(Duration::from_millis(DELAY_FOR_A_SLEEP)).await;
-                let task = HandlePutResultTask::new(delay_level, schedule_service, shutdown_flag);
-                task.run().await;
-            });
+            // Schedule after a short delay into the same generation-owned task group.
+            let spawn_result = ScheduleMessageService::<MS>::spawn_schedule_task(
+                &self.run_context,
+                "broker.schedule.handle-put-result",
+                async move {
+                    if !schedule_sleep(&context.cancellation, Duration::from_millis(DELAY_FOR_A_SLEEP)).await {
+                        return;
+                    }
+                    let task = HandlePutResultTask::new(delay_level, schedule_service, context);
+                    task.run().await;
+                },
+            );
+            if let Err(error) = spawn_result {
+                warn!(
+                    ?error,
+                    generation = self.run_context.generation,
+                    "failed to reschedule put-result handler"
+                );
+            }
         }
     }
 }
@@ -1865,9 +2063,14 @@ mod tests {
     use std::sync::Barrier;
     use std::thread;
 
+    use rocketmq_common::common::broker::broker_config::BrokerConfig;
     use rocketmq_remoting::protocol::DataVersion;
+    use rocketmq_runtime::RuntimeContext;
+    use rocketmq_store::config::message_store_config::MessageStoreConfig;
+    use tempfile::TempDir;
 
     use super::*;
+    use crate::broker_runtime::BrokerRuntime;
     use crate::schedule::delay_offset_serialize_wrapper::DelayOffsetSerializeWrapper;
 
     #[test]
@@ -1971,6 +2174,110 @@ mod tests {
             status.store(expected);
             assert_eq!(status.load(), expected);
         }
+    }
+
+    #[tokio::test]
+    async fn schedule_lifecycle_uses_fresh_generation_and_prunes_dynamic_child() {
+        let temp_dir = TempDir::new().expect("schedule lifecycle temp dir should be created");
+        let root = temp_dir.path().to_string_lossy().into_owned();
+        let broker_config = Arc::new(BrokerConfig {
+            store_path_root_dir: root.clone().into(),
+            ..BrokerConfig::default()
+        });
+        let message_store_config = Arc::new(MessageStoreConfig {
+            store_path_root_dir: root.into(),
+            ..MessageStoreConfig::default()
+        });
+        let runtime_context = RuntimeContext::from_current("schedule-lifecycle-generation-test");
+        let service_context = runtime_context.service_context("broker");
+        let parent_group = service_context.task_group().clone();
+        let mut runtime = BrokerRuntime::new_with_service_context(broker_config, message_store_config, service_context);
+        let service = runtime.inner_for_test().schedule_message_service_unchecked().clone();
+
+        ScheduleMessageService::start_persist_task_for_probe(service.clone(), Duration::from_secs(60))
+            .await
+            .expect("first schedule generation should start");
+        let first_generation = service.active_generation.load(Ordering::Acquire);
+        assert_ne!(first_generation, 0);
+        assert_eq!(parent_group.child_stats().active, 1);
+
+        service.stop().await.expect("first schedule generation should stop");
+        assert_eq!(service.active_generation.load(Ordering::Acquire), 0);
+        assert_eq!(service.task_count(), 0);
+        assert_eq!(parent_group.child_stats().active, 0);
+
+        ScheduleMessageService::start_persist_task_for_probe(service.clone(), Duration::from_secs(60))
+            .await
+            .expect("second schedule generation should start");
+        let second_generation = service.active_generation.load(Ordering::Acquire);
+        assert!(second_generation > first_generation);
+
+        service
+            .shutdown()
+            .await
+            .expect("final schedule shutdown should succeed");
+        assert_eq!(parent_group.child_stats().active, 0);
+        assert!(
+            ScheduleMessageService::start_persist_task_for_probe(service, Duration::from_secs(60))
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn legacy_runtime_constructor_installs_owned_schedule_context_on_first_start() {
+        let temp_dir = TempDir::new().expect("legacy schedule context temp dir should be created");
+        let root = temp_dir.path().to_string_lossy().into_owned();
+        let broker_config = Arc::new(BrokerConfig {
+            store_path_root_dir: root.clone().into(),
+            ..BrokerConfig::default()
+        });
+        let message_store_config = Arc::new(MessageStoreConfig {
+            store_path_root_dir: root.into(),
+            ..MessageStoreConfig::default()
+        });
+        let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
+        let service = runtime.inner_for_test().schedule_message_service_unchecked().clone();
+        assert!(service.runtime_capabilities.get().is_none());
+
+        ScheduleMessageService::start_persist_task_for_probe(service.clone(), Duration::from_secs(60))
+            .await
+            .expect("legacy schedule service should install a compatibility context");
+        assert!(service.runtime_capabilities.get().is_some());
+
+        service
+            .shutdown()
+            .await
+            .expect("legacy compatibility context should shutdown cleanly");
+    }
+
+    #[tokio::test]
+    async fn failed_peer_persistence_leaves_memory_snapshot_unchanged() {
+        let temp_dir = TempDir::new().expect("peer persistence temp dir should be created");
+        let blocked_root = temp_dir.path().join("not-a-directory");
+        std::fs::write(&blocked_root, b"blocked").expect("blocking file should be created");
+        let root = blocked_root.to_string_lossy().into_owned();
+        let broker_config = Arc::new(BrokerConfig {
+            store_path_root_dir: root.clone().into(),
+            ..BrokerConfig::default()
+        });
+        let message_store_config = Arc::new(MessageStoreConfig {
+            store_path_root_dir: root.into(),
+            ..MessageStoreConfig::default()
+        });
+        let runtime_context = RuntimeContext::from_current("schedule-peer-persistence-test");
+        let service_context = runtime_context.service_context("broker");
+        let mut runtime = BrokerRuntime::new_with_service_context(broker_config, message_store_config, service_context);
+        let service = runtime.inner_for_test().schedule_message_service_unchecked().clone();
+        service.offset_state.update_offset(1, 10, 1, 1);
+        let before = service.offset_state.snapshot();
+        let peer = DelayOffsetSerializeWrapper::new(Some(HashMap::from([(2, 20)])), Some(DataVersion::default()));
+        let encoded = peer.serialize_json().expect("peer snapshot should encode");
+
+        assert!(service.sync_delay_offset_from_peer(&encoded, &peer).await.is_err());
+        let after = service.offset_state.snapshot();
+        assert_eq!(after.0, before.0);
+        assert_eq!(after.1.counter(), before.1.counter());
     }
 
     // =============================================================================
@@ -2109,8 +2416,10 @@ mod tests {
     fn schedule_message_service_uses_typed_errors() {
         let source = include_str!("schedule_message_service.rs");
 
-        assert!(source.contains("RocketMQResult<ScheduledTaskGroup>"));
+        assert!(source.contains("async fn persist_current(&self) -> RocketMQResult<()>"));
         assert!(source.contains("RocketMQResult<PutResultProcess<MS>>"));
+        assert!(!source.contains(concat!("ArcMut<", "ScheduleMessageService")));
+        assert!(!source.contains(concat!("mut_from_ref()", ".escape_bridge_mut()")));
         assert!(!source.contains(concat!("Box<dyn std::error::", "Error")));
     }
 }

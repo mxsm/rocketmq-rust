@@ -2067,10 +2067,36 @@ Broker ScheduleMessageService internal-state ownership 随 Issue #8391 完成以
 75/82 总进度不变，Broker 其他 processor/transaction、Store、compatibility、stable/Miri/Loom/soak/SLO 与完整候选快照
 Gate 仍保持开放。
 
+## M11-12aw 实现
+
+Broker Schedule root/lifecycle ownership 随 Issue #8393 完成以下边界收敛：
+
+- `ScheduleMessageService` root 从 `ArcMut` 迁移到标准 `Arc`；Broker outer 持有唯一 EscapeBridge strong owner，BrokerRuntimeInner 只保留标准 `Weak` 回边，拆除 inner→bridge→inner 强引用环。Schedule、POP、ACK 和 transaction 调用链统一使用共享 EscapeBridge capability，不再通过 `mut_from_ref`/mutable accessor 跨 `.await`。
+- 每次成功 start 分配递增 generation 和独立 `TaskGroupChildLease`；delivery、put-result 与周期持久化任务只捕获 service `Weak`、generation context 和 cancellation token。activation gate 保证任务安装失败可事务回滚，重调度只能回到同一 generation，所有 sleep/backoff 均可取消，stop 后动态 child 被 drain 并从父组剪枝，restart 使用全新 generation。
+- 单一异步 lifecycle gate 串行 start/stop/shutdown，单一 persistence gate 串行周期、最终和 peer 写入。停止先清除 active generation、取消并 drain 旧组，再执行唯一最终 offset 持久化；final persist 失败保持可重试状态。生产 load、周期/最终/peer 文件 I/O 全部经注入的 `ServiceContext::blocking` 所有；未显式注入 context 的公开 Builder compatibility 路径复用 `ScheduledTaskManager` 已审计 legacy root，并只在其下创建 Schedule TaskGroup/BlockingExecutor child，不新增 Broker current-runtime adapter。
+- peer delay-offset 同步先持久化完整 JSON，再安装内存 snapshot；写盘失败时 offset/version 保持不变。Broker shutdown 在 message-store shutdown 前完成 schedule cancel/drain/final persist 并移除 runtime slot；Controller 降级在 Store 仍为 Master 时先停止 schedule，错误向角色切换传播，成功后才发布 schedule 状态位和 Store Slave role；提升保持先切 Store Master 再启动 schedule。
+- `PutResultProcess` 不再强持有 BrokerRuntimeInner，只保存 EscapeBridge `Weak` 与不可变 resend limit；重试退避可取消，取消时 process 放回队首。启动 load 不再重复执行，Schedule diagnostics 同时统计 generation 父组与 scheduled child driver。
+- reviewed baseline 从 459 identities / 1,173 occurrences 降至 453 / 1,146；production 从 287/680 降至 282/654，test 从 158/453 降至 157/452，compatibility 保持 14/40。Broker production 从 165/372 降至 160/346、test 从 58/72 降至 57/71；净删除 5 个 production identity/26 occurrence 与 1 个 test identity/1 occurrence。1 个保留 import occurrence 因相邻 import 删除发生一对一 fingerprint relocation，经临时 ADR-013 approval 审核且 approval 不提交。
+
+## M11-12aw 验证
+
+| 命令 | 结果 |
+|---|---|
+| `cargo check -p rocketmq-broker --all-features` / Broker strict Clippy | 通过；标准 root/Weak 回边、generation lifecycle、BlockingExecutor I/O 和 role/shutdown ordering 在 all-features 下编译和 lint 通过 |
+| Schedule/EscapeBridge/lifecycle focused tests | Schedule 21/21、EscapeBridge 5/5、持久化 lifecycle probe 1/1、角色状态失败重试 1/1 通过；覆盖 fresh generation/child prune/restart、legacy Builder owned context、peer disk failure 不发布内存、最终持久化失败不发布角色状态与修复后重试 |
+| `cargo test -p rocketmq-broker --all-features --lib -- --test-threads=1` | 583 passed、25 failed、1 ignored；25 个失败与 main 已登记失败名单一致，本切片新增 4 个测试全部通过且未新增 baseline failure，故不能把全套记为通过 |
+| RocksDB specialized gates | Store/Broker strict Clippy 通过；foundation 82/82、semantics 9/9、Broker `rocksdb` 20/20、`pop_consumer` 4/4 通过 |
+| reviewed baseline reduction / `python scripts/arc_mut_guard.py` | baseline 459/1,173→453/1,146；1 个保留 occurrence 经临时 ADR-013 一对一 relocation 审核，approval 不提交；guard 通过，production 282/654、test 157/452、compatibility 14/40，Broker production 160/346 |
+| ArcMut / architecture guard tests | ArcMut 67/67、fixtures 24/24、architecture dependency/release/performance 60/60 通过；target/baseline/release/performance profiles 全绿 |
+| `cargo fmt --all -- --check` / root workspace strict Clippy | 通过；root workspace 32 个 package 的 all-targets/all-features `-D warnings` profile 通过 |
+| runtime audit / AGENTS routing / targeted scan / `git diff --check` | runtime boundary 与 routing 通过；4 个 standalone Cargo、3 个 Node project、8 条 route；Schedule root ArcMut、EscapeBridge mutable accessor/path 与 Schedule 文件 ArcMut 均零匹配；diff check 无 whitespace error |
+
+下一子切片 M11-12ax 继续处理 Broker 其他 processor/transaction owner；75/82 总进度不变，Broker root 其余债务、
+Store、compatibility、stable/Miri/Loom/soak/SLO 与完整候选快照 Gate 仍保持开放。
+
 ## 剩余切片与 Gate
 
-1. Broker BrokerRuntimeInner、schedule/其他 processor/transaction owner（165/372）；下一子切片 M11-12aw 处理
-   Schedule root capability、task generation、shutdown ordering 与 blocking persistence ownership。
+1. Broker BrokerRuntimeInner、其他 processor/transaction owner（160/346）；下一子切片 M11-12ax 继续拆分 Broker owner。
 2. Store MappedFileQueue/ConsumeQueue、CommitLog/Flush、StoreHandle/Rocks/Timer 与 HA actor（122/308）。
 3. 删除 compatibility `arc_mut.rs` 和公开 re-export；移除其余 nightly feature，将 guard 切到 production/public zero。
 4. 对同一候选快照执行 stable feature matrix、Miri/Loom 可用切片、soak/SLO fault、dashboard/runbook、动态

@@ -25,6 +25,7 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
+use std::sync::Weak;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -528,6 +529,8 @@ pub(crate) struct BrokerRuntime {
     remoting_server_task_group: Option<TaskGroup>,
     remoting_server_report_receivers: Vec<BrokerRemotingServerReportReceiver>,
     request_processor_task_group: Option<TaskGroup>,
+    #[cfg(feature = "local_file_store")]
+    escape_bridge_owner: Arc<EscapeBridge<GenericMessageStore>>,
 }
 
 struct BrokerRemotingServerReportReceiver {
@@ -1071,7 +1074,8 @@ impl BrokerRuntime {
             inner.topic_config_manager = Some(TopicConfigManager::new(inner.clone(), true));
         }
         inner.topic_route_info_manager = Some(TopicRouteInfoManager::new(inner.clone()));
-        inner.escape_bridge = Some(EscapeBridge::new(inner.clone()));
+        let escape_bridge = Arc::new(EscapeBridge::new(inner.clone()));
+        inner.escape_bridge = Some(Arc::downgrade(&escape_bridge));
         #[cfg(feature = "rocksdb_store")]
         {
             inner.subscription_group_manager = Some(match rocksdb_config_managers.as_ref() {
@@ -1092,13 +1096,20 @@ impl BrokerRuntime {
             .consumer_manager
             .set_broker_stats_manager(Arc::downgrade(&stats_manager));
         inner.broker_stats_manager = Some(stats_manager);
-        inner.schedule_message_service = Some(ArcMut::new(ScheduleMessageService::new(inner.clone())));
+        inner.schedule_message_service = Some(Arc::new(ScheduleMessageService::new(
+            inner.broker_config.clone(),
+            inner.message_store_config.clone(),
+            Arc::downgrade(&escape_bridge),
+            inner.service_context.clone(),
+            scheduled_task_manager.clone(),
+        )));
         inner.client_housekeeping_service = Some(Arc::new(ClientHousekeepingService::new(inner.clone())));
         inner.slave_synchronize = Some(SlaveSynchronize::new(inner.clone()));
         inner.broker_pre_online_service = Some(BrokerPreOnlineService::new(inner.clone()));
         inner.topic_queue_mapping_clean_service = Some(TopicQueueMappingCleanService::new(inner.clone()));
         Self {
             inner,
+            escape_bridge_owner: escape_bridge,
             shutdown_hook: None,
             proxy_request_processor: None,
             consumer_ids_change_listener,
@@ -1214,8 +1225,19 @@ impl BrokerRuntime {
         shutdown_report.request_processor = self.shutdown_request_processor_tasks(deadline).await;
         progress.complete("request_processor");
 
+        // Scheduled delivery must drain and persist its final coherent offset snapshot while the
+        // message store is still available. Detach the service only after that owned shutdown
+        // completes so in-flight delivery cannot observe a missing runtime slot.
+        if let Some(schedule_message_service) = self.inner.schedule_message_service.as_ref().cloned() {
+            if let Err(error) = schedule_message_service.shutdown().await {
+                warn!(?error, "Failed to shutdown ScheduleMessageService cleanly");
+            }
+            self.inner.schedule_message_service.take();
+        }
+
         // Shutdown uses one absolute deadline and this fixed phase order:
-        // reject/drain requests -> flush/replicate the store -> stop background work -> telemetry.
+        // reject/drain requests -> drain store-backed delivery -> flush/replicate the store ->
+        // stop remaining background work -> telemetry.
         // Store durability therefore cannot be starved by a slow background component.
         let started = Instant::now();
         let message_store_outcome = if let Some(message_store) = self.inner.message_store.as_mut() {
@@ -1387,30 +1409,6 @@ impl BrokerRuntime {
             }
         }
 
-        if let Some(schedule_message_service) = self.inner.schedule_message_service.take() {
-            let persist_service = schedule_message_service.clone();
-            let persist_result = if let Some(service_context) = self.inner.service_context.as_ref() {
-                run_shutdown_blocking_operation(
-                    service_context,
-                    deadline,
-                    "broker.schedule-message.persist",
-                    move || {
-                        persist_service.persist();
-                        persist_service.stop();
-                    },
-                )
-                .await
-            } else {
-                Err(BrokerBlockingShutdownError::MissingServiceContext)
-            };
-            match persist_result {
-                Ok(()) => schedule_message_service.shutdown().await,
-                Err(error) => {
-                    warn!(error = %error.detail(), "Failed to persist schedule message state during shutdown");
-                    schedule_message_service.shutdown_without_persist().await;
-                }
-            }
-        }
         if let Some(transactional_message_check_service) = self.inner.transactional_message_check_service.as_mut() {
             transaction_services_present = true;
             transactional_message_check_service.shutdown().await;
@@ -1429,9 +1427,7 @@ impl BrokerRuntime {
             BrokerShutdownComponentReport::skipped("transaction_services")
         };
         progress.complete("transaction_services");
-        if let Some(escape_bridge) = self.inner.escape_bridge.as_mut() {
-            escape_bridge.shutdown();
-        }
+        self.escape_bridge_owner.shutdown();
         let started = Instant::now();
         let mut topic_route_present = false;
         if let Some(topic_route_info_manager) = self.inner.topic_route_info_manager.as_mut() {
@@ -1914,9 +1910,15 @@ impl BrokerRuntime {
         }
 
         //scheduleMessageService load after messageStore load success
-        if let Some(schedule_message_service) = &mut self.inner.schedule_message_service {
+        if let Some(schedule_message_service) = &self.inner.schedule_message_service {
             info!("Load schedule message service");
-            result &= schedule_message_service.load();
+            result &= match schedule_message_service.load_async().await {
+                Ok(loaded) => loaded,
+                Err(error) => {
+                    warn!(?error, "Load schedule message service failed");
+                    false
+                }
+            };
             if !result {
                 warn!("Load schedule message service failed");
                 return false;
@@ -2845,9 +2847,7 @@ impl BrokerRuntime {
 
         self.inner.broadcast_offset_manager.start();
 
-        if let Some(escape_bridge) = self.inner.escape_bridge.as_mut() {
-            escape_bridge.start();
-        }
+        self.escape_bridge_owner.start();
         if let Some(topic_route_info_manager) = self.inner.topic_route_info_manager.as_mut() {
             topic_route_info_manager.start();
         }
@@ -3326,7 +3326,7 @@ pub(crate) struct BrokerRuntimeInner<MS: MessageStore> {
     consumer_order_info_manager: Option<ConsumerOrderInfoManager<MS>>,
     message_store: Option<ArcMut<MS>>,
     broker_stats: Option<BrokerStats<MS>>,
-    schedule_message_service: Option<ArcMut<ScheduleMessageService<MS>>>,
+    schedule_message_service: Option<Arc<ScheduleMessageService<MS>>>,
     timer_message_store: Option<Arc<TimerMessageStore>>,
     lite_event_dispatcher: Arc<LiteEventDispatcher>,
     lite_lifecycle_manager: Arc<LiteLifecycleManager>,
@@ -3347,7 +3347,7 @@ pub(crate) struct BrokerRuntimeInner<MS: MessageStore> {
     transactional_message_check_service: Option<TransactionalMessageCheckService<MS>>,
     transaction_metrics_flush_service: Option<TransactionMetricsFlushService>,
     topic_route_info_manager: Option<TopicRouteInfoManager<MS>>,
-    escape_bridge: Option<EscapeBridge<MS>>,
+    escape_bridge: Option<Weak<EscapeBridge<MS>>>,
     pop_inflight_message_counter: PopInflightMessageCounter,
     replicas_manager: Option<ReplicasManager>,
     broker_fast_failure: BrokerFastFailure,
@@ -3561,16 +3561,6 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn escape_bridge_mut(&mut self) -> &mut EscapeBridge<MS> {
-        self.escape_bridge.as_mut().unwrap()
-    }
-
-    #[inline]
-    pub fn escape_bridge_unchecked_mut(&mut self) -> &mut EscapeBridge<MS> {
-        unsafe { self.escape_bridge.as_mut().unwrap_unchecked() }
-    }
-
-    #[inline]
     pub fn pop_inflight_message_counter_mut(&mut self) -> &mut PopInflightMessageCounter {
         &mut self.pop_inflight_message_counter
     }
@@ -3701,12 +3691,12 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn schedule_message_service(&self) -> &ArcMut<ScheduleMessageService<MS>> {
+    pub fn schedule_message_service(&self) -> &Arc<ScheduleMessageService<MS>> {
         self.schedule_message_service.as_ref().unwrap()
     }
 
     #[inline]
-    pub fn schedule_message_service_unchecked(&self) -> &ArcMut<ScheduleMessageService<MS>> {
+    pub fn schedule_message_service_unchecked(&self) -> &Arc<ScheduleMessageService<MS>> {
         unsafe { self.schedule_message_service.as_ref().unwrap_unchecked() }
     }
 
@@ -3827,8 +3817,11 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn escape_bridge(&self) -> &EscapeBridge<MS> {
-        self.escape_bridge.as_ref().unwrap()
+    pub fn escape_bridge(&self) -> Arc<EscapeBridge<MS>> {
+        self.escape_bridge
+            .as_ref()
+            .and_then(Weak::upgrade)
+            .expect("EscapeBridge owner must outlive BrokerRuntimeInner")
     }
 
     #[inline]
@@ -4022,11 +4015,6 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     #[inline]
     pub fn set_topic_route_info_manager(&mut self, topic_route_info_manager: TopicRouteInfoManager<MS>) {
         self.topic_route_info_manager = Some(topic_route_info_manager);
-    }
-
-    #[inline]
-    pub fn set_escape_bridge(&mut self, escape_bridge: EscapeBridge<MS>) {
-        self.escape_bridge = Some(escape_bridge);
     }
 
     #[inline]
@@ -4723,10 +4711,13 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     pub async fn change_special_service_status(&mut self, should_start: bool) {
+        if let Err(error) = self.change_schedule_service_status(should_start).await {
+            error!(?error, should_start, "Failed to change ScheduleMessageService status");
+            return;
+        }
         for plugin in self.broker_attached_plugins.iter() {
             plugin.status_changed(should_start);
         }
-        self.change_schedule_service_status(should_start);
         self.change_transaction_check_service_status(should_start).await;
 
         if let Some(ack_message_processor) = &mut self.ack_message_processor {
@@ -4735,15 +4726,15 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         }
     }
 
-    pub fn change_schedule_service_status(&mut self, should_start: bool) {
+    pub async fn change_schedule_service_status(&mut self, should_start: bool) -> rocketmq_error::RocketMQResult<()> {
         if self.is_schedule_service_start.load(Ordering::Relaxed) != should_start {
             info!("change_schedule_service_status changed to {}", should_start);
             if should_start {
                 if let Some(schedule_message_service) = &self.schedule_message_service {
-                    let _ = ScheduleMessageService::start(schedule_message_service.clone());
+                    ScheduleMessageService::start(schedule_message_service.clone()).await?;
                 }
-            } else if let Some(schedule_message_service) = &mut self.schedule_message_service {
-                schedule_message_service.stop();
+            } else if let Some(schedule_message_service) = &self.schedule_message_service {
+                schedule_message_service.stop().await?;
             }
 
             self.is_schedule_service_start.store(should_start, Ordering::Release);
@@ -4753,6 +4744,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
                 timer.set_should_running_dequeue(should_start);
             }
         }
+        Ok(())
     }
 
     pub async fn change_transaction_check_service_status(&mut self, should_start: bool) {
@@ -4849,6 +4841,8 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
                     outcome.master_epoch,
                 )
                 .await?;
+                this.change_schedule_service_status(outcome.should_start_special_service)
+                    .await?;
                 this.change_special_service_status(outcome.should_start_special_service)
                     .await;
                 if outcome.should_clear_slave_master_address() {
@@ -4858,6 +4852,11 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
                 }
             }
             BrokerReplicaRole::Slave => {
+                // Drain delayed delivery while the store still has its master write capability.
+                this.change_schedule_service_status(outcome.should_start_special_service)
+                    .await?;
+                this.change_special_service_status(outcome.should_start_special_service)
+                    .await;
                 this.apply_message_store_role_change(
                     previous_store_role,
                     BrokerReplicaRole::Slave,
@@ -4866,8 +4865,6 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
                     outcome.master_epoch,
                 )
                 .await?;
-                this.change_special_service_status(outcome.should_start_special_service)
-                    .await;
                 if let Some(master_address) = outcome.slave_master_address() {
                     if let Some(slave_synchronize) = this.slave_synchronize_mut() {
                         slave_synchronize.set_master_addr(Some(master_address));
@@ -5510,6 +5507,54 @@ mod tests {
             "{}",
             service_report.to_json()
         );
+    }
+
+    #[tokio::test]
+    async fn schedule_role_status_changes_only_after_final_persistence_succeeds() {
+        let temp_dir = tempfile::tempdir().expect("schedule role transition temp dir should be created");
+        let blocked_root = temp_dir.path().join("blocked-store-root");
+        std::fs::write(&blocked_root, b"not a directory").expect("blocking file should be created");
+        let root = blocked_root.to_string_lossy().into_owned();
+        let broker_config = Arc::new(BrokerConfig {
+            store_path_root_dir: root.clone().into(),
+            auth_config_path: temp_dir.path().join("auth.json").to_string_lossy().into_owned().into(),
+            ..BrokerConfig::default()
+        });
+        let message_store_config = Arc::new(MessageStoreConfig {
+            store_path_root_dir: root.into(),
+            ..MessageStoreConfig::default()
+        });
+        let context = RuntimeContext::from_current("broker-schedule-role-transition-test");
+        let service_context = context.service_context("broker");
+        let mut runtime = BrokerRuntime::new_with_service_context(broker_config, message_store_config, service_context);
+
+        runtime
+            .inner
+            .change_schedule_service_status(true)
+            .await
+            .expect("schedule service should start");
+        assert!(runtime.inner.is_schedule_service_start.load(Ordering::Acquire));
+
+        let error = runtime
+            .inner
+            .change_schedule_service_status(false)
+            .await
+            .expect_err("invalid store root should reject the final persistence transition");
+        assert!(error.to_string().contains("ScheduleMessageService"));
+        assert!(runtime.inner.is_schedule_service_start.load(Ordering::Acquire));
+        assert!(!runtime.inner.schedule_message_service().is_started());
+
+        std::fs::remove_file(&blocked_root).expect("blocking file should be removed");
+        std::fs::create_dir_all(&blocked_root).expect("store root should be repaired");
+        runtime
+            .inner
+            .change_schedule_service_status(false)
+            .await
+            .expect("schedule transition should succeed after the store root is repaired");
+        assert!(!runtime.inner.is_schedule_service_start.load(Ordering::Acquire));
+
+        let report = context.shutdown_tasks(Duration::from_secs(1)).await;
+        assert!(report.is_healthy(), "{}", report.to_json());
     }
 
     #[test]

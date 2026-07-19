@@ -348,7 +348,7 @@ where
     pub async fn escape_message(&mut self, message_inner: MessageExtBrokerInner) -> bool {
         let put_message_result = self
             .broker_runtime_inner
-            .escape_bridge_mut()
+            .escape_bridge()
             .put_message(message_inner)
             .await;
         put_message_result.is_ok()

@@ -43,6 +43,7 @@ pub mod bench_support {
     use rocketmq_common::common::broker::broker_config::BrokerConfig;
     use rocketmq_common::common::filter::expression_type::ExpressionType;
     use rocketmq_runtime::schedule::simple_scheduler::ScheduledShutdownReport;
+    use rocketmq_runtime::RuntimeContext;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
     use rocketmq_store::store_path_config_helper::get_delay_offset_store_path;
     use serde::Serialize;
@@ -549,13 +550,20 @@ pub mod bench_support {
             message_delay_level: "1s".to_string(),
             ..MessageStoreConfig::default()
         });
-        let mut runtime = crate::broker_runtime::BrokerRuntime::new(broker_config, message_store_config);
+        let runtime_context = RuntimeContext::from_current("broker-schedule-persistence-probe");
+        let service_context = runtime_context.service_context("broker");
+        let mut runtime = crate::broker_runtime::BrokerRuntime::new_with_service_context(
+            broker_config,
+            message_store_config,
+            service_context,
+        );
         let service = runtime.inner_for_test().schedule_message_service_unchecked().clone();
 
         crate::schedule::schedule_message_service::ScheduleMessageService::start_persist_task_for_probe(
             service.clone(),
             Duration::ZERO,
         )
+        .await
         .expect("broker schedule persist task should start");
 
         let mut snapshots = service.schedule_snapshot();
@@ -577,7 +585,10 @@ pub mod bench_support {
         let task_count_before_shutdown = service.task_count();
         let persisted_offset_file = PathBuf::from(get_delay_offset_store_path(&root_dir)).exists();
         let shutdown_started_at = Instant::now();
-        service.shutdown().await;
+        service
+            .shutdown()
+            .await
+            .expect("broker schedule persist task should shutdown");
         let shutdown_elapsed_us = shutdown_started_at.elapsed().as_micros();
         let task_count_after_shutdown = service.task_count();
         let healthy = scheduled_runs > 0

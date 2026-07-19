@@ -448,7 +448,7 @@ where
         inner.properties_string = message_decoder::message_properties_to_string(inner.get_properties());
         let put_message_result = self
             .broker_runtime_inner
-            .escape_bridge_mut()
+            .escape_bridge()
             .put_message_to_specific_queue(inner)
             .await;
         if !matches!(
