@@ -499,6 +499,12 @@ consumer-manage 与 query-assignment 的 variant/startup root 改为标准 `Arc`
 compatibility 保持 14/40。总进度仍为 75/82，下一子切片 M11-12ba 配对拆分 transaction bridge/listener 与
 TopicConfigManager runtime capability carrier，并继续收口 Broker admin/其他 processor；M11-12 父工作包未完成。
 
+Broker auth admin handler ownership 随 Issue #8402 从 11 个 auth/user admin handler 删除从未读取的完整
+`BrokerRuntimeInner` carrier 与无意义 `MessageStore` 泛型；handler 现在只持有标准 `Arc<AuthAdminService>`，Admin
+processor wiring 与 auth ACL/user/global-white 行为保持不变。实际快照降至 259 production/580 occurrence，test 保持
+156/451，Broker production 降至 137/272；compatibility 保持 14/40。总进度仍为 75/82，下一子切片 M11-12bb
+配对拆分 transaction bridge/listener 与 TopicConfigManager runtime capability carrier；M11-12 父工作包未完成。
+
 ### 9.3 证据目录
 
 - 运行期生成物：`target/architecture-refactor/Mxx/<run-id>/`，不提交 Git。

@@ -21,26 +21,17 @@ use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::header::get_acl_request_header::GetAclRequestHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::RemotingSerializable;
-use rocketmq_store::base::message_store::MessageStore;
 
 use crate::auth::auth_admin_service::AuthAdminService;
-use crate::broker_runtime::BrokerRuntimeInner;
 
 #[derive(Clone)]
-pub struct GetAclRequestHandler<MS: MessageStore> {
-    _broker_runtime_inner: rocketmq_rust::ArcMut<BrokerRuntimeInner<MS>>,
+pub struct GetAclRequestHandler {
     auth_admin_service: Arc<AuthAdminService>,
 }
 
-impl<MS: MessageStore> GetAclRequestHandler<MS> {
-    pub fn new(
-        broker_runtime_inner: rocketmq_rust::ArcMut<BrokerRuntimeInner<MS>>,
-        auth_admin_service: Arc<AuthAdminService>,
-    ) -> Self {
-        Self {
-            _broker_runtime_inner: broker_runtime_inner,
-            auth_admin_service,
-        }
+impl GetAclRequestHandler {
+    pub fn new(auth_admin_service: Arc<AuthAdminService>) -> Self {
+        Self { auth_admin_service }
     }
 
     pub async fn get_acl(
@@ -202,9 +193,9 @@ mod tests {
         alice.set_user_status(UserStatus::Enable);
         auth_admin_service.create_user(alice).await.expect("create alice user");
 
-        let mut create_handler = CreateAclRequestHandler::new(inner.clone(), auth_admin_service.clone());
-        let mut update_handler = UpdateAclRequestHandler::new(inner.clone(), auth_admin_service.clone());
-        let mut get_handler = GetAclRequestHandler::new(inner.clone(), auth_admin_service.clone());
+        let mut create_handler = CreateAclRequestHandler::new(auth_admin_service.clone());
+        let mut update_handler = UpdateAclRequestHandler::new(auth_admin_service.clone());
+        let mut get_handler = GetAclRequestHandler::new(auth_admin_service.clone());
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
 
@@ -302,10 +293,10 @@ mod tests {
             })
             .expect("create auth admin service"),
         );
-        let mut create_user_handler = CreateUserRequestHandler::new(inner.clone(), auth_admin_service.clone());
-        let mut update_user_handler = UpdateUserRequestHandler::new(inner.clone(), auth_admin_service.clone());
-        let mut create_acl_handler = CreateAclRequestHandler::new(inner.clone(), auth_admin_service.clone());
-        let mut update_acl_handler = UpdateAclRequestHandler::new(inner.clone(), auth_admin_service);
+        let mut create_user_handler = CreateUserRequestHandler::new(auth_admin_service.clone());
+        let mut update_user_handler = UpdateUserRequestHandler::new(auth_admin_service.clone());
+        let mut create_acl_handler = CreateAclRequestHandler::new(auth_admin_service.clone());
+        let mut update_acl_handler = UpdateAclRequestHandler::new(auth_admin_service);
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
 
@@ -415,8 +406,8 @@ mod tests {
             })
             .expect("create auth admin service"),
         );
-        let mut list_users_handler = ListUsersRequestHandler::new(inner.clone(), auth_admin_service.clone());
-        let mut list_acl_handler = ListAclRequestHandler::new(inner.clone(), auth_admin_service);
+        let mut list_users_handler = ListUsersRequestHandler::new(auth_admin_service.clone());
+        let mut list_acl_handler = ListAclRequestHandler::new(auth_admin_service);
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
 
@@ -482,7 +473,7 @@ mod tests {
         alice.set_user_status(UserStatus::Enable);
         auth_admin_service.create_user(alice).await.expect("create alice user");
 
-        let mut handler = UpdateUserRequestHandler::new(inner.clone(), auth_admin_service.clone());
+        let mut handler = UpdateUserRequestHandler::new(auth_admin_service.clone());
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request = RemotingCommand::create_request_command(
@@ -541,7 +532,7 @@ mod tests {
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
 
-        let mut create_handler = CreateUserRequestHandler::new(inner.clone(), auth_admin_service.clone());
+        let mut create_handler = CreateUserRequestHandler::new(auth_admin_service.clone());
         let mut create_request = RemotingCommand::create_request_command(
             RequestCode::AuthCreateUser,
             CreateUserRequestHeader {
@@ -577,7 +568,7 @@ mod tests {
             Some("The super user can only be create by super user")
         );
 
-        let mut update_handler = UpdateUserRequestHandler::new(inner.clone(), auth_admin_service);
+        let mut update_handler = UpdateUserRequestHandler::new(auth_admin_service);
         let mut update_request = RemotingCommand::create_request_command(
             RequestCode::AuthUpdateUser,
             UpdateUserRequestHeader {
@@ -648,8 +639,8 @@ mod tests {
             .await
             .expect("create acl");
 
-        let mut delete_handler = DeleteAclRequestHandler::new(inner.clone(), auth_admin_service.clone());
-        let mut get_handler = GetAclRequestHandler::new(inner.clone(), auth_admin_service);
+        let mut delete_handler = DeleteAclRequestHandler::new(auth_admin_service.clone());
+        let mut get_handler = GetAclRequestHandler::new(auth_admin_service);
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut delete_request = RemotingCommand::create_request_command(

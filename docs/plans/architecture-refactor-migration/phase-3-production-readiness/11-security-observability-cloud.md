@@ -513,6 +513,12 @@ root/runtime slot 改为标准 `Arc`；共享入口只复制轻量 capability，
 14/40 不增。下一子切片 M11-12ba 配对处理 transaction bridge/listener 与 TopicConfigManager runtime capability
 carrier，并继续处理 Broker admin/其他 processor；完整候选快照与 HUMAN Gate 仍未满足。
 
+M11-12ba 已从 11 个 auth/user admin handler 删除未使用的完整 BrokerRuntime carrier 与 `MessageStore` 泛型；每个 handler
+只保留标准 `Arc<AuthAdminService>` capability，避免 narrow auth control-plane handler 反向保活整个 Broker。实际快照降至
+259 production/580 occurrences，test 保持 156/451，Broker owner 降至 137/272；compatibility 14/40 不增。下一子切片
+M11-12bb 配对处理 transaction bridge/listener 与 TopicConfigManager runtime capability carrier；完整候选快照与 HUMAN
+Gate 仍未满足。
+
 ## 公共兼容面
 
 - development/compatibility仍可显式选择；secure只作为新部署默认，不静默重解释旧配置。

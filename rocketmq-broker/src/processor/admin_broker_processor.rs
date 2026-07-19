@@ -100,17 +100,17 @@ pub struct AdminBrokerProcessor<MS: MessageStore> {
     notify_broker_role_change_handler: NotifyBrokerRoleChangeHandler<MS>,
     message_related_handler: MessageRelatedHandler<MS>,
     producer_request_handler: ProducerRequestHandler<MS>,
-    create_acl_request_handler: CreateAclRequestHandler<MS>,
-    create_user_request_handler: CreateUserRequestHandler<MS>,
-    get_acl_request_handler: GetAclRequestHandler<MS>,
-    update_user_request_handler: UpdateUserRequestHandler<MS>,
-    update_acl_request_handler: UpdateAclRequestHandler<MS>,
-    delete_user_request_handler: DeleteUserRequestHandler<MS>,
-    list_users_request_handler: ListUsersRequestHandler<MS>,
-    get_user_request_handler: GetUserRequestHandler<MS>,
-    delete_acl_request_handler: DeleteAclRequestHandler<MS>,
-    list_acl_request_handler: ListAclRequestHandler<MS>,
-    update_global_white_addrs_config_request_handler: UpdateGlobalWhiteAddrsConfigRequestHandler<MS>,
+    create_acl_request_handler: CreateAclRequestHandler,
+    create_user_request_handler: CreateUserRequestHandler,
+    get_acl_request_handler: GetAclRequestHandler,
+    update_user_request_handler: UpdateUserRequestHandler,
+    update_acl_request_handler: UpdateAclRequestHandler,
+    delete_user_request_handler: DeleteUserRequestHandler,
+    list_users_request_handler: ListUsersRequestHandler,
+    get_user_request_handler: GetUserRequestHandler,
+    delete_acl_request_handler: DeleteAclRequestHandler,
+    list_acl_request_handler: ListAclRequestHandler,
+    update_global_white_addrs_config_request_handler: UpdateGlobalWhiteAddrsConfigRequestHandler,
     update_cold_data_flow_ctr_group_config_request_handler: UpdateColdDataFlowCtrGroupConfigRequestHandler<MS>,
     get_broker_ha_status_handler: GetBrokerHaStatusHandler<MS>,
     broker_stats_handler: BrokerStatsHandler<MS>,
@@ -155,28 +155,18 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
 
         let message_related_handler = MessageRelatedHandler::new(broker_runtime_inner.clone());
         let producer_request_handler = ProducerRequestHandler::new(broker_runtime_inner.clone());
-        let create_acl_request_handler =
-            CreateAclRequestHandler::new(broker_runtime_inner.clone(), auth_admin_service.clone());
-        let create_user_request_handler =
-            CreateUserRequestHandler::new(broker_runtime_inner.clone(), auth_admin_service.clone());
-        let get_acl_request_handler =
-            GetAclRequestHandler::new(broker_runtime_inner.clone(), auth_admin_service.clone());
-        let update_user_request_handler =
-            UpdateUserRequestHandler::new(broker_runtime_inner.clone(), auth_admin_service.clone());
-        let update_acl_request_handler =
-            UpdateAclRequestHandler::new(broker_runtime_inner.clone(), auth_admin_service.clone());
-        let delete_user_request_handler =
-            DeleteUserRequestHandler::new(broker_runtime_inner.clone(), auth_admin_service.clone());
-        let list_users_request_handler =
-            ListUsersRequestHandler::new(broker_runtime_inner.clone(), auth_admin_service.clone());
-        let get_user_request_handler =
-            GetUserRequestHandler::new(broker_runtime_inner.clone(), auth_admin_service.clone());
-        let delete_acl_request_handler =
-            DeleteAclRequestHandler::new(broker_runtime_inner.clone(), auth_admin_service.clone());
-        let list_acl_request_handler =
-            ListAclRequestHandler::new(broker_runtime_inner.clone(), auth_admin_service.clone());
+        let create_acl_request_handler = CreateAclRequestHandler::new(auth_admin_service.clone());
+        let create_user_request_handler = CreateUserRequestHandler::new(auth_admin_service.clone());
+        let get_acl_request_handler = GetAclRequestHandler::new(auth_admin_service.clone());
+        let update_user_request_handler = UpdateUserRequestHandler::new(auth_admin_service.clone());
+        let update_acl_request_handler = UpdateAclRequestHandler::new(auth_admin_service.clone());
+        let delete_user_request_handler = DeleteUserRequestHandler::new(auth_admin_service.clone());
+        let list_users_request_handler = ListUsersRequestHandler::new(auth_admin_service.clone());
+        let get_user_request_handler = GetUserRequestHandler::new(auth_admin_service.clone());
+        let delete_acl_request_handler = DeleteAclRequestHandler::new(auth_admin_service.clone());
+        let list_acl_request_handler = ListAclRequestHandler::new(auth_admin_service.clone());
         let update_global_white_addrs_config_request_handler =
-            UpdateGlobalWhiteAddrsConfigRequestHandler::new(broker_runtime_inner.clone(), auth_admin_service);
+            UpdateGlobalWhiteAddrsConfigRequestHandler::new(auth_admin_service);
         let update_cold_data_flow_ctr_group_config_request_handler =
             UpdateColdDataFlowCtrGroupConfigRequestHandler::new(broker_runtime_inner.clone());
         let get_broker_ha_status_handler = GetBrokerHaStatusHandler::new(broker_runtime_inner.clone());
@@ -663,6 +653,26 @@ mod tests {
     use rocketmq_error::RocketMQError;
 
     use super::*;
+
+    #[test]
+    fn auth_admin_handlers_do_not_retain_broker_runtime() {
+        for source in [
+            include_str!("admin_broker_processor/create_acl_request_handler.rs"),
+            include_str!("admin_broker_processor/create_user_request_handler.rs"),
+            include_str!("admin_broker_processor/delete_acl_request_handler.rs"),
+            include_str!("admin_broker_processor/delete_user_request_handler.rs"),
+            include_str!("admin_broker_processor/get_acl_request_handler.rs"),
+            include_str!("admin_broker_processor/get_user_request_handler.rs"),
+            include_str!("admin_broker_processor/list_acl_request_handler.rs"),
+            include_str!("admin_broker_processor/list_users_request_handler.rs"),
+            include_str!("admin_broker_processor/update_acl_request_handler.rs"),
+            include_str!("admin_broker_processor/update_global_white_addrs_config_request_handler.rs"),
+            include_str!("admin_broker_processor/update_user_request_handler.rs"),
+        ] {
+            assert!(!source.contains("BrokerRuntimeInner"));
+            assert!(!source.contains(concat!("Arc", "Mut")));
+        }
+    }
 
     #[test]
     fn legacy_acl_responses_are_explicitly_deprecated() {
