@@ -9852,22 +9852,10 @@
           "line": 2171
         },
         {
-          "id": "9029403838ad9ee36b96ba5e",
-          "fingerprint": "dbec1f2ff53b3c4d1f5978e8",
-          "item": "fn new_check_config_consumer",
-          "line": 2198
-        },
-        {
           "id": "bed96c1972704abacbb50d54",
           "fingerprint": "f2c8ab11b61d8b619ad064f2",
           "item": "fn new_check_config_consumer",
           "line": 2202
-        },
-        {
-          "id": "4c264cbb71beaa4bf4c605e3",
-          "fingerprint": "dbec1f2ff53b3c4d1f5978e8",
-          "item": "fn new_startable_push_consumer",
-          "line": 2213
         },
         {
           "id": "c68059f4dfcdd96ba79265bc",
@@ -9962,12 +9950,6 @@
           "line": 124
         },
         {
-          "id": "b856f278567af0be0b0cc3e5",
-          "fingerprint": "576787a49784fbf411be883c",
-          "item": "struct DefaultMQPushConsumerImpl",
-          "line": 128
-        },
-        {
           "id": "3e0db635a10209f2006e6951",
           "fingerprint": "be0591a92cf50c9b2801b786",
           "item": "struct DefaultMQPushConsumerImpl",
@@ -10002,12 +9984,6 @@
           "fingerprint": "6ea020e77dd8adced283cd03",
           "item": "fn set_mq_client_factory",
           "line": 204
-        },
-        {
-          "id": "1a5e1ca13cbdb70c79cde622",
-          "fingerprint": "ae2aac844ddedbc42eb8a817",
-          "item": "fn register_message_listener",
-          "line": 734
         }
       ],
       "owner": "client",
@@ -10687,18 +10663,6 @@
           "line": 425
         },
         {
-          "id": "bce40d8867de5bfa4415460e",
-          "fingerprint": "7c0ea3ebfcba3be371b05f1c",
-          "item": "fn register_message_listener_concurrently",
-          "line": 633
-        },
-        {
-          "id": "66ac06267eb255fe8da10791",
-          "fingerprint": "04fa5700ba9b9f7fc69ff654",
-          "item": "fn register_message_listener_orderly",
-          "line": 649
-        },
-        {
           "id": "193975bf1b4d9fc7783cbb1a",
           "fingerprint": "ea3b5033b309243a6ce382c7",
           "item": "fn new",
@@ -10709,25 +10673,6 @@
           "fingerprint": "72b089cf1222118e8b971ce6",
           "item": "fn new",
           "line": 1351
-        }
-      ],
-      "owner": "client",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "2e368bf2de92c87da8df8a44",
-      "path": "rocketmq-client/src/consumer/default_mq_push_consumer.rs",
-      "symbol": "ArcMut",
-      "kind": "constructor",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "b92302af75fac4c459e06b1e",
-          "fingerprint": "473025e0ff3e98f19834472f",
-          "item": "fn push_message_listener_facade_syncs_config_and_impl_like_java",
-          "line": 1603
         }
       ],
       "owner": "client",
@@ -10766,12 +10711,6 @@
           "fingerprint": "db40f275e31e87b4ab40da9a",
           "item": "struct ConsumerConfig",
           "line": 70
-        },
-        {
-          "id": "1e3191ef9a28fb0aad9f335d",
-          "fingerprint": "4bbedb6039986720099012fc",
-          "item": "struct ConsumerConfig",
-          "line": 71
         },
         {
           "id": "8a705a9b473fef5e34f7fee0",
@@ -10820,30 +10759,6 @@
           "fingerprint": "cf650ba060bcd7e822754772",
           "item": "fn get_default_mq_push_consumer_impl",
           "line": 928
-        },
-        {
-          "id": "e30e16aecaa35939c4d07cc5",
-          "fingerprint": "c0805137c7d28b9e323eb2e6",
-          "item": "fn message_listener",
-          "line": 932
-        },
-        {
-          "id": "32f16f238d3e68b7faf41b97",
-          "fingerprint": "9d59766720446590e66ed4aa",
-          "item": "fn get_message_listener",
-          "line": 936
-        },
-        {
-          "id": "76fc45aabdea17876d629e67",
-          "fingerprint": "2a3b1109cc4a557c27b6486e",
-          "item": "fn set_message_listener",
-          "line": 940
-        },
-        {
-          "id": "eeefc14711d502bb255ddbbc",
-          "fingerprint": "ffbb47cf407992fcf0169273",
-          "item": "fn register_message_listener",
-          "line": 947
         },
         {
           "id": "315000fd48a55b2e44f231e8",

@@ -125,7 +125,7 @@ pub struct DefaultMQPushConsumerImpl {
     pub(crate) pull_api_wrapper: Option<Arc<PullAPIWrapper>>,
     pause: Arc<AtomicBool>,
     consume_orderly: bool,
-    message_listener: Option<ArcMut<MessageListener>>,
+    message_listener: Option<Arc<MessageListener>>,
     pub(crate) offset_store: Option<Arc<OffsetStore>>,
     pub(crate) consume_message_service:
         Option<Arc<ConsumeMessageServiceGeneral<ConsumeMessageConcurrentlyService, ConsumeMessageOrderlyService>>>,
@@ -731,7 +731,7 @@ impl DefaultMQPushConsumerImpl {
         self.consume_message_hook_list.len()
     }
 
-    pub fn register_message_listener(&mut self, message_listener: Option<ArcMut<MessageListener>>) {
+    pub fn register_message_listener(&mut self, message_listener: Option<Arc<MessageListener>>) {
         self.message_listener = message_listener;
     }
 
@@ -2195,7 +2195,7 @@ mod tests {
             consume_timestamp,
             ..Default::default()
         };
-        consumer_config.message_listener = Some(ArcMut::new(MessageListener::new(
+        consumer_config.message_listener = Some(Arc::new(MessageListener::new(
             Some(Arc::new(NoopConcurrentListener)),
             None,
         )));
@@ -2210,7 +2210,7 @@ mod tests {
             consumer_group,
             ..Default::default()
         };
-        consumer_config.message_listener = Some(ArcMut::new(MessageListener::new(
+        consumer_config.message_listener = Some(Arc::new(MessageListener::new(
             Some(Arc::new(NoopConcurrentListener)),
             None,
         )));
