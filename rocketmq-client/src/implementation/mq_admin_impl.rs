@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::attribute::attribute_parser::AttributeParser;
@@ -261,7 +262,7 @@ impl MQAdminImpl {
     pub async fn fetch_publish_message_queues(
         &mut self,
         topic: &str,
-        mq_client_api_impl: ArcMut<MQClientAPIImpl>,
+        mq_client_api_impl: Arc<MQClientAPIImpl>,
         client_config: &mut ClientConfig,
     ) -> rocketmq_error::RocketMQResult<Vec<MessageQueue>> {
         let topic_route_data = mq_client_api_impl

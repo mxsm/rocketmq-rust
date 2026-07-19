@@ -1128,7 +1128,7 @@ where
                 ..Default::default()
             };
             request_body.mq_set.insert(mq.clone());
-            let Some(mq_client_api_impl) = client.mq_client_api_impl.as_mut() else {
+            let Some(mq_client_api_impl) = client.mq_client_api_impl.as_ref() else {
                 warn!("lockWith skipped: MQClientAPIImpl is not initialized, mq={}", mq);
                 return false;
             };
@@ -1189,7 +1189,7 @@ where
                             mq_set: mqs.clone(),
                             ..Default::default()
                         };
-                        let Some(mq_client_api_impl) = client.mq_client_api_impl.as_mut() else {
+                        let Some(mq_client_api_impl) = client.mq_client_api_impl.as_ref() else {
                             warn!(
                                 "lockAll skipped broker {}: MQClientAPIImpl is not initialized",
                                 broker_name
@@ -1258,7 +1258,7 @@ where
                     mq_set: mqs.clone(),
                     ..Default::default()
                 };
-                let Some(mq_client_api_impl) = client.mq_client_api_impl.as_mut() else {
+                let Some(mq_client_api_impl) = client.mq_client_api_impl.as_ref() else {
                     warn!(
                         "unlockAll skipped broker {}: MQClientAPIImpl is not initialized",
                         broker_name

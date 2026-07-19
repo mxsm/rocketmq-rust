@@ -1563,7 +1563,7 @@ impl DefaultMQPushConsumerImpl {
             let broker_name_str = broker_name.as_ref().map(|name| name.as_str());
             let max_consume_retry_times = self.get_max_reconsume_times();
             let result = if let Some(client_instance) = self.client_instance.as_mut() {
-                if let Some(mq_client_api_impl) = client_instance.mq_client_api_impl.as_mut() {
+                if let Some(mq_client_api_impl) = client_instance.mq_client_api_impl.as_ref() {
                     mq_client_api_impl
                         .consumer_send_message_back(
                             broker_addr.as_str(),
@@ -1744,7 +1744,7 @@ impl DefaultMQPushConsumerImpl {
 
             fn on_exception(&self, _e: rocketmq_error::RocketMQError) {}
         }
-        let Some(mq_client_api_impl) = client_instance.mq_client_api_impl.as_mut() else {
+        let Some(mq_client_api_impl) = client_instance.mq_client_api_impl.as_ref() else {
             error!("ackAsync error: MQClientAPIImpl is not initialized");
             return;
         };

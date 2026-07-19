@@ -458,7 +458,7 @@ impl Rebalance for RebalancePushImpl {
                 ..Default::default()
             };
             request_body.mq_set.insert(mq.clone());
-            let Some(mq_client_api_impl) = client.mq_client_api_impl.as_mut() else {
+            let Some(mq_client_api_impl) = client.mq_client_api_impl.as_ref() else {
                 warn!("unlockBatchMQ skipped: MQClientAPIImpl is not initialized, mq={}", mq);
                 return;
             };
@@ -612,7 +612,7 @@ async fn lock_all_impl(
                         mq_set: mqs.clone(),
                         ..Default::default()
                     };
-                    let Some(mq_client_api_impl) = client_instance.mq_client_api_impl.as_mut() else {
+                    let Some(mq_client_api_impl) = client_instance.mq_client_api_impl.as_ref() else {
                         warn!(
                             "lockBatchMQ skipped: MQClientAPIImpl is not initialized for broker {}",
                             broker_name
@@ -683,7 +683,7 @@ async fn unlock_all_impl(
                         mq_set: mqs.clone(),
                         ..Default::default()
                     };
-                    let Some(mq_client_api_impl) = client_instance.mq_client_api_impl.as_mut() else {
+                    let Some(mq_client_api_impl) = client_instance.mq_client_api_impl.as_ref() else {
                         warn!(
                             "unlockBatchMQ skipped: MQClientAPIImpl is not initialized for broker {}",
                             broker_name

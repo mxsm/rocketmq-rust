@@ -401,7 +401,7 @@ enum BrokerCleanupOperation {
 impl BrokerCleanupOperation {
     async fn execute(
         self,
-        api: &ArcMut<MQClientAPIImpl>,
+        api: &Arc<MQClientAPIImpl>,
         addr: &CheetahString,
         timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<bool> {
@@ -580,7 +580,7 @@ impl DefaultMQAdminExtImpl {
         self.client_config.set_use_tls(use_tls);
     }
 
-    fn mq_client_api(&self) -> rocketmq_error::RocketMQResult<ArcMut<MQClientAPIImpl>> {
+    fn mq_client_api(&self) -> rocketmq_error::RocketMQResult<Arc<MQClientAPIImpl>> {
         self.client_instance
             .as_ref()
             .ok_or(rocketmq_error::RocketMQError::ClientNotStarted)?
@@ -1472,7 +1472,7 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
             topic: topic.clone(),
             topic_request_header: None,
         };
-        let mut api = self.mq_client_api()?;
+        let api = self.mq_client_api()?;
         let timeout = self.remoting_timeout_millis()?;
         for addr in addrs {
             api.delete_topic_in_broker(
@@ -1615,7 +1615,7 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
             return Ok(HashMap::new());
         };
 
-        let mut api = self.mq_client_api()?;
+        let api = self.mq_client_api()?;
         let timeout = self.remoting_timeout_millis()?;
         let mut merged = HashMap::new();
         let mut queried = false;
@@ -2086,7 +2086,7 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         pop_work_group_size: i32,
         timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<()> {
-        let mut mq_client_api = self.mq_client_api()?;
+        let mq_client_api = self.mq_client_api()?;
         match mq_client_api
             .set_message_request_mode(
                 &broker_addr,
