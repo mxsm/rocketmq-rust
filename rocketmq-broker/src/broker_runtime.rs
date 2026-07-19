@@ -2239,7 +2239,7 @@ impl BrokerRuntime {
             pop_message_processor.clone(),
         ));
         self.inner.ack_message_processor = Some(ack_message_processor.clone());
-        let query_assignment_processor = ArcMut::new(QueryAssignmentProcessor::new(self.inner.clone()));
+        let query_assignment_processor = Arc::new(QueryAssignmentProcessor::new(self.inner.clone()));
         self.inner.query_assignment_processor = Some(query_assignment_processor.clone());
 
         let notification_processor = NotificationProcessor::new(self.inner.clone());
@@ -2290,7 +2290,7 @@ impl BrokerRuntime {
         );
 
         //PeekMessageProcessor
-        let peek_message_processor = ArcMut::new(PeekMessageProcessor::new(self.inner.clone()));
+        let peek_message_processor = Arc::new(PeekMessageProcessor::new(self.inner.clone()));
         broker_request_processor.register_processor(
             RequestCode::PeekMessage as i32,
             BrokerProcessorType::Peek(peek_message_processor),
@@ -2332,7 +2332,7 @@ impl BrokerRuntime {
         //pollingInfoProcessor
         broker_request_processor.register_processor(
             RequestCode::PollingInfo as i32,
-            BrokerProcessorType::PollingInfo(ArcMut::new(PollingInfoProcessor::new(self.inner.clone()))),
+            BrokerProcessorType::PollingInfo(Arc::new(PollingInfoProcessor::new(self.inner.clone()))),
         );
 
         //ReplyMessageProcessor
@@ -2347,14 +2347,14 @@ impl BrokerRuntime {
         );
 
         //RecallMessageProcessor
-        let recall_message_processor = ArcMut::new(RecallMessageProcessor::new(self.inner.clone()));
+        let recall_message_processor = Arc::new(RecallMessageProcessor::new(self.inner.clone()));
         broker_request_processor.register_processor(
             RequestCode::RecallMessage as i32,
             BrokerProcessorType::Recall(recall_message_processor),
         );
 
         //QueryMessageProcessor
-        let query_message_processor = ArcMut::new(QueryMessageProcessor::new(self.inner.clone()));
+        let query_message_processor = Arc::new(QueryMessageProcessor::new(self.inner.clone()));
         broker_request_processor.register_processor(
             RequestCode::QueryMessage as i32,
             BrokerProcessorType::QueryMessage(query_message_processor.clone()),
@@ -2364,7 +2364,7 @@ impl BrokerRuntime {
             BrokerProcessorType::QueryMessage(query_message_processor),
         );
         //ClientManageProcessor
-        let client_manage_processor = ArcMut::new(ClientManageProcessor::new(self.inner.clone()));
+        let client_manage_processor = Arc::new(ClientManageProcessor::new(self.inner.clone()));
         broker_request_processor.register_processor(
             RequestCode::HeartBeat as i32,
             BrokerProcessorType::ClientManage(client_manage_processor.clone()),
@@ -2379,7 +2379,7 @@ impl BrokerRuntime {
         );
 
         //ConsumerManageProcessor
-        let consumer_manage_processor = ArcMut::new(consumer_manage_processor);
+        let consumer_manage_processor = Arc::new(consumer_manage_processor);
 
         broker_request_processor.register_processor(
             RequestCode::GetConsumerListByGroup as i32,
@@ -3363,7 +3363,7 @@ pub(crate) struct BrokerRuntimeInner<MS: MessageStore> {
     pop_lite_message_processor: Option<Arc<PopLiteMessageProcessor<MS>>>,
     ack_message_processor: Option<ArcMut<AckMessageProcessor<MS>>>,
     notification_processor: Option<Arc<NotificationProcessor<MS>>>,
-    query_assignment_processor: Option<ArcMut<QueryAssignmentProcessor<MS>>>,
+    query_assignment_processor: Option<Arc<QueryAssignmentProcessor<MS>>>,
     auth_runtime: Option<Arc<AuthRuntime>>,
     broker_attached_plugins: Vec<Arc<dyn BrokerAttachedPlugin>>,
     transactional_message_service: Option<Arc<DefaultTransactionalMessageService<MS>>>,
@@ -4683,20 +4683,12 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         unsafe { self.notification_processor.as_ref().unwrap_unchecked() }
     }
 
-    pub fn query_assignment_processor_unchecked(&self) -> &ArcMut<QueryAssignmentProcessor<MS>> {
+    pub fn query_assignment_processor_unchecked(&self) -> &Arc<QueryAssignmentProcessor<MS>> {
         unsafe { self.query_assignment_processor.as_ref().unwrap_unchecked() }
     }
 
-    pub fn query_assignment_processor(&self) -> Option<&ArcMut<QueryAssignmentProcessor<MS>>> {
+    pub fn query_assignment_processor(&self) -> Option<&Arc<QueryAssignmentProcessor<MS>>> {
         self.query_assignment_processor.as_ref()
-    }
-
-    pub fn query_assignment_processor_mut(&mut self) -> Option<&mut ArcMut<QueryAssignmentProcessor<MS>>> {
-        self.query_assignment_processor.as_mut()
-    }
-
-    pub fn query_assignment_processor_unchecked_mut(&mut self) -> &mut ArcMut<QueryAssignmentProcessor<MS>> {
-        unsafe { self.query_assignment_processor.as_mut().unwrap_unchecked() }
     }
 
     pub async fn change_special_service_status(&mut self, should_start: bool) {

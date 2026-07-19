@@ -59,6 +59,14 @@ where
     }
 }
 
+impl<MS: MessageStore> Clone for RecallMessageProcessor<MS> {
+    fn clone(&self) -> Self {
+        Self {
+            broker_runtime_inner: self.broker_runtime_inner.clone(),
+        }
+    }
+}
+
 impl<MS> RequestProcessor for RecallMessageProcessor<MS>
 where
     MS: MessageStore,
@@ -100,6 +108,16 @@ impl<MS> RecallMessageProcessor<MS>
 where
     MS: MessageStore,
 {
+    pub async fn process_request_shared(
+        &self,
+        channel: Channel,
+        ctx: ConnectionHandlerContext,
+        request: &mut RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let mut processor = self.clone();
+        processor.process_request(channel, ctx, request).await
+    }
+
     async fn process_recall_message(
         &mut self,
         _channel: &Channel,

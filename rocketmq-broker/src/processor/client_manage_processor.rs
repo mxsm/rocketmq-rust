@@ -97,6 +97,16 @@ impl<MS> ClientManageProcessor<MS>
 where
     MS: MessageStore,
 {
+    pub async fn process_request_shared(
+        &self,
+        channel: Channel,
+        ctx: ConnectionHandlerContext,
+        request: &mut RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let mut processor = self.clone();
+        processor.process_request(channel, ctx, request).await
+    }
+
     async fn process_request_inner(
         &mut self,
         channel: Channel,
@@ -400,6 +410,15 @@ where
         response_command.add_ext_field(IS_SUPPORT_HEART_BEAT_V2.to_string(), true.to_string());
         response_command.add_ext_field(IS_SUB_CHANGE.to_string(), is_sub_change.to_string());
         Some(response_command)
+    }
+}
+
+impl<MS: MessageStore> Clone for ClientManageProcessor<MS> {
+    fn clone(&self) -> Self {
+        Self {
+            consumer_group_heartbeat_table: self.consumer_group_heartbeat_table.clone(),
+            broker_runtime_inner: self.broker_runtime_inner.clone(),
+        }
     }
 }
 

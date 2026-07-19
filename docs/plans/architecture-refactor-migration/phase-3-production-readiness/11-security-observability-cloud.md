@@ -507,6 +507,12 @@ M11-12ay 已将 send/reply/end-transaction processor root 与 immutable request 
 156/451，Broker owner 降至 151/316；compatibility 14/40 不增。下一子切片 M11-12az 继续处理 transaction
 bridge/listener capability 与其他 Broker owner，完整候选快照与 HUMAN Gate 仍未满足。
 
+M11-12az 已将 peek、polling-info、recall、query-message、client-manage、consumer-manage 与 query-assignment processor
+root/runtime slot 改为标准 `Arc`；共享入口只复制轻量 capability，Peek 保持单一共享原子序列，不新增全局 mutex 或请求
+串行瓶颈。实际快照为 273 production/605 occurrences，test 保持 156/451，Broker owner 为 151/297；compatibility
+14/40 不增。下一子切片 M11-12ba 配对处理 transaction bridge/listener 与 TopicConfigManager runtime capability
+carrier，并继续处理 Broker admin/其他 processor；完整候选快照与 HUMAN Gate 仍未满足。
+
 ## 公共兼容面
 
 - development/compatibility仍可显式选择；secure只作为新部署默认，不静默重解释旧配置。
