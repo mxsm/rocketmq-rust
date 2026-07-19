@@ -168,7 +168,7 @@ pub struct DefaultLitePullConsumer {
     message_queue_listener: Arc<StdRwLock<Option<ArcMessageQueueListener>>>,
 
     /// User-provided or initialized offset store.
-    offset_store: Arc<StdRwLock<Option<ArcMut<OffsetStore>>>>,
+    offset_store: Arc<StdRwLock<Option<Arc<OffsetStore>>>>,
 }
 
 impl DefaultLitePullConsumer {
@@ -397,17 +397,17 @@ impl DefaultLitePullConsumer {
     }
 
     /// Returns the configured offset store.
-    pub async fn offset_store(&self) -> Option<ArcMut<OffsetStore>> {
+    pub async fn offset_store(&self) -> Option<Arc<OffsetStore>> {
         <Self as LitePullConsumer>::offset_store(self).await
     }
 
     /// Java-compatible getter alias for the configured offset store.
-    pub async fn get_offset_store(&self) -> Option<ArcMut<OffsetStore>> {
+    pub async fn get_offset_store(&self) -> Option<Arc<OffsetStore>> {
         self.offset_store().await
     }
 
     /// Sets the configured offset store.
-    pub async fn set_offset_store(&self, offset_store: Option<ArcMut<OffsetStore>>) -> RocketMQResult<()> {
+    pub async fn set_offset_store(&self, offset_store: Option<Arc<OffsetStore>>) -> RocketMQResult<()> {
         <Self as LitePullConsumer>::set_offset_store(self, offset_store).await
     }
 
@@ -1044,11 +1044,11 @@ impl DefaultLitePullConsumer {
         }
     }
 
-    fn current_offset_store(&self) -> Option<ArcMut<OffsetStore>> {
+    fn current_offset_store(&self) -> Option<Arc<OffsetStore>> {
         self.offset_store.read().ok().and_then(|store| store.clone())
     }
 
-    fn set_offset_store_local(&self, offset_store: Option<ArcMut<OffsetStore>>) {
+    fn set_offset_store_local(&self, offset_store: Option<Arc<OffsetStore>>) {
         match self.offset_store.write() {
             Ok(mut current) => *current = offset_store,
             Err(error) => tracing::warn!("LitePull offset store lock poisoned: {}", error),
@@ -1303,14 +1303,14 @@ impl LitePullConsumer for DefaultLitePullConsumer {
         }
     }
 
-    async fn offset_store(&self) -> Option<ArcMut<OffsetStore>> {
+    async fn offset_store(&self) -> Option<Arc<OffsetStore>> {
         self.default_lite_pull_consumer_impl
             .get()
             .and_then(|impl_| impl_.offset_store())
             .or_else(|| self.current_offset_store())
     }
 
-    async fn set_offset_store(&self, offset_store: Option<ArcMut<OffsetStore>>) -> RocketMQResult<()> {
+    async fn set_offset_store(&self, offset_store: Option<Arc<OffsetStore>>) -> RocketMQResult<()> {
         if let Some(impl_) = self.default_lite_pull_consumer_impl.get() {
             impl_.mut_from_ref().set_offset_store(offset_store.clone())?;
         }
@@ -2278,7 +2278,7 @@ mod tests {
     async fn set_offset_store_updates_initialized_impl_and_rebalance_like_java() {
         let (consumer, impl_) = new_namespaced_consumer_with_impl();
         let queue = MessageQueue::from_parts("TopicA", "broker-a", 0);
-        let offset_store = ArcMut::new(OffsetStore::new_test());
+        let offset_store = Arc::new(OffsetStore::new_test());
 
         assert!(consumer.offset_store().await.is_none());
         assert!(impl_.offset_store().is_none());

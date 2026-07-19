@@ -328,6 +328,11 @@ Producer 注册只经共享引用，Producer 路由/heartbeat/注册路径删除
 start 的实际可变入口。实际快照 production 条目保持 420、occurrences 降至 1,259，Client 为 103/367；其余
 Client Instance/Producer/Consumer owner、Broker/Store、compatibility 与完整候选快照 Gate 仍保持开放。
 
+M11-12v 已删除 Push/Lite OffsetStore 的 `ArcMut` owner：Consumer facade、内部实现、rebalance 与 callback 改持
+普通 `Arc<OffsetStore>`，persistence receiver 收窄为共享引用；Local task handle 由 lifecycle mutex 串行并在 await
+前取出。实际快照降至 418 production/1,224 occurrences，Client 降至 101/332；旧 public OffsetStore ArcMut
+signature 不保留安全例外，其余 Client owner、Broker/Store、compatibility 与完整候选快照 Gate 仍保持开放。
+
 ## 公共兼容面
 
 - development/compatibility仍可显式选择；secure只作为新部署默认，不静默重解释旧配置。

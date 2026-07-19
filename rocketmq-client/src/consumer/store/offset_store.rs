@@ -140,7 +140,7 @@ impl OffsetStore {
 
     /// Asynchronously persists the offsets for all queues in `mqs` to the underlying
     /// storage backend.
-    pub async fn persist_all(&mut self, mqs: &HashSet<MessageQueue>) {
+    pub async fn persist_all(&self, mqs: &HashSet<MessageQueue>) {
         match self {
             Self::Remote(store) => store.persist_all(mqs).await,
             Self::Local(store) => store.persist_all(mqs).await,
@@ -151,7 +151,7 @@ impl OffsetStore {
 
     /// Asynchronously persists the offset for the specified queue to the underlying
     /// storage backend.
-    pub async fn persist(&mut self, mq: &MessageQueue) {
+    pub async fn persist(&self, mq: &MessageQueue) {
         match self {
             Self::Remote(store) => store.persist(mq).await,
             Self::Local(store) => store.persist(mq).await,
@@ -188,7 +188,7 @@ impl OffsetStore {
     ///
     /// Returns an error if the broker is unreachable or rejects the offset commit request.
     pub async fn update_consume_offset_to_broker(
-        &mut self,
+        &self,
         mq: &MessageQueue,
         offset: i64,
         is_oneway: bool,
@@ -205,7 +205,7 @@ impl OffsetStore {
     }
 
     /// Gracefully shuts down any background resources owned by the offset store.
-    pub async fn shutdown(&mut self, timeout: Duration) -> bool {
+    pub async fn shutdown(&self, timeout: Duration) -> bool {
         match self {
             Self::Remote(_) => true,
             Self::Local(store) => store.shutdown_with_timeout(timeout).await,
@@ -311,10 +311,10 @@ pub(crate) trait OffsetStoreTrait {
     async fn read_offset(&self, mq: &MessageQueue, type_: ReadOffsetType) -> i64;
 
     /// Asynchronously persists the offsets for all queues in `mqs` to the underlying storage.
-    async fn persist_all(&mut self, mqs: &HashSet<MessageQueue>);
+    async fn persist_all(&self, mqs: &HashSet<MessageQueue>);
 
     /// Asynchronously persists the offset for the specified queue to the underlying storage.
-    async fn persist(&mut self, mq: &MessageQueue);
+    async fn persist(&self, mq: &MessageQueue);
 
     /// Asynchronously removes the stored offset entry for the specified queue.
     async fn remove_offset(&self, mq: &MessageQueue);
@@ -330,7 +330,7 @@ pub(crate) trait OffsetStoreTrait {
     ///
     /// Returns an error if the broker is unreachable or rejects the offset commit request.
     async fn update_consume_offset_to_broker(
-        &mut self,
+        &self,
         mq: &MessageQueue,
         offset: i64,
         is_oneway: bool,

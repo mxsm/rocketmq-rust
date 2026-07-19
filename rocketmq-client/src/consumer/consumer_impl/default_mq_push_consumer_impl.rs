@@ -126,7 +126,7 @@ pub struct DefaultMQPushConsumerImpl {
     pause: Arc<AtomicBool>,
     consume_orderly: bool,
     message_listener: Option<ArcMut<MessageListener>>,
-    pub(crate) offset_store: Option<ArcMut<OffsetStore>>,
+    pub(crate) offset_store: Option<Arc<OffsetStore>>,
     pub(crate) consume_message_service:
         Option<Arc<ConsumeMessageServiceGeneral<ConsumeMessageConcurrentlyService, ConsumeMessageOrderlyService>>>,
     pub(crate) consume_message_pop_service: Option<
@@ -221,11 +221,11 @@ impl DefaultMQPushConsumerImpl {
         self.pause.load(Ordering::Acquire)
     }
 
-    pub fn offset_store(&self) -> Option<ArcMut<OffsetStore>> {
+    pub fn offset_store(&self) -> Option<Arc<OffsetStore>> {
         self.offset_store.clone()
     }
 
-    pub fn set_offset_store(&mut self, offset_store: Option<ArcMut<OffsetStore>>) {
+    pub fn set_offset_store(&mut self, offset_store: Option<Arc<OffsetStore>>) {
         self.offset_store = offset_store;
     }
 }
@@ -279,15 +279,14 @@ impl DefaultMQPushConsumerImpl {
                 } else {
                     match self.consumer_config.message_model {
                         MessageModel::Broadcasting => {
-                            self.offset_store =
-                                Some(ArcMut::new(OffsetStore::new_with_local(LocalFileOffsetStore::new(
-                                    client_instance.clone(),
-                                    self.consumer_config.consumer_group.clone(),
-                                ))));
+                            self.offset_store = Some(Arc::new(OffsetStore::new_with_local(LocalFileOffsetStore::new(
+                                client_instance.clone(),
+                                self.consumer_config.consumer_group.clone(),
+                            ))));
                         }
                         MessageModel::Clustering => {
                             self.offset_store =
-                                Some(ArcMut::new(OffsetStore::new_with_remote(RemoteBrokerOffsetStore::new(
+                                Some(Arc::new(OffsetStore::new_with_remote(RemoteBrokerOffsetStore::new(
                                     client_instance.clone(),
                                     self.consumer_config.consumer_group.clone(),
                                 ))));
@@ -460,12 +459,8 @@ impl DefaultMQPushConsumerImpl {
                         .await;
                 }
                 self.persist_consumer_offset().await;
-                if let Some(offset_store) = self.offset_store.as_mut() {
-                    if !offset_store
-                        .mut_from_ref()
-                        .shutdown(OFFSET_STORE_SHUTDOWN_TIMEOUT)
-                        .await
-                    {
+                if let Some(offset_store) = self.offset_store.as_ref() {
+                    if !offset_store.shutdown(OFFSET_STORE_SHUTDOWN_TIMEOUT).await {
                         warn!(
                             "consumer [{}] offset store did not stop before timeout",
                             self.consumer_config.consumer_group
@@ -1946,7 +1941,7 @@ impl MQConsumerInner for DefaultMQPushConsumerImpl {
                 );
                 return;
             };
-            offset_store.mut_from_ref().persist_all(&allocate_mq).await;
+            offset_store.persist_all(&allocate_mq).await;
         }
     }
 
@@ -2674,7 +2669,7 @@ mod tests {
         consumer.set_consume_orderly(true);
         consumer.consumer_config.consumer_group = CheetahString::from_static_str("ResetGroup");
 
-        let offset_store = ArcMut::new(OffsetStore::new_test());
+        let offset_store = Arc::new(OffsetStore::new_test());
         consumer.offset_store = Some(offset_store.clone());
 
         let topic = CheetahString::from_static_str("reset-topic");

@@ -193,7 +193,7 @@ impl OffsetStoreTrait for RemoteBrokerOffsetStore {
         }
     }
 
-    async fn persist_all(&mut self, mqs: &HashSet<MessageQueue>) {
+    async fn persist_all(&self, mqs: &HashSet<MessageQueue>) {
         if mqs.is_empty() {
             return;
         }
@@ -239,7 +239,7 @@ impl OffsetStoreTrait for RemoteBrokerOffsetStore {
         }
     }
 
-    async fn persist(&mut self, mq: &MessageQueue) {
+    async fn persist(&self, mq: &MessageQueue) {
         let offset_table = self.offset_table.lock().await;
         let Some(offset) = offset_table.get(mq).map(ControllableOffset::get_offset) else {
             return;
@@ -286,7 +286,7 @@ impl OffsetStoreTrait for RemoteBrokerOffsetStore {
     }
 
     async fn update_consume_offset_to_broker(
-        &mut self,
+        &self,
         mq: &MessageQueue,
         offset: i64,
         is_oneway: bool,
