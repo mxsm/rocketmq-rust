@@ -12,17 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
+use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_runtime::task::service_task::ServiceContext;
 use rocketmq_runtime::task::service_task::ServiceTask;
 use rocketmq_runtime::task::ServiceManager;
-use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
 use tracing::info;
+use tracing::warn;
 
-use crate::broker_runtime::BrokerRuntimeInner;
+use crate::transaction::queue::default_transactional_message_check_listener::DefaultTransactionalMessageCheckListener;
+use crate::transaction::queue::default_transactional_message_service::DefaultTransactionalMessageService;
 use crate::transaction::transactional_message_service::TransactionalMessageService;
 
 pub struct TransactionalMessageCheckService<MS: MessageStore> {
@@ -30,7 +33,9 @@ pub struct TransactionalMessageCheckService<MS: MessageStore> {
 }
 
 struct TransactionalMessageCheckServiceInner<MS: MessageStore> {
-    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+    broker_config: Arc<BrokerConfig>,
+    transactional_message_service: Arc<DefaultTransactionalMessageService<MS>>,
+    transactional_message_check_listener: DefaultTransactionalMessageCheckListener<MS>,
 }
 
 impl<MS: MessageStore> ServiceTask for TransactionalMessageCheckServiceInner<MS> {
@@ -42,10 +47,13 @@ impl<MS: MessageStore> ServiceTask for TransactionalMessageCheckServiceInner<MS>
         info!("Starting transactional check service");
 
         while !context.is_stopped() {
-            let transaction_check_interval = self.broker_runtime_inner.broker_config().transaction_check_interval;
+            let transaction_check_interval = self.broker_config.transaction_check_interval;
             context
                 .wait_for_running(Duration::from_millis(transaction_check_interval))
                 .await;
+            if context.is_stopped() {
+                break;
+            }
             self.on_wait_end().await;
         }
         info!("Transactional check service stopped");
@@ -53,23 +61,18 @@ impl<MS: MessageStore> ServiceTask for TransactionalMessageCheckServiceInner<MS>
 
     #[inline]
     async fn on_wait_end(&self) {
-        let transaction_timeout = self.broker_runtime_inner.broker_config().transaction_timeout;
-        let transaction_check_max = self.broker_runtime_inner.broker_config().transaction_check_max;
+        let transaction_timeout = self.broker_config.transaction_timeout;
+        let transaction_check_max = self.broker_config.transaction_check_max;
         let begin = Instant::now();
         info!(
             "Transactional check service is running, waiting for {} ms",
             transaction_timeout
         );
-        self.broker_runtime_inner
-            .mut_from_ref()
-            .transactional_message_service_unchecked_mut()
+        self.transactional_message_service
             .check(
                 transaction_timeout,
                 transaction_check_max as i32,
-                self.broker_runtime_inner
-                    .transactional_message_check_listener()
-                    .clone()
-                    .unwrap(),
+                self.transactional_message_check_listener.clone(),
             )
             .await;
         info!(
@@ -80,14 +83,22 @@ impl<MS: MessageStore> ServiceTask for TransactionalMessageCheckServiceInner<MS>
 }
 
 impl<MS: MessageStore> TransactionalMessageCheckService<MS> {
-    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
-        let task_impl = ServiceManager::new(TransactionalMessageCheckServiceInner { broker_runtime_inner });
+    pub fn new(
+        broker_config: Arc<BrokerConfig>,
+        transactional_message_service: Arc<DefaultTransactionalMessageService<MS>>,
+        transactional_message_check_listener: DefaultTransactionalMessageCheckListener<MS>,
+    ) -> Self {
+        let task_impl = ServiceManager::new(TransactionalMessageCheckServiceInner {
+            broker_config,
+            transactional_message_service,
+            transactional_message_check_listener,
+        });
         TransactionalMessageCheckService { task_impl }
     }
 }
 
 impl<MS: MessageStore> TransactionalMessageCheckService<MS> {
-    pub async fn start(&mut self) -> rocketmq_error::RocketMQResult<()> {
+    pub async fn start(&self) -> rocketmq_error::RocketMQResult<()> {
         self.task_impl
             .start()
             .await
@@ -98,11 +109,15 @@ impl<MS: MessageStore> TransactionalMessageCheckService<MS> {
             })
     }
 
-    pub async fn shutdown(&mut self) {
-        self.task_impl.shutdown().await.unwrap();
+    pub async fn shutdown(&self) {
+        if let Err(error) = self.task_impl.shutdown().await {
+            warn!(error = %error, "TransactionalMessageCheckService shutdown failed");
+        }
     }
 
-    pub async fn shutdown_interrupt(&mut self, interrupt: bool) {
-        self.task_impl.shutdown_with_interrupt(interrupt).await.unwrap();
+    pub async fn shutdown_interrupt(&self, interrupt: bool) {
+        if let Err(error) = self.task_impl.shutdown_with_interrupt(interrupt).await {
+            warn!(error = %error, "TransactionalMessageCheckService interrupt shutdown failed");
+        }
     }
 }

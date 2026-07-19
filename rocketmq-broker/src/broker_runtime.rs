@@ -1341,11 +1341,6 @@ impl BrokerRuntime {
 
         let transaction_started = Instant::now();
         let mut transaction_services_present = false;
-        if let Some(transactional_message_service) = self.inner.transactional_message_service.as_mut() {
-            transaction_services_present = true;
-            transactional_message_service.shutdown().await;
-        }
-
         if let Some(notification_processor) = self.inner.notification_processor.as_ref() {
             pop_services_present = true;
             notification_processor.shutdown().await;
@@ -1409,13 +1404,17 @@ impl BrokerRuntime {
             }
         }
 
-        if let Some(transactional_message_check_service) = self.inner.transactional_message_check_service.as_mut() {
+        if let Some(transactional_message_check_service) = self.inner.transactional_message_check_service.as_ref() {
             transaction_services_present = true;
             transactional_message_check_service.shutdown().await;
         }
         if let Some(transactional_message_check_listener) = self.inner.transactional_message_check_listener.as_ref() {
             transaction_services_present = true;
             transactional_message_check_listener.shutdown().await;
+        }
+        if let Some(transactional_message_service) = self.inner.transactional_message_service.as_ref() {
+            transaction_services_present = true;
+            transactional_message_service.shutdown().await;
         }
         if let Some(transaction_metrics_flush_service) = self.inner.transaction_metrics_flush_service.as_mut() {
             transaction_services_present = true;
@@ -2669,20 +2668,20 @@ impl BrokerRuntime {
                 let bridge = TransactionalMessageBridge::new(
                     self.inner.clone()
                 );
-                let mut service = ArcMut::new(DefaultTransactionalMessageService::new(bridge));
-                                let weak_service = ArcMut::downgrade(&service);
+                let service = Arc::new(DefaultTransactionalMessageService::new(bridge));
+                let weak_service = Arc::downgrade(&service);
                 if let Err(error) = service.set_transactional_op_batch_service_start(weak_service).await {
                     error!("Failed to start transactional op batch service: {error}");
                 }
                 self.inner.transactional_message_service = Some(service);
             }
         }
-        self.inner.transactional_message_check_listener = Some(DefaultTransactionalMessageCheckListener::new(
-            Broker2Client,
-            self.inner.clone(),
-        ));
+        let listener = DefaultTransactionalMessageCheckListener::new(Broker2Client, self.inner.clone());
+        self.inner.transactional_message_check_listener = Some(listener.clone());
         self.inner.transactional_message_check_service =
-            Some(TransactionalMessageCheckService::new(self.inner.clone()));
+            self.inner.transactional_message_service.as_ref().map(|service| {
+                TransactionalMessageCheckService::new(self.inner.broker_config_arc(), service.clone(), listener)
+            });
         self.inner.transaction_metrics_flush_service = Some(TransactionMetricsFlushService);
     }
 
@@ -3367,7 +3366,7 @@ pub(crate) struct BrokerRuntimeInner<MS: MessageStore> {
     query_assignment_processor: Option<ArcMut<QueryAssignmentProcessor<MS>>>,
     auth_runtime: Option<Arc<AuthRuntime>>,
     broker_attached_plugins: Vec<Arc<dyn BrokerAttachedPlugin>>,
-    transactional_message_service: Option<ArcMut<DefaultTransactionalMessageService<MS>>>,
+    transactional_message_service: Option<Arc<DefaultTransactionalMessageService<MS>>>,
     slave_synchronize: Option<SlaveSynchronize<MS>>,
     last_sync_time_ms: AtomicU64,
     broker_pre_online_service: Option<BrokerPreOnlineService<MS>>,
@@ -3519,16 +3518,6 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn transactional_message_service_mut(&mut self) -> &mut Option<ArcMut<DefaultTransactionalMessageService<MS>>> {
-        &mut self.transactional_message_service
-    }
-
-    #[inline]
-    pub fn transactional_message_service_unchecked_mut(&mut self) -> &mut DefaultTransactionalMessageService<MS> {
-        unsafe { self.transactional_message_service.as_mut().unwrap_unchecked() }
-    }
-
-    #[inline]
     pub fn transactional_message_check_listener_mut(
         &mut self,
     ) -> &mut Option<DefaultTransactionalMessageCheckListener<MS>> {
@@ -3538,11 +3527,6 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     #[inline]
     pub fn transactional_message_check_service_mut(&mut self) -> Option<&mut TransactionalMessageCheckService<MS>> {
         self.transactional_message_check_service.as_mut()
-    }
-
-    #[inline]
-    pub fn transactional_message_check_service_unchecked_mut(&mut self) -> &mut TransactionalMessageCheckService<MS> {
-        unsafe { self.transactional_message_check_service.as_mut().unwrap_unchecked() }
     }
 
     #[inline]
@@ -3799,6 +3783,11 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     #[inline]
     pub fn transactional_message_check_listener(&self) -> &Option<DefaultTransactionalMessageCheckListener<MS>> {
         &self.transactional_message_check_listener
+    }
+
+    #[inline]
+    pub fn transactional_message_service(&self) -> Option<&Arc<DefaultTransactionalMessageService<MS>>> {
+        self.transactional_message_service.as_ref()
     }
 
     #[inline]
@@ -4751,13 +4740,13 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         if self.is_transaction_check_service_start.load(Ordering::Relaxed) != should_start {
             info!("TransactionCheckService status changed to {}", should_start);
             if should_start {
-                if let Some(transactional_message_check_service) = &mut self.transactional_message_check_service {
+                if let Some(transactional_message_check_service) = &self.transactional_message_check_service {
                     if let Err(error) = transactional_message_check_service.start().await {
                         error!("Failed to start transactional message check service: {error}");
                         return;
                     }
                 }
-            } else if let Some(transactional_message_check_service) = &mut self.transactional_message_check_service {
+            } else if let Some(transactional_message_check_service) = &self.transactional_message_check_service {
                 transactional_message_check_service.shutdown_interrupt(true).await;
             }
 

@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::Arc;
+
 use cheetah_string::CheetahString;
 use rocketmq_common::common::broker::broker_role::BrokerRole;
 use rocketmq_common::common::message::message_decoder;
@@ -45,7 +47,7 @@ use crate::transaction::queue::transactional_message_util::TransactionalMessageU
 use crate::transaction::transactional_message_service::TransactionalMessageService;
 
 pub struct EndTransactionProcessor<TM, MS: MessageStore> {
-    transactional_message_service: ArcMut<TM>,
+    transactional_message_service: Arc<TM>,
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
@@ -81,10 +83,7 @@ where
 }
 
 impl<TM, MS: MessageStore> EndTransactionProcessor<TM, MS> {
-    pub fn new(
-        transactional_message_service: ArcMut<TM>,
-        broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
-    ) -> Self {
+    pub fn new(transactional_message_service: Arc<TM>, broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
         Self {
             transactional_message_service,
             broker_runtime_inner,
@@ -172,7 +171,7 @@ where
             response_code,
             ..
         } = if MessageSysFlag::TRANSACTION_COMMIT_TYPE == request_header.commit_or_rollback {
-            let mut result = self.transactional_message_service.commit_message(&request_header);
+            let mut result = self.transactional_message_service.commit_message(&request_header).await;
             if result.response_code == ResponseCode::Success {
                 if self.reject_commit_or_rollback(
                     request_header.from_transaction_check,
@@ -236,7 +235,10 @@ where
                 OperationResult::default()
             }
         } else if MessageSysFlag::TRANSACTION_ROLLBACK_TYPE == request_header.commit_or_rollback {
-            let result = self.transactional_message_service.rollback_message(&request_header);
+            let result = self
+                .transactional_message_service
+                .rollback_message(&request_header)
+                .await;
             if result.response_code == ResponseCode::Success {
                 if self.reject_commit_or_rollback(
                     request_header.from_transaction_check,

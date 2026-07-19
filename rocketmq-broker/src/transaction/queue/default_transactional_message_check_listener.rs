@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::any::Any;
+use std::sync::Arc;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
@@ -43,7 +44,7 @@ const TCMT_QUEUE_NUMS: i32 = 1;
 
 pub struct DefaultTransactionalMessageCheckListener<MS: MessageStore> {
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
-    broker_client: ArcMut<Broker2Client>,
+    broker_client: Arc<Broker2Client>,
     task_group: Option<TaskGroup>,
 }
 
@@ -62,7 +63,7 @@ impl<MS: MessageStore> DefaultTransactionalMessageCheckListener<MS> {
         let task_group = Self::create_task_group(&broker_runtime_inner);
         Self {
             broker_runtime_inner,
-            broker_client: ArcMut::new(broker_client),
+            broker_client: Arc::new(broker_client),
             task_group,
         }
     }

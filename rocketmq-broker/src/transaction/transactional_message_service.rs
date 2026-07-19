@@ -25,7 +25,7 @@ use crate::transaction::transactional_message_check_listener::TransactionalMessa
 /// This trait provides methods for preparing, committing, rolling back, and checking transactional
 /// messages, as well as managing the state of the transactional message service.
 #[trait_variant::make(TransactionalMessageService: Send)]
-pub trait TransactionalMessageServiceLocal: Sync + 'static {
+pub(crate) trait TransactionalMessageServiceLocal: Sync + 'static {
     /// Prepares a transactional message.
     ///
     /// # Arguments
@@ -35,7 +35,7 @@ pub trait TransactionalMessageServiceLocal: Sync + 'static {
     /// # Returns
     ///
     /// A `PutMessageResult` indicating the result of the message preparation.
-    async fn prepare_message(&mut self, message_inner: MessageExtBrokerInner) -> PutMessageResult;
+    async fn prepare_message(&self, message_inner: MessageExtBrokerInner) -> PutMessageResult;
 
     /// Asynchronously prepares a transactional message.
     ///
@@ -46,7 +46,7 @@ pub trait TransactionalMessageServiceLocal: Sync + 'static {
     /// # Returns
     ///
     /// A `PutMessageResult` indicating the result of the message preparation.
-    async fn async_prepare_message(&mut self, message_inner: MessageExtBrokerInner) -> PutMessageResult;
+    async fn async_prepare_message(&self, message_inner: MessageExtBrokerInner) -> PutMessageResult;
 
     /// Deletes a prepared transactional message.
     ///
@@ -57,7 +57,7 @@ pub trait TransactionalMessageServiceLocal: Sync + 'static {
     /// # Returns
     ///
     /// A boolean indicating whether the message was successfully deleted.
-    async fn delete_prepare_message(&mut self, message_ext: &MessageExt) -> bool;
+    async fn delete_prepare_message(&self, message_ext: &MessageExt) -> bool;
 
     /// Commits a transactional message.
     ///
@@ -68,7 +68,7 @@ pub trait TransactionalMessageServiceLocal: Sync + 'static {
     /// # Returns
     ///
     /// An `OperationResult` indicating the result of the commit operation.
-    fn commit_message(&mut self, request_header: &EndTransactionRequestHeader) -> OperationResult;
+    async fn commit_message(&self, request_header: &EndTransactionRequestHeader) -> OperationResult;
 
     /// Rolls back a transactional message.
     ///
@@ -79,7 +79,7 @@ pub trait TransactionalMessageServiceLocal: Sync + 'static {
     /// # Returns
     ///
     /// An `OperationResult` indicating the result of the rollback operation.
-    fn rollback_message(&mut self, request_header: &EndTransactionRequestHeader) -> OperationResult;
+    async fn rollback_message(&self, request_header: &EndTransactionRequestHeader) -> OperationResult;
 
     /// Checks the state of transactional messages.
     ///
@@ -88,7 +88,7 @@ pub trait TransactionalMessageServiceLocal: Sync + 'static {
     /// * `transaction_timeout` - The timeout for the transaction.
     /// * `transaction_check_max` - The maximum number of transaction checks.
     async fn check<Listener: TransactionalMessageCheckListener + Clone>(
-        &mut self,
+        &self,
         transaction_timeout: u64,
         transaction_check_max: i32,
         listener: Listener,
