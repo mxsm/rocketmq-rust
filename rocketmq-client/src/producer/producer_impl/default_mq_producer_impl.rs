@@ -1877,7 +1877,6 @@ impl DefaultMQProducerImpl {
                     .map(|entry| Arc::clone(entry.value()));
             };
             client_instance
-                .mut_from_ref()
                 .update_topic_route_info_from_name_server_topic(topic)
                 .await;
             topic_publish_info = self
@@ -1899,7 +1898,6 @@ impl DefaultMQProducerImpl {
             return topic_publish_info;
         };
         client_instance
-            .mut_from_ref()
             .update_topic_route_info_from_name_server_default(topic, true, Some(&self.producer_config))
             .await;
         self.topic_publish_info_table
@@ -2477,10 +2475,7 @@ impl DefaultMQProducerImpl {
         if !has_route_data {
             let begin_timestamp = Instant::now();
             self.try_to_find_topic_publish_info(msg.topic()).await;
-            client_instance
-                .mut_from_ref()
-                .send_heartbeat_to_all_broker_with_lock()
-                .await;
+            client_instance.send_heartbeat_to_all_broker_with_lock().await;
             let cost = begin_timestamp.elapsed().as_millis() as u64;
             if cost > 500 {
                 warn!(
@@ -3025,7 +3020,6 @@ impl DefaultMQProducerImpl {
                     }
                 };
                 let register_ok = client_instance
-                    .mut_from_ref()
                     .register_producer(
                         self.producer_config.producer_group(),
                         MQProducerInnerImpl {

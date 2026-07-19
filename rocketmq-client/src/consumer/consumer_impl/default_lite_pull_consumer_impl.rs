@@ -2696,7 +2696,7 @@ impl DefaultLitePullConsumerImpl {
     async fn max_offset(&self, message_queue: &MessageQueue) -> RocketMQResult<i64> {
         self.make_sure_state_ok()?;
 
-        let mut client_instance = self
+        let client_instance = self
             .client_instance
             .as_ref()
             .ok_or_else(|| crate::mq_client_err!("Client instance not initialized"))?
@@ -2720,7 +2720,7 @@ impl DefaultLitePullConsumerImpl {
     async fn min_offset(&self, message_queue: &MessageQueue) -> RocketMQResult<i64> {
         self.make_sure_state_ok()?;
 
-        let mut client_instance = self
+        let client_instance = self
             .client_instance
             .as_ref()
             .ok_or_else(|| crate::mq_client_err!("Client instance not initialized"))?

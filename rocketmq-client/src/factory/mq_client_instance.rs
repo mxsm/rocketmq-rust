@@ -693,7 +693,7 @@ impl MQClientInstance {
         }
     }
 
-    pub async fn register_producer(&mut self, group: &str, producer: MQProducerInnerImpl) -> bool {
+    pub async fn register_producer(&self, group: &str, producer: MQProducerInnerImpl) -> bool {
         if group.is_empty() {
             return false;
         }
@@ -744,7 +744,7 @@ impl MQClientInstance {
                 Duration::from_millis(10),
                 Duration::from_millis(poll_name_server_interval as u64),
                 async move |_token| {
-                    let mut instance = client_instance.clone();
+                    let instance = client_instance.clone();
                     info!("ScheduledTask: update_topic_route_info_from_name_server");
                     instance.update_topic_route_info_from_name_server().await;
                     Ok(())
@@ -790,7 +790,7 @@ impl MQClientInstance {
         Ok(())
     }
 
-    pub async fn update_topic_route_info_from_name_server(&mut self) {
+    pub async fn update_topic_route_info_from_name_server(&self) {
         let topic_list = self.collect_registered_route_topics();
         let total_topics = topic_list.len();
         let (refresh_topics, skipped_topics) = self.select_periodic_route_refresh_batch(&topic_list);
@@ -815,7 +815,7 @@ impl MQClientInstance {
     }
 
     #[inline]
-    pub async fn update_topic_route_info_from_name_server_topic(&mut self, topic: &CheetahString) -> bool {
+    pub async fn update_topic_route_info_from_name_server_topic(&self, topic: &CheetahString) -> bool {
         self.update_topic_route_info_from_name_server_default(topic, false, None)
             .await
     }
@@ -873,7 +873,7 @@ impl MQClientInstance {
         None
     }
 
-    pub async fn query_topic_route_data(&mut self, topic: &CheetahString) -> Option<TopicRouteData> {
+    pub async fn query_topic_route_data(&self, topic: &CheetahString) -> Option<TopicRouteData> {
         if let Some(topic_route_data) = self.topic_route_table.get(topic) {
             return Some(TopicRouteData::from_existing(topic_route_data.value()));
         }
@@ -885,7 +885,7 @@ impl MQClientInstance {
     }
 
     pub async fn update_topic_route_info_from_name_server_default(
-        &mut self,
+        &self,
         topic: &CheetahString,
         is_default: bool,
         producer_config: Option<&Arc<ProducerConfig>>,
@@ -900,7 +900,7 @@ impl MQClientInstance {
     }
 
     async fn update_topic_route_info_from_name_server_default_with_kind(
-        &mut self,
+        &self,
         topic: &CheetahString,
         is_default: bool,
         producer_config: Option<&Arc<ProducerConfig>>,
@@ -1044,7 +1044,7 @@ impl MQClientInstance {
     }
 
     async fn apply_topic_route_data_if_fresh(
-        &mut self,
+        &self,
         topic: &CheetahString,
         topic_route_data: &mut TopicRouteData,
         request_version: u64,
@@ -2078,7 +2078,7 @@ impl MQClientInstance {
     }
 
     pub async fn find_broker_address_in_subscribe(
-        &mut self,
+        &self,
         broker_name: &CheetahString,
         broker_id: u64,
         only_this_broker: bool,
@@ -2535,7 +2535,7 @@ pub async fn run_route_refresh_concurrent_stale_guard_probe() -> RouteRefreshCon
         namesrv_addr: None,
         ..Default::default()
     };
-    let mut instance = MQClientInstance::new_arc(client_config, 0, "route-refresh-concurrent-probe", None);
+    let instance = MQClientInstance::new_arc(client_config, 0, "route-refresh-concurrent-probe", None);
     let topic = CheetahString::from_static_str("route-refresh-concurrent-topic");
     let current_route = TopicRouteData {
         order_topic_conf: Some(CheetahString::from_static_str("broker-new:1")),
@@ -2968,7 +2968,7 @@ mod tests {
             namesrv_addr: None,
             ..Default::default()
         };
-        let mut instance = MQClientInstance::new_arc(client_config, 0, "heartbeat-route-index-test", None);
+        let instance = MQClientInstance::new_arc(client_config, 0, "heartbeat-route-index-test", None);
         let topic = CheetahString::from_static_str("heartbeat-route-index-topic");
         let mut first_route = heartbeat_route_with_addr("broker-a", "127.0.0.1:10911");
         let mut second_route = heartbeat_route_with_addr("broker-b", "127.0.0.2:10911");
@@ -2992,7 +2992,7 @@ mod tests {
             namesrv_addr: None,
             ..Default::default()
         };
-        let mut instance = MQClientInstance::new_arc(client_config, 0, "heartbeat-route-refcount-test", None);
+        let instance = MQClientInstance::new_arc(client_config, 0, "heartbeat-route-refcount-test", None);
         let topic_a = CheetahString::from_static_str("heartbeat-route-refcount-a");
         let topic_b = CheetahString::from_static_str("heartbeat-route-refcount-b");
         let mut shared_a = heartbeat_route_with_addr("broker-shared", "127.0.0.9:10911");
@@ -3200,7 +3200,7 @@ mod tests {
             namesrv_addr: None,
             ..Default::default()
         };
-        let mut instance = MQClientInstance::new_arc(client_config, 0, "query-route-test", None);
+        let instance = MQClientInstance::new_arc(client_config, 0, "query-route-test", None);
         let topic = CheetahString::from_static_str("topic-a");
         let route = TopicRouteData {
             order_topic_conf: Some(CheetahString::from_static_str("broker-a:1")),

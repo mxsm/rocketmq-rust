@@ -290,7 +290,7 @@ impl MQAdminImpl {
     ///
     /// Returns an error if the broker address cannot be resolved or the remote call fails.
     pub async fn max_offset(&self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
-        let mut client = self.client()?;
+        let client = self.client()?;
         let broker_name = client.get_broker_name_from_message_queue(mq).await;
         let mut broker_addr = client.find_broker_address_in_publish(broker_name.as_ref());
         if broker_addr.is_none() {
@@ -320,7 +320,7 @@ impl MQAdminImpl {
     /// Returns an error if the broker address cannot be resolved or the remote call fails.
     pub async fn search_offset(&self, mq: &MessageQueue, timestamp: u64) -> rocketmq_error::RocketMQResult<i64> {
         let timestamp = Self::timestamp_to_java_long("searchOffset", timestamp)?;
-        let mut client = self.client()?;
+        let client = self.client()?;
         let broker_name = client.get_broker_name_from_message_queue(mq).await;
         let mut broker_addr = client.find_broker_address_in_publish(broker_name.as_ref());
         if broker_addr.is_none() {
@@ -340,7 +340,7 @@ impl MQAdminImpl {
     }
 
     pub async fn min_offset(&self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
-        let mut client = self.client()?;
+        let client = self.client()?;
         let broker_name = client.get_broker_name_from_message_queue(mq).await;
         let mut broker_addr = client.find_broker_address_in_publish(broker_name.as_ref());
         if broker_addr.is_none() {
@@ -360,7 +360,7 @@ impl MQAdminImpl {
     }
 
     pub async fn earliest_msg_store_time(&self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
-        let mut client = self.client()?;
+        let client = self.client()?;
         let broker_name = client.get_broker_name_from_message_queue(mq).await;
         let mut broker_addr = client.find_broker_address_in_publish(broker_name.as_ref());
         if broker_addr.is_none() {

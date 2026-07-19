@@ -6,7 +6,7 @@ M11-12 的最终目标是 production/public compatibility API 中不存在 `ArcM
 `mut_from_ref` 或 clone-safe `AsMut`/`DerefMut`，并让默认 workspace 在 stable Rust 下通过，同时把 Miri/Loom、
 soak、SLO fault、dashboard/runbook、rollback 和 Human Gate 绑定到同一候选快照。
 
-该目标尚未完成。本文件记录 M11-12a～t 子切片的真实下降，不把子切片计为第 76 个工作包，也不刷新
+该目标尚未完成。本文件记录 M11-12a～u 子切片的真实下降，不把子切片计为第 76 个工作包，也不刷新
 baseline 来掩盖剩余债务。父 Issue 为 #8292；M11-12a 子切片 Issue 为 #8293；分支为
 `mxsm/architecture-refactor-owned-values`。
 
@@ -66,6 +66,9 @@ M11-12s 的 Client API instance owner 由 Issue #8331 跟踪，分支为
 
 M11-12t 的 Client internal Admin owner 由 Issue #8333 跟踪，分支为
 `mxsm/architecture-refactor-client-internal-admin-owner`；它仍是同一 M11-12 工作包的子切片。
+
+M11-12u 的 Client route registry owner 由 Issue #8335 跟踪，分支为
+`mxsm/architecture-refactor-client-route-registry-owner`；它仍是同一 M11-12 工作包的子切片。
 
 ## 初始盘点
 
@@ -566,6 +569,31 @@ reviewed baseline 条目保持 683，occurrences 从 2,009→1,996。`MQAdminImp
 occurrence 因 `Option`→`OnceLock`、receiver 与 lookup 收窄发生同 item 一对一 fingerprint relocation，按 ADR-013
 临时审核且 approval 不提交；除此之外只删除真实消失的 13 个 occurrence，没有新增或替代 shared-mutation wrapper。
 
+## M11-12u Client route registry owner
+
+| 目标 | 实现与证据 |
+|---|---|
+| route capability 收窄 | `MQClientInstance` 的 route refresh/application、route query 与 subscribe broker lookup 只经 `&self`，写入继续由既有 DashMap、原子版本和内部同步结构承担 |
+| Producer 注册 | `register_producer` 收窄为 `&self`，producer table 仍以并发 map 原子登记，不扩大生命周期写权限 |
+| escape 删除 | Producer 路由查找、默认路由刷新、heartbeat 与注册路径删除 4 个 safe `mut_from_ref`；production 中只保留实际调用 `MQClientInstance::start` 的 lifecycle 可变入口 |
+| 调用链清理 | scheduled refresh、Admin、Push/Lite Consumer 和 proxy adapter 删除因旧 receiver 遗留的冗余可变 client clone |
+| compatibility | route freshness/version guard、Producer/Consumer route view、heartbeat route index、Admin offset lookup 与 proxy adapter 行为保持不变 |
+
+M11-12u 后实际快照仍为 683 个条目：production 420、test 249、compatibility 14；occurrence 精确为
+production 1,259、test 693、compatibility 40。相对 M11-12t 没有删除完整 identity，但真实删除 4 个 production
+occurrence；相对初始快照累计删除 340 个 production 条目和 866 个 production occurrence。
+`rocketmq-client` production 债务从 103/371 降至 103/367。剩余 production 债务为：
+
+| crate | 条目 | occurrence |
+|---|---:|---:|
+| `rocketmq-broker` | 190 | 568 |
+| `rocketmq-client` | 103 | 367 |
+| `rocketmq-store` | 127 | 324 |
+
+reviewed baseline 条目保持 683，occurrences 从 1,996→1,992。guard 只报告 Producer 中 4 个已删除的旧
+occurrence，没有新增或 fingerprint relocation；因此本切片不使用 relocation approval，也没有新增或替代
+shared-mutation wrapper。
+
 ## 已执行验证
 
 | 命令 | 结果 |
@@ -985,9 +1013,28 @@ M11-12t 追加验证：
 | `ArcMut<MQAdminImpl>` / Admin `&mut self` / Producer Admin-only `mut_from_ref` 定向扫描 | 均零匹配 |
 | `git diff --check` | 通过 |
 
+M11-12u 追加验证：
+
+| 命令 | 结果 |
+|---|---|
+| `cargo check -p rocketmq-client-rust --all-targets --all-features` | 通过；route registry、Producer、Admin、Push/Lite Consumer 与 proxy adapter 调用链类型收敛且无 unused-mut warning |
+| `cargo test -p rocketmq-client-rust factory::mq_client_instance::tests --lib --all-features` | 29/29 通过；覆盖 Producer 注册、并发 stale guard、Producer/Consumer route view、heartbeat route index、缓存查询与 lifecycle rollback |
+| `cargo test -p rocketmq-client-rust --all-features --quiet` | 退出码 0 全部通过；library 965/965，其余 integration targets 全部通过（35 项既有外部环境测试忽略） |
+| reviewed baseline reduction | guard 只报告 4 个已删除旧 occurrence，无新增和 relocation；baseline 条目保持 683、occurrences 1,996→1,992 |
+| `python scripts/arc_mut_guard.py` | 通过；production 420/1,259，Client 103/367 |
+| `python -m unittest scripts.tests.test_arc_mut_guard` / `python scripts/arc_mut_guard.py --fixtures` | 67/67 单测、24/24 fixtures 通过 |
+| `cargo fmt --all -- --check` | 通过 |
+| `cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings` | 通过；Windows linker stdout 与既有 future-incompatibility note 不受 `-D warnings` 管辖 |
+| `rocketmq-example`: `cargo fmt --all -- --check` / `cargo clippy --all-targets -- -D warnings` | standalone Client/Admin consumer 通过 |
+| `.\scripts\runtime-audit.ps1 -SkipBaseline -EnforceBoundaryBaseline` | 通过；route refresh scheduled task 只捕获共享 owner，未新增 detached task、运行时或跨 await 同步 guard |
+| architecture target/baseline 与 release guard | 通过；35/35 target edges、3/3 test edges、32/32 release topology |
+| `.\scripts\check-agents-routing.ps1` | 通过；4 个 standalone Cargo、3 个 Node project、8 条 route |
+| Producer production `mut_from_ref` / route-registry `&mut self` 定向扫描 | Producer 仅余 1 个真实 lifecycle start；本切片收窄的 route/registration 方法为零匹配 |
+| `git diff --check` | 通过 |
+
 ## 剩余切片与 Gate
 
-1. Client 其余 MQClientInstance、Producer、Push/Lite Consumer owner（103/371）。
+1. Client 其余 MQClientInstance、Producer、Push/Lite Consumer owner（103/367）。
 2. Broker TopicConfig/offset、BrokerRuntimeInner、schedule/POP/processor/transaction owner（190/568）。
 3. Store TopicConfig snapshot、MappedFileQueue/ConsumeQueue、CommitLog/Flush、StoreHandle/Rocks/Timer 与 HA actor（127/324）。
 4. 删除 compatibility `arc_mut.rs` 和公开 re-export；移除其余 nightly feature，将 guard 切到 production/public zero。
