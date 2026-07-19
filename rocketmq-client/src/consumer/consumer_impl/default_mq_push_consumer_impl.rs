@@ -813,7 +813,7 @@ impl DefaultMQPushConsumerImpl {
         attributes: HashMap<String, String>,
     ) -> rocketmq_error::RocketMQResult<()> {
         self.make_sure_state_ok()?;
-        let mut client_instance = self
+        let client_instance = self
             .client_instance
             .as_ref()
             .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("MQClientInstance"))?
@@ -826,7 +826,7 @@ impl DefaultMQPushConsumerImpl {
 
     pub async fn earliest_msg_store_time(&mut self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
         self.make_sure_state_ok()?;
-        let mut client_instance = self
+        let client_instance = self
             .client_instance
             .as_ref()
             .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("MQClientInstance"))?
@@ -836,7 +836,7 @@ impl DefaultMQPushConsumerImpl {
 
     pub async fn max_offset(&mut self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
         self.make_sure_state_ok()?;
-        let mut client_instance = self
+        let client_instance = self
             .client_instance
             .as_ref()
             .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("MQClientInstance"))?
@@ -846,7 +846,7 @@ impl DefaultMQPushConsumerImpl {
 
     pub async fn min_offset(&mut self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
         self.make_sure_state_ok()?;
-        let mut client_instance = self
+        let client_instance = self
             .client_instance
             .as_ref()
             .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("MQClientInstance"))?
@@ -856,7 +856,7 @@ impl DefaultMQPushConsumerImpl {
 
     pub async fn search_offset(&mut self, mq: &MessageQueue, timestamp: u64) -> rocketmq_error::RocketMQResult<i64> {
         self.make_sure_state_ok()?;
-        let mut client_instance = self
+        let client_instance = self
             .client_instance
             .as_ref()
             .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("MQClientInstance"))?
@@ -906,7 +906,7 @@ impl DefaultMQPushConsumerImpl {
         end: u64,
     ) -> rocketmq_error::RocketMQResult<QueryResult> {
         self.make_sure_state_ok()?;
-        let mut client_instance = self
+        let client_instance = self
             .client_instance
             .as_ref()
             .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("MQClientInstance"))?
@@ -924,7 +924,7 @@ impl DefaultMQPushConsumerImpl {
     ) -> rocketmq_error::RocketMQResult<MessageExt> {
         self.make_sure_state_ok()?;
         let begin = current_millis().saturating_sub(QUERY_UNIQ_KEY_LOOKBACK_MILLIS);
-        let mut client_instance = self
+        let client_instance = self
             .client_instance
             .as_ref()
             .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("MQClientInstance"))?
@@ -942,7 +942,7 @@ impl DefaultMQPushConsumerImpl {
 
     pub async fn view_message(&mut self, topic: &str, msg_id: &str) -> rocketmq_error::RocketMQResult<MessageExt> {
         self.make_sure_state_ok()?;
-        let mut client_instance = self
+        let client_instance = self
             .client_instance
             .as_ref()
             .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("MQClientInstance"))?

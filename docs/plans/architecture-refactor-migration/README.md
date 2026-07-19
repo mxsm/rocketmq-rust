@@ -313,6 +313,10 @@ Client API instance owner 随 Issue #8331 将 `MQClientInstance`、Admin、Produ
 `MQClientAPIImpl` handle 改为普通 `Arc`；44 个不修改字段的历史 `&mut self` receiver 收窄为 `&self`，query/pull
 后台任务只捕获 `Arc<Self>`，heartbeat 不再调用 `mut_from_ref`。实际快照降至 420 production/1,276 occurrence，
 Client 降至 103/384；剩余为 Broker 190/568、Client 103/384 与 Store 127/324，总进度仍为 75/82。
+Client internal Admin owner 随 Issue #8333 改为普通 `Arc<MQAdminImpl>`，root client handle 通过 `OnceLock` 仅绑定
+一次，Admin forwarding receiver 收窄为 `&self`；Producer 删除 11 个仅为访问 Admin helper 的 `mut_from_ref`，
+Consumer 删除冗余可变 client clone。实际快照为 420 production/1,263 occurrence，Client 降至 103/371；剩余为
+Broker 190/568、Client 103/371 与 Store 127/324，总进度仍为 75/82。
 
 ### 9.3 证据目录
 

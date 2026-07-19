@@ -2242,7 +2242,7 @@ impl DefaultLitePullConsumerImpl {
     pub async fn search_offset(&self, mq: &MessageQueue, timestamp: u64) -> RocketMQResult<i64> {
         self.make_sure_state_ok()?;
 
-        let mut client_instance = self
+        let client_instance = self
             .client_instance
             .as_ref()
             .ok_or_else(|| crate::mq_client_err!("Client instance not initialized"))?
@@ -2307,7 +2307,7 @@ impl DefaultLitePullConsumerImpl {
     ) -> RocketMQResult<()> {
         self.make_sure_state_ok()?;
 
-        let mut client_instance = self
+        let client_instance = self
             .client_instance
             .as_ref()
             .ok_or_else(|| crate::mq_client_err!("Client instance not initialized"))?
@@ -2330,7 +2330,7 @@ impl DefaultLitePullConsumerImpl {
     ) -> RocketMQResult<QueryResult> {
         self.make_sure_state_ok()?;
 
-        let mut client_instance = self
+        let client_instance = self
             .client_instance
             .as_ref()
             .ok_or_else(|| crate::mq_client_err!("Client instance not initialized"))?
@@ -2347,7 +2347,7 @@ impl DefaultLitePullConsumerImpl {
         self.make_sure_state_ok()?;
 
         let begin = current_millis().saturating_sub(QUERY_UNIQ_KEY_LOOKBACK_MILLIS);
-        let mut client_instance = self
+        let client_instance = self
             .client_instance
             .as_ref()
             .ok_or_else(|| crate::mq_client_err!("Client instance not initialized"))?
@@ -2367,7 +2367,7 @@ impl DefaultLitePullConsumerImpl {
     pub async fn view_message(&self, topic: &str, msg_id: &str) -> RocketMQResult<MessageExt> {
         self.make_sure_state_ok()?;
 
-        let mut client_instance = self
+        let client_instance = self
             .client_instance
             .as_ref()
             .ok_or_else(|| crate::mq_client_err!("Client instance not initialized"))?
@@ -2410,7 +2410,7 @@ impl DefaultLitePullConsumerImpl {
     pub async fn earliest_msg_store_time(&self, mq: &MessageQueue) -> RocketMQResult<i64> {
         self.make_sure_state_ok()?;
 
-        let mut client_instance = self
+        let client_instance = self
             .client_instance
             .as_ref()
             .ok_or_else(|| crate::mq_client_err!("Client instance not initialized"))?
@@ -2711,7 +2711,7 @@ impl DefaultLitePullConsumerImpl {
 
         client_instance
             .mq_client_api_impl
-            .as_mut()
+            .as_ref()
             .ok_or_else(|| crate::mq_client_err!("MQClientAPIImpl not initialized"))?
             .get_max_offset(broker_result.broker_addr.as_str(), message_queue, 3000)
             .await
@@ -2735,7 +2735,7 @@ impl DefaultLitePullConsumerImpl {
 
         client_instance
             .mq_client_api_impl
-            .as_mut()
+            .as_ref()
             .ok_or_else(|| crate::mq_client_err!("MQClientAPIImpl not initialized"))?
             .get_min_offset(broker_result.broker_addr.as_str(), message_queue, 3000)
             .await

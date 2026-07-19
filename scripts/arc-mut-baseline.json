@@ -12697,7 +12697,7 @@
           "id": "9cbe2d507037ccc178f23eb8",
           "fingerprint": "d26a6e9d75c77b5c7069d839",
           "item": "mod tests",
-          "line": 2667
+          "line": 2668
         }
       ],
       "owner": "client",
@@ -12731,12 +12731,6 @@
           "line": 345
         },
         {
-          "id": "22a04fd2bac7bfc64a5e4797",
-          "fingerprint": "9994753dadd95ffaf159da23",
-          "item": "impl Into",
-          "line": 353
-        },
-        {
           "id": "a545e29fb04f6ec655e6362f",
           "fingerprint": "c0ddefea53f3b900e3c3b432",
           "item": "impl Into",
@@ -12759,19 +12753,19 @@
           "id": "3537a7f5e9f85fea0a9ca95a",
           "fingerprint": "1e1dd2485b87b679d56fce30",
           "item": "fn apply_route_refresh_updates_producer_and_consumer_views",
-          "line": 2885
+          "line": 2886
         },
         {
           "id": "a88e0cd463d27dc0b3e0d37a",
           "fingerprint": "6ee6af86f91a5447266fe14a",
           "item": "fn apply_route_refresh_updates_producer_and_consumer_views",
-          "line": 2901
+          "line": 2902
         },
         {
           "id": "954bf9f99136644e81c88b1c",
           "fingerprint": "6448cd2aa913551fd4d328c0",
           "item": "fn apply_route_refresh_updates_producer_and_consumer_views",
-          "line": 2903
+          "line": 2904
         }
       ],
       "owner": "client",
@@ -12812,12 +12806,6 @@
           "line": 223
         },
         {
-          "id": "6e9bcce24cb87675c79171d5",
-          "fingerprint": "9aeea7db1321ac3a0d248571",
-          "item": "struct MQClientInstance",
-          "line": 242
-        },
-        {
           "id": "46138f75cdf92f7ed803d3e4",
           "fingerprint": "2a9f1469a895ab8c7529dcfc",
           "item": "struct MQClientInstance",
@@ -12839,19 +12827,19 @@
           "id": "3ae1fb9d30be0d6c185b346d",
           "fingerprint": "9803c8d8017b5236972b4114",
           "item": "impl Into",
-          "line": 399
+          "line": 400
         },
         {
           "id": "ca1376cc209947df2ad88dd2",
           "fingerprint": "ec054c8c5c736949cc8bcbe4",
           "item": "fn start",
-          "line": 457
+          "line": 458
         },
         {
           "id": "19229b23cd4be4f5ed4b8fa7",
           "fingerprint": "601870d525a9d7fa55d52273",
           "item": "fn start_scheduled_task",
-          "line": 719
+          "line": 720
         }
       ],
       "owner": "client",
@@ -13052,7 +13040,7 @@
           "id": "cce69073596954299718616e",
           "fingerprint": "7aa586045540d1bc5fe92dca",
           "item": "mod tests",
-          "line": 517
+          "line": 506
         }
       ],
       "owner": "client",
@@ -13071,7 +13059,7 @@
           "id": "b9b19ef630ce5a0ef38a202a",
           "fingerprint": "c0f596ea777dc3b7d5b42f00",
           "item": "<module>",
-          "line": 36
+          "line": 37
         }
       ],
       "owner": "client",
@@ -13087,22 +13075,22 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "e91fd2c900994c8ab68d05b1",
-          "fingerprint": "05867ad6f19989f6fdcc97a1",
+          "id": "baf2bb42ead27b7c0a150b6b",
+          "fingerprint": "0fad4d7e4c4ad4faeb74b024",
           "item": "struct MQAdminImpl",
-          "line": 47
+          "line": 48
         },
         {
-          "id": "48d4239d5a156c7bf8974d2b",
-          "fingerprint": "f08e5d2746e4bdc05bc77e6d",
+          "id": "92c605b1eae672831fe59030",
+          "fingerprint": "ca6c4a60650bd5ea3ca91e95",
           "item": "fn set_client",
-          "line": 58
+          "line": 59
         },
         {
-          "id": "d2407aa57dd63d6977aa0f99",
-          "fingerprint": "91285f2b7090e214aa5d6d49",
+          "id": "6fbf93e8a11adebd8d8ab7ba",
+          "fingerprint": "87b43cabb2f857aeace31505",
           "item": "fn client",
-          "line": 62
+          "line": 63
         }
       ],
       "owner": "client",
@@ -13559,7 +13547,7 @@
           "id": "b1a22a9e0fa5d9ecfa852526",
           "fingerprint": "d140ff4ac2a0ea79a857088b",
           "item": "mod tests",
-          "line": 3657
+          "line": 3634
         }
       ],
       "owner": "client",
@@ -13578,7 +13566,7 @@
           "id": "67b0046e6072159c90695c24",
           "fingerprint": "356398455444fa281e36bc8b",
           "item": "fn running_producer_arc_with_self_inner",
-          "line": 3688
+          "line": 3665
         }
       ],
       "owner": "client",
@@ -13634,13 +13622,13 @@
           "id": "f4f791ad0cc15215ab5f9f9a",
           "fingerprint": "f0e256b31aba61aae79c3c48",
           "item": "struct DefaultServiceDetector",
-          "line": 3552
+          "line": 3529
         },
         {
           "id": "b1f91ffc3439d3410d7dee6b",
           "fingerprint": "2d53d4eadb152009da2a1127",
           "item": "struct DefaultResolver",
-          "line": 3641
+          "line": 3618
         }
       ],
       "owner": "client",
@@ -13659,13 +13647,13 @@
           "id": "d9a05be2d5e4ad25924e45a9",
           "fingerprint": "e921f953fdb474ebfdf78609",
           "item": "fn running_producer_arc_with_self_inner",
-          "line": 3687
+          "line": 3664
         },
         {
           "id": "47d45638c009526c0a6964ce",
           "fingerprint": "c4ea98db295aea5d035405e0",
           "item": "fn running_producer_arc_with_self_inner",
-          "line": 3691
+          "line": 3668
         }
       ],
       "owner": "client",
@@ -13709,7 +13697,7 @@
           "id": "2b08b75b29fdd51394ca3fd3",
           "fingerprint": "1b66359c3d04ea9077d40cac",
           "item": "fn set_default_mqproducer_impl_inner",
-          "line": 2807
+          "line": 2784
         }
       ],
       "owner": "client",
@@ -13725,100 +13713,34 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "b135e5af8cbef1ef6cd82115",
-          "fingerprint": "96ce007370550f34657c884c",
-          "item": "fn send_select_impl",
-          "line": 987
-        },
-        {
           "id": "3cff4888c4640403a0fee7ec",
           "fingerprint": "2b7c30d8bbe12eb6809a2d75",
           "item": "fn try_to_find_topic_publish_info",
-          "line": 1881
+          "line": 1880
         },
         {
           "id": "c526ad1082ac83aada1c800a",
           "fingerprint": "b1be7272ed4bd3328b970745",
           "item": "fn try_to_find_topic_publish_info",
-          "line": 1903
-        },
-        {
-          "id": "00bef45502634254add689e9",
-          "fingerprint": "96ce007370550f34657c884c",
-          "item": "fn invoke_message_queue_selector",
-          "line": 1980
-        },
-        {
-          "id": "3fe46093814e7ecb890b0f14",
-          "fingerprint": "0b7c17d3055d0795db5610a6",
-          "item": "fn fetch_publish_message_queues",
-          "line": 2034
-        },
-        {
-          "id": "fc308c71b85086dce61bf3a4",
-          "fingerprint": "94acd6797b324e6876b2dc1a",
-          "item": "fn create_topic",
-          "line": 2050
-        },
-        {
-          "id": "f1bb285075e11bc8ed1ef8a8",
-          "fingerprint": "1cc39da18b783350bb94a354",
-          "item": "fn search_offset",
-          "line": 2060
-        },
-        {
-          "id": "f7c70c5556c754eacb9efd93",
-          "fingerprint": "93a4e7baafb7cae95e1ad36d",
-          "item": "fn max_offset",
-          "line": 2070
-        },
-        {
-          "id": "d7781fbd83bf57cf8fa2b91f",
-          "fingerprint": "c63822401d6d5c7b78bb3791",
-          "item": "fn min_offset",
-          "line": 2080
-        },
-        {
-          "id": "1288bea9fa1b929bf55f183e",
-          "fingerprint": "d307728355c7aebd320f0e96",
-          "item": "fn earliest_msg_store_time",
-          "line": 2090
-        },
-        {
-          "id": "b9ed515f327d91f30bed3340",
-          "fingerprint": "52e1020dee15373a66ee1612",
-          "item": "fn query_message",
-          "line": 2106
-        },
-        {
-          "id": "544bb1bc8052efaedef94d49",
-          "fingerprint": "de7c5d6e3358dfe803697d6d",
-          "item": "fn query_message_by_uniq_key",
-          "line": 2121
-        },
-        {
-          "id": "1036e4943c3cf871f6d6f694",
-          "fingerprint": "b6fbc3eef62e813d95f0f9c9",
-          "item": "fn view_message",
-          "line": 2135
+          "line": 1902
         },
         {
           "id": "6fa89a5860674430e632cdf0",
           "fingerprint": "16265dad82edd69e3b6450a5",
           "item": "fn prepare_send_request",
-          "line": 2504
+          "line": 2481
         },
         {
           "id": "b17f8bc05dd80e8b5fecfcaf",
           "fingerprint": "9398f31e10e6c08979639c4f",
           "item": "fn start_with_factory",
-          "line": 3051
+          "line": 3028
         },
         {
           "id": "bd3c6e3b22f6359b735d4be8",
           "fingerprint": "4b07739b374c6b168ee272b5",
           "item": "fn start_with_factory",
-          "line": 3069
+          "line": 3046
         }
       ],
       "owner": "client",
@@ -13837,25 +13759,25 @@
           "id": "aba9ca5334cb9554b5016b9b",
           "fingerprint": "a51632360baadbb0bc486192",
           "item": "fn running_producer_arc_with_self_inner",
-          "line": 3690
+          "line": 3667
         },
         {
           "id": "16e189d4577b6391b57c80e4",
           "fingerprint": "8b150fb7bba37b260fdd92e9",
           "item": "fn async_send_to_queue_validates_message_before_kernel_like_java",
-          "line": 4182
+          "line": 4159
         },
         {
           "id": "e443a78aa00d5c904edc6f25",
           "fingerprint": "8b150fb7bba37b260fdd92e9",
           "item": "fn async_send_to_queue_topic_mismatch_uses_java_callback_error_message",
-          "line": 4218
+          "line": 4195
         },
         {
           "id": "8d72eb9eab5bdfe75d28666f",
           "fingerprint": "683fb6d123596cb2a5c150af",
           "item": "fn async_send_with_callback_reports_kernel_error_to_callback",
-          "line": 4259
+          "line": 4236
         }
       ],
       "owner": "client",
