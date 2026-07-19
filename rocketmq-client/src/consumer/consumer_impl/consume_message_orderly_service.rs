@@ -207,7 +207,7 @@ impl ConsumeMessageOrderlyService {
             return;
         }
 
-        let Some(mut default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_ref().cloned() else {
+        let Some(default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_ref().cloned() else {
             warn!(
                 "lockMQPeriodically skipped: DefaultMQPushConsumerImpl is not initialized, group={}",
                 self.consumer_group
@@ -270,8 +270,7 @@ impl ConsumeMessageOrderlyService {
     }
 
     pub fn reset_namespace(&self, msgs: &mut [Arc<MessageExt>]) {
-        let mut client_config = self.client_config.clone();
-        let namespace = client_config.get_namespace().unwrap_or_default();
+        let namespace = self.client_config.resolved_namespace().unwrap_or_default();
         if namespace.is_empty() {
             return;
         }
@@ -287,7 +286,7 @@ impl ConsumeMessageOrderlyService {
     pub async fn unlock_all_mq(&self) {
         let lock = self.global_lock.lock().await;
 
-        if let Some(mut default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_ref().cloned() {
+        if let Some(default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_ref().cloned() {
             default_mqpush_consumer_impl
                 .rebalance_impl
                 .rebalance_impl_inner
@@ -352,7 +351,6 @@ impl ConsumeMessageOrderlyService {
             return false;
         };
         default_mqpush_consumer_impl
-            .mut_from_ref()
             .rebalance_impl
             .rebalance_impl_inner
             .lock(message_queue)

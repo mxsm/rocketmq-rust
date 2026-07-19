@@ -641,7 +641,8 @@ M09-04 再删除 MCP 未使用的 Auth/Error direct edges，并把承担 owned t
   - [x] M11-12w Client accumulator batch producer owner：`MessageAccumulation` 直接持有 owned `DefaultMQProducer` clone；flush 在 batch mutex 内克隆、锁外发送，删除 accumulator 文件全部 ArcMut 构造、类型与 import
   - [x] M11-12x Client remote offset read access：`RemoteBrokerOffsetStore` 的 broker lookup、route refresh 与 client API 读取直接使用 immutable `MQClientInstance` access，删除 4 个过时 `mut_from_ref`
   - [x] M11-12y Client Push operational access：pull/pop dispatch、retry namespace reset、POP ack/change-invisible receiver 收窄为 `&self`，RebalancePush heartbeat/dispatch 与 consume service 删除 9 个过时 `mut_from_ref`
-  - [x] [`M11-12 进度证据`](phase-3-production-readiness/11-soundness-closure-progress.md) 记录父 Issue #8292、子切片 Issue #8293/#8295/#8297/#8299/#8301/#8303/#8307/#8309/#8311/#8313/#8315/#8317/#8319/#8321/#8323/#8325/#8327/#8329/#8331/#8333/#8335/#8337/#8339/#8341/#8343 与每次真实下降
+  - [x] M11-12z Client orderly lock access：Rebalance lock/unlock capability 与 Push/Lite/inner 实现收窄为 `&self`，orderly lock 路径删除 3 个 `mut_from_ref` 并改用 immutable namespace resolution
+  - [x] [`M11-12 进度证据`](phase-3-production-readiness/11-soundness-closure-progress.md) 记录父 Issue #8292、子切片 Issue #8293/#8295/#8297/#8299/#8301/#8303/#8307/#8309/#8311/#8313/#8315/#8317/#8319/#8321/#8323/#8325/#8327/#8329/#8331/#8333/#8335/#8337/#8339/#8341/#8343/#8345 与每次真实下降
   - [x] Issue #8295 后累计降至 711 production/2,029 occurrence；Controller 配置债务清零但其他 Controller owner 仍有 31 条 production 债务
   - [x] Issue #8297 后实际快照降至 697 production/1,986 occurrence；Controller 降至 17 条/51 occurrence，Manager/heartbeat/embedded-NameServer owner 已退出 `ArcMut`
   - [x] Issue #8299 后实际快照降至 690 production/1,961 occurrence；Controller 降至 10 条/26 occurrence，Raft/OpenRaft owner 与 Manager Raft `mut_from_ref` 已清零
@@ -667,7 +668,8 @@ M09-04 再删除 MCP 未使用的 Auth/Error direct edges，并把承担 owned t
   - [x] Issue #8339 后实际快照降至 415 production/1,219 occurrence；Client 降至 98/327，ProduceAccumulator production/test ArcMut 债务清零
   - [x] Issue #8341 后实际快照降至 414 production/1,215 occurrence；Client 降至 97/323，RemoteBrokerOffsetStore 只读查询路径 `mut_from_ref` 清零
   - [x] Issue #8343 后实际快照降至 411 production/1,206 occurrence；Client 降至 94/314，Push request/POP API/retry reset 只读访问删除 3 个 identity、9 个 occurrence
-  - [ ] M11-12z 及后续：Client 其余 MQClientInstance/Producer/Push/Lite owner、Broker、Store/HA、compatibility 删除、stable/Miri/Loom/soak/SLO 与同一候选快照 Gate 仍待完成
+  - [x] Issue #8345 后实际快照降至 410 production/1,203 occurrence；Client 降至 93/311，orderly service `mut_from_ref` 清零，POP-orderly 仅保留 producer send 可变入口
+  - [ ] M11-12aa 及后续：Client 其余 MQClientInstance/Producer/Push/Lite owner、Broker、Store/HA、compatibility 删除、stable/Miri/Loom/soak/SLO 与同一候选快照 Gate 仍待完成
   - [ ] 总进度仍为 75/82；本子切片不提前计作完成工作包，M10/Kind-K3d/container dynamic/HUMAN Gate 保持开放
 - [ ] 对应任务文档的 Exit Checklist 全部通过
 

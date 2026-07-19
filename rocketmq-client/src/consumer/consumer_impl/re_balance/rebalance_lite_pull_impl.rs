@@ -356,17 +356,17 @@ impl Rebalance for RebalanceLitePullImpl {
     ///
     /// LitePull consumers do not hold broker-side distributed queue locks; there is nothing
     /// to unlock.
-    async fn unlock(&mut self, _mq: &MessageQueue, _oneway: bool) {}
+    async fn unlock(&self, _mq: &MessageQueue, _oneway: bool) {}
 
     /// No-op for LitePull consumers.
     ///
     /// Broker-side queue locking is a Push-consumer concept and is not used here.
-    async fn lock_all(&mut self) {}
+    async fn lock_all(&self) {}
 
     /// No-op for LitePull consumers.
     ///
     /// Broker-side queue unlocking is a Push-consumer concept and is not used here.
-    async fn unlock_all(&mut self, _oneway: bool) {}
+    async fn unlock_all(&self, _oneway: bool) {}
 
     /// Drives the rebalance cycle by delegating to the shared [`RebalanceImpl`] core.
     async fn do_rebalance(&mut self, is_order: bool) -> bool {
