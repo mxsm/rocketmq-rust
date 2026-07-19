@@ -81,6 +81,32 @@ useRouteInfoManagerV2 = false
     }
 
     #[test]
+    fn namesrv_config_parse_loads_dev_baseline_file() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resource/namesrv.toml");
+
+        let config = parse_command_and_config_file(path).expect("dev baseline config should parse");
+
+        assert_eq!(config.rocketmq_home, "/tmp/rocketmq");
+        assert_eq!(config.kv_config_path, "/tmp/rocketmq/kvConfig.json");
+        assert_eq!(config.config_store_path, "/tmp/rocketmq/rocketmq-namesrv.properties");
+    }
+
+    #[test]
+    fn namesrv_config_parse_loads_production_baseline_file() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resource/namesrv-production.toml");
+
+        let config = parse_command_and_config_file(path).expect("production baseline config should parse");
+
+        assert_eq!(config.rocketmq_home, "/opt/rocketmq");
+        assert_eq!(config.client_request_thread_pool_nums, 16);
+        assert_eq!(config.default_thread_pool_nums, 32);
+        assert_eq!(config.client_request_thread_pool_queue_capacity, 100000);
+        assert_eq!(config.default_thread_pool_queue_capacity, 20000);
+        assert_eq!(config.unregister_broker_queue_capacity, 5000);
+        assert!(config.use_route_info_manager_v2);
+    }
+
+    #[test]
     fn namesrv_config_parse_falls_back_to_default_for_missing_file() {
         let config =
             parse_command_and_config_file(temp_config_path("missing")).expect("missing config should fall back");
