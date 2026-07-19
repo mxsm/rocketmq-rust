@@ -9229,7 +9229,7 @@
           "id": "a1578a8e4532db53800d00f4",
           "fingerprint": "f64ad1e2ea88a903e7f49ef5",
           "item": "mod tests",
-          "line": 3108
+          "line": 3106
         }
       ],
       "owner": "client",
@@ -9255,12 +9255,6 @@
           "fingerprint": "91c09c442fee0f8ccff25fc0",
           "item": "fn new",
           "line": 531
-        },
-        {
-          "id": "cce0d1fe7cc90211bdf50553",
-          "fingerprint": "41de8ca8523a7bf166711f48",
-          "item": "fn start",
-          "line": 1052
         }
       ],
       "owner": "client",
@@ -9279,415 +9273,409 @@
           "id": "30da58b9a02f8b2b05b3d0ce",
           "fingerprint": "972dc31ff5fe51d7b0a2f72d",
           "item": "fn shutdown_in_create_just_keeps_state_like_java_noop",
-          "line": 3266
+          "line": 3264
         },
         {
           "id": "39460d5c82af71f10a7a8ffc",
           "fingerprint": "339869160bd18fb701332ee2",
           "item": "fn shutdown_in_create_just_keeps_state_like_java_noop",
-          "line": 3267
+          "line": 3265
         },
         {
           "id": "c02d576ee8abd14854f1ee4c",
           "fingerprint": "d0ecdcd7156d24c169de1e1c",
           "item": "fn shutdown_in_start_failed_keeps_state_like_java_default_case",
-          "line": 3281
+          "line": 3279
         },
         {
           "id": "9a407de53b79561007622c1b",
           "fingerprint": "339869160bd18fb701332ee2",
           "item": "fn shutdown_in_start_failed_keeps_state_like_java_default_case",
-          "line": 3282
+          "line": 3280
         },
         {
           "id": "4033d2d9e6904008ca2bd67b",
           "fingerprint": "b145c94034077cfabef6b3cd",
           "item": "fn start_without_self_reference_returns_error_without_panic",
-          "line": 3336
+          "line": 3334
         },
         {
           "id": "12ac131928e6b5d8aa8f94ae",
           "fingerprint": "339869160bd18fb701332ee2",
           "item": "fn start_without_self_reference_returns_error_without_panic",
-          "line": 3337
+          "line": 3335
         },
         {
           "id": "40b8953569ce013a4cb9039c",
           "fingerprint": "ed6bfbfdce8f24a35919579d",
           "item": "fn check_config_rejects_unsupported_consume_from_where_like_java_lite_pull",
-          "line": 3357
+          "line": 3355
         },
         {
           "id": "4e83c0798bd1d8bebf3799a5",
           "fingerprint": "339869160bd18fb701332ee2",
           "item": "fn check_config_rejects_unsupported_consume_from_where_like_java_lite_pull",
-          "line": 3358
+          "line": 3356
         },
         {
           "id": "e49915a29503b014f072b808",
           "fingerprint": "a9406c96495777031f213ba2",
           "item": "fn check_config_rejects_default_consumer_group_like_java_lite_pull",
-          "line": 3375
+          "line": 3373
         },
         {
           "id": "9f546cf6e409fe6d20f9602c",
           "fingerprint": "c4e7e3661c30f49939122442",
           "item": "fn check_config_rejects_default_consumer_group_like_java_lite_pull",
-          "line": 3376
+          "line": 3374
         },
         {
           "id": "24f3fe19b696b130405733c0",
           "fingerprint": "51b797c7c578d286d607e940",
           "item": "fn check_config_rejects_consumer_suspend_timeout_below_broker_suspend_like_java",
-          "line": 3394
+          "line": 3392
         },
         {
           "id": "8cbb13f3218ea787248aad3c",
           "fingerprint": "339869160bd18fb701332ee2",
           "item": "fn check_config_rejects_consumer_suspend_timeout_below_broker_suspend_like_java",
-          "line": 3395
+          "line": 3393
         },
         {
           "id": "9bdbd3a3c79a8973f25fb14b",
           "fingerprint": "8f7f5c131d08b4f206c21b30",
           "item": "fn set_consumer_group_updates_rebalance_before_start_and_rejects_running_mutation",
-          "line": 3416
+          "line": 3414
         },
         {
           "id": "124efdae1098e60c4492a5fd",
           "fingerprint": "339869160bd18fb701332ee2",
           "item": "fn set_consumer_group_updates_rebalance_before_start_and_rejects_running_mutation",
-          "line": 3417
+          "line": 3415
         },
         {
           "id": "c49c8e911ded06138cbc64ae",
           "fingerprint": "9aeee0a70be4d1b619e6ded5",
           "item": "fn set_offset_store_updates_rebalance_before_start_and_rejects_running_mutation",
-          "line": 3497
+          "line": 3495
         },
         {
           "id": "19af49b37389cc9175982426",
           "fingerprint": "339869160bd18fb701332ee2",
           "item": "fn set_offset_store_updates_rebalance_before_start_and_rejects_running_mutation",
-          "line": 3498
+          "line": 3496
         },
         {
           "id": "64465500383d125ca451c2b5",
           "fingerprint": "b96b346dc347e0f58a8e5eb9",
           "item": "fn set_unit_mode_updates_pull_api_wrapper_for_filter_hooks_like_java",
-          "line": 3533
+          "line": 3531
         },
         {
           "id": "e413d3482603390eb8755de4",
           "fingerprint": "339869160bd18fb701332ee2",
           "item": "fn set_unit_mode_updates_pull_api_wrapper_for_filter_hooks_like_java",
-          "line": 3534
-        },
-        {
-          "id": "6d0d65c3545c6df174574ca1",
-          "fingerprint": "1128ad988970e8099a8443f0",
-          "item": "fn set_unit_mode_updates_pull_api_wrapper_for_filter_hooks_like_java",
-          "line": 3540
+          "line": 3532
         },
         {
           "id": "708e6ce2067b019a77b57bb8",
           "fingerprint": "920114b59e1dbc5222b7b3e4",
           "item": "fn operate_after_running_starts_preassigned_pull_tasks",
-          "line": 3583
+          "line": 3581
         },
         {
           "id": "ac384da8ff0decd82fb9fe2c",
           "fingerprint": "339869160bd18fb701332ee2",
           "item": "fn operate_after_running_starts_preassigned_pull_tasks",
-          "line": 3584
+          "line": 3582
         },
         {
           "id": "731ad29dcf28b207add091b1",
           "fingerprint": "57e855c8b6e771da718c0473",
           "item": "fn drop",
-          "line": 3632
+          "line": 3630
         },
         {
           "id": "6e0c09767b21822cb7496268",
           "fingerprint": "339869160bd18fb701332ee2",
           "item": "fn drop",
-          "line": 3633
+          "line": 3631
         },
         {
           "id": "c170a8701f5ffa341d62d9d5",
           "fingerprint": "ead3d2b3cee1ae7b714490ed",
           "item": "fn consumer_running_info_includes_assigned_process_queues",
-          "line": 3682
+          "line": 3680
         },
         {
           "id": "b318f31f7ab5fc192c57aca4",
           "fingerprint": "339869160bd18fb701332ee2",
           "item": "fn consumer_running_info_includes_assigned_process_queues",
-          "line": 3683
+          "line": 3681
         },
         {
           "id": "59b86e436017ed42c24bfc01",
           "fingerprint": "5f058666927d6041ec24b008",
           "item": "fn update_name_server_address_updates_client_api_like_java",
-          "line": 3704
+          "line": 3702
         },
         {
           "id": "962cac58a82d1a1020858204",
           "fingerprint": "339869160bd18fb701332ee2",
           "item": "fn update_name_server_address_updates_client_api_like_java",
-          "line": 3705
+          "line": 3703
         },
         {
           "id": "6c0409371a9265429d377296",
           "fingerprint": "017411168a3426b55855866a",
           "item": "fn subscribe_with_sql_selector_preserves_expression_type_like_java",
-          "line": 3746
+          "line": 3744
         },
         {
           "id": "9c1cbc0283496574190bfa9b",
           "fingerprint": "339869160bd18fb701332ee2",
           "item": "fn subscribe_with_sql_selector_preserves_expression_type_like_java",
-          "line": 3747
+          "line": 3745
         },
         {
           "id": "bb3f707ad6afbe9d3bb0f2c9",
           "fingerprint": "d1379570b482f9fe9f73410c",
           "item": "fn set_sub_expression_for_assign_matches_java_validation_and_state",
-          "line": 3790
+          "line": 3788
         },
         {
           "id": "9ffd508dc17c60e9429885c9",
           "fingerprint": "339869160bd18fb701332ee2",
           "item": "fn set_sub_expression_for_assign_matches_java_validation_and_state",
-          "line": 3791
+          "line": 3789
         },
         {
           "id": "d794df561f9dc6299ee19d68",
           "fingerprint": "bac224b9c1304ff5772b5282",
           "item": "fn set_sub_expression_for_assign_matches_java_validation_and_state",
-          "line": 3820
+          "line": 3818
         },
         {
           "id": "ab6b4e0328f121b2a7ccb12b",
           "fingerprint": "339869160bd18fb701332ee2",
           "item": "fn set_sub_expression_for_assign_matches_java_validation_and_state",
-          "line": 3821
+          "line": 3819
         },
         {
           "id": "c50aa97bac84af7a1d475b73",
           "fingerprint": "aa10463cf5283eb167cd8d82",
           "item": "fn next_pull_offset_applies_seek_to_consume_offset_like_java",
-          "line": 3840
+          "line": 3838
         },
         {
           "id": "c5302568e86a461cdd4ad071",
           "fingerprint": "339869160bd18fb701332ee2",
           "item": "fn next_pull_offset_applies_seek_to_consume_offset_like_java",
-          "line": 3841
+          "line": 3839
         },
         {
           "id": "01407d339a16bc6e1148c075",
           "fingerprint": "05abab6d6a5db5cbe6827d3a",
           "item": "fn seek_rejects_unassigned_queue_before_broker_offset_lookup_like_java",
-          "line": 3864
+          "line": 3862
         },
         {
           "id": "1543bd418b5c562978a22841",
           "fingerprint": "339869160bd18fb701332ee2",
           "item": "fn seek_rejects_unassigned_queue_before_broker_offset_lookup_like_java",
-          "line": 3865
+          "line": 3863
         },
         {
           "id": "bcbb136b372e1f8ab29ca040",
           "fingerprint": "2f629729f668d5a125283c59",
           "item": "fn commit_all_updates_offsets_without_persisting_like_java",
-          "line": 3887
+          "line": 3885
         },
         {
           "id": "aec170a7a876518bad8a0341",
           "fingerprint": "052a04afd7fd7d9337cfaa9c",
           "item": "fn commit_all_updates_offsets_without_persisting_like_java",
-          "line": 3888
+          "line": 3886
         },
         {
           "id": "ed558344e37f5de269bf5629",
           "fingerprint": "2f629729f668d5a125283c59",
           "item": "fn commit_message_queues_uses_assigned_consume_offset_like_java",
-          "line": 3913
+          "line": 3911
         },
         {
           "id": "86b4a57a28cfc0525dbcbbf3",
           "fingerprint": "052a04afd7fd7d9337cfaa9c",
           "item": "fn commit_message_queues_uses_assigned_consume_offset_like_java",
-          "line": 3914
+          "line": 3912
         },
         {
           "id": "17ca9d252cb1b8a6ba6c42ce",
           "fingerprint": "2f629729f668d5a125283c59",
           "item": "fn commit_message_queues_with_persist_calls_persist_all_like_java",
-          "line": 3943
+          "line": 3941
         },
         {
           "id": "fc425d827e49c4593151175a",
           "fingerprint": "052a04afd7fd7d9337cfaa9c",
           "item": "fn commit_message_queues_with_persist_calls_persist_all_like_java",
-          "line": 3944
+          "line": 3942
         },
         {
           "id": "785bd3ed9ebe0915a53e9cb4",
           "fingerprint": "a1673165c67ea98fcbb73202",
           "item": "fn poll_zero_timeout_returns_cached_message_like_java",
-          "line": 3970
+          "line": 3968
         },
         {
           "id": "4861921f79d6d2c5d1e990f1",
           "fingerprint": "339869160bd18fb701332ee2",
           "item": "fn poll_zero_timeout_returns_cached_message_like_java",
-          "line": 3971
+          "line": 3969
         },
         {
           "id": "a4fd166d5ed961a38865ff8b",
           "fingerprint": "48f2ab76e73a3357f7385b46",
           "item": "fn clear_message_queue_in_cache_removes_pending_consume_requests_like_java",
-          "line": 4010
+          "line": 4008
         },
         {
           "id": "02cbab2362703cb9987ad09e",
           "fingerprint": "339869160bd18fb701332ee2",
           "item": "fn clear_message_queue_in_cache_removes_pending_consume_requests_like_java",
-          "line": 4011
+          "line": 4009
         },
         {
           "id": "81e50deb7fbb2c893cc4c78a",
           "fingerprint": "ac207920b91ec78e60f7ddd5",
           "item": "fn poll_sets_access_channel_only_for_after_hook_like_java",
-          "line": 4083
+          "line": 4081
         },
         {
           "id": "e9c0e508582e2941441b6541",
           "fingerprint": "172d69f6a58980c38267ddfa",
           "item": "fn poll_sets_access_channel_only_for_after_hook_like_java",
-          "line": 4084
+          "line": 4082
         },
         {
           "id": "6d3a3042b53fa7153697c3fd",
           "fingerprint": "ee0cf08376f991319cce8627",
           "item": "fn poll_refreshes_last_consume_timestamp_after_hooks_like_java",
-          "line": 4140
+          "line": 4138
         },
         {
           "id": "f97996cfb07b0dd7bc0a924e",
           "fingerprint": "339869160bd18fb701332ee2",
           "item": "fn poll_refreshes_last_consume_timestamp_after_hooks_like_java",
-          "line": 4141
+          "line": 4139
         },
         {
           "id": "3c054cf0d9f08943f4f1ee30",
           "fingerprint": "920114b59e1dbc5222b7b3e4",
           "item": "fn concurrent_poll_calls_are_serialized_like_java_synchronized_poll",
-          "line": 4185
+          "line": 4183
         },
         {
           "id": "36e328af6483f6c95a6d3503",
           "fingerprint": "339869160bd18fb701332ee2",
           "item": "fn concurrent_poll_calls_are_serialized_like_java_synchronized_poll",
-          "line": 4186
+          "line": 4184
         },
         {
           "id": "d8ea17006020555c315e8c40",
           "fingerprint": "b10681626f5a4bad6b7d89c4",
           "item": "fn pull_inner_refreshes_last_pull_timestamp_before_flow_control_like_java",
-          "line": 4280
+          "line": 4278
         },
         {
           "id": "341ca152a2e4f7b6eef31c16",
           "fingerprint": "339869160bd18fb701332ee2",
           "item": "fn pull_inner_refreshes_last_pull_timestamp_before_flow_control_like_java",
-          "line": 4281
+          "line": 4279
         },
         {
           "id": "26421017fd2435eadc086912",
           "fingerprint": "42d90dfee07517f4bc1914dd",
           "item": "fn pull_result_does_not_overwrite_pending_seek_offset_like_java",
-          "line": 4310
+          "line": 4308
         },
         {
           "id": "9e997dc3bfbb6030538541a5",
           "fingerprint": "339869160bd18fb701332ee2",
           "item": "fn pull_result_does_not_overwrite_pending_seek_offset_like_java",
-          "line": 4311
+          "line": 4309
         },
         {
           "id": "c9f4d186b936b1cabcc20235",
           "fingerprint": "102f3dbc1f3673b7df7652c8",
           "item": "fn offset_illegal_corrects_pull_offset_without_dropping_queue_like_java_lite_pull",
-          "line": 4341
+          "line": 4339
         },
         {
           "id": "92676d39c345d6828ac06338",
           "fingerprint": "339869160bd18fb701332ee2",
           "item": "fn offset_illegal_corrects_pull_offset_without_dropping_queue_like_java_lite_pull",
-          "line": 4342
+          "line": 4340
         },
         {
           "id": "1700e90c26373d799d03279c",
           "fingerprint": "920114b59e1dbc5222b7b3e4",
           "item": "fn rebalance_update_assigns_divided_queues_and_starts_pull_tasks",
-          "line": 4366
+          "line": 4364
         },
         {
           "id": "3874c70d2ac4292a74864716",
           "fingerprint": "339869160bd18fb701332ee2",
           "item": "fn rebalance_update_assigns_divided_queues_and_starts_pull_tasks",
-          "line": 4367
+          "line": 4365
         },
         {
           "id": "dfd0335395c5f0c1df3c7f2b",
           "fingerprint": "920114b59e1dbc5222b7b3e4",
           "item": "fn lite_pull_rebalance_listener_invokes_user_listener",
-          "line": 4425
+          "line": 4423
         },
         {
           "id": "5befbea37203b1770d46940c",
           "fingerprint": "339869160bd18fb701332ee2",
           "item": "fn lite_pull_rebalance_listener_invokes_user_listener",
-          "line": 4426
+          "line": 4424
         },
         {
           "id": "a9ef79e80c47f76c4fe744f1",
           "fingerprint": "920114b59e1dbc5222b7b3e4",
           "item": "fn lite_pull_rebalance_listener_ignores_changes_after_shutdown_token_cancelled",
-          "line": 4485
+          "line": 4483
         },
         {
           "id": "2ba08011ddfb689946f99bca",
           "fingerprint": "339869160bd18fb701332ee2",
           "item": "fn lite_pull_rebalance_listener_ignores_changes_after_shutdown_token_cancelled",
-          "line": 4486
+          "line": 4484
         },
         {
           "id": "00763749b3fc0c40fca6a508",
           "fingerprint": "71733f1953918d1d674ad676",
           "item": "fn subscribe_with_listener_installs_user_listener_with_subscription_like_java",
-          "line": 4525
+          "line": 4523
         },
         {
           "id": "2e0678f3ca7e2fb502d81552",
           "fingerprint": "339869160bd18fb701332ee2",
           "item": "fn subscribe_with_listener_installs_user_listener_with_subscription_like_java",
-          "line": 4526
+          "line": 4524
         },
         {
           "id": "7c2ab5bb3ecd041b81337331",
           "fingerprint": "83ff5408764cfedd210c7335",
           "item": "fn topic_message_queue_change_listener_fires_only_when_snapshot_changes",
-          "line": 4571
+          "line": 4569
         },
         {
           "id": "77a285f5a2d64c7c75a5c1f7",
           "fingerprint": "339869160bd18fb701332ee2",
           "item": "fn topic_message_queue_change_listener_fires_only_when_snapshot_changes",
-          "line": 4572
+          "line": 4570
         }
       ],
       "owner": "client",
@@ -9728,16 +9716,10 @@
           "line": 462
         },
         {
-          "id": "a90157ac28153d06d91243af",
-          "fingerprint": "3c572ed0394cd02a02fdb69a",
+          "id": "ce9eb3c69f70708a3187406a",
+          "fingerprint": "f6f1a01a102a2475031a52c7",
           "item": "struct DefaultLitePullConsumerImpl",
           "line": 463
-        },
-        {
-          "id": "72c8e91b534f7e35bac29ed3",
-          "fingerprint": "9fea42cec685b3d774ca244b",
-          "item": "struct DefaultLitePullConsumerImpl",
-          "line": 464
         },
         {
           "id": "b581537dd861caf67957a04a",
@@ -9783,12 +9765,6 @@
           "line": 1100
         },
         {
-          "id": "828b1680c6737d4ada1cd3eb",
-          "fingerprint": "ee67b1588be5797090051a30",
-          "item": "fn set_unit_mode",
-          "line": 2589
-        },
-        {
           "id": "5566ff3bb5442376dde2e0b4",
           "fingerprint": "98b95a08cc3ff63ea51c343d",
           "item": "fn set_message_model",
@@ -9801,22 +9777,10 @@
           "line": 2643
         },
         {
-          "id": "921f1d37bcfa974e13796ea1",
-          "fingerprint": "c03ff0f8b2b1f4487c8e8989",
-          "item": "fn set_connect_broker_by_user",
-          "line": 2696
-        },
-        {
-          "id": "29bb41cea2780446a8cc306f",
-          "fingerprint": "bf62f8d2d5c167f407c9cbcd",
-          "item": "fn set_default_broker_id",
-          "line": 2714
-        },
-        {
           "id": "f0c147aba4fdca670c9e20a4",
           "fingerprint": "f4ef274a5137f7bef66fc3cb",
           "item": "fn do_rebalance",
-          "line": 2917
+          "line": 2915
         }
       ],
       "owner": "client",
@@ -9867,12 +9831,6 @@
           "fingerprint": "c9a9484e7fcafaf098dd24d7",
           "item": "fn new",
           "line": 157
-        },
-        {
-          "id": "60e54309a0be89837d0388fa",
-          "fingerprint": "3c2ca93faa0420a6ea14d4ec",
-          "item": "fn start",
-          "line": 268
         }
       ],
       "owner": "client",
@@ -10002,12 +9960,6 @@
           "fingerprint": "f3aaf8bdbf3892a00b128fb2",
           "item": "struct DefaultMQPushConsumerImpl",
           "line": 124
-        },
-        {
-          "id": "9a110801bc42ad1f4986f9eb",
-          "fingerprint": "143c2739adfa35abbb961144",
-          "item": "struct DefaultMQPushConsumerImpl",
-          "line": 125
         },
         {
           "id": "b856f278567af0be0b0cc3e5",
@@ -10236,7 +10188,7 @@
           "id": "20168c92697aac6e4b6dfcfd",
           "fingerprint": "74aae28454f710f862ae6fbf",
           "item": "mod tests",
-          "line": 581
+          "line": 586
         }
       ],
       "owner": "client",
@@ -10255,7 +10207,7 @@
           "id": "b1e4d2dd85e80e63fcf324e1",
           "fingerprint": "53f0f8b6de1332d4d0d638af",
           "item": "<module>",
-          "line": 38
+          "line": 41
         }
       ],
       "owner": "client",
@@ -10271,16 +10223,16 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "bdf59533cf7ebb08cc8a63d5",
-          "fingerprint": "969f09383c9f78b5df56323a",
+          "id": "469d2935ddbf4ae2b4e78bb5",
+          "fingerprint": "7709b23d13f5a7668e90306b",
           "item": "struct PullAPIWrapper",
-          "line": 90
+          "line": 92
         },
         {
           "id": "6ed5f399943aaac1ab706bab",
           "fingerprint": "a8662dd2da31437ff49581a2",
           "item": "fn new",
-          "line": 100
+          "line": 102
         }
       ],
       "owner": "client",

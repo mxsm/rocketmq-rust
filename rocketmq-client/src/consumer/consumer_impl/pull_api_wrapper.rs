@@ -12,9 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
+use arc_swap::ArcSwap;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use rand::RngExt;
@@ -85,15 +88,14 @@ fn decode_pull_messages(
     }
 }
 
-#[derive(Clone)]
 pub struct PullAPIWrapper {
     client_instance: ArcMut<MQClientInstance>,
     consumer_group: CheetahString,
-    unit_mode: bool,
+    unit_mode: AtomicBool,
     pull_from_which_node_table: Arc<DashMap<MessageQueue, AtomicU64>>,
-    connect_broker_by_user: bool,
-    default_broker_id: u64,
-    filter_message_hook_list: Vec<Arc<dyn FilterMessageHook + Send + Sync>>,
+    connect_broker_by_user: AtomicBool,
+    default_broker_id: AtomicU64,
+    filter_message_hook_list: ArcSwap<Vec<Arc<dyn FilterMessageHook + Send + Sync>>>,
 }
 
 impl PullAPIWrapper {
@@ -101,19 +103,19 @@ impl PullAPIWrapper {
         Self {
             client_instance: mq_client_factory,
             consumer_group,
-            unit_mode,
+            unit_mode: AtomicBool::new(unit_mode),
             pull_from_which_node_table: Arc::new(DashMap::with_capacity(64)),
-            connect_broker_by_user: false,
-            default_broker_id: mix_all::MASTER_ID,
-            filter_message_hook_list: Vec::new(),
+            connect_broker_by_user: AtomicBool::new(false),
+            default_broker_id: AtomicU64::new(mix_all::MASTER_ID),
+            filter_message_hook_list: ArcSwap::from_pointee(Vec::new()),
         }
     }
 
     pub fn register_filter_message_hook(
-        &mut self,
+        &self,
         filter_message_hook_list: Vec<Arc<dyn FilterMessageHook + Send + Sync>>,
     ) {
-        self.filter_message_hook_list = filter_message_hook_list;
+        self.filter_message_hook_list.store(Arc::new(filter_message_hook_list));
     }
 
     #[inline]
@@ -125,15 +127,15 @@ impl PullAPIWrapper {
     }
 
     pub fn has_hook(&self) -> bool {
-        !self.filter_message_hook_list.is_empty()
+        !self.filter_message_hook_list.load().is_empty()
     }
 
     pub fn unit_mode(&self) -> bool {
-        self.unit_mode
+        self.unit_mode.load(Ordering::Acquire)
     }
 
-    pub fn set_unit_mode(&mut self, unit_mode: bool) {
-        self.unit_mode = unit_mode;
+    pub fn set_unit_mode(&self, unit_mode: bool) {
+        self.unit_mode.store(unit_mode, Ordering::Release);
     }
 
     pub fn process_pull_result(
@@ -182,13 +184,16 @@ impl PullAPIWrapper {
             } else {
                 msg_vec
             };
-            if self.has_hook() {
+            let filter_message_hooks = self.filter_message_hook_list.load_full();
+            if !filter_message_hooks.is_empty() {
                 let context = FilterMessageContext {
-                    unit_mode: self.unit_mode,
+                    unit_mode: self.unit_mode(),
                     msg_list: &msg_list_filter_again,
                     ..Default::default()
                 };
-                self.execute_hook(&context);
+                for hook in filter_message_hooks.iter() {
+                    hook.filter_message(&context);
+                }
             }
 
             // Resolve batch-level constants once before iterating to avoid repeated allocations.
@@ -232,14 +237,15 @@ impl PullAPIWrapper {
     }
 
     pub fn execute_hook(&self, context: &FilterMessageContext) {
-        for hook in &self.filter_message_hook_list {
+        let filter_message_hooks = self.filter_message_hook_list.load_full();
+        for hook in filter_message_hooks.iter() {
             hook.filter_message(context);
         }
     }
 
     pub fn recalculate_pull_from_which_node(&self, mq: &MessageQueue) -> u64 {
-        if self.connect_broker_by_user {
-            return self.default_broker_id;
+        if self.connect_broker_by_user.load(Ordering::Acquire) {
+            return self.default_broker_id.load(Ordering::Acquire);
         }
 
         if let Some(atomic_u64) = self.pull_from_which_node_table.get(mq) {
@@ -273,7 +279,7 @@ impl PullAPIWrapper {
     /// A `Result` containing an `Option` with the `PullResultExt` if successful, or an
     /// `MQClientError` if an error occurs.
     pub async fn pull_kernel_impl<PCB>(
-        &mut self,
+        &self,
         mq: &MessageQueue,
         sub_expression: CheetahString,
         expression_type: CheetahString,
@@ -378,7 +384,7 @@ impl PullAPIWrapper {
     }
 
     async fn compute_pull_from_which_filter_server(
-        &mut self,
+        &self,
         topic: &CheetahString,
         broker_addr: &CheetahString,
     ) -> rocketmq_error::RocketMQResult<CheetahString> {
@@ -405,7 +411,7 @@ impl PullAPIWrapper {
     }
 
     pub async fn pop_async<PC>(
-        &mut self,
+        &self,
         mq: &MessageQueue,
         invisible_time: u64,
         max_nums: u32,
@@ -461,9 +467,7 @@ impl PullAPIWrapper {
                 request_header.born_time = current_millis();
             }
             self.client_instance
-                .mq_client_api_impl
-                .as_mut()
-                .ok_or_else(|| mq_client_err!("MQClientAPIImpl is not initialized"))?
+                .get_mq_client_api_impl()?
                 .pop_message_async(
                     mq.broker_name(),
                     &find_broker_result.broker_addr,
@@ -482,7 +486,7 @@ impl PullAPIWrapper {
     ///
     /// [`pull_kernel_impl`]: PullAPIWrapper::pull_kernel_impl
     pub async fn pull_kernel_impl_default_size<PCB>(
-        &mut self,
+        &self,
         mq: &MessageQueue,
         sub_expression: CheetahString,
         expression_type: CheetahString,
@@ -521,29 +525,30 @@ impl PullAPIWrapper {
     /// [`default_broker_id`][PullAPIWrapper::default_broker_id] rather than the recommendation
     /// table.
     pub fn is_connect_broker_by_user(&self) -> bool {
-        self.connect_broker_by_user
+        self.connect_broker_by_user.load(Ordering::Acquire)
     }
 
     /// Sets whether to always connect to the broker identified by [`default_broker_id`] instead of
     /// using the pull-from-which-node recommendation table.
     ///
     /// [`default_broker_id`]: PullAPIWrapper::default_broker_id
-    pub fn set_connect_broker_by_user(&mut self, connect_broker_by_user: bool) {
-        self.connect_broker_by_user = connect_broker_by_user;
+    pub fn set_connect_broker_by_user(&self, connect_broker_by_user: bool) {
+        self.connect_broker_by_user
+            .store(connect_broker_by_user, Ordering::Release);
     }
 
     /// Returns the default broker ID used when [`is_connect_broker_by_user`] is `true`.
     ///
     /// [`is_connect_broker_by_user`]: PullAPIWrapper::is_connect_broker_by_user
     pub fn default_broker_id(&self) -> u64 {
-        self.default_broker_id
+        self.default_broker_id.load(Ordering::Acquire)
     }
 
     /// Sets the default broker ID to connect to when [`is_connect_broker_by_user`] is `true`.
     ///
     /// [`is_connect_broker_by_user`]: PullAPIWrapper::is_connect_broker_by_user
-    pub fn set_default_broker_id(&mut self, broker_id: u64) {
-        self.default_broker_id = broker_id;
+    pub fn set_default_broker_id(&self, broker_id: u64) {
+        self.default_broker_id.store(broker_id, Ordering::Release);
     }
 }
 
@@ -672,7 +677,7 @@ mod tests {
 
     #[test]
     fn process_pull_result_filters_tags_before_hook() {
-        let mut wrapper = wrapper();
+        let wrapper = wrapper();
         let hook_seen = Arc::new(AtomicUsize::new(usize::MAX));
         wrapper.register_filter_message_hook(vec![Arc::new(RecordingHook {
             seen: hook_seen.clone(),
@@ -740,7 +745,7 @@ mod tests {
 
     #[test]
     fn process_pull_result_all_tag_misses_notifies_hook_with_empty_list() {
-        let mut wrapper = wrapper();
+        let wrapper = wrapper();
         let hook_seen = Arc::new(AtomicUsize::new(usize::MAX));
         wrapper.register_filter_message_hook(vec![Arc::new(RecordingHook {
             seen: hook_seen.clone(),
@@ -784,5 +789,44 @@ mod tests {
             message.property(&CheetahString::from_static_str(MessageConst::PROPERTY_RETRY_TOPIC)),
             Some(CheetahString::from_static_str("RetryTopic"))
         );
+    }
+
+    #[test]
+    fn shared_runtime_settings_publish_without_mutable_owner() {
+        let wrapper = Arc::new(wrapper());
+        let publisher = wrapper.clone();
+
+        std::thread::spawn(move || {
+            publisher.set_unit_mode(true);
+            publisher.set_connect_broker_by_user(true);
+            publisher.set_default_broker_id(7);
+        })
+        .join()
+        .expect("runtime setting publisher should finish");
+
+        assert!(wrapper.unit_mode());
+        assert!(wrapper.is_connect_broker_by_user());
+        assert_eq!(wrapper.default_broker_id(), 7);
+        assert_eq!(wrapper.recalculate_pull_from_which_node(&message_queue()), 7);
+    }
+
+    #[test]
+    fn filter_hook_replacement_publishes_complete_generation() {
+        let wrapper = wrapper();
+        let first_seen = Arc::new(AtomicUsize::new(usize::MAX));
+        let second_seen = Arc::new(AtomicUsize::new(usize::MAX));
+        wrapper.register_filter_message_hook(vec![Arc::new(RecordingHook {
+            seen: first_seen.clone(),
+        })]);
+        let first_generation = wrapper.filter_message_hook_list.load_full();
+
+        wrapper.register_filter_message_hook(vec![Arc::new(RecordingHook {
+            seen: second_seen.clone(),
+        })]);
+        wrapper.execute_hook(&FilterMessageContext::default());
+
+        assert_eq!(first_generation.len(), 1);
+        assert_eq!(first_seen.load(Ordering::Acquire), usize::MAX);
+        assert_eq!(second_seen.load(Ordering::Acquire), 0);
     }
 }

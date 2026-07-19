@@ -78,7 +78,7 @@ impl PullCallback for DefaultPullCallback {
             return;
         };
 
-        let Some(pull_api_wrapper) = push_consumer_impl.pull_api_wrapper.as_mut() else {
+        let Some(pull_api_wrapper) = push_consumer_impl.pull_api_wrapper.as_ref() else {
             warn!(
                 "pull callback success ignored: PullAPIWrapper is not initialized, mq={}",
                 message_queue_inner

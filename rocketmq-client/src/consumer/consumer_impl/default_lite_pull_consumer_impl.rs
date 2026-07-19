@@ -461,7 +461,7 @@ pub struct DefaultLitePullConsumerImpl {
     // Core components
     client_instance: StdRwLock<Option<ArcMut<MQClientInstance>>>,
     rebalance_impl: ArcMut<RebalanceLitePullImpl>,
-    pull_api_wrapper: StdRwLock<Option<ArcMut<PullAPIWrapper>>>,
+    pull_api_wrapper: StdRwLock<Option<Arc<PullAPIWrapper>>>,
     offset_store: StdRwLock<Option<Arc<OffsetStore>>>,
     rpc_hook: StdRwLock<Option<Arc<dyn RPCHook>>>,
 
@@ -1038,7 +1038,7 @@ impl DefaultLitePullConsumerImpl {
                 );
 
                 if self.component_snapshot(&self.pull_api_wrapper).is_none() {
-                    let mut pull_api_wrapper = PullAPIWrapper::new(
+                    let pull_api_wrapper = PullAPIWrapper::new(
                         client_instance.clone(),
                         consumer_config.consumer_group.clone(),
                         consumer_config.unit_mode,
@@ -1049,7 +1049,7 @@ impl DefaultLitePullConsumerImpl {
                     *self
                         .pull_api_wrapper
                         .write()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(ArcMut::new(pull_api_wrapper));
+                        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(Arc::new(pull_api_wrapper));
                 }
 
                 let offset_store = self.offset_store().unwrap_or_else(|| {
@@ -1669,7 +1669,7 @@ impl DefaultLitePullConsumerImpl {
         let sub_version = lite_pull_request_sub_version(&subscription_data);
         let sys_flag = lite_pull_request_sys_flag();
 
-        let mut pull_api_wrapper = self
+        let pull_api_wrapper = self
             .component_snapshot(&self.pull_api_wrapper)
             .ok_or_else(|| crate::mq_client_err!("PullAPIWrapper is not initialized"))?;
         let mut pull_result = pull_api_wrapper
@@ -2586,7 +2586,7 @@ impl DefaultLitePullConsumerImpl {
     pub fn set_unit_mode(&self, unit_mode: bool) {
         self.update_consumer_config(|config| config.unit_mode = unit_mode);
         if let Some(wrapper) = self.component_snapshot(&self.pull_api_wrapper) {
-            wrapper.mut_from_ref().set_unit_mode(unit_mode);
+            wrapper.set_unit_mode(unit_mode);
         }
         self.rebalance_impl.set_unit_mode(unit_mode);
     }
@@ -2692,9 +2692,7 @@ impl DefaultLitePullConsumerImpl {
     pub fn set_connect_broker_by_user(&self, connect_broker_by_user: bool) {
         self.update_consumer_config(|config| config.connect_broker_by_user = connect_broker_by_user);
         if let Some(wrapper) = self.component_snapshot(&self.pull_api_wrapper) {
-            wrapper
-                .mut_from_ref()
-                .set_connect_broker_by_user(connect_broker_by_user);
+            wrapper.set_connect_broker_by_user(connect_broker_by_user);
         }
     }
 
@@ -2711,7 +2709,7 @@ impl DefaultLitePullConsumerImpl {
     pub fn set_default_broker_id(&self, broker_id: u64) {
         self.update_consumer_config(|config| config.default_broker_id = broker_id);
         if let Some(wrapper) = self.component_snapshot(&self.pull_api_wrapper) {
-            wrapper.mut_from_ref().set_default_broker_id(broker_id);
+            wrapper.set_default_broker_id(broker_id);
         }
     }
 
@@ -3537,7 +3535,7 @@ mod tests {
             }),
         );
         let client_instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "lite-pull-unit-mode-test", None);
-        *impl_.pull_api_wrapper.write().expect("pull wrapper lock") = Some(ArcMut::new(PullAPIWrapper::new(
+        *impl_.pull_api_wrapper.write().expect("pull wrapper lock") = Some(Arc::new(PullAPIWrapper::new(
             client_instance,
             CheetahString::from_static_str("lite_pull_unit_mode_group"),
             false,

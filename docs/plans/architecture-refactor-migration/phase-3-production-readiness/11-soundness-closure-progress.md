@@ -1414,9 +1414,28 @@ M11-12ac 追加验证：
 | Lite Pull root ArcMut 定向扫描 | `ArcMut<DefaultLitePullConsumerImpl>`、`WeakArcMut<DefaultLitePullConsumerImpl>`、root constructor 与 root `mut_from_ref` 零匹配；child Rebalance/Pull/MQClient owner 保留给后续切片 |
 | `git diff --check` | 通过 |
 
+M11-12ad 追加验证：
+
+| 命令 | 结果 |
+|---|---|
+| `cargo check -p rocketmq-client-rust --all-targets --all-features` | 通过；Lite/Push wrapper 使用标准 `Arc`，pull/POP/filter-server 全部 target 编译通过 |
+| `cargo test -p rocketmq-client-rust pull_api_wrapper --lib --all-features` | 9/9 通过；覆盖共享原子运行参数、hook 整代替换、tag/SQL/class-filter/inner-batch 与 offset metadata |
+| `cargo test -p rocketmq-client-rust --all-features --quiet` | 退出码 0 全部通过；library 971/971，其余 integration targets 全部通过，35 项既有外部环境测试忽略 |
+| reviewed baseline reduction（临时 ADR-013 approval） | 7 个 production/Client occurrence 与 1 个 test occurrence 真实删除；2 个同 item relocation 逐条审核，approval 不提交；baseline 657/1,796→657/1,788 |
+| `python scripts/arc_mut_guard.py` | 通过；production 402/1,095，Client 85/203，tracked/reviewed semantic set 1,788/1,788 一致 |
+| `python -m unittest scripts.tests.test_arc_mut_guard` / `python scripts/arc_mut_guard.py --fixtures` | 67/67 单测、24/24 fixtures 通过 |
+| `cargo fmt --all -- --check` | 通过 |
+| Client package / root workspace strict Clippy | `cargo clippy -p rocketmq-client-rust --all-targets --all-features -- -D warnings` 与 root workspace profile 均通过 |
+| standalone Example / Tauri Rust backend / Web backend | 各自 fmt + strict Clippy 通过；Web backend `cargo build --all-targets --all-features` 通过 |
+| `./scripts/runtime-audit.ps1 -SkipBaseline -EnforceBoundaryBaseline` | 通过；wrapper 只共享 immutable `Arc`，原子/`ArcSwap` 操作不跨 await 持有 guard，未新增 task/runtime/blocking 边界 |
+| architecture target/baseline 与 release guard | 通过；35/35 target edges、3/3 test edges、32/32 release topology、10/10 R0 crates |
+| `./scripts/check-agents-routing.ps1` | 通过；4 个 standalone Cargo、3 个 Node project、8 条 route |
+| PullAPIWrapper ArcMut 定向扫描 | `ArcMut<PullAPIWrapper>` 与 wrapper setting `mut_from_ref` 零匹配；MQClientInstance child owner 保留给后续切片 |
+| `git diff --check` | 通过 |
+
 ## 剩余切片与 Gate
 
-1. Client 其余 MQClientInstance、Producer、Push 与 Rebalance child owner（85/210）。
+1. Client 其余 MQClientInstance、Producer、Push 与 Rebalance child owner（85/203）。
 2. Broker TopicConfig/offset、BrokerRuntimeInner、schedule/POP/processor/transaction owner（190/568）。
 3. Store TopicConfig snapshot、MappedFileQueue/ConsumeQueue、CommitLog/Flush、StoreHandle/Rocks/Timer 与 HA actor（127/324）。
 4. 删除 compatibility `arc_mut.rs` 和公开 re-export；移除其余 nightly feature，将 guard 切到 production/public zero。
