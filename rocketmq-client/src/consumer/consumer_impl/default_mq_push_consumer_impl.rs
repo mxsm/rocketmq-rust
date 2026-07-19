@@ -122,7 +122,7 @@ pub struct DefaultMQPushConsumerImpl {
     rpc_hook: Option<Arc<dyn RPCHook>>,
     service_state: ArcMut<ServiceState>,
     pub(crate) client_instance: Option<ArcMut<MQClientInstance>>,
-    pub(crate) pull_api_wrapper: Option<ArcMut<PullAPIWrapper>>,
+    pub(crate) pull_api_wrapper: Option<Arc<PullAPIWrapper>>,
     pause: Arc<AtomicBool>,
     consume_orderly: bool,
     message_listener: Option<ArcMut<MessageListener>>,
@@ -265,13 +265,13 @@ impl DefaultMQPushConsumerImpl {
                 );
                 self.rebalance_impl.set_mq_client_factory(client_instance.clone());
                 if self.pull_api_wrapper.is_none() {
-                    self.pull_api_wrapper = Some(ArcMut::new(PullAPIWrapper::new(
+                    self.pull_api_wrapper = Some(Arc::new(PullAPIWrapper::new(
                         client_instance.clone(),
                         self.consumer_config.consumer_group.clone(),
                         self.consumer_config.unit_mode,
                     )));
                 }
-                if let Some(pull_api_wrapper) = self.pull_api_wrapper.as_mut() {
+                if let Some(pull_api_wrapper) = self.pull_api_wrapper.as_ref() {
                     pull_api_wrapper.register_filter_message_hook(self.filter_message_hook_list.clone());
                 }
                 if let Some(offset_store) = self.consumer_config.offset_store() {
@@ -1102,7 +1102,7 @@ impl DefaultMQPushConsumerImpl {
             self.execute_pop_request_later(pop_request, self.pull_time_delay_mills_when_exception);
             return;
         };
-        let Some(pull_api_wrapper) = self.pull_api_wrapper.as_mut() else {
+        let Some(pull_api_wrapper) = self.pull_api_wrapper.as_ref() else {
             warn!(
                 "pop_message delayed: PullAPIWrapper is not initialized, {}",
                 pop_request
@@ -1321,7 +1321,7 @@ impl DefaultMQPushConsumerImpl {
         let sub_expression = sub_expression.unwrap_or_default();
         let expression_type = subscription_data.expression_type.clone();
         let sub_version = subscription_data.sub_version;
-        let Some(pull_api_wrapper) = self.pull_api_wrapper.as_mut() else {
+        let Some(pull_api_wrapper) = self.pull_api_wrapper.as_ref() else {
             warn!(
                 "pullMessage delayed: PullAPIWrapper is not initialized, {}",
                 pull_request
