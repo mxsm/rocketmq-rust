@@ -8823,25 +8823,6 @@
       "adr": "ADR-002"
     },
     {
-      "identity": "9cec0ad2b8a8991648e6cd84",
-      "path": "rocketmq-client/src/consumer/consumer_impl/consume_message_orderly_service.rs",
-      "symbol": "mut_from_ref",
-      "kind": "mut_from_ref_call",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "9912bd908304b34754061e60",
-          "fingerprint": "ec847fdc2c5a0177c158c209",
-          "item": "fn lock_one_mq",
-          "line": 355
-        }
-      ],
-      "owner": "client",
-      "reason": "Legacy safe mutable-reference escape pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
       "identity": "aab8c3c5878736152902dbd4",
       "path": "rocketmq-client/src/consumer/consumer_impl/consume_message_pop_concurrently_service.rs",
       "symbol": "*",
@@ -9225,18 +9206,6 @@
       "kind": "mut_from_ref_call",
       "category": "production",
       "occurrences": [
-        {
-          "id": "a3fad5dad135dd14e2092d72",
-          "fingerprint": "97b58edbb5cff801f5d66031",
-          "item": "fn lock_mq_periodically",
-          "line": 247
-        },
-        {
-          "id": "023db31e0f03d561b4f4a9a3",
-          "fingerprint": "3d2114d8eef652c6d6b32489",
-          "item": "fn unlock_all_message_queues",
-          "line": 402
-        },
         {
           "id": "a769e3c9807073f2b536ea6f",
           "fingerprint": "9f1002806ae1463680b9d881",

@@ -338,6 +338,11 @@ change-invisible receiver 收窄为 `&self`，并为 lazy namespace 提供不写
 RebalancePush heartbeat/dispatch 与 consume service 共删除 9 个过时 `mut_from_ref`。实际快照降至
 411 production/1,206 occurrence，Client 降至 94/314；剩余为 Broker 190/568、Client 94/314 与 Store 127/324，
 总进度仍为 75/82，M11-12 父工作包未完成。
+Client orderly lock access 随 Issue #8345 将 Rebalance 单队列 unlock、全队列 lock/unlock capability 与 Push/Lite/
+inner 实现收窄为 `&self`，broker lookup、request body、oneway 与 process-queue lock state 语义不变；orderly/POP-
+orderly namespace reset 使用 immutable resolution，删除 3 个 `mut_from_ref`。实际快照降至 410 production/1,203
+occurrence，Client 降至 93/311；剩余为 Broker 190/568、Client 93/311 与 Store 127/324，总进度仍为 75/82，
+M11-12 父工作包未完成。
 
 ### 9.3 证据目录
 

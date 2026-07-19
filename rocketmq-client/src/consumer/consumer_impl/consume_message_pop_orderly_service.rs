@@ -242,11 +242,7 @@ impl ConsumeMessagePopOrderlyService {
         };
 
         use crate::consumer::consumer_impl::re_balance::Rebalance;
-        default_mqpush_consumer_impl
-            .rebalance_impl
-            .mut_from_ref()
-            .lock_all()
-            .await;
+        default_mqpush_consumer_impl.rebalance_impl.lock_all().await;
     }
 
     fn start_lock_refresh_with_schedule(&self, initial_delay: Duration, period: Duration) {
@@ -269,7 +265,7 @@ impl ConsumeMessagePopOrderlyService {
                         return ScheduledTaskControl::Stop;
                     }
 
-                    let Some(mut impl_) = default_mqpush_consumer_impl.upgrade() else {
+                    let Some(impl_) = default_mqpush_consumer_impl.upgrade() else {
                         return ScheduledTaskControl::Stop;
                     };
 
@@ -305,8 +301,7 @@ impl ConsumeMessagePopOrderlyService {
     }
 
     pub fn reset_namespace(&self, msgs: &mut [Arc<MessageExt>]) {
-        let mut client_config = self.client_config.clone();
-        let namespace = client_config.get_namespace().unwrap_or_default();
+        let namespace = self.client_config.resolved_namespace().unwrap_or_default();
         if namespace.is_empty() {
             return;
         }
@@ -399,7 +394,7 @@ impl ConsumeMessagePopOrderlyService {
     async fn unlock_all_message_queues(&self) {
         if let Some(ref impl_) = self.default_mqpush_consumer_impl {
             use crate::consumer::consumer_impl::re_balance::Rebalance;
-            impl_.rebalance_impl.mut_from_ref().unlock_all(false).await;
+            impl_.rebalance_impl.unlock_all(false).await;
         }
     }
 

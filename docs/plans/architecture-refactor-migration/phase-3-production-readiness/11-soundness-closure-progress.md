@@ -6,7 +6,7 @@ M11-12 的最终目标是 production/public compatibility API 中不存在 `ArcM
 `mut_from_ref` 或 clone-safe `AsMut`/`DerefMut`，并让默认 workspace 在 stable Rust 下通过，同时把 Miri/Loom、
 soak、SLO fault、dashboard/runbook、rollback 和 Human Gate 绑定到同一候选快照。
 
-该目标尚未完成。本文件记录 M11-12a～y 子切片的真实下降，不把子切片计为第 76 个工作包，也不刷新
+该目标尚未完成。本文件记录 M11-12a～z 子切片的真实下降，不把子切片计为第 76 个工作包，也不刷新
 baseline 来掩盖剩余债务。父 Issue 为 #8292；M11-12a 子切片 Issue 为 #8293；分支为
 `mxsm/architecture-refactor-owned-values`。
 
@@ -81,6 +81,9 @@ M11-12x 的 Client remote offset read access 由 Issue #8341 跟踪，分支为
 
 M11-12y 的 Client Push operational access 由 Issue #8343 跟踪，分支为
 `mxsm/architecture-refactor-client-push-operational-access`；它仍是同一 M11-12 工作包的子切片。
+
+M11-12z 的 Client orderly lock access 由 Issue #8345 跟踪，分支为
+`mxsm/architecture-refactor-client-orderly-lock-access`；它仍是同一 M11-12 工作包的子切片。
 
 ## 初始盘点
 
@@ -705,6 +708,32 @@ occurrence（合计删除 9 个 occurrence），没有新增或 fingerprint relo
 identity/id/fingerprint/item 语义集合完全一致，因此本切片不使用 relocation approval，也没有新增或替代
 shared-mutation wrapper。
 
+## M11-12z Client orderly lock access
+
+| 目标 | 实现与证据 |
+|---|---|
+| trait boundary | Rebalance 单队列 `unlock`、全队列 `lock_all`/`unlock_all` receiver 收窄为 `&self`，Push 与 Lite 实现同步收窄 |
+| inner lock capability | `RebalanceImpl::lock`/`lock_with`/`lock_all`/`unlock_all` 使用 immutable receiver 和 immutable client access；仍通过 process-queue 并发表与原子状态更新锁状态/时间戳 |
+| orderly call sites | orderly lock 路径不再制造 mutable alias；POP-orderly lock/unlock 同样直接调用 immutable capability，producer send 的真实可变入口保留 |
+| namespace | orderly 与 POP-orderly reset 使用 `ClientConfig::resolved_namespace`，不再 clone config 后写共享 lazy-cache flag |
+| compatibility | broker lookup、lock/unlock request body、oneway、periodic scheduling、queue lock state/timestamp 与 namespace stripping 语义保持不变 |
+
+M11-12z 后实际快照为 671 个条目：production 410、test 247、compatibility 14；occurrence 精确为
+production 1,203、test 676、compatibility 40。相对 M11-12y 真实删除 1 个 production identity、3 个 production
+occurrence；相对初始快照累计删除 350 个 production 条目和 922 个 production occurrence。
+`rocketmq-client` production 债务从 94/314 降至 93/311。剩余 production 债务为：
+
+| crate | 条目 | occurrence |
+|---|---:|---:|
+| `rocketmq-broker` | 190 | 568 |
+| `rocketmq-client` | 93 | 311 |
+| `rocketmq-store` | 127 | 324 |
+
+reviewed baseline 从 672→671、occurrences 从 1,922→1,919。guard 报告 1 个完整删除 identity 和 2 个局部删除
+occurrence（合计删除 3 个 occurrence），没有新增或 fingerprint relocation；baseline 与 reviewed output 的
+identity/id/fingerprint/item 语义集合完全一致，因此本切片不使用 relocation approval，也没有新增或替代
+shared-mutation wrapper。
+
 ## 已执行验证
 
 | 命令 | 结果 |
@@ -1220,9 +1249,29 @@ M11-12y 追加验证：
 | Push operational `mut_from_ref` 定向扫描 | RebalancePush 零匹配；consume paths 只保留 rebalance lock/unlock 与 producer send 等真实可变入口，baseline 与 reviewed 语义集合一致 |
 | `git diff --check` | 通过 |
 
+M11-12z 追加验证：
+
+| 命令 | 结果 |
+|---|---|
+| `cargo check -p rocketmq-client-rust --all-targets --all-features` | 通过；Rebalance lock/unlock trait、Push/Lite/inner 实现与 orderly call sites 使用 immutable receiver |
+| `cargo test -p rocketmq-client-rust consumer::consumer_impl::consume_message_orderly_service::tests --lib --all-features` | 14/14 通过；覆盖 lock path、namespace reset、periodic lifecycle 与 shutdown |
+| `cargo test -p rocketmq-client-rust consumer::consumer_impl::consume_message_pop_orderly_service::tests --lib --all-features` | 17/17 通过；覆盖 lock refresh、namespace reset、task lifecycle、shutdown 与 retry bounds |
+| `cargo test -p rocketmq-client-rust --all-features --quiet` | 退出码 0 全部通过；library 966/966，其余 integration targets 全部通过（35 项既有外部环境测试忽略） |
+| reviewed baseline reduction | guard 报告 1 个完整删除 identity、2 个局部删除 occurrence，合计删除 3 个 occurrence；无新增和 relocation；baseline 672/1,922→671/1,919 |
+| `python scripts/arc_mut_guard.py` | 通过；production 410/1,203，Client 93/311 |
+| `python -m unittest scripts.tests.test_arc_mut_guard` / `python scripts/arc_mut_guard.py --fixtures` | 67/67 单测、24/24 fixtures 通过 |
+| `cargo fmt --all -- --check` | 通过 |
+| `cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings` | 通过；Windows linker stdout 与既有 future-incompatibility note 不受 `-D warnings` 管辖 |
+| `rocketmq-example`: `cargo fmt --all -- --check` / `cargo clippy --all-targets -- -D warnings` | standalone producer/consumer 通过 |
+| `.\scripts\runtime-audit.ps1 -SkipBaseline -EnforceBoundaryBaseline` | 通过；未新增 task/runtime/blocking 边界，periodic lock lifecycle 与 await 边界保持受控 |
+| architecture target/baseline 与 release guard | 通过；35/35 target edges、3/3 test edges、32/32 release topology |
+| `.\scripts\check-agents-routing.ps1` | 通过；4 个 standalone Cargo、3 个 Node project、8 条 route |
+| orderly lock `mut_from_ref` 定向扫描 | orderly 零匹配；POP-orderly 仅保留 producer send，baseline 与 reviewed output 语义集合一致 |
+| `git diff --check` | 通过 |
+
 ## 剩余切片与 Gate
 
-1. Client 其余 MQClientInstance、Producer、Push/Lite Consumer owner（94/314）。
+1. Client 其余 MQClientInstance、Producer、Push/Lite Consumer owner（93/311）。
 2. Broker TopicConfig/offset、BrokerRuntimeInner、schedule/POP/processor/transaction owner（190/568）。
 3. Store TopicConfig snapshot、MappedFileQueue/ConsumeQueue、CommitLog/Flush、StoreHandle/Rocks/Timer 与 HA actor（127/324）。
 4. 删除 compatibility `arc_mut.rs` 和公开 re-export；移除其余 nightly feature，将 guard 切到 production/public zero。

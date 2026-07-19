@@ -433,8 +433,8 @@ impl Rebalance for RebalancePushImpl {
         }
     }
 
-    async fn unlock(&mut self, mq: &MessageQueue, oneway: bool) {
-        let Some(client) = self.rebalance_impl_inner.client_instance.as_mut() else {
+    async fn unlock(&self, mq: &MessageQueue, oneway: bool) {
+        let Some(client) = self.rebalance_impl_inner.client_instance.as_ref() else {
             warn!("Client instance is not available for unlocking {}", mq);
             return;
         };
@@ -476,7 +476,7 @@ impl Rebalance for RebalancePushImpl {
         }
     }
 
-    async fn lock_all(&mut self) {
+    async fn lock_all(&self) {
         if let Some(default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_ref() {
             if default_mqpush_consumer_impl.is_consume_orderly() {
                 let process_queue_table = self.rebalance_impl_inner.process_queue_table.clone();
@@ -492,7 +492,7 @@ impl Rebalance for RebalancePushImpl {
         }
     }
 
-    async fn unlock_all(&mut self, oneway: bool) {
+    async fn unlock_all(&self, oneway: bool) {
         let process_queue_table = self.rebalance_impl_inner.process_queue_table.clone();
         let consumer_group = self.rebalance_impl_inner.consumer_group.clone();
         let client_instance = self.rebalance_impl_inner.client_instance.clone();

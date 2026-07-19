@@ -1098,7 +1098,7 @@ where
         queue_set
     }
 
-    pub async fn lock(&mut self, mq: &MessageQueue) -> bool {
+    pub async fn lock(&self, mq: &MessageQueue) -> bool {
         let process_queue_table_ = self.process_queue_table.clone();
         let process_queue_table = process_queue_table_.read().await;
         let table = process_queue_table.deref();
@@ -1106,14 +1106,14 @@ where
     }
 
     pub async fn lock_with(
-        &mut self,
+        &self,
         mq: &MessageQueue,
         process_queue_table: &HashMap<MessageQueue, Arc<ProcessQueue>>,
     ) -> bool {
         let Some(consumer_group) = self.consumer_group_ref("lockWith").cloned() else {
             return false;
         };
-        let Some(client) = self.client_instance.as_mut() else {
+        let Some(client) = self.client_instance.as_ref() else {
             warn!("lockWith skipped: client_instance is not initialized, mq={}", mq);
             return false;
         };
@@ -1157,7 +1157,7 @@ where
         }
     }
 
-    pub async fn lock_all(&mut self) {
+    pub async fn lock_all(&self) {
         let broker_mqs = self.build_process_queue_table_by_broker_name().await;
         let Some(consumer_group) = self.consumer_group.clone() else {
             warn!("lockAll skipped: consumer_group is not initialized");
@@ -1171,25 +1171,24 @@ where
         let map = broker_mqs
             .into_iter()
             .map(|(broker_name, mqs)| {
-                let mut client_instance = client_instance.clone();
+                let client_instance = client_instance.clone();
                 let process_queue_table = self.process_queue_table.clone();
                 let consumer_group = consumer_group.clone();
                 async move {
                     if mqs.is_empty() {
                         return;
                     }
-                    let client = client_instance.as_mut();
-                    let find_broker_result = client
+                    let find_broker_result = client_instance
                         .find_broker_address_in_subscribe(&broker_name, mix_all::MASTER_ID, true)
                         .await;
                     if let Some(find_broker_result) = find_broker_result {
                         let request_body = LockBatchRequestBody {
                             consumer_group: Some(consumer_group.to_owned()),
-                            client_id: Some(client.client_id.clone()),
+                            client_id: Some(client_instance.client_id.clone()),
                             mq_set: mqs.clone(),
                             ..Default::default()
                         };
-                        let Some(mq_client_api_impl) = client.mq_client_api_impl.as_ref() else {
+                        let Some(mq_client_api_impl) = client_instance.mq_client_api_impl.as_ref() else {
                             warn!(
                                 "lockAll skipped broker {}: MQClientAPIImpl is not initialized",
                                 broker_name
@@ -1234,7 +1233,7 @@ where
         futures::future::join_all(map).await;
     }
 
-    pub async fn unlock_all(&mut self, oneway: bool) {
+    pub async fn unlock_all(&self, oneway: bool) {
         let broker_mqs = self.build_process_queue_table_by_broker_name().await;
         let Some(consumer_group) = self.consumer_group.clone() else {
             warn!("unlockAll skipped: consumer_group is not initialized");
@@ -1244,7 +1243,7 @@ where
             if mqs.is_empty() {
                 continue;
             }
-            let Some(client) = self.client_instance.as_mut() else {
+            let Some(client) = self.client_instance.as_ref() else {
                 warn!("unlockAll skipped: client_instance is not initialized");
                 return;
             };
