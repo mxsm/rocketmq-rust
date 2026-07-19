@@ -441,6 +441,11 @@ service `Weak`；共享 wake-up trait 直接经 `&self` 分发请求，不引入
 start/shutdown/restart，`AtomicU64` 发布 cleanup 时间，TaskGroup 在 spawn 前完成发布且同步 guard 不跨 `.await`。
 实际快照降至 296 production/738 occurrence、166 test/463 occurrence，Broker 降至 174/430；总进度仍为 75/82，
 下一子切片 M11-12as 处理 Broker POP Lite processor/long-poll lifecycle ownership，M11-12 父工作包未完成。
+Broker POP Lite lifecycle ownership 随 Issue #8385 将 `PopLiteMessageProcessor` 与
+`PopLiteLongPollingService` root 改为标准 `Arc`，processor 回边与扫描任务 owner 改为标准 `Weak`；共享 wake-up trait
+经 `&self` 分发请求，每次成功 start 创建新 channel 并发布 sender，双层异步 lifecycle gate 串行 start/shutdown/restart，
+停止状态拒绝新增挂起。实际快照降至 294 production/725 occurrence、165 test/462 occurrence，Broker 降至 172/417；
+总进度仍为 75/82，下一子切片 M11-12at 处理 Broker Pull processor/request-hold lifecycle ownership，M11-12 父工作包未完成。
 
 ### 9.3 证据目录
 

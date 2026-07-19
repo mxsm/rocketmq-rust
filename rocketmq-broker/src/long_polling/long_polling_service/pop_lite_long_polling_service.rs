@@ -16,6 +16,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::Weak;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
@@ -24,16 +25,13 @@ use dashmap::DashMap;
 use parking_lot::Mutex;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_remoting::runtime::processor::RequestProcessor;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskKind;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
 use tokio::select;
 use tokio::sync::mpsc::unbounded_channel;
-use tokio::sync::mpsc::UnboundedReceiver;
-use tokio::sync::mpsc::UnboundedSender;
-use tokio::sync::Notify;
+use tokio::sync::Mutex as AsyncMutex;
 use tracing::error;
 use tracing::warn;
 
@@ -41,35 +39,41 @@ use crate::broker_runtime::BrokerRuntimeInner;
 use crate::long_polling::polling_result::PollingResult;
 use crate::long_polling::pop_request::PopRequest;
 
+#[trait_variant::make(PopLiteLongPollingRequestProcessor: Send)]
+pub(crate) trait LocalPopLiteLongPollingRequestProcessor {
+    async fn process_request_when_wakeup(
+        &self,
+        channel: rocketmq_remoting::net::channel::Channel,
+        ctx: ConnectionHandlerContext,
+        request: RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>>;
+}
+
 pub(crate) struct PopLiteLongPollingService<MS: MessageStore, RP> {
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
     polling_map: DashMap<CheetahString, SkipSet<Arc<PopRequest>>>,
     total_polling_num: AtomicU64,
-    processor: Option<ArcMut<RP>>,
-    notify: Notify,
-    wakeup_tx: UnboundedSender<CheetahString>,
-    wakeup_rx: Option<UnboundedReceiver<CheetahString>>,
+    processor: Weak<RP>,
     running: AtomicBool,
+    lifecycle: AsyncMutex<()>,
     task_group: Mutex<Option<TaskGroup>>,
 }
 
-impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLiteLongPollingService<MS, RP> {
-    pub(crate) fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
-        let (wakeup_tx, wakeup_rx) = unbounded_channel();
+impl<MS: MessageStore, RP: PopLiteLongPollingRequestProcessor + Sync + 'static> PopLiteLongPollingService<MS, RP> {
+    pub(crate) fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>, processor: Weak<RP>) -> Self {
         Self {
             broker_runtime_inner: broker_runtime_inner.clone(),
             polling_map: DashMap::with_capacity(broker_runtime_inner.broker_config().pop_polling_map_size),
             total_polling_num: AtomicU64::new(0),
-            processor: None,
-            notify: Notify::new(),
-            wakeup_tx,
-            wakeup_rx: Some(wakeup_rx),
+            processor,
             running: AtomicBool::new(false),
+            lifecycle: AsyncMutex::new(()),
             task_group: Mutex::new(None),
         }
     }
 
-    pub(crate) fn start(this: ArcMut<Self>) {
+    pub(crate) async fn start(this: &Arc<Self>) {
+        let _lifecycle = this.lifecycle.lock().await;
         if this
             .running
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -85,29 +89,30 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLiteLongPolling
             this.running.store(false, Ordering::Release);
             return;
         };
-        let Some(mut wakeup_rx) = this.mut_from_ref().wakeup_rx.take() else {
-            this.running.store(false, Ordering::Release);
-            warn!("PopLiteLongPollingService receiver has already been taken");
-            return;
-        };
-
         let cancellation_token = task_group.cancellation_token();
-        let service = this.clone();
+        let service = Arc::downgrade(this);
+        let (wakeup_tx, mut wakeup_rx) = unbounded_channel();
+        *this.task_group.lock() = Some(task_group.clone());
 
         let spawn_result = task_group.spawn_service("broker.long-polling.pop-lite.scan", async move {
             loop {
-                select! {
+                let client_id = select! {
                     _ = cancellation_token.cancelled() => { break; }
-                    _ = service.notify.notified() => { break; }
                     wakeup = wakeup_rx.recv() => {
                         match wakeup {
-                            Some(client_id) => {
-                                service.wake_up_client(&client_id);
-                            }
+                            Some(client_id) => Some(client_id),
                             None => break,
                         }
                     }
-                    _ = tokio::time::sleep(tokio::time::Duration::from_millis(20)) => {}
+                    _ = tokio::time::sleep(tokio::time::Duration::from_millis(20)) => None,
+                };
+
+                let Some(service) = service.upgrade() else {
+                    break;
+                };
+
+                if let Some(client_id) = client_id {
+                    service.wake_up_client(&client_id);
                 }
 
                 if service.polling_map.is_empty() {
@@ -133,27 +138,33 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLiteLongPolling
                 }
             }
 
-            for entry in service.polling_map.iter() {
-                let queue = entry.value();
-                while let Some(first) = queue.pop_front() {
-                    service.total_polling_num.fetch_sub(1, Ordering::AcqRel);
-                    service.wake_up(first.value().clone());
+            if let Some(service) = service.upgrade() {
+                for entry in service.polling_map.iter() {
+                    let queue = entry.value();
+                    while let Some(first) = queue.pop_front() {
+                        service.total_polling_num.fetch_sub(1, Ordering::AcqRel);
+                        service.wake_up(first.value().clone());
+                    }
                 }
+                service.running.store(false, Ordering::Release);
             }
-            service.running.store(false, Ordering::Release);
         });
 
         if let Err(error) = spawn_result {
+            this.task_group.lock().take();
             this.running.store(false, Ordering::Release);
             warn!(?error, "failed to spawn PopLiteLongPollingService scan task");
             return;
         }
 
-        *this.task_group.lock() = Some(task_group);
+        this.broker_runtime_inner
+            .lite_event_dispatcher()
+            .set_wakeup_sender(wakeup_tx);
     }
 
-    pub(crate) async fn shutdown(&mut self) {
-        self.notify.notify_waiters();
+    pub(crate) async fn shutdown(&self) {
+        let _lifecycle = self.lifecycle.lock().await;
+        self.running.store(false, Ordering::Release);
         let task_group = self.task_group.lock().take();
         if let Some(task_group) = task_group {
             let report = task_group.shutdown(Duration::from_secs(5)).await;
@@ -167,10 +178,6 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLiteLongPolling
         self.running.store(false, Ordering::Release);
     }
 
-    pub(crate) fn wakeup_sender(&self) -> UnboundedSender<CheetahString> {
-        self.wakeup_tx.clone()
-    }
-
     pub(crate) fn polling(
         &self,
         ctx: ConnectionHandlerContext,
@@ -181,6 +188,9 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLiteLongPolling
     ) -> PollingResult {
         if poll_time <= 0 {
             return PollingResult::NotPolling;
+        }
+        if !self.running.load(Ordering::Acquire) {
+            return PollingResult::PollingTimeout;
         }
 
         let expired = born_time.saturating_add(poll_time);
@@ -227,9 +237,9 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLiteLongPolling
         if !pop_request.complete() {
             return false;
         }
-        match self.processor.clone() {
+        match self.processor.upgrade() {
             None => false,
-            Some(mut processor) => {
+            Some(processor) => {
                 let task_group = self.task_group.lock().as_ref().cloned();
                 let Some(task_group) = task_group else {
                     warn!("PopLiteLongPollingService wake-up skipped because task group is not running");
@@ -242,7 +252,7 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLiteLongPolling
                         let ctx = pop_request.get_ctx().clone();
                         let opaque = pop_request.get_remoting_command().opaque();
                         let response = processor
-                            .process_request(channel, ctx, &mut pop_request.get_remoting_command().clone())
+                            .process_request_when_wakeup(channel, ctx, pop_request.get_remoting_command().clone())
                             .await;
                         match response {
                             Ok(result) => {
@@ -286,7 +296,13 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLiteLongPolling
         self.polling_map.get(key).map(|queue| queue.len() as i32).unwrap_or(0)
     }
 
-    pub(crate) fn set_processor(&mut self, processor: ArcMut<RP>) {
-        self.processor = Some(processor);
+    #[cfg(test)]
+    pub(crate) fn is_running(&self) -> bool {
+        self.running.load(Ordering::Acquire)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn task_group_for_test(&self) -> Option<TaskGroup> {
+        self.task_group.lock().as_ref().cloned()
     }
 }
