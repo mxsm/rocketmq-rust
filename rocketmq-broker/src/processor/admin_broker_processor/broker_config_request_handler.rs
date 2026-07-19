@@ -738,8 +738,6 @@ mod tests {
     use rocketmq_remoting::connection::Connection;
     use rocketmq_remoting::net::channel::Channel;
     use rocketmq_remoting::net::channel::ChannelInner;
-    #[cfg(feature = "rocksdb_store")]
-    use rocketmq_remoting::protocol::data_version_facade::DataVersionExt;
     use rocketmq_remoting::protocol::header::export_rocksdb_config_to_json_request_header::ExportRocksdbConfigToJsonRequestHeader;
     use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
     #[cfg(feature = "rocksdb_store")]
@@ -1041,11 +1039,7 @@ mod tests {
                 0,
                 77,
             );
-            inner_mut
-                .consumer_offset_manager()
-                .data_version()
-                .mut_from_ref()
-                .next_version();
+            inner_mut.consumer_offset_manager().advance_data_version();
             inner_mut.consumer_offset_manager().persist();
             let mut group_config = SubscriptionGroupConfig::new(group.clone());
             group_config.set_consume_broadcast_enable(false);

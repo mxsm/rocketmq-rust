@@ -6,7 +6,7 @@ M11-12 的最终目标是 production/public compatibility API 中不存在 `ArcM
 `mut_from_ref` 或 clone-safe `AsMut`/`DerefMut`，并让默认 workspace 在 stable Rust 下通过，同时把 Miri/Loom、
 soak、SLO fault、dashboard/runbook、rollback 和 Human Gate 绑定到同一候选快照。
 
-该目标尚未完成。本文件记录 M11-12a～as 子切片的真实下降，不把子切片计为第 76 个工作包，也不刷新
+该目标尚未完成。本文件记录 M11-12a～au 子切片的真实下降，不把子切片计为第 76 个工作包，也不刷新
 baseline 来掩盖剩余债务。父 Issue 为 #8292；M11-12a 子切片 Issue 为 #8293；分支为
 `mxsm/architecture-refactor-owned-values`。
 
@@ -128,6 +128,12 @@ M11-12ar 的 Broker POP lifecycle ownership 由 Issue #8383 跟踪，分支为
 
 M11-12as 的 Broker POP Lite lifecycle ownership 由 Issue #8385 跟踪，分支为
 `mxsm/architecture-refactor-broker-pop-lite-lifecycle-ownership`；它仍是同一 M11-12 工作包的子切片。
+
+M11-12at 的 Broker Pull lifecycle ownership 由 Issue #8387 跟踪，分支为
+`mxsm/architecture-refactor-broker-pull-lifecycle-ownership`；它仍是同一 M11-12 工作包的子切片。
+
+M11-12au 的 Broker ConsumerOffsetManager ownership 由 Issue #8389 跟踪，分支为
+`mxsm/architecture-refactor-broker-consumer-offset-version`；它仍是同一 M11-12 工作包的子切片。
 
 ## 初始盘点
 
@@ -2004,10 +2010,39 @@ Broker Pull lifecycle ownership 随 Issue #8387 完成以下边界收敛：
 下一子切片 M11-12au 处理 `ConsumerOffsetManager` immutable/serialized ownership；75/82 总进度不变，Broker/Store、
 compatibility、stable/Miri/Loom/soak/SLO 与完整候选快照 Gate 仍保持开放。
 
+## M11-12au 实现
+
+Broker ConsumerOffsetManager ownership 随 Issue #8389 完成以下边界收敛：
+
+- `ConsumerOffsetManager` 保持由 BrokerRuntimeInner 按值独占，不新增 root `Arc`；删除 manager/wrapper 无调用的 Clone、完整可写 offset-table lock escape、无用 mutable accessor 与 setter。Lite lag/diagnostics 只读取 owned snapshot 或长度。
+- `DataVersion` 改由 `ArcSwap` 发布完整不可变代际；单一短 transition 串行 offset/reset/pull 写入、commit 计数和版本发布，旧 reader 在更新后继续持有旧 snapshot。`ArcMut<MessageStore>` 初始化 carrier 明确延期到 Store/root 切片。
+- `commit_offset` 使用 `fetch_add` 返回值精确判断 `consumer_offset_update_version_step`，并发 writer 不再经第二次 load 重复或漏过阈值；非正 step 不再触发取模除零 panic。
+- Broker pre-online/slave 同步通过单一 `merge_offsets_from_peer` 安装表与版本，不再分别取得可写 DataVersion/table owner；read-only admin encode 改用共享 accessor。
+- JSON serialize 在 transition 内构造一致视图，decode 即使主 offset 表为空也恢复 reset/pull/version；RocksDB 先完整读取和解析全部记录，成功后一次发布，解析失败不再留下新版本或部分新表。RocksDB persist 在锁内克隆表与版本、锁外编码和 I/O。
+- reviewed baseline 从 465 identities / 1,204 occurrences 降至 461 / 1,194；production 从 289/706 降至 287/699，test 从 162/458 降至 160/455，compatibility 保持 14/40。Broker production 为 165/391、test 为 60/74；净删除 2 个 production identity/7 occurrence 与 2 个 test identity/3 occurrence，无新增 identity或 fingerprint relocation。
+
+## M11-12au 验证
+
+| 命令 | 结果 |
+|---|---|
+| `cargo check -p rocketmq-broker --all-targets --all-features` | 通过；ArcSwap generation、transition、narrow peer/table API 与全部 Broker targets/features 编译通过 |
+| ConsumerOffset focused default/all-feature tests | 13/13、15/15 通过；覆盖旧 snapshot 隔离、16 writer 精确阈值、零步长、peer merge、空主表 JSON reset/pull round-trip 与 RocksDB restart/delete |
+| processor/export/file→RocksDB migration focused tests | 1/1、1/1、2/2 通过；wire handler round-trip、JSON export、single/separate RocksDB metadata migration/recovery 保持通过 |
+| `cargo test -p rocketmq-broker --all-features --lib -- --test-threads=1` | 572 passed、25 failed、1 ignored；相对上一 main 的 567 passed、25 failed、1 ignored，新增 5 个测试全部通过且失败名单完全一致，故不能把全套记为通过，也未新增 baseline failure |
+| RocksDB specialized gates | Store/Broker strict Clippy 通过；foundation 82/82、semantics 9/9、Broker `rocksdb` 20/20、`pop_consumer` 4/4 通过 |
+| reviewed baseline reduction / `python scripts/arc_mut_guard.py` | baseline 465/1,204→461/1,194，无 relocation/临时 approval；guard 通过，production 287/699、test 160/455、compatibility 14/40，Broker production 165/391 |
+| ArcMut / architecture guard tests | ArcMut 67/67、fixtures 24/24、architecture dependency/release/performance 60/60 通过；target/baseline/release/performance profiles 全绿 |
+| `cargo fmt --all -- --check` / root workspace strict Clippy | 通过；root workspace 32 个 package 的 all-targets/all-features `-D warnings` profile 通过 |
+| runtime audit / AGENTS routing / `git diff --check` | runtime boundary 与 routing 通过；4 个 standalone Cargo、3 个 Node project、8 条 route；diff check 无 whitespace error |
+
+下一子切片 M11-12av 处理 Broker `ScheduleMessageService` 内部 offset/delay/DataVersion/status ownership；75/82 总进度
+不变，Broker root/其他 processor/transaction、Store、compatibility、stable/Miri/Loom/soak/SLO 与完整候选快照 Gate
+仍保持开放。
+
 ## 剩余切片与 Gate
 
-1. Broker offset、BrokerRuntimeInner、schedule/其他 processor/transaction owner（167/398）；下一子切片 M11-12au
-   处理 ConsumerOffsetManager immutable/serialized ownership。
+1. Broker BrokerRuntimeInner、schedule/其他 processor/transaction owner（165/391）；下一子切片 M11-12av 处理
+   `ScheduleMessageService` 内部 offset/delay/DataVersion/status ownership。
 2. Store MappedFileQueue/ConsumeQueue、CommitLog/Flush、StoreHandle/Rocks/Timer 与 HA actor（122/308）。
 3. 删除 compatibility `arc_mut.rs` 和公开 re-export；移除其余 nightly feature，将 guard 切到 production/public zero。
 4. 对同一候选快照执行 stable feature matrix、Miri/Loom 可用切片、soak/SLO fault、dashboard/runbook、动态

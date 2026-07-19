@@ -111,11 +111,10 @@ impl LiteConsumerLagCalculator {
         broker_runtime_inner: &BrokerRuntimeInner<MS>,
         target_group: Option<&CheetahString>,
     ) -> Vec<(CheetahString, i64)> {
-        let offset_table = broker_runtime_inner.consumer_offset_manager().offset_table();
-        let read_guard = offset_table.read();
+        let offset_table = broker_runtime_inner.consumer_offset_manager().offset_table_snapshot();
         let mut offsets = Vec::new();
 
-        for (topic_at_group, queue_offsets) in read_guard.iter() {
+        for (topic_at_group, queue_offsets) in &offset_table {
             let Some((topic, group)) = topic_at_group.as_str().split_once(TOPIC_GROUP_SEPARATOR) else {
                 continue;
             };

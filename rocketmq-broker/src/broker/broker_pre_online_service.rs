@@ -234,21 +234,11 @@ where
             .await
         {
             Ok(Some(offset_wrapper)) => {
-                let local_version = self
-                    .broker_runtime_inner
-                    .consumer_offset_manager()
-                    .data_version()
-                    .as_ref()
-                    .clone();
+                let local_version = self.broker_runtime_inner.consumer_offset_manager().data_version();
                 if should_sync_from_peer(&local_version, Some(offset_wrapper.data_version())) {
                     let consumer_offset_manager = self.broker_runtime_inner.consumer_offset_manager();
-                    consumer_offset_manager
-                        .data_version()
-                        .assign_new_one(offset_wrapper.data_version());
-                    let offset_table = consumer_offset_manager.offset_table();
-                    let mut consumer_offset_table = offset_table.write();
-                    consumer_offset_table.extend(offset_wrapper.offset_table());
-                    drop(consumer_offset_table);
+                    let data_version = offset_wrapper.data_version().clone();
+                    consumer_offset_manager.merge_offsets_from_peer(offset_wrapper.offset_table(), data_version);
                     consumer_offset_manager.persist();
                     info!(
                         "{}'s consumer offset data version is newer or equal, merged into local broker",

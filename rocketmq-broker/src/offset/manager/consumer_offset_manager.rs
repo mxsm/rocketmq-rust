@@ -22,6 +22,7 @@ use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
+use arc_swap::ArcSwap;
 use cheetah_string::CheetahBuilder;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
@@ -76,7 +77,6 @@ fn split_topic_group_key(key: &CheetahString) -> Option<(&str, &str)> {
     Some((topic, group))
 }
 
-#[derive(Clone)]
 pub(crate) struct ConsumerOffsetManager<MS: MessageStore> {
     broker_config: Arc<BrokerConfig>,
     message_store_config: Arc<MessageStoreConfig>,
@@ -99,11 +99,12 @@ where
             broker_config,
             message_store_config,
             consumer_offset_wrapper: ConsumerOffsetWrapper {
-                data_version: ArcMut::new(DataVersion::default()),
-                offset_table: Arc::new(parking_lot::RwLock::new(HashMap::new())),
-                reset_offset_table: Arc::new(parking_lot::RwLock::new(HashMap::new())),
-                pull_offset_table: Arc::new(parking_lot::RwLock::new(HashMap::new())),
-                version_change_counter: Arc::new(AtomicI64::new(0)),
+                data_version: ArcSwap::from_pointee(DataVersion::default()),
+                data_version_transition: parking_lot::Mutex::new(()),
+                offset_table: parking_lot::RwLock::new(HashMap::new()),
+                reset_offset_table: parking_lot::RwLock::new(HashMap::new()),
+                pull_offset_table: parking_lot::RwLock::new(HashMap::new()),
+                version_change_counter: AtomicI64::new(0),
             },
             message_store,
             #[cfg(feature = "rocksdb_store")]
@@ -159,6 +160,7 @@ where
         queue_id: i32,
         offset: i64,
     ) {
+        let _transition = self.consumer_offset_wrapper.data_version_transition.lock();
         let key = build_topic_group_key(topic, group);
         self.consumer_offset_wrapper
             .pull_offset_table
@@ -174,6 +176,7 @@ where
         group: &CheetahString,
         queue_id: i32,
     ) -> Option<i64> {
+        let _transition = self.consumer_offset_wrapper.data_version_transition.lock();
         let key = build_topic_group_lookup_key(topic, group);
         let mut write_guard = self.consumer_offset_wrapper.reset_offset_table.write();
         let offset_table = write_guard.get_mut(key.as_str());
@@ -184,6 +187,7 @@ where
     }
 
     pub fn assign_reset_offset(&self, topic: &CheetahString, group: &CheetahString, queue_id: i32, offset: i64) {
+        let _transition = self.consumer_offset_wrapper.data_version_transition.lock();
         let key = build_topic_group_key(topic, group);
         self.consumer_offset_wrapper
             .reset_offset_table
@@ -206,11 +210,13 @@ where
     }
 
     pub fn clear_pull_offset(&self, group: &CheetahString, topic: &CheetahString) {
+        let _transition = self.consumer_offset_wrapper.data_version_transition.lock();
         let key = build_topic_group_key(topic, group);
         self.consumer_offset_wrapper.pull_offset_table.write().remove(&key);
     }
 
     pub fn clone_offset(&self, src_group: &CheetahString, dest_group: &CheetahString, topic: &CheetahString) {
+        let _transition = self.consumer_offset_wrapper.data_version_transition.lock();
         let src_key = build_topic_group_key(topic, src_group);
         let Some(offsets) = self.consumer_offset_wrapper.offset_table.read().get(&src_key).cloned() else {
             return;
@@ -244,6 +250,7 @@ where
         queue_id: i32,
         offset: i64,
     ) {
+        let _transition = self.consumer_offset_wrapper.data_version_transition.lock();
         let key = build_topic_group_key(topic, group);
 
         {
@@ -265,26 +272,19 @@ where
             map.insert(queue_id, offset);
         }
 
-        let _ = self
+        let committed_updates = self
             .consumer_offset_wrapper
             .version_change_counter
-            .fetch_add(1, Ordering::Release);
-        if self
-            .consumer_offset_wrapper
-            .version_change_counter
-            .load(Ordering::Acquire)
-            % self.broker_config.consumer_offset_update_version_step
-            == 0
-        {
+            .fetch_add(1, Ordering::AcqRel)
+            + 1;
+        let update_step = self.broker_config.consumer_offset_update_version_step;
+        if update_step > 0 && committed_updates % update_step == 0 {
             let state_machine_version = if let Some(ref message_store) = self.message_store {
                 message_store.get_state_machine_version()
             } else {
                 0
             };
-            self.consumer_offset_wrapper
-                .data_version
-                .mut_from_ref()
-                .next_version_with(state_machine_version);
+            self.advance_data_version_with_locked(state_machine_version);
         }
     }
 
@@ -380,32 +380,62 @@ where
         topics
     }
 
-    pub fn offset_table(&self) -> Arc<parking_lot::RwLock<HashMap<CheetahString, HashMap<i32, i64>>>> {
-        self.consumer_offset_wrapper.offset_table.clone()
+    pub fn offset_table_snapshot(&self) -> HashMap<CheetahString, HashMap<i32, i64>> {
+        self.consumer_offset_wrapper.offset_table.read().clone()
     }
 
-    pub fn data_version(&self) -> ArcMut<DataVersion> {
-        self.consumer_offset_wrapper.data_version.clone()
+    pub fn offset_table_len(&self) -> usize {
+        self.consumer_offset_wrapper.offset_table.read().len()
+    }
+
+    pub fn data_version(&self) -> Arc<DataVersion> {
+        self.consumer_offset_wrapper.data_version.load_full()
+    }
+
+    pub(crate) fn advance_data_version(&self) {
+        self.advance_data_version_with(0);
+    }
+
+    fn advance_data_version_with(&self, state_machine_version: i64) {
+        let _transition = self.consumer_offset_wrapper.data_version_transition.lock();
+        self.advance_data_version_with_locked(state_machine_version);
+    }
+
+    fn advance_data_version_with_locked(&self, state_machine_version: i64) {
+        let mut data_version = self.consumer_offset_wrapper.data_version.load_full().as_ref().clone();
+        data_version.next_version_with(state_machine_version);
+        self.consumer_offset_wrapper.data_version.store(Arc::new(data_version));
+    }
+
+    pub(crate) fn merge_offsets_from_peer(
+        &self,
+        offset_table: HashMap<CheetahString, HashMap<i32, i64>>,
+        data_version: DataVersion,
+    ) {
+        let _transition = self.consumer_offset_wrapper.data_version_transition.lock();
+        self.consumer_offset_wrapper.offset_table.write().extend(offset_table);
+        self.consumer_offset_wrapper.data_version.store(Arc::new(data_version));
     }
 
     fn remove_keys_matching<F>(&self, predicate: F)
     where
         F: Fn(&CheetahString) -> bool,
     {
-        let keys_to_remove: Vec<CheetahString> = self
-            .consumer_offset_wrapper
-            .offset_table
-            .read()
-            .keys()
-            .filter(|key| predicate(key))
-            .cloned()
-            .collect();
+        let _keys_to_remove = {
+            let _transition = self.consumer_offset_wrapper.data_version_transition.lock();
+            let keys_to_remove: Vec<CheetahString> = self
+                .consumer_offset_wrapper
+                .offset_table
+                .read()
+                .keys()
+                .filter(|key| predicate(key))
+                .cloned()
+                .collect();
 
-        if keys_to_remove.is_empty() {
-            return;
-        }
+            if keys_to_remove.is_empty() {
+                return;
+            }
 
-        {
             let mut offset_table = self.consumer_offset_wrapper.offset_table.write();
             let mut reset_offset_table = self.consumer_offset_wrapper.reset_offset_table.write();
             let mut pull_offset_table = self.consumer_offset_wrapper.pull_offset_table.write();
@@ -414,10 +444,11 @@ where
                 reset_offset_table.remove(key);
                 pull_offset_table.remove(key);
             }
-        }
+            keys_to_remove
+        };
 
         #[cfg(feature = "rocksdb_store")]
-        if let Err(error) = self.delete_offsets_from_rocksdb(&keys_to_remove) {
+        if let Err(error) = self.delete_offsets_from_rocksdb(&_keys_to_remove) {
             error!("delete consumer offsets from rocksdb failed: {}", error);
         }
     }
@@ -430,7 +461,7 @@ where
         for key in keys {
             rocksdb_config_manager.delete(key.as_str())?;
         }
-        rocksdb_config_manager.set_kv_data_version(self.consumer_offset_wrapper.data_version.as_ref().clone())?;
+        rocksdb_config_manager.set_kv_data_version(self.data_version().as_ref().clone())?;
         self.flush_rocksdb_config_if_needed(rocksdb_config_manager)
     }
 
@@ -476,18 +507,14 @@ where
             return false;
         };
 
-        match rocksdb_config_manager.load_data_version() {
-            Ok(Some(data_version)) => self
-                .consumer_offset_wrapper
-                .data_version
-                .mut_from_ref()
-                .assign_new_one(&data_version),
-            Ok(None) => {}
+        let data_version = match rocksdb_config_manager.load_data_version() {
+            Ok(Some(data_version)) => data_version,
+            Ok(None) => self.data_version().as_ref().clone(),
             Err(error) => {
                 error!("load consumer offset rocksdb dataVersion failed: {}", error);
                 return false;
             }
-        }
+        };
 
         let records = match rocksdb_config_manager.load_data() {
             Ok(records) => records,
@@ -497,7 +524,7 @@ where
             }
         };
 
-        let mut offset_table = self.consumer_offset_wrapper.offset_table.write();
+        let mut decoded_offsets = HashMap::with_capacity(records.len());
         for (key, body) in records {
             let topic_at_group = match String::from_utf8(key) {
                 Ok(value) => CheetahString::from_string(value),
@@ -513,8 +540,15 @@ where
                     return false;
                 }
             };
-            offset_table.insert(topic_at_group, wrapper.offset_table);
+            decoded_offsets.insert(topic_at_group, wrapper.offset_table);
         }
+
+        let _transition = self.consumer_offset_wrapper.data_version_transition.lock();
+        self.consumer_offset_wrapper
+            .offset_table
+            .write()
+            .extend(decoded_offsets);
+        self.consumer_offset_wrapper.data_version.store(Arc::new(data_version));
         true
     }
 
@@ -523,10 +557,14 @@ where
         let Some(rocksdb_config_manager) = &self.rocksdb_config_manager else {
             return Ok(());
         };
-        let records = self
-            .consumer_offset_wrapper
-            .offset_table
-            .read()
+        let (data_version, offset_table) = {
+            let _transition = self.consumer_offset_wrapper.data_version_transition.lock();
+            (
+                self.consumer_offset_wrapper.data_version.load_full(),
+                self.consumer_offset_wrapper.offset_table.read().clone(),
+            )
+        };
+        let records = offset_table
             .iter()
             .map(|(key, offset_table)| {
                 let wrapper = RocksDbOffsetSerializeWrapper {
@@ -542,7 +580,7 @@ where
                 )
             })?;
         rocksdb_config_manager.batch_put_with_wal(&records)?;
-        rocksdb_config_manager.set_kv_data_version(self.consumer_offset_wrapper.data_version.as_ref().clone())?;
+        rocksdb_config_manager.set_kv_data_version(data_version.as_ref().clone())?;
         self.flush_rocksdb_config_if_needed(rocksdb_config_manager)
     }
 
@@ -644,14 +682,22 @@ where
             return;
         }
         let wrapper = SerdeJsonUtils::from_json_str::<ConsumerOffsetWrapper>(json_string).unwrap();
-        if !wrapper.offset_table.read().is_empty() {
-            self.consumer_offset_wrapper
-                .offset_table
-                .write()
-                .extend(wrapper.offset_table.read().clone());
-            let data_version = self.consumer_offset_wrapper.data_version.mut_from_ref();
-            *data_version = wrapper.data_version.as_ref().clone();
-        }
+        let data_version = wrapper.data_version.load_full();
+        let offset_table = wrapper.offset_table.read().clone();
+        let reset_offset_table = wrapper.reset_offset_table.read().clone();
+        let pull_offset_table = wrapper.pull_offset_table.read().clone();
+
+        let _transition = self.consumer_offset_wrapper.data_version_transition.lock();
+        self.consumer_offset_wrapper.offset_table.write().extend(offset_table);
+        self.consumer_offset_wrapper
+            .reset_offset_table
+            .write()
+            .extend(reset_offset_table);
+        self.consumer_offset_wrapper
+            .pull_offset_table
+            .write()
+            .extend(pull_offset_table);
+        self.consumer_offset_wrapper.data_version.store(data_version);
     }
 }
 
@@ -662,18 +708,29 @@ struct RocksDbOffsetSerializeWrapper {
     offset_table: HashMap<i32, i64>,
 }
 
-#[derive(Default, Clone)]
 struct ConsumerOffsetWrapper {
-    data_version: ArcMut<DataVersion>,
+    data_version: ArcSwap<DataVersion>,
+    data_version_transition: parking_lot::Mutex<()>,
     // Pop mode offset table
-    offset_table: Arc<parking_lot::RwLock<HashMap<CheetahString /* topic@group */, HashMap<i32 /* queue id */, i64>>>>,
+    offset_table: parking_lot::RwLock<HashMap<CheetahString /* topic@group */, HashMap<i32 /* queue id */, i64>>>,
     // Pop mode reset offset table
-    reset_offset_table:
-        Arc<parking_lot::RwLock<HashMap<CheetahString /* topic@group */, HashMap<i32 /* queue id */, i64>>>>,
+    reset_offset_table: parking_lot::RwLock<HashMap<CheetahString /* topic@group */, HashMap<i32 /* queue id */, i64>>>,
     //Pull mode offset table
-    pull_offset_table:
-        Arc<parking_lot::RwLock<HashMap<CheetahString /* topic@group */, HashMap<i32 /* queue id */, i64>>>>,
-    version_change_counter: Arc<AtomicI64>,
+    pull_offset_table: parking_lot::RwLock<HashMap<CheetahString /* topic@group */, HashMap<i32 /* queue id */, i64>>>,
+    version_change_counter: AtomicI64,
+}
+
+impl Default for ConsumerOffsetWrapper {
+    fn default() -> Self {
+        Self {
+            data_version: ArcSwap::from_pointee(DataVersion::default()),
+            data_version_transition: parking_lot::Mutex::new(()),
+            offset_table: parking_lot::RwLock::new(HashMap::new()),
+            reset_offset_table: parking_lot::RwLock::new(HashMap::new()),
+            pull_offset_table: parking_lot::RwLock::new(HashMap::new()),
+            version_change_counter: AtomicI64::new(0),
+        }
+    }
 }
 
 impl ConsumerOffsetWrapper {
@@ -695,8 +752,10 @@ impl ConsumerOffsetWrapper {
 
 impl Serialize for ConsumerOffsetWrapper {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let _transition = self.data_version_transition.lock();
         let mut state = serializer.serialize_struct("ConsumerOffsetWrapper", 5)?;
-        state.serialize_field("dataVersion", self.data_version.as_ref())?;
+        let data_version = self.data_version.load_full();
+        state.serialize_field("dataVersion", data_version.as_ref())?;
         state.serialize_field("offsetTable", &*self.offset_table.read())?;
         state.serialize_field("resetOffsetTable", &*self.reset_offset_table.read())?;
         state.serialize_field("pullOffsetTable", &*self.pull_offset_table.read())?;
@@ -794,11 +853,12 @@ impl<'de> Deserialize<'de> for ConsumerOffsetWrapper {
                 let pull_offset_table = pull_offset_table.unwrap_or_default();
 
                 Ok(ConsumerOffsetWrapper {
-                    data_version: ArcMut::new(data_version),
-                    offset_table: Arc::new(parking_lot::RwLock::new(offset_table)),
-                    reset_offset_table: Arc::new(parking_lot::RwLock::new(reset_offset_table)),
-                    pull_offset_table: Arc::new(parking_lot::RwLock::new(pull_offset_table)),
-                    version_change_counter: Arc::new(AtomicI64::new(0)),
+                    data_version: ArcSwap::from_pointee(data_version),
+                    data_version_transition: parking_lot::Mutex::new(()),
+                    offset_table: parking_lot::RwLock::new(offset_table),
+                    reset_offset_table: parking_lot::RwLock::new(reset_offset_table),
+                    pull_offset_table: parking_lot::RwLock::new(pull_offset_table),
+                    version_change_counter: AtomicI64::new(0),
                 })
             }
         }
@@ -814,13 +874,12 @@ mod tests {
     use std::collections::HashSet;
     use std::sync::atomic::Ordering;
     use std::sync::Arc;
+    use std::sync::Barrier;
 
     use cheetah_string::CheetahString;
     use rocketmq_common::common::broker::broker_config::BrokerConfig;
-    #[cfg(feature = "rocksdb_store")]
     use rocketmq_common::common::config_manager::ConfigManager;
-    #[cfg(feature = "rocksdb_store")]
-    use rocketmq_remoting::protocol::data_version_facade::DataVersionExt;
+    use rocketmq_remoting::protocol::DataVersion;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
     use rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore;
 
@@ -925,12 +984,10 @@ mod tests {
         assert_eq!(manager.query_offset(&group, &topic, 0), -1);
         assert!(!manager.has_offset_reset(group.as_str(), topic.as_str(), 0));
         assert!(!manager
-            .offset_table()
-            .read()
+            .offset_table_snapshot()
             .contains_key(&CheetahString::from_static_str("topic-a@group-a")));
         assert!(manager
-            .offset_table()
-            .read()
+            .offset_table_snapshot()
             .contains_key(&CheetahString::from_static_str("topic-a@group-b")));
     }
 
@@ -1014,6 +1071,134 @@ mod tests {
     }
 
     #[test]
+    fn data_version_snapshots_remain_immutable_after_publish() {
+        let manager = new_manager();
+        let initial = manager.data_version();
+
+        manager.advance_data_version();
+        let advanced = manager.data_version();
+
+        assert_eq!(initial.counter(), 0);
+        assert_eq!(advanced.counter(), 1);
+        assert!(!Arc::ptr_eq(&initial, &advanced));
+    }
+
+    #[test]
+    fn concurrent_commits_advance_data_version_once_per_threshold() {
+        const COMMIT_COUNT: usize = 16;
+
+        let mut manager = new_manager();
+        Arc::get_mut(&mut manager.broker_config)
+            .expect("test manager should own its broker config")
+            .consumer_offset_update_version_step = 1;
+        let manager = Arc::new(manager);
+        let barrier = Arc::new(Barrier::new(COMMIT_COUNT));
+        let mut workers = Vec::with_capacity(COMMIT_COUNT);
+
+        for queue_id in 0..COMMIT_COUNT {
+            let manager = manager.clone();
+            let barrier = barrier.clone();
+            workers.push(std::thread::spawn(move || {
+                barrier.wait();
+                manager.commit_offset(
+                    "127.0.0.1:10911".into(),
+                    &CheetahString::from_static_str("group-a"),
+                    &CheetahString::from_static_str("topic-a"),
+                    queue_id as i32,
+                    queue_id as i64,
+                );
+            }));
+        }
+
+        for worker in workers {
+            worker.join().expect("consumer offset commit worker should finish");
+        }
+
+        assert_eq!(manager.data_version().counter(), COMMIT_COUNT as i64);
+        assert_eq!(
+            manager
+                .consumer_offset_wrapper
+                .version_change_counter
+                .load(Ordering::Acquire),
+            COMMIT_COUNT as i64
+        );
+        assert_eq!(manager.offset_table_snapshot()["topic-a@group-a"].len(), COMMIT_COUNT);
+    }
+
+    #[test]
+    fn zero_version_update_step_does_not_panic_or_advance_version() {
+        let mut manager = new_manager();
+        Arc::get_mut(&mut manager.broker_config)
+            .expect("test manager should own its broker config")
+            .consumer_offset_update_version_step = 0;
+
+        manager.commit_offset(
+            "127.0.0.1:10911".into(),
+            &CheetahString::from_static_str("group-a"),
+            &CheetahString::from_static_str("topic-a"),
+            0,
+            1,
+        );
+
+        assert_eq!(manager.data_version().counter(), 0);
+    }
+
+    #[test]
+    fn merge_offsets_from_peer_publishes_complete_version_generation() {
+        let manager = new_manager();
+        let local_group = CheetahString::from_static_str("group-local");
+        let topic = CheetahString::from_static_str("topic-a");
+        manager.commit_offset("127.0.0.1:10911".into(), &local_group, &topic, 0, 7);
+
+        let mut remote_offsets = HashMap::new();
+        remote_offsets.insert(
+            CheetahString::from_static_str("topic-a@group-remote"),
+            HashMap::from([(0, 19)]),
+        );
+        let remote_version = DataVersion::with_values(3, 4, 5);
+        manager.merge_offsets_from_peer(remote_offsets, remote_version.clone());
+
+        assert_eq!(manager.query_offset(&local_group, &topic, 0), 7);
+        assert_eq!(
+            manager.query_offset(&CheetahString::from_static_str("group-remote"), &topic, 0),
+            19
+        );
+        assert_eq!(manager.data_version().as_ref(), &remote_version);
+    }
+
+    #[test]
+    fn json_round_trip_preserves_version_reset_and_pull_tables_without_committed_offsets() {
+        let manager = new_manager();
+        let group = CheetahString::from_static_str("group-a");
+        let topic = CheetahString::from_static_str("topic-a");
+        manager.assign_reset_offset(&topic, &group, 0, 5);
+        manager.commit_pull_offset(
+            std::net::SocketAddr::from(([127, 0, 0, 1], 10911)),
+            &group,
+            &topic,
+            0,
+            9,
+        );
+        manager.advance_data_version();
+
+        let encoded = manager.encode();
+        let restored = new_manager();
+        restored.decode(encoded.as_str());
+
+        assert_eq!(restored.data_version().counter(), 1);
+        assert_eq!(restored.query_then_erase_reset_offset(&topic, &group, 0), Some(5));
+        assert_eq!(
+            restored
+                .consumer_offset_wrapper
+                .pull_offset_table
+                .read()
+                .get("topic-a@group-a")
+                .and_then(|offsets| offsets.get(&0)),
+            Some(&9)
+        );
+    }
+
+    #[test]
     fn query_offsets_returns_full_queue_map() {
         let manager = new_manager();
         let group = CheetahString::from_static_str("group-a");
@@ -1056,7 +1241,7 @@ mod tests {
 
         manager.commit_offset("127.0.0.1:10911".into(), &group, &topic, 0, 12);
         manager.commit_offset("127.0.0.1:10911".into(), &group, &topic, 1, 24);
-        manager.data_version().mut_from_ref().next_version();
+        manager.advance_data_version();
         manager.persist();
         drop(manager);
 
@@ -1109,7 +1294,7 @@ mod tests {
         let topic = CheetahString::from_static_str("topic-a");
 
         manager.commit_offset("127.0.0.1:10911".into(), &group, &topic, 0, 12);
-        manager.data_version().mut_from_ref().next_version();
+        manager.advance_data_version();
         manager.persist();
         manager.clean_offset_by_group(&group);
         drop(manager);

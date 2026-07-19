@@ -194,13 +194,9 @@ where
                     Ok(offset_wrapper) => {
                         if let Some(offset_wrapper) = offset_wrapper {
                             let consumer_offset_manager = self.broker_runtime_inner.consumer_offset_manager();
+                            let data_version = offset_wrapper.data_version().clone();
                             consumer_offset_manager
-                                .data_version()
-                                .assign_new_one(offset_wrapper.data_version());
-                            let offset_table = consumer_offset_manager.offset_table();
-                            let mut consumer_offset_table = offset_table.write();
-                            consumer_offset_table.extend(offset_wrapper.offset_table());
-                            drop(consumer_offset_table);
+                                .merge_offsets_from_peer(offset_wrapper.offset_table(), data_version);
                             consumer_offset_manager.persist();
                             info!("Update slave consumer offset from master, {}", master_addr);
                         } else {

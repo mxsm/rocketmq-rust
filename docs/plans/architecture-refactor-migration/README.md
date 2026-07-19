@@ -453,6 +453,12 @@ start/shutdown/restart，停止状态拒绝新挂起并清空既有请求，dead
 重入同一 Tokio RwLock。实际快照降至 289 production/706 occurrence、162 test/458 occurrence，Broker production 降至
 167/398；compatibility 保持 14/40。总进度仍为 75/82，下一子切片 M11-12au 处理 Broker ConsumerOffsetManager
 ownership，M11-12 父工作包未完成。
+Broker ConsumerOffsetManager ownership 随 Issue #8389 将 `DataVersion` 改为 `ArcSwap` 不可变代际，并以单一
+transition 串行 offset 表写入、版本计数和完整发布；`fetch_add` 返回值精确决定更新阈值，零步长不再除零 panic。
+主从同步改用窄 merge API，JSON/RocksDB 在完整解析后一次发布，reset/pull 表可在主表为空时恢复；manager/table
+Clone 与可写 table lock escape、无用 runtime mutable accessor 已删除。实际快照降至 287 production/699 occurrence、
+160 test/455 occurrence，Broker production 降至 165/391；compatibility 保持 14/40。总进度仍为 75/82，下一
+子切片 M11-12av 处理 Broker `ScheduleMessageService` 内部状态 ownership，M11-12 父工作包未完成。
 
 ### 9.3 证据目录
 
