@@ -638,7 +638,8 @@ M09-04 再删除 MCP 未使用的 Auth/Error direct edges，并把承担 owned t
   - [x] M11-12t Client internal Admin owner：`MQClientInstance` 改持普通 `Arc<MQAdminImpl>`，client handle 以 `OnceLock` 一次绑定，Admin receiver 收窄为 `&self`，删除 Producer Admin-only `mut_from_ref`
   - [x] M11-12u Client route registry owner：route refresh/application、route query、broker lookup 与 Producer 注册入口收窄为 `&self`，Producer 路由/heartbeat/注册路径删除 4 个 safe `mut_from_ref`，仅保留 lifecycle start 可变入口
   - [x] M11-12v Client OffsetStore owner：Push/Lite facade、实现、rebalance 与 callback 改持普通 `Arc<OffsetStore>`；Remote/Local persistence receiver 收窄为 `&self`，Local task handle 以 lifecycle mutex 串行并在 await 前取出
-  - [x] [`M11-12 进度证据`](phase-3-production-readiness/11-soundness-closure-progress.md) 记录父 Issue #8292、子切片 Issue #8293/#8295/#8297/#8299/#8301/#8303/#8307/#8309/#8311/#8313/#8315/#8317/#8319/#8321/#8323/#8325/#8327/#8329/#8331/#8333/#8335/#8337 与每次真实下降
+  - [x] M11-12w Client accumulator batch producer owner：`MessageAccumulation` 直接持有 owned `DefaultMQProducer` clone；flush 在 batch mutex 内克隆、锁外发送，删除 accumulator 文件全部 ArcMut 构造、类型与 import
+  - [x] [`M11-12 进度证据`](phase-3-production-readiness/11-soundness-closure-progress.md) 记录父 Issue #8292、子切片 Issue #8293/#8295/#8297/#8299/#8301/#8303/#8307/#8309/#8311/#8313/#8315/#8317/#8319/#8321/#8323/#8325/#8327/#8329/#8331/#8333/#8335/#8337/#8339 与每次真实下降
   - [x] Issue #8295 后累计降至 711 production/2,029 occurrence；Controller 配置债务清零但其他 Controller owner 仍有 31 条 production 债务
   - [x] Issue #8297 后实际快照降至 697 production/1,986 occurrence；Controller 降至 17 条/51 occurrence，Manager/heartbeat/embedded-NameServer owner 已退出 `ArcMut`
   - [x] Issue #8299 后实际快照降至 690 production/1,961 occurrence；Controller 降至 10 条/26 occurrence，Raft/OpenRaft owner 与 Manager Raft `mut_from_ref` 已清零
@@ -661,7 +662,8 @@ M09-04 再删除 MCP 未使用的 Auth/Error direct edges，并把承担 owned t
   - [x] Issue #8333 后 production 条目保持 420，occurrence 降至 1,263；Client 为 103/371，internal Admin owner 与 11 个 Producer Admin-only `mut_from_ref` 退出共享边界
   - [x] Issue #8335 后 production 条目保持 420，occurrence 降至 1,259；Client 为 103/367，Producer route/heartbeat/registration 的 4 个 `mut_from_ref` 退出共享边界，仅余 lifecycle start
   - [x] Issue #8337 后实际快照降至 418 production/1,224 occurrence；Client 降至 101/332，Push/Lite OffsetStore owner 与 7 个 offset persistence/shutdown `mut_from_ref` 退出共享边界
-  - [ ] M11-12w 及后续：Client 其余 MQClientInstance/Producer/Push/Lite owner、Broker、Store/HA、compatibility 删除、stable/Miri/Loom/soak/SLO 与同一候选快照 Gate 仍待完成
+  - [x] Issue #8339 后实际快照降至 415 production/1,219 occurrence；Client 降至 98/327，ProduceAccumulator production/test ArcMut 债务清零
+  - [ ] M11-12x 及后续：Client 其余 MQClientInstance/Producer/Push/Lite owner、Broker、Store/HA、compatibility 删除、stable/Miri/Loom/soak/SLO 与同一候选快照 Gate 仍待完成
   - [ ] 总进度仍为 75/82；本子切片不提前计作完成工作包，M10/Kind-K3d/container dynamic/HUMAN Gate 保持开放
 - [ ] 对应任务文档的 Exit Checklist 全部通过
 

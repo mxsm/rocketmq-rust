@@ -39,7 +39,6 @@ use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQError;
-use rocketmq_rust::ArcMut;
 use serde::Serialize;
 use tokio::sync::mpsc;
 use tokio::sync::watch;
@@ -497,8 +496,7 @@ impl ProduceAccumulator {
         match self.sync_send_batchs.entry(aggregate_key.clone()) {
             dashmap::mapref::entry::Entry::Occupied(entry) => entry.get().clone(),
             dashmap::mapref::entry::Entry::Vacant(entry) => {
-                let accumulation =
-                    MessageAccumulation::new(aggregate_key.clone(), ArcMut::new(default_mq_producer.clone()));
+                let accumulation = MessageAccumulation::new(aggregate_key.clone(), default_mq_producer.clone());
                 let create_time = accumulation.create_time;
                 let deadline_ms = accumulation.deadline_ms(hold_ms as u64);
                 let batch = Arc::new(Mutex::new(accumulation));
@@ -519,8 +517,7 @@ impl ProduceAccumulator {
         match self.async_send_batchs.entry(aggregate_key.clone()) {
             dashmap::mapref::entry::Entry::Occupied(entry) => entry.get().clone(),
             dashmap::mapref::entry::Entry::Vacant(entry) => {
-                let accumulation =
-                    MessageAccumulation::new(aggregate_key.clone(), ArcMut::new(default_mq_producer.clone()));
+                let accumulation = MessageAccumulation::new(aggregate_key.clone(), default_mq_producer.clone());
                 let create_time = accumulation.create_time;
                 let deadline_ms = accumulation.deadline_ms(hold_ms as u64);
                 let batch = Arc::new(Mutex::new(accumulation));
@@ -943,7 +940,7 @@ mod tests {
     fn message_accumulation_ready_to_send_requires_size_over_hold_size_like_java() {
         let producer = DefaultMQProducer::default();
         let aggregate_key = AggregateKey::new(CheetahString::from("test-topic"), None, true, None);
-        let mut accumulation = MessageAccumulation::new(aggregate_key, ArcMut::new(producer));
+        let mut accumulation = MessageAccumulation::new(aggregate_key, producer);
         let message = Message::builder()
             .topic("test-topic")
             .body_slice(b"hello")
@@ -959,7 +956,7 @@ mod tests {
     fn message_accumulation_add_returns_index_and_flush_decision() {
         let producer = DefaultMQProducer::default();
         let aggregate_key = AggregateKey::new(CheetahString::from("test-topic"), None, true, None);
-        let mut accumulation = MessageAccumulation::new(aggregate_key, ArcMut::new(producer));
+        let mut accumulation = MessageAccumulation::new(aggregate_key, producer);
         let first = Message::builder()
             .topic("test-topic")
             .body_slice(b"abc")
@@ -988,7 +985,7 @@ mod tests {
     fn message_accumulation_closing_state_is_claimed_once() {
         let producer = DefaultMQProducer::default();
         let aggregate_key = AggregateKey::new(CheetahString::from("test-topic"), None, true, None);
-        let accumulation = MessageAccumulation::new(aggregate_key, ArcMut::new(producer));
+        let accumulation = MessageAccumulation::new(aggregate_key, producer);
 
         assert_eq!(accumulation.state(), BatchState::Open);
         assert!(accumulation.try_mark_closing());
@@ -1002,7 +999,7 @@ mod tests {
     fn close_pending_batch_does_not_release_batch_already_claimed_for_send() {
         let producer = DefaultMQProducer::default();
         let aggregate_key = AggregateKey::new(CheetahString::from("test-topic"), None, true, None);
-        let mut accumulation = MessageAccumulation::new(aggregate_key, ArcMut::new(producer));
+        let mut accumulation = MessageAccumulation::new(aggregate_key, producer);
         let message = Message::builder()
             .topic("test-topic")
             .body_slice(b"hello")
@@ -1031,7 +1028,7 @@ mod tests {
             true,
             Some(CheetahString::from("TagA")),
         );
-        let mut accumulation = MessageAccumulation::new(aggregate_key, ArcMut::new(producer));
+        let mut accumulation = MessageAccumulation::new(aggregate_key, producer);
         let first = Message::builder()
             .topic("test-topic")
             .tags("TagA")
@@ -1139,8 +1136,7 @@ mod tests {
     async fn shutdown_async_releases_pending_async_batch_hold_size_and_callbacks() {
         let accumulator = ProduceAccumulator::new("accumulator-shutdown-release-test");
         let aggregate_key = AggregateKey::new(CheetahString::from("test-topic"), None, true, None);
-        let mut accumulation =
-            MessageAccumulation::new(aggregate_key.clone(), ArcMut::new(DefaultMQProducer::default()));
+        let mut accumulation = MessageAccumulation::new(aggregate_key.clone(), DefaultMQProducer::default());
         let callback_invoked = Arc::new(AtomicBool::new(false));
         let callback_invoked_for_callback = callback_invoked.clone();
         let callback: ArcSendCallback = Arc::new(move |_result: Option<&SendResult>, error: Option<&RocketMQError>| {
@@ -1418,7 +1414,7 @@ impl Hash for AggregateKey {
 }
 
 struct MessageAccumulation {
-    default_mq_producer: ArcMut<DefaultMQProducer>,
+    default_mq_producer: DefaultMQProducer,
     messages: Vec<Box<dyn MessageTrait + Send + Sync + 'static>>,
     send_callbacks: Vec<ArcSendCallback>,
     keys: HashSet<String>,
@@ -1496,7 +1492,7 @@ impl PartialOrd for GuardDeadline {
 }
 
 impl MessageAccumulation {
-    pub fn new(aggregate_key: AggregateKey, default_mq_producer: ArcMut<DefaultMQProducer>) -> Self {
+    pub fn new(aggregate_key: AggregateKey, default_mq_producer: DefaultMQProducer) -> Self {
         Self {
             default_mq_producer,
             messages: vec![],
