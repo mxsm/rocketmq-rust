@@ -2260,7 +2260,7 @@ impl BrokerRuntime {
             broker_request_processor.set_auth_runtime(auth_runtime.clone());
         }
         broker_request_processor.set_broker_fast_failure(self.inner.broker_fast_failure.clone());
-        let send_message_processor = ArcMut::new(send_message_processor);
+        let send_message_processor = Arc::new(send_message_processor);
 
         broker_request_processor.register_processor(
             RequestCode::SendMessage as i32,
@@ -2336,7 +2336,7 @@ impl BrokerRuntime {
         );
 
         //ReplyMessageProcessor
-        let reply_message_processor = ArcMut::new(reply_message_processor);
+        let reply_message_processor = Arc::new(reply_message_processor);
         broker_request_processor.register_processor(
             RequestCode::SendReplyMessage as i32,
             BrokerProcessorType::Reply(reply_message_processor.clone()),
@@ -2439,7 +2439,7 @@ impl BrokerRuntime {
         //EndTransactionProcessor
         broker_request_processor.register_processor(
             RequestCode::EndTransaction as i32,
-            BrokerProcessorType::EndTransaction(ArcMut::new(EndTransactionProcessor::new(
+            BrokerProcessorType::EndTransaction(Arc::new(EndTransactionProcessor::new(
                 self.inner.transactional_message_service.as_ref().unwrap().clone(),
                 self.inner.clone(),
             ))),

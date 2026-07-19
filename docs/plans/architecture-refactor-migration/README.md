@@ -485,6 +485,12 @@ snapshot，释放锁后才取消息和写盘，失败回退路径也不再嵌套
 occurrence、156 test/451 occurrence，Broker production 降至 152/326，transaction 子树从 13/19 降至 5/8；
 compatibility 保持 14/40。总进度仍为 75/82，下一子切片 M11-12ay 继续处理 Broker 其他 processor 及
 transaction bridge/listener carrier，M11-12 父工作包未完成。
+Broker transaction processor root ownership 随 Issue #8398 将 send/reply/end-transaction processor variant 与 Broker
+startup root 改为标准 `Arc`；共享入口为每个请求复制轻量 capability 句柄，保留并发执行且不引入 processor 级全局 mutex。
+注册完成后只读的 request table/default processor 改用标准 `Arc`，启动期注册通过 copy-on-write 完成。实际快照降至
+273 production/624 occurrence，test 保持 156/451，Broker production 降至 151/316；compatibility 保持 14/40。
+总进度仍为 75/82，下一子切片 M11-12az 继续拆分 transaction bridge/listener capability 与其他 Broker owner，
+M11-12 父工作包未完成。
 
 ### 9.3 证据目录
 

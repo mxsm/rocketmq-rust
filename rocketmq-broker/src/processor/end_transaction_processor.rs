@@ -51,12 +51,46 @@ pub struct EndTransactionProcessor<TM, MS: MessageStore> {
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
+impl<TM, MS: MessageStore> Clone for EndTransactionProcessor<TM, MS> {
+    fn clone(&self) -> Self {
+        Self {
+            transactional_message_service: self.transactional_message_service.clone(),
+            broker_runtime_inner: self.broker_runtime_inner.clone(),
+        }
+    }
+}
+
 impl<TM, MS> RequestProcessor for EndTransactionProcessor<TM, MS>
 where
     TM: TransactionalMessageService,
     MS: MessageStore,
 {
     async fn process_request(
+        &mut self,
+        channel: Channel,
+        ctx: ConnectionHandlerContext,
+        request: &mut RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        self.process_request_mut(channel, ctx, request).await
+    }
+}
+
+impl<TM, MS> EndTransactionProcessor<TM, MS>
+where
+    TM: TransactionalMessageService,
+    MS: MessageStore,
+{
+    pub async fn process_request_shared(
+        &self,
+        channel: Channel,
+        ctx: ConnectionHandlerContext,
+        request: &mut RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let mut processor = self.clone();
+        processor.process_request_mut(channel, ctx, request).await
+    }
+
+    async fn process_request_mut(
         &mut self,
         channel: Channel,
         ctx: ConnectionHandlerContext,

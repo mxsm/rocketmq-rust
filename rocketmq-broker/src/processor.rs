@@ -78,7 +78,7 @@ pub(crate) mod reply_message_processor;
 pub(crate) mod send_message_processor;
 
 pub enum BrokerProcessorType<MS: MessageStore, TS> {
-    Send(ArcMut<SendMessageProcessor<MS, TS>>),
+    Send(Arc<SendMessageProcessor<MS, TS>>),
     Pull(Arc<PullMessageProcessor<MS>>),
     Peek(ArcMut<PeekMessageProcessor<MS>>),
     Pop(Arc<PopMessageProcessor<MS>>),
@@ -87,7 +87,7 @@ pub enum BrokerProcessorType<MS: MessageStore, TS> {
     ChangeInvisible(ArcMut<ChangeInvisibleTimeProcessor<MS>>),
     Notification(Arc<NotificationProcessor<MS>>),
     PollingInfo(ArcMut<PollingInfoProcessor<MS>>),
-    Reply(ArcMut<ReplyMessageProcessor<MS, TS>>),
+    Reply(Arc<ReplyMessageProcessor<MS, TS>>),
     Recall(ArcMut<RecallMessageProcessor<MS>>),
     QueryMessage(ArcMut<QueryMessageProcessor<MS>>),
     ClientManage(ArcMut<ClientManageProcessor<MS>>),
@@ -95,7 +95,7 @@ pub enum BrokerProcessorType<MS: MessageStore, TS> {
     QueryAssignment(ArcMut<QueryAssignmentProcessor<MS>>),
     LiteManager(ArcMut<LiteManagerProcessor<MS>>),
     LiteSubscriptionCtl(ArcMut<LiteSubscriptionCtlProcessor<MS>>),
-    EndTransaction(ArcMut<EndTransactionProcessor<TS, MS>>),
+    EndTransaction(Arc<EndTransactionProcessor<TS, MS>>),
     AdminBroker(ArcMut<AdminBrokerProcessor<MS>>),
 }
 
@@ -170,7 +170,7 @@ where
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         match self {
-            BrokerProcessorType::Send(processor) => processor.process_request(channel, ctx, request).await,
+            BrokerProcessorType::Send(processor) => processor.process_request_shared(channel, ctx, request).await,
             BrokerProcessorType::Pull(processor) => processor.process_request_shared(channel, ctx, request).await,
             BrokerProcessorType::Peek(processor) => processor.process_request(channel, ctx, request).await,
             BrokerProcessorType::Pop(processor) => processor.process_request_shared(channel, ctx, request).await,
@@ -181,7 +181,7 @@ where
                 processor.process_request_shared(channel, ctx, request).await
             }
             BrokerProcessorType::PollingInfo(processor) => processor.process_request(channel, ctx, request).await,
-            BrokerProcessorType::Reply(processor) => processor.process_request(channel, ctx, request).await,
+            BrokerProcessorType::Reply(processor) => processor.process_request_shared(channel, ctx, request).await,
             BrokerProcessorType::Recall(processor) => processor.process_request(channel, ctx, request).await,
             BrokerProcessorType::QueryMessage(processor) => processor.process_request(channel, ctx, request).await,
             BrokerProcessorType::ClientManage(processor) => processor.process_request(channel, ctx, request).await,
@@ -191,7 +191,9 @@ where
             BrokerProcessorType::LiteSubscriptionCtl(processor) => {
                 processor.process_request(channel, ctx, request).await
             }
-            BrokerProcessorType::EndTransaction(processor) => processor.process_request(channel, ctx, request).await,
+            BrokerProcessorType::EndTransaction(processor) => {
+                processor.process_request_shared(channel, ctx, request).await
+            }
             BrokerProcessorType::AdminBroker(processor) => processor.process_request(channel, ctx, request).await,
         }
     }
@@ -224,8 +226,8 @@ where
 pub(crate) type RequestCodeType = i32;
 
 pub struct BrokerRequestProcessor<MS: MessageStore, TS> {
-    process_table: ArcMut<HashMap<RequestCodeType, BrokerProcessorType<MS, TS>>>,
-    default_request_processor: Option<ArcMut<BrokerProcessorType<MS, TS>>>,
+    process_table: Arc<HashMap<RequestCodeType, BrokerProcessorType<MS, TS>>>,
+    default_request_processor: Option<Arc<BrokerProcessorType<MS, TS>>>,
     auth_runtime: Option<Arc<AuthRuntime>>,
     broker_fast_failure: Option<BrokerFastFailure>,
     request_task_group: Option<TaskGroup>,
@@ -238,7 +240,7 @@ where
 {
     pub fn new() -> Self {
         Self {
-            process_table: ArcMut::new(HashMap::new()),
+            process_table: Arc::new(HashMap::new()),
             default_request_processor: None,
             auth_runtime: None,
             broker_fast_failure: None,
@@ -247,11 +249,11 @@ where
     }
 
     pub fn register_processor(&mut self, request_code: RequestCodeType, processor: BrokerProcessorType<MS, TS>) {
-        self.process_table.insert(request_code, processor);
+        Arc::make_mut(&mut self.process_table).insert(request_code, processor);
     }
 
     pub fn register_default_processor(&mut self, processor: BrokerProcessorType<MS, TS>) {
-        self.default_request_processor = Some(ArcMut::new(processor));
+        self.default_request_processor = Some(Arc::new(processor));
     }
 
     pub fn set_auth_runtime(&mut self, auth_runtime: Arc<AuthRuntime>) {
@@ -674,6 +676,21 @@ mod tests {
             true,
             true
         ));
+    }
+
+    #[test]
+    fn transaction_processor_roots_and_registry_use_standard_arc() {
+        let processor_source = include_str!("processor.rs");
+        let runtime_source = include_str!("broker_runtime.rs");
+
+        assert!(processor_source.contains("process_table: Arc<HashMap"));
+        assert!(processor_source.contains("default_request_processor: Option<Arc<"));
+        assert!(!processor_source.contains(concat!("Send(ArcMut<", "SendMessageProcessor")));
+        assert!(!processor_source.contains(concat!("Reply(ArcMut<", "ReplyMessageProcessor")));
+        assert!(!processor_source.contains(concat!("EndTransaction(ArcMut<", "EndTransactionProcessor")));
+        assert!(!runtime_source.contains(concat!("ArcMut::new(", "send_message_processor")));
+        assert!(!runtime_source.contains(concat!("ArcMut::new(", "reply_message_processor")));
+        assert!(!runtime_source.contains(concat!("EndTransaction(ArcMut::new(", "EndTransactionProcessor")));
     }
 
     #[tokio::test]

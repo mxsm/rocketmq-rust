@@ -91,12 +91,51 @@ pub struct ReplyMessageProcessor<MS: MessageStore, TS> {
     inner: Inner<MS, TS>,
 }
 
+impl<MS: MessageStore, TS> Clone for ReplyMessageProcessor<MS, TS> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: Inner {
+                send_message_hook_vec: self.inner.send_message_hook_vec.clone(),
+                consume_message_hook_vec: self.inner.consume_message_hook_vec.clone(),
+                broker_to_client: self.inner.broker_to_client.clone(),
+                transactional_message_service: self.inner.transactional_message_service.clone(),
+                broker_runtime_inner: self.inner.broker_runtime_inner.clone(),
+            },
+        }
+    }
+}
+
 impl<MS, TS> RequestProcessor for ReplyMessageProcessor<MS, TS>
 where
     MS: MessageStore,
     TS: TransactionalMessageService,
 {
     async fn process_request(
+        &mut self,
+        channel: Channel,
+        ctx: ConnectionHandlerContext,
+        request: &mut RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        self.process_request_mut(channel, ctx, request).await
+    }
+}
+
+impl<MS, TS> ReplyMessageProcessor<MS, TS>
+where
+    MS: MessageStore,
+    TS: TransactionalMessageService,
+{
+    pub async fn process_request_shared(
+        &self,
+        channel: Channel,
+        ctx: ConnectionHandlerContext,
+        request: &mut RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let mut processor = self.clone();
+        processor.process_request_mut(channel, ctx, request).await
+    }
+
+    async fn process_request_mut(
         &mut self,
         channel: Channel,
         ctx: ConnectionHandlerContext,
