@@ -934,55 +934,55 @@
           "id": "3e9cf8ecdb4471e2f5c043f5",
           "fingerprint": "d3c8e7e66f108e9bc0a99e0f",
           "item": "fn phase3_send_message_processor_writes_to_local_store",
-          "line": 7200
+          "line": 7199
         },
         {
           "id": "cd355c13f4ab1f843807f393",
           "fingerprint": "d3c8e7e66f108e9bc0a99e0f",
           "item": "fn phase3_consumer_send_msg_back_writes_retry_delay_message",
-          "line": 7273
+          "line": 7272
         },
         {
           "id": "e9bcd3faaa3763567bb762df",
           "fingerprint": "d3c8e7e66f108e9bc0a99e0f",
           "item": "fn phase3_topic_config_admin_processor_returns_decodable_bodies",
-          "line": 7373
+          "line": 7372
         },
         {
           "id": "ec2343bcb7cf8f29bdc8f896",
           "fingerprint": "d3c8e7e66f108e9bc0a99e0f",
           "item": "fn phase4_consumer_offset_processors_round_trip_committed_offset",
-          "line": 7473
+          "line": 7472
         },
         {
           "id": "fbf728a698328d5502da4e9a",
           "fingerprint": "d3c8e7e66f108e9bc0a99e0f",
           "item": "fn phase5_admin_config_runtime_stats_and_empty_connection_queries_are_compatible",
-          "line": 7751
+          "line": 7750
         },
         {
           "id": "05647a770e7a227637cf743e",
           "fingerprint": "d3c8e7e66f108e9bc0a99e0f",
           "item": "fn phase6_store_offset_and_consume_queue_queries_return_decodable_models",
-          "line": 7901
+          "line": 7900
         },
         {
           "id": "21c69b7487ceefd61305dd26",
           "fingerprint": "8467b8e74a44e2436129e395",
           "item": "fn run_metadata_migration_to_rocksdb_case",
-          "line": 9472
+          "line": 9471
         },
         {
           "id": "a3c29627e8d7d7e68fa8faae",
           "fingerprint": "e21707b42c3ee99cb2a5e67d",
           "item": "fn apply_message_store_role_change_promotes_store_to_master",
-          "line": 9606
+          "line": 9605
         },
         {
           "id": "4ff61cc699c2c34d1b75fdec",
           "fingerprint": "e21707b42c3ee99cb2a5e67d",
           "item": "fn apply_message_store_role_change_demotes_store_to_slave",
-          "line": 9639
+          "line": 9638
         }
       ],
       "owner": "broker",
@@ -1511,12 +1511,6 @@
           "fingerprint": "931bd603377355c5e604a759",
           "item": "fn set_parent_topic_lite_expiration",
           "line": 6386
-        },
-        {
-          "id": "741868e10a001b222400dd90",
-          "fingerprint": "fc2788313c97067fb0425e87",
-          "item": "fn seed_lite_topic_publish_route",
-          "line": 6420
         }
       ],
       "owner": "broker",
@@ -7488,186 +7482,6 @@
       "adr": "ADR-002"
     },
     {
-      "identity": "39c7a1fc0cd67680a7964016",
-      "path": "rocketmq-broker/src/topic/manager/topic_queue_mapping_manager.rs",
-      "symbol": "*",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "5c56b7a9c75e139e4ae0986f",
-          "fingerprint": "699061f925cdba4f87c8a0da",
-          "item": "mod tests",
-          "line": 465
-        }
-      ],
-      "owner": "broker",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "db72268ca0ab2013e3e88b75",
-      "path": "rocketmq-broker/src/topic/manager/topic_queue_mapping_manager.rs",
-      "symbol": "ArcMut",
-      "kind": "constructor",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "867efd0facbac32f387f044c",
-          "fingerprint": "eb8de2276673eaf6999999ea",
-          "item": "fn update_topic_queue_mapping",
-          "line": 219
-        },
-        {
-          "id": "8b8271b2e461ef5cc257c1e2",
-          "fingerprint": "703b155d0a20a17736ec745a",
-          "item": "fn replace_cleaned_queue_items",
-          "line": 278
-        },
-        {
-          "id": "5e775ef4fdcdc352f588f00a",
-          "fingerprint": "703b155d0a20a17736ec745a",
-          "item": "fn remove_cleaned_hosted_queues",
-          "line": 327
-        }
-      ],
-      "owner": "broker",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "0ded17a4f96a8b1338dbdc8d",
-      "path": "rocketmq-broker/src/topic/manager/topic_queue_mapping_manager.rs",
-      "symbol": "ArcMut",
-      "kind": "constructor",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "72d047a5fcf662524eee39a9",
-          "fingerprint": "f44ef742724ff78263c7618f",
-          "item": "fn get_topic_queue_mapping_returns_mapping_for_existing_topic",
-          "line": 539
-        },
-        {
-          "id": "a1a24bcaf63250354c70da27",
-          "fingerprint": "f44ef742724ff78263c7618f",
-          "item": "fn delete_removes_existing_topic",
-          "line": 551
-        },
-        {
-          "id": "95d508b3b5de6464a052194e",
-          "fingerprint": "da4b209751eae3bb39718b14",
-          "item": "fn replace_cleaned_queue_items_rechecks_expected_items",
-          "line": 604
-        },
-        {
-          "id": "058f72f79425019f142df296",
-          "fingerprint": "da4b209751eae3bb39718b14",
-          "item": "fn remove_cleaned_hosted_queues_skips_when_current_items_changed",
-          "line": 647
-        },
-        {
-          "id": "16a01e5a1435d8c48f809712",
-          "fingerprint": "da4b209751eae3bb39718b14",
-          "item": "fn clean_mutation_skips_when_epoch_or_broker_mismatch",
-          "line": 694
-        },
-        {
-          "id": "d00f275074cf9aeb52b0dcb4",
-          "fingerprint": "da4b209751eae3bb39718b14",
-          "item": "fn remove_cleaned_hosted_queues_deletes_expected_qid_without_bumping_version",
-          "line": 747
-        }
-      ],
-      "owner": "broker",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "8200714f1e73902f2b2bcbcf",
-      "path": "rocketmq-broker/src/topic/manager/topic_queue_mapping_manager.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "07f567629f353b3682b18e91",
-          "fingerprint": "40dcd3801161608756f341df",
-          "item": "<module>",
-          "line": 40
-        }
-      ],
-      "owner": "broker",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "a058661b9b4f4dc0f735c982",
-      "path": "rocketmq-broker/src/topic/manager/topic_queue_mapping_manager.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "eb2134e056b1554a962a122f",
-          "fingerprint": "e3f79ff44d85886c8ff26fce",
-          "item": "struct TopicQueueMappingManager",
-          "line": 50
-        },
-        {
-          "id": "d7c4912d7b75d926e8720055",
-          "fingerprint": "c8652c09d512c30aefaf2b19",
-          "item": "fn get_topic_queue_mapping",
-          "line": 197
-        }
-      ],
-      "owner": "broker",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "485a890c880f757c68c02de2",
-      "path": "rocketmq-broker/src/topic/manager/topic_route_info_manager.rs",
-      "symbol": "ArcMut",
-      "kind": "constructor",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "6e4987e1015a0fb3e6993dd4",
-          "fingerprint": "18835d158daabf3d329402fa",
-          "item": "fn new",
-          "line": 75
-        },
-        {
-          "id": "6b75f566fb194d9409f21018",
-          "fingerprint": "41740f08e6fc18e8dd0d2aeb",
-          "item": "fn new",
-          "line": 76
-        },
-        {
-          "id": "e6c863adbe25bb6fab315d98",
-          "fingerprint": "a4e644e91e56a7d6923f8c32",
-          "item": "fn new",
-          "line": 77
-        },
-        {
-          "id": "e0ea561348f7c1d893b43653",
-          "fingerprint": "f752bbb635a562e1db2c5851",
-          "item": "fn new",
-          "line": 78
-        }
-      ],
-      "owner": "broker",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
       "identity": "078d7b56d593baeb24b7525c",
       "path": "rocketmq-broker/src/topic/manager/topic_route_info_manager.rs",
       "symbol": "ArcMut",
@@ -7678,7 +7492,7 @@
           "id": "324ddfe2023e4f39b847b1c2",
           "fingerprint": "a18476b4cd9b006627cbf6ca",
           "item": "<module>",
-          "line": 30
+          "line": 31
         }
       ],
       "owner": "broker",
@@ -7694,87 +7508,20 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "ec59d1697ee9c14859370a2d",
-          "fingerprint": "7330763dd4cc3cb43f2ff203",
-          "item": "struct TopicRouteInfoManager",
-          "line": 46
-        },
-        {
-          "id": "f55b3139a383e47f28ee86c0",
-          "fingerprint": "6ad5bc76a129e7681ad5c6c7",
-          "item": "struct TopicRouteInfoManager",
-          "line": 48
-        },
-        {
-          "id": "200327696bbc467ba7dd3300",
-          "fingerprint": "663e09ded3f099dd2f77a922",
-          "item": "struct TopicRouteInfoManager",
-          "line": 49
-        },
-        {
-          "id": "db304471f7949401de1f8eaf",
-          "fingerprint": "bbf292ebcf96cdb6e9e25b56",
-          "item": "struct TopicRouteInfoManager",
-          "line": 50
-        },
-        {
           "id": "465b44de9a8596b5b9233bd1",
           "fingerprint": "9e6c94bee503cc16588ad18c",
           "item": "struct TopicRouteInfoManager",
-          "line": 51
+          "line": 52
         },
         {
           "id": "1c3bb3e722c472b0b9542b35",
           "fingerprint": "4e347ab555e4793756c33dff",
           "item": "fn new",
-          "line": 72
+          "line": 73
         }
       ],
       "owner": "broker",
       "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "06108b436e195283a71b19b0",
-      "path": "rocketmq-broker/src/topic/manager/topic_route_info_manager.rs",
-      "symbol": "mut_from_ref",
-      "kind": "mut_from_ref_call",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "18d34c075c0bf08e6a5e86de",
-          "fingerprint": "fdf612572bdf9f299c09f372",
-          "item": "fn clean_none_route_topic",
-          "line": 231
-        },
-        {
-          "id": "d91dbeae194dd13456099eb8",
-          "fingerprint": "4e1166118cd5d7f93aa849d5",
-          "item": "fn update_subscribe_info_table",
-          "line": 251
-        },
-        {
-          "id": "102031d8a0507f5b1979bc11",
-          "fingerprint": "70cc82689110bb25394e009c",
-          "item": "fn update_topic_route_table",
-          "line": 271
-        },
-        {
-          "id": "b398c18f5a296ebbf1aadee1",
-          "fingerprint": "38000162422eb7e87e62f0bf",
-          "item": "fn update_topic_route_table",
-          "line": 283
-        },
-        {
-          "id": "e04aab519acf51460ab8dae0",
-          "fingerprint": "39a4904e9f58d28949fcde81",
-          "item": "fn update_topic_publish_info",
-          "line": 290
-        }
-      ],
-      "owner": "broker",
-      "reason": "Legacy safe mutable-reference escape pending ownership migration",
       "remove_by": "M05",
       "adr": "ADR-002"
     },

@@ -416,6 +416,13 @@ Client Producer root ownership 随 Issue #8375 将 DefaultMQProducer facade/impl
 `Arc`，这是移除 unsafe mutation capability 的有意 source break。实际快照降至 317 production/892 occurrence，
 Client production 清零、Client test 降至 4/71；剩余为 Broker 190/568 与 Store 127/324。总进度仍为 75/82，
 下一子切片 M11-12ao 进入 Broker owner，M11-12 父工作包未完成。
+Broker topic metadata table ownership 随 Issue #8377 将 `TopicRouteInfoManager` 的 route、broker-address、publish 和
+subscribe 四张共享表改为标准 `Arc<DashMap>`，并将 `TopicQueueMappingManager` 的表项改为不可变标准 `Arc` 整值代际；
+读取先克隆完整值，guard 在同表写入或 `.await` 前释放，decode/clean 只发布完整 replacement；cleanup 以 observed
+`Arc` identity 做条件发布，拒绝覆盖并发新代际，旧 mapping 代际继续有效。
+实际快照降至 312 production/873 occurrence、194 test/551 occurrence，Broker 降至 185/549；剩余为 Broker
+TopicConfig/offset/root/schedule/POP/processor/transaction 与 Store 127/324。总进度仍为 75/82，下一子切片
+M11-12ap 处理 Broker TopicConfig value/DataVersion ownership，M11-12 父工作包未完成。
 
 ### 9.3 证据目录
 

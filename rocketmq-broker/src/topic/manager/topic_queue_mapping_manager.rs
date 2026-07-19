@@ -37,7 +37,6 @@ use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::BlockingPoolPolicy;
 use rocketmq_runtime::RuntimeHandle;
 use rocketmq_runtime::TaskGroup;
-use rocketmq_rust::ArcMut;
 use tokio::runtime::Handle;
 use tracing::info;
 use tracing::warn;
@@ -47,7 +46,7 @@ use crate::broker_path_config_helper::get_topic_queue_mapping_path;
 #[derive(Default)]
 pub(crate) struct TopicQueueMappingManager {
     pub(crate) data_version: Arc<parking_lot::Mutex<DataVersion>>,
-    pub(crate) topic_queue_mapping_table: DashMap<CheetahString /* topic */, ArcMut<TopicQueueMappingDetail>>,
+    pub(crate) topic_queue_mapping_table: DashMap<CheetahString /* topic */, Arc<TopicQueueMappingDetail>>,
     pub(crate) broker_config: Arc<BrokerConfig>,
     blocking_executor: OnceLock<BlockingExecutor>,
     parent_task_group: Option<TaskGroup>,
@@ -194,7 +193,7 @@ impl TopicQueueMappingManager {
         }
     }
 
-    pub fn get_topic_queue_mapping(&self, topic: &str) -> Option<ArcMut<TopicQueueMappingDetail>> {
+    pub fn get_topic_queue_mapping(&self, topic: &str) -> Option<Arc<TopicQueueMappingDetail>> {
         self.topic_queue_mapping_table.get(topic).as_deref().cloned()
     }
 
@@ -216,7 +215,7 @@ impl TopicQueueMappingManager {
         }
 
         self.topic_queue_mapping_table
-            .insert(topic, ArcMut::new(topic_queue_mapping_detail));
+            .insert(topic, Arc::new(topic_queue_mapping_detail));
         self.data_version.lock().next_version();
         self.persist();
     }
@@ -242,7 +241,8 @@ impl TopicQueueMappingManager {
         let Some(current_ref) = self.topic_queue_mapping_table.get(topic) else {
             return false;
         };
-        let current = current_ref.as_ref();
+        let observed = Arc::clone(current_ref.value());
+        let current = observed.as_ref();
         if current.topic_queue_mapping_info.epoch != expected_epoch
             || current.topic_queue_mapping_info.bname.as_ref() != Some(expected_bname)
         {
@@ -273,11 +273,7 @@ impl TopicQueueMappingManager {
         }
         drop(current_ref);
 
-        if changed {
-            self.topic_queue_mapping_table
-                .insert(topic.clone(), ArcMut::new(new_detail));
-        }
-        changed
+        changed && self.publish_if_current(topic, &observed, new_detail)
     }
 
     pub(crate) fn remove_cleaned_hosted_queues(
@@ -294,7 +290,8 @@ impl TopicQueueMappingManager {
         let Some(current_ref) = self.topic_queue_mapping_table.get(topic) else {
             return false;
         };
-        let current = current_ref.as_ref();
+        let observed = Arc::clone(current_ref.value());
+        let current = observed.as_ref();
         if current.topic_queue_mapping_info.epoch != expected_epoch
             || current.topic_queue_mapping_info.bname.as_ref() != Some(expected_bname)
         {
@@ -322,11 +319,23 @@ impl TopicQueueMappingManager {
         }
         drop(current_ref);
 
-        if changed {
-            self.topic_queue_mapping_table
-                .insert(topic.clone(), ArcMut::new(new_detail));
+        changed && self.publish_if_current(topic, &observed, new_detail)
+    }
+
+    fn publish_if_current(
+        &self,
+        topic: &CheetahString,
+        observed: &Arc<TopicQueueMappingDetail>,
+        replacement: TopicQueueMappingDetail,
+    ) -> bool {
+        let Some(mut current) = self.topic_queue_mapping_table.get_mut(topic) else {
+            return false;
+        };
+        if !Arc::ptr_eq(current.value(), observed) {
+            return false;
         }
-        changed
+        *current.value_mut() = Arc::new(replacement);
+        true
     }
 
     pub(crate) async fn persist_clean_result(&self) -> RocketMQResult<()> {
@@ -447,8 +456,7 @@ impl ConfigManager for TopicQueueMappingManager {
         }
         if let Some(map) = wrapper.take_topic_queue_mapping_info_map() {
             for (key, value) in map {
-                let mut shared = self.topic_queue_mapping_table.entry(key).or_default();
-                **shared = value;
+                self.topic_queue_mapping_table.insert(key, Arc::new(value));
             }
         }
     }
@@ -536,7 +544,7 @@ mod tests {
     fn get_topic_queue_mapping_returns_mapping_for_existing_topic() {
         let broker_config = Arc::new(BrokerConfig::default());
         let manager = TopicQueueMappingManager::new(broker_config);
-        let detail = ArcMut::new(TopicQueueMappingDetail::default());
+        let detail = Arc::new(TopicQueueMappingDetail::default());
         manager
             .topic_queue_mapping_table
             .insert(CheetahString::from_static_str("existing_topic"), detail);
@@ -548,7 +556,7 @@ mod tests {
     fn delete_removes_existing_topic() {
         let broker_config = Arc::new(BrokerConfig::default());
         let manager = TopicQueueMappingManager::new(broker_config);
-        let detail = ArcMut::new(TopicQueueMappingDetail::default());
+        let detail = Arc::new(TopicQueueMappingDetail::default());
         manager
             .topic_queue_mapping_table
             .insert("existing_topic".into(), detail);
@@ -601,7 +609,7 @@ mod tests {
         hosted_queues.insert(0, vec![item0.clone(), item1.clone()]);
         manager.topic_queue_mapping_table.insert(
             topic.clone(),
-            ArcMut::new(TopicQueueMappingDetail {
+            Arc::new(TopicQueueMappingDetail {
                 topic_queue_mapping_info:
                     rocketmq_remoting::protocol::static_topic::topic_queue_mapping_info::TopicQueueMappingInfo {
                         topic: Some(topic.clone()),
@@ -614,12 +622,39 @@ mod tests {
         );
         let mut replacements = HashMap::new();
         replacements.insert(0, (vec![item0, item1.clone()], vec![item1.clone()]));
+        let original = manager.get_topic_queue_mapping(topic.as_str()).unwrap();
 
         assert!(manager.replace_cleaned_queue_items(&topic, 1, &broker_name, &replacements));
 
         let mapping = manager.get_topic_queue_mapping(topic.as_str()).unwrap();
+        assert!(!Arc::ptr_eq(&original, &mapping));
+        assert_eq!(original.hosted_queues.as_ref().unwrap().get(&0).unwrap().len(), 2);
         assert_eq!(mapping.hosted_queues.as_ref().unwrap().get(&0).unwrap(), &vec![item1]);
         assert_eq!(manager.data_version.lock().get_state_version(), 0);
+    }
+
+    #[test]
+    fn stale_cleanup_cannot_overwrite_a_newer_mapping_generation() {
+        let broker_config = Arc::new(BrokerConfig::default());
+        let manager = TopicQueueMappingManager::new(broker_config);
+        let topic = CheetahString::from_static_str("static-topic");
+        let original = Arc::new(TopicQueueMappingDetail::default());
+        manager
+            .topic_queue_mapping_table
+            .insert(topic.clone(), original.clone());
+
+        let mut newer_detail = TopicQueueMappingDetail::default();
+        newer_detail.topic_queue_mapping_info.epoch = 2;
+        let newer = Arc::new(newer_detail);
+        manager.topic_queue_mapping_table.insert(topic.clone(), newer.clone());
+
+        let mut stale_replacement = TopicQueueMappingDetail::default();
+        stale_replacement.topic_queue_mapping_info.epoch = 1;
+        assert!(!manager.publish_if_current(&topic, &original, stale_replacement));
+
+        let current = manager.get_topic_queue_mapping(topic.as_str()).unwrap();
+        assert!(Arc::ptr_eq(&current, &newer));
+        assert_eq!(current.topic_queue_mapping_info.epoch, 2);
     }
 
     #[test]
@@ -644,7 +679,7 @@ mod tests {
         hosted_queues.insert(0, vec![current_item]);
         manager.topic_queue_mapping_table.insert(
             topic.clone(),
-            ArcMut::new(TopicQueueMappingDetail {
+            Arc::new(TopicQueueMappingDetail {
                 topic_queue_mapping_info:
                     rocketmq_remoting::protocol::static_topic::topic_queue_mapping_info::TopicQueueMappingInfo {
                         topic: Some(topic.clone()),
@@ -691,7 +726,7 @@ mod tests {
         hosted_queues.insert(0, vec![item0.clone(), item1.clone()]);
         manager.topic_queue_mapping_table.insert(
             topic.clone(),
-            ArcMut::new(TopicQueueMappingDetail {
+            Arc::new(TopicQueueMappingDetail {
                 topic_queue_mapping_info:
                     rocketmq_remoting::protocol::static_topic::topic_queue_mapping_info::TopicQueueMappingInfo {
                         topic: Some(topic.clone()),
@@ -744,7 +779,7 @@ mod tests {
         hosted_queues.insert(0, vec![item.clone()]);
         manager.topic_queue_mapping_table.insert(
             topic.clone(),
-            ArcMut::new(TopicQueueMappingDetail {
+            Arc::new(TopicQueueMappingDetail {
                 topic_queue_mapping_info:
                     rocketmq_remoting::protocol::static_topic::topic_queue_mapping_info::TopicQueueMappingInfo {
                         topic: Some(topic.clone()),
