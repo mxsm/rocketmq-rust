@@ -301,12 +301,14 @@ impl DefaultMQPushConsumerImpl {
                     .await?;
 
                 if let Some(message_listener) = self.message_listener.as_ref() {
+                    let client_config_snapshot = Arc::new(self.client_config.as_ref().clone());
+                    let consumer_config_snapshot = Arc::new(self.consumer_config.as_ref().clone());
                     if let Some(listener) = message_listener.message_listener_concurrently.clone() {
                         self.consume_orderly = false;
                         let consume_message_concurrently_service = Arc::new(ConsumeMessageConcurrentlyService::new(
-                            self.client_config.clone(),
-                            self.consumer_config.clone(),
-                            self.consumer_config.consumer_group.clone(),
+                            client_config_snapshot.clone(),
+                            consumer_config_snapshot.clone(),
+                            consumer_config_snapshot.consumer_group.clone(),
                             listener.clone(),
                             self.default_mqpush_consumer_impl.clone(),
                         ));
@@ -316,9 +318,9 @@ impl DefaultMQPushConsumerImpl {
                         )));
                         let consume_message_pop_concurrently_service =
                             Arc::new(ConsumeMessagePopConcurrentlyService::new(
-                                self.client_config.clone(),
-                                self.consumer_config.clone(),
-                                self.consumer_config.consumer_group.clone(),
+                                client_config_snapshot.clone(),
+                                consumer_config_snapshot.clone(),
+                                consumer_config_snapshot.consumer_group.clone(),
                                 listener.clone(),
                                 self.default_mqpush_consumer_impl.clone(),
                             ));
@@ -330,9 +332,9 @@ impl DefaultMQPushConsumerImpl {
                     } else if let Some(listener) = message_listener.message_listener_orderly.clone() {
                         self.consume_orderly = true;
                         let consume_message_orderly_service = Arc::new(ConsumeMessageOrderlyService::new(
-                            self.client_config.clone(),
-                            self.consumer_config.clone(),
-                            self.consumer_config.consumer_group.clone(),
+                            client_config_snapshot.clone(),
+                            consumer_config_snapshot.clone(),
+                            consumer_config_snapshot.consumer_group.clone(),
                             listener.clone(),
                             self.default_mqpush_consumer_impl.clone(),
                         ));
@@ -342,9 +344,9 @@ impl DefaultMQPushConsumerImpl {
                         )));
 
                         let consume_message_pop_orderly_service = Arc::new(ConsumeMessagePopOrderlyService::new(
-                            self.client_config.clone(),
-                            self.consumer_config.clone(),
-                            self.consumer_config.consumer_group.clone(),
+                            client_config_snapshot,
+                            consumer_config_snapshot.clone(),
+                            consumer_config_snapshot.consumer_group.clone(),
                             listener,
                             self.default_mqpush_consumer_impl.clone(),
                         ));

@@ -371,6 +371,11 @@ Client Push subscription snapshots 随 Issue #8357 将 deprecated startup subscr
 `Arc<HashMap>`；config、builder 和 Java-compatible getter/setter 使用 immutable owned snapshot，启动时只读复制到
 独立 dynamic rebalance table。实际快照降至 400 production/1,078 occurrence，Client 降至 83/186；剩余为 Broker
 190/568、Client 83/186 与 Store 127/324，总进度仍为 75/82，M11-12 父工作包未完成。
+Client Push consume service config snapshots 随 Issue #8359 将 concurrent/orderly 与 POP concurrent/orderly 四类服务的
+`ClientConfig`/`ConsumerConfig` 改为启动时创建并成对注入的 immutable `Arc` 快照；服务内只读使用同一配置代际，仍需实时
+运行状态的 callback 继续通过 Push implementation owner 访问。实际快照降至 398 production/1,054 occurrence，Client owner
+降至 80/161，另有 Proxy 1/1；剩余为 Broker 190/568、Client 80/161、Proxy 1/1 与 Store 127/324，总进度仍为
+75/82，M11-12 父工作包未完成。
 
 ### 9.3 证据目录
 
