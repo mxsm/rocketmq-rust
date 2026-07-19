@@ -595,7 +595,7 @@ async fn lock_all_impl(
     let map = broker_mqs
         .into_iter()
         .map(|(broker_name, mqs)| {
-            let mut client_instance = client_instance.clone();
+            let client_instance = client_instance.clone();
             let process_queue_table = process_queue_table.clone();
             let consumer_group = consumer_group.clone();
             async move {
@@ -666,7 +666,7 @@ async fn unlock_all_impl(
     let map = broker_mqs
         .into_iter()
         .map(|(broker_name, mqs)| {
-            let mut client_instance = client_instance.clone();
+            let client_instance = client_instance.clone();
             let process_queue_table = process_queue_table.clone();
             let consumer_group = consumer_group.clone();
             async move {

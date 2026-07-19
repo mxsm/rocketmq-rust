@@ -317,6 +317,10 @@ Client internal Admin owner 随 Issue #8333 改为普通 `Arc<MQAdminImpl>`，ro
 一次，Admin forwarding receiver 收窄为 `&self`；Producer 删除 11 个仅为访问 Admin helper 的 `mut_from_ref`，
 Consumer 删除冗余可变 client clone。实际快照为 420 production/1,263 occurrence，Client 降至 103/371；剩余为
 Broker 190/568、Client 103/371 与 Store 127/324，总进度仍为 75/82。
+Client route registry owner 随 Issue #8335 将 route refresh/application、route query、broker lookup 与 Producer 注册入口
+收窄为 `&self`；Producer 路由/heartbeat/注册路径删除 4 个 safe `mut_from_ref`，仅保留真实 lifecycle start 的一个
+可变入口。实际快照为 420 production/1,259 occurrence，Client 降至 103/367；剩余为 Broker 190/568、Client
+103/367 与 Store 127/324，总进度仍为 75/82，M11-12 父工作包与最终目标 Gate 均未完成。
 
 ### 9.3 证据目录
 

@@ -428,7 +428,7 @@ pub mod proxy_adapter_compat {
             only_this_broker: bool,
         ) -> Option<CheetahString> {
             let _operation = self.operation().await;
-            let mut instance = self.inner.clone();
+            let instance = self.inner.clone();
             instance
                 .find_broker_address_in_subscribe(broker_name, broker_id, only_this_broker)
                 .await
@@ -437,7 +437,7 @@ pub mod proxy_adapter_compat {
 
         pub async fn refresh_topic_route(&self, topic: &CheetahString) -> bool {
             let _operation = self.operation().await;
-            let mut instance = self.inner.clone();
+            let instance = self.inner.clone();
             instance.update_topic_route_info_from_name_server_topic(topic).await
         }
 
