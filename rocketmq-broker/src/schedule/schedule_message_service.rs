@@ -21,11 +21,12 @@ use std::fmt::Formatter;
 use std::future::Future;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI32;
-use std::sync::atomic::AtomicI64;
+use std::sync::atomic::AtomicU8;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
+use arc_swap::ArcSwap;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use parking_lot::Mutex as ParkingMutex;
@@ -60,7 +61,6 @@ use rocketmq_store::queue::consume_queue_store::ConsumeQueueStoreTrait;
 use rocketmq_store::queue::local_file_consume_queue_store::ConsumeQueueStore;
 use rocketmq_store::store_path_config_helper::get_delay_offset_store_path;
 use tokio::sync::Mutex;
-use tracing::debug;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -85,6 +85,135 @@ const INITIAL_QUEUE_CAPACITY: usize = 128;
 const MAX_PENDING_QUEUE_SIZE: usize = 10000;
 
 pub type DeliverPendingTable<MS> = Arc<DashMap<i32, Arc<Mutex<VecDeque<PutResultProcess<MS>>>>>>;
+
+#[derive(Default)]
+struct DelayLevelConfig {
+    table: BTreeMap<i32, i64>,
+    max_level: i32,
+}
+
+fn parse_delay_level_config(level_string: &str) -> Result<DelayLevelConfig, String> {
+    let level_array = level_string.split_whitespace().collect::<Vec<_>>();
+    if level_array.is_empty() {
+        return Err("delay level configuration is empty".to_string());
+    }
+
+    let mut table = BTreeMap::new();
+    for (index, value) in level_array.into_iter().enumerate() {
+        let unit = value
+            .chars()
+            .last()
+            .ok_or_else(|| format!("delay level at index {index} is empty"))?;
+        let multiplier: i64 = match unit {
+            's' => 1_000,
+            'm' => 60_000,
+            'h' => 3_600_000,
+            'd' => 86_400_000,
+            _ => return Err(format!("unknown time unit '{unit}' at index {index}")),
+        };
+        let number_end = value.len() - unit.len_utf8();
+        let number = value[..number_end]
+            .parse::<i64>()
+            .map_err(|error| format!("invalid delay level number at index {index}: {error}"))?;
+        if number <= 0 {
+            return Err(format!("delay level value must be positive at index {index}"));
+        }
+        let delay_millis = multiplier
+            .checked_mul(number)
+            .ok_or_else(|| format!("delay level value overflows milliseconds at index {index}"))?;
+        let level = i32::try_from(index + 1).map_err(|_| "too many delay levels".to_string())?;
+        table.insert(level, delay_millis);
+    }
+
+    Ok(DelayLevelConfig {
+        max_level: table.len() as i32,
+        table,
+    })
+}
+
+struct ScheduleOffsetStateInner {
+    offset_table: HashMap<i32, i64>,
+    version_change_counter: u64,
+}
+
+struct ScheduleOffsetState {
+    inner: ParkingMutex<ScheduleOffsetStateInner>,
+    data_version: ArcSwap<DataVersion>,
+}
+
+impl ScheduleOffsetState {
+    fn new() -> Self {
+        Self {
+            inner: ParkingMutex::new(ScheduleOffsetStateInner {
+                offset_table: HashMap::new(),
+                version_change_counter: 0,
+            }),
+            data_version: ArcSwap::from_pointee(rocketmq_remoting::protocol::data_version_facade::new_data_version()),
+        }
+    }
+
+    fn offset(&self, delay_level: i32) -> Option<i64> {
+        self.inner.lock().offset_table.get(&delay_level).copied()
+    }
+
+    fn update_offset(
+        &self,
+        delay_level: i32,
+        offset: i64,
+        update_step: u64,
+        state_machine_version: i64,
+    ) -> (Option<i64>, u64, bool) {
+        let mut inner = self.inner.lock();
+        let previous = inner.offset_table.get(&delay_level).copied();
+        if previous.is_some_and(|current| offset <= current) {
+            return (previous, inner.version_change_counter, false);
+        }
+        inner.offset_table.insert(delay_level, offset);
+
+        inner.version_change_counter = inner.version_change_counter.checked_add(1).unwrap_or(1);
+        let version_counter = inner.version_change_counter;
+        let version_updated = update_step > 0 && version_counter.is_multiple_of(update_step);
+        if version_updated {
+            let mut data_version = self.data_version.load_full().as_ref().clone();
+            data_version.next_version_with(state_machine_version);
+            self.data_version.store(Arc::new(data_version));
+        }
+
+        (previous, version_counter, version_updated)
+    }
+
+    fn correct_offset(&self, delay_level: i32, expected: i64, corrected: i64) -> bool {
+        let mut inner = self.inner.lock();
+        if inner.offset_table.get(&delay_level).copied() != Some(expected) {
+            return false;
+        }
+        inner.offset_table.insert(delay_level, corrected);
+        true
+    }
+
+    fn data_version(&self) -> Arc<DataVersion> {
+        self.data_version.load_full()
+    }
+
+    fn set_data_version(&self, data_version: DataVersion) {
+        let _inner = self.inner.lock();
+        self.data_version.store(Arc::new(data_version));
+    }
+
+    fn snapshot(&self) -> (HashMap<i32, i64>, Arc<DataVersion>) {
+        let inner = self.inner.lock();
+        (inner.offset_table.clone(), self.data_version.load_full())
+    }
+
+    fn install_snapshot(&self, offset_table: &HashMap<i32, i64>, data_version: Option<&DataVersion>) {
+        let mut inner = self.inner.lock();
+        inner.offset_table.clone_from(offset_table);
+        inner.version_change_counter = 0;
+        if let Some(data_version) = data_version {
+            self.data_version.store(Arc::new(data_version.clone()));
+        }
+    }
+}
 
 fn schedule_message_service_startup_failed(error: impl Display) -> RocketMQError {
     RocketMQError::Service(UnifiedServiceError::StartupFailed(format!(
@@ -135,17 +264,15 @@ fn schedule_message_service_startup_failed(error: impl Display) -> RocketMQError
 /// Duplicate delivery is prevented through the unique message key (`uniqKey`) and the storage
 /// offset (`commitLogOffset`).
 pub struct ScheduleMessageService<MS: MessageStore> {
-    delay_level_table: ArcMut<BTreeMap<i32 /* level */, i64 /* delay timeMillis */>>,
-    offset_table: ArcMut<DashMap<i32, i64>>,
+    delay_level_config: ArcSwap<DelayLevelConfig>,
+    offset_state: ScheduleOffsetState,
     started: AtomicBool,
     /// Flag to signal graceful shutdown
     shutdown_requested: Arc<AtomicBool>,
-    max_delay_level: AtomicI32,
-    data_version: ArcMut<DataVersion>,
     enable_async_deliver: bool,
     deliver_pending_table: DeliverPendingTable<MS>,
+    deliver_resend_in_progress: Arc<DashMap<i32, Arc<AtomicBool>>>,
     broker_controller: ArcMut<BrokerRuntimeInner<MS>>,
-    version_change_counter: AtomicI64,
     /// Tracks all scheduled delivery and persistence tasks for graceful shutdown.
     task_group: ParkingMutex<Option<TaskGroup>>,
     scheduled_tasks: ParkingMutex<Option<ScheduledTaskGroup>>,
@@ -156,27 +283,23 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
         let enable_async_deliver = broker_controller.message_store_config().enable_schedule_async_deliver;
 
         Self {
-            delay_level_table: ArcMut::new(BTreeMap::new()),
-            offset_table: ArcMut::new(DashMap::new()),
+            delay_level_config: ArcSwap::from_pointee(DelayLevelConfig::default()),
+            offset_state: ScheduleOffsetState::new(),
             started: AtomicBool::new(false),
             shutdown_requested: Arc::new(AtomicBool::new(false)),
-            max_delay_level: AtomicI32::new(0),
-            data_version: ArcMut::new(rocketmq_remoting::protocol::data_version_facade::new_data_version()),
             enable_async_deliver,
             deliver_pending_table: Arc::new(DashMap::new()),
+            deliver_resend_in_progress: Arc::new(DashMap::new()),
             broker_controller,
-            version_change_counter: AtomicI64::new(0),
             task_group: ParkingMutex::new(None),
             scheduled_tasks: ParkingMutex::new(None),
         }
     }
 
     pub fn build_running_stats(&self, stats: &mut HashMap<String, String>) {
-        for entry in self.offset_table.iter() {
-            let delay_level = entry.key();
-            let delay_offset = entry.value();
-
-            let queue_id = delay_level_to_queue_id(*delay_level);
+        let (offset_table, _) = self.offset_state.snapshot();
+        for (delay_level, delay_offset) in offset_table {
+            let queue_id = delay_level_to_queue_id(delay_level);
             let max_offset = self.broker_controller.message_store().unwrap().get_max_offset_in_queue(
                 &CheetahString::from_static_str(TopicValidator::RMQ_SYS_SCHEDULE_TOPIC),
                 queue_id,
@@ -198,8 +321,16 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
     /// * `delay_level` - The delay level whose offset is being updated
     /// * `offset` - The new offset value
     fn update_offset(&self, delay_level: i32, offset: i64) {
-        let old_offset = self.offset_table.get(&delay_level).map(|v| *v.value());
-        self.offset_table.insert(delay_level, offset);
+        let state_machine_version = self
+            .broker_controller
+            .message_store_unchecked()
+            .get_state_machine_version();
+        let (old_offset, version_counter, version_updated) = self.offset_state.update_offset(
+            delay_level,
+            offset,
+            self.broker_controller.broker_config().delay_offset_update_version_step,
+            state_machine_version,
+        );
 
         // Log significant offset updates (every 100 messages)
         if let Some(old) = old_offset {
@@ -214,16 +345,7 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
             }
         }
 
-        let version_counter = self.version_change_counter.fetch_add(1, Ordering::SeqCst);
-        if version_counter % self.broker_controller.broker_config().delay_offset_update_version_step as i64 == 0 {
-            let state_machine_version = self
-                .broker_controller
-                .message_store_unchecked()
-                .get_state_machine_version();
-
-            let data_version = self.data_version.mut_from_ref();
-            data_version.next_version_with(state_machine_version);
-
+        if version_updated {
             info!(
                 "Data version updated: version_counter={}, state_machine_version={}",
                 version_counter, state_machine_version
@@ -232,7 +354,8 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
     }
 
     pub fn compute_deliver_timestamp(&self, delay_level: i32, store_timestamp: i64) -> i64 {
-        if let Some(time) = self.delay_level_table.get(&delay_level) {
+        let delay_config = self.delay_level_config.load();
+        if let Some(time) = delay_config.table.get(&delay_level) {
             *time + store_timestamp
         } else {
             store_timestamp + 1000
@@ -271,12 +394,13 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
                 }
             };
 
-            for level in this.delay_level_table.keys() {
-                let offset = { this.offset_table.get(level).map_or(0, |key_value| *key_value.value()) };
+            let delay_config = this.delay_level_config.load_full();
+            for level in delay_config.table.keys().copied() {
+                let offset = this.offset_state.offset(level).unwrap_or(0);
 
                 // Spawn async delivery handler task
                 if this.enable_async_deliver {
-                    let level_copy = *level;
+                    let level_copy = level;
                     let service = this.clone();
                     let shutdown_flag = Arc::clone(&this.shutdown_requested);
 
@@ -288,7 +412,7 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
                 }
 
                 // Spawn delivery timer task
-                let level_copy = *level;
+                let level_copy = level;
                 let offset_copy = offset;
                 let service = this.clone();
                 let shutdown_flag = Arc::clone(&this.shutdown_requested);
@@ -304,7 +428,7 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
 
             info!(
                 "ScheduleMessageService started successfully with {} delay levels",
-                this.delay_level_table.len()
+                delay_config.table.len()
             );
         }
 
@@ -377,7 +501,7 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
     /// Gracefully shuts down the schedule message service.
     ///
     /// Signals all tasks to stop, waits for them to complete, and persists final state.
-    pub async fn shutdown(&mut self) {
+    pub async fn shutdown(&self) {
         info!("Shutting down ScheduleMessageService...");
 
         self.shutdown_requested.store(true, Ordering::SeqCst);
@@ -387,7 +511,7 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
         info!("ScheduleMessageService shutdown complete");
     }
 
-    pub(crate) async fn shutdown_without_persist(&mut self) {
+    pub(crate) async fn shutdown_without_persist(&self) {
         warn!("Shutting down ScheduleMessageService without persistence because no blocking executor is available");
         self.shutdown_requested.store(true, Ordering::SeqCst);
         self.started.store(false, Ordering::SeqCst);
@@ -396,7 +520,7 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
         info!("ScheduleMessageService shutdown complete without persistence");
     }
 
-    async fn shutdown_tasks(&mut self) {
+    async fn shutdown_tasks(&self) {
         self.scheduled_tasks.lock().take();
         let task_group = self.task_group.lock().take();
         let Some(task_group) = task_group else {
@@ -471,27 +595,23 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
     }
 
     pub fn get_max_delay_level(&self) -> i32 {
-        self.max_delay_level.load(Ordering::Relaxed)
+        self.delay_level_config.load().max_level
     }
 
     pub fn get_data_version(&self) -> DataVersion {
-        self.data_version.as_ref().clone()
+        self.offset_state.data_version().as_ref().clone()
     }
 
     pub fn set_data_version(&self, data_version: DataVersion) {
-        let current = self.data_version.mut_from_ref();
-        *current = data_version;
+        self.offset_state.set_data_version(data_version);
     }
 
-    fn load_super(&self) -> RocketMQResult<bool> {
-        // Mock implementation for the parent class load method
-        Ok(true)
-    }
-
-    pub fn load_when_sync_delay_offset(&self) -> RocketMQResult<bool> {
-        let result = self.load_super()?;
+    pub fn load_when_sync_delay_offset(&self, snapshot: &DelayOffsetSerializeWrapper) -> RocketMQResult<bool> {
+        let offset_table = snapshot.offset_table().cloned().unwrap_or_default();
+        self.offset_state
+            .install_snapshot(&offset_table, snapshot.data_version());
         let parse_result = self.parse_delay_level();
-        Ok(result && parse_result)
+        Ok(parse_result)
     }
 
     /// Corrects delay offsets based on actual consume queue state.
@@ -504,8 +624,9 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
     /// `true` if corrections were successful, `false` otherwise
     pub fn correct_delay_offset(&self) -> bool {
         let topic = CheetahString::from_static_str(TopicValidator::RMQ_SYS_SCHEDULE_TOPIC);
-        for delay_level in self.delay_level_table.keys() {
-            let queue_id = delay_level_to_queue_id(*delay_level);
+        let delay_config = self.delay_level_config.load_full();
+        for delay_level in delay_config.table.keys().copied() {
+            let queue_id = delay_level_to_queue_id(delay_level);
             let cq = self
                 .broker_controller
                 .message_store_unchecked()
@@ -514,39 +635,40 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
                 .expect("Failed to downcast to ConsumeQueueStore")
                 .find_or_create_consume_queue(&topic, queue_id);
 
-            if let Some(current_delay_offset) = self.offset_table.get(delay_level) {
-                let mut correct_delay_offset = *current_delay_offset;
+            if let Some(current_delay_offset) = self.offset_state.offset(delay_level) {
+                let mut correct_delay_offset = current_delay_offset;
                 let cq_min_offset = cq.get_min_offset_in_queue();
                 let cq_max_offset = cq.get_max_offset_in_queue();
 
-                if *current_delay_offset < cq_min_offset {
+                if current_delay_offset < cq_min_offset {
                     correct_delay_offset = cq_min_offset;
                     error!(
                         "schedule CQ offset invalid. offset={}, cqMinOffset={}, cqMaxOffset={}, queueId={}",
-                        *current_delay_offset,
+                        current_delay_offset,
                         cq_min_offset,
                         cq_max_offset,
                         cq.get_queue_id()
                     );
                 }
 
-                if *current_delay_offset > cq_max_offset {
+                if current_delay_offset > cq_max_offset {
                     correct_delay_offset = cq_max_offset;
                     error!(
                         "schedule CQ offset invalid. offset={}, cqMinOffset={}, cqMaxOffset={}, queueId={}",
-                        *current_delay_offset,
+                        current_delay_offset,
                         cq_min_offset,
                         cq_max_offset,
                         cq.get_queue_id()
                     );
                 }
 
-                if correct_delay_offset != *current_delay_offset {
+                if correct_delay_offset != current_delay_offset {
                     error!(
                         "correct delay offset [ delayLevel {} ] from {} to {}",
-                        delay_level, *current_delay_offset, correct_delay_offset
+                        delay_level, current_delay_offset, correct_delay_offset
                     );
-                    self.offset_table.insert(*delay_level, correct_delay_offset);
+                    self.offset_state
+                        .correct_offset(delay_level, current_delay_offset, correct_delay_offset);
                 }
             }
         }
@@ -569,12 +691,6 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
     /// # Returns
     /// `true` if parsing succeeds, `false` otherwise
     pub fn parse_delay_level(&self) -> bool {
-        let mut time_unit_table = HashMap::with_capacity(4);
-        time_unit_table.insert("s", 1000);
-        time_unit_table.insert("m", 1000 * 60);
-        time_unit_table.insert("h", 1000 * 60 * 60);
-        time_unit_table.insert("d", 1000 * 60 * 60 * 24);
-
         let level_string = self
             .broker_controller
             .message_store_config()
@@ -582,88 +698,37 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
             .as_str();
 
         info!("Parsing delay level configuration: {}", level_string);
-
-        let level_array: Vec<&str> = level_string.split(' ').filter(|s| !s.is_empty()).collect();
-        if level_array.is_empty() {
-            error!("Delay level configuration is empty");
-            return false;
-        }
-
-        let delay_level_table = self.delay_level_table.mut_from_ref();
-        let mut max_delay_level = 0;
-
-        for (i, value) in level_array.iter().enumerate() {
-            if value.is_empty() {
-                warn!("Skipping empty delay level at index {}", i);
-                continue;
+        let delay_config = match parse_delay_level_config(level_string) {
+            Ok(config) => config,
+            Err(error) => {
+                error!(%error, message_delay_level = level_string, "Failed to parse delay level configuration");
+                return false;
             }
+        };
+        let delay_level_count = delay_config.table.len();
+        let max_delay_level = delay_config.max_level;
+        let accepted_levels = delay_config.table.keys().copied().collect::<Vec<_>>();
 
-            // Safe extraction of time unit character
-            let ch = match value.chars().last() {
-                Some(c) => c.to_string(),
-                None => {
-                    error!("Empty delay level value at index {}", i);
-                    return false;
-                }
-            };
-
-            // Look up time unit multiplier
-            let tu = match time_unit_table.get(ch.as_str()) {
-                Some(unit) => *unit,
-                None => {
-                    error!(
-                        "Unknown time unit '{}' at index {}. Allowed units: s, m, h, d. messageDelayLevel={}",
-                        ch, i, level_string
-                    );
-                    return false;
-                }
-            };
-
-            let level = i as i32 + 1;
-            if level > max_delay_level {
-                max_delay_level = level;
-            }
-
-            // Parse numeric value
-            let num_str = &value[0..value.len() - 1];
-            let num = match num_str.parse::<i64>() {
-                Ok(n) if n > 0 => n,
-                Ok(n) => {
-                    error!(
-                        "Delay level value must be positive, got {} at index {}. messageDelayLevel={}",
-                        n, i, level_string
-                    );
-                    return false;
-                }
-                Err(e) => {
-                    error!(
-                        "Failed to parse delay level number '{}' at index {}: {}. messageDelayLevel={}",
-                        num_str, i, e, level_string
-                    );
-                    return false;
-                }
-            };
-
-            let delay_time_millis = tu * num;
-            debug!("Parsed delay level {}: {} -> {} ms", level, value, delay_time_millis);
-
-            delay_level_table.insert(level, delay_time_millis);
-
-            if self.enable_async_deliver {
-                // Pre-allocate capacity to reduce reallocations during normal operation
-                self.deliver_pending_table.insert(
-                    level,
-                    Arc::new(Mutex::new(VecDeque::with_capacity(INITIAL_QUEUE_CAPACITY))),
-                );
+        if self.enable_async_deliver {
+            self.deliver_pending_table
+                .retain(|level, _| accepted_levels.binary_search(level).is_ok());
+            self.deliver_resend_in_progress
+                .retain(|level, _| accepted_levels.binary_search(level).is_ok());
+            for level in accepted_levels {
+                self.deliver_pending_table
+                    .entry(level)
+                    .or_insert_with(|| Arc::new(Mutex::new(VecDeque::with_capacity(INITIAL_QUEUE_CAPACITY))));
+                self.deliver_resend_in_progress
+                    .entry(level)
+                    .or_insert_with(|| Arc::new(AtomicBool::new(false)));
             }
         }
 
-        self.max_delay_level.store(max_delay_level, Ordering::Relaxed);
+        self.delay_level_config.store(Arc::new(delay_config));
 
         info!(
             "Successfully parsed {} delay levels, max level: {}",
-            delay_level_table.len(),
-            max_delay_level
+            delay_level_count, max_delay_level
         );
         true
     }
@@ -727,10 +792,7 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
     ///
     /// A HashMap containing all delay levels and their current offsets
     pub fn get_offset_table(&self) -> HashMap<i32, i64> {
-        self.offset_table.as_ref().iter().fold(HashMap::new(), |mut acc, item| {
-            acc.insert(*item.key(), *item.value());
-            acc
-        })
+        self.offset_state.snapshot().0
     }
 }
 
@@ -764,8 +826,9 @@ impl<MS: MessageStore> ConfigManager for ScheduleMessageService<MS> {
     }
 
     fn encode_pretty(&self, pretty_format: bool) -> String {
+        let (offset_table, data_version) = self.offset_state.snapshot();
         let delay_offset_serialize_wrapper =
-            DelayOffsetSerializeWrapper::new(Some(self.get_offset_table()), Some(self.get_data_version()));
+            DelayOffsetSerializeWrapper::new(Some(offset_table), Some(data_version.as_ref().clone()));
 
         let result = if pretty_format {
             delay_offset_serialize_wrapper.serialize_json_pretty()
@@ -801,14 +864,18 @@ impl<MS: MessageStore> ConfigManager for ScheduleMessageService<MS> {
                 }
             };
 
-        if let Some(offset_table_value) = delay_offset_serialize_wrapper.offset_table() {
-            self.offset_table.mut_from_ref().extend(offset_table_value.clone());
-            info!("Loaded {} delay offset entries from storage", offset_table_value.len());
+        let offset_table = delay_offset_serialize_wrapper
+            .offset_table()
+            .cloned()
+            .unwrap_or_default();
+        let data_version = delay_offset_serialize_wrapper.data_version();
+        self.offset_state.install_snapshot(&offset_table, data_version);
+
+        if !offset_table.is_empty() {
+            info!("Loaded {} delay offset entries from storage", offset_table.len());
         }
 
-        if let Some(data_version) = delay_offset_serialize_wrapper.data_version() {
-            let current = self.data_version.mut_from_ref();
-            current.assign_new_one(data_version);
+        if let Some(data_version) = data_version {
             info!("Loaded data version: {:?}", data_version);
         }
     }
@@ -886,7 +953,8 @@ impl<MS: MessageStore> DeliverDelayedMessageTimerTask<MS> {
     /// let corrected = task.correct_deliver_timestamp(current_millis, tags_code);
     /// ```
     fn correct_deliver_timestamp(&self, now: i64, deliver_timestamp: i64) -> i64 {
-        let delay_time = *self.schedule_service.delay_level_table.get(&self.delay_level).unwrap();
+        let delay_config = self.schedule_service.delay_level_config.load();
+        let delay_time = *delay_config.table.get(&self.delay_level).unwrap();
         let max_timestamp = now + delay_time;
 
         if deliver_timestamp > max_timestamp {
@@ -1113,51 +1181,64 @@ impl<MS: MessageStore> DeliverDelayedMessageTimerTask<MS> {
         offset_py: i64,
         size_py: i32,
     ) -> RocketMQResult<bool> {
-        let processes_queue_table = self
+        let processes_queue = self
             .schedule_service
             .deliver_pending_table
             .get(&self.delay_level)
-            .unwrap();
+            .map(|entry| Arc::clone(entry.value()))
+            .expect("delay-level pending queue should be initialized");
+        let resend_in_progress = self
+            .schedule_service
+            .deliver_resend_in_progress
+            .get(&self.delay_level)
+            .map(|entry| Arc::clone(entry.value()))
+            .expect("delay-level resend state should be initialized");
 
-        // Flow Control
-        let mut processes_queue = processes_queue_table.lock().await;
-        let current_pending_num = processes_queue.len();
+        if resend_in_progress.load(Ordering::Acquire) {
+            warn!(
+                "Asynchronous deliver blocked while retrying delay level {}",
+                self.delay_level
+            );
+            return Ok(false);
+        }
+
         let max_pending_limit = self
             .schedule_service
             .broker_controller
             .message_store_config()
             .schedule_async_deliver_max_pending_limit;
-
-        if current_pending_num > max_pending_limit {
-            warn!(
-                "Asynchronous deliver triggers flow control, currentPendingNum={}, maxPendingLimit={}",
-                current_pending_num, max_pending_limit
-            );
-            return Ok(false);
-        }
-
-        // Check if we're blocked
-        if let Some(first_process) = processes_queue.front() {
-            if first_process.need2_blocked() {
-                warn!("Asynchronous deliver block. info={}", first_process);
+        {
+            let queue = processes_queue.lock().await;
+            let current_pending_num = queue.len();
+            if current_pending_num > max_pending_limit || current_pending_num >= MAX_PENDING_QUEUE_SIZE {
+                warn!(
+                    "Asynchronous deliver triggers flow control, currentPendingNum={}, maxPendingLimit={}",
+                    current_pending_num, max_pending_limit
+                );
                 return Ok(false);
+            }
+            if let Some(first_process) = queue.front() {
+                if first_process.need2_blocked() {
+                    warn!("Asynchronous deliver block. info={}", first_process);
+                    return Ok(false);
+                }
             }
         }
 
-        // Deliver the message
+        // Do not hold the queue or DashMap guard across message-store I/O.
         let result_process = self
             .deliver_message(msg_inner, msg_id, offset, offset_py, size_py, true)
             .await?;
 
-        // Performance optimization: Check queue size before adding
+        let mut processes_queue = processes_queue.lock().await;
+        // The put already happened, so the result must remain tracked even if another producer
+        // filled the queue while message-store I/O was in flight.
         if processes_queue.len() >= MAX_PENDING_QUEUE_SIZE {
             warn!(
-                "Pending queue for delay level {} is full (size={}), applying backpressure",
+                "Pending queue for delay level {} reached its soft capacity while delivery was in flight (size={})",
                 self.delay_level,
                 processes_queue.len()
             );
-            // Return false to signal backpressure
-            return Ok(false);
         }
 
         // Add to pending queue
@@ -1205,6 +1286,31 @@ impl<MS: MessageStore> DeliverDelayedMessageTimerTask<MS> {
     }
 }
 
+struct ProcessStatusCell {
+    value: AtomicU8,
+}
+
+impl ProcessStatusCell {
+    fn new(status: ProcessStatus) -> Self {
+        Self {
+            value: AtomicU8::new(status as u8),
+        }
+    }
+
+    fn load(&self) -> ProcessStatus {
+        match self.value.load(Ordering::Acquire) {
+            value if value == ProcessStatus::Success as u8 => ProcessStatus::Success,
+            value if value == ProcessStatus::Exception as u8 => ProcessStatus::Exception,
+            value if value == ProcessStatus::Skip as u8 => ProcessStatus::Skip,
+            _ => ProcessStatus::Running,
+        }
+    }
+
+    fn store(&self, status: ProcessStatus) {
+        self.value.store(status as u8, Ordering::Release);
+    }
+}
+
 /// Process for handling the result of putting a message
 pub struct PutResultProcess<MS: MessageStore> {
     topic: CheetahString,
@@ -1216,7 +1322,7 @@ pub struct PutResultProcess<MS: MessageStore> {
     auto_resend: bool,
     put_message_result: Option<PutMessageResult>,
     resend_count: AtomicI32,
-    status: ArcMut<ProcessStatus>,
+    status: ProcessStatusCell,
     broker_controller: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
@@ -1233,7 +1339,7 @@ impl<MS: MessageStore> PutResultProcess<MS> {
             auto_resend: false,
             put_message_result: None,
             resend_count: AtomicI32::new(0),
-            status: ArcMut::new(ProcessStatus::Running),
+            status: ProcessStatusCell::new(ProcessStatus::Running),
             broker_controller,
         }
     }
@@ -1352,7 +1458,7 @@ impl<MS: MessageStore> PutResultProcess<MS> {
 
     /// Handle a successful put operation
     pub fn on_success(&self, result: &PutMessageResult) {
-        *self.status.mut_from_ref() = ProcessStatus::Success;
+        self.status.store(ProcessStatus::Success);
 
         if self
             .broker_controller
@@ -1457,17 +1563,16 @@ impl<MS: MessageStore> PutResultProcess<MS> {
     pub fn on_exception(&self) {
         warn!("ScheduleMessageService onException, info: {}", self);
 
-        let status_guard = self.status.mut_from_ref();
-        *status_guard = if self.auto_resend {
+        self.status.store(if self.auto_resend {
             ProcessStatus::Exception
         } else {
             ProcessStatus::Skip
-        };
+        });
     }
 
     /// Get the current processing status
     pub fn get_status(&self) -> ProcessStatus {
-        *self.status.as_ref()
+        self.status.load()
     }
 
     /// Get the result
@@ -1509,11 +1614,11 @@ impl<MS: MessageStore> PutResultProcess<MS> {
             }
             None => {
                 warn!("ScheduleMessageService resend not found message. info: {}", self);
-                *self.status.mut_from_ref() = if self.need2_skip() {
+                self.status.store(if self.need2_skip() {
                     ProcessStatus::Skip
                 } else {
                     ProcessStatus::Exception
-                };
+                });
             }
         }
     }
@@ -1553,12 +1658,13 @@ impl<MS: MessageStore> Display for PutResultProcess<MS> {
             self.msg_id,
             self.auto_resend,
             self.resend_count.load(Ordering::Relaxed),
-            self.status.as_ref(),
+            self.get_status(),
         )
     }
 }
 
 /// Represents the status of a message processing operation
+#[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ProcessStatus {
     /// In process, the processing result has not yet been returned
@@ -1572,6 +1678,14 @@ pub enum ProcessStatus {
 
     /// Skip put message. When the message cannot be looked up, the message will be skipped
     Skip,
+}
+
+enum PendingQueueAction<MS: MessageStore> {
+    Advance(i64),
+    Wait,
+    Resend(PutResultProcess<MS>),
+    Skip(PutResultProcess<MS>),
+    Empty,
 }
 
 impl Display for ProcessStatus {
@@ -1623,18 +1737,23 @@ impl<MS: MessageStore> HandlePutResultTask<MS> {
         }
 
         // Get the pending queue for this delay level
-        let pending_queue_guard = match self.schedule_service.deliver_pending_table.get(&self.delay_level) {
-            Some(queue) => queue,
+        let pending_queue = match self.schedule_service.deliver_pending_table.get(&self.delay_level) {
+            Some(queue) => Arc::clone(queue.value()),
             None => {
                 // If queue doesn't exist, schedule next task and return
                 self.schedule_next_task();
                 return;
             }
         };
-        let mut pending_queue_guard = pending_queue_guard.lock().await;
-
+        let resend_in_progress = match self.schedule_service.deliver_resend_in_progress.get(&self.delay_level) {
+            Some(flag) => Arc::clone(flag.value()),
+            None => {
+                self.schedule_next_task();
+                return;
+            }
+        };
         // Performance optimization: Track processing metrics
-        let queue_size = pending_queue_guard.len();
+        let queue_size = pending_queue.lock().await.len();
         if queue_size > 1000 {
             info!(
                 "HandlePutResultTask for level {} processing large queue: {} items",
@@ -1648,40 +1767,61 @@ impl<MS: MessageStore> HandlePutResultTask<MS> {
 
         // Process each result in the queue
         while processed_count < max_process_per_cycle {
-            let process = match pending_queue_guard.front_mut() {
-                Some(p) => p,
-                None => break,
-            };
-
             processed_count += 1;
-            match process.get_status() {
-                ProcessStatus::Success => {
-                    // Update offset and remove the process from queue
-                    self.schedule_service
-                        .update_offset(self.delay_level, process.get_next_offset());
-                    let _ = pending_queue_guard.pop_front();
+            let action = {
+                let mut queue = pending_queue.lock().await;
+                if resend_in_progress.load(Ordering::Acquire) {
+                    PendingQueueAction::Wait
+                } else {
+                    match queue.front().map(PutResultProcess::get_status) {
+                        None => PendingQueueAction::Empty,
+                        Some(ProcessStatus::Success) => {
+                            let next_offset = queue
+                                .pop_front()
+                                .expect("pending queue front should exist")
+                                .get_next_offset();
+                            PendingQueueAction::Advance(next_offset)
+                        }
+                        Some(ProcessStatus::Running) => PendingQueueAction::Wait,
+                        Some(ProcessStatus::Exception) => {
+                            resend_in_progress.store(true, Ordering::Release);
+                            PendingQueueAction::Resend(queue.pop_front().expect("pending queue front should exist"))
+                        }
+                        Some(ProcessStatus::Skip) => {
+                            PendingQueueAction::Skip(queue.pop_front().expect("pending queue front should exist"))
+                        }
+                    }
                 }
-                ProcessStatus::Running => {
+            };
+            match action {
+                PendingQueueAction::Empty => break,
+                PendingQueueAction::Advance(next_offset) => {
+                    self.schedule_service.update_offset(self.delay_level, next_offset);
+                }
+                PendingQueueAction::Wait => {
                     // If any process is still running, schedule next task and return
                     self.schedule_next_task();
                     return;
                 }
-                ProcessStatus::Exception => {
+                PendingQueueAction::Resend(process) => {
                     // If service is stopped, don't continue processing
                     if !self.schedule_service.is_started() {
-                        warn!("HandlePutResultTask shutdown, info={}", process);
+                        warn!("HandlePutResultTask shutdown, info={}", &process);
+                        pending_queue.lock().await.push_front(process);
+                        resend_in_progress.store(false, Ordering::Release);
                         return;
                     }
 
                     // Otherwise log warning and try resending
-                    warn!("putResultProcess error, info={}", process);
+                    warn!("putResultProcess error, info={}", &process);
                     process.do_resend().await;
+                    pending_queue.lock().await.push_front(process);
+                    resend_in_progress.store(false, Ordering::Release);
                     break;
                 }
-                ProcessStatus::Skip => {
+                PendingQueueAction::Skip(process) => {
                     // Log and remove skipped processes
                     warn!("putResultProcess skip, info={}", process);
-                    let _ = pending_queue_guard.pop_front();
                     break;
                 }
             }
@@ -1722,14 +1862,116 @@ pub fn delay_level_to_queue_id(delay_level: i32) -> i32 {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::sync::Barrier;
+    use std::thread;
 
     use rocketmq_remoting::protocol::DataVersion;
 
     use super::*;
     use crate::schedule::delay_offset_serialize_wrapper::DelayOffsetSerializeWrapper;
 
-    // Type alias for testing - use the actual LocalFileMessageStore type
-    type TestStore = rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore;
+    #[test]
+    fn schedule_offset_state_advances_version_on_exact_threshold() {
+        let state = ScheduleOffsetState::new();
+        let initial_generation = state.data_version();
+
+        assert_eq!(state.update_offset(1, 10, 2, 7), (None, 1, false));
+        assert_eq!(state.data_version().counter(), 0);
+        assert_eq!(state.update_offset(1, 11, 2, 7), (Some(10), 2, true));
+        assert_eq!(state.data_version().counter(), 1);
+        assert_eq!(initial_generation.counter(), 0);
+
+        assert_eq!(state.update_offset(1, 11, 2, 7), (Some(11), 2, false));
+        assert_eq!(state.update_offset(1, 9, 2, 7), (Some(11), 2, false));
+        assert_eq!(state.offset(1), Some(11));
+        assert_eq!(state.data_version().counter(), 1);
+    }
+
+    #[test]
+    fn schedule_offset_state_zero_step_does_not_panic_or_advance_version() {
+        let state = ScheduleOffsetState::new();
+
+        assert_eq!(state.update_offset(1, 10, 0, 7), (None, 1, false));
+        assert_eq!(state.update_offset(1, 11, 0, 7), (Some(10), 2, false));
+        assert_eq!(state.data_version().counter(), 0);
+    }
+
+    #[test]
+    fn schedule_offset_snapshot_replaces_offsets_and_resets_version_cadence() {
+        let state = ScheduleOffsetState::new();
+        state.update_offset(1, 10, 1, 7);
+
+        let mut installed_version = DataVersion::default();
+        installed_version.next_version_with(99);
+        let installed_counter = installed_version.counter();
+        state.install_snapshot(&HashMap::from([(2, 20)]), Some(&installed_version));
+
+        assert_eq!(state.snapshot().0, HashMap::from([(2, 20)]));
+        assert_eq!(state.data_version().counter(), installed_counter);
+        assert_eq!(state.update_offset(2, 21, 2, 99), (Some(20), 1, false));
+        assert_eq!(state.data_version().counter(), installed_counter);
+    }
+
+    #[test]
+    fn schedule_offset_state_serializes_concurrent_writers() {
+        const WRITERS: usize = 16;
+        let state = Arc::new(ScheduleOffsetState::new());
+        let barrier = Arc::new(Barrier::new(WRITERS));
+        let handles = (0..WRITERS)
+            .map(|index| {
+                let state = Arc::clone(&state);
+                let barrier = Arc::clone(&barrier);
+                thread::spawn(move || {
+                    barrier.wait();
+                    state.update_offset(index as i32, index as i64 + 1, 1, 42);
+                })
+            })
+            .collect::<Vec<_>>();
+
+        for handle in handles {
+            handle.join().expect("offset writer should finish");
+        }
+
+        let (offsets, version) = state.snapshot();
+        assert_eq!(offsets.len(), WRITERS);
+        assert_eq!(version.counter(), WRITERS as i64);
+    }
+
+    #[test]
+    fn delay_level_config_is_published_only_after_complete_parse() {
+        let published = ArcSwap::from_pointee(parse_delay_level_config("1s 2m 3h").unwrap());
+        let old_generation = published.load_full();
+
+        assert!(parse_delay_level_config("1s broken 3h").is_err());
+        assert!(Arc::ptr_eq(&old_generation, &published.load_full()));
+
+        published.store(Arc::new(parse_delay_level_config("5s").unwrap()));
+        assert_eq!(old_generation.table.len(), 3);
+        assert_eq!(published.load().table, BTreeMap::from([(1, 5_000)]));
+        assert_eq!(published.load().max_level, 1);
+    }
+
+    #[test]
+    fn delay_level_config_rejects_non_ascii_units_without_panicking() {
+        assert!(parse_delay_level_config("1秒").is_err());
+        assert!(parse_delay_level_config("0s").is_err());
+        assert!(parse_delay_level_config("9223372036854775807d").is_err());
+    }
+
+    #[test]
+    fn process_status_cell_publishes_every_transition() {
+        let status = ProcessStatusCell::new(ProcessStatus::Running);
+
+        for expected in [
+            ProcessStatus::Success,
+            ProcessStatus::Exception,
+            ProcessStatus::Skip,
+            ProcessStatus::Running,
+        ] {
+            status.store(expected);
+            assert_eq!(status.load(), expected);
+        }
+    }
 
     // =============================================================================
     // Tests for DelayOffsetSerializeWrapper

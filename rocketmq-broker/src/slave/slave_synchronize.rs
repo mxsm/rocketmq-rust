@@ -14,6 +14,7 @@
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::config_manager::ConfigManager;
+use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_common::FileUtils::string_to_file;
 use rocketmq_error::RocketMQResult;
 use rocketmq_rust::ArcMut;
@@ -24,6 +25,7 @@ use tracing::info;
 use tracing::warn;
 
 use crate::broker_runtime::BrokerRuntimeInner;
+use crate::schedule::delay_offset_serialize_wrapper::DelayOffsetSerializeWrapper;
 
 pub(crate) struct SlaveSynchronize<MS: MessageStore> {
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
@@ -223,6 +225,13 @@ where
                 {
                     Ok(offset) => {
                         if let Some(offset) = offset {
+                            let snapshot = match SerdeJsonUtils::from_json_str::<DelayOffsetSerializeWrapper>(&offset) {
+                                Ok(snapshot) => snapshot,
+                                Err(error) => {
+                                    error!("Decode delay offset failed, {}: {:?}", master_addr, error);
+                                    return;
+                                }
+                            };
                             let file_name = store_path_config_helper::get_delay_offset_store_path(
                                 self.broker_runtime_inner
                                     .message_store_config()
@@ -234,7 +243,7 @@ where
                                     if let Err(e) = self
                                         .broker_runtime_inner
                                         .schedule_message_service()
-                                        .load_when_sync_delay_offset()
+                                        .load_when_sync_delay_offset(&snapshot)
                                     {
                                         error!("LoadWhenSyncDelayOffset error: {:?}", e);
                                     }

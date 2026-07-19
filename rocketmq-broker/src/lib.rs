@@ -550,7 +550,7 @@ pub mod bench_support {
             ..MessageStoreConfig::default()
         });
         let mut runtime = crate::broker_runtime::BrokerRuntime::new(broker_config, message_store_config);
-        let mut service = runtime.inner_for_test().schedule_message_service_unchecked().clone();
+        let service = runtime.inner_for_test().schedule_message_service_unchecked().clone();
 
         crate::schedule::schedule_message_service::ScheduleMessageService::start_persist_task_for_probe(
             service.clone(),
