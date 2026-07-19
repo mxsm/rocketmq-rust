@@ -98,6 +98,11 @@ useRouteInfoManagerV2 = false
         let config = parse_command_and_config_file(path).expect("production baseline config should parse");
 
         assert_eq!(config.rocketmq_home, "/opt/rocketmq");
+        assert_eq!(config.kv_config_path, "/opt/rocketmq/data/kvConfig.json");
+        assert_eq!(
+            config.config_store_path,
+            "/opt/rocketmq/data/rocketmq-namesrv.properties"
+        );
         assert_eq!(config.client_request_thread_pool_nums, 16);
         assert_eq!(config.default_thread_pool_nums, 32);
         assert_eq!(config.client_request_thread_pool_queue_capacity, 100000);
