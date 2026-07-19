@@ -282,10 +282,7 @@ where
     MS: MessageStore,
     TS: TransactionalMessageService,
 {
-    pub fn new(
-        transactional_message_service: ArcMut<TS>,
-        broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
-    ) -> Self {
+    pub fn new(transactional_message_service: Arc<TS>, broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
         let store_host = broker_runtime_inner.store_host();
         Self {
             inner: ArcMut::new(Inner {
@@ -596,7 +593,7 @@ where
         let recall_handle = self.build_recall_handle(&message_ext);
         let append_receipt = if send_transaction_prepare_message {
             let result = {
-                let mut store = TransactionalMessageAppender::new(&mut *self.inner.transactional_message_service);
+                let mut store = TransactionalMessageAppender::new(self.inner.transactional_message_service.as_ref());
                 append_message_with_store(&mut store, message_ext)
                     .await
                     .map_err(map_store_api_error)?
@@ -1155,11 +1152,11 @@ fn sync_flush_backlog_reject_remark(
 }
 
 struct TransactionalMessageAppender<'a, TS> {
-    service: &'a mut TS,
+    service: &'a TS,
 }
 
 impl<'a, TS> TransactionalMessageAppender<'a, TS> {
-    fn new(service: &'a mut TS) -> Self {
+    fn new(service: &'a TS) -> Self {
         Self { service }
     }
 }
@@ -1292,7 +1289,7 @@ where
     pub(crate) send_message_hook_vec: ArcMut<Vec<Box<dyn SendMessageHook>>>,
     pub(crate) consume_message_hook_vec: ArcMut<Vec<Box<dyn ConsumeMessageHook>>>,
     pub(crate) broker_to_client: Broker2Client,
-    pub(crate) transactional_message_service: ArcMut<TS>,
+    pub(crate) transactional_message_service: Arc<TS>,
     pub(crate) broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 

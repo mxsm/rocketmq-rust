@@ -476,6 +476,15 @@ service `Weak`、generation 和 cancellation token，停止后先阻止重调度
 先完成 schedule 停止并传播失败。实际快照降至 282 production/654 occurrence、157 test/452 occurrence，Broker
 production 降至 160/346；compatibility 保持 14/40。总进度仍为 75/82，下一子切片 M11-12ax 继续处理 Broker
 其他 processor/transaction owner，M11-12 父工作包未完成。
+Broker transaction service ownership 随 Issue #8395 将 `DefaultTransactionalMessageService` root 及 send/reply/end
+transaction processor capability 改为标准 `Arc`，op-batch worker 只持标准 `Weak` 回边；transaction service API 改为
+共享引用，原 bridge 可变调用由显式 Tokio mutex 串行。transaction check service 直接注入 immutable config、标准 Arc
+service 与 listener，不再通过 BrokerRuntimeInner `mut_from_ref` 取得服务；listener 的无状态 Broker2Client 改用标准 Arc。
+Broker shutdown 先停止 check service/listener，再停止 service/batch worker；batch flush 先在 delete-context 锁内生成 ready
+snapshot，释放锁后才取消息和写盘，失败回退路径也不再嵌套获取同一 mutex。实际快照降至 274 production/634
+occurrence、156 test/451 occurrence，Broker production 降至 152/326，transaction 子树从 13/19 降至 5/8；
+compatibility 保持 14/40。总进度仍为 75/82，下一子切片 M11-12ay 继续处理 Broker 其他 processor 及
+transaction bridge/listener carrier，M11-12 父工作包未完成。
 
 ### 9.3 证据目录
 

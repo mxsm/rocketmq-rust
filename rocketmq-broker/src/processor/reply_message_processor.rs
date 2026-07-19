@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::Arc;
+
 use cheetah_string::CheetahString;
 use rocketmq_common::common::attribute::topic_message_type::TopicMessageType;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
@@ -127,10 +129,7 @@ where
     MS: MessageStore,
     TS: TransactionalMessageService,
 {
-    pub fn new(
-        transactional_message_service: ArcMut<TS>,
-        broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
-    ) -> Self {
+    pub fn new(transactional_message_service: Arc<TS>, broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
         Self {
             inner: Inner {
                 send_message_hook_vec: ArcMut::new(Vec::new()),

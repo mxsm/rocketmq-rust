@@ -14,6 +14,7 @@
 
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
+use std::sync::Weak;
 use std::time::Duration;
 
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
@@ -21,7 +22,6 @@ use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_runtime::task::service_task::ServiceContext;
 use rocketmq_runtime::task::service_task::ServiceTask;
 use rocketmq_runtime::task::ServiceManager;
-use rocketmq_rust::WeakArcMut;
 use rocketmq_store::base::message_store::MessageStore;
 use tracing::info;
 use tracing::warn;
@@ -41,7 +41,7 @@ where
 {
     pub fn new(
         broker_config: Arc<BrokerConfig>,
-        transactional_message_service: WeakArcMut<DefaultTransactionalMessageService<MS>>,
+        transactional_message_service: Weak<DefaultTransactionalMessageService<MS>>,
     ) -> Self {
         let inner = TransactionalOpBatchServiceInner {
             broker_config,
@@ -64,7 +64,9 @@ where
     }
 
     pub async fn shutdown(&self) {
-        self.service_manager.shutdown().await.unwrap();
+        if let Err(error) = self.service_manager.shutdown().await {
+            warn!(error = %error, "TransactionalOpBatchService shutdown failed");
+        }
     }
 
     pub fn wakeup(&self) {
@@ -77,7 +79,7 @@ where
     MS: MessageStore,
 {
     broker_config: Arc<BrokerConfig>,
-    transactional_message_service: WeakArcMut<DefaultTransactionalMessageService<MS>>,
+    transactional_message_service: Weak<DefaultTransactionalMessageService<MS>>,
     wakeup_timestamp: AtomicU64,
 }
 

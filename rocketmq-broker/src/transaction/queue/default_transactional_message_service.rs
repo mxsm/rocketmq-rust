@@ -15,9 +15,12 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::sync::OnceLock;
+use std::sync::Weak;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
+use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::broker::broker_role::BrokerRole;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
@@ -30,7 +33,6 @@ use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::protocol::header::end_transaction_request_header::EndTransactionRequestHeader;
-use rocketmq_rust::WeakArcMut;
 use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
@@ -82,9 +84,11 @@ fn is_illegal_or_unmatched_offset(status: GetStatus) -> bool {
 }
 
 pub struct DefaultTransactionalMessageService<MS: MessageStore> {
-    transactional_message_bridge: TransactionalMessageBridge<MS>,
+    transactional_message_bridge: Mutex<TransactionalMessageBridge<MS>>,
+    broker_config: Arc<BrokerConfig>,
+    file_reserved_time_hours: i64,
     delete_context: Arc<Mutex<HashMap<i32, MessageQueueOpContext>>>,
-    transactional_op_batch_service: Option<TransactionalOpBatchService<MS>>,
+    transactional_op_batch_service: OnceLock<TransactionalOpBatchService<MS>>,
     op_queue_map: Arc<RwLock<HashMap<MessageQueue, MessageQueue>>>,
     transaction_metrics: TransactionMetrics,
 }
@@ -94,32 +98,38 @@ where
     MS: MessageStore,
 {
     pub fn new(transactional_message_bridge: TransactionalMessageBridge<MS>) -> Self {
+        let broker_config = transactional_message_bridge.broker_runtime_inner.broker_config_arc();
+        let file_reserved_time_hours = transactional_message_bridge
+            .broker_runtime_inner
+            .message_store_config()
+            .file_reserved_time as i64;
         Self {
-            transactional_message_bridge,
+            transactional_message_bridge: Mutex::new(transactional_message_bridge),
+            broker_config,
+            file_reserved_time_hours,
             delete_context: Arc::new(Mutex::new(HashMap::new())),
-            transactional_op_batch_service: None,
+            transactional_op_batch_service: OnceLock::new(),
             op_queue_map: Arc::new(Default::default()),
             transaction_metrics: TransactionMetrics,
         }
     }
 
     pub async fn set_transactional_op_batch_service_start(
-        &mut self,
-        weak_this: WeakArcMut<DefaultTransactionalMessageService<MS>>,
+        &self,
+        weak_this: Weak<DefaultTransactionalMessageService<MS>>,
     ) -> rocketmq_error::RocketMQResult<()> {
-        let transactional_op_batch_service = TransactionalOpBatchService::new(
-            self.transactional_message_bridge
-                .broker_runtime_inner
-                .broker_config_arc(),
-            weak_this,
-        );
-        transactional_op_batch_service.start().await?;
-        self.transactional_op_batch_service = Some(transactional_op_batch_service);
-        Ok(())
+        let service = self
+            .transactional_op_batch_service
+            .get_or_init(|| TransactionalOpBatchService::new(self.broker_config.clone(), weak_this));
+        service.start().await
     }
 
-    fn get_half_message_by_offset(&self, offset: i64) -> OperationResult {
-        let message_ext = self.transactional_message_bridge.look_message_by_offset(offset);
+    async fn get_half_message_by_offset(&self, offset: i64) -> OperationResult {
+        let message_ext = self
+            .transactional_message_bridge
+            .lock()
+            .await
+            .look_message_by_offset(offset);
 
         if let Some(message_ext) = message_ext {
             OperationResult {
@@ -138,34 +148,45 @@ where
 
     pub async fn batch_send_op_message(&self) -> u64 {
         let start_time = current_millis();
-        let broker_config = self.transactional_message_bridge.broker_runtime_inner.broker_config();
-        let interval = broker_config.transaction_op_batch_interval;
-        let max_size = broker_config.transaction_op_msg_max_size as usize;
+        let interval = self.broker_config.transaction_op_batch_interval;
+        let max_size = self.broker_config.transaction_op_msg_max_size as usize;
         let mut over_size = false;
         let mut first_timestamp = start_time;
         let mut send_map = HashMap::<i32, Message>::new();
-        let delete_context_mutex_guard = self.delete_context.lock().await;
-        for (queue_id, mq_context) in delete_context_mutex_guard.iter() {
-            if mq_context.get_total_size().await == 0
-                || mq_context.is_empty().await
-                || (mq_context.get_total_size().await < max_size as u32
-                    && (start_time as i64 - mq_context.get_last_write_timestamp().await as i64) < interval as i64)
-            {
-                continue;
+        let ready_queues = {
+            let delete_context = self.delete_context.lock().await;
+            let mut ready_queues = Vec::new();
+            for (queue_id, mq_context) in delete_context.iter() {
+                let total_size = mq_context.get_total_size().await;
+                let last_write_timestamp = mq_context.get_last_write_timestamp().await;
+                if total_size == 0
+                    || mq_context.is_empty().await
+                    || (total_size < max_size as u32
+                        && (start_time as i64 - last_write_timestamp as i64) < interval as i64)
+                {
+                    continue;
+                }
+                ready_queues.push((*queue_id, total_size, last_write_timestamp));
             }
-            let op_message = self.get_op_message(*queue_id, None).await;
+            ready_queues
+        };
+
+        for (queue_id, total_size, last_write_timestamp) in ready_queues {
+            let op_message = self.get_op_message(queue_id, None).await;
             if op_message.is_none() {
                 continue;
             }
-            send_map.insert(*queue_id, op_message.unwrap());
-            first_timestamp = first_timestamp.min(mq_context.get_last_write_timestamp().await);
-            if mq_context.get_total_size().await >= max_size as u32 {
+            send_map.insert(queue_id, op_message.unwrap());
+            first_timestamp = first_timestamp.min(last_write_timestamp);
+            if total_size >= max_size as u32 {
                 over_size = true;
             }
         }
         for (op_queue_id, op_message) in send_map {
             if !self
                 .transactional_message_bridge
+                .lock()
+                .await
                 .write_op(op_queue_id, op_message)
                 .await
             {
@@ -187,11 +208,7 @@ where
 
         let more_data_length = if let Some(ref data) = more_data { data.len() } else { 0 };
         let mut length = more_data_length;
-        let max_size = self
-            .transactional_message_bridge
-            .broker_runtime_inner
-            .broker_config()
-            .transaction_op_msg_max_size as usize;
+        let max_size = self.broker_config.transaction_op_msg_max_size as usize;
         if length < max_size {
             let sz = mq_context.get_total_size().await as usize;
             if sz > max_size || length + sz > max_size {
@@ -231,13 +248,13 @@ where
         )
     }
 
-    pub async fn shutdown(&mut self) {
+    pub async fn shutdown(&self) {
         self.close().await
     }
 
     /// Internal check implementation
     async fn check_internal<Listener: TransactionalMessageCheckListener + Clone>(
-        &mut self,
+        &self,
         transaction_timeout: u64,
         transaction_check_max: i32,
         listener: Listener,
@@ -245,7 +262,12 @@ where
         let topic = CheetahString::from_static_str(TopicValidator::RMQ_SYS_TRANS_HALF_TOPIC);
 
         //TopicValidator::RMQ_SYS_TRANS_HALF_TOPIC only one read and write queue
-        let msg_queues = self.transactional_message_bridge.fetch_message_queues(&topic).await;
+        let msg_queues = self
+            .transactional_message_bridge
+            .lock()
+            .await
+            .fetch_message_queues(&topic)
+            .await;
 
         if msg_queues.is_empty() {
             warn!("The queue of topic is empty: {}", topic);
@@ -258,8 +280,13 @@ where
             let start_time = current_millis() as i64;
             let op_queue = self.get_op_queue(&message_queue).await;
 
-            let half_offset = self.transactional_message_bridge.fetch_consume_offset(&message_queue);
-            let op_offset = self.transactional_message_bridge.fetch_consume_offset(&op_queue);
+            let (half_offset, op_offset) = {
+                let bridge = self.transactional_message_bridge.lock().await;
+                (
+                    bridge.fetch_consume_offset(&message_queue),
+                    bridge.fetch_consume_offset(&op_queue),
+                )
+            };
 
             info!(
                 "Before check, the queue={:?} msgOffset={} opOffset={}",
@@ -322,7 +349,7 @@ where
 
     /// Process messages in a specific queue
     async fn process_message_queue<Listener: TransactionalMessageCheckListener>(
-        &mut self,
+        &self,
         message_queue: &MessageQueue,
         op_queue: &MessageQueue,
         half_offset: i64,
@@ -395,9 +422,14 @@ where
                     }
                 };
                 // Handle slave acting master scenario
-                if self.should_escape_message() {
+                if self.should_escape_message().await {
                     let msg_inner = TransactionalMessageBridge::<MS>::renew_half_message_inner(&msg_ext);
-                    let is_success = self.transactional_message_bridge.escape_message(msg_inner).await;
+                    let is_success = self
+                        .transactional_message_bridge
+                        .lock()
+                        .await
+                        .escape_message(msg_inner)
+                        .await;
 
                     if is_success {
                         escape_fail_cnt = 0;
@@ -551,12 +583,16 @@ where
         // Update offsets
         if new_offset != half_offset {
             self.transactional_message_bridge
+                .lock()
+                .await
                 .update_consume_offset(message_queue, new_offset);
         }
 
         let new_op_offset = self.calculate_op_offset(done_op_offset, op_offset);
         if new_op_offset != op_offset {
             self.transactional_message_bridge
+                .lock()
+                .await
                 .update_consume_offset(op_queue, new_op_offset);
         }
 
@@ -637,15 +673,21 @@ where
         let msg_inner = TransactionalMessageBridge::<MS>::renew_half_message_inner(message_ext);
         Some(
             self.transactional_message_bridge
+                .lock()
+                .await
                 .put_message_return_result(msg_inner)
                 .await,
         )
     }
 
     /// Put immunity message back to half queue
-    async fn put_immunity_msg_back_to_half_queue(&mut self, message_ext: &MessageExt) -> bool {
+    async fn put_immunity_msg_back_to_half_queue(&self, message_ext: &MessageExt) -> bool {
         let msg_inner = TransactionalMessageBridge::<MS>::renew_immunity_half_message_inner(message_ext);
-        self.transactional_message_bridge.put_message(msg_inner).await
+        self.transactional_message_bridge
+            .lock()
+            .await
+            .put_message(msg_inner)
+            .await
     }
 
     /// Determine if message check is needed
@@ -668,7 +710,7 @@ where
 
     /// Check prepare queue offset
     async fn check_prepare_queue_offset(
-        &mut self,
+        &self,
         remove_map: &mut HashMap<i64, i64>,
         done_op_offset: &mut Vec<i64>,
         msg_ext: &MessageExt,
@@ -738,13 +780,7 @@ where
     fn need_skip(&self, msg_ext: &MessageExt) -> bool {
         let value_of_current_minus_born = current_millis() as i64 - msg_ext.born_timestamp();
 
-        let file_reserved_time = self
-            .transactional_message_bridge
-            .broker_runtime_inner
-            .message_store_config()
-            .file_reserved_time as i64;
-
-        if value_of_current_minus_born > file_reserved_time * 3600 * 1000 {
+        if value_of_current_minus_born > self.file_reserved_time_hours * 3600 * 1000 {
             info!(
                 "Half message exceed file reserved time, so skip it. messageId {}, bornTime {}",
                 msg_ext.msg_id(),
@@ -782,27 +818,11 @@ where
         false
     }
 
-    fn should_escape_message(&self) -> bool {
-        self.transactional_message_bridge
-            .broker_runtime_inner
-            .broker_config()
-            .enable_slave_acting_master
-            && self
-                .transactional_message_bridge
-                .broker_runtime_inner
-                .get_min_broker_id_in_group()
-                == self
-                    .transactional_message_bridge
-                    .broker_runtime_inner
-                    .broker_config()
-                    .broker_identity
-                    .broker_id
-            && BrokerRole::Slave
-                == self
-                    .transactional_message_bridge
-                    .broker_runtime_inner
-                    .broker_config()
-                    .broker_role
+    async fn should_escape_message(&self) -> bool {
+        let bridge = self.transactional_message_bridge.lock().await;
+        self.broker_config.enable_slave_acting_master
+            && bridge.broker_runtime_inner.get_min_broker_id_in_group() == self.broker_config.broker_identity.broker_id
+            && BrokerRole::Slave == self.broker_config.broker_role
     }
 
     /// Get half message
@@ -824,6 +844,8 @@ where
     /// Pull half message
     async fn pull_half_msg(&self, mq: &MessageQueue, offset: i64, nums: i32) -> Option<TransactionReadOutcome> {
         self.transactional_message_bridge
+            .lock()
+            .await
             .get_half_message(mq.queue_id(), offset, nums)
             .await
     }
@@ -886,6 +908,8 @@ where
                 pull_offset_of_op, op_queue, pull_result
             );
             self.transactional_message_bridge
+                .lock()
+                .await
                 .update_consume_offset(op_queue, pull_result.next_begin_offset());
             return Ok(Some(pull_result));
         }
@@ -967,6 +991,8 @@ where
     /// Pull operation message
     async fn pull_op_msg(&self, mq: &MessageQueue, offset: i64, nums: i32) -> Option<TransactionReadOutcome> {
         self.transactional_message_bridge
+            .lock()
+            .await
             .get_op_message(mq.queue_id(), offset, nums)
             .await
     }
@@ -994,53 +1020,65 @@ impl<MS> TransactionalMessageService for DefaultTransactionalMessageService<MS>
 where
     MS: MessageStore + Send + Sync + 'static,
 {
-    async fn prepare_message(&mut self, message_inner: MessageExtBrokerInner) -> PutMessageResult {
-        self.transactional_message_bridge.put_half_message(message_inner).await
+    async fn prepare_message(&self, message_inner: MessageExtBrokerInner) -> PutMessageResult {
+        self.transactional_message_bridge
+            .lock()
+            .await
+            .put_half_message(message_inner)
+            .await
     }
 
-    async fn async_prepare_message(&mut self, message_inner: MessageExtBrokerInner) -> PutMessageResult {
-        self.transactional_message_bridge.put_half_message(message_inner).await
+    async fn async_prepare_message(&self, message_inner: MessageExtBrokerInner) -> PutMessageResult {
+        self.transactional_message_bridge
+            .lock()
+            .await
+            .put_half_message(message_inner)
+            .await
     }
 
-    async fn delete_prepare_message(&mut self, message_ext: &MessageExt) -> bool {
+    async fn delete_prepare_message(&self, message_ext: &MessageExt) -> bool {
         let queue_id = message_ext.queue_id;
-        let mut delete_context = self.delete_context.lock().await;
-        let mq_context = delete_context
-            .entry(queue_id)
-            .or_insert(MessageQueueOpContext::new(current_millis(), 20000));
         let data = format!(
             "{}{}",
             message_ext.queue_offset,
             TransactionalMessageUtil::OFFSET_SEPARATOR
         );
         let len = data.len();
-        let res = mq_context.offer(data.clone(), Duration::from_millis(100)).await;
-        if res.is_ok() {
-            let total_size = mq_context.total_size_add_and_get(len as u32).await;
-            if total_size
-                > self
-                    .transactional_message_bridge
-                    .broker_runtime_inner
-                    .broker_config()
-                    .transaction_op_msg_max_size as u32
-            {
-                if let Some(batch_service) = &self.transactional_op_batch_service {
+        let offered_total_size = {
+            let mut delete_context = self.delete_context.lock().await;
+            let mq_context = delete_context
+                .entry(queue_id)
+                .or_insert(MessageQueueOpContext::new(current_millis(), 20000));
+            if mq_context.offer(data.clone(), Duration::from_millis(100)).await.is_ok() {
+                Some(mq_context.total_size_add_and_get(len as u32).await)
+            } else {
+                None
+            }
+        };
+        if let Some(total_size) = offered_total_size {
+            if total_size > self.broker_config.transaction_op_msg_max_size as u32 {
+                if let Some(batch_service) = self.transactional_op_batch_service.get() {
                     batch_service.wakeup();
                 } else {
                     error!("Transactional op batch service not initialized");
                 }
             }
             return true;
-        } else if let Some(batch_service) = &self.transactional_op_batch_service {
+        } else if let Some(batch_service) = self.transactional_op_batch_service.get() {
             batch_service.wakeup();
         } else {
             error!("Transactional op batch service not initialized");
         }
 
-        let msg = self.get_op_message(queue_id, Some(data)).await;
+        let Some(msg) = self.get_op_message(queue_id, Some(data)).await else {
+            error!(queue_id, "Transaction op message was empty after offer fallback");
+            return false;
+        };
         if self
             .transactional_message_bridge
-            .write_op(queue_id, msg.expect("message is none"))
+            .lock()
+            .await
+            .write_op(queue_id, msg)
             .await
         {
             warn!("Force add remove op data. queueId={}", queue_id);
@@ -1055,17 +1093,17 @@ where
     }
 
     #[inline]
-    fn commit_message(&mut self, request_header: &EndTransactionRequestHeader) -> OperationResult {
-        self.get_half_message_by_offset(request_header.commit_log_offset)
+    async fn commit_message(&self, request_header: &EndTransactionRequestHeader) -> OperationResult {
+        self.get_half_message_by_offset(request_header.commit_log_offset).await
     }
 
     #[inline]
-    fn rollback_message(&mut self, request_header: &EndTransactionRequestHeader) -> OperationResult {
-        self.get_half_message_by_offset(request_header.commit_log_offset)
+    async fn rollback_message(&self, request_header: &EndTransactionRequestHeader) -> OperationResult {
+        self.get_half_message_by_offset(request_header.commit_log_offset).await
     }
 
     async fn check<Listener: TransactionalMessageCheckListener + Clone>(
-        &mut self,
+        &self,
         transaction_timeout: u64,
         transaction_check_max: i32,
         listener: Listener,
@@ -1084,17 +1122,17 @@ where
     }
 
     async fn close(&self) {
-        if let Some(batch_service) = &self.transactional_op_batch_service {
+        if let Some(batch_service) = self.transactional_op_batch_service.get() {
             batch_service.shutdown().await
         }
     }
 
     fn get_transaction_metrics(&self) -> &TransactionMetrics {
-        unimplemented!("get_transaction_metrics")
+        &self.transaction_metrics
     }
 
-    fn set_transaction_metrics(&mut self, _transaction_metrics: TransactionMetrics) {
-        unimplemented!("set_transaction_metrics")
+    fn set_transaction_metrics(&mut self, transaction_metrics: TransactionMetrics) {
+        self.transaction_metrics = transaction_metrics;
     }
 }
 
@@ -1160,5 +1198,21 @@ mod tests {
         assert!(source.contains(") -> RocketMQResult<GetResult>"));
         assert!(source.contains(") -> RocketMQResult<Option<TransactionReadOutcome>>"));
         assert!(!source.contains(concat!("Box<dyn std::error::", "Error")));
+    }
+
+    #[test]
+    fn transaction_service_ownership_uses_standard_arc_and_explicit_serialization() {
+        let service_source = include_str!("default_transactional_message_service.rs");
+        let batch_source = include_str!("transactional_op_batch_service.rs");
+        let check_source = include_str!("../transactional_message_check_service.rs");
+
+        assert!(service_source.contains("Mutex<TransactionalMessageBridge<MS>>"));
+        assert!(service_source.contains("OnceLock<TransactionalOpBatchService<MS>>"));
+        assert!(!service_source.contains(concat!("Weak", "ArcMut")));
+        assert!(batch_source.contains("Weak<DefaultTransactionalMessageService<MS>>"));
+        assert!(!batch_source.contains(concat!("Weak", "ArcMut")));
+        assert!(check_source.contains("Arc<DefaultTransactionalMessageService<MS>>"));
+        assert!(!check_source.contains(concat!("mut_from", "_ref")));
+        assert!(!check_source.contains(concat!("Arc", "Mut")));
     }
 }
