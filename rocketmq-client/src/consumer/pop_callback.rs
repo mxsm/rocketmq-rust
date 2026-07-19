@@ -147,7 +147,7 @@ impl PopCallback for DefaultPopCallback {
                             pop_request.get_message_queue(),
                         )
                         .await;
-                    let pull_interval = push_consumer_impl.consumer_config.pull_interval;
+                    let pull_interval = push_consumer_impl.consumer_config_snapshot().pull_interval;
                     if pull_interval > 0 {
                         push_consumer_impl.execute_pop_request_later(pop_request, pull_interval);
                     } else {
@@ -181,17 +181,12 @@ impl PopCallback for DefaultPopCallback {
         };
         let topic = message_queue_inner.topic_str();
         let broker_code = broker_response_code(&err);
+        let consumer_group = push_consumer_impl.consumer_config_snapshot().consumer_group.clone();
         if !topic.starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX) {
             if broker_code == Some(ResponseCode::SubscriptionNotLatest) {
-                warn!(
-                    "the subscription is not latest, group={}",
-                    push_consumer_impl.consumer_config.consumer_group,
-                );
+                warn!("the subscription is not latest, group={}", consumer_group,);
             } else {
-                warn!(
-                    "execute the pop request exception, group={}",
-                    push_consumer_impl.consumer_config.consumer_group
-                );
+                warn!("execute the pop request exception, group={}", consumer_group);
             }
         }
         let time_delay = if broker_code == Some(ResponseCode::FlowControl) {
@@ -229,7 +224,7 @@ mod tests {
     }
 
     fn new_callback() -> DefaultPopCallback {
-        let consumer_config = ArcMut::new(ConsumerConfig::default());
+        let consumer_config = ConsumerConfig::default();
         let push_consumer_impl = ArcMut::new(DefaultMQPushConsumerImpl::new(
             ClientConfig::default(),
             consumer_config,

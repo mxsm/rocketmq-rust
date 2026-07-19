@@ -1062,7 +1062,9 @@ impl ConsumeRequest {
                         }
                     }
                     Some(status_value) => {
-                        if consume_rt >= default_mqpush_consumer_impl.consumer_config.consume_timeout * 60 * 1000 {
+                        if consume_rt
+                            >= default_mqpush_consumer_impl.consumer_config_snapshot().consume_timeout * 60 * 1000
+                        {
                             ConsumeReturnType::TimeOut
                         } else if status_value == ConsumeOrderlyStatus::SuspendCurrentQueueAMoment {
                             ConsumeReturnType::Failed
@@ -1274,7 +1276,7 @@ mod tests {
     }
 
     fn new_default_impl() -> ArcMut<DefaultMQPushConsumerImpl> {
-        let consumer_config = ArcMut::new(ConsumerConfig::default());
+        let consumer_config = ConsumerConfig::default();
         ArcMut::new(DefaultMQPushConsumerImpl::new(
             ClientConfig::default(),
             consumer_config,

@@ -784,7 +784,7 @@ impl ConsumeRequest {
             status,
             has_exception,
             consume_rt,
-            default_mqpush_consumer_impl.consumer_config.consume_timeout,
+            default_mqpush_consumer_impl.consumer_config_snapshot().consume_timeout,
         );
 
         if has_hook {
@@ -1013,7 +1013,7 @@ mod tests {
     }
 
     fn new_default_impl() -> ArcMut<DefaultMQPushConsumerImpl> {
-        let consumer_config = ArcMut::new(ConsumerConfig::default());
+        let consumer_config = ConsumerConfig::default();
         ArcMut::new(DefaultMQPushConsumerImpl::new(
             ClientConfig::default(),
             consumer_config,

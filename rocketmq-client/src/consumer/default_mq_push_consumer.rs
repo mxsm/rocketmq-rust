@@ -15,6 +15,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use arc_swap::ArcSwap;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_common::common::message::message_decoder;
@@ -457,8 +458,22 @@ impl Default for ConsumerConfig {
 
 pub struct DefaultMQPushConsumer {
     client_config: ClientConfig,
-    consumer_config: ArcMut<ConsumerConfig>,
+    consumer_config: Arc<ArcSwap<ConsumerConfig>>,
     pub(crate) default_mqpush_consumer_impl: Option<ArcMut<DefaultMQPushConsumerImpl>>,
+}
+
+impl DefaultMQPushConsumer {
+    fn consumer_config_snapshot(&self) -> Arc<ConsumerConfig> {
+        self.consumer_config.load_full()
+    }
+
+    fn update_consumer_config(&self, update: impl Fn(&mut ConsumerConfig)) {
+        self.consumer_config.rcu(|current| {
+            let mut next = (**current).clone();
+            update(&mut next);
+            Arc::new(next)
+        });
+    }
 }
 
 impl MQConsumer for DefaultMQPushConsumer {
@@ -587,9 +602,10 @@ impl MQConsumer for DefaultMQPushConsumer {
 
 impl MQPushConsumer for DefaultMQPushConsumer {
     async fn start(&mut self) -> rocketmq_error::RocketMQResult<()> {
+        let consumer_config = self.consumer_config_snapshot();
         let consumer_group = NamespaceUtil::wrap_namespace(
             self.client_config.get_namespace().unwrap_or_default().as_str(),
-            self.consumer_config.consumer_group.as_str(),
+            consumer_config.consumer_group.as_str(),
         );
         self.set_consumer_group(consumer_group.as_str());
         let consumer_impl = self
@@ -599,7 +615,7 @@ impl MQPushConsumer for DefaultMQPushConsumer {
         consumer_impl.start().await?;
 
         let trace_dispatcher_to_start =
-            Self::prepare_trace_dispatcher(&self.client_config, &mut self.consumer_config, consumer_impl);
+            Self::prepare_trace_dispatcher(&self.client_config, &self.consumer_config, consumer_impl);
         if let Some(dispatcher) = trace_dispatcher_to_start {
             self.start_trace_dispatcher(dispatcher).await;
         }
@@ -608,12 +624,13 @@ impl MQPushConsumer for DefaultMQPushConsumer {
     }
 
     async fn shutdown(&mut self) {
+        let consumer_config = self.consumer_config_snapshot();
         if let Some(ref mut default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl {
             default_mqpush_consumer_impl
-                .shutdown(self.consumer_config.await_termination_millis_when_shutdown)
+                .shutdown(consumer_config.await_termination_millis_when_shutdown)
                 .await;
         }
-        if let Some(ref trace_dispatcher) = self.consumer_config.trace_dispatcher {
+        if let Some(ref trace_dispatcher) = consumer_config.trace_dispatcher {
             if let Some(async_dispatcher) = trace_dispatcher.as_any().downcast_ref::<AsyncTraceDispatcher>() {
                 async_dispatcher.shutdown_async().await;
             } else {
@@ -630,9 +647,10 @@ impl MQPushConsumer for DefaultMQPushConsumer {
             message_listener_concurrently: Some(Arc::new(message_listener)),
             message_listener_orderly: None,
         };
-        self.consumer_config.message_listener = Some(Arc::new(message_listener));
+        let message_listener = Some(Arc::new(message_listener));
+        self.update_consumer_config(|config| config.message_listener = message_listener.clone());
         if let Some(default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_mut() {
-            default_mqpush_consumer_impl.register_message_listener(self.consumer_config.message_listener.clone());
+            default_mqpush_consumer_impl.register_message_listener(message_listener);
         } else {
             tracing::warn!("DefaultMQPushConsumerImpl is not initialized; listener stored in consumer config");
         }
@@ -646,9 +664,10 @@ impl MQPushConsumer for DefaultMQPushConsumer {
             message_listener_concurrently: None,
             message_listener_orderly: Some(Arc::new(message_listener)),
         };
-        self.consumer_config.message_listener = Some(Arc::new(message_listener));
+        let message_listener = Some(Arc::new(message_listener));
+        self.update_consumer_config(|config| config.message_listener = message_listener.clone());
         if let Some(default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_mut() {
-            default_mqpush_consumer_impl.register_message_listener(self.consumer_config.message_listener.clone());
+            default_mqpush_consumer_impl.register_message_listener(message_listener);
         } else {
             tracing::warn!("DefaultMQPushConsumerImpl is not initialized; listener stored in consumer config");
         }
@@ -842,10 +861,11 @@ impl DefaultMQPushConsumer {
 
     fn prepare_trace_dispatcher(
         client_config: &ClientConfig,
-        consumer_config: &mut ArcMut<ConsumerConfig>,
+        consumer_config: &Arc<ArcSwap<ConsumerConfig>>,
         consumer_impl: &mut ArcMut<DefaultMQPushConsumerImpl>,
     ) -> Option<ArcTraceDispatcher> {
-        let dispatcher = match consumer_config.trace_dispatcher.clone() {
+        let consumer_config_snapshot = consumer_config.load_full();
+        let dispatcher = match consumer_config_snapshot.trace_dispatcher.clone() {
             Some(dispatcher) => dispatcher,
             None if client_config.enable_trace => {
                 let trace_topic = client_config
@@ -854,11 +874,11 @@ impl DefaultMQPushConsumer {
                     .map(|topic| topic.as_str())
                     .unwrap_or_default();
                 let dispatcher = AsyncTraceDispatcher::new(
-                    consumer_config.consumer_group.as_str(),
+                    consumer_config_snapshot.consumer_group.as_str(),
                     Type::Consume,
                     client_config.trace_msg_batch_num,
                     trace_topic,
-                    consumer_config.rpc_hook.clone(),
+                    consumer_config_snapshot.rpc_hook.clone(),
                 );
                 Arc::new(dispatcher)
             }
@@ -871,7 +891,11 @@ impl DefaultMQPushConsumer {
             async_dispatcher.set_use_tls(client_config.use_tls);
         }
 
-        consumer_config.trace_dispatcher = Some(dispatcher.clone());
+        consumer_config.rcu(|current| {
+            let mut next = (**current).clone();
+            next.trace_dispatcher = Some(dispatcher.clone());
+            Arc::new(next)
+        });
         consumer_impl.register_consume_message_hook(ConsumeMessageTraceHookImpl::new(dispatcher.clone()));
         Some(dispatcher)
     }
@@ -930,7 +954,7 @@ impl DefaultMQPushConsumer {
     }
 
     pub fn message_listener(&self) -> Option<Arc<MessageListener>> {
-        self.consumer_config.message_listener.clone()
+        self.consumer_config_snapshot().message_listener.clone()
     }
 
     pub fn get_message_listener(&self) -> Option<Arc<MessageListener>> {
@@ -938,7 +962,7 @@ impl DefaultMQPushConsumer {
     }
 
     pub fn set_message_listener(&mut self, message_listener: Option<Arc<MessageListener>>) {
-        self.consumer_config.message_listener = message_listener.clone();
+        self.update_consumer_config(|config| config.message_listener = message_listener.clone());
         if let Some(consumer_impl) = self.default_mqpush_consumer_impl.as_mut() {
             consumer_impl.register_message_listener(message_listener);
         }
@@ -949,7 +973,7 @@ impl DefaultMQPushConsumer {
     }
 
     pub fn allocate_message_queue_strategy(&self) -> Option<Arc<dyn AllocateMessageQueueStrategy>> {
-        self.consumer_config.allocate_message_queue_strategy.clone()
+        self.consumer_config_snapshot().allocate_message_queue_strategy.clone()
     }
 
     pub fn get_allocate_message_queue_strategy(&self) -> Option<Arc<dyn AllocateMessageQueueStrategy>> {
@@ -960,12 +984,13 @@ impl DefaultMQPushConsumer {
         &mut self,
         allocate_message_queue_strategy: Arc<dyn AllocateMessageQueueStrategy>,
     ) {
-        self.consumer_config
-            .set_allocate_message_queue_strategy(allocate_message_queue_strategy);
+        self.update_consumer_config(|config| {
+            config.set_allocate_message_queue_strategy(allocate_message_queue_strategy.clone())
+        });
     }
 
     pub fn consume_concurrently_max_span(&self) -> u32 {
-        self.consumer_config.consume_concurrently_max_span
+        self.consumer_config_snapshot().consume_concurrently_max_span
     }
 
     pub fn get_consume_concurrently_max_span(&self) -> u32 {
@@ -973,12 +998,11 @@ impl DefaultMQPushConsumer {
     }
 
     pub fn set_consume_concurrently_max_span(&mut self, consume_concurrently_max_span: u32) {
-        self.consumer_config
-            .set_consume_concurrently_max_span(consume_concurrently_max_span);
+        self.update_consumer_config(|config| config.set_consume_concurrently_max_span(consume_concurrently_max_span));
     }
 
     pub fn consume_from_where(&self) -> ConsumeFromWhere {
-        self.consumer_config.consume_from_where
+        self.consumer_config_snapshot().consume_from_where
     }
 
     pub fn get_consume_from_where(&self) -> ConsumeFromWhere {
@@ -986,12 +1010,12 @@ impl DefaultMQPushConsumer {
     }
 
     pub fn set_consume_from_where(&mut self, consume_from_where: ConsumeFromWhere) {
-        self.consumer_config.set_consume_from_where(consume_from_where);
+        self.update_consumer_config(|config| config.set_consume_from_where(consume_from_where));
         self.sync_rebalance_consumer_config();
     }
 
     pub fn consume_message_batch_max_size(&self) -> u32 {
-        self.consumer_config.consume_message_batch_max_size
+        self.consumer_config_snapshot().consume_message_batch_max_size
     }
 
     pub fn get_consume_message_batch_max_size(&self) -> u32 {
@@ -999,29 +1023,29 @@ impl DefaultMQPushConsumer {
     }
 
     pub fn set_consume_message_batch_max_size(&mut self, consume_message_batch_max_size: u32) {
-        self.consumer_config
-            .set_consume_message_batch_max_size(consume_message_batch_max_size);
+        self.update_consumer_config(|config| config.set_consume_message_batch_max_size(consume_message_batch_max_size));
     }
 
-    pub fn consumer_group(&self) -> &CheetahString {
-        &self.consumer_config.consumer_group
+    pub fn consumer_group(&self) -> CheetahString {
+        self.consumer_config_snapshot().consumer_group.clone()
     }
 
-    pub fn get_consumer_group(&self) -> &CheetahString {
+    pub fn get_consumer_group(&self) -> CheetahString {
         self.consumer_group()
     }
 
     pub fn get_subscription(&self) -> Arc<HashMap<CheetahString, CheetahString>> {
-        self.consumer_config.subscription()
+        self.consumer_config_snapshot().subscription()
     }
 
     #[inline]
     pub fn set_consumer_group(&mut self, consumer_group: impl Into<CheetahString>) {
-        self.consumer_config.set_consumer_group(consumer_group.into());
+        let consumer_group = consumer_group.into();
+        self.update_consumer_config(|config| config.set_consumer_group(consumer_group.clone()));
     }
 
     pub fn consume_thread_max(&self) -> u32 {
-        self.consumer_config.consume_thread_max
+        self.consumer_config_snapshot().consume_thread_max
     }
 
     pub fn get_consume_thread_max(&self) -> u32 {
@@ -1029,11 +1053,11 @@ impl DefaultMQPushConsumer {
     }
 
     pub fn set_consume_thread_max(&mut self, consume_thread_max: u32) {
-        self.consumer_config.set_consume_thread_max(consume_thread_max);
+        self.update_consumer_config(|config| config.set_consume_thread_max(consume_thread_max));
     }
 
     pub fn consume_thread_min(&self) -> u32 {
-        self.consumer_config.consume_thread_min
+        self.consumer_config_snapshot().consume_thread_min
     }
 
     pub fn get_consume_thread_min(&self) -> u32 {
@@ -1041,11 +1065,11 @@ impl DefaultMQPushConsumer {
     }
 
     pub fn set_consume_thread_min(&mut self, consume_thread_min: u32) {
-        self.consumer_config.set_consume_thread_min(consume_thread_min);
+        self.update_consumer_config(|config| config.set_consume_thread_min(consume_thread_min));
     }
 
     pub fn message_model(&self) -> MessageModel {
-        self.consumer_config.message_model
+        self.consumer_config_snapshot().message_model
     }
 
     pub fn get_message_model(&self) -> MessageModel {
@@ -1053,12 +1077,12 @@ impl DefaultMQPushConsumer {
     }
 
     pub fn set_message_model(&mut self, message_model: MessageModel) {
-        self.consumer_config.set_message_model(message_model);
+        self.update_consumer_config(|config| config.set_message_model(message_model));
         self.sync_rebalance_consumer_config();
     }
 
     pub fn pull_batch_size(&self) -> u32 {
-        self.consumer_config.pull_batch_size
+        self.consumer_config_snapshot().pull_batch_size
     }
 
     pub fn get_pull_batch_size(&self) -> u32 {
@@ -1066,11 +1090,11 @@ impl DefaultMQPushConsumer {
     }
 
     pub fn set_pull_batch_size(&mut self, pull_batch_size: u32) {
-        self.consumer_config.set_pull_batch_size(pull_batch_size);
+        self.update_consumer_config(|config| config.set_pull_batch_size(pull_batch_size));
     }
 
     pub fn pull_interval(&self) -> u64 {
-        self.consumer_config.pull_interval
+        self.consumer_config_snapshot().pull_interval
     }
 
     pub fn get_pull_interval(&self) -> u64 {
@@ -1078,11 +1102,11 @@ impl DefaultMQPushConsumer {
     }
 
     pub fn set_pull_interval(&mut self, pull_interval: u64) {
-        self.consumer_config.set_pull_interval(pull_interval);
+        self.update_consumer_config(|config| config.set_pull_interval(pull_interval));
     }
 
     pub fn pull_threshold_for_queue(&self) -> u32 {
-        self.consumer_config.pull_threshold_for_queue
+        self.consumer_config_snapshot().pull_threshold_for_queue
     }
 
     pub fn get_pull_threshold_for_queue(&self) -> u32 {
@@ -1090,13 +1114,12 @@ impl DefaultMQPushConsumer {
     }
 
     pub fn set_pull_threshold_for_queue(&mut self, pull_threshold_for_queue: u32) {
-        self.consumer_config
-            .set_pull_threshold_for_queue(pull_threshold_for_queue);
+        self.update_consumer_config(|config| config.set_pull_threshold_for_queue(pull_threshold_for_queue));
         self.sync_rebalance_consumer_config();
     }
 
     pub fn pop_threshold_for_queue(&self) -> u32 {
-        self.consumer_config.pop_threshold_for_queue
+        self.consumer_config_snapshot().pop_threshold_for_queue
     }
 
     pub fn get_pop_threshold_for_queue(&self) -> u32 {
@@ -1104,12 +1127,11 @@ impl DefaultMQPushConsumer {
     }
 
     pub fn set_pop_threshold_for_queue(&mut self, pop_threshold_for_queue: u32) {
-        self.consumer_config
-            .set_pop_threshold_for_queue(pop_threshold_for_queue);
+        self.update_consumer_config(|config| config.set_pop_threshold_for_queue(pop_threshold_for_queue));
     }
 
     pub fn pull_threshold_for_topic(&self) -> i32 {
-        self.consumer_config.pull_threshold_for_topic
+        self.consumer_config_snapshot().pull_threshold_for_topic
     }
 
     pub fn get_pull_threshold_for_topic(&self) -> i32 {
@@ -1117,13 +1139,12 @@ impl DefaultMQPushConsumer {
     }
 
     pub fn set_pull_threshold_for_topic(&mut self, pull_threshold_for_topic: i32) {
-        self.consumer_config
-            .set_pull_threshold_for_topic(pull_threshold_for_topic);
+        self.update_consumer_config(|config| config.set_pull_threshold_for_topic(pull_threshold_for_topic));
         self.sync_rebalance_consumer_config();
     }
 
     pub fn pull_threshold_size_for_queue(&self) -> u32 {
-        self.consumer_config.pull_threshold_size_for_queue
+        self.consumer_config_snapshot().pull_threshold_size_for_queue
     }
 
     pub fn get_pull_threshold_size_for_queue(&self) -> u32 {
@@ -1131,13 +1152,12 @@ impl DefaultMQPushConsumer {
     }
 
     pub fn set_pull_threshold_size_for_queue(&mut self, pull_threshold_size_for_queue: u32) {
-        self.consumer_config
-            .set_pull_threshold_size_for_queue(pull_threshold_size_for_queue);
+        self.update_consumer_config(|config| config.set_pull_threshold_size_for_queue(pull_threshold_size_for_queue));
         self.sync_rebalance_consumer_config();
     }
 
     pub fn pull_threshold_size_for_topic(&self) -> i32 {
-        self.consumer_config.pull_threshold_size_for_topic
+        self.consumer_config_snapshot().pull_threshold_size_for_topic
     }
 
     pub fn get_pull_threshold_size_for_topic(&self) -> i32 {
@@ -1145,13 +1165,12 @@ impl DefaultMQPushConsumer {
     }
 
     pub fn set_pull_threshold_size_for_topic(&mut self, pull_threshold_size_for_topic: i32) {
-        self.consumer_config
-            .set_pull_threshold_size_for_topic(pull_threshold_size_for_topic);
+        self.update_consumer_config(|config| config.set_pull_threshold_size_for_topic(pull_threshold_size_for_topic));
         self.sync_rebalance_consumer_config();
     }
 
     pub fn consume_timestamp(&self) -> Option<CheetahString> {
-        self.consumer_config.consume_timestamp.clone()
+        self.consumer_config_snapshot().consume_timestamp.clone()
     }
 
     pub fn get_consume_timestamp(&self) -> Option<CheetahString> {
@@ -1159,35 +1178,34 @@ impl DefaultMQPushConsumer {
     }
 
     pub fn set_consume_timestamp(&mut self, consume_timestamp: impl Into<CheetahString>) {
-        self.consumer_config
-            .set_consume_timestamp(Some(consume_timestamp.into()));
+        let consume_timestamp = consume_timestamp.into();
+        self.update_consumer_config(|config| config.set_consume_timestamp(Some(consume_timestamp.clone())));
         self.sync_rebalance_consumer_config();
     }
 
     pub fn clear_consume_timestamp(&mut self) {
-        self.consumer_config.set_consume_timestamp(None);
+        self.update_consumer_config(|config| config.set_consume_timestamp(None));
         self.sync_rebalance_consumer_config();
     }
 
     pub fn is_post_subscription_when_pull(&self) -> bool {
-        self.consumer_config.post_subscription_when_pull
+        self.consumer_config_snapshot().post_subscription_when_pull
     }
 
     pub fn set_post_subscription_when_pull(&mut self, post_subscription_when_pull: bool) {
-        self.consumer_config
-            .set_post_subscription_when_pull(post_subscription_when_pull);
+        self.update_consumer_config(|config| config.set_post_subscription_when_pull(post_subscription_when_pull));
     }
 
     pub fn is_unit_mode(&self) -> bool {
-        self.consumer_config.unit_mode
+        self.consumer_config_snapshot().unit_mode
     }
 
     pub fn set_unit_mode(&mut self, unit_mode: bool) {
-        self.consumer_config.set_unit_mode(unit_mode);
+        self.update_consumer_config(|config| config.set_unit_mode(unit_mode));
     }
 
     pub fn adjust_thread_pool_nums_threshold(&self) -> u64 {
-        self.consumer_config.adjust_thread_pool_nums_threshold
+        self.consumer_config_snapshot().adjust_thread_pool_nums_threshold
     }
 
     pub fn get_adjust_thread_pool_nums_threshold(&self) -> u64 {
@@ -1195,12 +1213,13 @@ impl DefaultMQPushConsumer {
     }
 
     pub fn set_adjust_thread_pool_nums_threshold(&mut self, adjust_thread_pool_nums_threshold: u64) {
-        self.consumer_config
-            .set_adjust_thread_pool_nums_threshold(adjust_thread_pool_nums_threshold);
+        self.update_consumer_config(|config| {
+            config.set_adjust_thread_pool_nums_threshold(adjust_thread_pool_nums_threshold)
+        });
     }
 
     pub fn max_reconsume_times(&self) -> i32 {
-        self.consumer_config.max_reconsume_times
+        self.consumer_config_snapshot().max_reconsume_times
     }
 
     pub fn get_max_reconsume_times(&self) -> i32 {
@@ -1208,11 +1227,11 @@ impl DefaultMQPushConsumer {
     }
 
     pub fn set_max_reconsume_times(&mut self, max_reconsume_times: i32) {
-        self.consumer_config.set_max_reconsume_times(max_reconsume_times);
+        self.update_consumer_config(|config| config.set_max_reconsume_times(max_reconsume_times));
     }
 
     pub fn suspend_current_queue_time_millis(&self) -> u64 {
-        self.consumer_config.suspend_current_queue_time_millis
+        self.consumer_config_snapshot().suspend_current_queue_time_millis
     }
 
     pub fn get_suspend_current_queue_time_millis(&self) -> u64 {
@@ -1220,12 +1239,13 @@ impl DefaultMQPushConsumer {
     }
 
     pub fn set_suspend_current_queue_time_millis(&mut self, suspend_current_queue_time_millis: u64) {
-        self.consumer_config
-            .set_suspend_current_queue_time_millis(suspend_current_queue_time_millis);
+        self.update_consumer_config(|config| {
+            config.set_suspend_current_queue_time_millis(suspend_current_queue_time_millis)
+        });
     }
 
     pub fn consume_timeout(&self) -> u64 {
-        self.consumer_config.consume_timeout
+        self.consumer_config_snapshot().consume_timeout
     }
 
     pub fn get_consume_timeout(&self) -> u64 {
@@ -1233,11 +1253,11 @@ impl DefaultMQPushConsumer {
     }
 
     pub fn set_consume_timeout(&mut self, consume_timeout: u64) {
-        self.consumer_config.set_consume_timeout(consume_timeout);
+        self.update_consumer_config(|config| config.set_consume_timeout(consume_timeout));
     }
 
     pub fn pop_invisible_time(&self) -> u64 {
-        self.consumer_config.pop_invisible_time
+        self.consumer_config_snapshot().pop_invisible_time
     }
 
     pub fn get_pop_invisible_time(&self) -> u64 {
@@ -1245,11 +1265,11 @@ impl DefaultMQPushConsumer {
     }
 
     pub fn set_pop_invisible_time(&mut self, pop_invisible_time: u64) {
-        self.consumer_config.set_pop_invisible_time(pop_invisible_time);
+        self.update_consumer_config(|config| config.set_pop_invisible_time(pop_invisible_time));
     }
 
     pub fn await_termination_millis_when_shutdown(&self) -> u64 {
-        self.consumer_config.await_termination_millis_when_shutdown
+        self.consumer_config_snapshot().await_termination_millis_when_shutdown
     }
 
     pub fn get_await_termination_millis_when_shutdown(&self) -> u64 {
@@ -1257,12 +1277,13 @@ impl DefaultMQPushConsumer {
     }
 
     pub fn set_await_termination_millis_when_shutdown(&mut self, await_termination_millis_when_shutdown: u64) {
-        self.consumer_config
-            .set_await_termination_millis_when_shutdown(await_termination_millis_when_shutdown);
+        self.update_consumer_config(|config| {
+            config.set_await_termination_millis_when_shutdown(await_termination_millis_when_shutdown)
+        });
     }
 
     pub fn pull_batch_size_in_bytes(&self) -> u32 {
-        self.consumer_config.pull_batch_size_in_bytes
+        self.consumer_config_snapshot().pull_batch_size_in_bytes
     }
 
     pub fn get_pull_batch_size_in_bytes(&self) -> u32 {
@@ -1270,12 +1291,11 @@ impl DefaultMQPushConsumer {
     }
 
     pub fn set_pull_batch_size_in_bytes(&mut self, pull_batch_size_in_bytes: u32) {
-        self.consumer_config
-            .set_pull_batch_size_in_bytes(pull_batch_size_in_bytes);
+        self.update_consumer_config(|config| config.set_pull_batch_size_in_bytes(pull_batch_size_in_bytes));
     }
 
     pub fn trace_dispatcher(&self) -> Option<ArcTraceDispatcher> {
-        self.consumer_config.trace_dispatcher.clone()
+        self.consumer_config_snapshot().trace_dispatcher.clone()
     }
 
     pub fn get_trace_dispatcher(&self) -> Option<ArcTraceDispatcher> {
@@ -1292,7 +1312,7 @@ impl DefaultMQPushConsumer {
             consumer_impl.client_config.set_use_tls(use_tls);
             consumer_impl.rebalance_impl.client_config.set_use_tls(use_tls);
         }
-        if let Some(trace_dispatcher) = self.consumer_config.trace_dispatcher.as_ref() {
+        if let Some(trace_dispatcher) = self.consumer_config_snapshot().trace_dispatcher.as_ref() {
             if let Some(async_dispatcher) = trace_dispatcher.as_any().downcast_ref::<AsyncTraceDispatcher>() {
                 async_dispatcher.set_use_tls(use_tls);
             }
@@ -1300,7 +1320,7 @@ impl DefaultMQPushConsumer {
     }
 
     pub fn offset_store(&self) -> Option<Arc<OffsetStore>> {
-        self.consumer_config.offset_store().or_else(|| {
+        self.consumer_config_snapshot().offset_store().or_else(|| {
             self.default_mqpush_consumer_impl
                 .as_ref()
                 .and_then(|consumer_impl| consumer_impl.offset_store())
@@ -1312,14 +1332,14 @@ impl DefaultMQPushConsumer {
     }
 
     pub fn set_offset_store(&mut self, offset_store: Option<Arc<OffsetStore>>) {
-        self.consumer_config.set_offset_store(offset_store.clone());
+        self.update_consumer_config(|config| config.set_offset_store(offset_store.clone()));
         if let Some(consumer_impl) = self.default_mqpush_consumer_impl.as_mut() {
             consumer_impl.set_offset_store(offset_store);
         }
     }
 
     pub fn pop_batch_nums(&self) -> u32 {
-        self.consumer_config.pop_batch_nums
+        self.consumer_config_snapshot().pop_batch_nums
     }
 
     pub fn get_pop_batch_nums(&self) -> u32 {
@@ -1327,20 +1347,20 @@ impl DefaultMQPushConsumer {
     }
 
     pub fn set_pop_batch_nums(&mut self, pop_batch_nums: u32) {
-        self.consumer_config.set_pop_batch_nums(pop_batch_nums);
+        self.update_consumer_config(|config| config.set_pop_batch_nums(pop_batch_nums));
     }
 
     pub fn is_client_rebalance(&self) -> bool {
-        self.consumer_config.client_rebalance
+        self.consumer_config_snapshot().client_rebalance
     }
 
     pub fn set_client_rebalance(&mut self, client_rebalance: bool) {
-        self.consumer_config.set_client_rebalance(client_rebalance);
+        self.update_consumer_config(|config| config.set_client_rebalance(client_rebalance));
         self.sync_rebalance_consumer_config();
     }
 
     pub fn message_queue_listener(&self) -> Option<ArcMessageQueueListener> {
-        self.consumer_config.message_queue_listener.clone()
+        self.consumer_config_snapshot().message_queue_listener.clone()
     }
 
     pub fn get_message_queue_listener(&self) -> Option<ArcMessageQueueListener> {
@@ -1348,27 +1368,28 @@ impl DefaultMQPushConsumer {
     }
 
     pub fn set_message_queue_listener(&mut self, message_queue_listener: Option<ArcMessageQueueListener>) {
-        self.consumer_config.set_message_queue_listener(message_queue_listener);
+        self.update_consumer_config(|config| config.set_message_queue_listener(message_queue_listener.clone()));
         self.sync_rebalance_consumer_config();
     }
 
     pub fn apply_tuning_profile(&mut self, profile: ConsumerTuningProfile) {
-        self.consumer_config.mut_from_ref().apply_tuning_profile(profile);
+        self.update_consumer_config(|config| config.apply_tuning_profile(profile));
         self.sync_rebalance_consumer_config();
     }
 
     fn sync_rebalance_consumer_config(&self) {
         if let Some(consumer_impl) = self.default_mqpush_consumer_impl.as_ref() {
-            consumer_impl.sync_rebalance_consumer_config(self.consumer_config.as_ref().clone());
+            consumer_impl.sync_rebalance_consumer_config((*self.consumer_config_snapshot()).clone());
         }
     }
 
     pub fn new(client_config: ClientConfig, consumer_config: ConsumerConfig) -> DefaultMQPushConsumer {
-        let consumer_config = ArcMut::new(consumer_config);
-        let mut default_mqpush_consumer_impl = ArcMut::new(DefaultMQPushConsumerImpl::new(
+        let rpc_hook = consumer_config.rpc_hook.clone();
+        let consumer_config = Arc::new(ArcSwap::from_pointee(consumer_config));
+        let mut default_mqpush_consumer_impl = ArcMut::new(DefaultMQPushConsumerImpl::new_with_config_store(
             client_config.clone(),
             consumer_config.clone(),
-            consumer_config.rpc_hook.clone(),
+            rpc_hook,
         ));
         let wrapper = default_mqpush_consumer_impl.clone();
         default_mqpush_consumer_impl.set_default_mqpush_consumer_impl(wrapper);
@@ -1500,8 +1521,8 @@ mod tests {
             .consumer_group("builder_default_strategy_group")
             .build();
 
-        let strategy = consumer
-            .consumer_config
+        let consumer_config = consumer.consumer_config_snapshot();
+        let strategy = consumer_config
             .allocate_message_queue_strategy
             .as_ref()
             .expect("default allocation strategy should be preserved");
@@ -1611,7 +1632,7 @@ mod tests {
 
         consumer.register_message_listener_concurrently(TestConcurrentListener);
 
-        assert!(consumer.consumer_config.message_listener.is_some());
+        assert!(consumer.consumer_config_snapshot().message_listener.is_some());
     }
 
     #[test]
@@ -1630,7 +1651,7 @@ mod tests {
         assert!(Arc::ptr_eq(&listener, &observed_listener));
         assert!(observed_listener.is_concurrently());
         assert!(consumer
-            .consumer_config
+            .consumer_config_snapshot()
             .message_listener
             .as_ref()
             .expect("config listener should be set")
@@ -1648,12 +1669,12 @@ mod tests {
         consumer.register_message_listener(None);
 
         assert!(consumer.message_listener().is_none());
-        assert!(consumer.consumer_config.message_listener.is_none());
+        assert!(consumer.consumer_config_snapshot().message_listener.is_none());
     }
 
     #[test]
     fn push_subscription_facade_preserves_owned_snapshot_identity() {
-        let mut consumer = DefaultMQPushConsumer::builder()
+        let consumer = DefaultMQPushConsumer::builder()
             .consumer_group("push_subscription_snapshot_group")
             .build();
         let first_snapshot = Arc::new(HashMap::from([(
@@ -1661,14 +1682,14 @@ mod tests {
             CheetahString::from_static_str("TagA"),
         )]));
 
-        consumer.consumer_config.set_subscription(first_snapshot.clone());
+        consumer.update_consumer_config(|config| config.set_subscription(first_snapshot.clone()));
 
         let observed = consumer.get_subscription();
         assert!(Arc::ptr_eq(&first_snapshot, &observed));
         assert_eq!(observed.get("TopicSnapshot").map(CheetahString::as_str), Some("TagA"));
 
         let second_snapshot = Arc::new(HashMap::new());
-        consumer.consumer_config.set_subscription(second_snapshot.clone());
+        consumer.update_consumer_config(|config| config.set_subscription(second_snapshot.clone()));
 
         assert!(Arc::ptr_eq(&second_snapshot, &consumer.get_subscription()));
         assert_eq!(
@@ -1826,6 +1847,7 @@ mod tests {
         let mut consumer = DefaultMQPushConsumer::builder()
             .consumer_group("push_runtime_config_group")
             .build();
+        let initial_config = consumer.consumer_config_snapshot();
         let listener: ArcMessageQueueListener = Arc::new(TestMessageQueueListener);
 
         consumer.set_allocate_message_queue_strategy(Arc::new(AllocateMessageQueueAveragely));
@@ -1889,11 +1911,15 @@ mod tests {
         assert!(consumer.message_queue_listener().is_some());
         assert!(consumer.allocate_message_queue_strategy().is_some());
 
-        let impl_config = &consumer
+        let consumer_impl = consumer
             .default_mqpush_consumer_impl
             .as_ref()
-            .expect("push consumer impl should exist")
-            .consumer_config;
+            .expect("push consumer impl should exist");
+        assert!(Arc::ptr_eq(&consumer.consumer_config, &consumer_impl.consumer_config));
+        let impl_config = consumer_impl.consumer_config_snapshot();
+        assert!(!Arc::ptr_eq(&initial_config, &impl_config));
+        assert_eq!(initial_config.consumer_group.as_str(), "push_runtime_config_group");
+        assert_eq!(initial_config.pull_batch_size, 32);
 
         assert_eq!(impl_config.consume_concurrently_max_span, 1234);
         assert_eq!(impl_config.consume_from_where, ConsumeFromWhere::ConsumeFromFirstOffset);
@@ -2023,11 +2049,11 @@ mod tests {
         assert_eq!(consumer.pull_threshold_for_queue(), 4096);
         assert_eq!(consumer.pull_threshold_size_for_queue(), 256);
 
-        let impl_config = &consumer
+        let impl_config = consumer
             .default_mqpush_consumer_impl
             .as_ref()
             .expect("push consumer impl should exist")
-            .consumer_config;
+            .consumer_config_snapshot();
 
         assert_eq!(impl_config.consume_message_batch_max_size, 16);
         assert_eq!(impl_config.pull_batch_size, 128);
@@ -2160,16 +2186,13 @@ mod tests {
             .build();
 
         let trace_dispatcher_to_start = {
+            let consumer_config = consumer.consumer_config.clone();
             let consumer_impl = consumer
                 .default_mqpush_consumer_impl
                 .as_mut()
                 .expect("push consumer impl should exist");
-            DefaultMQPushConsumer::prepare_trace_dispatcher(
-                &consumer.client_config,
-                &mut consumer.consumer_config,
-                consumer_impl,
-            )
-            .expect("custom dispatcher should be prepared")
+            DefaultMQPushConsumer::prepare_trace_dispatcher(&consumer.client_config, &consumer_config, consumer_impl)
+                .expect("custom dispatcher should be prepared")
         };
 
         assert_eq!(

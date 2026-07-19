@@ -220,7 +220,7 @@ impl Rebalance for RebalancePushImpl {
                         config.pull_threshold_size_for_queue = value;
                     }
                 });
-                if let Some(mut consumer_impl) = self.default_mqpush_consumer_impl.as_ref().cloned() {
+                if let Some(consumer_impl) = self.default_mqpush_consumer_impl.as_ref().cloned() {
                     consumer_impl
                         .update_pull_thresholds_from_rebalance(pull_threshold_for_queue, pull_threshold_size_for_queue);
                 }

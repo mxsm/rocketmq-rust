@@ -134,7 +134,7 @@ impl PullCallback for DefaultPullCallback {
                             )
                             .await;
                     }
-                    let pull_interval = push_consumer_impl.consumer_config.pull_interval;
+                    let pull_interval = push_consumer_impl.consumer_config_snapshot().pull_interval;
                     if pull_interval > 0 {
                         push_consumer_impl.execute_pull_request_later(pull_request, pull_interval);
                     } else {
@@ -212,17 +212,16 @@ impl PullCallback for DefaultPullCallback {
         };
         let topic = message_queue_inner.topic_str();
         let broker_code = broker_response_code(&err);
+        let consumer_group = self
+            .push_consumer_impl
+            .consumer_config_snapshot()
+            .consumer_group
+            .clone();
         if !topic.starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX) {
             if broker_code == Some(ResponseCode::SubscriptionNotLatest) {
-                warn!(
-                    "the subscription is not latest, group={}",
-                    self.push_consumer_impl.consumer_config.consumer_group,
-                );
+                warn!("the subscription is not latest, group={}", consumer_group,);
             } else {
-                warn!(
-                    "execute the pull request exception, group={}",
-                    self.push_consumer_impl.consumer_config.consumer_group
-                );
+                warn!("execute the pull request exception, group={}", consumer_group);
             }
         }
         let time_delay = if broker_code == Some(ResponseCode::FlowControl) {
@@ -246,7 +245,7 @@ mod tests {
     use crate::consumer::pull_result::PullResult;
 
     fn new_callback() -> DefaultPullCallback {
-        let consumer_config = ArcMut::new(ConsumerConfig::default());
+        let consumer_config = ConsumerConfig::default();
         let push_consumer_impl = ArcMut::new(DefaultMQPushConsumerImpl::new(
             ClientConfig::default(),
             consumer_config,
