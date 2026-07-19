@@ -64,7 +64,7 @@ fn rocksdb_store_config_with_maintenance(temp_dir: &TempDir) -> MessageStoreConf
 
 fn new_test_store(temp_dir: &TempDir) -> ArcMut<RocksDBMessageStore> {
     let broker_config = Arc::new(BrokerConfig::default());
-    let topic_table: Arc<DashMap<CheetahString, ArcMut<TopicConfig>>> = Arc::new(DashMap::new());
+    let topic_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>> = Arc::new(DashMap::new());
 
     ArcMut::new(
         RocksDBMessageStore::try_new(
@@ -80,7 +80,7 @@ fn new_test_store(temp_dir: &TempDir) -> ArcMut<RocksDBMessageStore> {
 
 fn new_test_store_with_config(config: MessageStoreConfig) -> ArcMut<RocksDBMessageStore> {
     let broker_config = Arc::new(BrokerConfig::default());
-    let topic_table: Arc<DashMap<CheetahString, ArcMut<TopicConfig>>> = Arc::new(DashMap::new());
+    let topic_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>> = Arc::new(DashMap::new());
 
     ArcMut::new(
         RocksDBMessageStore::try_new(Arc::new(config), broker_config, topic_table, None, false)

@@ -435,6 +435,13 @@ decode/clean 发布完整 replacement，cleanup 以 observed Arc identity 做条
 occurrences、194 test/551 occurrences，Broker owner 降至 185/549；Broker TopicConfig/offset/root、Store、
 compatibility 与完整候选快照 Gate 仍保持开放。
 
+M11-12ap 已将 Broker TopicConfig table/snapshot 与 Store carrier 改为不可变标准 `Arc` 整值代际；TopicConfig、
+读快照和 DataVersion 在单一 metadata transition 中提交，派生更新重读最新代际后发布。全量/单 Topic/增量注册
+共用异步顺序锁并在取锁后重采样，权限掩码只修改 owned clone；持久化与 slave replacement 捕获并发布同一表/版本。
+实际快照降至 300 production/783 occurrences、168 test/466 occurrences，Broker owner 降至 178/475、Store 降至
+122/308；compatibility 14/40 不增。下一子切片 M11-12aq 处理 Broker POP buffer merge service ownership，完整候选
+快照与 HUMAN Gate 仍保持开放。
+
 ## 公共兼容面
 
 - development/compatibility仍可显式选择；secure只作为新部署默认，不静默重解释旧配置。

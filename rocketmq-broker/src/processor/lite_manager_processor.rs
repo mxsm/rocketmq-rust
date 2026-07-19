@@ -15,6 +15,7 @@
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::attribute::topic_message_type::TopicMessageType;
@@ -657,7 +658,7 @@ impl<MS: MessageStore> LiteManagerProcessor<MS> {
     fn validate_lite_parent_topic(
         &self,
         topic: &CheetahString,
-    ) -> Result<ArcMut<TopicConfig>, (ResponseCode, CheetahString)> {
+    ) -> Result<Arc<TopicConfig>, (ResponseCode, CheetahString)> {
         let topic_config = self
             .broker_runtime_inner
             .topic_config_manager()

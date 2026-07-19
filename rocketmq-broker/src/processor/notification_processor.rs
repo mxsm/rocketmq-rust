@@ -98,13 +98,13 @@ impl<MS: MessageStore> NotificationProcessor<MS> {
             .broker_runtime_inner
             .topic_config_manager()
             .select_topic_config(topic_name);
-        self.has_msg_from_topic(topic_config.as_ref(), random_q, request_header)
+        self.has_msg_from_topic(topic_config.as_deref(), random_q, request_header)
             .await
     }
 
     async fn has_msg_from_topic(
         &self,
-        topic_config: Option<&ArcMut<TopicConfig>>,
+        topic_config: Option<&TopicConfig>,
         random_q: i32,
         request_header: &NotificationRequestHeader,
     ) -> bool {

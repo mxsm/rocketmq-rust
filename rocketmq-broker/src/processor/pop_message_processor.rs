@@ -1804,9 +1804,9 @@ mod tests {
         topic: &str,
         group: &str,
     ) {
-        inner
+        let _ = inner
             .topic_config_manager_mut()
-            .update_topic_config(ArcMut::new(TopicConfig::with_queues(topic, 1, 1)));
+            .update_topic_config(TopicConfig::with_queues(topic, 1, 1));
 
         let mut config = SubscriptionGroupConfig::new(CheetahString::from_slice(group));
         inner

@@ -279,7 +279,7 @@ pub struct LocalFileMessageStore {
     composition: LocalStoreComposition,
     broker_config: Arc<BrokerConfig>,
     put_message_hook_list: HookRegistry<dyn PutMessageHook + Send + Sync>,
-    topic_config_table: Arc<DashMap<CheetahString, ArcMut<TopicConfig>>>,
+    topic_config_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>>,
     commit_log: ArcMut<CommitLog>,
 
     store_checkpoint: Option<Arc<StoreCheckpoint>>,
@@ -395,7 +395,7 @@ impl LocalFileMessageStore {
     pub fn new(
         message_store_config: Arc<MessageStoreConfig>,
         broker_config: Arc<BrokerConfig>,
-        topic_config_table: Arc<DashMap<CheetahString, ArcMut<TopicConfig>>>,
+        topic_config_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>>,
         broker_stats_manager: Option<Arc<BrokerStatsManager>>,
         notify_message_arrive_in_batch: bool,
     ) -> Self {
@@ -412,7 +412,7 @@ impl LocalFileMessageStore {
     pub fn try_new(
         message_store_config: Arc<MessageStoreConfig>,
         broker_config: Arc<BrokerConfig>,
-        topic_config_table: Arc<DashMap<CheetahString, ArcMut<TopicConfig>>>,
+        topic_config_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>>,
         broker_stats_manager: Option<Arc<BrokerStatsManager>>,
         notify_message_arrive_in_batch: bool,
     ) -> Result<Self, StoreError> {
@@ -865,7 +865,7 @@ impl Drop for LocalFileMessageStore {
 
 impl LocalFileMessageStore {
     #[inline]
-    pub fn get_topic_config(&self, topic: &CheetahString) -> Option<ArcMut<TopicConfig>> {
+    pub fn get_topic_config(&self, topic: &CheetahString) -> Option<Arc<TopicConfig>> {
         if self.topic_config_table.is_empty() {
             return None;
         }
@@ -5599,7 +5599,7 @@ mod tests {
         let mut store = ArcMut::new(LocalFileMessageStore::new(
             Arc::new(message_store_config),
             Arc::new(broker_config),
-            Arc::new(DashMap::<CheetahString, ArcMut<TopicConfig>>::new()),
+            Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
             None,
             false,
         ));
@@ -5637,7 +5637,7 @@ mod tests {
         ArcMut::new(LocalFileMessageStore::new(
             Arc::new(message_store_config),
             Arc::new(BrokerConfig::default()),
-            Arc::new(DashMap::<CheetahString, ArcMut<TopicConfig>>::new()),
+            Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
             None,
             false,
         ))
@@ -5917,7 +5917,7 @@ mod tests {
         let mut store = ArcMut::new(LocalFileMessageStore::new(
             Arc::new(message_store_config),
             Arc::new(BrokerConfig::default()),
-            Arc::new(DashMap::<CheetahString, ArcMut<TopicConfig>>::new()),
+            Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
             None,
             false,
         ));
@@ -6308,9 +6308,7 @@ mod tests {
             TopicAttributes::cleanup_policy_attribute().name().clone(),
             CleanupPolicy::COMPACTION.to_string().into(),
         );
-        store
-            .topic_config_table
-            .insert(topic.clone(), ArcMut::new(topic_config));
+        store.topic_config_table.insert(topic.clone(), Arc::new(topic_config));
 
         store.init().await.expect("init compaction-enabled store");
         assert!(store.load().await, "load compaction-enabled store");
@@ -6354,9 +6352,7 @@ mod tests {
             TopicAttributes::queue_type_attribute().name().clone(),
             CQType::RocksDBCQ.to_string().into(),
         );
-        store
-            .topic_config_table
-            .insert(topic.clone(), ArcMut::new(topic_config));
+        store.topic_config_table.insert(topic.clone(), Arc::new(topic_config));
 
         store.init().await.expect("init rocksdb compatibility store");
         assert!(store.load().await, "load rocksdb compatibility store");
@@ -7234,7 +7230,7 @@ mod tests {
                 enable_controller_mode: true,
                 ..BrokerConfig::default()
             }),
-            Arc::new(DashMap::<CheetahString, ArcMut<TopicConfig>>::new()),
+            Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
             None,
             false,
         ));
@@ -7273,7 +7269,7 @@ mod tests {
                 ..MessageStoreConfig::default()
             }),
             Arc::new(BrokerConfig::default()),
-            Arc::new(DashMap::<CheetahString, ArcMut<TopicConfig>>::new()),
+            Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
             None,
             false,
         ));
@@ -7576,7 +7572,7 @@ mod tests {
                 ..MessageStoreConfig::default()
             }),
             Arc::new(BrokerConfig::default()),
-            Arc::new(DashMap::<CheetahString, ArcMut<TopicConfig>>::new()),
+            Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
             None,
             false,
         ));
@@ -8130,7 +8126,7 @@ mod tests {
                 enable_controller_mode: true,
                 ..BrokerConfig::default()
             }),
-            Arc::new(DashMap::<CheetahString, ArcMut<TopicConfig>>::new()),
+            Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
             None,
             false,
         ));
@@ -8180,7 +8176,7 @@ mod tests {
                 enable_controller_mode: true,
                 ..BrokerConfig::default()
             }),
-            Arc::new(DashMap::<CheetahString, ArcMut<TopicConfig>>::new()),
+            Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
             None,
             false,
         ));
@@ -8241,7 +8237,7 @@ mod tests {
                 enable_controller_mode: true,
                 ..BrokerConfig::default()
             }),
-            Arc::new(DashMap::<CheetahString, ArcMut<TopicConfig>>::new()),
+            Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
             None,
             false,
         ));
@@ -8266,7 +8262,7 @@ mod tests {
                 enable_controller_mode: true,
                 ..BrokerConfig::default()
             }),
-            Arc::new(DashMap::<CheetahString, ArcMut<TopicConfig>>::new()),
+            Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
             None,
             false,
         ));

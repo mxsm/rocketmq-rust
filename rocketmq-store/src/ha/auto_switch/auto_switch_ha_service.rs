@@ -470,7 +470,7 @@ mod tests {
             ..MessageStoreConfig::default()
         };
 
-        let topic_table: Arc<DashMap<CheetahString, ArcMut<TopicConfig>>> = Arc::new(DashMap::new());
+        let topic_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>> = Arc::new(DashMap::new());
         let mut store = ArcMut::new(LocalFileMessageStore::new(
             Arc::new(message_store_config),
             Arc::new(broker_config),

@@ -114,7 +114,7 @@ impl HookUtils {
     }
 
     pub fn check_inner_batch(
-        topic_config_table: &Arc<DashMap<CheetahString, ArcMut<TopicConfig>>>,
+        topic_config_table: &Arc<DashMap<CheetahString, Arc<TopicConfig>>>,
         msg: &MessageExt,
     ) -> Option<PutMessageResult> {
         if msg.properties().contains_key(MessageConst::PROPERTY_INNER_NUM)
@@ -129,8 +129,8 @@ impl HookUtils {
 
         if MessageSysFlag::check(msg.sys_flag(), MessageSysFlag::INNER_BATCH_FLAG) {
             let topic_config_ref = topic_config_table.get(msg.topic());
-            let topic_config = topic_config_ref.as_deref();
-            if !QueueTypeUtils::is_batch_cq_arc_mut(topic_config) {
+            let topic_config = topic_config_ref.as_deref().map(Arc::as_ref);
+            if !QueueTypeUtils::is_batch_cq(topic_config) {
                 error!("[BUG]The message is an inner batch but cq type is not batch cq");
                 return Some(PutMessageResult::new_default(PutMessageStatus::MessageIllegal));
             }
@@ -373,7 +373,7 @@ mod tests {
         let topic_config_table = DashMap::new();
         topic_config_table.insert(
             CheetahString::from_static_str("test_topic"),
-            ArcMut::new(TopicConfig::default()),
+            Arc::new(TopicConfig::default()),
         );
         let topic_config_table = Arc::new(topic_config_table);
         let mut msg = MessageExt::default();

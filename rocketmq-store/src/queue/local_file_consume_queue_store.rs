@@ -1470,8 +1470,8 @@ mod tests {
             ..MessageStoreConfig::default()
         });
         let broker_config = Arc::new(BrokerConfig::default());
-        let topic_config_table = Arc::new(DashMap::<CheetahString, ArcMut<TopicConfig>>::new());
-        topic_config_table.insert(topic.clone(), ArcMut::new(TopicConfig::new(topic.clone())));
+        let topic_config_table = Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new());
+        topic_config_table.insert(topic.clone(), Arc::new(TopicConfig::new(topic.clone())));
         let mut message_store = ArcMut::new(LocalFileMessageStore::new(
             message_store_config.clone(),
             broker_config.clone(),
@@ -1501,13 +1501,13 @@ mod tests {
             ..MessageStoreConfig::default()
         });
         let broker_config = Arc::new(BrokerConfig::default());
-        let topic_config_table = Arc::new(DashMap::<CheetahString, ArcMut<TopicConfig>>::new());
+        let topic_config_table = Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new());
         let mut topic_config = TopicConfig::new(topic.clone());
         topic_config.attributes.insert(
             TopicAttributes::queue_type_attribute().name().clone(),
             CQType::RocksDBCQ.to_string().into(),
         );
-        topic_config_table.insert(topic.clone(), ArcMut::new(topic_config));
+        topic_config_table.insert(topic.clone(), Arc::new(topic_config));
         let mut message_store = ArcMut::new(LocalFileMessageStore::new(
             message_store_config.clone(),
             broker_config.clone(),
@@ -1541,7 +1541,7 @@ mod tests {
             ..MessageStoreConfig::default()
         });
         let broker_config = Arc::new(BrokerConfig::default());
-        let topic_config_table = Arc::new(DashMap::<CheetahString, ArcMut<TopicConfig>>::new());
+        let topic_config_table = Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new());
         let mut message_store = ArcMut::new(LocalFileMessageStore::new(
             message_store_config.clone(),
             broker_config.clone(),

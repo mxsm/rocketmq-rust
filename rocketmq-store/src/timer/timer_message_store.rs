@@ -1381,10 +1381,10 @@ mod tests {
         let broker_config = Arc::new(BrokerConfig::default());
         let real_topic = CheetahString::from_static_str("phase3_topic");
         let topic_config_table = Arc::new(DashMap::new());
-        topic_config_table.insert(real_topic.clone(), ArcMut::new(TopicConfig::default()));
+        topic_config_table.insert(real_topic.clone(), Arc::new(TopicConfig::default()));
         topic_config_table.insert(
             CheetahString::from_static_str(TIMER_TOPIC),
-            ArcMut::new(TopicConfig::default()),
+            Arc::new(TopicConfig::default()),
         );
 
         let mut store = ArcMut::new(LocalFileMessageStore::new(

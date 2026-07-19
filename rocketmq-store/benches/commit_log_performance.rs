@@ -167,7 +167,7 @@ fn new_bench_store(flush_disk_type: FlushDiskType) -> BenchStore {
     let mut store = ArcMut::new(LocalFileMessageStore::new(
         Arc::new(message_store_config),
         Arc::new(BrokerConfig::default()),
-        Arc::new(DashMap::<CheetahString, ArcMut<TopicConfig>>::new()),
+        Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
         None,
         false,
     ));

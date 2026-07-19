@@ -56,11 +56,11 @@ fn timer_store_config(temp_dir: &TempDir) -> MessageStoreConfig {
 fn new_test_store(temp_dir: &TempDir) -> ArcMut<LocalFileMessageStore> {
     let real_topic = CheetahString::from_static_str("phase6-timer-real-topic");
     let broker_config = Arc::new(BrokerConfig::default());
-    let topic_config_table: Arc<DashMap<CheetahString, ArcMut<TopicConfig>>> = Arc::new(DashMap::new());
-    topic_config_table.insert(real_topic, ArcMut::new(TopicConfig::default()));
+    let topic_config_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>> = Arc::new(DashMap::new());
+    topic_config_table.insert(real_topic, Arc::new(TopicConfig::default()));
     topic_config_table.insert(
         CheetahString::from_static_str(TIMER_TOPIC),
-        ArcMut::new(TopicConfig::default()),
+        Arc::new(TopicConfig::default()),
     );
 
     let mut store = ArcMut::new(LocalFileMessageStore::new(

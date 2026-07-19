@@ -1054,12 +1054,14 @@ mod tests {
     use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
     use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
     use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
+    use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+    use rocketmq_remoting::protocol::LanguageCode;
     use rocketmq_remoting::protocol::RemotingDeserializable;
     use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
-    use rocketmq_rust::ArcMut;
+    use rocketmq_store::base::message_store::MessageStore;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
 
-    use super::*;
+    use super::ConsumerRequestHandler;
     use crate::broker_runtime::BrokerRuntime;
     use crate::client::client_channel_info::ClientChannelInfo;
 
@@ -1175,9 +1177,9 @@ mod tests {
     async fn get_broker_consume_stats_returns_grouped_offsets() {
         let mut runtime = new_test_runtime("broker-consume-stats").await;
         let mut inner = runtime.inner_for_test().clone();
-        inner
+        let _ = inner
             .topic_config_manager_mut()
-            .update_topic_config(ArcMut::new(TopicConfig::with_queues("topic-a", 1, 1)));
+            .update_topic_config(TopicConfig::with_queues("topic-a", 1, 1));
         let mut group_config =
             rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig::new(
                 CheetahString::from_static_str("group-a"),
@@ -1231,9 +1233,9 @@ mod tests {
     async fn query_correction_offset_marks_queue_as_max_when_compare_group_is_ahead() {
         let mut runtime = new_test_runtime("query-correction").await;
         let mut inner = runtime.inner_for_test().clone();
-        inner
+        let _ = inner
             .topic_config_manager_mut()
-            .update_topic_config(ArcMut::new(TopicConfig::with_queues("topic-a", 1, 1)));
+            .update_topic_config(TopicConfig::with_queues("topic-a", 1, 1));
         inner.consumer_offset_manager().commit_offset(
             CheetahString::from_static_str("127.0.0.1"),
             &CheetahString::from_static_str("group-a"),
@@ -1286,9 +1288,9 @@ mod tests {
     async fn consume_message_directly_returns_offline_error_for_known_message() {
         let mut runtime = new_test_runtime("consume-message-directly").await;
         let mut inner = runtime.inner_for_test().clone();
-        inner
+        let _ = inner
             .topic_config_manager_mut()
-            .update_topic_config(ArcMut::new(TopicConfig::with_queues("topic-a", 1, 1)));
+            .update_topic_config(TopicConfig::with_queues("topic-a", 1, 1));
         let mut group_config =
             rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig::new(
                 CheetahString::from_static_str("group-a"),
@@ -1335,9 +1337,9 @@ mod tests {
     async fn invoke_broker_to_reset_offset_assigns_server_side_offset() {
         let mut runtime = new_test_runtime("reset-offset").await;
         let mut inner = runtime.inner_for_test().clone();
-        inner
+        let _ = inner
             .topic_config_manager_mut()
-            .update_topic_config(ArcMut::new(TopicConfig::with_queues("topic-a", 1, 1)));
+            .update_topic_config(TopicConfig::with_queues("topic-a", 1, 1));
         let mut group_config =
             rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig::new(
                 CheetahString::from_static_str("group-a"),
@@ -1489,9 +1491,9 @@ mod tests {
     async fn query_consume_time_span_returns_queue_metadata() {
         let mut runtime = new_test_runtime("consume-time-span").await;
         let mut inner = runtime.inner_for_test().clone();
-        inner
+        let _ = inner
             .topic_config_manager_mut()
-            .update_topic_config(ArcMut::new(TopicConfig::with_queues("topic-a", 1, 1)));
+            .update_topic_config(TopicConfig::with_queues("topic-a", 1, 1));
 
         let mut handler = ConsumerRequestHandler::new(inner);
         let mut request = RemotingCommand::create_request_command(
@@ -1537,9 +1539,9 @@ mod tests {
     async fn clone_group_offset_copies_offsets_from_source_group() {
         let mut runtime = new_test_runtime("clone-offset").await;
         let mut inner = runtime.inner_for_test().clone();
-        inner
+        let _ = inner
             .topic_config_manager_mut()
-            .update_topic_config(ArcMut::new(TopicConfig::with_queues("topic-a", 1, 1)));
+            .update_topic_config(TopicConfig::with_queues("topic-a", 1, 1));
         inner.consumer_offset_manager().commit_offset(
             CheetahString::from_static_str("127.0.0.1"),
             &CheetahString::from_static_str("group-src"),

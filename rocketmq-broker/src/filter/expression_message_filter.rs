@@ -220,11 +220,8 @@ mod tests {
     }
 
     fn new_store(temp_root: &Path, topic: &CheetahString) -> ArcMut<LocalFileMessageStore> {
-        let topic_table: Arc<DashMap<CheetahString, ArcMut<TopicConfig>>> = Arc::new(DashMap::new());
-        topic_table.insert(
-            topic.clone(),
-            ArcMut::new(TopicConfig::with_queues(topic.as_str(), 1, 1)),
-        );
+        let topic_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>> = Arc::new(DashMap::new());
+        topic_table.insert(topic.clone(), Arc::new(TopicConfig::with_queues(topic.as_str(), 1, 1)));
 
         let mut store = ArcMut::new(LocalFileMessageStore::new(
             Arc::new(MessageStoreConfig {

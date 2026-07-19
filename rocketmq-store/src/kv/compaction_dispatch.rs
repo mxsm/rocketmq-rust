@@ -19,7 +19,6 @@ use dashmap::DashMap;
 use rocketmq_common::common::attribute::cleanup_policy::CleanupPolicy;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::CleanupPolicyUtils::get_delete_policy_arc_mut;
-use rocketmq_rust::ArcMut;
 
 use crate::base::commit_log_dispatcher::CommitLogDispatcher;
 use crate::base::dispatch_request::DispatchRequest;
@@ -29,14 +28,14 @@ use crate::kv::compaction_store::CompactionStore;
 pub struct CommitLogDispatcherCompaction {
     compaction_store: Arc<CompactionStore>,
     message_store_config: Arc<MessageStoreConfig>,
-    topic_config_table: Arc<DashMap<CheetahString, ArcMut<TopicConfig>>>,
+    topic_config_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>>,
 }
 
 impl CommitLogDispatcherCompaction {
     pub fn new(
         compaction_store: Arc<CompactionStore>,
         message_store_config: Arc<MessageStoreConfig>,
-        topic_config_table: Arc<DashMap<CheetahString, ArcMut<TopicConfig>>>,
+        topic_config_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>>,
     ) -> Self {
         Self {
             compaction_store,

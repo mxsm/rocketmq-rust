@@ -15,6 +15,7 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Instant;
 
 use cheetah_string::CheetahString;
@@ -1042,7 +1043,7 @@ where
         response: &mut RemotingCommand,
         request: &RemotingCommand,
         msg: &mut MessageExt,
-        topic_config: &mut ArcMut<rocketmq_common::common::config::TopicConfig>,
+        topic_config: &mut Arc<rocketmq_common::common::config::TopicConfig>,
         properties: &mut HashMap<CheetahString, CheetahString>,
     ) -> bool {
         let mut new_topic = request_header.topic();

@@ -35,7 +35,6 @@ use rocketmq_common::utils::message_utils;
 use rocketmq_common::CRC32Utils::crc32;
 use rocketmq_common::MessageDecoder::create_crc32;
 use rocketmq_common::MessageUtils::build_batch_message_id;
-use rocketmq_rust::ArcMut;
 use tracing::error;
 
 use crate::base::message_result::AppendMessageResult;
@@ -123,13 +122,13 @@ pub struct DefaultAppendMessageCallback {
     msg_store_item_memory: Mutex<bytes::BytesMut>,
     crc32_reserved_length: i32,
     message_store_config: Arc<MessageStoreConfig>,
-    topic_config_table: Arc<DashMap<CheetahString, ArcMut<TopicConfig>>>,
+    topic_config_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>>,
 }
 
 impl DefaultAppendMessageCallback {
     pub fn new(
         message_store_config: Arc<MessageStoreConfig>,
-        topic_config_table: Arc<DashMap<CheetahString, ArcMut<TopicConfig>>>,
+        topic_config_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>>,
     ) -> Self {
         let crc32_reserved_length = if message_store_config.enabled_append_prop_crc {
             CRC32_RESERVED_LEN
@@ -553,7 +552,7 @@ mod tests {
         let mapped_file = new_mapped_file(file_from_offset, file_size, wrote_position);
 
         let config = Arc::new(MessageStoreConfig::default());
-        let topic_config_table: Arc<DashMap<CheetahString, ArcMut<TopicConfig>>> = Arc::new(DashMap::new());
+        let topic_config_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>> = Arc::new(DashMap::new());
         let callback = DefaultAppendMessageCallback::new(Arc::clone(&config), topic_config_table);
 
         let mut msg = MessageExtBrokerInner::default();

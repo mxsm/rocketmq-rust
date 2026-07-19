@@ -12,10 +12,8 @@ use criterion::Criterion;
 use criterion::Throughput;
 use dashmap::DashMap;
 use rocketmq_common::common::config::TopicConfig;
-use rocketmq_rust::ArcMut;
-
-type TopicConfigMap = DashMap<CheetahString, ArcMut<TopicConfig>>;
-type TopicConfigSnapshot = ArcSwap<HashMap<CheetahString, ArcMut<TopicConfig>>>;
+type TopicConfigMap = DashMap<CheetahString, Arc<TopicConfig>>;
+type TopicConfigSnapshot = ArcSwap<HashMap<CheetahString, Arc<TopicConfig>>>;
 
 fn topic_name(index: usize) -> CheetahString {
     CheetahString::from_string(format!("TopicConfigLookup{index}"))
@@ -28,7 +26,7 @@ fn build_topic_config_maps(topic_count: usize) -> (TopicConfigMap, TopicConfigSn
 
     for index in 0..topic_count {
         let topic = topic_name(index);
-        let config = ArcMut::new(TopicConfig::with_queues(topic.clone(), 4, 4));
+        let config = Arc::new(TopicConfig::with_queues(topic.clone(), 4, 4));
         dash_map.insert(topic.clone(), config.clone());
         snapshot_map.insert(topic.clone(), config);
         topics.push(topic);

@@ -159,32 +159,15 @@ where
         }
 
         let topic_wrapper = topic_wrapper.unwrap();
-        // Sync topic config if data version differs
-        if self.broker_runtime_inner.topic_config_manager().data_version_ref()
-            != topic_wrapper.topic_config_serialize_wrapper.data_version()
-        {
-            let mut data_version = self.broker_runtime_inner.topic_config_manager().data_version();
-            data_version.assign_new_one(topic_wrapper.topic_config_serialize_wrapper.data_version());
-
-            let new_topic_config_table = topic_wrapper.topic_config_serialize_wrapper.topic_config_table.clone();
-            let topic_config_table = self.broker_runtime_inner.topic_config_manager().topic_config_table();
-
-            // Delete entries not in new config
-            topic_config_table.retain(|key, _| new_topic_config_table.contains_key(key));
-
-            // Update with new entries
-            for (key, value) in new_topic_config_table.into_iter() {
-                topic_config_table.insert(key, ArcMut::new(value));
-            }
-
-            drop(topic_config_table);
-            let topic_config_manager = self.broker_runtime_inner.topic_config_manager();
-            topic_config_manager.rebuild_topic_config_snapshot();
+        let topic_config_manager = self.broker_runtime_inner.topic_config_manager();
+        if topic_config_manager.replace_topic_config_table_from_master(
+            topic_wrapper.topic_config_serialize_wrapper.topic_config_table.clone(),
+            topic_wrapper.topic_config_serialize_wrapper.data_version(),
+        ) {
             topic_config_manager.persist();
         }
 
         // Sync topic queue mapping if present and data version differs
-        let new_topic_config_table = topic_wrapper.topic_config_serialize_wrapper.topic_config_table;
         let version = topic_wrapper.mapping_data_version;
         if version != self.broker_runtime_inner.topic_queue_mapping_manager().data_version() {
             self.broker_runtime_inner
@@ -193,18 +176,6 @@ where
                 .lock()
                 .assign_new_one(&version);
 
-            let topic_config_table = self.broker_runtime_inner.topic_config_manager().topic_config_table();
-            // Delete entries not in new config
-            topic_config_table.retain(|key, _| new_topic_config_table.contains_key(key));
-
-            // Update with new entries
-            for (key, value) in new_topic_config_table.into_iter() {
-                topic_config_table.insert(key, ArcMut::new(value));
-            }
-            drop(topic_config_table);
-            self.broker_runtime_inner
-                .topic_config_manager()
-                .rebuild_topic_config_snapshot();
             self.broker_runtime_inner.topic_queue_mapping_manager().persist();
         }
         Ok(())

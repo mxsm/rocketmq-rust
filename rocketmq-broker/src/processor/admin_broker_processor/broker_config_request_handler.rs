@@ -745,7 +745,6 @@ mod tests {
     #[cfg(feature = "rocksdb_store")]
     use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
     use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
-    use rocketmq_rust::ArcMut;
     use rocketmq_store::base::message_store::MessageStore;
     #[cfg(feature = "rocksdb_store")]
     use rocketmq_store::base::store_enum::StoreType;
@@ -1031,18 +1030,10 @@ mod tests {
         let group = CheetahString::from_static_str("ExportGroup");
 
         {
-            let topic_config = ArcMut::new(TopicConfig::with_queues(topic.clone(), 2, 4));
             let inner_mut = runtime.inner_for_test();
-            inner_mut
+            let _ = inner_mut
                 .topic_config_manager_mut()
-                .put_topic_config(topic_config.clone());
-            inner_mut
-                .topic_config_manager_mut()
-                .data_version_ref_mut()
-                .next_version();
-            inner_mut
-                .topic_config_manager_mut()
-                .persist_with_topic(topic.as_str(), Box::new(topic_config));
+                .update_topic_config(TopicConfig::with_queues(topic.clone(), 2, 4));
             inner_mut.consumer_offset_manager().commit_offset(
                 CheetahString::from_static_str("127.0.0.1:10911"),
                 &group,
