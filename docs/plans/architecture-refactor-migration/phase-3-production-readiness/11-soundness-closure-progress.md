@@ -114,6 +114,9 @@ M11-12am 的 Client internal child ownership 由 Issue #8371 跟踪，分支为
 M11-12an 的 Client Producer root ownership 由 Issue #8375 跟踪，分支为
 `mxsm/architecture-refactor-client-producer-root-ownership`；它仍是同一 M11-12 工作包的子切片。
 
+M11-12ao 的 Broker topic metadata table ownership 由 Issue #8377 跟踪，分支为
+`mxsm/architecture-refactor-broker-topic-metadata-ownership`；它仍是同一 M11-12 工作包的子切片。
+
 ## 初始盘点
 
 在 main `86719f1bc77c2e78ff32195262bad820145f271b` 上生成当前源码快照：
@@ -999,6 +1002,29 @@ reviewed baseline 从 541→527、occurrences 从 1,515→1,491；全部 14 个 
 无 identity/occurrence relocation，因此不需要 ADR-013 临时 approval。下一子切片 M11-12ao 进入 Broker owner 收口；
 75/82 总进度不变。
 
+## M11-12ao Broker topic metadata table ownership
+
+| 目标 | 实现与证据 |
+|---|---|
+| route table owner | `TopicRouteInfoManager` 的 route、broker-address、publish-route 和 subscribe-queue 四张表从 `ArcMut<HashMap>` 改为标准 `Arc<DashMap>`；manager clone 仍共享表 owner，不再暴露共享裸可变引用 |
+| guard 与异步边界 | route/subscription/publish 查询先克隆完整值并释放 DashMap guard；同表 insert/remove 和 NameServer 异步刷新前均不保留 guard，不引入同步锁跨 `.await` |
+| immutable mapping generations | `TopicQueueMappingManager` 表项从 `ArcMut<TopicQueueMappingDetail>` 改为标准 `Arc`；update、decode 与 cleanup 构造完整新值后替换，cleanup 以 observed Arc identity 做条件发布，代际已变化时拒绝 stale replacement；旧 `Arc` 代际保持原内容且不会被原地修改 |
+| compatibility 边界 | 两个 manager 均为 Broker 内部 owner，getter carrier 仅在 crate 内从 legacy wrapper 迁移到标准 `Arc`；wire DTO、序列化字段、数据版本递增、静态 topic epoch/broker/expected-items 校验和最终一致语义保持不变 |
+| regression evidence | route manager clone 共享/route cleanup、queue mapping 13 项 lookup/update/decode/expected-version cleanup 测试通过；replacement 测试显式证明旧 mapping generation 在新值发布后仍有效，stale cleanup 测试证明并发新代际不会被覆盖 |
+
+M11-12ao 后实际快照为 520 个条目：production 312、test 194、compatibility 14；occurrence 精确为 production
+873、test 551、compatibility 40。相对 M11-12an 删除 5 个 production identity/19 occurrence 与 2 个 test
+identity/8 occurrence；Broker production 从 190/568 降至 185/549。剩余 production 债务为：
+
+| owner | 条目 | occurrence |
+|---|---:|---:|
+| Broker | 185 | 549 |
+| Store | 127 | 324 |
+
+reviewed baseline 从 527→520、occurrences 从 1,491→1,464；全部 7 个 identity/27 个 occurrence 都是源码真实删除，
+无 identity/occurrence relocation，因此不需要 ADR-013 临时 approval。下一子切片 M11-12ap 处理 Broker
+TopicConfig value/DataVersion ownership；75/82 总进度不变。
+
 ## 已执行验证
 
 | 命令 | 结果 |
@@ -1802,10 +1828,27 @@ M11-12an 追加验证：
 | Client Producer ArcMut 定向扫描 | facade/implementation/registry 的 production ArcMut/WeakArcMut/constructor/`mut_from_ref` 零匹配，Client production 总量清零 |
 | `git diff --check` | 通过；仅报告工作树 CRLF 转换提示，无 whitespace error |
 
+M11-12ao 追加验证：
+
+| 命令 | 结果 |
+|---|---|
+| `cargo test -p rocketmq-broker --all-features topic_route_info_manager` | 3/3 通过；覆盖标准共享表 clone、route cleanup 与后台 task lifecycle |
+| `cargo test -p rocketmq-broker --all-features topic_queue_mapping_manager` | 13/13 通过；覆盖 lookup/update/decode、epoch/broker/expected-items cleanup、旧 Arc 代际稳定性与 stale cleanup 条件发布 |
+| `cargo test -p rocketmq-broker lite_sharding` | 2/2 通过；DashMap publish route 读取适配保持既有 hash contract |
+| `cargo test -p rocketmq-broker --all-features --lib -- --test-threads=1` | 550 passed、24 failed、1 ignored；失败集中在既有 lifecycle probe 与全局 Lite/consumer state tests，代表性 `get_broker_lite_info_returns_registry_aggregates` 在 clean `main@a158c49a8` 使用相同 all-features exact 命令同样失败，不能记为本切片通过，也未发现受影响定向测试失败 |
+| reviewed baseline reduction | 删除 5 个 production identity/19 occurrence 与 2 个 test identity/8 occurrence，无 relocation；baseline 527/1,491→520/1,464 |
+| `python scripts/arc_mut_guard.py` | 通过；production 312/873、test 194/551、compatibility 14/40；Broker production 185/549 |
+| `python -m unittest scripts.tests.test_arc_mut_guard -v` / `python scripts/arc_mut_guard.py --fixtures` | 67/67 单测、24/24 fixtures 通过 |
+| `cargo fmt --all -- --check` / root workspace strict Clippy | 通过；root workspace all-targets/all-features `-D warnings` profile 通过 |
+| architecture target/baseline/release guards | 通过；35/35 target edges、3/3 test edges、32/32 release topology、10/10 R0 crates，dependency/release/performance guard 单测 60/60 通过 |
+| `./scripts/runtime-audit.ps1 -SkipBaseline -EnforceBoundaryBaseline` | 通过；表 owner 替换未增加 task/runtime 边界 |
+| `./scripts/check-agents-routing.ps1` | 通过；4 个 standalone Cargo、3 个 Node project、8 条 route |
+| Broker topic metadata ArcMut 定向扫描 | `TopicQueueMappingManager` production/test ArcMut 清零；`TopicRouteInfoManager` 仅保留待 Broker root 切片处理的 `ArcMut<BrokerRuntimeInner>` 回边，四张表 owner 与 `mut_from_ref` 清零 |
+
 ## 剩余切片与 Gate
 
-1. Broker TopicConfig/offset、BrokerRuntimeInner、schedule/POP/processor/transaction owner（190/568）；下一子切片
-   M11-12ao 从 Broker owner 开始。
+1. Broker TopicConfig/offset、BrokerRuntimeInner、schedule/POP/processor/transaction owner（185/549）；下一子切片
+   M11-12ap 处理 TopicConfig value/DataVersion ownership。
 2. Store TopicConfig snapshot、MappedFileQueue/ConsumeQueue、CommitLog/Flush、StoreHandle/Rocks/Timer 与 HA actor（127/324）。
 3. 删除 compatibility `arc_mut.rs` 和公开 re-export；移除其余 nightly feature，将 guard 切到 production/public zero。
 4. 对同一候选快照执行 stable feature matrix、Miri/Loom 可用切片、soak/SLO fault、dashboard/runbook、动态

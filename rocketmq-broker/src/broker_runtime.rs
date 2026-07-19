@@ -6417,7 +6417,6 @@ accounts:
             .inner_for_test()
             .topic_route_info_manager_mut()
             .topic_publish_info_table
-            .mut_from_ref()
             .insert(CheetahString::from_static_str("parent-topic"), publish_info);
     }
 

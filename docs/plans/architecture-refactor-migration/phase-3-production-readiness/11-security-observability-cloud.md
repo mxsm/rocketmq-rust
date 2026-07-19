@@ -428,6 +428,13 @@ M11-12an 已将 DefaultMQProducer facade/implementation/registry 改为标准 `A
 production ArcMut 清零；公开 implementation getter carrier 从 `ArcMut` 迁移为标准 `Arc`，由 public API compile
 test 固定。Broker/Store、compatibility 与完整候选快照 Gate 仍保持开放。
 
+M11-12ao 已将 `TopicRouteInfoManager` 的四张共享路由表改为标准 `Arc<DashMap>`，并将
+`TopicQueueMappingManager` 表项改为不可变标准 `Arc` 整值代际；读 guard 在同表写入或异步边界前释放，
+decode/clean 发布完整 replacement，cleanup 以 observed Arc identity 做条件发布并拒绝覆盖并发新代际，旧 mapping
+代际不被原地修改。实际快照降至 312 production/873
+occurrences、194 test/551 occurrences，Broker owner 降至 185/549；Broker TopicConfig/offset/root、Store、
+compatibility 与完整候选快照 Gate 仍保持开放。
+
 ## 公共兼容面
 
 - development/compatibility仍可显式选择；secure只作为新部署默认，不静默重解释旧配置。

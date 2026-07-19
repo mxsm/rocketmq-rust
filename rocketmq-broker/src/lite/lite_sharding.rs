@@ -35,7 +35,7 @@ impl LiteSharding {
             .topic_route_info_manager()
             .topic_publish_info_table
             .get(parent_topic)
-            .cloned();
+            .map(|entry| entry.value().clone());
         let Some(publish_info) = publish_info.filter(|info| !info.message_queues().is_empty()) else {
             return current_broker;
         };
