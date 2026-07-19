@@ -8631,25 +8631,6 @@
       "adr": "ADR-002"
     },
     {
-      "identity": "5eb34bbbadb242f6035abebd",
-      "path": "rocketmq-client/src/consumer/consumer_impl/consume_message_concurrently_service.rs",
-      "symbol": "mut_from_ref",
-      "kind": "mut_from_ref_call",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "c2d356a30eb019d7dc602c4b",
-          "fingerprint": "f7b81046627c7dcfec09abf8",
-          "item": "fn consume_message_directly",
-          "line": 480
-        }
-      ],
-      "owner": "client",
-      "reason": "Legacy safe mutable-reference escape pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
       "identity": "cb4d08108f5a22e96dc24b24",
       "path": "rocketmq-client/src/consumer/consumer_impl/consume_message_orderly_service.rs",
       "symbol": "*",
@@ -8853,12 +8834,6 @@
           "fingerprint": "ec847fdc2c5a0177c158c209",
           "item": "fn lock_one_mq",
           "line": 355
-        },
-        {
-          "id": "d555f15f4909d0db4b71db31",
-          "fingerprint": "1e4884286430133ce6c1590d",
-          "item": "fn consume_message_directly",
-          "line": 703
         }
       ],
       "owner": "client",
@@ -9036,25 +9011,6 @@
       ],
       "owner": "client",
       "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "3bde40445de67b4bd7bc363f",
-      "path": "rocketmq-client/src/consumer/consumer_impl/consume_message_pop_concurrently_service.rs",
-      "symbol": "mut_from_ref",
-      "kind": "mut_from_ref_call",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "220c8e297278dff830952d76",
-          "fingerprint": "1e4884286430133ce6c1590d",
-          "item": "fn consume_message_directly",
-          "line": 216
-        }
-      ],
-      "owner": "client",
-      "reason": "Legacy safe mutable-reference escape pending ownership migration",
       "remove_by": "M05",
       "adr": "ADR-002"
     },
@@ -9286,24 +9242,6 @@
           "fingerprint": "9f1002806ae1463680b9d881",
           "item": "fn send_message_back",
           "line": 482
-        },
-        {
-          "id": "d678b5f43d0a6e42b0796ef7",
-          "fingerprint": "5fe522130e028d1e4ed5479c",
-          "item": "fn ack_message",
-          "line": 502
-        },
-        {
-          "id": "a7ef20e9e884d707b651e4f1",
-          "fingerprint": "222617052c483e8eef516188",
-          "item": "fn change_invisible_time",
-          "line": 510
-        },
-        {
-          "id": "c427b3259fd06f79350988e6",
-          "fingerprint": "1e4884286430133ce6c1590d",
-          "item": "fn consume_message_directly",
-          "line": 691
         }
       ],
       "owner": "client",
@@ -11080,37 +11018,6 @@
       ],
       "owner": "client",
       "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "d3e6f43c282e71a64f2de1ca",
-      "path": "rocketmq-client/src/consumer/consumer_impl/re_balance/rebalance_push_impl.rs",
-      "symbol": "mut_from_ref",
-      "kind": "mut_from_ref_call",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "cd13bd9c217349c10599298d",
-          "fingerprint": "3ed6af9c4040787d0bd2caf3",
-          "item": "fn message_queue_changed",
-          "line": 203
-        },
-        {
-          "id": "427f6d47946fc92070b7e384",
-          "fingerprint": "47315639bdfc3c1712cbaf1e",
-          "item": "fn dispatch_pull_request",
-          "line": 384
-        },
-        {
-          "id": "12898708f7c4d656bae50ab1",
-          "fingerprint": "dc90b47b8c6cdce6975821c6",
-          "item": "fn dispatch_pop_pull_request",
-          "line": 401
-        }
-      ],
-      "owner": "client",
-      "reason": "Legacy safe mutable-reference escape pending ownership migration",
       "remove_by": "M05",
       "adr": "ADR-002"
     },

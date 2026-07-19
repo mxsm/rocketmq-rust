@@ -190,6 +190,16 @@ impl ClientConfig {
         queue
     }
 
+    pub(crate) fn queue_with_resolved_namespace(&self, mut queue: MessageQueue) -> MessageQueue {
+        if let Some(namespace) = self.resolved_namespace() {
+            if !namespace.is_empty() {
+                let topic = NamespaceUtil::wrap_namespace(namespace.as_str(), queue.topic_str());
+                queue.set_topic(topic);
+            }
+        }
+        queue
+    }
+
     #[inline]
     pub fn queues_with_namespace<I>(&mut self, queues: I) -> Vec<MessageQueue>
     where
@@ -208,18 +218,23 @@ impl ClientConfig {
             return self.namespace.clone();
         }
 
-        if let Some(ref namespace) = self.namespace {
-            return Some(namespace.clone());
-        }
-
-        if let Some(ref namesrv_addr) = self.namesrv_addr {
-            if NameServerAddressUtils::validate_instance_endpoint(namesrv_addr.as_ref()) {
-                self.namespace =
-                    NameServerAddressUtils::parse_instance_id_from_endpoint(namesrv_addr.as_ref()).map(|id| id.into());
-            }
-        }
+        self.namespace = self.resolved_namespace();
         self.namespace_initialized.store(true, Ordering::Release);
         self.namespace.clone()
+    }
+
+    pub(crate) fn resolved_namespace(&self) -> Option<CheetahString> {
+        if self.namespace_initialized.load(Ordering::Acquire) {
+            return self.namespace.clone();
+        }
+        if let Some(namespace) = self.namespace.as_ref() {
+            return Some(namespace.clone());
+        }
+        self.namesrv_addr
+            .as_ref()
+            .filter(|address| NameServerAddressUtils::validate_instance_endpoint(address.as_ref()))
+            .and_then(|address| NameServerAddressUtils::parse_instance_id_from_endpoint(address.as_ref()))
+            .map(Into::into)
     }
 
     #[inline]
@@ -868,5 +883,20 @@ mod tests {
         let wrapped = config.queues_with_namespace(queues);
         assert_eq!(wrapped[0].topic_str(), "ns%topic_a");
         assert_eq!(wrapped[1].topic_str(), "ns%topic_b");
+    }
+
+    #[test]
+    fn immutable_namespace_resolution_wraps_queue_without_populating_cache() {
+        let mut config = ClientConfig {
+            namespace: Some(CheetahString::from("ns")),
+            ..Default::default()
+        };
+
+        let wrapped = config.queue_with_resolved_namespace(MessageQueue::from_parts("topic_a", "broker-a", 0));
+
+        assert_eq!(wrapped.topic_str(), "ns%topic_a");
+        assert!(!config.namespace_initialized.load(Ordering::Acquire));
+        assert_eq!(config.get_namespace().as_deref(), Some("ns"));
+        assert!(config.namespace_initialized.load(Ordering::Acquire));
     }
 }

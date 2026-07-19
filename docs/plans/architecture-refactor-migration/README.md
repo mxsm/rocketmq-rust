@@ -333,6 +333,11 @@ Client remote offset read access 随 Issue #8341 删除 `RemoteBrokerOffsetStore
 broker lookup、route miss refresh 与 client API 读取直接使用 immutable `MQClientInstance` access，查询 header、
 重试、timeout 与错误映射不变。实际快照降至 414 production/1,215 occurrence，Client 降至 97/323；剩余为
 Broker 190/568、Client 97/323 与 Store 127/324，总进度仍为 75/82，M11-12 父工作包未完成。
+Client Push operational access 随 Issue #8343 将 pull/pop request dispatch、retry namespace reset、POP ack 与
+change-invisible receiver 收窄为 `&self`，并为 lazy namespace 提供不写 cache 的 immutable resolution；
+RebalancePush heartbeat/dispatch 与 consume service 共删除 9 个过时 `mut_from_ref`。实际快照降至
+411 production/1,206 occurrence，Client 降至 94/314；剩余为 Broker 190/568、Client 94/314 与 Store 127/324，
+总进度仍为 75/82，M11-12 父工作包未完成。
 
 ### 9.3 证据目录
 

@@ -199,10 +199,7 @@ impl Rebalance for RebalancePushImpl {
 
         //notify broker
         if let Some(client_instance) = self.rebalance_impl_inner.client_instance.as_ref() {
-            let _ = client_instance
-                .mut_from_ref()
-                .send_heartbeat_to_all_broker_with_lock_v2(true)
-                .await;
+            let _ = client_instance.send_heartbeat_to_all_broker_with_lock_v2(true).await;
         }
         if let Some(ref message_queue_listener) = self.consumer_config.message_queue_listener {
             message_queue_listener.message_queue_changed(topic, mq_all, mq_divided);
@@ -381,7 +378,6 @@ impl Rebalance for RebalancePushImpl {
 
     async fn dispatch_pull_request(&self, pull_request_list: Vec<PullRequest>, delay: u64) {
         if let Some(mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_ref() {
-            let mqpush_consumer_impl = mqpush_consumer_impl.mut_from_ref();
             for pull_request in pull_request_list {
                 if delay == 0 {
                     mqpush_consumer_impl
@@ -398,7 +394,6 @@ impl Rebalance for RebalancePushImpl {
 
     async fn dispatch_pop_pull_request(&self, pop_request_list: Vec<PopRequest>, delay: u64) {
         if let Some(mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_ref() {
-            let mqpush_consumer_impl = mqpush_consumer_impl.mut_from_ref();
             for pop_request in pop_request_list {
                 if delay == 0 {
                     mqpush_consumer_impl.execute_pop_request_immediately(pop_request).await;

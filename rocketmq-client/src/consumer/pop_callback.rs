@@ -166,7 +166,7 @@ impl PopCallback for DefaultPopCallback {
     }
 
     fn on_error(&mut self, err: RocketMQError) {
-        let mut push_consumer_impl = self.push_consumer_impl.clone();
+        let push_consumer_impl = self.push_consumer_impl.clone();
 
         let Some(message_queue_inner) = self.message_queue_inner.take() else {
             warn!("pop callback exception ignored: message queue is missing, error={err}");

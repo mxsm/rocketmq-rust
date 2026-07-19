@@ -975,8 +975,8 @@ impl DefaultMQPushConsumerImpl {
         queues
     }
 
-    pub async fn execute_pull_request_immediately(&mut self, pull_request: PullRequest) {
-        let Some(client_instance) = self.client_instance.as_mut() else {
+    pub async fn execute_pull_request_immediately(&self, pull_request: PullRequest) {
+        let Some(client_instance) = self.client_instance.as_ref() else {
             warn!(
                 "execute_pull_request_immediately skipped: MQClientInstance is not initialized, {}",
                 pull_request
@@ -988,8 +988,8 @@ impl DefaultMQPushConsumerImpl {
             .execute_pull_request_immediately(pull_request)
             .await;
     }
-    pub fn execute_pull_request_later(&mut self, pull_request: PullRequest, time_delay: u64) {
-        let Some(client_instance) = self.client_instance.as_mut() else {
+    pub fn execute_pull_request_later(&self, pull_request: PullRequest, time_delay: u64) {
+        let Some(client_instance) = self.client_instance.as_ref() else {
             warn!(
                 "execute_pull_request_later skipped: MQClientInstance is not initialized, {}",
                 pull_request
@@ -1001,8 +1001,8 @@ impl DefaultMQPushConsumerImpl {
             .execute_pull_request_later(pull_request, time_delay);
     }
 
-    pub async fn execute_pop_request_immediately(&mut self, pop_request: PopRequest) {
-        let Some(client_instance) = self.client_instance.as_mut() else {
+    pub async fn execute_pop_request_immediately(&self, pop_request: PopRequest) {
+        let Some(client_instance) = self.client_instance.as_ref() else {
             warn!(
                 "execute_pop_request_immediately skipped: MQClientInstance is not initialized, {}",
                 pop_request
@@ -1014,8 +1014,8 @@ impl DefaultMQPushConsumerImpl {
             .execute_pop_pull_request_immediately(pop_request)
             .await;
     }
-    pub fn execute_pop_request_later(&mut self, pop_request: PopRequest, time_delay: u64) {
-        let Some(client_instance) = self.client_instance.as_mut() else {
+    pub fn execute_pop_request_later(&self, pop_request: PopRequest, time_delay: u64) {
+        let Some(client_instance) = self.client_instance.as_ref() else {
             warn!(
                 "execute_pop_request_later skipped: MQClientInstance is not initialized, {}",
                 pop_request
@@ -1448,9 +1448,9 @@ impl DefaultMQPushConsumerImpl {
         }
     }
 
-    pub fn reset_retry_and_namespace(&mut self, msgs: &mut [Arc<MessageExt>], consumer_group: &str) {
+    pub fn reset_retry_and_namespace(&self, msgs: &mut [Arc<MessageExt>], consumer_group: &str) {
         let group_topic = mix_all::get_retry_topic(consumer_group);
-        let namespace = self.client_config.get_namespace().unwrap_or_default();
+        let namespace = self.client_config.resolved_namespace().unwrap_or_default();
         for msg in msgs.iter_mut() {
             if let Some(retry_topic) = msg.property(&CheetahString::from_static_str(MessageConst::PROPERTY_RETRY_TOPIC))
             {
@@ -1652,7 +1652,7 @@ impl DefaultMQPushConsumerImpl {
         }
     }
 
-    pub(crate) async fn ack_async(&mut self, message: &MessageExt, consumer_group: &CheetahString) {
+    pub(crate) async fn ack_async(&self, message: &MessageExt, consumer_group: &CheetahString) {
         let extra_info = message
             .property(&CheetahString::from_static_str(MessageConst::PROPERTY_POP_CK))
             .unwrap_or_default();
@@ -1682,20 +1682,19 @@ impl DefaultMQPushConsumerImpl {
             CheetahString::from(ExtraInfoUtil::get_broker_name(extra_info_strs.as_slice()).unwrap_or_default());
         let topic = message.topic();
 
-        let Some(client_instance) = self.client_instance.as_mut() else {
+        let Some(client_instance) = self.client_instance.as_ref() else {
             error!("ackAsync error: MQClientInstance is not initialized");
             return;
         };
-        let des_broker_name = if !broker_name.is_empty()
-            && broker_name.starts_with(mix_all::LOGICAL_QUEUE_MOCK_BROKER_PREFIX)
-        {
-            let mq =
-                self.client_config
-                    .queue_with_namespace(MessageQueue::from_parts(topic, broker_name.clone(), queue_id));
-            client_instance.get_broker_name_from_message_queue(&mq).await
-        } else {
-            broker_name.clone()
-        };
+        let des_broker_name =
+            if !broker_name.is_empty() && broker_name.starts_with(mix_all::LOGICAL_QUEUE_MOCK_BROKER_PREFIX) {
+                let mq = self
+                    .client_config
+                    .queue_with_resolved_namespace(MessageQueue::from_parts(topic, broker_name.clone(), queue_id));
+                client_instance.get_broker_name_from_message_queue(&mq).await
+            } else {
+                broker_name.clone()
+            };
 
         let mut find_broker_result = client_instance
             .find_broker_address_in_subscribe(&des_broker_name, mix_all::MASTER_ID, true)
@@ -1760,7 +1759,7 @@ impl DefaultMQPushConsumerImpl {
     }
 
     pub(crate) async fn change_pop_invisible_time_async(
-        &mut self,
+        &self,
         topic: &CheetahString,
         consumer_group: &CheetahString,
         extra_info: &CheetahString,
@@ -1770,23 +1769,22 @@ impl DefaultMQPushConsumerImpl {
         let extra_info_strs = ExtraInfoUtil::split(extra_info);
         let broker_name = CheetahString::from_string(ExtraInfoUtil::get_broker_name(extra_info_strs.as_slice())?);
         let queue_id = ExtraInfoUtil::get_queue_id(extra_info_strs.as_slice())?;
-        let des_broker_name = if !broker_name.is_empty()
-            && broker_name.starts_with(mix_all::LOGICAL_QUEUE_MOCK_BROKER_PREFIX)
-        {
-            let queue =
-                self.client_config
-                    .queue_with_namespace(MessageQueue::from_parts(topic, broker_name.clone(), queue_id));
-            self.client_instance
-                .as_mut()
-                .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("MQClientInstance"))?
-                .get_broker_name_from_message_queue(&queue)
-                .await
-        } else {
-            broker_name.clone()
-        };
+        let des_broker_name =
+            if !broker_name.is_empty() && broker_name.starts_with(mix_all::LOGICAL_QUEUE_MOCK_BROKER_PREFIX) {
+                let queue = self
+                    .client_config
+                    .queue_with_resolved_namespace(MessageQueue::from_parts(topic, broker_name.clone(), queue_id));
+                self.client_instance
+                    .as_ref()
+                    .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("MQClientInstance"))?
+                    .get_broker_name_from_message_queue(&queue)
+                    .await
+            } else {
+                broker_name.clone()
+            };
         let client_instance = self
             .client_instance
-            .as_mut()
+            .as_ref()
             .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("MQClientInstance"))?;
         let mut find_broker_result = client_instance
             .find_broker_address_in_subscribe(&des_broker_name, mix_all::MASTER_ID, true)
@@ -2405,7 +2403,7 @@ mod tests {
 
     #[tokio::test]
     async fn execute_pull_request_immediately_without_client_instance_does_not_panic() {
-        let mut consumer = new_unstarted_impl();
+        let consumer = new_unstarted_impl();
 
         consumer.execute_pull_request_immediately(pull_request()).await;
     }
@@ -2422,21 +2420,21 @@ mod tests {
 
     #[test]
     fn execute_pull_request_later_without_client_instance_does_not_panic() {
-        let mut consumer = new_unstarted_impl();
+        let consumer = new_unstarted_impl();
 
         consumer.execute_pull_request_later(pull_request(), 1);
     }
 
     #[tokio::test]
     async fn execute_pop_request_immediately_without_client_instance_does_not_panic() {
-        let mut consumer = new_unstarted_impl();
+        let consumer = new_unstarted_impl();
 
         consumer.execute_pop_request_immediately(pop_request()).await;
     }
 
     #[test]
     fn execute_pop_request_later_without_client_instance_does_not_panic() {
-        let mut consumer = new_unstarted_impl();
+        let consumer = new_unstarted_impl();
 
         consumer.execute_pop_request_later(pop_request(), 1);
     }
