@@ -4546,6 +4546,7 @@ dependencies = [
 name = "rocketmq-client-rust"
 version = "1.0.0"
 dependencies = [
+ "arc-swap",
  "bytes",
  "cheetah-string",
  "criterion",

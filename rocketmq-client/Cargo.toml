@@ -59,6 +59,7 @@ rand          = { workspace = true }
 #log
 tracing.workspace = true
 
+arc-swap    = "1.9"
 parking_lot = { workspace = true }
 bytes       = { workspace = true }
 dashmap     = { workspace = true }

@@ -343,6 +343,11 @@ inner 实现收窄为 `&self`，broker lookup、request body、oneway 与 proces
 orderly namespace reset 使用 immutable resolution，删除 3 个 `mut_from_ref`。实际快照降至 410 production/1,203
 occurrence，Client 降至 93/311；剩余为 Broker 190/568、Client 93/311 与 Store 127/324，总进度仍为 75/82，
 M11-12 父工作包未完成。
+Client Lite Pull config snapshots 随 Issue #8347 将实现与 rebalance 配置改为 `ArcSwap` 不可变快照；同步 setter
+通过 copy-update-publish 串行 CAS 发布完整代际，异步 pull/rebalance/metadata/diagnostics 只持有不可变 `Arc` 快照，
+不跨 await 持有同步锁。兼容 facade 构造与 Java 行为保持，内部配置 owner 删除 34 个 `mut_from_ref`/`ArcMut`
+occurrence。实际快照为 410 production/1,169 occurrence，Client 为 93/277；剩余为 Broker 190/568、Client 93/277
+与 Store 127/324，总进度仍为 75/82，M11-12 父工作包与最终目标 Gate 均未完成。
 
 ### 9.3 证据目录
 

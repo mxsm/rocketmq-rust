@@ -815,10 +815,9 @@ impl DefaultLitePullConsumer {
     pub fn set_consumer_group(&self, consumer_group: impl Into<CheetahString>) -> RocketMQResult<()> {
         let consumer_group = consumer_group.into();
         if let Some(impl_) = self.default_lite_pull_consumer_impl.get() {
-            impl_.set_consumer_group(consumer_group)?;
-        } else {
-            self.consumer_config.mut_from_ref().consumer_group = consumer_group;
+            impl_.set_consumer_group(consumer_group.clone())?;
         }
+        self.consumer_config.mut_from_ref().consumer_group = consumer_group;
         Ok(())
     }
 
@@ -865,6 +864,9 @@ impl DefaultLitePullConsumer {
     /// Enables or disables TLS on the shared client configuration and trace dispatcher.
     pub async fn set_use_tls(&self, use_tls: bool) {
         self.client_config.mut_from_ref().set_use_tls(use_tls);
+        if let Some(impl_) = self.default_lite_pull_consumer_impl.get() {
+            impl_.set_use_tls(use_tls);
+        }
         if let Some(dispatcher) = self.trace_dispatcher.read().await.as_ref().cloned() {
             if let Some(async_dispatcher) = dispatcher.as_any().downcast_ref::<AsyncTraceDispatcher>() {
                 async_dispatcher.set_use_tls(use_tls);
@@ -1020,7 +1022,9 @@ impl DefaultLitePullConsumer {
 
                 self.init_trace_dispatcher_internal(&impl_).await?;
 
-                impl_.set_consumer_group(self.consumer_group_with_namespace())?;
+                let consumer_group = self.consumer_group_with_namespace();
+                self.set_consumer_group(consumer_group.clone())?;
+                impl_.set_consumer_group(consumer_group)?;
                 if let Some(offset_store) = self.current_offset_store() {
                     impl_.mut_from_ref().set_offset_store(Some(offset_store))?;
                 }
@@ -2525,13 +2529,13 @@ mod tests {
         let (consumer, impl_) = new_namespaced_consumer_with_impl();
 
         assert!(!consumer.is_use_tls());
-        assert!(!impl_.client_config.is_use_tls());
+        assert!(!impl_.client_config.load().is_use_tls());
 
         consumer.set_use_tls(true).await;
 
         assert!(consumer.is_use_tls());
         assert!(consumer.client_config().is_use_tls());
-        assert!(impl_.client_config.is_use_tls());
+        assert!(impl_.client_config.load().is_use_tls());
     }
 
     #[tokio::test]

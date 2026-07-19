@@ -29,6 +29,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use arc_swap::ArcSwap;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
@@ -63,7 +64,7 @@ pub struct RebalanceLitePullImpl {
     pub(crate) rebalance_impl_inner: RebalanceImpl<RebalanceLitePullImpl>,
     /// Consumer configuration providing `ConsumeFromWhere`, `ConsumeTimestamp`, and the
     /// optional [`MessageQueueListener`][crate::consumer::message_queue_listener::MessageQueueListener].
-    pub(crate) consumer_config: ArcMut<ConsumerConfig>,
+    consumer_config: ArcSwap<ConsumerConfig>,
     /// The active offset storage backend, injected after the consumer starts.
     pub(crate) offset_store: Option<Arc<OffsetStore>>,
 }
@@ -73,12 +74,20 @@ impl RebalanceLitePullImpl {
     ///
     /// The offset store, client instance, and subscription strategy must be set separately
     /// before the first rebalance cycle runs.
-    pub fn new(consumer_config: ArcMut<ConsumerConfig>) -> Self {
+    pub fn new(consumer_config: ConsumerConfig) -> Self {
         Self {
-            consumer_config,
+            consumer_config: ArcSwap::from_pointee(consumer_config),
             rebalance_impl_inner: RebalanceImpl::new(None, None, None, None),
             offset_store: None,
         }
+    }
+
+    fn update_consumer_config(&self, update: impl Fn(&mut ConsumerConfig)) {
+        self.consumer_config.rcu(|current| {
+            let mut next = (**current).clone();
+            update(&mut next);
+            Arc::new(next)
+        });
     }
 }
 
@@ -90,7 +99,8 @@ impl RebalanceLitePullImpl {
 
     /// Sets the consumer group name on the underlying rebalance core.
     pub fn set_consumer_group(&mut self, consumer_group: CheetahString) {
-        self.rebalance_impl_inner.consumer_group = Some(consumer_group);
+        self.rebalance_impl_inner.consumer_group = Some(consumer_group.clone());
+        self.update_consumer_config(|config| config.consumer_group = consumer_group.clone());
     }
 
     /// Sets the message model (Clustering / Broadcasting) on the underlying rebalance core.
@@ -99,6 +109,7 @@ impl RebalanceLitePullImpl {
         message_model: rocketmq_remoting::protocol::heartbeat::message_model::MessageModel,
     ) {
         self.rebalance_impl_inner.message_model = Some(message_model);
+        self.update_consumer_config(|config| config.message_model = message_model);
     }
 
     /// Sets the queue-allocation strategy used during rebalancing.
@@ -106,7 +117,31 @@ impl RebalanceLitePullImpl {
         &mut self,
         strategy: Arc<dyn crate::consumer::allocate_message_queue_strategy::AllocateMessageQueueStrategy>,
     ) {
-        self.rebalance_impl_inner.allocate_message_queue_strategy = Some(strategy);
+        self.rebalance_impl_inner.allocate_message_queue_strategy = Some(strategy.clone());
+        self.update_consumer_config(|config| config.allocate_message_queue_strategy = Some(strategy.clone()));
+    }
+
+    /// Updates unit-mode routing in the immutable rebalance configuration snapshot.
+    pub fn set_unit_mode(&self, unit_mode: bool) {
+        self.update_consumer_config(|config| config.unit_mode = unit_mode);
+    }
+
+    /// Updates the initial offset policy in the immutable rebalance configuration snapshot.
+    pub fn set_consume_from_where(&self, consume_from_where: ConsumeFromWhere) {
+        self.update_consumer_config(|config| config.consume_from_where = consume_from_where);
+    }
+
+    /// Updates the timestamp used by `ConsumeFromTimestamp`.
+    pub fn set_consume_timestamp(&self, consume_timestamp: Option<CheetahString>) {
+        self.update_consumer_config(|config| config.consume_timestamp = consume_timestamp.clone());
+    }
+
+    /// Updates the rebalance listener in the immutable configuration snapshot.
+    pub fn set_message_queue_listener(
+        &self,
+        listener: Option<Arc<dyn crate::consumer::message_queue_listener::MessageQueueListener>>,
+    ) {
+        self.update_consumer_config(|config| config.message_queue_listener = listener.clone());
     }
 
     /// Injects the `MQClientInstance` used for broker communication.
@@ -147,7 +182,7 @@ impl Rebalance for RebalanceLitePullImpl {
         mq_all: &HashSet<MessageQueue>,
         mq_divided: &HashSet<MessageQueue>,
     ) {
-        let listener = self.consumer_config.message_queue_listener.clone();
+        let listener = self.consumer_config.load().message_queue_listener.clone();
         if let Some(listener) = listener {
             if let Err(err) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 listener.message_queue_changed(topic, mq_all, mq_divided);
@@ -204,7 +239,8 @@ impl Rebalance for RebalanceLitePullImpl {
         &mut self,
         mq: &MessageQueue,
     ) -> rocketmq_error::RocketMQResult<i64> {
-        let consume_from_where = self.consumer_config.consume_from_where;
+        let consumer_config = self.consumer_config.load_full();
+        let consume_from_where = consumer_config.consume_from_where;
 
         let offset_store = self.offset_store.as_ref().ok_or_else(|| {
             error!("Offset store not initialised for mq: {}", mq);
@@ -267,10 +303,8 @@ impl Rebalance for RebalanceLitePullImpl {
                         })?;
                         client.mq_admin_impl.max_offset(mq).await?
                     } else {
-                        let timestamp = super::parse_consume_timestamp_millis(
-                            self.consumer_config.consume_timestamp.as_deref(),
-                            mq,
-                        )?;
+                        let timestamp =
+                            super::parse_consume_timestamp_millis(consumer_config.consume_timestamp.as_deref(), mq)?;
                         let client = self.rebalance_impl_inner.client_instance.as_mut().ok_or_else(|| {
                             error!("Client instance not initialised for mq: {}", mq);
                             mq_client_err!(

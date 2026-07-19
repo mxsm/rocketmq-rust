@@ -355,6 +355,11 @@ orderly namespace reset 使用 immutable resolution，删除 3 个过时 `mut_fr
 410 production/1,203 occurrences，Client 降至 93/311；POP-orderly producer send、Rebalance owner/assignment 与
 其余 Client/Broker/Store、compatibility、完整候选快照 Gate 仍保持开放。
 
+M11-12aa 已将 Lite Pull 实现与 rebalance 配置从共享可变 owner 改为 `ArcSwap` 不可变快照；setter 使用
+copy-update-publish，异步 pull/rebalance/metadata/diagnostics 读取完整代际且不跨 await 持有同步 guard。兼容 facade
+入口、namespace、trace、pull、offset 与 Java 配置同步行为保持。实际快照为 410 production/1,169 occurrences，
+Client 为 93/277；Lite Pull facade/root lifecycle、其余 Client/Broker/Store、compatibility 与完整候选快照 Gate 仍保持开放。
+
 ## 公共兼容面
 
 - development/compatibility仍可显式选择；secure只作为新部署默认，不静默重解释旧配置。
