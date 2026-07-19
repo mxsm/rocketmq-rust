@@ -14,6 +14,7 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
@@ -118,7 +119,7 @@ pub struct MQConsumerInnerImpl {
 #[derive(Clone)]
 enum MQConsumerInnerImplKind {
     Push(ArcMut<DefaultMQPushConsumerImpl>),
-    LitePull(ArcMut<DefaultLitePullConsumerImpl>),
+    LitePull(Arc<DefaultLitePullConsumerImpl>),
 }
 
 impl MQConsumerInnerImpl {
@@ -128,7 +129,7 @@ impl MQConsumerInnerImpl {
         }
     }
 
-    pub(crate) fn from_lite_pull(default_lite_pull_consumer_impl: ArcMut<DefaultLitePullConsumerImpl>) -> Self {
+    pub(crate) fn from_lite_pull(default_lite_pull_consumer_impl: Arc<DefaultLitePullConsumerImpl>) -> Self {
         Self {
             inner: MQConsumerInnerImplKind::LitePull(default_lite_pull_consumer_impl),
         }
@@ -325,12 +326,12 @@ mod tests {
     #[test]
     fn lite_pull_wrapper_delegates_heartbeat_fields() {
         let consumer_group = CheetahString::from_static_str("lite_pull_wrapper_group");
-        let consumer_config = ArcMut::new(LitePullConsumerConfig {
+        let consumer_config = Arc::new(LitePullConsumerConfig {
             consumer_group: consumer_group.clone(),
             ..Default::default()
         });
-        let impl_ = ArcMut::new(DefaultLitePullConsumerImpl::new(
-            ArcMut::new(ClientConfig::default()),
+        let impl_ = Arc::new(DefaultLitePullConsumerImpl::new(
+            Arc::new(ClientConfig::default()),
             consumer_config,
         ));
         let wrapper = MQConsumerInnerImpl::from_lite_pull(impl_);

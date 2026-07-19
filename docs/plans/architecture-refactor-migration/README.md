@@ -354,6 +354,11 @@ Client Lite Pull facade config snapshots 随 Issue #8349 将 facade 的 client/c
 `DefaultLitePullConsumer` 路径、builder、Java-compatible 方法名、namespace/TLS/trace/pull/offset 行为保持。实际快照降至
 408 production/1,129 occurrence，Client 降至 91/237；剩余为 Broker 190/568、Client 91/237 与 Store 127/324，
 总进度仍为 75/82，下一子切片处理 Lite Pull root lifecycle，M11-12 父工作包与最终目标 Gate 均未完成。
+Client Lite Pull root lifecycle 随 Issue #8351 将 facade、consumer inner、rebalance listener、metadata/pull task 的
+根 owner 改为标准 `Arc`/`Weak`，以专用异步 lifecycle mutex 串行 start/shutdown 与订阅控制面；同步状态和组件槽位只在
+短锁内发布或克隆快照，锁外执行 await。Rebalance offset store 改为 `ArcSwapOption`，consumer 注册与订阅表写入收窄为
+`&self`，未新增 shared-mutation occurrence。实际快照降至 402 production/1,102 occurrence，Client crate 降至
+85/210；剩余为 Broker 190/568、Client 85/210 与 Store 127/324，总进度仍为 75/82，M11-12 父工作包未完成。
 
 ### 9.3 证据目录
 

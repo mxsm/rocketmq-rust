@@ -30,6 +30,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
+use arc_swap::ArcSwapOption;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
@@ -66,7 +67,7 @@ pub struct RebalanceLitePullImpl {
     /// optional [`MessageQueueListener`][crate::consumer::message_queue_listener::MessageQueueListener].
     consumer_config: ArcSwap<ConsumerConfig>,
     /// The active offset storage backend, injected after the consumer starts.
-    pub(crate) offset_store: Option<Arc<OffsetStore>>,
+    pub(crate) offset_store: ArcSwapOption<OffsetStore>,
 }
 
 impl RebalanceLitePullImpl {
@@ -78,7 +79,7 @@ impl RebalanceLitePullImpl {
         Self {
             consumer_config: ArcSwap::from_pointee(consumer_config),
             rebalance_impl_inner: RebalanceImpl::new(None, None, None, None),
-            offset_store: None,
+            offset_store: ArcSwapOption::empty(),
         }
     }
 
@@ -144,9 +145,23 @@ impl RebalanceLitePullImpl {
         self.update_consumer_config(|config| config.message_queue_listener = listener.clone());
     }
 
-    /// Injects the `MQClientInstance` used for broker communication.
-    pub fn set_mq_client_factory(&mut self, client_instance: ArcMut<MQClientInstance>) {
+    /// Publishes the runtime rebalance inputs immediately before client registration.
+    pub fn set_mq_client_factory(
+        &mut self,
+        consumer_group: CheetahString,
+        message_model: rocketmq_remoting::protocol::heartbeat::message_model::MessageModel,
+        strategy: Arc<dyn crate::consumer::allocate_message_queue_strategy::AllocateMessageQueueStrategy>,
+        client_instance: ArcMut<MQClientInstance>,
+    ) {
+        self.rebalance_impl_inner.consumer_group = Some(consumer_group.clone());
+        self.rebalance_impl_inner.message_model = Some(message_model);
+        self.rebalance_impl_inner.allocate_message_queue_strategy = Some(strategy.clone());
         self.rebalance_impl_inner.client_instance = Some(client_instance);
+        self.update_consumer_config(|config| {
+            config.consumer_group = consumer_group.clone();
+            config.message_model = message_model;
+            config.allocate_message_queue_strategy = Some(strategy.clone());
+        });
     }
 
     /// Registers this [`RebalanceLitePullImpl`] as its own sub-rebalance implementation.
@@ -159,15 +174,15 @@ impl RebalanceLitePullImpl {
 
     /// Inserts or replaces a topic subscription.
     #[inline]
-    pub fn put_subscription_data(&mut self, topic: CheetahString, subscription_data: SubscriptionData) {
+    pub fn put_subscription_data(&self, topic: CheetahString, subscription_data: SubscriptionData) {
         self.rebalance_impl_inner
             .subscription_inner
             .insert(topic, subscription_data);
     }
 
     /// Sets the offset store backend used to persist and query per-queue consume offsets.
-    pub fn set_offset_store(&mut self, offset_store: Arc<OffsetStore>) {
-        self.offset_store = Some(offset_store);
+    pub fn set_offset_store(&self, offset_store: Option<Arc<OffsetStore>>) {
+        self.offset_store.store(offset_store);
     }
 }
 
@@ -197,7 +212,7 @@ impl Rebalance for RebalanceLitePullImpl {
     /// LitePull consumers have no ordering lock, so the queue can always be removed immediately.
     /// Returns `true` unconditionally.
     async fn remove_unnecessary_message_queue(&mut self, mq: &MessageQueue, _pq: &ProcessQueue) -> bool {
-        let Some(ref offset_store) = self.offset_store else {
+        let Some(offset_store) = self.offset_store.load_full() else {
             warn!("Offset store not initialised; skipping persist/remove for {}", mq);
             return true;
         };
@@ -215,7 +230,7 @@ impl Rebalance for RebalanceLitePullImpl {
     ///
     /// Called to discard a stale offset before a fresh initial-offset computation.
     async fn remove_dirty_offset(&mut self, mq: &MessageQueue) {
-        let Some(ref offset_store) = self.offset_store else {
+        let Some(offset_store) = self.offset_store.load_full() else {
             warn!("Offset store not initialised; cannot remove dirty offset for {}", mq);
             return;
         };
@@ -242,7 +257,7 @@ impl Rebalance for RebalanceLitePullImpl {
         let consumer_config = self.consumer_config.load_full();
         let consume_from_where = consumer_config.consume_from_where;
 
-        let offset_store = self.offset_store.as_ref().ok_or_else(|| {
+        let offset_store = self.offset_store.load_full().ok_or_else(|| {
             error!("Offset store not initialised for mq: {}", mq);
             mq_client_err!(
                 ResponseCode::SystemError as i32,
