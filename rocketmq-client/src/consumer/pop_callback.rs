@@ -21,7 +21,6 @@ use rocketmq_common::common::mix_all;
 use rocketmq_error::RocketMQError;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
-use rocketmq_rust::ArcMut;
 use tracing::warn;
 
 use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
@@ -89,7 +88,7 @@ fn broker_response_code(error: &RocketMQError) -> Option<ResponseCode> {
 }
 
 pub struct DefaultPopCallback {
-    pub(crate) push_consumer_impl: ArcMut<DefaultMQPushConsumerImpl>,
+    pub(crate) push_consumer_impl: Arc<DefaultMQPushConsumerImpl>,
     pub(crate) message_queue_inner: Option<MessageQueue>,
     pub(crate) subscription_data: Option<SubscriptionData>,
     pub(crate) pop_request: Option<PopRequest>,
@@ -97,7 +96,7 @@ pub struct DefaultPopCallback {
 
 impl PopCallback for DefaultPopCallback {
     async fn on_success(&mut self, pop_result: PopResult) {
-        let mut push_consumer_impl = self.push_consumer_impl.clone();
+        let push_consumer_impl = self.push_consumer_impl.clone();
 
         let Some(message_queue_inner) = self.message_queue_inner.take() else {
             warn!("pop callback success ignored: message queue is missing");
@@ -130,8 +129,7 @@ impl PopCallback for DefaultPopCallback {
                 if pop_result.msg_found_list.as_ref().is_none_or(|value| value.is_empty()) {
                     push_consumer_impl.execute_pop_request_immediately(pop_request).await;
                 } else {
-                    let Some(consume_message_pop_service) = push_consumer_impl.consume_message_pop_service.as_mut()
-                    else {
+                    let Some(consume_message_pop_service) = push_consumer_impl.consume_message_pop_service() else {
                         warn!(
                             "pop callback found messages but ConsumeMessagePopService is not initialized, mq={}",
                             message_queue_inner
@@ -225,11 +223,12 @@ mod tests {
 
     fn new_callback() -> DefaultPopCallback {
         let consumer_config = ConsumerConfig::default();
-        let push_consumer_impl = ArcMut::new(DefaultMQPushConsumerImpl::new(
+        let push_consumer_impl = Arc::new(DefaultMQPushConsumerImpl::new(
             ClientConfig::default(),
             consumer_config,
             None,
         ));
+        push_consumer_impl.initialize_self_reference();
         DefaultPopCallback {
             push_consumer_impl,
             message_queue_inner: None,

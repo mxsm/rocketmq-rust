@@ -18,6 +18,9 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::OnceLock;
+use std::sync::RwLock as StdRwLock;
+use std::sync::Weak;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -114,30 +117,34 @@ const _1MB: u64 = 1024 * 1024;
 
 pub struct DefaultMQPushConsumerImpl {
     pub(crate) global_lock: Arc<Mutex<()>>,
+    lifecycle_transition: Mutex<()>,
     pub(crate) pull_time_delay_mills_when_exception: u64,
-    pub(crate) client_config: ArcMut<ClientConfig>,
+    client_config: ArcSwap<ClientConfig>,
     pub(crate) consumer_config: Arc<ArcSwap<ConsumerConfig>>,
     pub(crate) rebalance_impl: ArcMut<RebalancePushImpl>,
-    filter_message_hook_list: Vec<Arc<dyn FilterMessageHook + Send + Sync>>,
-    consume_message_hook_list: Vec<ConsumeMessageHookArc>,
+    filter_message_hook_list: StdRwLock<Vec<Arc<dyn FilterMessageHook + Send + Sync>>>,
+    consume_message_hook_list: StdRwLock<Vec<ConsumeMessageHookArc>>,
     rpc_hook: Option<Arc<dyn RPCHook>>,
-    service_state: ArcMut<ServiceState>,
-    pub(crate) client_instance: Option<ArcMut<MQClientInstance>>,
-    pub(crate) pull_api_wrapper: Option<Arc<PullAPIWrapper>>,
+    service_state: StdRwLock<ServiceState>,
+    client_instance: StdRwLock<Option<ArcMut<MQClientInstance>>>,
+    pull_api_wrapper: StdRwLock<Option<Arc<PullAPIWrapper>>>,
     pause: Arc<AtomicBool>,
-    consume_orderly: bool,
-    message_listener: Option<Arc<MessageListener>>,
-    pub(crate) offset_store: Option<Arc<OffsetStore>>,
-    pub(crate) consume_message_service:
+    consume_orderly: AtomicBool,
+    message_listener: StdRwLock<Option<Arc<MessageListener>>>,
+    offset_store: StdRwLock<Option<Arc<OffsetStore>>>,
+    consume_message_service: StdRwLock<
         Option<Arc<ConsumeMessageServiceGeneral<ConsumeMessageConcurrentlyService, ConsumeMessageOrderlyService>>>,
-    pub(crate) consume_message_pop_service: Option<
-        Arc<ConsumeMessagePopServiceGeneral<ConsumeMessagePopConcurrentlyService, ConsumeMessagePopOrderlyService>>,
     >,
-    queue_flow_control_times: u64,
-    queue_max_span_flow_control_times: u64,
+    consume_message_pop_service: StdRwLock<
+        Option<
+            Arc<ConsumeMessagePopServiceGeneral<ConsumeMessagePopConcurrentlyService, ConsumeMessagePopOrderlyService>>,
+        >,
+    >,
+    queue_flow_control_times: AtomicU64,
+    queue_max_span_flow_control_times: AtomicU64,
     consumer_start_timestamp: AtomicU64,
     pub(crate) pop_delay_level: Arc<[i32; 16]>,
-    default_mqpush_consumer_impl: Option<ArcMut<DefaultMQPushConsumerImpl>>,
+    self_reference: OnceLock<Weak<DefaultMQPushConsumerImpl>>,
 }
 
 impl DefaultMQPushConsumerImpl {
@@ -148,31 +155,32 @@ impl DefaultMQPushConsumerImpl {
     ) -> Self {
         let consumer_config = Arc::new(ArcSwap::from_pointee(consumer_config));
         let rebalance_consumer_config = (*consumer_config.load_full()).clone();
-        let mut this = Self {
+        let this = Self {
             global_lock: Arc::new(Default::default()),
+            lifecycle_transition: Mutex::new(()),
             pull_time_delay_mills_when_exception: 3_000,
-            client_config: ArcMut::new(client_config.clone()),
+            client_config: ArcSwap::from_pointee(client_config.clone()),
             consumer_config: consumer_config.clone(),
             rebalance_impl: ArcMut::new(RebalancePushImpl::new(client_config, rebalance_consumer_config)),
-            filter_message_hook_list: vec![],
-            consume_message_hook_list: vec![],
+            filter_message_hook_list: StdRwLock::new(vec![]),
+            consume_message_hook_list: StdRwLock::new(vec![]),
             rpc_hook,
-            service_state: ArcMut::new(ServiceState::CreateJust),
-            client_instance: None,
-            pull_api_wrapper: None,
+            service_state: StdRwLock::new(ServiceState::CreateJust),
+            client_instance: StdRwLock::new(None),
+            pull_api_wrapper: StdRwLock::new(None),
             pause: Arc::new(AtomicBool::new(false)),
-            consume_orderly: false,
-            message_listener: None,
-            offset_store: None,
-            consume_message_service: None,
-            consume_message_pop_service: None,
-            queue_flow_control_times: 0,
-            queue_max_span_flow_control_times: 0,
+            consume_orderly: AtomicBool::new(false),
+            message_listener: StdRwLock::new(None),
+            offset_store: StdRwLock::new(None),
+            consume_message_service: StdRwLock::new(None),
+            consume_message_pop_service: StdRwLock::new(None),
+            queue_flow_control_times: AtomicU64::new(0),
+            queue_max_span_flow_control_times: AtomicU64::new(0),
             consumer_start_timestamp: AtomicU64::new(current_millis()),
             pop_delay_level: Arc::new([
                 10, 30, 60, 120, 180, 240, 300, 360, 420, 480, 540, 600, 1200, 1800, 3600, 7200,
             ]),
-            default_mqpush_consumer_impl: None,
+            self_reference: OnceLock::new(),
         };
         let wrapper = ArcMut::downgrade(&this.rebalance_impl);
         this.rebalance_impl.set_rebalance_impl(wrapper);
@@ -190,44 +198,50 @@ impl DefaultMQPushConsumerImpl {
         this
     }
 
-    pub fn set_default_mqpush_consumer_impl(
-        &mut self,
-        default_mqpush_consumer_impl: ArcMut<DefaultMQPushConsumerImpl>,
-    ) {
-        self.rebalance_impl
-            .set_default_mqpush_consumer_impl(default_mqpush_consumer_impl.clone());
-        self.default_mqpush_consumer_impl = Some(default_mqpush_consumer_impl.clone());
-        if let Some(consume_message_service) = self.consume_message_service.as_ref() {
+    pub(crate) fn initialize_self_reference(self: &Arc<Self>) {
+        let weak = Arc::downgrade(self);
+        let _ = self.self_reference.set(weak.clone());
+        self.rebalance_impl.set_default_mqpush_consumer_impl(weak);
+        if let Some(consume_message_service) = self.consume_message_service() {
             if let Some(service) = consume_message_service.get_consume_message_concurrently_service() {
-                *service.default_mqpush_consumer_impl.write() = Some(default_mqpush_consumer_impl);
+                *service.default_mqpush_consumer_impl.write() = Some(Arc::downgrade(self));
             }
         }
     }
 
     pub fn get_mq_client_factory(&self) -> Option<ArcMut<MQClientInstance>> {
-        self.client_instance.clone()
+        self.component_snapshot(&self.client_instance)
     }
 
     #[inline]
     pub(crate) fn client_id(&self) -> Option<CheetahString> {
-        self.client_instance
+        self.get_mq_client_factory()
             .as_ref()
             .map(|client_instance| client_instance.client_id.clone())
     }
 
-    pub fn set_mq_client_factory(&mut self, client_instance: ArcMut<MQClientInstance>) {
+    pub fn set_mq_client_factory(&self, client_instance: ArcMut<MQClientInstance>) {
         self.rebalance_impl.set_mq_client_factory(client_instance.clone());
-        self.client_instance = Some(client_instance);
+        self.set_component(&self.client_instance, Some(client_instance));
+    }
+
+    pub(crate) fn set_use_tls(&self, use_tls: bool) {
+        self.client_config.rcu(|current| {
+            let mut next = (**current).clone();
+            next.set_use_tls(use_tls);
+            Arc::new(next)
+        });
+        self.rebalance_impl.set_use_tls(use_tls);
     }
 
     #[inline]
     pub fn is_consume_orderly(&self) -> bool {
-        self.consume_orderly
+        self.consume_orderly.load(Ordering::Acquire)
     }
 
     #[inline]
-    pub fn set_consume_orderly(&mut self, consume_orderly: bool) {
-        self.consume_orderly = consume_orderly;
+    pub fn set_consume_orderly(&self, consume_orderly: bool) {
+        self.consume_orderly.store(consume_orderly, Ordering::Release);
     }
 
     #[inline]
@@ -236,11 +250,11 @@ impl DefaultMQPushConsumerImpl {
     }
 
     pub fn offset_store(&self) -> Option<Arc<OffsetStore>> {
-        self.offset_store.clone()
+        self.component_snapshot(&self.offset_store)
     }
 
-    pub fn set_offset_store(&mut self, offset_store: Option<Arc<OffsetStore>>) {
-        self.offset_store = offset_store;
+    pub fn set_offset_store(&self, offset_store: Option<Arc<OffsetStore>>) {
+        self.set_component(&self.offset_store, offset_store);
     }
 
     pub(crate) fn sync_rebalance_consumer_config(&self, consumer_config: ConsumerConfig) {
@@ -249,6 +263,64 @@ impl DefaultMQPushConsumerImpl {
 
     pub(crate) fn consumer_config_snapshot(&self) -> Arc<ConsumerConfig> {
         self.consumer_config.load_full()
+    }
+
+    pub(crate) fn client_config_snapshot(&self) -> Arc<ClientConfig> {
+        self.client_config.load_full()
+    }
+
+    pub(crate) fn with_namespace(&self, resource: impl Into<CheetahString>) -> CheetahString {
+        let resource = resource.into();
+        let namespace = self.client_config_snapshot().resolved_namespace().unwrap_or_default();
+        if namespace.is_empty() || NamespaceUtil::is_already_with_namespace(resource.as_str(), namespace.as_str()) {
+            resource
+        } else {
+            NamespaceUtil::wrap_namespace(namespace, resource)
+        }
+    }
+
+    pub(crate) fn pull_api_wrapper(&self) -> Option<Arc<PullAPIWrapper>> {
+        self.component_snapshot(&self.pull_api_wrapper)
+    }
+
+    pub(crate) fn consume_message_service(
+        &self,
+    ) -> Option<Arc<ConsumeMessageServiceGeneral<ConsumeMessageConcurrentlyService, ConsumeMessageOrderlyService>>>
+    {
+        self.component_snapshot(&self.consume_message_service)
+    }
+
+    pub(crate) fn consume_message_pop_service(
+        &self,
+    ) -> Option<
+        Arc<ConsumeMessagePopServiceGeneral<ConsumeMessagePopConcurrentlyService, ConsumeMessagePopOrderlyService>>,
+    > {
+        self.component_snapshot(&self.consume_message_pop_service)
+    }
+
+    fn service_state(&self) -> ServiceState {
+        *self
+            .service_state
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn set_service_state(&self, state: ServiceState) {
+        *self
+            .service_state
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = state;
+    }
+
+    fn component_snapshot<T: Clone>(&self, component: &StdRwLock<T>) -> T {
+        component
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    fn set_component<T>(&self, component: &StdRwLock<T>, value: T) {
+        *component.write().unwrap_or_else(|poisoned| poisoned.into_inner()) = value;
     }
 
     fn update_consumer_config(&self, update: impl Fn(&mut ConsumerConfig)) {
@@ -276,25 +348,35 @@ impl DefaultMQPushConsumerImpl {
 }
 
 impl DefaultMQPushConsumerImpl {
-    pub async fn start(&mut self) -> rocketmq_error::RocketMQResult<()> {
-        match *self.service_state {
+    pub async fn start(&self) -> rocketmq_error::RocketMQResult<()> {
+        let _transition = self.lifecycle_transition.lock().await;
+        self.start_transition().await
+    }
+
+    async fn start_transition(&self) -> rocketmq_error::RocketMQResult<()> {
+        match self.service_state() {
             ServiceState::CreateJust => {
                 let consumer_config = self.consumer_config_snapshot();
                 info!(
                     "the consumer [{}] start beginning. message_model={}, isUnitMode={}",
                     consumer_config.consumer_group, consumer_config.message_model, consumer_config.unit_mode
                 );
-                *self.service_state = ServiceState::StartFailed;
+                self.set_service_state(ServiceState::StartFailed);
                 // check all config
                 self.check_config()?;
                 //copy_subscription is can be removed
                 self.copy_subscription().await?;
                 if consumer_config.message_model() == MessageModel::Clustering {
-                    self.client_config.change_instance_name_to_pid();
+                    self.client_config.rcu(|current| {
+                        let mut next = (**current).clone();
+                        next.change_instance_name_to_pid();
+                        Arc::new(next)
+                    });
                 }
+                let client_config = self.client_config_snapshot();
                 let mut client_instance = MQClientManager::get_instance()
-                    .get_or_create_mq_client_instance(self.client_config.as_ref().clone(), self.rpc_hook.clone());
-                self.client_instance = Some(client_instance.clone());
+                    .get_or_create_mq_client_instance(client_config.as_ref().clone(), self.rpc_hook.clone());
+                self.set_component(&self.client_instance, Some(client_instance.clone()));
                 self.rebalance_impl
                     .set_consumer_group(consumer_config.consumer_group.clone());
                 self.rebalance_impl.set_message_model(consumer_config.message_model);
@@ -304,111 +386,126 @@ impl DefaultMQPushConsumerImpl {
                     })?,
                 );
                 self.rebalance_impl.set_mq_client_factory(client_instance.clone());
-                if self.pull_api_wrapper.is_none() {
-                    self.pull_api_wrapper = Some(Arc::new(PullAPIWrapper::new(
-                        client_instance.clone(),
-                        consumer_config.consumer_group.clone(),
-                        consumer_config.unit_mode,
-                    )));
+                if self.pull_api_wrapper().is_none() {
+                    self.set_component(
+                        &self.pull_api_wrapper,
+                        Some(Arc::new(PullAPIWrapper::new(
+                            client_instance.clone(),
+                            consumer_config.consumer_group.clone(),
+                            consumer_config.unit_mode,
+                        ))),
+                    );
                 }
-                if let Some(pull_api_wrapper) = self.pull_api_wrapper.as_ref() {
-                    pull_api_wrapper.register_filter_message_hook(self.filter_message_hook_list.clone());
+                if let Some(pull_api_wrapper) = self.pull_api_wrapper() {
+                    pull_api_wrapper
+                        .register_filter_message_hook(self.component_snapshot(&self.filter_message_hook_list));
                 }
-                if let Some(offset_store) = consumer_config.offset_store() {
-                    self.offset_store = Some(offset_store);
+                let offset_store = if let Some(offset_store) = consumer_config.offset_store() {
+                    offset_store
                 } else {
-                    match consumer_config.message_model {
-                        MessageModel::Broadcasting => {
-                            self.offset_store = Some(Arc::new(OffsetStore::new_with_local(LocalFileOffsetStore::new(
-                                client_instance.clone(),
-                                consumer_config.consumer_group.clone(),
-                            ))));
-                        }
-                        MessageModel::Clustering => {
-                            self.offset_store =
-                                Some(Arc::new(OffsetStore::new_with_remote(RemoteBrokerOffsetStore::new(
-                                    client_instance.clone(),
-                                    consumer_config.consumer_group.clone(),
-                                ))));
-                        }
-                    }
-                    self.update_consumer_config(|consumer_config| {
-                        consumer_config.set_offset_store(self.offset_store.clone())
+                    let offset_store = Arc::new(match consumer_config.message_model {
+                        MessageModel::Broadcasting => OffsetStore::new_with_local(LocalFileOffsetStore::new(
+                            client_instance.clone(),
+                            consumer_config.consumer_group.clone(),
+                        )),
+                        MessageModel::Clustering => OffsetStore::new_with_remote(RemoteBrokerOffsetStore::new(
+                            client_instance.clone(),
+                            consumer_config.consumer_group.clone(),
+                        )),
                     });
-                }
-                self.offset_store
-                    .as_mut()
-                    .ok_or_else(|| mq_client_err!("OffsetStore is not initialized"))?
-                    .load()
-                    .await?;
+                    self.update_consumer_config(|consumer_config| {
+                        consumer_config.set_offset_store(Some(offset_store.clone()))
+                    });
+                    offset_store
+                };
+                self.set_offset_store(Some(offset_store.clone()));
+                offset_store.load().await?;
 
-                if let Some(message_listener) = self.message_listener.as_ref() {
-                    let client_config_snapshot = Arc::new(self.client_config.as_ref().clone());
+                if let Some(message_listener) = self.component_snapshot(&self.message_listener) {
+                    let self_reference = self
+                        .self_reference
+                        .get()
+                        .cloned()
+                        .ok_or_else(|| mq_client_err!("default_mqpush_consumer_impl is not initialized"))?;
+                    let client_config_snapshot = self.client_config_snapshot();
                     let consumer_config_snapshot = Arc::new(consumer_config.as_ref().clone());
                     if let Some(listener) = message_listener.message_listener_concurrently.clone() {
-                        self.consume_orderly = false;
+                        self.set_consume_orderly(false);
                         let consume_message_concurrently_service = Arc::new(ConsumeMessageConcurrentlyService::new(
                             client_config_snapshot.clone(),
                             consumer_config_snapshot.clone(),
                             consumer_config_snapshot.consumer_group.clone(),
                             listener.clone(),
-                            self.default_mqpush_consumer_impl.clone(),
+                            Some(self_reference.clone()),
                         ));
-                        self.consume_message_service = Some(Arc::new(ConsumeMessageServiceGeneral::new(
-                            Some(consume_message_concurrently_service),
-                            None,
-                        )));
+                        self.set_component(
+                            &self.consume_message_service,
+                            Some(Arc::new(ConsumeMessageServiceGeneral::new(
+                                Some(consume_message_concurrently_service),
+                                None,
+                            ))),
+                        );
                         let consume_message_pop_concurrently_service =
                             Arc::new(ConsumeMessagePopConcurrentlyService::new(
                                 client_config_snapshot.clone(),
                                 consumer_config_snapshot.clone(),
                                 consumer_config_snapshot.consumer_group.clone(),
                                 listener.clone(),
-                                self.default_mqpush_consumer_impl.clone(),
+                                Some(self_reference.clone()),
                             ));
 
-                        self.consume_message_pop_service = Some(Arc::new(ConsumeMessagePopServiceGeneral::new(
-                            Some(consume_message_pop_concurrently_service),
-                            None,
-                        )));
+                        self.set_component(
+                            &self.consume_message_pop_service,
+                            Some(Arc::new(ConsumeMessagePopServiceGeneral::new(
+                                Some(consume_message_pop_concurrently_service),
+                                None,
+                            ))),
+                        );
                     } else if let Some(listener) = message_listener.message_listener_orderly.clone() {
-                        self.consume_orderly = true;
+                        self.set_consume_orderly(true);
                         let consume_message_orderly_service = Arc::new(ConsumeMessageOrderlyService::new(
                             client_config_snapshot.clone(),
                             consumer_config_snapshot.clone(),
                             consumer_config_snapshot.consumer_group.clone(),
                             listener.clone(),
-                            self.default_mqpush_consumer_impl.clone(),
+                            Some(self_reference.clone()),
                         ));
-                        self.consume_message_service = Some(Arc::new(ConsumeMessageServiceGeneral::new(
-                            None,
-                            Some(consume_message_orderly_service),
-                        )));
+                        self.set_component(
+                            &self.consume_message_service,
+                            Some(Arc::new(ConsumeMessageServiceGeneral::new(
+                                None,
+                                Some(consume_message_orderly_service),
+                            ))),
+                        );
 
                         let consume_message_pop_orderly_service = Arc::new(ConsumeMessagePopOrderlyService::new(
                             client_config_snapshot,
                             consumer_config_snapshot.clone(),
                             consumer_config_snapshot.consumer_group.clone(),
                             listener,
-                            self.default_mqpush_consumer_impl.clone(),
+                            Some(self_reference),
                         ));
-                        self.consume_message_pop_service = Some(Arc::new(ConsumeMessagePopServiceGeneral::new(
-                            None,
-                            Some(consume_message_pop_orderly_service),
-                        )));
+                        self.set_component(
+                            &self.consume_message_pop_service,
+                            Some(Arc::new(ConsumeMessagePopServiceGeneral::new(
+                                None,
+                                Some(consume_message_pop_orderly_service),
+                            ))),
+                        );
                     }
                 }
 
-                if let Some(consume_message_concurrently_service) = self.consume_message_service.as_ref() {
+                if let Some(consume_message_concurrently_service) = self.consume_message_service() {
                     consume_message_concurrently_service.start();
                 }
 
-                if let Some(consume_message_orderly_service) = self.consume_message_pop_service.as_ref() {
+                if let Some(consume_message_orderly_service) = self.consume_message_pop_service() {
                     consume_message_orderly_service.start();
                 }
                 let default_mqpush_consumer_impl = self
-                    .default_mqpush_consumer_impl
-                    .clone()
+                    .self_reference
+                    .get()
+                    .and_then(Weak::upgrade)
                     .ok_or_else(|| mq_client_err!("default_mqpush_consumer_impl is None"))?;
                 let register_ok = client_instance
                     .register_consumer(
@@ -417,13 +514,13 @@ impl DefaultMQPushConsumerImpl {
                     )
                     .await;
                 if !register_ok {
-                    *self.service_state = ServiceState::CreateJust;
-                    if let Some(consume_message_service) = self.consume_message_service.as_ref() {
+                    self.set_service_state(ServiceState::CreateJust);
+                    if let Some(consume_message_service) = self.consume_message_service() {
                         consume_message_service
                             .shutdown(consumer_config.await_termination_millis_when_shutdown)
                             .await;
                     }
-                    if let Some(consume_message_pop_service) = self.consume_message_pop_service.as_ref() {
+                    if let Some(consume_message_pop_service) = self.consume_message_pop_service() {
                         consume_message_pop_service
                             .shutdown(consumer_config.await_termination_millis_when_shutdown)
                             .await;
@@ -440,7 +537,7 @@ impl DefaultMQPushConsumerImpl {
                     "the consumer [{}] start OK, message_model={}, isUnitMode={}",
                     consumer_config.consumer_group, consumer_config.message_model, consumer_config.unit_mode
                 );
-                *self.service_state = ServiceState::Running;
+                self.set_service_state(ServiceState::Running);
             }
             ServiceState::Running => {
                 return Err(mq_client_err!("The PushConsumer service state is Running"));
@@ -451,7 +548,7 @@ impl DefaultMQPushConsumerImpl {
             ServiceState::StartFailed => {
                 return Err(mq_client_err!(format!(
                     "The PushConsumer service state not OK, maybe started once,{:?},{}",
-                    *self.service_state,
+                    self.service_state(),
                     FAQUrl::suggest_todo(FAQUrl::CLIENT_SERVICE_NOT_OK)
                 )));
             }
@@ -459,22 +556,21 @@ impl DefaultMQPushConsumerImpl {
         self.complete_startup_after_running().await
     }
 
-    async fn complete_startup_after_running(&mut self) -> rocketmq_error::RocketMQResult<()> {
+    async fn complete_startup_after_running(&self) -> rocketmq_error::RocketMQResult<()> {
         let consumer_config = self.consumer_config_snapshot();
         if let Err(error) = self.run_startup_after_running_checks().await {
             warn!("Start the consumer {} fail. {}", consumer_config.consumer_group, error);
-            self.shutdown(consumer_config.await_termination_millis_when_shutdown)
+            self.shutdown_transition(consumer_config.await_termination_millis_when_shutdown)
                 .await;
             return Err(error);
         }
         Ok(())
     }
 
-    async fn run_startup_after_running_checks(&mut self) -> rocketmq_error::RocketMQResult<()> {
+    async fn run_startup_after_running_checks(&self) -> rocketmq_error::RocketMQResult<()> {
         self.update_topic_subscribe_info_when_subscription_changed().await;
-        let client_instance = self
-            .client_instance
-            .as_mut()
+        let mut client_instance = self
+            .get_mq_client_factory()
             .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("MQClientInstance"))?;
         client_instance.check_client_in_broker().await?;
         if client_instance.send_heartbeat_to_all_broker_with_lock().await {
@@ -483,9 +579,13 @@ impl DefaultMQPushConsumerImpl {
         Ok(())
     }
 
-    pub async fn shutdown(&mut self, await_terminate_millis: u64) {
-        let _lock = self.global_lock.lock().await;
-        match *self.service_state {
+    pub async fn shutdown(&self, await_terminate_millis: u64) {
+        let _transition = self.lifecycle_transition.lock().await;
+        self.shutdown_transition(await_terminate_millis).await;
+    }
+
+    async fn shutdown_transition(&self, await_terminate_millis: u64) {
+        match self.service_state() {
             ServiceState::CreateJust => {
                 warn!(
                     "the consumer [{}] do not start, so do nothing",
@@ -493,13 +593,13 @@ impl DefaultMQPushConsumerImpl {
                 );
             }
             ServiceState::Running => {
-                if let Some(consume_message_concurrently_service) = self.consume_message_service.as_ref() {
+                if let Some(consume_message_concurrently_service) = self.consume_message_service() {
                     consume_message_concurrently_service
                         .shutdown(await_terminate_millis)
                         .await;
                 }
                 self.persist_consumer_offset().await;
-                if let Some(offset_store) = self.offset_store.as_ref() {
+                if let Some(offset_store) = self.offset_store() {
                     if !offset_store.shutdown(OFFSET_STORE_SHUTDOWN_TIMEOUT).await {
                         warn!(
                             "consumer [{}] offset store did not stop before timeout",
@@ -508,7 +608,7 @@ impl DefaultMQPushConsumerImpl {
                     }
                 }
                 let consumer_group = self.consumer_config_snapshot().consumer_group.clone();
-                if let Some(client) = self.client_instance.as_mut() {
+                if let Some(mut client) = self.get_mq_client_factory() {
                     client.unregister_consumer(consumer_group.as_str()).await;
                     client.shutdown().await;
                 } else {
@@ -522,7 +622,7 @@ impl DefaultMQPushConsumerImpl {
                     self.consumer_config_snapshot().consumer_group.as_str()
                 );
                 self.rebalance_impl.destroy();
-                *self.service_state = ServiceState::ShutdownAlready;
+                self.set_service_state(ServiceState::ShutdownAlready);
             }
             ServiceState::ShutdownAlready => {
                 warn!(
@@ -537,17 +637,16 @@ impl DefaultMQPushConsumerImpl {
                 );
             }
         }
-        drop(_lock);
     }
 
-    async fn update_topic_subscribe_info_when_subscription_changed(&mut self) {
+    async fn update_topic_subscribe_info_when_subscription_changed(&self) {
         let keys = self
             .rebalance_impl
             .get_subscription_inner()
             .iter()
             .map(|e| e.key().clone())
             .collect::<Vec<_>>();
-        let Some(client) = self.client_instance.as_mut() else {
+        let Some(client) = self.get_mq_client_factory() else {
             warn!(
                 "update topic subscribe info skipped because MQClientInstance is not initialized. group={}",
                 self.consumer_config_snapshot().consumer_group
@@ -559,7 +658,7 @@ impl DefaultMQPushConsumerImpl {
         }
     }
 
-    fn check_config(&mut self) -> rocketmq_error::RocketMQResult<()> {
+    fn check_config(&self) -> rocketmq_error::RocketMQResult<()> {
         let consumer_config = self.consumer_config_snapshot();
         Validators::check_group(consumer_config.consumer_group.as_str())?;
         if consumer_config.consumer_group.is_empty() {
@@ -723,7 +822,7 @@ impl DefaultMQPushConsumerImpl {
         Ok(())
     }
 
-    async fn copy_subscription(&mut self) -> rocketmq_error::RocketMQResult<()> {
+    async fn copy_subscription(&self) -> rocketmq_error::RocketMQResult<()> {
         let sub = self.consumer_config_snapshot().subscription();
         if !sub.is_empty() {
             for (topic, sub_expression) in sub.as_ref() {
@@ -733,8 +832,11 @@ impl DefaultMQPushConsumerImpl {
                     .put_subscription_data(topic.clone(), subscription_data);
             }
         }
-        if self.message_listener.is_none() {
-            self.message_listener = self.consumer_config_snapshot().message_listener.clone();
+        if self.component_snapshot(&self.message_listener).is_none() {
+            self.set_component(
+                &self.message_listener,
+                self.consumer_config_snapshot().message_listener.clone(),
+            );
         }
 
         match self.consumer_config_snapshot().message_model {
@@ -755,36 +857,38 @@ impl DefaultMQPushConsumerImpl {
         Ok(())
     }
 
-    pub fn register_consume_message_hook(&mut self, hook: impl ConsumeMessageHook + 'static) {
+    pub fn register_consume_message_hook(&self, hook: impl ConsumeMessageHook + 'static) {
         self.consume_message_hook_list
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .push(Arc::new(hook) as ConsumeMessageHookArc);
     }
 
     #[cfg(test)]
     pub(crate) fn consume_message_hook_count(&self) -> usize {
-        self.consume_message_hook_list.len()
+        self.component_snapshot(&self.consume_message_hook_list).len()
     }
 
-    pub fn register_message_listener(&mut self, message_listener: Option<Arc<MessageListener>>) {
-        self.message_listener = message_listener;
+    pub fn register_message_listener(&self, message_listener: Option<Arc<MessageListener>>) {
+        self.set_component(&self.message_listener, message_listener);
     }
 
     pub async fn subscribe(
-        &mut self,
+        &self,
         topic: CheetahString,
         sub_expression: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
         let subscription_data = FilterAPI::build_subscription_data(&topic, &sub_expression)
             .map_err(|e| mq_client_err!(format!("buildSubscriptionData exception, {}", e)))?;
         self.rebalance_impl.put_subscription_data(topic, subscription_data);
-        if let Some(ref mut client_instance) = self.client_instance {
+        if let Some(client_instance) = self.get_mq_client_factory() {
             client_instance.send_heartbeat_to_all_broker_with_lock().await;
         }
         Ok(())
     }
 
     pub async fn subscribe_with_selector(
-        &mut self,
+        &self,
         topic: CheetahString,
         selector: Option<MessageSelector>,
     ) -> rocketmq_error::RocketMQResult<()> {
@@ -797,7 +901,7 @@ impl DefaultMQPushConsumerImpl {
                 )
                 .map_err(|e| mq_client_err!(format!("buildSubscriptionData exception, {}", e)))?;
                 self.rebalance_impl.put_subscription_data(topic, subscription_data);
-                if let Some(ref mut client_instance) = self.client_instance {
+                if let Some(client_instance) = self.get_mq_client_factory() {
                     client_instance.send_heartbeat_to_all_broker_with_lock().await;
                 }
                 Ok(())
@@ -810,7 +914,7 @@ impl DefaultMQPushConsumerImpl {
     }
 
     pub async fn fetch_subscribe_message_queues(
-        &mut self,
+        &self,
         topic: &str,
     ) -> rocketmq_error::RocketMQResult<Vec<MessageQueue>> {
         let topic = CheetahString::from(topic);
@@ -819,8 +923,7 @@ impl DefaultMQPushConsumerImpl {
         }
 
         let client_instance = self
-            .client_instance
-            .as_mut()
+            .get_mq_client_factory()
             .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("MQClientInstance"))?;
         client_instance
             .update_topic_route_info_from_name_server_topic(&topic)
@@ -834,7 +937,7 @@ impl DefaultMQPushConsumerImpl {
     }
 
     pub async fn create_topic(
-        &mut self,
+        &self,
         key: &str,
         new_topic: &str,
         queue_num: i32,
@@ -843,57 +946,47 @@ impl DefaultMQPushConsumerImpl {
     ) -> rocketmq_error::RocketMQResult<()> {
         self.make_sure_state_ok()?;
         let client_instance = self
-            .client_instance
-            .as_ref()
-            .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("MQClientInstance"))?
-            .clone();
+            .get_mq_client_factory()
+            .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("MQClientInstance"))?;
         client_instance
             .mq_admin_impl
             .create_topic(key, new_topic, queue_num, topic_sys_flag, attributes)
             .await
     }
 
-    pub async fn earliest_msg_store_time(&mut self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
+    pub async fn earliest_msg_store_time(&self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
         self.make_sure_state_ok()?;
         let client_instance = self
-            .client_instance
-            .as_ref()
-            .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("MQClientInstance"))?
-            .clone();
+            .get_mq_client_factory()
+            .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("MQClientInstance"))?;
         client_instance.mq_admin_impl.earliest_msg_store_time(mq).await
     }
 
-    pub async fn max_offset(&mut self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
+    pub async fn max_offset(&self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
         self.make_sure_state_ok()?;
         let client_instance = self
-            .client_instance
-            .as_ref()
-            .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("MQClientInstance"))?
-            .clone();
+            .get_mq_client_factory()
+            .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("MQClientInstance"))?;
         client_instance.mq_admin_impl.max_offset(mq).await
     }
 
-    pub async fn min_offset(&mut self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
+    pub async fn min_offset(&self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
         self.make_sure_state_ok()?;
         let client_instance = self
-            .client_instance
-            .as_ref()
-            .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("MQClientInstance"))?
-            .clone();
+            .get_mq_client_factory()
+            .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("MQClientInstance"))?;
         client_instance.mq_admin_impl.min_offset(mq).await
     }
 
-    pub async fn search_offset(&mut self, mq: &MessageQueue, timestamp: u64) -> rocketmq_error::RocketMQResult<i64> {
+    pub async fn search_offset(&self, mq: &MessageQueue, timestamp: u64) -> rocketmq_error::RocketMQResult<i64> {
         self.make_sure_state_ok()?;
         let client_instance = self
-            .client_instance
-            .as_ref()
-            .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("MQClientInstance"))?
-            .clone();
+            .get_mq_client_factory()
+            .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("MQClientInstance"))?;
         client_instance.mq_admin_impl.search_offset(mq, timestamp).await
     }
 
-    pub async fn reset_offset_by_time_stamp(&mut self, time_stamp: u64) -> rocketmq_error::RocketMQResult<()> {
+    pub async fn reset_offset_by_time_stamp(&self, time_stamp: u64) -> rocketmq_error::RocketMQResult<()> {
         self.make_sure_state_ok()?;
         let topics = self
             .rebalance_impl
@@ -927,7 +1020,7 @@ impl DefaultMQPushConsumerImpl {
     }
 
     pub async fn query_message(
-        &mut self,
+        &self,
         topic: &str,
         key: &str,
         max_num: i32,
@@ -936,10 +1029,8 @@ impl DefaultMQPushConsumerImpl {
     ) -> rocketmq_error::RocketMQResult<QueryResult> {
         self.make_sure_state_ok()?;
         let client_instance = self
-            .client_instance
-            .as_ref()
-            .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("MQClientInstance"))?
-            .clone();
+            .get_mq_client_factory()
+            .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("MQClientInstance"))?;
         client_instance
             .mq_admin_impl
             .query_message(topic, key, max_num, begin, end)
@@ -947,17 +1038,15 @@ impl DefaultMQPushConsumerImpl {
     }
 
     pub async fn query_message_by_uniq_key(
-        &mut self,
+        &self,
         topic: &str,
         uniq_key: &str,
     ) -> rocketmq_error::RocketMQResult<MessageExt> {
         self.make_sure_state_ok()?;
         let begin = current_millis().saturating_sub(QUERY_UNIQ_KEY_LOOKBACK_MILLIS);
         let client_instance = self
-            .client_instance
-            .as_ref()
-            .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("MQClientInstance"))?
-            .clone();
+            .get_mq_client_factory()
+            .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("MQClientInstance"))?;
         let result = client_instance
             .mq_admin_impl
             .query_message_with_unique_flag(topic, uniq_key, 32, begin, i64::MAX as u64, true)
@@ -969,13 +1058,11 @@ impl DefaultMQPushConsumerImpl {
             .ok_or_else(|| mq_client_err!("query message by uniq key finished, but no message."))
     }
 
-    pub async fn view_message(&mut self, topic: &str, msg_id: &str) -> rocketmq_error::RocketMQResult<MessageExt> {
+    pub async fn view_message(&self, topic: &str, msg_id: &str) -> rocketmq_error::RocketMQResult<MessageExt> {
         self.make_sure_state_ok()?;
         let client_instance = self
-            .client_instance
-            .as_ref()
-            .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("MQClientInstance"))?
-            .clone();
+            .get_mq_client_factory()
+            .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("MQClientInstance"))?;
         client_instance.mq_admin_impl.view_message(topic, msg_id).await
     }
 
@@ -992,16 +1079,11 @@ impl DefaultMQPushConsumerImpl {
     }
 
     fn parse_subscribe_message_queues(&self, message_queue_list: &HashSet<MessageQueue>) -> Vec<MessageQueue> {
-        let namespace = self
-            .client_config
-            .namespace
-            .as_ref()
-            .map(|namespace| namespace.as_str())
-            .unwrap_or_default();
+        let namespace = self.client_config_snapshot().resolved_namespace().unwrap_or_default();
         let mut queues = message_queue_list
             .iter()
             .map(|mq| {
-                let user_topic = NamespaceUtil::without_namespace_with_namespace(mq.topic_str(), namespace);
+                let user_topic = NamespaceUtil::without_namespace_with_namespace(mq.topic_str(), namespace.as_str());
                 MessageQueue::from_parts(user_topic, mq.broker_name(), mq.queue_id())
             })
             .collect::<Vec<_>>();
@@ -1010,7 +1092,7 @@ impl DefaultMQPushConsumerImpl {
     }
 
     pub async fn execute_pull_request_immediately(&self, pull_request: PullRequest) {
-        let Some(client_instance) = self.client_instance.as_ref() else {
+        let Some(client_instance) = self.get_mq_client_factory() else {
             warn!(
                 "execute_pull_request_immediately skipped: MQClientInstance is not initialized, {}",
                 pull_request
@@ -1023,7 +1105,7 @@ impl DefaultMQPushConsumerImpl {
             .await;
     }
     pub fn execute_pull_request_later(&self, pull_request: PullRequest, time_delay: u64) {
-        let Some(client_instance) = self.client_instance.as_ref() else {
+        let Some(client_instance) = self.get_mq_client_factory() else {
             warn!(
                 "execute_pull_request_later skipped: MQClientInstance is not initialized, {}",
                 pull_request
@@ -1036,7 +1118,7 @@ impl DefaultMQPushConsumerImpl {
     }
 
     pub async fn execute_pop_request_immediately(&self, pop_request: PopRequest) {
-        let Some(client_instance) = self.client_instance.as_ref() else {
+        let Some(client_instance) = self.get_mq_client_factory() else {
             warn!(
                 "execute_pop_request_immediately skipped: MQClientInstance is not initialized, {}",
                 pop_request
@@ -1049,7 +1131,7 @@ impl DefaultMQPushConsumerImpl {
             .await;
     }
     pub fn execute_pop_request_later(&self, pop_request: PopRequest, time_delay: u64) {
-        let Some(client_instance) = self.client_instance.as_ref() else {
+        let Some(client_instance) = self.get_mq_client_factory() else {
             warn!(
                 "execute_pop_request_later skipped: MQClientInstance is not initialized, {}",
                 pop_request
@@ -1066,9 +1148,9 @@ impl DefaultMQPushConsumerImpl {
         msg: MessageExt,
         broker_name: Option<CheetahString>,
     ) -> Option<ConsumeMessageDirectlyResult> {
-        if let Some(consume_message_service) = self.consume_message_service.as_ref() {
+        if let Some(consume_message_service) = self.consume_message_service() {
             Some(consume_message_service.consume_message_directly(msg, broker_name).await)
-        } else if let Some(consume_message_pop_service) = self.consume_message_pop_service.as_ref() {
+        } else if let Some(consume_message_pop_service) = self.consume_message_pop_service() {
             Some(
                 consume_message_pop_service
                     .consume_message_directly(msg, broker_name)
@@ -1079,7 +1161,7 @@ impl DefaultMQPushConsumerImpl {
         }
     }
 
-    pub(crate) async fn pop_message(&mut self, pop_request: PopRequest) {
+    pub(crate) async fn pop_message(&self, pop_request: PopRequest) {
         let process_queue = pop_request.get_pop_process_queue();
         if process_queue.is_dropped() {
             info!("the pop request[{}] is dropped.", pop_request);
@@ -1096,7 +1178,7 @@ impl DefaultMQPushConsumerImpl {
         if self.pause.load(Ordering::Acquire) {
             warn!(
                 "consumer was paused, execute pull request later. instanceName={}, group={}",
-                self.client_config.instance_name,
+                self.client_config_snapshot().instance_name,
                 self.consumer_config_snapshot().consumer_group
             );
             self.execute_pop_request_later(pop_request, PULL_TIME_DELAY_MILLS_WHEN_SUSPEND);
@@ -1130,7 +1212,7 @@ impl DefaultMQPushConsumerImpl {
         let consumer_group = pop_request.get_consumer_group().clone();
         let init_mode = pop_request.get_init_mode();
         let pop_batch_nums = self.consumer_config_snapshot().pop_batch_nums;
-        let Some(this) = self.default_mqpush_consumer_impl.clone() else {
+        let Some(this) = self.self_reference.get().and_then(Weak::upgrade) else {
             warn!(
                 "pop_message delayed: DefaultMQPushConsumerImpl self reference is not initialized, {}",
                 pop_request
@@ -1138,7 +1220,7 @@ impl DefaultMQPushConsumerImpl {
             self.execute_pop_request_later(pop_request, self.pull_time_delay_mills_when_exception);
             return;
         };
-        let Some(pull_api_wrapper) = self.pull_api_wrapper.as_ref() else {
+        let Some(pull_api_wrapper) = self.pull_api_wrapper() else {
             warn!(
                 "pop_message delayed: PullAPIWrapper is not initialized, {}",
                 pop_request
@@ -1176,7 +1258,7 @@ impl DefaultMQPushConsumerImpl {
         }
     }
 
-    pub(crate) async fn pull_message(&mut self, mut pull_request: PullRequest) {
+    pub(crate) async fn pull_message(&self, mut pull_request: PullRequest) {
         //let process_queue = pull_request.get_process_queue_mut();
         if pull_request.process_queue.is_dropped() {
             info!("the pull request[{}] is dropped.", pull_request);
@@ -1191,7 +1273,7 @@ impl DefaultMQPushConsumerImpl {
         if self.pause.load(Ordering::Acquire) {
             warn!(
                 "consumer was paused, execute pull request later. instanceName={}, group={}",
-                self.client_config.instance_name,
+                self.client_config_snapshot().instance_name,
                 self.consumer_config_snapshot().consumer_group
             );
             self.execute_pull_request_later(pull_request, PULL_TIME_DELAY_MILLS_WHEN_SUSPEND);
@@ -1200,7 +1282,8 @@ impl DefaultMQPushConsumerImpl {
         let cached_message_count = pull_request.process_queue.msg_count();
         let cached_message_size_in_mib = pull_request.process_queue.msg_size() / _1MB;
         if cached_message_count > self.consumer_config_snapshot().pull_threshold_for_queue as u64 {
-            if self.queue_flow_control_times.is_multiple_of(1000) {
+            let flow_control_times = self.queue_flow_control_times.fetch_add(1, Ordering::Relaxed);
+            if flow_control_times.is_multiple_of(1000) {
                 if let Some((min_offset, max_offset)) = pull_request.process_queue.get_offset_span().await {
                     warn!(
                         "the cached message count exceeds the threshold {}, so do flow control, minOffset={}, \
@@ -1211,18 +1294,18 @@ impl DefaultMQPushConsumerImpl {
                         cached_message_count,
                         cached_message_size_in_mib,
                         pull_request.to_string(),
-                        self.queue_flow_control_times
+                        flow_control_times
                     );
                 }
             }
             self.execute_pull_request_later(pull_request, PULL_TIME_DELAY_MILLS_WHEN_CACHE_FLOW_CONTROL);
 
-            self.queue_flow_control_times += 1;
             return;
         }
 
         if cached_message_size_in_mib > self.consumer_config_snapshot().pull_threshold_size_for_queue as u64 {
-            if self.queue_flow_control_times.is_multiple_of(1000) {
+            let flow_control_times = self.queue_flow_control_times.fetch_add(1, Ordering::Relaxed);
+            if flow_control_times.is_multiple_of(1000) {
                 if let Some((min_offset, max_offset)) = pull_request.process_queue.get_offset_span().await {
                     warn!(
                         "the cached message size exceeds the threshold {} MiB, so do flow control, minOffset={}, \
@@ -1233,19 +1316,19 @@ impl DefaultMQPushConsumerImpl {
                         cached_message_count,
                         cached_message_size_in_mib,
                         pull_request.to_string(),
-                        self.queue_flow_control_times
+                        flow_control_times
                     );
                 }
             }
             self.execute_pull_request_later(pull_request, PULL_TIME_DELAY_MILLS_WHEN_CACHE_FLOW_CONTROL);
-            self.queue_flow_control_times += 1;
             return;
         }
 
-        if !self.consume_orderly {
+        if !self.is_consume_orderly() {
             let max_span = pull_request.process_queue.get_max_span().await;
             if max_span > self.consumer_config_snapshot().consume_concurrently_max_span as u64 {
-                if self.queue_max_span_flow_control_times.is_multiple_of(1000) {
+                let flow_control_times = self.queue_max_span_flow_control_times.fetch_add(1, Ordering::Relaxed);
+                if flow_control_times.is_multiple_of(1000) {
                     if let Some((min_offset, max_offset)) = pull_request.process_queue.get_offset_span().await {
                         warn!(
                             "the queue's messages, span too long, so do flow control, minOffset={}, maxOffset={}, \
@@ -1254,11 +1337,10 @@ impl DefaultMQPushConsumerImpl {
                             max_offset,
                             max_span,
                             pull_request.to_string(),
-                            self.queue_max_span_flow_control_times
+                            flow_control_times
                         );
                     }
                 }
-                self.queue_max_span_flow_control_times += 1;
                 self.execute_pull_request_later(pull_request, PULL_TIME_DELAY_MILLS_WHEN_CACHE_FLOW_CONTROL);
                 return;
             }
@@ -1328,7 +1410,7 @@ impl DefaultMQPushConsumerImpl {
         let mut commit_offset_enable = false;
         let mut commit_offset_value = 0;
         if MessageModel::Clustering == self.consumer_config_snapshot().message_model {
-            let Some(offset_store) = self.offset_store.as_ref() else {
+            let Some(offset_store) = self.offset_store() else {
                 warn!("pullMessage delayed: OffsetStore is not initialized, {}", pull_request);
                 self.execute_pull_request_later(pull_request, self.pull_time_delay_mills_when_exception);
                 return;
@@ -1346,7 +1428,7 @@ impl DefaultMQPushConsumerImpl {
         }
         let class_filter = subscription_data.class_filter_mode;
         let sys_flag = PullSysFlag::build_sys_flag(commit_offset_enable, true, sub_expression.is_some(), class_filter);
-        let Some(this) = self.default_mqpush_consumer_impl.clone() else {
+        let Some(this) = self.self_reference.get().and_then(Weak::upgrade) else {
             warn!(
                 "pullMessage delayed: DefaultMQPushConsumerImpl self reference is not initialized, {}",
                 pull_request
@@ -1359,7 +1441,7 @@ impl DefaultMQPushConsumerImpl {
         let sub_expression = sub_expression.unwrap_or_default();
         let expression_type = subscription_data.expression_type.clone();
         let sub_version = subscription_data.sub_version;
-        let Some(pull_api_wrapper) = self.pull_api_wrapper.as_ref() else {
+        let Some(pull_api_wrapper) = self.pull_api_wrapper() else {
             warn!(
                 "pullMessage delayed: PullAPIWrapper is not initialized, {}",
                 pull_request
@@ -1402,7 +1484,7 @@ impl DefaultMQPushConsumerImpl {
     }
 
     pub(crate) async fn process_pop_result(
-        &mut self,
+        &self,
         mut pop_result: PopResult,
         subscription_data: &SubscriptionData,
     ) -> PopResult {
@@ -1422,13 +1504,14 @@ impl DefaultMQPushConsumerImpl {
                 } else {
                     msg_vec
                 };
-            if !self.filter_message_hook_list.is_empty() {
+            let filter_message_hooks = self.component_snapshot(&self.filter_message_hook_list);
+            if !filter_message_hooks.is_empty() {
                 let context = FilterMessageContext {
                     unit_mode: self.consumer_config_snapshot().unit_mode,
                     msg_list: &msg_list_filter_again,
                     ..Default::default()
                 };
-                for hook in self.filter_message_hook_list.iter() {
+                for hook in &filter_message_hooks {
                     hook.filter_message(&context);
                 }
             }
@@ -1448,19 +1531,20 @@ impl DefaultMQPushConsumerImpl {
 
     #[inline]
     fn make_sure_state_ok(&self) -> rocketmq_error::RocketMQResult<()> {
-        if *self.service_state != ServiceState::Running {
+        let service_state = self.service_state();
+        if service_state != ServiceState::Running {
             return Err(mq_client_err!(format!(
                 "The consumer service state not OK, {},{}",
-                *self.service_state,
+                service_state,
                 FAQUrl::suggest_todo(FAQUrl::CLIENT_SERVICE_NOT_OK)
             )));
         }
         Ok(())
     }
 
-    pub(crate) async fn correct_tags_offset(&mut self, pull_request: &PullRequest) {
+    pub(crate) async fn correct_tags_offset(&self, pull_request: &PullRequest) {
         if pull_request.process_queue.msg_count() == 0 {
-            let Some(offset_store) = self.offset_store.as_mut() else {
+            let Some(offset_store) = self.offset_store() else {
                 warn!(
                     "correct_tags_offset skipped: OffsetStore is not initialized, {}",
                     pull_request
@@ -1488,7 +1572,7 @@ impl DefaultMQPushConsumerImpl {
 
     pub fn reset_retry_and_namespace(&self, msgs: &mut [Arc<MessageExt>], consumer_group: &str) {
         let group_topic = mix_all::get_retry_topic(consumer_group);
-        let namespace = self.client_config.resolved_namespace().unwrap_or_default();
+        let namespace = self.client_config_snapshot().resolved_namespace().unwrap_or_default();
         for msg in msgs.iter_mut() {
             if let Some(retry_topic) = msg.property(&CheetahString::from_static_str(MessageConst::PROPERTY_RETRY_TOPIC))
             {
@@ -1508,23 +1592,23 @@ impl DefaultMQPushConsumerImpl {
 
     #[inline]
     pub fn has_hook(&self) -> bool {
-        !self.consume_message_hook_list.is_empty()
+        !self.component_snapshot(&self.consume_message_hook_list).is_empty()
     }
 
     pub fn execute_hook_before(&self, context: &mut ConsumeMessageContext) {
-        for hook in self.consume_message_hook_list.iter() {
+        for hook in self.component_snapshot(&self.consume_message_hook_list) {
             hook.consume_message_before(context);
         }
     }
 
     pub fn execute_hook_after(&self, context: &mut ConsumeMessageContext) {
-        for hook in self.consume_message_hook_list.iter() {
+        for hook in self.component_snapshot(&self.consume_message_hook_list) {
             hook.consume_message_after(context);
         }
     }
 
     pub async fn send_message_back(
-        &mut self,
+        &self,
         msg: &mut MessageExt,
         delay_level: i32,
         mq: &MessageQueue,
@@ -1547,7 +1631,7 @@ impl DefaultMQPushConsumerImpl {
     }
 
     pub async fn send_message_back_with_broker_name(
-        &mut self,
+        &self,
         msg: &mut MessageExt,
         delay_level: i32,
         broker_name: Option<CheetahString>,
@@ -1561,7 +1645,7 @@ impl DefaultMQPushConsumerImpl {
     }
 
     async fn send_message_back_with_broker_name_inner(
-        &mut self,
+        &self,
         msg: &mut MessageExt,
         delay_level: i32,
         broker_name: Option<CheetahString>,
@@ -1576,7 +1660,7 @@ impl DefaultMQPushConsumerImpl {
             let _ = self.send_message_back_as_normal_message(msg).await;
         } else {
             let broker_addr = if let Some(ref broker_name_) = broker_name {
-                let Some(client_instance) = self.client_instance.as_mut() else {
+                let Some(client_instance) = self.get_mq_client_factory() else {
                     error!("send message back failed: MQClientInstance is not initialized");
                     return self.send_message_back_as_normal_message(msg).await;
                 };
@@ -1596,7 +1680,7 @@ impl DefaultMQPushConsumerImpl {
             let broker_name_str = broker_name.as_ref().map(|name| name.as_str());
             let max_consume_retry_times = self.get_max_reconsume_times();
             let consumer_group = self.consumer_config_snapshot().consumer_group.clone();
-            let result = if let Some(client_instance) = self.client_instance.as_mut() {
+            let result = if let Some(client_instance) = self.get_mq_client_factory() {
                 if let Some(mq_client_api_impl) = client_instance.mq_client_api_impl.as_ref() {
                     mq_client_api_impl
                         .consumer_send_message_back(
@@ -1624,11 +1708,14 @@ impl DefaultMQPushConsumerImpl {
         Ok(())
     }
 
-    fn reset_send_message_back_topic_namespace(&mut self, msg: &mut MessageExt) {
+    fn reset_send_message_back_topic_namespace(&self, msg: &mut MessageExt) {
         msg.set_topic(CheetahString::from_string(
             NamespaceUtil::without_namespace_with_namespace(
                 msg.topic().as_str(),
-                self.client_config.get_namespace().unwrap_or_default().as_str(),
+                self.client_config_snapshot()
+                    .resolved_namespace()
+                    .unwrap_or_default()
+                    .as_str(),
             ),
         ));
     }
@@ -1663,10 +1750,9 @@ impl DefaultMQPushConsumerImpl {
         Ok(new_msg)
     }
 
-    async fn send_message_back_as_normal_message(&mut self, msg: &MessageExt) -> rocketmq_error::RocketMQResult<()> {
+    async fn send_message_back_as_normal_message(&self, msg: &MessageExt) -> rocketmq_error::RocketMQResult<()> {
         let new_msg = self.build_retry_message_for_send_back(msg)?;
-        self.client_instance
-            .as_mut()
+        self.get_mq_client_factory()
             .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("MQClientInstance"))?
             .default_producer
             .send(new_msg)
@@ -1683,10 +1769,10 @@ impl DefaultMQPushConsumerImpl {
     }
 
     pub fn update_core_pool_size(&self, core_pool_size: usize) {
-        if let Some(consume_message_service) = &self.consume_message_service {
+        if let Some(consume_message_service) = self.consume_message_service() {
             consume_message_service.update_core_pool_size(core_pool_size);
         }
-        if let Some(consume_message_pop_service) = &self.consume_message_pop_service {
+        if let Some(consume_message_pop_service) = self.consume_message_pop_service() {
             consume_message_pop_service.update_core_pool_size(core_pool_size);
         }
     }
@@ -1721,14 +1807,14 @@ impl DefaultMQPushConsumerImpl {
             CheetahString::from(ExtraInfoUtil::get_broker_name(extra_info_strs.as_slice()).unwrap_or_default());
         let topic = message.topic();
 
-        let Some(client_instance) = self.client_instance.as_ref() else {
+        let Some(client_instance) = self.get_mq_client_factory() else {
             error!("ackAsync error: MQClientInstance is not initialized");
             return;
         };
         let des_broker_name =
             if !broker_name.is_empty() && broker_name.starts_with(mix_all::LOGICAL_QUEUE_MOCK_BROKER_PREFIX) {
                 let mq = self
-                    .client_config
+                    .client_config_snapshot()
                     .queue_with_resolved_namespace(MessageQueue::from_parts(topic, broker_name.clone(), queue_id));
                 client_instance.get_broker_name_from_message_queue(&mq).await
             } else {
@@ -1811,10 +1897,9 @@ impl DefaultMQPushConsumerImpl {
         let des_broker_name =
             if !broker_name.is_empty() && broker_name.starts_with(mix_all::LOGICAL_QUEUE_MOCK_BROKER_PREFIX) {
                 let queue = self
-                    .client_config
+                    .client_config_snapshot()
                     .queue_with_resolved_namespace(MessageQueue::from_parts(topic, broker_name.clone(), queue_id));
-                self.client_instance
-                    .as_ref()
+                self.get_mq_client_factory()
                     .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("MQClientInstance"))?
                     .get_broker_name_from_message_queue(&queue)
                     .await
@@ -1822,8 +1907,7 @@ impl DefaultMQPushConsumerImpl {
                 broker_name.clone()
             };
         let client_instance = self
-            .client_instance
-            .as_ref()
+            .get_mq_client_factory()
             .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("MQClientInstance"))?;
         let mut find_broker_result = client_instance
             .find_broker_address_in_subscribe(&des_broker_name, mix_all::MASTER_ID, true)
@@ -1882,7 +1966,7 @@ impl DefaultMQPushConsumerImpl {
             .await
     }
 
-    pub async fn unsubscribe(&mut self, topic: &str) {
+    pub async fn unsubscribe(&self, topic: &str) {
         self.rebalance_impl
             .rebalance_impl_inner
             .subscription_inner
@@ -1893,7 +1977,7 @@ impl DefaultMQPushConsumerImpl {
         self.pause.store(true, Ordering::Release);
         info!(
             "Suspend the consumer, instanceName={}, group={}",
-            self.client_config.instance_name,
+            self.client_config_snapshot().instance_name,
             self.consumer_config_snapshot().consumer_group
         );
     }
@@ -1903,7 +1987,7 @@ impl DefaultMQPushConsumerImpl {
         self.do_rebalance().await;
         info!(
             "Resume the consumer, instanceName={}, group={}",
-            self.client_config.instance_name,
+            self.client_config_snapshot().instance_name,
             self.consumer_config_snapshot().consumer_group
         );
     }
@@ -1938,11 +2022,11 @@ impl MQConsumerInner for DefaultMQPushConsumerImpl {
     async fn do_rebalance(&self) {
         if !self.pause.load(Ordering::Acquire) {
             let orderly = self.is_consume_orderly();
-            let rebalance = self.rebalance_impl.mut_from_ref().do_rebalance(orderly).await;
+            let rebalance = self.rebalance_impl.do_rebalance(orderly).await;
             if !rebalance {
                 warn!(
                     "rebalance failed, maybe the consumer was paused during rebalance. instanceName={}, group={}",
-                    self.client_config.instance_name,
+                    self.client_config_snapshot().instance_name,
                     self.consumer_config_snapshot().consumer_group
                 );
             }
@@ -1951,11 +2035,7 @@ impl MQConsumerInner for DefaultMQPushConsumerImpl {
 
     async fn try_rebalance(&self) -> rocketmq_error::RocketMQResult<bool> {
         if !self.pause.load(Ordering::Acquire) {
-            return Ok(self
-                .rebalance_impl
-                .mut_from_ref()
-                .do_rebalance(self.consume_orderly)
-                .await);
+            return Ok(self.rebalance_impl.do_rebalance(self.is_consume_orderly()).await);
         }
         Ok(false)
     }
@@ -1968,14 +2048,16 @@ impl MQConsumerInner for DefaultMQPushConsumerImpl {
                 err
             );
         } else {
-            let guard = self
-                .rebalance_impl
-                .rebalance_impl_inner
-                .process_queue_table
-                .read()
-                .await;
-            let allocate_mq = guard.keys().cloned().collect::<HashSet<_>>();
-            let Some(offset_store) = self.offset_store.as_ref() else {
+            let allocate_mq = {
+                let guard = self
+                    .rebalance_impl
+                    .rebalance_impl_inner
+                    .process_queue_table
+                    .read()
+                    .await;
+                guard.keys().cloned().collect::<HashSet<_>>()
+            };
+            let Some(offset_store) = self.offset_store() else {
                 warn!(
                     "group: {} persistConsumerOffset skipped: OffsetStore is not initialized",
                     self.consumer_config_snapshot().consumer_group
@@ -2016,7 +2098,7 @@ impl MQConsumerInner for DefaultMQPushConsumerImpl {
     }
 
     async fn reset_offsets(&self, topic: &CheetahString, offsets: HashMap<MessageQueue, i64>) {
-        let Some(offset_store) = self.offset_store.as_ref() else {
+        let Some(offset_store) = self.offset_store() else {
             warn!(
                 "reset offset ignored because offset store is not initialized. group={}, topic={}",
                 self.consumer_config_snapshot().consumer_group,
@@ -2061,7 +2143,6 @@ impl MQConsumerInner for DefaultMQPushConsumerImpl {
 
             offset_store.update_and_freeze_offset(&mq, offset).await;
             self.rebalance_impl
-                .mut_from_ref()
                 .remove_unnecessary_message_queue(&mq, pq.as_ref())
                 .await;
 
@@ -2085,7 +2166,7 @@ impl MQConsumerInner for DefaultMQPushConsumerImpl {
     }
 
     async fn consumer_status(&self, topic: &CheetahString) -> HashMap<MessageQueue, i64> {
-        let Some(offset_store) = self.offset_store.as_ref() else {
+        let Some(offset_store) = self.offset_store() else {
             warn!(
                 "consumer status is empty because offset store is not initialized. group={}, topic={}",
                 self.consumer_config_snapshot().consumer_group,
@@ -2101,13 +2182,12 @@ impl MQConsumerInner for DefaultMQPushConsumerImpl {
         let consumer_config = self.consumer_config_snapshot();
         let mut info = ConsumerRunningInfo::new();
         info.consume_type = self.consume_type();
-        info.consume_orderly = self.consume_orderly;
+        info.consume_orderly = self.is_consume_orderly();
         info.prop_consumer_start_timestamp = self.consumer_start_timestamp.load(Ordering::Acquire);
         info.sync_properties_from_derived_fields();
         info.set_property(
             ConsumerRunningInfo::PROP_THREADPOOL_CORE_SIZE,
-            self.consume_message_service
-                .as_ref()
+            self.consume_message_service()
                 .map(|service| service.get_core_pool_size().to_string())
                 .unwrap_or_else(|| consumer_config.consume_thread_min.to_string()),
         );
@@ -2123,7 +2203,7 @@ impl MQConsumerInner for DefaultMQPushConsumerImpl {
             info.subscription_set.insert(entry.value().clone());
         }
 
-        if let Some(client_instance) = self.client_instance.as_ref() {
+        if let Some(client_instance) = self.get_mq_client_factory() {
             for subscription_data in &info.subscription_set {
                 let status = client_instance.consumer_stats_manager().consume_status(
                     consumer_config.consumer_group.as_str(),
@@ -2146,7 +2226,7 @@ impl MQConsumerInner for DefaultMQPushConsumerImpl {
                 .collect::<Vec<_>>()
         };
         for (mq, pq) in process_queue_table {
-            let commit_offset = if let Some(offset_store) = self.offset_store.as_ref() {
+            let commit_offset = if let Some(offset_store) = self.offset_store() {
                 offset_store
                     .read_offset(&mq, ReadOffsetType::MemoryFirstThenStore)
                     .await
@@ -2219,8 +2299,8 @@ mod tests {
     }
 
     fn new_running_impl() -> DefaultMQPushConsumerImpl {
-        let mut consumer = new_unstarted_impl();
-        *consumer.service_state = ServiceState::Running;
+        let consumer = new_unstarted_impl();
+        consumer.set_service_state(ServiceState::Running);
         consumer
     }
 
@@ -2252,7 +2332,7 @@ mod tests {
     fn new_startable_push_consumer(
         client_config: ClientConfig,
         consumer_group: CheetahString,
-    ) -> ArcMut<DefaultMQPushConsumerImpl> {
+    ) -> Arc<DefaultMQPushConsumerImpl> {
         let mut consumer_config = ConsumerConfig {
             consumer_group,
             ..Default::default()
@@ -2261,9 +2341,8 @@ mod tests {
             Some(Arc::new(NoopConcurrentListener)),
             None,
         )));
-        let mut consumer = ArcMut::new(DefaultMQPushConsumerImpl::new(client_config, consumer_config, None));
-        let wrapper = consumer.clone();
-        consumer.set_default_mqpush_consumer_impl(wrapper);
+        let consumer = Arc::new(DefaultMQPushConsumerImpl::new(client_config, consumer_config, None));
+        consumer.initialize_self_reference();
         consumer
     }
 
@@ -2280,6 +2359,50 @@ mod tests {
         assert_eq!(initial_config.pull_threshold_size_for_queue, 100);
         assert_eq!(consumer_config.pull_threshold_for_queue, 25);
         assert_eq!(consumer_config.pull_threshold_size_for_queue, 10);
+    }
+
+    #[test]
+    fn root_owned_services_and_rebalance_back_reference_are_weak() {
+        let consumer = Arc::new(new_unstarted_impl());
+        consumer.initialize_self_reference();
+        let weak_consumer = Arc::downgrade(&consumer);
+        let consumer_config = Arc::new(ConsumerConfig::default());
+        let service = Arc::new(ConsumeMessageConcurrentlyService::new(
+            Arc::new(ClientConfig::default()),
+            consumer_config.clone(),
+            consumer_config.consumer_group.clone(),
+            Arc::new(|_msgs: &[&MessageExt], _context: &ConsumeConcurrentlyContext| {
+                Ok(ConsumeConcurrentlyStatus::ConsumeSuccess)
+            }),
+            Some(weak_consumer.clone()),
+        ));
+        consumer.set_component(
+            &consumer.consume_message_service,
+            Some(Arc::new(ConsumeMessageServiceGeneral::new(Some(service), None))),
+        );
+
+        assert_eq!(Arc::strong_count(&consumer), 1);
+        drop(consumer);
+        assert!(weak_consumer.upgrade().is_none());
+    }
+
+    #[tokio::test]
+    async fn shutdown_waits_for_the_lifecycle_transition_owner() {
+        let consumer = Arc::new(new_unstarted_impl());
+        consumer.initialize_self_reference();
+        let transition = consumer.lifecycle_transition.lock().await;
+        let consumer_for_shutdown = consumer.clone();
+        let shutdown = tokio::spawn(async move {
+            consumer_for_shutdown.shutdown(0).await;
+        });
+
+        tokio::task::yield_now().await;
+        assert!(!shutdown.is_finished());
+        drop(transition);
+        tokio::time::timeout(Duration::from_secs(1), shutdown)
+            .await
+            .expect("shutdown should acquire the released lifecycle transition")
+            .expect("shutdown task should not panic");
     }
 
     fn message_queue() -> MessageQueue {
@@ -2342,16 +2465,15 @@ mod tests {
                 .await
         );
 
-        let mut duplicate_consumer = new_startable_push_consumer(client_config, group.clone());
+        let duplicate_consumer = new_startable_push_consumer(client_config, group.clone());
         let result = duplicate_consumer.start().await;
 
         assert!(result
             .err()
             .is_some_and(|error| error.to_string().contains("has been created before")));
-        assert_eq!(*duplicate_consumer.service_state, ServiceState::CreateJust);
+        assert_eq!(duplicate_consumer.service_state(), ServiceState::CreateJust);
         assert!(duplicate_consumer
-            .consume_message_service
-            .as_ref()
+            .consume_message_service()
             .and_then(|service| service.get_consume_message_concurrently_service())
             .is_some_and(|service| service.is_shutdown()));
 
@@ -2369,9 +2491,9 @@ mod tests {
             current_millis()
         )));
         let client_instance = MQClientInstance::new_arc(client_config.clone(), 0, "push-post-start-fail-client", None);
-        let mut consumer = new_startable_push_consumer(client_config, group.clone());
-        *consumer.service_state = ServiceState::Running;
-        consumer.client_instance = Some(client_instance.clone());
+        let consumer = new_startable_push_consumer(client_config, group.clone());
+        consumer.set_service_state(ServiceState::Running);
+        consumer.set_mq_client_factory(client_instance.clone());
 
         let mut subscription = SubscriptionData {
             topic: topic.clone(),
@@ -2414,7 +2536,7 @@ mod tests {
             matches!(error, rocketmq_error::RocketMQError::ClientNotStarted),
             "unexpected post-start error: {error:?}"
         );
-        assert_eq!(*consumer.service_state, ServiceState::ShutdownAlready);
+        assert_eq!(consumer.service_state(), ServiceState::ShutdownAlready);
         let replacement = new_startable_push_consumer(ClientConfig::default(), group.clone());
         assert!(
             client_instance
@@ -2428,7 +2550,7 @@ mod tests {
 
     #[test]
     fn check_config_accepts_java_consume_timestamp_format() {
-        let mut consumer = new_check_config_consumer(Some(CheetahString::from_static_str("20250102030405")));
+        let consumer = new_check_config_consumer(Some(CheetahString::from_static_str("20250102030405")));
 
         consumer
             .check_config()
@@ -2437,7 +2559,7 @@ mod tests {
 
     #[test]
     fn check_config_rejects_invalid_consume_timestamp_like_java() {
-        let mut consumer = new_check_config_consumer(Some(CheetahString::from_static_str("2025-01-02 03:04:05")));
+        let consumer = new_check_config_consumer(Some(CheetahString::from_static_str("2025-01-02 03:04:05")));
 
         let error = consumer
             .check_config()
@@ -2450,7 +2572,7 @@ mod tests {
 
     #[test]
     fn check_config_rejects_missing_consume_timestamp_without_panic() {
-        let mut consumer = new_check_config_consumer(None);
+        let consumer = new_check_config_consumer(None);
 
         let error = consumer
             .check_config()
@@ -2468,7 +2590,7 @@ mod tests {
 
     #[tokio::test]
     async fn reset_offset_by_time_stamp_with_no_subscriptions_is_noop_like_java() {
-        let mut consumer = new_running_impl();
+        let consumer = new_running_impl();
 
         consumer
             .reset_offset_by_time_stamp(123456)
@@ -2585,7 +2707,7 @@ mod tests {
             consumer_group: CheetahString::from_static_str("PushGroup"),
             ..Default::default()
         };
-        let mut consumer = DefaultMQPushConsumerImpl::new(client_config, consumer_config, None);
+        let consumer = DefaultMQPushConsumerImpl::new(client_config, consumer_config, None);
         let mut msg = message_ext_for_send_back("ns%TopicA");
 
         let error = consumer
@@ -2599,7 +2721,7 @@ mod tests {
 
     #[tokio::test]
     async fn send_message_back_queue_overload_uses_message_broker_name_like_java() {
-        let mut consumer = new_unstarted_impl();
+        let consumer = new_unstarted_impl();
         let mut msg = message_ext_for_send_back("TopicA");
         msg.broker_name = CheetahString::from_string(format!("{}broker-a", mix_all::LOGICAL_QUEUE_MOCK_BROKER_PREFIX));
         let mq = MessageQueue::from_parts("TopicA", "broker-a", 0);
@@ -2630,7 +2752,7 @@ mod tests {
             namespace: Some(CheetahString::from_static_str("ns")),
             ..Default::default()
         };
-        let mut consumer = DefaultMQPushConsumerImpl::new(client_config, ConsumerConfig::default(), None);
+        let consumer = DefaultMQPushConsumerImpl::new(client_config, ConsumerConfig::default(), None);
         let topic = CheetahString::from_static_str("ns%TopicA");
         let cached_queues = HashSet::from([
             MessageQueue::from_parts("ns%TopicA", "broker-b", 1),
@@ -2691,7 +2813,7 @@ mod tests {
 
     #[tokio::test]
     async fn consumer_running_info_includes_push_status_table() {
-        let mut consumer = new_unstarted_impl();
+        let consumer = new_unstarted_impl();
         let topic = CheetahString::from_static_str("topic-status");
         let subscription_data =
             FilterAPI::build_subscription_data(&topic, &CheetahString::from_static_str(SubscriptionData::SUB_ALL))
@@ -2699,7 +2821,7 @@ mod tests {
         consumer
             .rebalance_impl
             .put_subscription_data(topic.clone(), subscription_data);
-        consumer.client_instance = Some(MQClientInstance::new_arc(
+        consumer.set_mq_client_factory(MQClientInstance::new_arc(
             ClientConfig::default(),
             0,
             "push-running-info-status-test",
@@ -2719,14 +2841,13 @@ mod tests {
 
     #[tokio::test]
     async fn reset_offsets_drops_clears_persists_and_removes_assigned_queue_like_java() {
-        let mut consumer = ArcMut::new(new_unstarted_impl());
-        let wrapper = consumer.clone();
-        consumer.set_default_mqpush_consumer_impl(wrapper);
+        let consumer = Arc::new(new_unstarted_impl());
+        consumer.initialize_self_reference();
         consumer.set_consume_orderly(true);
         consumer.update_consumer_config(|config| config.consumer_group = CheetahString::from_static_str("ResetGroup"));
 
         let offset_store = Arc::new(OffsetStore::new_test());
-        consumer.offset_store = Some(offset_store.clone());
+        consumer.set_offset_store(Some(offset_store.clone()));
 
         let topic = CheetahString::from_static_str("reset-topic");
         let mq = MessageQueue::from_parts(topic.clone(), "broker-a", 0);
@@ -2769,7 +2890,7 @@ mod tests {
     async fn copy_subscription_reads_immutable_config_snapshot() {
         let topic = CheetahString::from_static_str("TopicSnapshotCopy");
         let expression = CheetahString::from_static_str("TagA || TagB");
-        let mut consumer = new_check_config_consumer(None);
+        let consumer = new_check_config_consumer(None);
         consumer.update_consumer_config(|config| {
             config.subscription = Arc::new(HashMap::from([(topic.clone(), expression.clone())]))
         });

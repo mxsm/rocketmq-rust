@@ -651,7 +651,8 @@ M09-04 再删除 MCP 未使用的 Auth/Error direct edges，并把承担 owned t
   - [x] M11-12ag Client Push consume service config snapshots：concurrent/orderly 与 POP concurrent/orderly 服务持有同一启动代的 immutable `Arc<ClientConfig>`/`Arc<ConsumerConfig>`，服务不再暴露配置共享写入口
   - [x] M11-12ah Client Push rebalance config snapshots：RebalancePush 使用 `ArcSwap<ConsumerConfig>` 发布完整不可变代际；相关 facade setter 显式同步，队列数变化只通过 Push implementation owner 回写两个动态 threshold
   - [x] M11-12ai Client Push root config snapshots：facade 与 implementation 共享 `Arc<ArcSwap<ConsumerConfig>>`，setter 以 clone-update-publish 发布完整代际；启动、回调、diagnostics 与动态 threshold 更新只读取稳定 immutable `Arc` 快照
-  - [x] [`M11-12 进度证据`](phase-3-production-readiness/11-soundness-closure-progress.md) 记录父 Issue #8292、子切片 Issue #8293/#8295/#8297/#8299/#8301/#8303/#8307/#8309/#8311/#8313/#8315/#8317/#8319/#8321/#8323/#8325/#8327/#8329/#8331/#8333/#8335/#8337/#8339/#8341/#8343/#8345/#8347/#8349/#8351/#8353/#8355/#8357/#8359/#8361/#8363 与每次真实下降
+  - [x] M11-12aj Client Push implementation root ownership：facade、consumer registry、callback 与 task capture 改用标准 `Arc`，root-owned consume/rebalance 回边改用 `Weak`；start/shutdown 由 lifecycle mutex 串行，组件槽位短锁发布快照，rebalance metadata 使用共享引用安全更新且未新增 production `mut_from_ref`
+  - [x] [`M11-12 进度证据`](phase-3-production-readiness/11-soundness-closure-progress.md) 记录父 Issue #8292、子切片 Issue #8293/#8295/#8297/#8299/#8301/#8303/#8307/#8309/#8311/#8313/#8315/#8317/#8319/#8321/#8323/#8325/#8327/#8329/#8331/#8333/#8335/#8337/#8339/#8341/#8343/#8345/#8347/#8349/#8351/#8353/#8355/#8357/#8359/#8361/#8363/#8365 与每次真实下降
   - [x] Issue #8295 后累计降至 711 production/2,029 occurrence；Controller 配置债务清零但其他 Controller owner 仍有 31 条 production 债务
   - [x] Issue #8297 后实际快照降至 697 production/1,986 occurrence；Controller 降至 17 条/51 occurrence，Manager/heartbeat/embedded-NameServer owner 已退出 `ArcMut`
   - [x] Issue #8299 后实际快照降至 690 production/1,961 occurrence；Controller 降至 10 条/26 occurrence，Raft/OpenRaft owner 与 Manager Raft `mut_from_ref` 已清零
@@ -687,7 +688,8 @@ M09-04 再删除 MCP 未使用的 Auth/Error direct edges，并把承担 owned t
   - [x] Issue #8359 后实际快照降至 398 production/1,054 occurrence；Client owner 降至 80/161，另有 Proxy 1/1；四类 Push consume service 配置的 2 个 production identity/24 occurrence 与 16 个 test occurrence 退出
   - [x] Issue #8361 后 production identity 保持 398、occurrence 降至 1,052；Client owner 降至 80/159，RebalancePush 的 2 个 `ArcMut<ConsumerConfig>` occurrence 退出且测试/compatibility 不增
   - [x] Issue #8363 后实际快照降至 397 production/1,045 occurrence；Client owner 降至 79/152，测试从 47/145 降至 47/132；Push 根 `ConsumerConfig` 的 1 个 identity/20 occurrence 退出
-  - [ ] M11-12aj 及后续：Client 其余 MQClientInstance/Producer/Push owner、Broker、Store/HA、compatibility 删除、stable/Miri/Loom/soak/SLO 与同一候选快照 Gate 仍待完成
+  - [x] Issue #8365 后实际快照降至 376 production/995 occurrence；Client owner 降至 58/102，Client test 降至 25/102；Push implementation root、consume service/callback owner 与过时 rebalance 可变 receiver 共删除 21 个 production identity/50 occurrence、22 个 test identity/30 occurrence
+  - [ ] M11-12ak 及后续：Client Rebalance/MQClientInstance/Producer owner、Broker、Store/HA、compatibility 删除、stable/Miri/Loom/soak/SLO 与同一候选快照 Gate 仍待完成
   - [ ] 总进度仍为 75/82；本子切片不提前计作完成工作包，M10/Kind-K3d/container dynamic/HUMAN Gate 保持开放
 - [ ] 对应任务文档的 Exit Checklist 全部通过
 

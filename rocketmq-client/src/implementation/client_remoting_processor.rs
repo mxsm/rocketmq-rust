@@ -564,20 +564,19 @@ mod tests {
     async fn client_with_push_consumer(
         group: CheetahString,
         client_id: &str,
-    ) -> (ArcMut<MQClientInstance>, ArcMut<DefaultMQPushConsumerImpl>) {
+    ) -> (ArcMut<MQClientInstance>, Arc<DefaultMQPushConsumerImpl>) {
         let client_instance = MQClientInstance::new_arc(ClientConfig::default(), 0, client_id, None);
         let consumer_config = ConsumerConfig {
             consumer_group: group.clone(),
             ..Default::default()
         };
-        let mut consumer_impl = ArcMut::new(DefaultMQPushConsumerImpl::new(
+        let consumer_impl = Arc::new(DefaultMQPushConsumerImpl::new(
             ClientConfig::default(),
             consumer_config,
             None,
         ));
-        let wrapper = consumer_impl.clone();
-        consumer_impl.set_default_mqpush_consumer_impl(wrapper);
-        consumer_impl.offset_store = Some(Arc::new(OffsetStore::new_test()));
+        consumer_impl.initialize_self_reference();
+        consumer_impl.set_offset_store(Some(Arc::new(OffsetStore::new_test())));
 
         let registered = client_instance
             .mut_from_ref()
@@ -637,7 +636,7 @@ mod tests {
     async fn reset_consumer_client_offset_updates_matching_consumer_offsets() {
         let topic = CheetahString::from_static_str("reset-topic");
         let group = CheetahString::from_static_str("reset-group");
-        let (client_instance, mut consumer_impl) =
+        let (client_instance, consumer_impl) =
             client_with_push_consumer(group.clone(), "reset-consumer-offset-test").await;
         let mut processor = ClientRemotingProcessor::new(client_instance);
         let harness = LocalRequestHarness::new()
@@ -688,8 +687,7 @@ mod tests {
             .await
             .contains_key(&mq));
         let offset_store = consumer_impl
-            .offset_store
-            .as_ref()
+            .offset_store()
             .expect("test consumer should have offset store");
         assert_eq!(offset_store.test_persisted_offset(&mq), Some(123));
         assert_eq!(offset_store.read_offset(&mq, ReadOffsetType::ReadFromMemory).await, -1);
@@ -736,8 +734,7 @@ mod tests {
         let (client_instance, consumer_impl) = client_with_push_consumer(group.clone(), "consumer-status-test").await;
         let mq = MessageQueue::from_parts(topic.clone(), "broker-a", 1);
         consumer_impl
-            .offset_store
-            .as_ref()
+            .offset_store()
             .expect("test consumer should have offset store")
             .update_offset(&mq, 456, false)
             .await;

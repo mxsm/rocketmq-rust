@@ -400,6 +400,12 @@ implementation threshold 更新与 trace dispatcher 通过 clone-update-publish 
 稳定 `Arc` 快照。实际快照降至 397 production/1,045 occurrences，Client owner 降至 79/152，Client test 降至
 47/132，另有 Proxy 1/1；其余 Client/Broker/Store、compatibility 与完整候选快照 Gate 仍保持开放。
 
+M11-12aj 已将 Push implementation 根 owner、consumer registry、pull/pop callback 与 consume task capture 改为标准
+`Arc`，root-owned consume/rebalance 回边改为 `Weak`；lifecycle mutex 串行 start/shutdown，组件与 rebalance metadata
+使用短锁快照，异步路径不持同步 guard，并删除因根 owner 迁移暴露出的 production `mut_from_ref`。实际快照降至
+376 production/995 occurrences，Client owner 降至 58/102，Client test 降至 25/102，另有 Proxy 1/1；下一子切片
+处理 Rebalance root ownership，其余 Client/Broker/Store、compatibility 与完整候选快照 Gate 仍保持开放。
+
 ## 公共兼容面
 
 - development/compatibility仍可显式选择；secure只作为新部署默认，不静默重解释旧配置。

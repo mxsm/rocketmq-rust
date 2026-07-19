@@ -63,7 +63,7 @@ pub trait RebalanceLocal {
     /// * `mq_all` - A set of all message queues.
     /// * `mq_divided` - A set of divided message queues.
     async fn message_queue_changed(
-        &mut self,
+        &self,
         topic: &str,
         mq_all: &HashSet<MessageQueue>,
         mq_divided: &HashSet<MessageQueue>,
@@ -79,7 +79,7 @@ pub trait RebalanceLocal {
     /// # Returns
     ///
     /// A boolean indicating whether the message queue was removed.
-    async fn remove_unnecessary_message_queue(&mut self, mq: &MessageQueue, pq: &ProcessQueue) -> bool;
+    async fn remove_unnecessary_message_queue(&self, mq: &MessageQueue, pq: &ProcessQueue) -> bool;
 
     /// Removes an unnecessary pop message queue.
     ///
@@ -91,7 +91,7 @@ pub trait RebalanceLocal {
     /// # Returns
     ///
     /// A boolean indicating whether the pop message queue was removed.
-    fn remove_unnecessary_pop_message_queue(&mut self, _mq: &MessageQueue, _pq: &PopProcessQueue) -> bool {
+    fn remove_unnecessary_pop_message_queue(&self, _mq: &MessageQueue, _pq: &PopProcessQueue) -> bool {
         true
     }
 
@@ -107,7 +107,7 @@ pub trait RebalanceLocal {
     /// # Arguments
     ///
     /// * `mq` - The message queue for which the offset should be removed.
-    async fn remove_dirty_offset(&mut self, mq: &MessageQueue);
+    async fn remove_dirty_offset(&self, mq: &MessageQueue);
 
     /// Computes the pull offset with exception handling.
     ///
@@ -118,10 +118,7 @@ pub trait RebalanceLocal {
     /// # Returns
     ///
     /// A result containing the pull offset or an error.
-    async fn compute_pull_from_where_with_exception(
-        &mut self,
-        mq: &MessageQueue,
-    ) -> rocketmq_error::RocketMQResult<i64>;
+    async fn compute_pull_from_where_with_exception(&self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64>;
 
     /// Computes the pull offset.
     ///
@@ -132,7 +129,7 @@ pub trait RebalanceLocal {
     /// # Returns
     ///
     /// The pull offset.
-    async fn compute_pull_from_where(&mut self, mq: &MessageQueue) -> i64;
+    async fn compute_pull_from_where(&self, mq: &MessageQueue) -> i64;
 
     /// Retrieves the consume initialization mode.
     ///
@@ -176,7 +173,7 @@ pub trait RebalanceLocal {
     /// # Arguments
     ///
     /// * `mq` - The message queue for which the process queue should be removed.
-    async fn remove_process_queue(&mut self, mq: &MessageQueue);
+    async fn remove_process_queue(&self, mq: &MessageQueue);
 
     /// Unlocks a message queue.
     ///
@@ -205,7 +202,7 @@ pub trait RebalanceLocal {
     /// # Returns
     ///
     /// A boolean indicating if the rebalancing was successful.
-    async fn do_rebalance(&mut self, is_order: bool) -> bool;
+    async fn do_rebalance(&self, is_order: bool) -> bool;
 
     /// Performs client-side rebalancing.
     ///
@@ -216,10 +213,10 @@ pub trait RebalanceLocal {
     /// # Returns
     ///
     /// A boolean indicating if the client-side rebalancing was successful.
-    fn client_rebalance(&mut self, topic: &str) -> bool;
+    fn client_rebalance(&self, topic: &str) -> bool;
 
     /// Destroys the rebalancer.
-    fn destroy(&mut self);
+    fn destroy(&self);
 }
 
 #[cfg(test)]

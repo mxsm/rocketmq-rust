@@ -2899,7 +2899,7 @@ mod tests {
         );
 
         let consumer_group = CheetahString::from_static_str("route-refresh-consumer");
-        let mut consumer = ArcMut::new(DefaultMQPushConsumerImpl::new(
+        let consumer = Arc::new(DefaultMQPushConsumerImpl::new(
             ClientConfig::default(),
             ConsumerConfig {
                 consumer_group: consumer_group.clone(),
@@ -2907,6 +2907,7 @@ mod tests {
             },
             None,
         ));
+        consumer.initialize_self_reference();
         consumer.rebalance_impl.put_subscription_data(
             topic.clone(),
             SubscriptionData {

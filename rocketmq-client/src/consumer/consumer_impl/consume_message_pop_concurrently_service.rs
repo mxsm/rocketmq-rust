@@ -18,6 +18,7 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::Weak;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -32,7 +33,6 @@ use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::protocol::body::cm_result::CMResult;
 use rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
 use rocketmq_remoting::protocol::header::extra_info_util::ExtraInfoUtil;
-use rocketmq_rust::ArcMut;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
@@ -81,7 +81,7 @@ fn spawn_tracked_pop_concurrent_task<F>(
 }
 
 pub struct ConsumeMessagePopConcurrentlyService {
-    pub(crate) default_mqpush_consumer_impl: Option<ArcMut<DefaultMQPushConsumerImpl>>,
+    pub(crate) default_mqpush_consumer_impl: Option<Weak<DefaultMQPushConsumerImpl>>,
     pub(crate) client_config: Arc<ClientConfig>,
     pub(crate) consumer_config: Arc<ConsumerConfig>,
     pub(crate) consumer_group: CheetahString,
@@ -101,7 +101,7 @@ impl ConsumeMessagePopConcurrentlyService {
         consumer_config: Arc<ConsumerConfig>,
         consumer_group: CheetahString,
         message_listener: ArcMessageListenerConcurrently,
-        default_mqpush_consumer_impl: Option<ArcMut<DefaultMQPushConsumerImpl>>,
+        default_mqpush_consumer_impl: Option<Weak<DefaultMQPushConsumerImpl>>,
     ) -> Self {
         let consume_thread = consumer_config.consume_thread_min;
         Self {
@@ -118,6 +118,10 @@ impl ConsumeMessagePopConcurrentlyService {
             force_stop_token: CancellationToken::new(),
             submitted_tasks: Arc::new(AtomicU64::new(0)),
         }
+    }
+
+    fn consumer_impl(&self) -> Option<Arc<DefaultMQPushConsumerImpl>> {
+        self.default_mqpush_consumer_impl.as_ref().and_then(Weak::upgrade)
     }
 
     fn resize_available_permits(semaphore: &Semaphore, old_total: usize, new_total: usize) {
@@ -211,7 +215,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopConcurrentlyService {
         let mq = MessageQueue::from_parts(msg.topic().clone(), broker_name.unwrap_or_default(), msg.queue_id());
         let mut msgs = vec![Arc::new(msg)];
         let context = ConsumeConcurrentlyContext::new(mq);
-        if let Some(default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_ref() {
+        if let Some(default_mqpush_consumer_impl) = self.consumer_impl() {
             default_mqpush_consumer_impl.reset_retry_and_namespace(msgs.as_mut_slice(), self.consumer_group.as_str());
         } else {
             warn!(
@@ -323,7 +327,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopConcurrentlyService {
                 message_queue.clone(),
                 self.consumer_group.clone(),
                 self.message_listener.clone(),
-                self.default_mqpush_consumer_impl.clone(),
+                self.consumer_impl(),
             );
             let limiter = self.concurrency_limiter.clone();
             let stopped = self.stopped.clone();
@@ -352,7 +356,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopConcurrentlyService {
         } else {
             let consumer_group = self.consumer_group.clone();
             let message_listener = self.message_listener.clone();
-            let default_impl = self.default_mqpush_consumer_impl.clone();
+            let default_impl = self.consumer_impl();
             let limiter = self.concurrency_limiter.clone();
             let stopped = self.stopped.clone();
             msgs.chunks(consume_batch_size as usize)
@@ -444,8 +448,8 @@ impl ConsumeMessagePopConcurrentlyService {
         let ack_index = normalize_ack_index(status, context.ack_index, consume_request.msgs.len());
 
         // Update per-topic/group consume throughput counters, split by ack index.
-        if let Some(impl_) = self.default_mqpush_consumer_impl.as_ref() {
-            if let Some(client_instance) = impl_.client_instance.as_ref() {
+        if let Some(impl_) = self.consumer_impl() {
+            if let Some(client_instance) = impl_.get_mq_client_factory() {
                 let mgr = client_instance.consumer_stats_manager();
                 let topic = consume_request.message_queue.topic().as_str();
                 let group = self.consumer_group.as_str();
@@ -468,7 +472,7 @@ impl ConsumeMessagePopConcurrentlyService {
         if ack_index >= 0 {
             for i in 0..=ack_index {
                 let msg = &consume_request.msgs[i as usize];
-                if let Some(default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_ref().cloned() {
+                if let Some(default_mqpush_consumer_impl) = self.consumer_impl() {
                     default_mqpush_consumer_impl
                         .ack_async(msg.as_ref(), &self.consumer_group)
                         .await;
@@ -497,7 +501,7 @@ impl ConsumeMessagePopConcurrentlyService {
     }
 
     async fn check_need_ack_or_delay(&self, message: &MessageExt) {
-        let Some(default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_ref().cloned() else {
+        let Some(default_mqpush_consumer_impl) = self.consumer_impl() else {
             warn!(
                 "pop consume retry handling skipped: DefaultMQPushConsumerImpl is not initialized, group={}, msg={}",
                 self.consumer_group, message
@@ -542,7 +546,7 @@ impl ConsumeMessagePopConcurrentlyService {
         if delay_level == 0 {
             delay_level = message.reconsume_times;
         }
-        let Some(default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_ref().cloned() else {
+        let Some(default_mqpush_consumer_impl) = self.consumer_impl() else {
             warn!(
                 "changePopInvisibleTime skipped: DefaultMQPushConsumerImpl is not initialized, group={} msg={}",
                 consumer_group, message
@@ -594,7 +598,7 @@ struct ConsumeRequest {
     invisible_time: u64,
     consumer_group: CheetahString,
     message_listener: ArcMessageListenerConcurrently,
-    default_mqpush_consumer_impl: Option<ArcMut<DefaultMQPushConsumerImpl>>,
+    default_mqpush_consumer_impl: Option<Arc<DefaultMQPushConsumerImpl>>,
 }
 
 impl ConsumeRequest {
@@ -604,7 +608,7 @@ impl ConsumeRequest {
         message_queue: MessageQueue,
         consumer_group: CheetahString,
         message_listener: ArcMessageListenerConcurrently,
-        default_mqpush_consumer_impl: Option<ArcMut<DefaultMQPushConsumerImpl>>,
+        default_mqpush_consumer_impl: Option<Arc<DefaultMQPushConsumerImpl>>,
     ) -> Self {
         let mut pop_time = 0u64;
         let mut invisible_time = 0u64;
@@ -686,7 +690,7 @@ impl ConsumeRequest {
             self.process_queue.inc_found_msg(self.msgs.len());
             return;
         }
-        let Some(mut default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_ref().cloned() else {
+        let Some(default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_ref().cloned() else {
             warn!(
                 "pop consume request skipped: DefaultMQPushConsumerImpl is not initialized, group={}, mq={}, msgs={}",
                 self.consumer_group,
@@ -717,8 +721,8 @@ impl ConsumeRequest {
                     .with_mq(self.message_queue.clone())
                     .with_namespace(
                         default_mqpush_consumer_impl
-                            .client_config
-                            .get_namespace()
+                            .client_config_snapshot()
+                            .resolved_namespace()
                             .unwrap_or_default(),
                     ),
             );
@@ -823,7 +827,7 @@ impl ConsumeRequest {
             if let Some(cmc) = consume_message_context.as_mut() {
                 cmc.status = final_status.to_string().into();
                 cmc.success = final_status == ConsumeConcurrentlyStatus::ConsumeSuccess;
-                cmc.access_channel = Some(default_mqpush_consumer_impl.client_config.access_channel);
+                cmc.access_channel = Some(default_mqpush_consumer_impl.client_config_snapshot().access_channel);
                 default_mqpush_consumer_impl.execute_hook_after(cmc);
             } else {
                 warn!(
@@ -834,7 +838,7 @@ impl ConsumeRequest {
         }
 
         // Record message consume round-trip time.
-        if let Some(client_instance) = default_mqpush_consumer_impl.client_instance.as_ref() {
+        if let Some(client_instance) = default_mqpush_consumer_impl.get_mq_client_factory() {
             client_instance.consumer_stats_manager().inc_consume_rt(
                 self.consumer_group.as_str(),
                 self.message_queue.topic().as_str(),
@@ -932,13 +936,13 @@ mod tests {
         CheetahString::from_static_str("group")
     }
 
-    fn new_service(default_impl: Option<ArcMut<DefaultMQPushConsumerImpl>>) -> ConsumeMessagePopConcurrentlyService {
+    fn new_service(default_impl: Option<Arc<DefaultMQPushConsumerImpl>>) -> ConsumeMessagePopConcurrentlyService {
         ConsumeMessagePopConcurrentlyService::new(
             Arc::new(ClientConfig::default()),
             Arc::new(ConsumerConfig::default()),
             consumer_group(),
             listener(),
-            default_impl,
+            default_impl.as_ref().map(Arc::downgrade),
         )
     }
 
@@ -952,13 +956,15 @@ mod tests {
         )
     }
 
-    fn new_default_impl() -> ArcMut<DefaultMQPushConsumerImpl> {
+    fn new_default_impl() -> Arc<DefaultMQPushConsumerImpl> {
         let consumer_config = ConsumerConfig::default();
-        ArcMut::new(DefaultMQPushConsumerImpl::new(
+        let consumer = Arc::new(DefaultMQPushConsumerImpl::new(
             ClientConfig::default(),
             consumer_config,
             None,
-        ))
+        ));
+        consumer.initialize_self_reference();
+        consumer
     }
 
     fn pop_message() -> MessageExt {

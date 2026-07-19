@@ -19,7 +19,6 @@ use rocketmq_common::common::mix_all;
 use rocketmq_error::RocketMQError;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
-use rocketmq_rust::ArcMut;
 use tracing::warn;
 
 use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
@@ -45,7 +44,7 @@ pub trait PullCallbackLocal: Sync {
 }
 
 pub(crate) struct DefaultPullCallback {
-    pub(crate) push_consumer_impl: ArcMut<DefaultMQPushConsumerImpl>,
+    pub(crate) push_consumer_impl: Arc<DefaultMQPushConsumerImpl>,
     pub(crate) message_queue_inner: Option<MessageQueue>,
     pub(crate) subscription_data: Option<SubscriptionData>,
     pub(crate) pull_request: Option<PullRequest>,
@@ -53,7 +52,7 @@ pub(crate) struct DefaultPullCallback {
 
 impl PullCallback for DefaultPullCallback {
     async fn on_success(&mut self, mut pull_result_ext: PullResultExt) {
-        let mut push_consumer_impl = self.push_consumer_impl.clone();
+        let push_consumer_impl = self.push_consumer_impl.clone();
 
         let Some(message_queue_inner) = self.message_queue_inner.take() else {
             warn!("pull callback success ignored: message queue is missing");
@@ -78,7 +77,7 @@ impl PullCallback for DefaultPullCallback {
             return;
         };
 
-        let Some(pull_api_wrapper) = push_consumer_impl.pull_api_wrapper.as_ref() else {
+        let Some(pull_api_wrapper) = push_consumer_impl.pull_api_wrapper() else {
             warn!(
                 "pull callback success ignored: PullAPIWrapper is not initialized, mq={}",
                 message_queue_inner
@@ -114,7 +113,7 @@ impl PullCallback for DefaultPullCallback {
                         return;
                     }
                     first_msg_offset = msg_found_list.first().map_or(i64::MAX, |msg| msg.queue_offset);
-                    if push_consumer_impl.consume_message_service.is_none() {
+                    if push_consumer_impl.consume_message_service().is_none() {
                         warn!(
                             "pull callback found messages but ConsumeMessageService is not initialized, mq={}",
                             message_queue_inner
@@ -124,7 +123,7 @@ impl PullCallback for DefaultPullCallback {
                         return;
                     }
                     let dispatch_to_consume = pull_request.process_queue.put_message(&msg_found_list).await;
-                    if let Some(consume_message_service) = push_consumer_impl.consume_message_service.as_mut() {
+                    if let Some(consume_message_service) = push_consumer_impl.consume_message_service() {
                         consume_message_service
                             .submit_consume_request(
                                 msg_found_list,
@@ -165,7 +164,7 @@ impl PullCallback for DefaultPullCallback {
                 pull_request.next_offset = pull_result_ext.pull_result.next_begin_offset as i64;
                 pull_request.process_queue.set_dropped(true);
 
-                let Some(offset_store) = push_consumer_impl.offset_store.as_mut() else {
+                let Some(offset_store) = push_consumer_impl.offset_store() else {
                     warn!(
                         "offset illegal repair skipped: OffsetStore is not initialized, {}",
                         pull_request
@@ -183,8 +182,7 @@ impl PullCallback for DefaultPullCallback {
                 match push_consumer_impl
                     .rebalance_impl
                     .rebalance_impl_inner
-                    .client_instance
-                    .as_ref()
+                    .get_mq_client_factory()
                 {
                     Some(client_instance) => client_instance.re_balance_immediately(),
                     None => {
@@ -246,11 +244,12 @@ mod tests {
 
     fn new_callback() -> DefaultPullCallback {
         let consumer_config = ConsumerConfig::default();
-        let push_consumer_impl = ArcMut::new(DefaultMQPushConsumerImpl::new(
+        let push_consumer_impl = Arc::new(DefaultMQPushConsumerImpl::new(
             ClientConfig::default(),
             consumer_config,
             None,
         ));
+        push_consumer_impl.initialize_self_reference();
         DefaultPullCallback {
             push_consumer_impl,
             message_queue_inner: None,

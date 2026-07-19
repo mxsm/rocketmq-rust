@@ -520,7 +520,7 @@ impl DefaultLitePullConsumerImpl {
         let (tx, rx) = mpsc::unbounded_channel();
         let rebalance_config = consumer_config.to_consumer_config();
 
-        let mut this = Self {
+        let this = Self {
             client_config: ArcSwap::from_pointee(client_config),
             consumer_config: ArcSwap::from_pointee(consumer_config),
             lifecycle_transition: Mutex::new(()),
@@ -676,13 +676,13 @@ impl DefaultLitePullConsumerImpl {
         }
 
         self.update_consumer_config(|config| config.consumer_group = consumer_group.clone());
-        self.rebalance_impl.mut_from_ref().set_consumer_group(consumer_group);
+        self.rebalance_impl.set_consumer_group(consumer_group);
         Ok(())
     }
 
     #[cfg(test)]
     pub(crate) fn rebalance_consumer_group_name(&self) -> Option<CheetahString> {
-        self.rebalance_impl.rebalance_impl_inner.consumer_group.clone()
+        self.rebalance_impl.rebalance_impl_inner.consumer_group()
     }
 
     /// Returns the active or preconfigured offset store.
@@ -956,7 +956,7 @@ impl DefaultLitePullConsumerImpl {
         }
 
         if !topics.is_empty() {
-            self.rebalance_impl.mut_from_ref().do_rebalance(false).await;
+            self.rebalance_impl.do_rebalance(false).await;
             self.sync_assigned_queues_from_rebalance(&topics).await?;
         }
 
@@ -1030,7 +1030,7 @@ impl DefaultLitePullConsumerImpl {
                     .write()
                     .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(client_instance.clone());
 
-                self.rebalance_impl.mut_from_ref().set_mq_client_factory(
+                self.rebalance_impl.set_mq_client_factory(
                     consumer_config.consumer_group.clone(),
                     consumer_config.message_model,
                     consumer_config.allocate_message_queue_strategy.clone(),
@@ -2599,7 +2599,7 @@ impl DefaultLitePullConsumerImpl {
     /// Updates the configured message model.
     pub fn set_message_model(&self, message_model: MessageModel) {
         self.update_consumer_config(|config| config.message_model = message_model);
-        self.rebalance_impl.mut_from_ref().set_message_model(message_model);
+        self.rebalance_impl.set_message_model(message_model);
     }
 
     /// Returns where consumption starts when no offset exists.
@@ -2640,7 +2640,6 @@ impl DefaultLitePullConsumerImpl {
             config.allocate_message_queue_strategy = allocate_message_queue_strategy.clone();
         });
         self.rebalance_impl
-            .mut_from_ref()
             .set_allocate_message_queue_strategy(allocate_message_queue_strategy);
     }
 
@@ -2648,8 +2647,7 @@ impl DefaultLitePullConsumerImpl {
     pub(crate) fn rebalance_allocate_message_queue_strategy_name(&self) -> Option<&'static str> {
         self.rebalance_impl
             .rebalance_impl_inner
-            .allocate_message_queue_strategy
-            .as_ref()
+            .allocate_message_queue_strategy()
             .map(|strategy| strategy.get_name())
     }
 
@@ -2912,7 +2910,7 @@ impl MQConsumerInner for DefaultLitePullConsumerImpl {
                 .iter()
                 .map(|entry| entry.key().clone())
                 .collect();
-            self.rebalance_impl.mut_from_ref().do_rebalance(false).await;
+            self.rebalance_impl.do_rebalance(false).await;
             if let Err(error) = self.sync_assigned_queues_from_rebalance(&topics).await {
                 warn!(
                     "LitePull failed to synchronize rebalance assignments for group={}, error={}",
