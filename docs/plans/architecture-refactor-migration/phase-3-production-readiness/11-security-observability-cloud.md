@@ -422,6 +422,12 @@ M11-12am 已将 `MQClientInstance` 内部 PullMessageService child 改为标准 
 既有串行边界，且没有同步 guard 跨 `.await`。实际快照降至 323 production/904 occurrences，Client owner 降至
 6/12；完整 Producer root/registry/standard-weak、Broker/Store、compatibility 与候选快照 Gate 仍保持开放。
 
+M11-12an 已将 DefaultMQProducer facade/implementation/registry 改为标准 `Arc`/`Weak`，以单一 runtime snapshot、
+短锁配置发布、异步 lifecycle、task admission 和 owner-aware unregister 取代共享可变 root；client/resolver/detector
+回边不再保活 root，发送与重试不经过全局 impl mutex。实际快照降至 317 production/892 occurrences，Client
+production ArcMut 清零；公开 implementation getter carrier 从 `ArcMut` 迁移为标准 `Arc`，由 public API compile
+test 固定。Broker/Store、compatibility 与完整候选快照 Gate 仍保持开放。
+
 ## 公共兼容面
 
 - development/compatibility仍可显式选择；secure只作为新部署默认，不静默重解释旧配置。

@@ -243,13 +243,13 @@ impl MQAdminImpl {
     pub fn parse_publish_message_queues(
         &self,
         message_queue_array: &[MessageQueue],
-        client_config: &mut ClientConfig,
+        client_config: &ClientConfig,
     ) -> Vec<MessageQueue> {
         let mut message_queues = Vec::new();
         for message_queue in message_queue_array {
             let user_topic = NamespaceUtil::without_namespace_with_namespace(
                 message_queue.topic_str(),
-                client_config.get_namespace().unwrap_or_default().as_str(),
+                client_config.resolved_namespace().unwrap_or_default().as_str(),
             );
 
             let message_queue =
@@ -263,7 +263,7 @@ impl MQAdminImpl {
         &self,
         topic: &str,
         mq_client_api_impl: Arc<MQClientAPIImpl>,
-        client_config: &mut ClientConfig,
+        client_config: &ClientConfig,
     ) -> rocketmq_error::RocketMQResult<Vec<MessageQueue>> {
         let topic_route_data = mq_client_api_impl
             .get_topic_route_info_from_name_server_detail(topic, self.timeout_millis, true)

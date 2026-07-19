@@ -15,9 +15,11 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::net::SocketAddr;
+use std::ops::Deref;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
+use parking_lot::RwLock;
 use rocketmq_common::common::compression::compression_type::CompressionType;
 use rocketmq_common::common::compression::compressor::Compressor;
 use rocketmq_common::common::compression::compressor_factory::CompressorFactory;
@@ -34,9 +36,9 @@ use rocketmq_common::common::mix_all::MESSAGE_COMPRESS_TYPE;
 use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_error::RocketMQError;
 use rocketmq_remoting::code::response_code::ResponseCode;
+use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::RPCHook;
-use rocketmq_rust::ArcMut;
 use tracing::error;
 
 use crate::base::client_config::ClientConfig;
@@ -60,6 +62,96 @@ use crate::trace::trace_dispatcher::Type;
 
 pub(crate) const MIN_BACK_PRESSURE_FOR_ASYNC_SEND_NUM: u32 = 10;
 pub(crate) const MIN_BACK_PRESSURE_FOR_ASYNC_SEND_SIZE: u32 = 1024 * 1024;
+
+/// Clone-shared, append-only configuration generations.
+///
+/// Several legacy producer getters return references tied to the facade. Once
+/// facades are cloneable and share one implementation root, replacing a
+/// generation in place would either invalidate those references or require a
+/// lock guard in the public API. Retaining immutable generations preserves the
+/// existing borrowed API while all writers clone and publish from the latest
+/// complete generation.
+struct StableConfigHistory<T> {
+    state: RwLock<StableConfigState<T>>,
+}
+
+struct StableConfigState<T> {
+    generations: Vec<Box<T>>,
+    current: usize,
+}
+
+struct StableConfig<T> {
+    history: Arc<StableConfigHistory<T>>,
+}
+
+impl<T> StableConfig<T> {
+    fn new(value: T) -> Self {
+        Self {
+            history: Arc::new(StableConfigHistory {
+                state: RwLock::new(StableConfigState {
+                    generations: vec![Box::new(value)],
+                    current: 0,
+                }),
+            }),
+        }
+    }
+
+    fn replace(&self, value: T) {
+        let mut state = self.history.state.write();
+        state.generations.push(Box::new(value));
+        state.current = state.generations.len() - 1;
+    }
+
+    fn current(&self) -> &T {
+        let current = {
+            let state = self.history.state.read();
+            (&*state.generations[state.current]) as *const T
+        };
+
+        // SAFETY: generations are immutable `Box<T>` allocations. Writers only
+        // append boxes and switch the current index; they never mutate or remove
+        // an existing allocation. `&self` keeps the shared history alive for the
+        // returned reference, so the pointed-to generation cannot be freed.
+        unsafe { &*current }
+    }
+}
+
+impl<T: Clone> StableConfig<T> {
+    fn snapshot(&self) -> T {
+        self.current().clone()
+    }
+
+    fn update<R>(&self, update: impl FnOnce(&mut T) -> R) -> R {
+        let mut state = self.history.state.write();
+        let mut next = state.generations[state.current].as_ref().clone();
+        let result = update(&mut next);
+        state.generations.push(Box::new(next));
+        state.current = state.generations.len() - 1;
+        result
+    }
+}
+
+impl<T> Clone for StableConfig<T> {
+    fn clone(&self) -> Self {
+        Self {
+            history: Arc::clone(&self.history),
+        }
+    }
+}
+
+impl<T: Default> Default for StableConfig<T> {
+    fn default() -> Self {
+        Self::new(T::default())
+    }
+}
+
+impl<T> Deref for StableConfig<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        self.current()
+    }
+}
 
 #[derive(Clone)]
 pub struct ProducerConfig {
@@ -124,6 +216,8 @@ pub struct ProducerConfig {
     compressor: Option<&'static (dyn Compressor + Send + Sync)>,
     callback_executor: Option<tokio::runtime::Handle>,
     async_sender_executor: Option<tokio::runtime::Handle>,
+    latency_max: Vec<u64>,
+    not_available_duration: Vec<u64>,
 }
 
 struct CompositeRPCHook {
@@ -315,6 +409,22 @@ impl ProducerConfig {
     pub(crate) fn set_async_sender_executor(&mut self, async_sender_executor: tokio::runtime::Handle) {
         self.async_sender_executor = Some(async_sender_executor);
     }
+
+    pub(crate) fn latency_max(&self) -> &[u64] {
+        &self.latency_max
+    }
+
+    pub(crate) fn set_latency_max(&mut self, latency_max: Vec<u64>) {
+        self.latency_max = latency_max;
+    }
+
+    pub(crate) fn not_available_duration(&self) -> &[u64] {
+        &self.not_available_duration
+    }
+
+    pub(crate) fn set_not_available_duration(&mut self, not_available_duration: Vec<u64>) {
+        self.not_available_duration = not_available_duration;
+    }
 }
 
 impl Default for ProducerConfig {
@@ -361,15 +471,17 @@ impl Default for ProducerConfig {
             compressor: Some(CompressorFactory::get_compressor(compression_type)),
             callback_executor: None,
             async_sender_executor: None,
+            latency_max: MQFaultStrategy::DEFAULT_LATENCY_MAX.to_vec(),
+            not_available_duration: MQFaultStrategy::DEFAULT_NOT_AVAILABLE_DURATION.to_vec(),
         }
     }
 }
 
 #[derive(Default, Clone)]
 pub struct DefaultMQProducer {
-    client_config: ClientConfig,
-    producer_config: ProducerConfig,
-    pub(crate) default_mqproducer_impl: Option<ArcMut<DefaultMQProducerImpl>>,
+    client_config: StableConfig<ClientConfig>,
+    producer_config: StableConfig<ProducerConfig>,
+    pub(crate) default_mqproducer_impl: Option<Arc<DefaultMQProducerImpl>>,
 }
 
 impl DefaultMQProducer {
@@ -392,7 +504,7 @@ impl DefaultMQProducer {
     /// Stops producer-owned work without shutting down the shared Client factory.
     #[doc(hidden)]
     pub async fn shutdown_for_shared_factory(&mut self) {
-        if let Some(producer) = self.default_mqproducer_impl.as_mut() {
+        if let Some(producer) = self.default_mqproducer_impl.as_ref() {
             if let Err(error) = producer.shutdown_after_partial_start_with_factory(false).await {
                 error!(?error, "DefaultMQProducerImpl shared-factory shutdown failed");
             }
@@ -833,12 +945,12 @@ impl DefaultMQProducer {
     }
 
     #[inline]
-    pub fn default_mq_producer_impl(&self) -> Option<&ArcMut<DefaultMQProducerImpl>> {
+    pub fn default_mq_producer_impl(&self) -> Option<&Arc<DefaultMQProducerImpl>> {
         self.default_mqproducer_impl.as_ref()
     }
 
     #[inline]
-    pub fn get_default_mq_producer_impl(&self) -> Option<&ArcMut<DefaultMQProducerImpl>> {
+    pub fn get_default_mq_producer_impl(&self) -> Option<&Arc<DefaultMQProducerImpl>> {
         self.default_mq_producer_impl()
     }
 
@@ -1091,8 +1203,8 @@ impl DefaultMQProducer {
     }
 
     pub fn set_use_tls(&mut self, use_tls: bool) {
-        self.client_config.set_use_tls(use_tls);
-        if let Some(default_mqproducer_impl) = self.default_mqproducer_impl.as_mut() {
+        self.client_config.update(|config| config.set_use_tls(use_tls));
+        if let Some(default_mqproducer_impl) = self.default_mqproducer_impl.as_ref() {
             default_mqproducer_impl.set_use_tls(use_tls);
         }
         if let Some(dispatcher) = self.producer_config.trace_dispatcher.as_ref() {
@@ -1103,85 +1215,95 @@ impl DefaultMQProducer {
     }
 
     pub fn set_client_config(&mut self, client_config: ClientConfig) {
-        self.client_config = client_config;
-        if let Some(default_mqproducer_impl) = self.default_mqproducer_impl.as_mut() {
+        self.client_config.replace(client_config);
+        if let Some(default_mqproducer_impl) = self.default_mqproducer_impl.as_ref() {
             default_mqproducer_impl.set_use_tls(self.client_config.use_tls);
         }
     }
 
-    pub fn set_default_mqproducer_impl(&mut self, default_mqproducer_impl: DefaultMQProducerImpl) {
-        let mut wrapper = ArcMut::new(default_mqproducer_impl);
-        let wrapper_weak = ArcMut::downgrade(&wrapper);
-        wrapper.set_default_mqproducer_impl_inner(wrapper_weak);
+    pub(crate) fn set_default_mqproducer_impl(&mut self, default_mqproducer_impl: DefaultMQProducerImpl) {
+        let wrapper = Arc::new(default_mqproducer_impl);
+        // The root is freshly allocated and has not been published, so no competing
+        // owner can initialize its self reference to a different allocation.
+        wrapper
+            .initialize_self_reference(&wrapper)
+            .expect("fresh DefaultMQProducerImpl root must accept its own weak reference");
+        self.client_config.replace(wrapper.client_config_snapshot());
+        self.producer_config
+            .replace(wrapper.producer_config_snapshot().as_ref().clone());
         self.default_mqproducer_impl = Some(wrapper);
     }
 
-    fn sync_producer_config_to_impl(&mut self) {
-        if let Some(default_mqproducer_impl) = self.default_mqproducer_impl.as_mut() {
-            default_mqproducer_impl.replace_producer_config(self.producer_config.clone());
+    fn sync_producer_config_to_impl(&self) {
+        if let Some(default_mqproducer_impl) = self.default_mqproducer_impl.as_ref() {
+            default_mqproducer_impl.replace_producer_config(self.producer_config.snapshot());
         }
     }
 
-    pub fn set_retry_response_codes(&mut self, retry_response_codes: HashSet<i32>) {
-        self.producer_config.retry_response_codes = retry_response_codes;
+    fn update_producer_config(&self, update: impl FnOnce(&mut ProducerConfig)) {
+        self.producer_config.update(update);
         self.sync_producer_config_to_impl();
     }
 
+    pub fn set_retry_response_codes(&mut self, retry_response_codes: HashSet<i32>) {
+        self.update_producer_config(|config| config.retry_response_codes = retry_response_codes);
+    }
+
     pub fn add_retry_response_code(&mut self, response_code: i32) {
-        self.producer_config.retry_response_codes.insert(response_code);
-        self.sync_producer_config_to_impl();
+        self.update_producer_config(|config| {
+            config.retry_response_codes.insert(response_code);
+        });
     }
 
     #[inline]
     pub fn set_producer_group(&mut self, producer_group: impl Into<CheetahString>) {
-        self.producer_config.producer_group = producer_group.into();
-        self.sync_producer_config_to_impl();
+        let producer_group = producer_group.into();
+        self.update_producer_config(|config| config.producer_group = producer_group);
     }
 
     pub fn set_topics(&mut self, topics: Vec<CheetahString>) {
-        self.producer_config.topics = topics;
-        self.sync_producer_config_to_impl();
+        self.update_producer_config(|config| config.topics = topics);
     }
 
     pub fn set_create_topic_key(&mut self, create_topic_key: impl Into<CheetahString>) {
-        self.producer_config.create_topic_key = create_topic_key.into();
-        self.sync_producer_config_to_impl();
+        let create_topic_key = create_topic_key.into();
+        self.update_producer_config(|config| config.create_topic_key = create_topic_key);
     }
 
     pub fn set_default_topic_queue_nums(&mut self, default_topic_queue_nums: u32) {
-        self.producer_config.default_topic_queue_nums = default_topic_queue_nums;
-        self.sync_producer_config_to_impl();
+        self.update_producer_config(|config| config.default_topic_queue_nums = default_topic_queue_nums);
     }
 
     pub fn set_send_msg_timeout(&mut self, send_msg_timeout: u32) {
-        self.producer_config.send_msg_timeout = send_msg_timeout;
-        self.sync_producer_config_to_impl();
+        self.update_producer_config(|config| config.send_msg_timeout = send_msg_timeout);
     }
 
     pub fn set_compress_msg_body_over_howmuch(&mut self, compress_msg_body_over_howmuch: u32) {
-        self.producer_config.compress_msg_body_over_howmuch = compress_msg_body_over_howmuch;
-        self.sync_producer_config_to_impl();
+        self.update_producer_config(|config| {
+            config.compress_msg_body_over_howmuch = compress_msg_body_over_howmuch;
+        });
     }
 
     pub fn set_retry_times_when_send_failed(&mut self, retry_times_when_send_failed: u32) {
-        self.producer_config.retry_times_when_send_failed = retry_times_when_send_failed;
-        self.sync_producer_config_to_impl();
+        self.update_producer_config(|config| config.retry_times_when_send_failed = retry_times_when_send_failed);
     }
 
     pub fn set_retry_times_when_send_async_failed(&mut self, retry_times_when_send_async_failed: u32) {
-        self.producer_config.retry_times_when_send_async_failed = retry_times_when_send_async_failed;
-        self.sync_producer_config_to_impl();
+        self.update_producer_config(|config| {
+            config.retry_times_when_send_async_failed = retry_times_when_send_async_failed;
+        });
     }
 
     pub fn set_retry_another_broker_when_not_store_ok(&mut self, retry_another_broker_when_not_store_ok: bool) {
-        self.producer_config.retry_another_broker_when_not_store_ok = retry_another_broker_when_not_store_ok;
-        self.sync_producer_config_to_impl();
+        self.update_producer_config(|config| {
+            config.retry_another_broker_when_not_store_ok = retry_another_broker_when_not_store_ok;
+        });
     }
 
     pub fn set_send_message_with_vip_channel(&mut self, send_message_with_vip_channel: bool) {
         self.client_config
-            .set_vip_channel_enabled(send_message_with_vip_channel);
-        if let Some(default_mqproducer_impl) = self.default_mqproducer_impl.as_mut() {
+            .update(|config| config.set_vip_channel_enabled(send_message_with_vip_channel));
+        if let Some(default_mqproducer_impl) = self.default_mqproducer_impl.as_ref() {
             default_mqproducer_impl.set_send_message_with_vip_channel(send_message_with_vip_channel);
         }
     }
@@ -1191,70 +1313,70 @@ impl DefaultMQProducer {
     }
 
     pub fn set_max_message_size(&mut self, max_message_size: u32) {
-        self.producer_config.max_message_size = max_message_size;
-        self.sync_producer_config_to_impl();
+        self.update_producer_config(|config| config.max_message_size = max_message_size);
     }
 
     pub fn set_trace_dispatcher(&mut self, trace_dispatcher: ArcTraceDispatcher) {
-        self.producer_config.trace_dispatcher = Some(trace_dispatcher);
-        self.sync_producer_config_to_impl();
+        self.update_producer_config(|config| config.trace_dispatcher = Some(trace_dispatcher));
     }
 
     pub fn set_auto_batch(&mut self, auto_batch: bool) {
-        self.producer_config.auto_batch = auto_batch;
-        self.sync_producer_config_to_impl();
+        self.update_producer_config(|config| config.auto_batch = auto_batch);
     }
 
     pub fn set_produce_accumulator(&mut self, produce_accumulator: ProduceAccumulator) {
         self.apply_batch_config_to_accumulator(&produce_accumulator);
-        self.producer_config.produce_accumulator = Some(Arc::new(produce_accumulator));
-        self.sync_producer_config_to_impl();
+        self.update_producer_config(|config| {
+            config.produce_accumulator = Some(Arc::new(produce_accumulator));
+        });
     }
 
     pub fn set_enable_backpressure_for_async_mode(&mut self, enable_backpressure_for_async_mode: bool) {
-        self.producer_config
-            .set_enable_backpressure_for_async_mode(enable_backpressure_for_async_mode);
-        self.sync_producer_config_to_impl();
+        self.update_producer_config(|config| {
+            config.set_enable_backpressure_for_async_mode(enable_backpressure_for_async_mode);
+        });
     }
 
     pub fn set_back_pressure_for_async_send_num(&mut self, back_pressure_for_async_send_num: u32) {
-        self.producer_config
-            .set_back_pressure_for_async_send_num(back_pressure_for_async_send_num);
-        self.sync_producer_config_to_impl();
+        self.update_producer_config(|config| {
+            config.set_back_pressure_for_async_send_num(back_pressure_for_async_send_num);
+        });
     }
 
     pub fn set_back_pressure_for_async_send_size(&mut self, back_pressure_for_async_send_size: u32) {
-        self.producer_config
-            .set_back_pressure_for_async_send_size(back_pressure_for_async_send_size);
-        self.sync_producer_config_to_impl();
+        self.update_producer_config(|config| {
+            config.set_back_pressure_for_async_send_size(back_pressure_for_async_send_size);
+        });
     }
 
     pub fn set_rpc_hook(&mut self, rpc_hook: Arc<dyn RPCHook>) {
-        self.producer_config.rpc_hook = Some(rpc_hook.clone());
-        if let Some(ref mut default_mqproducer_impl) = self.default_mqproducer_impl {
+        self.producer_config
+            .update(|config| config.rpc_hook = Some(rpc_hook.clone()));
+        if let Some(ref default_mqproducer_impl) = self.default_mqproducer_impl {
             default_mqproducer_impl.set_rpc_hook(rpc_hook);
         }
+        self.sync_producer_config_to_impl();
     }
 
     pub fn set_compress_level(&mut self, compress_level: i32) {
-        self.producer_config.compress_level = compress_level;
-        self.sync_producer_config_to_impl();
+        self.update_producer_config(|config| config.compress_level = compress_level);
     }
 
     pub fn set_compress_type(&mut self, compress_type: CompressionType) {
-        self.producer_config.compress_type = compress_type;
-        self.producer_config.compressor = Some(CompressorFactory::get_compressor(compress_type));
-        self.sync_producer_config_to_impl();
+        self.update_producer_config(|config| {
+            config.compress_type = compress_type;
+            config.compressor = Some(CompressorFactory::get_compressor(compress_type));
+        });
     }
 
     pub fn set_compressor(&mut self, compressor: Option<&'static (dyn Compressor + Send + Sync)>) {
-        self.producer_config.compressor = compressor;
-        self.sync_producer_config_to_impl();
+        self.update_producer_config(|config| config.compressor = compressor);
     }
 
     pub fn set_callback_executor(&mut self, callback_executor: tokio::runtime::Handle) {
-        self.producer_config.set_callback_executor(callback_executor.clone());
-        if let Some(default_mqproducer_impl) = self.default_mqproducer_impl.as_mut() {
+        self.producer_config
+            .update(|config| config.set_callback_executor(callback_executor.clone()));
+        if let Some(default_mqproducer_impl) = self.default_mqproducer_impl.as_ref() {
             default_mqproducer_impl.set_callback_executor(callback_executor);
         }
         self.sync_producer_config_to_impl();
@@ -1262,8 +1384,8 @@ impl DefaultMQProducer {
 
     pub fn set_async_sender_executor(&mut self, async_sender_executor: tokio::runtime::Handle) {
         self.producer_config
-            .set_async_sender_executor(async_sender_executor.clone());
-        if let Some(default_mqproducer_impl) = self.default_mqproducer_impl.as_mut() {
+            .update(|config| config.set_async_sender_executor(async_sender_executor.clone()));
+        if let Some(default_mqproducer_impl) = self.default_mqproducer_impl.as_ref() {
             default_mqproducer_impl.set_async_sender_executor(async_sender_executor);
         }
         self.sync_producer_config_to_impl();
@@ -1271,19 +1393,18 @@ impl DefaultMQProducer {
 
     #[inline]
     pub fn set_send_msg_max_timeout_per_request(&mut self, timeout: u32) {
-        self.producer_config.send_msg_max_timeout_per_request = Some(timeout);
-        self.sync_producer_config_to_impl();
+        self.update_producer_config(|config| config.send_msg_max_timeout_per_request = Some(timeout));
     }
 
     #[inline]
     pub fn set_send_msg_max_timeout_per_request_option(&mut self, timeout: Option<u32>) {
-        self.producer_config.send_msg_max_timeout_per_request = timeout;
-        self.sync_producer_config_to_impl();
+        self.update_producer_config(|config| config.send_msg_max_timeout_per_request = timeout);
     }
 
     #[inline]
     pub fn set_batch_max_delay_ms(&mut self, delay_ms: u32) {
-        self.producer_config.batch_max_delay_ms = Some(delay_ms);
+        self.producer_config
+            .update(|config| config.batch_max_delay_ms = Some(delay_ms));
         if let Some(produce_accumulator) = self.producer_config.produce_accumulator.as_ref() {
             if let Err(error) = produce_accumulator.set_batch_max_delay_ms(delay_ms) {
                 tracing::warn!("ignore invalid batchMaxDelayMs for ProduceAccumulator: {error}");
@@ -1294,13 +1415,13 @@ impl DefaultMQProducer {
 
     #[inline]
     pub fn set_batch_max_delay_ms_option(&mut self, delay_ms: Option<u32>) {
-        self.producer_config.batch_max_delay_ms = delay_ms;
-        self.sync_producer_config_to_impl();
+        self.update_producer_config(|config| config.batch_max_delay_ms = delay_ms);
     }
 
     #[inline]
     pub fn set_batch_max_bytes(&mut self, bytes: u64) {
-        self.producer_config.batch_max_bytes = Some(bytes);
+        self.producer_config
+            .update(|config| config.batch_max_bytes = Some(bytes));
         if let Some(produce_accumulator) = self.producer_config.produce_accumulator.as_ref() {
             if let Err(error) = produce_accumulator.set_batch_max_bytes(bytes) {
                 tracing::warn!("ignore invalid batchMaxBytes for ProduceAccumulator: {error}");
@@ -1311,13 +1432,13 @@ impl DefaultMQProducer {
 
     #[inline]
     pub fn set_batch_max_bytes_option(&mut self, bytes: Option<u64>) {
-        self.producer_config.batch_max_bytes = bytes;
-        self.sync_producer_config_to_impl();
+        self.update_producer_config(|config| config.batch_max_bytes = bytes);
     }
 
     #[inline]
     pub fn set_total_batch_max_bytes(&mut self, bytes: u64) {
-        self.producer_config.total_batch_max_bytes = Some(bytes);
+        self.producer_config
+            .update(|config| config.total_batch_max_bytes = Some(bytes));
         if let Some(produce_accumulator) = self.producer_config.produce_accumulator.as_ref() {
             if let Err(error) = produce_accumulator.set_total_batch_max_bytes(bytes) {
                 tracing::warn!("ignore invalid totalBatchMaxBytes for ProduceAccumulator: {error}");
@@ -1328,8 +1449,7 @@ impl DefaultMQProducer {
 
     #[inline]
     pub fn set_total_batch_max_bytes_option(&mut self, bytes: Option<u64>) {
-        self.producer_config.total_batch_max_bytes = bytes;
-        self.sync_producer_config_to_impl();
+        self.update_producer_config(|config| config.total_batch_max_bytes = bytes);
     }
 
     pub fn producer_config(&self) -> &ProducerConfig {
@@ -1356,8 +1476,9 @@ impl DefaultMQProducer {
 
     #[inline]
     pub fn set_send_latency_fault_enable(&mut self, send_latency_fault_enable: bool) {
-        self.client_config.set_send_latency_enable(send_latency_fault_enable);
-        if let Some(ref mut default_mqproducer_impl) = self.default_mqproducer_impl {
+        self.client_config
+            .update(|config| config.set_send_latency_enable(send_latency_fault_enable));
+        if let Some(ref default_mqproducer_impl) = self.default_mqproducer_impl {
             default_mqproducer_impl.set_send_latency_fault_enable(send_latency_fault_enable);
         }
     }
@@ -1372,8 +1493,9 @@ impl DefaultMQProducer {
 
     #[inline]
     pub fn set_start_detector_enable(&mut self, start_detector_enable: bool) {
-        self.client_config.set_start_detector_enable(start_detector_enable);
-        if let Some(ref mut default_mqproducer_impl) = self.default_mqproducer_impl {
+        self.client_config
+            .update(|config| config.set_start_detector_enable(start_detector_enable));
+        if let Some(ref default_mqproducer_impl) = self.default_mqproducer_impl {
             default_mqproducer_impl.set_start_detector_enable(start_detector_enable);
         }
     }
@@ -1387,10 +1509,7 @@ impl DefaultMQProducer {
     }
 
     pub fn latency_max(&self) -> &[u64] {
-        self.default_mqproducer_impl
-            .as_ref()
-            .map(|producer_impl| producer_impl.latency_max())
-            .unwrap_or(&MQFaultStrategy::DEFAULT_LATENCY_MAX)
+        self.producer_config.latency_max()
     }
 
     pub fn get_latency_max(&self) -> &[u64] {
@@ -1399,16 +1518,15 @@ impl DefaultMQProducer {
 
     pub fn set_latency_max(&mut self, latency_max: impl Into<Vec<u64>>) {
         let latency_max = latency_max.into();
-        if let Some(default_mqproducer_impl) = self.default_mqproducer_impl.as_mut() {
+        self.producer_config
+            .update(|config| config.latency_max = latency_max.clone());
+        if let Some(default_mqproducer_impl) = self.default_mqproducer_impl.as_ref() {
             default_mqproducer_impl.set_latency_max(latency_max);
         }
     }
 
     pub fn not_available_duration(&self) -> &[u64] {
-        self.default_mqproducer_impl
-            .as_ref()
-            .map(|producer_impl| producer_impl.not_available_duration())
-            .unwrap_or(&MQFaultStrategy::DEFAULT_NOT_AVAILABLE_DURATION)
+        self.producer_config.not_available_duration()
     }
 
     pub fn get_not_available_duration(&self) -> &[u64] {
@@ -1417,17 +1535,18 @@ impl DefaultMQProducer {
 
     pub fn set_not_available_duration(&mut self, not_available_duration: impl Into<Vec<u64>>) {
         let not_available_duration = not_available_duration.into();
-        if let Some(default_mqproducer_impl) = self.default_mqproducer_impl.as_mut() {
+        self.producer_config
+            .update(|config| config.not_available_duration = not_available_duration.clone());
+        if let Some(default_mqproducer_impl) = self.default_mqproducer_impl.as_ref() {
             default_mqproducer_impl.set_not_available_duration(not_available_duration);
         }
     }
 
     pub fn init_produce_accumulator(&mut self) {
         let produce_accumulator =
-            MQClientManager::get_instance().get_or_create_produce_accumulator(self.client_config.clone());
+            MQClientManager::get_instance().get_or_create_produce_accumulator(self.client_config.snapshot());
         self.apply_batch_config_to_accumulator(&produce_accumulator);
-        self.producer_config.produce_accumulator = Some(produce_accumulator);
-        self.sync_producer_config_to_impl();
+        self.update_producer_config(|config| config.produce_accumulator = Some(produce_accumulator));
     }
 
     pub fn set_back_pressure_for_async_send_num_inside_adjust(&mut self, back_pressure_for_async_send_num: u32) {
@@ -1474,9 +1593,9 @@ impl DefaultMQProducer {
         self.producer_config.produce_accumulator.is_some() && self.producer_config.auto_batch
     }
     #[inline]
-    fn get_impl_mut(&mut self) -> rocketmq_error::RocketMQResult<&mut ArcMut<DefaultMQProducerImpl>> {
+    fn get_impl(&self) -> rocketmq_error::RocketMQResult<&Arc<DefaultMQProducerImpl>> {
         self.default_mqproducer_impl
-            .as_mut()
+            .as_ref()
             .ok_or_else(|| mq_client_err!("DefaultMQProducerImpl is not initialized, call start() first"))
     }
 
@@ -1496,7 +1615,7 @@ impl DefaultMQProducer {
     where
         M: MessageTrait + Send + Sync,
     {
-        let producer = self.get_impl_mut()?;
+        let producer = self.get_impl()?;
 
         if send_callback.is_none() {
             if let Some(mq) = mq {
@@ -1576,51 +1695,57 @@ impl DefaultMQProducer {
 impl DefaultMQProducer {
     #[inline]
     pub fn with_namespace(&mut self, resource: impl Into<CheetahString>) -> CheetahString {
-        self.client_config.with_namespace(resource)
+        let resource = resource.into();
+        let namespace = self.client_config.resolved_namespace().unwrap_or_default();
+        if namespace.is_empty() || NamespaceUtil::is_already_with_namespace(resource.as_str(), namespace.as_str()) {
+            return resource;
+        }
+        NamespaceUtil::wrap_namespace(namespace, resource)
     }
 
-    fn prepare_trace_dispatcher(
-        client_config: &ClientConfig,
-        producer_config: &mut ProducerConfig,
-        default_mqproducer_impl: &mut ArcMut<DefaultMQProducerImpl>,
-    ) -> Option<ArcTraceDispatcher> {
-        let dispatcher = match producer_config.trace_dispatcher.clone() {
-            Some(dispatcher) => dispatcher,
-            None if client_config.enable_trace => {
-                let trace_topic = client_config
-                    .trace_topic
-                    .as_ref()
-                    .map(|topic| topic.as_str())
-                    .unwrap_or_default();
-                let dispatcher = AsyncTraceDispatcher::new(
-                    producer_config.producer_group.as_str(),
-                    Type::Produce,
-                    client_config.trace_msg_batch_num,
-                    trace_topic,
-                    producer_config.rpc_hook.clone(),
-                );
-                Arc::new(dispatcher)
-            }
-            None => return None,
-        };
+    fn prepare_trace_dispatcher(&self, default_mqproducer_impl: &DefaultMQProducerImpl) -> Option<ArcTraceDispatcher> {
+        let client_config = self.client_config.snapshot();
+        let (dispatcher, rpc_hook) = self.producer_config.update(|producer_config| {
+            let dispatcher = match producer_config.trace_dispatcher.clone() {
+                Some(dispatcher) => dispatcher,
+                None if client_config.enable_trace => {
+                    let trace_topic = client_config
+                        .trace_topic
+                        .as_ref()
+                        .map(|topic| topic.as_str())
+                        .unwrap_or_default();
+                    let dispatcher = AsyncTraceDispatcher::new(
+                        producer_config.producer_group.as_str(),
+                        Type::Produce,
+                        client_config.trace_msg_batch_num,
+                        trace_topic,
+                        producer_config.rpc_hook.clone(),
+                    );
+                    Arc::new(dispatcher)
+                }
+                None => return None,
+            };
+
+            producer_config.trace_dispatcher = Some(dispatcher.clone());
+            let recall_trace_hook: Arc<dyn RPCHook> = Arc::new(DefaultRecallMessageTraceHook::new(dispatcher.clone()));
+            let rpc_hook = match producer_config.rpc_hook.clone() {
+                Some(existing_hook) => CompositeRPCHook::chain(existing_hook, recall_trace_hook),
+                None => recall_trace_hook,
+            };
+            producer_config.rpc_hook = Some(rpc_hook.clone());
+            Some((dispatcher, rpc_hook))
+        })?;
 
         if let Some(async_dispatcher) = dispatcher.as_any().downcast_ref::<AsyncTraceDispatcher>() {
             async_dispatcher.set_namespace_v2(client_config.namespace_v2.clone());
             async_dispatcher.set_use_tls(client_config.use_tls);
         }
 
-        producer_config.trace_dispatcher = Some(dispatcher.clone());
         default_mqproducer_impl.register_send_message_hook(Arc::new(SendMessageTraceHookImpl::new(dispatcher.clone())));
         default_mqproducer_impl
             .register_end_transaction_hook(Arc::new(EndTransactionTraceHookImpl::new(dispatcher.clone())));
-
-        let recall_trace_hook: Arc<dyn RPCHook> = Arc::new(DefaultRecallMessageTraceHook::new(dispatcher.clone()));
-        let rpc_hook = match producer_config.rpc_hook.clone() {
-            Some(existing_hook) => CompositeRPCHook::chain(existing_hook, recall_trace_hook),
-            None => recall_trace_hook,
-        };
-        producer_config.rpc_hook = Some(rpc_hook.clone());
         default_mqproducer_impl.set_rpc_hook(rpc_hook);
+        self.sync_producer_config_to_impl();
 
         Some(dispatcher)
     }
@@ -1633,11 +1758,10 @@ impl MQProducer for DefaultMQProducer {
         self.set_producer_group(producer_group);
         let default_mqproducer_impl = self
             .default_mqproducer_impl
-            .as_mut()
+            .as_ref()
             .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?;
 
-        let trace_dispatcher_to_start =
-            Self::prepare_trace_dispatcher(&self.client_config, &mut self.producer_config, default_mqproducer_impl);
+        let trace_dispatcher_to_start = self.prepare_trace_dispatcher(default_mqproducer_impl);
 
         default_mqproducer_impl.start().await?;
         if let Some(dispatcher) = trace_dispatcher_to_start.as_ref() {
@@ -1663,7 +1787,7 @@ impl MQProducer for DefaultMQProducer {
     }
 
     async fn shutdown(&mut self) {
-        if let Some(ref mut default_mqproducer_impl) = self.default_mqproducer_impl {
+        if let Some(ref default_mqproducer_impl) = self.default_mqproducer_impl {
             if let Err(e) = default_mqproducer_impl.shutdown().await {
                 error!("DefaultMQProducerImpl shutdown error: {:?}", e);
             }
@@ -1685,7 +1809,7 @@ impl MQProducer for DefaultMQProducer {
     async fn fetch_publish_message_queues(&mut self, topic: &str) -> rocketmq_error::RocketMQResult<Vec<MessageQueue>> {
         let topic = self.with_namespace(topic);
         self.default_mqproducer_impl
-            .as_mut()
+            .as_ref()
             .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .fetch_publish_message_queues(topic.as_ref())
             .await
@@ -1712,7 +1836,7 @@ impl MQProducer for DefaultMQProducer {
     ) -> rocketmq_error::RocketMQResult<()> {
         let new_topic = self.with_namespace(new_topic);
         self.default_mqproducer_impl
-            .as_mut()
+            .as_ref()
             .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .create_topic(key, new_topic.as_str(), queue_num, topic_sys_flag, attributes)
             .await
@@ -1720,7 +1844,7 @@ impl MQProducer for DefaultMQProducer {
 
     async fn search_offset(&mut self, mq: &MessageQueue, timestamp: u64) -> rocketmq_error::RocketMQResult<i64> {
         self.default_mqproducer_impl
-            .as_mut()
+            .as_ref()
             .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .search_offset(mq, timestamp)
             .await
@@ -1728,7 +1852,7 @@ impl MQProducer for DefaultMQProducer {
 
     async fn max_offset(&mut self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
         self.default_mqproducer_impl
-            .as_mut()
+            .as_ref()
             .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .max_offset(mq)
             .await
@@ -1736,7 +1860,7 @@ impl MQProducer for DefaultMQProducer {
 
     async fn min_offset(&mut self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
         self.default_mqproducer_impl
-            .as_mut()
+            .as_ref()
             .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .min_offset(mq)
             .await
@@ -1744,7 +1868,7 @@ impl MQProducer for DefaultMQProducer {
 
     async fn earliest_msg_store_time(&mut self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
         self.default_mqproducer_impl
-            .as_mut()
+            .as_ref()
             .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .earliest_msg_store_time(mq)
             .await
@@ -1760,7 +1884,7 @@ impl MQProducer for DefaultMQProducer {
     ) -> rocketmq_error::RocketMQResult<QueryResult> {
         let topic = self.with_namespace(topic);
         self.default_mqproducer_impl
-            .as_mut()
+            .as_ref()
             .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .query_message(topic.as_str(), key, max_num, begin, end)
             .await
@@ -1770,7 +1894,7 @@ impl MQProducer for DefaultMQProducer {
         let view_result = {
             let producer_impl = self
                 .default_mqproducer_impl
-                .as_mut()
+                .as_ref()
                 .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?;
             producer_impl.view_message(topic, msg_id).await
         };
@@ -1779,7 +1903,7 @@ impl MQProducer for DefaultMQProducer {
             Err(_) => {
                 let topic = self.with_namespace(topic);
                 self.default_mqproducer_impl
-                    .as_mut()
+                    .as_ref()
                     .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
                     .query_message_by_uniq_key(topic.as_str(), msg_id)
                     .await
@@ -1797,7 +1921,7 @@ impl MQProducer for DefaultMQProducer {
         } else {
             let timeout = self.producer_config.send_msg_timeout() as u64;
             self.default_mqproducer_impl
-                .as_mut()
+                .as_ref()
                 .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
                 .send_with_timeout(&mut msg, timeout)
                 .await
@@ -1815,7 +1939,7 @@ impl MQProducer for DefaultMQProducer {
         let topic_build = self.with_namespace(msg.topic().as_str());
         msg.set_topic(topic_build);
         self.default_mqproducer_impl
-            .as_mut()
+            .as_ref()
             .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .send_with_timeout(&mut msg, timeout)
             .await
@@ -1834,7 +1958,7 @@ impl MQProducer for DefaultMQProducer {
         } else {
             let timeout = self.producer_config.send_msg_timeout() as u64;
             self.default_mqproducer_impl
-                .as_mut()
+                .as_ref()
                 .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
                 .async_send_with_callback_timeout(msg, Some(send_callback_inner.clone()), timeout)
                 .await
@@ -1858,7 +1982,7 @@ impl MQProducer for DefaultMQProducer {
     {
         msg.set_topic(self.with_namespace(msg.topic().as_str()));
         self.default_mqproducer_impl
-            .as_mut()
+            .as_ref()
             .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .async_send_with_callback_timeout(msg, Some(Arc::new(send_callback)), timeout)
             .await?;
@@ -1871,7 +1995,7 @@ impl MQProducer for DefaultMQProducer {
     {
         msg.set_topic(self.with_namespace(msg.topic()));
         self.default_mqproducer_impl
-            .as_mut()
+            .as_ref()
             .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .send_oneway(msg)
             .await?;
@@ -1887,7 +2011,7 @@ impl MQProducer for DefaultMQProducer {
         M: MessageTrait + Send + Sync,
     {
         msg.set_topic(self.with_namespace(msg.topic()));
-        let mq = self.client_config.queue_with_namespace(mq);
+        let mq = self.client_config.queue_with_resolved_namespace(mq);
         if self.get_auto_batch() && msg.as_any().downcast_ref::<MessageBatch>().is_none() {
             self.send_by_accumulator(msg, Some(mq), None).await
         } else {
@@ -1905,9 +2029,9 @@ impl MQProducer for DefaultMQProducer {
         M: MessageTrait + Send + Sync,
     {
         msg.set_topic(self.with_namespace(msg.topic()));
-        let mq = self.client_config.queue_with_namespace(mq);
+        let mq = self.client_config.queue_with_resolved_namespace(mq);
         self.default_mqproducer_impl
-            .as_mut()
+            .as_ref()
             .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .sync_send_with_message_queue_timeout(msg, mq, timeout)
             .await
@@ -1924,7 +2048,7 @@ impl MQProducer for DefaultMQProducer {
         F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync + 'static,
     {
         msg.set_topic(self.with_namespace(msg.topic()));
-        let mq = self.client_config.queue_with_namespace(mq);
+        let mq = self.client_config.queue_with_resolved_namespace(mq);
 
         if self.get_auto_batch() && msg.as_any().downcast_ref::<MessageBatch>().is_none() {
             self.send_by_accumulator(msg, Some(mq), Some(Arc::new(send_callback)))
@@ -1948,9 +2072,9 @@ impl MQProducer for DefaultMQProducer {
         F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync + 'static,
     {
         msg.set_topic(self.with_namespace(msg.topic()));
-        let mq = self.client_config.queue_with_namespace(mq);
+        let mq = self.client_config.queue_with_resolved_namespace(mq);
         self.default_mqproducer_impl
-            .as_mut()
+            .as_ref()
             .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .async_send_batch_to_queue_with_callback_timeout(msg, mq, Some(Arc::new(send_callback)), timeout)
             .await
@@ -1961,9 +2085,9 @@ impl MQProducer for DefaultMQProducer {
         M: MessageTrait + Send + Sync,
     {
         msg.set_topic(self.with_namespace(msg.topic()));
-        let mq = self.client_config.queue_with_namespace(mq);
+        let mq = self.client_config.queue_with_resolved_namespace(mq);
         self.default_mqproducer_impl
-            .as_mut()
+            .as_ref()
             .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .send_oneway_with_message_queue(msg, mq)
             .await?;
@@ -1984,11 +2108,11 @@ impl MQProducer for DefaultMQProducer {
         msg.set_topic(self.with_namespace(msg.topic()));
         let mq = self
             .default_mqproducer_impl
-            .as_mut()
+            .as_ref()
             .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .invoke_message_queue_selector(&mut msg, selector, &arg, self.producer_config.send_msg_timeout() as u64)
             .await?;
-        let mq = self.client_config.queue_with_namespace(mq);
+        let mq = self.client_config.queue_with_resolved_namespace(mq);
         if self.get_auto_batch() && msg.as_any().downcast_ref::<MessageBatch>().is_none() {
             self.send_by_accumulator(msg, Some(mq), None).await
         } else {
@@ -2010,7 +2134,7 @@ impl MQProducer for DefaultMQProducer {
     {
         msg.set_topic(self.with_namespace(msg.topic()));
         self.default_mqproducer_impl
-            .as_mut()
+            .as_ref()
             .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .send_with_selector_timeout(msg, selector, arg, timeout)
             .await
@@ -2031,11 +2155,11 @@ impl MQProducer for DefaultMQProducer {
         msg.set_topic(self.with_namespace(msg.topic()));
         let mq = self
             .default_mqproducer_impl
-            .as_mut()
+            .as_ref()
             .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .invoke_message_queue_selector(&mut msg, selector, &arg, self.producer_config.send_msg_timeout() as u64)
             .await?;
-        let mq = self.client_config.queue_with_namespace(mq);
+        let mq = self.client_config.queue_with_resolved_namespace(mq);
         if self.auto_batch() && msg.as_any().downcast_ref::<MessageBatch>().is_none() {
             self.send_by_accumulator(msg, Some(mq), send_callback).await
         } else {
@@ -2059,7 +2183,7 @@ impl MQProducer for DefaultMQProducer {
     {
         msg.set_topic(self.with_namespace(msg.topic()));
         self.default_mqproducer_impl
-            .as_mut()
+            .as_ref()
             .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .send_with_selector_callback_timeout(msg, selector, arg, send_callback, timeout)
             .await
@@ -2078,7 +2202,7 @@ impl MQProducer for DefaultMQProducer {
     {
         msg.set_topic(self.with_namespace(msg.topic()));
         self.default_mqproducer_impl
-            .as_mut()
+            .as_ref()
             .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .send_oneway_with_selector(msg, selector, arg)
             .await
@@ -2105,7 +2229,7 @@ impl MQProducer for DefaultMQProducer {
         let mut batch = self.batch(msgs)?;
         let result = self
             .default_mqproducer_impl
-            .as_mut()
+            .as_ref()
             .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .send(&mut batch)
             .await?;
@@ -2123,7 +2247,7 @@ impl MQProducer for DefaultMQProducer {
         let mut batch = self.batch(msgs)?;
         let result = self
             .default_mqproducer_impl
-            .as_mut()
+            .as_ref()
             .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .send_with_timeout(&mut batch, timeout)
             .await?;
@@ -2139,10 +2263,10 @@ impl MQProducer for DefaultMQProducer {
         M: MessageTrait + Send + Sync,
     {
         let batch = self.batch(msgs)?;
-        let mq = self.client_config.queue_with_namespace(mq);
+        let mq = self.client_config.queue_with_resolved_namespace(mq);
         let result = self
             .default_mqproducer_impl
-            .as_mut()
+            .as_ref()
             .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .sync_send_with_message_queue(batch, mq)
             .await?;
@@ -2159,10 +2283,10 @@ impl MQProducer for DefaultMQProducer {
         M: MessageTrait + Send + Sync,
     {
         let batch = self.batch(msgs)?;
-        let mq = self.client_config.queue_with_namespace(mq);
+        let mq = self.client_config.queue_with_resolved_namespace(mq);
         let result = self
             .default_mqproducer_impl
-            .as_mut()
+            .as_ref()
             .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .sync_send_with_message_queue_timeout(batch, mq, timeout)
             .await?;
@@ -2176,7 +2300,7 @@ impl MQProducer for DefaultMQProducer {
     {
         let batch = self.batch(msgs)?;
         self.default_mqproducer_impl
-            .as_mut()
+            .as_ref()
             .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("DefaultMQProducerImpl is not initialized"))?
             .async_send_with_callback(batch, Some(Arc::new(f)))
             .await?;
@@ -2195,7 +2319,7 @@ impl MQProducer for DefaultMQProducer {
     {
         let batch = self.batch(msgs)?;
         self.default_mqproducer_impl
-            .as_mut()
+            .as_ref()
             .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("DefaultMQProducerImpl is not initialized"))?
             .async_send_with_callback_timeout(batch, Some(Arc::new(f)), timeout)
             .await?;
@@ -2213,9 +2337,9 @@ impl MQProducer for DefaultMQProducer {
         F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync + 'static,
     {
         let batch = self.batch(msgs)?;
-        let mq = self.client_config.queue_with_namespace(mq);
+        let mq = self.client_config.queue_with_resolved_namespace(mq);
         self.default_mqproducer_impl
-            .as_mut()
+            .as_ref()
             .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("DefaultMQProducerImpl is not initialized"))?
             .async_send_with_message_queue_callback(batch, mq, Some(Arc::new(f)))
             .await
@@ -2233,9 +2357,9 @@ impl MQProducer for DefaultMQProducer {
         F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync + 'static,
     {
         let batch = self.batch(msgs)?;
-        let mq = self.client_config.queue_with_namespace(mq);
+        let mq = self.client_config.queue_with_resolved_namespace(mq);
         self.default_mqproducer_impl
-            .as_mut()
+            .as_ref()
             .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .async_send_batch_to_queue_with_callback_timeout(batch, mq, Some(Arc::new(f)), timeout)
             .await
@@ -2251,7 +2375,7 @@ impl MQProducer for DefaultMQProducer {
     {
         msg.set_topic(self.with_namespace(msg.topic()));
         self.default_mqproducer_impl
-            .as_mut()
+            .as_ref()
             .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .request(msg, timeout)
             .await
@@ -2269,7 +2393,7 @@ impl MQProducer for DefaultMQProducer {
     {
         msg.set_topic(self.with_namespace(msg.topic()));
         self.default_mqproducer_impl
-            .as_mut()
+            .as_ref()
             .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("DefaultMQProducerImpl is not initialized"))?
             .request_with_callback(msg, Arc::new(request_callback), timeout)
             .await
@@ -2289,7 +2413,7 @@ impl MQProducer for DefaultMQProducer {
     {
         msg.set_topic(self.with_namespace(msg.topic()));
         self.default_mqproducer_impl
-            .as_mut()
+            .as_ref()
             .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("DefaultMQProducerImpl is not initialized"))?
             .request_with_selector(msg, selector, arg, timeout)
             .await
@@ -2311,7 +2435,7 @@ impl MQProducer for DefaultMQProducer {
     {
         msg.set_topic(self.with_namespace(msg.topic()));
         self.default_mqproducer_impl
-            .as_mut()
+            .as_ref()
             .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("DefaultMQProducerImpl is not initialized"))?
             .request_with_selector_callback(msg, selector, arg, Arc::new(request_callback), timeout)
             .await
@@ -2327,9 +2451,9 @@ impl MQProducer for DefaultMQProducer {
         M: MessageTrait + Send + Sync,
     {
         msg.set_topic(self.with_namespace(msg.topic()));
-        let mq = self.client_config.queue_with_namespace(mq);
+        let mq = self.client_config.queue_with_resolved_namespace(mq);
         self.default_mqproducer_impl
-            .as_mut()
+            .as_ref()
             .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .request_to_queue(msg, mq, timeout)
             .await
@@ -2347,9 +2471,9 @@ impl MQProducer for DefaultMQProducer {
         M: MessageTrait + Send + Sync,
     {
         msg.set_topic(self.with_namespace(msg.topic()));
-        let mq = self.client_config.queue_with_namespace(mq);
+        let mq = self.client_config.queue_with_resolved_namespace(mq);
         self.default_mqproducer_impl
-            .as_mut()
+            .as_ref()
             .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .request_to_queue_with_callback(msg, mq, Arc::new(request_callback), timeout)
             .await
@@ -2369,7 +2493,7 @@ impl MQProducer for DefaultMQProducer {
         recall_handle: impl Into<CheetahString>,
     ) -> rocketmq_error::RocketMQResult<String> {
         self.default_mqproducer_impl
-            .as_mut()
+            .as_ref()
             .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .recall_message(topic, recall_handle)
             .await
@@ -2378,6 +2502,8 @@ impl MQProducer for DefaultMQProducer {
 
 #[cfg(test)]
 mod facade_tests {
+    use std::sync::Arc;
+
     use bytes::Bytes;
     use rocketmq_common::common::message::message_queue::MessageQueue;
     use rocketmq_common::common::message::message_single::Message;
@@ -2387,15 +2513,95 @@ mod facade_tests {
 
     use super::DefaultMQProducer;
     use super::ProducerConfig;
+    use super::StableConfig;
     use crate::base::client_config::ClientConfig;
     use crate::producer::send_result::SendResult;
 
     fn unstarted_producer() -> DefaultMQProducer {
         DefaultMQProducer {
-            client_config: ClientConfig::default(),
-            producer_config: ProducerConfig::default(),
+            client_config: StableConfig::new(ClientConfig::default()),
+            producer_config: StableConfig::new(ProducerConfig::default()),
             default_mqproducer_impl: None,
         }
+    }
+
+    #[test]
+    fn cloned_facades_share_standard_impl_root_without_self_cycle() {
+        let producer = DefaultMQProducer::builder()
+            .producer_group("facade_standard_arc_root")
+            .build();
+        let producer_clone = producer.clone();
+        let root = producer
+            .default_mqproducer_impl
+            .as_ref()
+            .expect("producer impl should be initialized")
+            .clone();
+        let weak = Arc::downgrade(&root);
+
+        assert!(Arc::ptr_eq(
+            producer
+                .default_mqproducer_impl
+                .as_ref()
+                .expect("producer impl should be initialized"),
+            producer_clone
+                .default_mqproducer_impl
+                .as_ref()
+                .expect("cloned producer impl should be initialized"),
+        ));
+
+        drop(root);
+        drop(producer);
+        assert!(weak.upgrade().is_some(), "the cloned facade should keep the root alive");
+
+        drop(producer_clone);
+        assert!(
+            weak.upgrade().is_none(),
+            "the standard weak self reference must not form a cycle"
+        );
+    }
+
+    #[test]
+    fn cloned_facades_publish_updates_from_the_latest_shared_config_generation() {
+        let mut first = DefaultMQProducer::builder()
+            .producer_group("facade_shared_config")
+            .build();
+        let mut second = first.clone();
+
+        first.set_send_msg_timeout(4_321);
+        second.set_retry_times_when_send_failed(5);
+        first.set_latency_max(vec![10, 20, 30]);
+
+        assert_eq!(first.get_retry_times_when_send_failed(), 5);
+        assert_eq!(second.get_send_msg_timeout(), 4_321);
+        assert_eq!(second.latency_max(), &[10, 20, 30]);
+
+        let producer_impl = first
+            .default_mqproducer_impl
+            .as_ref()
+            .expect("producer impl should be initialized");
+        let impl_config = producer_impl.producer_config();
+        assert_eq!(impl_config.send_msg_timeout(), 4_321);
+        assert_eq!(impl_config.retry_times_when_send_failed(), 5);
+        assert_eq!(producer_impl.latency_max(), &[10, 20, 30]);
+    }
+
+    #[test]
+    fn borrowed_config_generation_remains_valid_after_clone_updates() {
+        let first = DefaultMQProducer::builder()
+            .producer_group("facade_stable_borrow")
+            .build();
+        let mut second = first.clone();
+        let original_latency = first.latency_max();
+
+        for latency in 1..=128 {
+            second.set_latency_max(vec![latency]);
+        }
+
+        assert_eq!(
+            original_latency,
+            crate::latency::mq_fault_strategy::MQFaultStrategy::DEFAULT_LATENCY_MAX
+        );
+        assert_eq!(first.latency_max(), &[128]);
     }
 
     fn message() -> Message {
@@ -2708,21 +2914,18 @@ mod tests {
         let mut client_config = ClientConfig::default();
         client_config.set_enable_trace(true);
         client_config.set_trace_msg_batch_num(7);
-        let mut producer = DefaultMQProducer::builder()
+        let producer = DefaultMQProducer::builder()
             .client_config(client_config)
             .producer_group("producer_trace_batch_group")
             .build();
         let dispatcher = {
             let default_mqproducer_impl = producer
                 .default_mqproducer_impl
-                .as_mut()
+                .as_ref()
                 .expect("producer impl should exist");
-            DefaultMQProducer::prepare_trace_dispatcher(
-                &producer.client_config,
-                &mut producer.producer_config,
-                default_mqproducer_impl,
-            )
-            .expect("trace dispatcher should be created")
+            producer
+                .prepare_trace_dispatcher(default_mqproducer_impl)
+                .expect("trace dispatcher should be created")
         };
 
         let async_dispatcher = dispatcher

@@ -409,6 +409,13 @@ Client internal child ownership 随 Issue #8371 将 `MQClientInstance::pull_mess
 transition mutex；序列化范围与锁顺序不变。实际快照降至 323 production/904 occurrence，Client owner 降至 6/12；
 剩余为 Broker 190/568、Client 6/12 与 Store 127/324，总进度仍为 75/82。下一子切片为 M11-12an 完整 Producer
 root/registry/standard-weak 与强引用环拆除，M11-12 父工作包未完成。
+Client Producer root ownership 随 Issue #8375 将 DefaultMQProducer facade/implementation/registry 统一为标准
+`Arc`/`Weak`，以单一 runtime snapshot、短锁配置发布、异步 lifecycle、task admission 和 owner-aware unregister
+替代共享可变 root；发送与重试不经过全局 impl mutex。clone-shared append-only immutable config generations 保持
+既有 borrowed getter API 且消除 clone 间 lost update。公开 implementation getter carrier 从 `ArcMut` 迁移为标准
+`Arc`，这是移除 unsafe mutation capability 的有意 source break。实际快照降至 317 production/892 occurrence，
+Client production 清零、Client test 降至 4/71；剩余为 Broker 190/568 与 Store 127/324。总进度仍为 75/82，
+下一子切片 M11-12ao 进入 Broker owner，M11-12 父工作包未完成。
 
 ### 9.3 证据目录
 

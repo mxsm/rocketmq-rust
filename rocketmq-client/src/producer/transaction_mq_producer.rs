@@ -156,7 +156,7 @@ impl TransactionMQProducer {
 
     pub fn set_transaction_listener_arc(&mut self, transaction_listener: ArcTransactionListener) {
         self.transaction_producer_config.transaction_listener = Some(transaction_listener.clone());
-        if let Some(default_mqproducer_impl) = self.default_producer.default_mqproducer_impl.as_mut() {
+        if let Some(default_mqproducer_impl) = self.default_producer.default_mqproducer_impl.as_ref() {
             default_mqproducer_impl.set_transaction_listener(transaction_listener);
         } else {
             tracing::warn!("DefaultMQProducerImpl is not initialized; transaction listener stored in config");
@@ -209,7 +209,7 @@ impl TransactionMQProducer {
 
     pub fn set_executor_service(&mut self, executor_service: tokio::runtime::Handle) {
         self.transaction_producer_config.executor_service = Some(executor_service.clone());
-        if let Some(default_mqproducer_impl) = self.default_producer.default_mqproducer_impl.as_mut() {
+        if let Some(default_mqproducer_impl) = self.default_producer.default_mqproducer_impl.as_ref() {
             default_mqproducer_impl.set_transaction_executor_service(Some(executor_service));
         }
     }
@@ -231,7 +231,7 @@ impl MQProducer for TransactionMQProducer {
         let default_mqproducer_impl =
             self.default_producer
                 .default_mqproducer_impl
-                .as_mut()
+                .as_ref()
                 .ok_or(RocketMQError::not_initialized(
                     "DefaultMQProducerImpl is not initialized",
                 ))?;
@@ -250,7 +250,7 @@ impl MQProducer for TransactionMQProducer {
 
     async fn shutdown(&mut self) {
         self.default_producer.shutdown().await;
-        if let Some(default_mqproducer_impl) = self.default_producer.default_mqproducer_impl.as_mut() {
+        if let Some(default_mqproducer_impl) = self.default_producer.default_mqproducer_impl.as_ref() {
             default_mqproducer_impl.destroy_transaction_env().await;
         }
     }
@@ -516,7 +516,7 @@ impl MQProducer for TransactionMQProducer {
             .ok_or_else(|| crate::mq_client_err!("TransactionListener is null"))?;
 
         msg.set_topic(self.default_producer.with_namespace(msg.topic()));
-        let default_mqproducer_impl = self.default_producer.default_mqproducer_impl.as_mut().ok_or(
+        let default_mqproducer_impl = self.default_producer.default_mqproducer_impl.as_ref().ok_or(
             rocketmq_error::RocketMQError::not_initialized("DefaultMQProducerImpl is not initialized"),
         )?;
         default_mqproducer_impl.set_transaction_listener(transaction_listener);

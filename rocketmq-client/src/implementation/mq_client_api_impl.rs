@@ -2549,7 +2549,7 @@ impl MQClientAPIImpl {
         let current_request = request;
         let topic_publish_info_cloned = topic_publish_info.cloned();
         let instance_cloned = instance.clone();
-        let mq_fault_strategy = producer.mq_fault_strategy.clone();
+        let mq_fault_strategy = producer.fault_strategy_snapshot();
         let callback_executor = producer.producer_config().callback_executor().cloned();
 
         // Snapshot only the immutable hook capability and context data needed by the callback.
