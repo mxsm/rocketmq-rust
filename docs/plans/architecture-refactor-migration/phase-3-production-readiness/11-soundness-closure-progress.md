@@ -6,7 +6,7 @@ M11-12 的最终目标是 production/public compatibility API 中不存在 `ArcM
 `mut_from_ref` 或 clone-safe `AsMut`/`DerefMut`，并让默认 workspace 在 stable Rust 下通过，同时把 Miri/Loom、
 soak、SLO fault、dashboard/runbook、rollback 和 Human Gate 绑定到同一候选快照。
 
-该目标尚未完成。本文件记录 M11-12a～z 子切片的真实下降，不把子切片计为第 76 个工作包，也不刷新
+该目标尚未完成。本文件记录 M11-12a～aa 子切片的真实下降，不把子切片计为第 76 个工作包，也不刷新
 baseline 来掩盖剩余债务。父 Issue 为 #8292；M11-12a 子切片 Issue 为 #8293；分支为
 `mxsm/architecture-refactor-owned-values`。
 
@@ -84,6 +84,9 @@ M11-12y 的 Client Push operational access 由 Issue #8343 跟踪，分支为
 
 M11-12z 的 Client orderly lock access 由 Issue #8345 跟踪，分支为
 `mxsm/architecture-refactor-client-orderly-lock-access`；它仍是同一 M11-12 工作包的子切片。
+
+M11-12aa 的 Client Lite Pull config snapshots 由 Issue #8347 跟踪，分支为
+`mxsm/architecture-refactor-lite-pull-config-snapshots`；它仍是同一 M11-12 工作包的子切片。
 
 ## 初始盘点
 
@@ -734,6 +737,32 @@ occurrence（合计删除 3 个 occurrence），没有新增或 fingerprint relo
 identity/id/fingerprint/item 语义集合完全一致，因此本切片不使用 relocation approval，也没有新增或替代
 shared-mutation wrapper。
 
+## M11-12aa Client Lite Pull config snapshots
+
+| 目标 | 实现与证据 |
+|---|---|
+| implementation config | `DefaultLitePullConsumerImpl` 的 `ClientConfig` 与 `LitePullConsumerConfig` 使用 `ArcSwap` 不可变快照；兼容 `ArcMut` 构造参数仅在边界复制，不再成为内部 owner |
+| rebalance config | `RebalanceLitePullImpl` 直接持有 `ArcSwap<ConsumerConfig>`；group/model/strategy/unit/timestamp/listener 通过 copy-update-publish 同步完整代际 |
+| async read boundary | start、shutdown、pull、flow control、auto-commit、hook、metadata 与 running-info 在 await 前取得不可变 `Arc` 快照，不持有同步 lock guard |
+| concurrent update | 既有 consumer-group 回归测试追加四路同步配置写入，验证不同字段的并发 accepted update 不丢失 |
+| compatibility | public Lite Pull facade 构造与 setter、namespace group wrapping、TLS、trace、pull、offset 与 Java-compatible getter 行为保持不变 |
+
+M11-12aa 后实际快照仍为 671 个条目：production 410、test 247、compatibility 14；occurrence 精确为
+production 1,169、test 676、compatibility 40。相对 M11-12z 没有删除完整 identity，真实删除 34 个 production
+occurrence；相对初始快照累计删除 350 个 production 条目和 956 个 production occurrence。
+`rocketmq-client` production 债务从 93/311 降至 93/277。剩余 production 债务为：
+
+| crate | 条目 | occurrence |
+|---|---:|---:|
+| `rocketmq-broker` | 190 | 568 |
+| `rocketmq-client` | 93 | 277 |
+| `rocketmq-store` | 127 | 324 |
+
+reviewed baseline 从 671→671、occurrences 从 1,919→1,885。34 个 occurrence 均因内部配置共享可变入口真实删除；
+11 个保留 occurrence 仅因同一函数内相邻字段/初始化变为 `ArcSwap` 而发生 fingerprint 位移，逐条按 ADR-013
+临时审核且 approval 不提交。tracked baseline 与 reviewed output 的 identity/id/fingerprint/item 语义集合一致，
+没有新增或替代 shared-mutation wrapper。
+
 ## 已执行验证
 
 | 命令 | 结果 |
@@ -1269,9 +1298,28 @@ M11-12z 追加验证：
 | orderly lock `mut_from_ref` 定向扫描 | orderly 零匹配；POP-orderly 仅保留 producer send，baseline 与 reviewed output 语义集合一致 |
 | `git diff --check` | 通过 |
 
+M11-12aa 追加验证：
+
+| 命令 | 结果 |
+|---|---|
+| `cargo check -p rocketmq-client-rust --all-targets --all-features` | 通过；Lite Pull implementation/rebalance config 使用 `ArcSwap` snapshot，全部 target 编译通过 |
+| `cargo test -p rocketmq-client-rust default_lite_pull_consumer --lib` | 83/83 通过；覆盖 config setter 同步、并发 copy-update-publish、namespace、trace、pull、offset、rebalance 与 lifecycle |
+| `cargo test -p rocketmq-client-rust --all-features --quiet` | 退出码 0 全部通过；library 966/966，其余 integration targets 全部通过（35 项既有外部环境测试忽略） |
+| reviewed baseline reduction（临时 ADR-013 approval） | 34 个 production occurrence 真实删除；11 个同 item 保留 occurrence 的 fingerprint relocation 逐条审核，approval 不提交；baseline 671/1,919→671/1,885 |
+| `python scripts/arc_mut_guard.py` | 通过；production 410/1,169，Client 93/277，tracked/reviewed semantic set 1,885/1,885 一致 |
+| `python -m unittest scripts.tests.test_arc_mut_guard` / `python scripts/arc_mut_guard.py --fixtures` | 67/67 单测、24/24 fixtures 通过 |
+| `cargo fmt --all -- --check` | 通过 |
+| `cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings` | 通过；Windows linker stdout 与既有 future-incompatibility note 不受 `-D warnings` 管辖 |
+| standalone Example / Tauri Rust backend / Web backend | 各自 fmt + strict Clippy 通过；Web backend `cargo build --all-targets --all-features` 通过 |
+| `.\scripts\runtime-audit.ps1 -SkipBaseline -EnforceBoundaryBaseline` | 通过；异步路径只持有 immutable `Arc` config snapshot，不跨 await 持有同步 lock guard |
+| architecture target/baseline 与 release guard | 通过；35/35 target edges、3/3 test edges、32/32 release topology |
+| `.\scripts\check-agents-routing.ps1` | 通过；4 个 standalone Cargo、3 个 Node project、8 条 route |
+| Lite Pull internal config `mut_from_ref` 定向扫描 | implementation 与 rebalance config 零匹配；兼容 facade/root lifecycle 边界保留给后续切片 |
+| `git diff --check` | 通过 |
+
 ## 剩余切片与 Gate
 
-1. Client 其余 MQClientInstance、Producer、Push/Lite Consumer owner（93/311）。
+1. Client 其余 MQClientInstance、Producer、Push/Lite facade/root owner（93/277）。
 2. Broker TopicConfig/offset、BrokerRuntimeInner、schedule/POP/processor/transaction owner（190/568）。
 3. Store TopicConfig snapshot、MappedFileQueue/ConsumeQueue、CommitLog/Flush、StoreHandle/Rocks/Timer 与 HA actor（127/324）。
 4. 删除 compatibility `arc_mut.rs` 和公开 re-export；移除其余 nightly feature，将 guard 切到 production/public zero。

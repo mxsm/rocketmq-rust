@@ -24,6 +24,7 @@ use std::sync::RwLock as StdRwLock;
 use std::time::Duration;
 use std::time::Instant;
 
+use arc_swap::ArcSwap;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_common::common::filter::expression_type::ExpressionType;
@@ -389,8 +390,8 @@ impl Default for LitePullConsumerConfig {
 
 impl LitePullConsumerConfig {
     /// Converts LitePullConsumerConfig to ConsumerConfig for rebalance.
-    fn to_consumer_config(&self) -> ArcMut<ConsumerConfig> {
-        ArcMut::new(ConsumerConfig {
+    fn to_consumer_config(&self) -> ConsumerConfig {
+        ConsumerConfig {
             consumer_group: self.consumer_group.clone(),
             topic: CheetahString::from_static_str(""),
             sub_expression: CheetahString::from_static_str("*"),
@@ -426,7 +427,7 @@ impl LitePullConsumerConfig {
             trace_dispatcher: None,
             client_rebalance: false,
             rpc_hook: None,
-        })
+        }
     }
 }
 
@@ -446,8 +447,8 @@ pub enum ServiceState {
 /// Core implementation of lite pull consumer.
 pub struct DefaultLitePullConsumerImpl {
     // Configuration
-    pub(crate) client_config: ArcMut<ClientConfig>,
-    pub(crate) consumer_config: ArcMut<LitePullConsumerConfig>,
+    pub(crate) client_config: ArcSwap<ClientConfig>,
+    consumer_config: ArcSwap<LitePullConsumerConfig>,
 
     // Lifecycle state
     service_state: ArcMut<ServiceState>,
@@ -507,16 +508,19 @@ pub struct DefaultLitePullConsumerImpl {
 impl DefaultLitePullConsumerImpl {
     /// Creates a new lite pull consumer implementation.
     pub fn new(client_config: ArcMut<ClientConfig>, consumer_config: ArcMut<LitePullConsumerConfig>) -> Self {
+        let client_config = client_config.as_ref().clone();
+        let consumer_config = consumer_config.as_ref().clone();
         let (tx, rx) = mpsc::unbounded_channel();
+        let rebalance_config = consumer_config.to_consumer_config();
 
         let mut this = Self {
-            client_config,
-            consumer_config: consumer_config.clone(),
+            client_config: ArcSwap::from_pointee(client_config),
+            consumer_config: ArcSwap::from_pointee(consumer_config),
             service_state: ArcMut::new(ServiceState::CreateJust),
             subscription_type: Arc::new(RwLock::new(SubscriptionType::None)),
             consumer_start_timestamp: AtomicI64::new(current_millis() as i64),
             client_instance: None,
-            rebalance_impl: ArcMut::new(RebalanceLitePullImpl::new(consumer_config.to_consumer_config())),
+            rebalance_impl: ArcMut::new(RebalanceLitePullImpl::new(rebalance_config)),
             pull_api_wrapper: None,
             offset_store: None,
             rpc_hook: None,
@@ -547,17 +551,42 @@ impl DefaultLitePullConsumerImpl {
         this
     }
 
+    fn consumer_config_snapshot(&self) -> Arc<LitePullConsumerConfig> {
+        self.consumer_config.load_full()
+    }
+
+    fn update_consumer_config(&self, update: impl Fn(&mut LitePullConsumerConfig)) {
+        self.consumer_config.rcu(|current| {
+            let mut next = (**current).clone();
+            update(&mut next);
+            Arc::new(next)
+        });
+    }
+
+    fn update_client_config(&self, update: impl Fn(&mut ClientConfig)) {
+        self.client_config.rcu(|current| {
+            let mut next = (**current).clone();
+            update(&mut next);
+            Arc::new(next)
+        });
+    }
+
+    pub(crate) fn set_use_tls(&self, use_tls: bool) {
+        self.update_client_config(|config| config.set_use_tls(use_tls));
+    }
+
     /// Sets the self-reference for callbacks.
     pub fn set_default_lite_pull_consumer_impl(
         &mut self,
         default_lite_pull_consumer_impl: ArcMut<DefaultLitePullConsumerImpl>,
     ) {
-        self.rebalance_impl.consumer_config.message_queue_listener = Some(Arc::new(LitePullRebalanceListener {
-            consumer_impl: ArcMut::downgrade(&default_lite_pull_consumer_impl),
-            user_listener: self.user_message_queue_listener.clone(),
-            task_tracker: self.rebalance_listener_tasks.clone(),
-            shutdown_token: self.rebalance_listener_shutdown.clone(),
-        }));
+        self.rebalance_impl
+            .set_message_queue_listener(Some(Arc::new(LitePullRebalanceListener {
+                consumer_impl: ArcMut::downgrade(&default_lite_pull_consumer_impl),
+                user_listener: self.user_message_queue_listener.clone(),
+                task_tracker: self.rebalance_listener_tasks.clone(),
+                shutdown_token: self.rebalance_listener_shutdown.clone(),
+            })));
         self.default_lite_pull_consumer_impl = Some(default_lite_pull_consumer_impl);
     }
 
@@ -585,7 +614,7 @@ impl DefaultLitePullConsumerImpl {
 
     /// Returns the configured consumer group.
     pub fn consumer_group_config(&self) -> CheetahString {
-        self.consumer_config.consumer_group.clone()
+        self.consumer_config.load().consumer_group.clone()
     }
 
     /// Updates the consumer group before startup and keeps rebalance config in sync.
@@ -596,11 +625,8 @@ impl DefaultLitePullConsumerImpl {
             ));
         }
 
-        self.consumer_config.mut_from_ref().consumer_group = consumer_group.clone();
-        self.rebalance_impl
-            .mut_from_ref()
-            .set_consumer_group(consumer_group.clone());
-        self.rebalance_impl.consumer_config.mut_from_ref().consumer_group = consumer_group;
+        self.update_consumer_config(|config| config.consumer_group = consumer_group.clone());
+        self.rebalance_impl.mut_from_ref().set_consumer_group(consumer_group);
         Ok(())
     }
 
@@ -643,11 +669,12 @@ impl DefaultLitePullConsumerImpl {
 
     /// Validates configuration before starting.
     fn check_config(&self) -> RocketMQResult<()> {
-        if self.consumer_config.consumer_group.is_empty() {
+        let config = self.consumer_config_snapshot();
+        if config.consumer_group.is_empty() {
             return Err(crate::mq_client_err!("Consumer group cannot be empty"));
         }
 
-        if self.consumer_config.consumer_group == mix_all::DEFAULT_CONSUMER_GROUP {
+        if config.consumer_group == mix_all::DEFAULT_CONSUMER_GROUP {
             return Err(crate::mq_client_err!(format!(
                 "consumerGroup can not equal {}, please specify another one.{}",
                 mix_all::DEFAULT_CONSUMER_GROUP,
@@ -657,29 +684,27 @@ impl DefaultLitePullConsumerImpl {
             )));
         }
 
-        validate_lite_pull_consume_from_where(self.consumer_config.consume_from_where)?;
+        validate_lite_pull_consume_from_where(config.consume_from_where)?;
 
-        if self.consumer_config.pull_batch_size < 1 || self.consumer_config.pull_batch_size > 1024 {
+        if config.pull_batch_size < 1 || config.pull_batch_size > 1024 {
             return Err(crate::mq_client_err!(format!(
                 "pullBatchSize must be in [1, 1024], current value: {}",
-                self.consumer_config.pull_batch_size
+                config.pull_batch_size
             )));
         }
 
-        if self.consumer_config.pull_threshold_for_queue < 1 || self.consumer_config.pull_threshold_for_queue > 65535 {
+        if config.pull_threshold_for_queue < 1 || config.pull_threshold_for_queue > 65535 {
             return Err(crate::mq_client_err!(format!(
                 "pullThresholdForQueue must be in [1, 65535], current value: {}",
-                self.consumer_config.pull_threshold_for_queue
+                config.pull_threshold_for_queue
             )));
         }
 
-        if self.consumer_config.poll_timeout_millis == 0 {
+        if config.poll_timeout_millis == 0 {
             return Err(crate::mq_client_err!("pollTimeoutMillis cannot be 0"));
         }
 
-        if self.consumer_config.consumer_timeout_millis_when_suspend
-            < self.consumer_config.broker_suspend_max_time_millis
-        {
+        if config.consumer_timeout_millis_when_suspend < config.broker_suspend_max_time_millis {
             return Err(crate::mq_client_err!(
                 "Long polling mode, the consumer consumerTimeoutMillisWhenSuspend must greater than \
                  brokerSuspendMaxTimeMillis"
@@ -799,7 +824,7 @@ impl DefaultLitePullConsumerImpl {
         mq_all: &HashSet<MessageQueue>,
         mq_divided: &HashSet<MessageQueue>,
     ) -> RocketMQResult<()> {
-        let assigned = match self.consumer_config.message_model {
+        let assigned = match self.consumer_config.load().message_model {
             MessageModel::Broadcasting => mq_all,
             MessageModel::Clustering => mq_divided,
         };
@@ -911,52 +936,53 @@ impl DefaultLitePullConsumerImpl {
     pub async fn start(&mut self) -> RocketMQResult<()> {
         match *self.service_state {
             ServiceState::CreateJust => {
+                let consumer_config = self.consumer_config_snapshot();
                 info!(
                     "DefaultLitePullConsumerImpl [{}] starting. message_model={:?}",
-                    self.consumer_config.consumer_group, self.consumer_config.message_model
+                    consumer_config.consumer_group, consumer_config.message_model
                 );
 
                 *self.service_state = ServiceState::StartFailed;
 
                 self.check_config()?;
 
-                if self.consumer_config.message_model == MessageModel::Clustering {
-                    self.client_config.change_instance_name_to_pid();
+                if consumer_config.message_model == MessageModel::Clustering {
+                    self.update_client_config(ClientConfig::change_instance_name_to_pid);
                 }
 
+                let client_config = self.client_config.load_full();
                 let client_instance = MQClientManager::get_instance()
-                    .get_or_create_mq_client_instance(self.client_config.as_ref().clone(), self.rpc_hook.clone());
+                    .get_or_create_mq_client_instance(client_config.as_ref().clone(), self.rpc_hook.clone());
                 self.client_instance = Some(client_instance.clone());
 
                 self.rebalance_impl
-                    .set_consumer_group(self.consumer_config.consumer_group.clone());
+                    .set_consumer_group(consumer_config.consumer_group.clone());
+                self.rebalance_impl.set_message_model(consumer_config.message_model);
                 self.rebalance_impl
-                    .set_message_model(self.consumer_config.message_model);
-                self.rebalance_impl
-                    .set_allocate_message_queue_strategy(self.consumer_config.allocate_message_queue_strategy.clone());
+                    .set_allocate_message_queue_strategy(consumer_config.allocate_message_queue_strategy.clone());
                 self.rebalance_impl.set_mq_client_factory(client_instance.clone());
 
                 if self.pull_api_wrapper.is_none() {
                     let mut pull_api_wrapper = PullAPIWrapper::new(
                         client_instance.clone(),
-                        self.consumer_config.consumer_group.clone(),
-                        self.consumer_config.unit_mode,
+                        consumer_config.consumer_group.clone(),
+                        consumer_config.unit_mode,
                     );
-                    pull_api_wrapper.set_connect_broker_by_user(self.consumer_config.connect_broker_by_user);
-                    pull_api_wrapper.set_default_broker_id(self.consumer_config.default_broker_id);
+                    pull_api_wrapper.set_connect_broker_by_user(consumer_config.connect_broker_by_user);
+                    pull_api_wrapper.set_default_broker_id(consumer_config.default_broker_id);
                     pull_api_wrapper.register_filter_message_hook(self.filter_message_hook_list.clone());
                     self.pull_api_wrapper = Some(ArcMut::new(pull_api_wrapper));
                 }
 
                 let offset_store = self.offset_store.clone().unwrap_or_else(|| {
-                    Arc::new(match self.consumer_config.message_model {
+                    Arc::new(match consumer_config.message_model {
                         MessageModel::Broadcasting => OffsetStore::new_with_local(LocalFileOffsetStore::new(
                             client_instance.clone(),
-                            self.consumer_config.consumer_group.clone(),
+                            consumer_config.consumer_group.clone(),
                         )),
                         MessageModel::Clustering => OffsetStore::new_with_remote(RemoteBrokerOffsetStore::new(
                             client_instance.clone(),
-                            self.consumer_config.consumer_group.clone(),
+                            consumer_config.consumer_group.clone(),
                         )),
                     })
                 });
@@ -974,7 +1000,7 @@ impl DefaultLitePullConsumerImpl {
                 let register_ok = client_instance
                     .mut_from_ref()
                     .register_consumer(
-                        &self.consumer_config.consumer_group,
+                        &consumer_config.consumer_group,
                         MQConsumerInnerImpl::from_lite_pull(default_lite_pull_consumer_impl),
                     )
                     .await;
@@ -982,7 +1008,7 @@ impl DefaultLitePullConsumerImpl {
                     *self.service_state = ServiceState::CreateJust;
                     return Err(crate::mq_client_err!(format!(
                         "The consumer group[{}] has been created before, specify another name please.{}",
-                        self.consumer_config.consumer_group,
+                        consumer_config.consumer_group,
                         rocketmq_common::common::FAQUrl::suggest_todo(
                             rocketmq_common::common::FAQUrl::GROUP_NAME_DUPLICATE_URL
                         )
@@ -998,7 +1024,7 @@ impl DefaultLitePullConsumerImpl {
 
                 info!(
                     "DefaultLitePullConsumerImpl [{}] started successfully",
-                    self.consumer_config.consumer_group
+                    consumer_config.consumer_group
                 );
 
                 if let Err(error) = self.operate_after_running().await {
@@ -1057,7 +1083,8 @@ impl DefaultLitePullConsumerImpl {
         let shutdown_signal = self.shutdown_signal.clone();
         let task_cancelled = Arc::new(AtomicBool::new(false));
         let task_cancelled_for_task = task_cancelled.clone();
-        let check_interval = Duration::from_millis(self.consumer_config.topic_metadata_check_interval_millis.max(1));
+        let check_interval =
+            Duration::from_millis(self.consumer_config.load().topic_metadata_check_interval_millis.max(1));
 
         self.topic_metadata_check_task_handle = Some(
             spawn_lite_pull_task("rocketmq-client-lite-pull-topic-metadata", task_cancelled, async move {
@@ -1173,10 +1200,8 @@ impl DefaultLitePullConsumerImpl {
     pub async fn shutdown(&mut self) -> RocketMQResult<()> {
         match *self.service_state {
             ServiceState::Running => {
-                info!(
-                    "DefaultLitePullConsumerImpl [{}] shutting down",
-                    self.consumer_config.consumer_group
-                );
+                let consumer_group = self.consumer_config.load().consumer_group.clone();
+                info!("DefaultLitePullConsumerImpl [{}] shutting down", consumer_group);
 
                 self.shutdown_signal.store(true, Ordering::Release);
                 self.rebalance_listener_shutdown.cancel();
@@ -1190,7 +1215,7 @@ impl DefaultLitePullConsumerImpl {
                 {
                     warn!(
                         "LitePull rebalance listener tasks did not finish in time. group={}",
-                        self.consumer_config.consumer_group
+                        consumer_group
                     );
                 }
 
@@ -1214,13 +1239,13 @@ impl DefaultLitePullConsumerImpl {
                     if !offset_store.shutdown(OFFSET_STORE_SHUTDOWN_TIMEOUT).await {
                         warn!(
                             "lite pull consumer [{}] offset store did not stop before timeout",
-                            self.consumer_config.consumer_group
+                            consumer_group
                         );
                     }
                 }
 
                 if let Some(client) = self.client_instance.as_mut() {
-                    client.unregister_consumer(&self.consumer_config.consumer_group).await;
+                    client.unregister_consumer(&consumer_group).await;
                 }
 
                 if let Some(mut client) = self.client_instance.take() {
@@ -1229,10 +1254,7 @@ impl DefaultLitePullConsumerImpl {
 
                 *self.service_state = ServiceState::ShutdownAlready;
 
-                info!(
-                    "DefaultLitePullConsumerImpl [{}] shutdown successfully",
-                    self.consumer_config.consumer_group
-                );
+                info!("DefaultLitePullConsumerImpl [{}] shutdown successfully", consumer_group);
 
                 Ok(())
             }
@@ -1320,9 +1342,9 @@ impl DefaultLitePullConsumerImpl {
     /// Updates the name server addresses.
     pub async fn update_name_server_address(&self, addresses: Vec<String>) {
         let joined_addr = addresses.join(";");
-        self.client_config
-            .mut_from_ref()
-            .set_namesrv_addr(CheetahString::from_string(joined_addr.clone()));
+        self.update_client_config(|config| {
+            config.set_namesrv_addr(CheetahString::from_string(joined_addr.clone()));
+        });
 
         if let Some(client_instance) = self.client_instance.as_ref() {
             if let Some(api_impl) = client_instance.mq_client_api_impl.as_ref() {
@@ -1450,7 +1472,12 @@ impl DefaultLitePullConsumerImpl {
                     if !sleep_or_cancel(
                         &shutdown_signal,
                         &task_cancelled_for_task,
-                        Duration::from_millis(default_impl.consumer_config.pull_time_delay_millis_when_exception),
+                        Duration::from_millis(
+                            default_impl
+                                .consumer_config
+                                .load()
+                                .pull_time_delay_millis_when_exception,
+                        ),
                     )
                     .await
                     {
@@ -1477,7 +1504,12 @@ impl DefaultLitePullConsumerImpl {
                         if !sleep_or_cancel(
                             &shutdown_signal,
                             &task_cancelled_for_task,
-                            Duration::from_millis(default_impl.consumer_config.pull_time_delay_millis_when_exception),
+                            Duration::from_millis(
+                                default_impl
+                                    .consumer_config
+                                    .load()
+                                    .pull_time_delay_millis_when_exception,
+                            ),
                         )
                         .await
                         {
@@ -1523,9 +1555,10 @@ impl DefaultLitePullConsumerImpl {
         }
 
         let pull_offset = self.next_pull_offset(mq).await?;
+        let consumer_config = self.consumer_config_snapshot();
 
         if pull_offset < 0 {
-            return Ok(self.consumer_config.pull_time_delay_millis_when_exception);
+            return Ok(consumer_config.pull_time_delay_millis_when_exception);
         }
 
         let subscription_data = self.subscription_data_for_queue(mq).await?;
@@ -1544,12 +1577,12 @@ impl DefaultLitePullConsumerImpl {
                 subscription_data.expression_type.clone(),
                 sub_version,
                 pull_offset,
-                self.consumer_config.pull_batch_size,
+                consumer_config.pull_batch_size,
                 i32::MAX,
                 sys_flag,
                 0,
-                self.consumer_config.broker_suspend_max_time_millis,
-                self.consumer_config.consumer_pull_timeout_millis,
+                consumer_config.broker_suspend_max_time_millis,
+                consumer_config.consumer_pull_timeout_millis,
                 CommunicationMode::Sync,
                 NoopPullCallback,
             )
@@ -1649,7 +1682,7 @@ impl DefaultLitePullConsumerImpl {
         let _guard = lock.lock().await;
         self.update_pull_offset_if_no_pending_seek(mq, next_pull_offset, process_queue)
             .await;
-        self.consumer_config.pull_time_delay_millis_when_exception
+        self.consumer_config.load().pull_time_delay_millis_when_exception
     }
 
     async fn subscription_data_for_queue(&self, mq: &MessageQueue) -> RocketMQResult<SubscriptionData> {
@@ -1700,7 +1733,8 @@ impl DefaultLitePullConsumerImpl {
             }
         }
 
-        match self.consumer_config.consume_from_where {
+        let consumer_config = self.consumer_config_snapshot();
+        match consumer_config.consume_from_where {
             ConsumeFromWhere::ConsumeFromFirstOffset | ConsumeFromWhere::ConsumeFromMinOffset => {
                 self.min_offset(mq).await
             }
@@ -1708,8 +1742,7 @@ impl DefaultLitePullConsumerImpl {
                 if mq.topic_str().starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX) {
                     return self.max_offset(mq).await;
                 }
-                let timestamp = self
-                    .consumer_config
+                let timestamp = consumer_config
                     .consume_timestamp
                     .as_deref()
                     .and_then(|value| util_all::parse_date(value, util_all::YYYYMMDDHHMMSS))
@@ -1736,7 +1769,7 @@ impl DefaultLitePullConsumerImpl {
         _mq: &MessageQueue,
         pq: &Arc<crate::consumer::consumer_impl::process_queue::ProcessQueue>,
     ) -> RocketMQResult<Option<u64>> {
-        let config = &self.consumer_config;
+        let config = self.consumer_config_snapshot();
 
         // Global cache flow control
         if config.pull_threshold_for_all > 0 {
@@ -1786,7 +1819,7 @@ impl DefaultLitePullConsumerImpl {
         let _poll_guard = self.poll_lock.lock().await;
         self.make_sure_state_ok()?;
 
-        if self.consumer_config.auto_commit {
+        if self.consumer_config.load().auto_commit {
             self.maybe_auto_commit().await;
         }
 
@@ -1833,9 +1866,11 @@ impl DefaultLitePullConsumerImpl {
 
             // Execute consume message hooks if registered
             if !self.consume_message_hook_list.is_empty() {
-                let mut context = ConsumeMessageContext::new(self.consumer_config.consumer_group.clone(), &messages)
+                let consumer_group = self.consumer_config.load().consumer_group.clone();
+                let client_config = self.client_config.load_full();
+                let mut context = ConsumeMessageContext::new(consumer_group, &messages)
                     .with_mq(request.message_queue.clone())
-                    .with_namespace(self.client_config.namespace.clone().unwrap_or_default());
+                    .with_namespace(client_config.namespace.clone().unwrap_or_default());
 
                 // Execute hook before with panic protection
                 for hook in &self.consume_message_hook_list {
@@ -1853,7 +1888,7 @@ impl DefaultLitePullConsumerImpl {
                 // Update context for successful consumption
                 context.status = CheetahString::from_static_str("CONSUME_SUCCESS");
                 context.success = true;
-                context.access_channel = Some(self.client_config.access_channel);
+                context.access_channel = Some(client_config.access_channel);
 
                 // Execute hook after with panic protection
                 for hook in &self.consume_message_hook_list {
@@ -1881,7 +1916,7 @@ impl DefaultLitePullConsumerImpl {
         let next_deadline = self.next_auto_commit_deadline.load(Ordering::Acquire);
 
         if now >= next_deadline {
-            let new_deadline = now + self.consumer_config.auto_commit_interval_millis as i64;
+            let new_deadline = now + self.consumer_config.load().auto_commit_interval_millis as i64;
 
             // Use CAS to ensure only one thread performs the commit.
             if self
@@ -2042,7 +2077,8 @@ impl DefaultLitePullConsumerImpl {
             return;
         }
 
-        if let Some(namespace) = &self.client_config.namespace {
+        let client_config = self.client_config.load();
+        if let Some(namespace) = &client_config.namespace {
             if !namespace.is_empty() {
                 for msg in messages.iter_mut() {
                     let topic = msg.message.topic().to_string();
@@ -2378,11 +2414,8 @@ impl DefaultLitePullConsumerImpl {
 
     /// Parses message queues by removing namespace from their topic names.
     fn parse_message_queues(&self, queue_set: &HashSet<MessageQueue>) -> RocketMQResult<HashSet<MessageQueue>> {
-        let namespace = self
-            .client_config
-            .get_namespace_v2()
-            .map(|s| s.as_str())
-            .unwrap_or_default();
+        let client_config = self.client_config.load();
+        let namespace = client_config.get_namespace_v2().map(|s| s.as_str()).unwrap_or_default();
 
         let mut result = HashSet::with_capacity(queue_set.len());
         for mq in queue_set {
@@ -2430,77 +2463,76 @@ impl DefaultLitePullConsumerImpl {
     /// Returns whether auto-commit is enabled.
     #[allow(dead_code)]
     pub fn is_auto_commit(&self) -> bool {
-        self.consumer_config.auto_commit
+        self.consumer_config.load().auto_commit
     }
 
     /// Updates whether offsets are automatically committed during poll.
     pub fn set_auto_commit(&self, auto_commit: bool) {
-        self.consumer_config.mut_from_ref().auto_commit = auto_commit;
+        self.update_consumer_config(|config| config.auto_commit = auto_commit);
     }
 
     /// Returns the interval between automatic offset commits.
     pub fn auto_commit_interval_millis(&self) -> u64 {
-        self.consumer_config.auto_commit_interval_millis
+        self.consumer_config.load().auto_commit_interval_millis
     }
 
     /// Updates the interval between automatic offset commits.
     pub fn set_auto_commit_interval_millis(&self, interval_millis: u64) {
-        self.consumer_config.mut_from_ref().auto_commit_interval_millis = interval_millis;
+        self.update_consumer_config(|config| config.auto_commit_interval_millis = interval_millis);
     }
 
     /// Returns whether the subscription group runs in unit mode.
     pub fn is_unit_mode(&self) -> bool {
-        self.consumer_config.unit_mode
+        self.consumer_config.load().unit_mode
     }
 
     /// Updates whether the subscription group runs in unit mode.
     pub fn set_unit_mode(&self, unit_mode: bool) {
-        self.consumer_config.mut_from_ref().unit_mode = unit_mode;
+        self.update_consumer_config(|config| config.unit_mode = unit_mode);
         if let Some(wrapper) = self.pull_api_wrapper.as_ref() {
             wrapper.mut_from_ref().set_unit_mode(unit_mode);
         }
-        self.rebalance_impl.consumer_config.mut_from_ref().unit_mode = unit_mode;
+        self.rebalance_impl.set_unit_mode(unit_mode);
     }
 
     /// Returns the configured message model.
     pub fn message_model_config(&self) -> MessageModel {
-        self.consumer_config.message_model
+        self.consumer_config.load().message_model
     }
 
     /// Updates the configured message model.
     pub fn set_message_model(&self, message_model: MessageModel) {
-        self.consumer_config.mut_from_ref().message_model = message_model;
+        self.update_consumer_config(|config| config.message_model = message_model);
         self.rebalance_impl.mut_from_ref().set_message_model(message_model);
-        self.rebalance_impl.consumer_config.mut_from_ref().message_model = message_model;
     }
 
     /// Returns where consumption starts when no offset exists.
     pub fn consume_from_where_config(&self) -> ConsumeFromWhere {
-        self.consumer_config.consume_from_where
+        self.consumer_config.load().consume_from_where
     }
 
     /// Updates where consumption starts when no offset exists.
     pub fn set_consume_from_where(&self, consume_from_where: ConsumeFromWhere) -> RocketMQResult<()> {
         validate_lite_pull_consume_from_where(consume_from_where)?;
-        self.consumer_config.mut_from_ref().consume_from_where = consume_from_where;
-        self.rebalance_impl.consumer_config.mut_from_ref().consume_from_where = consume_from_where;
+        self.update_consumer_config(|config| config.consume_from_where = consume_from_where);
+        self.rebalance_impl.set_consume_from_where(consume_from_where);
         Ok(())
     }
 
     /// Returns the configured timestamp for ConsumeFromTimestamp.
     pub fn consume_timestamp(&self) -> Option<CheetahString> {
-        self.consumer_config.consume_timestamp.clone()
+        self.consumer_config.load().consume_timestamp.clone()
     }
 
     /// Updates the configured timestamp for ConsumeFromTimestamp.
     pub fn set_consume_timestamp(&self, consume_timestamp: Option<CheetahString>) {
-        self.consumer_config.mut_from_ref().consume_timestamp = consume_timestamp.clone();
-        self.rebalance_impl.consumer_config.mut_from_ref().consume_timestamp = consume_timestamp;
+        self.update_consumer_config(|config| config.consume_timestamp = consume_timestamp.clone());
+        self.rebalance_impl.set_consume_timestamp(consume_timestamp);
     }
 
     /// Returns the queue allocation strategy used during rebalance.
     pub fn allocate_message_queue_strategy(&self) -> Arc<dyn AllocateMessageQueueStrategy + Send + Sync> {
-        self.consumer_config.allocate_message_queue_strategy.clone()
+        self.consumer_config.load().allocate_message_queue_strategy.clone()
     }
 
     /// Updates the queue allocation strategy used during rebalance.
@@ -2508,14 +2540,12 @@ impl DefaultLitePullConsumerImpl {
         &self,
         allocate_message_queue_strategy: Arc<dyn AllocateMessageQueueStrategy + Send + Sync>,
     ) {
-        self.consumer_config.mut_from_ref().allocate_message_queue_strategy = allocate_message_queue_strategy.clone();
+        self.update_consumer_config(|config| {
+            config.allocate_message_queue_strategy = allocate_message_queue_strategy.clone();
+        });
         self.rebalance_impl
             .mut_from_ref()
-            .set_allocate_message_queue_strategy(allocate_message_queue_strategy.clone());
-        self.rebalance_impl
-            .consumer_config
-            .mut_from_ref()
-            .allocate_message_queue_strategy = Some(allocate_message_queue_strategy);
+            .set_allocate_message_queue_strategy(allocate_message_queue_strategy);
     }
 
     #[cfg(test)]
@@ -2545,26 +2575,26 @@ impl DefaultLitePullConsumerImpl {
 
     /// Returns the topic metadata check interval in milliseconds.
     pub fn topic_metadata_check_interval_millis(&self) -> u64 {
-        self.consumer_config.topic_metadata_check_interval_millis
+        self.consumer_config.load().topic_metadata_check_interval_millis
     }
 
     /// Updates the topic metadata check interval in milliseconds.
     pub fn set_topic_metadata_check_interval_millis(&self, interval_millis: u64) {
-        self.consumer_config.mut_from_ref().topic_metadata_check_interval_millis = interval_millis;
+        self.update_consumer_config(|config| config.topic_metadata_check_interval_millis = interval_millis);
     }
 
     /// Returns whether broker selection is controlled by user configuration.
     pub fn is_connect_broker_by_user(&self) -> bool {
         self.pull_api_wrapper
             .as_ref()
-            .map_or(self.consumer_config.connect_broker_by_user, |wrapper| {
+            .map_or(self.consumer_config.load().connect_broker_by_user, |wrapper| {
                 wrapper.is_connect_broker_by_user()
             })
     }
 
     /// Updates whether broker selection is controlled by user configuration.
     pub fn set_connect_broker_by_user(&self, connect_broker_by_user: bool) {
-        self.consumer_config.mut_from_ref().connect_broker_by_user = connect_broker_by_user;
+        self.update_consumer_config(|config| config.connect_broker_by_user = connect_broker_by_user);
         if let Some(wrapper) = self.pull_api_wrapper.as_ref() {
             wrapper
                 .mut_from_ref()
@@ -2576,14 +2606,14 @@ impl DefaultLitePullConsumerImpl {
     pub fn default_broker_id(&self) -> u64 {
         self.pull_api_wrapper
             .as_ref()
-            .map_or(self.consumer_config.default_broker_id, |wrapper| {
+            .map_or(self.consumer_config.load().default_broker_id, |wrapper| {
                 wrapper.default_broker_id()
             })
     }
 
     /// Updates the broker ID used when user-controlled broker selection is enabled.
     pub fn set_default_broker_id(&self, broker_id: u64) {
-        self.consumer_config.mut_from_ref().default_broker_id = broker_id;
+        self.update_consumer_config(|config| config.default_broker_id = broker_id);
         if let Some(wrapper) = self.pull_api_wrapper.as_ref() {
             wrapper.mut_from_ref().set_default_broker_id(broker_id);
         }
@@ -2591,102 +2621,102 @@ impl DefaultLitePullConsumerImpl {
 
     /// Returns the default poll timeout in milliseconds.
     pub fn poll_timeout_millis(&self) -> u64 {
-        self.consumer_config.poll_timeout_millis
+        self.consumer_config.load().poll_timeout_millis
     }
 
     /// Updates the default poll timeout in milliseconds.
     pub fn set_poll_timeout_millis(&self, timeout_millis: u64) {
-        self.consumer_config.mut_from_ref().poll_timeout_millis = timeout_millis;
+        self.update_consumer_config(|config| config.poll_timeout_millis = timeout_millis);
     }
 
     /// Returns the maximum time that the broker may suspend a long-poll pull request.
     pub fn broker_suspend_max_time_millis(&self) -> u64 {
-        self.consumer_config.broker_suspend_max_time_millis
+        self.consumer_config.load().broker_suspend_max_time_millis
     }
 
     /// Updates the maximum time that the broker may suspend a long-poll pull request.
     pub fn set_broker_suspend_max_time_millis(&self, timeout_millis: u64) {
-        self.consumer_config.mut_from_ref().broker_suspend_max_time_millis = timeout_millis;
+        self.update_consumer_config(|config| config.broker_suspend_max_time_millis = timeout_millis);
     }
 
     /// Returns the consumer-side timeout for suspended long-poll pull requests.
     pub fn consumer_timeout_millis_when_suspend(&self) -> u64 {
-        self.consumer_config.consumer_timeout_millis_when_suspend
+        self.consumer_config.load().consumer_timeout_millis_when_suspend
     }
 
     /// Updates the consumer-side timeout for suspended long-poll pull requests.
     pub fn set_consumer_timeout_millis_when_suspend(&self, timeout_millis: u64) {
-        self.consumer_config.mut_from_ref().consumer_timeout_millis_when_suspend = timeout_millis;
+        self.update_consumer_config(|config| config.consumer_timeout_millis_when_suspend = timeout_millis);
     }
 
     /// Returns the RPC timeout used for lite pull requests in milliseconds.
     pub fn consumer_pull_timeout_millis(&self) -> u64 {
-        self.consumer_config.consumer_pull_timeout_millis
+        self.consumer_config.load().consumer_pull_timeout_millis
     }
 
     /// Updates the RPC timeout used for lite pull requests in milliseconds.
     pub fn set_consumer_pull_timeout_millis(&self, timeout_millis: u64) {
-        self.consumer_config.mut_from_ref().consumer_pull_timeout_millis = timeout_millis;
+        self.update_consumer_config(|config| config.consumer_pull_timeout_millis = timeout_millis);
     }
 
     /// Returns the maximum number of messages requested in one pull.
     pub fn pull_batch_size(&self) -> i32 {
-        self.consumer_config.pull_batch_size
+        self.consumer_config.load().pull_batch_size
     }
 
     /// Updates the maximum number of messages requested in one pull.
     pub fn set_pull_batch_size(&self, pull_batch_size: i32) {
-        self.consumer_config.mut_from_ref().pull_batch_size = pull_batch_size;
+        self.update_consumer_config(|config| config.pull_batch_size = pull_batch_size);
     }
 
     /// Returns the configured number of pull worker threads.
     pub fn pull_thread_nums(&self) -> usize {
-        self.consumer_config.pull_thread_nums
+        self.consumer_config.load().pull_thread_nums
     }
 
     /// Updates the configured number of pull worker threads.
     pub fn set_pull_thread_nums(&self, pull_thread_nums: usize) {
-        self.consumer_config.mut_from_ref().pull_thread_nums = pull_thread_nums;
+        self.update_consumer_config(|config| config.pull_thread_nums = pull_thread_nums);
     }
 
     /// Returns the total cached-message threshold across all queues.
     pub fn pull_threshold_for_all(&self) -> i64 {
-        self.consumer_config.pull_threshold_for_all
+        self.consumer_config.load().pull_threshold_for_all
     }
 
     /// Updates the total cached-message threshold across all queues.
     pub fn set_pull_threshold_for_all(&self, pull_threshold_for_all: i64) {
-        self.consumer_config.mut_from_ref().pull_threshold_for_all = pull_threshold_for_all;
+        self.update_consumer_config(|config| config.pull_threshold_for_all = pull_threshold_for_all);
     }
 
     /// Returns the cached-message threshold for each queue.
     pub fn pull_threshold_for_queue(&self) -> i64 {
-        self.consumer_config.pull_threshold_for_queue
+        self.consumer_config.load().pull_threshold_for_queue
     }
 
     /// Updates the cached-message threshold for each queue.
     pub fn set_pull_threshold_for_queue(&self, pull_threshold_for_queue: i64) {
-        self.consumer_config.mut_from_ref().pull_threshold_for_queue = pull_threshold_for_queue;
+        self.update_consumer_config(|config| config.pull_threshold_for_queue = pull_threshold_for_queue);
     }
 
     /// Returns the cached-message-size threshold in MiB for each queue.
     pub fn pull_threshold_size_for_queue(&self) -> i32 {
-        self.consumer_config.pull_threshold_size_for_queue
+        self.consumer_config.load().pull_threshold_size_for_queue
     }
 
     /// Updates the cached-message-size threshold in MiB for each queue.
     pub fn set_pull_threshold_size_for_queue(&self, pull_threshold_size_for_queue: i32) {
-        self.consumer_config.mut_from_ref().pull_threshold_size_for_queue = pull_threshold_size_for_queue;
+        self.update_consumer_config(|config| config.pull_threshold_size_for_queue = pull_threshold_size_for_queue);
     }
 
     /// Returns the maximum cached offset span.
     pub fn consume_max_span(&self) -> i64 {
-        self.consumer_config.consume_max_span
+        self.consumer_config.load().consume_max_span
     }
 
     /// Updates the maximum cached offset span.
     pub fn set_consume_max_span(&self, consume_max_span: i64) {
-        self.consumer_config.mut_from_ref().consume_max_span = consume_max_span;
+        self.update_consumer_config(|config| config.consume_max_span = consume_max_span);
     }
 
     async fn max_offset(&self, message_queue: &MessageQueue) -> RocketMQResult<i64> {
@@ -2763,11 +2793,11 @@ impl DefaultLitePullConsumerImpl {
 
 impl MQConsumerInner for DefaultLitePullConsumerImpl {
     fn group_name(&self) -> CheetahString {
-        self.consumer_config.consumer_group.clone()
+        self.consumer_config.load().consumer_group.clone()
     }
 
     fn message_model(&self) -> MessageModel {
-        self.consumer_config.message_model
+        self.consumer_config.load().message_model
     }
 
     fn consume_type(&self) -> ConsumeType {
@@ -2776,7 +2806,7 @@ impl MQConsumerInner for DefaultLitePullConsumerImpl {
     }
 
     fn consume_from_where(&self) -> ConsumeFromWhere {
-        self.consumer_config.consume_from_where
+        self.consumer_config.load().consume_from_where
     }
 
     fn subscriptions(&self) -> HashSet<SubscriptionData> {
@@ -2796,7 +2826,8 @@ impl MQConsumerInner for DefaultLitePullConsumerImpl {
             if let Err(error) = self.sync_assigned_queues_from_rebalance(&topics).await {
                 warn!(
                     "LitePull failed to synchronize rebalance assignments for group={}, error={}",
-                    self.consumer_config.consumer_group, error
+                    self.consumer_config.load().consumer_group,
+                    error
                 );
             }
         }
@@ -2869,14 +2900,15 @@ impl MQConsumerInner for DefaultLitePullConsumerImpl {
     }
 
     fn is_unit_mode(&self) -> bool {
-        self.consumer_config.unit_mode
+        self.consumer_config.load().unit_mode
     }
 
     async fn reset_offsets(&self, topic: &CheetahString, offsets: HashMap<MessageQueue, i64>) {
         let Some(offset_store) = self.offset_store.as_ref() else {
             warn!(
                 "lite pull reset offset ignored because offset store is not initialized. group={}, topic={}",
-                self.consumer_config.consumer_group, topic
+                self.consumer_config.load().consumer_group,
+                topic
             );
             return;
         };
@@ -2892,7 +2924,8 @@ impl MQConsumerInner for DefaultLitePullConsumerImpl {
         let Some(offset_store) = self.offset_store.as_ref() else {
             warn!(
                 "lite pull consumer status is empty because offset store is not initialized. group={}, topic={}",
-                self.consumer_config.consumer_group, topic
+                self.consumer_config.load().consumer_group,
+                topic
             );
             return HashMap::new();
         };
@@ -2908,13 +2941,14 @@ impl MQConsumerInner for DefaultLitePullConsumerImpl {
         info.consume_orderly = false;
         info.prop_consumer_start_timestamp = self.consumer_start_timestamp.load(Ordering::Acquire) as u64;
         info.sync_properties_from_derived_fields();
-        info.set_property("consumerGroup", self.consumer_config.consumer_group.to_string());
-        info.set_property("messageModel", format!("{:?}", self.consumer_config.message_model));
-        info.set_property("pullBatchSize", self.consumer_config.pull_batch_size.to_string());
-        info.set_property("autoCommit", self.consumer_config.auto_commit.to_string());
+        let consumer_config = self.consumer_config_snapshot();
+        info.set_property("consumerGroup", consumer_config.consumer_group.to_string());
+        info.set_property("messageModel", format!("{:?}", consumer_config.message_model));
+        info.set_property("pullBatchSize", consumer_config.pull_batch_size.to_string());
+        info.set_property("autoCommit", consumer_config.auto_commit.to_string());
         info.set_property(
             "autoCommitIntervalMillis",
-            self.consumer_config.auto_commit_interval_millis.to_string(),
+            consumer_config.auto_commit_interval_millis.to_string(),
         );
 
         for entry in self.rebalance_impl.get_subscription_inner().iter() {
@@ -2976,6 +3010,7 @@ mod tests {
     use std::sync::atomic::AtomicU64;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering as AtomicOrdering;
+    use std::sync::Barrier;
     use std::sync::Mutex as StdMutex;
 
     use super::*;
@@ -3277,6 +3312,55 @@ mod tests {
             .to_string()
             .contains("consumerGroup can not be changed after the lite pull consumer has started"));
         assert_eq!(impl_.consumer_group_config().as_str(), "lite_pull_updated_group");
+
+        let impl_ = Arc::new(impl_);
+        let barrier = Arc::new(Barrier::new(5));
+
+        let workers = [
+            {
+                let impl_ = impl_.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    impl_.set_auto_commit(false);
+                })
+            },
+            {
+                let impl_ = impl_.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    impl_.set_auto_commit_interval_millis(1234);
+                })
+            },
+            {
+                let impl_ = impl_.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    impl_.set_pull_batch_size(64);
+                })
+            },
+            {
+                let impl_ = impl_.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    impl_.set_pull_threshold_for_all(22_222);
+                })
+            },
+        ];
+
+        barrier.wait();
+        for worker in workers {
+            worker.join().expect("config update worker should finish");
+        }
+
+        let config = impl_.consumer_config_snapshot();
+        assert!(!config.auto_commit);
+        assert_eq!(config.auto_commit_interval_millis, 1234);
+        assert_eq!(config.pull_batch_size, 64);
+        assert_eq!(config.pull_threshold_for_all, 22_222);
     }
 
     #[test]
@@ -3508,7 +3592,7 @@ mod tests {
             .await;
 
         assert_eq!(
-            impl_.client_config.namesrv_addr.as_deref(),
+            impl_.client_config.load().namesrv_addr.as_deref(),
             Some("127.0.0.1:9876;127.0.0.2:9876")
         );
         let api_impl = impl_
