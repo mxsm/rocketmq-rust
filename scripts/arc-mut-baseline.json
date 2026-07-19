@@ -12709,7 +12709,7 @@
           "id": "9cbe2d507037ccc178f23eb8",
           "fingerprint": "d26a6e9d75c77b5c7069d839",
           "item": "mod tests",
-          "line": 2673
+          "line": 2672
         }
       ],
       "owner": "client",
@@ -12777,19 +12777,19 @@
           "id": "3537a7f5e9f85fea0a9ca95a",
           "fingerprint": "1e1dd2485b87b679d56fce30",
           "item": "fn apply_route_refresh_updates_producer_and_consumer_views",
-          "line": 2891
+          "line": 2890
         },
         {
           "id": "a88e0cd463d27dc0b3e0d37a",
           "fingerprint": "6ee6af86f91a5447266fe14a",
           "item": "fn apply_route_refresh_updates_producer_and_consumer_views",
-          "line": 2907
+          "line": 2906
         },
         {
           "id": "954bf9f99136644e81c88b1c",
           "fingerprint": "6448cd2aa913551fd4d328c0",
           "item": "fn apply_route_refresh_updates_producer_and_consumer_views",
-          "line": 2909
+          "line": 2908
         }
       ],
       "owner": "client",
@@ -12881,7 +12881,7 @@
           "id": "2eb723a5fa37aea763cefc10",
           "fingerprint": "a257d1fbfb0d07f9b5701185",
           "item": "fn get_mq_client_api_impl",
-          "line": 1283
+          "line": 1282
         }
       ],
       "owner": "client",
@@ -12944,13 +12944,13 @@
           "id": "1a0b0fbc78abb02216825dd8",
           "fingerprint": "849cca6d45fc8601d5ec19c9",
           "item": "fn send_heartbeat_to_all_broker_concurrently",
-          "line": 1693
+          "line": 1692
         },
         {
           "id": "6c837b9baff5a33bb9b7ae7a",
           "fingerprint": "76ea1402c1e48bd63cda20ec",
           "item": "fn send_heartbeat_to_broker_inner",
-          "line": 1919
+          "line": 1918
         }
       ],
       "owner": "client",
@@ -13172,87 +13172,6 @@
       "adr": "ADR-002"
     },
     {
-      "identity": "e3ecf63eee274b2ce9a94926",
-      "path": "rocketmq-client/src/implementation/mq_client_api_factory.rs",
-      "symbol": "*",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "b6e2a1f1e486f1fecd12ecd1",
-          "fingerprint": "e3694631fd6059071bc32252",
-          "item": "mod tests",
-          "line": 314
-        }
-      ],
-      "owner": "client",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "892b577b03f0e7e0127d2b6b",
-      "path": "rocketmq-client/src/implementation/mq_client_api_factory.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "d315477cbdfe2b9fd91ec59d",
-          "fingerprint": "1de8cffa8d98bccb4d787656",
-          "item": "<module>",
-          "line": 24
-        }
-      ],
-      "owner": "client",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "087f3e06db6743d4a586476b",
-      "path": "rocketmq-client/src/implementation/mq_client_api_factory.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "5465fb7dc207e87db6a5f36b",
-          "fingerprint": "fc8a86a7bef2bf30f6e32040",
-          "item": "struct MQClientAPIFactory",
-          "line": 38
-        },
-        {
-          "id": "b3a5abc170ef3676d9a3cf93",
-          "fingerprint": "553c8fb236154b12d2c4b0ec",
-          "item": "impl Into",
-          "line": 101
-        },
-        {
-          "id": "3c0f0114f66239c025702a8e",
-          "fingerprint": "09968be80efae836ba3e05cc",
-          "item": "fn get_clients",
-          "line": 134
-        },
-        {
-          "id": "522d3a9fa85ab19877350866",
-          "fingerprint": "0b856e44f96c2c320c0c1419",
-          "item": "fn get_client",
-          "line": 138
-        },
-        {
-          "id": "c141e0463f98094c1d8f8837",
-          "fingerprint": "553c8fb236154b12d2c4b0ec",
-          "item": "impl Into",
-          "line": 152
-        }
-      ],
-      "owner": "client",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
       "identity": "ec08dca8a046c2d987eca5ad",
       "path": "rocketmq-client/src/implementation/mq_client_api_impl.rs",
       "symbol": "*",
@@ -13263,7 +13182,7 @@
           "id": "8dd0c94e325297b656b173f0",
           "fingerprint": "972c41753edd899738867f9d",
           "item": "mod tests",
-          "line": 6548
+          "line": 6564
         }
       ],
       "owner": "client",
@@ -13279,8 +13198,8 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "a740b999d605505e292ba650",
-          "fingerprint": "b49969bc172bd82ae03dab80",
+          "id": "a399c0791bed4a561db80a6a",
+          "fingerprint": "0f8655a1d4a00dcc97e1320b",
           "item": "<module>",
           "line": 252
         }
@@ -13301,43 +13220,43 @@
           "id": "436e5e4e43c43c52593d2f2d",
           "fingerprint": "ad720cf5d09f13cd08bb1e20",
           "item": "fn send_message",
-          "line": 2312
+          "line": 2328
         },
         {
           "id": "938da9511e6d99ecfe836972",
           "fingerprint": "ad720cf5d09f13cd08bb1e20",
           "item": "fn send_message_async",
-          "line": 2496
+          "line": 2512
         },
         {
           "id": "b707cabfb0ac55855f1b0180",
           "fingerprint": "5a67d1e294ce8f269bed92e1",
           "item": "fn send_message_async_impl",
-          "line": 2591
+          "line": 2607
         },
         {
           "id": "a4e0dd48aa0233e995f1ea02",
           "fingerprint": "3d682987e275ee3fca84dbcd",
           "item": "fn select_async_retry_target",
-          "line": 2782
+          "line": 2798
         },
         {
           "id": "6074144a9b590d32d044cff0",
           "fingerprint": "40dc5b96b47ff465d6f09212",
           "item": "fn prepare_retry",
-          "line": 2982
+          "line": 2998
         },
         {
           "id": "df27cb64d10db4409ddb1f36",
           "fingerprint": "00b171d7639490dec8a50391",
           "item": "fn query_message",
-          "line": 3525
+          "line": 3541
         },
         {
           "id": "89711f779f800d933a3e2bb4",
           "fingerprint": "0cf022187d5515c349ebe9ed",
           "item": "fn pull_message",
-          "line": 3560
+          "line": 3576
         }
       ],
       "owner": "client",
