@@ -386,6 +386,12 @@ Client Push root config snapshots 随 Issue #8363 将 facade 与 implementation 
 trace 与动态 threshold 更新读取稳定 immutable `Arc` 快照，公开 consumer-group getter 返回 owned value。实际快照降至
 397 production/1,045 occurrence，Client owner 降至 79/152，Client test 从 47/145 降至 47/132；剩余为 Broker
 190/568、Client 79/152、Proxy 1/1 与 Store 127/324，总进度仍为 75/82，M11-12 父工作包未完成。
+Client Push implementation root ownership 随 Issue #8365 将 facade、consumer registry、pull/pop callback 与 task capture
+统一为标准 `Arc<DefaultMQPushConsumerImpl>`，root-owned consume/rebalance 回边统一为 `Weak`；start/shutdown 由单一
+lifecycle mutex 串行，组件槽位与 rebalance metadata 只在短同步锁内发布完整快照，异步路径锁外工作。实际快照降至
+376 production/995 occurrence，Client owner 降至 58/102，Client test 降至 25/102；剩余为 Broker 190/568、Client
+58/102、Proxy 1/1 与 Store 127/324，总进度仍为 75/82。下一子切片为 M11-12ak Client Rebalance root ownership，
+M11-12 父工作包未完成。
 
 ### 9.3 证据目录
 

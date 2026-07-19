@@ -99,26 +99,27 @@ impl RebalanceLitePullImpl {
     }
 
     /// Sets the consumer group name on the underlying rebalance core.
-    pub fn set_consumer_group(&mut self, consumer_group: CheetahString) {
-        self.rebalance_impl_inner.consumer_group = Some(consumer_group.clone());
+    pub fn set_consumer_group(&self, consumer_group: CheetahString) {
+        self.rebalance_impl_inner.set_consumer_group(consumer_group.clone());
         self.update_consumer_config(|config| config.consumer_group = consumer_group.clone());
     }
 
     /// Sets the message model (Clustering / Broadcasting) on the underlying rebalance core.
     pub fn set_message_model(
-        &mut self,
+        &self,
         message_model: rocketmq_remoting::protocol::heartbeat::message_model::MessageModel,
     ) {
-        self.rebalance_impl_inner.message_model = Some(message_model);
+        self.rebalance_impl_inner.set_message_model(message_model);
         self.update_consumer_config(|config| config.message_model = message_model);
     }
 
     /// Sets the queue-allocation strategy used during rebalancing.
     pub fn set_allocate_message_queue_strategy(
-        &mut self,
+        &self,
         strategy: Arc<dyn crate::consumer::allocate_message_queue_strategy::AllocateMessageQueueStrategy>,
     ) {
-        self.rebalance_impl_inner.allocate_message_queue_strategy = Some(strategy.clone());
+        self.rebalance_impl_inner
+            .set_allocate_message_queue_strategy(strategy.clone());
         self.update_consumer_config(|config| config.allocate_message_queue_strategy = Some(strategy.clone()));
     }
 
@@ -147,16 +148,17 @@ impl RebalanceLitePullImpl {
 
     /// Publishes the runtime rebalance inputs immediately before client registration.
     pub fn set_mq_client_factory(
-        &mut self,
+        &self,
         consumer_group: CheetahString,
         message_model: rocketmq_remoting::protocol::heartbeat::message_model::MessageModel,
         strategy: Arc<dyn crate::consumer::allocate_message_queue_strategy::AllocateMessageQueueStrategy>,
         client_instance: ArcMut<MQClientInstance>,
     ) {
-        self.rebalance_impl_inner.consumer_group = Some(consumer_group.clone());
-        self.rebalance_impl_inner.message_model = Some(message_model);
-        self.rebalance_impl_inner.allocate_message_queue_strategy = Some(strategy.clone());
-        self.rebalance_impl_inner.client_instance = Some(client_instance);
+        self.rebalance_impl_inner.set_consumer_group(consumer_group.clone());
+        self.rebalance_impl_inner.set_message_model(message_model);
+        self.rebalance_impl_inner
+            .set_allocate_message_queue_strategy(strategy.clone());
+        self.rebalance_impl_inner.set_mq_client_factory(client_instance);
         self.update_consumer_config(|config| {
             config.consumer_group = consumer_group.clone();
             config.message_model = message_model;
@@ -168,8 +170,8 @@ impl RebalanceLitePullImpl {
     ///
     /// The weak reference prevents a reference cycle between the outer `ArcMut` wrapper and
     /// the inner rebalance core.
-    pub fn set_rebalance_impl(&mut self, rebalance_impl: WeakArcMut<RebalanceLitePullImpl>) {
-        self.rebalance_impl_inner.sub_rebalance_impl = Some(rebalance_impl);
+    pub fn set_rebalance_impl(&self, rebalance_impl: WeakArcMut<RebalanceLitePullImpl>) {
+        let _ = self.rebalance_impl_inner.sub_rebalance_impl.set(rebalance_impl);
     }
 
     /// Inserts or replaces a topic subscription.
@@ -192,7 +194,7 @@ impl Rebalance for RebalanceLitePullImpl {
     /// Any panic or error raised by the listener is caught and logged; the rebalance cycle
     /// is never interrupted by listener failures.
     async fn message_queue_changed(
-        &mut self,
+        &self,
         topic: &str,
         mq_all: &HashSet<MessageQueue>,
         mq_divided: &HashSet<MessageQueue>,
@@ -211,7 +213,7 @@ impl Rebalance for RebalanceLitePullImpl {
     ///
     /// LitePull consumers have no ordering lock, so the queue can always be removed immediately.
     /// Returns `true` unconditionally.
-    async fn remove_unnecessary_message_queue(&mut self, mq: &MessageQueue, _pq: &ProcessQueue) -> bool {
+    async fn remove_unnecessary_message_queue(&self, mq: &MessageQueue, _pq: &ProcessQueue) -> bool {
         let Some(offset_store) = self.offset_store.load_full() else {
             warn!("Offset store not initialised; skipping persist/remove for {}", mq);
             return true;
@@ -229,7 +231,7 @@ impl Rebalance for RebalanceLitePullImpl {
     /// Removes the in-memory offset entry for the given queue without persisting it.
     ///
     /// Called to discard a stale offset before a fresh initial-offset computation.
-    async fn remove_dirty_offset(&mut self, mq: &MessageQueue) {
+    async fn remove_dirty_offset(&self, mq: &MessageQueue) {
         let Some(offset_store) = self.offset_store.load_full() else {
             warn!("Offset store not initialised; cannot remove dirty offset for {}", mq);
             return;
@@ -250,10 +252,7 @@ impl Rebalance for RebalanceLitePullImpl {
     ///
     /// Returns an error if the broker is unreachable when a remote offset query is required.
     #[allow(deprecated)]
-    async fn compute_pull_from_where_with_exception(
-        &mut self,
-        mq: &MessageQueue,
-    ) -> rocketmq_error::RocketMQResult<i64> {
+    async fn compute_pull_from_where_with_exception(&self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
         let consumer_config = self.consumer_config.load_full();
         let consume_from_where = consumer_config.consume_from_where;
 
@@ -280,7 +279,7 @@ impl Rebalance for RebalanceLitePullImpl {
                     if mq.topic_str().starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX) {
                         0
                     } else {
-                        let client = self.rebalance_impl_inner.client_instance.as_mut().ok_or_else(|| {
+                        let client = self.rebalance_impl_inner.get_mq_client_factory().ok_or_else(|| {
                             error!("Client instance not initialised for mq: {}", mq);
                             mq_client_err!(
                                 ResponseCode::SystemError as i32,
@@ -309,7 +308,7 @@ impl Rebalance for RebalanceLitePullImpl {
                     last_offset
                 } else if last_offset == -1 {
                     if mq.topic_str().starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX) {
-                        let client = self.rebalance_impl_inner.client_instance.as_mut().ok_or_else(|| {
+                        let client = self.rebalance_impl_inner.get_mq_client_factory().ok_or_else(|| {
                             error!("Client instance not initialised for mq: {}", mq);
                             mq_client_err!(
                                 ResponseCode::SystemError as i32,
@@ -320,7 +319,7 @@ impl Rebalance for RebalanceLitePullImpl {
                     } else {
                         let timestamp =
                             super::parse_consume_timestamp_millis(consumer_config.consume_timestamp.as_deref(), mq)?;
-                        let client = self.rebalance_impl_inner.client_instance.as_mut().ok_or_else(|| {
+                        let client = self.rebalance_impl_inner.get_mq_client_factory().ok_or_else(|| {
                             error!("Client instance not initialised for mq: {}", mq);
                             mq_client_err!(
                                 ResponseCode::SystemError as i32,
@@ -339,7 +338,7 @@ impl Rebalance for RebalanceLitePullImpl {
     }
 
     /// Computes the initial consume offset, returning `-1` on any error.
-    async fn compute_pull_from_where(&mut self, mq: &MessageQueue) -> i64 {
+    async fn compute_pull_from_where(&self, mq: &MessageQueue) -> i64 {
         self.compute_pull_from_where_with_exception(mq)
             .await
             .unwrap_or_else(|e| {
@@ -384,7 +383,7 @@ impl Rebalance for RebalanceLitePullImpl {
     }
 
     /// Marks the process queue as dropped, removes it from the table, and cleans up the offset.
-    async fn remove_process_queue(&mut self, mq: &MessageQueue) {
+    async fn remove_process_queue(&self, mq: &MessageQueue) {
         let mut process_queue_table = self.rebalance_impl_inner.process_queue_table.write().await;
         let prev = process_queue_table.remove(mq);
         drop(process_queue_table);
@@ -392,7 +391,7 @@ impl Rebalance for RebalanceLitePullImpl {
             let dropped = pq.is_dropped();
             pq.set_dropped(true);
             self.remove_unnecessary_message_queue(mq, &pq).await;
-            if let Some(ref consumer_group) = self.rebalance_impl_inner.consumer_group {
+            if let Some(consumer_group) = self.rebalance_impl_inner.consumer_group() {
                 info!(
                     "Rebalance cleanup for {}, removed unnecessary mq: {}, dropped: {}",
                     consumer_group, mq, dropped
@@ -418,22 +417,22 @@ impl Rebalance for RebalanceLitePullImpl {
     async fn unlock_all(&self, _oneway: bool) {}
 
     /// Drives the rebalance cycle by delegating to the shared [`RebalanceImpl`] core.
-    async fn do_rebalance(&mut self, is_order: bool) -> bool {
+    async fn do_rebalance(&self, is_order: bool) -> bool {
         self.rebalance_impl_inner.do_rebalance(is_order).await
     }
 
     /// Returns `true`; LitePull consumers always perform client-side rebalancing.
-    fn client_rebalance(&mut self, _topic: &str) -> bool {
+    fn client_rebalance(&self, _topic: &str) -> bool {
         true
     }
 
     /// Drops all process queues and clears the internal tables.
     ///
     /// Called during consumer shutdown to ensure no stale state remains.
-    fn destroy(&mut self) {
+    fn destroy(&self) {
         info!(
             "Destroying RebalanceLitePullImpl for consumer group: {:?}",
-            self.rebalance_impl_inner.consumer_group
+            self.rebalance_impl_inner.consumer_group()
         );
         if let Ok(mut table) = self.rebalance_impl_inner.process_queue_table.try_write() {
             for pq in table.values() {

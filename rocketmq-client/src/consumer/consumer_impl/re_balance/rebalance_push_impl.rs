@@ -15,6 +15,8 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::sync::OnceLock;
+use std::sync::Weak;
 use std::time::Duration;
 
 use arc_swap::ArcSwap;
@@ -59,24 +61,36 @@ static UNLOCK_DELAY_TIME_MILLS: LazyLock<u64> = LazyLock::new(|| {
 });
 
 pub struct RebalancePushImpl {
-    pub(crate) client_config: ClientConfig,
+    client_config: ArcSwap<ClientConfig>,
     pub(crate) consumer_config: ArcSwap<ConsumerConfig>,
     pub(crate) rebalance_impl_inner: RebalanceImpl<RebalancePushImpl>,
-    pub(crate) default_mqpush_consumer_impl: Option<ArcMut<DefaultMQPushConsumerImpl>>,
+    default_mqpush_consumer_impl: OnceLock<Weak<DefaultMQPushConsumerImpl>>,
 }
 
 impl RebalancePushImpl {
     pub fn new(client_config: ClientConfig, consumer_config: ConsumerConfig) -> Self {
         RebalancePushImpl {
-            client_config,
+            client_config: ArcSwap::from_pointee(client_config),
             consumer_config: ArcSwap::from_pointee(consumer_config),
             rebalance_impl_inner: RebalanceImpl::new(None, None, None, None),
-            default_mqpush_consumer_impl: None,
+            default_mqpush_consumer_impl: OnceLock::new(),
         }
     }
 
     pub(crate) fn replace_consumer_config(&self, consumer_config: ConsumerConfig) {
         self.consumer_config.store(Arc::new(consumer_config));
+    }
+
+    pub(crate) fn set_use_tls(&self, use_tls: bool) {
+        self.client_config.rcu(|current| {
+            let mut next = (**current).clone();
+            next.set_use_tls(use_tls);
+            Arc::new(next)
+        });
+    }
+
+    pub(crate) fn client_config_snapshot(&self) -> Arc<ClientConfig> {
+        self.client_config.load_full()
     }
 
     fn update_consumer_config(&self, update: impl Fn(&mut ConsumerConfig)) {
@@ -93,45 +107,43 @@ impl RebalancePushImpl {
         self.rebalance_impl_inner.subscription_inner.clone()
     }
 
-    pub fn set_default_mqpush_consumer_impl(
-        &mut self,
-        default_mqpush_consumer_impl: ArcMut<DefaultMQPushConsumerImpl>,
-    ) {
-        self.default_mqpush_consumer_impl = Some(default_mqpush_consumer_impl);
+    pub fn set_default_mqpush_consumer_impl(&self, default_mqpush_consumer_impl: Weak<DefaultMQPushConsumerImpl>) {
+        let _ = self.default_mqpush_consumer_impl.set(default_mqpush_consumer_impl);
     }
 
-    pub fn set_consumer_group(&mut self, consumer_group: CheetahString) {
-        self.rebalance_impl_inner.consumer_group = Some(consumer_group);
+    pub fn set_consumer_group(&self, consumer_group: CheetahString) {
+        self.rebalance_impl_inner.set_consumer_group(consumer_group);
     }
 
-    pub fn set_message_model(&mut self, message_model: MessageModel) {
-        self.rebalance_impl_inner.message_model = Some(message_model);
+    pub fn set_message_model(&self, message_model: MessageModel) {
+        self.rebalance_impl_inner.set_message_model(message_model);
     }
 
     pub fn set_allocate_message_queue_strategy(
-        &mut self,
+        &self,
         allocate_message_queue_strategy: Arc<dyn AllocateMessageQueueStrategy>,
     ) {
-        self.rebalance_impl_inner.allocate_message_queue_strategy = Some(allocate_message_queue_strategy);
+        self.rebalance_impl_inner
+            .set_allocate_message_queue_strategy(allocate_message_queue_strategy);
     }
 
-    pub fn set_mq_client_factory(&mut self, client_instance: ArcMut<MQClientInstance>) {
-        self.rebalance_impl_inner.client_instance = Some(client_instance);
+    pub fn set_mq_client_factory(&self, client_instance: ArcMut<MQClientInstance>) {
+        self.rebalance_impl_inner.set_mq_client_factory(client_instance);
     }
 
     #[inline]
-    pub fn put_subscription_data(&mut self, topic: CheetahString, subscription_data: SubscriptionData) {
+    pub fn put_subscription_data(&self, topic: CheetahString, subscription_data: SubscriptionData) {
         self.rebalance_impl_inner
             .subscription_inner
             .insert(topic, subscription_data);
     }
 
-    pub fn set_rebalance_impl(&mut self, rebalance_impl: WeakArcMut<RebalancePushImpl>) {
-        self.rebalance_impl_inner.sub_rebalance_impl = Some(rebalance_impl);
+    pub fn set_rebalance_impl(&self, rebalance_impl: WeakArcMut<RebalancePushImpl>) {
+        let _ = self.rebalance_impl_inner.sub_rebalance_impl.set(rebalance_impl);
     }
 
-    async fn try_remove_order_message_queue(&mut self, mq: &MessageQueue, pq: &ProcessQueue) -> bool {
-        let Some(default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_mut() else {
+    async fn try_remove_order_message_queue(&self, mq: &MessageQueue, pq: &ProcessQueue) -> bool {
+        let Some(default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.get().and_then(Weak::upgrade) else {
             error!("DefaultMQPushConsumerImpl not initialized for removing order message queue");
             return false;
         };
@@ -142,7 +154,7 @@ impl RebalancePushImpl {
             .await
             .ok();
         if force_unlock || consume_lock.is_some() {
-            let Some(offset_store) = default_mqpush_consumer_impl.offset_store.as_mut() else {
+            let Some(offset_store) = default_mqpush_consumer_impl.offset_store() else {
                 error!("Offset store not initialized");
                 return false;
             };
@@ -167,7 +179,7 @@ const UNLOCK_BATCH_MQ_TIMEOUT_MS: u64 = 1_000;
 
 impl Rebalance for RebalancePushImpl {
     async fn message_queue_changed(
-        &mut self,
+        &self,
         topic: &str,
         mq_all: &HashSet<MessageQueue>,
         mq_divided: &HashSet<MessageQueue>,
@@ -220,7 +232,7 @@ impl Rebalance for RebalancePushImpl {
                         config.pull_threshold_size_for_queue = value;
                     }
                 });
-                if let Some(consumer_impl) = self.default_mqpush_consumer_impl.as_ref().cloned() {
+                if let Some(consumer_impl) = self.default_mqpush_consumer_impl.get().and_then(Weak::upgrade) {
                     consumer_impl
                         .update_pull_thresholds_from_rebalance(pull_threshold_for_queue, pull_threshold_size_for_queue);
                 }
@@ -228,7 +240,7 @@ impl Rebalance for RebalancePushImpl {
         }
 
         //notify broker
-        if let Some(client_instance) = self.rebalance_impl_inner.client_instance.as_ref() {
+        if let Some(client_instance) = self.rebalance_impl_inner.get_mq_client_factory() {
             let _ = client_instance.send_heartbeat_to_all_broker_with_lock_v2(true).await;
         }
         if let Some(ref message_queue_listener) = consumer_config.message_queue_listener {
@@ -236,14 +248,14 @@ impl Rebalance for RebalancePushImpl {
         }
     }
 
-    async fn remove_unnecessary_message_queue(&mut self, mq: &MessageQueue, pq: &ProcessQueue) -> bool {
+    async fn remove_unnecessary_message_queue(&self, mq: &MessageQueue, pq: &ProcessQueue) -> bool {
         let consumer_config = self.consumer_config.load_full();
-        let Some(ref default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl else {
+        let Some(default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.get().and_then(Weak::upgrade) else {
             error!("DefaultMQPushConsumerImpl not initialized");
             return false;
         };
         let consume_orderly = default_mqpush_consumer_impl.is_consume_orderly();
-        let Some(offset_store) = default_mqpush_consumer_impl.offset_store.clone() else {
+        let Some(offset_store) = default_mqpush_consumer_impl.offset_store() else {
             error!("Offset store not initialized");
             return false;
         };
@@ -263,9 +275,9 @@ impl Rebalance for RebalancePushImpl {
         ConsumeType::ConsumePassively
     }
 
-    async fn remove_dirty_offset(&mut self, mq: &MessageQueue) {
-        if let Some(default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_mut() {
-            if let Some(offset_store) = default_mqpush_consumer_impl.offset_store.as_mut() {
+    async fn remove_dirty_offset(&self, mq: &MessageQueue) {
+        if let Some(default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.get().and_then(Weak::upgrade) {
+            if let Some(offset_store) = default_mqpush_consumer_impl.offset_store() {
                 offset_store.remove_offset(mq).await;
             } else {
                 warn!("Offset store not initialized, cannot remove dirty offset for {}", mq);
@@ -279,21 +291,21 @@ impl Rebalance for RebalancePushImpl {
     }
 
     #[allow(deprecated)]
-    async fn compute_pull_from_where_with_exception(
-        &mut self,
-        mq: &MessageQueue,
-    ) -> rocketmq_error::RocketMQResult<i64> {
+    async fn compute_pull_from_where_with_exception(&self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
         let consumer_config = self.consumer_config.load_full();
         let consume_from_where = consumer_config.consume_from_where;
-        let default_mqpush_consumer_impl = self.default_mqpush_consumer_impl.as_ref().ok_or_else(|| {
-            error!("DefaultMQPushConsumerImpl not initialized for mq: {}", mq);
-            mq_client_err!(
-                ResponseCode::SystemError as i32,
-                format!("DefaultMQPushConsumerImpl not initialized for mq: {}", mq)
-            )
-        })?;
-        let default_mqpush_consumer_impl = default_mqpush_consumer_impl.clone();
-        let Some(offset_store) = default_mqpush_consumer_impl.offset_store.clone() else {
+        let default_mqpush_consumer_impl = self
+            .default_mqpush_consumer_impl
+            .get()
+            .and_then(Weak::upgrade)
+            .ok_or_else(|| {
+                error!("DefaultMQPushConsumerImpl not initialized for mq: {}", mq);
+                mq_client_err!(
+                    ResponseCode::SystemError as i32,
+                    format!("DefaultMQPushConsumerImpl not initialized for mq: {}", mq)
+                )
+            })?;
+        let Some(offset_store) = default_mqpush_consumer_impl.offset_store() else {
             error!("Offset store not initialized for mq: {}", mq);
             return Err(mq_client_err!(
                 ResponseCode::SystemError as i32,
@@ -313,7 +325,7 @@ impl Rebalance for RebalancePushImpl {
                     if mq.topic_str().starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX) {
                         0
                     } else {
-                        let Some(client_instance) = self.rebalance_impl_inner.client_instance.as_mut() else {
+                        let Some(client_instance) = self.rebalance_impl_inner.get_mq_client_factory() else {
                             error!("Client instance not initialized for mq: {}", mq);
                             return Err(mq_client_err!(
                                 ResponseCode::SystemError as i32,
@@ -348,7 +360,7 @@ impl Rebalance for RebalancePushImpl {
                     last_offset
                 } else if -1 == last_offset {
                     if mq.topic_str().starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX) {
-                        let Some(client_instance) = self.rebalance_impl_inner.client_instance.as_mut() else {
+                        let Some(client_instance) = self.rebalance_impl_inner.get_mq_client_factory() else {
                             error!("Client instance not initialized for mq: {}", mq);
                             return Err(mq_client_err!(
                                 ResponseCode::SystemError as i32,
@@ -357,7 +369,7 @@ impl Rebalance for RebalancePushImpl {
                         };
                         client_instance.mq_admin_impl.max_offset(mq).await?
                     } else {
-                        let Some(client_instance) = self.rebalance_impl_inner.client_instance.as_mut() else {
+                        let Some(client_instance) = self.rebalance_impl_inner.get_mq_client_factory() else {
                             error!("Client instance not initialized for mq: {}", mq);
                             return Err(mq_client_err!(
                                 ResponseCode::SystemError as i32,
@@ -388,7 +400,7 @@ impl Rebalance for RebalancePushImpl {
         Ok(result)
     }
 
-    async fn compute_pull_from_where(&mut self, mq: &MessageQueue) -> i64 {
+    async fn compute_pull_from_where(&self, mq: &MessageQueue) -> i64 {
         self.compute_pull_from_where_with_exception(mq)
             .await
             .unwrap_or_else(|e| {
@@ -407,7 +419,7 @@ impl Rebalance for RebalancePushImpl {
     }
 
     async fn dispatch_pull_request(&self, pull_request_list: Vec<PullRequest>, delay: u64) {
-        if let Some(mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_ref() {
+        if let Some(mqpush_consumer_impl) = self.default_mqpush_consumer_impl.get().and_then(Weak::upgrade) {
             for pull_request in pull_request_list {
                 if delay == 0 {
                     mqpush_consumer_impl
@@ -423,7 +435,7 @@ impl Rebalance for RebalancePushImpl {
     }
 
     async fn dispatch_pop_pull_request(&self, pop_request_list: Vec<PopRequest>, delay: u64) {
-        if let Some(mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_ref() {
+        if let Some(mqpush_consumer_impl) = self.default_mqpush_consumer_impl.get().and_then(Weak::upgrade) {
             for pop_request in pop_request_list {
                 if delay == 0 {
                     mqpush_consumer_impl.execute_pop_request_immediately(pop_request).await;
@@ -446,7 +458,7 @@ impl Rebalance for RebalancePushImpl {
         PopProcessQueue::new()
     }
 
-    async fn remove_process_queue(&mut self, mq: &MessageQueue) {
+    async fn remove_process_queue(&self, mq: &MessageQueue) {
         let mut process_queue_table = self.rebalance_impl_inner.process_queue_table.write().await;
         let prev = process_queue_table.remove(mq);
         drop(process_queue_table);
@@ -454,7 +466,7 @@ impl Rebalance for RebalancePushImpl {
             let droped = pq.is_dropped();
             pq.set_dropped(true);
             self.remove_unnecessary_message_queue(mq, &pq).await;
-            if let Some(ref consumer_group) = self.rebalance_impl_inner.consumer_group {
+            if let Some(consumer_group) = self.rebalance_impl_inner.consumer_group() {
                 info!(
                     "Fix Offset, {}, remove unnecessary mq, {} Droped: {}",
                     consumer_group, mq, droped
@@ -464,11 +476,11 @@ impl Rebalance for RebalancePushImpl {
     }
 
     async fn unlock(&self, mq: &MessageQueue, oneway: bool) {
-        let Some(client) = self.rebalance_impl_inner.client_instance.as_ref() else {
+        let Some(client) = self.rebalance_impl_inner.get_mq_client_factory() else {
             warn!("Client instance is not available for unlocking {}", mq);
             return;
         };
-        let Some(ref consumer_group) = self.rebalance_impl_inner.consumer_group else {
+        let Some(consumer_group) = self.rebalance_impl_inner.consumer_group() else {
             warn!("Consumer group not set for unlocking {}", mq);
             return;
         };
@@ -507,11 +519,11 @@ impl Rebalance for RebalancePushImpl {
     }
 
     async fn lock_all(&self) {
-        if let Some(default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_ref() {
+        if let Some(default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.get().and_then(Weak::upgrade) {
             if default_mqpush_consumer_impl.is_consume_orderly() {
                 let process_queue_table = self.rebalance_impl_inner.process_queue_table.clone();
-                let consumer_group = self.rebalance_impl_inner.consumer_group.clone();
-                let client_instance = self.rebalance_impl_inner.client_instance.clone();
+                let consumer_group = self.rebalance_impl_inner.consumer_group();
+                let client_instance = self.rebalance_impl_inner.get_mq_client_factory();
 
                 if let Some(client_instance) = client_instance {
                     let broker_mqs =
@@ -524,8 +536,8 @@ impl Rebalance for RebalancePushImpl {
 
     async fn unlock_all(&self, oneway: bool) {
         let process_queue_table = self.rebalance_impl_inner.process_queue_table.clone();
-        let consumer_group = self.rebalance_impl_inner.consumer_group.clone();
-        let client_instance = self.rebalance_impl_inner.client_instance.clone();
+        let consumer_group = self.rebalance_impl_inner.consumer_group();
+        let client_instance = self.rebalance_impl_inner.get_mq_client_factory();
 
         if let Some(client_instance) = client_instance {
             let broker_mqs = build_process_queue_table_by_broker_name(&process_queue_table, &client_instance).await;
@@ -533,7 +545,7 @@ impl Rebalance for RebalancePushImpl {
         }
     }
 
-    async fn do_rebalance(&mut self, is_order: bool) -> bool {
+    async fn do_rebalance(&self, is_order: bool) -> bool {
         self.rebalance_impl_inner.do_rebalance(is_order).await
     }
 
@@ -552,22 +564,23 @@ impl Rebalance for RebalancePushImpl {
     ///
     /// * `true` if the client should perform rebalancing.
     /// * `false` otherwise.
-    fn client_rebalance(&mut self, topic: &str) -> bool {
+    fn client_rebalance(&self, topic: &str) -> bool {
         //Pop message mode, order message consumer not implement, it's use
         // ConsumeMessageOrderlyService to consume
         self.consumer_config.load_full().client_rebalance
-            || self.rebalance_impl_inner.message_model == Some(MessageModel::Broadcasting)
+            || self.rebalance_impl_inner.message_model() == Some(MessageModel::Broadcasting)
             || self
                 .default_mqpush_consumer_impl
-                .as_ref()
+                .get()
+                .and_then(Weak::upgrade)
                 .map(|impl_ref| impl_ref.is_consume_orderly())
                 .unwrap_or(false)
     }
 
-    fn destroy(&mut self) {
+    fn destroy(&self) {
         info!(
             "Destroying RebalancePushImpl for consumer group: {:?}",
-            self.rebalance_impl_inner.consumer_group
+            self.rebalance_impl_inner.consumer_group()
         );
         // Mark all process queues as dropped and clear the tables.
         // Use try_write to avoid blocking; shutdown callers are expected to drain tasks first.
@@ -798,7 +811,7 @@ mod tests {
             pull_threshold_size_for_queue: 100,
             ..Default::default()
         };
-        let mut rebalance = RebalancePushImpl::new(ClientConfig::default(), config);
+        let rebalance = RebalancePushImpl::new(ClientConfig::default(), config);
         rebalance
             .rebalance_impl_inner
             .subscription_inner
@@ -825,7 +838,7 @@ mod tests {
         let topic = CheetahString::from_static_str("topic-a");
         let old_calls = Arc::new(AtomicUsize::new(0));
         let new_calls = Arc::new(AtomicUsize::new(0));
-        let mut rebalance = RebalancePushImpl::new(
+        let rebalance = RebalancePushImpl::new(
             ClientConfig::default(),
             ConsumerConfig {
                 message_queue_listener: Some(Arc::new(CountingMessageQueueListener(old_calls.clone()))),

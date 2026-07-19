@@ -18,6 +18,7 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::Weak;
 use std::time::Duration;
 use std::time::Instant;
 use tokio::sync::Semaphore;
@@ -38,7 +39,6 @@ use rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeM
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_runtime::ScheduledTaskSnapshot;
-use rocketmq_rust::ArcMut;
 use rocketmq_rust::RocketMQTokioMutex;
 use serde::Serialize;
 use std::sync::LazyLock;
@@ -71,7 +71,7 @@ static MAX_TIME_CONSUME_CONTINUOUSLY: LazyLock<u64> = LazyLock::new(|| {
 });
 
 pub struct ConsumeMessageOrderlyService {
-    pub(crate) default_mqpush_consumer_impl: Option<ArcMut<DefaultMQPushConsumerImpl>>,
+    pub(crate) default_mqpush_consumer_impl: Option<Weak<DefaultMQPushConsumerImpl>>,
     pub(crate) client_config: Arc<ClientConfig>,
     pub(crate) consumer_config: Arc<ConsumerConfig>,
     pub(crate) consumer_group: CheetahString,
@@ -165,7 +165,7 @@ impl ConsumeMessageOrderlyService {
         consumer_config: Arc<ConsumerConfig>,
         consumer_group: CheetahString,
         message_listener: ArcMessageListenerOrderly,
-        default_mqpush_consumer_impl: Option<ArcMut<DefaultMQPushConsumerImpl>>,
+        default_mqpush_consumer_impl: Option<Weak<DefaultMQPushConsumerImpl>>,
     ) -> Self {
         let core_pool_size = consumer_config.consume_thread_min as usize;
         Self {
@@ -201,13 +201,17 @@ impl ConsumeMessageOrderlyService {
         }
     }
 
+    fn consumer_impl(&self) -> Option<Arc<DefaultMQPushConsumerImpl>> {
+        self.default_mqpush_consumer_impl.as_ref().and_then(Weak::upgrade)
+    }
+
     pub async fn lock_mqperiodically(&self) {
         let lock = self.global_lock.lock().await;
         if self.stopped.load(Ordering::Acquire) {
             return;
         }
 
-        let Some(default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_ref().cloned() else {
+        let Some(default_mqpush_consumer_impl) = self.consumer_impl() else {
             warn!(
                 "lockMQPeriodically skipped: DefaultMQPushConsumerImpl is not initialized, group={}",
                 self.consumer_group
@@ -286,7 +290,7 @@ impl ConsumeMessageOrderlyService {
     pub async fn unlock_all_mq(&self) {
         let lock = self.global_lock.lock().await;
 
-        if let Some(default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_ref().cloned() {
+        if let Some(default_mqpush_consumer_impl) = self.consumer_impl() {
             default_mqpush_consumer_impl
                 .rebalance_impl
                 .rebalance_impl_inner
@@ -343,7 +347,7 @@ impl ConsumeMessageOrderlyService {
             return false;
         }
 
-        let Some(default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_ref() else {
+        let Some(default_mqpush_consumer_impl) = self.consumer_impl() else {
             warn!(
                 "lockOneMQ skipped: DefaultMQPushConsumerImpl is not initialized, group={}, mq={}",
                 self.consumer_group, message_queue
@@ -437,14 +441,14 @@ impl ConsumeMessageOrderlyService {
         );
         MessageAccessor::clear_property(&mut new_msg, MessageConst::PROPERTY_TRANSACTION_PREPARED);
         new_msg.set_delay_time_level(3 + msg.reconsume_times());
-        let Some(mut default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_ref().cloned() else {
+        let Some(default_mqpush_consumer_impl) = self.consumer_impl() else {
             warn!(
                 "sendMessageBack skipped: DefaultMQPushConsumerImpl is not initialized, group={} msg={}",
                 self.consumer_group, msg
             );
             return false;
         };
-        let Some(client_instance) = default_mqpush_consumer_impl.client_instance.as_mut() else {
+        let Some(mut client_instance) = default_mqpush_consumer_impl.get_mq_client_factory() else {
             warn!(
                 "sendMessageBack skipped: MQClientInstance is not initialized, group={} msg={}",
                 self.consumer_group, msg
@@ -547,8 +551,8 @@ impl ConsumeMessageOrderlyService {
         };
 
         // Update per-topic/group consume throughput counters based on the orderly consume result.
-        if let Some(impl_) = self.default_mqpush_consumer_impl.as_ref() {
-            if let Some(client_instance) = impl_.client_instance.as_ref() {
+        if let Some(impl_) = self.consumer_impl() {
+            if let Some(client_instance) = impl_.get_mq_client_factory() {
                 let mgr = client_instance.consumer_stats_manager();
                 let topic = consume_request.message_queue.topic().as_str();
                 let group = self.consumer_group.as_str();
@@ -569,7 +573,7 @@ impl ConsumeMessageOrderlyService {
         }
 
         if commit_offset >= 0 && !consume_request.process_queue.is_dropped() {
-            let Some(mut default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_ref().cloned() else {
+            let Some(default_mqpush_consumer_impl) = self.consumer_impl() else {
                 warn!(
                     "orderly consume offset update skipped: DefaultMQPushConsumerImpl is not initialized, group={}, \
                      mq={}",
@@ -577,7 +581,7 @@ impl ConsumeMessageOrderlyService {
                 );
                 return continue_consume;
             };
-            let Some(offset_store) = default_mqpush_consumer_impl.offset_store.as_mut() else {
+            let Some(offset_store) = default_mqpush_consumer_impl.offset_store() else {
                 warn!(
                     "orderly consume offset update skipped: OffsetStore is not initialized, group={}, mq={}",
                     self.consumer_group, consume_request.message_queue
@@ -696,7 +700,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessageOrderlyService {
         let mq = MessageQueue::from_parts(msg.topic().clone(), broker_name.unwrap_or_default(), msg.queue_id());
         let mut msgs = vec![Arc::new(msg)];
         let mut context = ConsumeOrderlyContext::new(mq);
-        if let Some(default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_ref() {
+        if let Some(default_mqpush_consumer_impl) = self.consumer_impl() {
             default_mqpush_consumer_impl.reset_retry_and_namespace(msgs.as_mut_slice(), self.consumer_group.as_str());
         } else {
             warn!(
@@ -796,7 +800,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessageOrderlyService {
         let mut consume_request = ConsumeRequest {
             process_queue,
             message_queue,
-            default_mqpush_consumer_impl: self.default_mqpush_consumer_impl.clone(),
+            default_mqpush_consumer_impl: self.consumer_impl(),
             consumer_group: self.consumer_group.clone(),
         };
         let limiter = self.concurrency_limiter.clone();
@@ -838,7 +842,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessageOrderlyService {
 struct ConsumeRequest {
     process_queue: Arc<ProcessQueue>,
     message_queue: MessageQueue,
-    default_mqpush_consumer_impl: Option<ArcMut<DefaultMQPushConsumerImpl>>,
+    default_mqpush_consumer_impl: Option<Arc<DefaultMQPushConsumerImpl>>,
     consumer_group: CheetahString,
 }
 
@@ -884,7 +888,7 @@ impl ConsumeRequest {
             .fetch_lock_object(&self.message_queue)
             .await;
         let locked = lock.lock().await;
-        let Some(mut default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_mut().cloned() else {
+        let Some(default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_ref().cloned() else {
             warn!(
                 "orderly consume request skipped: DefaultMQPushConsumerImpl is not initialized, group={}, mq={}",
                 self.consumer_group, self.message_queue
@@ -967,8 +971,8 @@ impl ConsumeRequest {
                             .with_mq(self.message_queue.clone())
                             .with_namespace(
                                 default_mqpush_consumer_impl
-                                    .client_config
-                                    .get_namespace()
+                                    .client_config_snapshot()
+                                    .resolved_namespace()
                                     .unwrap_or_default(),
                             ),
                     );
@@ -1110,7 +1114,7 @@ impl ConsumeRequest {
                         cmc.success = final_status == ConsumeOrderlyStatus::Success
                             || final_status == ConsumeOrderlyStatus::Commit;
                         cmc.status = final_status.to_string().into();
-                        cmc.access_channel = Some(default_mqpush_consumer_impl.client_config.access_channel);
+                        cmc.access_channel = Some(default_mqpush_consumer_impl.client_config_snapshot().access_channel);
                         default_mqpush_consumer_impl.execute_hook_after(cmc);
                     } else {
                         warn!(
@@ -1120,7 +1124,7 @@ impl ConsumeRequest {
                     }
                 }
                 // Record message consume round-trip time.
-                if let Some(client_instance) = default_mqpush_consumer_impl.client_instance.as_ref() {
+                if let Some(client_instance) = default_mqpush_consumer_impl.get_mq_client_factory() {
                     client_instance.consumer_stats_manager().inc_consume_rt(
                         consume_message_orderly_service_inner.consumer_group.as_str(),
                         self.message_queue.topic().as_str(),
@@ -1245,13 +1249,13 @@ mod tests {
         CheetahString::from_static_str("group")
     }
 
-    fn new_service(default_impl: Option<ArcMut<DefaultMQPushConsumerImpl>>) -> ConsumeMessageOrderlyService {
+    fn new_service(default_impl: Option<Arc<DefaultMQPushConsumerImpl>>) -> ConsumeMessageOrderlyService {
         ConsumeMessageOrderlyService::new(
             Arc::new(ClientConfig::default()),
             Arc::new(ConsumerConfig::default()),
             consumer_group(),
             listener(),
-            default_impl,
+            default_impl.as_ref().map(Arc::downgrade),
         )
     }
 
@@ -1275,13 +1279,15 @@ mod tests {
         )
     }
 
-    fn new_default_impl() -> ArcMut<DefaultMQPushConsumerImpl> {
+    fn new_default_impl() -> Arc<DefaultMQPushConsumerImpl> {
         let consumer_config = ConsumerConfig::default();
-        ArcMut::new(DefaultMQPushConsumerImpl::new(
+        let consumer = Arc::new(DefaultMQPushConsumerImpl::new(
             ClientConfig::default(),
             consumer_config,
             None,
-        ))
+        ));
+        consumer.initialize_self_reference();
+        consumer
     }
 
     #[tokio::test]

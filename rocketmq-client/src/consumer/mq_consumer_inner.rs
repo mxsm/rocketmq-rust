@@ -25,7 +25,6 @@ use rocketmq_remoting::protocol::body::consumer_running_info::ConsumerRunningInf
 use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
-use rocketmq_rust::ArcMut;
 
 use crate::consumer::consumer_impl::default_lite_pull_consumer_impl::DefaultLitePullConsumerImpl;
 use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
@@ -118,12 +117,12 @@ pub struct MQConsumerInnerImpl {
 
 #[derive(Clone)]
 enum MQConsumerInnerImplKind {
-    Push(ArcMut<DefaultMQPushConsumerImpl>),
+    Push(Arc<DefaultMQPushConsumerImpl>),
     LitePull(Arc<DefaultLitePullConsumerImpl>),
 }
 
 impl MQConsumerInnerImpl {
-    pub(crate) fn from_push(default_mqpush_consumer_impl: ArcMut<DefaultMQPushConsumerImpl>) -> Self {
+    pub(crate) fn from_push(default_mqpush_consumer_impl: Arc<DefaultMQPushConsumerImpl>) -> Self {
         Self {
             inner: MQConsumerInnerImplKind::Push(default_mqpush_consumer_impl),
         }

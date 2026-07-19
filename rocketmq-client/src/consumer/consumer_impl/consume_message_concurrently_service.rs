@@ -17,6 +17,7 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::Weak;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -32,7 +33,6 @@ use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::protocol::body::cm_result::CMResult;
 use rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
-use rocketmq_rust::ArcMut;
 use serde::Serialize;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
@@ -58,7 +58,7 @@ use crate::runtime::spawn_client_tracked_task;
 use crate::runtime::ClientTrackedTaskHandle;
 
 pub struct ConsumeMessageConcurrentlyService {
-    pub(crate) default_mqpush_consumer_impl: RwLock<Option<ArcMut<DefaultMQPushConsumerImpl>>>,
+    pub(crate) default_mqpush_consumer_impl: RwLock<Option<Weak<DefaultMQPushConsumerImpl>>>,
     pub(crate) client_config: Arc<ClientConfig>,
     pub(crate) consumer_config: Arc<ConsumerConfig>,
     pub(crate) consumer_group: CheetahString,
@@ -173,7 +173,7 @@ impl ConsumeMessageConcurrentlyService {
         consumer_config: Arc<ConsumerConfig>,
         consumer_group: CheetahString,
         message_listener: ArcMessageListenerConcurrently,
-        default_mqpush_consumer_impl: Option<ArcMut<DefaultMQPushConsumerImpl>>,
+        default_mqpush_consumer_impl: Option<Weak<DefaultMQPushConsumerImpl>>,
     ) -> Self {
         let core_pool_size = consumer_config.consume_thread_min as usize;
         Self {
@@ -220,8 +220,15 @@ impl ConsumeMessageConcurrentlyService {
 }
 
 impl ConsumeMessageConcurrentlyService {
+    fn consumer_impl(&self) -> Option<Arc<DefaultMQPushConsumerImpl>> {
+        self.default_mqpush_consumer_impl
+            .read()
+            .as_ref()
+            .and_then(Weak::upgrade)
+    }
+
     async fn clean_expire_msg(&self) {
-        let Some(default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.read().clone() else {
+        let Some(default_mqpush_consumer_impl) = self.consumer_impl() else {
             warn!(
                 "clean expired messages skipped: DefaultMQPushConsumerImpl is not initialized, group={}",
                 self.consumer_group
@@ -255,8 +262,8 @@ impl ConsumeMessageConcurrentlyService {
         let ack_index = normalize_ack_index(status, context.ack_index, consume_request.msgs.len());
 
         // Update per-topic/group consume throughput counters, split by ack index.
-        if let Some(impl_) = self.default_mqpush_consumer_impl.read().clone() {
-            if let Some(client_instance) = impl_.client_instance.as_ref() {
+        if let Some(impl_) = self.consumer_impl() {
+            if let Some(client_instance) = impl_.get_mq_client_factory() {
                 let mgr = client_instance.consumer_stats_manager();
                 let topic = consume_request.message_queue.topic().as_str();
                 let group = self.consumer_group.as_str();
@@ -329,14 +336,14 @@ impl ConsumeMessageConcurrentlyService {
             .remove_message(&consume_request.msgs)
             .await;
         if offset >= 0 && !consume_request.process_queue.is_dropped() {
-            let Some(mut default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.read().clone() else {
+            let Some(default_mqpush_consumer_impl) = self.consumer_impl() else {
                 warn!(
                     "consume offset update skipped: DefaultMQPushConsumerImpl is not initialized, group={}, mq={}",
                     self.consumer_group, consume_request.message_queue
                 );
                 return;
             };
-            let Some(offset_store) = default_mqpush_consumer_impl.offset_store.as_mut() else {
+            let Some(offset_store) = default_mqpush_consumer_impl.offset_store() else {
                 warn!(
                     "consume offset update skipped: OffsetStore is not initialized, group={}, mq={}",
                     self.consumer_group, consume_request.message_queue
@@ -378,7 +385,7 @@ impl ConsumeMessageConcurrentlyService {
         let mut client_config = (*self.client_config).clone();
         msg.set_topic(client_config.with_namespace(msg.topic().as_str()));
 
-        let Some(mut default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.read().clone() else {
+        let Some(default_mqpush_consumer_impl) = self.consumer_impl() else {
             error!(
                 "sendMessageBack skipped: DefaultMQPushConsumerImpl is not initialized, group: {} msg: {}",
                 self.consumer_group, msg
@@ -475,7 +482,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
         msg.broker_name = broker_name.unwrap_or_default();
         let mq = MessageQueue::from_parts(msg.topic().clone(), msg.broker_name.clone(), msg.queue_id());
         let mut msgs = vec![Arc::new(msg)];
-        if let Some(default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.read().clone() {
+        if let Some(default_mqpush_consumer_impl) = self.consumer_impl() {
             default_mqpush_consumer_impl.reset_retry_and_namespace(msgs.as_mut_slice(), self.consumer_group.as_str());
         } else {
             warn!(
@@ -633,7 +640,7 @@ impl ConsumeMessageConcurrentlyService {
                     message_queue,
                     dispatch_to_consume,
                     consumer_group: self.consumer_group.clone(),
-                    default_mqpush_consumer_impl: self.default_mqpush_consumer_impl.read().clone(),
+                    default_mqpush_consumer_impl: self.consumer_impl(),
                 };
                 spawn_tracked_concurrent_task(
                     "rocketmq-client-concurrent-consume",
@@ -665,7 +672,7 @@ struct ConsumeRequest {
     message_queue: MessageQueue,
     dispatch_to_consume: bool,
     consumer_group: CheetahString,
-    default_mqpush_consumer_impl: Option<ArcMut<DefaultMQPushConsumerImpl>>,
+    default_mqpush_consumer_impl: Option<Arc<DefaultMQPushConsumerImpl>>,
 }
 
 impl ConsumeRequest {
@@ -683,7 +690,7 @@ impl ConsumeRequest {
             ack_index: i32::MAX,
         };
 
-        let Some(mut default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_ref().cloned() else {
+        let Some(default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_ref().cloned() else {
             warn!(
                 "consume request skipped: DefaultMQPushConsumerImpl is not initialized, group={}, mq={}, msgs={}",
                 self.consumer_group,
@@ -726,8 +733,8 @@ impl ConsumeRequest {
                         .with_mq(self.message_queue.clone())
                         .with_namespace(
                             default_mqpush_consumer_impl
-                                .client_config
-                                .get_namespace()
+                                .client_config_snapshot()
+                                .resolved_namespace()
                                 .unwrap_or_default(),
                         ),
                 );
@@ -835,7 +842,7 @@ impl ConsumeRequest {
             if let Some(cmc) = consume_message_context.as_mut() {
                 cmc.status = final_status.to_string().into();
                 cmc.success = final_status == ConsumeConcurrentlyStatus::ConsumeSuccess;
-                cmc.access_channel = Some(default_mqpush_consumer_impl.client_config.access_channel);
+                cmc.access_channel = Some(default_mqpush_consumer_impl.client_config_snapshot().access_channel);
                 default_mqpush_consumer_impl.execute_hook_after(cmc);
             } else {
                 warn!(
@@ -846,7 +853,7 @@ impl ConsumeRequest {
         }
 
         // Record message consume round-trip time.
-        if let Some(client_instance) = default_mqpush_consumer_impl.client_instance.as_ref() {
+        if let Some(client_instance) = default_mqpush_consumer_impl.get_mq_client_factory() {
             client_instance.consumer_stats_manager().inc_consume_rt(
                 self.consumer_group.as_str(),
                 self.message_queue.topic().as_str(),
@@ -976,13 +983,13 @@ mod tests {
         CheetahString::from_static_str("group")
     }
 
-    fn new_service(default_impl: Option<ArcMut<DefaultMQPushConsumerImpl>>) -> ConsumeMessageConcurrentlyService {
+    fn new_service(default_impl: Option<Arc<DefaultMQPushConsumerImpl>>) -> ConsumeMessageConcurrentlyService {
         ConsumeMessageConcurrentlyService::new(
             Arc::new(ClientConfig::default()),
             Arc::new(ConsumerConfig::default()),
             consumer_group(),
             listener(),
-            default_impl,
+            default_impl.as_ref().map(Arc::downgrade),
         )
     }
 
@@ -1012,16 +1019,18 @@ mod tests {
         assert!(Arc::ptr_eq(&consumer_config, &service.consumer_config));
     }
 
-    fn new_default_impl() -> ArcMut<DefaultMQPushConsumerImpl> {
+    fn new_default_impl() -> Arc<DefaultMQPushConsumerImpl> {
         let consumer_config = ConsumerConfig::default();
-        ArcMut::new(DefaultMQPushConsumerImpl::new(
+        let consumer = Arc::new(DefaultMQPushConsumerImpl::new(
             ClientConfig::default(),
             consumer_config,
             None,
-        ))
+        ));
+        consumer.initialize_self_reference();
+        consumer
     }
 
-    fn consume_request(default_impl: Option<ArcMut<DefaultMQPushConsumerImpl>>) -> ConsumeRequest {
+    fn consume_request(default_impl: Option<Arc<DefaultMQPushConsumerImpl>>) -> ConsumeRequest {
         ConsumeRequest {
             msgs: vec![Arc::new(MessageExt::default())],
             message_listener: listener(),
@@ -1136,7 +1145,7 @@ mod tests {
         let service = new_service(None);
         assert!(service.default_mqpush_consumer_impl.read().is_none());
 
-        *service.default_mqpush_consumer_impl.write() = Some(new_default_impl());
+        *service.default_mqpush_consumer_impl.write() = Some(Arc::downgrade(&new_default_impl()));
 
         assert!(service.default_mqpush_consumer_impl.read().is_some());
     }

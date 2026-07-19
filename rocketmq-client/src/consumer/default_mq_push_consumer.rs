@@ -27,7 +27,6 @@ use rocketmq_remoting::protocol::body::consumer_running_info::ConsumerRunningInf
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_remoting::runtime::RPCHook;
-use rocketmq_rust::ArcMut;
 
 use crate::base::client_config::ClientConfig;
 use crate::base::query_result::QueryResult;
@@ -459,7 +458,7 @@ impl Default for ConsumerConfig {
 pub struct DefaultMQPushConsumer {
     client_config: ClientConfig,
     consumer_config: Arc<ArcSwap<ConsumerConfig>>,
-    pub(crate) default_mqpush_consumer_impl: Option<ArcMut<DefaultMQPushConsumerImpl>>,
+    pub(crate) default_mqpush_consumer_impl: Option<Arc<DefaultMQPushConsumerImpl>>,
 }
 
 impl DefaultMQPushConsumer {
@@ -862,7 +861,7 @@ impl DefaultMQPushConsumer {
     fn prepare_trace_dispatcher(
         client_config: &ClientConfig,
         consumer_config: &Arc<ArcSwap<ConsumerConfig>>,
-        consumer_impl: &mut ArcMut<DefaultMQPushConsumerImpl>,
+        consumer_impl: &Arc<DefaultMQPushConsumerImpl>,
     ) -> Option<ArcTraceDispatcher> {
         let consumer_config_snapshot = consumer_config.load_full();
         let dispatcher = match consumer_config_snapshot.trace_dispatcher.clone() {
@@ -945,11 +944,11 @@ impl DefaultMQPushConsumer {
         Ok(())
     }
 
-    pub fn default_mq_push_consumer_impl(&self) -> Option<&ArcMut<DefaultMQPushConsumerImpl>> {
+    pub fn default_mq_push_consumer_impl(&self) -> Option<&Arc<DefaultMQPushConsumerImpl>> {
         self.default_mqpush_consumer_impl.as_ref()
     }
 
-    pub fn get_default_mq_push_consumer_impl(&self) -> Option<&ArcMut<DefaultMQPushConsumerImpl>> {
+    pub fn get_default_mq_push_consumer_impl(&self) -> Option<&Arc<DefaultMQPushConsumerImpl>> {
         self.default_mq_push_consumer_impl()
     }
 
@@ -1309,8 +1308,7 @@ impl DefaultMQPushConsumer {
     pub fn set_use_tls(&mut self, use_tls: bool) {
         self.client_config.set_use_tls(use_tls);
         if let Some(consumer_impl) = self.default_mqpush_consumer_impl.as_mut() {
-            consumer_impl.client_config.set_use_tls(use_tls);
-            consumer_impl.rebalance_impl.client_config.set_use_tls(use_tls);
+            consumer_impl.set_use_tls(use_tls);
         }
         if let Some(trace_dispatcher) = self.consumer_config_snapshot().trace_dispatcher.as_ref() {
             if let Some(async_dispatcher) = trace_dispatcher.as_any().downcast_ref::<AsyncTraceDispatcher>() {
@@ -1386,13 +1384,12 @@ impl DefaultMQPushConsumer {
     pub fn new(client_config: ClientConfig, consumer_config: ConsumerConfig) -> DefaultMQPushConsumer {
         let rpc_hook = consumer_config.rpc_hook.clone();
         let consumer_config = Arc::new(ArcSwap::from_pointee(consumer_config));
-        let mut default_mqpush_consumer_impl = ArcMut::new(DefaultMQPushConsumerImpl::new_with_config_store(
+        let default_mqpush_consumer_impl = Arc::new(DefaultMQPushConsumerImpl::new_with_config_store(
             client_config.clone(),
             consumer_config.clone(),
             rpc_hook,
         ));
-        let wrapper = default_mqpush_consumer_impl.clone();
-        default_mqpush_consumer_impl.set_default_mqpush_consumer_impl(wrapper);
+        default_mqpush_consumer_impl.initialize_self_reference();
         DefaultMQPushConsumer {
             client_config,
             consumer_config,
@@ -1713,8 +1710,8 @@ mod tests {
             .default_mqpush_consumer_impl
             .as_ref()
             .expect("push consumer impl should exist");
-        assert!(consumer_impl.client_config.is_use_tls());
-        assert!(consumer_impl.rebalance_impl.client_config.is_use_tls());
+        assert!(consumer_impl.client_config_snapshot().is_use_tls());
+        assert!(consumer_impl.rebalance_impl.client_config_snapshot().is_use_tls());
     }
 
     #[test]

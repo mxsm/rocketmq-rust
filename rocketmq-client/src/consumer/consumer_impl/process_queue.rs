@@ -28,7 +28,6 @@ use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::MessageAccessor::MessageAccessor;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::protocol::body::process_queue_info::ProcessQueueInfo;
-use rocketmq_rust::ArcMut;
 use serde::Serialize;
 use tokio::sync::RwLock;
 use tracing::info;
@@ -189,8 +188,8 @@ impl ProcessQueue {
         self.try_unlock_times.fetch_add(1, Ordering::AcqRel);
     }
 
-    pub(crate) async fn clean_expired_msg(&self, push_consumer: Option<ArcMut<DefaultMQPushConsumerImpl>>) {
-        let mut push_consumer = match push_consumer {
+    pub(crate) async fn clean_expired_msg(&self, push_consumer: Option<Arc<DefaultMQPushConsumerImpl>>) {
+        let push_consumer = match push_consumer {
             Some(pc) => pc,
             None => return,
         };
@@ -227,7 +226,7 @@ impl ProcessQueue {
             };
 
             let msg_inner = Arc::make_mut(&mut msg);
-            let topic = push_consumer.client_config.with_namespace(msg_inner.topic());
+            let topic = push_consumer.with_namespace(msg_inner.topic());
             let queue_id = msg_inner.queue_id();
             let msg_id = msg_inner.msg_id().to_string();
             let store_host = format!("{:?}", msg_inner.store_host());
