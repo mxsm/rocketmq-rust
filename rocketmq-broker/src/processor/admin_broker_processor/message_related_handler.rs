@@ -741,7 +741,7 @@ mod tests {
             .pop_message_processor()
             .cloned()
             .expect("pop message processor should exist");
-        pop_message_processor.mut_from_ref().start();
+        pop_message_processor.start().await;
 
         let service = pop_message_processor.pop_buffer_merge_service().clone();
         crate::processor::processor_service::pop_buffer_merge_service::PopBufferMergeService::start(service.clone());

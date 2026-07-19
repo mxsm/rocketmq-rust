@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::Arc;
+
 use bytes::Bytes;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_decoder;
@@ -47,7 +49,7 @@ use crate::processor::pop_message_processor::PopMessageProcessor;
 
 pub struct ChangeInvisibleTimeProcessor<MS: MessageStore> {
     revive_topic: CheetahString,
-    pop_message_processor: ArcMut<PopMessageProcessor<MS>>,
+    pop_message_processor: Arc<PopMessageProcessor<MS>>,
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
@@ -86,7 +88,7 @@ where
 
 impl<MS: MessageStore> ChangeInvisibleTimeProcessor<MS> {
     pub fn new(
-        pop_message_processor: ArcMut<PopMessageProcessor<MS>>,
+        pop_message_processor: Arc<PopMessageProcessor<MS>>,
         broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
     ) -> Self {
         let revive_topic = PopAckConstants::build_cluster_revive_topic(
