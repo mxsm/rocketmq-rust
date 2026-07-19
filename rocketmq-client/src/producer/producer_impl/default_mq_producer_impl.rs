@@ -325,7 +325,7 @@ pub struct DefaultMQProducerImpl {
 
     rpc_hook: Option<Arc<dyn RPCHook>>,
     client_instance: Option<ArcMut<MQClientInstance>>,
-    pub(crate) mq_fault_strategy: ArcMut<MQFaultStrategy>,
+    pub(crate) mq_fault_strategy: MQFaultStrategy,
 
     // ===== Backpressure control =====
     semaphore_async_send_num: Arc<Semaphore>,
@@ -376,7 +376,7 @@ impl DefaultMQProducerImpl {
             pending_forbidden_hooks: ParkingLotMutex::new(Some(Vec::new())),
             rpc_hook,
             client_instance: None,
-            mq_fault_strategy: ArcMut::new(MQFaultStrategy::new(&client_config)),
+            mq_fault_strategy: MQFaultStrategy::new(&client_config),
             semaphore_async_send_num: Arc::new(semaphore_async_send_num),
             semaphore_async_send_size: Arc::new(semaphore_async_send_size),
             default_mqproducer_impl_inner: None,

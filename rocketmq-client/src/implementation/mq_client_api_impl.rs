@@ -2578,7 +2578,7 @@ impl MQClientAPIImpl {
     async fn send_message_async_impl(
         remoting_client: Arc<RocketmqDefaultClient<ClientRemotingProcessor>>,
         client_config: Arc<ClientConfig>,
-        mq_fault_strategy: ArcMut<MQFaultStrategy>,
+        mq_fault_strategy: MQFaultStrategy,
         mut current_addr: CheetahString,
         mut current_broker_name: CheetahString,
         msg_topic: CheetahString,

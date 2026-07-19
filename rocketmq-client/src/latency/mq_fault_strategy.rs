@@ -27,14 +27,13 @@ use crate::producer::producer_impl::default_mq_producer_impl::DefaultServiceDete
 use crate::producer::producer_impl::queue_filter::QueueFilter;
 use crate::producer::producer_impl::topic_publish_info::TopicPublishInfo;
 
+#[derive(Clone)]
 pub struct MQFaultStrategy {
     latency_fault_tolerance: Arc<LatencyFaultToleranceImpl<DefaultResolver, DefaultServiceDetector>>,
-    send_latency_fault_enable: AtomicBool,
-    start_detector_enable: AtomicBool,
+    send_latency_fault_enable: Arc<AtomicBool>,
+    start_detector_enable: Arc<AtomicBool>,
     latency_max: Vec<u64>,
     not_available_duration: Vec<u64>,
-    reachable_filter: Box<dyn QueueFilter>,
-    available_filter: Box<dyn QueueFilter>,
 }
 
 impl MQFaultStrategy {
@@ -51,16 +50,10 @@ impl MQFaultStrategy {
         let latency_fault_tolerance = Arc::new(tolerance_impl);
         Self {
             latency_fault_tolerance: Arc::clone(&latency_fault_tolerance),
-            send_latency_fault_enable: AtomicBool::new(client_config.send_latency_enable),
-            start_detector_enable: AtomicBool::new(client_config.start_detector_enable),
+            send_latency_fault_enable: Arc::new(AtomicBool::new(client_config.send_latency_enable)),
+            start_detector_enable: Arc::new(AtomicBool::new(client_config.start_detector_enable)),
             latency_max: Self::DEFAULT_LATENCY_MAX.to_vec(),
             not_available_duration: Self::DEFAULT_NOT_AVAILABLE_DURATION.to_vec(),
-            reachable_filter: Box::new(ReachableFilter {
-                latency_fault_tolerance: Arc::clone(&latency_fault_tolerance),
-            }),
-            available_filter: Box::new(AvailableFilter {
-                latency_fault_tolerance,
-            }),
         }
     }
 
@@ -112,12 +105,24 @@ impl MQFaultStrategy {
                 tp_info.reset_index();
             }
 
-            let filter = &[self.available_filter.as_ref(), &broker_filter as &dyn QueueFilter];
+            let available_filter = AvailableFilter {
+                latency_fault_tolerance: Arc::clone(&self.latency_fault_tolerance),
+            };
+            let filter = &[
+                &available_filter as &dyn QueueFilter,
+                &broker_filter as &dyn QueueFilter,
+            ];
             if let Some(mq) = tp_info.select_one_message_queue_filters(filter) {
                 return Some(mq);
             }
 
-            let filter = &[self.reachable_filter.as_ref(), &broker_filter as &dyn QueueFilter];
+            let reachable_filter = ReachableFilter {
+                latency_fault_tolerance: Arc::clone(&self.latency_fault_tolerance),
+            };
+            let filter = &[
+                &reachable_filter as &dyn QueueFilter,
+                &broker_filter as &dyn QueueFilter,
+            ];
             if let Some(mq) = tp_info.select_one_message_queue_filters(filter) {
                 return Some(mq);
             }
@@ -178,7 +183,7 @@ impl MQFaultStrategy {
     }
 
     #[inline]
-    pub fn set_send_latency_fault_enable(&mut self, send_latency_fault_enable: bool) {
+    pub fn set_send_latency_fault_enable(&self, send_latency_fault_enable: bool) {
         self.send_latency_fault_enable
             .store(send_latency_fault_enable, Ordering::Relaxed);
     }
@@ -285,5 +290,26 @@ mod tests {
         assert_eq!(detect_timeout, 321);
         assert!(strategy.is_start_detector_enable());
         assert!(strategy.latency_fault_tolerance.is_start_detector_enable());
+    }
+
+    #[test]
+    fn cloned_strategy_shares_runtime_switches_and_snapshots_thresholds() {
+        let mut strategy = MQFaultStrategy::new(&ClientConfig::default());
+        strategy.set_latency_max(vec![10, 20, 30]);
+        strategy.set_not_available_duration(vec![0, 100, 200]);
+        strategy.set_send_latency_fault_enable(true);
+        strategy.set_start_detector_enable(true);
+
+        let snapshot = strategy.clone();
+
+        strategy.set_latency_max(vec![40, 50, 60]);
+        strategy.set_not_available_duration(vec![300, 400, 500]);
+        strategy.set_send_latency_fault_enable(false);
+        strategy.set_start_detector_enable(false);
+
+        assert_eq!(snapshot.get_latency_max(), &[10, 20, 30]);
+        assert_eq!(snapshot.get_not_available_duration(), &[0, 100, 200]);
+        assert!(!snapshot.is_send_latency_fault_enable());
+        assert!(!snapshot.is_start_detector_enable());
     }
 }
