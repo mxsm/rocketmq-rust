@@ -343,6 +343,12 @@ M11-12x 已删除 `RemoteBrokerOffsetStore` 只读 broker lookup、route refresh
 重试、timeout 与错误映射不变，其余 MQClientInstance owner、Client/Broker/Store、compatibility 与完整候选
 快照 Gate 仍保持开放。
 
+M11-12y 已将 Push pull/pop request dispatch、retry namespace reset、POP ack/change-invisible receiver 收窄为
+`&self`，lazy namespace 通过 immutable resolution 保持显式 namespace 与 endpoint-derived namespace 语义；
+RebalancePush heartbeat/dispatch 与 consume service 删除 9 个过时 `mut_from_ref`。实际快照降至
+411 production/1,206 occurrences，Client 降至 94/314；真实 rebalance/producer mutation、Push owner 与其余
+Client/Broker/Store、compatibility、完整候选快照 Gate 仍保持开放。
+
 ## 公共兼容面
 
 - development/compatibility仍可显式选择；secure只作为新部署默认，不静默重解释旧配置。

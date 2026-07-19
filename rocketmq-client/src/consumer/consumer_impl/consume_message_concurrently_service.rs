@@ -476,9 +476,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
         let mq = MessageQueue::from_parts(msg.topic().clone(), msg.broker_name.clone(), msg.queue_id());
         let mut msgs = vec![Arc::new(msg)];
         if let Some(default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.read().clone() {
-            default_mqpush_consumer_impl
-                .mut_from_ref()
-                .reset_retry_and_namespace(msgs.as_mut_slice(), self.consumer_group.as_str());
+            default_mqpush_consumer_impl.reset_retry_and_namespace(msgs.as_mut_slice(), self.consumer_group.as_str());
         } else {
             warn!(
                 "consumeMessageDirectly namespace reset skipped: DefaultMQPushConsumerImpl is not initialized, \

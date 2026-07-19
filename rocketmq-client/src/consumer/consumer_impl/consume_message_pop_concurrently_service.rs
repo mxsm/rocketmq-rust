@@ -212,9 +212,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopConcurrentlyService {
         let mut msgs = vec![Arc::new(msg)];
         let context = ConsumeConcurrentlyContext::new(mq);
         if let Some(default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_ref() {
-            default_mqpush_consumer_impl
-                .mut_from_ref()
-                .reset_retry_and_namespace(msgs.as_mut_slice(), self.consumer_group.as_str());
+            default_mqpush_consumer_impl.reset_retry_and_namespace(msgs.as_mut_slice(), self.consumer_group.as_str());
         } else {
             warn!(
                 "consumeMessageDirectly namespace reset skipped: DefaultMQPushConsumerImpl is not initialized, \
@@ -470,7 +468,7 @@ impl ConsumeMessagePopConcurrentlyService {
         if ack_index >= 0 {
             for i in 0..=ack_index {
                 let msg = &consume_request.msgs[i as usize];
-                if let Some(mut default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_ref().cloned() {
+                if let Some(default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_ref().cloned() {
                     default_mqpush_consumer_impl
                         .ack_async(msg.as_ref(), &self.consumer_group)
                         .await;
@@ -499,7 +497,7 @@ impl ConsumeMessagePopConcurrentlyService {
     }
 
     async fn check_need_ack_or_delay(&self, message: &MessageExt) {
-        let Some(mut default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_ref().cloned() else {
+        let Some(default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_ref().cloned() else {
             warn!(
                 "pop consume retry handling skipped: DefaultMQPushConsumerImpl is not initialized, group={}, msg={}",
                 self.consumer_group, message
@@ -544,7 +542,7 @@ impl ConsumeMessagePopConcurrentlyService {
         if delay_level == 0 {
             delay_level = message.reconsume_times;
         }
-        let Some(mut default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_ref().cloned() else {
+        let Some(default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_ref().cloned() else {
             warn!(
                 "changePopInvisibleTime skipped: DefaultMQPushConsumerImpl is not initialized, group={} msg={}",
                 consumer_group, message

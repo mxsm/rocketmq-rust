@@ -699,9 +699,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessageOrderlyService {
         let mut msgs = vec![Arc::new(msg)];
         let mut context = ConsumeOrderlyContext::new(mq);
         if let Some(default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_ref() {
-            default_mqpush_consumer_impl
-                .mut_from_ref()
-                .reset_retry_and_namespace(msgs.as_mut_slice(), self.consumer_group.as_str());
+            default_mqpush_consumer_impl.reset_retry_and_namespace(msgs.as_mut_slice(), self.consumer_group.as_str());
         } else {
             warn!(
                 "consumeMessageDirectly namespace reset skipped: DefaultMQPushConsumerImpl is not initialized, \

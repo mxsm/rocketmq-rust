@@ -499,7 +499,7 @@ impl ConsumeMessagePopOrderlyService {
 
     async fn ack_message(&self, msg: &MessageExt) {
         if let Some(ref impl_) = self.default_mqpush_consumer_impl {
-            impl_.mut_from_ref().ack_async(msg, &self.consumer_group).await;
+            impl_.ack_async(msg, &self.consumer_group).await;
         }
     }
 
@@ -507,7 +507,6 @@ impl ConsumeMessagePopOrderlyService {
         if let Some(ref impl_) = self.default_mqpush_consumer_impl {
             if let Some(extra_info) = msg.property(&CheetahString::from_static_str("POP_CK")) {
                 let result = impl_
-                    .mut_from_ref()
                     .change_pop_invisible_time_async(
                         msg.topic(),
                         &self.consumer_group,
@@ -687,9 +686,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopOrderlyService {
         let mq = MessageQueue::from_parts(msg.topic().clone(), broker_name.unwrap_or_default(), msg.queue_id());
         let mut msgs = vec![Arc::new(msg)];
         if let Some(default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_ref() {
-            default_mqpush_consumer_impl
-                .mut_from_ref()
-                .reset_retry_and_namespace(msgs.as_mut_slice(), self.consumer_group.as_str());
+            default_mqpush_consumer_impl.reset_retry_and_namespace(msgs.as_mut_slice(), self.consumer_group.as_str());
         } else {
             warn!(
                 "consumeMessageDirectly namespace reset skipped: DefaultMQPushConsumerImpl is not initialized, \
