@@ -1989,7 +1989,7 @@ impl MQClientInstance {
         heartbeat_data
     }
 
-    pub async fn register_consumer(&mut self, group: &CheetahString, consumer: MQConsumerInnerImpl) -> bool {
+    pub async fn register_consumer(&self, group: &CheetahString, consumer: MQConsumerInnerImpl) -> bool {
         if self.consumer_table.contains_key(group) {
             warn!("the consumer group[{}] exist already.", group);
             return false;
@@ -2880,7 +2880,7 @@ mod tests {
             namesrv_addr: None,
             ..Default::default()
         };
-        let mut instance = MQClientInstance::new_arc(client_config, 0, "route-refresh-apply-test", None);
+        let instance = MQClientInstance::new_arc(client_config, 0, "route-refresh-apply-test", None);
         let topic = CheetahString::from_static_str("route-refresh-topic");
 
         let producer = ArcMut::new(DefaultMQProducerImpl::new(

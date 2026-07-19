@@ -366,6 +366,12 @@ owned `Arc` snapshot，consumer group 返回 owned value，构造边界接收 ow
 方法名与 namespace/TLS/trace/pull/offset 行为保持。实际快照降至 408 production/1,129 occurrences，Client 降至
 91/237；Lite Pull root lifecycle、其余 Client/Broker/Store、compatibility 与完整候选快照 Gate 仍保持开放。
 
+M11-12ac 已将 Lite Pull facade、consumer inner、callback 与 task 的根 owner 改为标准 `Arc`/`Weak`；专用异步
+lifecycle mutex 串行 start/shutdown 与订阅控制面，同步状态和组件槽位只在短锁内发布/克隆并在 await 前释放。
+Rebalance offset store 使用 `ArcSwapOption` 快照，consumer 注册与订阅表写入收窄为 `&self`。实际快照降至
+402 production/1,102 occurrences，Client crate 降至 85/210；其余 Client/Broker/Store、compatibility 与完整候选
+快照 Gate 仍保持开放。
+
 ## 公共兼容面
 
 - development/compatibility仍可显式选择；secure只作为新部署默认，不静默重解释旧配置。

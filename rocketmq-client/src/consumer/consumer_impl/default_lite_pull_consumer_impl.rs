@@ -20,7 +20,10 @@ use std::sync::atomic::AtomicI64;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
+use std::sync::OnceLock;
 use std::sync::RwLock as StdRwLock;
+use std::sync::Weak;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -45,7 +48,6 @@ use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_remoting::runtime::RPCHook;
 use rocketmq_rust::ArcMut;
-use rocketmq_rust::WeakArcMut;
 use serde::Serialize;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
@@ -184,7 +186,7 @@ async fn sleep_or_cancel(shutdown_signal: &Arc<AtomicBool>, cancelled: &Arc<Atom
 
 /// Internal rebalance listener that mirrors Java LitePull's default MessageQueueListenerImpl.
 struct LitePullRebalanceListener {
-    consumer_impl: WeakArcMut<DefaultLitePullConsumerImpl>,
+    consumer_impl: Weak<DefaultLitePullConsumerImpl>,
     user_listener: Arc<StdRwLock<Option<ArcMessageQueueListener>>>,
     task_tracker: TaskTracker,
     shutdown_token: CancellationToken,
@@ -451,16 +453,17 @@ pub struct DefaultLitePullConsumerImpl {
     consumer_config: ArcSwap<LitePullConsumerConfig>,
 
     // Lifecycle state
-    service_state: ArcMut<ServiceState>,
+    lifecycle_transition: Mutex<()>,
+    service_state: StdRwLock<ServiceState>,
     subscription_type: Arc<RwLock<SubscriptionType>>,
     consumer_start_timestamp: AtomicI64,
 
     // Core components
-    client_instance: Option<ArcMut<MQClientInstance>>,
+    client_instance: StdRwLock<Option<ArcMut<MQClientInstance>>>,
     rebalance_impl: ArcMut<RebalanceLitePullImpl>,
-    pull_api_wrapper: Option<ArcMut<PullAPIWrapper>>,
-    offset_store: Option<Arc<OffsetStore>>,
-    rpc_hook: Option<Arc<dyn RPCHook>>,
+    pull_api_wrapper: StdRwLock<Option<ArcMut<PullAPIWrapper>>>,
+    offset_store: StdRwLock<Option<Arc<OffsetStore>>>,
+    rpc_hook: StdRwLock<Option<Arc<dyn RPCHook>>>,
 
     // Queue management
     assigned_message_queue: Arc<AssignedMessageQueue>,
@@ -486,8 +489,8 @@ pub struct DefaultLitePullConsumerImpl {
     next_auto_commit_deadline: Arc<AtomicI64>,
 
     // Hooks
-    consume_message_hook_list: Vec<Arc<dyn ConsumeMessageHook + Send + Sync>>,
-    filter_message_hook_list: Vec<Arc<dyn FilterMessageHook + Send + Sync>>,
+    consume_message_hook_list: StdRwLock<Vec<Arc<dyn ConsumeMessageHook + Send + Sync>>>,
+    filter_message_hook_list: StdRwLock<Vec<Arc<dyn FilterMessageHook + Send + Sync>>>,
 
     // Topic change listeners
     topic_message_queue_change_listener_map:
@@ -497,12 +500,12 @@ pub struct DefaultLitePullConsumerImpl {
 
     // Shutdown coordination
     shutdown_signal: Arc<AtomicBool>,
-    topic_metadata_check_task_handle: Option<LitePullTaskHandle>,
+    topic_metadata_check_task_handle: StdMutex<Option<LitePullTaskHandle>>,
     rebalance_listener_tasks: TaskTracker,
     rebalance_listener_shutdown: CancellationToken,
 
     // Self-reference (for callbacks)
-    default_lite_pull_consumer_impl: Option<ArcMut<DefaultLitePullConsumerImpl>>,
+    self_reference: OnceLock<Weak<DefaultLitePullConsumerImpl>>,
 }
 
 impl DefaultLitePullConsumerImpl {
@@ -520,14 +523,15 @@ impl DefaultLitePullConsumerImpl {
         let mut this = Self {
             client_config: ArcSwap::from_pointee(client_config),
             consumer_config: ArcSwap::from_pointee(consumer_config),
-            service_state: ArcMut::new(ServiceState::CreateJust),
+            lifecycle_transition: Mutex::new(()),
+            service_state: StdRwLock::new(ServiceState::CreateJust),
             subscription_type: Arc::new(RwLock::new(SubscriptionType::None)),
             consumer_start_timestamp: AtomicI64::new(current_millis() as i64),
-            client_instance: None,
+            client_instance: StdRwLock::new(None),
             rebalance_impl: ArcMut::new(RebalanceLitePullImpl::new(rebalance_config)),
-            pull_api_wrapper: None,
-            offset_store: None,
-            rpc_hook: None,
+            pull_api_wrapper: StdRwLock::new(None),
+            offset_store: StdRwLock::new(None),
+            rpc_hook: StdRwLock::new(None),
             assigned_message_queue: Arc::new(AssignedMessageQueue::new()),
             message_queue_locks: Arc::new(RwLock::new(HashMap::new())),
             task_handles: Arc::new(RwLock::new(HashMap::new())),
@@ -539,16 +543,16 @@ impl DefaultLitePullConsumerImpl {
             queue_flow_control_times: Arc::new(AtomicU64::new(0)),
             queue_max_span_flow_control_times: Arc::new(AtomicU64::new(0)),
             next_auto_commit_deadline: Arc::new(AtomicI64::new(0)),
-            consume_message_hook_list: Vec::new(),
-            filter_message_hook_list: Vec::new(),
+            consume_message_hook_list: StdRwLock::new(Vec::new()),
+            filter_message_hook_list: StdRwLock::new(Vec::new()),
             topic_message_queue_change_listener_map: Arc::new(RwLock::new(HashMap::new())),
             message_queues_for_topic: Arc::new(RwLock::new(HashMap::new())),
             user_message_queue_listener: Arc::new(StdRwLock::new(None)),
             shutdown_signal: Arc::new(AtomicBool::new(false)),
-            topic_metadata_check_task_handle: None,
+            topic_metadata_check_task_handle: StdMutex::new(None),
             rebalance_listener_tasks: TaskTracker::new(),
             rebalance_listener_shutdown: CancellationToken::new(),
-            default_lite_pull_consumer_impl: None,
+            self_reference: OnceLock::new(),
         };
         let wrapper = ArcMut::downgrade(&this.rebalance_impl);
         this.rebalance_impl.set_rebalance_impl(wrapper);
@@ -579,32 +583,32 @@ impl DefaultLitePullConsumerImpl {
         self.update_client_config(|config| config.set_use_tls(use_tls));
     }
 
-    /// Sets the self-reference for callbacks.
-    pub fn set_default_lite_pull_consumer_impl(
-        &mut self,
-        default_lite_pull_consumer_impl: ArcMut<DefaultLitePullConsumerImpl>,
-    ) {
-        self.rebalance_impl
-            .set_message_queue_listener(Some(Arc::new(LitePullRebalanceListener {
-                consumer_impl: ArcMut::downgrade(&default_lite_pull_consumer_impl),
-                user_listener: self.user_message_queue_listener.clone(),
-                task_tracker: self.rebalance_listener_tasks.clone(),
-                shutdown_token: self.rebalance_listener_shutdown.clone(),
-            })));
-        self.default_lite_pull_consumer_impl = Some(default_lite_pull_consumer_impl);
+    /// Binds the weak self-reference used by callbacks exactly once.
+    pub(crate) fn bind_self(self: &Arc<Self>) {
+        let self_reference = Arc::downgrade(self);
+        if self.self_reference.set(self_reference.clone()).is_ok() {
+            self.rebalance_impl
+                .set_message_queue_listener(Some(Arc::new(LitePullRebalanceListener {
+                    consumer_impl: self_reference,
+                    user_listener: self.user_message_queue_listener.clone(),
+                    task_tracker: self.rebalance_listener_tasks.clone(),
+                    shutdown_token: self.rebalance_listener_shutdown.clone(),
+                })));
+        }
     }
 
-    pub fn set_rpc_hook(&mut self, rpc_hook: Option<Arc<dyn RPCHook>>) {
-        self.rpc_hook = rpc_hook;
+    pub fn set_rpc_hook(&self, rpc_hook: Option<Arc<dyn RPCHook>>) {
+        *self.rpc_hook.write().unwrap_or_else(|poisoned| poisoned.into_inner()) = rpc_hook;
     }
 
     /// Validates service state is Running.
     #[inline]
     fn make_sure_state_ok(&self) -> RocketMQResult<()> {
-        if *self.service_state != ServiceState::Running {
+        let service_state = self.service_state();
+        if service_state != ServiceState::Running {
             return Err(crate::mq_client_err!(format!(
                 "The lite pull consumer service state not OK, {:?}, {}",
-                *self.service_state,
+                service_state,
                 rocketmq_common::common::FAQUrl::suggest_todo(rocketmq_common::common::FAQUrl::CLIENT_SERVICE_NOT_OK)
             )));
         }
@@ -613,7 +617,45 @@ impl DefaultLitePullConsumerImpl {
 
     /// Returns the current service state.
     pub fn service_state(&self) -> ServiceState {
-        *self.service_state
+        *self
+            .service_state
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn set_service_state(&self, service_state: ServiceState) {
+        *self
+            .service_state
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = service_state;
+    }
+
+    fn component_snapshot<T: Clone>(&self, component: &StdRwLock<Option<T>>) -> Option<T> {
+        component
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    fn rpc_hook_snapshot(&self) -> Option<Arc<dyn RPCHook>> {
+        self.rpc_hook
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    fn consume_message_hooks_snapshot(&self) -> Vec<Arc<dyn ConsumeMessageHook + Send + Sync>> {
+        self.consume_message_hook_list
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    fn filter_message_hooks_snapshot(&self) -> Vec<Arc<dyn FilterMessageHook + Send + Sync>> {
+        self.filter_message_hook_list
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
     }
 
     /// Returns the configured consumer group.
@@ -623,7 +665,11 @@ impl DefaultLitePullConsumerImpl {
 
     /// Updates the consumer group before startup and keeps rebalance config in sync.
     pub fn set_consumer_group(&self, consumer_group: CheetahString) -> RocketMQResult<()> {
-        if *self.service_state != ServiceState::CreateJust {
+        let service_state = self
+            .service_state
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if *service_state != ServiceState::CreateJust {
             return Err(crate::mq_client_err!(
                 "consumerGroup can not be changed after the lite pull consumer has started."
             ));
@@ -641,34 +687,43 @@ impl DefaultLitePullConsumerImpl {
 
     /// Returns the active or preconfigured offset store.
     pub fn offset_store(&self) -> Option<Arc<OffsetStore>> {
-        self.offset_store.clone()
+        self.offset_store
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
     }
 
     /// Updates the offset store before startup and keeps rebalance state in sync.
-    pub fn set_offset_store(&mut self, offset_store: Option<Arc<OffsetStore>>) -> RocketMQResult<()> {
-        if *self.service_state != ServiceState::CreateJust {
+    pub fn set_offset_store(&self, offset_store: Option<Arc<OffsetStore>>) -> RocketMQResult<()> {
+        let service_state = self
+            .service_state
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if *service_state != ServiceState::CreateJust {
             return Err(crate::mq_client_err!(
                 "offsetStore can not be changed after the lite pull consumer has started."
             ));
         }
 
-        self.offset_store = offset_store.clone();
-        if let Some(offset_store) = offset_store {
-            self.rebalance_impl.set_offset_store(offset_store);
-        } else {
-            self.rebalance_impl.offset_store = None;
-        }
+        *self
+            .offset_store
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = offset_store.clone();
+        self.rebalance_impl.set_offset_store(offset_store);
         Ok(())
     }
 
     #[cfg(test)]
     pub(crate) fn rebalance_has_offset_store(&self) -> bool {
-        self.rebalance_impl.offset_store.is_some()
+        self.rebalance_impl.offset_store.load().is_some()
     }
 
     #[cfg(test)]
     pub(crate) fn has_rpc_hook(&self) -> bool {
-        self.rpc_hook.is_some()
+        self.rpc_hook
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_some()
     }
 
     /// Validates configuration before starting.
@@ -732,11 +787,12 @@ impl DefaultLitePullConsumerImpl {
     }
 
     async fn subscribe_inner(
-        &mut self,
+        &self,
         topic: impl Into<CheetahString>,
         sub_expression: impl Into<CheetahString>,
         message_queue_listener: Option<ArcMessageQueueListener>,
     ) -> RocketMQResult<()> {
+        let _transition = self.lifecycle_transition.lock().await;
         let topic = topic.into();
         let sub_expression = sub_expression.into();
 
@@ -754,8 +810,8 @@ impl DefaultLitePullConsumerImpl {
             self.set_message_queue_listener(Some(listener));
         }
 
-        if *self.service_state == ServiceState::Running {
-            if let Some(ref client_instance) = self.client_instance {
+        if self.service_state() == ServiceState::Running {
+            if let Some(client_instance) = self.component_snapshot(&self.client_instance) {
                 client_instance.send_heartbeat_to_all_broker_with_lock().await;
                 self.update_topic_subscribe_info_when_subscription_changed().await?;
             }
@@ -766,7 +822,7 @@ impl DefaultLitePullConsumerImpl {
 
     /// Subscribes to a topic with optional tag expression filter.
     pub async fn subscribe(
-        &mut self,
+        &self,
         topic: impl Into<CheetahString>,
         sub_expression: impl Into<CheetahString>,
     ) -> RocketMQResult<()> {
@@ -774,7 +830,8 @@ impl DefaultLitePullConsumerImpl {
     }
 
     /// Manually assigns specific message queues (ASSIGN mode).
-    pub async fn assign(&mut self, message_queues: Vec<MessageQueue>) -> RocketMQResult<()> {
+    pub async fn assign(&self, message_queues: Vec<MessageQueue>) -> RocketMQResult<()> {
+        let _transition = self.lifecycle_transition.lock().await;
         if message_queues.is_empty() {
             return Err(crate::mq_client_err!("Message queues can not be null or empty."));
         }
@@ -783,7 +840,7 @@ impl DefaultLitePullConsumerImpl {
 
         self.update_assigned_message_queue_for_assign(&message_queues).await;
 
-        if *self.service_state == ServiceState::Running {
+        if self.service_state() == ServiceState::Running {
             self.update_pull_task_for_assign(&message_queues).await?;
         }
 
@@ -881,7 +938,7 @@ impl DefaultLitePullConsumerImpl {
     }
 
     /// Updates topic subscription info when subscription changes (SUBSCRIBE mode).
-    async fn update_topic_subscribe_info_when_subscription_changed(&mut self) -> RocketMQResult<()> {
+    async fn update_topic_subscribe_info_when_subscription_changed(&self) -> RocketMQResult<()> {
         let topics: Vec<CheetahString> = self
             .rebalance_impl
             .get_subscription_inner()
@@ -889,7 +946,7 @@ impl DefaultLitePullConsumerImpl {
             .map(|entry| entry.key().clone())
             .collect();
 
-        if let Some(ref mut client_instance) = self.client_instance {
+        if let Some(client_instance) = self.component_snapshot(&self.client_instance) {
             for topic in &topics {
                 client_instance
                     .update_topic_route_info_from_name_server_topic(topic)
@@ -937,16 +994,27 @@ impl DefaultLitePullConsumerImpl {
     }
 
     /// Starts the lite pull consumer.
-    pub async fn start(&mut self) -> RocketMQResult<()> {
-        match *self.service_state {
+    pub async fn start(&self) -> RocketMQResult<()> {
+        let _transition = self.lifecycle_transition.lock().await;
+        let previous_state = {
+            let mut service_state = self
+                .service_state
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let previous_state = *service_state;
+            if previous_state == ServiceState::CreateJust {
+                *service_state = ServiceState::StartFailed;
+            }
+            previous_state
+        };
+
+        match previous_state {
             ServiceState::CreateJust => {
                 let consumer_config = self.consumer_config_snapshot();
                 info!(
                     "DefaultLitePullConsumerImpl [{}] starting. message_model={:?}",
                     consumer_config.consumer_group, consumer_config.message_model
                 );
-
-                *self.service_state = ServiceState::StartFailed;
 
                 self.check_config()?;
 
@@ -956,17 +1024,20 @@ impl DefaultLitePullConsumerImpl {
 
                 let client_config = self.client_config.load_full();
                 let client_instance = MQClientManager::get_instance()
-                    .get_or_create_mq_client_instance(client_config.as_ref().clone(), self.rpc_hook.clone());
-                self.client_instance = Some(client_instance.clone());
+                    .get_or_create_mq_client_instance(client_config.as_ref().clone(), self.rpc_hook_snapshot());
+                *self
+                    .client_instance
+                    .write()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(client_instance.clone());
 
-                self.rebalance_impl
-                    .set_consumer_group(consumer_config.consumer_group.clone());
-                self.rebalance_impl.set_message_model(consumer_config.message_model);
-                self.rebalance_impl
-                    .set_allocate_message_queue_strategy(consumer_config.allocate_message_queue_strategy.clone());
-                self.rebalance_impl.set_mq_client_factory(client_instance.clone());
+                self.rebalance_impl.mut_from_ref().set_mq_client_factory(
+                    consumer_config.consumer_group.clone(),
+                    consumer_config.message_model,
+                    consumer_config.allocate_message_queue_strategy.clone(),
+                    client_instance.clone(),
+                );
 
-                if self.pull_api_wrapper.is_none() {
+                if self.component_snapshot(&self.pull_api_wrapper).is_none() {
                     let mut pull_api_wrapper = PullAPIWrapper::new(
                         client_instance.clone(),
                         consumer_config.consumer_group.clone(),
@@ -974,11 +1045,14 @@ impl DefaultLitePullConsumerImpl {
                     );
                     pull_api_wrapper.set_connect_broker_by_user(consumer_config.connect_broker_by_user);
                     pull_api_wrapper.set_default_broker_id(consumer_config.default_broker_id);
-                    pull_api_wrapper.register_filter_message_hook(self.filter_message_hook_list.clone());
-                    self.pull_api_wrapper = Some(ArcMut::new(pull_api_wrapper));
+                    pull_api_wrapper.register_filter_message_hook(self.filter_message_hooks_snapshot());
+                    *self
+                        .pull_api_wrapper
+                        .write()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(ArcMut::new(pull_api_wrapper));
                 }
 
-                let offset_store = self.offset_store.clone().unwrap_or_else(|| {
+                let offset_store = self.offset_store().unwrap_or_else(|| {
                     Arc::new(match consumer_config.message_model {
                         MessageModel::Broadcasting => OffsetStore::new_with_local(LocalFileOffsetStore::new(
                             client_instance.clone(),
@@ -993,23 +1067,26 @@ impl DefaultLitePullConsumerImpl {
 
                 offset_store.load().await?;
 
-                self.rebalance_impl.set_offset_store(offset_store.clone());
+                self.rebalance_impl.set_offset_store(Some(offset_store.clone()));
 
-                self.offset_store = Some(offset_store);
+                *self
+                    .offset_store
+                    .write()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(offset_store);
 
                 let default_lite_pull_consumer_impl = self
-                    .default_lite_pull_consumer_impl
-                    .clone()
+                    .self_reference
+                    .get()
+                    .and_then(Weak::upgrade)
                     .ok_or_else(|| crate::mq_client_err!("default_lite_pull_consumer_impl is not initialized"))?;
                 let register_ok = client_instance
-                    .mut_from_ref()
                     .register_consumer(
                         &consumer_config.consumer_group,
                         MQConsumerInnerImpl::from_lite_pull(default_lite_pull_consumer_impl),
                     )
                     .await;
                 if !register_ok {
-                    *self.service_state = ServiceState::CreateJust;
+                    self.set_service_state(ServiceState::CreateJust);
                     return Err(crate::mq_client_err!(format!(
                         "The consumer group[{}] has been created before, specify another name please.{}",
                         consumer_config.consumer_group,
@@ -1022,7 +1099,7 @@ impl DefaultLitePullConsumerImpl {
                 let client_instance_clone = client_instance.clone();
                 client_instance.mut_from_ref().start(client_instance_clone).await?;
 
-                *self.service_state = ServiceState::Running;
+                self.set_service_state(ServiceState::Running);
 
                 self.start_topic_metadata_check_task()?;
 
@@ -1032,7 +1109,7 @@ impl DefaultLitePullConsumerImpl {
                 );
 
                 if let Err(error) = self.operate_after_running().await {
-                    let _ = self.shutdown().await;
+                    let _ = self.shutdown_transition().await;
                     return Err(error);
                 }
 
@@ -1042,7 +1119,7 @@ impl DefaultLitePullConsumerImpl {
             ServiceState::ShutdownAlready => Err(crate::mq_client_err!("The lite pull consumer has been shutdown")),
             ServiceState::StartFailed => Err(crate::mq_client_err!(format!(
                 "The lite pull consumer start failed, current state: {:?}",
-                *self.service_state
+                self.service_state()
             ))),
         }
     }
@@ -1051,7 +1128,7 @@ impl DefaultLitePullConsumerImpl {
     ///
     /// This mirrors Java's `operateAfterRunning`: subscriptions made before `start`
     /// need topic route refresh, and assignments made before `start` need pull tasks.
-    async fn operate_after_running(&mut self) -> RocketMQResult<()> {
+    async fn operate_after_running(&self) -> RocketMQResult<()> {
         let subscription_type = *self.subscription_type.read().await;
         match subscription_type {
             SubscriptionType::Subscribe => {
@@ -1067,55 +1144,61 @@ impl DefaultLitePullConsumerImpl {
 
         self.refresh_registered_topic_message_queue_snapshots().await?;
 
-        let client_instance = self
-            .client_instance
-            .as_mut()
+        let mut client_instance = self
+            .component_snapshot(&self.client_instance)
             .ok_or_else(|| crate::mq_client_err!("Client instance not initialized"))?;
         client_instance.check_client_in_broker().await
     }
 
-    fn start_topic_metadata_check_task(&mut self) -> RocketMQResult<()> {
-        if self.topic_metadata_check_task_handle.is_some() {
+    fn start_topic_metadata_check_task(&self) -> RocketMQResult<()> {
+        if self
+            .topic_metadata_check_task_handle
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_some()
+        {
             return Ok(());
         }
 
-        let consumer_impl = self
-            .default_lite_pull_consumer_impl
-            .as_ref()
+        let weak_consumer_impl = self
+            .self_reference
+            .get()
+            .cloned()
             .ok_or_else(|| crate::mq_client_err!("default_lite_pull_consumer_impl is not initialized"))?;
-        let weak_consumer_impl = ArcMut::downgrade(consumer_impl);
         let shutdown_signal = self.shutdown_signal.clone();
         let task_cancelled = Arc::new(AtomicBool::new(false));
         let task_cancelled_for_task = task_cancelled.clone();
         let check_interval =
             Duration::from_millis(self.consumer_config.load().topic_metadata_check_interval_millis.max(1));
 
-        self.topic_metadata_check_task_handle = Some(
-            spawn_lite_pull_task("rocketmq-client-lite-pull-topic-metadata", task_cancelled, async move {
-                if !sleep_or_cancel(&shutdown_signal, &task_cancelled_for_task, Duration::from_secs(10)).await {
-                    return;
+        let handle = spawn_lite_pull_task("rocketmq-client-lite-pull-topic-metadata", task_cancelled, async move {
+            if !sleep_or_cancel(&shutdown_signal, &task_cancelled_for_task, Duration::from_secs(10)).await {
+                return;
+            }
+
+            loop {
+                if shutdown_signal.load(Ordering::Acquire) || task_cancelled_for_task.load(Ordering::Acquire) {
+                    break;
                 }
 
-                loop {
-                    if shutdown_signal.load(Ordering::Acquire) || task_cancelled_for_task.load(Ordering::Acquire) {
-                        break;
-                    }
+                let Some(consumer_impl) = weak_consumer_impl.upgrade() else {
+                    break;
+                };
 
-                    let Some(consumer_impl) = weak_consumer_impl.upgrade() else {
-                        break;
-                    };
-
-                    if let Err(error) = consumer_impl.fetch_topic_message_queues_and_compare().await {
-                        warn!("Scheduled fetchTopicMessageQueuesAndCompare exception: {}", error);
-                    }
-
-                    if !sleep_or_cancel(&shutdown_signal, &task_cancelled_for_task, check_interval).await {
-                        break;
-                    }
+                if let Err(error) = consumer_impl.fetch_topic_message_queues_and_compare().await {
+                    warn!("Scheduled fetchTopicMessageQueuesAndCompare exception: {}", error);
                 }
-            })
-            .map_err(|error| crate::mq_client_err!(format!("failed to spawn topic metadata check task: {error}")))?,
-        );
+
+                if !sleep_or_cancel(&shutdown_signal, &task_cancelled_for_task, check_interval).await {
+                    break;
+                }
+            }
+        })
+        .map_err(|error| crate::mq_client_err!(format!("failed to spawn topic metadata check task: {error}")))?;
+        *self
+            .topic_metadata_check_task_handle
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(handle);
 
         Ok(())
     }
@@ -1201,8 +1284,13 @@ impl DefaultLitePullConsumerImpl {
     }
 
     /// Shuts down the lite pull consumer gracefully.
-    pub async fn shutdown(&mut self) -> RocketMQResult<()> {
-        match *self.service_state {
+    pub async fn shutdown(&self) -> RocketMQResult<()> {
+        let _transition = self.lifecycle_transition.lock().await;
+        self.shutdown_transition().await
+    }
+
+    async fn shutdown_transition(&self) -> RocketMQResult<()> {
+        match self.service_state() {
             ServiceState::Running => {
                 let consumer_group = self.consumer_config.load().consumer_group.clone();
                 info!("DefaultLitePullConsumerImpl [{}] shutting down", consumer_group);
@@ -1223,23 +1311,26 @@ impl DefaultLitePullConsumerImpl {
                     );
                 }
 
-                if let Some(handle) = self.topic_metadata_check_task_handle.take() {
+                let metadata_handle = self
+                    .topic_metadata_check_task_handle
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .take();
+                if let Some(handle) = metadata_handle {
                     if !handle.wait(Duration::from_secs(1)).await {
                         warn!("Topic metadata check task did not finish in time");
                     }
                 }
 
                 // Wait for all pull tasks to complete (5s timeout)
-                let mut handles = self.task_handles.write().await;
-                for (mq, handle) in handles.drain() {
+                let handles: Vec<_> = self.task_handles.write().await.drain().collect();
+                for (mq, handle) in handles {
                     if !handle.wait(Duration::from_secs(5)).await {
                         warn!("Pull task for {:?} did not finish in time", mq);
                     }
                 }
-                drop(handles);
-
                 self.persist_consumer_offset().await;
-                if let Some(offset_store) = self.offset_store.as_ref() {
+                if let Some(offset_store) = self.offset_store() {
                     if !offset_store.shutdown(OFFSET_STORE_SHUTDOWN_TIMEOUT).await {
                         warn!(
                             "lite pull consumer [{}] offset store did not stop before timeout",
@@ -1248,15 +1339,17 @@ impl DefaultLitePullConsumerImpl {
                     }
                 }
 
-                if let Some(client) = self.client_instance.as_mut() {
+                let client = self
+                    .client_instance
+                    .write()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .take();
+                if let Some(mut client) = client {
                     client.unregister_consumer(&consumer_group).await;
-                }
-
-                if let Some(mut client) = self.client_instance.take() {
                     client.shutdown().await;
                 }
 
-                *self.service_state = ServiceState::ShutdownAlready;
+                self.set_service_state(ServiceState::ShutdownAlready);
 
                 info!("DefaultLitePullConsumerImpl [{}] shutdown successfully", consumer_group);
 
@@ -1273,12 +1366,12 @@ impl DefaultLitePullConsumerImpl {
 
     /// Returns whether the consumer is currently running.
     pub async fn is_running(&self) -> bool {
-        matches!(*self.service_state, ServiceState::Running)
+        matches!(self.service_state(), ServiceState::Running)
     }
 
     /// Subscribes to a topic with a listener for queue assignment changes.
     pub async fn subscribe_with_listener<L>(
-        &mut self,
+        &self,
         topic: impl Into<CheetahString>,
         sub_expression: impl Into<CheetahString>,
         listener: L,
@@ -1292,7 +1385,7 @@ impl DefaultLitePullConsumerImpl {
 
     /// Subscribes to a topic with a shared listener for queue assignment changes.
     pub async fn subscribe_with_listener_arc(
-        &mut self,
+        &self,
         topic: impl Into<CheetahString>,
         sub_expression: impl Into<CheetahString>,
         listener: ArcMessageQueueListener,
@@ -1305,7 +1398,7 @@ impl DefaultLitePullConsumerImpl {
 
     /// Subscribes to a topic with a message selector.
     pub async fn subscribe_with_selector(
-        &mut self,
+        &self,
         topic: impl Into<CheetahString>,
         selector: Option<crate::consumer::message_selector::MessageSelector>,
     ) -> RocketMQResult<()> {
@@ -1313,6 +1406,7 @@ impl DefaultLitePullConsumerImpl {
 
         match selector {
             Some(sel) => {
+                let _transition = self.lifecycle_transition.lock().await;
                 if topic.is_empty() {
                     return Err(crate::mq_client_err!("Topic cannot be empty"));
                 }
@@ -1325,8 +1419,8 @@ impl DefaultLitePullConsumerImpl {
 
                 self.rebalance_impl.put_subscription_data(topic, subscription_data);
 
-                if *self.service_state == ServiceState::Running {
-                    if let Some(ref client_instance) = self.client_instance {
+                if self.service_state() == ServiceState::Running {
+                    if let Some(client_instance) = self.component_snapshot(&self.client_instance) {
                         client_instance.send_heartbeat_to_all_broker_with_lock().await;
                         self.update_topic_subscribe_info_when_subscription_changed().await?;
                     }
@@ -1350,7 +1444,7 @@ impl DefaultLitePullConsumerImpl {
             config.set_namesrv_addr(CheetahString::from_string(joined_addr.clone()));
         });
 
-        if let Some(client_instance) = self.client_instance.as_ref() {
+        if let Some(client_instance) = self.component_snapshot(&self.client_instance) {
             if let Some(api_impl) = client_instance.mq_client_api_impl.as_ref() {
                 api_impl.update_name_server_address_list(&joined_addr).await;
             }
@@ -1374,7 +1468,7 @@ impl DefaultLitePullConsumerImpl {
                 topic
             );
         }
-        if *self.service_state == ServiceState::Running {
+        if self.service_state() == ServiceState::Running {
             let message_queues = self.fetch_message_queues(topic.clone()).await?;
             self.message_queues_for_topic
                 .write()
@@ -1390,13 +1484,14 @@ impl DefaultLitePullConsumerImpl {
         topic: impl Into<CheetahString>,
         sub_expression: impl Into<CheetahString>,
     ) -> RocketMQResult<()> {
+        let _transition = self.lifecycle_transition.lock().await;
         let topic = topic.into();
         let sub_expression = sub_expression.into();
 
         if sub_expression.as_str().trim().is_empty() {
             return Err(crate::mq_client_err!("subExpression can not be null or empty."));
         }
-        if *self.service_state != ServiceState::CreateJust {
+        if self.service_state() != ServiceState::CreateJust {
             return Err(crate::mq_client_err!("setAssignTag only can be called before start."));
         }
 
@@ -1451,9 +1546,10 @@ impl DefaultLitePullConsumerImpl {
             }
         }
 
-        let default_impl = self
-            .default_lite_pull_consumer_impl
-            .clone()
+        let weak_default_impl = self
+            .self_reference
+            .get()
+            .cloned()
             .ok_or_else(|| crate::mq_client_err!("Consumer self-reference not initialized"))?;
         let shutdown_signal = self.shutdown_signal.clone();
         let task_cancelled = Arc::new(AtomicBool::new(false));
@@ -1466,6 +1562,10 @@ impl DefaultLitePullConsumerImpl {
                 if shutdown_signal.load(Ordering::Acquire) || task_cancelled_for_task.load(Ordering::Acquire) {
                     break;
                 }
+
+                let Some(default_impl) = weak_default_impl.upgrade() else {
+                    break;
+                };
 
                 let pq = match assigned_mq.get_process_queue(&mq_clone).await {
                     Some(pq) if !pq.is_dropped() => pq,
@@ -1570,10 +1670,8 @@ impl DefaultLitePullConsumerImpl {
         let sys_flag = lite_pull_request_sys_flag();
 
         let mut pull_api_wrapper = self
-            .pull_api_wrapper
-            .as_ref()
-            .ok_or_else(|| crate::mq_client_err!("PullAPIWrapper is not initialized"))?
-            .clone();
+            .component_snapshot(&self.pull_api_wrapper)
+            .ok_or_else(|| crate::mq_client_err!("PullAPIWrapper is not initialized"))?;
         let mut pull_result = pull_api_wrapper
             .pull_kernel_impl(
                 mq,
@@ -1730,7 +1828,7 @@ impl DefaultLitePullConsumerImpl {
 
     #[allow(deprecated)]
     async fn compute_initial_pull_offset(&self, mq: &MessageQueue) -> RocketMQResult<i64> {
-        if let Some(offset_store) = &self.offset_store {
+        if let Some(offset_store) = self.offset_store() {
             let stored_offset = offset_store.read_offset(mq, ReadOffsetType::MemoryFirstThenStore).await;
             if stored_offset >= 0 {
                 return Ok(stored_offset);
@@ -1869,7 +1967,8 @@ impl DefaultLitePullConsumerImpl {
             self.reset_topic(&mut messages);
 
             // Execute consume message hooks if registered
-            if !self.consume_message_hook_list.is_empty() {
+            let consume_message_hooks = self.consume_message_hooks_snapshot();
+            if !consume_message_hooks.is_empty() {
                 let consumer_group = self.consumer_config.load().consumer_group.clone();
                 let client_config = self.client_config.load_full();
                 let mut context = ConsumeMessageContext::new(consumer_group, &messages)
@@ -1877,7 +1976,7 @@ impl DefaultLitePullConsumerImpl {
                     .with_namespace(client_config.namespace.clone().unwrap_or_default());
 
                 // Execute hook before with panic protection
-                for hook in &self.consume_message_hook_list {
+                for hook in &consume_message_hooks {
                     if let Err(err) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         hook.consume_message_before(&mut context);
                     })) {
@@ -1895,7 +1994,7 @@ impl DefaultLitePullConsumerImpl {
                 context.access_channel = Some(client_config.access_channel);
 
                 // Execute hook after with panic protection
-                for hook in &self.consume_message_hook_list {
+                for hook in &consume_message_hooks {
                     if let Err(err) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         hook.consume_message_after(&mut context);
                     })) {
@@ -1962,7 +2061,7 @@ impl DefaultLitePullConsumerImpl {
         let updated = self.commit_assigned_message_queue_offset(mq).await?;
 
         if persist && updated {
-            if let Some(ref offset_store) = self.offset_store {
+            if let Some(offset_store) = self.offset_store() {
                 let mut mqs = HashSet::new();
                 mqs.insert(mq.clone());
                 offset_store.persist_all(&mqs).await;
@@ -2007,7 +2106,7 @@ impl DefaultLitePullConsumerImpl {
         }
 
         if persist {
-            if let Some(ref offset_store) = self.offset_store {
+            if let Some(offset_store) = self.offset_store() {
                 offset_store.persist_all(message_queues).await;
             }
         }
@@ -2044,7 +2143,7 @@ impl DefaultLitePullConsumerImpl {
         }
 
         if persist {
-            if let Some(ref offset_store) = self.offset_store {
+            if let Some(offset_store) = self.offset_store() {
                 offset_store.persist_all(&mqs_to_persist).await;
             }
         }
@@ -2054,7 +2153,7 @@ impl DefaultLitePullConsumerImpl {
 
     /// Updates the consume offset for a message queue.
     async fn update_consume_offset(&self, mq: &MessageQueue, offset: i64) -> RocketMQResult<()> {
-        if let Some(ref offset_store) = self.offset_store {
+        if let Some(offset_store) = self.offset_store() {
             offset_store.update_offset(mq, offset, false).await;
         }
         Ok(())
@@ -2066,13 +2165,19 @@ impl DefaultLitePullConsumerImpl {
     }
 
     /// Registers a consume message hook for monitoring message consumption.
-    pub fn register_consume_message_hook(&mut self, hook: Arc<dyn ConsumeMessageHook + Send + Sync>) {
-        self.consume_message_hook_list.push(hook);
+    pub fn register_consume_message_hook(&self, hook: Arc<dyn ConsumeMessageHook + Send + Sync>) {
+        self.consume_message_hook_list
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(hook);
     }
 
     #[cfg(test)]
     pub(crate) fn consume_message_hook_count(&self) -> usize {
-        self.consume_message_hook_list.len()
+        self.consume_message_hook_list
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .len()
     }
 
     /// Removes namespace from message topics if namespace is configured.
@@ -2213,7 +2318,7 @@ impl DefaultLitePullConsumerImpl {
     pub async fn committed(&self, message_queue: &MessageQueue) -> RocketMQResult<i64> {
         self.make_sure_state_ok()?;
 
-        if let Some(ref offset_store) = self.offset_store {
+        if let Some(offset_store) = self.offset_store() {
             let offset = offset_store
                 .read_offset(message_queue, ReadOffsetType::MemoryFirstThenStore)
                 .await;
@@ -2235,7 +2340,8 @@ impl DefaultLitePullConsumerImpl {
     /// and clears assigned message queues for the topic.
     ///
     /// This operation can be performed regardless of the consumer state.
-    pub async fn unsubscribe(&mut self, topic: impl Into<CheetahString>) -> RocketMQResult<()> {
+    pub async fn unsubscribe(&self, topic: impl Into<CheetahString>) -> RocketMQResult<()> {
+        let _transition = self.lifecycle_transition.lock().await;
         let topic = topic.into();
 
         // Remove from rebalance_impl subscription
@@ -2279,10 +2385,8 @@ impl DefaultLitePullConsumerImpl {
         self.make_sure_state_ok()?;
 
         let client_instance = self
-            .client_instance
-            .as_ref()
-            .ok_or_else(|| crate::mq_client_err!("Client instance not initialized"))?
-            .clone();
+            .component_snapshot(&self.client_instance)
+            .ok_or_else(|| crate::mq_client_err!("Client instance not initialized"))?;
 
         client_instance.mq_admin_impl.search_offset(mq, timestamp).await
     }
@@ -2302,10 +2406,8 @@ impl DefaultLitePullConsumerImpl {
 
         let topic = topic.into();
         let client_instance = self
-            .client_instance
-            .as_ref()
-            .ok_or_else(|| crate::mq_client_err!("Client instance not initialized"))?
-            .clone();
+            .component_snapshot(&self.client_instance)
+            .ok_or_else(|| crate::mq_client_err!("Client instance not initialized"))?;
 
         // Fetch topic route data from name server
         let topic_route_data = client_instance
@@ -2344,10 +2446,8 @@ impl DefaultLitePullConsumerImpl {
         self.make_sure_state_ok()?;
 
         let client_instance = self
-            .client_instance
-            .as_ref()
-            .ok_or_else(|| crate::mq_client_err!("Client instance not initialized"))?
-            .clone();
+            .component_snapshot(&self.client_instance)
+            .ok_or_else(|| crate::mq_client_err!("Client instance not initialized"))?;
 
         client_instance
             .mq_admin_impl
@@ -2367,10 +2467,8 @@ impl DefaultLitePullConsumerImpl {
         self.make_sure_state_ok()?;
 
         let client_instance = self
-            .client_instance
-            .as_ref()
-            .ok_or_else(|| crate::mq_client_err!("Client instance not initialized"))?
-            .clone();
+            .component_snapshot(&self.client_instance)
+            .ok_or_else(|| crate::mq_client_err!("Client instance not initialized"))?;
 
         client_instance
             .mq_admin_impl
@@ -2384,10 +2482,8 @@ impl DefaultLitePullConsumerImpl {
 
         let begin = current_millis().saturating_sub(QUERY_UNIQ_KEY_LOOKBACK_MILLIS);
         let client_instance = self
-            .client_instance
-            .as_ref()
-            .ok_or_else(|| crate::mq_client_err!("Client instance not initialized"))?
-            .clone();
+            .component_snapshot(&self.client_instance)
+            .ok_or_else(|| crate::mq_client_err!("Client instance not initialized"))?;
         let result = client_instance
             .mq_admin_impl
             .query_message_with_unique_flag(topic, uniq_key, 32, begin, i64::MAX as u64, true)
@@ -2404,10 +2500,8 @@ impl DefaultLitePullConsumerImpl {
         self.make_sure_state_ok()?;
 
         let client_instance = self
-            .client_instance
-            .as_ref()
-            .ok_or_else(|| crate::mq_client_err!("Client instance not initialized"))?
-            .clone();
+            .component_snapshot(&self.client_instance)
+            .ok_or_else(|| crate::mq_client_err!("Client instance not initialized"))?;
 
         if message_decoder::decode_message_id(msg_id).is_ok() {
             client_instance.mq_admin_impl.view_message(topic, msg_id).await
@@ -2444,10 +2538,8 @@ impl DefaultLitePullConsumerImpl {
         self.make_sure_state_ok()?;
 
         let client_instance = self
-            .client_instance
-            .as_ref()
-            .ok_or_else(|| crate::mq_client_err!("Client instance not initialized"))?
-            .clone();
+            .component_snapshot(&self.client_instance)
+            .ok_or_else(|| crate::mq_client_err!("Client instance not initialized"))?;
 
         client_instance.mq_admin_impl.earliest_msg_store_time(mq).await
     }
@@ -2493,7 +2585,7 @@ impl DefaultLitePullConsumerImpl {
     /// Updates whether the subscription group runs in unit mode.
     pub fn set_unit_mode(&self, unit_mode: bool) {
         self.update_consumer_config(|config| config.unit_mode = unit_mode);
-        if let Some(wrapper) = self.pull_api_wrapper.as_ref() {
+        if let Some(wrapper) = self.component_snapshot(&self.pull_api_wrapper) {
             wrapper.mut_from_ref().set_unit_mode(unit_mode);
         }
         self.rebalance_impl.set_unit_mode(unit_mode);
@@ -2589,7 +2681,7 @@ impl DefaultLitePullConsumerImpl {
 
     /// Returns whether broker selection is controlled by user configuration.
     pub fn is_connect_broker_by_user(&self) -> bool {
-        self.pull_api_wrapper
+        self.component_snapshot(&self.pull_api_wrapper)
             .as_ref()
             .map_or(self.consumer_config.load().connect_broker_by_user, |wrapper| {
                 wrapper.is_connect_broker_by_user()
@@ -2599,7 +2691,7 @@ impl DefaultLitePullConsumerImpl {
     /// Updates whether broker selection is controlled by user configuration.
     pub fn set_connect_broker_by_user(&self, connect_broker_by_user: bool) {
         self.update_consumer_config(|config| config.connect_broker_by_user = connect_broker_by_user);
-        if let Some(wrapper) = self.pull_api_wrapper.as_ref() {
+        if let Some(wrapper) = self.component_snapshot(&self.pull_api_wrapper) {
             wrapper
                 .mut_from_ref()
                 .set_connect_broker_by_user(connect_broker_by_user);
@@ -2608,7 +2700,7 @@ impl DefaultLitePullConsumerImpl {
 
     /// Returns the broker ID used when user-controlled broker selection is enabled.
     pub fn default_broker_id(&self) -> u64 {
-        self.pull_api_wrapper
+        self.component_snapshot(&self.pull_api_wrapper)
             .as_ref()
             .map_or(self.consumer_config.load().default_broker_id, |wrapper| {
                 wrapper.default_broker_id()
@@ -2618,7 +2710,7 @@ impl DefaultLitePullConsumerImpl {
     /// Updates the broker ID used when user-controlled broker selection is enabled.
     pub fn set_default_broker_id(&self, broker_id: u64) {
         self.update_consumer_config(|config| config.default_broker_id = broker_id);
-        if let Some(wrapper) = self.pull_api_wrapper.as_ref() {
+        if let Some(wrapper) = self.component_snapshot(&self.pull_api_wrapper) {
             wrapper.mut_from_ref().set_default_broker_id(broker_id);
         }
     }
@@ -2727,10 +2819,8 @@ impl DefaultLitePullConsumerImpl {
         self.make_sure_state_ok()?;
 
         let client_instance = self
-            .client_instance
-            .as_ref()
-            .ok_or_else(|| crate::mq_client_err!("Client instance not initialized"))?
-            .clone();
+            .component_snapshot(&self.client_instance)
+            .ok_or_else(|| crate::mq_client_err!("Client instance not initialized"))?;
 
         let broker_result = client_instance
             .find_broker_address_in_subscribe(message_queue.broker_name(), mix_all::MASTER_ID, true)
@@ -2751,10 +2841,8 @@ impl DefaultLitePullConsumerImpl {
         self.make_sure_state_ok()?;
 
         let client_instance = self
-            .client_instance
-            .as_ref()
-            .ok_or_else(|| crate::mq_client_err!("Client instance not initialized"))?
-            .clone();
+            .component_snapshot(&self.client_instance)
+            .ok_or_else(|| crate::mq_client_err!("Client instance not initialized"))?;
 
         let broker_result = client_instance
             .find_broker_address_in_subscribe(message_queue.broker_name(), mix_all::MASTER_ID, true)
@@ -2867,7 +2955,7 @@ impl MQConsumerInner for DefaultLitePullConsumerImpl {
         };
 
         if !mqs.is_empty() {
-            if let Some(ref offset_store) = self.offset_store {
+            if let Some(offset_store) = self.offset_store() {
                 offset_store.persist_all(&mqs).await;
             }
         }
@@ -2908,7 +2996,7 @@ impl MQConsumerInner for DefaultLitePullConsumerImpl {
     }
 
     async fn reset_offsets(&self, topic: &CheetahString, offsets: HashMap<MessageQueue, i64>) {
-        let Some(offset_store) = self.offset_store.as_ref() else {
+        let Some(offset_store) = self.offset_store() else {
             warn!(
                 "lite pull reset offset ignored because offset store is not initialized. group={}, topic={}",
                 self.consumer_config.load().consumer_group,
@@ -2925,7 +3013,7 @@ impl MQConsumerInner for DefaultLitePullConsumerImpl {
     }
 
     async fn consumer_status(&self, topic: &CheetahString) -> HashMap<MessageQueue, i64> {
-        let Some(offset_store) = self.offset_store.as_ref() else {
+        let Some(offset_store) = self.offset_store() else {
             warn!(
                 "lite pull consumer status is empty because offset store is not initialized. group={}, topic={}",
                 self.consumer_config.load().consumer_group,
@@ -2964,7 +3052,7 @@ impl MQConsumerInner for DefaultLitePullConsumerImpl {
             let Some(process_queue) = self.assigned_message_queue.get_process_queue(&mq).await else {
                 continue;
             };
-            let commit_offset = if let Some(offset_store) = self.offset_store.as_ref() {
+            let commit_offset = if let Some(offset_store) = self.offset_store() {
                 offset_store
                     .read_offset(&mq, ReadOffsetType::MemoryFirstThenStore)
                     .await
@@ -3174,7 +3262,7 @@ mod tests {
 
     #[tokio::test]
     async fn shutdown_in_create_just_keeps_state_like_java_noop() {
-        let mut impl_ = DefaultLitePullConsumerImpl::new(
+        let impl_ = DefaultLitePullConsumerImpl::new(
             ArcMut::new(ClientConfig::default()),
             ArcMut::new(LitePullConsumerConfig {
                 consumer_group: CheetahString::from_static_str("lite_pull_shutdown_create_group"),
@@ -3189,14 +3277,14 @@ mod tests {
 
     #[tokio::test]
     async fn shutdown_in_start_failed_keeps_state_like_java_default_case() {
-        let mut impl_ = DefaultLitePullConsumerImpl::new(
+        let impl_ = DefaultLitePullConsumerImpl::new(
             ArcMut::new(ClientConfig::default()),
             ArcMut::new(LitePullConsumerConfig {
                 consumer_group: CheetahString::from_static_str("lite_pull_shutdown_failed_group"),
                 ..Default::default()
             }),
         );
-        *impl_.service_state = ServiceState::StartFailed;
+        impl_.set_service_state(ServiceState::StartFailed);
 
         impl_
             .shutdown()
@@ -3207,8 +3295,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn concurrent_shutdown_calls_share_one_lifecycle_transition() {
+        let impl_ = Arc::new(DefaultLitePullConsumerImpl::new(
+            Arc::new(ClientConfig::default()),
+            Arc::new(LitePullConsumerConfig {
+                consumer_group: CheetahString::from_static_str("lite_pull_concurrent_shutdown_group"),
+                ..Default::default()
+            }),
+        ));
+        impl_.bind_self();
+        impl_.set_service_state(ServiceState::Running);
+
+        let (first, second) = tokio::join!(impl_.shutdown(), impl_.shutdown());
+
+        first.expect("first shutdown should complete");
+        second.expect("second shutdown should observe the completed transition");
+        assert_eq!(impl_.service_state(), ServiceState::ShutdownAlready);
+    }
+
+    #[test]
+    fn callback_self_reference_is_weak_and_does_not_keep_root_alive() {
+        let impl_ = Arc::new(DefaultLitePullConsumerImpl::new(
+            Arc::new(ClientConfig::default()),
+            Arc::new(LitePullConsumerConfig {
+                consumer_group: CheetahString::from_static_str("lite_pull_weak_root_group"),
+                ..Default::default()
+            }),
+        ));
+        impl_.bind_self();
+        let weak_impl = Arc::downgrade(&impl_);
+
+        drop(impl_);
+
+        assert!(weak_impl.upgrade().is_none());
+    }
+
+    #[tokio::test]
     async fn start_without_self_reference_returns_error_without_panic() {
-        let mut impl_ = DefaultLitePullConsumerImpl::new(
+        let impl_ = DefaultLitePullConsumerImpl::new(
             ArcMut::new(ClientConfig::default()),
             ArcMut::new(LitePullConsumerConfig {
                 consumer_group: CheetahString::from_static_str("lite_pull_missing_self_ref_group"),
@@ -3288,7 +3412,7 @@ mod tests {
 
     #[test]
     fn set_consumer_group_updates_rebalance_before_start_and_rejects_running_mutation() {
-        let mut impl_ = DefaultLitePullConsumerImpl::new(
+        let impl_ = DefaultLitePullConsumerImpl::new(
             ArcMut::new(ClientConfig::default()),
             ArcMut::new(LitePullConsumerConfig {
                 consumer_group: CheetahString::from_static_str("lite_pull_initial_group"),
@@ -3306,7 +3430,7 @@ mod tests {
             Some("lite_pull_updated_group")
         );
 
-        *impl_.service_state = ServiceState::Running;
+        impl_.set_service_state(ServiceState::Running);
 
         let error = impl_
             .set_consumer_group(CheetahString::from_static_str("lite_pull_late_group"))
@@ -3369,7 +3493,7 @@ mod tests {
 
     #[test]
     fn set_offset_store_updates_rebalance_before_start_and_rejects_running_mutation() {
-        let mut impl_ = DefaultLitePullConsumerImpl::new(
+        let impl_ = DefaultLitePullConsumerImpl::new(
             ArcMut::new(ClientConfig::default()),
             ArcMut::new(LitePullConsumerConfig {
                 consumer_group: CheetahString::from_static_str("lite_pull_offset_store_group"),
@@ -3392,7 +3516,7 @@ mod tests {
         assert!(impl_.offset_store().is_none());
         assert!(!impl_.rebalance_has_offset_store());
 
-        *impl_.service_state = ServiceState::Running;
+        impl_.set_service_state(ServiceState::Running);
 
         let error = impl_
             .set_offset_store(Some(Arc::new(OffsetStore::new_test())))
@@ -3405,7 +3529,7 @@ mod tests {
 
     #[tokio::test]
     async fn set_unit_mode_updates_pull_api_wrapper_for_filter_hooks_like_java() {
-        let mut impl_ = DefaultLitePullConsumerImpl::new(
+        let impl_ = DefaultLitePullConsumerImpl::new(
             ArcMut::new(ClientConfig::default()),
             ArcMut::new(LitePullConsumerConfig {
                 consumer_group: CheetahString::from_static_str("lite_pull_unit_mode_group"),
@@ -3413,7 +3537,7 @@ mod tests {
             }),
         );
         let client_instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "lite-pull-unit-mode-test", None);
-        impl_.pull_api_wrapper = Some(ArcMut::new(PullAPIWrapper::new(
+        *impl_.pull_api_wrapper.write().expect("pull wrapper lock") = Some(ArcMut::new(PullAPIWrapper::new(
             client_instance,
             CheetahString::from_static_str("lite_pull_unit_mode_group"),
             false,
@@ -3423,7 +3547,7 @@ mod tests {
 
         assert!(impl_.is_unit_mode());
         assert!(impl_
-            .pull_api_wrapper
+            .component_snapshot(&impl_.pull_api_wrapper)
             .as_ref()
             .expect("pull wrapper should be present")
             .unit_mode());
@@ -3455,28 +3579,27 @@ mod tests {
 
     #[tokio::test]
     async fn operate_after_running_starts_preassigned_pull_tasks() {
-        let mut impl_ = ArcMut::new(DefaultLitePullConsumerImpl::new(
+        let impl_ = Arc::new(DefaultLitePullConsumerImpl::new(
             ArcMut::new(ClientConfig::default()),
             ArcMut::new(LitePullConsumerConfig {
                 consumer_group: CheetahString::from_static_str("lite_pull_preassigned_group"),
                 ..Default::default()
             }),
         ));
-        let wrapper = impl_.clone();
-        impl_.set_default_lite_pull_consumer_impl(wrapper);
+        impl_.bind_self();
 
         let mq = MessageQueue::from_parts("topic-a", "broker-a", 0);
         impl_
             .assign(vec![mq.clone()])
             .await
             .expect("assign before running should succeed");
-        impl_.client_instance = Some(MQClientInstance::new_arc(
+        *impl_.client_instance.write().expect("client instance lock") = Some(MQClientInstance::new_arc(
             ClientConfig::default(),
             0,
             "lite-pull-operate-after-running-test",
             None,
         ));
-        *impl_.service_state = ServiceState::Running;
+        impl_.set_service_state(ServiceState::Running);
 
         impl_
             .operate_after_running()
@@ -3555,7 +3678,7 @@ mod tests {
 
     #[tokio::test]
     async fn consumer_running_info_includes_assigned_process_queues() {
-        let mut impl_ = DefaultLitePullConsumerImpl::new(
+        let impl_ = DefaultLitePullConsumerImpl::new(
             ArcMut::new(ClientConfig::default()),
             ArcMut::new(LitePullConsumerConfig {
                 consumer_group: CheetahString::from_static_str("lite_pull_running_info_group"),
@@ -3577,14 +3700,14 @@ mod tests {
 
     #[tokio::test]
     async fn update_name_server_address_updates_client_api_like_java() {
-        let mut impl_ = DefaultLitePullConsumerImpl::new(
+        let impl_ = DefaultLitePullConsumerImpl::new(
             ArcMut::new(ClientConfig::default()),
             ArcMut::new(LitePullConsumerConfig {
                 consumer_group: CheetahString::from_static_str("lite_pull_update_namesrv_group"),
                 ..Default::default()
             }),
         );
-        impl_.client_instance = Some(MQClientInstance::new_arc(
+        *impl_.client_instance.write().expect("client instance lock") = Some(MQClientInstance::new_arc(
             ClientConfig::default(),
             0,
             "lite-pull-update-namesrv-test",
@@ -3599,10 +3722,12 @@ mod tests {
             impl_.client_config.load().namesrv_addr.as_deref(),
             Some("127.0.0.1:9876;127.0.0.2:9876")
         );
-        let api_impl = impl_
-            .client_instance
+        let client_instance = impl_
+            .component_snapshot(&impl_.client_instance)
+            .expect("client instance should be initialized");
+        let api_impl = client_instance
+            .mq_client_api_impl
             .as_ref()
-            .and_then(|client| client.mq_client_api_impl.as_ref())
             .expect("client api should be initialized");
         let mut actual_addresses = api_impl.get_name_server_address_list().to_vec();
         actual_addresses.sort();
@@ -3617,7 +3742,7 @@ mod tests {
 
     #[tokio::test]
     async fn subscribe_with_sql_selector_preserves_expression_type_like_java() {
-        let mut impl_ = DefaultLitePullConsumerImpl::new(
+        let impl_ = DefaultLitePullConsumerImpl::new(
             ArcMut::new(ClientConfig::default()),
             ArcMut::new(LitePullConsumerConfig {
                 consumer_group: CheetahString::from_static_str("lite_pull_sql_selector_group"),
@@ -3691,14 +3816,14 @@ mod tests {
         );
         drop(map);
 
-        let mut running_impl = DefaultLitePullConsumerImpl::new(
+        let running_impl = DefaultLitePullConsumerImpl::new(
             ArcMut::new(ClientConfig::default()),
             ArcMut::new(LitePullConsumerConfig {
                 consumer_group: CheetahString::from_static_str("lite_pull_assign_filter_running_group"),
                 ..Default::default()
             }),
         );
-        *running_impl.service_state = ServiceState::Running;
+        running_impl.set_service_state(ServiceState::Running);
 
         let running_error = running_impl
             .set_sub_expression_for_assign(topic, "TagA")
@@ -3735,14 +3860,14 @@ mod tests {
 
     #[tokio::test]
     async fn seek_rejects_unassigned_queue_before_broker_offset_lookup_like_java() {
-        let mut impl_ = DefaultLitePullConsumerImpl::new(
+        let impl_ = DefaultLitePullConsumerImpl::new(
             ArcMut::new(ClientConfig::default()),
             ArcMut::new(LitePullConsumerConfig {
                 consumer_group: CheetahString::from_static_str("lite_pull_seek_unassigned_group"),
                 ..Default::default()
             }),
         );
-        *impl_.service_state = ServiceState::Running;
+        impl_.set_service_state(ServiceState::Running);
 
         let mq = MessageQueue::from_parts("topic-seek-unassigned", "broker-a", 0);
         let error = impl_
@@ -3758,14 +3883,14 @@ mod tests {
     #[tokio::test]
     async fn commit_all_updates_offsets_without_persisting_like_java() {
         let group = CheetahString::from_static_str("lite_pull_commit_all_group");
-        let mut impl_ = DefaultLitePullConsumerImpl::new(
+        let impl_ = DefaultLitePullConsumerImpl::new(
             ArcMut::new(ClientConfig::default()),
             ArcMut::new(LitePullConsumerConfig {
                 consumer_group: group,
                 ..Default::default()
             }),
         );
-        *impl_.service_state = ServiceState::Running;
+        impl_.set_service_state(ServiceState::Running);
 
         let mq = MessageQueue::from_parts("topic-commit-all", "broker-a", 0);
         impl_.assigned_message_queue.put(mq.clone()).await;
@@ -3773,7 +3898,7 @@ mod tests {
 
         let offset_store = Arc::new(OffsetStore::new_test());
         offset_store.update_offset(&mq, 5, false).await;
-        impl_.offset_store = Some(offset_store.clone());
+        *impl_.offset_store.write().expect("offset store lock") = Some(offset_store.clone());
 
         impl_.commit_all().await.expect("commit all should update offset store");
 
@@ -3784,14 +3909,14 @@ mod tests {
     #[tokio::test]
     async fn commit_message_queues_uses_assigned_consume_offset_like_java() {
         let group = CheetahString::from_static_str("lite_pull_commit_set_group");
-        let mut impl_ = DefaultLitePullConsumerImpl::new(
+        let impl_ = DefaultLitePullConsumerImpl::new(
             ArcMut::new(ClientConfig::default()),
             ArcMut::new(LitePullConsumerConfig {
                 consumer_group: group,
                 ..Default::default()
             }),
         );
-        *impl_.service_state = ServiceState::Running;
+        impl_.set_service_state(ServiceState::Running);
 
         let mq = MessageQueue::from_parts("topic-commit-set", "broker-a", 0);
         impl_.assigned_message_queue.put(mq.clone()).await;
@@ -3799,7 +3924,7 @@ mod tests {
 
         let offset_store = Arc::new(OffsetStore::new_test());
         offset_store.update_offset(&mq, 5, false).await;
-        impl_.offset_store = Some(offset_store.clone());
+        *impl_.offset_store.write().expect("offset store lock") = Some(offset_store.clone());
 
         let queues = HashSet::from([mq.clone()]);
         impl_
@@ -3814,21 +3939,21 @@ mod tests {
     #[tokio::test]
     async fn commit_message_queues_with_persist_calls_persist_all_like_java() {
         let group = CheetahString::from_static_str("lite_pull_commit_set_persist_group");
-        let mut impl_ = DefaultLitePullConsumerImpl::new(
+        let impl_ = DefaultLitePullConsumerImpl::new(
             ArcMut::new(ClientConfig::default()),
             ArcMut::new(LitePullConsumerConfig {
                 consumer_group: group,
                 ..Default::default()
             }),
         );
-        *impl_.service_state = ServiceState::Running;
+        impl_.set_service_state(ServiceState::Running);
 
         let mq = MessageQueue::from_parts("topic-commit-set-persist", "broker-a", 0);
         impl_.assigned_message_queue.put(mq.clone()).await;
         impl_.assigned_message_queue.update_consume_offset(&mq, 100).await;
 
         let offset_store = Arc::new(OffsetStore::new_test());
-        impl_.offset_store = Some(offset_store.clone());
+        *impl_.offset_store.write().expect("offset store lock") = Some(offset_store.clone());
 
         let queues = HashSet::from([mq]);
         impl_
@@ -3841,7 +3966,7 @@ mod tests {
 
     #[tokio::test]
     async fn poll_zero_timeout_returns_cached_message_like_java() {
-        let mut impl_ = DefaultLitePullConsumerImpl::new(
+        let impl_ = DefaultLitePullConsumerImpl::new(
             ArcMut::new(ClientConfig::default()),
             ArcMut::new(LitePullConsumerConfig {
                 consumer_group: CheetahString::from_static_str("lite_pull_zero_timeout_group"),
@@ -3849,7 +3974,7 @@ mod tests {
                 ..Default::default()
             }),
         );
-        *impl_.service_state = ServiceState::Running;
+        impl_.set_service_state(ServiceState::Running);
 
         let mq = MessageQueue::from_parts("topic-zero-timeout", "broker-a", 0);
         impl_.assigned_message_queue.put(mq.clone()).await;
@@ -3881,7 +4006,7 @@ mod tests {
 
     #[tokio::test]
     async fn clear_message_queue_in_cache_removes_pending_consume_requests_like_java() {
-        let mut impl_ = DefaultLitePullConsumerImpl::new(
+        let impl_ = DefaultLitePullConsumerImpl::new(
             ArcMut::new(ClientConfig::default()),
             ArcMut::new(LitePullConsumerConfig {
                 consumer_group: CheetahString::from_static_str("lite_pull_clear_cache_group"),
@@ -3889,7 +4014,7 @@ mod tests {
                 ..Default::default()
             }),
         );
-        *impl_.service_state = ServiceState::Running;
+        impl_.set_service_state(ServiceState::Running);
 
         let cleared_mq = MessageQueue::from_parts("topic-clear-cache", "broker-a", 0);
         let retained_mq = MessageQueue::from_parts("topic-clear-cache", "broker-a", 1);
@@ -3954,7 +4079,7 @@ mod tests {
             access_channel: AccessChannel::Cloud,
             ..Default::default()
         };
-        let mut impl_ = DefaultLitePullConsumerImpl::new(
+        let impl_ = DefaultLitePullConsumerImpl::new(
             ArcMut::new(client_config),
             ArcMut::new(LitePullConsumerConfig {
                 consumer_group: CheetahString::from_static_str("lite_pull_hook_access_channel_group"),
@@ -3962,7 +4087,7 @@ mod tests {
                 ..Default::default()
             }),
         );
-        *impl_.service_state = ServiceState::Running;
+        impl_.set_service_state(ServiceState::Running);
         let hook = Arc::new(CapturingConsumeHook::new());
         impl_.register_consume_message_hook(hook.clone());
 
@@ -4011,7 +4136,7 @@ mod tests {
 
     #[tokio::test]
     async fn poll_refreshes_last_consume_timestamp_after_hooks_like_java() {
-        let mut impl_ = DefaultLitePullConsumerImpl::new(
+        let impl_ = DefaultLitePullConsumerImpl::new(
             ArcMut::new(ClientConfig::default()),
             ArcMut::new(LitePullConsumerConfig {
                 consumer_group: CheetahString::from_static_str("lite_pull_timestamp_after_hook_group"),
@@ -4019,7 +4144,7 @@ mod tests {
                 ..Default::default()
             }),
         );
-        *impl_.service_state = ServiceState::Running;
+        impl_.set_service_state(ServiceState::Running);
         let after_timestamp = Arc::new(AtomicU64::new(0));
         impl_.register_consume_message_hook(Arc::new(SlowAfterConsumeHook {
             after_timestamp: after_timestamp.clone(),
@@ -4056,7 +4181,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn concurrent_poll_calls_are_serialized_like_java_synchronized_poll() {
-        let mut impl_ = ArcMut::new(DefaultLitePullConsumerImpl::new(
+        let impl_ = Arc::new(DefaultLitePullConsumerImpl::new(
             ArcMut::new(ClientConfig::default()),
             ArcMut::new(LitePullConsumerConfig {
                 consumer_group: CheetahString::from_static_str("lite_pull_serialized_poll_group"),
@@ -4064,7 +4189,7 @@ mod tests {
                 ..Default::default()
             }),
         ));
-        *impl_.service_state = ServiceState::Running;
+        impl_.set_service_state(ServiceState::Running);
 
         let entered_first_after = Arc::new(AtomicBool::new(false));
         let release_first_after = Arc::new(AtomicBool::new(false));
@@ -4151,7 +4276,7 @@ mod tests {
 
     #[tokio::test]
     async fn pull_inner_refreshes_last_pull_timestamp_before_flow_control_like_java() {
-        let mut impl_ = DefaultLitePullConsumerImpl::new(
+        let impl_ = DefaultLitePullConsumerImpl::new(
             ArcMut::new(ClientConfig::default()),
             ArcMut::new(LitePullConsumerConfig {
                 consumer_group: CheetahString::from_static_str("lite_pull_last_pull_timestamp_group"),
@@ -4160,7 +4285,7 @@ mod tests {
                 ..Default::default()
             }),
         );
-        *impl_.service_state = ServiceState::Running;
+        impl_.set_service_state(ServiceState::Running);
         let mq = MessageQueue::from_parts("topic-flow-control", "broker-a", 0);
         let process_queue = Arc::new(crate::consumer::consumer_impl::process_queue::ProcessQueue::new());
         process_queue.set_last_pull_timestamp(1);
@@ -4237,7 +4362,7 @@ mod tests {
 
     #[tokio::test]
     async fn rebalance_update_assigns_divided_queues_and_starts_pull_tasks() {
-        let mut impl_ = ArcMut::new(DefaultLitePullConsumerImpl::new(
+        let impl_ = Arc::new(DefaultLitePullConsumerImpl::new(
             ArcMut::new(ClientConfig::default()),
             ArcMut::new(LitePullConsumerConfig {
                 consumer_group: CheetahString::from_static_str("lite_pull_rebalance_update_group"),
@@ -4245,8 +4370,7 @@ mod tests {
                 ..Default::default()
             }),
         ));
-        let wrapper = impl_.clone();
-        impl_.set_default_lite_pull_consumer_impl(wrapper);
+        impl_.bind_self();
 
         let mq0 = MessageQueue::from_parts("topic-a", "broker-a", 0);
         let mq1 = MessageQueue::from_parts("topic-a", "broker-a", 1);
@@ -4297,15 +4421,14 @@ mod tests {
 
     #[tokio::test]
     async fn lite_pull_rebalance_listener_invokes_user_listener() {
-        let mut impl_ = ArcMut::new(DefaultLitePullConsumerImpl::new(
+        let impl_ = Arc::new(DefaultLitePullConsumerImpl::new(
             ArcMut::new(ClientConfig::default()),
             ArcMut::new(LitePullConsumerConfig {
                 consumer_group: CheetahString::from_static_str("lite_pull_user_listener_group"),
                 ..Default::default()
             }),
         ));
-        let wrapper = impl_.clone();
-        impl_.set_default_lite_pull_consumer_impl(wrapper);
+        impl_.bind_self();
 
         let calls = Arc::new(AtomicUsize::new(0));
         {
@@ -4317,7 +4440,7 @@ mod tests {
         }
 
         let listener = LitePullRebalanceListener {
-            consumer_impl: ArcMut::downgrade(&impl_),
+            consumer_impl: Arc::downgrade(&impl_),
             user_listener: impl_.user_message_queue_listener.clone(),
             task_tracker: impl_.rebalance_listener_tasks.clone(),
             shutdown_token: impl_.rebalance_listener_shutdown.clone(),
@@ -4358,15 +4481,14 @@ mod tests {
 
     #[tokio::test]
     async fn lite_pull_rebalance_listener_ignores_changes_after_shutdown_token_cancelled() {
-        let mut impl_ = ArcMut::new(DefaultLitePullConsumerImpl::new(
+        let impl_ = Arc::new(DefaultLitePullConsumerImpl::new(
             ArcMut::new(ClientConfig::default()),
             ArcMut::new(LitePullConsumerConfig {
                 consumer_group: CheetahString::from_static_str("lite_pull_cancelled_listener_group"),
                 ..Default::default()
             }),
         ));
-        let wrapper = impl_.clone();
-        impl_.set_default_lite_pull_consumer_impl(wrapper);
+        impl_.bind_self();
 
         let calls = Arc::new(AtomicUsize::new(0));
         {
@@ -4379,7 +4501,7 @@ mod tests {
 
         impl_.rebalance_listener_shutdown.cancel();
         let listener = LitePullRebalanceListener {
-            consumer_impl: ArcMut::downgrade(&impl_),
+            consumer_impl: Arc::downgrade(&impl_),
             user_listener: impl_.user_message_queue_listener.clone(),
             task_tracker: impl_.rebalance_listener_tasks.clone(),
             shutdown_token: impl_.rebalance_listener_shutdown.clone(),
@@ -4399,7 +4521,7 @@ mod tests {
 
     #[tokio::test]
     async fn subscribe_with_listener_installs_user_listener_with_subscription_like_java() {
-        let mut impl_ = DefaultLitePullConsumerImpl::new(
+        let impl_ = DefaultLitePullConsumerImpl::new(
             ArcMut::new(ClientConfig::default()),
             ArcMut::new(LitePullConsumerConfig {
                 consumer_group: CheetahString::from_static_str("lite_pull_subscribe_listener_group"),

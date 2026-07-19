@@ -31,7 +31,6 @@ use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_remoting::runtime::RPCHook;
-use rocketmq_rust::ArcMut;
 use tokio::sync::OnceCell;
 use tokio::sync::RwLock;
 
@@ -151,7 +150,7 @@ pub struct DefaultLitePullConsumer {
     consumer_config: Arc<ArcSwap<LitePullConsumerConfig>>,
 
     /// Core implementation (lazy-initialized on start using OnceCell)
-    default_lite_pull_consumer_impl: Arc<OnceCell<ArcMut<DefaultLitePullConsumerImpl>>>,
+    default_lite_pull_consumer_impl: Arc<OnceCell<Arc<DefaultLitePullConsumerImpl>>>,
 
     /// Optional RPC hook for request/response interception
     rpc_hook: Option<Arc<dyn RPCHook>>,
@@ -969,7 +968,7 @@ impl DefaultLitePullConsumer {
     }
 
     /// Initializes the trace dispatcher if message trace is enabled.
-    async fn init_trace_dispatcher_internal(&self, impl_: &ArcMut<DefaultLitePullConsumerImpl>) -> RocketMQResult<()> {
+    async fn init_trace_dispatcher_internal(&self, impl_: &Arc<DefaultLitePullConsumerImpl>) -> RocketMQResult<()> {
         if !self.enable_msg_trace {
             return Ok(());
         }
@@ -1004,7 +1003,7 @@ impl DefaultLitePullConsumer {
         };
 
         let hook = Arc::new(ConsumeMessageTraceHookImpl::new(dispatcher_arc));
-        impl_.mut_from_ref().register_consume_message_hook(hook);
+        impl_.register_consume_message_hook(hook);
 
         Ok(())
     }
@@ -1032,7 +1031,7 @@ impl DefaultLitePullConsumer {
     }
 
     /// Returns a reference to the internal implementation after it has been initialized.
-    fn try_impl_(&self) -> RocketMQResult<&ArcMut<DefaultLitePullConsumerImpl>> {
+    fn try_impl_(&self) -> RocketMQResult<&Arc<DefaultLitePullConsumerImpl>> {
         self.default_lite_pull_consumer_impl
             .get()
             .ok_or_else(|| RocketMQError::not_initialized("DefaultLitePullConsumer not started. Call start() first."))
@@ -1044,15 +1043,14 @@ impl DefaultLitePullConsumer {
     /// `setSubExpressionForAssign` while the implementation is still in
     /// `CREATE_JUST`. Those calls populate local subscription state and only
     /// trigger broker route updates after `start()`.
-    async fn get_or_init_impl(&self) -> RocketMQResult<&ArcMut<DefaultLitePullConsumerImpl>> {
+    async fn get_or_init_impl(&self) -> RocketMQResult<&Arc<DefaultLitePullConsumerImpl>> {
         self.default_lite_pull_consumer_impl
             .get_or_try_init(|| async {
-                let mut impl_ = ArcMut::new(DefaultLitePullConsumerImpl::new(
+                let impl_ = Arc::new(DefaultLitePullConsumerImpl::new(
                     self.client_config_snapshot(),
                     self.consumer_config_snapshot(),
                 ));
-                let wrapper = impl_.clone();
-                impl_.set_default_lite_pull_consumer_impl(wrapper);
+                impl_.bind_self();
                 impl_.set_rpc_hook(self.rpc_hook.clone());
                 impl_.set_message_queue_listener(self.current_message_queue_listener());
 
@@ -1062,10 +1060,10 @@ impl DefaultLitePullConsumer {
                 self.set_consumer_group(consumer_group.clone())?;
                 impl_.set_consumer_group(consumer_group)?;
                 if let Some(offset_store) = self.current_offset_store() {
-                    impl_.mut_from_ref().set_offset_store(Some(offset_store))?;
+                    impl_.set_offset_store(Some(offset_store))?;
                 }
 
-                Ok::<ArcMut<DefaultLitePullConsumerImpl>, rocketmq_error::RocketMQError>(impl_)
+                Ok::<Arc<DefaultLitePullConsumerImpl>, rocketmq_error::RocketMQError>(impl_)
             })
             .await
     }
@@ -1101,7 +1099,7 @@ impl LitePullConsumer for DefaultLitePullConsumer {
     async fn start(&self) -> RocketMQResult<()> {
         let impl_ = self.get_or_init_impl().await?;
 
-        impl_.mut_from_ref().start().await?;
+        impl_.start().await?;
         self.set_offset_store_local(impl_.offset_store());
         self.start_trace_dispatcher().await;
         Ok(())
@@ -1109,7 +1107,7 @@ impl LitePullConsumer for DefaultLitePullConsumer {
 
     async fn shutdown(&self) {
         if let Some(impl_) = self.default_lite_pull_consumer_impl.get() {
-            let _ = impl_.mut_from_ref().shutdown().await;
+            let _ = impl_.shutdown().await;
         }
 
         // Shutdown trace dispatcher
@@ -1138,7 +1136,6 @@ impl LitePullConsumer for DefaultLitePullConsumer {
         let wrapped_topic = self.with_namespace(topic);
         self.get_or_init_impl()
             .await?
-            .mut_from_ref()
             .subscribe(wrapped_topic, sub_expression)
             .await
     }
@@ -1151,7 +1148,6 @@ impl LitePullConsumer for DefaultLitePullConsumer {
         let listener: ArcMessageQueueListener = Arc::new(listener);
         self.get_or_init_impl()
             .await?
-            .mut_from_ref()
             .subscribe_with_listener_arc(wrapped_topic, sub_expression, listener.clone())
             .await?;
         self.set_message_queue_listener_local(Some(listener));
@@ -1162,7 +1158,6 @@ impl LitePullConsumer for DefaultLitePullConsumer {
         let wrapped_topic = self.with_namespace(topic);
         self.get_or_init_impl()
             .await?
-            .mut_from_ref()
             .subscribe_with_selector(wrapped_topic, selector)
             .await
     }
@@ -1171,7 +1166,7 @@ impl LitePullConsumer for DefaultLitePullConsumer {
         let wrapped_topic = self.with_namespace(topic);
         match self.try_impl_() {
             Ok(impl_) => {
-                if let Err(e) = impl_.mut_from_ref().unsubscribe(wrapped_topic).await {
+                if let Err(e) = impl_.unsubscribe(wrapped_topic).await {
                     tracing::warn!(topic = %topic, error = %e, "unsubscribe failed");
                 }
             }
@@ -1195,11 +1190,7 @@ impl LitePullConsumer for DefaultLitePullConsumer {
         // Wrap namespace for all queues
         let wrapped_queues: Vec<_> = message_queues.iter().map(|mq| self.queue_with_namespace(mq)).collect();
 
-        self.get_or_init_impl()
-            .await?
-            .mut_from_ref()
-            .assign(wrapped_queues)
-            .await
+        self.get_or_init_impl().await?.assign(wrapped_queues).await
     }
 
     async fn set_sub_expression_for_assign(&self, topic: &str, sub_expression: &str) -> RocketMQResult<()> {
@@ -1355,7 +1346,7 @@ impl LitePullConsumer for DefaultLitePullConsumer {
 
     async fn set_offset_store(&self, offset_store: Option<Arc<OffsetStore>>) -> RocketMQResult<()> {
         if let Some(impl_) = self.default_lite_pull_consumer_impl.get() {
-            impl_.mut_from_ref().set_offset_store(offset_store.clone())?;
+            impl_.set_offset_store(offset_store.clone())?;
         }
         self.set_offset_store_local(offset_store);
         Ok(())
@@ -1849,18 +1840,17 @@ mod tests {
             .expect("builder should create consumer")
     }
 
-    fn new_namespaced_consumer_with_impl() -> (DefaultLitePullConsumer, ArcMut<DefaultLitePullConsumerImpl>) {
+    fn new_namespaced_consumer_with_impl() -> (DefaultLitePullConsumer, Arc<DefaultLitePullConsumerImpl>) {
         let consumer = DefaultLitePullConsumer::builder()
             .consumer_group("lite_pull_namespace_group")
             .namespace("ns")
             .build()
             .expect("builder should create namespaced consumer");
-        let mut impl_ = ArcMut::new(DefaultLitePullConsumerImpl::new(
+        let impl_ = Arc::new(DefaultLitePullConsumerImpl::new(
             consumer.client_config_snapshot(),
             consumer.consumer_config_snapshot(),
         ));
-        let wrapper = impl_.clone();
-        impl_.set_default_lite_pull_consumer_impl(wrapper);
+        impl_.bind_self();
         if consumer.default_lite_pull_consumer_impl.set(impl_.clone()).is_err() {
             panic!("test consumer impl should be set once");
         }
@@ -2668,12 +2658,11 @@ mod tests {
             true,
             None,
         );
-        let mut impl_ = ArcMut::new(DefaultLitePullConsumerImpl::new(
+        let impl_ = Arc::new(DefaultLitePullConsumerImpl::new(
             consumer.client_config_snapshot(),
             consumer.consumer_config_snapshot(),
         ));
-        let wrapper = impl_.clone();
-        impl_.set_default_lite_pull_consumer_impl(wrapper);
+        impl_.bind_self();
 
         consumer
             .init_trace_dispatcher_internal(&impl_)
@@ -2711,12 +2700,11 @@ mod tests {
             true,
             None,
         );
-        let mut impl_ = ArcMut::new(DefaultLitePullConsumerImpl::new(
+        let impl_ = Arc::new(DefaultLitePullConsumerImpl::new(
             consumer.client_config_snapshot(),
             consumer.consumer_config_snapshot(),
         ));
-        let wrapper = impl_.clone();
-        impl_.set_default_lite_pull_consumer_impl(wrapper);
+        impl_.bind_self();
 
         consumer
             .init_trace_dispatcher_internal(&impl_)
