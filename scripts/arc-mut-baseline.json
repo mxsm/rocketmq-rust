@@ -789,13 +789,13 @@
           "id": "a3c29627e8d7d7e68fa8faae",
           "fingerprint": "e21707b42c3ee99cb2a5e67d",
           "item": "fn apply_message_store_role_change_promotes_store_to_master",
-          "line": 9669
+          "line": 9670
         },
         {
           "id": "4ff61cc699c2c34d1b75fdec",
           "fingerprint": "e21707b42c3ee99cb2a5e67d",
           "item": "fn apply_message_store_role_change_demotes_store_to_slave",
-          "line": 9702
+          "line": 9703
         }
       ],
       "owner": "broker",
@@ -884,12 +884,6 @@
           "line": 3326
         },
         {
-          "id": "a4581ac092036fd9e83cb0b4",
-          "fingerprint": "c7097209a6e85abc30842435",
-          "item": "struct BrokerRuntimeInner",
-          "line": 3361
-        },
-        {
           "id": "f248d64f116cda3a8fac82bc",
           "fingerprint": "11c496708854f974676df3a1",
           "item": "struct BrokerRuntimeInner",
@@ -936,12 +930,6 @@
           "fingerprint": "7e8542f406042396ea595c53",
           "item": "fn message_store",
           "line": 3681
-        },
-        {
-          "id": "af914556887c67791df7dfd8",
-          "fingerprint": "5c66d04b8339ebd1b5e8f1a1",
-          "item": "fn pop_lite_message_processor",
-          "line": 3701
         },
         {
           "id": "51723d390366120a3abf406a",
@@ -1692,54 +1680,17 @@
           "id": "eca1ff4ca952398cae8fa2f3",
           "fingerprint": "23dc51c7be1eb64e851149ae",
           "item": "struct PopLiteLongPollingService",
-          "line": 45
+          "line": 53
         },
         {
-          "id": "c1b4e20de9cf4c98eff0c7ce",
-          "fingerprint": "7c99663a9dd01e448430e63d",
-          "item": "struct PopLiteLongPollingService",
-          "line": 48
-        },
-        {
-          "id": "d8c31bf5b2f9a76f042e49c0",
-          "fingerprint": "baf993ae90865ea6ebddfd8d",
+          "id": "b03649b97362b5417d843b3c",
+          "fingerprint": "e9d911094ce80b00f21f4c03",
           "item": "fn new",
-          "line": 57
-        },
-        {
-          "id": "065ea47a9d23cca6f3668eec",
-          "fingerprint": "0cc599b3e33c53086125e9cf",
-          "item": "fn start",
-          "line": 72
-        },
-        {
-          "id": "aa681a2402381bf6acccfe6a",
-          "fingerprint": "858e66e8f61a65f6153c4bda",
-          "item": "fn set_processor",
-          "line": 289
+          "line": 63
         }
       ],
       "owner": "broker",
       "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "a878158de9fb3db61e2de961",
-      "path": "rocketmq-broker/src/long_polling/long_polling_service/pop_lite_long_polling_service.rs",
-      "symbol": "mut_from_ref",
-      "kind": "mut_from_ref_call",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "b845d1b71282336802eabf78",
-          "fingerprint": "460e80157407375d8ae99881",
-          "item": "fn start",
-          "line": 88
-        }
-      ],
-      "owner": "broker",
-      "reason": "Legacy safe mutable-reference escape pending ownership migration",
       "remove_by": "M05",
       "adr": "ADR-002"
     },
@@ -4160,50 +4111,6 @@
       "adr": "ADR-002"
     },
     {
-      "identity": "02e51aa995b8eadeae2a890d",
-      "path": "rocketmq-broker/src/processor/pop_lite_message_processor.rs",
-      "symbol": "*",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "d09129793d10143e2a76b0d1",
-          "fingerprint": "ac16edb63b38368133fb4f17",
-          "item": "mod tests",
-          "line": 547
-        }
-      ],
-      "owner": "broker",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "1db79a152cb99d3684abec56",
-      "path": "rocketmq-broker/src/processor/pop_lite_message_processor.rs",
-      "symbol": "ArcMut",
-      "kind": "constructor",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "5ffde42fb64b31e89f8e9d74",
-          "fingerprint": "b3a2af64f08552541d5c14f6",
-          "item": "fn new",
-          "line": 65
-        },
-        {
-          "id": "536997b562b794d4918d07c8",
-          "fingerprint": "60da66baee0140eeb058a635",
-          "item": "fn new_arc_mut",
-          "line": 73
-        }
-      ],
-      "owner": "broker",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
       "identity": "fb23e3d232b1ceaad894942b",
       "path": "rocketmq-broker/src/processor/pop_lite_message_processor.rs",
       "symbol": "ArcMut",
@@ -4214,7 +4121,7 @@
           "id": "b3787b31af8bbab34476a9b1",
           "fingerprint": "90b9a8c27c9425758f0828a7",
           "item": "<module>",
-          "line": 32
+          "line": 33
         }
       ],
       "owner": "broker",
@@ -4230,52 +4137,28 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "ed42d999e11b02573f51d007",
-          "fingerprint": "2f1927308b4ca147d99c38a4",
+          "id": "f5c43b17c7f8d357fe408bd0",
+          "fingerprint": "53ff93622e9601a3ad609d82",
           "item": "struct PopLiteMessageProcessor",
-          "line": 45
+          "line": 48
         },
         {
-          "id": "a8996b7b1f82ad1ab89a1d5c",
-          "fingerprint": "7856da80cda4529e82867fcb",
-          "item": "struct PopLiteMessageProcessor",
-          "line": 46
-        },
-        {
-          "id": "47df3de3d2300eb38b8b9d2b",
-          "fingerprint": "67501e494530b522a9bce160",
+          "id": "30694cb75e166177586be952",
+          "fingerprint": "66c6898e03481421bea2bf85",
           "item": "fn new",
-          "line": 63
-        },
-        {
-          "id": "9edf6bd47d7611034e93d4c3",
-          "fingerprint": "28dd0ee60ea8116311db6e19",
-          "item": "fn new_arc_mut",
-          "line": 72
-        },
-        {
-          "id": "316613bfa8ed07442b78e257",
-          "fingerprint": "4681985d9052463cda536ac0",
-          "item": "fn new_arc_mut",
-          "line": 72
-        },
-        {
-          "id": "d4126c1e4e8de9cdb759b394",
-          "fingerprint": "11a7ce5ee267a406616a9a39",
-          "item": "fn pop_lite_long_polling_service",
-          "line": 96
+          "line": 67
         },
         {
           "id": "b188ec8d7310558440dd9a52",
           "fingerprint": "154565f293c8878bedec0967",
           "item": "fn pop_from_lmq",
-          "line": 313
+          "line": 312
         },
         {
           "id": "26d1634bee537318d96760f7",
           "fingerprint": "384ccb1c0a07541c6f474c27",
           "item": "fn get_message",
-          "line": 394
+          "line": 393
         }
       ],
       "owner": "broker",
@@ -4291,10 +4174,10 @@
       "category": "test",
       "occurrences": [
         {
-          "id": "740e05ac0b0df6d7f3954efa",
-          "fingerprint": "0357bf2ef305f43dd33a662c",
+          "id": "0257464670a30b2b0ad19855",
+          "fingerprint": "1ba8b6af64c53055007da37a",
           "item": "mod tests",
-          "line": 545
+          "line": 571
         }
       ],
       "owner": "broker",
@@ -4313,7 +4196,7 @@
           "id": "954c573c45dcf60d39e499c7",
           "fingerprint": "f84fa0ca9f64055f30e67cbe",
           "item": "fn transform_order_count_info_drops_queue_level_suffix_when_offset_entries_exist",
-          "line": 552
+          "line": 580
         }
       ],
       "owner": "broker",
@@ -5304,14 +5187,8 @@
           "line": 83
         },
         {
-          "id": "291c539917e70b7afe9e0b09",
-          "fingerprint": "5b5c97f2639f2a81edbe15c6",
-          "item": "enum BrokerProcessorType",
-          "line": 85
-        },
-        {
-          "id": "e7ca20ae5c543f4f8de0f921",
-          "fingerprint": "62e2731be06de656117f1b89",
+          "id": "e390813c4f45519515004dfe",
+          "fingerprint": "b1dd1d89163e9d12bafc56c1",
           "item": "enum BrokerProcessorType",
           "line": 86
         },

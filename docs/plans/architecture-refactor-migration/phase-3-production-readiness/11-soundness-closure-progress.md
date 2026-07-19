@@ -6,7 +6,7 @@ M11-12 的最终目标是 production/public compatibility API 中不存在 `ArcM
 `mut_from_ref` 或 clone-safe `AsMut`/`DerefMut`，并让默认 workspace 在 stable Rust 下通过，同时把 Miri/Loom、
 soak、SLO fault、dashboard/runbook、rollback 和 Human Gate 绑定到同一候选快照。
 
-该目标尚未完成。本文件记录 M11-12a～ar 子切片的真实下降，不把子切片计为第 76 个工作包，也不刷新
+该目标尚未完成。本文件记录 M11-12a～as 子切片的真实下降，不把子切片计为第 76 个工作包，也不刷新
 baseline 来掩盖剩余债务。父 Issue 为 #8292；M11-12a 子切片 Issue 为 #8293；分支为
 `mxsm/architecture-refactor-owned-values`。
 
@@ -125,6 +125,9 @@ M11-12aq 的 Broker POP buffer ownership 由 Issue #8381 跟踪，分支为
 
 M11-12ar 的 Broker POP lifecycle ownership 由 Issue #8383 跟踪，分支为
 `mxsm/architecture-refactor-broker-pop-lifecycle-ownership`；它仍是同一 M11-12 工作包的子切片。
+
+M11-12as 的 Broker POP Lite lifecycle ownership 由 Issue #8385 跟踪，分支为
+`mxsm/architecture-refactor-broker-pop-lite-lifecycle-ownership`；它仍是同一 M11-12 工作包的子切片。
 
 ## 初始盘点
 
@@ -1940,13 +1943,41 @@ Broker POP lifecycle ownership 随 Issue #8383 完成以下边界收敛：
 | `./scripts/check-agents-routing.ps1` | 通过；4 个 standalone Cargo、3 个 Node project、8 条 route |
 | POP lifecycle ArcMut 定向扫描 / `git diff --check` | POP/Notification processor root、long-poll service carrier/constructor/back-reference 与对应 `mut_from_ref` 零匹配；保留 `BrokerRuntimeInner`/`GetMessageResult` 既有边界，diff check 无 whitespace error |
 
-下一子切片 M11-12as 处理 `PopLiteMessageProcessor`/`PopLiteLongPollingService` lifecycle owner；75/82 总进度不变，
+## M11-12as 实现
+
+Broker POP Lite lifecycle ownership 随 Issue #8385 完成以下边界收敛：
+
+- `PopLiteMessageProcessor`、`PopLiteLongPollingService`、Broker processor enum 与 BrokerRuntime field/accessor 统一改用标准 `Arc`；processor 通过 `Arc::new_cyclic` 向 service 一次安装标准 `Weak` 回边，删除运行期 setter 与 processor/service 强引用环。
+- crate-private shared wake-up trait 接收 owned request 并经 processor `&self` handler 分发；remoting `RequestProcessor` 仅保留为兼容 adapter，不为标准 Arc 引入整 processor mutex 或共享 `&mut` 别名。
+- scan task 只捕获 service `Weak` 和本轮 receiver；每次成功 start 创建新 channel，spawn 成功后向 `LiteEventDispatcher` 发布 sender，shutdown/restart 不再复用已消费或已关闭的 receiver，owner 释放时 scan 自然退出。
+- processor 与 service 分别使用异步 lifecycle gate 串行 start/shutdown/restart；TaskGroup 在 spawn 前发布、失败时回滚，短 parking_lot guard 在任何 `.await` 前释放，停止状态拒绝新增挂起以避免 drain 后重新入队。
+- 新增标准 Arc Send+Sync、Weak 回边、重复 start/停止/重启与活动 scan 不保活 owner 覆盖；保留的两个目标文件仍有 4 个 `BrokerRuntimeInner` 与 2 个 MessageStore `ArcMut` type reference 及 2 个 import occurrence，留待 Broker root/Store 边界后续切片处理。
+- reviewed baseline 从 476 identities / 1,241 occurrences 降至 473 / 1,227；production 从 296/738 降至 294/725，test 从 166/463 降至 165/462，compatibility 保持 14/40。Broker production 为 172/417、test 为 65/81；净删除 2 个 production identity/13 occurrence 与 1 个 test identity/1 occurrence，无新增 identity。
+
+## M11-12as 验证
+
+| 命令 | 结果 |
+|---|---|
+| `cargo check -p rocketmq-broker --all-targets --all-features` / Broker strict Clippy | 通过；标准 Arc/Weak owner、共享 request handler、重启 channel 与双层异步 lifecycle gate 在全部 Broker targets/features 编译及 lint 通过 |
+| POP Lite lifecycle focused tests | 3/3 通过；覆盖 Send+Sync/Weak 回边、重复 start/停止/重启、活动 scan 不保活 owner |
+| RocksDB specialized gates | Store/Broker strict Clippy 通过；foundation 82/82、semantics 9/9、Broker `rocksdb` 20/20、`pop_consumer` 4/4 通过；隔离 main 对照污染增量缓存后曾触发 nightly rustc ICE，按编译器建议定向 clean 后重跑通过 |
+| `cargo test -p rocketmq-broker --all-features --lib -- --test-threads=1` | 564 passed、25 failed、1 ignored；其中 24 项与上一 main 已登记失败集合一致，额外 lifecycle probe 已在隔离 `main@2c301e71a` 以同一聚焦测试命令复现；新增 3 个测试全部通过，故不能把全套记为通过，也未新增 baseline failure |
+| reviewed baseline reduction | baseline 476/1,241→473/1,227；5 个保留 occurrence 因相邻 carrier/签名/测试 import 变化发生一对一指纹位移，以临时 ADR-013 approval 逐项审核且 approval 不提交 |
+| `python scripts/arc_mut_guard.py` | 通过；production 294/725、test 165/462、compatibility 14/40，Broker production 172/417；没有新增 identity |
+| `python -m unittest scripts.tests.test_arc_mut_guard -v` / `python scripts/arc_mut_guard.py --fixtures` | 67/67 单测、24/24 fixtures 通过 |
+| `cargo fmt --all -- --check` / root workspace strict Clippy | 通过；root workspace 32 个 package 的 all-targets/all-features `-D warnings` profile 通过 |
+| architecture target/baseline/release/performance guards | 通过；35/35 target edges、3/3 test edges、32/32 release topology、10/10 R0 crates、8 profiles/11 variants/50 metric contracts，dependency/release/performance guard 单测 60/60 通过 |
+| `./scripts/runtime-audit.ps1 -SkipBaseline -EnforceBoundaryBaseline` | 通过；scan task 仍由 TaskGroup 所有，Weak capture、fresh receiver 与串行 lifecycle transition 未新增 detached task/runtime 边界 |
+| `./scripts/check-agents-routing.ps1` | 通过；4 个 standalone Cargo、3 个 Node project、8 条 route |
+| POP Lite ArcMut 定向扫描 / `git diff --check` | processor/service root、Broker carrier、processor back-reference、service-self `mut_from_ref` 与测试 glob import 零匹配；保留 BrokerRuntimeInner/MessageStore 既有边界，diff check 无 whitespace error |
+
+下一子切片 M11-12at 处理 `PullMessageProcessor`/`PullRequestHoldService` lifecycle owner；75/82 总进度不变，
 Broker/Store、compatibility 与完整候选快照 Gate 仍保持开放。
 
 ## 剩余切片与 Gate
 
-1. Broker offset、BrokerRuntimeInner、schedule/POP Lite/其他 processor/transaction owner（174/430）；下一子切片 M11-12as
-   处理 PopLiteMessageProcessor/PopLiteLongPollingService lifecycle ownership。
+1. Broker offset、BrokerRuntimeInner、schedule/其他 processor/transaction owner（172/417）；下一子切片 M11-12at
+   处理 PullMessageProcessor/PullRequestHoldService lifecycle ownership。
 2. Store MappedFileQueue/ConsumeQueue、CommitLog/Flush、StoreHandle/Rocks/Timer 与 HA actor（122/308）。
 3. 删除 compatibility `arc_mut.rs` 和公开 re-export；移除其余 nightly feature，将 guard 切到 production/public zero。
 4. 对同一候选快照执行 stable feature matrix、Miri/Loom 可用切片、soak/SLO fault、dashboard/runbook、动态

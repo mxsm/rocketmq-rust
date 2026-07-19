@@ -454,6 +454,13 @@ processor/service 回边与 service/scan-task 回边改为标准 `Weak`。共享
 production/738 occurrences、166 test/463 occurrences，Broker owner 降至 174/430；compatibility 14/40 不增。
 下一子切片 M11-12as 处理 Broker POP Lite processor/long-poll lifecycle ownership，完整候选快照与 HUMAN Gate 仍保持开放。
 
+M11-12as 已将 `PopLiteMessageProcessor` 与 `PopLiteLongPollingService` root、Broker processor/runtime carrier 改为标准
+`Arc`，processor 回边和 scan task 改为标准 `Weak`。共享 wake-up trait 经 `&self` 分发恢复请求；每次成功 start 创建
+新 channel 并向 Lite dispatcher 发布 sender，停止状态拒绝新增挂起，processor/service 双层异步 lifecycle gate 串行
+start/shutdown/restart。实际快照降至 294 production/725 occurrences、165 test/462 occurrences，Broker owner 降至
+172/417；compatibility 14/40 不增。下一子切片 M11-12at 处理 Broker Pull processor/request-hold lifecycle ownership，
+完整候选快照与 HUMAN Gate 仍保持开放。
+
 ## 公共兼容面
 
 - development/compatibility仍可显式选择；secure只作为新部署默认，不静默重解释旧配置。

@@ -82,7 +82,7 @@ pub enum BrokerProcessorType<MS: MessageStore, TS> {
     Pull(ArcMut<PullMessageProcessor<MS>>),
     Peek(ArcMut<PeekMessageProcessor<MS>>),
     Pop(Arc<PopMessageProcessor<MS>>),
-    PopLite(ArcMut<PopLiteMessageProcessor<MS>>),
+    PopLite(Arc<PopLiteMessageProcessor<MS>>),
     Ack(ArcMut<AckMessageProcessor<MS>>),
     ChangeInvisible(ArcMut<ChangeInvisibleTimeProcessor<MS>>),
     Notification(Arc<NotificationProcessor<MS>>),
@@ -174,7 +174,7 @@ where
             BrokerProcessorType::Pull(processor) => processor.process_request(channel, ctx, request).await,
             BrokerProcessorType::Peek(processor) => processor.process_request(channel, ctx, request).await,
             BrokerProcessorType::Pop(processor) => processor.process_request_shared(channel, ctx, request).await,
-            BrokerProcessorType::PopLite(processor) => processor.process_request(channel, ctx, request).await,
+            BrokerProcessorType::PopLite(processor) => processor.process_request_shared(channel, ctx, request).await,
             BrokerProcessorType::Ack(processor) => processor.process_request(channel, ctx, request).await,
             BrokerProcessorType::ChangeInvisible(processor) => processor.process_request(channel, ctx, request).await,
             BrokerProcessorType::Notification(processor) => {

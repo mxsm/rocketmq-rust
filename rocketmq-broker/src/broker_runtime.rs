@@ -1307,7 +1307,7 @@ impl BrokerRuntime {
             pop_message_processor.shutdown().await;
         }
 
-        if let Some(pop_lite_message_processor) = self.inner.pop_lite_message_processor.as_mut() {
+        if let Some(pop_lite_message_processor) = self.inner.pop_lite_message_processor.as_ref() {
             pop_services_present = true;
             pop_lite_message_processor.shutdown().await;
         }
@@ -2232,7 +2232,7 @@ impl BrokerRuntime {
 
         let pop_message_processor = PopMessageProcessor::new(self.inner.clone());
         self.inner.pop_message_processor = Some(pop_message_processor.clone());
-        let pop_lite_message_processor = PopLiteMessageProcessor::new_arc_mut(self.inner.clone());
+        let pop_lite_message_processor = PopLiteMessageProcessor::new(self.inner.clone());
         self.inner.pop_lite_message_processor = Some(pop_lite_message_processor.clone());
         let ack_message_processor = ArcMut::new(AckMessageProcessor::new(
             self.inner.clone(),
@@ -2814,8 +2814,8 @@ impl BrokerRuntime {
         if let Some(pop_message_processor) = self.inner.pop_message_processor.as_ref() {
             pop_message_processor.start().await;
         }
-        if let Some(pop_lite_message_processor) = self.inner.pop_lite_message_processor.as_mut() {
-            pop_lite_message_processor.start();
+        if let Some(pop_lite_message_processor) = self.inner.pop_lite_message_processor.as_ref() {
+            pop_lite_message_processor.start().await;
         }
         if let Some(ack_message_processor) = self.inner.ack_message_processor.as_mut() {
             ack_message_processor.start();
@@ -3358,7 +3358,7 @@ pub(crate) struct BrokerRuntimeInner<MS: MessageStore> {
     client_housekeeping_service: Option<Arc<ClientHousekeepingService<MS>>>,
     //Processor
     pop_message_processor: Option<Arc<PopMessageProcessor<MS>>>,
-    pop_lite_message_processor: Option<ArcMut<PopLiteMessageProcessor<MS>>>,
+    pop_lite_message_processor: Option<Arc<PopLiteMessageProcessor<MS>>>,
     ack_message_processor: Option<ArcMut<AckMessageProcessor<MS>>>,
     notification_processor: Option<Arc<NotificationProcessor<MS>>>,
     query_assignment_processor: Option<ArcMut<QueryAssignmentProcessor<MS>>>,
@@ -3698,7 +3698,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn pop_lite_message_processor(&self) -> Option<&ArcMut<PopLiteMessageProcessor<MS>>> {
+    pub fn pop_lite_message_processor(&self) -> Option<&Arc<PopLiteMessageProcessor<MS>>> {
         self.pop_lite_message_processor.as_ref()
     }
 
@@ -8980,10 +8980,10 @@ accounts:
         runtime
             .inner
             .pop_lite_message_processor
-            .as_mut()
+            .as_ref()
             .expect("pop lite processor should be initialized")
-            .start();
-
+            .start()
+            .await;
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let header = PopLiteMessageRequestHeader {
@@ -9023,7 +9023,7 @@ accounts:
         runtime
             .inner
             .pop_lite_message_processor
-            .as_mut()
+            .as_ref()
             .expect("pop lite processor should be initialized")
             .shutdown()
             .await;
@@ -9041,9 +9041,10 @@ accounts:
         runtime
             .inner
             .pop_lite_message_processor
-            .as_mut()
+            .as_ref()
             .expect("pop lite processor should be initialized")
-            .start();
+            .start()
+            .await;
 
         let pop_channel = create_test_channel().await;
         let pop_ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(pop_channel.clone()));
@@ -9121,7 +9122,7 @@ accounts:
         runtime
             .inner
             .pop_lite_message_processor
-            .as_mut()
+            .as_ref()
             .expect("pop lite processor should be initialized")
             .shutdown()
             .await;
