@@ -17,6 +17,9 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 
@@ -62,6 +65,61 @@ use crate::store_error::StoreErrorKind;
 use crate::timer::timer_message_store::TimerMessageStore;
 
 type AsyncResult<T> = Pin<Box<dyn Future<Output = Result<T, StoreError>> + Send>>;
+
+/// Read-only state required to decide whether the store can accept a message.
+///
+/// This capability deliberately excludes the message-store owner so callers can
+/// retain it without retaining or mutating the complete store.
+#[derive(Clone)]
+pub struct PutMessagePreflight {
+    shutdown: Arc<AtomicBool>,
+    running_flags: Arc<RunningFlags>,
+    begin_time_in_lock: Arc<AtomicU64>,
+}
+
+impl PutMessagePreflight {
+    pub(crate) fn new(
+        shutdown: Arc<AtomicBool>,
+        running_flags: Arc<RunningFlags>,
+        begin_time_in_lock: Arc<AtomicU64>,
+    ) -> Self {
+        Self {
+            shutdown,
+            running_flags,
+            begin_time_in_lock,
+        }
+    }
+
+    fn unavailable() -> Self {
+        Self::new(
+            Arc::new(AtomicBool::new(true)),
+            Arc::new(RunningFlags::new()),
+            Arc::new(AtomicU64::new(0)),
+        )
+    }
+
+    /// Returns whether the owning store has begun shutting down.
+    pub fn is_shutdown(&self) -> bool {
+        self.shutdown.load(Ordering::SeqCst)
+    }
+
+    /// Returns whether the store running flags permit writes.
+    pub fn is_writeable(&self) -> bool {
+        self.running_flags.is_writeable()
+    }
+
+    /// Returns the raw running-state flags for diagnostic logging.
+    pub fn flag_bits(&self) -> i32 {
+        self.running_flags.get_flag_bits()
+    }
+
+    /// Returns whether the commit-log lock has exceeded the configured busy timeout.
+    pub fn is_os_page_cache_busy(&self, busy_timeout_millis: u64) -> bool {
+        let begin = self.begin_time_in_lock.load(Ordering::Relaxed);
+        let elapsed = current_millis().saturating_sub(begin);
+        elapsed < 10_000_000 && elapsed > busy_timeout_millis
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StoreHealthSnapshot {
@@ -472,6 +530,14 @@ pub trait MessageStoreInner: Sync + 'static {
     /// Check if the operating system page cache is busy.
     fn is_os_page_cache_busy(&self) -> bool;
 
+    /// Project only the atomic state required by put-message preflight checks.
+    ///
+    /// The fail-closed default preserves compatibility for custom store
+    /// implementations while requiring an explicit opt-in to message writes.
+    fn put_message_preflight(&self) -> PutMessagePreflight {
+        PutMessagePreflight::unavailable()
+    }
+
     /// Get current sync flush backlog runtime info without building the full runtime-info map.
     fn sync_flush_runtime_info(&self) -> SyncFlushRuntimeInfo;
 
@@ -744,4 +810,50 @@ pub trait MessageStoreInner: Sync + 'static {
 
     /// Get HA runtime information using the current commit log max offset.
     fn get_ha_runtime_info(&self) -> Option<HARuntimeInfo>;
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::AtomicU64;
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
+
+    use rocketmq_common::TimeUtils::current_millis;
+
+    use super::PutMessagePreflight;
+    use crate::store::running_flags::RunningFlags;
+
+    #[test]
+    fn put_message_preflight_tracks_live_store_state_without_store_owner() {
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let running_flags = Arc::new(RunningFlags::new());
+        let begin_time_in_lock = Arc::new(AtomicU64::new(0));
+        let preflight = PutMessagePreflight::new(shutdown.clone(), running_flags.clone(), begin_time_in_lock.clone());
+
+        assert!(!preflight.is_shutdown());
+        assert!(preflight.is_writeable());
+        assert_eq!(preflight.flag_bits(), 0);
+        assert!(!preflight.is_os_page_cache_busy(10));
+
+        running_flags.get_and_make_not_writeable();
+        begin_time_in_lock.store(current_millis().saturating_sub(1_000), Ordering::Relaxed);
+        shutdown.store(true, Ordering::SeqCst);
+
+        assert!(preflight.is_shutdown());
+        assert!(!preflight.is_writeable());
+        assert_ne!(preflight.flag_bits(), 0);
+        assert!(preflight.is_os_page_cache_busy(10));
+        assert!(!preflight.is_os_page_cache_busy(10_000_000));
+    }
+
+    #[test]
+    fn unavailable_put_message_preflight_fails_closed() {
+        let preflight = PutMessagePreflight::unavailable();
+
+        assert!(preflight.is_shutdown());
+        assert!(preflight.is_writeable());
+        assert_eq!(preflight.flag_bits(), 0);
+        assert!(!preflight.is_os_page_cache_busy(10));
+    }
 }

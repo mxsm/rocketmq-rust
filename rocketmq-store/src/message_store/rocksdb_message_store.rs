@@ -53,6 +53,7 @@ use crate::base::message_result::PutMessageResult;
 use crate::base::message_status_enum::GetMessageStatus;
 use crate::base::message_store::MessageStore;
 use crate::base::message_store::MessageStoreShutdownReport;
+use crate::base::message_store::PutMessagePreflight;
 use crate::base::message_store::StoreHealthSnapshot;
 use crate::base::query_message_result::QueryMessageResult;
 use crate::base::select_result::SelectMappedBufferResult;
@@ -904,6 +905,10 @@ impl MessageStore for RocksDBMessageStore {
 
     fn is_os_page_cache_busy(&self) -> bool {
         self.local_file_store.is_os_page_cache_busy()
+    }
+
+    fn put_message_preflight(&self) -> PutMessagePreflight {
+        self.local_file_store.put_message_preflight()
     }
 
     fn sync_flush_runtime_info(&self) -> crate::base::flush_manager::SyncFlushRuntimeInfo {

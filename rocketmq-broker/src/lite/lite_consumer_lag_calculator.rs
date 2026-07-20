@@ -146,7 +146,7 @@ impl LiteConsumerLagCalculator {
 
         let broker_offset = broker_runtime_inner
             .lite_lifecycle_manager()
-            .get_max_offset_in_queue(broker_runtime_inner.message_store(), lmq_name);
+            .get_max_offset_in_queue(broker_runtime_inner.message_store_ref(), lmq_name);
         (broker_offset - consumer_offset).max(0)
     }
 

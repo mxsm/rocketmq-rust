@@ -12,38 +12,36 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::ops::Deref;
 use std::sync::Arc;
 
 use rocketmq_common::common::message::MessageTrait;
-use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_result::PutMessageResult;
-use rocketmq_store::base::message_store::MessageStore;
+use rocketmq_store::base::message_store::PutMessagePreflight;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use rocketmq_store::hook::put_message_hook::PutMessageHook;
 
 use crate::util::hook_utils::HookUtils;
 
-pub struct CheckBeforePutMessageHook<MS> {
-    message_store: ArcMut<MS>,
+pub struct CheckBeforePutMessageHook {
+    preflight: PutMessagePreflight,
     message_store_config: Arc<MessageStoreConfig>,
 }
 
-impl<MS: MessageStore> CheckBeforePutMessageHook<MS> {
-    pub fn new(message_store: ArcMut<MS>, message_store_config: Arc<MessageStoreConfig>) -> Self {
+impl CheckBeforePutMessageHook {
+    pub fn new(preflight: PutMessagePreflight, message_store_config: Arc<MessageStoreConfig>) -> Self {
         Self {
-            message_store,
+            preflight,
             message_store_config,
         }
     }
 }
 
-impl<MS: MessageStore> PutMessageHook for CheckBeforePutMessageHook<MS> {
+impl PutMessageHook for CheckBeforePutMessageHook {
     fn hook_name(&self) -> &'static str {
         "checkBeforePutMessage"
     }
 
     fn execute_before_put_message(&self, msg: &mut dyn MessageTrait) -> Option<PutMessageResult> {
-        HookUtils::check_before_put_message(self.message_store.deref(), &self.message_store_config, msg)
+        HookUtils::check_before_put_message(&self.preflight, &self.message_store_config, msg)
     }
 }

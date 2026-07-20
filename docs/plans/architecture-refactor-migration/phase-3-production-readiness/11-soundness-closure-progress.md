@@ -2437,9 +2437,35 @@ HA connection registry capability 随 Issue #8423 完成以下边界收敛：
 下一子切片 M11-12bc10 继续收窄 Broker put-message preflight/leaf 或 Store HA/Timer/WAL owner；75/82 总进度不变，
 compatibility、stable/Miri/Loom/soak/SLO 与完整候选快照 Gate 仍保持开放。
 
+## M11-12bc10 实现
+
+Put-message preflight capability 随 Issue #8425 完成以下边界收敛：
+
+- `CheckBeforePutMessageHook` 删除完整 `ArcMut<MessageStore>` owner，改持 `PutMessagePreflight`；该能力只共享 shutdown、running flags 与 commit-log lock timestamp 三项原子状态，不允许访问、克隆或修改完整 Store。
+- `MessageStore::put_message_preflight` 为 Local/Rocks/Generic Store 发布同一代 live 原子状态，自定义 Store 的默认实现 fail-closed；shutdown、不可写、flag diagnostics 与 OS page-cache busy 的既有判断语义保持。
+- Broker 在可变注册 Hook 前先采样 preflight capability，注册完成后 Store 强引用计数保持不变，拆除 `MessageStore -> Hook -> MessageStore` 强引用环；Schedule/Batch hook 的注册与执行顺序不变。
+- `LiteLifecycleManager` 的 max-offset/existence 查询从 `Option<&ArcMut<MS>>` 收窄为 `Option<&MS>`；新增 `message_store_ref` 只传播普通借用，Lite consumer lag、subscription、manager 与 POP Lite 调用方不再接触共享可变 Store carrier。
+- reviewed baseline 从 394 identities / 1,014 occurrences 降至 389 / 1,007；production 从 230/529 降至 226/523，test 从 150/445 降至 149/444，compatibility 保持 14/40。Broker production 从 120/241 降至 116/235；净删除 4 个 production identity/6 occurrence 与 1 个 test identity/1 occurrence，无 relocation。
+
+## M11-12bc10 验证
+
+| 命令 | 结果 |
+|---|---|
+| Store/Broker check 与 strict Clippy | 两 crate check 通过；all-target/all-feature strict Clippy 通过；Store/Broker `rocksdb_store` strict Clippy 通过 |
+| preflight/hook/Lite focused tests | Store preflight live-state/fail-closed 2/2、HookUtils 9/9、Hook registration Store strong-count 1/1、LiteLifecycle 1/1 通过 |
+| Store/RocksDB 回归 | Store all-feature lib 504/504；RocksDB foundation 82/82、semantics 9/9、Broker rocksdb 21/21、pop_consumer 4/4 通过 |
+| `cargo test -p rocketmq-broker --all-features --lib -- --test-threads=1` | 605 passed、25 failed、1 ignored；25 项与 main 已登记失败名单一致，本切片聚焦测试全部通过且未新增失败名称，因此全套仍如实记为基线复现而非通过 |
+| reviewed baseline / fixtures | `--apply-reviewed-reductions` 审核候选精确删除 5 identity/7 occurrence；正式 baseline 补丁后 `python scripts/arc_mut_guard.py`、24/24 fixtures 与 67/67 guard tests 通过，无 relocation/临时 approval |
+| runtime / architecture guards | enforcing runtime audit、dependency fixtures/target/baseline、release、8-profile performance、architecture 60/60 与 AGENTS routing 通过 |
+| Rustdoc / public API snapshot | `cargo doc -p rocketmq-store --no-deps --all-features` 成功并复现 4 个既有 Rustdoc warning；31-package public API snapshot 为 `review-required`，基线自旧提交以来存在多包未归类漂移，本切片新增 Store public path 需随 M11 候选快照统一审核，未擅自重置基线 |
+| root workspace final gates | `cargo fmt --all -- --check`、`git diff --check` 与 workspace all-target/all-feature strict Clippy 通过；Windows linker stdout 与既有 future-incompatibility note 不受 `-D warnings` 管辖 |
+
+下一子切片 M11-12bc11 继续收窄 Broker aggregate/leaf 或 Store WAL/queue/timer/HA owner；75/82 总进度不变，
+compatibility、stable/Miri/Loom/soak/SLO 与完整候选快照 Gate 仍保持开放。
+
 ## 剩余切片与 Gate
 
-1. Broker BrokerRuntimeInner capability carrier 与其他 admin/processor/leaf owner（120/241）；transaction bridge、Producer/ColdData admin leaf 与 Schedule hook 已退出完整 runtime owner，显式 Store 兼容 owner 留待 Store 批次删除。
+1. Broker BrokerRuntimeInner capability carrier 与其他 admin/processor/leaf owner（116/235）；transaction bridge、Producer/ColdData admin leaf、Schedule hook 与 put-message preflight 已退出完整 runtime/store owner，LiteLifecycle 只读 Store carrier 已收窄为普通借用，显式 Store 兼容 owner 留待 Store 批次删除。
 2. Store MappedFileQueue/其余 ConsumeQueue、CommitLog/Flush、StoreHandle/Rocks/Timer 与其余 HA actor（110/288）；BrokerStats observer、ConsumeQueueExt 显式锁 owner 与 HA notification/connection registry 窄能力已完成。
 3. 删除 compatibility `arc_mut.rs` 和公开 re-export；移除其余 nightly feature，将 guard 切到 production/public zero。
 4. 对同一候选快照执行 stable feature matrix、Miri/Loom 可用切片、soak/SLO fault、dashboard/runbook、动态

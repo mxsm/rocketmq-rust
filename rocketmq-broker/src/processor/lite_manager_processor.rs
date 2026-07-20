@@ -501,12 +501,12 @@ impl<MS: MessageStore> LiteManagerProcessor<MS> {
 
     fn has_dispatchable_messages(&self, group: &CheetahString, lmq_name: &CheetahString) -> bool {
         let lifecycle_manager = self.broker_runtime_inner.lite_lifecycle_manager();
-        if !lifecycle_manager.is_lmq_exist(self.broker_runtime_inner.message_store(), lmq_name) {
+        if !lifecycle_manager.is_lmq_exist(self.broker_runtime_inner.message_store_ref(), lmq_name) {
             return false;
         }
 
         let broker_offset =
-            lifecycle_manager.get_max_offset_in_queue(self.broker_runtime_inner.message_store(), lmq_name);
+            lifecycle_manager.get_max_offset_in_queue(self.broker_runtime_inner.message_store_ref(), lmq_name);
         broker_offset > 0
             && self
                 .broker_runtime_inner
@@ -555,7 +555,7 @@ impl<MS: MessageStore> LiteManagerProcessor<MS> {
     fn lmq_broker_offset(&self, lmq_name: &CheetahString) -> i64 {
         self.broker_runtime_inner
             .lite_lifecycle_manager()
-            .get_max_offset_in_queue(self.broker_runtime_inner.message_store(), lmq_name)
+            .get_max_offset_in_queue(self.broker_runtime_inner.message_store_ref(), lmq_name)
     }
 
     fn earliest_unconsumed_timestamp(&self, lmq_name: &CheetahString, commit_offset: i64) -> i64 {
