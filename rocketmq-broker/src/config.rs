@@ -22,6 +22,8 @@ mod tests {
     use std::time::SystemTime;
     use std::time::UNIX_EPOCH;
 
+    use rocketmq_remoting::protocol::data_version_facade::DataVersionExt;
+    use rocketmq_remoting::protocol::DataVersion;
     use rocketmq_store::rocksdb::config::RocksDbWalRecoveryMode;
 
     use super::rocksdb_manager::RocksDbBrokerConfigManager;
@@ -117,6 +119,44 @@ mod tests {
         assert_eq!(data_version.counter(), 1);
 
         reopened.close();
+        let _ = fs::remove_dir_all(path);
+    }
+
+    #[test]
+    fn rocksdb_config_manager_atomically_replaces_rows_and_version() {
+        let path = unique_temp_path("broker-config-snapshot");
+        let manager = RocksDbBrokerConfigManager::open(RocksDbBrokerConfigManagerConfig::topic(path.clone()))
+            .expect("config manager should open");
+        manager
+            .put_string("StaleTopic", r#"{"topicName":"StaleTopic"}"#)
+            .expect("stale row should write");
+        let mut data_version = DataVersion::default();
+        data_version.next_version();
+
+        manager
+            .replace_snapshot_with_version(
+                &[(b"CurrentTopic".to_vec(), br#"{"topicName":"CurrentTopic"}"#.to_vec())],
+                &data_version,
+            )
+            .expect("snapshot should replace atomically");
+
+        assert!(manager
+            .get_string("StaleTopic")
+            .expect("stale lookup should work")
+            .is_none());
+        assert!(manager
+            .get_string("CurrentTopic")
+            .expect("current lookup should work")
+            .is_some());
+        assert_eq!(
+            manager
+                .load_data_version()
+                .expect("version lookup should work")
+                .expect("version should exist"),
+            data_version
+        );
+
+        manager.close();
         let _ = fs::remove_dir_all(path);
     }
 

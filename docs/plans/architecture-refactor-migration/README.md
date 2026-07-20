@@ -519,6 +519,13 @@ Broker production 降至 133/263；compatibility 保持 14/40。总进度仍为 
 persistence/registration coordinator、BlockingExecutor、admission/drain-before-unregister 与共享 Rocks backend close 边界，
 再继续 transaction bridge/listener 与其他 Broker/Store owner；M11-12 父工作包未完成。
 
+Topic persistence/registration coordinator 随 Issue #8408 建立：Broker 生命周期只创建一个 leased FIFO worker，Topic
+文件/RocksDB 写盘全部经 `BlockingExecutor`，single/increment/full registration 与最终稳定持久化共享同一顺序边界；
+shutdown 关闭 admission、排空已接纳命令并确认 worker/阻塞任务退出后才 unregister 和 detach。Topic RocksDB 的 stale key
+删除、当前行与 DataVersion 进入同一 write batch，共享配置后端由 Broker aggregate owner 在 Topic/Subscription/Offset 最终写盘后
+去重关闭。ArcMut 快照保持 424 identities/1,061 occurrences（production 255/571、Broker 133/263），总进度仍为
+75/82；下一子切片 M11-12bc3 继续 transaction bridge/listener 与其余 Broker/Store owner。
+
 ### 9.3 证据目录
 
 - 运行期生成物：`target/architecture-refactor/Mxx/<run-id>/`，不提交 Git。

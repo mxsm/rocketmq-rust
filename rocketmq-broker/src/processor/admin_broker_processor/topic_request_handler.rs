@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::attribute::attribute_parser::AttributeParser;
@@ -41,6 +42,7 @@ use rocketmq_remoting::protocol::header::query_topics_by_consumer_request_header
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::static_topic::topic_config_and_queue_mapping::TopicConfigAndQueueMapping;
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
+use rocketmq_remoting::protocol::DataVersion;
 use rocketmq_remoting::protocol::RemotingDeserializable;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
@@ -49,6 +51,7 @@ use rocketmq_store::base::message_store::MessageStore;
 use tracing::info;
 
 use crate::broker_runtime::BrokerRuntimeInner;
+use crate::topic::manager::topic_config_coordinator::TopicRegistrationAction;
 
 fn decode_topic_queue_mapping_detail(body: &[u8]) -> Result<TopicQueueMappingDetail, String> {
     match serde_json::from_slice::<TopicQueueMappingDetail>(body) {
@@ -122,6 +125,32 @@ pub(super) struct TopicRequestHandler<MS: MessageStore> {
 impl<MS: MessageStore> TopicRequestHandler<MS> {
     pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
         TopicRequestHandler { broker_runtime_inner }
+    }
+
+    async fn persist_and_register_topic_updates(
+        &self,
+        topic_config_list: Vec<Arc<TopicConfig>>,
+        data_version: DataVersion,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        let runtime = self.broker_runtime_inner.clone();
+        let single_topic_registration = runtime.broker_config().enable_single_topic_register;
+        let registration: TopicRegistrationAction = Box::new(move || {
+            Box::pin(async move {
+                if single_topic_registration {
+                    for topic_config in topic_config_list {
+                        runtime.register_single_topic_all(topic_config).await;
+                    }
+                } else {
+                    BrokerRuntimeInner::<MS>::register_increment_broker_data(runtime, topic_config_list, data_version)
+                        .await;
+                }
+                Ok(())
+            })
+        });
+        self.broker_runtime_inner
+            .topic_config_coordinator()
+            .persist_and_register_wait(registration)
+            .await
     }
 }
 
@@ -218,18 +247,8 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
             self.broker_runtime_inner.topic_config_state_machine_version(),
         );
 
-        if self.broker_runtime_inner.broker_config().enable_single_topic_register {
-            self.broker_runtime_inner
-                .register_single_topic_all(update.topic_config)
-                .await;
-        } else {
-            BrokerRuntimeInner::<MS>::register_increment_broker_data(
-                self.broker_runtime_inner.clone(),
-                vec![update.topic_config],
-                update.data_version,
-            )
-            .await;
-        }
+        self.persist_and_register_topic_updates(vec![update.topic_config], update.data_version)
+            .await?;
 
         Ok(Some(response.set_code(ResponseCode::Success)))
     }
@@ -327,12 +346,8 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
             .topic_queue_mapping_manager()
             .update_topic_queue_mapping(topic_queue_mapping_detail);
 
-        BrokerRuntimeInner::<MS>::register_increment_broker_data(
-            self.broker_runtime_inner.clone(),
-            vec![update.topic_config],
-            update.data_version,
-        )
-        .await;
+        self.persist_and_register_topic_updates(vec![update.topic_config], update.data_version)
+            .await?;
 
         Ok(Some(response.set_code(ResponseCode::Success)))
     }
@@ -407,20 +422,8 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
                 topic_config_list.as_mut_slice(),
                 self.broker_runtime_inner.topic_config_state_machine_version(),
             );
-        if self.broker_runtime_inner.broker_config().enable_single_topic_register {
-            for topic_config in topic_config_list.iter() {
-                self.broker_runtime_inner
-                    .register_single_topic_all(topic_config.clone())
-                    .await;
-            }
-        } else {
-            BrokerRuntimeInner::<MS>::register_increment_broker_data(
-                self.broker_runtime_inner.clone(),
-                topic_config_list,
-                data_version,
-            )
-            .await;
-        }
+        self.persist_and_register_topic_updates(topic_config_list, data_version)
+            .await?;
         Ok(Some(response.set_code(ResponseCode::Success)))
     }
 
@@ -487,6 +490,10 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
             }
         }
         self.delete_topic_in_broker(topic);
+        self.broker_runtime_inner
+            .topic_config_coordinator()
+            .persist_and_wait()
+            .await?;
         Ok(Some(response.set_code(ResponseCode::Success)))
     }
 

@@ -2243,9 +2243,36 @@ TopicConfigManager runtime ownership cycle 随 Issue #8406 完成以下前置边
 关闭 task admission 并 drain 后再 unregister，且统一共享 Rocks backend 的 aggregate close；随后继续 transaction
 bridge/listener capability。75/82 总进度不变。
 
+## M11-12bc2 实现
+
+Topic persistence/registration coordinator 随 Issue #8408 完成以下生命周期收敛：
+
+- 新增非泛型 `TopicConfigCoordinator`，Broker 生命周期内只租用一个 dynamic child generation 和一个有界 FIFO worker；异步 Topic create 只等待有界入队，不再为每个 Topic 创建 TaskGroup child，也不再创建 current-runtime root fallback。
+- Topic manager 的 update/list/delete/order/unit mutator 只发布内存 metadata 代际；Broker auto-create、Topic admin、从节点同步、POP retry、full/single/increment registration 与 Topic JSON export 均经 coordinator。文件和 RocksDB load/persist/export 只通过已建立的 `BlockingExecutor` 执行。
+- coordinator 关闭 admission 后，将 Finalize 排在所有已接纳命令之后；最终写盘循环到持久版本等于当前 metadata 版本，worker、registration 与 blocking task 全部静默后，Broker 才 unregister、detach Topic owner 并继续 MessageStore shutdown。超时报告保持 Topic owner、Store、OuterAPI 与 Rocks backend 不被提前关闭。
+- `RocksDbBrokerConfigManager::replace_snapshot_with_version` 在同一 write batch 中删除 stale Topic key、写入当前 Topic rows 和 DataVersion；Topic/Subscription/Offset logical manager 不再独立 close backend，由 Broker aggregate owner 按 backend identity 去重并在三类 final persistence 后统一关闭。
+- shutdown report 新增 `topic_config` typed component，记录 admission、pending、final persist、worker、registration quiescence、unregister、blocking-still-running 与 deadline；确定性 barrier 测试证明已接纳 registration 在 shutdown 前排空、关闭后命令被拒绝且 pending 归零。
+- reviewed ArcMut baseline 保持 424 identities / 1,061 occurrences；production 255/571、test 155/450、compatibility 14/40、Broker production 133/263。本切片完成生命周期边界而不虚报 ArcMut 下降；`do_register_broker_all_inner` 的 1 个既有 occurrence 因同文件控制流调整发生一对一 fingerprint relocation，经 ADR-013 临时 approval 审核并更新 reviewed baseline，approval 不提交。
+
+## M11-12bc2 验证
+
+| 命令 | 结果 |
+|---|---|
+| Broker check / strict Clippy | 默认与 `rocksdb_store` library check、全 target/全 feature check，以及 Broker 全 target/全 feature strict Clippy 通过 |
+| Coordinator / Topic manager focused tests | coordinator barrier/persistence 2/2、Topic manager default 10/10、Rocks restart/delete 2/2、atomic snapshot 1/1、metadata migration 2/2 通过；覆盖 admission/drain、pending 守恒、稳定最终写盘与 deleted Topic 不复活 |
+| RocksDB specialized gates | Store strict Clippy 与 Broker `rocksdb_store` strict Clippy 通过；foundation 82/82、semantics 9/9、Broker rocksdb 21/21、pop_consumer 4/4 通过 |
+| reviewed baseline / fixtures | `python scripts/arc_mut_guard.py` 与 `--fixtures` 通过；baseline 数量不变，1 个 reviewed relocation 已更新 |
+| runtime / architecture guards | enforcing runtime audit、AGENTS routing、134 个 guard tests、dependency fixtures/target/baseline、release 与 8-profile performance validation 全部通过 |
+| 全特性 Broker lib | 最终 592 passed、25 failed、1 ignored；25 个失败与 main 已登记名单一致，首轮新增的 2 个 migration fixture 失败已修复并在最终全量中通过，未新增 baseline failure，因此全套仍如实记为基线复现而非通过 |
+| root workspace final gates | `cargo fmt --all -- --check` 与 `cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings` 通过；Windows linker stdout 与既有 future-incompatibility note 不受 `-D warnings` 管辖 |
+
+下一子切片 M11-12bc3 继续拆分 transaction bridge/listener capability 与其余 Broker admin/processor owner；75/82
+总进度不变，Store、compatibility、stable/Miri/Loom/soak/SLO、动态 Kind/K3d/container、M10 固定硬件与 Human Gate
+仍保持开放。
+
 ## 剩余切片与 Gate
 
-1. Broker BrokerRuntimeInner capability carrier、其他 admin/processor、transaction bridge/listener 与 topic persistence/registration coordinator（133/263）；下一子切片 M11-12bc2 完成 BlockingExecutor、admission/drain-before-unregister 与共享 Rocks close 边界。
+1. Broker BrokerRuntimeInner capability carrier、其他 admin/processor 与 transaction bridge/listener（133/263）；下一子切片 M11-12bc3 继续拆分窄 capability，Topic persistence/registration coordinator 已由 Issue #8408 完成。
 2. Store MappedFileQueue/ConsumeQueue、CommitLog/Flush、StoreHandle/Rocks/Timer 与 HA actor（122/308）。
 3. 删除 compatibility `arc_mut.rs` 和公开 re-export；移除其余 nightly feature，将 guard 切到 production/public zero。
 4. 对同一候选快照执行 stable feature matrix、Miri/Loom 可用切片、soak/SLO fault、dashboard/runbook、动态
