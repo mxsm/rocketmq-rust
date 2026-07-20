@@ -558,6 +558,13 @@ topic/group 自动清理回归通过。ArcMut 快照降至 379 identities/989 oc
 和 1 个 test identity/1 occurrence，且无 relocation。总进度仍为 75/82，下一子切片 M11-12bc13 继续 Broker
 aggregate/leaf 或 Store WAL/queue/timer/HA owner。
 
+Broker orphan V2 migration example 随 Issue #8431 清理：该文件从未加入 Broker module tree，也未被 Cargo 或测试
+编译；V2 实现、完整 example 与集成测试已由 Remoting 的 canonical 路径维护。删除重复残留不改变 Broker runtime
+wiring，Remoting example check 与 processor V2 tests 7/7 通过。ArcMut 快照降至 376 identities/980 occurrences
+（production 215/499、test 147/441、compatibility 14/40、Broker production 112/225），净删除 2 个 production
+identities/7 occurrences 和 1 个 test identity/2 occurrences，且无 relocation。总进度仍为 75/82，下一子切片
+M11-12bc14 继续 Broker aggregate/leaf 或 Store WAL/queue/timer/HA owner。
+
 ### 9.3 证据目录
 
 - 运行期生成物：`target/architecture-refactor/Mxx/<run-id>/`，不提交 Git。
