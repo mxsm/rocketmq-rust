@@ -522,8 +522,14 @@ Gate 仍未满足。
 M11-12bb 已删除 NameServer 注册客户端从未读取的 BrokerRuntime/MessageStore 泛型 carrier，并让
 TopicQueueMappingInfo 注册 payload 从采样到 wire wrapper 全程保持 owned `HashMap`。实际快照降至 257
 production/576 occurrences、155 test/450 occurrences，Broker owner 降至 135/268；compatibility 14/40 不增。
-下一子切片 M11-12bc 完成 TopicConfigManager 非泛型标准 Arc owner、独立持久化/注册 coordinator 与
-drain-before-unregister，再继续 transaction bridge/listener capability；完整候选快照与 HUMAN Gate 仍未满足。
+下一子切片 M11-12bc1 完成 TopicConfigManager 非泛型标准 Arc owner 前置边界；完整候选快照与 HUMAN Gate 仍未满足。
+
+M11-12bc1 已将 TopicConfigManager 改为不持有 BrokerRuntime back-reference 的非泛型标准 `Arc` metadata owner，删除
+mutable/unchecked manager accessor，并让 topic state 更新显式接收 message-store generation。动态 policy 由 Broker workflow
+实时采样；异步持久化/注册任务直接持有 manager handle，并用 RAII guard 释放 pending 计数。实际快照降至 255
+production/571 occurrences，test 保持 155/450，Broker owner 降至 133/263；compatibility 14/40 不增。下一子切片
+M11-12bc2 建立独立 coordinator、BlockingExecutor、admission/drain-before-unregister 与共享 Rocks close 边界，再继续
+transaction bridge/listener capability；完整候选快照与 HUMAN Gate 仍未满足。
 
 ## 公共兼容面
 

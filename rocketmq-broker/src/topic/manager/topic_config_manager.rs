@@ -16,6 +16,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 #[cfg(feature = "rocksdb_store")]
 use std::path::Path;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -25,6 +26,7 @@ use arc_swap::ArcSwap;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use rocketmq_common::common::attribute::attribute_util::AttributeUtil;
+use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_common::common::constant::PermName;
@@ -43,20 +45,17 @@ use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_info::TopicQu
 use rocketmq_remoting::protocol::DataVersion;
 use rocketmq_remoting::protocol::RemotingDeserializable;
 use rocketmq_remoting::protocol::RemotingSerializable;
-use rocketmq_runtime::TaskKind;
-use rocketmq_rust::ArcMut;
-use rocketmq_store::base::message_store::MessageStore;
+use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use rocketmq_store::timer::timer_message_store;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
 
 use crate::broker_path_config_helper::get_topic_config_path;
-use crate::broker_runtime::BrokerRuntimeInner;
 #[cfg(feature = "rocksdb_store")]
 use crate::config::rocksdb_manager::RocksDbBrokerConfigManager;
 
-pub(crate) struct TopicConfigManager<MS: MessageStore> {
+pub(crate) struct TopicConfigManager {
     topic_config_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>>,
     topic_config_snapshot: ArcSwap<HashMap<CheetahString, Arc<TopicConfig>>>,
     metadata_transition: parking_lot::Mutex<DataVersion>,
@@ -64,7 +63,8 @@ pub(crate) struct TopicConfigManager<MS: MessageStore> {
     persist_lock: Arc<parking_lot::Mutex<()>>,
     async_topic_create_pending_count: Arc<AtomicU64>,
     async_topic_create_spawn_failure_count: Arc<AtomicU64>,
-    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+    config_file_path: String,
+    real_time_persist_rocksdb_config: AtomicBool,
     #[cfg(feature = "rocksdb_store")]
     rocksdb_config_manager: Option<Arc<RocksDbBrokerConfigManager>>,
 }
@@ -75,9 +75,26 @@ pub(crate) struct TopicConfigUpdate {
     pub(crate) data_version: DataVersion,
 }
 
-impl<MS: MessageStore> TopicConfigManager<MS> {
+pub(crate) struct TopicConfigCreation {
+    pub(crate) topic_config: Arc<TopicConfig>,
+    pub(crate) update: Option<TopicConfigUpdate>,
+    pub(crate) register: bool,
+    pub(crate) created: bool,
+}
+
+pub(crate) struct TopicConfigAsyncPersistGuard {
+    pending_count: Arc<AtomicU64>,
+}
+
+impl Drop for TopicConfigAsyncPersistGuard {
+    fn drop(&mut self) {
+        self.pending_count.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+impl TopicConfigManager {
     #[inline]
-    fn record_topic_create_latency(start_time: Instant) {
+    pub(crate) fn record_topic_create_latency(start_time: Instant) {
         if let Some(metrics) = crate::metrics::broker_metrics_manager::BrokerMetricsManager::try_global() {
             metrics.record_topic_create_time(start_time.elapsed().as_millis().min(u64::MAX as u128) as u64);
         }
@@ -85,7 +102,7 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
 
     const SCHEDULE_TOPIC_QUEUE_NUM: u32 = 18;
 
-    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>, init: bool) -> Self {
+    pub fn new(broker_config: &BrokerConfig, message_store_config: &MessageStoreConfig, init: bool) -> Self {
         let mut manager = Self {
             topic_config_table: Arc::new(DashMap::with_capacity(1024)),
             topic_config_snapshot: ArcSwap::from_pointee(HashMap::new()),
@@ -94,23 +111,25 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
             persist_lock: Arc::new(parking_lot::Mutex::new(())),
             async_topic_create_pending_count: Arc::new(AtomicU64::new(0)),
             async_topic_create_spawn_failure_count: Arc::new(AtomicU64::new(0)),
-            broker_runtime_inner,
+            config_file_path: get_topic_config_path(broker_config.store_path_root_dir.as_str()),
+            real_time_persist_rocksdb_config: AtomicBool::new(message_store_config.real_time_persist_rocksdb_config),
             #[cfg(feature = "rocksdb_store")]
             rocksdb_config_manager: None,
         };
         if init {
-            manager.init();
+            manager.init(broker_config, message_store_config);
         }
         manager
     }
 
     #[cfg(feature = "rocksdb_store")]
     pub(crate) fn new_with_rocksdb_config_manager(
-        broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+        broker_config: &BrokerConfig,
+        message_store_config: &MessageStoreConfig,
         init: bool,
         rocksdb_config_manager: Arc<RocksDbBrokerConfigManager>,
     ) -> Self {
-        let mut manager = Self::new(broker_runtime_inner, init);
+        let mut manager = Self::new(broker_config, message_store_config, init);
         manager.rocksdb_config_manager = Some(rocksdb_config_manager);
         manager
     }
@@ -139,7 +158,7 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
         })
     }
 
-    fn init(&mut self) {
+    fn init(&mut self, broker_config: &BrokerConfig, message_store_config: &MessageStoreConfig) {
         //SELF_TEST_TOPIC
         {
             self.put_topic_config(TopicConfig::with_queues(TopicValidator::RMQ_SYS_SELF_TEST_TOPIC, 1, 1));
@@ -147,12 +166,8 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
 
         //auto create topic setting
         {
-            if self.broker_runtime_inner.broker_config().auto_create_topic_enable {
-                let default_topic_queue_nums = self
-                    .broker_runtime_inner
-                    .broker_config()
-                    .topic_queue_config
-                    .default_topic_queue_nums;
+            if broker_config.auto_create_topic_enable {
+                let default_topic_queue_nums = broker_config.topic_queue_config.default_topic_queue_nums;
                 self.put_topic_config(TopicConfig::with_perm(
                     TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC,
                     default_topic_queue_nums,
@@ -169,16 +184,11 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
             ));
         }
         {
-            let topic = self
-                .broker_runtime_inner
-                .broker_config()
-                .broker_identity
-                .broker_cluster_name
-                .to_string();
+            let topic = broker_config.broker_identity.broker_cluster_name.to_string();
             TopicValidator::add_system_topic(topic.as_str());
             let mut config = TopicConfig::new(topic);
             let mut perm = PermName::PERM_INHERIT;
-            if self.broker_runtime_inner.broker_config().cluster_topic_enable {
+            if broker_config.cluster_topic_enable {
                 perm |= PermName::PERM_READ | PermName::PERM_WRITE;
             }
             config.perm = perm;
@@ -186,18 +196,13 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
         }
 
         {
-            let topic = self
-                .broker_runtime_inner
-                .broker_config()
-                .broker_identity
-                .broker_name
-                .to_string();
+            let topic = broker_config.broker_identity.broker_name.to_string();
             TopicValidator::add_system_topic(topic.as_str());
             let mut config = TopicConfig::new(topic);
             config.write_queue_nums = 1;
             config.read_queue_nums = 1;
             let mut perm = PermName::PERM_INHERIT;
-            if self.broker_runtime_inner.broker_config().broker_topic_enable {
+            if broker_config.broker_topic_enable {
                 perm |= PermName::PERM_READ | PermName::PERM_WRITE;
             }
             config.perm = perm;
@@ -221,8 +226,8 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
         }
 
         {
-            if self.broker_runtime_inner.broker_config().trace_topic_enable {
-                let topic = self.broker_runtime_inner.broker_config().msg_trace_topic_name.clone();
+            if broker_config.trace_topic_enable {
+                let topic = broker_config.msg_trace_topic_name.clone();
                 TopicValidator::add_system_topic(topic.as_str());
                 self.put_topic_config(TopicConfig::with_queues(topic, 1, 1));
             }
@@ -231,7 +236,7 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
         {
             let topic = format!(
                 "{}_{}",
-                self.broker_runtime_inner.broker_config().broker_identity.broker_name,
+                broker_config.broker_identity.broker_name,
                 mix_all::REPLY_TOPIC_POSTFIX
             );
             TopicValidator::add_system_topic(topic.as_str());
@@ -239,18 +244,13 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
         }
 
         {
-            let topic = PopAckConstants::build_cluster_revive_topic(
-                self.broker_runtime_inner
-                    .broker_config()
-                    .broker_identity
-                    .broker_cluster_name
-                    .as_str(),
-            );
+            let topic =
+                PopAckConstants::build_cluster_revive_topic(broker_config.broker_identity.broker_cluster_name.as_str());
             TopicValidator::add_system_topic(topic.as_str());
             self.put_topic_config(TopicConfig::with_queues(
                 topic,
-                self.broker_runtime_inner.broker_config().revive_queue_num,
-                self.broker_runtime_inner.broker_config().revive_queue_num,
+                broker_config.revive_queue_num,
+                broker_config.revive_queue_num,
             ));
         }
 
@@ -258,7 +258,7 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
             let topic = format!(
                 "{}_{}",
                 TopicValidator::SYNC_BROKER_MEMBER_GROUP_PREFIX,
-                self.broker_runtime_inner.broker_config().broker_identity.broker_name,
+                broker_config.broker_identity.broker_name,
             );
             TopicValidator::add_system_topic(topic.as_str());
             self.put_topic_config(TopicConfig::with_perm(topic, 1, 1, PermName::PERM_INHERIT));
@@ -277,7 +277,7 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
         }
 
         {
-            if self.broker_runtime_inner.message_store_config().timer_wheel_enable {
+            if message_store_config.timer_wheel_enable {
                 TopicValidator::add_system_topic(timer_message_store::TIMER_TOPIC);
                 self.put_topic_config(TopicConfig::with_queues(timer_message_store::TIMER_TOPIC, 1, 1));
             }
@@ -364,6 +364,18 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
         self.async_topic_create_spawn_failure_count.load(Ordering::Acquire)
     }
 
+    pub(crate) fn update_message_store_policy(&self, message_store_config: &MessageStoreConfig) {
+        self.real_time_persist_rocksdb_config
+            .store(message_store_config.real_time_persist_rocksdb_config, Ordering::Release);
+    }
+
+    pub(crate) fn close(&self) {
+        #[cfg(feature = "rocksdb_store")]
+        if let Some(rocksdb_config_manager) = &self.rocksdb_config_manager {
+            rocksdb_config_manager.close();
+        }
+    }
+
     pub fn build_serialize_wrapper(
         &self,
         topic_config_table: HashMap<CheetahString, TopicConfig>,
@@ -411,25 +423,34 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
         old
     }
 
-    pub async fn create_topic_in_send_message_method(
-        &mut self,
+    pub fn create_topic_in_send_message_method(
+        &self,
         topic: &CheetahString,
         default_topic: &CheetahString,
         remote_address: SocketAddr,
         client_default_topic_queue_nums: i32,
         topic_sys_flag: u32,
-    ) -> Option<Arc<TopicConfig>> {
-        let start_time = Instant::now();
-
+        state_machine_version: i64,
+        auto_create_topic_enable: bool,
+    ) -> Option<TopicConfigCreation> {
         if let Some(config) = self.get_topic_config(topic.as_str()) {
-            return Some(config);
+            return Some(TopicConfigCreation {
+                topic_config: config,
+                update: None,
+                register: false,
+                created: false,
+            });
         }
 
-        let state_machine_version = self.state_machine_version();
         let update = {
             let mut data_version = self.metadata_transition.lock();
             if let Some(config) = self.topic_config_table.get(topic).map(|entry| entry.value().clone()) {
-                return Some(config);
+                return Some(TopicConfigCreation {
+                    topic_config: config,
+                    update: None,
+                    register: false,
+                    created: false,
+                });
             }
 
             // Clone the default generation before writing the same DashMap so no shard guard is re-entered.
@@ -448,9 +469,7 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
                 }
             };
 
-            if default_topic == TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC
-                && !self.broker_runtime_inner.broker_config().auto_create_topic_enable
-            {
+            if default_topic == TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC && !auto_create_topic_enable {
                 default_topic_config.perm = PermName::PERM_READ | PermName::PERM_WRITE;
             }
 
@@ -487,40 +506,54 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
             }
         };
 
-        let result = update.topic_config.clone();
-        self.persist_and_register_created_topic(update, true).await;
-        Self::record_topic_create_latency(start_time);
-        Some(result)
+        Some(TopicConfigCreation {
+            topic_config: update.topic_config.clone(),
+            update: Some(update),
+            register: true,
+            created: true,
+        })
     }
 
-    pub async fn create_topic_in_send_message_back_method(
-        &mut self,
+    pub fn create_topic_in_send_message_back_method(
+        &self,
         topic: &CheetahString,
         client_default_topic_queue_nums: i32,
         perm: u32,
         is_order: bool,
         topic_sys_flag: u32,
-    ) -> Option<Arc<TopicConfig>> {
-        let start_time = Instant::now();
-
+        state_machine_version: i64,
+    ) -> Option<TopicConfigCreation> {
         if let Some(config) = self.get_topic_config(topic) {
             if is_order != config.order {
-                if let Some(update) = self.update_existing_topic(topic, |replacement| {
+                if let Some(update) = self.update_existing_topic(topic, state_machine_version, |replacement| {
                     replacement.order = is_order;
                 }) {
-                    self.persist_topic_config(topic.as_str());
-                    return Some(update.topic_config);
+                    return Some(TopicConfigCreation {
+                        topic_config: update.topic_config.clone(),
+                        update: Some(update),
+                        register: false,
+                        created: false,
+                    });
                 }
             } else {
-                return Some(config);
+                return Some(TopicConfigCreation {
+                    topic_config: config,
+                    update: None,
+                    register: false,
+                    created: false,
+                });
             }
         }
 
-        let state_machine_version = self.state_machine_version();
         let update = {
             let mut data_version = self.metadata_transition.lock();
             if let Some(config) = self.topic_config_table.get(topic).map(|entry| entry.value().clone()) {
-                return Some(config);
+                return Some(TopicConfigCreation {
+                    topic_config: config,
+                    update: None,
+                    register: false,
+                    created: false,
+                });
             }
 
             let mut config = TopicConfig::new(topic);
@@ -540,119 +573,31 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
             }
         };
 
-        let result = update.topic_config.clone();
-        self.persist_and_register_created_topic(update, true).await;
-        Self::record_topic_create_latency(start_time);
-        Some(result)
+        Some(TopicConfigCreation {
+            topic_config: update.topic_config.clone(),
+            update: Some(update),
+            register: true,
+            created: true,
+        })
     }
 
-    async fn register_broker_data(&self, update: TopicConfigUpdate) {
-        let broker_config = self.broker_runtime_inner.broker_config().clone();
-        let broker_runtime_inner = self.broker_runtime_inner.clone();
-
-        if broker_config.enable_single_topic_register {
-            broker_runtime_inner
-                .register_single_topic_all(update.topic_config)
-                .await;
-        } else {
-            BrokerRuntimeInner::register_increment_broker_data(
-                broker_runtime_inner,
-                vec![update.topic_config],
-                update.data_version,
-            )
-            .await;
-        }
-    }
-
-    fn state_machine_version(&self) -> i64 {
-        self.broker_runtime_inner
-            .message_store()
-            .map(|message_store| message_store.get_state_machine_version())
-            .unwrap_or_default()
-    }
-
-    async fn persist_and_register_created_topic(&self, update: TopicConfigUpdate, register: bool) {
-        if self
-            .broker_runtime_inner
-            .broker_config()
-            .async_topic_create_persist_enable
-            && self.enqueue_async_topic_create_persist(update.clone(), register)
-        {
-            return;
-        }
-
-        self.persist_created_topic_sync(update, register).await;
-    }
-
-    async fn persist_created_topic_sync(&self, update: TopicConfigUpdate, register: bool) {
-        self.persist();
-
-        if register {
-            self.register_broker_data(update).await;
-        }
-    }
-
-    fn enqueue_async_topic_create_persist(&self, update: TopicConfigUpdate, register: bool) -> bool {
+    pub(crate) fn begin_async_topic_create_persist(&self) -> TopicConfigAsyncPersistGuard {
         self.async_topic_create_pending_count.fetch_add(1, Ordering::AcqRel);
-
-        let pending_count_for_task = self.async_topic_create_pending_count.clone();
-        let pending_count_for_spawn_failure = self.async_topic_create_pending_count.clone();
-        let spawn_failure_count = self.async_topic_create_spawn_failure_count.clone();
-        let broker_runtime_inner = self.broker_runtime_inner.clone();
-        let task = async move {
-            let topic_name = update
-                .topic_config
-                .topic_name
-                .as_ref()
-                .map_or_else(|| "<unknown>".to_string(), ToString::to_string);
-            broker_runtime_inner.topic_config_manager().persist();
-
-            if register {
-                let broker_config = broker_runtime_inner.broker_config().clone();
-                if broker_config.enable_single_topic_register {
-                    broker_runtime_inner
-                        .register_single_topic_all(update.topic_config)
-                        .await;
-                } else {
-                    BrokerRuntimeInner::register_increment_broker_data(
-                        broker_runtime_inner.clone(),
-                        vec![update.topic_config],
-                        update.data_version,
-                    )
-                    .await;
-                }
-            }
-
-            pending_count_for_task.fetch_sub(1, Ordering::AcqRel);
-            info!("async topic create persist/register completed, topic={}", topic_name);
-        };
-
-        if let Some(task_group) = self.broker_runtime_inner.broker_task_group_or_current(
-            "broker.topic-config.async-create",
-            "async topic create persist requested without an active broker runtime; falling back to synchronous \
-             persist",
-        ) {
-            match task_group.spawn("broker.topic-config.async-create.persist", TaskKind::Worker, task) {
-                Ok(_) => true,
-                Err(error) => {
-                    pending_count_for_spawn_failure.fetch_sub(1, Ordering::AcqRel);
-                    spawn_failure_count.fetch_add(1, Ordering::AcqRel);
-                    warn!(?error, "failed to spawn async topic create persist task");
-                    false
-                }
-            }
-        } else {
-            pending_count_for_spawn_failure.fetch_sub(1, Ordering::AcqRel);
-            spawn_failure_count.fetch_add(1, Ordering::AcqRel);
-            false
+        TopicConfigAsyncPersistGuard {
+            pending_count: Arc::clone(&self.async_topic_create_pending_count),
         }
+    }
+
+    pub(crate) fn record_async_topic_create_spawn_failure(&self) {
+        self.async_topic_create_spawn_failure_count
+            .fetch_add(1, Ordering::AcqRel);
     }
 
     pub fn update_topic_config_list(
         &self,
         topic_config_list: &mut [TopicConfig],
+        state_machine_version: i64,
     ) -> (Vec<Arc<TopicConfig>>, DataVersion) {
-        let state_machine_version = self.state_machine_version();
         let (published, data_version) = {
             let mut data_version = self.metadata_transition.lock();
             let mut published = Vec::with_capacity(topic_config_list.len());
@@ -674,8 +619,7 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
         (published, data_version)
     }
 
-    pub fn delete_topic_config(&self, topic: &CheetahString) {
-        let state_machine_version = self.state_machine_version();
+    pub fn delete_topic_config(&self, topic: &CheetahString, state_machine_version: i64) {
         let old = {
             let mut data_version = self.metadata_transition.lock();
             let old = self.topic_config_table.remove(topic).map(|(_, value)| value);
@@ -702,13 +646,12 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
         }
     }
 
-    pub fn update_topic_config(&self, mut topic_config: TopicConfig) -> TopicConfigUpdate {
+    pub fn update_topic_config(&self, mut topic_config: TopicConfig, state_machine_version: i64) -> TopicConfigUpdate {
         let start_time = Instant::now();
         let topic_name = topic_config
             .topic_name
             .clone()
             .expect("TopicConfigManager updates require topic_name");
-        let state_machine_version = self.state_machine_version();
         let (update, old) = {
             let mut data_version = self.metadata_transition.lock();
             self.apply_topic_attributes_locked(&mut topic_config);
@@ -765,8 +708,12 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
         }
     }
 
-    fn update_existing_topic(&self, topic: &str, update: impl FnOnce(&mut TopicConfig)) -> Option<TopicConfigUpdate> {
-        let state_machine_version = self.state_machine_version();
+    fn update_existing_topic(
+        &self,
+        topic: &str,
+        state_machine_version: i64,
+        update: impl FnOnce(&mut TopicConfig),
+    ) -> Option<TopicConfigUpdate> {
         let mut data_version = self.metadata_transition.lock();
         let current = self
             .topic_config_table
@@ -797,19 +744,24 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
         self.metadata_snapshot().0
     }
 
-    pub async fn create_topic_of_tran_check_max_time(
-        &mut self,
+    pub fn create_topic_of_tran_check_max_time(
+        &self,
         client_default_topic_queue_nums: i32,
         perm: u32,
-    ) -> Option<Arc<TopicConfig>> {
+        state_machine_version: i64,
+    ) -> Option<TopicConfigCreation> {
         if let Some(config) = self
             .topic_config_table
             .get(TopicValidator::RMQ_SYS_TRANS_CHECK_MAX_TIME_TOPIC)
         {
-            return Some(config.value().clone());
+            return Some(TopicConfigCreation {
+                topic_config: config.value().clone(),
+                update: None,
+                register: false,
+                created: false,
+            });
         }
 
-        let state_machine_version = self.state_machine_version();
         let update = {
             let mut data_version = self.metadata_transition.lock();
             let topic_key = CheetahString::from_static_str(TopicValidator::RMQ_SYS_TRANS_CHECK_MAX_TIME_TOPIC);
@@ -818,7 +770,12 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
                 .get(&topic_key)
                 .map(|entry| entry.value().clone())
             {
-                return Some(config);
+                return Some(TopicConfigCreation {
+                    topic_config: config,
+                    update: None,
+                    register: false,
+                    created: false,
+                });
             }
 
             let mut config = TopicConfig::new(TopicValidator::RMQ_SYS_TRANS_CHECK_MAX_TIME_TOPIC);
@@ -837,9 +794,12 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
             }
         };
 
-        let result = update.topic_config.clone();
-        self.persist_and_register_created_topic(update, true).await;
-        Some(result)
+        Some(TopicConfigCreation {
+            topic_config: update.topic_config.clone(),
+            update: Some(update),
+            register: true,
+            created: true,
+        })
     }
 
     pub fn contains_topic(&self, topic: &CheetahString) -> bool {
@@ -891,14 +851,8 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
         true
     }
 
-    #[inline]
-    pub fn broker_runtime_inner(&self) -> &ArcMut<BrokerRuntimeInner<MS>> {
-        &self.broker_runtime_inner
-    }
-
-    pub fn update_order_topic_config(&mut self, order_kv_table_from_ns: &KVTable) {
+    pub fn update_order_topic_config(&self, order_kv_table_from_ns: &KVTable, state_machine_version: i64) {
         if !order_kv_table_from_ns.table.is_empty() {
-            let state_machine_version = self.state_machine_version();
             let is_change = {
                 let mut data_version = self.metadata_transition.lock();
                 let mut is_change = false;
@@ -929,12 +883,12 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
         }
     }
 
-    pub async fn create_topic_if_absent(
-        &mut self,
+    pub fn create_topic_if_absent(
+        &self,
         mut topic_config: TopicConfig,
         register: bool,
-    ) -> Option<Arc<TopicConfig>> {
-        let start_time = Instant::now();
+        state_machine_version: i64,
+    ) -> Option<TopicConfigCreation> {
         if topic_config.topic_name.is_none() {
             error!("createTopicIfAbsent: TopicName cannot be None");
             return None;
@@ -943,10 +897,14 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
         let topic_name = topic_config.topic_name.as_ref().unwrap().clone();
 
         if let Some(config) = self.get_topic_config(topic_name.as_str()) {
-            return Some(config);
+            return Some(TopicConfigCreation {
+                topic_config: config,
+                update: None,
+                register: false,
+                created: false,
+            });
         }
 
-        let state_machine_version = self.state_machine_version();
         let update = {
             let mut data_version = self.metadata_transition.lock();
             if let Some(config) = self
@@ -954,7 +912,12 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
                 .get(&topic_name)
                 .map(|entry| entry.value().clone())
             {
-                return Some(config);
+                return Some(TopicConfigCreation {
+                    topic_config: config,
+                    update: None,
+                    register: false,
+                    created: false,
+                });
             }
 
             info!("Create new topic [{}] config:[{:?}]", topic_name, topic_config);
@@ -969,14 +932,21 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
             }
         };
 
-        let result = update.topic_config.clone();
-        self.persist_and_register_created_topic(update, register).await;
-        Self::record_topic_create_latency(start_time);
-        Some(result)
+        Some(TopicConfigCreation {
+            topic_config: update.topic_config.clone(),
+            update: Some(update),
+            register,
+            created: true,
+        })
     }
 
-    pub async fn update_topic_unit_flag(&mut self, topic: &str, unit: bool) {
-        if let Some(update) = self.update_existing_topic(topic, |topic_config| {
+    pub fn update_topic_unit_flag(
+        &self,
+        topic: &str,
+        unit: bool,
+        state_machine_version: i64,
+    ) -> Option<TopicConfigUpdate> {
+        let update = self.update_existing_topic(topic, state_machine_version, |topic_config| {
             let old_topic_sys_flag = topic_config.topic_sys_flag;
             topic_config.topic_sys_flag = if unit {
                 TopicSysFlag::set_unit_flag(old_topic_sys_flag)
@@ -987,14 +957,20 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
                 "update topic sys flag. oldTopicSysFlag={}, newTopicSysFlag={}",
                 old_topic_sys_flag, topic_config.topic_sys_flag
             );
-        }) {
+        });
+        if update.is_some() {
             self.persist();
-            self.register_broker_data(update).await;
         }
+        update
     }
 
-    pub async fn update_topic_unit_sub_flag(&mut self, topic: &str, has_unit_sub: bool) {
-        if let Some(update) = self.update_existing_topic(topic, |topic_config| {
+    pub fn update_topic_unit_sub_flag(
+        &self,
+        topic: &str,
+        has_unit_sub: bool,
+        state_machine_version: i64,
+    ) -> Option<TopicConfigUpdate> {
+        let update = self.update_existing_topic(topic, state_machine_version, |topic_config| {
             let old_topic_sys_flag = topic_config.topic_sys_flag;
             topic_config.topic_sys_flag = if has_unit_sub {
                 TopicSysFlag::set_unit_sub_flag(old_topic_sys_flag)
@@ -1005,10 +981,11 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
                 "update topic sys flag. oldTopicSysFlag={}, newTopicSysFlag={}",
                 old_topic_sys_flag, topic_config.topic_sys_flag
             );
-        }) {
+        });
+        if update.is_some() {
             self.persist();
-            self.register_broker_data(update).await;
         }
+        update
     }
 
     pub fn load_data_version(&self) -> bool {
@@ -1179,11 +1156,7 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
         &self,
         rocksdb_config_manager: &RocksDbBrokerConfigManager,
     ) -> Result<(), rocketmq_error::RocketMQError> {
-        if self
-            .broker_runtime_inner
-            .message_store_config()
-            .real_time_persist_rocksdb_config
-        {
+        if self.real_time_persist_rocksdb_config.load(Ordering::Acquire) {
             rocksdb_config_manager.flush_wal()?;
         }
         Ok(())
@@ -1254,7 +1227,7 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
     }
 }
 
-impl<MS: MessageStore> ConfigManager for TopicConfigManager<MS> {
+impl ConfigManager for TopicConfigManager {
     fn load(&self) -> bool {
         #[cfg(feature = "rocksdb_store")]
         if self.rocksdb_config_manager.is_some() {
@@ -1281,7 +1254,7 @@ impl<MS: MessageStore> ConfigManager for TopicConfigManager<MS> {
     }
 
     fn config_file_path(&self) -> String {
-        get_topic_config_path(self.broker_runtime_inner.broker_config().store_path_root_dir.as_str())
+        self.config_file_path.clone()
     }
 
     fn encode_pretty(&self, pretty_format: bool) -> String {
@@ -1325,26 +1298,22 @@ mod tests {
     use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_info::TopicQueueMappingInfo;
     use rocketmq_remoting::protocol::DataVersion;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
-    use rocketmq_store::message_store::GenericMessageStore;
     use tempfile::TempDir;
 
-    use crate::broker_runtime::BrokerRuntime;
     use crate::topic::manager::topic_config_manager::TopicConfigManager;
 
-    fn test_topic_config_manager() -> (TempDir, TopicConfigManager<GenericMessageStore>) {
+    fn test_topic_config_manager() -> (TempDir, TopicConfigManager) {
         let temp_dir = TempDir::new().expect("temp dir should be created");
         let root = CheetahString::from_string(temp_dir.path().to_string_lossy().to_string());
-        let mut runtime = BrokerRuntime::new(
-            Arc::new(BrokerConfig {
-                store_path_root_dir: root.clone(),
-                ..BrokerConfig::default()
-            }),
-            Arc::new(MessageStoreConfig {
-                store_path_root_dir: root,
-                ..MessageStoreConfig::default()
-            }),
-        );
-        let manager = TopicConfigManager::new(runtime.inner_for_test().clone(), false);
+        let broker_config = BrokerConfig {
+            store_path_root_dir: root.clone(),
+            ..BrokerConfig::default()
+        };
+        let message_store_config = MessageStoreConfig {
+            store_path_root_dir: root,
+            ..MessageStoreConfig::default()
+        };
+        let manager = TopicConfigManager::new(&broker_config, &message_store_config, false);
         (temp_dir, manager)
     }
 
@@ -1376,7 +1345,7 @@ mod tests {
         assert_eq!(config.read_queue_nums, 2);
         assert_eq!(config.write_queue_nums, 3);
 
-        manager.delete_topic_config(&topic);
+        manager.delete_topic_config(&topic, 0);
         assert!(manager.select_topic_config(&topic).is_none());
     }
 
@@ -1424,17 +1393,41 @@ mod tests {
     }
 
     #[test]
+    fn async_topic_create_pending_guard_releases_on_drop() {
+        let (_temp_dir, manager) = test_topic_config_manager();
+
+        let pending = manager.begin_async_topic_create_persist();
+        assert_eq!(manager.async_topic_create_pending_count(), 1);
+        drop(pending);
+        assert_eq!(manager.async_topic_create_pending_count(), 0);
+    }
+
+    #[test]
+    fn source_has_no_runtime_or_arc_mut_owner_back_reference() {
+        let source = include_str!("topic_config_manager.rs");
+
+        for forbidden in [
+            ["Arc", "Mut"].concat(),
+            ["Broker", "Runtime", "Inner"].concat(),
+            ["broker", "_runtime", "_inner"].concat(),
+            ["TopicConfigManager", "<"].concat(),
+        ] {
+            assert!(!source.contains(&forbidden), "forbidden owner carrier: {forbidden}");
+        }
+    }
+
+    #[test]
     fn update_publishes_immutable_generation_with_matching_version() {
         let (_temp_dir, manager) = test_topic_config_manager();
         let topic = CheetahString::from_static_str("GenerationTopic");
 
-        let first = manager.update_topic_config(TopicConfig::with_queues(topic.clone(), 2, 3));
+        let first = manager.update_topic_config(TopicConfig::with_queues(topic.clone(), 2, 3), 0);
         let first_reader = manager
             .select_topic_config(&topic)
             .expect("first generation should be visible");
         assert!(Arc::ptr_eq(&first.topic_config, &first_reader));
 
-        let second = manager.update_topic_config(TopicConfig::with_queues(topic.clone(), 5, 7));
+        let second = manager.update_topic_config(TopicConfig::with_queues(topic.clone(), 5, 7), 0);
         let second_reader = manager
             .select_topic_config(&topic)
             .expect("second generation should be visible");
@@ -1461,7 +1454,7 @@ mod tests {
                 let barrier = Arc::clone(&barrier);
                 scope.spawn(move || {
                     barrier.wait();
-                    manager.update_topic_config(TopicConfig::with_queues(topic, 1, 1));
+                    manager.update_topic_config(TopicConfig::with_queues(topic, 1, 1), 0);
                 });
             }
             barrier.wait();
@@ -1517,8 +1510,8 @@ mod tests {
     async fn stale_registration_trigger_resamples_current_generation_after_send_guard() {
         let (_temp_dir, manager) = test_topic_config_manager();
         let topic = CheetahString::from_static_str("RegistrationTopic");
-        let stale = manager.update_topic_config(TopicConfig::with_queues(topic.clone(), 1, 1));
-        let current = manager.update_topic_config(TopicConfig::with_queues(topic.clone(), 7, 9));
+        let stale = manager.update_topic_config(TopicConfig::with_queues(topic.clone(), 1, 1), 0);
+        let current = manager.update_topic_config(TopicConfig::with_queues(topic.clone(), 7, 9), 0);
 
         let _registration = manager.topic_registration_guard().await;
         let (configs, data_version) = manager.topic_registration_snapshot(std::slice::from_ref(&topic));
@@ -1543,7 +1536,6 @@ mod rocksdb_config_tests {
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
     use tempfile::TempDir;
 
-    use crate::broker_runtime::BrokerRuntime;
     use crate::config::rocksdb_manager::RocksDbBrokerConfigManager;
     use crate::config::rocksdb_manager::RocksDbBrokerConfigManagerConfig;
     use crate::topic::manager::topic_config_manager::TopicConfigManager;
@@ -1551,23 +1543,31 @@ mod rocksdb_config_tests {
     #[tokio::test]
     async fn topic_config_manager_persists_single_topic_to_rocksdb_and_loads_after_restart() {
         let temp_dir = TempDir::new().expect("temp dir should be created");
-        let mut runtime = test_runtime(&temp_dir);
-        let inner = runtime.inner_for_test().clone();
+        let (broker_config, message_store_config) = test_configs(&temp_dir);
         let rocksdb_path = temp_dir.path().join("config").join("topics");
         let rocksdb_manager = Arc::new(
             RocksDbBrokerConfigManager::open(RocksDbBrokerConfigManagerConfig::topic(rocksdb_path.clone()))
                 .expect("rocksdb config manager should open"),
         );
-        let topic_manager = TopicConfigManager::new_with_rocksdb_config_manager(inner.clone(), false, rocksdb_manager);
-        topic_manager.update_topic_config(TopicConfig::with_queues("TopicA", 4, 5));
+        let topic_manager = TopicConfigManager::new_with_rocksdb_config_manager(
+            &broker_config,
+            &message_store_config,
+            false,
+            rocksdb_manager,
+        );
+        topic_manager.update_topic_config(TopicConfig::with_queues("TopicA", 4, 5), 0);
         drop(topic_manager);
 
         let restarted_rocksdb_manager = Arc::new(
             RocksDbBrokerConfigManager::open(RocksDbBrokerConfigManagerConfig::topic(rocksdb_path))
                 .expect("rocksdb config manager should reopen"),
         );
-        let restarted_manager =
-            TopicConfigManager::new_with_rocksdb_config_manager(inner, false, restarted_rocksdb_manager);
+        let restarted_manager = TopicConfigManager::new_with_rocksdb_config_manager(
+            &broker_config,
+            &message_store_config,
+            false,
+            restarted_rocksdb_manager,
+        );
 
         assert!(restarted_manager.load());
         let loaded = restarted_manager
@@ -1581,42 +1581,50 @@ mod rocksdb_config_tests {
     #[tokio::test]
     async fn topic_config_manager_delete_removes_topic_from_rocksdb() {
         let temp_dir = TempDir::new().expect("temp dir should be created");
-        let mut runtime = test_runtime(&temp_dir);
-        let inner = runtime.inner_for_test().clone();
+        let (broker_config, message_store_config) = test_configs(&temp_dir);
         let rocksdb_path = temp_dir.path().join("config").join("topics-delete");
         let rocksdb_manager = Arc::new(
             RocksDbBrokerConfigManager::open(RocksDbBrokerConfigManagerConfig::topic(rocksdb_path.clone()))
                 .expect("rocksdb config manager should open"),
         );
-        let topic_manager = TopicConfigManager::new_with_rocksdb_config_manager(inner.clone(), false, rocksdb_manager);
+        let topic_manager = TopicConfigManager::new_with_rocksdb_config_manager(
+            &broker_config,
+            &message_store_config,
+            false,
+            rocksdb_manager,
+        );
         let topic_name = CheetahString::from_static_str("TopicDelete");
-        topic_manager.update_topic_config(TopicConfig::with_queues(topic_name.clone(), 1, 1));
-        topic_manager.delete_topic_config(&topic_name);
+        topic_manager.update_topic_config(TopicConfig::with_queues(topic_name.clone(), 1, 1), 0);
+        topic_manager.delete_topic_config(&topic_name, 0);
         drop(topic_manager);
 
         let restarted_rocksdb_manager = Arc::new(
             RocksDbBrokerConfigManager::open(RocksDbBrokerConfigManagerConfig::topic(rocksdb_path))
                 .expect("rocksdb config manager should reopen"),
         );
-        let restarted_manager =
-            TopicConfigManager::new_with_rocksdb_config_manager(inner, false, restarted_rocksdb_manager);
+        let restarted_manager = TopicConfigManager::new_with_rocksdb_config_manager(
+            &broker_config,
+            &message_store_config,
+            false,
+            restarted_rocksdb_manager,
+        );
 
         assert!(restarted_manager.load());
         assert!(restarted_manager.get_topic_config(topic_name.as_str()).is_none());
     }
 
-    fn test_runtime(temp_dir: &TempDir) -> BrokerRuntime {
+    fn test_configs(temp_dir: &TempDir) -> (BrokerConfig, MessageStoreConfig) {
         let root = CheetahString::from_string(temp_dir.path().to_string_lossy().to_string());
-        BrokerRuntime::new(
-            Arc::new(BrokerConfig {
+        (
+            BrokerConfig {
                 store_path_root_dir: root.clone(),
                 ..BrokerConfig::default()
-            }),
-            Arc::new(MessageStoreConfig {
+            },
+            MessageStoreConfig {
                 store_path_root_dir: root,
                 real_time_persist_rocksdb_config: true,
                 ..MessageStoreConfig::default()
-            }),
+            },
         )
     }
 }

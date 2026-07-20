@@ -170,17 +170,14 @@ where
             .topic_config_manager()
             .select_topic_config(topic);
         if topic_config.is_none() {
-            topic_config = self
-                .broker_runtime_inner
-                .topic_config_manager_mut()
-                .create_topic_in_send_message_back_method(
-                    topic,
-                    1,
-                    PermName::PERM_WRITE | PermName::PERM_READ,
-                    false,
-                    0,
-                )
-                .await;
+            topic_config = crate::broker_runtime::create_topic_in_send_message_back!(
+                self.broker_runtime_inner.clone(),
+                topic,
+                1,
+                PermName::PERM_WRITE | PermName::PERM_READ,
+                false,
+                0,
+            );
         }
         topic_config
     }

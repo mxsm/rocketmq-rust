@@ -206,10 +206,10 @@ impl<MS: MessageStore> PopReviveService<MS> {
         topic_config.topic_filter_type = TopicFilterType::SingleTag;
         topic_config.perm = 6;
         topic_config.topic_sys_flag = 0;
-        let _ = self
-            .broker_runtime_inner
-            .topic_config_manager_mut()
-            .update_topic_config(topic_config);
+        let _ = self.broker_runtime_inner.topic_config_manager().update_topic_config(
+            topic_config,
+            self.broker_runtime_inner.topic_config_state_machine_version(),
+        );
         self.init_pop_retry_offset(topic, consumer_group);
     }
 

@@ -102,12 +102,12 @@ where
             msg_ext
         );
 
-        let topic_config = self
-            .broker_runtime_inner
-            .topic_config_manager_mut()
-            .create_topic_of_tran_check_max_time(TCMT_QUEUE_NUMS, PermName::PERM_READ | PermName::PERM_WRITE)
-            .await
-            .expect("Create topic of tran check max time failed");
+        let topic_config = crate::broker_runtime::create_tran_check_max_time_topic!(
+            self.broker_runtime_inner.clone(),
+            TCMT_QUEUE_NUMS,
+            PermName::PERM_READ | PermName::PERM_WRITE,
+        )
+        .expect("Create topic of tran check max time failed");
         let broker_inner = to_message_ext_broker_inner(&topic_config, &msg_ext);
         let put_message_result = self
             .broker_runtime_inner

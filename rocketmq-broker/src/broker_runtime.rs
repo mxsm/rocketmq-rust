@@ -154,7 +154,9 @@ use crate::schedule::schedule_message_service::ScheduleMessageService;
 use crate::slave::slave_synchronize::SlaveSynchronize;
 use crate::subscription::lite_subscription_registry::LiteSubscriptionRegistry;
 use crate::subscription::manager::subscription_group_manager::SubscriptionGroupManager;
+use crate::topic::manager::topic_config_manager::TopicConfigCreation;
 use crate::topic::manager::topic_config_manager::TopicConfigManager;
+use crate::topic::manager::topic_config_manager::TopicConfigUpdate;
 use crate::topic::manager::topic_queue_mapping_manager::TopicQueueMappingManager;
 use crate::topic::manager::topic_route_info_manager::TopicRouteInfoManager;
 use crate::topic::topic_queue_mapping_clean_service::TopicQueueMappingCleanService;
@@ -169,6 +171,191 @@ type DefaultServerProcessor =
 
 type FasterServerProcessor =
     BrokerRequestProcessor<GenericMessageStore, DefaultTransactionalMessageService<GenericMessageStore>>;
+
+pub(crate) async fn complete_topic_config_creation<F, Fut>(
+    manager: Arc<TopicConfigManager>,
+    creation: TopicConfigCreation,
+    start_time: Instant,
+    async_persist: bool,
+    task_group: Option<TaskGroup>,
+    register_update: F,
+) -> Arc<TopicConfig>
+where
+    F: Fn(TopicConfigUpdate) -> Fut + Clone + Send + Sync + 'static,
+    Fut: Future<Output = ()> + Send + 'static,
+{
+    let TopicConfigCreation {
+        topic_config,
+        update,
+        register,
+        created,
+    } = creation;
+
+    if let Some(update) = update {
+        if async_persist {
+            if let Some(task_group) = task_group {
+                let pending = manager.begin_async_topic_create_persist();
+                let manager_for_task = Arc::clone(&manager);
+                let register_for_task = register_update.clone();
+                let topic_name = update
+                    .topic_config
+                    .topic_name
+                    .as_ref()
+                    .map_or_else(|| "<unknown>".to_string(), ToString::to_string);
+                let update_for_task = update.clone();
+                let task = async move {
+                    let _pending = pending;
+                    manager_for_task.persist();
+                    if register {
+                        register_for_task(update_for_task).await;
+                    }
+                    info!("async topic create persist/register completed, topic={}", topic_name);
+                };
+                match task_group.spawn(
+                    "broker.topic-config.async-create.persist",
+                    rocketmq_runtime::TaskKind::Worker,
+                    task,
+                ) {
+                    Ok(_) => {
+                        if created {
+                            TopicConfigManager::record_topic_create_latency(start_time);
+                        }
+                        return topic_config;
+                    }
+                    Err(error) => {
+                        manager.record_async_topic_create_spawn_failure();
+                        warn!(?error, "failed to spawn async topic create persist task");
+                    }
+                }
+            } else {
+                manager.record_async_topic_create_spawn_failure();
+            }
+        }
+
+        manager.persist();
+        if register {
+            register_update(update).await;
+        }
+    }
+
+    if created {
+        TopicConfigManager::record_topic_create_latency(start_time);
+    }
+    topic_config
+}
+
+macro_rules! finish_topic_config_creation {
+    ($runtime:expr, $manager:expr, $creation:expr, $start_time:expr) => {{
+        let runtime = ($runtime).clone();
+        let async_persist = runtime.broker_config().async_topic_create_persist_enable;
+        let task_group = if async_persist {
+            runtime.broker_task_group_or_current(
+                "broker.topic-config.async-create",
+                "async topic create persist requested without an active broker runtime; falling back to synchronous \
+                 persist",
+            )
+        } else {
+            None
+        };
+        let registration_runtime = runtime.clone();
+        $crate::broker_runtime::complete_topic_config_creation(
+            $manager,
+            $creation,
+            $start_time,
+            async_persist,
+            task_group,
+            move |update| {
+                let runtime = registration_runtime.clone();
+                async move {
+                    if runtime.broker_config().enable_single_topic_register {
+                        runtime.register_single_topic_all(update.topic_config).await;
+                    } else {
+                        $crate::broker_runtime::BrokerRuntimeInner::register_increment_broker_data(
+                            runtime,
+                            vec![update.topic_config],
+                            update.data_version,
+                        )
+                        .await;
+                    }
+                }
+            },
+        )
+        .await
+    }};
+}
+
+macro_rules! create_topic_in_send_message {
+    (
+        $runtime:expr,
+        $topic:expr,
+        $default_topic:expr,
+        $remote_address:expr,
+        $queue_nums:expr,
+        $topic_sys_flag:expr $(,)?
+    ) => {{
+        let runtime = ($runtime).clone();
+        let start_time = std::time::Instant::now();
+        let manager = runtime.topic_config_manager_handle();
+        match manager.create_topic_in_send_message_method(
+            $topic,
+            $default_topic,
+            $remote_address,
+            $queue_nums,
+            $topic_sys_flag,
+            runtime.topic_config_state_machine_version(),
+            runtime.broker_config().auto_create_topic_enable,
+        ) {
+            Some(creation) => Some($crate::broker_runtime::finish_topic_config_creation!(
+                runtime, manager, creation, start_time
+            )),
+            None => None,
+        }
+    }};
+}
+
+macro_rules! create_topic_in_send_message_back {
+    ($runtime:expr, $topic:expr, $queue_nums:expr, $perm:expr, $is_order:expr, $topic_sys_flag:expr $(,)?) => {{
+        let runtime = ($runtime).clone();
+        let start_time = std::time::Instant::now();
+        let manager = runtime.topic_config_manager_handle();
+        match manager.create_topic_in_send_message_back_method(
+            $topic,
+            $queue_nums,
+            $perm,
+            $is_order,
+            $topic_sys_flag,
+            runtime.topic_config_state_machine_version(),
+        ) {
+            Some(creation) => Some($crate::broker_runtime::finish_topic_config_creation!(
+                runtime, manager, creation, start_time
+            )),
+            None => None,
+        }
+    }};
+}
+
+macro_rules! create_tran_check_max_time_topic {
+    ($runtime:expr, $queue_nums:expr, $perm:expr $(,)?) => {{
+        let runtime = ($runtime).clone();
+        let start_time = std::time::Instant::now();
+        let manager = runtime.topic_config_manager_handle();
+        match manager.create_topic_of_tran_check_max_time(
+            $queue_nums,
+            $perm,
+            runtime.topic_config_state_machine_version(),
+        ) {
+            Some(creation) => Some($crate::broker_runtime::finish_topic_config_creation!(
+                runtime, manager, creation, start_time
+            )),
+            None => None,
+        }
+    }};
+}
+
+pub(crate) use create_topic_in_send_message;
+pub(crate) use create_topic_in_send_message_back;
+pub(crate) use create_tran_check_max_time_topic;
+pub(crate) use finish_topic_config_creation;
 
 const SCHEDULED_TASK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 const BROKER_OUTER_API_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
@@ -1060,18 +1247,25 @@ impl BrokerRuntime {
         let stats_manager = Arc::new(stats_manager);
         #[cfg(feature = "rocksdb_store")]
         {
-            inner.topic_config_manager = Some(match rocksdb_config_managers.as_ref() {
+            inner.topic_config_manager = Some(Arc::new(match rocksdb_config_managers.as_ref() {
                 Some(managers) => TopicConfigManager::new_with_rocksdb_config_manager(
-                    inner.clone(),
+                    inner.broker_config.as_ref(),
+                    inner.message_store_config.as_ref(),
                     true,
                     Arc::clone(&managers.topic),
                 ),
-                None => TopicConfigManager::new(inner.clone(), true),
-            });
+                None => {
+                    TopicConfigManager::new(inner.broker_config.as_ref(), inner.message_store_config.as_ref(), true)
+                }
+            }));
         }
         #[cfg(not(feature = "rocksdb_store"))]
         {
-            inner.topic_config_manager = Some(TopicConfigManager::new(inner.clone(), true));
+            inner.topic_config_manager = Some(Arc::new(TopicConfigManager::new(
+                inner.broker_config.as_ref(),
+                inner.message_store_config.as_ref(),
+                true,
+            )));
         }
         inner.topic_route_info_manager = Some(TopicRouteInfoManager::new(inner.clone()));
         let escape_bridge = Arc::new(EscapeBridge::new(inner.clone()));
@@ -1452,7 +1646,7 @@ impl BrokerRuntime {
             cold_data_cg_ctr_service.shutdown();
         }
 
-        if let Some(mut topic_config_manager) = self.inner.topic_config_manager.take() {
+        if let Some(topic_config_manager) = self.inner.topic_config_manager.take() {
             let result = if let Some(service_context) = self.inner.service_context.as_ref() {
                 run_shutdown_blocking_operation(
                     service_context,
@@ -1460,7 +1654,7 @@ impl BrokerRuntime {
                     "broker.topic-config.persist-stop",
                     move || {
                         topic_config_manager.persist();
-                        topic_config_manager.stop();
+                        topic_config_manager.close();
                     },
                 )
                 .await
@@ -3110,6 +3304,12 @@ impl BrokerRuntime {
 }
 
 impl<MS: MessageStore> BrokerRuntimeInner<MS> {
+    pub(crate) fn topic_config_state_machine_version(&self) -> i64 {
+        self.message_store()
+            .map(|message_store| message_store.get_state_machine_version())
+            .unwrap_or_default()
+    }
+
     fn topic_config_for_registration(&self, topic_config: &TopicConfig) -> TopicConfig {
         let mut topic_config = topic_config.clone();
         if !PermName::is_writeable(self.broker_config.broker_permission)
@@ -3255,8 +3455,9 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
                 slave_synchronize.set_master_addr(Some(&result.master_addr));
             }
             if check_order_config {
-                if let Some(topic_config_manager) = &mut self.topic_config_manager {
-                    topic_config_manager.update_order_topic_config(&result.kv_table);
+                let state_machine_version = self.topic_config_state_machine_version();
+                if let Some(topic_config_manager) = &self.topic_config_manager {
+                    topic_config_manager.update_order_topic_config(&result.kv_table, state_machine_version);
                 }
             }
         }
@@ -3315,7 +3516,7 @@ pub(crate) struct BrokerRuntimeInner<MS: MessageStore> {
     broker_addr: CheetahString,
     broker_config: Arc<BrokerConfig>,
     message_store_config: Arc<MessageStoreConfig>,
-    topic_config_manager: Option<TopicConfigManager<MS>>,
+    topic_config_manager: Option<Arc<TopicConfigManager>>,
     topic_queue_mapping_manager: TopicQueueMappingManager,
     consumer_offset_manager: ConsumerOffsetManager<MS>,
     subscription_group_manager: Option<SubscriptionGroupManager<MS>>,
@@ -3408,16 +3609,6 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     #[inline]
     pub fn store_host_mut(&mut self) -> &mut SocketAddr {
         &mut self.store_host
-    }
-
-    #[inline]
-    pub fn topic_config_manager_mut(&mut self) -> &mut TopicConfigManager<MS> {
-        self.topic_config_manager.as_mut().unwrap()
-    }
-
-    #[inline]
-    pub fn topic_config_manager_unchecked_mut(&mut self) -> &mut TopicConfigManager<MS> {
-        unsafe { self.topic_config_manager.as_mut().unwrap_unchecked() }
     }
 
     #[inline]
@@ -3583,13 +3774,13 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn topic_config_manager(&self) -> &TopicConfigManager<MS> {
-        self.topic_config_manager.as_ref().unwrap()
+    pub fn topic_config_manager(&self) -> &TopicConfigManager {
+        self.topic_config_manager.as_deref().unwrap()
     }
 
     #[inline]
-    pub fn topic_config_manager_unchecked(&self) -> &TopicConfigManager<MS> {
-        unsafe { self.topic_config_manager.as_ref().unwrap_unchecked() }
+    pub(crate) fn topic_config_manager_handle(&self) -> Arc<TopicConfigManager> {
+        Arc::clone(self.topic_config_manager.as_ref().unwrap())
     }
 
     #[inline]
@@ -3865,12 +4056,10 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
 
     #[inline]
     pub fn set_message_store_config(&mut self, message_store_config: MessageStoreConfig) {
+        if let Some(topic_config_manager) = self.topic_config_manager.as_ref() {
+            topic_config_manager.update_message_store_policy(&message_store_config);
+        }
         self.message_store_config = Arc::new(message_store_config);
-    }
-
-    #[inline]
-    pub fn set_topic_config_manager(&mut self, topic_config_manager: TopicConfigManager<MS>) {
-        self.topic_config_manager = Some(topic_config_manager);
     }
 
     #[inline]
@@ -6358,7 +6547,7 @@ accounts:
             )),
             CheetahString::from_static_str("LITE"),
         );
-        inner.topic_config_manager_mut().update_topic_config(topic_config);
+        inner.topic_config_manager().update_topic_config(topic_config, 0);
 
         for group in ["group-a", "group-b"] {
             let mut config = SubscriptionGroupConfig::new(CheetahString::from_static_str(group));
@@ -6430,7 +6619,7 @@ accounts:
         runtime
             .inner_for_test()
             .topic_config_manager()
-            .update_topic_config(replacement);
+            .update_topic_config(replacement, 0);
     }
 
     fn set_parent_topic_lite_expiration(runtime: &mut BrokerRuntime, expiration: i32) {
@@ -6449,7 +6638,7 @@ accounts:
         runtime
             .inner_for_test()
             .topic_config_manager()
-            .update_topic_config(replacement);
+            .update_topic_config(replacement, 0);
     }
 
     fn seed_lite_bound_group(runtime: &mut BrokerRuntime, group: &str) {
@@ -7256,8 +7445,8 @@ accounts:
         let topic = CheetahString::from_static_str("phase3-send-topic");
         runtime
             .inner_for_test()
-            .topic_config_manager_mut()
-            .update_topic_config(TopicConfig::with_queues(topic.clone(), 1, 1));
+            .topic_config_manager()
+            .update_topic_config(TopicConfig::with_queues(topic.clone(), 1, 1), 0);
 
         let (mut processor, _) = runtime.init_processor();
         let send_header = SendMessageRequestHeader {
@@ -7329,8 +7518,8 @@ accounts:
         let group = CheetahString::from_static_str("phase3-send-back-group");
         runtime
             .inner_for_test()
-            .topic_config_manager_mut()
-            .update_topic_config(TopicConfig::with_queues(topic.clone(), 1, 1));
+            .topic_config_manager()
+            .update_topic_config(TopicConfig::with_queues(topic.clone(), 1, 1), 0);
         runtime
             .inner_for_test()
             .subscription_group_manager_mut()
@@ -7429,8 +7618,8 @@ accounts:
         let topic = CheetahString::from_static_str("phase3-topic-config");
         runtime
             .inner_for_test()
-            .topic_config_manager_mut()
-            .update_topic_config(TopicConfig::with_queues(topic.clone(), 2, 3));
+            .topic_config_manager()
+            .update_topic_config(TopicConfig::with_queues(topic.clone(), 2, 3), 0);
 
         let (mut processor, _) = runtime.init_processor();
         let mut all_config_request = RemotingCommand::create_remoting_command(RequestCode::GetAllTopicConfig);
@@ -7529,8 +7718,8 @@ accounts:
         let group = CheetahString::from_static_str("phase4-consumer-group");
         runtime
             .inner_for_test()
-            .topic_config_manager_mut()
-            .update_topic_config(TopicConfig::with_queues(topic.clone(), 1, 1));
+            .topic_config_manager()
+            .update_topic_config(TopicConfig::with_queues(topic.clone(), 1, 1), 0);
 
         let mut group_config = SubscriptionGroupConfig::new(group.clone());
         runtime
@@ -7807,8 +7996,8 @@ accounts:
         let group = CheetahString::from_static_str("phase5-admin-consumer-group");
         runtime
             .inner_for_test()
-            .topic_config_manager_mut()
-            .update_topic_config(TopicConfig::with_queues(topic.clone(), 2, 2));
+            .topic_config_manager()
+            .update_topic_config(TopicConfig::with_queues(topic.clone(), 2, 2), 0);
         let mut group_config = SubscriptionGroupConfig::new(group.clone());
         runtime
             .inner_for_test()
@@ -7957,8 +8146,8 @@ accounts:
         let topic = CheetahString::from_static_str("phase6-store-topic");
         runtime
             .inner_for_test()
-            .topic_config_manager_mut()
-            .update_topic_config(TopicConfig::with_queues(topic.clone(), 1, 1));
+            .topic_config_manager()
+            .update_topic_config(TopicConfig::with_queues(topic.clone(), 1, 1), 0);
 
         let (mut processor, _) = runtime.init_processor();
         let send_response_header = send_message_through_broker_processor(
@@ -9532,7 +9721,7 @@ accounts:
             let inner = file_runtime.inner_for_test();
             inner
                 .topic_config_manager()
-                .update_topic_config(TopicConfig::with_queues(topic.clone(), 3, 5));
+                .update_topic_config(TopicConfig::with_queues(topic.clone(), 3, 5), 0);
             inner.consumer_offset_manager().commit_offset(
                 CheetahString::from_static_str("127.0.0.1:10911"),
                 &group,

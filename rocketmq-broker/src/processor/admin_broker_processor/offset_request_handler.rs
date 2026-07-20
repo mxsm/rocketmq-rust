@@ -555,10 +555,10 @@ mod tests {
     #[tokio::test]
     async fn get_earliest_msg_store_time_returns_store_timestamp() {
         let mut runtime = new_test_runtime("earliest-time").await;
-        let mut inner = runtime.inner_for_test().clone();
+        let inner = runtime.inner_for_test().clone();
         let _ = inner
-            .topic_config_manager_mut()
-            .update_topic_config(TopicConfig::with_queues("topic-a", 1, 1));
+            .topic_config_manager()
+            .update_topic_config(TopicConfig::with_queues("topic-a", 1, 1), 0);
 
         let expected_timestamp = inner
             .message_store()

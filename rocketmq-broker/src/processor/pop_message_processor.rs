@@ -1803,8 +1803,8 @@ mod tests {
         group: &str,
     ) {
         let _ = inner
-            .topic_config_manager_mut()
-            .update_topic_config(TopicConfig::with_queues(topic, 1, 1));
+            .topic_config_manager()
+            .update_topic_config(TopicConfig::with_queues(topic, 1, 1), 0);
 
         let mut config = SubscriptionGroupConfig::new(CheetahString::from_slice(group));
         inner

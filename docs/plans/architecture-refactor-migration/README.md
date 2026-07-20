@@ -509,8 +509,15 @@ Broker registration carrier ownership 随 Issue #8404 删除 `BrokerOuterAPI::re
 `MessageStore` 泛型与完整 BrokerRuntime 参数；TopicQueueMappingInfo 注册 payload 直接以 owned `HashMap` 进入 wire
 wrapper，不再建立临时 `ArcMut` map 后重新克隆。实际快照降至 257 production/576 occurrence、155 test/450
 occurrence，Broker production 降至 135/268；compatibility 保持 14/40。总进度仍为 75/82，下一子切片
-M11-12bc 完成 TopicConfigManager 非泛型标准 Arc owner、独立 coordinator 与 drain-before-unregister 边界，再为
-transaction bridge/listener 提供不隐藏 Runtime/Store ArcMut 的真实 capability；M11-12 父工作包未完成。
+M11-12bc1 完成 TopicConfigManager 非泛型标准 Arc owner 边界；M11-12 父工作包未完成。
+
+TopicConfigManager runtime ownership cycle 随 Issue #8406 拆除：manager 不再泛化于 `MessageStore`，不再持有
+BrokerRuntime back-reference，也不再暴露 mutable/unchecked accessor；状态更新显式接收 state-machine generation，动态
+policy 在 Broker workflow 中实时采样，异步任务直接持有 `Arc<TopicConfigManager>`，并以 RAII guard 保证 pending persist
+计数在成功、失败、panic 或 abort 时都能释放。实际快照降至 255 production/571 occurrence，test 保持 155/450，
+Broker production 降至 133/263；compatibility 保持 14/40。总进度仍为 75/82，下一子切片 M11-12bc2 建立独立
+persistence/registration coordinator、BlockingExecutor、admission/drain-before-unregister 与共享 Rocks backend close 边界，
+再继续 transaction bridge/listener 与其他 Broker/Store owner；M11-12 父工作包未完成。
 
 ### 9.3 证据目录
 

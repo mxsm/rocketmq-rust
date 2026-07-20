@@ -213,15 +213,13 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
             );
             return Ok(Some(response.set_code(ResponseCode::Success)));
         }
-        let update = self
-            .broker_runtime_inner
-            .topic_config_manager_mut()
-            .update_topic_config(topic_config);
+        let update = self.broker_runtime_inner.topic_config_manager().update_topic_config(
+            topic_config,
+            self.broker_runtime_inner.topic_config_state_machine_version(),
+        );
 
         if self.broker_runtime_inner.broker_config().enable_single_topic_register {
             self.broker_runtime_inner
-                .topic_config_manager()
-                .broker_runtime_inner()
                 .register_single_topic_all(update.topic_config)
                 .await;
         } else {
@@ -312,10 +310,10 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
             order: request_header.order,
             attributes,
         };
-        let update = self
-            .broker_runtime_inner
-            .topic_config_manager_mut()
-            .update_topic_config(topic_config);
+        let update = self.broker_runtime_inner.topic_config_manager().update_topic_config(
+            topic_config,
+            self.broker_runtime_inner.topic_config_state_machine_version(),
+        );
 
         topic_queue_mapping_detail.topic_queue_mapping_info.topic = Some(topic.clone());
         if topic_queue_mapping_detail.topic_queue_mapping_info.total_queues <= 0 {
@@ -404,13 +402,14 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
         let mut topic_config_list = request_body.topic_config_list;
         let (topic_config_list, data_version) = self
             .broker_runtime_inner
-            .topic_config_manager_mut()
-            .update_topic_config_list(topic_config_list.as_mut_slice());
+            .topic_config_manager()
+            .update_topic_config_list(
+                topic_config_list.as_mut_slice(),
+                self.broker_runtime_inner.topic_config_state_machine_version(),
+            );
         if self.broker_runtime_inner.broker_config().enable_single_topic_register {
             for topic_config in topic_config_list.iter() {
                 self.broker_runtime_inner
-                    .topic_config_manager()
-                    .broker_runtime_inner()
                     .register_single_topic_all(topic_config.clone())
                     .await;
             }
@@ -730,7 +729,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
     fn delete_topic_in_broker(&mut self, topic: &CheetahString) {
         self.broker_runtime_inner
             .topic_config_manager()
-            .delete_topic_config(topic);
+            .delete_topic_config(topic, self.broker_runtime_inner.topic_config_state_machine_version());
         self.broker_runtime_inner.topic_queue_mapping_manager().delete(topic);
         self.broker_runtime_inner
             .consumer_offset_manager()
