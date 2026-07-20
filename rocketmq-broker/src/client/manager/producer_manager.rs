@@ -65,10 +65,10 @@ pub struct ProducerManager {
     broker_config: Option<Arc<BrokerConfig>>,
 }
 
-/// Shared read capability for selecting a live producer channel.
+/// Shared read capability for producer channel selection and connection snapshots.
 ///
 /// This view deliberately omits broker configuration and mutation hooks so transaction checking
-/// cannot retain the complete producer manager or broker runtime.
+/// and administration queries cannot retain the complete producer manager or broker runtime.
 #[derive(Clone)]
 pub(crate) struct ProducerChannelRegistry {
     group_channel_table: Arc<DashMap<ProducerGroupName, DashMap<Channel, ClientChannelInfo>>>,
@@ -78,6 +78,10 @@ pub(crate) struct ProducerChannelRegistry {
 impl ProducerChannelRegistry {
     pub(crate) fn get_available_channel(&self, group: Option<&ProducerGroupName>) -> Option<Channel> {
         select_available_channel(&self.group_channel_table, &self.positive_atomic_counter, group)
+    }
+
+    pub(crate) fn producer_table(&self) -> ProducerTableInfo {
+        producer_table_snapshot(&self.group_channel_table)
     }
 }
 
@@ -110,6 +114,29 @@ fn select_available_channel(
         index = (index + 1) % size;
     }
     last_healthy_channel
+}
+
+fn producer_table_snapshot(
+    group_channel_table: &DashMap<ProducerGroupName, DashMap<Channel, ClientChannelInfo>>,
+) -> ProducerTableInfo {
+    let mut producers: HashMap<String, Vec<ProducerInfo>> = HashMap::new();
+    for group_entry in group_channel_table.iter() {
+        for channel_entry in group_entry.value().iter() {
+            let client = channel_entry.value();
+            let producer = ProducerInfo::new(
+                client.client_id().to_string(),
+                client.channel().remote_address().to_string(),
+                client.language(),
+                client.version(),
+                client.last_update_timestamp() as i64,
+            );
+            producers
+                .entry(group_entry.key().to_string())
+                .or_default()
+                .push(producer);
+        }
+    }
+    ProducerTableInfo::from(producers)
 }
 
 impl ProducerManager {
@@ -192,32 +219,7 @@ impl ProducerManager {
     /// The snapshot reflects the state at the time of the call and may become stale
     /// as producers connect or disconnect.
     pub fn get_producer_table(&self) -> ProducerTableInfo {
-        let mut map: HashMap<String, Vec<ProducerInfo>> = HashMap::new();
-
-        // Iterate over all groups
-        for group_entry in self.group_channel_table.iter() {
-            let (group, channel_map) = (group_entry.key(), group_entry.value());
-
-            // Iterate over all channels in this group
-            for channel_entry in channel_map.iter() {
-                let client_channel_info = channel_entry.value();
-
-                // Create producer info from client channel info
-                let producer_info = ProducerInfo::new(
-                    client_channel_info.client_id().to_string(),
-                    client_channel_info.channel().remote_address().to_string(),
-                    client_channel_info.language(),
-                    client_channel_info.version(),
-                    client_channel_info.last_update_timestamp() as i64,
-                );
-
-                // Add to map, creating a new vector if this is the first entry for this group
-                map.entry(group.to_string()).or_default().push(producer_info);
-            }
-        }
-
-        // Create and return producer table info
-        ProducerTableInfo::from(map)
+        producer_table_snapshot(&self.group_channel_table)
     }
 
     /// Checks whether a producer group has at least one connected producer.
@@ -740,12 +742,17 @@ mod tests {
         let registry = manager.channel_registry();
         let group = CheetahString::from_static_str("transaction-producer");
         assert!(registry.get_available_channel(Some(&group)).is_none());
+        assert!(registry.producer_table().data().is_empty());
 
         let channel = create_test_channel().await;
         let client = ClientChannelInfo::new(channel.clone(), "client-id".into(), LanguageCode::default(), 1);
         manager.register_producer(&group, &client);
 
         assert_eq!(registry.get_available_channel(Some(&group)), Some(channel));
+        let snapshot = registry.producer_table();
+        let producers = snapshot.data().get(group.as_str()).expect("producer group snapshot");
+        assert_eq!(producers.len(), 1);
+        assert_eq!(producers[0].client_id(), "client-id");
     }
 
     #[test]
