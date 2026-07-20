@@ -83,7 +83,11 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopConcurrentlyService {
     }
 
     async fn shutdown(&mut self, await_terminate_millis: u64) {
-        todo!()
+        // The POP concurrent service does not start a background task in its
+        // current implementation. Keep shutdown idempotent until POP task
+        // ownership is implemented, rather than panicking during push-consumer
+        // lifecycle cleanup.
+        let _ = await_terminate_millis;
     }
 
     async fn consume_message_directly(

@@ -63,7 +63,14 @@ where
     }
 
     pub async fn shutdown(&mut self, await_terminate_millis: u64) {
-        todo!()
+        if let Some(consume_message_concurrently_service) = &mut self.consume_message_concurrently_service {
+            consume_message_concurrently_service
+                .shutdown(await_terminate_millis)
+                .await;
+        }
+        if let Some(consume_message_orderly_service) = &mut self.consume_message_orderly_service {
+            consume_message_orderly_service.shutdown(await_terminate_millis).await;
+        }
     }
 
     pub fn update_core_pool_size(&self, core_pool_size: usize) {
@@ -171,7 +178,16 @@ where
     }
 
     pub async fn shutdown(&mut self, await_terminate_millis: u64) {
-        todo!()
+        if let Some(consume_message_pop_concurrently_service) = &mut self.consume_message_pop_concurrently_service {
+            consume_message_pop_concurrently_service
+                .shutdown(await_terminate_millis)
+                .await;
+        }
+        if let Some(consume_message_pop_orderly_service) = &mut self.consume_message_pop_orderly_service {
+            consume_message_pop_orderly_service
+                .shutdown(await_terminate_millis)
+                .await;
+        }
     }
 
     fn update_core_pool_size(&self, core_pool_size: usize) {

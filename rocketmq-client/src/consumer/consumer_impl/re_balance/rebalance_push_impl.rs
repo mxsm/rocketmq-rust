@@ -478,6 +478,18 @@ impl Rebalance for RebalancePushImpl {
     }
 
     fn destroy(&mut self) {
-        unimplemented!()
+        // `destroy` is synchronous because it is called from consumer shutdown.
+        // Mark queues dropped immediately so already scheduled pull/pop work is
+        // discarded; the maps can then be reclaimed with the consumer instance.
+        if let Ok(process_queues) = self.rebalance_impl_inner.process_queue_table.try_read() {
+            for process_queue in process_queues.values() {
+                process_queue.set_dropped(true);
+            }
+        }
+        if let Ok(pop_process_queues) = self.rebalance_impl_inner.pop_process_queue_table.try_read() {
+            for process_queue in pop_process_queues.values() {
+                process_queue.set_dropped(true);
+            }
+        }
     }
 }

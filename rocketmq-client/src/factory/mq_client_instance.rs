@@ -1219,6 +1219,8 @@ mod tests {
     use super::*;
     use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
     use crate::consumer::default_mq_push_consumer::ConsumerConfig;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
 
     fn test_consumer(group: &str) -> MQConsumerInnerImpl {
         let mut consumer_config = ArcMut::new(ConsumerConfig::default());
@@ -1277,6 +1279,33 @@ mod tests {
         instance.unregister_consumer(second).await;
         instance.shutdown().await;
         assert_eq!(instance.service_state, ServiceState::ShutdownAlready);
+    }
+
+    #[tokio::test]
+    async fn shared_factory_start_lock_is_single_flight() {
+        let instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "phase3-start-lock-client", None);
+        let active = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let mut tasks = Vec::new();
+
+        for _ in 0..4 {
+            let lock = instance.lock_startup.clone();
+            let active = active.clone();
+            let peak = peak.clone();
+            tasks.push(tokio::spawn(async move {
+                let _guard = lock.lock().await;
+                let current = active.fetch_add(1, Ordering::SeqCst) + 1;
+                peak.fetch_max(current, Ordering::SeqCst);
+                tokio::task::yield_now().await;
+                active.fetch_sub(1, Ordering::SeqCst);
+            }));
+        }
+
+        for task in tasks {
+            task.await.expect("startup lock task");
+        }
+
+        assert_eq!(peak.load(Ordering::SeqCst), 1);
     }
 }
 

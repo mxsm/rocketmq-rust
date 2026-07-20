@@ -97,7 +97,9 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopOrderlyService {
     fn start(&mut self, this: ArcMut<Self>) {}
 
     async fn shutdown(&mut self, await_terminate_millis: u64) {
-        todo!()
+        // See the concurrent POP service: no independently-owned background
+        // task exists to terminate yet, but shutdown must never panic.
+        let _ = await_terminate_millis;
     }
 
     #[allow(deprecated)]

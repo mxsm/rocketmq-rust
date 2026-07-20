@@ -406,6 +406,9 @@ impl DefaultMQPushConsumerImpl {
                 if let Some(consume_message_service) = self.consume_message_service.as_mut() {
                     consume_message_service.shutdown(await_terminate_millis).await;
                 }
+                if let Some(consume_message_pop_service) = self.consume_message_pop_service.as_mut() {
+                    consume_message_pop_service.shutdown(await_terminate_millis).await;
+                }
                 if had_client_instance {
                     self.rebalance_impl.destroy();
                 }
@@ -416,6 +419,9 @@ impl DefaultMQPushConsumerImpl {
                     consume_message_concurrently_service
                         .shutdown(await_terminate_millis)
                         .await;
+                }
+                if let Some(consume_message_pop_service) = self.consume_message_pop_service.as_mut() {
+                    consume_message_pop_service.shutdown(await_terminate_millis).await;
                 }
                 self.persist_consumer_offset().await;
                 let client = self.client_instance.as_mut().unwrap();
