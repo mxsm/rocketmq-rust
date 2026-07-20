@@ -17,123 +17,64 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::config::TopicConfig;
-use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::message::MessageTrait;
-use rocketmq_common::MessageAccessor::MessageAccessor;
-use rocketmq_common::MessageDecoder;
 use rocketmq_remoting::protocol::header::check_transaction_state_request_header::CheckTransactionStateRequestHeader;
 use rocketmq_remoting::rpc::rpc_request_header::RpcRequestHeader;
+use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
+use rocketmq_runtime::TaskGroupChildLease;
 use rocketmq_runtime::TaskKind;
-use rocketmq_rust::ArcMut;
-use rocketmq_store::base::message_status_enum::PutMessageStatus;
-use rocketmq_store::base::message_store::MessageStore;
 use tracing::error;
-use tracing::info;
 use tracing::warn;
 
-use crate::broker_runtime::BrokerRuntimeInner;
+use crate::client::manager::producer_manager::ProducerChannelRegistry;
 use crate::client::net::broker_to_client::Broker2Client;
 use crate::transaction::transactional_message_check_listener::TransactionalMessageCheckListener;
 
-const TCMT_QUEUE_NUMS: i32 = 1;
+struct TransactionCheckTaskOwner {
+    _lease: TaskGroupChildLease,
+    group: TaskGroup,
+}
 
-pub struct DefaultTransactionalMessageCheckListener<MS: MessageStore> {
-    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+impl TransactionCheckTaskOwner {
+    fn new(lease: TaskGroupChildLease) -> Self {
+        let group = lease.group().clone();
+        Self { _lease: lease, group }
+    }
+}
+
+#[derive(Clone)]
+pub struct DefaultTransactionalMessageCheckListener {
+    broker_name: CheetahString,
+    producer_channels: ProducerChannelRegistry,
     broker_client: Arc<Broker2Client>,
-    task_group: Option<TaskGroup>,
+    task_owner: Option<Arc<TransactionCheckTaskOwner>>,
 }
 
-impl<MS: MessageStore> Clone for DefaultTransactionalMessageCheckListener<MS> {
-    fn clone(&self) -> Self {
+impl DefaultTransactionalMessageCheckListener {
+    pub(crate) fn new(
+        broker_name: CheetahString,
+        producer_channels: ProducerChannelRegistry,
+        broker_client: Arc<Broker2Client>,
+        task_group_lease: Option<TaskGroupChildLease>,
+    ) -> Self {
         Self {
-            broker_client: self.broker_client.clone(),
-            broker_runtime_inner: self.broker_runtime_inner.clone(),
-            task_group: self.task_group.clone(),
+            broker_name,
+            producer_channels,
+            broker_client,
+            task_owner: task_group_lease.map(TransactionCheckTaskOwner::new).map(Arc::new),
         }
+    }
+
+    pub async fn shutdown(&self, timeout: Duration) -> Option<ShutdownReport> {
+        let task_owner = self.task_owner.as_ref()?;
+        Some(task_owner.group.shutdown(timeout).await)
     }
 }
 
-impl<MS: MessageStore> DefaultTransactionalMessageCheckListener<MS> {
-    pub fn new(broker_client: Broker2Client, broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
-        let task_group = Self::create_task_group(&broker_runtime_inner);
-        Self {
-            broker_runtime_inner,
-            broker_client: Arc::new(broker_client),
-            task_group,
-        }
-    }
-
-    fn create_task_group(broker_runtime_inner: &ArcMut<BrokerRuntimeInner<MS>>) -> Option<TaskGroup> {
-        let broker_config = broker_runtime_inner.broker_config();
-        broker_runtime_inner.broker_task_group_or_current(
-            format!("rocketmq-broker.transaction-check.{}", broker_config.broker_name()),
-            "transaction check listener initialized outside Tokio runtime; check tasks will run inline",
-        )
-    }
-
-    pub async fn shutdown(&self) {
-        let Some(task_group) = self.task_group.as_ref() else {
-            return;
-        };
-
-        let report = task_group.shutdown(Duration::from_secs(5)).await;
-        if !report.is_healthy() {
-            warn!(
-                report = %report.to_json(),
-                "DefaultTransactionalMessageCheckListener shutdown report is unhealthy"
-            );
-        }
-    }
-}
-
-impl<MS> TransactionalMessageCheckListener for DefaultTransactionalMessageCheckListener<MS>
-where
-    MS: MessageStore,
-{
-    async fn resolve_discard_msg(&mut self, msg_ext: MessageExt) {
-        error!(
-            "MsgExt:{} has been checked too many times, so discard it by moving it to system topic \
-             TRANS_CHECK_MAXTIME_TOPIC",
-            msg_ext
-        );
-
-        let topic_config = crate::broker_runtime::create_tran_check_max_time_topic!(
-            self.broker_runtime_inner.clone(),
-            TCMT_QUEUE_NUMS,
-            PermName::PERM_READ | PermName::PERM_WRITE,
-        )
-        .expect("Create topic of tran check max time failed");
-        let broker_inner = to_message_ext_broker_inner(&topic_config, &msg_ext);
-        let put_message_result = self
-            .broker_runtime_inner
-            .message_store_mut()
-            .as_mut()
-            .unwrap()
-            .put_message(broker_inner)
-            .await;
-
-        if put_message_result.put_message_status() == PutMessageStatus::PutOk {
-            info!(
-                "Put checked-too-many-time half message to TRANS_CHECK_MAXTIME_TOPIC OK. Restored in queueOffset={}, \
-                 commitLogOffset={}, real topic={:?}",
-                msg_ext.queue_offset,
-                msg_ext.commit_log_offset,
-                msg_ext.user_property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC,)),
-            );
-        } else {
-            error!(
-                "Put checked-too-many-time half message to TRANS_CHECK_MAXTIME_TOPIC failed, real topic={}, msgId={}",
-                msg_ext.topic(),
-                msg_ext.msg_id(),
-            );
-        }
-    }
-
+impl TransactionalMessageCheckListener for DefaultTransactionalMessageCheckListener {
     async fn send_check_message(&self, mut msg_ext: MessageExt) -> rocketmq_error::RocketMQResult<()> {
         let msg_id = msg_ext.user_property(&CheetahString::from_static_str(
             MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
@@ -146,7 +87,7 @@ where
             transaction_id: msg_id,
             tran_state_table_offset: msg_ext.queue_offset,
             rpc_request_header: Some(RpcRequestHeader {
-                broker_name: Some(self.broker_runtime_inner.broker_config().broker_name().clone()),
+                broker_name: Some(self.broker_name.clone()),
                 ..Default::default()
             }),
         };
@@ -160,10 +101,7 @@ where
         }
         msg_ext.store_size = 0;
         let group_id = msg_ext.user_property(&CheetahString::from_static_str(MessageConst::PROPERTY_PRODUCER_GROUP));
-        let channel = self
-            .broker_runtime_inner
-            .producer_manager()
-            .get_available_channel(group_id.as_ref());
+        let channel = self.producer_channels.get_available_channel(group_id.as_ref());
         if let Some(mut channel) = channel {
             self.broker_client
                 .check_producer_transaction_state(group_id.as_ref().unwrap(), &mut channel, header, msg_ext)
@@ -175,13 +113,14 @@ where
     }
 
     async fn resolve_half_msg(&self, msg_ext: MessageExt) -> rocketmq_error::RocketMQResult<()> {
-        let Some(task_group) = self.task_group.as_ref() else {
+        let Some(task_owner) = self.task_owner.as_ref() else {
             self.send_check_message(msg_ext).await?;
             return Ok(());
         };
 
         let this = self.clone();
-        task_group
+        task_owner
+            .group
             .spawn(
                 "broker.transaction-check.send-check-message",
                 TaskKind::Worker,
@@ -205,95 +144,5 @@ where
 
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
-    }
-}
-
-fn to_message_ext_broker_inner(topic_config: &TopicConfig, msg_ext: &MessageExt) -> MessageExtBrokerInner {
-    let mut inner = MessageExtBrokerInner::default();
-    if let Some(topic_name) = &topic_config.topic_name {
-        inner.set_topic(topic_name.clone());
-    }
-    if let Some(body) = msg_ext.get_body() {
-        inner.set_body(body.clone());
-    }
-    inner.set_flag(msg_ext.get_flag());
-    MessageAccessor::set_properties(&mut inner, msg_ext.get_properties().clone());
-    inner.properties_string = MessageDecoder::message_properties_to_string(msg_ext.get_properties());
-    inner.tags_code = MessageExtBrokerInner::tags_string_to_tags_code(msg_ext.tags().unwrap_or_default().as_str());
-    inner.message_ext_inner.queue_id = 0;
-    inner.message_ext_inner.sys_flag = msg_ext.sys_flag();
-    inner.message_ext_inner.born_timestamp = msg_ext.born_timestamp;
-    inner.message_ext_inner.born_host = msg_ext.born_host;
-    inner.message_ext_inner.store_timestamp = msg_ext.store_timestamp;
-    inner.message_ext_inner.store_host = msg_ext.store_host;
-    inner.message_ext_inner.msg_id = msg_ext.msg_id().clone();
-    inner.message_ext_inner.reconsume_times = msg_ext.reconsume_times();
-    inner.set_wait_store_msg_ok(false);
-
-    inner
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn to_message_ext_broker_inner_with_valid_message() {
-        let topic_config = TopicConfig {
-            topic_name: Some("test_topic".into()),
-            ..Default::default()
-        };
-        let msg_ext = MessageExt::default();
-        let result = to_message_ext_broker_inner(&topic_config, &msg_ext);
-        assert_eq!(result.get_topic(), "test_topic");
-        assert_eq!(result.get_body(), msg_ext.get_body());
-        assert_eq!(result.get_flag(), msg_ext.get_flag());
-        assert_eq!(
-            result.properties_string,
-            MessageDecoder::message_properties_to_string(result.get_properties())
-        );
-        assert_eq!(
-            result.tags_code,
-            MessageExtBrokerInner::tags_string_to_tags_code(msg_ext.tags().unwrap_or_default().as_str())
-        );
-        assert_eq!(result.message_ext_inner.queue_id, result.message_ext_inner.queue_id);
-        assert_eq!(result.message_ext_inner.sys_flag, msg_ext.sys_flag());
-        assert_eq!(result.message_ext_inner.born_timestamp, msg_ext.born_timestamp);
-        assert_eq!(result.message_ext_inner.born_host, msg_ext.born_host);
-        assert_eq!(result.message_ext_inner.store_timestamp, msg_ext.store_timestamp);
-        assert_eq!(result.message_ext_inner.store_host, msg_ext.store_host);
-        assert_eq!(result.message_ext_inner.msg_id, msg_ext.msg_id().clone());
-        assert_eq!(result.message_ext_inner.reconsume_times, msg_ext.reconsume_times());
-        assert!(!result.is_wait_store_msg_ok());
-        assert_eq!(
-            result
-                .property_ref(&CheetahString::from_static_str(
-                    MessageConst::PROPERTY_WAIT_STORE_MSG_OK
-                ))
-                .map(CheetahString::as_str),
-            Some("false")
-        );
-    }
-
-    #[test]
-    fn to_message_ext_broker_inner_with_empty_body() {
-        let topic_config = TopicConfig {
-            topic_name: Some("test_topic".into()),
-            ..Default::default()
-        };
-        let msg_ext = MessageExt::default();
-        let result = to_message_ext_broker_inner(&topic_config, &msg_ext);
-        assert!(result.get_body().is_none());
-    }
-
-    #[test]
-    fn to_message_ext_broker_inner_with_missing_topic_name() {
-        let topic_config = TopicConfig {
-            topic_name: None,
-            ..Default::default()
-        };
-        let msg_ext = MessageExt::default();
-        let result = to_message_ext_broker_inner(&topic_config, &msg_ext);
-        assert!(result.get_topic().is_empty());
     }
 }

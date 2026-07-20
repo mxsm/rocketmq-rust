@@ -22,6 +22,7 @@ use std::time::Duration;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::broker::broker_role::BrokerRole;
+use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_common::common::message::message_queue::MessageQueue;
@@ -29,6 +30,8 @@ use rocketmq_common::common::message::message_single::Message;
 use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::topic::TopicValidator;
+use rocketmq_common::MessageAccessor::MessageAccessor;
+use rocketmq_common::MessageDecoder;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::code::response_code::ResponseCode;
@@ -252,6 +255,45 @@ where
         self.close().await
     }
 
+    async fn resolve_discard_msg(&self, msg_ext: MessageExt) {
+        error!(
+            "MsgExt:{} has been checked too many times, so discard it by moving it to system topic \
+             TRANS_CHECK_MAXTIME_TOPIC",
+            msg_ext
+        );
+
+        let put_message_result = {
+            let mut bridge = self.transactional_message_bridge.lock().await;
+            let Some(topic_config) = bridge.select_tran_check_max_time_topic().await else {
+                error!(
+                    "Create topic of tran check max time failed, real topic={}, msgId={}",
+                    msg_ext.topic(),
+                    msg_ext.msg_id(),
+                );
+                return;
+            };
+            bridge
+                .put_message_return_result(to_message_ext_broker_inner(&topic_config, &msg_ext))
+                .await
+        };
+
+        if put_message_result.put_message_status() == PutMessageStatus::PutOk {
+            info!(
+                "Put checked-too-many-time half message to TRANS_CHECK_MAXTIME_TOPIC OK. Restored in queueOffset={}, \
+                 commitLogOffset={}, real topic={:?}",
+                msg_ext.queue_offset,
+                msg_ext.commit_log_offset,
+                msg_ext.user_property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC,)),
+            );
+        } else {
+            error!(
+                "Put checked-too-many-time half message to TRANS_CHECK_MAXTIME_TOPIC failed, real topic={}, msgId={}",
+                msg_ext.topic(),
+                msg_ext.msg_id(),
+            );
+        }
+    }
+
     /// Internal check implementation
     async fn check_internal<Listener: TransactionalMessageCheckListener + Clone>(
         &self,
@@ -463,7 +505,7 @@ where
 
                 // Check if message should be discarded or skipped
                 if self.need_discard(&mut msg_ext, transaction_check_max) || self.need_skip(&msg_ext) {
-                    listener.resolve_discard_msg(msg_ext).await;
+                    self.resolve_discard_msg(msg_ext).await;
                     new_offset = consume_half_offset + 1;
                     consume_half_offset += 1;
                     continue;
@@ -1136,9 +1178,67 @@ where
     }
 }
 
+fn to_message_ext_broker_inner(topic_config: &TopicConfig, msg_ext: &MessageExt) -> MessageExtBrokerInner {
+    let mut inner = MessageExtBrokerInner::default();
+    if let Some(topic_name) = &topic_config.topic_name {
+        inner.set_topic(topic_name.clone());
+    }
+    if let Some(body) = msg_ext.get_body() {
+        inner.set_body(body.clone());
+    }
+    inner.set_flag(msg_ext.get_flag());
+    MessageAccessor::set_properties(&mut inner, msg_ext.get_properties().clone());
+    inner.properties_string = MessageDecoder::message_properties_to_string(msg_ext.get_properties());
+    inner.tags_code = MessageExtBrokerInner::tags_string_to_tags_code(msg_ext.tags().unwrap_or_default().as_str());
+    inner.message_ext_inner.queue_id = 0;
+    inner.message_ext_inner.sys_flag = msg_ext.sys_flag();
+    inner.message_ext_inner.born_timestamp = msg_ext.born_timestamp;
+    inner.message_ext_inner.born_host = msg_ext.born_host;
+    inner.message_ext_inner.store_timestamp = msg_ext.store_timestamp;
+    inner.message_ext_inner.store_host = msg_ext.store_host;
+    inner.message_ext_inner.msg_id = msg_ext.msg_id().clone();
+    inner.message_ext_inner.reconsume_times = msg_ext.reconsume_times();
+    inner.set_wait_store_msg_ok(false);
+    inner
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn discard_message_conversion_preserves_protocol_fields() {
+        let topic_config = TopicConfig {
+            topic_name: Some("test_topic".into()),
+            ..Default::default()
+        };
+        let msg_ext = MessageExt::default();
+        let result = to_message_ext_broker_inner(&topic_config, &msg_ext);
+
+        assert_eq!(result.get_topic(), "test_topic");
+        assert_eq!(result.get_body(), msg_ext.get_body());
+        assert_eq!(result.get_flag(), msg_ext.get_flag());
+        assert_eq!(
+            result.properties_string,
+            MessageDecoder::message_properties_to_string(result.get_properties())
+        );
+        assert_eq!(result.message_ext_inner.sys_flag, msg_ext.sys_flag());
+        assert_eq!(result.message_ext_inner.born_timestamp, msg_ext.born_timestamp);
+        assert_eq!(result.message_ext_inner.born_host, msg_ext.born_host);
+        assert_eq!(result.message_ext_inner.store_timestamp, msg_ext.store_timestamp);
+        assert_eq!(result.message_ext_inner.store_host, msg_ext.store_host);
+        assert_eq!(result.message_ext_inner.msg_id, msg_ext.msg_id().clone());
+        assert_eq!(result.message_ext_inner.reconsume_times, msg_ext.reconsume_times());
+        assert!(!result.is_wait_store_msg_ok());
+    }
+
+    #[test]
+    fn discard_message_conversion_tolerates_missing_topic_and_body() {
+        let result = to_message_ext_broker_inner(&TopicConfig::default(), &MessageExt::default());
+
+        assert!(result.get_topic().is_empty());
+        assert!(result.get_body().is_none());
+    }
 
     #[test]
     fn transaction_check_needed_when_no_op_messages_after_immunity() {
@@ -1205,6 +1305,9 @@ mod tests {
         let service_source = include_str!("default_transactional_message_service.rs");
         let batch_source = include_str!("transactional_op_batch_service.rs");
         let check_source = include_str!("../transactional_message_check_service.rs");
+        let listener_source = include_str!("default_transactional_message_check_listener.rs");
+        let bridge_source = include_str!("transactional_message_bridge.rs");
+        let stats_source = include_str!("../../processor/admin_broker_processor/broker_stats_handler.rs");
 
         assert!(service_source.contains("Mutex<TransactionalMessageBridge<MS>>"));
         assert!(service_source.contains("OnceLock<TransactionalOpBatchService<MS>>"));
@@ -1214,5 +1317,13 @@ mod tests {
         assert!(check_source.contains("Arc<DefaultTransactionalMessageService<MS>>"));
         assert!(!check_source.contains(concat!("mut_from", "_ref")));
         assert!(!check_source.contains(concat!("Arc", "Mut")));
+        assert!(!listener_source.contains(concat!("Arc", "Mut")));
+        assert!(!listener_source.contains("BrokerRuntimeInner"));
+        assert!(!listener_source.contains("MessageStore"));
+        assert!(!listener_source.contains("broker_task_group_or_current"));
+        assert!(!listener_source.contains("TaskGroup::root"));
+        assert!(!bridge_source.contains(concat!("mut_from", "_ref")));
+        assert!(!stats_source.contains(concat!("Arc", "Mut")));
+        assert!(!stats_source.contains("BrokerRuntimeInner"));
     }
 }

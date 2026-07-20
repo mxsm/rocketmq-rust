@@ -21,19 +21,17 @@ use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::subscription::broker_stats_data::BrokerStatsData;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_rust::ArcMut;
-use rocketmq_store::base::message_store::MessageStore;
-
-use crate::broker_runtime::BrokerRuntimeInner;
+use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
+use std::sync::Arc;
 
 #[derive(Clone)]
-pub(super) struct BrokerStatsHandler<MS: MessageStore> {
-    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+pub(super) struct BrokerStatsHandler {
+    broker_stats_manager: Arc<BrokerStatsManager>,
 }
 
-impl<MS: MessageStore> BrokerStatsHandler<MS> {
-    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
-        Self { broker_runtime_inner }
+impl BrokerStatsHandler {
+    pub fn new(broker_stats_manager: Arc<BrokerStatsManager>) -> Self {
+        Self { broker_stats_manager }
     }
 
     pub async fn view_broker_stats_data(
@@ -49,10 +47,7 @@ impl<MS: MessageStore> BrokerStatsHandler<MS> {
         let stats_name = request_header.stats_name.as_str();
         let stats_key = request_header.stats_key.as_str();
 
-        let stats_item = self
-            .broker_runtime_inner
-            .broker_stats_manager()
-            .get_stats_item(stats_name, stats_key);
+        let stats_item = self.broker_stats_manager.get_stats_item(stats_name, stats_key);
 
         match stats_item {
             Some(item) => {

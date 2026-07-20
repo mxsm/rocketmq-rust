@@ -2270,9 +2270,33 @@ Topic persistence/registration coordinator 随 Issue #8408 完成以下生命周
 总进度不变，Store、compatibility、stable/Miri/Loom/soak/SLO、动态 Kind/K3d/container、M10 固定硬件与 Human Gate
 仍保持开放。
 
+## M11-12bc3 实现
+
+Transaction check runtime capability 随 Issue #8410 完成以下边界收敛：
+
+- `DefaultTransactionalMessageCheckListener` 删除 `MessageStore` 泛型和完整 `ArcMut<BrokerRuntimeInner<MS>>` owner，只持 broker name、`ProducerChannelRegistry`、标准 `Arc<Broker2Client>` 与 runtime-owned leased TaskGroup；无 `ServiceContext` 的兼容构造只执行 inline send，不创建 current-runtime root fallback。
+- checked-too-many-times message 的 Topic 创建、转换与 Store 写入回归 `DefaultTransactionalMessageService`；`TransactionalMessageBridge` 写路径使用独占 `&mut self`，删除 `put_message_return_result` 的 `mut_from_ref`。
+- Broker shutdown 在 Topic coordinator admission close 与 MessageStore shutdown 之前依次停止 transaction check service、排空 listener task group、关闭 op-batch/service 与 metrics；四个 runtime slot 均以 `take` 释放，超时或不健康时保留 Topic owner 与 Store 并返回 typed component report。
+- `BrokerStatsHandler` 删除无关 `MessageStore` 泛型和完整 runtime owner，只持标准 `Arc<BrokerStatsManager>`；`AdminBrokerProcessor` 删除未读取的 runtime 字段。
+- reviewed baseline 从 424 identities / 1,061 occurrences 降至 418 / 1,051；production 从 255/571 降至 250/562，test 从 155/450 降至 154/449，compatibility 保持 14/40。Broker production 从 133/263 降至 128/254；净删除 5 个 production identity/9 occurrence 与 1 个 test identity/1 occurrence，无 relocation。
+
+## M11-12bc3 验证
+
+| 命令 | 结果 |
+|---|---|
+| Broker check / strict Clippy | default library 与 all-target/all-feature check 通过；Broker all-target/all-feature strict Clippy 通过 |
+| transaction / capability focused tests | transaction 25/25、producer channel shared view 1/1、ownership/shutdown order 2/2、discard conversion 2/2 通过 |
+| `cargo test -p rocketmq-broker --all-features --lib -- --test-threads=1` | 594 passed、25 failed、1 ignored；25 个失败与 main 已登记名单一致，较 M11-12bc2 增加 2 个通过测试，未新增 baseline failure，因此全套仍如实记为基线复现而非通过 |
+| reviewed baseline / fixtures | `python scripts/arc_mut_guard.py` 与 `--fixtures` 通过；baseline 424/1,061→418/1,051，无 relocation |
+| runtime / architecture guards | enforcing runtime audit、ArcMut 67/67、dependency fixtures/target/baseline、release、8-profile performance 与 AGENTS routing 通过 |
+| root workspace final gates | `cargo fmt --all -- --check` 与 workspace all-target/all-feature strict Clippy 通过；Windows linker stdout 和既有 future-incompatibility note 不受 `-D warnings` 管辖 |
+
+下一子切片 M11-12bc4 继续拆分 transaction bridge 的 Store/offset capability 与其他 Broker admin/processor owner；
+75/82 总进度不变，Store、compatibility、stable/Miri/Loom/soak/SLO 与完整候选快照 Gate 仍保持开放。
+
 ## 剩余切片与 Gate
 
-1. Broker BrokerRuntimeInner capability carrier、其他 admin/processor 与 transaction bridge/listener（133/263）；下一子切片 M11-12bc3 继续拆分窄 capability，Topic persistence/registration coordinator 已由 Issue #8408 完成。
+1. Broker BrokerRuntimeInner capability carrier、其他 admin/processor 与 transaction bridge 的 Store/offset owner（128/254）；下一子切片 M11-12bc4 继续拆分窄 capability，transaction check listener 已由 Issue #8410 完成。
 2. Store MappedFileQueue/ConsumeQueue、CommitLog/Flush、StoreHandle/Rocks/Timer 与 HA actor（122/308）。
 3. 删除 compatibility `arc_mut.rs` 和公开 re-export；移除其余 nightly feature，将 guard 切到 production/public zero。
 4. 对同一候选快照执行 stable feature matrix、Miri/Loom 可用切片、soak/SLO fault、dashboard/runbook、动态
