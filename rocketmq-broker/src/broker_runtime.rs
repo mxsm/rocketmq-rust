@@ -2495,16 +2495,8 @@ impl BrokerRuntime {
         ));
 
         let consumer_manage_processor = ConsumerManageProcessor::new(self.inner.clone());
-        self.inner.pull_request_hold_service = Some(Arc::new(PullRequestHoldService::new(Arc::downgrade(
-            &pull_message_processor,
-        ))));
-
-        let inner = self.inner.clone();
-        self.inner
-            .message_store
-            .as_mut()
-            .unwrap()
-            .set_message_arriving_listener(Some(Arc::new(Box::new(NotifyMessageArrivingListener::new(inner)))));
+        let pull_request_hold_service = Arc::new(PullRequestHoldService::new(Arc::downgrade(&pull_message_processor)));
+        self.inner.pull_request_hold_service = Some(Arc::clone(&pull_request_hold_service));
 
         let pop_message_processor = PopMessageProcessor::new(self.inner.clone());
         self.inner.pop_message_processor = Some(pop_message_processor.clone());
@@ -2520,6 +2512,16 @@ impl BrokerRuntime {
 
         let notification_processor = NotificationProcessor::new(self.inner.clone());
         self.inner.notification_processor = Some(notification_processor.clone());
+        let message_arriving_listener = NotifyMessageArrivingListener::new(
+            &pull_request_hold_service,
+            &pop_message_processor,
+            &notification_processor,
+        );
+        self.inner
+            .message_store
+            .as_mut()
+            .unwrap()
+            .set_message_arriving_listener(Some(Arc::new(Box::new(message_arriving_listener))));
         let mut broker_request_processor = BrokerRequestProcessor::new();
         let request_processor_task_group = self.request_processor_task_group.clone().or_else(|| {
             self.broker_task_group_or_current(
@@ -6658,6 +6660,22 @@ accounts:
                 .strong_count(),
             store_strong_count_before
         );
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn message_arriving_listener_does_not_retain_runtime_root() {
+        let mut runtime = new_phase3_test_runtime("message-arriving-listener-ownership").await;
+        let strong_count_before = runtime.inner.strong_count();
+
+        runtime
+            .inner
+            .message_store
+            .as_mut()
+            .expect("message store should be initialized")
+            .set_message_arriving_listener(None);
+
+        assert_eq!(runtime.inner.strong_count(), strong_count_before);
         let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }
 

@@ -572,6 +572,13 @@ ambient Tokio runtime root。幂等启动/有界关闭、父任务组和共享 r
 14/40、Broker production 110/222），净删除 2 个 production identities/3 occurrences，且无 relocation。总进度
 仍为 75/82，下一子切片 M11-12bc15 继续 Broker aggregate/leaf 或 Store WAL/queue/timer/HA owner。
 
+MessageArrivingListener runtime cycle 随 Issue #8435 拆除：Store-owned listener 不再强持完整 Broker runtime，改持
+Pull hold、POP 与 Notification processor 的标准 `Weak` handle；注册顺序移至三项 owner 初始化后，late notification
+在 teardown owner 已释放时安全跳过。移除 listener 前后 Broker runtime strong count 不变的回归通过。ArcMut 快照
+降至 372 identities/974 occurrences（production 211/493、test 147/441、compatibility 14/40、Broker production
+108/219），净删除 2 个 production identities/3 occurrences，且无 relocation。总进度仍为 75/82，下一子切片
+M11-12bc16 继续 Broker aggregate/leaf 或 Store WAL/queue/timer/HA owner。
+
 ### 9.3 证据目录
 
 - 运行期生成物：`target/architecture-refactor/Mxx/<run-id>/`，不提交 Git。
