@@ -2486,9 +2486,32 @@ HA nested child ownership 随 Issue #8427 完成以下边界收敛：
 下一子切片 M11-12bc12 继续收窄 Broker aggregate/leaf 或 Store WAL/queue/timer/HA owner；75/82 总进度不变，
 compatibility、stable/Miri/Loom/soak/SLO 与完整候选快照 Gate 仍保持开放。
 
+## M11-12bc12 实现
+
+ConsumerOrderInfo runtime capability 随 Issue #8429 完成以下边界收敛：
+
+- `ConsumerOrderInfoManager` 删除完整 `ArcMut<BrokerRuntimeInner>` back-reference 与 `MessageStore` 泛型，改为只持存储根目录、标准 `Arc<TopicConfigManager>` 和共享 subscription-group live table；配置路径、topic existence 与 group existence 不再通过完整 Broker runtime 间接读取。
+- Broker 初始化在 manager 边界注入同一代 Topic manager 与同一 live subscription-group table；配置路径与实时 topic/group 自动清理回归证明能力代际和原行为不变。
+- 删除 4 个仓内无调用方的 `consumer_order_info_manager_mut`、`consumer_order_info_manager_unchecked_mut`、`consumer_order_info_manager_unchecked` 与 setter；共享只读 accessor 保留，consumer-order lock/info 行为不变。
+- reviewed baseline 从 382 identities / 993 occurrences 降至 379 / 989；production 从 219/509 降至 217/506，test 从 149/444 降至 148/443，compatibility 保持 14/40。Broker production 从 116/235 降至 114/232；净删除 2 个 production identity/3 occurrence 与 1 个 test identity/1 occurrence，无 relocation。
+
+## M11-12bc12 验证
+
+| 命令 | 结果 |
+|---|---|
+| Broker check / focused tests / strict Clippy | `cargo check -p rocketmq-broker --all-features` 通过；ConsumerOrderInfoManager 7/7 通过；Broker all-target/all-feature strict Clippy 通过 |
+| Broker all-feature lib 回归 | 607 passed、25 failed、1 ignored；25 项与 main 已登记失败名单一致，较上一切片增加的 2 个通过项均为本切片回归，因此全套仍如实记为基线复现而非通过 |
+| RocksDB 专项 | Store/Broker `rocksdb_store` strict Clippy 通过；foundation 82/82、semantics 9/9、Broker rocksdb 21/21、pop_consumer 4/4 通过 |
+| reviewed baseline / fixtures | `--apply-reviewed-reductions` 审核候选精确删除 3 identity/4 occurrence；正式 baseline 补丁后 `python scripts/arc_mut_guard.py`、24/24 fixtures 与 67/67 guard tests 通过，无 relocation/临时 approval |
+| runtime / architecture guards | enforcing runtime audit、dependency fixtures/target/baseline、release、8-profile performance、architecture 60/60 与 AGENTS routing 通过 |
+| root workspace final gates | `cargo fmt --all -- --check`、`git diff --check` 与 workspace all-target/all-feature strict Clippy 通过；Windows linker stdout 与既有 future-incompatibility note 不受 `-D warnings` 管辖 |
+
+下一子切片 M11-12bc13 继续收窄 Broker aggregate/leaf 或 Store WAL/queue/timer/HA owner；75/82 总进度不变，
+compatibility、stable/Miri/Loom/soak/SLO 与完整候选快照 Gate 仍保持开放。
+
 ## 剩余切片与 Gate
 
-1. Broker BrokerRuntimeInner capability carrier 与其他 admin/processor/leaf owner（116/235）；transaction bridge、Producer/ColdData admin leaf、Schedule hook 与 put-message preflight 已退出完整 runtime/store owner，LiteLifecycle 只读 Store carrier 已收窄为普通借用，显式 Store 兼容 owner 留待 Store 批次删除。
+1. Broker BrokerRuntimeInner capability carrier 与其他 admin/processor/leaf owner（114/232）；transaction bridge、Producer/ColdData admin leaf、Schedule hook、put-message preflight 与 ConsumerOrderInfoManager 已退出完整 runtime/store owner，LiteLifecycle 只读 Store carrier 已收窄为普通借用，显式 Store 兼容 owner 留待 Store 批次删除。
 2. Store MappedFileQueue/其余 ConsumeQueue、CommitLog/Flush、StoreHandle/Rocks/Timer 与其余 HA service/actor（103/274）；BrokerStats observer、ConsumeQueueExt 显式锁 owner、HA notification/connection registry 窄能力与未共享 HA child direct ownership 已完成。
 3. 先迁移 Store 对 `WeakArcMut` 的剩余使用并移除其余 nightly feature；公开 `arc_mut.rs`/re-export 的 destructive 删除受 next-major 两轮弃用与 Release Manager/HUMAN Gate 约束，不能静默重置 public API baseline。
 4. 对同一候选快照执行 stable feature matrix、Miri/Loom 可用切片、soak/SLO fault、dashboard/runbook、动态
