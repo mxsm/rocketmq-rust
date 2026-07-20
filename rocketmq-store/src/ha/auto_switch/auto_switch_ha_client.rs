@@ -26,7 +26,7 @@ use crate::ha::ha_connection_state::HAConnectionState;
 use crate::message_store::local_file_message_store::LocalFileMessageStore;
 
 pub struct AutoSwitchHAClient {
-    delegate: ArcMut<DefaultHAClient>,
+    delegate: DefaultHAClient,
     reported_broker_id: Arc<AtomicI64>,
     master_address: Arc<Mutex<Option<String>>>,
     ha_master_address: Arc<Mutex<Option<String>>>,
@@ -37,7 +37,7 @@ impl AutoSwitchHAClient {
         let client = DefaultHAClient::new(message_store)?;
         client.set_reported_broker_id(broker_id);
         Ok(Self {
-            delegate: ArcMut::new(client),
+            delegate: client,
             reported_broker_id: Arc::new(AtomicI64::new(broker_id.unwrap_or(-1))),
             master_address: Arc::new(Mutex::new(None)),
             ha_master_address: Arc::new(Mutex::new(None)),
@@ -109,7 +109,7 @@ impl HAClient for AutoSwitchHAClient {
             .try_lock()
             .ok()
             .and_then(|guard| guard.clone())
-            .unwrap_or_else(|| HAClient::get_master_address(&*self.delegate))
+            .unwrap_or_else(|| HAClient::get_master_address(&self.delegate))
     }
 
     fn get_ha_master_address(&self) -> String {
@@ -117,19 +117,19 @@ impl HAClient for AutoSwitchHAClient {
             .try_lock()
             .ok()
             .and_then(|guard| guard.clone())
-            .unwrap_or_else(|| HAClient::get_ha_master_address(&*self.delegate))
+            .unwrap_or_else(|| HAClient::get_ha_master_address(&self.delegate))
     }
 
     fn get_last_read_timestamp(&self) -> i64 {
-        HAClient::get_last_read_timestamp(&*self.delegate)
+        HAClient::get_last_read_timestamp(&self.delegate)
     }
 
     fn get_last_write_timestamp(&self) -> i64 {
-        HAClient::get_last_write_timestamp(&*self.delegate)
+        HAClient::get_last_write_timestamp(&self.delegate)
     }
 
     fn get_current_state(&self) -> HAConnectionState {
-        HAClient::get_current_state(&*self.delegate)
+        HAClient::get_current_state(&self.delegate)
     }
 
     fn change_current_state(&self, ha_connection_state: HAConnectionState) {
@@ -141,7 +141,7 @@ impl HAClient for AutoSwitchHAClient {
     }
 
     fn get_transferred_byte_in_second(&self) -> i64 {
-        HAClient::get_transferred_byte_in_second(&*self.delegate)
+        HAClient::get_transferred_byte_in_second(&self.delegate)
     }
 }
 

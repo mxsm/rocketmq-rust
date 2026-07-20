@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_rust::ArcMut;
 use rocketmq_rust::WeakArcMut;
 use tokio::net::TcpStream;
 
@@ -25,8 +24,8 @@ use crate::ha::HAConnectionError;
 
 #[derive(Default)]
 pub struct GeneralHAConnection {
-    default_ha_connection: Option<ArcMut<DefaultHAConnection>>,
-    auto_switch_ha_connection: Option<ArcMut<AutoSwitchHAConnection>>,
+    default_ha_connection: Option<DefaultHAConnection>,
+    auto_switch_ha_connection: Option<AutoSwitchHAConnection>,
 }
 
 impl GeneralHAConnection {
@@ -36,7 +35,7 @@ impl GeneralHAConnection {
 
     pub fn new_with_default_ha_connection(default_ha_connection: DefaultHAConnection) -> Self {
         GeneralHAConnection {
-            default_ha_connection: Some(ArcMut::new(default_ha_connection)),
+            default_ha_connection: Some(default_ha_connection),
             auto_switch_ha_connection: None,
         }
     }
@@ -44,16 +43,16 @@ impl GeneralHAConnection {
     pub fn new_with_auto_switch_ha_connection(auto_switch_ha_connection: AutoSwitchHAConnection) -> Self {
         GeneralHAConnection {
             default_ha_connection: None,
-            auto_switch_ha_connection: Some(ArcMut::new(auto_switch_ha_connection)),
+            auto_switch_ha_connection: Some(auto_switch_ha_connection),
         }
     }
 
     pub fn set_default_ha_connection(&mut self, connection: DefaultHAConnection) {
-        self.default_ha_connection = Some(ArcMut::new(connection));
+        self.default_ha_connection = Some(connection);
     }
 
     pub fn set_auto_switch_ha_connection(&mut self, connection: AutoSwitchHAConnection) {
-        self.auto_switch_ha_connection = Some(ArcMut::new(connection));
+        self.auto_switch_ha_connection = Some(connection);
     }
 
     pub fn is_auto_switch(&self) -> bool {

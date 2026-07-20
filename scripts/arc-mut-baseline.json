@@ -5235,25 +5235,6 @@
       "adr": "ADR-013"
     },
     {
-      "identity": "13c058d5c634ca5358db53fb",
-      "path": "rocketmq-store/src/ha/auto_switch/auto_switch_ha_client.rs",
-      "symbol": "ArcMut",
-      "kind": "constructor",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "662bb7b7bdb81fbf624895ed",
-          "fingerprint": "c9eccb922e3ff7efd477f8ed",
-          "item": "fn new",
-          "line": 40
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
       "identity": "7135277e44e4f197f7a2d6a5",
       "path": "rocketmq-store/src/ha/auto_switch/auto_switch_ha_client.rs",
       "symbol": "ArcMut",
@@ -5298,12 +5279,6 @@
       "kind": "type_reference",
       "category": "production",
       "occurrences": [
-        {
-          "id": "9cdb6a5d3a402e05f757a7d8",
-          "fingerprint": "2963b2df668abd09e0eeb461",
-          "item": "struct AutoSwitchHAClient",
-          "line": 29
-        },
         {
           "id": "1955ad8e3f621b835b3297d5",
           "fingerprint": "731a590d4bcde96df1d2ccd9",
@@ -5362,8 +5337,8 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "4ec3427c91b4a0b39e4fd633",
-          "fingerprint": "5e851e31ab40ba8565ed4acc",
+          "id": "ddb60b3580890df47eb43bb9",
+          "fingerprint": "c1f2a760589f4a1e176d58f8",
           "item": "<module>",
           "line": 26
         }
@@ -6619,156 +6594,6 @@
       "adr": "ADR-013"
     },
     {
-      "identity": "a416770a04a7922ea791f4f1",
-      "path": "rocketmq-store/src/ha/general_ha_client.rs",
-      "symbol": "ArcMut",
-      "kind": "constructor",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "709fc9d1b9884f167878cc66",
-          "fingerprint": "57c5c88ef5a5f390a39fb899",
-          "item": "fn new_with_default_ha_client",
-          "line": 30
-        },
-        {
-          "id": "0dd5310ff654869b7c9f0f1e",
-          "fingerprint": "c8a6a51c56649520c2a79c0f",
-          "item": "fn new_with_auto_switch_ha_client",
-          "line": 34
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "ac4d28b1362797c944c59e1b",
-      "path": "rocketmq-store/src/ha/general_ha_client.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "2a2bda56f8001f48aba5b048",
-          "fingerprint": "848e3177ae081352355203ba",
-          "item": "<module>",
-          "line": 15
-        }
-      ],
-      "owner": "store",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "73b72097405bb15d6f2619e4",
-      "path": "rocketmq-store/src/ha/general_ha_client.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "6ae41ea624c32fd347b5d442",
-          "fingerprint": "2e7123a0dde13d64d8989897",
-          "item": "enum GeneralHAClient",
-          "line": 24
-        },
-        {
-          "id": "0a7f7869c03a2c9da4176d86",
-          "fingerprint": "3bc683b73bfbd5065e13a952",
-          "item": "enum GeneralHAClient",
-          "line": 25
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "a9fbc72ee9e65f4f5e28f788",
-      "path": "rocketmq-store/src/ha/general_ha_connection.rs",
-      "symbol": "ArcMut",
-      "kind": "constructor",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "176e75632c0ffa3681a63c3a",
-          "fingerprint": "1808232da0c2b9c553dd3bfa",
-          "item": "fn new_with_default_ha_connection",
-          "line": 39
-        },
-        {
-          "id": "fa3bba536df71e10a2103448",
-          "fingerprint": "c17ecb136688eb49002995f9",
-          "item": "fn new_with_auto_switch_ha_connection",
-          "line": 47
-        },
-        {
-          "id": "e4a30bde32b97f551d3c152a",
-          "fingerprint": "9296970d2db8ee0e207517aa",
-          "item": "fn set_default_ha_connection",
-          "line": 52
-        },
-        {
-          "id": "86a81d8d0d1cee11eb894022",
-          "fingerprint": "96c9857be6feed6fff7fc716",
-          "item": "fn set_auto_switch_ha_connection",
-          "line": 56
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "5bdc0cd9f62f0bb0ea78a2b5",
-      "path": "rocketmq-store/src/ha/general_ha_connection.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "560d984635b8e4ea88f541b5",
-          "fingerprint": "7df7d712f797beba7d978eb7",
-          "item": "<module>",
-          "line": 15
-        }
-      ],
-      "owner": "store",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "1534ddac4a82f4af73412707",
-      "path": "rocketmq-store/src/ha/general_ha_connection.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "a87156aec410fe5f806bcb78",
-          "fingerprint": "532ca0d183c548595b8e68f1",
-          "item": "struct GeneralHAConnection",
-          "line": 28
-        },
-        {
-          "id": "5c3a60d29912b6fc0d832b5c",
-          "fingerprint": "61dce60ea5f55adc24087d2c",
-          "item": "struct GeneralHAConnection",
-          "line": 29
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
       "identity": "dc26ed320b0b2d8ab292e76b",
       "path": "rocketmq-store/src/ha/general_ha_connection.rs",
       "symbol": "WeakArcMut",
@@ -6776,10 +6601,10 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "4c2af319d5588529cdec6e2e",
-          "fingerprint": "db5dcf91e6070ff9a520aaf9",
+          "id": "c709c73c04608e928a8f20bd",
+          "fingerprint": "828408db21273269b368b086",
           "item": "<module>",
-          "line": 16
+          "line": 15
         }
       ],
       "owner": "store",
