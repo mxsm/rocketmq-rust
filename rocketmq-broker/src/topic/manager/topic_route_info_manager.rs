@@ -28,13 +28,12 @@ use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_runtime::TaskGroup;
-use rocketmq_rust::ArcMut;
 use rocketmq_rust::RocketMQTokioMutex;
-use rocketmq_store::base::message_store::MessageStore;
 use tracing::info;
 use tracing::warn;
 
-use crate::broker_runtime::BrokerRuntimeInner;
+use crate::broker_runtime::broker_task_group_or_current;
+use crate::out_api::broker_outer_api::BrokerOuterAPI;
 use crate::topic::route::topic_route_to_subscribe_queues;
 use crate::topic::route::BrokerPublishRoute;
 
@@ -42,19 +41,21 @@ const GET_TOPIC_ROUTE_TIMEOUT: u64 = 3000;
 const LOCK_TIMEOUT_MILLIS: u64 = 3000;
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
-pub(crate) struct TopicRouteInfoManager<MS: MessageStore> {
+pub(crate) struct TopicRouteInfoManager {
     pub(crate) lock: Arc<RocketMQTokioMutex<()>>,
     pub(crate) topic_route_table: Arc<DashMap<CheetahString /* Topic */, TopicRouteData>>,
     pub(crate) broker_addr_table:
         Arc<DashMap<CheetahString /* Broker Name */, HashMap<u64 /* brokerId */, CheetahString /* address */>>>,
     pub(crate) topic_publish_info_table: Arc<DashMap<CheetahString /* topic */, BrokerPublishRoute>>,
     pub(crate) topic_subscribe_info_table: Arc<DashMap<CheetahString /* topic */, HashSet<MessageQueue>>>,
-    pub(crate) broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+    broker_outer_api: BrokerOuterAPI,
+    load_balance_poll_name_server_interval: u64,
+    parent_task_group: Option<TaskGroup>,
     running: Arc<AtomicBool>,
     task_group: Arc<Mutex<Option<TaskGroup>>>,
 }
 
-impl<MS: MessageStore> Clone for TopicRouteInfoManager<MS> {
+impl Clone for TopicRouteInfoManager {
     fn clone(&self) -> Self {
         Self {
             lock: self.lock.clone(),
@@ -62,22 +63,30 @@ impl<MS: MessageStore> Clone for TopicRouteInfoManager<MS> {
             broker_addr_table: self.broker_addr_table.clone(),
             topic_publish_info_table: self.topic_publish_info_table.clone(),
             topic_subscribe_info_table: self.topic_subscribe_info_table.clone(),
-            broker_runtime_inner: self.broker_runtime_inner.clone(),
+            broker_outer_api: self.broker_outer_api.clone(),
+            load_balance_poll_name_server_interval: self.load_balance_poll_name_server_interval,
+            parent_task_group: self.parent_task_group.clone(),
             running: self.running.clone(),
             task_group: self.task_group.clone(),
         }
     }
 }
 
-impl<MS: MessageStore> TopicRouteInfoManager<MS> {
-    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
+impl TopicRouteInfoManager {
+    pub fn new(
+        broker_outer_api: BrokerOuterAPI,
+        load_balance_poll_name_server_interval: u64,
+        parent_task_group: Option<TaskGroup>,
+    ) -> Self {
         TopicRouteInfoManager {
             lock: Arc::new(RocketMQTokioMutex::new(())),
             topic_route_table: Arc::new(DashMap::new()),
             broker_addr_table: Arc::new(DashMap::new()),
             topic_publish_info_table: Arc::new(DashMap::new()),
             topic_subscribe_info_table: Arc::new(DashMap::new()),
-            broker_runtime_inner,
+            broker_outer_api,
+            load_balance_poll_name_server_interval,
+            parent_task_group,
             running: Arc::new(AtomicBool::new(false)),
             task_group: Arc::new(Mutex::new(None)),
         }
@@ -92,7 +101,8 @@ impl<MS: MessageStore> TopicRouteInfoManager<MS> {
             return;
         }
 
-        let Some(group) = self.broker_runtime_inner.broker_task_group_or_current(
+        let Some(group) = broker_task_group_or_current(
+            self.parent_task_group.as_ref(),
             "rocketmq-broker.topic-route-info",
             "failed to start TopicRouteInfoManager outside Tokio runtime",
         ) else {
@@ -102,10 +112,7 @@ impl<MS: MessageStore> TopicRouteInfoManager<MS> {
         let mut task_group = self.task_group.lock();
         let cancellation_token = group.cancellation_token();
         let manager = self.clone();
-        let load_balance_poll_name_server_interval = self
-            .broker_runtime_inner
-            .broker_config()
-            .load_balance_poll_name_server_interval;
+        let load_balance_poll_name_server_interval = self.load_balance_poll_name_server_interval;
 
         if let Err(error) = group.spawn_service("broker.topic-route-info.poll-namesrv", async move {
             tokio::select! {
@@ -193,8 +200,7 @@ impl<MS: MessageStore> TopicRouteInfoManager<MS> {
             .await
         {
             let topic_route_data = self
-                .broker_runtime_inner
-                .broker_outer_api()
+                .broker_outer_api
                 .get_topic_route_info_from_name_server(topic, GET_TOPIC_ROUTE_TIMEOUT, true)
                 .await;
             if let Err(e) = topic_route_data {

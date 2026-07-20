@@ -2529,9 +2529,31 @@ Broker orphan V2 migration example 随 Issue #8431 完成以下边界清理：
 下一子切片 M11-12bc14 继续收窄 Broker aggregate/leaf 或 Store WAL/queue/timer/HA owner；75/82 总进度不变，
 compatibility、stable/Miri/Loom/soak/SLO 与完整候选快照 Gate 仍保持开放。
 
+## M11-12bc14 实现
+
+TopicRouteInfo runtime capability 随 Issue #8433 完成以下边界收敛：
+
+- `TopicRouteInfoManager` 删除完整 `ArcMut<BrokerRuntimeInner>` back-reference 与 `MessageStore` 泛型，改为只持共享 `BrokerOuterAPI`、Namesrv 轮询间隔和可选父 `TaskGroup`；route refresh 不再借由完整 Broker runtime 取得三项能力。
+- Broker 初始化注入同一 Remoting client generation 的 `BrokerOuterAPI` clone、配置间隔与 Broker service task-group parent；无 `ServiceContext` 时仍从 ambient Tokio runtime 创建兼容 root，保留原失败告警、幂等启动、cancellation 与 5 秒有界 shutdown 语义。
+- 删除仓内无调用方的 unchecked mutable accessor 与 setter；测试 route table 写入改经共享 accessor，标准 `Arc<DashMap>` clone 仍观察同一 live route state。
+- reviewed baseline 从 376 identities / 980 occurrences 降至 374 / 977；production 从 215/499 降至 213/496，test 保持 147/441，compatibility 保持 14/40。Broker production 从 112/225 降至 110/222；净删除 2 个 production identity/3 occurrence，无 relocation。
+
+## M11-12bc14 验证
+
+| 命令 | 结果 |
+|---|---|
+| Broker check / focused tests / strict Clippy | `cargo check -p rocketmq-broker --all-features` 通过；TopicRouteInfoManager lifecycle/parent/shared-table 3/3 通过；Broker all-target/all-feature strict Clippy 通过 |
+| Broker all-feature lib 回归 | 607 passed、25 failed、1 ignored；25 项与 main 已登记失败名单一致，TopicRouteInfoManager 聚焦测试全部通过且未新增失败名称，因此全套仍如实记为基线复现而非通过 |
+| reviewed baseline / fixtures | `--apply-reviewed-reductions` 审核候选精确删除 2 identity/3 occurrence；正式 baseline 补丁后 `python scripts/arc_mut_guard.py`、24/24 fixtures 与 67/67 guard tests 通过，无 relocation/临时 approval |
+| runtime / architecture guards | enforcing runtime audit、dependency fixtures/target/baseline、release、8-profile performance、architecture 60/60 与 AGENTS routing 通过 |
+| root workspace final gates | `cargo fmt --all -- --check`、`git diff --check` 与 workspace all-target/all-feature strict Clippy 通过；Windows linker stdout 与既有 future-incompatibility note 不受 `-D warnings` 管辖 |
+
+下一子切片 M11-12bc15 继续收窄 Broker aggregate/leaf 或 Store WAL/queue/timer/HA owner；75/82 总进度不变，
+compatibility、stable/Miri/Loom/soak/SLO 与完整候选快照 Gate 仍保持开放。
+
 ## 剩余切片与 Gate
 
-1. Broker BrokerRuntimeInner capability carrier 与其他 admin/processor/leaf owner（112/225）；transaction bridge、Producer/ColdData admin leaf、Schedule hook、put-message preflight、ConsumerOrderInfoManager 与未编译 V2 示例残留已退出完整 runtime/store owner，LiteLifecycle 只读 Store carrier 已收窄为普通借用，显式 Store 兼容 owner 留待 Store 批次删除。
+1. Broker BrokerRuntimeInner capability carrier 与其他 admin/processor/leaf owner（110/222）；transaction bridge、Producer/ColdData admin leaf、Schedule hook、put-message preflight、ConsumerOrderInfoManager、TopicRouteInfoManager 与未编译 V2 示例残留已退出完整 runtime/store owner，LiteLifecycle 只读 Store carrier 已收窄为普通借用，显式 Store 兼容 owner 留待 Store 批次删除。
 2. Store MappedFileQueue/其余 ConsumeQueue、CommitLog/Flush、StoreHandle/Rocks/Timer 与其余 HA service/actor（103/274）；BrokerStats observer、ConsumeQueueExt 显式锁 owner、HA notification/connection registry 窄能力与未共享 HA child direct ownership 已完成。
 3. 先迁移 Store 对 `WeakArcMut` 的剩余使用并移除其余 nightly feature；公开 `arc_mut.rs`/re-export 的 destructive 删除受 next-major 两轮弃用与 Release Manager/HUMAN Gate 约束，不能静默重置 public API baseline。
 4. 对同一候选快照执行 stable feature matrix、Miri/Loom 可用切片、soak/SLO fault、dashboard/runbook、动态

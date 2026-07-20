@@ -1254,7 +1254,11 @@ impl BrokerRuntime {
             inner.service_context.clone(),
             scheduled_task_manager.clone(),
         )));
-        inner.topic_route_info_manager = Some(TopicRouteInfoManager::new(inner.clone()));
+        inner.topic_route_info_manager = Some(TopicRouteInfoManager::new(
+            inner.broker_outer_api.clone(),
+            inner.broker_config.load_balance_poll_name_server_interval,
+            inner.broker_service_task_group(),
+        ));
         let escape_bridge = Arc::new(EscapeBridge::new(inner.clone()));
         inner.escape_bridge = Some(Arc::downgrade(&escape_bridge));
         #[cfg(feature = "rocksdb_store")]
@@ -3669,7 +3673,7 @@ pub(crate) struct BrokerRuntimeInner<MS: MessageStore> {
     transactional_message_check_listener: Option<DefaultTransactionalMessageCheckListener>,
     transactional_message_check_service: Option<TransactionalMessageCheckService<MS>>,
     transaction_metrics_flush_service: Option<TransactionMetricsFlushService>,
-    topic_route_info_manager: Option<TopicRouteInfoManager<MS>>,
+    topic_route_info_manager: Option<TopicRouteInfoManager>,
     escape_bridge: Option<Weak<EscapeBridge<MS>>>,
     pop_inflight_message_counter: PopInflightMessageCounter,
     replicas_manager: Option<ReplicasManager>,
@@ -3700,6 +3704,26 @@ pub(crate) struct BrokerRuntimeInner<MS: MessageStore> {
     lock: Mutex<()>,
 }
 
+pub(crate) fn broker_task_group_or_current(
+    parent_task_group: Option<&TaskGroup>,
+    name: impl Into<Arc<str>>,
+    no_runtime_warning: &'static str,
+) -> Option<TaskGroup> {
+    let name = name.into();
+    if let Some(parent_task_group) = parent_task_group {
+        return Some(parent_task_group.child(Arc::clone(&name)));
+    }
+
+    let runtime = match tokio::runtime::Handle::try_current() {
+        Ok(handle) => RuntimeHandle::new(handle),
+        Err(error) => {
+            warn!(?error, "{no_runtime_warning}");
+            return None;
+        }
+    };
+    Some(TaskGroup::root(name, runtime))
+}
+
 impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     pub(crate) fn auth_metrics_snapshot(&self) -> Option<AuthMetricsSnapshot> {
         self.auth_runtime.as_ref().map(|runtime| runtime.metrics_snapshot())
@@ -3710,19 +3734,11 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         name: impl Into<Arc<str>>,
         no_runtime_warning: &'static str,
     ) -> Option<TaskGroup> {
-        let name = name.into();
-        if let Some(service_context) = self.service_context.as_ref() {
-            return Some(service_context.task_group().child(Arc::clone(&name)));
-        }
-
-        let runtime = match tokio::runtime::Handle::try_current() {
-            Ok(handle) => RuntimeHandle::new(handle),
-            Err(error) => {
-                warn!(?error, "{no_runtime_warning}");
-                return None;
-            }
-        };
-        Some(TaskGroup::root(name, runtime))
+        crate::broker_runtime::broker_task_group_or_current(
+            self.service_context.as_ref().map(ServiceContext::task_group),
+            name,
+            no_runtime_warning,
+        )
     }
 
     pub(crate) fn broker_service_task_group(&self) -> Option<TaskGroup> {
@@ -3837,16 +3853,6 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     #[inline]
     pub fn transaction_metrics_flush_service_mut(&mut self) -> Option<&mut TransactionMetricsFlushService> {
         self.transaction_metrics_flush_service.as_mut()
-    }
-
-    #[inline]
-    pub fn topic_route_info_manager_mut(&mut self) -> &mut TopicRouteInfoManager<MS> {
-        self.topic_route_info_manager.as_mut().unwrap()
-    }
-
-    #[inline]
-    pub fn topic_route_info_manager_unchecked_mut(&mut self) -> &mut TopicRouteInfoManager<MS> {
-        unsafe { self.topic_route_info_manager.as_mut().unwrap_unchecked() }
     }
 
     #[inline]
@@ -4132,7 +4138,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn topic_route_info_manager(&self) -> &TopicRouteInfoManager<MS> {
+    pub fn topic_route_info_manager(&self) -> &TopicRouteInfoManager {
         self.topic_route_info_manager.as_ref().unwrap()
     }
 
@@ -4330,12 +4336,6 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         self.transaction_metrics_flush_service = Some(transaction_metrics_flush_service);
     }
 
-    #[inline]
-    pub fn set_topic_route_info_manager(&mut self, topic_route_info_manager: TopicRouteInfoManager<MS>) {
-        self.topic_route_info_manager = Some(topic_route_info_manager);
-    }
-
-    #[inline]
     pub fn set_pop_inflight_message_counter(&mut self, pop_inflight_message_counter: PopInflightMessageCounter) {
         self.pop_inflight_message_counter = pop_inflight_message_counter;
     }
@@ -6868,7 +6868,7 @@ accounts:
         );
         runtime
             .inner_for_test()
-            .topic_route_info_manager_mut()
+            .topic_route_info_manager()
             .topic_publish_info_table
             .insert(CheetahString::from_static_str("parent-topic"), publish_info);
     }
