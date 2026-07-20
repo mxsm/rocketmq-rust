@@ -100,12 +100,11 @@ impl<MS> DefaultTransactionalMessageService<MS>
 where
     MS: MessageStore,
 {
-    pub fn new(transactional_message_bridge: TransactionalMessageBridge<MS>) -> Self {
-        let broker_config = transactional_message_bridge.broker_runtime_inner.broker_config_arc();
-        let file_reserved_time_hours = transactional_message_bridge
-            .broker_runtime_inner
-            .message_store_config()
-            .file_reserved_time as i64;
+    pub fn new(
+        transactional_message_bridge: TransactionalMessageBridge<MS>,
+        broker_config: Arc<BrokerConfig>,
+        file_reserved_time_hours: i64,
+    ) -> Self {
         Self {
             transactional_message_bridge: Mutex::new(transactional_message_bridge),
             broker_config,
@@ -861,10 +860,7 @@ where
     }
 
     async fn should_escape_message(&self) -> bool {
-        let bridge = self.transactional_message_bridge.lock().await;
-        self.broker_config.enable_slave_acting_master
-            && bridge.broker_runtime_inner.get_min_broker_id_in_group() == self.broker_config.broker_identity.broker_id
-            && BrokerRole::Slave == self.broker_config.broker_role
+        self.broker_config.enable_slave_acting_master && BrokerRole::Slave == self.broker_config.broker_role
     }
 
     /// Get half message
@@ -1307,6 +1303,7 @@ mod tests {
         let check_source = include_str!("../transactional_message_check_service.rs");
         let listener_source = include_str!("default_transactional_message_check_listener.rs");
         let bridge_source = include_str!("transactional_message_bridge.rs");
+        let store_source = include_str!("transaction_message_store.rs");
         let stats_source = include_str!("../../processor/admin_broker_processor/broker_stats_handler.rs");
 
         assert!(service_source.contains("Mutex<TransactionalMessageBridge<MS>>"));
@@ -1318,12 +1315,19 @@ mod tests {
         assert!(!check_source.contains(concat!("mut_from", "_ref")));
         assert!(!check_source.contains(concat!("Arc", "Mut")));
         assert!(!listener_source.contains(concat!("Arc", "Mut")));
-        assert!(!listener_source.contains("BrokerRuntimeInner"));
+        assert!(!listener_source.contains(concat!("BrokerRuntime", "Inner")));
         assert!(!listener_source.contains("MessageStore"));
         assert!(!listener_source.contains("broker_task_group_or_current"));
         assert!(!listener_source.contains("TaskGroup::root"));
         assert!(!bridge_source.contains(concat!("mut_from", "_ref")));
+        assert!(!bridge_source.contains(concat!("BrokerRuntime", "Inner")));
+        assert!(!bridge_source.contains("broker_runtime_inner"));
+        assert!(!bridge_source.contains(concat!("Arc", "Mut")));
+        assert!(store_source.contains("struct TransactionMessageStore"));
+        assert!(store_source.contains("owner: ArcMut<MS>"));
+        assert!(!store_source.contains(concat!("BrokerRuntime", "Inner")));
+        assert!(!service_source.contains(concat!("BrokerRuntime", "Inner")));
         assert!(!stats_source.contains(concat!("Arc", "Mut")));
-        assert!(!stats_source.contains("BrokerRuntimeInner"));
+        assert!(!stats_source.contains(concat!("BrokerRuntime", "Inner")));
     }
 }

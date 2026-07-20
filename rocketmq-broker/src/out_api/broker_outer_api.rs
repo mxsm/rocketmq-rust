@@ -110,6 +110,7 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
+#[derive(Clone)]
 pub struct BrokerOuterAPI {
     remoting_client: Arc<RocketmqDefaultClient<DefaultRemotingRequestProcessor>>,
     name_server_address: Option<String>,
@@ -1662,6 +1663,15 @@ mod tests {
     use rocketmq_remoting::protocol::route::route_data_view::BrokerData;
 
     use super::*;
+
+    #[test]
+    fn cloned_outer_api_shares_the_remoting_client() {
+        let api = BrokerOuterAPI::new(Arc::new(TokioClientConfig::default()));
+        let cloned = api.clone();
+
+        assert!(Arc::ptr_eq(&api.remoting_client, &cloned.remoting_client));
+        assert!(Arc::ptr_eq(&api.client_metadata, &cloned.client_metadata));
+    }
 
     #[test]
     fn broker_registration_api_does_not_accept_runtime_ownership() {

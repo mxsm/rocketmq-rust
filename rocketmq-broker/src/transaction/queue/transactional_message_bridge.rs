@@ -19,7 +19,6 @@ use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::config::TopicConfig;
-use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::message::message_client_id_setter::MessageClientIDSetter;
 use rocketmq_common::common::message::message_decoder;
 use rocketmq_common::common::message::message_ext::MessageExt;
@@ -33,7 +32,6 @@ use rocketmq_common::MessageAccessor::MessageAccessor;
 use rocketmq_common::MessageDecoder;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
-use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
@@ -41,27 +39,45 @@ use rocketmq_store_api::ReadOutcome;
 use tokio::sync::Mutex;
 use tracing::error;
 
-use crate::broker_runtime::BrokerRuntimeInner;
+use crate::failover::escape_bridge::EscapeBridge;
+use crate::offset::manager::consumer_offset_manager::ConsumerOffsetManager;
 use crate::store_read::decode_read_outcome;
+use crate::transaction::queue::transaction_message_store::TransactionMessageStore;
+use crate::transaction::queue::transaction_topic_registration::TransactionTopicRegistration;
 use crate::transaction::queue::transactional_message_util::TransactionalMessageUtil;
 
-const TCMT_QUEUE_NUMS: i32 = 1;
+pub(crate) struct TransactionalMessageBridgeContext<MS: MessageStore> {
+    pub(crate) store_host: SocketAddr,
+    pub(crate) broker_name: CheetahString,
+    pub(crate) consumer_offset_manager: Arc<ConsumerOffsetManager<MS>>,
+    pub(crate) message_store: TransactionMessageStore<MS>,
+    pub(crate) topic_registration: Arc<TransactionTopicRegistration<MS>>,
+    pub(crate) escape_bridge: Arc<EscapeBridge<MS>>,
+}
 
 pub struct TransactionalMessageBridge<MS: MessageStore> {
     pub(crate) op_queue_map: Arc<Mutex<HashMap<i32, MessageQueue>>>,
     pub(crate) store_host: SocketAddr,
-    pub(crate) broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+    broker_name: CheetahString,
+    consumer_offset_manager: Arc<ConsumerOffsetManager<MS>>,
+    message_store: TransactionMessageStore<MS>,
+    topic_registration: Arc<TransactionTopicRegistration<MS>>,
+    escape_bridge: Arc<EscapeBridge<MS>>,
 }
 
 impl<MS> TransactionalMessageBridge<MS>
 where
     MS: MessageStore,
 {
-    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
+    pub(crate) fn new(context: TransactionalMessageBridgeContext<MS>) -> Self {
         Self {
             op_queue_map: Arc::new(Mutex::new(HashMap::new())),
-            store_host: broker_runtime_inner.store_host(),
-            broker_runtime_inner,
+            store_host: context.store_host,
+            broker_name: context.broker_name,
+            consumer_offset_manager: context.consumer_offset_manager,
+            message_store: context.message_store,
+            topic_registration: context.topic_registration,
+            escape_bridge: context.escape_bridge,
         }
     }
 }
@@ -74,16 +90,9 @@ where
         let group = CheetahString::from_static_str(TransactionalMessageUtil::build_consumer_group());
         let topic = mq.topic();
         let queue_id = mq.queue_id();
-        let mut offset = self
-            .broker_runtime_inner
-            .consumer_offset_manager()
-            .query_offset(&group, topic, queue_id);
+        let mut offset = self.consumer_offset_manager.query_offset(&group, topic, queue_id);
         if offset == -1 {
-            offset = self
-                .broker_runtime_inner
-                .message_store()
-                .unwrap()
-                .get_min_offset_in_queue(topic, queue_id);
+            offset = self.message_store.get_min_offset_in_queue(topic, queue_id);
         }
         offset
     }
@@ -91,10 +100,9 @@ where
     pub async fn fetch_message_queues(&mut self, topic: &CheetahString) -> HashSet<MessageQueue> {
         let mut message_queues = HashSet::new();
         let topic_config = self.select_topic_config(topic).await;
-        let broker_name = self.broker_runtime_inner.broker_config().broker_name();
         if let Some(topic_config) = topic_config {
             for i in 0..topic_config.read_queue_nums {
-                let mq = MessageQueue::from_parts(topic, broker_name.clone(), i as i32);
+                let mq = MessageQueue::from_parts(topic, self.broker_name.clone(), i as i32);
                 message_queues.insert(mq);
             }
         }
@@ -102,7 +110,7 @@ where
     }
 
     pub fn update_consume_offset(&self, mq: &MessageQueue, offset: i64) {
-        self.broker_runtime_inner.consumer_offset_manager().commit_offset(
+        self.consumer_offset_manager.commit_offset(
             self.store_host.to_string().into(),
             &CheetahString::from_static_str(TransactionalMessageUtil::build_consumer_group()),
             mq.topic(),
@@ -146,13 +154,8 @@ where
                                          * Option */
     ) -> Option<ReadOutcome<MessageExt>> {
         let get_message_result = self
-            .broker_runtime_inner
-            .message_store()
-            .unwrap()
-            .get_message(
-                group, topic, queue_id, offset, nums, //  MAX_PULL_MSG_SIZE,
-                None,
-            )
+            .message_store
+            .get_message(group, topic, queue_id, offset, nums)
             .await;
 
         if let Some(get_message_result) = get_message_result {
@@ -167,37 +170,16 @@ where
     }
 
     pub async fn select_topic_config(&mut self, topic: &CheetahString) -> Option<Arc<TopicConfig>> {
-        let mut topic_config = self
-            .broker_runtime_inner
-            .topic_config_manager()
-            .select_topic_config(topic);
-        if topic_config.is_none() {
-            topic_config = crate::broker_runtime::create_topic_in_send_message_back!(
-                self.broker_runtime_inner.clone(),
-                topic,
-                1,
-                PermName::PERM_WRITE | PermName::PERM_READ,
-                false,
-                0,
-            );
-        }
-        topic_config
+        self.topic_registration.select_or_create_send_back_topic(topic).await
     }
 
     pub(crate) async fn select_tran_check_max_time_topic(&mut self) -> Option<Arc<TopicConfig>> {
-        crate::broker_runtime::create_tran_check_max_time_topic!(
-            self.broker_runtime_inner.clone(),
-            TCMT_QUEUE_NUMS,
-            PermName::PERM_READ | PermName::PERM_WRITE,
-        )
+        self.topic_registration.select_or_create_check_max_time_topic().await
     }
 
     pub async fn put_half_message(&mut self, mut message: MessageExtBrokerInner) -> PutMessageResult {
         Self::parse_half_message_inner(&mut message);
-        self.broker_runtime_inner
-            .message_store_unchecked_mut()
-            .put_message(message)
-            .await
+        self.message_store.put_message(message).await
     }
 
     /// Parses and transforms a message into a half message for transaction processing.
@@ -313,10 +295,7 @@ where
     }
 
     pub fn look_message_by_offset(&self, offset: i64) -> Option<MessageExt> {
-        self.broker_runtime_inner
-            .message_store()
-            .unwrap()
-            .look_message_by_offset(offset)
+        self.message_store.look_message_by_offset(offset)
     }
 
     pub async fn write_op(&mut self, queue_id: i32, message: Message) -> bool {
@@ -324,12 +303,7 @@ where
             let mut op_queue_map = self.op_queue_map.lock().await;
             op_queue_map
                 .entry(queue_id)
-                .or_insert_with(|| {
-                    get_op_queue_by_half(
-                        queue_id,
-                        self.broker_runtime_inner.broker_config().broker_name().clone(),
-                    )
-                })
+                .or_insert_with(|| get_op_queue_by_half(queue_id, self.broker_name.clone()))
                 .clone()
         };
         let inner = self.make_op_message_inner(message, &op_queue);
@@ -338,13 +312,7 @@ where
     }
 
     pub async fn put_message_return_result(&mut self, message_inner: MessageExtBrokerInner) -> PutMessageResult {
-        let result = self
-            .broker_runtime_inner
-            .message_store_mut()
-            .as_mut()
-            .unwrap()
-            .put_message(message_inner)
-            .await;
+        let result = self.message_store.put_message(message_inner).await;
         if result.put_message_status() == PutMessageStatus::PutOk {
             //nothing to do
         }
@@ -357,11 +325,7 @@ where
     }
 
     pub async fn escape_message(&mut self, message_inner: MessageExtBrokerInner) -> bool {
-        let put_message_result = self
-            .broker_runtime_inner
-            .escape_bridge()
-            .put_message(message_inner)
-            .await;
+        let put_message_result = self.escape_bridge.put_message(message_inner).await;
         put_message_result.is_ok()
     }
 }
