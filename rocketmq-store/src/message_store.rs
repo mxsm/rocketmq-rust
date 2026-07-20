@@ -44,6 +44,7 @@ use crate::base::message_result::AppendMessageResult;
 use crate::base::message_result::PutMessageResult;
 use crate::base::message_store::MessageStore;
 use crate::base::message_store::MessageStoreShutdownReport;
+use crate::base::message_store::PutMessagePreflight;
 use crate::base::message_store::StoreHealthSnapshot;
 use crate::base::query_message_result::QueryMessageResult;
 use crate::base::select_result::SelectMappedBufferResult;
@@ -467,6 +468,10 @@ impl MessageStore for GenericMessageStore {
 
     fn is_os_page_cache_busy(&self) -> bool {
         delegate_store!(self, is_os_page_cache_busy())
+    }
+
+    fn put_message_preflight(&self) -> PutMessagePreflight {
+        delegate_store!(self, put_message_preflight())
     }
 
     fn sync_flush_runtime_info(&self) -> crate::base::flush_manager::SyncFlushRuntimeInfo {

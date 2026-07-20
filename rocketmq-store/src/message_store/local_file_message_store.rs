@@ -113,6 +113,7 @@ use crate::base::message_status_enum::GetMessageStatus;
 use crate::base::message_status_enum::PutMessageStatus;
 use crate::base::message_store::MessageStore;
 use crate::base::message_store::MessageStoreShutdownReport;
+use crate::base::message_store::PutMessagePreflight;
 use crate::base::message_store::StoreHealthRecorder;
 use crate::base::message_store::StoreHealthSnapshot;
 use crate::base::query_message_result::QueryMessageResult;
@@ -3323,6 +3324,14 @@ impl MessageStore for LocalFileMessageStore {
         let begin = self.commit_log.begin_time_in_lock().load(Ordering::Relaxed);
         let diff = current_millis() - begin;
         diff < 10000000 && diff > self.message_store_config.os_page_cache_busy_timeout_mills
+    }
+
+    fn put_message_preflight(&self) -> PutMessagePreflight {
+        PutMessagePreflight::new(
+            self.shutdown.clone(),
+            self.running_flags.clone(),
+            self.commit_log.begin_time_in_lock().clone(),
+        )
     }
 
     fn sync_flush_runtime_info(&self) -> crate::base::flush_manager::SyncFlushRuntimeInfo {

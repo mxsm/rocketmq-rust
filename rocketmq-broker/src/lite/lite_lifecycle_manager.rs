@@ -16,7 +16,6 @@ use std::collections::HashSet;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::lite::get_lite_topic;
-use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::queue::consume_queue_store::ConsumeQueueStoreTrait;
 use rocketmq_store::queue::local_file_consume_queue_store::ConsumeQueueStore;
@@ -29,7 +28,7 @@ pub(crate) struct LiteLifecycleManager;
 impl LiteLifecycleManager {
     pub(crate) fn get_max_offset_in_queue<MS: MessageStore>(
         &self,
-        message_store: Option<&ArcMut<MS>>,
+        message_store: Option<&MS>,
         lmq_name: &CheetahString,
     ) -> i64 {
         let Some(message_store) = message_store else {
@@ -44,11 +43,7 @@ impl LiteLifecycleManager {
         message_store.get_max_offset_in_queue(lmq_name, 0)
     }
 
-    pub(crate) fn is_lmq_exist<MS: MessageStore>(
-        &self,
-        message_store: Option<&ArcMut<MS>>,
-        lmq_name: &CheetahString,
-    ) -> bool {
+    pub(crate) fn is_lmq_exist<MS: MessageStore>(&self, message_store: Option<&MS>, lmq_name: &CheetahString) -> bool {
         let Some(message_store) = message_store else {
             return false;
         };

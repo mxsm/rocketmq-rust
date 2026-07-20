@@ -288,7 +288,7 @@ impl<MS: MessageStore> PopLiteMessageProcessor<MS> {
                     let broker_offset = self
                         .broker_runtime_inner
                         .lite_lifecycle_manager()
-                        .get_max_offset_in_queue(self.broker_runtime_inner.message_store(), &lmq_name);
+                        .get_max_offset_in_queue(self.broker_runtime_inner.message_store_ref(), &lmq_name);
                     if next_offset < broker_offset {
                         requeue_events.insert(lmq_name);
                     }

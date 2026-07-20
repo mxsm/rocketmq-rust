@@ -32,7 +32,7 @@ use rocketmq_common::MessageDecoder::message_properties_to_string;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
-use rocketmq_store::base::message_store::MessageStore;
+use rocketmq_store::base::message_store::PutMessagePreflight;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use rocketmq_store::timer::timer_message_store;
 use rocketmq_store::timer::timer_message_store::TimerMessageStore;
@@ -49,11 +49,11 @@ pub struct HookUtils;
 
 impl HookUtils {
     pub fn check_before_put_message(
-        message_store: &impl MessageStore,
+        preflight: &PutMessagePreflight,
         message_store_config: &Arc<MessageStoreConfig>,
         msg: &mut dyn MessageTrait,
     ) -> Option<PutMessageResult> {
-        if message_store.is_shutdown() {
+        if preflight.is_shutdown() {
             warn!("message store has shutdown, so putMessage is forbidden");
             return Some(PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable));
         }
@@ -67,12 +67,12 @@ impl HookUtils {
             return Some(PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable));
         }
 
-        if !message_store.get_running_flags().is_writeable() {
+        if !preflight.is_writeable() {
             let value = PRINT_TIMES.fetch_add(1, Ordering::SeqCst);
             if (value % 50000) == 0 {
                 warn!(
                     "message store is not writeable, so putMessage is forbidden {}",
-                    message_store.get_running_flags().get_flag_bits()
+                    preflight.flag_bits()
                 );
             }
 
@@ -104,7 +104,7 @@ impl HookUtils {
             warn!("putMessage message topic[{}], but message body is null", msg.topic());
             return Some(PutMessageResult::new_default(PutMessageStatus::MessageIllegal));
         }
-        if message_store.is_os_page_cache_busy() {
+        if preflight.is_os_page_cache_busy(message_store_config.os_page_cache_busy_timeout_mills) {
             return Some(PutMessageResult::new_default(PutMessageStatus::OsPageCacheBusy));
         }
 
