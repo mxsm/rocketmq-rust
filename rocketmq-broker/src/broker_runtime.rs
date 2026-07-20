@@ -1194,9 +1194,9 @@ impl BrokerRuntime {
             #[cfg(feature = "otel-metrics")]
             observability_metrics_initialized: false,
             cold_data_pull_request_hold_service: Some(ColdDataPullRequestHoldService::default()),
-            cold_data_cg_ctr_service: Some(ColdDataCgCtrService::new(
+            cold_data_cg_ctr_service: Some(Arc::new(ColdDataCgCtrService::new(
                 message_store_config.cold_data_flow_control_enable,
-            )),
+            ))),
             is_schedule_service_start: Arc::new(Default::default()),
             is_transaction_check_service_start: Arc::new(Default::default()),
             client_housekeeping_service: None,
@@ -1689,7 +1689,7 @@ impl BrokerRuntime {
             cold_data_pull_request_hold_service.shutdown();
         }
 
-        if let Some(cold_data_cg_ctr_service) = self.inner.cold_data_cg_ctr_service.as_mut() {
+        if let Some(cold_data_cg_ctr_service) = self.inner.cold_data_cg_ctr_service.as_ref() {
             cold_data_cg_ctr_service.shutdown();
         }
 
@@ -3161,7 +3161,7 @@ impl BrokerRuntime {
         if let Some(cold_data_pull_request_hold_service) = self.inner.cold_data_pull_request_hold_service.as_mut() {
             cold_data_pull_request_hold_service.start();
         }
-        if let Some(cold_data_cg_ctr_service) = self.inner.cold_data_cg_ctr_service.as_mut() {
+        if let Some(cold_data_cg_ctr_service) = self.inner.cold_data_cg_ctr_service.as_ref() {
             cold_data_cg_ctr_service.start();
         }
 
@@ -3659,7 +3659,7 @@ pub(crate) struct BrokerRuntimeInner<MS: MessageStore> {
     #[cfg(feature = "otel-metrics")]
     observability_metrics_initialized: bool,
     cold_data_pull_request_hold_service: Option<ColdDataPullRequestHoldService>,
-    cold_data_cg_ctr_service: Option<ColdDataCgCtrService>,
+    cold_data_cg_ctr_service: Option<Arc<ColdDataCgCtrService>>,
     is_schedule_service_start: Arc<AtomicBool>,
     is_transaction_check_service_start: Arc<AtomicBool>,
     client_housekeeping_service: Option<Arc<ClientHousekeepingService<MS>>>,
@@ -4142,7 +4142,12 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
 
     #[inline]
     pub fn cold_data_cg_ctr_service(&self) -> Option<&ColdDataCgCtrService> {
-        self.cold_data_cg_ctr_service.as_ref()
+        self.cold_data_cg_ctr_service.as_deref()
+    }
+
+    #[inline]
+    pub(crate) fn cold_data_cg_ctr_service_handle(&self) -> Option<Arc<ColdDataCgCtrService>> {
+        self.cold_data_cg_ctr_service.clone()
     }
 
     #[inline]

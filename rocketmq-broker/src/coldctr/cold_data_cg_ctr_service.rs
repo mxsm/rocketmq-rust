@@ -95,7 +95,7 @@ impl ColdDataCgCtrService {
         }
     }
 
-    pub fn start(&mut self) {
+    pub fn start(&self) {
         warn!("ColdDataCgCtrService started not implemented");
     }
 
@@ -206,7 +206,7 @@ impl ColdDataCgCtrService {
         .expect("serialize cold data flow ctr info")
     }
 
-    pub fn shutdown(&mut self) {
+    pub fn shutdown(&self) {
         warn!("ColdDataCgCtrService shutdown not implemented");
     }
 }

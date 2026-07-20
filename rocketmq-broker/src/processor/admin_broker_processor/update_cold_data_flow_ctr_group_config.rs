@@ -12,24 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::broker_runtime::BrokerRuntimeInner;
+use std::sync::Arc;
+
+use crate::coldctr::cold_data_cg_ctr_service::ColdDataCgCtrService;
 use rocketmq_common::common::mix_all;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_rust::ArcMut;
-use rocketmq_store::base::message_store::MessageStore;
 
 #[derive(Clone)]
-pub struct UpdateColdDataFlowCtrGroupConfigRequestHandler<MS: MessageStore> {
-    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+pub struct UpdateColdDataFlowCtrGroupConfigRequestHandler {
+    cold_data_cg_ctr_service: Option<Arc<ColdDataCgCtrService>>,
 }
 
-impl<MS: MessageStore> UpdateColdDataFlowCtrGroupConfigRequestHandler<MS> {
-    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
-        Self { broker_runtime_inner }
+impl UpdateColdDataFlowCtrGroupConfigRequestHandler {
+    pub fn new(cold_data_cg_ctr_service: Option<Arc<ColdDataCgCtrService>>) -> Self {
+        Self {
+            cold_data_cg_ctr_service,
+        }
     }
 
     pub async fn update_cold_data_flow_ctr_group_config(
@@ -48,7 +50,7 @@ impl<MS: MessageStore> UpdateColdDataFlowCtrGroupConfigRequestHandler<MS> {
         let body = mix_all::string_to_properties(&String::from_utf8_lossy(body));
         match body {
             Some(body) => {
-                let Some(service) = self.broker_runtime_inner.cold_data_cg_ctr_service() else {
+                let Some(service) = self.cold_data_cg_ctr_service.as_deref() else {
                     return Ok(Some(
                         response
                             .set_code(ResponseCode::SystemError)
@@ -83,7 +85,7 @@ impl<MS: MessageStore> UpdateColdDataFlowCtrGroupConfigRequestHandler<MS> {
         let Some(body) = request.get_body() else {
             return Ok(Some(response.set_code(ResponseCode::Success)));
         };
-        let Some(service) = self.broker_runtime_inner.cold_data_cg_ctr_service() else {
+        let Some(service) = self.cold_data_cg_ctr_service.as_deref() else {
             return Ok(Some(
                 response
                     .set_code(ResponseCode::SystemError)
@@ -106,7 +108,7 @@ impl<MS: MessageStore> UpdateColdDataFlowCtrGroupConfigRequestHandler<MS> {
         _request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut response = RemotingCommand::create_response_command();
-        let Some(service) = self.broker_runtime_inner.cold_data_cg_ctr_service() else {
+        let Some(service) = self.cold_data_cg_ctr_service.as_deref() else {
             return Ok(Some(
                 response
                     .set_code(ResponseCode::SystemError)
@@ -179,7 +181,7 @@ mod tests {
     async fn update_and_get_cold_data_flow_ctr_info_round_trips_config() {
         let mut runtime = new_test_runtime("update-get", true).await;
         let inner = runtime.inner_for_test().clone();
-        let mut handler = UpdateColdDataFlowCtrGroupConfigRequestHandler::new(inner.clone());
+        let mut handler = UpdateColdDataFlowCtrGroupConfigRequestHandler::new(inner.cold_data_cg_ctr_service_handle());
         let mut request =
             RemotingCommand::create_request_command(RequestCode::UpdateColdDataFlowCtrConfig, EmptyHeader {})
                 .set_body("group-a=128\ngroup-b=256");
@@ -255,7 +257,7 @@ mod tests {
     async fn update_and_remove_cold_data_flow_ctr_empty_body_match_java_noop_success() {
         let mut runtime = new_test_runtime("empty-body", true).await;
         let inner = runtime.inner_for_test().clone();
-        let mut handler = UpdateColdDataFlowCtrGroupConfigRequestHandler::new(inner);
+        let mut handler = UpdateColdDataFlowCtrGroupConfigRequestHandler::new(inner.cold_data_cg_ctr_service_handle());
 
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
@@ -301,7 +303,7 @@ mod tests {
             .cold_data_cg_ctr_service()
             .expect("cold data service")
             .add_or_update_group_config("group-a", 128);
-        let mut handler = UpdateColdDataFlowCtrGroupConfigRequestHandler::new(inner.clone());
+        let mut handler = UpdateColdDataFlowCtrGroupConfigRequestHandler::new(inner.cold_data_cg_ctr_service_handle());
         let mut request =
             RemotingCommand::create_request_command(RequestCode::RemoveColdDataFlowCtrConfig, EmptyHeader {})
                 .set_body("group-a");
@@ -327,5 +329,48 @@ mod tests {
             .is_cg_need_cold_data_flow_ctr("group-a"));
 
         let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn missing_cold_data_service_returns_system_error() {
+        let mut handler = UpdateColdDataFlowCtrGroupConfigRequestHandler::new(None);
+        let channel = create_test_channel().await;
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let mut request =
+            RemotingCommand::create_request_command(RequestCode::UpdateColdDataFlowCtrConfig, EmptyHeader {})
+                .set_body("group-a=128");
+
+        let response = handler
+            .update_cold_data_flow_ctr_group_config(
+                channel,
+                ctx,
+                RequestCode::UpdateColdDataFlowCtrConfig,
+                &mut request,
+            )
+            .await
+            .expect("missing service should return broker response")
+            .expect("missing service response");
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::SystemError);
+        assert!(response
+            .remark()
+            .is_some_and(|remark| remark.contains("ColdDataCgCtrService is not configured")));
+    }
+
+    #[test]
+    fn cold_data_handler_has_narrow_shared_service_owner() {
+        let service = Arc::new(ColdDataCgCtrService::new(true));
+        let handler = UpdateColdDataFlowCtrGroupConfigRequestHandler::new(Some(Arc::clone(&service)));
+        let cloned = handler.clone();
+
+        assert!(Arc::ptr_eq(
+            handler.cold_data_cg_ctr_service.as_ref().expect("handler service"),
+            cloned.cold_data_cg_ctr_service.as_ref().expect("cloned service"),
+        ));
+        let source = include_str!("update_cold_data_flow_ctr_group_config.rs");
+        let production_source = source.split("#[cfg(test)]").next().expect("production source");
+        assert!(!production_source.contains(concat!("BrokerRuntime", "Inner")));
+        assert!(!production_source.contains(concat!("Arc", "Mut")));
+        assert!(!production_source.contains(concat!("Message", "Store")));
     }
 }

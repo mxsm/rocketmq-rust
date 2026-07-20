@@ -97,7 +97,7 @@ pub struct AdminBrokerProcessor<MS: MessageStore> {
     broker_epoch_cache_handler: BrokerEpochCacheHandler<MS>,
     notify_broker_role_change_handler: NotifyBrokerRoleChangeHandler<MS>,
     message_related_handler: MessageRelatedHandler<MS>,
-    producer_request_handler: ProducerRequestHandler<MS>,
+    producer_request_handler: ProducerRequestHandler,
     create_acl_request_handler: CreateAclRequestHandler,
     create_user_request_handler: CreateUserRequestHandler,
     get_acl_request_handler: GetAclRequestHandler,
@@ -109,7 +109,7 @@ pub struct AdminBrokerProcessor<MS: MessageStore> {
     delete_acl_request_handler: DeleteAclRequestHandler,
     list_acl_request_handler: ListAclRequestHandler,
     update_global_white_addrs_config_request_handler: UpdateGlobalWhiteAddrsConfigRequestHandler,
-    update_cold_data_flow_ctr_group_config_request_handler: UpdateColdDataFlowCtrGroupConfigRequestHandler<MS>,
+    update_cold_data_flow_ctr_group_config_request_handler: UpdateColdDataFlowCtrGroupConfigRequestHandler,
     get_broker_ha_status_handler: GetBrokerHaStatusHandler<MS>,
     broker_stats_handler: BrokerStatsHandler,
 }
@@ -152,7 +152,8 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
         let notify_broker_role_change_handler = NotifyBrokerRoleChangeHandler::new(broker_runtime_inner.clone());
 
         let message_related_handler = MessageRelatedHandler::new(broker_runtime_inner.clone());
-        let producer_request_handler = ProducerRequestHandler::new(broker_runtime_inner.clone());
+        let producer_request_handler =
+            ProducerRequestHandler::new(broker_runtime_inner.producer_manager().channel_registry());
         let create_acl_request_handler = CreateAclRequestHandler::new(auth_admin_service.clone());
         let create_user_request_handler = CreateUserRequestHandler::new(auth_admin_service.clone());
         let get_acl_request_handler = GetAclRequestHandler::new(auth_admin_service.clone());
@@ -166,7 +167,7 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
         let update_global_white_addrs_config_request_handler =
             UpdateGlobalWhiteAddrsConfigRequestHandler::new(auth_admin_service);
         let update_cold_data_flow_ctr_group_config_request_handler =
-            UpdateColdDataFlowCtrGroupConfigRequestHandler::new(broker_runtime_inner.clone());
+            UpdateColdDataFlowCtrGroupConfigRequestHandler::new(broker_runtime_inner.cold_data_cg_ctr_service_handle());
         let get_broker_ha_status_handler = GetBrokerHaStatusHandler::new(broker_runtime_inner.clone());
         let broker_stats_handler = BrokerStatsHandler::new(broker_runtime_inner.broker_stats_manager_handle());
 
