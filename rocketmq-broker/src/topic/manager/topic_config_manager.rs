@@ -17,7 +17,6 @@ use std::net::SocketAddr;
 #[cfg(feature = "rocksdb_store")]
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
-use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Instant;
@@ -59,10 +58,7 @@ pub(crate) struct TopicConfigManager {
     topic_config_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>>,
     topic_config_snapshot: ArcSwap<HashMap<CheetahString, Arc<TopicConfig>>>,
     metadata_transition: parking_lot::Mutex<DataVersion>,
-    topic_registration_lock: tokio::sync::Mutex<()>,
     persist_lock: Arc<parking_lot::Mutex<()>>,
-    async_topic_create_pending_count: Arc<AtomicU64>,
-    async_topic_create_spawn_failure_count: Arc<AtomicU64>,
     config_file_path: String,
     real_time_persist_rocksdb_config: AtomicBool,
     #[cfg(feature = "rocksdb_store")]
@@ -82,16 +78,6 @@ pub(crate) struct TopicConfigCreation {
     pub(crate) created: bool,
 }
 
-pub(crate) struct TopicConfigAsyncPersistGuard {
-    pending_count: Arc<AtomicU64>,
-}
-
-impl Drop for TopicConfigAsyncPersistGuard {
-    fn drop(&mut self) {
-        self.pending_count.fetch_sub(1, Ordering::AcqRel);
-    }
-}
-
 impl TopicConfigManager {
     #[inline]
     pub(crate) fn record_topic_create_latency(start_time: Instant) {
@@ -107,10 +93,7 @@ impl TopicConfigManager {
             topic_config_table: Arc::new(DashMap::with_capacity(1024)),
             topic_config_snapshot: ArcSwap::from_pointee(HashMap::new()),
             metadata_transition: parking_lot::Mutex::new(DataVersion::default()),
-            topic_registration_lock: tokio::sync::Mutex::new(()),
             persist_lock: Arc::new(parking_lot::Mutex::new(())),
-            async_topic_create_pending_count: Arc::new(AtomicU64::new(0)),
-            async_topic_create_spawn_failure_count: Arc::new(AtomicU64::new(0)),
             config_file_path: get_topic_config_path(broker_config.store_path_root_dir.as_str()),
             real_time_persist_rocksdb_config: AtomicBool::new(message_store_config.real_time_persist_rocksdb_config),
             #[cfg(feature = "rocksdb_store")]
@@ -308,15 +291,6 @@ impl TopicConfigManager {
         (topic_config_table, data_version.clone())
     }
 
-    fn topic_metadata_snapshot(&self, topic_name: &str) -> Option<(Arc<TopicConfig>, DataVersion)> {
-        let data_version = self.metadata_transition.lock();
-        let topic_config = self
-            .topic_config_table
-            .get(topic_name)
-            .map(|entry| entry.value().clone())?;
-        Some((topic_config, data_version.clone()))
-    }
-
     pub(crate) fn topic_registration_snapshot(
         &self,
         topic_names: &[CheetahString],
@@ -356,24 +330,9 @@ impl TopicConfigManager {
         (topic_config_table, split_data_version, data_version.clone())
     }
 
-    pub(crate) fn async_topic_create_pending_count(&self) -> u64 {
-        self.async_topic_create_pending_count.load(Ordering::Acquire)
-    }
-
-    pub(crate) fn async_topic_create_spawn_failure_count(&self) -> u64 {
-        self.async_topic_create_spawn_failure_count.load(Ordering::Acquire)
-    }
-
     pub(crate) fn update_message_store_policy(&self, message_store_config: &MessageStoreConfig) {
         self.real_time_persist_rocksdb_config
             .store(message_store_config.real_time_persist_rocksdb_config, Ordering::Release);
-    }
-
-    pub(crate) fn close(&self) {
-        #[cfg(feature = "rocksdb_store")]
-        if let Some(rocksdb_config_manager) = &self.rocksdb_config_manager {
-            rocksdb_config_manager.close();
-        }
     }
 
     pub fn build_serialize_wrapper(
@@ -581,18 +540,6 @@ impl TopicConfigManager {
         })
     }
 
-    pub(crate) fn begin_async_topic_create_persist(&self) -> TopicConfigAsyncPersistGuard {
-        self.async_topic_create_pending_count.fetch_add(1, Ordering::AcqRel);
-        TopicConfigAsyncPersistGuard {
-            pending_count: Arc::clone(&self.async_topic_create_pending_count),
-        }
-    }
-
-    pub(crate) fn record_async_topic_create_spawn_failure(&self) {
-        self.async_topic_create_spawn_failure_count
-            .fetch_add(1, Ordering::AcqRel);
-    }
-
     pub fn update_topic_config_list(
         &self,
         topic_config_list: &mut [TopicConfig],
@@ -615,7 +562,6 @@ impl TopicConfigManager {
             self.rebuild_topic_config_snapshot_locked();
             (published, data_version.clone())
         };
-        self.persist();
         (published, data_version)
     }
 
@@ -631,16 +577,6 @@ impl TopicConfigManager {
         };
         if let Some(old) = old {
             info!("delete topic config OK, topic: {:?}", old);
-            #[cfg(feature = "rocksdb_store")]
-            if let Some(rocksdb_config_manager) = &self.rocksdb_config_manager {
-                if let Err(error) = rocksdb_config_manager.delete(topic.as_str()) {
-                    error!(
-                        "delete topic config from rocksdb failed, topic={}, error={}",
-                        topic, error
-                    );
-                }
-            }
-            self.persist();
         } else {
             warn!("delete topic config failed, topic: {} not exists", topic);
         }
@@ -675,7 +611,6 @@ impl TopicConfigManager {
                 info!("update topic config, old:[{:?}] new:[{:?}]", old, update.topic_config);
             }
         }
-        self.persist_topic_config(topic_name.as_str());
         if old.is_none() {
             Self::record_topic_create_latency(start_time);
         }
@@ -814,10 +749,6 @@ impl TopicConfigManager {
         self.metadata_transition.lock().assign_new_one(data_version);
     }
 
-    pub(crate) async fn topic_registration_guard(&self) -> tokio::sync::MutexGuard<'_, ()> {
-        self.topic_registration_lock.lock().await
-    }
-
     fn replace_topic_config_table(
         &self,
         topic_config_table: HashMap<CheetahString, TopicConfig>,
@@ -851,7 +782,7 @@ impl TopicConfigManager {
         true
     }
 
-    pub fn update_order_topic_config(&self, order_kv_table_from_ns: &KVTable, state_machine_version: i64) {
+    pub fn update_order_topic_config(&self, order_kv_table_from_ns: &KVTable, state_machine_version: i64) -> bool {
         if !order_kv_table_from_ns.table.is_empty() {
             let is_change = {
                 let mut data_version = self.metadata_transition.lock();
@@ -877,10 +808,9 @@ impl TopicConfigManager {
                 }
                 is_change
             };
-            if is_change {
-                self.persist();
-            }
+            return is_change;
         }
+        false
     }
 
     pub fn create_topic_if_absent(
@@ -958,9 +888,6 @@ impl TopicConfigManager {
                 old_topic_sys_flag, topic_config.topic_sys_flag
             );
         });
-        if update.is_some() {
-            self.persist();
-        }
         update
     }
 
@@ -982,9 +909,6 @@ impl TopicConfigManager {
                 old_topic_sys_flag, topic_config.topic_sys_flag
             );
         });
-        if update.is_some() {
-            self.persist();
-        }
         update
     }
 
@@ -1034,7 +958,8 @@ impl TopicConfigManager {
         if !self.load_from_config_file() {
             return false;
         }
-        if let Err(error) = self.persist_all_topics_to_rocksdb() {
+        let (topic_config_table, data_version) = self.metadata_snapshot();
+        if let Err(error) = self.persist_all_topics_to_rocksdb(&topic_config_table, &data_version) {
             error!("migrate topic config file to rocksdb failed: {}", error);
             return false;
         }
@@ -1110,32 +1035,14 @@ impl TopicConfigManager {
     }
 
     #[cfg(feature = "rocksdb_store")]
-    fn persist_topic_to_rocksdb(&self, topic_name: &str) -> Result<(), rocketmq_error::RocketMQError> {
+    fn persist_all_topics_to_rocksdb(
+        &self,
+        topic_config_table: &HashMap<CheetahString, TopicConfig>,
+        data_version: &DataVersion,
+    ) -> Result<(), rocketmq_error::RocketMQError> {
         let Some(rocksdb_config_manager) = &self.rocksdb_config_manager else {
             return Ok(());
         };
-        let Some((topic_config, data_version)) = self.topic_metadata_snapshot(topic_name) else {
-            rocksdb_config_manager.delete(topic_name)?;
-            rocksdb_config_manager.set_kv_data_version(self.data_version())?;
-            return self.flush_rocksdb_config_if_needed(rocksdb_config_manager);
-        };
-        let body = serde_json::to_string(topic_config.as_ref()).map_err(|error| {
-            rocketmq_error::RocketMQError::storage_write_failed(
-                "rocksdb-topic-config",
-                format!("topic config encode failed: {error}"),
-            )
-        })?;
-        rocksdb_config_manager.put_string(topic_name, &body)?;
-        rocksdb_config_manager.set_kv_data_version(data_version)?;
-        self.flush_rocksdb_config_if_needed(rocksdb_config_manager)
-    }
-
-    #[cfg(feature = "rocksdb_store")]
-    fn persist_all_topics_to_rocksdb(&self) -> Result<(), rocketmq_error::RocketMQError> {
-        let Some(rocksdb_config_manager) = &self.rocksdb_config_manager else {
-            return Ok(());
-        };
-        let (topic_config_table, data_version) = self.metadata_snapshot();
         let records = topic_config_table
             .iter()
             .map(|(topic, config)| serde_json::to_vec(config).map(|body| (topic.as_bytes().to_vec(), body)))
@@ -1146,8 +1053,7 @@ impl TopicConfigManager {
                     format!("topic config encode failed: {error}"),
                 )
             })?;
-        rocksdb_config_manager.batch_put_with_wal(&records)?;
-        rocksdb_config_manager.set_kv_data_version(data_version)?;
+        rocksdb_config_manager.replace_snapshot_with_version(&records, data_version)?;
         self.flush_rocksdb_config_if_needed(rocksdb_config_manager)
     }
 
@@ -1162,39 +1068,39 @@ impl TopicConfigManager {
         Ok(())
     }
 
-    fn persist_topic_config(&self, topic_name: &str) {
-        let _persist = self.persist_lock.lock();
-        #[cfg(not(feature = "rocksdb_store"))]
-        let _ = topic_name;
-        #[cfg(feature = "rocksdb_store")]
-        if self.rocksdb_config_manager.is_some() {
-            if let Err(error) = self.persist_topic_to_rocksdb(topic_name) {
-                error!(
-                    "persist topic config to rocksdb failed, topic={}, error={}",
-                    topic_name, error
-                );
-            }
-            return;
+    fn persist_topic_config(&self, _topic_name: &str) {
+        if let Err(error) = self.persist_latest_snapshot() {
+            error!(?error, "persist topic config failed");
         }
-        self.persist_unlocked();
     }
 
-    fn persist_unlocked(&self) {
+    pub(crate) fn persist_latest_snapshot(&self) -> Result<DataVersion, rocketmq_error::RocketMQError> {
+        let _persist = self.persist_lock.lock();
+        let (topic_config_table, data_version) = self.metadata_snapshot();
         #[cfg(feature = "rocksdb_store")]
         if self.rocksdb_config_manager.is_some() {
-            if let Err(error) = self.persist_all_topics_to_rocksdb() {
-                error!("persist topic configs to rocksdb failed: {}", error);
-            }
-            return;
+            self.persist_all_topics_to_rocksdb(&topic_config_table, &data_version)?;
+            return Ok(data_version);
         }
 
-        let json = self.encode_pretty(true);
+        let json = TopicConfigSerializeWrapper::new(Some(topic_config_table), Some(data_version.clone()))
+            .serialize_json_pretty()
+            .map_err(|error| {
+                rocketmq_error::RocketMQError::storage_write_failed(
+                    self.config_file_path(),
+                    format!("encode topic config snapshot failed: {error}"),
+                )
+            })?;
         if !json.is_empty() {
             let file_name = self.config_file_path();
-            if file_utils::string_to_file(json.as_str(), file_name.as_str()).is_err() {
-                error!("persist file {} exception", file_name);
-            }
+            file_utils::string_to_file(json.as_str(), file_name.as_str()).map_err(|error| {
+                rocketmq_error::RocketMQError::storage_write_failed(
+                    file_name,
+                    format!("persist topic config snapshot failed: {error}"),
+                )
+            })?;
         }
+        Ok(data_version)
     }
 
     fn load_from_config_file(&self) -> bool {
@@ -1241,15 +1147,12 @@ impl ConfigManager for TopicConfigManager {
     }
 
     fn persist(&self) {
-        let _persist = self.persist_lock.lock();
-        self.persist_unlocked();
+        if let Err(error) = self.persist_latest_snapshot() {
+            error!(?error, "persist topic config failed");
+        }
     }
 
     fn stop(&mut self) -> bool {
-        #[cfg(feature = "rocksdb_store")]
-        if let Some(rocksdb_config_manager) = &self.rocksdb_config_manager {
-            rocksdb_config_manager.close();
-        }
         true
     }
 
@@ -1385,24 +1288,6 @@ mod tests {
     }
 
     #[test]
-    fn async_topic_create_runtime_counters_start_empty() {
-        let (_temp_dir, manager) = test_topic_config_manager();
-
-        assert_eq!(manager.async_topic_create_pending_count(), 0);
-        assert_eq!(manager.async_topic_create_spawn_failure_count(), 0);
-    }
-
-    #[test]
-    fn async_topic_create_pending_guard_releases_on_drop() {
-        let (_temp_dir, manager) = test_topic_config_manager();
-
-        let pending = manager.begin_async_topic_create_persist();
-        assert_eq!(manager.async_topic_create_pending_count(), 1);
-        drop(pending);
-        assert_eq!(manager.async_topic_create_pending_count(), 0);
-    }
-
-    #[test]
     fn source_has_no_runtime_or_arc_mut_owner_back_reference() {
         let source = include_str!("topic_config_manager.rs");
 
@@ -1506,14 +1391,13 @@ mod tests {
         assert_eq!(manager.data_version(), final_version);
     }
 
-    #[tokio::test]
-    async fn stale_registration_trigger_resamples_current_generation_after_send_guard() {
+    #[test]
+    fn registration_snapshot_resamples_current_generation() {
         let (_temp_dir, manager) = test_topic_config_manager();
         let topic = CheetahString::from_static_str("RegistrationTopic");
         let stale = manager.update_topic_config(TopicConfig::with_queues(topic.clone(), 1, 1), 0);
         let current = manager.update_topic_config(TopicConfig::with_queues(topic.clone(), 7, 9), 0);
 
-        let _registration = manager.topic_registration_guard().await;
         let (configs, data_version) = manager.topic_registration_snapshot(std::slice::from_ref(&topic));
 
         assert_eq!(configs.len(), 1);
@@ -1556,6 +1440,7 @@ mod rocksdb_config_tests {
             rocksdb_manager,
         );
         topic_manager.update_topic_config(TopicConfig::with_queues("TopicA", 4, 5), 0);
+        topic_manager.persist();
         drop(topic_manager);
 
         let restarted_rocksdb_manager = Arc::new(
@@ -1595,7 +1480,9 @@ mod rocksdb_config_tests {
         );
         let topic_name = CheetahString::from_static_str("TopicDelete");
         topic_manager.update_topic_config(TopicConfig::with_queues(topic_name.clone(), 1, 1), 0);
+        topic_manager.persist();
         topic_manager.delete_topic_config(&topic_name, 0);
+        topic_manager.persist();
         drop(topic_manager);
 
         let restarted_rocksdb_manager = Arc::new(

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -280,6 +281,35 @@ impl RocksDbBrokerConfigManager {
         self.core.store.write_batch(&batch)
     }
 
+    /// Atomically replaces one logical broker-config snapshot and its data version.
+    ///
+    /// Keys absent from `records` are deleted in the same RocksDB write batch as the
+    /// current rows and version marker. This prevents a deleted topic from being
+    /// revived by an older full-snapshot write.
+    pub(crate) fn replace_snapshot_with_version(
+        &self,
+        records: &[(Vec<u8>, Vec<u8>)],
+        data_version: &DataVersion,
+    ) -> Result<(), RocketMQError> {
+        let existing = self.load_data()?;
+        let desired_keys = records.iter().map(|(key, _)| key.as_slice()).collect::<HashSet<_>>();
+        let version_body = serde_json::to_vec(data_version)
+            .map_err(|error| codec_error(format!("config data version encode failed: {error}")))?;
+        let mut batch = RocksDbWriteBatch::with_capacity(existing.len() + records.len() + 1);
+        for (key, _) in existing {
+            if !desired_keys.contains(key.as_slice()) {
+                batch.delete_cf(self.default_cf.clone(), key);
+            }
+        }
+        for (key, value) in records {
+            batch.put_cf(self.default_cf.clone(), key.clone(), value.clone());
+        }
+        batch.put_cf(self.version_cf.clone(), KV_DATA_VERSION_KEY.to_vec(), version_body);
+        self.core.store.write_batch(&batch)?;
+        self.kv_data_version.lock().assign_new_one(data_version);
+        Ok(())
+    }
+
     pub(crate) fn flush_wal(&self) -> Result<(), RocketMQError> {
         self.core.store.flush_wal(false)
     }
@@ -290,6 +320,10 @@ impl RocksDbBrokerConfigManager {
 
     pub(crate) fn close(&self) {
         self.core.store.close();
+    }
+
+    pub(crate) fn backend_identity(&self) -> usize {
+        Arc::as_ptr(&self.core) as usize
     }
 
     fn create_cf_if_missing(&self, cf: &str) -> Result<(), RocketMQError> {

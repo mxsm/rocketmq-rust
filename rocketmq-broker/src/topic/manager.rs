@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub(crate) mod topic_config_coordinator;
 pub(crate) mod topic_config_manager;
 pub(crate) mod topic_queue_mapping_manager;
 pub(crate) mod topic_route_info_manager;

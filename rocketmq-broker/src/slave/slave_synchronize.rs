@@ -164,7 +164,10 @@ where
             topic_wrapper.topic_config_serialize_wrapper.topic_config_table.clone(),
             topic_wrapper.topic_config_serialize_wrapper.data_version(),
         ) {
-            topic_config_manager.persist();
+            self.broker_runtime_inner
+                .topic_config_coordinator()
+                .persist_and_wait()
+                .await?;
         }
 
         // Sync topic queue mapping if present and data version differs

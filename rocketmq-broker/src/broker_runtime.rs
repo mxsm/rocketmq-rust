@@ -154,6 +154,10 @@ use crate::schedule::schedule_message_service::ScheduleMessageService;
 use crate::slave::slave_synchronize::SlaveSynchronize;
 use crate::subscription::lite_subscription_registry::LiteSubscriptionRegistry;
 use crate::subscription::manager::subscription_group_manager::SubscriptionGroupManager;
+use crate::topic::manager::topic_config_coordinator::TopicConfigCoordinator;
+use crate::topic::manager::topic_config_coordinator::TopicConfigCoordinatorShutdownReport;
+use crate::topic::manager::topic_config_coordinator::TopicRegistrationAction;
+use crate::topic::manager::topic_config_coordinator::TopicRegistrationFuture;
 use crate::topic::manager::topic_config_manager::TopicConfigCreation;
 use crate::topic::manager::topic_config_manager::TopicConfigManager;
 use crate::topic::manager::topic_config_manager::TopicConfigUpdate;
@@ -173,15 +177,14 @@ type FasterServerProcessor =
     BrokerRequestProcessor<GenericMessageStore, DefaultTransactionalMessageService<GenericMessageStore>>;
 
 pub(crate) async fn complete_topic_config_creation<F, Fut>(
-    manager: Arc<TopicConfigManager>,
+    coordinator: Arc<TopicConfigCoordinator>,
     creation: TopicConfigCreation,
     start_time: Instant,
     async_persist: bool,
-    task_group: Option<TaskGroup>,
     register_update: F,
 ) -> Arc<TopicConfig>
 where
-    F: Fn(TopicConfigUpdate) -> Fut + Clone + Send + Sync + 'static,
+    F: FnOnce(TopicConfigUpdate) -> Fut + Send + 'static,
     Fut: Future<Output = ()> + Send + 'static,
 {
     let TopicConfigCreation {
@@ -192,49 +195,22 @@ where
     } = creation;
 
     if let Some(update) = update {
-        if async_persist {
-            if let Some(task_group) = task_group {
-                let pending = manager.begin_async_topic_create_persist();
-                let manager_for_task = Arc::clone(&manager);
-                let register_for_task = register_update.clone();
-                let topic_name = update
-                    .topic_config
-                    .topic_name
-                    .as_ref()
-                    .map_or_else(|| "<unknown>".to_string(), ToString::to_string);
-                let update_for_task = update.clone();
-                let task = async move {
-                    let _pending = pending;
-                    manager_for_task.persist();
-                    if register {
-                        register_for_task(update_for_task).await;
-                    }
-                    info!("async topic create persist/register completed, topic={}", topic_name);
-                };
-                match task_group.spawn(
-                    "broker.topic-config.async-create.persist",
-                    rocketmq_runtime::TaskKind::Worker,
-                    task,
-                ) {
-                    Ok(_) => {
-                        if created {
-                            TopicConfigManager::record_topic_create_latency(start_time);
-                        }
-                        return topic_config;
-                    }
-                    Err(error) => {
-                        manager.record_async_topic_create_spawn_failure();
-                        warn!(?error, "failed to spawn async topic create persist task");
-                    }
-                }
-            } else {
-                manager.record_async_topic_create_spawn_failure();
-            }
-        }
-
-        manager.persist();
-        if register {
-            register_update(update).await;
+        let registration = register.then(|| {
+            Box::new(move || {
+                Box::pin(async move {
+                    register_update(update).await;
+                    Ok(())
+                }) as TopicRegistrationFuture
+            }) as TopicRegistrationAction
+        });
+        let result = match (async_persist, registration) {
+            (true, Some(registration)) => coordinator.persist_and_register_accepted(registration).await,
+            (true, None) => coordinator.persist_accepted().await,
+            (false, Some(registration)) => coordinator.persist_and_register_wait(registration).await,
+            (false, None) => coordinator.persist_and_wait().await,
+        };
+        if let Err(error) = result {
+            warn!(?error, "failed to coordinate topic create persistence and registration");
         }
     }
 
@@ -248,22 +224,13 @@ macro_rules! finish_topic_config_creation {
     ($runtime:expr, $manager:expr, $creation:expr, $start_time:expr) => {{
         let runtime = ($runtime).clone();
         let async_persist = runtime.broker_config().async_topic_create_persist_enable;
-        let task_group = if async_persist {
-            runtime.broker_task_group_or_current(
-                "broker.topic-config.async-create",
-                "async topic create persist requested without an active broker runtime; falling back to synchronous \
-                 persist",
-            )
-        } else {
-            None
-        };
+        let coordinator = runtime.topic_config_coordinator_handle();
         let registration_runtime = runtime.clone();
         $crate::broker_runtime::complete_topic_config_creation(
-            $manager,
+            coordinator,
             $creation,
             $start_time,
             async_persist,
-            task_group,
             move |update| {
                 let runtime = registration_runtime.clone();
                 async move {
@@ -585,6 +552,18 @@ struct BrokerRocksDbConfigManagers {
 }
 
 #[cfg(feature = "rocksdb_store")]
+impl BrokerRocksDbConfigManagers {
+    fn close_all(self) {
+        let mut closed = HashSet::new();
+        for manager in [self.topic, self.consumer_offset, self.subscription_group] {
+            if closed.insert(manager.backend_identity()) {
+                manager.close();
+            }
+        }
+    }
+}
+
+#[cfg(feature = "rocksdb_store")]
 fn open_broker_rocksdb_config_managers(
     broker_config: &BrokerConfig,
     message_store_config: &MessageStoreConfig,
@@ -716,6 +695,8 @@ pub(crate) struct BrokerRuntime {
     remoting_server_task_group: Option<TaskGroup>,
     remoting_server_report_receivers: Vec<BrokerRemotingServerReportReceiver>,
     request_processor_task_group: Option<TaskGroup>,
+    #[cfg(feature = "rocksdb_store")]
+    rocksdb_config_managers: Option<BrokerRocksDbConfigManagers>,
     #[cfg(feature = "local_file_store")]
     escape_bridge_owner: Arc<EscapeBridge<GenericMessageStore>>,
 }
@@ -759,6 +740,7 @@ impl BrokerRemotingServerShutdownReport {
 pub(crate) struct BrokerBasicServiceShutdownReport {
     pub(crate) remoting: Option<BrokerRemotingServerShutdownReport>,
     pub(crate) request_processor: Option<ShutdownReport>,
+    pub(crate) topic_config: Option<TopicConfigCoordinatorShutdownReport>,
     pub(crate) broker_outer_api: BrokerShutdownComponentReport,
     pub(crate) client_housekeeping: BrokerShutdownComponentReport,
     pub(crate) auth: BrokerShutdownComponentReport,
@@ -786,7 +768,7 @@ impl BrokerShutdownProgress {
     fn new() -> Self {
         Self {
             unfinished: Arc::new(StdMutex::new(
-                BrokerBasicServiceShutdownReport::COMPONENT_NAMES[..15].to_vec(),
+                BrokerBasicServiceShutdownReport::COMPONENT_NAMES[..16].to_vec(),
             )),
             message_store_report: Arc::new(StdMutex::new(None)),
         }
@@ -967,9 +949,10 @@ fn record_message_store_shutdown_outcome(
 }
 
 impl BrokerBasicServiceShutdownReport {
-    const COMPONENT_NAMES: [&'static str; 16] = [
+    const COMPONENT_NAMES: [&'static str; 17] = [
         "remoting",
         "request_processor",
+        "topic_config",
         "broker_outer_api",
         "client_housekeeping",
         "auth",
@@ -993,6 +976,10 @@ impl BrokerBasicServiceShutdownReport {
                 .as_ref()
                 .is_none_or(BrokerRemotingServerShutdownReport::is_healthy)
             && self.request_processor.as_ref().is_none_or(ShutdownReport::is_healthy)
+            && self
+                .topic_config
+                .as_ref()
+                .is_none_or(TopicConfigCoordinatorShutdownReport::is_healthy)
             && self.component_reports().into_iter().all(|component| component.healthy)
     }
 
@@ -1015,6 +1002,9 @@ impl BrokerBasicServiceShutdownReport {
             .is_some_and(|report| !report.is_healthy())
         {
             names.push("request_processor");
+        }
+        if self.topic_config.as_ref().is_some_and(|report| !report.is_healthy()) {
+            names.push("topic_config");
         }
         names.extend(
             self.component_reports()
@@ -1045,6 +1035,9 @@ impl BrokerBasicServiceShutdownReport {
             .is_some_and(shutdown_report_has_timed_out)
         {
             names.push("request_processor");
+        }
+        if self.topic_config.as_ref().is_some_and(|report| report.timed_out) {
+            names.push("topic_config");
         }
         names.extend(
             self.component_reports()
@@ -1175,6 +1168,7 @@ impl BrokerRuntime {
             message_store_config: message_store_config.clone(),
             //server_config,
             topic_config_manager: None,
+            topic_config_coordinator: None,
             topic_queue_mapping_manager,
             consumer_offset_manager,
             subscription_group_manager: None,
@@ -1267,6 +1261,11 @@ impl BrokerRuntime {
                 true,
             )));
         }
+        inner.topic_config_coordinator = Some(Arc::new(TopicConfigCoordinator::new(
+            inner.topic_config_manager_handle(),
+            inner.service_context.clone(),
+            scheduled_task_manager.clone(),
+        )));
         inner.topic_route_info_manager = Some(TopicRouteInfoManager::new(inner.clone()));
         let escape_bridge = Arc::new(EscapeBridge::new(inner.clone()));
         inner.escape_bridge = Some(Arc::downgrade(&escape_bridge));
@@ -1311,6 +1310,8 @@ impl BrokerRuntime {
             remoting_server_task_group: None,
             remoting_server_report_receivers: Vec::new(),
             request_processor_task_group: None,
+            #[cfg(feature = "rocksdb_store")]
+            rocksdb_config_managers,
         }
     }
 
@@ -1410,11 +1411,10 @@ impl BrokerRuntime {
         progress: BrokerShutdownProgress,
     ) -> BrokerBasicServiceShutdownReport {
         self.inner.shutdown.store(true, Ordering::SeqCst);
-        let mut shutdown_report = BrokerBasicServiceShutdownReport::default();
-
-        self.unregister_broker().await;
-
-        shutdown_report.remoting = self.shutdown_remoting_servers(deadline).await;
+        let mut shutdown_report = BrokerBasicServiceShutdownReport {
+            remoting: self.shutdown_remoting_servers(deadline).await,
+            ..Default::default()
+        };
         progress.complete("remoting");
         shutdown_report.request_processor = self.shutdown_request_processor_tasks(deadline).await;
         progress.complete("request_processor");
@@ -1427,6 +1427,34 @@ impl BrokerRuntime {
                 warn!(?error, "Failed to shutdown ScheduleMessageService cleanly");
             }
             self.inner.schedule_message_service.take();
+        }
+
+        if let Some(topic_config_coordinator) = self.inner.topic_config_coordinator.as_ref().cloned() {
+            let mut topic_config_report = topic_config_coordinator.shutdown_until(deadline).await;
+            if topic_config_report.can_unregister() {
+                self.unregister_broker().await;
+                topic_config_report.unregister_succeeded = true;
+            }
+            if topic_config_report.can_detach() {
+                self.inner.topic_config_coordinator.take();
+                self.inner.topic_config_manager.take();
+                progress.complete("topic_config");
+            } else {
+                warn!(
+                    ?topic_config_report,
+                    "Topic config coordinator did not reach a detachable state"
+                );
+            }
+            shutdown_report.topic_config = Some(topic_config_report);
+            if !shutdown_report
+                .topic_config
+                .as_ref()
+                .is_some_and(TopicConfigCoordinatorShutdownReport::is_healthy)
+            {
+                return shutdown_report;
+            }
+        } else {
+            progress.complete("topic_config");
         }
 
         // Shutdown uses one absolute deadline and this fixed phase order:
@@ -1646,26 +1674,6 @@ impl BrokerRuntime {
             cold_data_cg_ctr_service.shutdown();
         }
 
-        if let Some(topic_config_manager) = self.inner.topic_config_manager.take() {
-            let result = if let Some(service_context) = self.inner.service_context.as_ref() {
-                run_shutdown_blocking_operation(
-                    service_context,
-                    deadline,
-                    "broker.topic-config.persist-stop",
-                    move || {
-                        topic_config_manager.persist();
-                        topic_config_manager.close();
-                    },
-                )
-                .await
-            } else {
-                Err(BrokerBlockingShutdownError::MissingServiceContext)
-            };
-            if let Err(error) = result {
-                warn!(error = %error.detail(), "Failed to persist topic configuration during shutdown");
-            }
-        }
-
         let started = Instant::now();
         if let Some(mut subscription_group_manager) = self.inner.subscription_group_manager.take() {
             let result = if let Some(service_context) = self.inner.service_context.as_ref() {
@@ -1732,6 +1740,28 @@ impl BrokerRuntime {
                 BrokerShutdownComponentReport::unhealthy("consumer_offset", started.elapsed(), error.detail())
             }
         };
+
+        #[cfg(feature = "rocksdb_store")]
+        if shutdown_report.subscription_group.healthy && shutdown_report.consumer_offset.healthy {
+            if let Some(rocksdb_config_managers) = self.rocksdb_config_managers.take() {
+                if let Some(service_context) = self.inner.service_context.as_ref() {
+                    if let Err(error) = run_shutdown_blocking_operation(
+                        service_context,
+                        deadline,
+                        "broker.config-rocksdb.close",
+                        move || rocksdb_config_managers.close_all(),
+                    )
+                    .await
+                    {
+                        warn!(error = %error.detail(), "Failed to close broker config RocksDB owners");
+                    }
+                } else {
+                    // Compatibility builders share no injected BlockingExecutor. Their config
+                    // stores are nevertheless closed by the aggregate owner, never by a leaf.
+                    rocksdb_config_managers.close_all();
+                }
+            }
+        }
 
         let started = Instant::now();
         let broker_outer_api_report = self
@@ -1948,7 +1978,7 @@ impl BrokerRuntime {
 
 impl BrokerRuntime {
     pub(crate) async fn initialize(&mut self) -> bool {
-        let mut result = self.initialize_metadata();
+        let mut result = self.initialize_metadata().await;
         if !result {
             warn!("Initialize metadata failed");
             return false;
@@ -1976,9 +2006,9 @@ impl BrokerRuntime {
     /// The loaders are invoked in order and combined using logical AND. If all loaders
     /// return `true`, the function returns `true`. If any loader fails (returns `false`),
     /// the whole initialization is considered failed and the function returns `false`.
-    fn initialize_metadata(&self) -> bool {
+    async fn initialize_metadata(&self) -> bool {
         info!("======Starting initialize metadata========");
-        self.inner.topic_config_manager().load()
+        matches!(self.inner.topic_config_coordinator().load().await, Ok(true))
             && self.inner.topic_queue_mapping_manager().load()
             && self.inner.consumer_offset_manager().load()
             && self.inner.subscription_group_manager().load()
@@ -3326,7 +3356,6 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             return;
         };
         let topic_config_manager = self.topic_config_manager();
-        let _registration = topic_config_manager.topic_registration_guard().await;
         let (mut current_configs, _) =
             topic_config_manager.topic_registration_snapshot(std::slice::from_ref(&topic_name));
         let Some(current) = current_configs.pop() else {
@@ -3354,7 +3383,6 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             .collect::<Vec<_>>();
         let registration_owner = this.clone();
         let topic_config_manager = registration_owner.topic_config_manager();
-        let _registration = topic_config_manager.topic_registration_guard().await;
         let (topic_config_list, current_data_version) = topic_config_manager.topic_registration_snapshot(&topic_names);
         if current_data_version != data_version {
             debug!(
@@ -3517,6 +3545,7 @@ pub(crate) struct BrokerRuntimeInner<MS: MessageStore> {
     broker_config: Arc<BrokerConfig>,
     message_store_config: Arc<MessageStoreConfig>,
     topic_config_manager: Option<Arc<TopicConfigManager>>,
+    topic_config_coordinator: Option<Arc<TopicConfigCoordinator>>,
     topic_queue_mapping_manager: TopicQueueMappingManager,
     consumer_offset_manager: ConsumerOffsetManager<MS>,
     subscription_group_manager: Option<SubscriptionGroupManager<MS>>,
@@ -3781,6 +3810,14 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     #[inline]
     pub(crate) fn topic_config_manager_handle(&self) -> Arc<TopicConfigManager> {
         Arc::clone(self.topic_config_manager.as_ref().unwrap())
+    }
+
+    pub(crate) fn topic_config_coordinator(&self) -> &TopicConfigCoordinator {
+        self.topic_config_coordinator.as_deref().unwrap()
+    }
+
+    pub(crate) fn topic_config_coordinator_handle(&self) -> Arc<TopicConfigCoordinator> {
+        Arc::clone(self.topic_config_coordinator.as_ref().unwrap())
     }
 
     #[inline]
@@ -4230,91 +4267,92 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             info!("BrokerRuntimeInner#register_broker_all_inner: broker has shutdown, skip broker registration.");
             return;
         }
+        let coordinator = self.topic_config_coordinator_handle();
+        let registration: TopicRegistrationAction = Box::new(move || {
+            Box::pin(async move {
+                let topic_config_manager = this.topic_config_manager();
+                let (raw_topic_config_table, split_data_version, final_data_version) = topic_config_manager
+                    .full_registration_snapshot(
+                        this.broker_config.enable_split_registration,
+                        this.broker_config.split_registration_size,
+                    );
+                let mut topic_config_table = raw_topic_config_table
+                    .into_values()
+                    .map(|topic_config| {
+                        let topic_config = this.topic_config_for_registration(&topic_config);
+                        (
+                            topic_config
+                                .topic_name
+                                .clone()
+                                .expect("registered topic config requires topic_name"),
+                            topic_config,
+                        )
+                    })
+                    .collect::<HashMap<_, _>>();
 
-        let Some(topic_config_manager) = self.topic_config_manager.as_ref() else {
-            warn!("Skip broker registration because topic config manager is not initialized");
-            return;
-        };
-        let registration_owner = this.clone();
-        let _registration = registration_owner
-            .topic_config_manager()
-            .topic_registration_guard()
-            .await;
-        let (raw_topic_config_table, split_data_version, final_data_version) = topic_config_manager
-            .full_registration_snapshot(
-                self.broker_config.enable_split_registration,
-                self.broker_config.split_registration_size,
-            );
-        let mut topic_config_table = raw_topic_config_table
-            .into_values()
-            .map(|topic_config| {
-                let topic_config = self.topic_config_for_registration(&topic_config);
-                (
-                    topic_config
-                        .topic_name
-                        .clone()
-                        .expect("registered topic config requires topic_name"),
-                    topic_config,
-                )
-            })
-            .collect::<HashMap<_, _>>();
-
-        // Handle split registration logic
-        if let Some(split_data_version) = split_data_version {
-            let topic_config_wrapper = this
-                .topic_config_manager()
-                .build_serialize_wrapper(topic_config_table.clone(), split_data_version);
-            BrokerRuntimeInner::<MS>::do_register_broker_all(
-                this.clone(),
-                check_order_config,
-                oneway,
-                topic_config_wrapper,
-            )
-            .await;
-            topic_config_table.clear();
-        }
-
-        // Collect topicQueueMappingInfoMap
-        let topic_queue_mapping_info_map = self
-            .topic_queue_mapping_manager
-            .topic_queue_mapping_table
-            .clone()
-            .iter()
-            .map(|kv| {
-                (
-                    kv.key().clone(),
-                    TopicQueueMappingDetail::clone_as_mapping_info(kv.value().as_ref()),
-                )
-            })
-            .collect();
-
-        let topic_config_wrapper = this
-            .topic_config_manager()
-            .build_serialize_wrapper_with_topic_queue_map(
-                topic_config_table,
-                topic_queue_mapping_info_map,
-                final_data_version,
-            );
-
-        let should_register = self.broker_config.enable_split_registration
-            || force_register
-            || need_register(
-                &self
-                    .broker_outer_api
-                    .need_register(
-                        self.broker_config.broker_identity.broker_cluster_name.clone(),
-                        self.get_broker_addr().clone(),
-                        self.broker_config.broker_identity.broker_name.clone(),
-                        self.broker_config.broker_identity.broker_id,
-                        &topic_config_wrapper,
-                        self.broker_config.register_broker_timeout_mills as u64,
-                        self.broker_config.is_in_broker_container,
+                if let Some(split_data_version) = split_data_version {
+                    let topic_config_wrapper = this
+                        .topic_config_manager()
+                        .build_serialize_wrapper(topic_config_table.clone(), split_data_version);
+                    BrokerRuntimeInner::<MS>::do_register_broker_all(
+                        this.clone(),
+                        check_order_config,
+                        oneway,
+                        topic_config_wrapper,
                     )
-                    .await,
-            );
-        if should_register {
-            BrokerRuntimeInner::<MS>::do_register_broker_all(this, check_order_config, oneway, topic_config_wrapper)
-                .await;
+                    .await;
+                    topic_config_table.clear();
+                }
+
+                let topic_queue_mapping_info_map = this
+                    .topic_queue_mapping_manager
+                    .topic_queue_mapping_table
+                    .clone()
+                    .iter()
+                    .map(|kv| {
+                        (
+                            kv.key().clone(),
+                            TopicQueueMappingDetail::clone_as_mapping_info(kv.value().as_ref()),
+                        )
+                    })
+                    .collect();
+                let topic_config_wrapper = this
+                    .topic_config_manager()
+                    .build_serialize_wrapper_with_topic_queue_map(
+                        topic_config_table,
+                        topic_queue_mapping_info_map,
+                        final_data_version,
+                    );
+                let should_register = this.broker_config.enable_split_registration
+                    || force_register
+                    || need_register(
+                        &this
+                            .broker_outer_api
+                            .need_register(
+                                this.broker_config.broker_identity.broker_cluster_name.clone(),
+                                this.get_broker_addr().clone(),
+                                this.broker_config.broker_identity.broker_name.clone(),
+                                this.broker_config.broker_identity.broker_id,
+                                &topic_config_wrapper,
+                                this.broker_config.register_broker_timeout_mills as u64,
+                                this.broker_config.is_in_broker_container,
+                            )
+                            .await,
+                    );
+                if should_register {
+                    BrokerRuntimeInner::<MS>::do_register_broker_all(
+                        this,
+                        check_order_config,
+                        oneway,
+                        topic_config_wrapper,
+                    )
+                    .await;
+                }
+                Ok(())
+            })
+        });
+        if let Err(error) = coordinator.persist_and_register_wait(registration).await {
+            warn!(?error, "failed to coordinate full broker registration");
         }
     }
 
@@ -5732,6 +5770,7 @@ mod tests {
             vec![
                 "remoting",
                 "request_processor",
+                "topic_config",
                 "broker_outer_api",
                 "client_housekeeping",
                 "auth",
@@ -7262,7 +7301,7 @@ accounts:
 
     async fn initialize_controller_mode_broker(runtime: &mut BrokerRuntime, broker_label: &str) {
         assert!(
-            runtime.initialize_metadata(),
+            runtime.initialize_metadata().await,
             "{broker_label} metadata init should succeed"
         );
         assert!(
@@ -7328,7 +7367,7 @@ accounts:
             ..MessageStoreConfig::default()
         });
         let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
-        assert!(runtime.initialize_metadata());
+        assert!(runtime.initialize_metadata().await);
         assert!(runtime.initialize_message_store().await);
 
         let store_timer = runtime
@@ -7363,7 +7402,7 @@ accounts:
             ..MessageStoreConfig::default()
         });
         let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
-        assert!(runtime.initialize_metadata());
+        assert!(runtime.initialize_metadata().await);
         assert!(runtime.initialize_message_store().await);
         let message_store = runtime
             .inner
@@ -9722,6 +9761,7 @@ accounts:
             inner
                 .topic_config_manager()
                 .update_topic_config(TopicConfig::with_queues(topic.clone(), 3, 5), 0);
+            inner.topic_config_manager().persist();
             inner.consumer_offset_manager().commit_offset(
                 CheetahString::from_static_str("127.0.0.1:10911"),
                 &group,

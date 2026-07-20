@@ -150,7 +150,8 @@ impl<MS: MessageStore> PopReviveService<MS> {
         }
         msg_inner.properties_string = message_decoder::message_properties_to_string(msg_inner.get_properties());
         let retry_topic = msg_inner.get_topic().clone();
-        self.add_retry_topic_if_not_exist(&retry_topic, &pop_check_point.cid);
+        self.add_retry_topic_if_not_exist(&retry_topic, &pop_check_point.cid)
+            .await;
         let put_message_result = self
             .broker_runtime_inner
             .escape_bridge()
@@ -192,7 +193,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
         true
     }
 
-    pub fn add_retry_topic_if_not_exist(&mut self, topic: &CheetahString, consumer_group: &CheetahString) {
+    pub async fn add_retry_topic_if_not_exist(&mut self, topic: &CheetahString, consumer_group: &CheetahString) {
         if let Some(_topic_config) = self
             .broker_runtime_inner
             .topic_config_manager()
@@ -210,6 +211,14 @@ impl<MS: MessageStore> PopReviveService<MS> {
             topic_config,
             self.broker_runtime_inner.topic_config_state_machine_version(),
         );
+        if let Err(error) = self
+            .broker_runtime_inner
+            .topic_config_coordinator()
+            .persist_and_wait()
+            .await
+        {
+            warn!(?error, topic = %topic, "failed to persist POP retry topic");
+        }
         self.init_pop_retry_offset(topic, consumer_group);
     }
 

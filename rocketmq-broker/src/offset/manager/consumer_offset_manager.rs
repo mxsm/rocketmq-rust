@@ -656,10 +656,6 @@ where
     }
 
     fn stop(&mut self) -> bool {
-        #[cfg(feature = "rocksdb_store")]
-        if let Some(rocksdb_config_manager) = &self.rocksdb_config_manager {
-            rocksdb_config_manager.close();
-        }
         true
     }
 

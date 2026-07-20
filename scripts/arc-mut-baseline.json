@@ -812,10 +812,10 @@
           "line": 4224
         },
         {
-          "id": "daaaf0da4630c3d390481e48",
-          "fingerprint": "2a8132de51b1b9bbebef6afa",
+          "id": "c6edd12cc424af0d9cb42bba",
+          "fingerprint": "af228ab0ff9d67691c021df2",
           "item": "fn do_register_broker_all_inner",
-          "line": 4322
+          "line": 4360
         },
         {
           "id": "397e52506121c49464b3bd42",
