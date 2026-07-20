@@ -2066,7 +2066,7 @@ impl BrokerRuntime {
             local_file_store.set_message_store_arc(local_file_store_clone);
             self.inner.timer_message_store = local_file_store.get_timer_message_store().cloned();
             let message_store = ArcMut::new(GenericMessageStore::local_file(local_file_store));
-            self.inner.broker_stats = Some(BrokerStats::new(message_store.clone()));
+            self.inner.broker_stats = Some(BrokerStats::from_manager(self.inner.broker_stats_manager.clone()));
             self.inner.message_store = Some(message_store.clone());
             let message_store_for_fast_failure = message_store.clone();
             self.inner
@@ -2106,7 +2106,7 @@ impl BrokerRuntime {
                 let rocksdb_message_store = ArcMut::new(rocksdb_message_store);
                 self.inner.timer_message_store = rocksdb_message_store.get_timer_message_store().cloned();
                 let message_store = ArcMut::new(GenericMessageStore::rocksdb(rocksdb_message_store));
-                self.inner.broker_stats = Some(BrokerStats::new(message_store.clone()));
+                self.inner.broker_stats = Some(BrokerStats::from_manager(self.inner.broker_stats_manager.clone()));
                 self.inner.message_store = Some(message_store.clone());
                 let message_store_for_fast_failure = message_store.clone();
                 self.inner

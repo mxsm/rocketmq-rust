@@ -12,27 +12,32 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::marker::PhantomData;
+use std::ops::Deref;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
-use rocketmq_rust::ArcMut;
 use tracing::error;
 use tracing::info;
 
 use crate::base::message_store::MessageStore;
+use crate::stats::broker_stats_manager::BrokerStatsManager;
 
-pub struct BrokerStats<MS: MessageStore> {
-    default_message_store: ArcMut<MS>,
+pub struct BrokerStats<MS> {
+    broker_stats_manager: Option<Arc<BrokerStatsManager>>,
+    message_store_marker: PhantomData<fn() -> MS>,
     msg_put_total_yesterday_morning: AtomicU64,
     msg_put_total_today_morning: AtomicU64,
     msg_get_total_yesterday_morning: AtomicU64,
     msg_get_total_today_morning: AtomicU64,
 }
 
-impl<MS: MessageStore> BrokerStats<MS> {
-    pub fn new(default_message_store: ArcMut<MS>) -> Self {
+impl<MS> BrokerStats<MS> {
+    pub fn from_manager(broker_stats_manager: Option<Arc<BrokerStatsManager>>) -> Self {
         BrokerStats {
-            default_message_store,
+            broker_stats_manager,
+            message_store_marker: PhantomData,
             msg_put_total_yesterday_morning: AtomicU64::new(0),
             msg_put_total_today_morning: AtomicU64::new(0),
             msg_get_total_yesterday_morning: AtomicU64::new(0),
@@ -50,8 +55,7 @@ impl<MS: MessageStore> BrokerStats<MS> {
             Ordering::Relaxed,
         );
 
-        let broker_stats_manager = self.default_message_store.get_broker_stats_manager();
-        match broker_stats_manager {
+        match self.broker_stats_manager.as_ref() {
             Some(manager) => {
                 self.msg_put_total_today_morning
                     .store(manager.get_broker_puts_num_without_system_topic(), Ordering::Relaxed);
@@ -92,7 +96,7 @@ impl<MS: MessageStore> BrokerStats<MS> {
     }
 
     pub fn get_msg_put_total_today_now(&self) -> u64 {
-        match self.default_message_store.get_broker_stats_manager() {
+        match self.broker_stats_manager.as_ref() {
             Some(manager) => manager.get_broker_puts_num_without_system_topic(),
             None => {
                 error!("Failed to get BrokerStatsManager");
@@ -102,12 +106,82 @@ impl<MS: MessageStore> BrokerStats<MS> {
     }
 
     pub fn get_msg_get_total_today_now(&self) -> u64 {
-        match self.default_message_store.get_broker_stats_manager() {
+        match self.broker_stats_manager.as_ref() {
             Some(manager) => manager.get_broker_gets_num_without_system_topic(),
             None => {
                 error!("Failed to get BrokerStatsManager");
                 0
             }
         }
+    }
+}
+
+impl<MS: MessageStore> BrokerStats<MS> {
+    /// Creates broker statistics from a message store without retaining the store handle.
+    ///
+    /// New composition roots should prefer [`Self::from_manager`] and inject the observer
+    /// capability directly. This constructor remains as a compatibility bridge for callers
+    /// that still own a dereferenceable message-store handle.
+    pub fn new<S>(message_store: S) -> Self
+    where
+        S: Deref<Target = MS>,
+    {
+        Self::from_manager(message_store.get_broker_stats_manager().cloned())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rocketmq_common::common::broker::broker_config::BrokerConfig;
+
+    use super::*;
+
+    #[test]
+    fn records_snapshots_from_injected_stats_manager() {
+        let manager = Arc::new(BrokerStatsManager::new(Arc::new(BrokerConfig::default())));
+        let stats = BrokerStats::<()>::from_manager(Some(Arc::clone(&manager)));
+
+        manager.inc_broker_put_nums("UserTopic", 10);
+        manager.inc_broker_get_nums("UserTopic", 7);
+        stats.record();
+
+        assert_eq!(stats.get_msg_put_total_yesterday_morning(), 0);
+        assert_eq!(stats.get_msg_put_total_today_morning(), 10);
+        assert_eq!(stats.get_msg_get_total_yesterday_morning(), 0);
+        assert_eq!(stats.get_msg_get_total_today_morning(), 7);
+
+        manager.inc_broker_put_nums("UserTopic", 4);
+        manager.inc_broker_get_nums("UserTopic", 3);
+        assert_eq!(stats.get_msg_put_total_today_now(), 14);
+        assert_eq!(stats.get_msg_get_total_today_now(), 10);
+
+        stats.record();
+        assert_eq!(stats.get_msg_put_total_yesterday_morning(), 10);
+        assert_eq!(stats.get_msg_put_total_today_morning(), 14);
+        assert_eq!(stats.get_msg_get_total_yesterday_morning(), 7);
+        assert_eq!(stats.get_msg_get_total_today_morning(), 10);
+    }
+
+    #[test]
+    fn missing_stats_manager_preserves_zero_fallback() {
+        let stats = BrokerStats::<()>::from_manager(None);
+
+        stats.record();
+
+        assert_eq!(stats.get_msg_put_total_today_now(), 0);
+        assert_eq!(stats.get_msg_get_total_today_now(), 0);
+        assert_eq!(stats.get_msg_put_total_today_morning(), 0);
+        assert_eq!(stats.get_msg_get_total_today_morning(), 0);
+    }
+
+    #[test]
+    fn broker_stats_does_not_retain_message_store_ownership() {
+        let source = include_str!("broker_stats.rs");
+        let forbidden = concat!("Arc", "Mut");
+        let forbidden_store_field = concat!("default_message", "_store");
+
+        assert!(!source.contains(forbidden));
+        assert!(!source.contains(forbidden_store_field));
+        assert!(source.contains("broker_stats_manager: Option<Arc<BrokerStatsManager>>"));
     }
 }
