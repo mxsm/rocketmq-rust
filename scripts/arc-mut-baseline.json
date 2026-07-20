@@ -764,10 +764,10 @@
           "line": 3601
         },
         {
-          "id": "fb274c3282855e73a012ee3f",
-          "fingerprint": "db30298987fa29f77b4e9a6b",
+          "id": "4ff86f94755506ecea829db9",
+          "fingerprint": "e8143bac4e115cee5a064d74",
           "item": "struct BrokerRuntimeInner",
-          "line": 3639
+          "line": 3650
         },
         {
           "id": "f248d64f116cda3a8fac82bc",
@@ -1543,69 +1543,6 @@
           "fingerprint": "507b9f9640d80f2d0ae706be",
           "item": "fn consumer_offset_manager_clean_group_deletes_offsets_from_rocksdb",
           "line": 1298
-        }
-      ],
-      "owner": "broker",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "29b31eab02e51a8dd7348e98",
-      "path": "rocketmq-broker/src/offset/manager/consumer_order_info_manager.rs",
-      "symbol": "*",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "94d2a063fbbd9332202fa780",
-          "fingerprint": "1f0d5ad97db515c58344edf5",
-          "item": "mod tests",
-          "line": 516
-        }
-      ],
-      "owner": "broker",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "e10969eeec74e5807658474b",
-      "path": "rocketmq-broker/src/offset/manager/consumer_order_info_manager.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "1ad2fea806aa155e0b3fd744",
-          "fingerprint": "a2f6e14e2ba324e28d0da644",
-          "item": "<module>",
-          "line": 26
-        }
-      ],
-      "owner": "broker",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "a3256d80a76dd9a8d9b20906",
-      "path": "rocketmq-broker/src/offset/manager/consumer_order_info_manager.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "a90250d8761ddc8a53aa0532",
-          "fingerprint": "ffb12e8192d98e1dbf7d1743",
-          "item": "struct ConsumerOrderInfoManager",
-          "line": 43
-        },
-        {
-          "id": "82d2cc5b29b242edf6148fca",
-          "fingerprint": "fc8784a5c4bccef1edad41c2",
-          "item": "fn new",
-          "line": 47
         }
       ],
       "owner": "broker",

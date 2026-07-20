@@ -1271,7 +1271,12 @@ impl BrokerRuntime {
         {
             inner.subscription_group_manager = Some(SubscriptionGroupManager::new(inner.clone()));
         }
-        inner.consumer_order_info_manager = Some(ConsumerOrderInfoManager::new(inner.clone()));
+        let consumer_order_info_manager = ConsumerOrderInfoManager::new(
+            inner.broker_config.store_path_root_dir.clone(),
+            inner.topic_config_manager_handle(),
+            Arc::clone(inner.subscription_group_manager().subscription_group_table()),
+        );
+        inner.consumer_order_info_manager = Some(consumer_order_info_manager);
         inner.producer_manager.set_broker_stats_manager(stats_manager.clone());
         inner
             .consumer_manager
@@ -3641,7 +3646,7 @@ pub(crate) struct BrokerRuntimeInner<MS: MessageStore> {
     consumer_offset_manager: Arc<ConsumerOffsetManager<MS>>,
     subscription_group_manager: Option<SubscriptionGroupManager<MS>>,
     consumer_filter_manager: Option<ConsumerFilterManager>,
-    consumer_order_info_manager: Option<ConsumerOrderInfoManager<MS>>,
+    consumer_order_info_manager: Option<ConsumerOrderInfoManager>,
     message_store: Option<ArcMut<MS>>,
     broker_stats: Option<BrokerStats<MS>>,
     schedule_message_service: Option<Arc<ScheduleMessageService<MS>>>,
@@ -3755,16 +3760,6 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     #[inline]
     pub fn consumer_filter_manager_unchecked_mut(&mut self) -> &mut ConsumerFilterManager {
         unsafe { self.consumer_filter_manager.as_mut().unwrap_unchecked() }
-    }
-
-    #[inline]
-    pub fn consumer_order_info_manager_mut(&mut self) -> &mut ConsumerOrderInfoManager<MS> {
-        self.consumer_order_info_manager.as_mut().unwrap()
-    }
-
-    #[inline]
-    pub fn consumer_order_info_manager_unchecked_mut(&mut self) -> &mut ConsumerOrderInfoManager<MS> {
-        unsafe { self.consumer_order_info_manager.as_mut().unwrap_unchecked() }
     }
 
     #[inline]
@@ -3953,13 +3948,8 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn consumer_order_info_manager(&self) -> &ConsumerOrderInfoManager<MS> {
+    pub fn consumer_order_info_manager(&self) -> &ConsumerOrderInfoManager {
         self.consumer_order_info_manager.as_ref().unwrap()
-    }
-
-    #[inline]
-    pub fn consumer_order_info_manager_unchecked(&self) -> &ConsumerOrderInfoManager<MS> {
-        unsafe { self.consumer_order_info_manager.as_ref().unwrap_unchecked() }
     }
 
     #[inline]
@@ -4232,11 +4222,6 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     #[inline]
     pub fn set_consumer_filter_manager(&mut self, consumer_filter_manager: ConsumerFilterManager) {
         self.consumer_filter_manager = Some(consumer_filter_manager);
-    }
-
-    #[inline]
-    pub fn set_consumer_order_info_manager(&mut self, consumer_order_info_manager: ConsumerOrderInfoManager<MS>) {
-        self.consumer_order_info_manager = Some(consumer_order_info_manager);
     }
 
     #[inline]

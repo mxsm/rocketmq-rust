@@ -18,46 +18,56 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt::Display;
 use std::ops::Deref;
+use std::sync::Arc;
 
 use cheetah_string::CheetahString;
+use dashmap::DashMap;
 use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_rust::ArcMut;
-use rocketmq_store::base::message_store::MessageStore;
+use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 use serde::Deserialize;
 use serde::Serialize;
 use tracing::info;
 use tracing::warn;
 
 use crate::broker_path_config_helper::get_consumer_order_info_path;
-use crate::broker_runtime::BrokerRuntimeInner;
 use crate::offset::manager::consumer_order_info_lock_manager::ConsumerOrderInfoLockManager;
+use crate::topic::manager::topic_config_manager::TopicConfigManager;
 
 const TOPIC_GROUP_SEPARATOR: &str = "@";
 const CLEAN_SPAN_FROM_LAST: u64 = 24 * 3600 * 1000;
+type SubscriptionGroupTable = Arc<DashMap<CheetahString, Arc<SubscriptionGroupConfig>>>;
 
-pub(crate) struct ConsumerOrderInfoManager<MS: MessageStore> {
+pub(crate) struct ConsumerOrderInfoManager {
     pub(crate) consumer_order_info_wrapper: parking_lot::Mutex<ConsumerOrderInfoWrapper>,
     pub(crate) consumer_order_info_lock_manager: Option<ConsumerOrderInfoLockManager>,
-    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+    store_path_root_dir: CheetahString,
+    topic_config_manager: Arc<TopicConfigManager>,
+    subscription_group_table: SubscriptionGroupTable,
 }
 
-impl<MS: MessageStore> ConsumerOrderInfoManager<MS> {
-    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> ConsumerOrderInfoManager<MS> {
+impl ConsumerOrderInfoManager {
+    pub fn new(
+        store_path_root_dir: CheetahString,
+        topic_config_manager: Arc<TopicConfigManager>,
+        subscription_group_table: SubscriptionGroupTable,
+    ) -> Self {
         Self {
             consumer_order_info_wrapper: parking_lot::Mutex::new(ConsumerOrderInfoWrapper::default()),
             consumer_order_info_lock_manager: None,
-            broker_runtime_inner,
+            store_path_root_dir,
+            topic_config_manager,
+            subscription_group_table,
         }
     }
 }
 
 //Fully implemented will be removed
 #[allow(unused_variables)]
-impl<MS: MessageStore> ConfigManager for ConsumerOrderInfoManager<MS> {
+impl ConfigManager for ConsumerOrderInfoManager {
     fn config_file_path(&self) -> String {
-        get_consumer_order_info_path(self.broker_runtime_inner.broker_config().store_path_root_dir.as_str())
+        get_consumer_order_info_path(self.store_path_root_dir.as_str())
     }
 
     fn encode_pretty(&self, pretty_format: bool) -> String {
@@ -84,7 +94,7 @@ impl<MS: MessageStore> ConfigManager for ConsumerOrderInfoManager<MS> {
     }
 }
 
-impl<MS: MessageStore> ConsumerOrderInfoManager<MS> {
+impl ConsumerOrderInfoManager {
     pub fn clear_block(&self, topic: &CheetahString, group: &CheetahString, queue_id: i32) {
         unimplemented!()
     }
@@ -105,19 +115,14 @@ impl<MS: MessageStore> ConsumerOrderInfoManager<MS> {
             let group = arrays[1];
 
             let topic_config = self
-                .broker_runtime_inner
-                .topic_config_manager()
+                .topic_config_manager
                 .select_topic_config(&CheetahString::from(topic));
             if topic_config.is_none() {
                 info!("Topic not exist, Clean order info, {}:{:?}", topic_at_group, qs);
                 keys_to_remove.push(topic_at_group.clone());
                 continue;
             }
-            let subscription_group_table = self
-                .broker_runtime_inner
-                .subscription_group_manager()
-                .subscription_group_table();
-            let subscription_group_config = subscription_group_table.get(&CheetahString::from(group));
+            let subscription_group_config = self.subscription_group_table.get(&CheetahString::from(group));
             if subscription_group_config.is_none() {
                 info!("Group not exist, Clean order info, {}:{:?}", topic_at_group, qs);
                 keys_to_remove.push(topic_at_group.clone());
@@ -513,7 +518,66 @@ impl OrderInfo {
 mod tests {
     use std::collections::HashMap;
 
+    use rocketmq_common::common::broker::broker_config::BrokerConfig;
+    use rocketmq_common::common::config::TopicConfig;
+    use rocketmq_store::config::message_store_config::MessageStoreConfig;
+
     use super::*;
+
+    fn test_manager() -> (
+        ConsumerOrderInfoManager,
+        Arc<TopicConfigManager>,
+        SubscriptionGroupTable,
+    ) {
+        let broker_config = BrokerConfig {
+            store_path_root_dir: CheetahString::from_static_str("consumer-order-root"),
+            ..BrokerConfig::default()
+        };
+        let topic_config_manager = Arc::new(TopicConfigManager::new(
+            &broker_config,
+            &MessageStoreConfig::default(),
+            false,
+        ));
+        let subscription_group_table = Arc::new(DashMap::new());
+        let manager = ConsumerOrderInfoManager::new(
+            broker_config.store_path_root_dir,
+            Arc::clone(&topic_config_manager),
+            Arc::clone(&subscription_group_table),
+        );
+        (manager, topic_config_manager, subscription_group_table)
+    }
+
+    #[test]
+    fn config_file_path_uses_injected_store_root() {
+        let (manager, _, _) = test_manager();
+
+        assert_eq!(
+            manager.config_file_path(),
+            get_consumer_order_info_path("consumer-order-root")
+        );
+    }
+
+    #[test]
+    fn auto_clean_observes_injected_topic_and_subscription_tables() {
+        let (manager, topic_config_manager, subscription_group_table) = test_manager();
+        let topic = CheetahString::from_static_str("OrderTopic");
+        let group = CheetahString::from_static_str("OrderGroup");
+        topic_config_manager.update_topic_config(TopicConfig::new(topic.as_str()), 0);
+        subscription_group_table.insert(group.clone(), Arc::new(SubscriptionGroupConfig::new(group.clone())));
+        let key = CheetahString::from_string(build_key(&topic, &group));
+        manager
+            .consumer_order_info_wrapper
+            .lock()
+            .table
+            .insert(key.clone(), HashMap::from([(0, OrderInfo::default())]));
+
+        manager.auto_clean();
+        assert!(manager.consumer_order_info_wrapper.lock().table.contains_key(&key));
+
+        subscription_group_table.remove(&group);
+        manager.auto_clean();
+        assert!(!manager.consumer_order_info_wrapper.lock().table.contains_key(&key));
+    }
 
     #[test]
     fn build_offset_list_with_single_element() {

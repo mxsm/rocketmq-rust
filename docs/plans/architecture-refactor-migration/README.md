@@ -550,6 +550,14 @@ occurrences（production 219/509、test 149/444、compatibility 14/40、Store pr
 7 个 production identities/14 occurrences 且无 relocation。总进度仍为 75/82，下一子切片 M11-12bc12
 继续 Broker aggregate/leaf 或 Store WAL/queue/timer/HA owner。
 
+ConsumerOrderInfo runtime capability 随 Issue #8429 收口：`ConsumerOrderInfoManager` 删除完整
+`BrokerRuntimeInner` back-reference 与 `MessageStore` 泛型，改为注入存储根目录、标准 `Arc<TopicConfigManager>`
+和共享 subscription-group live table；同时删除 4 个无调用方 mutable/unchecked/setter accessor。配置路径与
+topic/group 自动清理回归通过。ArcMut 快照降至 379 identities/989 occurrences（production 217/506、test
+148/443、compatibility 14/40、Broker production 114/232），净删除 2 个 production identities/3 occurrences
+和 1 个 test identity/1 occurrence，且无 relocation。总进度仍为 75/82，下一子切片 M11-12bc13 继续 Broker
+aggregate/leaf 或 Store WAL/queue/timer/HA owner。
+
 ### 9.3 证据目录
 
 - 运行期生成物：`target/architecture-refactor/Mxx/<run-id>/`，不提交 Git。
