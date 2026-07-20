@@ -13,9 +13,10 @@
 // limitations under the License.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use cheetah_string::CheetahString;
-use rocketmq_rust::ArcMut;
+use parking_lot::Mutex;
 use rocketmq_store_local::consume_queue::extension::cq_ext_capacity_available;
 use rocketmq_store_local::consume_queue::extension::cq_ext_file_before_min;
 use rocketmq_store_local::consume_queue::extension::decorate_cq_ext_offset;
@@ -36,7 +37,7 @@ use crate::log_file::mapped_file::MappedFile;
 
 #[derive(Clone)]
 pub struct ConsumeQueueExt {
-    mapped_file_queue: ArcMut<MappedFileQueue>,
+    mapped_file_queue: Arc<Mutex<MappedFileQueue>>,
     topic: CheetahString,
     queue_id: i32,
     store_path: CheetahString,
@@ -54,11 +55,11 @@ impl ConsumeQueueExt {
         let queue_dir = PathBuf::from(store_path.as_str())
             .join(topic.as_str())
             .join(queue_id.to_string());
-        let mapped_file_queue = ArcMut::new(MappedFileQueue::new(
+        let mapped_file_queue = Arc::new(Mutex::new(MappedFileQueue::new(
             queue_dir.to_string_lossy().to_string(),
             mapped_file_size as u64,
             None,
-        ));
+        )));
         let _ = bit_map_length;
         Self {
             mapped_file_queue,
@@ -107,7 +108,7 @@ impl ConsumeQueueExt {
 
         let real_offset = Self::undecorate(max_address);
         self.mapped_file_queue
-            .mut_from_ref()
+            .lock()
             .truncate_dirty_files(real_offset + cq_ext_unit.size() as i64);
     }
 
@@ -119,8 +120,9 @@ impl ConsumeQueueExt {
         info!("Truncate consume queue ext by min {}.", min_address);
 
         let real_offset = Self::undecorate(min_address);
+        let mapped_file_queue = self.mapped_file_queue.lock();
         let mut will_remove_files = Vec::new();
-        let mapped_files = self.mapped_file_queue.get_mapped_files().load().clone();
+        let mapped_files = mapped_file_queue.get_mapped_files().load().clone();
 
         for mapped_file in mapped_files.iter() {
             let file_from_offset = mapped_file.get_file_from_offset() as i64;
@@ -138,11 +140,11 @@ impl ConsumeQueueExt {
             }
         }
 
-        self.mapped_file_queue.delete_expired_file(will_remove_files);
+        mapped_file_queue.delete_expired_file(will_remove_files);
     }
 
     pub fn load(&mut self) -> bool {
-        let result = self.mapped_file_queue.load();
+        let result = self.mapped_file_queue.lock().load();
         info!(
             "load consume queue extend {}-{}  {}",
             self.topic,
@@ -154,7 +156,8 @@ impl ConsumeQueueExt {
     }
 
     pub fn recover(&mut self) {
-        let mapped_files = self.mapped_file_queue.get_mapped_files().load().clone();
+        let mut mapped_file_queue = self.mapped_file_queue.lock();
+        let mapped_files = mapped_file_queue.get_mapped_files().load().clone();
         if mapped_files.is_empty() {
             return;
         }
@@ -176,11 +179,9 @@ impl ConsumeQueueExt {
             }
         }
 
-        self.mapped_file_queue.set_flushed_where(process_offset);
-        self.mapped_file_queue.set_committed_where(process_offset);
-        self.mapped_file_queue
-            .mut_from_ref()
-            .truncate_dirty_files(process_offset);
+        mapped_file_queue.set_flushed_where(process_offset);
+        mapped_file_queue.set_committed_where(process_offset);
+        mapped_file_queue.truncate_dirty_files(process_offset);
     }
 
     pub fn put(&self, cq_ext_unit: CqExtUnit) -> i64 {
@@ -195,28 +196,22 @@ impl ConsumeQueueExt {
             return 1;
         }
 
-        if !cq_ext_capacity_available(self.mapped_file_queue.get_max_offset(), size) {
-            warn!(
-                "Capacity of ext is maximum!{}, {}",
-                self.mapped_file_queue.get_max_offset(),
-                size
-            );
-            return 1;
-        }
-
         for _ in 0..RETRY_TIMES {
-            let mapped_file = {
-                let queue = self.mapped_file_queue.mut_from_ref();
-                match queue.get_last_mapped_file() {
-                    Some(mapped_file) if !mapped_file.is_full() => mapped_file,
-                    _ => match queue.get_last_mapped_file_mut_start_offset(0, true) {
-                        Some(mapped_file) => mapped_file,
-                        None => {
-                            error!("Create mapped file when save consume queue extend, {}", cq_ext_unit);
-                            continue;
-                        }
-                    },
-                }
+            let mut queue = self.mapped_file_queue.lock();
+            let max_offset = queue.get_max_offset();
+            if !cq_ext_capacity_available(max_offset, size) {
+                warn!("Capacity of ext is maximum!{}, {}", max_offset, size);
+                return 1;
+            }
+            let mapped_file = match queue.get_last_mapped_file() {
+                Some(mapped_file) if !mapped_file.is_full() => mapped_file,
+                _ => match queue.get_last_mapped_file_mut_start_offset(0, true) {
+                    Some(mapped_file) => mapped_file,
+                    None => {
+                        error!("Create mapped file when save consume queue extend, {}", cq_ext_unit);
+                        continue;
+                    }
+                },
             };
 
             let wrote_position = mapped_file.get_wrote_position();
@@ -245,7 +240,7 @@ impl ConsumeQueueExt {
     }
 
     pub fn destroy(&mut self) {
-        self.mapped_file_queue.destroy();
+        self.mapped_file_queue.lock().destroy();
     }
 
     pub fn get(&self, address: i64, cq_ext_unit: &mut CqExtUnit) -> bool {
@@ -254,10 +249,8 @@ impl ConsumeQueueExt {
         }
 
         let real_offset = Self::undecorate(address);
-        let Some(mapped_file) = self
-            .mapped_file_queue
-            .find_mapped_file_by_offset(real_offset, real_offset == 0)
-        else {
+        let mapped_file_queue = self.mapped_file_queue.lock();
+        let Some(mapped_file) = mapped_file_queue.find_mapped_file_by_offset(real_offset, real_offset == 0) else {
             return false;
         };
 
@@ -277,16 +270,16 @@ impl ConsumeQueueExt {
     }
 
     pub fn flush(&self, flush_least_pages: i32) -> bool {
-        self.mapped_file_queue.flush(flush_least_pages)
+        self.mapped_file_queue.lock().flush(flush_least_pages)
     }
 
     pub fn get_total_size(&self) -> i64 {
-        self.mapped_file_queue.get_total_file_size()
+        self.mapped_file_queue.lock().get_total_file_size()
     }
 
     pub fn check_self(&self) {
         let _ = self.store_path.as_str();
-        self.mapped_file_queue.check_self()
+        self.mapped_file_queue.lock().check_self()
     }
 }
 
@@ -328,8 +321,9 @@ mod tests {
         let second = CqExtUnit::new(22, 202, Some(vec![3, 4, 5]));
         let second_addr = ext.put(second.clone());
 
-        let queue = ext.mapped_file_queue.mut_from_ref();
+        let queue = ext.mapped_file_queue.lock();
         let mapped_file = queue.get_last_mapped_file().expect("mapped file");
+        drop(queue);
         let dirty_pos = mapped_file.get_wrote_position() as usize;
         assert!(mapped_file.put_slice(&[0x7F, 0xFF, 0xAA], dirty_pos));
         mapped_file.set_wrote_position(dirty_pos as i32 + 3);
@@ -342,7 +336,7 @@ mod tests {
         assert!(reloaded.get(second_addr, &mut restored));
         assert_eq!(restored, second);
         assert_eq!(
-            reloaded.mapped_file_queue.get_max_offset(),
+            reloaded.mapped_file_queue.lock().get_max_offset(),
             ConsumeQueueExt::undecorate(second_addr) + restored.size() as i64
         );
     }
@@ -356,13 +350,14 @@ mod tests {
             .map(|index| ext.put(CqExtUnit::new(100 + index, 1000 + index, None)))
             .collect();
 
-        assert_eq!(ext.mapped_file_queue.get_mapped_files_size(), 2);
+        assert_eq!(ext.mapped_file_queue.lock().get_mapped_files_size(), 2);
 
         ext.truncate_by_min_address(addresses[4]);
 
-        assert_eq!(ext.mapped_file_queue.get_mapped_files_size(), 1);
+        assert_eq!(ext.mapped_file_queue.lock().get_mapped_files_size(), 1);
         let first_file = ext
             .mapped_file_queue
+            .lock()
             .get_first_mapped_file()
             .expect("remaining mapped file");
         assert_eq!(
@@ -388,5 +383,31 @@ mod tests {
         assert!(ext.get(first_addr, &mut first));
         assert!(ext.get(second_addr, &mut second));
         assert!(!ext.get(third_addr, &mut third));
+    }
+
+    #[test]
+    fn cloned_ext_instances_share_serialized_queue_state() {
+        let temp_dir = tempdir().unwrap();
+        let ext = new_test_ext(&temp_dir, 64);
+        let cloned = ext.clone();
+        let original = CqExtUnit::new(44, 404, Some(vec![4, 0, 4]));
+
+        let address = cloned.put(original.clone());
+
+        let mut restored = CqExtUnit::default();
+        assert!(ext.get(address, &mut restored));
+        assert_eq!(restored, original);
+        assert_eq!(ext.get_total_size(), cloned.get_total_size());
+    }
+
+    #[test]
+    fn consume_queue_ext_uses_explicit_safe_queue_ownership() {
+        let source = include_str!("consume_queue_ext.rs");
+        let forbidden_handle = concat!("Arc", "Mut");
+        let forbidden_escape = concat!("mut_from", "_ref");
+
+        assert!(!source.contains(forbidden_handle));
+        assert!(!source.contains(forbidden_escape));
+        assert!(source.contains("mapped_file_queue: Arc<Mutex<MappedFileQueue>>"));
     }
 }
