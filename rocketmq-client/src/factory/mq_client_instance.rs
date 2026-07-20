@@ -55,6 +55,10 @@ use crate::consumer::consumer_impl::pull_message_service::PullMessageService;
 use crate::consumer::consumer_impl::re_balance::rebalance_service::RebalanceService;
 use crate::consumer::mq_consumer_inner::MQConsumerInner;
 use crate::consumer::mq_consumer_inner::MQConsumerInnerImpl;
+use crate::factory::transport_health::emit_consumer_transport_event;
+use crate::factory::transport_health::ConsumerTransportEvent;
+use crate::factory::transport_health::ConsumerTransportOperation;
+use crate::factory::transport_health::ConsumerTransportOutcome;
 use crate::implementation::client_remoting_processor::ClientRemotingProcessor;
 use crate::implementation::find_broker_result::FindBrokerResult;
 use crate::implementation::mq_admin_impl::MQAdminImpl;
@@ -513,17 +517,35 @@ impl MQClientInstance {
                 .get_consumer_id_list_by_group(broker_addr.as_str(), group, self.client_config.mq_client_api_timeout)
                 .await
             {
-                Ok(value) => return Some(value),
+                Ok(value) => {
+                    self.emit_consumer_transport_event(
+                        group,
+                        ConsumerTransportOperation::ConsumerIdList,
+                        ConsumerTransportOutcome::Success,
+                    );
+                    return Some(value);
+                }
                 Err(e) => {
+                    self.emit_consumer_transport_event(
+                        group,
+                        ConsumerTransportOperation::ConsumerIdList,
+                        ConsumerTransportOutcome::Failure,
+                    );
                     warn!(
                         "getConsumerIdListByGroup exception,{}  {}, err:{}",
                         broker_addr,
                         group,
                         e.to_string()
                     );
+                    return None;
                 }
             }
         }
+        self.emit_consumer_transport_event(
+            group,
+            ConsumerTransportOperation::ConsumerIdList,
+            ConsumerTransportOutcome::Failure,
+        );
         None
     }
 
@@ -846,6 +868,8 @@ impl MQClientInstance {
             .send_heartbeat(addr, heartbeat_data, self.client_config.mq_client_api_timeout)
             .await
         {
+            self.emit_heartbeat_transport_event(ConsumerTransportOutcome::Success)
+                .await;
             let mut broker_version_table = self.broker_version_table.write().await;
             let map = broker_version_table.get_mut(broker_name);
             if let Some(map) = map {
@@ -872,7 +896,30 @@ impl MQClientInstance {
                 broker_name, id, addr
             )
         }
+        self.emit_heartbeat_transport_event(ConsumerTransportOutcome::Failure)
+            .await;
         false
+    }
+
+    fn emit_consumer_transport_event(
+        &self,
+        consumer_group: &CheetahString,
+        operation: ConsumerTransportOperation,
+        outcome: ConsumerTransportOutcome,
+    ) {
+        emit_consumer_transport_event(ConsumerTransportEvent {
+            client_id: self.client_id.to_string(),
+            consumer_group: consumer_group.to_string(),
+            operation,
+            outcome,
+        });
+    }
+
+    async fn emit_heartbeat_transport_event(&self, outcome: ConsumerTransportOutcome) {
+        let consumer_groups = self.consumer_table.read().await.keys().cloned().collect::<Vec<_>>();
+        for consumer_group in consumer_groups {
+            self.emit_consumer_transport_event(&consumer_group, ConsumerTransportOperation::Heartbeat, outcome);
+        }
     }
 
     async fn is_broker_in_name_server(&self, broker_name: &str) -> bool {

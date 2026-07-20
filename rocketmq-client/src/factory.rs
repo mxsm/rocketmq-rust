@@ -13,3 +13,4 @@
 // limitations under the License.
 
 pub mod mq_client_instance;
+pub mod transport_health;
