@@ -13,25 +13,37 @@
 // limitations under the License.
 
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::Weak;
 
 use cheetah_string::CheetahString;
-use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_arriving_listener::MessageArrivingListener;
 use rocketmq_store::base::message_store::MessageStore;
 
-use crate::broker_runtime::BrokerRuntimeInner;
+use crate::long_polling::long_polling_service::pull_request_hold_service::PullRequestHoldService;
+use crate::processor::notification_processor::NotificationProcessor;
+use crate::processor::pop_message_processor::PopMessageProcessor;
 
 pub struct NotifyMessageArrivingListener<MS: MessageStore> {
-    //pull_request_hold_service: ArcMut<PullRequestHoldService<MS>>,
-    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+    pull_request_hold_service: Weak<PullRequestHoldService<MS>>,
+    pop_message_processor: Weak<PopMessageProcessor<MS>>,
+    notification_processor: Weak<NotificationProcessor<MS>>,
 }
 
 impl<MS> NotifyMessageArrivingListener<MS>
 where
     MS: MessageStore + Send + Sync,
 {
-    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
-        Self { broker_runtime_inner }
+    pub fn new(
+        pull_request_hold_service: &Arc<PullRequestHoldService<MS>>,
+        pop_message_processor: &Arc<PopMessageProcessor<MS>>,
+        notification_processor: &Arc<NotificationProcessor<MS>>,
+    ) -> Self {
+        Self {
+            pull_request_hold_service: Arc::downgrade(pull_request_hold_service),
+            pop_message_processor: Arc::downgrade(pop_message_processor),
+            notification_processor: Arc::downgrade(notification_processor),
+        }
     }
 }
 
@@ -50,11 +62,8 @@ where
         filter_bit_map: Option<Vec<u8>>,
         properties: Option<&HashMap<CheetahString, CheetahString>>,
     ) {
-        self.broker_runtime_inner
-            .pull_request_hold_service()
-            .as_ref()
-            .unwrap()
-            .notify_message_arriving_ext(
+        if let Some(pull_request_hold_service) = self.pull_request_hold_service.upgrade() {
+            pull_request_hold_service.notify_message_arriving_ext(
                 topic,
                 queue_id,
                 logic_offset,
@@ -63,10 +72,10 @@ where
                 filter_bit_map.clone(),
                 properties,
             );
+        }
 
-        self.broker_runtime_inner
-            .pop_message_processor_unchecked()
-            .notify_message_arriving_full(
+        if let Some(pop_message_processor) = self.pop_message_processor.upgrade() {
+            pop_message_processor.notify_message_arriving_full(
                 topic.clone(),
                 queue_id,
                 tags_code,
@@ -74,10 +83,10 @@ where
                 filter_bit_map.clone(),
                 properties,
             );
+        }
 
-        self.broker_runtime_inner
-            .notification_processor_unchecked()
-            .notify_message_arriving(
+        if let Some(notification_processor) = self.notification_processor.upgrade() {
+            notification_processor.notify_message_arriving(
                 topic.clone(),
                 queue_id,
                 tags_code,
@@ -85,5 +94,6 @@ where
                 filter_bit_map,
                 properties,
             );
+        }
     }
 }
