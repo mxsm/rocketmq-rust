@@ -2192,12 +2192,35 @@ Broker auth admin handler ownership 随 Issue #8402 完成以下边界收敛：
 | `cargo fmt --all -- --check` / root workspace strict Clippy | 通过；root workspace 32 个 package 的 all-targets/all-features `-D warnings` profile 通过 |
 | runtime audit / AGENTS routing / `git diff --check` | runtime boundary 与 routing 通过；4 个 standalone Cargo、3 个 Node project、8 条 route；diff check 无 whitespace error |
 
-下一子切片 M11-12bb 配对拆分 transaction bridge/listener 与 TopicConfigManager runtime capability carrier；75/82 总进度
-不变，Store、compatibility、stable/Miri/Loom/soak/SLO 与完整候选快照 Gate 仍保持开放。
+## M11-12bb 实现
+
+Broker registration carrier ownership 随 Issue #8404 完成以下边界收敛：
+
+- `BrokerOuterAPI::register_broker_all` 删除从未读取的 `MS: MessageStore` 泛型和 `ArcMut<BrokerRuntimeInner<MS>>` 参数；三个 Broker 注册调用点不再复制完整 runtime owner 到 NameServer client boundary。
+- full registration 的 `TopicQueueMappingInfo` 采样直接生成 owned `HashMap`；`TopicConfigManager::build_serialize_wrapper_with_topic_queue_map` 直接接收并移动该 wire-compatible map，不再构造 `DashMap<CheetahString, ArcMut<TopicQueueMappingInfo>>` 后逐项重新克隆。
+- source contract 固定注册 API 签名不得重新引入 `BrokerRuntimeInner`、`ArcMut` 或 `MessageStore`；owned mapping 回归测试证明 key/value、epoch、queue count 与 broker identity 进入 wrapper 后保持不变。
+- reviewed baseline 从 429 identities / 1,071 occurrences 降至 426 / 1,066；production 从 259/580 降至 257/576，test 从 156/451 降至 155/450，compatibility 保持 14/40。Broker production 从 137/272 降至 135/268；净删除 2 个 production identity/4 occurrence 与 1 个 test identity/1 occurrence，无 fingerprint relocation，因此无需 ADR-013 临时 approval。
+
+## M11-12bb 验证
+
+| 命令 | 结果 |
+|---|---|
+| `cargo check -p rocketmq-broker --all-features` / Broker strict Clippy | 通过；注册 API、三个调用点和 owned mapping wrapper 在 all-features/all-targets 下编译和 lint 通过 |
+| owned registration focused tests | 新增 source/wrapper 2/2、TopicConfigManager 10/10、registration 4/4、need-register 2/2、wire request 1/1 通过；覆盖 API ownership、版本重采样、权限投影与 wire body |
+| `cargo test -p rocketmq-broker --all-features --lib -- --test-threads=1` | 589 passed、25 failed、1 ignored；25 个失败与 main 已登记失败名单一致，较 M11-12ba 增加的 2 个通过测试正是本切片回归测试，故未新增 baseline failure，也不能把全套记为通过 |
+| reviewed baseline reduction / `python scripts/arc_mut_guard.py` | baseline 429/1,071→426/1,066；无 relocation；guard 通过，production 257/576、test 155/450、compatibility 14/40，Broker production 135/268 |
+| ArcMut / architecture guard tests | ArcMut 67/67、fixtures 24/24、architecture dependency/release/performance 60/60 通过；target/baseline/release/performance profiles 全绿 |
+| `cargo fmt --all -- --check` / root workspace strict Clippy | 通过；root workspace 32 个 package 的 all-targets/all-features `-D warnings` profile 通过 |
+| runtime audit / AGENTS routing / `git diff --check` | runtime boundary 与 routing 通过；4 个 standalone Cargo、3 个 Node project、8 条 route；diff check 无 whitespace error |
+
+下一子切片 M11-12bc 将 TopicConfigManager 收敛为无 BrokerRuntime back-reference 的非泛型标准 Arc metadata owner，并由
+独立 coordinator 管理动态 policy、BlockingExecutor persistence、registration ordering 与 drain-before-unregister；随后为
+transaction bridge/listener 提供不隐藏 Runtime/Store ArcMut 的真实 capability。75/82 总进度不变，Store、compatibility、
+stable/Miri/Loom/soak/SLO 与完整候选快照 Gate 仍保持开放。
 
 ## 剩余切片与 Gate
 
-1. Broker BrokerRuntimeInner capability carrier、其他 admin/processor、transaction bridge/listener 与 TopicConfigManager runtime carrier（137/272）；下一子切片 M11-12bb 继续拆分 Broker owner。
+1. Broker BrokerRuntimeInner capability carrier、其他 admin/processor、transaction bridge/listener 与 TopicConfigManager runtime carrier（135/268）；下一子切片 M11-12bc 完成 TopicConfigManager owner/coordinator 前置边界。
 2. Store MappedFileQueue/ConsumeQueue、CommitLog/Flush、StoreHandle/Rocks/Timer 与 HA actor（122/308）。
 3. 删除 compatibility `arc_mut.rs` 和公开 re-export；移除其余 nightly feature，将 guard 切到 production/public zero。
 4. 对同一候选快照执行 stable feature matrix、Miri/Loom 可用切片、soak/SLO fault、dashboard/runbook、动态

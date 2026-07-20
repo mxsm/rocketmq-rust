@@ -369,13 +369,13 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
         topic_config_table: HashMap<CheetahString, TopicConfig>,
         data_version: DataVersion,
     ) -> TopicConfigAndMappingSerializeWrapper {
-        self.build_serialize_wrapper_with_topic_queue_map(topic_config_table, DashMap::new(), data_version)
+        self.build_serialize_wrapper_with_topic_queue_map(topic_config_table, HashMap::new(), data_version)
     }
 
     pub fn build_serialize_wrapper_with_topic_queue_map(
         &self,
         topic_config_table: HashMap<CheetahString, TopicConfig>,
-        topic_queue_mapping_info_map: DashMap<CheetahString, ArcMut<TopicQueueMappingInfo>>,
+        topic_queue_mapping_info_map: HashMap<CheetahString, TopicQueueMappingInfo>,
         data_version: DataVersion,
     ) -> TopicConfigAndMappingSerializeWrapper {
         TopicConfigAndMappingSerializeWrapper {
@@ -383,10 +383,7 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
                 topic_config_table,
                 data_version,
             },
-            topic_queue_mapping_info_map: topic_queue_mapping_info_map
-                .iter()
-                .map(|entry| (entry.key().clone(), (**entry.value()).clone()))
-                .collect(),
+            topic_queue_mapping_info_map,
             ..TopicConfigAndMappingSerializeWrapper::default()
         }
     }
@@ -1325,6 +1322,7 @@ mod tests {
     use rocketmq_common::common::broker::broker_config::BrokerConfig;
     use rocketmq_common::common::config::TopicConfig;
     use rocketmq_common::common::config_manager::ConfigManager;
+    use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_info::TopicQueueMappingInfo;
     use rocketmq_remoting::protocol::DataVersion;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
     use rocketmq_store::message_store::GenericMessageStore;
@@ -1348,6 +1346,20 @@ mod tests {
         );
         let manager = TopicConfigManager::new(runtime.inner_for_test().clone(), false);
         (temp_dir, manager)
+    }
+
+    #[test]
+    fn serialize_wrapper_preserves_owned_topic_queue_mapping_info() {
+        let (_temp_dir, manager) = test_topic_config_manager();
+        let topic = CheetahString::from_static_str("OwnedMappingTopic");
+        let mapping = TopicQueueMappingInfo::new(topic.clone(), 8, CheetahString::from_static_str("broker-a"), 7);
+        let wrapper = manager.build_serialize_wrapper_with_topic_queue_map(
+            HashMap::new(),
+            HashMap::from([(topic.clone(), mapping.clone())]),
+            DataVersion::default(),
+        );
+
+        assert_eq!(wrapper.topic_queue_mapping_info_map.get(&topic), Some(&mapping));
     }
 
     #[test]

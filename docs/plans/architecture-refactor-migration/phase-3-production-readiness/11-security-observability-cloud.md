@@ -519,6 +519,12 @@ M11-12ba 已从 11 个 auth/user admin handler 删除未使用的完整 BrokerRu
 M11-12bb 配对处理 transaction bridge/listener 与 TopicConfigManager runtime capability carrier；完整候选快照与 HUMAN
 Gate 仍未满足。
 
+M11-12bb 已删除 NameServer 注册客户端从未读取的 BrokerRuntime/MessageStore 泛型 carrier，并让
+TopicQueueMappingInfo 注册 payload 从采样到 wire wrapper 全程保持 owned `HashMap`。实际快照降至 257
+production/576 occurrences、155 test/450 occurrences，Broker owner 降至 135/268；compatibility 14/40 不增。
+下一子切片 M11-12bc 完成 TopicConfigManager 非泛型标准 Arc owner、独立持久化/注册 coordinator 与
+drain-before-unregister，再继续 transaction bridge/listener capability；完整候选快照与 HUMAN Gate 仍未满足。
+
 ## 公共兼容面
 
 - development/compatibility仍可显式选择；secure只作为新部署默认，不静默重解释旧配置。

@@ -15,7 +15,6 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use crate::broker_runtime::BrokerRuntimeInner;
 use crate::out_api::pull::build_pull_message_request;
 use crate::out_api::pull::decode_pull_response;
 use crate::out_api::pull::process_pull_response;
@@ -104,8 +103,6 @@ use rocketmq_remoting::rpc::rpc_request_header::RpcRequestHeader;
 use rocketmq_remoting::rpc::topic_request_header::TopicRequestHeader as RpcTopicRequestHeader;
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
 use rocketmq_remoting::runtime::RPCHook;
-use rocketmq_rust::ArcMut;
-use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::timer::timer_checkpoint::TimerCheckpointSnapshot;
 use rocketmq_store::timer::timer_metrics::TimerMetricsSerializeWrapper;
 use tracing::debug;
@@ -195,7 +192,7 @@ impl BrokerOuterAPI {
         self.remoting_client.update_name_server_address_list(address_list).await;
     }
 
-    pub async fn register_broker_all<MS: MessageStore>(
+    pub async fn register_broker_all(
         &self,
         cluster_name: CheetahString,
         broker_addr: CheetahString,
@@ -210,7 +207,6 @@ impl BrokerOuterAPI {
         compressed: bool,
         heartbeat_timeout_millis: Option<i64>,
         _broker_identity: BrokerIdentity,
-        _broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
     ) -> Vec<RegisterBrokerResult> {
         let mut name_server_address_list = self.remoting_client.get_available_name_srv_list();
         if name_server_address_list.is_empty() {
@@ -1666,6 +1662,23 @@ mod tests {
     use rocketmq_remoting::protocol::route::route_data_view::BrokerData;
 
     use super::*;
+
+    #[test]
+    fn broker_registration_api_does_not_accept_runtime_ownership() {
+        let source = include_str!("broker_outer_api.rs");
+        let signature_start = source
+            .find("pub async fn register_broker_all(")
+            .expect("register_broker_all signature should exist");
+        let signature_end = source[signature_start..]
+            .find("    ) -> Vec<RegisterBrokerResult>")
+            .map(|offset| signature_start + offset)
+            .expect("register_broker_all signature should have the expected return type");
+        let signature = &source[signature_start..signature_end];
+
+        assert!(!signature.contains("BrokerRuntimeInner"));
+        assert!(!signature.contains("ArcMut"));
+        assert!(!signature.contains("MessageStore"));
+    }
 
     #[test]
     fn dns_lookup_address_by_domain_returns_correct_addresses() {
