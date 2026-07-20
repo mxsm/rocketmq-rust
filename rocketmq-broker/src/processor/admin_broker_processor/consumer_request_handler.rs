@@ -1178,8 +1178,8 @@ mod tests {
         let mut runtime = new_test_runtime("broker-consume-stats").await;
         let mut inner = runtime.inner_for_test().clone();
         let _ = inner
-            .topic_config_manager_mut()
-            .update_topic_config(TopicConfig::with_queues("topic-a", 1, 1));
+            .topic_config_manager()
+            .update_topic_config(TopicConfig::with_queues("topic-a", 1, 1), 0);
         let mut group_config =
             rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig::new(
                 CheetahString::from_static_str("group-a"),
@@ -1232,10 +1232,10 @@ mod tests {
     #[tokio::test]
     async fn query_correction_offset_marks_queue_as_max_when_compare_group_is_ahead() {
         let mut runtime = new_test_runtime("query-correction").await;
-        let mut inner = runtime.inner_for_test().clone();
+        let inner = runtime.inner_for_test().clone();
         let _ = inner
-            .topic_config_manager_mut()
-            .update_topic_config(TopicConfig::with_queues("topic-a", 1, 1));
+            .topic_config_manager()
+            .update_topic_config(TopicConfig::with_queues("topic-a", 1, 1), 0);
         inner.consumer_offset_manager().commit_offset(
             CheetahString::from_static_str("127.0.0.1"),
             &CheetahString::from_static_str("group-a"),
@@ -1289,8 +1289,8 @@ mod tests {
         let mut runtime = new_test_runtime("consume-message-directly").await;
         let mut inner = runtime.inner_for_test().clone();
         let _ = inner
-            .topic_config_manager_mut()
-            .update_topic_config(TopicConfig::with_queues("topic-a", 1, 1));
+            .topic_config_manager()
+            .update_topic_config(TopicConfig::with_queues("topic-a", 1, 1), 0);
         let mut group_config =
             rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig::new(
                 CheetahString::from_static_str("group-a"),
@@ -1338,8 +1338,8 @@ mod tests {
         let mut runtime = new_test_runtime("reset-offset").await;
         let mut inner = runtime.inner_for_test().clone();
         let _ = inner
-            .topic_config_manager_mut()
-            .update_topic_config(TopicConfig::with_queues("topic-a", 1, 1));
+            .topic_config_manager()
+            .update_topic_config(TopicConfig::with_queues("topic-a", 1, 1), 0);
         let mut group_config =
             rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig::new(
                 CheetahString::from_static_str("group-a"),
@@ -1490,10 +1490,10 @@ mod tests {
     #[tokio::test]
     async fn query_consume_time_span_returns_queue_metadata() {
         let mut runtime = new_test_runtime("consume-time-span").await;
-        let mut inner = runtime.inner_for_test().clone();
+        let inner = runtime.inner_for_test().clone();
         let _ = inner
-            .topic_config_manager_mut()
-            .update_topic_config(TopicConfig::with_queues("topic-a", 1, 1));
+            .topic_config_manager()
+            .update_topic_config(TopicConfig::with_queues("topic-a", 1, 1), 0);
 
         let mut handler = ConsumerRequestHandler::new(inner);
         let mut request = RemotingCommand::create_request_command(
@@ -1538,10 +1538,10 @@ mod tests {
     #[tokio::test]
     async fn clone_group_offset_copies_offsets_from_source_group() {
         let mut runtime = new_test_runtime("clone-offset").await;
-        let mut inner = runtime.inner_for_test().clone();
+        let inner = runtime.inner_for_test().clone();
         let _ = inner
-            .topic_config_manager_mut()
-            .update_topic_config(TopicConfig::with_queues("topic-a", 1, 1));
+            .topic_config_manager()
+            .update_topic_config(TopicConfig::with_queues("topic-a", 1, 1), 0);
         inner.consumer_offset_manager().commit_offset(
             CheetahString::from_static_str("127.0.0.1"),
             &CheetahString::from_static_str("group-src"),

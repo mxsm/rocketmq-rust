@@ -264,16 +264,14 @@ where
                 0
             };
             let new_topic = CheetahString::from_string(mix_all::get_retry_topic(consumer_data.group_name.as_str()));
-            self.broker_runtime_inner
-                .topic_config_manager_mut()
-                .create_topic_in_send_message_back_method(
-                    &new_topic,
-                    subscription_group_config.retry_queue_nums(),
-                    PermName::PERM_WRITE | PermName::PERM_READ,
-                    has_order_topic_sub,
-                    topic_sys_flag,
-                )
-                .await;
+            crate::broker_runtime::create_topic_in_send_message_back!(
+                self.broker_runtime_inner.clone(),
+                &new_topic,
+                subscription_group_config.retry_queue_nums(),
+                PermName::PERM_WRITE | PermName::PERM_READ,
+                has_order_topic_sub,
+                topic_sys_flag,
+            );
             let changed = self.broker_runtime_inner.consumer_manager().register_consumer(
                 consumer_data.group_name.as_ref(),
                 client_channel_info.clone(),
@@ -355,16 +353,14 @@ where
                 0
             };
             let new_topic = CheetahString::from_string(mix_all::get_retry_topic(consumer_data.group_name.as_str()));
-            self.broker_runtime_inner
-                .topic_config_manager_mut()
-                .create_topic_in_send_message_back_method(
-                    &new_topic,
-                    subscription_group_config.retry_queue_nums(),
-                    PermName::PERM_WRITE | PermName::PERM_READ,
-                    has_order_topic_sub,
-                    topic_sys_flag,
-                )
-                .await;
+            crate::broker_runtime::create_topic_in_send_message_back!(
+                self.broker_runtime_inner.clone(),
+                &new_topic,
+                subscription_group_config.retry_queue_nums(),
+                PermName::PERM_WRITE | PermName::PERM_READ,
+                has_order_topic_sub,
+                topic_sys_flag,
+            );
 
             let changed = if heartbeat_data.is_without_sub {
                 self.broker_runtime_inner

@@ -647,8 +647,8 @@ mod tests {
         let mut runtime = new_test_runtime("query-consume-queue").await;
         let mut inner = runtime.inner_for_test().clone();
         let _ = inner
-            .topic_config_manager_mut()
-            .update_topic_config(TopicConfig::with_queues("topic-a", 1, 1));
+            .topic_config_manager()
+            .update_topic_config(TopicConfig::with_queues("topic-a", 1, 1), 0);
         inner
             .message_store_mut()
             .as_mut()

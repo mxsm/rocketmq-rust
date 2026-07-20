@@ -1139,18 +1139,14 @@ where
                 let topic_ = CheetahString::from_string(mix_all::get_dlq_topic(group_name.as_str()));
                 new_topic = &topic_;
                 let queue_id_int = self.inner.random_queue_id(retry_config::DLQ_NUMS_PER_GROUP) as i32;
-                let new_topic_config = self
-                    .inner
-                    .broker_runtime_inner
-                    .topic_config_manager_mut()
-                    .create_topic_in_send_message_back_method(
-                        new_topic,
-                        retry_config::DLQ_NUMS_PER_GROUP as i32,
-                        PermName::PERM_WRITE | PermName::PERM_READ,
-                        false,
-                        0,
-                    )
-                    .await;
+                let new_topic_config = crate::broker_runtime::create_topic_in_send_message_back!(
+                    self.inner.broker_runtime_inner.clone(),
+                    new_topic,
+                    retry_config::DLQ_NUMS_PER_GROUP as i32,
+                    PermName::PERM_WRITE | PermName::PERM_READ,
+                    false,
+                    0,
+                );
                 msg.message.set_topic(new_topic.clone());
                 msg.queue_id = queue_id_int;
                 msg.message.set_delay_time_level(0);
@@ -1442,17 +1438,14 @@ where
         } else {
             0
         };
-        let topic_config = self
-            .broker_runtime_inner
-            .topic_config_manager_mut()
-            .create_topic_in_send_message_back_method(
-                &new_topic,
-                subscription_group_config.retry_queue_nums(),
-                PermName::PERM_WRITE | PermName::PERM_READ,
-                false,
-                topic_sys_flag,
-            )
-            .await;
+        let topic_config = crate::broker_runtime::create_topic_in_send_message_back!(
+            self.broker_runtime_inner.clone(),
+            &new_topic,
+            subscription_group_config.retry_queue_nums(),
+            PermName::PERM_WRITE | PermName::PERM_READ,
+            false,
+            topic_sys_flag,
+        );
         if topic_config.is_none() {
             return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
                 ResponseCode::SystemError,
@@ -1513,17 +1506,14 @@ where
         let is_dlq = if msg_ext.reconsume_times >= max_reconsume_times || delay_level < 0 {
             new_topic = CheetahString::from_string(mix_all::get_dlq_topic(&request_header.group));
             queue_id_int = 0;
-            let topic_config_inner = self
-                .broker_runtime_inner
-                .topic_config_manager_mut()
-                .create_topic_in_send_message_back_method(
-                    &new_topic,
-                    retry_config::DLQ_NUMS_PER_GROUP as i32,
-                    PermName::PERM_WRITE | PermName::PERM_READ,
-                    false,
-                    0,
-                )
-                .await;
+            let topic_config_inner = crate::broker_runtime::create_topic_in_send_message_back!(
+                self.broker_runtime_inner.clone(),
+                &new_topic,
+                retry_config::DLQ_NUMS_PER_GROUP as i32,
+                PermName::PERM_WRITE | PermName::PERM_READ,
+                false,
+                0,
+            );
             if topic_config_inner.is_none() {
                 return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
                     ResponseCode::SystemError,
@@ -1769,30 +1759,24 @@ where
                 request_header.topic(),
                 channel.remote_address(),
             );
-            topic_config = self
-                .broker_runtime_inner
-                .topic_config_manager_mut()
-                .create_topic_in_send_message_method(
-                    &request_header.topic,
-                    &request_header.default_topic,
-                    channel.remote_address(),
-                    request_header.default_topic_queue_nums,
-                    topic_sys_flag,
-                )
-                .await;
+            topic_config = crate::broker_runtime::create_topic_in_send_message!(
+                self.broker_runtime_inner.clone(),
+                &request_header.topic,
+                &request_header.default_topic,
+                channel.remote_address(),
+                request_header.default_topic_queue_nums,
+                topic_sys_flag,
+            );
 
             if topic_config.is_none() && request_header.topic.starts_with(RETRY_GROUP_TOPIC_PREFIX) {
-                topic_config = self
-                    .broker_runtime_inner
-                    .topic_config_manager_mut()
-                    .create_topic_in_send_message_back_method(
-                        request_header.topic.as_ref(),
-                        1,
-                        PermName::PERM_WRITE | PermName::PERM_READ,
-                        false,
-                        topic_sys_flag,
-                    )
-                    .await;
+                topic_config = crate::broker_runtime::create_topic_in_send_message_back!(
+                    self.broker_runtime_inner.clone(),
+                    request_header.topic.as_ref(),
+                    1,
+                    PermName::PERM_WRITE | PermName::PERM_READ,
+                    false,
+                    topic_sys_flag,
+                );
             }
 
             if topic_config.is_none() {

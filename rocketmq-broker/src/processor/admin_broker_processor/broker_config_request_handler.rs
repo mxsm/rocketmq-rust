@@ -1030,8 +1030,8 @@ mod tests {
         {
             let inner_mut = runtime.inner_for_test();
             let _ = inner_mut
-                .topic_config_manager_mut()
-                .update_topic_config(TopicConfig::with_queues(topic.clone(), 2, 4));
+                .topic_config_manager()
+                .update_topic_config(TopicConfig::with_queues(topic.clone(), 2, 4), 0);
             inner_mut.consumer_offset_manager().commit_offset(
                 CheetahString::from_static_str("127.0.0.1:10911"),
                 &group,
