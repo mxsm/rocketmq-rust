@@ -3100,7 +3100,6 @@ impl BrokerRuntime {
                 false,
                 None,
                 Default::default(),
-                self.inner.clone(),
             )
             .await;
     }
@@ -3233,7 +3232,6 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
                     .enable_slave_acting_master
                     .then_some(this.broker_config.broker_not_active_timeout_millis),
                 Default::default(), //optimize
-                this.clone(),
             )
             .await;
         this.handle_register_broker_result(result, check_order_config).await;
@@ -4096,7 +4094,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             .map(|kv| {
                 (
                     kv.key().clone(),
-                    ArcMut::new(TopicQueueMappingDetail::clone_as_mapping_info(kv.value().as_ref())),
+                    TopicQueueMappingDetail::clone_as_mapping_info(kv.value().as_ref()),
                 )
             })
             .collect();
@@ -4144,7 +4142,6 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             this.broker_config.broker_ip1, this.broker_config.broker_server_config.listen_port
         ));
         let broker_id = this.broker_config.broker_identity.broker_id;
-        let this_ = this.clone();
         this.broker_outer_api
             .register_broker_all(
                 cluster_name,
@@ -4160,7 +4157,6 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
                 false,
                 None,
                 Default::default(),
-                this_,
             )
             .await;
     }
