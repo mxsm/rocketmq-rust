@@ -1,7 +1,7 @@
 # 架构重构剩余任务盘点
 
 > 盘点日期：2026-07-20
-> 代码基线：Issue #8414 / M11-12bc5 完成后
+> 代码基线：Issue #8416 / M11-12bc6 完成后
 > 统计规则：82 个顶层 `PR-Mxx-yy` 工作包与 M11-12 内部实施切片分开统计，禁止重复计数。
 
 ## 结论
@@ -19,19 +19,19 @@ owner 清零、compatibility 删除和同一候选快照验收。
 
 ## PR-M11-12 剩余实现
 
-Issue #8414 后 reviewed ArcMut baseline 为 413 identities / 1,044 occurrences：production 246/556、test
-153/448、compatibility 14/40。production 全部分布在 Broker 与 Store。
+Issue #8416 后 reviewed ArcMut baseline 为 408 identities / 1,036 occurrences：production 242/549、test
+152/447、compatibility 14/40。production 全部分布在 Broker 与 Store。
 
 | owner | 剩余 identity / occurrence | 完成条件 |
 |---|---:|---|
-| Broker | 124 / 248 | transaction bridge、Producer/ColdData admin leaf 已退出完整 runtime owner；继续让显式 Store 兼容边界、BrokerRuntime aggregate carrier、其余 admin/processor/service 不再传播不安全共享可变 owner |
+| Broker | 120 / 241 | transaction bridge、Producer/ColdData admin leaf 与 Schedule hook 已退出完整 runtime owner；继续让显式 Store 兼容边界、BrokerRuntime aggregate carrier、其余 admin/processor/service 不再传播不安全共享可变 owner |
 | Store | 122 / 308 | MessageStore、CommitLog/Flush、ConsumeQueue、Rocks/Timer 与 HA 生命周期改为独占 owner、标准 Arc/Weak 或显式 actor/锁边界 |
 | compatibility | 14 / 40 | 删除 `rocketmq/src/arc_mut.rs` production/public re-export 与兼容入口 |
 
 建议按以下最小可审查批次继续推进；它们是 PR-M11-12 的内部切片，不增加 82 个顶层工作包总数：
 
-1. Broker aggregate：收窄 `BrokerRuntimeInner`、processor variant 和启动 carrier（热点文件 `broker_runtime.rs` 为 7/48）；下一子切片优先拆除 MessageStore Schedule hook 对完整 runtime 的强保活环。
-2. Broker leaf：完成其余 admin/processor/revive/slave/offset leaf owner；transaction bridge 已由 M11-12bc4 收窄，Producer/ColdData admin handler 已由 M11-12bc5 改持 live registry/standard Arc capability。
+1. Broker aggregate：收窄 `BrokerRuntimeInner`、processor variant 和启动 carrier（热点文件 `broker_runtime.rs` 为 7/47）；Schedule hook 强保活环已拆除，下一子切片继续清理只读取少量能力的 admin/processor leaf。
+2. Broker leaf：完成其余 admin/processor/revive/slave/offset leaf owner；transaction bridge 已由 M11-12bc4 收窄，Producer/ColdData admin handler 已由 M11-12bc5 改持 live registry/standard Arc capability，Schedule hook 已由 M11-12bc6 改持三项显式能力。
 3. Store WAL：收口 Local/Rocks MessageStore、CommitLog 与 Flush manager，并替换 transaction 的直接 Store 兼容 owner。
 4. Store queue：收口 ConsumeQueue、queue store、index/mapped-file carrier。
 5. Store timer/HA：收口 Timer、Default/General/AutoSwitch HA service、client 与 connection actor。
@@ -49,6 +49,11 @@ EscapeBridge 使用窄标准 `Arc` capability；原有 2 个 ArcMut identity / 3
 M11-12bc5 将 Producer 查询与 ColdData 管理 handler 从完整 runtime owner 收窄为 live producer registry 和标准
 `Arc<ColdDataCgCtrService>`。production 净删除 4 identities / 6 occurrences；ColdData 测试 glob 不再传递导入
 ArcMut，额外删除 test 1/1，因此 reviewed 总量降至 413/1,044，无 relocation，compatibility 不增。
+
+M11-12bc6 将 MessageStore 的 Schedule hook 从完整 runtime owner 收窄为 `MessageStoreConfig`、可选
+`TimerMessageStore` 与标准 `Arc<ScheduleMessageService>`；helper 只接收配置、timer 借用和实时最大延迟级别，
+注册不再复制 runtime owner。production 净删除 4 identities / 7 occurrences，测试 glob 额外删除 test 1/1，
+因此 reviewed 总量降至 408/1,036，无 relocation，compatibility 不增。
 
 ## PR-M12 剩余工作包
 

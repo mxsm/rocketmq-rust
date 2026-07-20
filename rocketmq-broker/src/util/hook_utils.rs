@@ -30,7 +30,6 @@ use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_common::utils::queue_type_utils::QueueTypeUtils;
 use rocketmq_common::MessageDecoder::message_properties_to_string;
 use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
@@ -40,7 +39,6 @@ use rocketmq_store::timer::timer_message_store::TimerMessageStore;
 use tracing::error;
 use tracing::warn;
 
-use crate::broker_runtime::BrokerRuntimeInner;
 use crate::out_api::broker_outer_api::BrokerOuterAPI;
 use crate::schedule::schedule_message_service::delay_level_to_queue_id;
 
@@ -139,28 +137,32 @@ impl HookUtils {
         None
     }
 
-    pub fn handle_schedule_message<MS: MessageStore>(
-        broker_runtime_inner: &ArcMut<BrokerRuntimeInner<MS>>,
+    pub fn handle_schedule_message(
+        message_store_config: &MessageStoreConfig,
+        timer_message_store: Option<&TimerMessageStore>,
+        max_delay_level: i32,
         msg: &mut MessageExtBrokerInner,
     ) -> Option<PutMessageResult> {
         let tran_type = MessageSysFlag::get_transaction_value(msg.sys_flag());
         if tran_type == MessageSysFlag::TRANSACTION_NOT_TYPE || tran_type == MessageSysFlag::TRANSACTION_COMMIT_TYPE {
             if !Self::is_rolled_timer_message(msg) && Self::check_if_timer_message(msg) {
-                if !broker_runtime_inner.message_store_config().timer_wheel_enable {
+                if !message_store_config.timer_wheel_enable {
                     // wheel timer is not enabled, reject the message
                     return Some(PutMessageResult::new_default(PutMessageStatus::WheelTimerNotEnable));
                 }
-                if let Some(transform_res) = Self::transform_timer_message(
-                    broker_runtime_inner.timer_message_store_unchecked(),
-                    broker_runtime_inner.message_store_config(),
-                    msg,
-                ) {
+                let Some(timer_message_store) = timer_message_store else {
+                    warn!("timer message store is unavailable while timer wheel is enabled");
+                    return Some(PutMessageResult::new_default(PutMessageStatus::WheelTimerNotEnable));
+                };
+                if let Some(transform_res) =
+                    Self::transform_timer_message(timer_message_store, message_store_config, msg)
+                {
                     return Some(transform_res);
                 }
             }
             // Delay Delivery
             if msg.message_ext_inner.message.delay_time_level() > 0 {
-                Self::transform_delay_level_message(broker_runtime_inner, msg);
+                Self::transform_delay_level_message(max_delay_level, msg);
             }
         }
         None
@@ -301,22 +303,11 @@ impl HookUtils {
     ///
     /// # Arguments
     ///
-    /// * `broker_runtime_inner` - Reference to the broker runtime that contains the schedule
-    ///   message service
+    /// * `max_delay_level` - Current maximum delay level from the schedule message service
     /// * `msg` - Mutable reference to the message to be transformed
-    ///
-    /// # Type Parameters
-    ///
-    /// * `MS` - A type that implements the `MessageStore` trait
-    pub fn transform_delay_level_message<MS: MessageStore>(
-        broker_runtime_inner: &ArcMut<BrokerRuntimeInner<MS>>,
-        msg: &mut MessageExtBrokerInner,
-    ) {
-        let schedule_message_service = broker_runtime_inner.schedule_message_service();
-        if msg.message_ext_inner.message.delay_time_level() > schedule_message_service.get_max_delay_level() {
-            msg.message_ext_inner
-                .message
-                .set_delay_time_level(schedule_message_service.get_max_delay_level());
+    pub fn transform_delay_level_message(max_delay_level: i32, msg: &mut MessageExtBrokerInner) {
+        if msg.message_ext_inner.message.delay_time_level() > max_delay_level {
+            msg.message_ext_inner.message.set_delay_time_level(max_delay_level);
         }
 
         // Backup real topic, queueId
@@ -540,5 +531,72 @@ mod tests {
         assert!(msg
             .property(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DELIVER_MS))
             .is_none());
+    }
+
+    #[test]
+    fn handle_schedule_message_rejects_timer_message_when_timer_wheel_is_disabled() {
+        let message_store_config = MessageStoreConfig::default();
+        let mut msg = MessageExtBrokerInner::default();
+        msg.set_topic(CheetahString::from_static_str("timer_topic"));
+        msg.put_property(
+            CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DELAY_MS),
+            CheetahString::from_static_str("1000"),
+        );
+
+        let result = HookUtils::handle_schedule_message(&message_store_config, None, 18, &mut msg);
+
+        assert_eq!(
+            result.unwrap().put_message_status(),
+            PutMessageStatus::WheelTimerNotEnable
+        );
+    }
+
+    #[test]
+    fn handle_schedule_message_rejects_timer_message_when_timer_store_is_unavailable() {
+        let message_store_config = MessageStoreConfig {
+            timer_wheel_enable: true,
+            ..MessageStoreConfig::default()
+        };
+        let mut msg = MessageExtBrokerInner::default();
+        msg.set_topic(CheetahString::from_static_str("timer_topic"));
+        msg.put_property(
+            CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DELAY_MS),
+            CheetahString::from_static_str("1000"),
+        );
+
+        let result = HookUtils::handle_schedule_message(&message_store_config, None, 18, &mut msg);
+
+        assert_eq!(
+            result.unwrap().put_message_status(),
+            PutMessageStatus::WheelTimerNotEnable
+        );
+    }
+
+    #[test]
+    fn handle_schedule_message_uses_current_max_delay_level_and_rewrites_destination() {
+        let message_store_config = MessageStoreConfig::default();
+        let mut msg = MessageExtBrokerInner::default();
+        msg.set_topic(CheetahString::from_static_str("delay_topic"));
+        msg.message_ext_inner.queue_id = 4;
+        msg.set_delay_time_level(12);
+
+        let result = HookUtils::handle_schedule_message(&message_store_config, None, 3, &mut msg);
+
+        assert!(result.is_none());
+        assert_eq!(msg.delay_time_level(), 3);
+        assert_eq!(msg.topic().as_str(), TopicValidator::RMQ_SYS_SCHEDULE_TOPIC);
+        assert_eq!(msg.message_ext_inner.queue_id, delay_level_to_queue_id(3));
+        assert_eq!(
+            msg.property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC))
+                .as_ref()
+                .map(CheetahString::as_str),
+            Some("delay_topic")
+        );
+        assert_eq!(
+            msg.property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_QUEUE_ID))
+                .as_ref()
+                .map(CheetahString::as_str),
+            Some("4")
+        );
     }
 }
