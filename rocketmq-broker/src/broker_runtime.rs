@@ -2199,12 +2199,20 @@ impl BrokerRuntime {
     pub fn register_message_store_hook(&mut self) {
         let config = self.inner.message_store_config.clone();
         let topic_config_table = self.inner.topic_config_manager().topic_config_table();
-        let broker_runtime_inner = ArcMut::clone(&self.inner);
+        let timer_message_store = self.inner.timer_message_store().cloned();
+        let schedule_message_service = self.inner.schedule_message_service().clone();
         if let Some(ref mut message_store) = self.inner.message_store {
             let message_store_clone = message_store.clone();
-            message_store.set_put_message_hook(Box::new(CheckBeforePutMessageHook::new(message_store_clone, config)));
+            message_store.set_put_message_hook(Box::new(CheckBeforePutMessageHook::new(
+                message_store_clone,
+                config.clone(),
+            )));
             message_store.set_put_message_hook(Box::new(BatchCheckBeforePutMessageHook::new(topic_config_table)));
-            message_store.set_put_message_hook(Box::new(ScheduleMessageHook::new(broker_runtime_inner)))
+            message_store.set_put_message_hook(Box::new(ScheduleMessageHook::new(
+                config,
+                timer_message_store,
+                schedule_message_service,
+            )))
         }
     }
 
@@ -6629,6 +6637,17 @@ accounts:
         let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
         assert!(runtime.initialize().await);
         runtime
+    }
+
+    #[tokio::test]
+    async fn registering_message_store_hooks_does_not_retain_runtime_root() {
+        let mut runtime = new_phase3_test_runtime("schedule-hook-ownership").await;
+        let strong_count_before = runtime.inner.strong_count();
+
+        runtime.register_message_store_hook();
+
+        assert_eq!(runtime.inner.strong_count(), strong_count_before);
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }
 
     #[cfg(feature = "tieredstore")]

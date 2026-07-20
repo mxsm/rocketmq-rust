@@ -12,24 +12,37 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::Arc;
+
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_common::common::message::MessageTrait;
-use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::base::message_store::MessageStore;
+use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use rocketmq_store::hook::put_message_hook::PutMessageHook;
+use rocketmq_store::timer::timer_message_store::TimerMessageStore;
 use tracing::warn;
 
-use crate::broker_runtime::BrokerRuntimeInner;
+use crate::schedule::schedule_message_service::ScheduleMessageService;
 use crate::util::hook_utils::HookUtils;
 
 pub struct ScheduleMessageHook<MS: MessageStore> {
-    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+    message_store_config: Arc<MessageStoreConfig>,
+    timer_message_store: Option<Arc<TimerMessageStore>>,
+    schedule_message_service: Arc<ScheduleMessageService<MS>>,
 }
 
 impl<MS: MessageStore> ScheduleMessageHook<MS> {
-    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
-        Self { broker_runtime_inner }
+    pub fn new(
+        message_store_config: Arc<MessageStoreConfig>,
+        timer_message_store: Option<Arc<TimerMessageStore>>,
+        schedule_message_service: Arc<ScheduleMessageService<MS>>,
+    ) -> Self {
+        Self {
+            message_store_config,
+            timer_message_store,
+            schedule_message_service,
+        }
     }
 }
 
@@ -46,10 +59,42 @@ impl<MS: MessageStore> PutMessageHook for ScheduleMessageHook<MS> {
         // so we log a warning and return None to indicate that no further processing
         // can be performed for this message.
         if let Some(msg) = msg.as_any_mut().downcast_mut::<MessageExtBrokerInner>() {
-            HookUtils::handle_schedule_message(&self.broker_runtime_inner, msg)
+            HookUtils::handle_schedule_message(
+                self.message_store_config.as_ref(),
+                self.timer_message_store.as_deref(),
+                self.schedule_message_service.get_max_delay_level(),
+                msg,
+            )
         } else {
             warn!("Message is not of type MessageExtBrokerInner");
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn schedule_hook_source_depends_only_on_explicit_capabilities() {
+        let hook_source = include_str!("schedule_message_hook.rs");
+        let helper_source = include_str!("../util/hook_utils.rs");
+        let forbidden = [
+            concat!("rocketmq_", "rust"),
+            concat!("Broker", "Runtime", "Inner"),
+            concat!("Arc", "Mut"),
+        ];
+
+        for source in [hook_source, helper_source] {
+            for identifier in forbidden {
+                assert!(
+                    !source.contains(identifier),
+                    "schedule hook boundary contains forbidden dependency {identifier}"
+                );
+            }
+        }
+        assert!(hook_source.contains("message_store_config: Arc<MessageStoreConfig>"));
+        assert!(hook_source.contains("timer_message_store: Option<Arc<TimerMessageStore>>"));
+        assert!(hook_source.contains("schedule_message_service: Arc<ScheduleMessageService<MS>>"));
+        assert!(hook_source.contains("self.schedule_message_service.get_max_delay_level()"));
     }
 }

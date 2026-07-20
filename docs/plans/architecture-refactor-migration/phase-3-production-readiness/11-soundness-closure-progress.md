@@ -2342,9 +2342,33 @@ Broker admin leaf capability 随 Issue #8414 完成以下 owner 收敛：
 下一子切片 M11-12bc6 拆除 MessageStore Schedule hook 对完整 BrokerRuntimeInner 的强保活环，只注入
 MessageStoreConfig、TimerMessageStore 与 ScheduleMessageService capability；75/82 总进度不变。
 
+## M11-12bc6 实现
+
+Schedule hook runtime ownership 随 Issue #8416 完成以下 capability 收敛：
+
+- `ScheduleMessageHook` 删除完整 `ArcMut<BrokerRuntimeInner<MS>>` owner，改持 `Arc<MessageStoreConfig>`、可选 `Arc<TimerMessageStore>` 与标准 `Arc<ScheduleMessageService<MS>>`。MessageStore 不再经 hook 强保活 Broker aggregate，`BrokerRuntimeInner → MessageStore → Hook → BrokerRuntimeInner` 环被拆除。
+- `HookUtils::handle_schedule_message` 与 delay-level transform 删除 runtime 参数和泛型，只接收配置、timer 借用、当前最大延迟级别与消息；hook 每次执行仍从共享 Schedule service 读取实时 max level，保留 transaction gate、timer 校验/重写及固定延迟 Topic/queue/property 语义。
+- timer wheel 已启用但 Timer store capability 缺失时返回既有 `WheelTimerNotEnable` 状态并记录警告，不再依赖 aggregate unchecked accessor；timer wheel 禁用时的既有拒绝状态保持不变。
+- `register_message_store_hook` 在注册前采样三项能力，不再 `ArcMut::clone` runtime。源码 contract 禁止 hook/helper 重新引入完整 runtime/ArcMut，重复注册强引用计数回归直接证明 runtime root 不会被 Hook 保留。
+- reviewed baseline 从 413 identities / 1,044 occurrences 降至 408 / 1,036；production 从 246/556 降至 242/549，test 从 153/448 降至 152/447，compatibility 保持 14/40。Broker production 从 124/248 降至 120/241；净删除 4 个 production identity/7 occurrence 与 1 个 test glob identity/1 occurrence，无 relocation。
+
+## M11-12bc6 验证
+
+| 命令 | 结果 |
+|---|---|
+| Broker check / strict Clippy | `cargo check -p rocketmq-broker --all-targets --all-features` 与 Broker all-target/all-feature strict Clippy 通过 |
+| Schedule hook focused tests | HookUtils 9/9、source capability contract 1/1、runtime strong-count ownership 1/1 通过；覆盖 timer disabled/missing、timer transformation、实时 max delay 输入、目标重写和无 runtime 回边 |
+| `cargo test -p rocketmq-broker --all-features --lib -- --test-threads=1` | 605 passed、25 failed、1 ignored；25 项与 main 已登记失败集合一致，本切片新增 5 个测试全部通过且未新增失败名称，因此全套仍如实记为基线复现而非通过 |
+| reviewed baseline / fixtures | `--apply-reviewed-reductions` 精确删除 5 identity/8 occurrence；`python scripts/arc_mut_guard.py`、24/24 fixtures 与 67/67 guard tests 通过，无 relocation/临时 approval |
+| runtime / architecture guards | enforcing runtime audit、dependency fixtures/target/baseline、release、8-profile performance、architecture 60/60 与 AGENTS routing 通过 |
+| root workspace final gates | `cargo fmt --all -- --check`、`git diff --check` 与 workspace all-target/all-feature strict Clippy 通过；Windows linker stdout 与既有 future-incompatibility note 不受 `-D warnings` 管辖 |
+
+下一子切片 M11-12bc7 继续收窄只读取少量能力的 Broker admin/processor leaf，随后进入 Store WAL/queue/timer/HA
+owner 清零；75/82 总进度不变。
+
 ## 剩余切片与 Gate
 
-1. Broker BrokerRuntimeInner capability carrier 与其他 admin/processor/leaf owner（124/248）；transaction bridge、Producer/ColdData admin leaf 已退出完整 runtime owner，显式 Store 兼容 owner 留待 Store 批次删除。
+1. Broker BrokerRuntimeInner capability carrier 与其他 admin/processor/leaf owner（120/241）；transaction bridge、Producer/ColdData admin leaf 与 Schedule hook 已退出完整 runtime owner，显式 Store 兼容 owner 留待 Store 批次删除。
 2. Store MappedFileQueue/ConsumeQueue、CommitLog/Flush、StoreHandle/Rocks/Timer 与 HA actor（122/308）。
 3. 删除 compatibility `arc_mut.rs` 和公开 re-export；移除其余 nightly feature，将 guard 切到 production/public zero。
 4. 对同一候选快照执行 stable feature matrix、Miri/Loom 可用切片、soak/SLO fault、dashboard/runbook、动态

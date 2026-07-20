@@ -40,14 +40,14 @@
 PR-M10-05 已完成性能门禁实现；真实固定硬件 baseline/candidate 与 HUMAN M10 Gate 尚未完成，因此 M10 为
 `待验收`而非`已完成`。M11 为`实施中`，当前下一工作包为 PR-M11-12。
 
-PR-M11-12 的内部子切片不重复计入 82 个顶层工作包。Issue #8414 的 M11-12bc5 子切片完成后，当前 ArcMut reviewed
-baseline 为 413 identities / 1,044 occurrences，其中 production 为 246/556、test 为 153/448、compatibility
+PR-M11-12 的内部子切片不重复计入 82 个顶层工作包。Issue #8416 的 M11-12bc6 子切片完成后，当前 ArcMut reviewed
+baseline 为 408 identities / 1,036 occurrences，其中 production 为 242/549、test 为 152/447、compatibility
 为 14/40。production 剩余分布和完成目标如下：
 
 | owner | identity / occurrence | PR-M11-12 完成目标 |
 |---|---:|---|
 | Client | 0 / 0 | 已完成 DefaultMQProducer facade/implementation/registry 标准 Arc/Weak、配置快照、生命周期/任务接纳边界，并拆除强引用环 |
-| Broker | 124 / 248 | Topic route/queue mapping、TopicConfig value/coordinator、POP/Pull、offset、schedule、transaction service/check listener/bridge、核心 processor root、auth/Producer/ColdData admin 与统计 handler 已完成；继续删除显式 transaction Store 兼容 owner，并完成 BrokerRuntime carrier 与其他 admin/processor 安全化 |
+| Broker | 120 / 241 | Topic route/queue mapping、TopicConfig value/coordinator、POP/Pull、offset、schedule service/root/hook、transaction service/check listener/bridge、核心 processor root、auth/Producer/ColdData admin 与统计 handler 已完成；继续删除显式 transaction Store 兼容 owner，并完成 BrokerRuntime carrier 与其他 admin/processor 安全化 |
 | Store | 122 / 308 | TopicConfig 只读代际 carrier 已完成；继续完成 message store、CommitLog/Flush、queue、Rocks/Timer 与 HA owner/actor 安全化 |
 
 ArcMut production/public compatibility 清零之后，PR-M11-12 还必须在同一冻结候选快照完成 stable feature matrix、
@@ -690,7 +690,8 @@ M09-04 再删除 MCP 未使用的 Auth/Error direct edges，并把承担 owned t
   - [x] M11-12bc3 Transaction check runtime capability：listener 改持 broker name、producer channel registry、Broker2Client 与 leased TaskGroup；discard 写入回归 transaction service，bridge 写路径删除 `mut_from_ref`；事务服务在 Topic coordinator/Store 前有界排空并 `take` runtime slot，BrokerStatsHandler 只持统计 manager
   - [x] M11-12bc4 Transaction bridge capability：bridge/service 删除完整 `BrokerRuntimeInner` owner，只持 offset、Topic registration、EscapeBridge、Broker config 与显式 MessageStore capability；ConsumerOffset/TopicQueueMapping 发布标准 `Arc` 代际，Slave master address 以 `ArcSwapOption` 发布不可变代际
   - [x] M11-12bc5 Broker admin leaf capability：Producer 查询 handler 只持共享 live registry，ColdData handler 只持标准 `Arc<ColdDataCgCtrService>`；两者删除完整 runtime owner、`MessageStore` 泛型与 ArcMut import/type
-  - [x] [`M11-12 进度证据`](phase-3-production-readiness/11-soundness-closure-progress.md) 记录父 Issue #8292、子切片 Issue #8293/#8295/#8297/#8299/#8301/#8303/#8307/#8309/#8311/#8313/#8315/#8317/#8319/#8321/#8323/#8325/#8327/#8329/#8331/#8333/#8335/#8337/#8339/#8341/#8343/#8345/#8347/#8349/#8351/#8353/#8355/#8357/#8359/#8361/#8363/#8365/#8367/#8369/#8371/#8375/#8377/#8379/#8381/#8383/#8385/#8387/#8389/#8391/#8393/#8395/#8398/#8400/#8402/#8404/#8406/#8408/#8410/#8412/#8414 与每次真实下降或经审核的边界搬迁
+  - [x] M11-12bc6 Schedule hook capability：MessageStore hook 只持 `MessageStoreConfig`、可选 `TimerMessageStore` 与标准 `Arc<ScheduleMessageService>`；helper 改收窄参数，注册不再克隆 Broker runtime，强引用计数回归防止 Store→Hook→Runtime 环恢复
+  - [x] [`M11-12 进度证据`](phase-3-production-readiness/11-soundness-closure-progress.md) 记录父 Issue #8292、子切片 Issue #8293/#8295/#8297/#8299/#8301/#8303/#8307/#8309/#8311/#8313/#8315/#8317/#8319/#8321/#8323/#8325/#8327/#8329/#8331/#8333/#8335/#8337/#8339/#8341/#8343/#8345/#8347/#8349/#8351/#8353/#8355/#8357/#8359/#8361/#8363/#8365/#8367/#8369/#8371/#8375/#8377/#8379/#8381/#8383/#8385/#8387/#8389/#8391/#8393/#8395/#8398/#8400/#8402/#8404/#8406/#8408/#8410/#8412/#8414/#8416 与每次真实下降或经审核的边界搬迁
   - [x] Issue #8295 后累计降至 711 production/2,029 occurrence；Controller 配置债务清零但其他 Controller owner 仍有 31 条 production 债务
   - [x] Issue #8297 后实际快照降至 697 production/1,986 occurrence；Controller 降至 17 条/51 occurrence，Manager/heartbeat/embedded-NameServer owner 已退出 `ArcMut`
   - [x] Issue #8299 后实际快照降至 690 production/1,961 occurrence；Controller 降至 10 条/26 occurrence，Raft/OpenRaft owner 与 Manager Raft `mut_from_ref` 已清零
@@ -750,7 +751,8 @@ M09-04 再删除 MCP 未使用的 Auth/Error direct edges，并把承担 owned t
   - [x] Issue #8410 后实际快照降至 418 identities/1,051 occurrences：production 250/562、test 154/449、compatibility 14/40、Broker production 128/254；净删除 5 个 production identity/9 occurrence 与 1 个 test identity/1 occurrence，无 relocation
   - [x] Issue #8412 后 ArcMut 快照保持 418 identities/1,051 occurrences：production 250/562、test 154/449、compatibility 14/40、Broker production 128/254；transaction bridge 删除完整 runtime owner，2 个 identity/3 occurrence 搬到显式 `TransactionMessageStore` 兼容边界，另有 2 个相邻上下文 occurrence 经 ADR-013 一对一 relocation 审核，临时 approval 不提交且剩余债务未隐藏
   - [x] Issue #8414 后实际快照降至 413 identities/1,044 occurrences：production 246/556、test 153/448、compatibility 14/40、Broker production 124/248；Producer/ColdData admin leaf 净删除 4 个 production identity/6 occurrence 与 1 个 test identity/1 occurrence，无 relocation
-  - [ ] M11-12bc6 及后续：Schedule hook/runtime 强环、Broker aggregate/leaf、Store WAL/queue/timer/HA、compatibility 删除、stable/Miri/Loom/soak/SLO 与同一候选快照 Gate 仍待完成
+  - [x] Issue #8416 后实际快照降至 408 identities/1,036 occurrences：production 242/549、test 152/447、compatibility 14/40、Broker production 120/241；Schedule hook/helper 净删除 4 个 production identity/7 occurrence 与 1 个 test glob identity/1 occurrence，无 relocation
+  - [ ] M11-12bc7 及后续：Broker aggregate/leaf、Store WAL/queue/timer/HA、compatibility 删除、stable/Miri/Loom/soak/SLO 与同一候选快照 Gate 仍待完成
   - [ ] 总进度仍为 75/82；本子切片不提前计作完成工作包，M10/Kind-K3d/container dynamic/HUMAN Gate 保持开放
 - [ ] 对应任务文档的 Exit Checklist 全部通过
 
