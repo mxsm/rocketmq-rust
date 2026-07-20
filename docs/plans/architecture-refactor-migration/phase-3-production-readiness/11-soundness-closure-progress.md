@@ -2509,9 +2509,29 @@ ConsumerOrderInfo runtime capability 随 Issue #8429 完成以下边界收敛：
 下一子切片 M11-12bc13 继续收窄 Broker aggregate/leaf 或 Store WAL/queue/timer/HA owner；75/82 总进度不变，
 compatibility、stable/Miri/Loom/soak/SLO 与完整候选快照 Gate 仍保持开放。
 
+## M11-12bc13 实现
+
+Broker orphan V2 migration example 随 Issue #8431 完成以下边界清理：
+
+- 删除 `rocketmq-broker/src/processor_v2_migration_example.rs`；该 tracked standalone source 从未加入 Broker module tree，Cargo/测试从未编译或调用其中的 processor wrapper、dispatcher 或伪 benchmark，因此删除不改变 Broker runtime wiring。
+- `rocketmq-remoting/src/runtime/processor_v2.rs`、`rocketmq-remoting/examples/processor_v2_complete_example.rs` 与 `rocketmq-remoting/tests/processor_v2_tests.rs` 保持 V2 implementation、完整 example 和 executable integration coverage 的 canonical owner，不复制维护第二套 Broker 示例。
+- reviewed baseline 从 379 identities / 989 occurrences 降至 376 / 980；production 从 217/506 降至 215/499，test 从 148/443 降至 147/441，compatibility 保持 14/40。Broker production 从 114/232 降至 112/225；净删除 2 个 production identity/7 occurrence 与 1 个 test identity/2 occurrence，无 relocation。
+
+## M11-12bc13 验证
+
+| 命令 | 结果 |
+|---|---|
+| Broker / Remoting V2 | `cargo check -p rocketmq-broker --all-features` 与 Remoting complete example check 通过；`processor_v2_tests` 7/7 通过、1 个手工 zero-allocation verification 保持 ignored |
+| reviewed baseline / fixtures | `--apply-reviewed-reductions` 审核候选精确删除 3 identity/9 occurrence；正式 baseline 补丁后 `python scripts/arc_mut_guard.py`、24/24 fixtures 与 67/67 guard tests 通过，无 relocation/临时 approval |
+| runtime / architecture guards | enforcing runtime audit、dependency fixtures/target/baseline、release、8-profile performance、architecture 60/60 与 AGENTS routing 通过 |
+| root workspace final gates | `cargo fmt --all -- --check`、`git diff --check` 与 workspace all-target/all-feature strict Clippy 通过；Windows linker stdout 与既有 future-incompatibility note 不受 `-D warnings` 管辖 |
+
+下一子切片 M11-12bc14 继续收窄 Broker aggregate/leaf 或 Store WAL/queue/timer/HA owner；75/82 总进度不变，
+compatibility、stable/Miri/Loom/soak/SLO 与完整候选快照 Gate 仍保持开放。
+
 ## 剩余切片与 Gate
 
-1. Broker BrokerRuntimeInner capability carrier 与其他 admin/processor/leaf owner（114/232）；transaction bridge、Producer/ColdData admin leaf、Schedule hook、put-message preflight 与 ConsumerOrderInfoManager 已退出完整 runtime/store owner，LiteLifecycle 只读 Store carrier 已收窄为普通借用，显式 Store 兼容 owner 留待 Store 批次删除。
+1. Broker BrokerRuntimeInner capability carrier 与其他 admin/processor/leaf owner（112/225）；transaction bridge、Producer/ColdData admin leaf、Schedule hook、put-message preflight、ConsumerOrderInfoManager 与未编译 V2 示例残留已退出完整 runtime/store owner，LiteLifecycle 只读 Store carrier 已收窄为普通借用，显式 Store 兼容 owner 留待 Store 批次删除。
 2. Store MappedFileQueue/其余 ConsumeQueue、CommitLog/Flush、StoreHandle/Rocks/Timer 与其余 HA service/actor（103/274）；BrokerStats observer、ConsumeQueueExt 显式锁 owner、HA notification/connection registry 窄能力与未共享 HA child direct ownership 已完成。
 3. 先迁移 Store 对 `WeakArcMut` 的剩余使用并移除其余 nightly feature；公开 `arc_mut.rs`/re-export 的 destructive 删除受 next-major 两轮弃用与 Release Manager/HUMAN Gate 约束，不能静默重置 public API baseline。
 4. 对同一候选快照执行 stable feature matrix、Miri/Loom 可用切片、soak/SLO fault、dashboard/runbook、动态
