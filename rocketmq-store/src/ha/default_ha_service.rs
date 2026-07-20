@@ -169,7 +169,7 @@ impl DefaultHAService {
         }
 
         let state_notification_service =
-            HAConnectionStateNotificationService::new(general_ha_service, this.default_message_store.clone());
+            HAConnectionStateNotificationService::new(general_ha_service, Arc::clone(&config));
         this.ha_connection_state_notification_service = Some(state_notification_service);
 
         let arc_mut = this.clone();

@@ -21,10 +21,10 @@ use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_runtime::task::service_task::ServiceContext;
 use rocketmq_runtime::task::service_task::ServiceTask;
 use rocketmq_runtime::task::ServiceManager;
-use rocketmq_rust::ArcMut;
 use tokio::sync::Mutex;
 use tracing::error;
 
+use crate::config::message_store_config::MessageStoreConfig;
 use crate::ha::general_ha_connection::GeneralHAConnection;
 use crate::ha::general_ha_service::GeneralHAService;
 use crate::ha::ha_client::HAClient;
@@ -32,7 +32,6 @@ use crate::ha::ha_connection::HAConnection;
 use crate::ha::ha_connection_state::HAConnectionState;
 use crate::ha::ha_connection_state_notification_request::HAConnectionStateNotificationRequest;
 use crate::ha::ha_service::HAService;
-use crate::message_store::local_file_message_store::LocalFileMessageStore;
 use crate::store_error::HAError;
 use crate::store_error::HAResult;
 
@@ -45,7 +44,7 @@ pub struct HAConnectionStateNotificationService {
 
 struct Inner {
     ha_service: GeneralHAService,
-    default_message_store: ArcMut<LocalFileMessageStore>,
+    message_store_config: Arc<MessageStoreConfig>,
     request: Mutex<Option<HAConnectionStateNotificationRequest>>,
     last_check_time_stamp: AtomicU64,
 }
@@ -61,7 +60,7 @@ impl Inner {
             return;
         }
 
-        if self.default_message_store.get_message_store_config().broker_role == BrokerRole::Slave {
+        if uses_slave_connection_path(&self.message_store_config) {
             let connection_state = self.ha_service.get_ha_client().unwrap().get_current_state();
             if connection_state == request.expect_state() {
                 request.complete(true).await;
@@ -133,10 +132,10 @@ impl ServiceTask for Inner {
 }
 
 impl HAConnectionStateNotificationService {
-    pub fn new(ha_service: GeneralHAService, default_message_store: ArcMut<LocalFileMessageStore>) -> Self {
+    pub fn new(ha_service: GeneralHAService, message_store_config: Arc<MessageStoreConfig>) -> Self {
         let inner = Arc::new(Inner {
             ha_service,
-            default_message_store,
+            message_store_config,
             request: Mutex::new(None),
             last_check_time_stamp: AtomicU64::new(0),
         });
@@ -174,5 +173,40 @@ impl HAConnectionStateNotificationService {
         self.inner
             .last_check_time_stamp
             .store(current_millis(), std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+fn uses_slave_connection_path(message_store_config: &MessageStoreConfig) -> bool {
+    message_store_config.broker_role == BrokerRole::Slave
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn selects_connection_path_from_injected_store_config() {
+        let mut config = MessageStoreConfig {
+            broker_role: BrokerRole::Slave,
+            ..Default::default()
+        };
+        assert!(uses_slave_connection_path(&config));
+
+        config.broker_role = BrokerRole::AsyncMaster;
+        assert!(!uses_slave_connection_path(&config));
+
+        config.broker_role = BrokerRole::SyncMaster;
+        assert!(!uses_slave_connection_path(&config));
+    }
+
+    #[test]
+    fn notification_service_does_not_retain_concrete_store_ownership() {
+        let source = include_str!("ha_connection_state_notification_service.rs");
+        let forbidden_handle = concat!("Arc", "Mut");
+        let forbidden_store = concat!("LocalFile", "MessageStore");
+
+        assert!(!source.contains(forbidden_handle));
+        assert!(!source.contains(forbidden_store));
+        assert!(source.contains("message_store_config: Arc<MessageStoreConfig>"));
     }
 }
