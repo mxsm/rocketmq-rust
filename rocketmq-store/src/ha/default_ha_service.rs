@@ -45,14 +45,15 @@ use crate::ha::default_ha_connection::DefaultHAConnection;
 use crate::ha::general_ha_client::GeneralHAClient;
 use crate::ha::general_ha_connection::GeneralHAConnection;
 use crate::ha::general_ha_service::GeneralHAService;
-use crate::ha::general_ha_service::HAAckedReplicaSnapshot;
 use crate::ha::group_transfer_service::GroupTransferRuntimeInfo;
 use crate::ha::group_transfer_service::GroupTransferService;
 use crate::ha::ha_client::HAClient;
 use crate::ha::ha_connection::HAConnection;
 use crate::ha::ha_connection::HAConnectionId;
+use crate::ha::ha_connection_state::HAConnectionState;
 use crate::ha::ha_connection_state_notification_request::HAConnectionStateNotificationRequest;
 use crate::ha::ha_connection_state_notification_service::HAConnectionStateNotificationService;
+use crate::ha::ha_service::HAAckedReplicaSnapshot;
 use crate::ha::ha_service::HAService;
 use crate::ha::transfer_metrics::HaTransferMetrics;
 use crate::log_file::group_commit_request::GroupCommitRequest;
@@ -194,8 +195,10 @@ impl DefaultHAService {
         self.handle_connection_removed(connection.as_ref());
 
         if let Some(ha_connection_state_notification_service) = &self.ha_connection_state_notification_service {
+            let remote_addr = connection.remote_address();
+            let connection_state = connection.get_current_state().await;
             let _ = ha_connection_state_notification_service
-                .check_connection_state_and_notify(connection.as_ref())
+                .check_connection_state_and_notify(&remote_addr, connection_state)
                 .await;
         }
 
@@ -239,18 +242,6 @@ impl DefaultHAService {
                     .collect()
             })
             .unwrap_or_default()
-    }
-
-    pub(crate) fn try_snapshot_acked_replicas(&self) -> Option<Vec<HAAckedReplicaSnapshot>> {
-        self.connections.try_lock().ok().map(|connections| {
-            connections
-                .values()
-                .map(|connection| HAAckedReplicaSnapshot {
-                    slave_broker_id: connection.slave_broker_id(),
-                    slave_ack_offset: connection.get_slave_ack_offset(),
-                })
-                .collect()
-        })
     }
 
     pub(crate) fn handle_connection_added(&self, connection: &GeneralHAConnection) {
@@ -416,9 +407,29 @@ impl HAService for DefaultHAService {
         }
     }
 
-    async fn get_connection_list(&self) -> Vec<ArcMut<GeneralHAConnection>> {
+    async fn snapshot_acked_replicas(&self) -> Vec<HAAckedReplicaSnapshot> {
         let connections = self.connections.lock().await;
-        connections.values().cloned().collect()
+        connections
+            .values()
+            .map(|connection| HAAckedReplicaSnapshot {
+                slave_broker_id: connection.slave_broker_id(),
+                slave_ack_offset: connection.get_slave_ack_offset(),
+            })
+            .collect()
+    }
+
+    async fn connection_state(&self, remote_addr: &str) -> Option<HAConnectionState> {
+        let connection = {
+            let connections = self.connections.lock().await;
+            connections
+                .values()
+                .find(|connection| connection.remote_address() == remote_addr)
+                .cloned()
+        };
+        match connection {
+            Some(connection) => Some(connection.get_current_state().await),
+            None => None,
+        }
     }
 
     fn get_ha_client(&self) -> Option<&GeneralHAClient> {
@@ -964,6 +975,15 @@ mod tests {
         .await
         .expect("connection should observe slave ack offset");
 
+        let acked_replicas = service.snapshot_acked_replicas().await;
+        assert_eq!(acked_replicas.len(), 1);
+        assert_eq!(acked_replicas[0].slave_broker_id, None);
+        assert_eq!(acked_replicas[0].slave_ack_offset, 64);
+        assert_eq!(
+            service.connection_state(&remote_addr.to_string()).await,
+            Some(HAConnectionState::Transfer)
+        );
+        assert_eq!(service.connection_state("127.0.0.1:1").await, None);
         assert_eq!(service.in_sync_replicas_nums(64), 2);
         assert_eq!(service.in_sync_replicas_nums(65), 1);
 

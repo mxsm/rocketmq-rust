@@ -28,11 +28,12 @@ use crate::ha::default_ha_service::DefaultHAService;
 use crate::ha::general_ha_client::GeneralHAClient;
 use crate::ha::general_ha_connection::GeneralHAConnection;
 use crate::ha::general_ha_service::GeneralHAService;
-use crate::ha::general_ha_service::HAAckedReplicaSnapshot;
 use crate::ha::group_transfer_service::GroupTransferRuntimeInfo;
 use crate::ha::ha_client::HAClient;
 use crate::ha::ha_connection::HAConnection;
+use crate::ha::ha_connection_state::HAConnectionState;
 use crate::ha::ha_connection_state_notification_request::HAConnectionStateNotificationRequest;
+use crate::ha::ha_service::HAAckedReplicaSnapshot;
 use crate::ha::ha_service::HAService;
 use crate::log_file::group_commit_request::GroupCommitRequest;
 use crate::message_store::local_file_message_store::LocalFileMessageStore;
@@ -55,10 +56,6 @@ impl AutoSwitchHAService {
             message_store,
             replication: ReplicationStateRoot::new(is_master),
         }
-    }
-
-    pub(crate) fn try_snapshot_acked_replicas(&self) -> Option<Vec<HAAckedReplicaSnapshot>> {
-        self.delegate.try_snapshot_acked_replicas()
     }
 
     pub(crate) fn group_transfer_runtime_info(&self) -> GroupTransferRuntimeInfo {
@@ -386,8 +383,12 @@ impl HAService for AutoSwitchHAService {
         self.delegate.put_group_connection_state_request(request).await;
     }
 
-    async fn get_connection_list(&self) -> Vec<ArcMut<GeneralHAConnection>> {
-        self.delegate.get_connection_list().await
+    async fn snapshot_acked_replicas(&self) -> Vec<HAAckedReplicaSnapshot> {
+        self.delegate.snapshot_acked_replicas().await
+    }
+
+    async fn connection_state(&self, remote_addr: &str) -> Option<HAConnectionState> {
+        self.delegate.connection_state(remote_addr).await
     }
 
     fn get_ha_client(&self) -> Option<&GeneralHAClient> {

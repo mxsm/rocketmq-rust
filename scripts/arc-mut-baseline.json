@@ -5567,7 +5567,7 @@
           "id": "7ad13bdff2acf984eb9e69c0",
           "fingerprint": "0716291881cc01fdc7d0b051",
           "item": "mod tests",
-          "line": 454
+          "line": 455
         }
       ],
       "owner": "store",
@@ -5586,7 +5586,7 @@
           "id": "9bcb5e9909e2a326c1f092a9",
           "fingerprint": "5c368e38ee565dfebfe2d1cc",
           "item": "fn new",
-          "line": 54
+          "line": 55
         }
       ],
       "owner": "store",
@@ -5605,61 +5605,61 @@
           "id": "73da0d8c0eb1fb9366dc5fbb",
           "fingerprint": "88a50625f8b4ef1eb68814de",
           "item": "fn new_test_message_store",
-          "line": 474
+          "line": 475
         },
         {
           "id": "31563961163080e52d85b497",
           "fingerprint": "8ae36e15029a503727d86ba4",
           "item": "fn auto_switch_service_initializes_client_and_tracks_sync_state_set_size",
-          "line": 516
+          "line": 517
         },
         {
           "id": "582c4c0f6759873d58b4a4e4",
           "fingerprint": "64d0a676efe092515e29f2a4",
           "item": "fn sync_controller_sync_state_set_updates_local_membership",
-          "line": 546
+          "line": 547
         },
         {
           "id": "44b44e3af298f19a649db20c",
           "fingerprint": "64d0a676efe092515e29f2a4",
           "item": "fn maybe_expand_in_sync_state_set_marks_remote_membership",
-          "line": 589
+          "line": 590
         },
         {
           "id": "7c8a6f8585ad109e2bbc1cd2",
           "fingerprint": "64d0a676efe092515e29f2a4",
           "item": "fn maybe_expand_in_sync_state_set_does_not_reenter_sync_state_lock",
-          "line": 619
+          "line": 620
         },
         {
           "id": "f5dbceb50629de7092518b31",
           "fingerprint": "64d0a676efe092515e29f2a4",
           "item": "fn maybe_shrink_sync_state_set_removes_stale_members",
-          "line": 648
+          "line": 649
         },
         {
           "id": "3ea4db825b90339b2dc93754",
           "fingerprint": "64d0a676efe092515e29f2a4",
           "item": "fn sync_controller_sync_state_set_clears_pending_remote_membership",
-          "line": 674
+          "line": 675
         },
         {
           "id": "4a68cc3a47bcba222b89197a",
           "fingerprint": "64d0a676efe092515e29f2a4",
           "item": "fn change_to_slave_clears_pending_remote_membership_and_updates_reported_broker_id",
-          "line": 704
+          "line": 705
         },
         {
           "id": "6ec3bcdb179359f9f7faf00d",
           "fingerprint": "d29404160773e320cc55f104",
           "item": "fn change_to_master_records_epoch_boundary_and_refreshes_confirm_offset",
-          "line": 745
+          "line": 746
         },
         {
           "id": "790db8829ca5de2dc275a1d8",
           "fingerprint": "64d0a676efe092515e29f2a4",
           "item": "fn follower_rejects_stale_epoch",
-          "line": 767
+          "line": 768
         }
       ],
       "owner": "store",
@@ -5697,37 +5697,31 @@
           "id": "439c16b8ee37f0cfe7344fef",
           "fingerprint": "788a1614cc3a237d3d707f04",
           "item": "struct AutoSwitchHAService",
-          "line": 45
+          "line": 46
         },
         {
           "id": "81d67e0622537835e5ddd119",
           "fingerprint": "f778d96acac1a5f9fdd1c23e",
           "item": "struct AutoSwitchHAService",
-          "line": 46
+          "line": 47
         },
         {
           "id": "c35980021309c10d8bc30fdb",
           "fingerprint": "1d97658e4780c6ceae8a4f95",
           "item": "fn new",
-          "line": 51
+          "line": 52
         },
         {
           "id": "2207f2ab20ff84fad9a70823",
           "fingerprint": "3212bd4ed39261093870b3a3",
           "item": "fn init",
-          "line": 68
+          "line": 65
         },
         {
           "id": "1f4d630df0b166ee9e687024",
           "fingerprint": "9aa0e00527f79a57c20c4686",
           "item": "fn init",
-          "line": 71
-        },
-        {
-          "id": "67f17c2834d1fcf6f7b4b02f",
-          "fingerprint": "30a835170b55953cd33e3293",
-          "item": "fn get_connection_list",
-          "line": 389
+          "line": 68
         }
       ],
       "owner": "store",
@@ -5746,7 +5740,7 @@
           "id": "c3d9fdd314a81d293103e253",
           "fingerprint": "87b2740a1679e6d19027cce9",
           "item": "fn new_test_message_store",
-          "line": 458
+          "line": 459
         }
       ],
       "owner": "store",
@@ -5765,7 +5759,7 @@
           "id": "1f8ce7320bee6458decddc37",
           "fingerprint": "92cd79aafb87511baa6f4a3f",
           "item": "fn new_test_message_store",
-          "line": 474
+          "line": 475
         }
       ],
       "owner": "store",
@@ -5784,7 +5778,7 @@
           "id": "b312fa57e298d846a6443a2e",
           "fingerprint": "000836ab6efa68ef608cdf2b",
           "item": "<module>",
-          "line": 38
+          "line": 39
         }
       ],
       "owner": "store",
@@ -5803,13 +5797,13 @@
           "id": "06ba5bbcf23316cc0f7bd3c2",
           "fingerprint": "da8d30ab543f8684f7d2b7c8",
           "item": "struct AutoSwitchHAService",
-          "line": 46
+          "line": 47
         },
         {
           "id": "2946430ecc346d640de71250",
           "fingerprint": "0933cb8703b34a460fb3ea90",
           "item": "fn new",
-          "line": 51
+          "line": 52
         }
       ],
       "owner": "store",
@@ -5828,7 +5822,7 @@
           "id": "1ed14b7d95e05c7c1035e308",
           "fingerprint": "d7425232be170cd9e4ba9687",
           "item": "fn new_test_message_store",
-          "line": 458
+          "line": 459
         }
       ],
       "owner": "store",
@@ -5847,31 +5841,31 @@
           "id": "be9142c031a7e6bb801e2a98",
           "fingerprint": "f26fb880a9d928bd927ec162",
           "item": "fn set_sync_state_set",
-          "line": 119
+          "line": 116
         },
         {
           "id": "a6eee7c44dc4e7c41d082c3d",
           "fingerprint": "7a17348b07a667ab265749c7",
           "item": "fn update_confirm_offset_when_slave_ack",
-          "line": 157
+          "line": 154
         },
         {
           "id": "0861b9b5206073884eea7596",
           "fingerprint": "ae361ecb24065212a1a98603",
           "item": "fn handle_connection_removed",
-          "line": 208
+          "line": 205
         },
         {
           "id": "168cb56afd15ebc5b7a5d606",
           "fingerprint": "77f5d1b2cef0f9de68ce5611",
           "item": "fn apply_epoch_transition",
-          "line": 282
+          "line": 279
         },
         {
           "id": "9e89ff40ee15c4c61fc60d7f",
           "fingerprint": "7ae6c9b0b8c0629701ae09ec",
           "item": "fn refresh_confirm_offset_after_role_change",
-          "line": 300
+          "line": 297
         }
       ],
       "owner": "store",
@@ -6340,7 +6334,7 @@
           "id": "c400cc39cb0db21bb2f34f89",
           "fingerprint": "c7fe0a6136272523a4df44f0",
           "item": "mod tests",
-          "line": 638
+          "line": 649
         }
       ],
       "owner": "store",
@@ -6359,7 +6353,7 @@
           "id": "0a83d032db7072c2f97a2afb",
           "fingerprint": "327da55696eba2e537937365",
           "item": "fn build_connection",
-          "line": 539
+          "line": 550
         }
       ],
       "owner": "store",
@@ -6378,61 +6372,61 @@
           "id": "1112e350e7951da968729314",
           "fingerprint": "88a50625f8b4ef1eb68814de",
           "item": "fn new_test_message_store",
-          "line": 657
+          "line": 668
         },
         {
           "id": "cb90e58ef06237ad5a893bbe",
           "fingerprint": "8e2886a85f0162ba5346d9de",
           "item": "fn new_auto_switch_services",
-          "line": 671
+          "line": 682
         },
         {
           "id": "3ce56492a93cf937d1a8861d",
           "fingerprint": "f650c4dfaf5a8e4ec495bcad",
           "item": "fn new_auto_switch_services",
-          "line": 672
+          "line": 683
         },
         {
           "id": "aa0904a6c01650df05d89371",
           "fingerprint": "68ae3106a5a47816087172b8",
           "item": "fn notify_transfer_some_counts_repeated_same_offset_acks",
-          "line": 727
+          "line": 738
         },
         {
           "id": "be3b8637effff8b8a325786f",
           "fingerprint": "1ee5a0570265e65a0f676396",
           "item": "fn accept_socket_service_shutdown_joins_worker",
-          "line": 744
+          "line": 755
         },
         {
           "id": "6c48bc6ce5035655ffddda3c",
           "fingerprint": "f650c4dfaf5a8e4ec495bcad",
           "item": "fn accept_socket_service_shutdown_joins_worker",
-          "line": 745
+          "line": 756
         },
         {
           "id": "a536498f42b67b99b2791d41",
           "fingerprint": "1ee5a0570265e65a0f676396",
           "item": "fn init_uses_auto_switch_accept_socket_service_for_auto_switch_mode",
-          "line": 772
+          "line": 783
         },
         {
           "id": "403cc0dde90411c5ffdf9dcb",
           "fingerprint": "f650c4dfaf5a8e4ec495bcad",
           "item": "fn init_uses_auto_switch_accept_socket_service_for_auto_switch_mode",
-          "line": 773
+          "line": 784
         },
         {
           "id": "8a35258ff1ab6ce2cb692b5b",
           "fingerprint": "e28f6d8c703b09680320ab3a",
           "item": "fn build_connection_wraps_auto_switch_connections_when_enabled",
-          "line": 796
+          "line": 807
         },
         {
           "id": "1d059318005168a2720892eb",
           "fingerprint": "f7331b4044bcce07339536a3",
           "item": "fn in_sync_replicas_count_requires_slave_ack_to_reach_master_offset",
-          "line": 937
+          "line": 948
         }
       ],
       "owner": "store",
@@ -6470,85 +6464,79 @@
           "id": "bda988674e92ecd29bc86402",
           "fingerprint": "08686d018c08f95abb7c5656",
           "item": "struct DefaultHAService",
-          "line": 76
+          "line": 77
         },
         {
           "id": "cfbb908afb1111e0e6eb2aea",
           "fingerprint": "e38ccfabd53dda3e8fbd4baf",
           "item": "struct DefaultHAService",
-          "line": 78
+          "line": 79
         },
         {
           "id": "8935db88fcceaf4a935cead4",
           "fingerprint": "be74862ccff4036ce4d6f59b",
           "item": "fn new",
-          "line": 89
+          "line": 90
         },
         {
           "id": "f0d88775ca8c5fee15962268",
           "fingerprint": "441694cf10fdff4c02c0cc7e",
           "item": "fn auto_switch_service",
-          "line": 144
+          "line": 145
         },
         {
           "id": "e718591089641e44d89339b7",
           "fingerprint": "3212bd4ed39261093870b3a3",
           "item": "fn init",
-          "line": 156
+          "line": 157
         },
         {
           "id": "41176db98e1ae352fb638d08",
           "fingerprint": "2edd075030156de61bd9b641",
           "item": "fn init",
-          "line": 161
+          "line": 162
         },
         {
           "id": "2bb4e6a6c5022de18e2fd532",
           "fingerprint": "27e43d4edf3a7be253ad97bc",
           "item": "fn add_connection",
-          "line": 184
+          "line": 185
         },
         {
           "id": "9885ecaff77fd11c780e5ace",
           "fingerprint": "f7228a7a3b59ce57b8cdfa91",
           "item": "fn remove_connection",
-          "line": 193
-        },
-        {
-          "id": "e01efca3cfa75b8593cb6e00",
-          "fingerprint": "ee67f78ff9781e83f292c47a",
-          "item": "fn get_connection_list",
-          "line": 419
+          "line": 194
         },
         {
           "id": "a27f2e1ea40458c8feff6fa9",
           "fingerprint": "342b6abf6b39338dc5502d58",
           "item": "struct AcceptSocketService",
-          "line": 503
+          "line": 514
         },
         {
           "id": "56ab32d2732aa8f20fd678cf",
           "fingerprint": "203eb27394db4611eefee16e",
           "item": "fn new",
-          "line": 510
+          "line": 521
         },
         {
           "id": "5ea743f99f8611411abce9d6",
           "fingerprint": "c7b2e2e9d34ccb79b32a8240",
           "item": "fn build_connection",
-          "line": 526
+          "line": 537
         },
         {
           "id": "7d49720f55232786ef84e3cc",
           "fingerprint": "0972c8a1b60394a7c84c4bf5",
           "item": "fn build_connection",
-          "line": 531
+          "line": 542
         },
         {
           "id": "25921228a72ac1e17fb3c0b9",
           "fingerprint": "582f47be691a798abac3c6d9",
           "item": "fn start",
-          "line": 584
+          "line": 595
         }
       ],
       "owner": "store",
@@ -6567,31 +6555,31 @@
           "id": "4b3ec32d6e2df55e36120c8f",
           "fingerprint": "5ddf728cdf3d55063f4f1c2c",
           "item": "fn new_test_message_store",
-          "line": 641
+          "line": 652
         },
         {
           "id": "2ad4ada661ed109f004646f2",
           "fingerprint": "819b7b23d9c1f98346463a5a",
           "item": "fn new_auto_switch_services",
-          "line": 669
+          "line": 680
         },
         {
           "id": "1854378156fe4c51ab3ef9b1",
           "fingerprint": "f98b7587a9c6e1f612ddfd49",
           "item": "fn new_auto_switch_services",
-          "line": 669
+          "line": 680
         },
         {
           "id": "c300c60c0cb01ec18f176e48",
           "fingerprint": "e16596d3e1f41e9159f82175",
           "item": "fn destroy_connections_does_not_hold_connection_table_lock_during_connection_shutdown",
-          "line": 834
+          "line": 845
         },
         {
           "id": "e7779c8af3b93a9bcfb4a168",
           "fingerprint": "e16596d3e1f41e9159f82175",
           "item": "fn in_sync_replicas_count_requires_slave_ack_to_reach_master_offset",
-          "line": 948
+          "line": 959
         }
       ],
       "owner": "store",
@@ -6610,7 +6598,7 @@
           "id": "82e6f974c0caac1b25cee9e5",
           "fingerprint": "92cd79aafb87511baa6f4a3f",
           "item": "fn new_test_message_store",
-          "line": 657
+          "line": 668
         }
       ],
       "owner": "store",
@@ -6629,7 +6617,7 @@
           "id": "7dfa83830b3bb5760342c16f",
           "fingerprint": "d823c22092a33e9f0f83c723",
           "item": "<module>",
-          "line": 59
+          "line": 60
         }
       ],
       "owner": "store",
@@ -6648,19 +6636,19 @@
           "id": "e566573a107c0f26a85cbfe6",
           "fingerprint": "392a52a4b90b54db547d7a23",
           "item": "struct DefaultHAService",
-          "line": 78
+          "line": 79
         },
         {
           "id": "dcabb798dc6b87fe29f7b97d",
           "fingerprint": "d972a7c3852af94eaee09aa9",
           "item": "fn new",
-          "line": 89
+          "line": 90
         },
         {
           "id": "8c3740fe9e00b6937789da91",
           "fingerprint": "e9c3e7ce4265e3b34423d849",
           "item": "fn get_default_message_store",
-          "line": 105
+          "line": 106
         }
       ],
       "owner": "store",
@@ -6679,7 +6667,7 @@
           "id": "a4c38ada3c1a42f0645b5be6",
           "fingerprint": "929539ec6ab7778d1c57be7a",
           "item": "fn new_test_message_store",
-          "line": 641
+          "line": 652
         }
       ],
       "owner": "store",
@@ -6717,19 +6705,19 @@
           "id": "080167291bbc09f1a550a128",
           "fingerprint": "9d6c8f400d376765a02dcf4d",
           "item": "struct DefaultHAService",
-          "line": 84
+          "line": 85
         },
         {
           "id": "9ad8b53023a79dd7f42ab4c0",
           "fingerprint": "5b01b0c60d49f25c9fe1762f",
           "item": "fn set_auto_switch_service",
-          "line": 140
+          "line": 141
         },
         {
           "id": "2333ab338ede1d29d8d356aa",
           "fingerprint": "9f6d912a4060e3ba50c846e6",
           "item": "fn auto_switch_service",
-          "line": 145
+          "line": 146
         }
       ],
       "owner": "store",
@@ -6974,12 +6962,6 @@
           "fingerprint": "67703ecd1e21d01bcd854952",
           "item": "fn new_with_auto_switch_ha_service",
           "line": 44
-        },
-        {
-          "id": "dcd67d95631e4ebd88c58f63",
-          "fingerprint": "3e4ae6670ef65b1274aac5dd",
-          "item": "fn get_connection_list",
-          "line": 221
         }
       ],
       "owner": "store",
@@ -6998,13 +6980,13 @@
           "id": "392dc826b8e453e29f428267",
           "fingerprint": "39188f24237030b06c2d316d",
           "item": "fn new_test_ha_service",
-          "line": 282
+          "line": 269
         },
         {
           "id": "75dc2917c880a7dd048c6719",
           "fingerprint": "1e661b936ec198a622484a4e",
           "item": "fn new_test_ha_service",
-          "line": 294
+          "line": 281
         }
       ],
       "owner": "store",
@@ -7023,7 +7005,7 @@
           "id": "83b0cba0e2453502c6d51dcc",
           "fingerprint": "ad5961450f73f8e1d136149d",
           "item": "mod tests",
-          "line": 273
+          "line": 260
         }
       ],
       "owner": "store",
@@ -7042,7 +7024,7 @@
           "id": "12a79c6afc851d2738259cad",
           "fingerprint": "d93142cef34ad7eb1f8c7672",
           "item": "fn new_test_ha_service",
-          "line": 282
+          "line": 269
         }
       ],
       "owner": "store",
@@ -7061,7 +7043,7 @@
           "id": "e22de9eba0eb3de6ae444612",
           "fingerprint": "45b1844f3c9471bcf6575fac",
           "item": "mod tests",
-          "line": 278
+          "line": 265
         }
       ],
       "owner": "store",
@@ -7119,44 +7101,6 @@
           "fingerprint": "a85e14e6c1e218bce62f6f39",
           "item": "fn start",
           "line": 30
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "c642974e37d93c896c29e607",
-      "path": "rocketmq-store/src/ha/ha_service.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "2ad34e1b3e424c5c8a9aa9ff",
-          "fingerprint": "6784617bda8d6b0632f93ca3",
-          "item": "<module>",
-          "line": 18
-        }
-      ],
-      "owner": "store",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "3600411af4d601e171041e1c",
-      "path": "rocketmq-store/src/ha/ha_service.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "4ba5fba385dd24aab109cf39",
-          "fingerprint": "4488738ccd22631b72146ef6",
-          "item": "fn get_connection_list",
-          "line": 134
         }
       ],
       "owner": "store",

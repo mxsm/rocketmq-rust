@@ -15,19 +15,17 @@
 use std::sync::atomic::AtomicU32;
 
 use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
-use rocketmq_rust::ArcMut;
 use tokio::sync::Notify;
 
 use crate::ha::general_ha_client::GeneralHAClient;
-use crate::ha::general_ha_connection::GeneralHAConnection;
+use crate::ha::ha_connection_state::HAConnectionState;
 use crate::ha::ha_connection_state_notification_request::HAConnectionStateNotificationRequest;
 use crate::log_file::group_commit_request::GroupCommitRequest;
 use crate::store_error::HAResult;
+pub(crate) use rocketmq_store_local::ha::replication::HAAckedReplicaSnapshot;
 
 #[trait_variant::make(HAService: Send)]
 pub trait RocketHAService: Sync {
-    //fn init<MS: MessageStore>(&mut self, message_store: ArcMut<MS>) -> HAResult<()>;
-
     /// Start the HA service
     ///
     /// # Returns
@@ -127,11 +125,17 @@ pub trait RocketHAService: Sync {
     /// * `request` - The connection state request
     async fn put_group_connection_state_request(&self, request: HAConnectionStateNotificationRequest);
 
-    /// Get the list of HA connections
+    /// Snapshot replica acknowledgements without exposing connection owners.
     ///
     /// # Returns
-    /// List of HA connections
-    async fn get_connection_list(&self) -> Vec<ArcMut<GeneralHAConnection>>;
+    /// Owned replica acknowledgement snapshots.
+    async fn snapshot_acked_replicas(&self) -> Vec<HAAckedReplicaSnapshot>;
+
+    /// Look up the current state for one remote HA connection.
+    ///
+    /// # Returns
+    /// The current state when the remote address is registered.
+    async fn connection_state(&self, remote_addr: &str) -> Option<HAConnectionState>;
 
     /// Get the HA client instance.
     ///
