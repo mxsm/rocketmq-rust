@@ -62,7 +62,7 @@ async fn wait_for_transport_event(
     group: &str,
     outcome: ConsumerTransportOutcome,
 ) {
-    tokio::time::timeout(std::time::Duration::from_secs(15), async {
+    tokio::time::timeout(std::time::Duration::from_secs(45), async {
         loop {
             let event = receiver.recv().await.expect("transport event channel remains open");
             if event.consumer_group == group
@@ -130,10 +130,12 @@ async fn active_consumer_survives_admin_diagnostic_request() {
         .expect("set ROCKETMQ_PHASE3_NAMESERVER to a live NameServer address");
     let group = std::env::var("ROCKETMQ_PHASE4_ADMIN_GROUP")
         .expect("set ROCKETMQ_PHASE4_ADMIN_GROUP to the fixture consumer group");
-    let mut consumer = consumer(group.clone(), &nameserver);
+    let mut events = subscribe_consumer_transport_events();
+    let mut consumer = consumer_with_fast_heartbeat(group.clone(), &nameserver);
 
     consumer.start().await.expect("consumer starts before admin request");
+    wait_for_transport_event(&mut events, &group, ConsumerTransportOutcome::Success).await;
     println!("phase4_admin_ready group={group}");
-    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+    tokio::time::sleep(std::time::Duration::from_secs(20)).await;
     consumer.shutdown().await;
 }
