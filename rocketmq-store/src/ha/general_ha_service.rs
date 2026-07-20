@@ -22,13 +22,13 @@ use tokio::sync::Notify;
 use crate::ha::auto_switch::auto_switch_ha_service::AutoSwitchHAService;
 use crate::ha::default_ha_service::DefaultHAService;
 use crate::ha::general_ha_client::GeneralHAClient;
-use crate::ha::general_ha_connection::GeneralHAConnection;
 use crate::ha::group_transfer_service::GroupTransferRuntimeInfo;
+use crate::ha::ha_connection_state::HAConnectionState;
 use crate::ha::ha_connection_state_notification_request::HAConnectionStateNotificationRequest;
+use crate::ha::ha_service::HAAckedReplicaSnapshot;
 use crate::ha::ha_service::HAService;
 use crate::log_file::group_commit_request::GroupCommitRequest;
 use crate::store_error::HAResult;
-pub(crate) use rocketmq_store_local::ha::replication::HAAckedReplicaSnapshot;
 
 #[derive(Clone)]
 pub enum GeneralHAService {
@@ -86,13 +86,6 @@ impl GeneralHAService {
         match self {
             GeneralHAService::DefaultHAService(_) => None,
             GeneralHAService::AutoSwitchHAService(service) => Some(service.get_sync_state_set()),
-        }
-    }
-
-    pub(crate) fn try_snapshot_acked_replicas(&self) -> Option<Vec<HAAckedReplicaSnapshot>> {
-        match self {
-            GeneralHAService::DefaultHAService(service) => service.try_snapshot_acked_replicas(),
-            GeneralHAService::AutoSwitchHAService(service) => service.try_snapshot_acked_replicas(),
         }
     }
 
@@ -218,10 +211,17 @@ impl HAService for GeneralHAService {
         }
     }
 
-    async fn get_connection_list(&self) -> Vec<ArcMut<GeneralHAConnection>> {
+    async fn snapshot_acked_replicas(&self) -> Vec<HAAckedReplicaSnapshot> {
         match self {
-            GeneralHAService::DefaultHAService(service) => service.get_connection_list().await,
-            GeneralHAService::AutoSwitchHAService(service) => service.get_connection_list().await,
+            GeneralHAService::DefaultHAService(service) => service.snapshot_acked_replicas().await,
+            GeneralHAService::AutoSwitchHAService(service) => service.snapshot_acked_replicas().await,
+        }
+    }
+
+    async fn connection_state(&self, remote_addr: &str) -> Option<HAConnectionState> {
+        match self {
+            GeneralHAService::DefaultHAService(service) => service.connection_state(remote_addr).await,
+            GeneralHAService::AutoSwitchHAService(service) => service.connection_state(remote_addr).await,
         }
     }
 

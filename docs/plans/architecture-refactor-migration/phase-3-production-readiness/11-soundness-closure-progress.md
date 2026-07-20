@@ -2414,10 +2414,33 @@ ConsumeQueueExt ownership 随 Issue #8421 完成以下边界收敛：
 下一子切片 M11-12bc9 继续收窄 Store HA connection registry 或 Broker put-message preflight/leaf owner；75/82 总进度不变，
 compatibility、stable/Miri/Loom/soak/SLO 与完整候选快照 Gate 仍保持开放。
 
+## M11-12bc9 实现
+
+HA connection registry capability 随 Issue #8423 完成以下边界收敛：
+
+- `HAService::get_connection_list` 删除，替换为 owned `HAAckedReplicaSnapshot` 列表与按 remote address 返回 scalar `HAConnectionState` 的窄能力；DefaultHAService registry 不再把 `ArcMut<GeneralHAConnection>` 暴露给 service consumer，General/AutoSwitch 只委托标量 API。
+- GroupTransferService 直接等待 ack snapshot，不再先 try-lock、失败后克隆连接 owner；required-acks 与 sync-state-set 判定仍使用同一 broker-id/ack-offset 语义。
+- HA notification master 路径不再先 `take` 请求后又从 slot 读取，非终态和地址不匹配请求保持注册；仅达到目标状态、允许的 shutdown、替换或 10 秒未发现连接超时时消费请求。slave 路径同时删除缺失 HA client 的 panic，并保留既有 Ready timeout/非 Ready 活跃时间语义。
+- 连接 registry 的 ack/state 回归、notification pending/mismatch/shutdown/timeout 回归与源码 capability contract 已覆盖；reviewed baseline 从 396 identities / 1,019 occurrences 降至 394 / 1,014，production 从 232/534 降至 230/529，test 保持 150/445，compatibility 保持 14/40。Store production 从 112/293 降至 110/288；净删除 2 个 production identity/5 occurrence，无 relocation。
+
+## M11-12bc9 验证
+
+| 命令 | 结果 |
+|---|---|
+| Store check / strict Clippy | Store all-target/all-feature check 与 strict Clippy 通过；Store/Broker `rocksdb_store` strict Clippy 通过 |
+| HA focused tests | notification 5/5、registry ack/state 1/1、group-transfer 5/5 通过；覆盖请求保留、地址匹配、目标/shutdown/timeout、owned snapshot 与 scalar state lookup |
+| Store/RocksDB 回归 | Store all-feature lib 502/502；RocksDB foundation 82/82、semantics 9/9、Broker rocksdb 21/21、pop_consumer 4/4 通过 |
+| reviewed baseline / fixtures | `--apply-reviewed-reductions` 精确删除 2 identity/5 occurrence；`python scripts/arc_mut_guard.py`、24/24 fixtures 与 67/67 guard tests 通过，无 relocation/临时 approval |
+| runtime / architecture guards | enforcing runtime audit、dependency fixtures/target/baseline、release、8-profile performance、architecture 60/60 与 AGENTS routing 通过 |
+| root workspace final gates | `cargo fmt --all -- --check`、`git diff --check` 与 workspace all-target/all-feature strict Clippy 通过；Windows linker stdout 与既有 future-incompatibility note 不受 `-D warnings` 管辖 |
+
+下一子切片 M11-12bc10 继续收窄 Broker put-message preflight/leaf 或 Store HA/Timer/WAL owner；75/82 总进度不变，
+compatibility、stable/Miri/Loom/soak/SLO 与完整候选快照 Gate 仍保持开放。
+
 ## 剩余切片与 Gate
 
 1. Broker BrokerRuntimeInner capability carrier 与其他 admin/processor/leaf owner（120/241）；transaction bridge、Producer/ColdData admin leaf 与 Schedule hook 已退出完整 runtime owner，显式 Store 兼容 owner 留待 Store 批次删除。
-2. Store MappedFileQueue/其余 ConsumeQueue、CommitLog/Flush、StoreHandle/Rocks/Timer 与其余 HA actor（112/293）；BrokerStats observer、HA notification config capability 与 ConsumeQueueExt 显式锁 owner 已完成。
+2. Store MappedFileQueue/其余 ConsumeQueue、CommitLog/Flush、StoreHandle/Rocks/Timer 与其余 HA actor（110/288）；BrokerStats observer、ConsumeQueueExt 显式锁 owner 与 HA notification/connection registry 窄能力已完成。
 3. 删除 compatibility `arc_mut.rs` 和公开 re-export；移除其余 nightly feature，将 guard 切到 production/public zero。
 4. 对同一候选快照执行 stable feature matrix、Miri/Loom 可用切片、soak/SLO fault、dashboard/runbook、动态
    Kind/K3d/container、M10 固定硬件和 Human Gate。

@@ -31,8 +31,7 @@ use tracing::warn;
 
 use crate::base::message_status_enum::PutMessageStatus;
 use crate::ha::general_ha_service::GeneralHAService;
-use crate::ha::general_ha_service::HAAckedReplicaSnapshot;
-use crate::ha::ha_connection::HAConnection;
+use crate::ha::ha_service::HAAckedReplicaSnapshot;
 use crate::ha::ha_service::HAService;
 use crate::log_file::group_commit_request::GroupCommitRequest;
 use crate::store_error::HAError;
@@ -144,19 +143,7 @@ impl GroupTransferServiceInner {
     }
 
     async fn load_acked_replicas(&self) -> Vec<HAAckedReplicaSnapshot> {
-        if let Some(acked_replicas) = self.ha_service.try_snapshot_acked_replicas() {
-            return acked_replicas;
-        }
-
-        self.ha_service
-            .get_connection_list()
-            .await
-            .into_iter()
-            .map(|connection| HAAckedReplicaSnapshot {
-                slave_broker_id: connection.slave_broker_id(),
-                slave_ack_offset: connection.get_slave_ack_offset(),
-            })
-            .collect()
+        self.ha_service.snapshot_acked_replicas().await
     }
 
     async fn do_wait_transfer(&self) {

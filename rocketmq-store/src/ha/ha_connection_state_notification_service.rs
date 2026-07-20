@@ -25,10 +25,8 @@ use tokio::sync::Mutex;
 use tracing::error;
 
 use crate::config::message_store_config::MessageStoreConfig;
-use crate::ha::general_ha_connection::GeneralHAConnection;
 use crate::ha::general_ha_service::GeneralHAService;
 use crate::ha::ha_client::HAClient;
-use crate::ha::ha_connection::HAConnection;
 use crate::ha::ha_connection_state::HAConnectionState;
 use crate::ha::ha_connection_state_notification_request::HAConnectionStateNotificationRequest;
 use crate::ha::ha_service::HAService;
@@ -51,71 +49,132 @@ struct Inner {
 
 impl Inner {
     async fn do_wait_connection_state(&self) {
-        let request = self.request.lock().await.take();
-        if request.is_none() {
-            return;
-        }
-        let request = request.unwrap();
-        if request.is_completed() {
-            return;
-        }
+        let remote_addr = {
+            let mut request_guard = self.request.lock().await;
+            let Some(request) = request_guard.as_ref() else {
+                return;
+            };
+            if request.is_completed() {
+                request_guard.take();
+                return;
+            }
+            request.remote_addr().to_string()
+        };
 
         if uses_slave_connection_path(&self.message_store_config) {
-            let connection_state = self.ha_service.get_ha_client().unwrap().get_current_state();
-            if connection_state == request.expect_state() {
-                request.complete(true).await;
-            } else if connection_state == HAConnectionState::Ready {
-                if current_millis() - self.last_check_time_stamp.load(std::sync::atomic::Ordering::Relaxed)
-                    > CONNECTION_ESTABLISH_TIMEOUT
-                {
-                    error!("Wait HA connection establish with {} timeout", request.remote_addr());
-                    request.complete(false).await;
+            let Some(ha_client) = self.ha_service.get_ha_client() else {
+                self.complete_timed_out_request(&remote_addr).await;
+                return;
+            };
+            let connection_state = ha_client.get_current_state();
+            match self
+                .check_connection_state_and_notify(&remote_addr, connection_state)
+                .await
+            {
+                ConnectionNotificationMatch::Pending if connection_state == HAConnectionState::Ready => {
+                    self.complete_timed_out_request(&remote_addr).await;
                 }
-            } else {
-                self.last_check_time_stamp
-                    .store(current_millis(), std::sync::atomic::Ordering::Relaxed);
+                ConnectionNotificationMatch::Pending => {
+                    self.last_check_time_stamp
+                        .store(current_millis(), std::sync::atomic::Ordering::Relaxed);
+                }
+                ConnectionNotificationMatch::Missing | ConnectionNotificationMatch::Completed => {}
             }
         } else {
-            let mut connection_found = false;
-            for connection in self.ha_service.get_connection_list().await {
-                if self.check_connection_state_and_notify(connection.as_ref()).await {
-                    connection_found = true;
+            match self.ha_service.connection_state(&remote_addr).await {
+                Some(connection_state) => {
+                    let connection_match = self
+                        .check_connection_state_and_notify(&remote_addr, connection_state)
+                        .await;
+                    if connection_match != ConnectionNotificationMatch::Missing {
+                        self.last_check_time_stamp
+                            .store(current_millis(), std::sync::atomic::Ordering::Relaxed);
+                    }
                 }
-            }
-
-            if connection_found {
-                self.last_check_time_stamp
-                    .store(current_millis(), std::sync::atomic::Ordering::Relaxed);
-            }
-            if !connection_found
-                && (current_millis() - self.last_check_time_stamp.load(std::sync::atomic::Ordering::Relaxed)
-                    > CONNECTION_ESTABLISH_TIMEOUT)
-            {
-                error!("Wait HA connection establish with {} timeout", request.remote_addr());
-                request.complete(false).await;
+                None => self.complete_timed_out_request(&remote_addr).await,
             }
         }
     }
 
-    async fn check_connection_state_and_notify(&self, connection: &GeneralHAConnection) -> bool {
-        let request = self.request.lock().await.take();
-        if request.is_none() {
-            return false;
-        }
-        let request = request.unwrap();
-        let remote_addr = connection.remote_address();
-        if remote_addr == request.remote_addr() {
-            let conn_state = connection.get_current_state().await;
-            if conn_state == request.expect_state() {
-                request.complete(true).await;
-            } else if conn_state == HAConnectionState::Shutdown && request.notify_when_shutdown() {
-                request.complete(false).await;
-            }
-            return true;
+    async fn check_connection_state_and_notify(
+        &self,
+        remote_addr: &str,
+        connection_state: HAConnectionState,
+    ) -> ConnectionNotificationMatch {
+        notify_matching_request(&self.request, remote_addr, connection_state).await
+    }
+
+    async fn complete_timed_out_request(&self, remote_addr: &str) {
+        if !self.connection_wait_timed_out() {
+            return;
         }
 
-        false
+        if fail_matching_request(&self.request, remote_addr).await {
+            error!("Wait HA connection establish with {} timeout", remote_addr);
+        }
     }
+
+    fn connection_wait_timed_out(&self) -> bool {
+        current_millis().saturating_sub(self.last_check_time_stamp.load(std::sync::atomic::Ordering::Relaxed))
+            > CONNECTION_ESTABLISH_TIMEOUT
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ConnectionNotificationMatch {
+    Missing,
+    Pending,
+    Completed,
+}
+
+async fn notify_matching_request(
+    request_slot: &Mutex<Option<HAConnectionStateNotificationRequest>>,
+    remote_addr: &str,
+    connection_state: HAConnectionState,
+) -> ConnectionNotificationMatch {
+    let mut request_guard = request_slot.lock().await;
+    let Some(request) = request_guard.as_ref() else {
+        return ConnectionNotificationMatch::Missing;
+    };
+    if request.remote_addr() != remote_addr {
+        return ConnectionNotificationMatch::Missing;
+    }
+
+    let result = if connection_state == request.expect_state() {
+        Some(true)
+    } else if connection_state == HAConnectionState::Shutdown && request.notify_when_shutdown() {
+        Some(false)
+    } else {
+        None
+    };
+    let Some(result) = result else {
+        return ConnectionNotificationMatch::Pending;
+    };
+
+    let Some(request) = request_guard.take() else {
+        return ConnectionNotificationMatch::Missing;
+    };
+    request.complete(result).await;
+    ConnectionNotificationMatch::Completed
+}
+
+async fn fail_matching_request(
+    request_slot: &Mutex<Option<HAConnectionStateNotificationRequest>>,
+    remote_addr: &str,
+) -> bool {
+    let mut request_guard = request_slot.lock().await;
+    if !request_guard
+        .as_ref()
+        .is_some_and(|request| request.remote_addr() == remote_addr)
+    {
+        return false;
+    }
+
+    let Some(request) = request_guard.take() else {
+        return false;
+    };
+    request.complete(false).await;
+    true
 }
 
 impl ServiceTask for Inner {
@@ -159,8 +218,15 @@ impl HAConnectionStateNotificationService {
         }
     }
 
-    pub async fn check_connection_state_and_notify(&self, connection: &GeneralHAConnection) -> bool {
-        self.inner.check_connection_state_and_notify(connection).await
+    pub async fn check_connection_state_and_notify(
+        &self,
+        remote_addr: &str,
+        connection_state: HAConnectionState,
+    ) -> bool {
+        self.inner
+            .check_connection_state_and_notify(remote_addr, connection_state)
+            .await
+            != ConnectionNotificationMatch::Missing
     }
 
     pub async fn set_request(&self, request: HAConnectionStateNotificationRequest) {
@@ -202,11 +268,71 @@ mod tests {
     #[test]
     fn notification_service_does_not_retain_concrete_store_ownership() {
         let source = include_str!("ha_connection_state_notification_service.rs");
+        let service_source = include_str!("ha_service.rs");
         let forbidden_handle = concat!("Arc", "Mut");
         let forbidden_store = concat!("LocalFile", "MessageStore");
+        let forbidden_connection_list = concat!("get_connection", "_list");
 
         assert!(!source.contains(forbidden_handle));
         assert!(!source.contains(forbidden_store));
+        assert!(!source.contains(forbidden_connection_list));
         assert!(source.contains("message_store_config: Arc<MessageStoreConfig>"));
+        assert!(!service_source.contains(forbidden_handle));
+        assert!(!service_source.contains(forbidden_connection_list));
+        assert!(service_source.contains("snapshot_acked_replicas"));
+        assert!(service_source.contains("connection_state"));
+    }
+
+    #[tokio::test]
+    async fn nonterminal_state_keeps_request_until_expected_state_arrives() {
+        let (request, mut receiver) =
+            HAConnectionStateNotificationRequest::new(HAConnectionState::Transfer, "127.0.0.1:10912", true);
+        let request_slot = Mutex::new(Some(request));
+
+        assert_eq!(
+            notify_matching_request(&request_slot, "127.0.0.1:10912", HAConnectionState::Ready).await,
+            ConnectionNotificationMatch::Pending
+        );
+        assert!(request_slot.lock().await.is_some());
+        assert!(receiver.try_recv().is_err());
+
+        assert_eq!(
+            notify_matching_request(&request_slot, "127.0.0.1:10912", HAConnectionState::Transfer).await,
+            ConnectionNotificationMatch::Completed
+        );
+        assert!(request_slot.lock().await.is_none());
+        assert!(receiver.await.expect("expected-state notification"));
+    }
+
+    #[tokio::test]
+    async fn mismatched_address_keeps_request_registered() {
+        let (request, mut receiver) =
+            HAConnectionStateNotificationRequest::new(HAConnectionState::Transfer, "127.0.0.1:10912", true);
+        let request_slot = Mutex::new(Some(request));
+
+        assert_eq!(
+            notify_matching_request(&request_slot, "127.0.0.1:10913", HAConnectionState::Transfer).await,
+            ConnectionNotificationMatch::Missing
+        );
+        assert!(request_slot.lock().await.is_some());
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn shutdown_and_timeout_complete_matching_requests_with_failure() {
+        let (shutdown_request, shutdown_receiver) =
+            HAConnectionStateNotificationRequest::new(HAConnectionState::Transfer, "127.0.0.1:10912", true);
+        let shutdown_slot = Mutex::new(Some(shutdown_request));
+        assert_eq!(
+            notify_matching_request(&shutdown_slot, "127.0.0.1:10912", HAConnectionState::Shutdown).await,
+            ConnectionNotificationMatch::Completed
+        );
+        assert!(!shutdown_receiver.await.expect("shutdown notification"));
+
+        let (timeout_request, timeout_receiver) =
+            HAConnectionStateNotificationRequest::new(HAConnectionState::Transfer, "127.0.0.1:10912", false);
+        let timeout_slot = Mutex::new(Some(timeout_request));
+        assert!(fail_matching_request(&timeout_slot, "127.0.0.1:10912").await);
+        assert!(!timeout_receiver.await.expect("timeout notification"));
     }
 }
