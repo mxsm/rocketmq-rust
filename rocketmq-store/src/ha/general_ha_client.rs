@@ -12,26 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_rust::ArcMut;
-
 use crate::ha::auto_switch::auto_switch_ha_client::AutoSwitchHAClient;
 use crate::ha::default_ha_client::DefaultHAClient;
 use crate::ha::ha_client::HAClient;
 use crate::ha::ha_connection_state::HAConnectionState;
 
-#[derive(Clone)]
 pub enum GeneralHAClient {
-    DefaultHaClient(ArcMut<DefaultHAClient>),
-    AutoSwitchHaClient(ArcMut<AutoSwitchHAClient>),
+    DefaultHaClient(DefaultHAClient),
+    AutoSwitchHaClient(AutoSwitchHAClient),
 }
 
 impl GeneralHAClient {
     pub fn new_with_default_ha_client(default_ha_client: DefaultHAClient) -> Self {
-        GeneralHAClient::DefaultHaClient(ArcMut::new(default_ha_client))
+        GeneralHAClient::DefaultHaClient(default_ha_client)
     }
 
     pub fn new_with_auto_switch_ha_client(auto_switch_ha_client: AutoSwitchHAClient) -> Self {
-        GeneralHAClient::AutoSwitchHaClient(ArcMut::new(auto_switch_ha_client))
+        GeneralHAClient::AutoSwitchHaClient(auto_switch_ha_client)
     }
 
     pub fn set_reported_broker_id(&self, broker_id: Option<i64>) {
@@ -125,35 +122,35 @@ impl HAClient for GeneralHAClient {
 
     fn get_master_address(&self) -> String {
         match self {
-            GeneralHAClient::DefaultHaClient(client) => HAClient::get_master_address(client.as_ref()),
+            GeneralHAClient::DefaultHaClient(client) => HAClient::get_master_address(client),
             GeneralHAClient::AutoSwitchHaClient(client) => client.get_master_address(),
         }
     }
 
     fn get_ha_master_address(&self) -> String {
         match self {
-            GeneralHAClient::DefaultHaClient(client) => HAClient::get_ha_master_address(client.as_ref()),
+            GeneralHAClient::DefaultHaClient(client) => HAClient::get_ha_master_address(client),
             GeneralHAClient::AutoSwitchHaClient(client) => client.get_ha_master_address(),
         }
     }
 
     fn get_last_read_timestamp(&self) -> i64 {
         match self {
-            GeneralHAClient::DefaultHaClient(client) => HAClient::get_last_read_timestamp(client.as_ref()),
+            GeneralHAClient::DefaultHaClient(client) => HAClient::get_last_read_timestamp(client),
             GeneralHAClient::AutoSwitchHaClient(client) => client.get_last_read_timestamp(),
         }
     }
 
     fn get_last_write_timestamp(&self) -> i64 {
         match self {
-            GeneralHAClient::DefaultHaClient(client) => HAClient::get_last_write_timestamp(client.as_ref()),
+            GeneralHAClient::DefaultHaClient(client) => HAClient::get_last_write_timestamp(client),
             GeneralHAClient::AutoSwitchHaClient(client) => client.get_last_write_timestamp(),
         }
     }
 
     fn get_current_state(&self) -> HAConnectionState {
         match self {
-            GeneralHAClient::DefaultHaClient(client) => HAClient::get_current_state(client.as_ref()),
+            GeneralHAClient::DefaultHaClient(client) => HAClient::get_current_state(client),
             GeneralHAClient::AutoSwitchHaClient(client) => client.get_current_state(),
         }
     }
@@ -178,7 +175,7 @@ impl HAClient for GeneralHAClient {
 
     fn get_transferred_byte_in_second(&self) -> i64 {
         match self {
-            GeneralHAClient::DefaultHaClient(client) => HAClient::get_transferred_byte_in_second(client.as_ref()),
+            GeneralHAClient::DefaultHaClient(client) => HAClient::get_transferred_byte_in_second(client),
             GeneralHAClient::AutoSwitchHaClient(client) => client.get_transferred_byte_in_second(),
         }
     }

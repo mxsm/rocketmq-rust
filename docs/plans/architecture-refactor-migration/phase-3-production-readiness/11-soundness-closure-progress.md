@@ -2463,11 +2463,34 @@ Put-message preflight capability 随 Issue #8425 完成以下边界收敛：
 下一子切片 M11-12bc11 继续收窄 Broker aggregate/leaf 或 Store WAL/queue/timer/HA owner；75/82 总进度不变，
 compatibility、stable/Miri/Loom/soak/SLO 与完整候选快照 Gate 仍保持开放。
 
+## M11-12bc11 实现
+
+HA nested child ownership 随 Issue #8427 完成以下边界收敛：
+
+- `GeneralHAClient` 的 Default/AutoSwitch enum payload 改为直接 owned child，并删除从未使用的 `Clone`；`AutoSwitchHAClient` 直接拥有 Default delegate，现有原子 broker id 与异步 address state 保持不变。
+- `GeneralHAConnection` 的 Default/AutoSwitch optional child 改为直接 owned value；构造和替换不再添加嵌套 `ArcMut`，start/shutdown 继续由外层 `&mut self` 独占委托，其他状态查询继续只借用 `&self`。
+- 外层 `DefaultHAService` connection registry、General service wrapper 与 connection task 的 `WeakArcMut<GeneralHAConnection>` 回指不在本切片提前改动，避免把 service/actor 生命周期与局部 child ownership 混为一次迁移。
+- reviewed baseline 从 389 identities / 1,007 occurrences 降至 382 / 993；production 从 226/523 降至 219/509，test 保持 149/444，compatibility 保持 14/40。Store production 从 110/288 降至 103/274；净删除 7 个 production identity/14 occurrence，无 relocation。
+
+## M11-12bc11 验证
+
+| 命令 | 结果 |
+|---|---|
+| Store check / strict Clippy | `cargo check -p rocketmq-store --all-features` 与 Store all-target/all-feature strict Clippy 通过；Store/Broker `rocksdb_store` strict Clippy 通过 |
+| HA focused tests | AutoSwitch client 2/2、auto-switch connection construction 1/1、connection-table lock-free shutdown 1/1、ACK callback 1/1 通过 |
+| Store/RocksDB 回归 | Store all-feature lib 504/504；RocksDB foundation 82/82、semantics 9/9、Broker rocksdb 21/21、pop_consumer 4/4 通过 |
+| reviewed baseline / fixtures | `--apply-reviewed-reductions` 审核候选精确删除 7 identity/14 occurrence；正式 baseline 补丁后 `python scripts/arc_mut_guard.py`、24/24 fixtures 与 67/67 guard tests 通过，无 relocation/临时 approval |
+| runtime / architecture guards | enforcing runtime audit、dependency fixtures/target/baseline、release、8-profile performance、architecture 60/60 与 AGENTS routing 通过 |
+| root workspace final gates | `cargo fmt --all -- --check` 与 workspace all-target/all-feature strict Clippy 通过；Windows linker stdout 与既有 future-incompatibility note 不受 `-D warnings` 管辖 |
+
+下一子切片 M11-12bc12 继续收窄 Broker aggregate/leaf 或 Store WAL/queue/timer/HA owner；75/82 总进度不变，
+compatibility、stable/Miri/Loom/soak/SLO 与完整候选快照 Gate 仍保持开放。
+
 ## 剩余切片与 Gate
 
 1. Broker BrokerRuntimeInner capability carrier 与其他 admin/processor/leaf owner（116/235）；transaction bridge、Producer/ColdData admin leaf、Schedule hook 与 put-message preflight 已退出完整 runtime/store owner，LiteLifecycle 只读 Store carrier 已收窄为普通借用，显式 Store 兼容 owner 留待 Store 批次删除。
-2. Store MappedFileQueue/其余 ConsumeQueue、CommitLog/Flush、StoreHandle/Rocks/Timer 与其余 HA actor（110/288）；BrokerStats observer、ConsumeQueueExt 显式锁 owner 与 HA notification/connection registry 窄能力已完成。
-3. 删除 compatibility `arc_mut.rs` 和公开 re-export；移除其余 nightly feature，将 guard 切到 production/public zero。
+2. Store MappedFileQueue/其余 ConsumeQueue、CommitLog/Flush、StoreHandle/Rocks/Timer 与其余 HA service/actor（103/274）；BrokerStats observer、ConsumeQueueExt 显式锁 owner、HA notification/connection registry 窄能力与未共享 HA child direct ownership 已完成。
+3. 先迁移 Store 对 `WeakArcMut` 的剩余使用并移除其余 nightly feature；公开 `arc_mut.rs`/re-export 的 destructive 删除受 next-major 两轮弃用与 Release Manager/HUMAN Gate 约束，不能静默重置 public API baseline。
 4. 对同一候选快照执行 stable feature matrix、Miri/Loom 可用切片、soak/SLO fault、dashboard/runbook、动态
    Kind/K3d/container、M10 固定硬件和 Human Gate。
 
