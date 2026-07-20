@@ -2294,9 +2294,33 @@ Transaction check runtime capability 随 Issue #8410 完成以下边界收敛：
 下一子切片 M11-12bc4 继续拆分 transaction bridge 的 Store/offset capability 与其他 Broker admin/processor owner；
 75/82 总进度不变，Store、compatibility、stable/Miri/Loom/soak/SLO 与完整候选快照 Gate 仍保持开放。
 
+## M11-12bc4 实现
+
+Transaction bridge runtime boundary 随 Issue #8412 完成以下 capability 收敛：
+
+- `TransactionalMessageBridge` 与 `DefaultTransactionalMessageService` 删除完整 `BrokerRuntimeInner` owner；bridge 只持 store host、broker name、标准 `Arc<ConsumerOffsetManager>`、Topic registration、EscapeBridge 与显式 MessageStore capability，service 显式接收 Broker config 和文件保留时间。
+- 新增 `TransactionTopicRegistration`，只组合 TopicConfig manager/coordinator、queue mapping、cloneable `BrokerOuterAPI`、store state-machine generation、shutdown 与 slave master-address capability；send-back/check-max Topic 创建继续保持 single/increment registration、权限投影、版本重采样、order config 和 HA master-address 更新语义。
+- Broker runtime 以标准 `Arc` 发布 ConsumerOffsetManager 与 TopicQueueMappingManager 的同一代 owner；`BrokerOuterAPI`/`RpcClientImpl` 的 clone 共享既有 remoting client，`SlaveMasterAddress` 使用 `ArcSwapOption` 发布不可变地址代际，旧 reader 在替换后仍持有稳定值。
+- 新增 `TransactionMessageStore` 作为直接 MessageStore 的过渡兼容 owner，将 remaining `ArcMut` 从完整 runtime bridge 隔离到 Store-only boundary。它不是 soundness 豁免，后续 Store 批次必须删除该 owner。
+- reviewed ArcMut baseline 保持 418 identities / 1,051 occurrences：production 250/562、test 154/449、compatibility 14/40、Broker production 128/254。2 个 identity/3 个 occurrence 从 bridge 搬到显式 Store 边界，另有 2 个既有 occurrence 因相邻构造上下文变化发生一对一 fingerprint relocation；均经 ADR-013 临时 approval 审核，approval 不提交，未新增或隐藏债务。
+
+## M11-12bc4 验证
+
+| 命令 | 结果 |
+|---|---|
+| Broker check / strict Clippy | `cargo check -p rocketmq-broker --all-targets --all-features` 与 `cargo clippy -p rocketmq-broker --all-targets --all-features -- -D warnings` 通过 |
+| transaction / capability focused tests | transaction 26/26、BrokerOuterAPI shared remoting client 1/1、Slave master-address immutable generations 1/1 通过 |
+| `cargo test -p rocketmq-broker --all-features --lib -- --test-threads=1` | 598 passed、24 failed、1 ignored；24 项均属于 main 已登记的 25 项失败集合，本切片新增 3 个测试全部通过且失败集合未扩张，因此全套如实记为基线复现而非通过 |
+| reviewed baseline / fixtures | `python scripts/arc_mut_guard.py` 与 `--fixtures` 通过；baseline 数量保持 418/1,051，reviewed identity/occurrence relocations 已更新 |
+| runtime / architecture guards | enforcing runtime audit、ArcMut 67/67、dependency fixtures/target/baseline、release、8-profile performance、architecture 60/60 与 AGENTS routing 通过 |
+| root workspace final gates | `cargo fmt --all -- --check`、`git diff --check` 与 `cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings` 通过；Windows linker stdout 与既有 future-incompatibility note 不受 `-D warnings` 管辖 |
+
+下一子切片 M11-12bc5 收窄 BrokerRuntime aggregate/processor carrier 与其他 Broker leaf owner；75/82 总进度不变，
+Store、compatibility、stable/Miri/Loom/soak/SLO 与完整候选快照 Gate 仍保持开放。
+
 ## 剩余切片与 Gate
 
-1. Broker BrokerRuntimeInner capability carrier、其他 admin/processor 与 transaction bridge 的 Store/offset owner（128/254）；下一子切片 M11-12bc4 继续拆分窄 capability，transaction check listener 已由 Issue #8410 完成。
+1. Broker BrokerRuntimeInner capability carrier 与其他 admin/processor/leaf owner（128/254）；transaction bridge 已由 Issue #8412 退出完整 runtime owner，显式 Store 兼容 owner 留待 Store 批次删除。
 2. Store MappedFileQueue/ConsumeQueue、CommitLog/Flush、StoreHandle/Rocks/Timer 与 HA actor（122/308）。
 3. 删除 compatibility `arc_mut.rs` 和公开 re-export；移除其余 nightly feature，将 guard 切到 production/public zero。
 4. 对同一候选快照执行 stable feature matrix、Miri/Loom 可用切片、soak/SLO fault、dashboard/runbook、动态

@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::Arc;
+
+use arc_swap::ArcSwapOption;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
@@ -27,7 +30,27 @@ use crate::schedule::delay_offset_serialize_wrapper::DelayOffsetSerializeWrapper
 
 pub(crate) struct SlaveSynchronize<MS: MessageStore> {
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
-    master_addr: Option<CheetahString>,
+    master_addr: Arc<SlaveMasterAddress>,
+}
+
+#[derive(Default)]
+pub(crate) struct SlaveMasterAddress {
+    current: ArcSwapOption<CheetahString>,
+}
+
+impl SlaveMasterAddress {
+    pub(crate) fn load(&self) -> Option<Arc<CheetahString>> {
+        self.current.load_full()
+    }
+
+    pub(crate) fn store(&self, addr: Option<&CheetahString>) {
+        let current = self.load();
+        if current.as_deref() == addr {
+            return;
+        }
+        info!("Update master address from {:?} to {:?}", current, addr);
+        self.current.store(addr.cloned().map(Arc::new));
+    }
 }
 
 impl<MS> SlaveSynchronize<MS>
@@ -37,21 +60,20 @@ where
     pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
         Self {
             broker_runtime_inner,
-            master_addr: None,
+            master_addr: Arc::new(SlaveMasterAddress::default()),
         }
     }
 
-    pub fn master_addr(&self) -> Option<&CheetahString> {
-        self.master_addr.as_ref()
+    pub fn master_addr(&self) -> Option<Arc<CheetahString>> {
+        self.master_addr.load()
     }
 
-    pub fn set_master_addr(&mut self, addr: Option<&CheetahString>) {
-        let addr = addr.cloned();
-        if self.master_addr == addr {
-            return;
-        }
-        info!("Update master address from {:?} to {:?}", self.master_addr, addr);
-        self.master_addr = addr;
+    pub(crate) fn master_addr_handle(&self) -> Arc<SlaveMasterAddress> {
+        Arc::clone(&self.master_addr)
+    }
+
+    pub fn set_master_addr(&self, addr: Option<&CheetahString>) {
+        self.master_addr.store(addr);
     }
 
     pub async fn sync_all(&self) {
@@ -71,7 +93,7 @@ where
     }
 
     fn check_master_addr(&self) -> (bool, Option<CheetahString>) {
-        let master_addr_bak = self.master_addr.clone();
+        let master_addr_bak = self.master_addr();
         match &master_addr_bak {
             None => {
                 warn!("Master address is not set");
@@ -84,7 +106,7 @@ where
                 );
                 (false, None)
             }
-            Some(addr) => (true, Some(addr.clone())),
+            Some(addr) => (true, Some(addr.as_ref().clone())),
         }
     }
 
@@ -366,5 +388,28 @@ where
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use cheetah_string::CheetahString;
+
+    use super::SlaveMasterAddress;
+
+    #[test]
+    fn slave_master_address_publishes_immutable_generations() {
+        let address = SlaveMasterAddress::default();
+        let first = CheetahString::from_static_str("127.0.0.1:10911");
+        let second = CheetahString::from_static_str("127.0.0.2:10911");
+
+        address.store(Some(&first));
+        let first_generation = address.load().expect("first generation");
+        address.store(Some(&second));
+
+        assert_eq!(first_generation.as_str(), first.as_str());
+        assert_eq!(address.load().as_deref(), Some(&second));
+        address.store(None);
+        assert!(address.load().is_none());
     }
 }

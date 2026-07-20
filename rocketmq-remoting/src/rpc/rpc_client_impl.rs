@@ -117,6 +117,7 @@ impl ResponseConfig {
 ///     }
 /// });
 /// ```
+#[derive(Clone)]
 pub struct RpcClientImpl {
     /// Client metadata for broker address resolution
     client_metadata: Arc<ClientMetadata>,

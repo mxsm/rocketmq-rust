@@ -166,7 +166,11 @@ use crate::topic::manager::topic_route_info_manager::TopicRouteInfoManager;
 use crate::topic::topic_queue_mapping_clean_service::TopicQueueMappingCleanService;
 use crate::transaction::queue::default_transactional_message_check_listener::DefaultTransactionalMessageCheckListener;
 use crate::transaction::queue::default_transactional_message_service::DefaultTransactionalMessageService;
+use crate::transaction::queue::transaction_message_store::TransactionMessageStore;
+use crate::transaction::queue::transaction_topic_registration::TransactionTopicRegistration;
+use crate::transaction::queue::transaction_topic_registration::TransactionTopicRegistrationContext;
 use crate::transaction::queue::transactional_message_bridge::TransactionalMessageBridge;
+use crate::transaction::queue::transactional_message_bridge::TransactionalMessageBridgeContext;
 use crate::transaction::transaction_metrics_flush_service::TransactionMetricsFlushService;
 use crate::transaction::transactional_message_check_service::TransactionalMessageCheckService;
 
@@ -301,27 +305,8 @@ macro_rules! create_topic_in_send_message_back {
     }};
 }
 
-macro_rules! create_tran_check_max_time_topic {
-    ($runtime:expr, $queue_nums:expr, $perm:expr $(,)?) => {{
-        let runtime = ($runtime).clone();
-        let start_time = std::time::Instant::now();
-        let manager = runtime.topic_config_manager_handle();
-        match manager.create_topic_of_tran_check_max_time(
-            $queue_nums,
-            $perm,
-            runtime.topic_config_state_machine_version(),
-        ) {
-            Some(creation) => Some($crate::broker_runtime::finish_topic_config_creation!(
-                runtime, manager, creation, start_time
-            )),
-            None => None,
-        }
-    }};
-}
-
 pub(crate) use create_topic_in_send_message;
 pub(crate) use create_topic_in_send_message_back;
-pub(crate) use create_tran_check_max_time_topic;
 pub(crate) use finish_topic_config_creation;
 
 const SCHEDULED_TASK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
@@ -1147,7 +1132,7 @@ impl BrokerRuntime {
         let rocksdb_config_managers =
             open_broker_rocksdb_config_managers(broker_config.as_ref(), message_store_config.as_ref());
         #[cfg(feature = "rocksdb_store")]
-        let consumer_offset_manager = match rocksdb_config_managers.as_ref() {
+        let consumer_offset_manager = Arc::new(match rocksdb_config_managers.as_ref() {
             Some(managers) => ConsumerOffsetManager::new_with_rocksdb_config_manager(
                 broker_config.clone(),
                 message_store_config.clone(),
@@ -1155,10 +1140,13 @@ impl BrokerRuntime {
                 Arc::clone(&managers.consumer_offset),
             ),
             None => ConsumerOffsetManager::new(broker_config.clone(), message_store_config.clone(), None),
-        };
+        });
         #[cfg(not(feature = "rocksdb_store"))]
-        let consumer_offset_manager =
-            ConsumerOffsetManager::new(broker_config.clone(), message_store_config.clone(), None);
+        let consumer_offset_manager = Arc::new(ConsumerOffsetManager::new(
+            broker_config.clone(),
+            message_store_config.clone(),
+            None,
+        ));
 
         let mut inner = ArcMut::new(BrokerRuntimeInner::<GenericMessageStore> {
             shutdown: Arc::new(AtomicBool::new(false)),
@@ -1169,7 +1157,7 @@ impl BrokerRuntime {
             //server_config,
             topic_config_manager: None,
             topic_config_coordinator: None,
-            topic_queue_mapping_manager,
+            topic_queue_mapping_manager: Arc::new(topic_queue_mapping_manager),
             consumer_offset_manager,
             subscription_group_manager: None,
             consumer_filter_manager: Some(consumer_filter_manager),
@@ -1739,12 +1727,12 @@ impl BrokerRuntime {
         }
 
         let started = Instant::now();
-        let mut consumer_offset_manager = ConsumerOffsetManager::new(
-            self.inner.broker_config.clone(),
-            self.inner.message_store_config.clone(),
-            None,
+        let broker_config = self.inner.broker_config.clone();
+        let message_store_config = self.inner.message_store_config.clone();
+        let consumer_offset_manager = std::mem::replace(
+            &mut self.inner.consumer_offset_manager,
+            Arc::new(ConsumerOffsetManager::new(broker_config, message_store_config, None)),
         );
-        std::mem::swap(&mut self.inner.consumer_offset_manager, &mut consumer_offset_manager);
         let result = if let Some(service_context) = self.inner.service_context.as_ref() {
             run_shutdown_blocking_operation(
                 service_context,
@@ -1752,7 +1740,17 @@ impl BrokerRuntime {
                 "broker.consumer-offset.persist-stop",
                 move || {
                     consumer_offset_manager.persist();
-                    consumer_offset_manager.stop();
+                    match Arc::try_unwrap(consumer_offset_manager) {
+                        Ok(mut manager) => {
+                            manager.stop();
+                        }
+                        Err(manager) => {
+                            warn!(
+                                strong_count = Arc::strong_count(&manager),
+                                "Consumer offset manager still has live capability owners during shutdown"
+                            );
+                        }
+                    }
                 },
             )
             .await
@@ -2074,8 +2072,8 @@ impl BrokerRuntime {
             self.inner
                 .broker_fast_failure
                 .set_page_cache_busy_checker(move || message_store_for_fast_failure.is_os_page_cache_busy());
-            self.inner
-                .consumer_offset_manager
+            Arc::get_mut(&mut self.inner.consumer_offset_manager)
+                .expect("consumer offset manager is not published before transaction initialization")
                 .set_message_store(Some(message_store));
             if let Some(message_store) = &mut self.inner.message_store {
                 match message_store.init().await {
@@ -2114,8 +2112,8 @@ impl BrokerRuntime {
                 self.inner
                     .broker_fast_failure
                     .set_page_cache_busy_checker(move || message_store_for_fast_failure.is_os_page_cache_busy());
-                self.inner
-                    .consumer_offset_manager
+                Arc::get_mut(&mut self.inner.consumer_offset_manager)
+                    .expect("consumer offset manager is not published before transaction initialization")
                     .set_message_store(Some(message_store));
                 if let Some(message_store) = &mut self.inner.message_store {
                     match message_store.init().await {
@@ -2920,10 +2918,38 @@ impl BrokerRuntime {
     async fn initial_transaction(&mut self) -> bool {
         cfg_if::cfg_if! {
             if #[cfg(feature = "local_file_store")] {
-                let bridge = TransactionalMessageBridge::new(
-                    self.inner.clone()
-                );
-                let service = Arc::new(DefaultTransactionalMessageService::new(bridge));
+                let message_store = TransactionMessageStore::new(self.inner.message_store_unchecked().clone());
+                let topic_registration = Arc::new(TransactionTopicRegistration::new(
+                    TransactionTopicRegistrationContext {
+                        broker_config: self.inner.broker_config_arc(),
+                        topic_config_manager: self.inner.topic_config_manager_handle(),
+                        topic_config_coordinator: self.inner.topic_config_coordinator_handle(),
+                        topic_queue_mapping_manager: self.inner.topic_queue_mapping_manager_handle(),
+                        broker_outer_api: self.inner.broker_outer_api().clone(),
+                        message_store: message_store.clone(),
+                        slave_master_addr: self
+                            .inner
+                            .slave_synchronize()
+                            .map(SlaveSynchronize::master_addr_handle),
+                        update_master_haserver_addr_periodically: self
+                            .inner
+                            .update_master_haserver_addr_periodically,
+                        shutdown: Arc::clone(&self.inner.shutdown),
+                    },
+                ));
+                let bridge = TransactionalMessageBridge::new(TransactionalMessageBridgeContext {
+                    store_host: self.inner.store_host(),
+                    broker_name: self.inner.broker_config().broker_name().clone(),
+                    consumer_offset_manager: self.inner.consumer_offset_manager_handle(),
+                    message_store,
+                    topic_registration,
+                    escape_bridge: Arc::clone(&self.escape_bridge_owner),
+                });
+                let service = Arc::new(DefaultTransactionalMessageService::new(
+                    bridge,
+                    self.inner.broker_config_arc(),
+                    self.inner.message_store_config().file_reserved_time as i64,
+                ));
                 let weak_service = Arc::downgrade(&service);
                 if let Err(error) = service.set_transactional_op_batch_service_start(weak_service).await {
                     error!("Failed to start transactional op batch service: {error}");
@@ -3597,8 +3623,8 @@ pub(crate) struct BrokerRuntimeInner<MS: MessageStore> {
     message_store_config: Arc<MessageStoreConfig>,
     topic_config_manager: Option<Arc<TopicConfigManager>>,
     topic_config_coordinator: Option<Arc<TopicConfigCoordinator>>,
-    topic_queue_mapping_manager: TopicQueueMappingManager,
-    consumer_offset_manager: ConsumerOffsetManager<MS>,
+    topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
+    consumer_offset_manager: Arc<ConsumerOffsetManager<MS>>,
     subscription_group_manager: Option<SubscriptionGroupManager<MS>>,
     consumer_filter_manager: Option<ConsumerFilterManager>,
     consumer_order_info_manager: Option<ConsumerOrderInfoManager<MS>>,
@@ -3693,7 +3719,8 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
 
     #[inline]
     pub fn topic_queue_mapping_manager_mut(&mut self) -> &mut TopicQueueMappingManager {
-        &mut self.topic_queue_mapping_manager
+        Arc::get_mut(&mut self.topic_queue_mapping_manager)
+            .expect("topic queue mapping manager mutation requires an unpublished owner")
     }
 
     #[inline]
@@ -3873,12 +3900,22 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
 
     #[inline]
     pub fn topic_queue_mapping_manager(&self) -> &TopicQueueMappingManager {
-        &self.topic_queue_mapping_manager
+        self.topic_queue_mapping_manager.as_ref()
     }
 
     #[inline]
     pub fn consumer_offset_manager(&self) -> &ConsumerOffsetManager<MS> {
-        &self.consumer_offset_manager
+        self.consumer_offset_manager.as_ref()
+    }
+
+    #[inline]
+    pub(crate) fn consumer_offset_manager_handle(&self) -> Arc<ConsumerOffsetManager<MS>> {
+        Arc::clone(&self.consumer_offset_manager)
+    }
+
+    #[inline]
+    pub(crate) fn topic_queue_mapping_manager_handle(&self) -> Arc<TopicQueueMappingManager> {
+        Arc::clone(&self.topic_queue_mapping_manager)
     }
 
     #[inline]
@@ -4160,7 +4197,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
 
     #[inline]
     pub fn set_topic_queue_mapping_manager(&mut self, topic_queue_mapping_manager: TopicQueueMappingManager) {
-        self.topic_queue_mapping_manager = topic_queue_mapping_manager;
+        self.topic_queue_mapping_manager = Arc::new(topic_queue_mapping_manager);
     }
 
     #[inline]
@@ -5225,9 +5262,8 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             self.broker_config.broker_identity.broker_id == self.min_broker_id_in_group.load(Ordering::SeqCst),
         )
         .await;
-        if offline_broker_addr.is_some()
-            && offline_broker_addr.as_ref() == self.slave_synchronize().unwrap().master_addr()
-        {
+        let current_slave_master_addr = self.slave_synchronize().unwrap().master_addr();
+        if offline_broker_addr.is_some() && offline_broker_addr.as_ref() == current_slave_master_addr.as_deref() {
             //master offline
             self.on_master_offline().await;
         }
@@ -5647,6 +5683,20 @@ mod tests {
 
         assert_eq!(auth_config.signature_algorithm, SignatureAlgorithm::HmacSha256);
         assert_eq!(auth_config.request_timestamp_expired_millis, 300_000);
+    }
+
+    #[test]
+    fn transaction_capability_handles_share_runtime_generations() {
+        let runtime = BrokerRuntime::new(
+            Arc::new(BrokerConfig::default()),
+            Arc::new(MessageStoreConfig::default()),
+        );
+
+        let offset_handle = runtime.inner.consumer_offset_manager_handle();
+        let mapping_handle = runtime.inner.topic_queue_mapping_manager_handle();
+
+        assert!(Arc::ptr_eq(&offset_handle, &runtime.inner.consumer_offset_manager));
+        assert!(Arc::ptr_eq(&mapping_handle, &runtime.inner.topic_queue_mapping_manager));
     }
 
     #[test]
