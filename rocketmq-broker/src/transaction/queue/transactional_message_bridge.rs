@@ -45,6 +45,8 @@ use crate::broker_runtime::BrokerRuntimeInner;
 use crate::store_read::decode_read_outcome;
 use crate::transaction::queue::transactional_message_util::TransactionalMessageUtil;
 
+const TCMT_QUEUE_NUMS: i32 = 1;
+
 pub struct TransactionalMessageBridge<MS: MessageStore> {
     pub(crate) op_queue_map: Arc<Mutex<HashMap<i32, MessageQueue>>>,
     pub(crate) store_host: SocketAddr,
@@ -182,6 +184,14 @@ where
         topic_config
     }
 
+    pub(crate) async fn select_tran_check_max_time_topic(&mut self) -> Option<Arc<TopicConfig>> {
+        crate::broker_runtime::create_tran_check_max_time_topic!(
+            self.broker_runtime_inner.clone(),
+            TCMT_QUEUE_NUMS,
+            PermName::PERM_READ | PermName::PERM_WRITE,
+        )
+    }
+
     pub async fn put_half_message(&mut self, mut message: MessageExtBrokerInner) -> PutMessageResult {
         Self::parse_half_message_inner(&mut message);
         self.broker_runtime_inner
@@ -309,23 +319,27 @@ where
             .look_message_by_offset(offset)
     }
 
-    pub async fn write_op(&self, queue_id: i32, message: Message) -> bool {
-        let mut op_queue_map = self.op_queue_map.lock().await;
-        let op_queue = op_queue_map.entry(queue_id).or_insert_with(|| {
-            get_op_queue_by_half(
-                queue_id,
-                self.broker_runtime_inner.broker_config().broker_name().clone(),
-            )
-        });
-        let inner = self.make_op_message_inner(message, op_queue);
+    pub async fn write_op(&mut self, queue_id: i32, message: Message) -> bool {
+        let op_queue = {
+            let mut op_queue_map = self.op_queue_map.lock().await;
+            op_queue_map
+                .entry(queue_id)
+                .or_insert_with(|| {
+                    get_op_queue_by_half(
+                        queue_id,
+                        self.broker_runtime_inner.broker_config().broker_name().clone(),
+                    )
+                })
+                .clone()
+        };
+        let inner = self.make_op_message_inner(message, &op_queue);
         let result = self.put_message_return_result(inner).await;
         result.put_message_status() == PutMessageStatus::PutOk
     }
 
-    pub async fn put_message_return_result(&self, message_inner: MessageExtBrokerInner) -> PutMessageResult {
+    pub async fn put_message_return_result(&mut self, message_inner: MessageExtBrokerInner) -> PutMessageResult {
         let result = self
             .broker_runtime_inner
-            .mut_from_ref()
             .message_store_mut()
             .as_mut()
             .unwrap()

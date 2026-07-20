@@ -65,7 +65,61 @@ pub struct ProducerManager {
     broker_config: Option<Arc<BrokerConfig>>,
 }
 
+/// Shared read capability for selecting a live producer channel.
+///
+/// This view deliberately omits broker configuration and mutation hooks so transaction checking
+/// cannot retain the complete producer manager or broker runtime.
+#[derive(Clone)]
+pub(crate) struct ProducerChannelRegistry {
+    group_channel_table: Arc<DashMap<ProducerGroupName, DashMap<Channel, ClientChannelInfo>>>,
+    positive_atomic_counter: Arc<AtomicI32>,
+}
+
+impl ProducerChannelRegistry {
+    pub(crate) fn get_available_channel(&self, group: Option<&ProducerGroupName>) -> Option<Channel> {
+        select_available_channel(&self.group_channel_table, &self.positive_atomic_counter, group)
+    }
+}
+
+fn select_available_channel(
+    group_channel_table: &DashMap<ProducerGroupName, DashMap<Channel, ClientChannelInfo>>,
+    positive_atomic_counter: &AtomicI32,
+    group: Option<&ProducerGroupName>,
+) -> Option<Channel> {
+    let group = group?;
+    let channels = {
+        let channel_map = group_channel_table.get(group)?;
+        if channel_map.is_empty() {
+            warn!("Channel list is empty. group={}", group);
+            return None;
+        }
+        channel_map.iter().map(|entry| entry.key().clone()).collect::<Vec<_>>()
+    };
+    let size = channels.len();
+    let index = positive_atomic_counter.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+    let mut index = index.unsigned_abs() as usize % size;
+    let mut last_healthy_channel = None;
+    for _ in 0..GET_AVAILABLE_CHANNEL_RETRY_COUNT {
+        let channel = &channels[index];
+        if channel.connection_ref().is_healthy() {
+            return Some(channel.clone());
+        }
+        if channel.connection_ref().state() != ConnectionState::Closed {
+            last_healthy_channel = Some(channel.clone());
+        }
+        index = (index + 1) % size;
+    }
+    last_healthy_channel
+}
+
 impl ProducerManager {
+    pub(crate) fn channel_registry(&self) -> ProducerChannelRegistry {
+        ProducerChannelRegistry {
+            group_channel_table: Arc::clone(&self.group_channel_table),
+            positive_atomic_counter: Arc::clone(&self.positive_atomic_counter),
+        }
+    }
+
     /// Creates a new producer manager with empty state.
     pub fn new() -> Self {
         Self {
@@ -366,49 +420,7 @@ impl ProducerManager {
     /// # Returns
     /// A channel if the group exists and has at least one non-closed channel, or `None` otherwise
     pub fn get_available_channel(&self, group: Option<&ProducerGroupName>) -> Option<Channel> {
-        let group = group?;
-
-        // Collect all channels first, then release the lock
-        let channels: Vec<Channel> = {
-            let channel_map = self.group_channel_table.get(group)?;
-            if channel_map.is_empty() {
-                warn!("Channel list is empty. group={}", group);
-                return None;
-            }
-            channel_map.iter().map(|entry| entry.key().clone()).collect()
-        };
-
-        let size = channels.len();
-        if size == 0 {
-            warn!("Channel list is empty. group={}", group);
-            return None;
-        }
-
-        // Round-robin selection (no locks held)
-        let index = self
-            .positive_atomic_counter
-            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-        let mut index = index.unsigned_abs() as usize % size;
-        let mut last_healthy_channel: Option<Channel> = None;
-
-        // Try to find a healthy channel (retry GET_AVAILABLE_CHANNEL_RETRY_COUNT times)
-        for _ in 0..GET_AVAILABLE_CHANNEL_RETRY_COUNT {
-            let channel = &channels[index];
-            let is_healthy = channel.connection_ref().is_healthy();
-
-            if is_healthy {
-                return Some(channel.clone());
-            }
-
-            // Track non-closed channels as fallback
-            if channel.connection_ref().state() != ConnectionState::Closed {
-                last_healthy_channel = Some(channel.clone());
-            }
-
-            index = (index + 1) % size;
-        }
-
-        last_healthy_channel
+        select_available_channel(&self.group_channel_table, &self.positive_atomic_counter, group)
     }
 
     /// Removes producers that have not sent a heartbeat within the timeout period.
@@ -692,5 +704,60 @@ impl ProducerManager {
         for listener in listeners.iter() {
             listener.handle(event, group, client_channel_info);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use parking_lot::Mutex;
+    use rocketmq_remoting::base::response_future::ResponseFuture;
+    use rocketmq_remoting::connection::Connection;
+    use rocketmq_remoting::net::channel::ChannelInner;
+    use rocketmq_remoting::protocol::LanguageCode;
+    use tokio::net::TcpStream;
+
+    use super::*;
+
+    async fn create_test_channel() -> Channel {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind local test listener");
+        let local_addr = listener.local_addr().expect("local listener addr");
+        let std_stream = std::net::TcpStream::connect(local_addr).expect("connect local test listener");
+        std_stream.set_nonblocking(true).expect("set nonblocking");
+        drop(listener);
+        let tcp_stream = TcpStream::from_std(std_stream).expect("convert tcp stream");
+        let connection = Connection::new(tcp_stream);
+        let response_table = Arc::new(Mutex::new(HashMap::<i32, ResponseFuture>::new()));
+        let inner = Arc::new(ChannelInner::new(connection, response_table));
+        Channel::new(inner, local_addr, local_addr)
+    }
+
+    #[tokio::test]
+    async fn channel_registry_observes_later_producer_registration() {
+        let manager = ProducerManager::new();
+        let registry = manager.channel_registry();
+        let group = CheetahString::from_static_str("transaction-producer");
+        assert!(registry.get_available_channel(Some(&group)).is_none());
+
+        let channel = create_test_channel().await;
+        let client = ClientChannelInfo::new(channel.clone(), "client-id".into(), LanguageCode::default(), 1);
+        manager.register_producer(&group, &client);
+
+        assert_eq!(registry.get_available_channel(Some(&group)), Some(channel));
+    }
+
+    #[test]
+    fn narrow_registry_does_not_capture_producer_configuration() {
+        let source = include_str!("producer_manager.rs");
+        let registry_start = source.find("pub(crate) struct ProducerChannelRegistry").unwrap();
+        let registry_end = source[registry_start..]
+            .find("impl ProducerManager")
+            .map(|offset| registry_start + offset)
+            .unwrap();
+        let registry_source = &source[registry_start..registry_end];
+
+        assert!(!registry_source.contains("broker_config"));
     }
 }

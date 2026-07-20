@@ -91,8 +91,6 @@ pub struct AdminBrokerProcessor<MS: MessageStore> {
     batch_mq_handler: BatchMqHandler<MS>,
     subscription_group_handler: SubscriptionGroupHandler<MS>,
 
-    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
-
     notify_min_broker_handler: NotifyMinBrokerChangeIdHandler<MS>,
     update_broker_ha_handler: UpdateBrokerHaHandler<MS>,
     reset_master_flusg_offset_handler: ResetMasterFlushOffsetHandler<MS>,
@@ -113,7 +111,7 @@ pub struct AdminBrokerProcessor<MS: MessageStore> {
     update_global_white_addrs_config_request_handler: UpdateGlobalWhiteAddrsConfigRequestHandler,
     update_cold_data_flow_ctr_group_config_request_handler: UpdateColdDataFlowCtrGroupConfigRequestHandler<MS>,
     get_broker_ha_status_handler: GetBrokerHaStatusHandler<MS>,
-    broker_stats_handler: BrokerStatsHandler<MS>,
+    broker_stats_handler: BrokerStatsHandler,
 }
 
 impl<MS> RequestProcessor for AdminBrokerProcessor<MS>
@@ -170,7 +168,7 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
         let update_cold_data_flow_ctr_group_config_request_handler =
             UpdateColdDataFlowCtrGroupConfigRequestHandler::new(broker_runtime_inner.clone());
         let get_broker_ha_status_handler = GetBrokerHaStatusHandler::new(broker_runtime_inner.clone());
-        let broker_stats_handler = BrokerStatsHandler::new(broker_runtime_inner.clone());
+        let broker_stats_handler = BrokerStatsHandler::new(broker_runtime_inner.broker_stats_manager_handle());
 
         AdminBrokerProcessor {
             topic_request_handler,
@@ -179,7 +177,6 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
             offset_request_handler,
             batch_mq_handler,
             subscription_group_handler,
-            broker_runtime_inner,
             notify_min_broker_handler,
             update_broker_ha_handler,
             reset_master_flusg_offset_handler,

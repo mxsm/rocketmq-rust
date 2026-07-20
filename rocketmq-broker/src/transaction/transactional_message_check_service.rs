@@ -35,7 +35,7 @@ pub struct TransactionalMessageCheckService<MS: MessageStore> {
 struct TransactionalMessageCheckServiceInner<MS: MessageStore> {
     broker_config: Arc<BrokerConfig>,
     transactional_message_service: Arc<DefaultTransactionalMessageService<MS>>,
-    transactional_message_check_listener: DefaultTransactionalMessageCheckListener<MS>,
+    transactional_message_check_listener: DefaultTransactionalMessageCheckListener,
 }
 
 impl<MS: MessageStore> ServiceTask for TransactionalMessageCheckServiceInner<MS> {
@@ -86,7 +86,7 @@ impl<MS: MessageStore> TransactionalMessageCheckService<MS> {
     pub fn new(
         broker_config: Arc<BrokerConfig>,
         transactional_message_service: Arc<DefaultTransactionalMessageService<MS>>,
-        transactional_message_check_listener: DefaultTransactionalMessageCheckListener<MS>,
+        transactional_message_check_listener: DefaultTransactionalMessageCheckListener,
     ) -> Self {
         let task_impl = ServiceManager::new(TransactionalMessageCheckServiceInner {
             broker_config,

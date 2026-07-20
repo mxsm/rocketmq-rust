@@ -1429,6 +1429,61 @@ impl BrokerRuntime {
             self.inner.schedule_message_service.take();
         }
 
+        // Transaction checking can create the checked-too-many-times topic and read/write the
+        // message store. Stop admission, drain its owned check tasks, then stop the op batch
+        // service before closing topic registration or the store. Taking every runtime slot also
+        // breaks the service -> bridge -> runtime ownership cycle.
+        let transaction_started = Instant::now();
+        let mut transaction_services_present = false;
+        if let Some(transactional_message_check_service) = self.inner.transactional_message_check_service.take() {
+            transaction_services_present = true;
+            if await_shutdown_deadline(deadline, transactional_message_check_service.shutdown())
+                .await
+                .is_err()
+            {
+                shutdown_report.transaction_services =
+                    BrokerShutdownComponentReport::timed_out("transaction_services", transaction_started.elapsed());
+                return shutdown_report;
+            }
+        }
+        if let Some(transactional_message_check_listener) = self.inner.transactional_message_check_listener.take() {
+            transaction_services_present = true;
+            if let Some(listener_report) = transactional_message_check_listener
+                .shutdown(deadline.remaining())
+                .await
+            {
+                if !listener_report.is_healthy() {
+                    shutdown_report.transaction_services = BrokerShutdownComponentReport::from_shutdown_report(
+                        "transaction_services",
+                        Some(&listener_report),
+                        transaction_started.elapsed(),
+                    );
+                    return shutdown_report;
+                }
+            }
+        }
+        if let Some(transactional_message_service) = self.inner.transactional_message_service.take() {
+            transaction_services_present = true;
+            if await_shutdown_deadline(deadline, transactional_message_service.shutdown())
+                .await
+                .is_err()
+            {
+                shutdown_report.transaction_services =
+                    BrokerShutdownComponentReport::timed_out("transaction_services", transaction_started.elapsed());
+                return shutdown_report;
+            }
+        }
+        if let Some(mut transaction_metrics_flush_service) = self.inner.transaction_metrics_flush_service.take() {
+            transaction_services_present = true;
+            transaction_metrics_flush_service.shutdown();
+        }
+        shutdown_report.transaction_services = if transaction_services_present {
+            BrokerShutdownComponentReport::completed("transaction_services", transaction_started.elapsed())
+        } else {
+            BrokerShutdownComponentReport::skipped("transaction_services")
+        };
+        progress.complete("transaction_services");
+
         if let Some(topic_config_coordinator) = self.inner.topic_config_coordinator.as_ref().cloned() {
             let mut topic_config_report = topic_config_coordinator.shutdown_until(deadline).await;
             if topic_config_report.can_unregister() {
@@ -1561,8 +1616,6 @@ impl BrokerRuntime {
             ack_message_processor.shutdown().await;
         }
 
-        let transaction_started = Instant::now();
-        let mut transaction_services_present = false;
         if let Some(notification_processor) = self.inner.notification_processor.as_ref() {
             pop_services_present = true;
             notification_processor.shutdown().await;
@@ -1626,28 +1679,6 @@ impl BrokerRuntime {
             }
         }
 
-        if let Some(transactional_message_check_service) = self.inner.transactional_message_check_service.as_ref() {
-            transaction_services_present = true;
-            transactional_message_check_service.shutdown().await;
-        }
-        if let Some(transactional_message_check_listener) = self.inner.transactional_message_check_listener.as_ref() {
-            transaction_services_present = true;
-            transactional_message_check_listener.shutdown().await;
-        }
-        if let Some(transactional_message_service) = self.inner.transactional_message_service.as_ref() {
-            transaction_services_present = true;
-            transactional_message_service.shutdown().await;
-        }
-        if let Some(transaction_metrics_flush_service) = self.inner.transaction_metrics_flush_service.as_mut() {
-            transaction_services_present = true;
-            transaction_metrics_flush_service.shutdown();
-        }
-        shutdown_report.transaction_services = if transaction_services_present {
-            BrokerShutdownComponentReport::completed("transaction_services", transaction_started.elapsed())
-        } else {
-            BrokerShutdownComponentReport::skipped("transaction_services")
-        };
-        progress.complete("transaction_services");
         self.escape_bridge_owner.shutdown();
         let started = Instant::now();
         let mut topic_route_present = false;
@@ -2154,7 +2185,7 @@ impl BrokerRuntime {
             self.initialize_remoting_server();
             self.initialize_resources();
             self.initialize_scheduled_tasks().await;
-            self.initial_transaction().await;
+            result &= self.initial_transaction().await;
             result &= self.initial_acl().await;
             if result {
                 result &= self.initial_rpc_hooks();
@@ -2886,7 +2917,7 @@ impl BrokerRuntime {
         }
     }
 
-    async fn initial_transaction(&mut self) {
+    async fn initial_transaction(&mut self) -> bool {
         cfg_if::cfg_if! {
             if #[cfg(feature = "local_file_store")] {
                 let bridge = TransactionalMessageBridge::new(
@@ -2900,13 +2931,33 @@ impl BrokerRuntime {
                 self.inner.transactional_message_service = Some(service);
             }
         }
-        let listener = DefaultTransactionalMessageCheckListener::new(Broker2Client, self.inner.clone());
+        let broker_name = self.inner.broker_config().broker_name().clone();
+        let task_group_lease = match self.inner.service_context.as_ref() {
+            Some(service_context) => match service_context
+                .task_group()
+                .try_child_lease(format!("rocketmq-broker.transaction-check.{broker_name}"))
+            {
+                Ok(lease) => Some(lease),
+                Err(error) => {
+                    error!(?error, "Failed to create transaction check task group");
+                    return false;
+                }
+            },
+            None => None,
+        };
+        let listener = DefaultTransactionalMessageCheckListener::new(
+            broker_name,
+            self.inner.producer_manager().channel_registry(),
+            Arc::new(Broker2Client),
+            task_group_lease,
+        );
         self.inner.transactional_message_check_listener = Some(listener.clone());
         self.inner.transactional_message_check_service =
             self.inner.transactional_message_service.as_ref().map(|service| {
                 TransactionalMessageCheckService::new(self.inner.broker_config_arc(), service.clone(), listener)
             });
         self.inner.transaction_metrics_flush_service = Some(TransactionMetricsFlushService);
+        true
     }
 
     async fn initial_acl(&mut self) -> bool {
@@ -3570,7 +3621,7 @@ pub(crate) struct BrokerRuntimeInner<MS: MessageStore> {
     pull_request_hold_service: Option<Arc<PullRequestHoldService<MS>>>,
     rebalance_lock_manager: RebalanceLockManager,
     broker_member_group: BrokerMemberGroup,
-    transactional_message_check_listener: Option<DefaultTransactionalMessageCheckListener<MS>>,
+    transactional_message_check_listener: Option<DefaultTransactionalMessageCheckListener>,
     transactional_message_check_service: Option<TransactionalMessageCheckService<MS>>,
     transaction_metrics_flush_service: Option<TransactionMetricsFlushService>,
     topic_route_info_manager: Option<TopicRouteInfoManager<MS>>,
@@ -3738,7 +3789,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     #[inline]
     pub fn transactional_message_check_listener_mut(
         &mut self,
-    ) -> &mut Option<DefaultTransactionalMessageCheckListener<MS>> {
+    ) -> &mut Option<DefaultTransactionalMessageCheckListener> {
         &mut self.transactional_message_check_listener
     }
 
@@ -3957,6 +4008,14 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
+    pub(crate) fn broker_stats_manager_handle(&self) -> Arc<BrokerStatsManager> {
+        self.broker_stats_manager
+            .as_ref()
+            .expect("broker_stats_manager should be initialized before request processors")
+            .clone()
+    }
+
+    #[inline]
     pub fn broker_stats_manager_unchecked(&self) -> &BrokerStatsManager {
         unsafe { self.broker_stats_manager.as_ref().unwrap_unchecked() }
     }
@@ -4007,7 +4066,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn transactional_message_check_listener(&self) -> &Option<DefaultTransactionalMessageCheckListener<MS>> {
+    pub fn transactional_message_check_listener(&self) -> &Option<DefaultTransactionalMessageCheckListener> {
         &self.transactional_message_check_listener
     }
 
@@ -4204,7 +4263,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     #[inline]
     pub fn set_transactional_message_check_listener(
         &mut self,
-        transactional_message_check_listener: DefaultTransactionalMessageCheckListener<MS>,
+        transactional_message_check_listener: DefaultTransactionalMessageCheckListener,
     ) {
         self.transactional_message_check_listener = Some(transactional_message_check_listener);
     }
@@ -5790,6 +5849,26 @@ mod tests {
     }
 
     #[test]
+    fn transaction_shutdown_precedes_topic_coordinator_and_message_store() {
+        let source = include_str!("broker_runtime.rs");
+        let transaction_shutdown = source
+            .find("self.inner.transactional_message_check_service.take()")
+            .expect("transaction check service should detach during shutdown");
+        let topic_shutdown = source
+            .find("if let Some(topic_config_coordinator) = self.inner.topic_config_coordinator.as_ref().cloned()")
+            .expect("topic coordinator shutdown should exist");
+        let store_shutdown = source
+            .find("let message_store_outcome =")
+            .expect("message store shutdown should exist");
+
+        assert!(transaction_shutdown < topic_shutdown);
+        assert!(topic_shutdown < store_shutdown);
+        assert!(source.contains("self.inner.transactional_message_check_listener.take()"));
+        assert!(source.contains("self.inner.transactional_message_service.take()"));
+        assert!(source.contains("self.inner.transaction_metrics_flush_service.take()"));
+    }
+
+    #[test]
     fn broker_basic_shutdown_report_aggregates_unhealthy_and_timed_out_components() {
         let report = BrokerBasicServiceShutdownReport {
             auth: BrokerShutdownComponentReport::completed("auth", Duration::from_millis(1)),
@@ -7332,7 +7411,10 @@ accounts:
         runtime.initialize_remoting_server();
         runtime.initialize_resources();
         runtime.initialize_scheduled_tasks().await;
-        runtime.initial_transaction().await;
+        assert!(
+            runtime.initial_transaction().await,
+            "{broker_label} transaction init should succeed"
+        );
         assert!(runtime.initial_acl().await, "{broker_label} acl init should succeed");
         assert!(
             runtime.initial_rpc_hooks(),

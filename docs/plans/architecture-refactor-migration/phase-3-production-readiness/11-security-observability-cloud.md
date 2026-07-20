@@ -537,6 +537,12 @@ registration 静默、worker 与 blocking task 退出后才 unregister/detach。
 `topic_config` 健康、超时和未完成状态；该收敛关闭 Topic metadata 在 unregister、MessageStore 和共享 Rocks backend
 之间的提前拆卸窗口，但不提前签署整个 Phase 3 drain `[REV]` Gate。
 
+M11-12bc3 随 Issue #8410 将 transaction check listener 收窄为 broker name、producer channel registry、Broker2Client
+与 leased TaskGroup，不再持有完整 BrokerRuntime/MessageStore。Broker shutdown 现在先停止 check admission、排空 listener
+task、关闭 transaction service/op-batch 并 `take` runtime slot，再关闭 Topic coordinator 与 MessageStore；transaction drain
+超时或不健康时保留后两者并返回 typed component report。该顺序关闭了事务检查在 Topic admission close 后建 Topic、或在
+Store close 后读写消息的窗口，但不提前签署整个 Phase 3 drain `[REV]` Gate。
+
 ## 公共兼容面
 
 - development/compatibility仍可显式选择；secure只作为新部署默认，不静默重解释旧配置。
