@@ -2042,6 +2042,9 @@ impl DefaultMQProducerImpl {
             ServiceState::ShutdownAlready => {
                 return Err(mq_client_err!("The producer service state is ShutdownAlready"));
             }
+            ServiceState::Starting => {
+                return Err(mq_client_err!("The producer service state is Starting"));
+            }
             ServiceState::StartFailed => {
                 return Err(mq_client_err!(format!(
                     "The producer service state not OK, maybe started once,{:?},{}",

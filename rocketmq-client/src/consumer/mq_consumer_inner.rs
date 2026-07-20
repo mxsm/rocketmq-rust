@@ -108,6 +108,10 @@ pub struct MQConsumerInnerImpl {
 }
 
 impl MQConsumerInnerImpl {
+    pub(crate) fn is_running(&self) -> bool {
+        self.default_mqpush_consumer_impl.is_running()
+    }
+
     pub(crate) async fn pop_message(&mut self, pop_request: PopRequest) {
         self.default_mqpush_consumer_impl.pop_message(pop_request).await;
     }

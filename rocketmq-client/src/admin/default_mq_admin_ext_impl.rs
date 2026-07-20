@@ -157,7 +157,10 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
                 info!("the adminExt [{}] start OK", self.admin_ext_group);
                 Ok(())
             }
-            ServiceState::Running | ServiceState::ShutdownAlready | ServiceState::StartFailed => {
+            ServiceState::Running
+            | ServiceState::ShutdownAlready
+            | ServiceState::Starting
+            | ServiceState::StartFailed => {
                 unimplemented!()
             }
         }
@@ -165,7 +168,10 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
 
     async fn shutdown(&mut self) {
         match self.service_state {
-            ServiceState::CreateJust | ServiceState::ShutdownAlready | ServiceState::StartFailed => {
+            ServiceState::CreateJust
+            | ServiceState::Starting
+            | ServiceState::ShutdownAlready
+            | ServiceState::StartFailed => {
                 // do nothing
             }
             ServiceState::Running => {

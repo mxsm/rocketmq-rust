@@ -18,6 +18,8 @@ use std::fmt::Display;
 pub enum ServiceState {
     /// Service just created, not started
     CreateJust,
+    /// Service initialization is in progress and it must not be exposed to work scheduling.
+    Starting,
     /// Service running
     Running,
     /// Service shutdown
@@ -30,9 +32,21 @@ impl Display for ServiceState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ServiceState::CreateJust => write!(f, "CreateJust"),
+            ServiceState::Starting => write!(f, "Starting"),
             ServiceState::Running => write!(f, "Running"),
             ServiceState::ShutdownAlready => write!(f, "ShutdownAlready"),
             ServiceState::StartFailed => write!(f, "StartFailed"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn starting_has_a_distinct_display_value() {
+        assert_eq!(ServiceState::Starting.to_string(), "Starting");
+        assert_ne!(ServiceState::Starting, ServiceState::StartFailed);
     }
 }

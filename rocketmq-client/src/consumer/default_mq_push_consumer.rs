@@ -513,7 +513,12 @@ impl MQPushConsumer for DefaultMQPushConsumer {
     }
 
     async fn shutdown(&mut self) {
-        todo!()
+        let await_termination_millis = self.consumer_config.await_termination_millis_when_shutdown;
+        self.default_mqpush_consumer_impl
+            .as_mut()
+            .expect("default_mqpush_consumer_impl is None")
+            .shutdown(await_termination_millis)
+            .await;
     }
 
     fn register_message_listener_concurrently_fn<MLCFN>(&mut self, message_listener: MLCFN)
@@ -643,5 +648,20 @@ impl DefaultMQPushConsumer {
 
     pub fn set_consume_from_where(&mut self, consume_from_where: ConsumeFromWhere) {
         self.consumer_config.consume_from_where = consume_from_where;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn public_shutdown_is_idempotent_before_start() {
+        let mut consumer = DefaultMQPushConsumer::builder()
+            .consumer_group("phase3-shutdown-test")
+            .build();
+
+        consumer.shutdown().await;
+        consumer.shutdown().await;
     }
 }

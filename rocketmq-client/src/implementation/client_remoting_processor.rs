@@ -55,6 +55,12 @@ impl ClientRemotingProcessor {
     }
 }
 
+fn unsupported_request_response() -> RemotingCommand {
+    RemotingCommand::create_response_command()
+        .set_code(ResponseCode::RequestCodeNotSupported)
+        .set_remark("request is not supported by this RocketMQ Rust client")
+}
+
 impl RequestProcessor for ClientRemotingProcessor {
     async fn process_request(
         &mut self,
@@ -66,15 +72,9 @@ impl RequestProcessor for ClientRemotingProcessor {
         info!("process_request: {:?}", request_code);
         match request_code {
             RequestCode::CheckTransactionState => self.check_transaction_state(channel, ctx, request).await,
-            RequestCode::ResetConsumerClientOffset => {
-                unimplemented!("ResetConsumerClientOffset")
-            }
-            RequestCode::GetConsumerStatusFromClient => {
-                unimplemented!("GetConsumerStatusFromClient")
-            }
-            RequestCode::GetConsumerRunningInfo => {
-                unimplemented!("GetConsumerRunningInfo")
-            }
+            RequestCode::ResetConsumerClientOffset
+            | RequestCode::GetConsumerStatusFromClient
+            | RequestCode::GetConsumerRunningInfo => Ok(Some(unsupported_request_response())),
             RequestCode::ConsumeMessageDirectly => self.consume_message_directly(channel, ctx, request).await,
             //RPC message handle code
             RequestCode::PushReplyMessageToClient => self.receive_reply_message(ctx, request).await,
@@ -85,6 +85,17 @@ impl RequestProcessor for ClientRemotingProcessor {
                 Ok(None)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unsupported_lifecycle_requests_return_a_response_instead_of_panicking() {
+        let response = unsupported_request_response();
+        assert_eq!(response.code(), ResponseCode::RequestCodeNotSupported.to_i32());
     }
 }
 

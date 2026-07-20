@@ -92,6 +92,8 @@ pub struct MQClientInstance {
         Arc<RwLock<HashMap<CheetahString /* Topic */, HashMap<MessageQueue, CheetahString /* brokerName */>>>>,
     lock_namesrv: Arc<RocketMQTokioMutex<()>>,
     lock_heartbeat: Arc<RocketMQTokioMutex<()>>,
+    /// Serializes shared factory startup before any background work is exposed.
+    lock_startup: Arc<RocketMQTokioMutex<()>>,
 
     service_state: ServiceState,
     pub(crate) pull_message_service: ArcMut<PullMessageService>,
@@ -146,6 +148,7 @@ impl MQClientInstance {
             topic_end_points_table: Arc::new(Default::default()),
             lock_namesrv: Default::default(),
             lock_heartbeat: Default::default(),
+            lock_startup: Default::default(),
             service_state: ServiceState::CreateJust,
             pull_message_service: ArcMut::new(PullMessageService::new()),
             rebalance_service: RebalanceService::new(),
@@ -190,6 +193,7 @@ impl MQClientInstance {
             topic_end_points_table: Arc::new(Default::default()),
             lock_namesrv: Default::default(),
             lock_heartbeat: Default::default(),
+            lock_startup: Default::default(),
             service_state: ServiceState::CreateJust,
             pull_message_service: ArcMut::new(PullMessageService::new()),
             rebalance_service: RebalanceService::new(),
@@ -274,9 +278,11 @@ impl MQClientInstance {
     }
 
     pub async fn start(&mut self, this: ArcMut<Self>) -> rocketmq_error::RocketMQResult<()> {
+        let startup_lock = self.lock_startup.clone();
+        let _startup_guard = startup_lock.lock().await;
         match self.service_state {
             ServiceState::CreateJust => {
-                self.service_state = ServiceState::StartFailed;
+                self.service_state = ServiceState::Starting;
                 // If not specified,looking address from name remoting_server
                 if self.client_config.namesrv_addr.is_none() {
                     self.mq_client_api_impl
@@ -300,17 +306,35 @@ impl MQClientInstance {
                 self.rebalance_service.start(this).await;
                 // Start push service
 
-                self.default_producer
+                if let Err(error) = self
+                    .default_producer
                     .default_mqproducer_impl
                     .as_mut()
                     .unwrap()
                     .start_with_factory(false)
-                    .await?;
+                    .await
+                {
+                    self.pull_message_service.shutdown();
+                    self.rebalance_service.shutdown();
+                    // A failed shared factory cannot safely be reused: its remoting and
+                    // background services may have been partially initialized. Remove it
+                    // from the manager so the next consumer generation creates a clean one.
+                    self.service_state = ServiceState::ShutdownAlready;
+                    crate::implementation::mq_client_manager::MQClientManager::get_instance()
+                        .remove_client_factory(&self.client_id);
+                    return Err(error);
+                }
                 info!("the client factory[{}] start OK", self.client_id);
                 self.service_state = ServiceState::Running;
             }
             ServiceState::Running => {}
             ServiceState::ShutdownAlready => {}
+            ServiceState::Starting => {
+                return Err(mq_client_err!(format!(
+                    "The Factory object[{}] is already starting.",
+                    self.client_id
+                )));
+            }
             ServiceState::StartFailed => {
                 return Err(mq_client_err!(format!(
                     "The Factory object[{}] has been created before, and failed.",
@@ -321,7 +345,32 @@ impl MQClientInstance {
         Ok(())
     }
 
-    pub async fn shutdown(&mut self) {}
+    pub async fn shutdown(&mut self) {
+        if !self.consumer_table.read().await.is_empty() {
+            return;
+        }
+        let has_external_producer = self
+            .producer_table
+            .read()
+            .await
+            .keys()
+            .any(|group| group.as_str() != mix_all::CLIENT_INNER_PRODUCER_GROUP);
+        if has_external_producer {
+            return;
+        }
+        if self.service_state == ServiceState::ShutdownAlready {
+            return;
+        }
+        self.producer_table
+            .write()
+            .await
+            .remove(mix_all::CLIENT_INNER_PRODUCER_GROUP);
+        self.pull_message_service.shutdown();
+        self.rebalance_service.shutdown();
+        self.service_state = ServiceState::ShutdownAlready;
+        crate::implementation::mq_client_manager::MQClientManager::get_instance()
+            .remove_client_factory(&self.client_id);
+    }
 
     pub async fn register_producer(&mut self, group: &str, producer: MQProducerInnerImpl) -> bool {
         if group.is_empty() {
@@ -532,7 +581,10 @@ impl MQClientInstance {
                 .await
                 .map_or_else(
                     |err| {
-                        warn!("getTopicRouteInfoFromNameServer failed, topic: {}, err: {:?}", topic, err);
+                        warn!(
+                            "getTopicRouteInfoFromNameServer failed, topic: {}, err: {:?}",
+                            topic, err
+                        );
                         None
                     },
                     |v| v,
@@ -1017,7 +1069,10 @@ impl MQClientInstance {
 
     pub async fn select_consumer(&self, group: &str) -> Option<MQConsumerInnerImpl> {
         let consumer_table = self.consumer_table.read().await;
-        consumer_table.get(group).cloned()
+        consumer_table
+            .get(group)
+            .filter(|consumer| consumer.is_running())
+            .cloned()
     }
 
     pub async fn select_producer(&self, group: &str) -> Option<MQProducerInnerImpl> {
@@ -1026,7 +1081,11 @@ impl MQClientInstance {
     }
 
     pub async fn unregister_consumer(&mut self, group: impl Into<CheetahString>) {
-        self.unregister_client(None, Some(group.into())).await;
+        let group = group.into();
+        // Always remove the local entry first. Broker unregistration is best effort;
+        // retaining a stale local entry makes a later retry permanently duplicate.
+        self.consumer_table.write().await.remove(&group);
+        self.unregister_client(None, Some(group)).await;
     }
     pub async fn unregister_producer(&mut self, group: impl Into<CheetahString>) {
         self.unregister_client(Some(group.into()), None).await;
@@ -1152,6 +1211,72 @@ impl MQClientInstance {
         }
 
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
+    use crate::consumer::default_mq_push_consumer::ConsumerConfig;
+
+    fn test_consumer(group: &str) -> MQConsumerInnerImpl {
+        let mut consumer_config = ArcMut::new(ConsumerConfig::default());
+        consumer_config.consumer_group = group.into();
+        let mut consumer_impl = ArcMut::new(DefaultMQPushConsumerImpl::new(
+            ClientConfig::default(),
+            consumer_config,
+            None,
+        ));
+        let consumer_impl_clone = consumer_impl.clone();
+        consumer_impl.set_default_mqpush_consumer_impl(consumer_impl_clone.clone());
+        MQConsumerInnerImpl {
+            default_mqpush_consumer_impl: consumer_impl_clone,
+        }
+    }
+
+    #[tokio::test]
+    async fn unregister_consumer_always_removes_the_local_entry() {
+        let mut instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "phase3-unregister-client", None);
+        let group = CheetahString::from("phase3-unregister-group");
+
+        assert!(instance.register_consumer(&group, test_consumer(group.as_str())).await);
+        assert!(instance.consumer_table.read().await.contains_key(&group));
+
+        instance.unregister_consumer(group.clone()).await;
+
+        assert!(!instance.consumer_table.read().await.contains_key(&group));
+    }
+
+    #[tokio::test]
+    async fn select_consumer_hides_non_running_consumers() {
+        let mut instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "phase3-select-client", None);
+        let group = CheetahString::from("phase3-select-group");
+        assert!(instance.register_consumer(&group, test_consumer(group.as_str())).await);
+
+        assert!(instance.select_consumer(group.as_str()).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn shutdown_keeps_the_shared_client_alive_for_a_sibling_consumer() {
+        let mut instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "phase3-sibling-client", None);
+        let first = CheetahString::from("phase3-sibling-one");
+        let second = CheetahString::from("phase3-sibling-two");
+        instance.service_state = ServiceState::Running;
+        assert!(instance.register_consumer(&first, test_consumer(first.as_str())).await);
+        assert!(
+            instance
+                .register_consumer(&second, test_consumer(second.as_str()))
+                .await
+        );
+
+        instance.unregister_consumer(first).await;
+        instance.shutdown().await;
+        assert_eq!(instance.service_state, ServiceState::Running);
+
+        instance.unregister_consumer(second).await;
+        instance.shutdown().await;
+        assert_eq!(instance.service_state, ServiceState::ShutdownAlready);
     }
 }
 

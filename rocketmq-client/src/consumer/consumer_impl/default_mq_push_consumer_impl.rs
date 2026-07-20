@@ -31,8 +31,8 @@ use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::common::mix_all::DEFAULT_CONSUMER_GROUP;
-use rocketmq_common::common::FAQUrl;
 use rocketmq_common::common::sys_flag::pull_sys_flag::PullSysFlag;
+use rocketmq_common::common::FAQUrl;
 use rocketmq_common::MessageAccessor::MessageAccessor;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_error::ClientErr;
@@ -131,6 +131,10 @@ pub struct DefaultMQPushConsumerImpl {
 }
 
 impl DefaultMQPushConsumerImpl {
+    pub(crate) fn is_running(&self) -> bool {
+        *self.service_state == ServiceState::Running
+    }
+
     pub fn new(
         client_config: ClientConfig,
         consumer_config: ArcMut<ConsumerConfig>,
@@ -188,6 +192,8 @@ impl DefaultMQPushConsumerImpl {
 
 impl DefaultMQPushConsumerImpl {
     pub async fn start(&mut self) -> rocketmq_error::RocketMQResult<()> {
+        let global_lock = self.global_lock.clone();
+        let _lock = global_lock.lock().await;
         match *self.service_state {
             ServiceState::CreateJust => {
                 info!(
@@ -196,7 +202,7 @@ impl DefaultMQPushConsumerImpl {
                     self.consumer_config.message_model,
                     self.consumer_config.unit_mode
                 );
-                *self.service_state = ServiceState::StartFailed;
+                *self.service_state = ServiceState::Starting;
                 // check all config
                 self.check_config()?;
                 //copy_subscription is can be removed
@@ -309,7 +315,13 @@ impl DefaultMQPushConsumerImpl {
                 if let Some(consume_message_orderly_service) = self.consume_message_pop_service.as_mut() {
                     consume_message_orderly_service.start();
                 }
-                self.client_instance
+                let cloned = self.client_instance.as_mut().cloned().unwrap();
+                if let Err(error) = self.client_instance.as_mut().unwrap().start(cloned).await {
+                    *self.service_state = ServiceState::StartFailed;
+                    return Err(error);
+                }
+                let registered = self
+                    .client_instance
                     .as_mut()
                     .unwrap()
                     .register_consumer(
@@ -322,8 +334,23 @@ impl DefaultMQPushConsumerImpl {
                         },
                     )
                     .await;
-                let cloned = self.client_instance.as_mut().cloned().unwrap();
-                self.client_instance.as_mut().unwrap().start(cloned).await?;
+                if !registered {
+                    *self.service_state = ServiceState::StartFailed;
+                    return Err(mq_client_err!(format!(
+                        "the consumer group[{}] exist already.",
+                        self.consumer_config.consumer_group
+                    )));
+                }
+                self.update_topic_subscribe_info_when_subscription_changed().await;
+                if let Err(error) = self.client_instance.as_mut().unwrap().check_client_in_broker().await {
+                    self.client_instance
+                        .as_mut()
+                        .unwrap()
+                        .unregister_consumer(self.consumer_config.consumer_group.as_str())
+                        .await;
+                    *self.service_state = ServiceState::StartFailed;
+                    return Err(error);
+                }
                 info!(
                     "the consumer [{}] start OK, message_model={}, isUnitMode={}",
                     self.consumer_config.consumer_group,
@@ -331,12 +358,24 @@ impl DefaultMQPushConsumerImpl {
                     self.consumer_config.unit_mode
                 );
                 *self.service_state = ServiceState::Running;
+                if self
+                    .client_instance
+                    .as_mut()
+                    .unwrap()
+                    .send_heartbeat_to_all_broker_with_lock()
+                    .await
+                {
+                    self.client_instance.as_mut().unwrap().re_balance_immediately();
+                }
             }
             ServiceState::Running => {
                 return Err(mq_client_err!("The PushConsumer service state is Running"));
             }
             ServiceState::ShutdownAlready => {
                 return Err(mq_client_err!("The PushConsumer service state is ShutdownAlready"));
+            }
+            ServiceState::Starting => {
+                return Err(mq_client_err!("The PushConsumer service is Starting"));
             }
             ServiceState::StartFailed => {
                 return Err(mq_client_err!(format!(
@@ -346,23 +385,31 @@ impl DefaultMQPushConsumerImpl {
                 )));
             }
         }
-        self.update_topic_subscribe_info_when_subscription_changed().await;
-        let client_instance = self.client_instance.as_mut().unwrap();
-        client_instance.check_client_in_broker().await?;
-        if client_instance.send_heartbeat_to_all_broker_with_lock().await {
-            client_instance.re_balance_immediately();
-        }
         Ok(())
     }
 
     pub async fn shutdown(&mut self, await_terminate_millis: u64) {
         let _lock = self.global_lock.lock().await;
         match *self.service_state {
-            ServiceState::CreateJust => {
+            ServiceState::CreateJust | ServiceState::StartFailed | ServiceState::Starting => {
                 warn!(
-                    "the consumer [{}] do not start, so do nothing",
+                    "the consumer [{}] did not complete startup; cleaning up local state",
                     self.consumer_config.consumer_group
                 );
+                let had_client_instance = self.client_instance.is_some();
+                if let Some(client) = self.client_instance.as_mut() {
+                    client
+                        .unregister_consumer(self.consumer_config.consumer_group.as_str())
+                        .await;
+                    client.shutdown().await;
+                }
+                if let Some(consume_message_service) = self.consume_message_service.as_mut() {
+                    consume_message_service.shutdown(await_terminate_millis).await;
+                }
+                if had_client_instance {
+                    self.rebalance_impl.destroy();
+                }
+                *self.service_state = ServiceState::ShutdownAlready;
             }
             ServiceState::Running => {
                 if let Some(consume_message_concurrently_service) = self.consume_message_service.as_mut() {
@@ -386,12 +433,6 @@ impl DefaultMQPushConsumerImpl {
             ServiceState::ShutdownAlready => {
                 warn!(
                     "the consumer [{}] has been shutdown, do nothing",
-                    self.consumer_config.consumer_group
-                );
-            }
-            ServiceState::StartFailed => {
-                warn!(
-                    "the consumer [{}] start failed, do nothing",
                     self.consumer_config.consumer_group
                 );
             }
@@ -701,7 +742,9 @@ impl DefaultMQPushConsumerImpl {
 
         if let Err(e) = self.make_sure_state_ok() {
             warn!("pop_message exception, consumer state not ok {}", e);
-            self.execute_pop_request_later(pop_request, self.pull_time_delay_mills_when_exception);
+            if !self.is_terminal_state() {
+                self.execute_pop_request_later(pop_request, self.pull_time_delay_mills_when_exception);
+            }
             return;
         }
 
@@ -784,7 +827,9 @@ impl DefaultMQPushConsumerImpl {
         pull_request.process_queue.set_last_pull_timestamp(get_current_millis());
         if let Err(e) = self.make_sure_state_ok() {
             warn!("pullMessage exception, consumer state not ok {}", e);
-            self.execute_pull_request_later(pull_request, self.pull_time_delay_mills_when_exception);
+            if !self.is_terminal_state() {
+                self.execute_pull_request_later(pull_request, self.pull_time_delay_mills_when_exception);
+            }
             return;
         }
         if self.pause.load(Ordering::Acquire) {
@@ -1044,6 +1089,14 @@ impl DefaultMQPushConsumerImpl {
             )));
         }
         Ok(())
+    }
+
+    #[inline]
+    fn is_terminal_state(&self) -> bool {
+        matches!(
+            *self.service_state,
+            ServiceState::StartFailed | ServiceState::ShutdownAlready
+        )
     }
 
     pub(crate) async fn correct_tags_offset(&mut self, pull_request: &PullRequest) {
