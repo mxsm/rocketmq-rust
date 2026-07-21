@@ -1871,50 +1871,6 @@
       "adr": "ADR-002"
     },
     {
-      "identity": "625abd668b8978b92b1922e9",
-      "path": "rocketmq-broker/src/processor/admin_broker_processor/reset_master_flusg_offset_handler.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "022a0f2b2bc325b23fa47598",
-          "fingerprint": "a96f125fbe035bcc1f3b43d2",
-          "item": "<module>",
-          "line": 22
-        }
-      ],
-      "owner": "broker",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "ca96d5a84ba5aa2629373bcf",
-      "path": "rocketmq-broker/src/processor/admin_broker_processor/reset_master_flusg_offset_handler.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "ea5073e021b17bf1c652c978",
-          "fingerprint": "0d58356d82a7958798ee90bc",
-          "item": "struct ResetMasterFlushOffsetHandler",
-          "line": 29
-        },
-        {
-          "id": "436f236c7fdb8e4bfb5c550b",
-          "fingerprint": "3f216fa04c6cd65432100a4c",
-          "item": "fn new",
-          "line": 33
-        }
-      ],
-      "owner": "broker",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
       "identity": "83d292fb6470493bcaf22ecd",
       "path": "rocketmq-broker/src/processor/admin_broker_processor/subscription_group_handler.rs",
       "symbol": "*",
@@ -2033,50 +1989,6 @@
           "fingerprint": "4c2ed25434f2a642d6be176b",
           "item": "fn new",
           "line": 126
-        }
-      ],
-      "owner": "broker",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "d18223388e7b28031f2636b6",
-      "path": "rocketmq-broker/src/processor/admin_broker_processor/update_broker_ha_handler.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "fb4e405caa0b283b7385b7db",
-          "fingerprint": "353397efe163cf37285096f9",
-          "item": "<module>",
-          "line": 23
-        }
-      ],
-      "owner": "broker",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "211684d735c34e1156740427",
-      "path": "rocketmq-broker/src/processor/admin_broker_processor/update_broker_ha_handler.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "462c7a99bf994c07df1199f6",
-          "fingerprint": "92302b6b5fd0d9adc9d07362",
-          "item": "struct UpdateBrokerHaHandler",
-          "line": 31
-        },
-        {
-          "id": "d12868b7ac5a0beed2a8b4b7",
-          "fingerprint": "8407f5c8f6304cfa808a5dba",
-          "item": "fn new",
-          "line": 35
         }
       ],
       "owner": "broker",

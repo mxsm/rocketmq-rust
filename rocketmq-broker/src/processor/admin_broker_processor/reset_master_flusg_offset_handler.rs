@@ -19,23 +19,20 @@ use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::header::reset_master_flush_offset_header::ResetMasterFlushOffsetHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
 
 use crate::broker_runtime::BrokerRuntimeInner;
 
-#[derive(Clone)]
-pub struct ResetMasterFlushOffsetHandler<MS: MessageStore> {
-    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
-}
+pub struct ResetMasterFlushOffsetHandler;
 
-impl<MS: MessageStore> ResetMasterFlushOffsetHandler<MS> {
-    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
-        Self { broker_runtime_inner }
+impl ResetMasterFlushOffsetHandler {
+    pub const fn new() -> Self {
+        Self
     }
 
-    pub async fn reset_master_flush_offset(
-        &mut self,
+    pub async fn reset_master_flush_offset<MS: MessageStore>(
+        &self,
+        broker_runtime_inner: &BrokerRuntimeInner<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -43,14 +40,14 @@ impl<MS: MessageStore> ResetMasterFlushOffsetHandler<MS> {
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let response = RemotingCommand::create_response_command();
 
-        let broker_id = self.broker_runtime_inner.broker_config().broker_identity.broker_id;
+        let broker_id = broker_runtime_inner.broker_config().broker_identity.broker_id;
         if broker_id != MASTER_ID {
             let request_header = request
                 .decode_command_custom_header::<ResetMasterFlushOffsetHeader>()
                 .unwrap();
 
             if let Some(maset_flush_offset) = request_header.master_flush_offset {
-                if let Some(message_store) = self.broker_runtime_inner.message_store() {
+                if let Some(message_store) = broker_runtime_inner.message_store() {
                     message_store.set_master_flushed_offset(maset_flush_offset);
                 }
             }

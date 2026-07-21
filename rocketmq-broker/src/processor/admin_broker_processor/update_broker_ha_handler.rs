@@ -20,24 +20,21 @@ use rocketmq_remoting::protocol::header::exchange_ha_info_request_header::Exchan
 use rocketmq_remoting::protocol::header::exchange_ha_info_response_header::ExchangeHaInfoResponseHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
 use tracing::info;
 
 use crate::broker_runtime::BrokerRuntimeInner;
 
-#[derive(Clone)]
-pub struct UpdateBrokerHaHandler<MS: MessageStore> {
-    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
-}
+pub struct UpdateBrokerHaHandler;
 
-impl<MS: MessageStore> UpdateBrokerHaHandler<MS> {
-    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
-        Self { broker_runtime_inner }
+impl UpdateBrokerHaHandler {
+    pub const fn new() -> Self {
+        Self
     }
 
-    pub async fn update_broker_ha_info(
-        &mut self,
+    pub async fn update_broker_ha_info<MS: MessageStore>(
+        &self,
+        broker_runtime_inner: &BrokerRuntimeInner<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -54,14 +51,13 @@ impl<MS: MessageStore> UpdateBrokerHaHandler<MS> {
         });
 
         if let Some(master_ha_addr) = exchange_request_header.master_ha_address.as_ref() {
-            if let Some(message_store) = self.broker_runtime_inner.message_store() {
+            if let Some(message_store) = broker_runtime_inner.message_store() {
                 message_store.update_ha_master_address(master_ha_addr.as_str()).await;
 
                 let master_address = exchange_request_header.master_address.unwrap_or_default();
                 message_store.update_master_address(&master_address);
 
-                let should_sync_master_flush_offset_on_startup = self
-                    .broker_runtime_inner
+                let should_sync_master_flush_offset_on_startup = broker_runtime_inner
                     .message_store_config()
                     .sync_master_flush_offset_when_startup;
                 if message_store.get_master_flushed_offset() == 0x0000
@@ -74,7 +70,7 @@ impl<MS: MessageStore> UpdateBrokerHaHandler<MS> {
                     message_store.set_master_flushed_offset(master_flush_offset);
                 }
             }
-        } else if self.broker_runtime_inner.broker_config().broker_identity.broker_id == MASTER_ID {
+        } else if broker_runtime_inner.broker_config().broker_identity.broker_id == MASTER_ID {
             let Some(response_header) = response.read_custom_header_mut::<ExchangeHaInfoResponseHeader>() else {
                 return Ok(Some(
                     response
@@ -83,12 +79,11 @@ impl<MS: MessageStore> UpdateBrokerHaHandler<MS> {
                 ));
             };
 
-            let master_ha_address = self.broker_runtime_inner.get_ha_server_addr();
-            let master_flush_offset = self
-                .broker_runtime_inner
+            let master_ha_address = broker_runtime_inner.get_ha_server_addr();
+            let master_flush_offset = broker_runtime_inner
                 .message_store()
                 .map(|store| store.get_broker_init_max_offset());
-            let master_address = self.broker_runtime_inner.get_broker_addr().clone();
+            let master_address = broker_runtime_inner.get_broker_addr().clone();
 
             response_header.master_ha_address = Some(master_ha_address.clone());
 
