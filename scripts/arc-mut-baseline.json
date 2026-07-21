@@ -6085,25 +6085,6 @@
       "adr": "ADR-013"
     },
     {
-      "identity": "40b7e2ab4ef7d3cf278da5e1",
-      "path": "rocketmq-store/src/log_file/commit_log.rs",
-      "symbol": "mut_from_ref",
-      "kind": "mut_from_ref_call",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "0cd68a581e68a2823e818fc8",
-          "fingerprint": "570f4410e324e24a9bd6add0",
-          "item": "fn handle_disk_flush",
-          "line": 1433
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy safe mutable-reference escape pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
       "identity": "527ebe3ad5a4c0369200bcb4",
       "path": "rocketmq-store/src/log_file/flush_manager_impl/default_flush_manager.rs",
       "symbol": "*",

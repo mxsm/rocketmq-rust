@@ -684,6 +684,15 @@ compatibility 14/40、Store production 91/251），production 净删除 8 identi
 总进度仍为 75/82，下一子切片 M11-12bc29 继续
 Broker aggregate/leaf 或 Store WAL/queue/timer/HA owner。
 
+Store WAL sync-flush enqueue 随 Issue #8467 收窄：`GroupCommitService::put_request` 改为共享 receiver；
+`DefaultFlushManager` 新增 crate-private shared disk-flush 实现，公开 `FlushManager::handle_disk_flush(&mut self, ...)`
+兼容签名保持不变并委托该实现。CommitLog 的共享热路径直接调用 shared 方法，不再通过 `mut_from_ref` 取得完整
+flush manager 可变引用。enqueue 前后 cancellation、bounded channel backpressure、原子统计、flush completion timeout、
+`PutMessageStatus` 映射与 start/shutdown 独占生命周期保持不变。ArcMut 快照降至 330 identities/906 occurrences
+（production 173/431、test 143/435、compatibility 14/40、Store production 90/250），净删除 1 个 production
+identity/1 occurrence，无 relocation。总进度仍为 75/82，下一子切片 M11-12bc30 优先清理 Store 最后的
+production `WeakArcMut` 或继续 Broker aggregate/leaf。
+
 ### 9.3 证据目录
 
 - 运行期生成物：`target/architecture-refactor/Mxx/<run-id>/`，不提交 Git。
