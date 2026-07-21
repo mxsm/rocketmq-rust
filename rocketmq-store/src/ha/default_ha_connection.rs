@@ -25,7 +25,6 @@ use bytes::BytesMut;
 use futures_util::StreamExt;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_rust::ArcMut;
-use rocketmq_rust::WeakArcMut;
 use tokio::io::AsyncWrite;
 use tokio::net::tcp::OwnedReadHalf;
 use tokio::net::tcp::OwnedWriteHalf;
@@ -47,7 +46,6 @@ use crate::config::message_store_config::MessageStoreConfig;
 use crate::ha::default_ha_client::CONTROLLER_REPORT_HEADER_SIZE;
 use crate::ha::default_ha_service::DefaultHAService;
 use crate::ha::flow_monitor::FlowMonitor;
-use crate::ha::general_ha_connection::GeneralHAConnection;
 use crate::ha::ha_connection::HAConnection;
 use crate::ha::ha_connection::HAConnectionId;
 use crate::ha::ha_connection_state::HAConnectionState;
@@ -71,6 +69,41 @@ pub(crate) use rocketmq_store_local::ha::wire::OffsetFrame;
 pub(crate) use rocketmq_store_local::ha::wire::TransferHeader;
 
 type HAConnectionResult<T> = Result<T, HAConnectionError>;
+
+#[derive(Clone)]
+pub(crate) struct HAConnectionRuntimeHandle {
+    connection_id: HAConnectionId,
+    remote_address: String,
+    current_state: Arc<RwLock<HAConnectionState>>,
+    slave_broker_id: Option<Arc<AtomicI64>>,
+}
+
+impl HAConnectionRuntimeHandle {
+    pub(crate) fn connection_id(&self) -> &HAConnectionId {
+        &self.connection_id
+    }
+
+    pub(crate) fn remote_address(&self) -> &str {
+        &self.remote_address
+    }
+
+    pub(crate) async fn current_state(&self) -> HAConnectionState {
+        *self.current_state.read().await
+    }
+
+    pub(crate) fn set_slave_broker_id(&self, slave_broker_id: i64) {
+        if let Some(current_slave_broker_id) = &self.slave_broker_id {
+            current_slave_broker_id.store(slave_broker_id, Ordering::SeqCst);
+        }
+    }
+
+    pub(crate) fn slave_broker_id(&self) -> Option<i64> {
+        self.slave_broker_id
+            .as_ref()
+            .map(|slave_broker_id| slave_broker_id.load(Ordering::SeqCst))
+            .filter(|slave_broker_id| *slave_broker_id >= 0)
+    }
+}
 
 pub(crate) fn encode_transfer_header(
     byte_buffer_header: &mut BytesMut,
@@ -109,6 +142,7 @@ pub struct DefaultHAConnection {
     shutdown_tx: Arc<Mutex<Option<tokio::sync::broadcast::Sender<()>>>>,
     message_store_config: Arc<MessageStoreConfig>,
     next_transfer_from_where: Arc<AtomicI64>,
+    runtime_slave_broker_id: Option<Arc<AtomicI64>>,
     id: HAConnectionId,
     remote_addr: SocketAddr,
 }
@@ -155,6 +189,7 @@ impl DefaultHAConnection {
             shutdown_tx: Arc::new(Mutex::new(None)),
             message_store_config,
             next_transfer_from_where: Arc::new(AtomicI64::new(-1)),
+            runtime_slave_broker_id: None,
             id: HAConnectionId::default(),
             remote_addr,
         })
@@ -166,13 +201,26 @@ impl DefaultHAConnection {
         let mut state_guard = self.current_state.write().await;
         *state_guard = new_state;
     }
+
+    fn runtime_handle(&self) -> HAConnectionRuntimeHandle {
+        HAConnectionRuntimeHandle {
+            connection_id: self.id.clone(),
+            remote_address: self.remote_addr.to_string(),
+            current_state: Arc::clone(&self.current_state),
+            slave_broker_id: self.runtime_slave_broker_id.clone(),
+        }
+    }
+
+    pub(crate) fn set_runtime_slave_broker_id(&mut self, slave_broker_id: Arc<AtomicI64>) {
+        self.runtime_slave_broker_id = Some(slave_broker_id);
+    }
 }
 
 impl HAConnection for DefaultHAConnection {
-    async fn start(&mut self, conn: WeakArcMut<GeneralHAConnection>) -> Result<(), HAConnectionError> {
+    async fn start(&mut self) -> Result<(), HAConnectionError> {
+        let connection_runtime = self.runtime_handle();
         self.change_current_state(HAConnectionState::Transfer).await;
 
-        // Start flow monitor
         self.flow_monitor
             .start()
             .await
@@ -189,16 +237,11 @@ impl HAConnection for DefaultHAConnection {
         self.socket_stream = Some(retained_stream);
         let (reader, write) = split_stream.into_split();
 
-        // Create shutdown channel
-        // Create shutdown channel with bounded capacity
         let (shutdown_tx, _) = tokio::sync::broadcast::channel(16);
         let read_shutdown_rx = shutdown_tx.subscribe();
         let write_shutdown_rx = shutdown_tx.subscribe();
-
-        // Store shutdown sender before spawning tasks
         *self.shutdown_tx.lock().await = Some(shutdown_tx);
 
-        // Create and start read service
         let read_service = ReadSocketService::new(
             FramedRead::new(
                 reader,
@@ -214,11 +257,10 @@ impl HAConnection for DefaultHAConnection {
             self.slave_request_offset.clone(),
             self.slave_ack_offset.clone(),
             self.message_store_config.clone(),
-            conn.clone(),
+            connection_runtime.clone(),
         )
         .await?;
 
-        // Create and start write service
         let write_service = WriteSocketService::new(
             write,
             self.client_address.clone(),
@@ -227,7 +269,7 @@ impl HAConnection for DefaultHAConnection {
             self.slave_request_offset.clone(),
             Arc::clone(&self.flow_monitor),
             self.message_store_config.clone(),
-            conn,
+            connection_runtime,
             self.next_transfer_from_where.clone(),
         )
         .await?;
@@ -347,7 +389,7 @@ pub struct ReadSocketService {
     process_position: usize,
     message_store_config: Arc<MessageStoreConfig>,
     last_read_timestamp: AtomicU64,
-    connection: WeakArcMut<GeneralHAConnection>,
+    connection_runtime: HAConnectionRuntimeHandle,
 }
 
 impl ReadSocketService {
@@ -359,7 +401,7 @@ impl ReadSocketService {
         slave_request_offset: Arc<AtomicI64>,
         slave_ack_offset: Arc<AtomicI64>,
         message_store_config: Arc<MessageStoreConfig>,
-        connection: WeakArcMut<GeneralHAConnection>,
+        connection_runtime: HAConnectionRuntimeHandle,
     ) -> Result<Self, HAConnectionError> {
         let (shutdown_sender, _) = mpsc::channel::<()>(1);
 
@@ -374,7 +416,7 @@ impl ReadSocketService {
             process_position: 0,
             message_store_config,
             last_read_timestamp: AtomicU64::new(current_millis()),
-            connection,
+            connection_runtime,
         })
     }
 
@@ -405,12 +447,11 @@ impl ReadSocketService {
                         self.slave_request_offset.store(offset, Ordering::Release);
                         info!("slave[{}] request offset {}", self.client_address, offset);
                     }
-                    if let Some(connection) = self.connection.upgrade() {
-                        if let Some(broker_id) = broker_id.filter(|broker_id| *broker_id >= 0) {
-                            connection.set_slave_broker_id(Some(broker_id));
-                        }
-                        self.ha_service.handle_connection_ack(connection.as_ref(), offset);
+                    if let Some(broker_id) = broker_id.filter(|broker_id| *broker_id >= 0) {
+                        self.connection_runtime.set_slave_broker_id(broker_id);
                     }
+                    self.ha_service
+                        .handle_runtime_connection_ack(&self.connection_runtime, offset);
                     self.ha_service.notify_transfer_some(offset).await;
                 }
                 Some(Err(e)) => {
@@ -530,7 +571,7 @@ pub struct WriteSocketService {
     next_transfer_from_where: Arc<AtomicI64>,
     message_store_config: Arc<MessageStoreConfig>,
     byte_buffer_header: BytesMut,
-    connection: WeakArcMut<GeneralHAConnection>,
+    connection_runtime: HAConnectionRuntimeHandle,
     last_write_timestamp: AtomicU64,
     last_print_timestamp: AtomicU64,
     last_write_over: AtomicBool,
@@ -545,7 +586,7 @@ impl WriteSocketService {
         slave_request_offset: Arc<AtomicI64>,
         flow_monitor: Arc<FlowMonitor>,
         message_store_config: Arc<MessageStoreConfig>,
-        connection: WeakArcMut<GeneralHAConnection>,
+        connection_runtime: HAConnectionRuntimeHandle,
         next_transfer_from_where: Arc<AtomicI64>,
     ) -> Result<Self, HAConnectionError> {
         let enable_controller_mode = message_store_config.enable_controller_mode;
@@ -587,7 +628,7 @@ impl WriteSocketService {
             flow_monitor,
             next_transfer_from_where,
             message_store_config,
-            connection,
+            connection_runtime,
             last_write_timestamp: AtomicU64::new(current_millis()),
             last_print_timestamp: AtomicU64::new(current_millis()),
             byte_buffer_header: BytesMut::with_capacity(transfer_header_size(enable_controller_mode)),
@@ -707,9 +748,8 @@ impl WriteSocketService {
             .get_commit_log()
             .get_max_offset();
         if next_offset >= max_commit_log_offset {
-            if let Some(connection) = self.connection.upgrade() {
-                self.ha_service.handle_connection_caught_up(connection.as_ref());
-            }
+            self.ha_service
+                .handle_runtime_connection_caught_up(&self.connection_runtime);
             return Ok(());
         }
 
@@ -828,9 +868,9 @@ impl WriteSocketService {
     async fn cleanup(&mut self) {
         *self.current_state.write().await = HAConnectionState::Shutdown;
 
-        if let Some(connection) = self.connection.upgrade() {
-            self.ha_service.remove_connection(connection).await;
-        }
+        self.ha_service
+            .remove_runtime_connection(&self.connection_runtime)
+            .await;
 
         self.flow_monitor.shutdown().await;
     }
