@@ -872,6 +872,16 @@ production 45/112、Store production 82/234），净删除 2 个 production iden
 identity 或临时 approval。总进度仍为 75/82，下一子切片 M11-12bc50 继续 Broker aggregate/leaf 或 Store
 WAL/queue/timer/HA owner。
 
+Slave metadata synchronization capability 随 Issue #8511 收窄：`SlaveSynchronize` 删除完整
+`ArcMut<BrokerRuntimeInner<MS>>` owner、构造传播与 subscription-group `mut_from_ref`，改持 broker/timer policy、
+BrokerOuterAPI 和显式弱 metadata/Store/service provider。ConsumerOffsetManager 在 MessageStore 发布后晚绑定为 Weak，
+MessageRequestModeManager 在 QueryAssignment 构造后晚绑定；shutdown 在 metadata/Store detach 前释放 subscription/request-mode
+强 capability，避免延长 RocksDB owner 生命周期。topic/offset/delay/subscription/request-mode/timer checkpoint/metrics 同步语义保持不变，
+provider 退出时 fail closed。ArcMut 快照降至 264 identities/798 occurrences（production 124/342、test 126/416、
+compatibility 14/40、Broker production 42/108、Store production 82/234），净删除 3 个 production identities/4
+occurrences，无 relocation、新增 identity 或临时 approval。总进度仍为 75/82，下一子切片 M11-12bc51 继续 Broker
+aggregate/leaf 或 Store WAL/queue/timer/HA owner。
+
 ### 9.3 证据目录
 
 - 运行期生成物：`target/architecture-refactor/Mxx/<run-id>/`，不提交 Git。
