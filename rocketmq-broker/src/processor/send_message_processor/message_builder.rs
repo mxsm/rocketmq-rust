@@ -7,12 +7,12 @@ use rocketmq_common::MessageDecoder::message_properties_to_string;
 use rocketmq_common::MessageDecoder::string_to_message_properties;
 use rocketmq_common::TimeUtils;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
-use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use rocketmq_store::timer::timer_message_store::TIMER_TOPIC;
 
 pub(super) fn recall_handle_topic_and_timestamp(
     message: &MessageExtBrokerInner,
-    message_store_config: &MessageStoreConfig,
+    timer_max_delay_sec: u64,
+    timer_precision_ms: u64,
 ) -> Option<(CheetahString, i64)> {
     if let (Some(timestamp_str), Some(real_topic)) = (
         message.property(MessageConst::PROPERTY_TIMER_OUT_MS),
@@ -41,12 +41,12 @@ pub(super) fn recall_handle_topic_and_timestamp(
         return None;
     }
 
-    let max_delay_ms = message_store_config.timer_max_delay_sec.checked_mul(1000)?;
+    let max_delay_ms = timer_max_delay_sec.checked_mul(1000)?;
     if deliver_ms.saturating_sub(now) > max_delay_ms {
         return None;
     }
 
-    let precision_ms = message_store_config.timer_precision_ms;
+    let precision_ms = timer_precision_ms;
     let timer_out_ms = if precision_ms == 0 {
         deliver_ms
     } else if deliver_ms.is_multiple_of(precision_ms) {
@@ -95,6 +95,14 @@ pub(super) fn clear_reserved_properties(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rocketmq_store::config::message_store_config::MessageStoreConfig;
+
+    fn recall_handle_topic_and_timestamp_with_defaults(
+        message: &MessageExtBrokerInner,
+    ) -> Option<(CheetahString, i64)> {
+        let config = MessageStoreConfig::default();
+        recall_handle_topic_and_timestamp(message, config.timer_max_delay_sec, config.timer_precision_ms)
+    }
 
     fn message_with_topic(topic: &str) -> MessageExtBrokerInner {
         let mut message = MessageExtBrokerInner::default();
@@ -117,8 +125,7 @@ mod tests {
             CheetahString::from_static_str("RecallTopic"),
         );
 
-        let (topic, timestamp) =
-            recall_handle_topic_and_timestamp(&message, &MessageStoreConfig::default()).expect("recall data");
+        let (topic, timestamp) = recall_handle_topic_and_timestamp_with_defaults(&message).expect("recall data");
 
         assert_eq!(topic, "RecallTopic");
         assert_eq!(timestamp, 123001);
@@ -134,8 +141,7 @@ mod tests {
             CheetahString::from_string(deliver_ms.to_string()),
         );
 
-        let (topic, timestamp) =
-            recall_handle_topic_and_timestamp(&message, &MessageStoreConfig::default()).expect("recall data");
+        let (topic, timestamp) = recall_handle_topic_and_timestamp_with_defaults(&message).expect("recall data");
 
         assert_eq!(topic, "RecallTopic");
         assert_eq!(timestamp, i64::try_from(deliver_ms - 1000).unwrap() + 1);
@@ -150,8 +156,7 @@ mod tests {
         );
 
         let now = TimeUtils::current_millis();
-        let (topic, timestamp) =
-            recall_handle_topic_and_timestamp(&message, &MessageStoreConfig::default()).expect("recall data");
+        let (topic, timestamp) = recall_handle_topic_and_timestamp_with_defaults(&message).expect("recall data");
 
         assert_eq!(topic, "RecallTopic");
         let min_expected = i64::try_from(((now + 60_000) / 1000) * 1000).unwrap();
@@ -171,8 +176,7 @@ mod tests {
         );
 
         let now = TimeUtils::current_millis();
-        let (topic, timestamp) =
-            recall_handle_topic_and_timestamp(&message, &MessageStoreConfig::default()).expect("recall data");
+        let (topic, timestamp) = recall_handle_topic_and_timestamp_with_defaults(&message).expect("recall data");
 
         assert_eq!(topic, "RecallTopic");
         let min_expected = i64::try_from(((now + 60_000) / 1000) * 1000).unwrap();
