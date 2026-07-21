@@ -80,7 +80,7 @@ impl<MS: MessageStore> PopLiteOffsetCapability<MS> {
         }
     }
 
-    fn query_offset(&self, group: &CheetahString, topic: &CheetahString) -> i64 {
+    pub(crate) fn query_offset(&self, group: &CheetahString, topic: &CheetahString) -> i64 {
         self.manager
             .upgrade()
             .map(|manager| manager.query_offset(group, topic, 0))
@@ -97,6 +97,14 @@ impl<MS: MessageStore> PopLiteOffsetCapability<MS> {
         if let Some(manager) = self.manager.upgrade() {
             manager.commit_offset(CheetahString::from_static_str(client_host), group, topic, 0, offset);
         }
+    }
+
+    pub(crate) fn assign_reset_offset(&self, topic: &CheetahString, group: &CheetahString, offset: i64) -> bool {
+        let Some(manager) = self.manager.upgrade() else {
+            return false;
+        };
+        manager.assign_reset_offset(topic, group, 0, offset);
+        true
     }
 }
 
@@ -130,7 +138,7 @@ impl<MS: MessageStore> PopLiteMessageStoreCapability<MS> {
             .flatten()
     }
 
-    fn max_offset(&self, lmq_name: &CheetahString) -> i64 {
+    pub(crate) fn max_offset(&self, lmq_name: &CheetahString) -> i64 {
         self.escape_bridge
             .upgrade()
             .and_then(|bridge| {

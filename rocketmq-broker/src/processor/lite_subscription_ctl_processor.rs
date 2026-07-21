@@ -14,8 +14,10 @@
 
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::sync::Weak;
 
 use cheetah_string::CheetahString;
+use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::lite::to_lmq_name;
 use rocketmq_common::common::lite::LiteSubscriptionAction;
 use rocketmq_common::common::lite::OffsetOption;
@@ -27,25 +29,78 @@ use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
-use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
 use tracing::warn;
 
-use crate::broker_runtime::BrokerRuntimeInner;
+use crate::lite::lite_event_dispatcher::LiteEventDispatcher;
+use crate::processor::pop_lite_message_processor::PopLiteMessageProcessor;
+use crate::processor::pop_lite_message_processor::PopLiteMessageStoreCapability;
+use crate::processor::pop_lite_message_processor::PopLiteOffsetCapability;
+use crate::subscription::lite_subscription_registry::LiteSubscriptionRegistry;
+use crate::subscription::manager::subscription_group_manager::SubscriptionGroupManager;
 
-pub(crate) struct LiteSubscriptionCtlProcessor<MS: MessageStore> {
-    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+#[derive(Clone)]
+pub(crate) struct LiteSubscriptionCtlPolicy {
+    max_lite_subscription_count: usize,
 }
 
-impl<MS: MessageStore> LiteSubscriptionCtlProcessor<MS> {
-    pub(crate) fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
-        Self { broker_runtime_inner }
+impl LiteSubscriptionCtlPolicy {
+    pub(crate) fn from_config(broker_config: &BrokerConfig) -> Self {
+        Self {
+            max_lite_subscription_count: broker_config.max_lite_subscription_count as usize,
+        }
     }
 }
 
-impl<MS: MessageStore> RequestProcessor for LiteSubscriptionCtlProcessor<MS> {
-    async fn process_request(
-        &mut self,
+pub(crate) struct LiteSubscriptionCtlContext<MS: MessageStore> {
+    policy: LiteSubscriptionCtlPolicy,
+    registry: LiteSubscriptionRegistry,
+    event_dispatcher: LiteEventDispatcher,
+    subscription_group_manager: SubscriptionGroupManager,
+    consumer_offset: PopLiteOffsetCapability<MS>,
+    message_store: PopLiteMessageStoreCapability<MS>,
+    pop_lite_message_processor: Weak<PopLiteMessageProcessor<MS>>,
+}
+
+impl<MS: MessageStore> LiteSubscriptionCtlContext<MS> {
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "composition root lists each Lite subscription capability explicitly"
+    )]
+    pub(crate) fn new(
+        policy: LiteSubscriptionCtlPolicy,
+        registry: LiteSubscriptionRegistry,
+        event_dispatcher: LiteEventDispatcher,
+        subscription_group_manager: SubscriptionGroupManager,
+        consumer_offset: PopLiteOffsetCapability<MS>,
+        message_store: PopLiteMessageStoreCapability<MS>,
+        pop_lite_message_processor: Weak<PopLiteMessageProcessor<MS>>,
+    ) -> Self {
+        Self {
+            policy,
+            registry,
+            event_dispatcher,
+            subscription_group_manager,
+            consumer_offset,
+            message_store,
+            pop_lite_message_processor,
+        }
+    }
+}
+
+pub(crate) struct LiteSubscriptionCtlProcessor<MS: MessageStore> {
+    context: LiteSubscriptionCtlContext<MS>,
+}
+
+impl<MS: MessageStore> LiteSubscriptionCtlProcessor<MS> {
+    pub(crate) fn new(context: LiteSubscriptionCtlContext<MS>) -> Self {
+        Self { context }
+    }
+}
+
+impl<MS: MessageStore> LiteSubscriptionCtlProcessor<MS> {
+    pub(crate) async fn process_request_shared(
+        &self,
         channel: Channel,
         _ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
@@ -94,7 +149,7 @@ impl<MS: MessageStore> RequestProcessor for LiteSubscriptionCtlProcessor<MS> {
                 continue;
             }
 
-            let registry = self.broker_runtime_inner.lite_subscription_registry();
+            let registry = &self.context.registry;
             let lmq_name_set = self.to_lmq_name_set(entry.topic(), entry.lite_topic_set());
 
             match entry.action() {
@@ -111,9 +166,7 @@ impl<MS: MessageStore> RequestProcessor for LiteSubscriptionCtlProcessor<MS> {
                         return Ok(Some(self.response_with_code(request, code, remark)));
                     }
                     registry.update_client_channel(entry.client_id(), channel.clone());
-                    self.broker_runtime_inner
-                        .lite_event_dispatcher()
-                        .touch_client(entry.client_id());
+                    self.context.event_dispatcher.touch_client(entry.client_id());
                     let removed_lmq_names = if group_config.lite_sub_exclusive() {
                         self.exclude_conflicting_subscriptions(
                             entry.client_id(),
@@ -170,9 +223,7 @@ impl<MS: MessageStore> RequestProcessor for LiteSubscriptionCtlProcessor<MS> {
                         return Ok(Some(self.response_with_code(request, code, remark)));
                     }
                     registry.update_client_channel(entry.client_id(), channel.clone());
-                    self.broker_runtime_inner
-                        .lite_event_dispatcher()
-                        .touch_client(entry.client_id());
+                    self.context.event_dispatcher.touch_client(entry.client_id());
                     registry.add_complete_subscription(
                         entry.client_id(),
                         entry.group(),
@@ -193,6 +244,17 @@ impl<MS: MessageStore> RequestProcessor for LiteSubscriptionCtlProcessor<MS> {
     }
 }
 
+impl<MS: MessageStore> RequestProcessor for LiteSubscriptionCtlProcessor<MS> {
+    async fn process_request(
+        &mut self,
+        channel: Channel,
+        ctx: ConnectionHandlerContext,
+        request: &mut RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        self.process_request_shared(channel, ctx, request).await
+    }
+}
+
 impl<MS: MessageStore> LiteSubscriptionCtlProcessor<MS> {
     fn ensure_quota(
         &self,
@@ -202,8 +264,8 @@ impl<MS: MessageStore> LiteSubscriptionCtlProcessor<MS> {
         lmq_name_set: &HashSet<CheetahString>,
     ) -> Result<(), (ResponseCode, CheetahString)> {
         let existing_topics = self
-            .broker_runtime_inner
-            .lite_subscription_registry()
+            .context
+            .registry
             .lite_subscription(client_id, group, topic)
             .map(|subscription| subscription.lite_topic_set().clone())
             .unwrap_or_default();
@@ -212,10 +274,10 @@ impl<MS: MessageStore> LiteSubscriptionCtlProcessor<MS> {
             return Ok(());
         }
 
-        let max_count = self.broker_runtime_inner.broker_config().max_lite_subscription_count as usize;
+        let max_count = self.context.policy.max_lite_subscription_count;
         let projected_count = self
-            .broker_runtime_inner
-            .lite_subscription_registry()
+            .context
+            .registry
             .active_subscription_num()
             .saturating_add(additional_refs);
         if projected_count > max_count {
@@ -234,8 +296,8 @@ impl<MS: MessageStore> LiteSubscriptionCtlProcessor<MS> {
         topic: &CheetahString,
     ) -> Result<Arc<SubscriptionGroupConfig>, (ResponseCode, CheetahString)> {
         let group_config = self
-            .broker_runtime_inner
-            .subscription_group_manager()
+            .context
+            .subscription_group_manager
             .subscription_group_table()
             .get(group)
             .map(|entry| Arc::clone(entry.value()))
@@ -263,8 +325,8 @@ impl<MS: MessageStore> LiteSubscriptionCtlProcessor<MS> {
     }
 
     fn find_consumer_group_config(&self, group: &CheetahString) -> Option<Arc<SubscriptionGroupConfig>> {
-        self.broker_runtime_inner
-            .subscription_group_manager()
+        self.context
+            .subscription_group_manager
             .subscription_group_table()
             .get(group)
             .map(|entry| Arc::clone(entry.value()))
@@ -282,7 +344,7 @@ impl<MS: MessageStore> LiteSubscriptionCtlProcessor<MS> {
         topic: &CheetahString,
         lmq_name_set: &HashSet<CheetahString>,
     ) -> HashSet<CheetahString> {
-        let registry = self.broker_runtime_inner.lite_subscription_registry();
+        let registry = &self.context.registry;
         let conflicts = registry
             .all_subscriptions()
             .into_iter()
@@ -324,18 +386,13 @@ impl<MS: MessageStore> LiteSubscriptionCtlProcessor<MS> {
             return;
         };
 
-        let current_offset = self
-            .broker_runtime_inner
-            .consumer_offset_manager()
-            .query_offset(group, lmq_name, 0);
+        let current_offset = self.context.consumer_offset.query_offset(group, lmq_name);
         let target_offset = match offset_option.type_() {
             rocketmq_common::common::lite::OffsetOptionType::Policy => match offset_option.value() {
                 value if value == OffsetOption::POLICY_MIN_VALUE => Some(0),
-                value if value == OffsetOption::POLICY_MAX_VALUE => Some(
-                    self.broker_runtime_inner
-                        .lite_lifecycle_manager()
-                        .get_max_offset_in_queue(self.broker_runtime_inner.message_store_ref(), lmq_name),
-                ),
+                value if value == OffsetOption::POLICY_MAX_VALUE => {
+                    Some(self.context.message_store.max_offset(lmq_name))
+                }
                 _ => None,
             },
             rocketmq_common::common::lite::OffsetOptionType::Offset => Some(offset_option.value()),
@@ -348,13 +405,10 @@ impl<MS: MessageStore> LiteSubscriptionCtlProcessor<MS> {
 
         if let Some(target_offset) = target_offset {
             if current_offset != target_offset {
-                self.broker_runtime_inner.consumer_offset_manager().assign_reset_offset(
-                    lmq_name,
-                    group,
-                    0,
-                    target_offset,
-                );
-                if let Some(processor) = self.broker_runtime_inner.pop_lite_message_processor() {
+                self.context
+                    .consumer_offset
+                    .assign_reset_offset(lmq_name, group, target_offset);
+                if let Some(processor) = self.context.pop_lite_message_processor.upgrade() {
                     processor.clear_order_info(lmq_name, group);
                 }
             }
@@ -375,6 +429,7 @@ impl<MS: MessageStore> LiteSubscriptionCtlProcessor<MS> {
 mod tests {
     use std::collections::HashMap;
     use std::collections::HashSet;
+    use std::sync::Arc;
     use std::time::SystemTime;
 
     use bytes::Bytes;
@@ -392,14 +447,22 @@ mod tests {
     use rocketmq_remoting::code::request_code::RequestCode;
     use rocketmq_remoting::code::response_code::ResponseCode;
     use rocketmq_remoting::connection::Connection;
+    use rocketmq_remoting::net::channel::Channel;
     use rocketmq_remoting::net::channel::ChannelInner;
     use rocketmq_remoting::protocol::body::lite_subscription_ctl_request_body::LiteSubscriptionCtlRequestBody;
     use rocketmq_remoting::protocol::header::empty_header::EmptyHeader;
+    use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
     use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
+    use rocketmq_remoting::runtime::processor::RequestProcessor;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
+    use rocketmq_store::message_store::GenericMessageStore;
 
-    use super::*;
+    use super::LiteSubscriptionCtlContext;
+    use super::LiteSubscriptionCtlPolicy;
+    use super::LiteSubscriptionCtlProcessor;
     use crate::broker_runtime::BrokerRuntime;
+    use crate::processor::pop_lite_message_processor::PopLiteMessageStoreCapability;
+    use crate::processor::pop_lite_message_processor::PopLiteOffsetCapability;
 
     fn temp_test_root(label: &str) -> std::path::PathBuf {
         let millis = SystemTime::now()
@@ -433,6 +496,27 @@ mod tests {
         runtime
     }
 
+    fn lite_subscription_processor_for_test(
+        runtime: &mut BrokerRuntime,
+    ) -> LiteSubscriptionCtlProcessor<GenericMessageStore> {
+        let inner = runtime.inner_for_test();
+        let consumer_offset_manager = inner.consumer_offset_manager_handle();
+        let escape_bridge = inner.escape_bridge();
+        let pop_lite_message_processor = inner
+            .pop_lite_message_processor()
+            .map(Arc::downgrade)
+            .unwrap_or_default();
+        LiteSubscriptionCtlProcessor::new(LiteSubscriptionCtlContext::new(
+            LiteSubscriptionCtlPolicy::from_config(inner.broker_config()),
+            inner.lite_subscription_registry().clone(),
+            inner.lite_event_dispatcher().clone(),
+            inner.subscription_group_manager().clone(),
+            PopLiteOffsetCapability::new(&consumer_offset_manager),
+            PopLiteMessageStoreCapability::new(&escape_bridge),
+            pop_lite_message_processor,
+        ))
+    }
+
     async fn create_test_channel() -> Channel {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind local test listener");
         let local_addr = listener.local_addr().expect("local listener addr");
@@ -446,27 +530,68 @@ mod tests {
         Channel::new(inner, local_addr, local_addr)
     }
 
-    fn seed_group_config<MS: MessageStore>(
-        inner: &mut ArcMut<crate::broker_runtime::BrokerRuntimeInner<MS>>,
-        group: &str,
-        attributes: HashMap<CheetahString, CheetahString>,
-    ) {
+    fn seed_group_config(runtime: &mut BrokerRuntime, group: &str, attributes: HashMap<CheetahString, CheetahString>) {
         let mut config =
             rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig::new(
                 CheetahString::from(group),
             );
         config.set_attributes(attributes);
-        inner
+        runtime
+            .inner_for_test()
             .subscription_group_manager_mut()
             .update_subscription_group_config(&mut config);
+    }
+
+    #[test]
+    fn lite_subscription_ctl_policy_captures_only_required_startup_value() {
+        let broker_config = BrokerConfig {
+            max_lite_subscription_count: 37,
+            ..Default::default()
+        };
+
+        let policy = LiteSubscriptionCtlPolicy::from_config(&broker_config);
+
+        assert_eq!(policy.max_lite_subscription_count, 37);
+    }
+
+    #[test]
+    fn lite_subscription_ctl_source_uses_only_explicit_capabilities() {
+        let source = include_str!("lite_subscription_ctl_processor.rs");
+        let production = source
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production source should precede tests");
+
+        assert!(!production.contains(concat!("rocketmq_rust::", "ArcMut")));
+        assert!(!production.contains(concat!("BrokerRuntime", "Inner")));
+        assert!(!production.contains(concat!("broker_runtime", "_inner")));
+        assert!(production.contains("context: LiteSubscriptionCtlContext<MS>"));
+        assert!(production.contains("consumer_offset: PopLiteOffsetCapability<MS>"));
+        assert!(production.contains("message_store: PopLiteMessageStoreCapability<MS>"));
+    }
+
+    #[test]
+    fn lite_subscription_ctl_weak_providers_do_not_keep_runtime_or_store_alive() {
+        let broker_config = Arc::new(BrokerConfig::default());
+        let message_store_config = Arc::new(MessageStoreConfig::default());
+        let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
+        let processor = lite_subscription_processor_for_test(&mut runtime);
+        let group = CheetahString::from_static_str("group");
+        let lmq_name = CheetahString::from_static_str("%LMQ%topic%child");
+
+        drop(runtime);
+
+        assert_eq!(processor.context.consumer_offset.query_offset(&group, &lmq_name), -1);
+        assert_eq!(processor.context.message_store.max_offset(&lmq_name), 0);
+        assert!(processor.context.pop_lite_message_processor.upgrade().is_none());
     }
 
     #[tokio::test]
     async fn complete_add_updates_registry_with_lmq_names() {
         let mut runtime = new_test_runtime("processor-success").await;
-        let mut inner = runtime.inner_for_test().clone();
+        let inner = runtime.inner_for_test().clone();
         seed_group_config(
-            &mut inner,
+            &mut runtime,
             "lite-group",
             HashMap::from([(
                 CheetahString::from_string(format!("+{LITE_BIND_TOPIC_ATTRIBUTE_NAME}")),
@@ -487,7 +612,7 @@ mod tests {
 
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
-        let mut processor = LiteSubscriptionCtlProcessor::new(inner.clone());
+        let mut processor = lite_subscription_processor_for_test(&mut runtime);
         let response = processor
             .process_request(channel, ctx, &mut request)
             .await
@@ -513,9 +638,9 @@ mod tests {
     #[tokio::test]
     async fn complete_add_ignores_stale_version_snapshot() {
         let mut runtime = new_test_runtime("processor-stale-version").await;
-        let mut inner = runtime.inner_for_test().clone();
+        let inner = runtime.inner_for_test().clone();
         seed_group_config(
-            &mut inner,
+            &mut runtime,
             "lite-group",
             HashMap::from([(
                 CheetahString::from_string(format!("+{LITE_BIND_TOPIC_ATTRIBUTE_NAME}")),
@@ -539,7 +664,7 @@ mod tests {
 
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
-        let mut processor = LiteSubscriptionCtlProcessor::new(inner.clone());
+        let mut processor = lite_subscription_processor_for_test(&mut runtime);
         let response = processor
             .process_request(channel.clone(), ctx.clone(), &mut request)
             .await
@@ -591,9 +716,9 @@ mod tests {
     #[tokio::test]
     async fn partial_add_returns_quota_exceeded_when_global_limit_is_hit() {
         let mut runtime = new_test_runtime_with_max_subscription_count("quota-exceeded", 1).await;
-        let mut inner = runtime.inner_for_test().clone();
+        let inner = runtime.inner_for_test().clone();
         seed_group_config(
-            &mut inner,
+            &mut runtime,
             "lite-group",
             HashMap::from([(
                 CheetahString::from_string(format!("+{LITE_BIND_TOPIC_ATTRIBUTE_NAME}")),
@@ -622,7 +747,7 @@ mod tests {
 
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
-        let mut processor = LiteSubscriptionCtlProcessor::new(inner.clone());
+        let mut processor = lite_subscription_processor_for_test(&mut runtime);
         let response = processor
             .process_request(channel, ctx, &mut request)
             .await
@@ -640,9 +765,9 @@ mod tests {
     #[tokio::test]
     async fn partial_add_with_offset_option_assigns_reset_offset() {
         let mut runtime = new_test_runtime("offset-option").await;
-        let mut inner = runtime.inner_for_test().clone();
+        let inner = runtime.inner_for_test().clone();
         seed_group_config(
-            &mut inner,
+            &mut runtime,
             "lite-group",
             HashMap::from([(
                 CheetahString::from_string(format!("+{LITE_BIND_TOPIC_ATTRIBUTE_NAME}")),
@@ -664,7 +789,7 @@ mod tests {
 
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
-        let mut processor = LiteSubscriptionCtlProcessor::new(inner.clone());
+        let mut processor = lite_subscription_processor_for_test(&mut runtime);
         let response = processor
             .process_request(channel, ctx, &mut request)
             .await
@@ -685,9 +810,9 @@ mod tests {
     #[tokio::test]
     async fn partial_remove_with_reset_offset_on_unsubscribe_assigns_min_offset() {
         let mut runtime = new_test_runtime("reset-on-unsubscribe").await;
-        let mut inner = runtime.inner_for_test().clone();
+        let inner = runtime.inner_for_test().clone();
         seed_group_config(
-            &mut inner,
+            &mut runtime,
             "lite-group",
             HashMap::from([
                 (
@@ -722,7 +847,7 @@ mod tests {
 
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
-        let mut processor = LiteSubscriptionCtlProcessor::new(inner.clone());
+        let mut processor = lite_subscription_processor_for_test(&mut runtime);
         let response = processor
             .process_request(channel, ctx, &mut request)
             .await
@@ -743,9 +868,9 @@ mod tests {
     #[tokio::test]
     async fn partial_add_in_exclusive_mode_excludes_previous_client_subscription() {
         let mut runtime = new_test_runtime("exclusive-model").await;
-        let mut inner = runtime.inner_for_test().clone();
+        let inner = runtime.inner_for_test().clone();
         seed_group_config(
-            &mut inner,
+            &mut runtime,
             "lite-group",
             HashMap::from([
                 (
@@ -784,7 +909,7 @@ mod tests {
 
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
-        let mut processor = LiteSubscriptionCtlProcessor::new(inner.clone());
+        let mut processor = lite_subscription_processor_for_test(&mut runtime);
         let response = processor
             .process_request(channel, ctx, &mut request)
             .await
