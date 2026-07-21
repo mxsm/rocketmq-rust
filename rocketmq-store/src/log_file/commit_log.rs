@@ -692,11 +692,6 @@ impl CommitLog {
 
     pub fn start(&mut self) {
         let mut flush_manager = self.flush_manager.clone();
-        let flush_manager_weak = ArcMut::downgrade(&flush_manager);
-
-        if let Some(service) = flush_manager.commit_real_time_service_mut() {
-            service.set_flush_manager(flush_manager_weak);
-        }
         flush_manager.start();
     }
 

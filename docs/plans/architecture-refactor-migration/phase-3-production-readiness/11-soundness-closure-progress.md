@@ -2761,10 +2761,30 @@ Consumer Admin runtime borrow 随 Issue #8454 完成以下边界收敛：
 | runtime / architecture guards | enforcing runtime audit、dependency fixtures/target/baseline、release、8-profile performance、architecture 60/60 与 AGENTS routing 通过 |
 | root workspace final gates | `cargo fmt --all -- --check` 与 workspace all-target/all-feature strict Clippy 通过；最终补丁后复跑 `git diff --check`；Windows linker stdout 与既有 future-incompatibility note 不受 `-D warnings` 管辖 |
 
+## M11-12bc25 实现
+
+Store flush wakeup capability 随 Issue #8456 完成以下边界收敛：
+
+- `CommitRealTimeService` 删除完整 `WeakArcMut<DefaultFlushManager>` back-reference 和 late setter，改持只包含 group-commit/flush-realtime 可选 `Notify` 与 `flush_commit_log_timed` policy 的 `FlushWakeup`。
+- commit worker 成功后直接调用窄唤醒能力；sync flush 唤醒 group-commit，async untimed 唤醒 flush-realtime，async timed 留给周期 worker，不再升级完整 manager。
+- `CommitLog::start` 删除 `ArcMut::downgrade` 与注入路径，并删除无其他调用方的 commit-service accessors；worker 的 `CancellationToken`、`TaskGroup`、start/shutdown 顺序保持不变。
+- reviewed baseline 从 346 identities / 936 occurrences 降至 344 / 932；production 从 188/458 降至 186/454，test 保持 144/438，compatibility 保持 14/40。Store production 从 103/274 降至 101/270；净删除 2 个 production identity/4 occurrence。相邻 import 删除和测试扩展导致 2 个保留 import occurrence 指纹一对一变化，已按实际扫描审核更新，无新增 identity。
+
+## M11-12bc25 验证
+
+| 命令 | 结果 |
+|---|---|
+| Store focused / all-feature check / lib / strict Clippy | flush wakeup 三类 policy 回归 3/3；`cargo check -p rocketmq-store --all-features`、507/507 all-feature library tests 与 all-target/all-feature strict Clippy 通过 |
+| Broker all-feature lib 回归 | 611 passed、24 failed、1 ignored；失败仍全部属于 main 已登记的 lifecycle/Lite/subscription 动态基线，无 flush/commit 新失败；`three_controller_two_broker` 串行重跑 3/4，唯一失败仍是已登记的 rejoin namesrv/store/HA slave-view 收敛超时，因此全套如实记为未通过 |
+| Store/RocksDB 专项 | Store/Broker `rocksdb_store` strict Clippy 通过；foundation 82/82、semantics 9/9、Broker rocksdb 21/21、pop_consumer 4/4 通过 |
+| reviewed baseline / fixtures | `--apply-reviewed-reductions` 候选精确从 346/936 降至 344/932；正式 baseline 删除 2 identity/4 occurrence并审核更新 2 个保留 import 指纹；`python scripts/arc_mut_guard.py`、24/24 fixtures 与 67/67 guard tests 通过，无新增 identity或临时 approval 文件 |
+| runtime / architecture guards | enforcing runtime audit、dependency fixtures/target/baseline、release、8-profile performance、architecture 60/60 与 AGENTS routing 通过；目标 compatibility 35/35、test edge 3/3、release topology 32/32 |
+| root workspace final gates | `cargo fmt --all -- --check` 与 workspace all-target/all-feature strict Clippy 通过；Windows linker stdout 与既有 future-incompatibility note 不受 `-D warnings` 管辖 |
+
 ## 剩余切片与 Gate
 
 1. Broker BrokerRuntimeInner capability carrier 与其他 admin/processor/leaf owner（85/184）；transaction bridge、Producer/ColdData admin leaf、Schedule hook、put-message preflight、ConsumerOrderInfoManager、TopicRouteInfoManager、MessageArrivingListener、ClientHousekeepingService、HA diagnostics/control/min-broker transition、BatchMq、SubscriptionGroup、MessageRelated、Offset、Consumer handler 与未编译 V2 示例残留已退出 leaf-level 完整 runtime/store owner，LiteLifecycle 只读 Store carrier 已收窄为普通借用，显式 Store 兼容 owner 留待 Store 批次删除。
-2. Store MappedFileQueue/其余 ConsumeQueue、CommitLog/Flush、StoreHandle/Rocks/Timer 与其余 HA service/actor（103/274）；BrokerStats observer、ConsumeQueueExt 显式锁 owner、HA notification/connection registry 窄能力与未共享 HA child direct ownership 已完成。
+2. Store MappedFileQueue/其余 ConsumeQueue、CommitLog/Flush、StoreHandle/Rocks/Timer 与其余 HA service/actor（101/270）；BrokerStats observer、ConsumeQueueExt 显式锁 owner、HA notification/connection registry 窄能力、未共享 HA child direct ownership 与 commit-to-flush 窄唤醒能力已完成。
 3. 先迁移 Store 对 `WeakArcMut` 的剩余使用并移除其余 nightly feature；公开 `arc_mut.rs`/re-export 的 destructive 删除受 next-major 两轮弃用与 Release Manager/HUMAN Gate 约束，不能静默重置 public API baseline。
 4. 对同一候选快照执行 stable feature matrix、Miri/Loom 可用切片、soak/SLO fault、dashboard/runbook、动态
    Kind/K3d/container、M10 固定硬件和 Human Gate。

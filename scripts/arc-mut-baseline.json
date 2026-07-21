@@ -6212,12 +6212,6 @@
           "line": 369
         },
         {
-          "id": "aec82b8b7e282c35e688884a",
-          "fingerprint": "f21f51d8b9df36d609f3e72d",
-          "item": "fn start",
-          "line": 695
-        },
-        {
           "id": "7b82a0c547144271333e00f4",
           "fingerprint": "f888bd2b5652943d91e73499",
           "item": "fn recover_normally_optimized",
@@ -6436,10 +6430,10 @@
       "category": "test",
       "occurrences": [
         {
-          "id": "142e50c0a2fe6071fa98ca69",
-          "fingerprint": "9f544a8c23139aecaf354bdc",
+          "id": "dd044f8e799d54c7117e31f9",
+          "fingerprint": "8035c90fa25e4939a7500d0d",
           "item": "mod tests",
-          "line": 639
+          "line": 646
         }
       ],
       "owner": "store",
@@ -6504,8 +6498,8 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "ed90aef20d1d02193c746b52",
-          "fingerprint": "a1242bb96af1e085537b9869",
+          "id": "b931a0448320ad80ead2a81d",
+          "fingerprint": "de491a778310e6cc68132e5d",
           "item": "<module>",
           "line": 22
         }
@@ -6563,50 +6557,6 @@
           "fingerprint": "04b812ce9b8d375ca570c5d4",
           "item": "fn commit_mapped_file_queue",
           "line": 618
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "3c663e49572a9aa0b69c5ffb",
-      "path": "rocketmq-store/src/log_file/flush_manager_impl/default_flush_manager.rs",
-      "symbol": "WeakArcMut",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "40abdeec7b706b7a903595f0",
-          "fingerprint": "59b42a0e45fe95bcf5977fb7",
-          "item": "<module>",
-          "line": 23
-        }
-      ],
-      "owner": "store",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "fc0828c03794a02c19d17143",
-      "path": "rocketmq-store/src/log_file/flush_manager_impl/default_flush_manager.rs",
-      "symbol": "WeakArcMut",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "6884b5555e6af46ed03a9942",
-          "fingerprint": "31835f75c3027b6e8821d43d",
-          "item": "struct CommitRealTimeService",
-          "line": 512
-        },
-        {
-          "id": "d616fbddd744b8a1b0138594",
-          "fingerprint": "ede5b0008432693bdd4cc261",
-          "item": "fn set_flush_manager",
-          "line": 579
         }
       ],
       "owner": "store",

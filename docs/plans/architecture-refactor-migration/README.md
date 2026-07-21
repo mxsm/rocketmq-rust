@@ -648,6 +648,14 @@ consumer 聚焦回归 9/9、ownership 回归通过。ArcMut 快照降至 346 ide
 test 144/438、compatibility 14/40、Broker production 85/184），净删除 2 个 production identities/3 occurrences，
 且无 relocation。总进度仍为 75/82，下一子切片 M11-12bc25 继续 Broker aggregate/leaf 或 Store WAL/queue/timer/HA owner。
 
+Store flush wakeup capability 随 Issue #8456 收窄：`CommitRealTimeService` 不再持有或升级完整
+`WeakArcMut<DefaultFlushManager>`，只保留 group-commit/flush-realtime 的可选 `Notify` 与 timed-flush policy；
+`CommitLog::start` 删除 downgrade、late setter 和无调用 accessor。sync flush、async untimed 与 async timed 三类行为
+由确定性测试固定，worker 仍由原 `CancellationToken`/`TaskGroup` 所有。ArcMut 快照降至 344 identities/932
+occurrences（production 186/454、test 144/438、compatibility 14/40、Store production 101/270），净删除 2 个
+production identities/4 occurrences；2 个保留 import occurrence 仅作一对一指纹更新，无新增 identity。
+总进度仍为 75/82，下一子切片 M11-12bc26 继续 Broker aggregate/leaf 或 Store WAL/queue/timer/HA owner。
+
 ### 9.3 证据目录
 
 - 运行期生成物：`target/architecture-refactor/Mxx/<run-id>/`，不提交 Git。

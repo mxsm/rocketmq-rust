@@ -20,7 +20,6 @@ use std::time::Duration;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_rust::ArcMut;
-use rocketmq_rust::WeakArcMut;
 use rocketmq_store_local::flush::group_commit::run_group_commit_worker;
 use rocketmq_store_local::flush::group_commit::GroupCommitStatus;
 use rocketmq_store_local::flush::group_commit::GroupCommitWorkerConfig;
@@ -131,7 +130,15 @@ impl DefaultFlushManager {
                 message_store_config: message_store_config.clone(),
                 store_checkpoint,
                 notified: Arc::new(Default::default()),
-                flush_manager: None,
+                flush_wakeup: FlushWakeup {
+                    group_commit_notified: group_commit_service
+                        .as_ref()
+                        .map(|service| Arc::clone(&service.notified)),
+                    flush_real_time_notified: flush_real_time_service
+                        .as_ref()
+                        .map(|service| Arc::clone(&service.notified)),
+                    flush_commit_log_timed: message_store_config.flush_commit_log_timed,
+                },
                 shutdown_token: CancellationToken::new(),
                 worker_group: None,
             })
@@ -166,14 +173,6 @@ impl DefaultFlushManager {
 impl DefaultFlushManager {
     pub fn sync_flush_runtime_info(&self) -> SyncFlushRuntimeInfo {
         self.sync_flush_stats.snapshot()
-    }
-
-    pub(crate) fn commit_real_time_service(&self) -> Option<&CommitRealTimeService> {
-        self.commit_real_time_service.as_ref()
-    }
-
-    pub(crate) fn commit_real_time_service_mut(&mut self) -> Option<&mut CommitRealTimeService> {
-        self.commit_real_time_service.as_mut()
     }
 
     pub(crate) async fn shutdown_gracefully(&mut self) -> Result<FlushProgress, StoreError> {
@@ -505,11 +504,31 @@ impl FlushRealTimeService {
     }
 }
 
-pub(crate) struct CommitRealTimeService {
+#[derive(Clone)]
+struct FlushWakeup {
+    group_commit_notified: Option<Arc<Notify>>,
+    flush_real_time_notified: Option<Arc<Notify>>,
+    flush_commit_log_timed: bool,
+}
+
+impl FlushWakeup {
+    fn wakeup(&self) {
+        if let Some(notified) = &self.group_commit_notified {
+            notified.notify_one();
+        }
+        if !self.flush_commit_log_timed {
+            if let Some(notified) = &self.flush_real_time_notified {
+                notified.notify_one();
+            }
+        }
+    }
+}
+
+struct CommitRealTimeService {
     message_store_config: Arc<MessageStoreConfig>,
     store_checkpoint: Arc<StoreCheckpoint>,
     notified: Arc<Notify>,
-    flush_manager: Option<WeakArcMut<DefaultFlushManager>>,
+    flush_wakeup: FlushWakeup,
     shutdown_token: CancellationToken,
     worker_group: Option<TaskGroup>,
 }
@@ -539,20 +558,12 @@ impl CommitRealTimeService {
         );
         let store_checkpoint = self.store_checkpoint.clone();
         let notified = self.notified.clone();
-        let flush_manager = self.flush_manager.clone();
+        let flush_wakeup = self.flush_wakeup.clone();
         let shutdown_token = self.shutdown_token.clone();
         if let Err(error) = worker_group.spawn_service("commit-log-commit-real-time", async move {
             let ports = CommitRealTimeWorkerPorts::new(
                 move |least_pages| commit_mapped_file_queue(mapped_file_queue.clone(), least_pages),
-                move || {
-                    if let Some(flush_manager) =
-                        flush_manager.as_ref().and_then(|flush_manager| flush_manager.upgrade())
-                    {
-                        flush_manager.wake_up_flush();
-                    } else {
-                        warn!("CommitRealTimeService cannot wake flush because flush manager is not initialized");
-                    }
-                },
+                move || flush_wakeup.wakeup(),
                 move |timestamp| store_checkpoint.set_physic_msg_timestamp(timestamp),
                 time::sleep,
             );
@@ -574,10 +585,6 @@ impl CommitRealTimeService {
         self.shutdown_token.cancel();
         self.notified.notify_waiters();
         shutdown_worker_gracefully("CommitRealTimeService", &mut self.worker_group).await;
-    }
-
-    pub fn set_flush_manager(&mut self, flush_manager: WeakArcMut<DefaultFlushManager>) {
-        self.flush_manager = Some(flush_manager);
     }
 }
 
@@ -638,6 +645,7 @@ async fn commit_mapped_file_queue(
 mod tests {
     use super::*;
 
+    use futures_util::FutureExt;
     use rocketmq_common::TimeUtils::current_millis;
     use rocketmq_store_local::flush::group_commit::complete_group_commit_batch;
     use rocketmq_store_local::flush::group_commit::complete_group_commit_batch_error;
@@ -648,6 +656,48 @@ mod tests {
 
     fn health_recorder() -> StoreHealthRecorder {
         StoreHealthRecorder::new(Arc::new(RunningFlags::new()))
+    }
+
+    #[test]
+    fn flush_wakeup_notifies_group_commit_service() {
+        let notified = Arc::new(Notify::new());
+        let wakeup = FlushWakeup {
+            group_commit_notified: Some(Arc::clone(&notified)),
+            flush_real_time_notified: None,
+            flush_commit_log_timed: false,
+        };
+
+        wakeup.wakeup();
+
+        assert!(notified.notified().now_or_never().is_some());
+    }
+
+    #[test]
+    fn flush_wakeup_notifies_untimed_flush_service() {
+        let notified = Arc::new(Notify::new());
+        let wakeup = FlushWakeup {
+            group_commit_notified: None,
+            flush_real_time_notified: Some(Arc::clone(&notified)),
+            flush_commit_log_timed: false,
+        };
+
+        wakeup.wakeup();
+
+        assert!(notified.notified().now_or_never().is_some());
+    }
+
+    #[test]
+    fn flush_wakeup_leaves_timed_flush_service_for_periodic_worker() {
+        let notified = Arc::new(Notify::new());
+        let wakeup = FlushWakeup {
+            group_commit_notified: None,
+            flush_real_time_notified: Some(Arc::clone(&notified)),
+            flush_commit_log_timed: true,
+        };
+
+        wakeup.wakeup();
+
+        assert!(notified.notified().now_or_never().is_none());
     }
 
     #[test]
