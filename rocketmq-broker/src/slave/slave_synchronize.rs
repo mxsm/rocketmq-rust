@@ -646,7 +646,6 @@ mod tests {
         let offset_manager = Arc::new(ConsumerOffsetManager::<GenericMessageStore>::new(
             Arc::clone(&broker_config),
             Arc::clone(&message_store_config),
-            None,
         ));
         let offset_capability = super::SlaveConsumerOffsetCapability::default();
 

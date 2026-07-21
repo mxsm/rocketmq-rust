@@ -16,7 +16,6 @@ use bytes::Bytes;
 use cheetah_string::CheetahString;
 use futures::future::BoxFuture;
 use futures::FutureExt;
-use rocketmq_common::common::broker::broker_role::BrokerRole;
 use rocketmq_common::common::hasher::string_hasher::JavaStringHasher;
 use rocketmq_common::common::message::message_batch::MessageExtBatch;
 use rocketmq_common::common::message::message_decoder;
@@ -29,7 +28,6 @@ use rocketmq_common::common::mix_all;
 use rocketmq_model::result::PullStatus;
 use rocketmq_model::result::SendResult;
 use rocketmq_model::result::SendStatus;
-use rocketmq_rust::ArcMut;
 use rocketmq_store::base::get_message_result::GetMessageResult;
 use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::base::message_status_enum::GetMessageStatus;
@@ -39,20 +37,17 @@ use rocketmq_store::base::query_message_result::QueryMessageResult;
 use rocketmq_store::base::select_result::SelectMappedBufferResult;
 use rocketmq_store::filter::ArcMessageFilter;
 use rocketmq_store::ha::ha_connection_state_notification_request::HAConnectionStateNotificationRequest;
-use rocketmq_store::ha::ha_service::HAService;
 use rocketmq_store::store_api_adapter::LegacyAppendReceipt;
-use rocketmq_store::store_api_adapter::LegacyMessageStoreAdapter;
-use rocketmq_store::store_api_adapter::LegacyMessageStoreHealthAdapter;
 use rocketmq_store::store_api_adapter::LegacyStoreHealthSnapshot;
-use rocketmq_store_api::MessageAppender;
 use rocketmq_store_api::StoreError;
-use rocketmq_store_api::StoreErrorKind;
-use rocketmq_store_api::StoreHealth;
-use rocketmq_store_api::StoreOperation;
 use tracing::error;
 use tracing::warn;
 
-use crate::broker_runtime::BrokerRuntimeInner;
+use crate::failover::escape_bridge_capability::EscapeBridgePolicyState;
+use crate::failover::escape_bridge_capability::EscapeBridgeStoreCapability;
+use crate::failover::escape_bridge_capability::LegacyEscapeStoreOwner;
+use crate::out_api::broker_outer_api::BrokerOuterAPI;
+use crate::topic::manager::topic_route_info_manager::TopicRouteInfoManager;
 use crate::transaction::queue::transactional_message_util::TransactionalMessageUtil;
 
 const SEND_TIMEOUT: u64 = 3_000;
@@ -103,34 +98,45 @@ pub(crate) struct MessageStoreUnavailable;
 pub(crate) struct EscapeBridge<MS: MessageStore> {
     inner_producer_group_name: CheetahString,
     inner_consumer_group_name: CheetahString,
-    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+    policy_state: EscapeBridgePolicyState,
+    message_store: EscapeBridgeStoreCapability<MS>,
+    topic_route_info_manager: TopicRouteInfoManager,
+    broker_outer_api: BrokerOuterAPI,
 }
 
 impl<MS: MessageStore> EscapeBridge<MS> {
-    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
+    pub(crate) fn new(
+        policy_state: EscapeBridgePolicyState,
+        topic_route_info_manager: TopicRouteInfoManager,
+        broker_outer_api: BrokerOuterAPI,
+    ) -> Self {
+        let policy = policy_state.snapshot();
         let inner_producer_group_name = CheetahString::from_string(format!(
             "InnerProducerGroup_{}_{}",
-            broker_runtime_inner.broker_config().broker_name(),
-            broker_runtime_inner.broker_config().broker_identity.broker_id
+            policy.broker_name, policy.broker_id
         ));
         let inner_consumer_group_name = CheetahString::from_string(format!(
             "InnerConsumerGroup_{}_{}",
-            broker_runtime_inner.broker_config().broker_name(),
-            broker_runtime_inner.broker_config().broker_identity.broker_id
+            policy.broker_name, policy.broker_id
         ));
 
         Self {
             inner_producer_group_name,
             inner_consumer_group_name,
-            broker_runtime_inner,
+            policy_state,
+            message_store: EscapeBridgeStoreCapability::default(),
+            topic_route_info_manager,
+            broker_outer_api,
         }
     }
 
-    pub fn start(&self /* message_store: Option<ArcMut<MS>> */) {
-        let broker_runtime_inner = &self.broker_runtime_inner;
-        if broker_runtime_inner.broker_config().enable_slave_acting_master
-            && broker_runtime_inner.broker_config().enable_remote_escape
-        {
+    pub(crate) fn bind_message_store(&self, owner: LegacyEscapeStoreOwner<MS>) {
+        self.message_store.bind(owner);
+    }
+
+    pub fn start(&self) {
+        let policy = self.policy_state.snapshot();
+        if policy.enable_slave_acting_master && policy.enable_remote_escape {
 
             //self.message_store = message_store;
         }
@@ -141,51 +147,37 @@ impl<MS: MessageStore> EscapeBridge<MS> {
     }
 
     pub(crate) fn with_message_store<R>(&self, operation: impl FnOnce(&MS) -> R) -> R {
-        operation(self.broker_runtime_inner.message_store_unchecked().as_ref())
+        self.message_store
+            .with_store(operation)
+            .expect("message store must be bound before broker services start")
     }
 
     pub(crate) fn try_with_message_store<R>(
         &self,
         operation: impl FnOnce(&MS) -> R,
     ) -> Result<R, MessageStoreUnavailable> {
-        let message_store = self
-            .broker_runtime_inner
-            .message_store()
-            .ok_or(MessageStoreUnavailable)?;
-        Ok(operation(message_store.as_ref()))
+        self.message_store.with_store(operation)
     }
 
     pub(crate) fn send_message_store_health_snapshot(
         &self,
     ) -> Result<LegacyStoreHealthSnapshot, MessageStoreUnavailable> {
-        self.try_with_message_store(|store| LegacyMessageStoreHealthAdapter::new(store).health_snapshot())
+        self.message_store.health_snapshot()
     }
 
     pub(crate) async fn send_append_message(
         &self,
         message: MessageExtBrokerInner,
     ) -> Result<LegacyAppendReceipt, StoreError> {
-        let mut message_store = self
-            .broker_runtime_inner
-            .message_store()
-            .cloned()
-            .ok_or_else(|| StoreError::new(StoreErrorKind::NotStarted, StoreOperation::Append))?;
-        let mut adapter = LegacyMessageStoreAdapter::new(message_store.as_mut());
-        adapter.append_message(message).await
+        self.message_store.append_message(message).await
     }
 
     pub(crate) async fn send_append_batch(&self, batch: MessageExtBatch) -> Result<LegacyAppendReceipt, StoreError> {
-        let mut message_store = self
-            .broker_runtime_inner
-            .message_store()
-            .cloned()
-            .ok_or_else(|| StoreError::new(StoreErrorKind::NotStarted, StoreOperation::Append))?;
-        let mut adapter = LegacyMessageStoreAdapter::new(message_store.as_mut());
-        adapter.append_message(batch).await
+        self.message_store.append_batch(batch).await
     }
 
     pub(crate) fn send_append_progress(&self) -> Result<(i64, i64), MessageStoreUnavailable> {
-        self.try_with_message_store(|store| (store.get_max_phy_offset(), store.get_flushed_where()))
+        self.message_store.append_progress()
     }
 
     pub(crate) fn pre_online_broker_init_max_offset(&self) -> Result<i64, MessageStoreUnavailable> {
@@ -197,22 +189,14 @@ impl<MS: MessageStore> EscapeBridge<MS> {
     }
 
     pub(crate) fn pre_online_set_master_flushed_offset(&self, offset: i64) -> Result<(), MessageStoreUnavailable> {
-        self.try_with_message_store(|store| store.set_master_flushed_offset(offset))
+        self.message_store.set_master_flushed_offset(offset)
     }
 
     pub(crate) async fn pre_online_submit_ha_transfer(
         &self,
         request: HAConnectionStateNotificationRequest,
     ) -> Result<bool, MessageStoreUnavailable> {
-        let message_store = self
-            .broker_runtime_inner
-            .message_store()
-            .ok_or(MessageStoreUnavailable)?;
-        let Some(ha_service) = message_store.get_ha_service() else {
-            return Ok(false);
-        };
-        ha_service.put_group_connection_state_request(request).await;
-        Ok(true)
+        self.message_store.submit_ha_transfer(request).await
     }
 
     pub(crate) async fn pre_online_update_master_addresses(
@@ -220,13 +204,9 @@ impl<MS: MessageStore> EscapeBridge<MS> {
         master_ha_address: &CheetahString,
         master_address: &CheetahString,
     ) -> Result<(), MessageStoreUnavailable> {
-        let message_store = self
-            .broker_runtime_inner
-            .message_store()
-            .ok_or(MessageStoreUnavailable)?;
-        message_store.update_ha_master_address(master_ha_address.as_str()).await;
-        message_store.update_master_address(master_address);
-        Ok(())
+        self.message_store
+            .update_master_addresses(master_ha_address, master_address)
+            .await
     }
 
     pub(crate) async fn query_message_from_store(
@@ -237,36 +217,23 @@ impl<MS: MessageStore> EscapeBridge<MS> {
         begin_timestamp: i64,
         end_timestamp: i64,
     ) -> Result<Option<QueryMessageResult>, MessageStoreUnavailable> {
-        let message_store = self
-            .broker_runtime_inner
-            .message_store()
-            .ok_or(MessageStoreUnavailable)?;
-        Ok(message_store
+        self.message_store
             .query_message(topic, key, max_num, begin_timestamp, end_timestamp)
-            .await)
+            .await
     }
 
     pub(crate) fn select_message_from_store(
         &self,
         offset: i64,
     ) -> Result<Option<SelectMappedBufferResult>, MessageStoreUnavailable> {
-        let message_store = self
-            .broker_runtime_inner
-            .message_store()
-            .ok_or(MessageStoreUnavailable)?;
-        Ok(message_store.select_one_message_by_offset(offset))
+        self.message_store.select_message(offset)
     }
 
     pub(crate) async fn put_message_to_local_store(
         &self,
         message: MessageExtBrokerInner,
     ) -> Result<PutMessageResult, MessageStoreUnavailable> {
-        let mut message_store = self
-            .broker_runtime_inner
-            .message_store()
-            .cloned()
-            .ok_or(MessageStoreUnavailable)?;
-        Ok(message_store.put_message(message).await)
+        self.message_store.put_message(message).await
     }
 
     pub(crate) fn get_min_offset_from_local_store(
@@ -274,11 +241,7 @@ impl<MS: MessageStore> EscapeBridge<MS> {
         topic: &CheetahString,
         queue_id: i32,
     ) -> Result<i64, MessageStoreUnavailable> {
-        let message_store = self
-            .broker_runtime_inner
-            .message_store()
-            .ok_or(MessageStoreUnavailable)?;
-        Ok(message_store.get_min_offset_in_queue(topic, queue_id))
+        self.message_store.min_offset(topic, queue_id)
     }
 
     pub(crate) fn get_max_offset_from_local_store(
@@ -286,19 +249,11 @@ impl<MS: MessageStore> EscapeBridge<MS> {
         topic: &CheetahString,
         queue_id: i32,
     ) -> Result<i64, MessageStoreUnavailable> {
-        let message_store = self
-            .broker_runtime_inner
-            .message_store()
-            .ok_or(MessageStoreUnavailable)?;
-        Ok(message_store.get_max_offset_in_queue(topic, queue_id))
+        self.message_store.max_offset(topic, queue_id)
     }
 
     pub(crate) fn local_store_now(&self) -> Result<u64, MessageStoreUnavailable> {
-        let message_store = self
-            .broker_runtime_inner
-            .message_store()
-            .ok_or(MessageStoreUnavailable)?;
-        Ok(message_store.now())
+        self.message_store.now()
     }
 
     pub(crate) async fn get_message_from_local_store(
@@ -309,13 +264,9 @@ impl<MS: MessageStore> EscapeBridge<MS> {
         offset: i64,
         nums: i32,
     ) -> Result<Option<GetMessageResult>, MessageStoreUnavailable> {
-        let message_store = self
-            .broker_runtime_inner
-            .message_store()
-            .ok_or(MessageStoreUnavailable)?;
-        Ok(message_store
-            .get_message(group, topic, queue_id, offset, nums, None)
-            .await)
+        self.message_store
+            .get_message(group, topic, queue_id, offset, nums)
+            .await
     }
 
     #[allow(clippy::too_many_arguments, reason = "preserves the Store pull read contract")]
@@ -329,12 +280,7 @@ impl<MS: MessageStore> EscapeBridge<MS> {
         max_msg_bytes: i32,
         message_filter: ArcMessageFilter,
     ) -> Result<Option<GetMessageResult>, MessageStoreUnavailable> {
-        let message_store = self
-            .broker_runtime_inner
-            .message_store()
-            .cloned()
-            .ok_or(MessageStoreUnavailable)?;
-        Ok(message_store
+        self.message_store
             .get_message_with_size_limit(
                 group,
                 topic,
@@ -342,9 +288,9 @@ impl<MS: MessageStore> EscapeBridge<MS> {
                 offset,
                 max_msg_nums,
                 max_msg_bytes,
-                Some(message_filter),
+                message_filter,
             )
-            .await)
+            .await
     }
 
     #[cfg(feature = "local_file_store")]
@@ -367,37 +313,30 @@ impl<MS: MessageStore> EscapeBridge<MS> {
         &self,
         offset: i64,
     ) -> Result<Option<MessageExt>, MessageStoreUnavailable> {
-        let message_store = self
-            .broker_runtime_inner
-            .message_store()
-            .ok_or(MessageStoreUnavailable)?;
-        Ok(message_store.look_message_by_offset(offset))
+        self.message_store.look_message_by_offset(offset)
     }
 
     pub(crate) fn local_store_state_machine_version(&self) -> Result<i64, MessageStoreUnavailable> {
-        let message_store = self
-            .broker_runtime_inner
-            .message_store()
-            .ok_or(MessageStoreUnavailable)?;
-        Ok(message_store.get_state_machine_version())
+        self.message_store.state_machine_version()
     }
 
     pub(crate) async fn update_local_store_master_address(
         &self,
         master_addr: &CheetahString,
     ) -> Result<(), MessageStoreUnavailable> {
-        let message_store = self
-            .broker_runtime_inner
-            .message_store()
-            .cloned()
-            .ok_or(MessageStoreUnavailable)?;
-        message_store.update_ha_master_address(master_addr.as_str()).await;
-        message_store.update_master_address(master_addr);
-        Ok(())
+        self.message_store.update_master_address(master_addr).await
     }
 
     pub(crate) fn is_message_store_slave(&self) -> bool {
-        self.broker_runtime_inner.message_store_config().broker_role == BrokerRole::Slave
+        self.policy_state.snapshot().broker_role == rocketmq_common::common::broker::broker_role::BrokerRole::Slave
+    }
+
+    pub(crate) fn check_in_mem_by_consume_offset(
+        &self,
+        topic: &CheetahString,
+        queue_id: i32,
+    ) -> Result<bool, MessageStoreUnavailable> {
+        self.message_store.check_in_mem_by_consume_offset(topic, queue_id)
     }
 }
 
@@ -406,13 +345,13 @@ where
     MS: MessageStore,
 {
     pub async fn put_message(&self, mut message_ext: MessageExtBrokerInner) -> PutMessageResult {
-        let broker_runtime_inner = self.broker_runtime_inner.clone();
-        if broker_runtime_inner.broker_config().broker_identity.broker_id == mix_all::MASTER_ID {
-            let mut message_store = broker_runtime_inner.message_store_unchecked().clone();
-            message_store.put_message(message_ext).await
-        } else if broker_runtime_inner.broker_config().enable_slave_acting_master
-            && broker_runtime_inner.broker_config().enable_remote_escape
-        {
+        let policy = self.policy_state.snapshot();
+        if policy.broker_id == mix_all::MASTER_ID {
+            self.message_store
+                .put_message(message_ext)
+                .await
+                .expect("message store must be bound before broker services start")
+        } else if policy.enable_slave_acting_master && policy.enable_remote_escape {
             message_ext.set_wait_store_msg_ok(false);
             match self.put_message_to_remote_broker(message_ext, None).await {
                 Ok(send_result) => transform_send_result2put_result(send_result),
@@ -424,8 +363,7 @@ where
         } else {
             warn!(
                 "Put message failed, enableSlaveActingMaster={}, enableRemoteEscape={}.",
-                broker_runtime_inner.broker_config().enable_slave_acting_master,
-                broker_runtime_inner.broker_config().enable_remote_escape
+                policy.enable_slave_acting_master, policy.enable_remote_escape
             );
             PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable)
         }
@@ -436,12 +374,8 @@ where
         message_ext: MessageExtBrokerInner,
         mut broker_name_to_send: Option<CheetahString>,
     ) -> rocketmq_error::RocketMQResult<Option<SendResult>> {
-        let broker_runtime_inner = self.broker_runtime_inner.clone();
-        let broker_name = broker_runtime_inner
-            .broker_config()
-            .broker_identity
-            .broker_name
-            .as_str();
+        let policy = self.policy_state.snapshot();
+        let broker_name = policy.broker_name.as_str();
         if broker_name.is_empty() || broker_name == broker_name_to_send.as_ref().map_or("", |value| value.as_str()) {
             // not remote broker
             return Ok(None);
@@ -452,8 +386,8 @@ where
         } else {
             message_ext
         };
-        let topic_publish_info = broker_runtime_inner
-            .topic_route_info_manager()
+        let topic_publish_info = self
+            .topic_route_info_manager
             .try_to_find_topic_publish_info(message_to_put.get_topic())
             .await;
         if !topic_publish_info.as_ref().is_some_and(|value| value.is_usable()) {
@@ -471,13 +405,7 @@ where
                 .unwrap();
             message_to_put.message_ext_inner.queue_id = mq.queue_id();
             broker_name_to_send = Some(mq.broker_name().clone());
-            if broker_runtime_inner
-                .broker_config()
-                .broker_identity
-                .broker_name
-                .as_str()
-                == mq.broker_name().as_str()
-            {
+            if broker_name == mq.broker_name().as_str() {
                 warn!(
                     "putMessageToRemoteBroker failed, remote broker not found. Topic: {}, MsgId: {}, Broker: {}",
                     message_to_put.get_topic(),
@@ -494,8 +422,8 @@ where
                 message_to_put.queue_id(),
             )
         };
-        let broker_addr_to_send = broker_runtime_inner
-            .topic_route_info_manager()
+        let broker_addr_to_send = self
+            .topic_route_info_manager
             .find_broker_address_in_publish(broker_name_to_send.as_ref());
         if broker_addr_to_send.is_none() {
             warn!(
@@ -507,8 +435,8 @@ where
             return Ok(None);
         }
         let producer_group = self.get_producer_group(&message_to_put);
-        let result = broker_runtime_inner
-            .broker_outer_api()
+        let result = self
+            .broker_outer_api
             .send_message_to_specific_broker(
                 broker_addr_to_send.as_ref().unwrap(),
                 broker_name_to_send.as_ref().unwrap(),
@@ -533,16 +461,16 @@ where
     }
 
     pub async fn async_put_message(&self, mut message_ext: MessageExtBrokerInner) -> PutMessageResult {
-        let broker_runtime_inner = self.broker_runtime_inner.clone();
-        if broker_runtime_inner.broker_config().broker_identity.broker_id == mix_all::MASTER_ID {
-            let mut message_store = broker_runtime_inner.message_store_unchecked().clone();
-            message_store.put_message(message_ext).await
-        } else if broker_runtime_inner.broker_config().enable_slave_acting_master
-            && broker_runtime_inner.broker_config().enable_remote_escape
-        {
+        let policy = self.policy_state.snapshot();
+        if policy.broker_id == mix_all::MASTER_ID {
+            self.message_store
+                .put_message(message_ext)
+                .await
+                .expect("message store must be bound before broker services start")
+        } else if policy.enable_slave_acting_master && policy.enable_remote_escape {
             message_ext.set_wait_store_msg_ok(false);
-            let topic_publish_info = broker_runtime_inner
-                .topic_route_info_manager()
+            let topic_publish_info = self
+                .topic_route_info_manager
                 .try_to_find_topic_publish_info(message_ext.get_topic())
                 .await;
             if topic_publish_info.is_none() {
@@ -556,12 +484,12 @@ where
             let message_queue = mq_selected.unwrap();
             message_ext.message_ext_inner.queue_id = message_queue.queue_id();
             let broker_name_to_send = message_queue.broker_name();
-            let broker_addr_to_send = broker_runtime_inner
-                .topic_route_info_manager()
+            let broker_addr_to_send = self
+                .topic_route_info_manager
                 .find_broker_address_in_publish(Some(broker_name_to_send));
             let producer_group = self.get_producer_group(&message_ext);
-            let result = broker_runtime_inner
-                .broker_outer_api()
+            let result = self
+                .broker_outer_api
                 .send_message_to_specific_broker(
                     broker_addr_to_send.as_ref().unwrap(),
                     broker_name_to_send,
@@ -577,16 +505,16 @@ where
     }
 
     pub async fn put_message_to_specific_queue(&self, mut message_ext: MessageExtBrokerInner) -> PutMessageResult {
-        let broker_runtime_inner = self.broker_runtime_inner.clone();
-        if broker_runtime_inner.broker_config().broker_identity.broker_id == mix_all::MASTER_ID {
-            let mut message_store = broker_runtime_inner.message_store_unchecked().clone();
-            message_store.put_message(message_ext).await
-        } else if broker_runtime_inner.broker_config().enable_slave_acting_master
-            && broker_runtime_inner.broker_config().enable_remote_escape
-        {
+        let policy = self.policy_state.snapshot();
+        if policy.broker_id == mix_all::MASTER_ID {
+            self.message_store
+                .put_message(message_ext)
+                .await
+                .expect("message store must be bound before broker services start")
+        } else if policy.enable_slave_acting_master && policy.enable_remote_escape {
             message_ext.set_wait_store_msg_ok(false);
-            let topic_publish_info = broker_runtime_inner
-                .topic_route_info_manager()
+            let topic_publish_info = self
+                .topic_route_info_manager
                 .try_to_find_topic_publish_info(message_ext.get_topic())
                 .await;
             if topic_publish_info.is_none() {
@@ -608,12 +536,12 @@ where
             let message_queue = topic_publish_info.message_queues()[index].clone();
             message_ext.message_ext_inner.queue_id = message_queue.queue_id();
             let broker_name_to_send = message_queue.broker_name();
-            let broker_addr_to_send = broker_runtime_inner
-                .topic_route_info_manager()
+            let broker_addr_to_send = self
+                .topic_route_info_manager
                 .find_broker_address_in_publish(Some(broker_name_to_send));
             let producer_group = self.get_producer_group(&message_ext);
-            match broker_runtime_inner
-                .broker_outer_api()
+            match self
+                .broker_outer_api
                 .send_message_to_specific_broker(
                     broker_addr_to_send.as_ref().unwrap(),
                     broker_name_to_send,
@@ -632,8 +560,7 @@ where
         } else {
             warn!(
                 "Put message failed, enableSlaveActingMaster={}, enableRemoteEscape={}.",
-                broker_runtime_inner.broker_config().enable_slave_acting_master,
-                broker_runtime_inner.broker_config().enable_remote_escape
+                policy.enable_slave_acting_master, policy.enable_remote_escape
             );
             PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable)
         }
@@ -647,19 +574,21 @@ where
         broker_name: &CheetahString,
         de_compress_body: bool,
     ) -> BoxFuture<'_, (Option<MessageExt>, String, bool)> {
-        let broker_runtime_inner = self.broker_runtime_inner.clone();
-        let Some(message_store) = broker_runtime_inner.message_store().cloned() else {
+        let message_store = self.message_store.clone();
+        if message_store.with_store(|_| ()).is_err() {
             return async { (None, "message store is unavailable".to_string(), false) }.boxed();
-        };
+        }
         let inner_consumer_group_name = self.inner_consumer_group_name.clone();
         let topic = topic.clone();
         let broker_name = broker_name.clone();
 
-        if broker_runtime_inner.broker_config().broker_identity.broker_name == broker_name {
+        if self.policy_state.snapshot().broker_name == broker_name {
             async move {
                 let result = message_store
-                    .get_message(&inner_consumer_group_name, &topic, queue_id, offset, 1, None)
-                    .await;
+                    .get_message(&inner_consumer_group_name, &topic, queue_id, offset, 1)
+                    .await
+                    .ok()
+                    .flatten();
                 if result.is_none() {
                     warn!(
                         "getMessageResult is null, innerConsumerGroupName {}, topic {}, offset {}, queueId {}",
@@ -693,24 +622,21 @@ where
         queue_id: i32,
         broker_name: &CheetahString,
     ) -> BoxFuture<'_, (Option<MessageExt>, String, bool)> {
-        let broker_runtime_inner = self.broker_runtime_inner.clone();
+        let topic_route_info_manager = self.topic_route_info_manager.clone();
+        let broker_outer_api = self.broker_outer_api.clone();
         let inner_consumer_group_name = self.inner_consumer_group_name.clone();
         let topic = topic.clone();
         let broker_name = broker_name.clone();
 
         async move {
-            let mut broker_addr = broker_runtime_inner
-                .topic_route_info_manager()
-                .find_broker_address_in_subscribe(Some(&broker_name), 0, false);
+            let mut broker_addr =
+                topic_route_info_manager.find_broker_address_in_subscribe(Some(&broker_name), 0, false);
 
             if broker_addr.is_none() {
-                broker_runtime_inner
-                    .topic_route_info_manager()
+                topic_route_info_manager
                     .update_topic_route_info_from_name_server_ext(&topic, true, false)
                     .await;
-                broker_addr = broker_runtime_inner
-                    .topic_route_info_manager()
-                    .find_broker_address_in_subscribe(Some(&broker_name), 0, false);
+                broker_addr = topic_route_info_manager.find_broker_address_in_subscribe(Some(&broker_name), 0, false);
 
                 if broker_addr.is_none() {
                     warn!("can't find broker address for topic {}, {}", topic, broker_name);
@@ -719,8 +645,7 @@ where
             }
 
             let broker_addr = broker_addr.unwrap();
-            match broker_runtime_inner
-                .broker_outer_api()
+            match broker_outer_api
                 .pull_message_from_specific_broker_async(
                     &broker_name,
                     &broker_addr,
@@ -780,8 +705,21 @@ fn transform_send_result2put_result(send_result: Option<SendResult>) -> PutMessa
 mod tests {
     use rocketmq_model::result::SendResult;
     use rocketmq_model::result::SendStatus;
+    use rocketmq_store::base::message_status_enum::PutMessageStatus;
 
-    use super::*;
+    use super::transform_send_result2put_result;
+
+    #[test]
+    fn offset_and_failover_targets_do_not_retain_the_runtime_pointer() {
+        for source in [
+            include_str!("escape_bridge.rs"),
+            include_str!("../offset/manager/consumer_offset_manager.rs"),
+        ] {
+            assert!(!source.contains(concat!("Arc", "Mut")));
+            assert!(!source.contains(concat!("BrokerRuntime", "Inner")));
+            assert!(!source.contains(concat!("mut", "_from_ref")));
+        }
+    }
 
     #[test]
     fn transform_send_result2put_result_handles_none() {
