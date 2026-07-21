@@ -26,25 +26,22 @@ use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::RemotingDeserializable;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
 use tokio::time::timeout;
 use tracing::warn;
 
 use crate::broker_runtime::BrokerRuntimeInner;
 
-#[derive(Clone)]
-pub(super) struct BatchMqHandler<MS: MessageStore> {
-    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
-}
+pub(super) struct BatchMqHandler;
 
-impl<MS: MessageStore> BatchMqHandler<MS> {
-    pub(super) fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
-        Self { broker_runtime_inner }
+impl BatchMqHandler {
+    pub(super) const fn new() -> Self {
+        Self
     }
 
-    pub async fn lock_natch_mq(
-        &mut self,
+    pub async fn lock_natch_mq<MS: MessageStore>(
+        &self,
+        broker_runtime_inner: &BrokerRuntimeInner<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -52,16 +49,16 @@ impl<MS: MessageStore> BatchMqHandler<MS> {
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut request_body = LockBatchRequestBody::decode(request.get_body().unwrap()).unwrap();
         let mut lock_ok_mqset = HashSet::new();
-        let self_lock_okmqset = self.broker_runtime_inner.rebalance_lock_manager().try_lock_batch(
+        let self_lock_okmqset = broker_runtime_inner.rebalance_lock_manager().try_lock_batch(
             request_body.consumer_group.as_ref().unwrap(),
             &request_body.mq_set,
             request_body.client_id.as_ref().unwrap(),
         );
-        if request_body.only_this_broker || !self.broker_runtime_inner.broker_config().lock_in_strict_mode {
+        if request_body.only_this_broker || !broker_runtime_inner.broker_config().lock_in_strict_mode {
             lock_ok_mqset = self_lock_okmqset;
         } else {
             request_body.only_this_broker = true;
-            let replica_size = self.broker_runtime_inner.message_store_config().total_replicas;
+            let replica_size = broker_runtime_inner.message_store_config().total_replicas;
             let quorum = replica_size / 2 + 1;
             if quorum <= 1 {
                 lock_ok_mqset = self_lock_okmqset;
@@ -71,18 +68,18 @@ impl<MS: MessageStore> BatchMqHandler<MS> {
                     *mq_lock_map.entry(mq.clone()).or_insert(0) += 1;
                 }
                 let mut addr_map = HashMap::with_capacity(8);
-                addr_map.extend(self.broker_runtime_inner.broker_member_group().broker_addrs.clone());
-                addr_map.remove(&self.broker_runtime_inner.broker_config().broker_identity.broker_id);
+                addr_map.extend(broker_runtime_inner.broker_member_group().broker_addrs.clone());
+                addr_map.remove(&broker_runtime_inner.broker_config().broker_identity.broker_id);
 
                 let request_body = Bytes::from(request_body.encode().expect("lockBatchMQ encode error"));
+                let broker_outer_api = broker_runtime_inner.broker_outer_api().clone();
                 let futures = addr_map.into_values().map(|broker_addr| {
-                    let broker_outer_api_ = self.broker_runtime_inner.clone();
+                    let broker_outer_api = broker_outer_api.clone();
                     let request_body_cloned = request_body.clone();
                     async move {
                         (
                             broker_addr.clone(),
-                            broker_outer_api_
-                                .broker_outer_api()
+                            broker_outer_api
                                 .lock_batch_mq_async(&broker_addr, request_body_cloned, 1000)
                                 .await,
                         )
@@ -120,16 +117,17 @@ impl<MS: MessageStore> BatchMqHandler<MS> {
         ))
     }
 
-    pub async fn unlock_batch_mq(
-        &mut self,
+    pub async fn unlock_batch_mq<MS: MessageStore>(
+        &self,
+        broker_runtime_inner: &BrokerRuntimeInner<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut request_body = UnlockBatchRequestBody::decode(request.get_body().unwrap()).unwrap();
-        if request_body.only_this_broker || !self.broker_runtime_inner.broker_config().lock_in_strict_mode {
-            self.broker_runtime_inner.rebalance_lock_manager().unlock_batch(
+        if request_body.only_this_broker || !broker_runtime_inner.broker_config().lock_in_strict_mode {
+            broker_runtime_inner.rebalance_lock_manager().unlock_batch(
                 request_body.consumer_group.as_ref().unwrap(),
                 &request_body.mq_set,
                 request_body.client_id.as_ref().unwrap(),
@@ -137,9 +135,8 @@ impl<MS: MessageStore> BatchMqHandler<MS> {
         } else {
             request_body.only_this_broker = true;
             let request_body = Bytes::from(request_body.encode().expect("unlockBatchMQ encode error"));
-            for broker_addr in self.broker_runtime_inner.broker_member_group().broker_addrs.values() {
-                match self
-                    .broker_runtime_inner
+            for broker_addr in broker_runtime_inner.broker_member_group().broker_addrs.values() {
+                match broker_runtime_inner
                     .broker_outer_api()
                     .unlock_batch_mq_async(broker_addr, request_body.clone(), 1000)
                     .await

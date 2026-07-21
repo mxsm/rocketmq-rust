@@ -88,7 +88,7 @@ pub struct AdminBrokerProcessor<MS: MessageStore> {
     broker_config_request_handler: BrokerConfigRequestHandler<MS>,
     consumer_request_handler: ConsumerRequestHandler<MS>,
     offset_request_handler: OffsetRequestHandler<MS>,
-    batch_mq_handler: BatchMqHandler<MS>,
+    batch_mq_handler: BatchMqHandler,
     subscription_group_handler: SubscriptionGroupHandler<MS>,
 
     notify_min_broker_handler: NotifyMinBrokerChangeIdHandler<MS>,
@@ -138,7 +138,7 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
         let broker_config_request_handler = BrokerConfigRequestHandler::new(broker_runtime_inner.clone());
         let consumer_request_handler = ConsumerRequestHandler::new(broker_runtime_inner.clone());
         let offset_request_handler = OffsetRequestHandler::new(broker_runtime_inner.clone());
-        let batch_mq_handler = BatchMqHandler::new(broker_runtime_inner.clone());
+        let batch_mq_handler = BatchMqHandler::new();
         let subscription_group_handler = SubscriptionGroupHandler::new(broker_runtime_inner.clone());
 
         let notify_min_broker_handler = NotifyMinBrokerChangeIdHandler::new(broker_runtime_inner.clone());
@@ -298,13 +298,15 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .await
             }
             RequestCode::LockBatchMq => {
+                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner();
                 self.batch_mq_handler
-                    .lock_natch_mq(channel, ctx, request_code, request)
+                    .lock_natch_mq(broker_runtime_inner, channel, ctx, request_code, request)
                     .await
             }
             RequestCode::UnlockBatchMq => {
+                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner();
                 self.batch_mq_handler
-                    .unlock_batch_mq(channel, ctx, request_code, request)
+                    .unlock_batch_mq(broker_runtime_inner, channel, ctx, request_code, request)
                     .await
             }
             RequestCode::UpdateAndCreateSubscriptionGroup => {

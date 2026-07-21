@@ -1513,50 +1513,6 @@
       "adr": "ADR-002"
     },
     {
-      "identity": "98d08c97a4a5caa03dab433e",
-      "path": "rocketmq-broker/src/processor/admin_broker_processor/batch_mq_handler.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "bdcc788133ef63d221199d18",
-          "fingerprint": "85d6e3ca1364f813db9fba62",
-          "item": "<module>",
-          "line": 29
-        }
-      ],
-      "owner": "broker",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "ed2714f42721c97bec7f83db",
-      "path": "rocketmq-broker/src/processor/admin_broker_processor/batch_mq_handler.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "91d05a41c494b2b9b294ebec",
-          "fingerprint": "d602b5edc3eb73196dd02554",
-          "item": "struct BatchMqHandler",
-          "line": 38
-        },
-        {
-          "id": "83e3fe5c2ba39d9cefd149d7",
-          "fingerprint": "7f2dacb8836f59fff72f097b",
-          "item": "fn new",
-          "line": 42
-        }
-      ],
-      "owner": "broker",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
       "identity": "78fdaddcb828e964699ee3ce",
       "path": "rocketmq-broker/src/processor/admin_broker_processor/broker_config_request_handler.rs",
       "symbol": "ArcMut",
