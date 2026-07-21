@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use bytes::Bytes;
 use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_common::TimeUtils::current_millis;
@@ -20,7 +19,6 @@ use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::body::subscription_group_list::SubscriptionGroupList;
-use rocketmq_remoting::protocol::body::unlock_batch_request_body::UnlockBatchRequestBody;
 use rocketmq_remoting::protocol::header::delete_subscription_group_request_header::DeleteSubscriptionGroupRequestHeader;
 use rocketmq_remoting::protocol::header::get_subscription_group_config_request_header::GetSubscriptionGroupConfigRequestHeader;
 use rocketmq_remoting::protocol::header::update_group_forbidden_request_header::UpdateGroupForbiddenRequestHeader;
@@ -30,26 +28,22 @@ use rocketmq_remoting::protocol::subscription::subscription_group_config::Subscr
 use rocketmq_remoting::protocol::RemotingDeserializable;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
 use tracing::info;
-use tracing::warn;
 
 use crate::broker_runtime::BrokerRuntimeInner;
 use crate::subscription::manager::subscription_group_manager::CHARACTER_MAX_LENGTH;
 
-#[derive(Clone)]
-pub(super) struct SubscriptionGroupHandler<MS: MessageStore> {
-    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
-}
+pub(super) struct SubscriptionGroupHandler;
 
-impl<MS: MessageStore> SubscriptionGroupHandler<MS> {
-    pub(super) fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
-        Self { broker_runtime_inner }
+impl SubscriptionGroupHandler {
+    pub(super) const fn new() -> Self {
+        Self
     }
 
-    pub async fn update_and_create_subscription_group(
-        &mut self,
+    pub async fn update_and_create_subscription_group<MS: MessageStore>(
+        &self,
+        broker_runtime_inner: &mut BrokerRuntimeInner<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -65,7 +59,7 @@ impl<MS: MessageStore> SubscriptionGroupHandler<MS> {
         );
         let mut config = SubscriptionGroupConfig::decode(request.get_body().unwrap());
         if let Ok(config) = config.as_mut() {
-            self.broker_runtime_inner
+            broker_runtime_inner
                 .subscription_group_manager_mut()
                 .update_subscription_group_config(config)
         }
@@ -90,8 +84,9 @@ impl<MS: MessageStore> SubscriptionGroupHandler<MS> {
         Ok(Some(response))
     }
 
-    pub async fn get_subscription_group_config(
-        &mut self,
+    pub async fn get_subscription_group_config<MS: MessageStore>(
+        &self,
+        broker_runtime_inner: &BrokerRuntimeInner<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -100,8 +95,7 @@ impl<MS: MessageStore> SubscriptionGroupHandler<MS> {
         let mut response = RemotingCommand::create_response_command();
         let request_header = request.decode_command_custom_header::<GetSubscriptionGroupConfigRequestHeader>()?;
         let group = &request_header.group;
-        let group_config = self
-            .broker_runtime_inner
+        let group_config = broker_runtime_inner
             .subscription_group_manager()
             .find_subscription_group_config(group);
 
@@ -118,8 +112,9 @@ impl<MS: MessageStore> SubscriptionGroupHandler<MS> {
         }
     }
 
-    pub async fn update_and_create_subscription_group_list(
-        &mut self,
+    pub async fn update_and_create_subscription_group_list<MS: MessageStore>(
+        &self,
+        broker_runtime_inner: &mut BrokerRuntimeInner<MS>,
         channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -148,14 +143,15 @@ impl<MS: MessageStore> SubscriptionGroupHandler<MS> {
             }
         }
 
-        self.broker_runtime_inner
+        broker_runtime_inner
             .subscription_group_manager_mut()
             .update_subscription_group_config_list(subscription_group_list.group_config_list);
         Ok(Some(response.set_code(ResponseCode::Success)))
     }
 
-    pub async fn delete_subscription_group(
-        &mut self,
+    pub async fn delete_subscription_group<MS: MessageStore>(
+        &self,
+        broker_runtime_inner: &mut BrokerRuntimeInner<MS>,
         channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -168,22 +164,21 @@ impl<MS: MessageStore> SubscriptionGroupHandler<MS> {
         );
 
         let should_clean_offset = request_header.clean_offset
-            || self
-                .broker_runtime_inner
+            || broker_runtime_inner
                 .subscription_group_manager()
                 .find_subscription_group_config(&request_header.group_name)
                 .and_then(|config| config.lite_bind_topic().cloned())
                 .is_some();
 
-        self.broker_runtime_inner
+        broker_runtime_inner
             .subscription_group_manager_mut()
             .delete_subscription_group_config(request_header.group_name.as_str());
 
         if should_clean_offset {
-            self.broker_runtime_inner
+            broker_runtime_inner
                 .consumer_offset_manager()
                 .clean_offset_by_group(&request_header.group_name);
-            self.broker_runtime_inner
+            broker_runtime_inner
                 .pop_inflight_message_counter()
                 .clear_in_flight_message_num_by_group_name(&request_header.group_name);
         }
@@ -193,42 +188,9 @@ impl<MS: MessageStore> SubscriptionGroupHandler<MS> {
         ))
     }
 
-    pub async fn unlock_batch_mq(
-        &mut self,
-        _channel: Channel,
-        _ctx: ConnectionHandlerContext,
-        _request_code: RequestCode,
-        request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let mut request_body = UnlockBatchRequestBody::decode(request.get_body().unwrap()).unwrap();
-        if request_body.only_this_broker || !self.broker_runtime_inner.broker_config().lock_in_strict_mode {
-            self.broker_runtime_inner.rebalance_lock_manager().unlock_batch(
-                request_body.consumer_group.as_ref().unwrap(),
-                &request_body.mq_set,
-                request_body.client_id.as_ref().unwrap(),
-            );
-        } else {
-            request_body.only_this_broker = true;
-            let request_body = Bytes::from(request_body.encode().expect("unlockBatchMQ encode error"));
-            for broker_addr in self.broker_runtime_inner.broker_member_group().broker_addrs.values() {
-                match self
-                    .broker_runtime_inner
-                    .broker_outer_api()
-                    .unlock_batch_mq_async(broker_addr, request_body.clone(), 1000)
-                    .await
-                {
-                    Ok(_) => {}
-                    Err(e) => {
-                        warn!("unlockBatchMQ exception on {}, {}", broker_addr, e);
-                    }
-                }
-            }
-        }
-        Ok(Some(RemotingCommand::create_response_command()))
-    }
-
-    pub async fn update_and_get_group_forbidden(
-        &mut self,
+    pub async fn update_and_get_group_forbidden<MS: MessageStore>(
+        &self,
+        broker_runtime_inner: &mut BrokerRuntimeInner<MS>,
         channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -245,25 +207,21 @@ impl<MS: MessageStore> SubscriptionGroupHandler<MS> {
 
         if let Some(readable) = request_header.readable {
             if readable {
-                self.broker_runtime_inner
-                    .subscription_group_manager_mut()
-                    .clear_forbidden(
-                        &request_header.group,
-                        &request_header.topic,
-                        PermName::INDEX_PERM_READ as i32,
-                    );
+                broker_runtime_inner.subscription_group_manager_mut().clear_forbidden(
+                    &request_header.group,
+                    &request_header.topic,
+                    PermName::INDEX_PERM_READ as i32,
+                );
             } else {
-                self.broker_runtime_inner
-                    .subscription_group_manager_mut()
-                    .set_forbidden(
-                        &request_header.group,
-                        &request_header.topic,
-                        PermName::INDEX_PERM_READ as i32,
-                    );
+                broker_runtime_inner.subscription_group_manager_mut().set_forbidden(
+                    &request_header.group,
+                    &request_header.topic,
+                    PermName::INDEX_PERM_READ as i32,
+                );
             }
         }
 
-        let readable = !self.broker_runtime_inner.subscription_group_manager().get_forbidden(
+        let readable = !broker_runtime_inner.subscription_group_manager().get_forbidden(
             &request_header.group,
             &request_header.topic,
             PermName::INDEX_PERM_READ as i32,
@@ -363,8 +321,8 @@ mod tests {
     #[tokio::test]
     async fn update_and_create_subscription_group_list_persists_multiple_groups() {
         let mut runtime = new_test_runtime("update-list").await;
-        let inner = runtime.inner_for_test().clone();
-        let mut handler = SubscriptionGroupHandler::new(inner.clone());
+        let mut inner = runtime.inner_for_test().clone();
+        let handler = SubscriptionGroupHandler::new();
 
         let body = SubscriptionGroupList {
             group_config_list: vec![
@@ -380,6 +338,7 @@ mod tests {
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let response = handler
             .update_and_create_subscription_group_list(
+                inner.as_mut(),
                 channel,
                 ctx,
                 RequestCode::UpdateAndCreateSubscriptionGroupList,
@@ -428,7 +387,7 @@ mod tests {
             8,
         );
 
-        let mut handler = SubscriptionGroupHandler::new(inner.clone());
+        let handler = SubscriptionGroupHandler::new();
         let mut request = RemotingCommand::create_request_command(
             RequestCode::DeleteSubscriptionGroup,
             DeleteSubscriptionGroupRequestHeader {
@@ -442,7 +401,13 @@ mod tests {
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let response = handler
-            .delete_subscription_group(channel, ctx, RequestCode::DeleteSubscriptionGroup, &mut request)
+            .delete_subscription_group(
+                inner.as_mut(),
+                channel,
+                ctx,
+                RequestCode::DeleteSubscriptionGroup,
+                &mut request,
+            )
             .await
             .expect("delete group request should succeed")
             .expect("delete group request should return response");
@@ -469,8 +434,8 @@ mod tests {
     #[tokio::test]
     async fn update_and_get_group_forbidden_updates_readable_flag() {
         let mut runtime = new_test_runtime("group-forbidden").await;
-        let inner = runtime.inner_for_test().clone();
-        let mut handler = SubscriptionGroupHandler::new(inner.clone());
+        let mut inner = runtime.inner_for_test().clone();
+        let handler = SubscriptionGroupHandler::new();
         let mut request = RemotingCommand::create_request_command(
             RequestCode::UpdateAndGetGroupForbidden,
             UpdateGroupForbiddenRequestHeader {
@@ -485,7 +450,13 @@ mod tests {
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut response = handler
-            .update_and_get_group_forbidden(channel, ctx, RequestCode::UpdateAndGetGroupForbidden, &mut request)
+            .update_and_get_group_forbidden(
+                inner.as_mut(),
+                channel,
+                ctx,
+                RequestCode::UpdateAndGetGroupForbidden,
+                &mut request,
+            )
             .await
             .expect("update and get group forbidden should succeed")
             .expect("update and get group forbidden should return response");
