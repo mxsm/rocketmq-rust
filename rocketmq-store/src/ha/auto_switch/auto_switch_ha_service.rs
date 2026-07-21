@@ -14,6 +14,7 @@
 
 use std::collections::HashSet;
 use std::sync::atomic::AtomicU32;
+use std::sync::Arc;
 
 use rocketmq_common::common::broker::broker_role::BrokerRole;
 use rocketmq_common::TimeUtils::current_millis;
@@ -43,7 +44,7 @@ use rocketmq_store_local::ha::replication::ReplicationStateRoot;
 pub struct AutoSwitchHAService {
     delegate: ArcMut<DefaultHAService>,
     message_store: ArcMut<LocalFileMessageStore>,
-    replication: ReplicationStateRoot,
+    replication: Arc<ReplicationStateRoot>,
 }
 
 impl AutoSwitchHAService {
@@ -52,7 +53,7 @@ impl AutoSwitchHAService {
         Self {
             delegate: ArcMut::new(DefaultHAService::new(message_store.clone())),
             message_store,
-            replication: ReplicationStateRoot::new(is_master),
+            replication: Arc::new(ReplicationStateRoot::new(is_master)),
         }
     }
 
@@ -63,11 +64,14 @@ impl AutoSwitchHAService {
     pub(crate) fn init(this: &mut ArcMut<Self>, general_ha_service: GeneralHAService) -> HAResult<()> {
         let mut delegate = this.delegate.clone();
         DefaultHAService::init(&mut delegate, general_ha_service)?;
-        delegate.set_auto_switch_service(ArcMut::downgrade(this));
         let client = AutoSwitchHAClient::new(this.message_store.clone(), None)
             .map_err(|error| crate::store_error::HAError::Service(error.to_string()))?;
         delegate.set_general_ha_client(GeneralHAClient::new_with_auto_switch_ha_client(client));
         Ok(())
+    }
+
+    pub(crate) fn replication_state(&self) -> Arc<ReplicationStateRoot> {
+        Arc::clone(&self.replication)
     }
 
     async fn clear_master_target(&self) {
@@ -147,54 +151,6 @@ impl AutoSwitchHAService {
         self.message_store.publish_confirm_offset(confirm_offset);
     }
 
-    pub(crate) fn handle_connection_added(&self, slave_broker_id: Option<i64>, slave_ack_offset: i64) {
-        let Some(slave_broker_id) = slave_broker_id else {
-            return;
-        };
-
-        self.update_connection_last_caught_up_time(slave_broker_id, current_millis());
-        if slave_ack_offset >= 0 {
-            self.handle_connection_ack(Some(slave_broker_id), slave_ack_offset);
-        }
-    }
-
-    pub(crate) fn handle_connection_ack(&self, slave_broker_id: Option<i64>, slave_ack_offset: i64) {
-        let Some(slave_broker_id) = slave_broker_id else {
-            return;
-        };
-
-        self.update_connection_last_caught_up_time(slave_broker_id, current_millis());
-        let _ = self.maybe_expand_in_sync_state_set(slave_broker_id, slave_ack_offset);
-        self.update_confirm_offset_when_slave_ack(slave_broker_id);
-    }
-
-    pub(crate) fn handle_connection_caught_up(&self, slave_broker_id: Option<i64>) {
-        let Some(slave_broker_id) = slave_broker_id else {
-            return;
-        };
-
-        self.update_connection_last_caught_up_time(slave_broker_id, current_millis());
-    }
-
-    pub(crate) fn handle_connection_removed(&self, slave_broker_id: Option<i64>) {
-        if self.message_store.is_shutdown() {
-            return;
-        }
-
-        let Some(slave_broker_id) = slave_broker_id else {
-            return;
-        };
-
-        let removed_from_sync_state_set = self.replication.remove_replica(slave_broker_id);
-
-        if removed_from_sync_state_set {
-            let max_phy_offset = self.message_store.get_max_phy_offset();
-            let current_confirm_offset = self.message_store.get_commit_log().get_confirm_offset_directly();
-            let confirm_offset = self.compute_confirm_offset(current_confirm_offset, max_phy_offset);
-            self.message_store.publish_confirm_offset(confirm_offset);
-        }
-    }
-
     fn tracked_sync_state_set_size(&self) -> Option<usize> {
         self.replication.tracked_sync_state_set_size()
     }
@@ -217,7 +173,7 @@ impl AutoSwitchHAService {
         )
     }
 
-    fn compute_confirm_offset_from_runtime(
+    pub(crate) fn compute_confirm_offset_from_runtime(
         current_confirm_offset: i64,
         max_phy_offset: i64,
         expected_sync_state_set_size: usize,
