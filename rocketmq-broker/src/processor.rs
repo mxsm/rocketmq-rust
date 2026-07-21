@@ -25,8 +25,8 @@ use rocketmq_remoting::runtime::processor::RejectRequestResponse;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskKind;
-use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
+use tokio::sync::Mutex;
 use tracing::warn;
 
 use self::client_manage_processor::ClientManageProcessor;
@@ -83,8 +83,8 @@ pub enum BrokerProcessorType<MS: MessageStore, TS> {
     Peek(Arc<PeekMessageProcessor<MS>>),
     Pop(Arc<PopMessageProcessor<MS>>),
     PopLite(Arc<PopLiteMessageProcessor<MS>>),
-    Ack(ArcMut<AckMessageProcessor<MS>>),
-    ChangeInvisible(ArcMut<ChangeInvisibleTimeProcessor<MS>>),
+    Ack(Arc<AckMessageProcessor<MS>>),
+    ChangeInvisible(Arc<ChangeInvisibleTimeProcessor<MS>>),
     Notification(Arc<NotificationProcessor<MS>>),
     PollingInfo(Arc<PollingInfoProcessor>),
     Reply(Arc<ReplyMessageProcessor<MS, TS>>),
@@ -96,7 +96,7 @@ pub enum BrokerProcessorType<MS: MessageStore, TS> {
     LiteManager(Arc<LiteManagerProcessor<MS>>),
     LiteSubscriptionCtl(Arc<LiteSubscriptionCtlProcessor<MS>>),
     EndTransaction(Arc<EndTransactionProcessor<TS, MS>>),
-    AdminBroker(ArcMut<AdminBrokerProcessor<MS>>),
+    AdminBroker(Arc<Mutex<AdminBrokerProcessor<MS>>>),
 }
 
 impl<MS, TS> Clone for BrokerProcessorType<MS, TS>
@@ -175,8 +175,10 @@ where
             BrokerProcessorType::Peek(processor) => processor.process_request_shared(channel, ctx, request).await,
             BrokerProcessorType::Pop(processor) => processor.process_request_shared(channel, ctx, request).await,
             BrokerProcessorType::PopLite(processor) => processor.process_request_shared(channel, ctx, request).await,
-            BrokerProcessorType::Ack(processor) => processor.process_request(channel, ctx, request).await,
-            BrokerProcessorType::ChangeInvisible(processor) => processor.process_request(channel, ctx, request).await,
+            BrokerProcessorType::Ack(processor) => processor.process_request_shared(channel, ctx, request).await,
+            BrokerProcessorType::ChangeInvisible(processor) => {
+                processor.process_request_shared(channel, ctx, request).await
+            }
             BrokerProcessorType::Notification(processor) => {
                 processor.process_request_shared(channel, ctx, request).await
             }
@@ -206,7 +208,9 @@ where
             BrokerProcessorType::EndTransaction(processor) => {
                 processor.process_request_shared(channel, ctx, request).await
             }
-            BrokerProcessorType::AdminBroker(processor) => processor.process_request(channel, ctx, request).await,
+            BrokerProcessorType::AdminBroker(processor) => {
+                processor.lock().await.process_request(channel, ctx, request).await
+            }
         }
     }
 
@@ -230,7 +234,7 @@ where
             BrokerProcessorType::LiteManager(processor) => processor.reject_request(code),
             BrokerProcessorType::LiteSubscriptionCtl(processor) => processor.reject_request(code),
             BrokerProcessorType::EndTransaction(processor) => processor.reject_request(code),
-            BrokerProcessorType::AdminBroker(processor) => processor.reject_request(code),
+            BrokerProcessorType::AdminBroker(_) => (false, None),
         }
     }
 }
@@ -712,6 +716,8 @@ mod tests {
         let query_assignment_source = include_str!("processor/query_assignment_processor.rs");
 
         for (variant, processor) in [
+            ("Ack", "AckMessageProcessor"),
+            ("ChangeInvisible", "ChangeInvisibleTimeProcessor"),
             ("Peek", "PeekMessageProcessor"),
             ("PollingInfo", "PollingInfoProcessor"),
             ("Recall", "RecallMessageProcessor"),
@@ -719,6 +725,7 @@ mod tests {
             ("ClientManage", "ClientManageProcessor"),
             ("ConsumerManage", "ConsumerManageProcessor"),
             ("QueryAssignment", "QueryAssignmentProcessor"),
+            ("AdminBroker", "AdminBrokerProcessor"),
         ] {
             let legacy_variant = format!("{variant}({}<", concat!("Arc", "Mut"));
             assert!(
@@ -732,6 +739,7 @@ mod tests {
             );
         }
 
+        assert!(!runtime_source.contains(concat!("ack_message_processor: Option<ArcMut<", "AckMessageProcessor")));
         assert!(!runtime_source.contains(concat!(
             "query_assignment_processor: Option<ArcMut<",
             "QueryAssignmentProcessor"

@@ -1681,7 +1681,7 @@ impl BrokerRuntime {
             pop_lite_message_processor.shutdown().await;
         }
 
-        if let Some(ack_message_processor) = self.inner.ack_message_processor.as_mut() {
+        if let Some(ack_message_processor) = self.inner.ack_message_processor.as_ref() {
             pop_services_present = true;
             ack_message_processor.shutdown().await;
         }
@@ -2605,7 +2605,7 @@ impl BrokerRuntime {
         ));
         let pop_lite_message_processor_provider = Arc::downgrade(&pop_lite_message_processor);
         self.inner.pop_lite_message_processor = Some(pop_lite_message_processor.clone());
-        let ack_message_processor = ArcMut::new(AckMessageProcessor::new(
+        let ack_message_processor = Arc::new(AckMessageProcessor::new(
             self.inner.clone(),
             pop_message_processor.clone(),
         ));
@@ -2738,7 +2738,7 @@ impl BrokerRuntime {
         let change_invisible_order_info = self.inner.consumer_order_info_manager_handle();
         broker_request_processor.register_processor(
             RequestCode::ChangeMessageInvisibleTime as i32,
-            BrokerProcessorType::ChangeInvisible(ArcMut::new(ChangeInvisibleTimeProcessor::new(
+            BrokerProcessorType::ChangeInvisible(Arc::new(ChangeInvisibleTimeProcessor::new(
                 ChangeInvisibleTimeProcessorContext::new(
                     ChangeInvisibleTimePolicy::from_config(self.inner.broker_config(), self.inner.store_host()),
                     self.inner.topic_config_manager_handle(),
@@ -2930,7 +2930,10 @@ impl BrokerRuntime {
             None => AuthAdminService::new(build_auth_config(self.inner.broker_config()))
                 .expect("broker auth admin service initialization must succeed"),
         });
-        let admin_broker_processor = ArcMut::new(AdminBrokerProcessor::new(self.inner.clone(), auth_admin_service));
+        let admin_broker_processor = Arc::new(Mutex::new(AdminBrokerProcessor::new(
+            self.inner.clone(),
+            auth_admin_service,
+        )));
         broker_request_processor.register_default_processor(BrokerProcessorType::AdminBroker(admin_broker_processor));
 
         (broker_request_processor.clone(), broker_request_processor)
@@ -3876,7 +3879,7 @@ pub(crate) struct BrokerRuntimeInner<MS: MessageStore> {
     //Processor
     pop_message_processor: Option<Arc<PopMessageProcessor<MS>>>,
     pop_lite_message_processor: Option<Arc<PopLiteMessageProcessor<MS>>>,
-    ack_message_processor: Option<ArcMut<AckMessageProcessor<MS>>>,
+    ack_message_processor: Option<Arc<AckMessageProcessor<MS>>>,
     notification_processor: Option<Arc<NotificationProcessor<MS>>>,
     query_assignment_processor: Option<Arc<QueryAssignmentProcessor>>,
     auth_runtime: Option<Arc<AuthRuntime>>,
@@ -5261,7 +5264,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         unsafe { self.pop_message_processor.as_ref().unwrap_unchecked() }
     }
 
-    pub fn ack_message_processor_unchecked(&self) -> &ArcMut<AckMessageProcessor<MS>> {
+    pub fn ack_message_processor_unchecked(&self) -> &Arc<AckMessageProcessor<MS>> {
         unsafe { self.ack_message_processor.as_ref().unwrap_unchecked() }
     }
 
@@ -5287,7 +5290,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         }
         self.change_transaction_check_service_status(should_start).await;
 
-        if let Some(ack_message_processor) = &mut self.ack_message_processor {
+        if let Some(ack_message_processor) = &self.ack_message_processor {
             info!("Set PopReviveService Status to {}", should_start);
             ack_message_processor.set_pop_revive_service_status(should_start);
         }

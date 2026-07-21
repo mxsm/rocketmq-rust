@@ -72,6 +72,20 @@ where
         ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        self.process_request_shared(channel, ctx, request).await
+    }
+}
+
+impl<MS> AckMessageProcessor<MS>
+where
+    MS: MessageStore,
+{
+    pub async fn process_request_shared(
+        &self,
+        channel: Channel,
+        ctx: ConnectionHandlerContext,
+        request: &mut RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_code = RequestCode::from(request.code());
         info!("AckMessageProcessor received request code: {:?}", request_code);
         match request_code {
@@ -110,7 +124,7 @@ where
 
         // each PopReviveService handles one revive topic's revive queue
         for i in 0..broker_runtime_inner.broker_config().revive_queue_num {
-            let mut pop_revive_service =
+            let pop_revive_service =
                 PopReviveService::new(revive_topic.clone(), i as i32, broker_runtime_inner.clone());
             pop_revive_service.set_should_run_pop_revive(is_run_pop_revive);
             pop_revive_services.push(ArcMut::new(pop_revive_service));
@@ -124,7 +138,7 @@ where
     }
 
     pub async fn process_request_inner(
-        &mut self,
+        &self,
         channel: Channel,
         ctx: ConnectionHandlerContext,
         request_code: RequestCode,
@@ -147,14 +161,14 @@ where
         }
     }
 
-    pub fn start(&mut self) {
+    pub fn start(&self) {
         for pop_revive_service in self.pop_revive_services.iter() {
             PopReviveService::start(pop_revive_service.clone());
         }
     }
 
-    pub fn set_pop_revive_service_status(&mut self, status: bool) {
-        for pop_revive_service in self.pop_revive_services.iter_mut() {
+    pub fn set_pop_revive_service_status(&self, status: bool) {
+        for pop_revive_service in &self.pop_revive_services {
             pop_revive_service.set_should_run_pop_revive(status);
         }
     }
@@ -178,7 +192,7 @@ where
     MS: MessageStore,
 {
     async fn process_ack(
-        &mut self,
+        &self,
         channel: Channel,
         _ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
@@ -243,7 +257,7 @@ where
     }
 
     async fn process_batch_ack(
-        &mut self,
+        &self,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
@@ -270,7 +284,7 @@ where
     }
 
     async fn append_ack(
-        &mut self,
+        &self,
         request_header: Option<AckMessageRequestHeader>,
         response: &mut RemotingCommand,
         batch_ack: Option<BatchAck>,
@@ -467,7 +481,7 @@ where
     }
 
     async fn ack_orderly(
-        &mut self,
+        &self,
         topic: CheetahString,
         consume_group: CheetahString,
         q_id: i32,
@@ -562,10 +576,10 @@ where
             .decrement_in_flight_message_num(&topic, &consume_group, pop_time, q_id, 1);
     }
 
-    pub async fn shutdown(&mut self) {
+    pub async fn shutdown(&self) {
         join_all(
             self.pop_revive_services
-                .iter_mut()
+                .iter()
                 .map(|pop_revive_service| pop_revive_service.shutdown()),
         )
         .await;

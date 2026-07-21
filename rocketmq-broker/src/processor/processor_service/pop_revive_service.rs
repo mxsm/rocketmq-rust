@@ -422,7 +422,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
         *this.task_group.lock() = Some(task_group);
     }
 
-    pub async fn shutdown(&mut self) {
+    pub async fn shutdown(&self) {
         self.shutdown.store(true, Ordering::Release);
         let task_group = self.task_group.lock().take();
         if let Some(task_group) = task_group {
@@ -1006,7 +1006,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
         }
     }
 
-    pub fn set_should_run_pop_revive(&mut self, should_run_pop_revive: bool) {
+    pub fn set_should_run_pop_revive(&self, should_run_pop_revive: bool) {
         self.should_run_pop_revive
             .store(should_run_pop_revive, Ordering::Release);
     }

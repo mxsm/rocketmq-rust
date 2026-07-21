@@ -599,24 +599,6 @@
           "line": 2108
         },
         {
-          "id": "5ee21c896b913562301a1077",
-          "fingerprint": "5e4000a4cc6080e4ca942578",
-          "item": "fn init_processor",
-          "line": 2498
-        },
-        {
-          "id": "6976451526277a1a24c110a1",
-          "fingerprint": "f858d8edbb988d06f665a7b8",
-          "item": "fn init_processor",
-          "line": 2678
-        },
-        {
-          "id": "085b114fa4b32ee717392eac",
-          "fingerprint": "697b006598311fd21b7be444",
-          "item": "fn init_processor",
-          "line": 2716
-        },
-        {
           "id": "5a11a6fa9237fdd8ea0dafa1",
           "fingerprint": "700bae83c5efcc96fd63bae4",
           "item": "fn set_message_store",
@@ -728,12 +710,6 @@
           "line": 3734
         },
         {
-          "id": "f248d64f116cda3a8fac82bc",
-          "fingerprint": "11c496708854f974676df3a1",
-          "item": "struct BrokerRuntimeInner",
-          "line": 3677
-        },
-        {
           "id": "4ade86c96052f2090dbb7f77",
           "fingerprint": "cdae48c0ebbb111839de0523",
           "item": "fn message_store_mut",
@@ -822,12 +798,6 @@
           "fingerprint": "198bb68697b47e45b2d7539d",
           "item": "fn update_min_broker",
           "line": 4983
-        },
-        {
-          "id": "3427582ef504bcbb0dceb9d6",
-          "fingerprint": "ae555e6b3b3ad0a94f0de73e",
-          "item": "fn ack_message_processor_unchecked",
-          "line": 5010
         },
         {
           "id": "bcd154dd4496146de09f72ed",
@@ -2151,75 +2121,6 @@
           "fingerprint": "8220b744a6156a08d6c8c9c1",
           "item": "struct Inner",
           "line": 1335
-        }
-      ],
-      "owner": "broker",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "5edb93f1cea4341b0515fbe8",
-      "path": "rocketmq-broker/src/processor.rs",
-      "symbol": "*",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "468664a90f2e4f141141e7ea",
-          "fingerprint": "a90a4acfdccba594354dd404",
-          "item": "mod tests",
-          "line": 599
-        }
-      ],
-      "owner": "broker",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "cf891f2c673110e5a11f1f98",
-      "path": "rocketmq-broker/src/processor.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "8980af65fc42e22158b0caae",
-          "fingerprint": "a4adb6a8fea1bd2f4489f490",
-          "item": "<module>",
-          "line": 28
-        }
-      ],
-      "owner": "broker",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "f734c04390784d82ec6aeb68",
-      "path": "rocketmq-broker/src/processor.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "e390813c4f45519515004dfe",
-          "fingerprint": "b1dd1d89163e9d12bafc56c1",
-          "item": "enum BrokerProcessorType",
-          "line": 86
-        },
-        {
-          "id": "aec77a3e74d2b75fe6562cec",
-          "fingerprint": "8bfa651e792896d11e662d2a",
-          "item": "enum BrokerProcessorType",
-          "line": 87
-        },
-        {
-          "id": "007391b6e83c430726bff6b1",
-          "fingerprint": "985e80e7eb0138751b9833fa",
-          "item": "enum BrokerProcessorType",
-          "line": 99
         }
       ],
       "owner": "broker",

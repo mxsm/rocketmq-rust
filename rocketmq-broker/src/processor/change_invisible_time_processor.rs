@@ -207,6 +207,20 @@ where
         ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        self.process_request_shared(channel, ctx, request).await
+    }
+}
+
+impl<MS> ChangeInvisibleTimeProcessor<MS>
+where
+    MS: MessageStore,
+{
+    pub async fn process_request_shared(
+        &self,
+        channel: Channel,
+        ctx: ConnectionHandlerContext,
+        request: &mut RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_code = RequestCode::from(request.code());
         info!("ChangeInvisibleTimeProcessor received request code: {:?}", request_code);
         match request_code {
@@ -241,7 +255,7 @@ where
     MS: MessageStore,
 {
     async fn process_request_(
-        &mut self,
+        &self,
         channel: Channel,
         ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -251,7 +265,7 @@ where
     }
 
     pub async fn process_request_inner(
-        &mut self,
+        &self,
         channel: Channel,
         _ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
@@ -380,7 +394,7 @@ where
     }
 
     async fn ack_origin(
-        &mut self,
+        &self,
         request_header: &ChangeInvisibleTimeRequestHeader,
         extra_info: &[String],
     ) -> rocketmq_error::RocketMQResult<()> {
@@ -439,7 +453,7 @@ where
     }
 
     async fn append_check_point(
-        &mut self,
+        &self,
         request_header: &ChangeInvisibleTimeRequestHeader,
         revive_qid: i32,
         queue_id: i32,
@@ -498,7 +512,7 @@ where
     }
 
     async fn process_change_invisible_time_for_order(
-        &mut self,
+        &self,
         request_header: &ChangeInvisibleTimeRequestHeader,
         extra_info: &[String],
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
