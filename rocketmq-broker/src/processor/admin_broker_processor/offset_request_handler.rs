@@ -31,26 +31,21 @@ use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_utils::TopicQ
 use rocketmq_remoting::rpc::rpc_client::RpcClient;
 use rocketmq_remoting::rpc::rpc_request::RpcRequest;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
 use tracing::error;
 
 use crate::broker_runtime::BrokerRuntimeInner;
 
-#[derive(Clone)]
-pub(super) struct OffsetRequestHandler<MS: MessageStore> {
-    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
-}
+pub(super) struct OffsetRequestHandler;
 
-impl<MS: MessageStore> OffsetRequestHandler<MS> {
-    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
-        Self { broker_runtime_inner }
+impl OffsetRequestHandler {
+    pub const fn new() -> Self {
+        Self
     }
-}
 
-impl<MS: MessageStore> OffsetRequestHandler<MS> {
-    pub async fn get_max_offset(
-        &mut self,
+    pub async fn get_max_offset<MS: MessageStore>(
+        &self,
+        broker_runtime_inner: &BrokerRuntimeInner<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -59,21 +54,19 @@ impl<MS: MessageStore> OffsetRequestHandler<MS> {
         let request_header = request
             .decode_command_custom_header::<GetMaxOffsetRequestHeader>()
             .unwrap(); //need to optimize
-        let mapping_context = self
-            .broker_runtime_inner
+        let mapping_context = broker_runtime_inner
             .topic_queue_mapping_manager()
             .build_topic_queue_mapping_context(&request_header, false);
         let topic = request_header.topic.clone();
         let queue_id = request_header.queue_id;
         let rewrite_result = self
-            .rewrite_request_for_static_topic(request_header, mapping_context)
+            .rewrite_request_for_static_topic(broker_runtime_inner, request_header, mapping_context)
             .await?;
         if rewrite_result.is_some() {
             return Ok(rewrite_result);
         }
 
-        let offset = self
-            .broker_runtime_inner
+        let offset = broker_runtime_inner
             .message_store()
             .unwrap()
             .get_max_offset_in_queue(topic.as_ref(), queue_id);
@@ -83,8 +76,9 @@ impl<MS: MessageStore> OffsetRequestHandler<MS> {
         )))
     }
 
-    pub async fn get_min_offset(
-        &mut self,
+    pub async fn get_min_offset<MS: MessageStore>(
+        &self,
+        broker_runtime_inner: &BrokerRuntimeInner<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -94,21 +88,19 @@ impl<MS: MessageStore> OffsetRequestHandler<MS> {
             .decode_command_custom_header::<GetMinOffsetRequestHeader>()
             .unwrap(); //need to optimize
 
-        let mapping_context = self
-            .broker_runtime_inner
+        let mapping_context = broker_runtime_inner
             .topic_queue_mapping_manager()
             .build_topic_queue_mapping_context(&request_header, false);
         let topic = request_header.topic.clone();
         let queue_id = request_header.queue_id;
         let rewrite_result = self
-            .handle_get_min_offset_for_static_topic(request_header, mapping_context)
+            .handle_get_min_offset_for_static_topic(broker_runtime_inner, request_header, mapping_context)
             .await?;
         if rewrite_result.is_some() {
             return Ok(rewrite_result);
         }
 
-        let offset = self
-            .broker_runtime_inner
+        let offset = broker_runtime_inner
             .message_store()
             .unwrap()
             .get_min_offset_in_queue(topic.as_ref(), queue_id);
@@ -118,8 +110,9 @@ impl<MS: MessageStore> OffsetRequestHandler<MS> {
         )))
     }
 
-    async fn handle_get_min_offset_for_static_topic(
-        &mut self,
+    async fn handle_get_min_offset_for_static_topic<MS: MessageStore>(
+        &self,
+        broker_runtime_inner: &BrokerRuntimeInner<MS>,
         mut request_header: GetMinOffsetRequestHeader,
         mapping_context: TopicQueueMappingContext,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -149,17 +142,16 @@ impl<MS: MessageStore> OffsetRequestHandler<MS> {
         request_header.set_lo(Some(false));
         request_header.queue_id = max_item.queue_id;
         let max_physical_offset = if max_item.bname == mapping_detail.topic_queue_mapping_info.bname {
-            self.broker_runtime_inner
+            broker_runtime_inner
                 .message_store()
                 .unwrap()
                 .get_min_offset_in_queue(mapping_context.topic.as_ref(), max_item.queue_id)
         } else {
             let rpc_request = RpcRequest::new(RequestCode::GetMinOffset.to_i32(), request_header, None);
-            let rpc_response = self
-                .broker_runtime_inner
+            let rpc_response = broker_runtime_inner
                 .broker_outer_api()
                 .rpc_client()
-                .invoke(rpc_request, self.broker_runtime_inner.broker_config().forward_timeout)
+                .invoke(rpc_request, broker_runtime_inner.broker_config().forward_timeout)
                 .await;
             if let Err(e) = rpc_response {
                 return Ok(Some(
@@ -185,8 +177,9 @@ impl<MS: MessageStore> OffsetRequestHandler<MS> {
         )))
     }
 
-    async fn rewrite_request_for_static_topic(
-        &mut self,
+    async fn rewrite_request_for_static_topic<MS: MessageStore>(
+        &self,
+        broker_runtime_inner: &BrokerRuntimeInner<MS>,
         mut request_header: GetMaxOffsetRequestHeader,
         mapping_context: TopicQueueMappingContext,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -216,17 +209,16 @@ impl<MS: MessageStore> OffsetRequestHandler<MS> {
         request_header.set_lo(Some(false));
         request_header.queue_id = max_item.queue_id;
         let max_physical_offset = if max_item.bname == mapping_detail.topic_queue_mapping_info.bname {
-            self.broker_runtime_inner
+            broker_runtime_inner
                 .message_store()
                 .unwrap()
                 .get_max_offset_in_queue(mapping_context.topic.as_ref(), max_item.queue_id)
         } else {
             let rpc_request = RpcRequest::new(RequestCode::GetMaxOffset.to_i32(), request_header.clone(), None);
-            let rpc_response = self
-                .broker_runtime_inner
+            let rpc_response = broker_runtime_inner
                 .broker_outer_api()
                 .rpc_client()
-                .invoke(rpc_request, self.broker_runtime_inner.broker_config().forward_timeout)
+                .invoke(rpc_request, broker_runtime_inner.broker_config().forward_timeout)
                 .await;
             if let Err(e) = rpc_response {
                 return Ok(Some(
@@ -252,18 +244,16 @@ impl<MS: MessageStore> OffsetRequestHandler<MS> {
         )))
     }
 
-    pub async fn get_all_delay_offset(
-        &mut self,
+    pub async fn get_all_delay_offset<MS: MessageStore>(
+        &self,
+        broker_runtime_inner: &BrokerRuntimeInner<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut response_command = RemotingCommand::create_response_command();
-        let content = self
-            .broker_runtime_inner
-            .schedule_message_service()
-            .encode_pretty(false);
+        let content = broker_runtime_inner.schedule_message_service().encode_pretty(false);
         if content.is_empty() {
             return Ok(Some(
                 response_command
@@ -275,29 +265,28 @@ impl<MS: MessageStore> OffsetRequestHandler<MS> {
         Ok(Some(response_command))
     }
 
-    pub async fn get_earliest_msg_store_time(
-        &mut self,
+    pub async fn get_earliest_msg_store_time<MS: MessageStore>(
+        &self,
+        broker_runtime_inner: &BrokerRuntimeInner<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_header = request.decode_command_custom_header::<GetEarliestMsgStoretimeRequestHeader>()?;
-        let mapping_context = self
-            .broker_runtime_inner
+        let mapping_context = broker_runtime_inner
             .topic_queue_mapping_manager()
             .build_topic_queue_mapping_context(&request_header, false);
         let topic = request_header.topic.clone();
         let queue_id = request_header.queue_id;
         let rewrite_result = self
-            .rewrite_get_earliest_request_for_static_topic(request_header, mapping_context)
+            .rewrite_get_earliest_request_for_static_topic(broker_runtime_inner, request_header, mapping_context)
             .await?;
         if rewrite_result.is_some() {
             return Ok(rewrite_result);
         }
 
-        let timestamp = self
-            .broker_runtime_inner
+        let timestamp = broker_runtime_inner
             .message_store()
             .unwrap()
             .get_earliest_message_time(topic.as_ref(), queue_id);
@@ -306,14 +295,15 @@ impl<MS: MessageStore> OffsetRequestHandler<MS> {
         )))
     }
 
-    pub async fn clean_expired_consumequeue(
-        &mut self,
+    pub async fn clean_expired_consumequeue<MS: MessageStore>(
+        &self,
+        broker_runtime_inner: &BrokerRuntimeInner<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        self.broker_runtime_inner
+        broker_runtime_inner
             .message_store()
             .unwrap()
             .clean_expired_consumer_queue();
@@ -322,14 +312,15 @@ impl<MS: MessageStore> OffsetRequestHandler<MS> {
         ))
     }
 
-    pub async fn delete_expired_commitlog(
-        &mut self,
+    pub async fn delete_expired_commitlog<MS: MessageStore>(
+        &self,
+        broker_runtime_inner: &BrokerRuntimeInner<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        self.broker_runtime_inner
+        broker_runtime_inner
             .message_store()
             .unwrap()
             .execute_delete_files_manually();
@@ -339,7 +330,7 @@ impl<MS: MessageStore> OffsetRequestHandler<MS> {
     }
 
     pub async fn check_rocksdb_cq_write_progress(
-        &mut self,
+        &self,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -356,18 +347,16 @@ impl<MS: MessageStore> OffsetRequestHandler<MS> {
         ))
     }
 
-    pub async fn get_all_subscription_group_config(
-        &mut self,
+    pub async fn get_all_subscription_group_config<MS: MessageStore>(
+        &self,
+        broker_runtime_inner: &BrokerRuntimeInner<MS>,
         channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut response_command = RemotingCommand::create_response_command();
-        let content = self
-            .broker_runtime_inner
-            .subscription_group_manager()
-            .encode_pretty(false);
+        let content = broker_runtime_inner.subscription_group_manager().encode_pretty(false);
         if content.is_empty() {
             error!(
                 "No subscription group config in this broker,client:{}",
@@ -383,8 +372,9 @@ impl<MS: MessageStore> OffsetRequestHandler<MS> {
         Ok(Some(response_command))
     }
 
-    async fn rewrite_get_earliest_request_for_static_topic(
-        &mut self,
+    async fn rewrite_get_earliest_request_for_static_topic<MS: MessageStore>(
+        &self,
+        broker_runtime_inner: &BrokerRuntimeInner<MS>,
         mut request_header: GetEarliestMsgStoretimeRequestHeader,
         mapping_context: TopicQueueMappingContext,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -422,17 +412,16 @@ impl<MS: MessageStore> OffsetRequestHandler<MS> {
         request_header.queue_id = mapping_item.queue_id;
 
         let timestamp = if mapping_item.bname == mapping_detail.topic_queue_mapping_info.bname {
-            self.broker_runtime_inner
+            broker_runtime_inner
                 .message_store()
                 .unwrap()
                 .get_earliest_message_time(mapping_context.topic.as_ref(), mapping_item.queue_id)
         } else {
             let rpc_request = RpcRequest::new(RequestCode::GetEarliestMsgStoreTime.to_i32(), request_header, None);
-            match self
-                .broker_runtime_inner
+            match broker_runtime_inner
                 .broker_outer_api()
                 .rpc_client()
-                .invoke(rpc_request, self.broker_runtime_inner.broker_config().forward_timeout)
+                .invoke(rpc_request, broker_runtime_inner.broker_config().forward_timeout)
                 .await
             {
                 Ok(response) => match response.get_header::<GetEarliestMsgStoretimeResponseHeader>() {
@@ -565,7 +554,7 @@ mod tests {
             .expect("message store should exist")
             .get_earliest_message_time(&CheetahString::from_static_str("topic-a"), 0);
 
-        let mut handler = OffsetRequestHandler::new(inner);
+        let handler = OffsetRequestHandler::new();
         let mut request = RemotingCommand::create_request_command(
             RequestCode::GetEarliestMsgStoreTime,
             GetEarliestMsgStoretimeRequestHeader {
@@ -579,7 +568,13 @@ mod tests {
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
 
         let response = handler
-            .get_earliest_msg_store_time(channel, ctx, RequestCode::GetEarliestMsgStoreTime, &mut request)
+            .get_earliest_msg_store_time(
+                inner.as_ref(),
+                channel,
+                ctx,
+                RequestCode::GetEarliestMsgStoreTime,
+                &mut request,
+            )
             .await
             .expect("get earliest msg store time should succeed")
             .expect("get earliest msg store time should return response");
@@ -600,14 +595,20 @@ mod tests {
     async fn clean_expired_consumequeue_returns_success() {
         let mut runtime = new_test_runtime("clean-expired-cq").await;
         let inner = runtime.inner_for_test().clone();
-        let mut handler = OffsetRequestHandler::new(inner);
+        let handler = OffsetRequestHandler::new();
         let mut request =
             RemotingCommand::create_request_command(RequestCode::CleanExpiredConsumequeue, EmptyHeader {});
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
 
         let response = handler
-            .clean_expired_consumequeue(channel, ctx, RequestCode::CleanExpiredConsumequeue, &mut request)
+            .clean_expired_consumequeue(
+                inner.as_ref(),
+                channel,
+                ctx,
+                RequestCode::CleanExpiredConsumequeue,
+                &mut request,
+            )
             .await
             .expect("clean expired consumequeue should succeed")
             .expect("clean expired consumequeue should return response");
@@ -619,9 +620,8 @@ mod tests {
 
     #[tokio::test]
     async fn check_rocksdb_cq_write_progress_without_rocksdb_returns_not_supported() {
-        let mut runtime = new_test_runtime("check-rocksdb-progress").await;
-        let inner = runtime.inner_for_test().clone();
-        let mut handler = OffsetRequestHandler::new(inner);
+        let runtime = new_test_runtime("check-rocksdb-progress").await;
+        let handler = OffsetRequestHandler::new();
         let mut request = RemotingCommand::create_request_command(
             RequestCode::CheckRocksdbCqWriteProgress,
             CheckRocksdbCqWriteProgressRequestHeader {

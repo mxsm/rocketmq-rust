@@ -87,7 +87,7 @@ pub struct AdminBrokerProcessor<MS: MessageStore> {
     topic_request_handler: TopicRequestHandler<MS>,
     broker_config_request_handler: BrokerConfigRequestHandler<MS>,
     consumer_request_handler: ConsumerRequestHandler<MS>,
-    offset_request_handler: OffsetRequestHandler<MS>,
+    offset_request_handler: OffsetRequestHandler,
     batch_mq_handler: BatchMqHandler,
     subscription_group_handler: SubscriptionGroupHandler,
 
@@ -137,7 +137,7 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
         let topic_request_handler = TopicRequestHandler::new(broker_runtime_inner.clone());
         let broker_config_request_handler = BrokerConfigRequestHandler::new(broker_runtime_inner.clone());
         let consumer_request_handler = ConsumerRequestHandler::new(broker_runtime_inner.clone());
-        let offset_request_handler = OffsetRequestHandler::new(broker_runtime_inner.clone());
+        let offset_request_handler = OffsetRequestHandler::new();
         let batch_mq_handler = BatchMqHandler::new();
         let subscription_group_handler = SubscriptionGroupHandler::new();
 
@@ -279,18 +279,21 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .await
             }
             RequestCode::GetMaxOffset => {
+                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner();
                 self.offset_request_handler
-                    .get_max_offset(channel, ctx, request_code, request)
+                    .get_max_offset(broker_runtime_inner, channel, ctx, request_code, request)
                     .await
             }
             RequestCode::GetMinOffset => {
+                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner();
                 self.offset_request_handler
-                    .get_min_offset(channel, ctx, request_code, request)
+                    .get_min_offset(broker_runtime_inner, channel, ctx, request_code, request)
                     .await
             }
             RequestCode::GetEarliestMsgStoreTime => {
+                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner();
                 self.offset_request_handler
-                    .get_earliest_msg_store_time(channel, ctx, request_code, request)
+                    .get_earliest_msg_store_time(broker_runtime_inner, channel, ctx, request_code, request)
                     .await
             }
             RequestCode::GetBrokerRuntimeInfo => {
@@ -329,8 +332,9 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .await
             }
             RequestCode::GetAllSubscriptionGroupConfig => {
+                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner();
                 self.offset_request_handler
-                    .get_all_subscription_group_config(channel, ctx, request_code, request)
+                    .get_all_subscription_group_config(broker_runtime_inner, channel, ctx, request_code, request)
                     .await
             }
             RequestCode::DeleteSubscriptionGroup => {
@@ -366,8 +370,9 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .await
             }
             RequestCode::GetAllDelayOffset => {
+                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner();
                 self.offset_request_handler
-                    .get_all_delay_offset(channel, ctx, request_code, request)
+                    .get_all_delay_offset(broker_runtime_inner, channel, ctx, request_code, request)
                     .await
             }
             RequestCode::GetAllMessageRequestMode => {
@@ -411,13 +416,15 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .await
             }
             RequestCode::CleanExpiredConsumequeue => {
+                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner();
                 self.offset_request_handler
-                    .clean_expired_consumequeue(channel, ctx, request_code, request)
+                    .clean_expired_consumequeue(broker_runtime_inner, channel, ctx, request_code, request)
                     .await
             }
             RequestCode::DeleteExpiredCommitlog => {
+                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner();
                 self.offset_request_handler
-                    .delete_expired_commitlog(channel, ctx, request_code, request)
+                    .delete_expired_commitlog(broker_runtime_inner, channel, ctx, request_code, request)
                     .await
             }
             RequestCode::CleanUnusedTopic => {
