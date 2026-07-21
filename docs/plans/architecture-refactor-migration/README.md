@@ -693,6 +693,15 @@ flush manager 可变引用。enqueue 前后 cancellation、bounded channel backp
 identity/1 occurrence，无 relocation。总进度仍为 75/82，下一子切片 M11-12bc30 优先清理 Store 最后的
 production `WeakArcMut` 或继续 Broker aggregate/leaf。
 
+Store auto-switch HA 回指随 Issue #8469 收窄：`AutoSwitchHAService` 以标准 `Arc<ReplicationStateRoot>` 发布窄状态
+能力，`DefaultHAService` 直接使用该状态与自身既有 Store 能力处理 connection added/ack/caught-up/removed，删除对完整
+auto-switch service 的 `WeakArcMut`、upgrade 与两处 downgrade。sync-state expansion/removal、caught-up 时间、shutdown
+短路、confirm-offset 计算和发布保持不变；现有回调回归额外证明初始化后完整 auto-switch owner 的 weak count 为零。
+ArcMut 快照降至 328 identities/899 occurrences（production 171/424、test 143/435、compatibility 14/40、
+Store production 88/243），净删除 2 个 production identity/7 occurrence；4 个保留 occurrence 经临时 ADR-013
+一对一 relocation 审核，无新增 identity，production `WeakArcMut` 已清零。总进度仍为 75/82，下一子切片
+M11-12bc31 继续 Broker aggregate/leaf 或 Store WAL/queue/timer/HA owner。
+
 ### 9.3 证据目录
 
 - 运行期生成物：`target/architecture-refactor/Mxx/<run-id>/`，不提交 Git。

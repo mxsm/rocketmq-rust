@@ -23,7 +23,6 @@ use rocketmq_remoting::protocol::body::ha_client_runtime_info::HAClientRuntimeIn
 use rocketmq_remoting::protocol::body::ha_connection_runtime_info::HAConnectionRuntimeInfo;
 use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
 use rocketmq_rust::ArcMut;
-use rocketmq_rust::WeakArcMut;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::select;
@@ -63,6 +62,8 @@ use crate::store_error::HAError;
 use crate::store_error::HAResult;
 use rocketmq_store_local::ha::replication::ReplicationProgress;
 
+type AutoSwitchReplicationState = rocketmq_store_local::ha::replication::ReplicationStateRoot;
+
 #[derive(Clone, Debug)]
 pub(crate) struct HAConnectionRuntimeSnapshot {
     pub addr: String,
@@ -83,7 +84,7 @@ pub struct DefaultHAService {
     group_transfer_service: Option<GroupTransferService>,
     ha_client: Option<GeneralHAClient>,
     ha_connection_state_notification_service: Option<HAConnectionStateNotificationService>,
-    auto_switch_service: Option<WeakArcMut<AutoSwitchHAService>>,
+    auto_switch_replication: Option<Arc<AutoSwitchReplicationState>>,
     ha_transfer_metrics: Arc<HaTransferMetrics>,
 }
 
@@ -99,7 +100,7 @@ impl DefaultHAService {
             group_transfer_service: None,
             ha_client: None,
             ha_connection_state_notification_service: None,
-            auto_switch_service: None,
+            auto_switch_replication: None,
             ha_transfer_metrics: Arc::new(HaTransferMetrics::default()),
         }
     }
@@ -139,14 +140,6 @@ impl DefaultHAService {
         self.ha_client = Some(ha_client);
     }
 
-    pub(crate) fn set_auto_switch_service(&mut self, auto_switch_service: WeakArcMut<AutoSwitchHAService>) {
-        self.auto_switch_service = Some(auto_switch_service);
-    }
-
-    fn auto_switch_service(&self) -> Option<ArcMut<AutoSwitchHAService>> {
-        self.auto_switch_service.as_ref().and_then(WeakArcMut::upgrade)
-    }
-
     pub async fn notify_transfer_some(&self, offset: i64) {
         self.replication_progress.record_ack(offset);
 
@@ -159,9 +152,10 @@ impl DefaultHAService {
         // Initialize the DefaultHAService with the provided message store.
         let config = this.default_message_store.get_message_store_config();
         let is_auto_switch = general_ha_service.is_auto_switch_enabled();
-        if let GeneralHAService::AutoSwitchHAService(auto_switch_service) = &general_ha_service {
-            this.set_auto_switch_service(ArcMut::downgrade(auto_switch_service));
-        }
+        this.auto_switch_replication = match &general_ha_service {
+            GeneralHAService::AutoSwitchHAService(auto_switch_service) => Some(auto_switch_service.replication_state()),
+            GeneralHAService::DefaultHAService(_) => None,
+        };
 
         let group_transfer_service = GroupTransferService::new(general_ha_service.clone());
         this.group_transfer_service = Some(group_transfer_service);
@@ -260,8 +254,9 @@ impl DefaultHAService {
     }
 
     pub(crate) fn handle_connection_added(&self, connection: &GeneralHAConnection) {
-        if let Some(auto_switch_service) = self.auto_switch_service() {
-            auto_switch_service.handle_connection_added(
+        if let Some(replication) = self.auto_switch_replication.as_deref() {
+            self.handle_auto_switch_connection_added(
+                replication,
                 Self::auto_switch_slave_broker_id(connection),
                 connection.get_slave_ack_offset(),
             );
@@ -269,39 +264,123 @@ impl DefaultHAService {
     }
 
     pub(crate) fn handle_connection_ack(&self, connection: &GeneralHAConnection, slave_ack_offset: i64) {
-        if let Some(auto_switch_service) = self.auto_switch_service() {
-            auto_switch_service.handle_connection_ack(Self::auto_switch_slave_broker_id(connection), slave_ack_offset);
+        if let Some(replication) = self.auto_switch_replication.as_deref() {
+            self.handle_auto_switch_connection_ack(
+                replication,
+                Self::auto_switch_slave_broker_id(connection),
+                slave_ack_offset,
+            );
         }
     }
 
     pub(crate) fn handle_connection_caught_up(&self, connection: &GeneralHAConnection) {
-        if let Some(auto_switch_service) = self.auto_switch_service() {
-            auto_switch_service.handle_connection_caught_up(Self::auto_switch_slave_broker_id(connection));
+        if let Some(replication) = self.auto_switch_replication.as_deref() {
+            Self::handle_auto_switch_connection_caught_up(replication, Self::auto_switch_slave_broker_id(connection));
         }
     }
 
     pub(crate) fn handle_connection_removed(&self, connection: &GeneralHAConnection) {
-        if let Some(auto_switch_service) = self.auto_switch_service() {
-            auto_switch_service.handle_connection_removed(Self::auto_switch_slave_broker_id(connection));
+        if let Some(replication) = self.auto_switch_replication.as_deref() {
+            self.handle_auto_switch_connection_removed(replication, Self::auto_switch_slave_broker_id(connection));
         }
     }
 
     pub(crate) fn handle_runtime_connection_ack(&self, connection: &HAConnectionRuntimeHandle, slave_ack_offset: i64) {
-        if let Some(auto_switch_service) = self.auto_switch_service() {
-            auto_switch_service.handle_connection_ack(connection.slave_broker_id(), slave_ack_offset);
+        if let Some(replication) = self.auto_switch_replication.as_deref() {
+            self.handle_auto_switch_connection_ack(replication, connection.slave_broker_id(), slave_ack_offset);
         }
     }
 
     pub(crate) fn handle_runtime_connection_caught_up(&self, connection: &HAConnectionRuntimeHandle) {
-        if let Some(auto_switch_service) = self.auto_switch_service() {
-            auto_switch_service.handle_connection_caught_up(connection.slave_broker_id());
+        if let Some(replication) = self.auto_switch_replication.as_deref() {
+            Self::handle_auto_switch_connection_caught_up(replication, connection.slave_broker_id());
         }
     }
 
     fn handle_runtime_connection_removed(&self, connection: &HAConnectionRuntimeHandle) {
-        if let Some(auto_switch_service) = self.auto_switch_service() {
-            auto_switch_service.handle_connection_removed(connection.slave_broker_id());
+        if let Some(replication) = self.auto_switch_replication.as_deref() {
+            self.handle_auto_switch_connection_removed(replication, connection.slave_broker_id());
         }
+    }
+
+    fn handle_auto_switch_connection_added(
+        &self,
+        replication: &AutoSwitchReplicationState,
+        slave_broker_id: Option<i64>,
+        slave_ack_offset: i64,
+    ) {
+        let Some(slave_broker_id) = slave_broker_id else {
+            return;
+        };
+
+        replication.record_caught_up(slave_broker_id, rocketmq_common::TimeUtils::current_millis());
+        if slave_ack_offset >= 0 {
+            self.handle_auto_switch_connection_ack(replication, Some(slave_broker_id), slave_ack_offset);
+        }
+    }
+
+    fn handle_auto_switch_connection_ack(
+        &self,
+        replication: &AutoSwitchReplicationState,
+        slave_broker_id: Option<i64>,
+        slave_ack_offset: i64,
+    ) {
+        let Some(slave_broker_id) = slave_broker_id else {
+            return;
+        };
+
+        replication.record_caught_up(slave_broker_id, rocketmq_common::TimeUtils::current_millis());
+        let current_confirm_offset = self
+            .default_message_store
+            .get_commit_log()
+            .get_confirm_offset_directly();
+        let _ = replication.maybe_expand_sync_state_set(slave_broker_id, slave_ack_offset, current_confirm_offset);
+        if replication.local_sync_state_set().contains(&slave_broker_id) {
+            self.publish_auto_switch_confirm_offset(replication);
+        }
+    }
+
+    fn handle_auto_switch_connection_caught_up(replication: &AutoSwitchReplicationState, slave_broker_id: Option<i64>) {
+        if let Some(slave_broker_id) = slave_broker_id {
+            replication.record_caught_up(slave_broker_id, rocketmq_common::TimeUtils::current_millis());
+        }
+    }
+
+    fn handle_auto_switch_connection_removed(
+        &self,
+        replication: &AutoSwitchReplicationState,
+        slave_broker_id: Option<i64>,
+    ) {
+        if self.default_message_store.is_shutdown() {
+            return;
+        }
+
+        let Some(slave_broker_id) = slave_broker_id else {
+            return;
+        };
+
+        if replication.remove_replica(slave_broker_id) {
+            self.publish_auto_switch_confirm_offset(replication);
+        }
+    }
+
+    fn publish_auto_switch_confirm_offset(&self, replication: &AutoSwitchReplicationState) {
+        let max_phy_offset = self.default_message_store.get_max_phy_offset();
+        let current_confirm_offset = self
+            .default_message_store
+            .get_commit_log()
+            .get_confirm_offset_directly();
+        let runtime_info = self.get_runtime_info(max_phy_offset);
+        let expected_sync_state_set_size = replication
+            .tracked_sync_state_set_size()
+            .unwrap_or_else(|| self.default_message_store.get_alive_replica_num_in_group().max(1) as usize);
+        let confirm_offset = AutoSwitchHAService::compute_confirm_offset_from_runtime(
+            current_confirm_offset,
+            max_phy_offset,
+            expected_sync_state_set_size,
+            &runtime_info,
+        );
+        self.default_message_store.publish_confirm_offset(confirm_offset);
     }
 
     fn auto_switch_slave_broker_id(connection: &GeneralHAConnection) -> Option<i64> {
@@ -900,6 +979,7 @@ mod tests {
         let temp_root =
             std::env::temp_dir().join(format!("rocketmq-rust-default-ha-ack-callback-{}", current_millis()));
         let (service, auto_switch_service) = new_auto_switch_services(&temp_root);
+        assert_eq!(auto_switch_service.weak_count(), 0);
         auto_switch_service.sync_controller_sync_state_set(7, &HashSet::from([7_i64]));
 
         let (server_stream, remote_addr, _client) = new_server_stream().await;

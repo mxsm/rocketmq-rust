@@ -2871,11 +2871,33 @@ Store WAL sync-flush enqueue 随 Issue #8467 完成以下边界收敛：
 | runtime / architecture guards | enforcing runtime audit、dependency fixtures/target/baseline、release、8-profile/11-variant performance、architecture 60/60 与 AGENTS routing 通过；目标 compatibility 35/35、test edge 3/3、release topology 32/32 |
 | root workspace final gates | `cargo fmt --all -- --check`、workspace all-target/all-feature strict Clippy 与 `git diff --check` 通过；Windows linker stdout 与既有 future-incompatibility note 不受 `-D warnings` 管辖 |
 
+## M11-12bc30 实现
+
+Store HA replication-state callback 随 Issue #8469 完成以下边界收敛：
+
+- `AutoSwitchHAService` 以标准 `Arc<ReplicationStateRoot>` 共享复制状态，不再把完整 service 通过 `WeakArcMut` 回注到 `DefaultHAService`。
+- `DefaultHAService` 的 connection added、ack、caught-up 与 removed callback 直接消费窄 replication-state capability，并复用既有 Store 只读访问完成 runtime snapshot、confirm-offset 计算和发布。
+- caught-up timestamp、sync-state expand/remove、shutdown short circuit、connection registry 与 confirm-offset 更新顺序保持不变；Default HA 模式不持有 auto-switch replication state。
+- 所有权回归断言 auto-switch service 的 `weak_count()` 保持为零，证明初始化和 callback 不再建立旧的完整 service 弱回边。
+- reviewed baseline 从 330 identities / 906 occurrences 降至 328 / 899；production 从 173/431 降至 171/424，test 保持 143/435，compatibility 保持 14/40。Store production 从 90/250 降至 88/243；净删除 2 个 production identity/7 occurrences，4 个保留 occurrence 经同 item 一对一指纹审核更新，production `WeakArcMut` 已清零。
+
+## M11-12bc30 验证
+
+| 命令 | 结果 |
+|---|---|
+| Store focused / all-feature check / strict Clippy | HA callback 聚焦回归 3/3；`cargo check -p rocketmq-store --all-features` 与 Store all-target/all-feature strict Clippy 通过 |
+| Store all-feature lib | 507/507 通过；auto-switch ack/caught-up/remove、sync-state 与 confirm-offset 行为无新增失败 |
+| Broker all-feature lib | 610 passed、26 failed、1 ignored；失败仍集中于既有 lifecycle/Lite/subscription/controller 动态基线，无 HA replication-state 新失败，因此全套如实记为未通过 |
+| Store/RocksDB 专项 | Store/Broker `rocksdb_store` strict Clippy 通过；foundation 82/82、semantics 9/9、Broker rocksdb 21/21、pop_consumer 4/4 通过 |
+| reviewed baseline / fixtures | `--apply-reviewed-reductions` 从 330/906 精确降至 328/899，4 个保留 occurrence 通过同 item 一对一审核；`python scripts/arc_mut_guard.py`、24/24 fixtures 与 67/67 ArcMut guard tests 通过，无新增 identity 或提交态临时 approval |
+| runtime / architecture guards | enforcing runtime audit、dependency fixtures/target/baseline、release、8-profile/11-variant performance、127/127 guard tests 与 AGENTS routing 通过；目标 compatibility 35/35、test edge 3/3、release topology 32/32 |
+| root workspace final gates | `cargo fmt --all -- --check` 与 workspace all-target/all-feature strict Clippy 通过；最终补丁后复跑 `git diff --check`；Windows linker stdout 与既有 future-incompatibility note 不受 `-D warnings` 管辖 |
+
 ## 剩余切片与 Gate
 
 1. Broker BrokerRuntimeInner capability carrier 与其他 admin/processor/leaf owner（83/181）；transaction bridge、Producer/ColdData admin leaf、Schedule hook、put-message preflight、ConsumerOrderInfoManager、TopicRouteInfoManager、MessageArrivingListener、ClientHousekeepingService、HA diagnostics/control/min-broker transition、controller role-change duplicate owner、BatchMq、SubscriptionGroup、MessageRelated、Offset、Consumer handler 与未编译 V2 示例残留已退出 leaf-level 完整 runtime/store owner，LiteLifecycle 只读 Store carrier 已收窄为普通借用，显式 Store 兼容 owner 留待 Store 批次删除。
-2. Store MappedFileQueue/其余 ConsumeQueue、CommitLog/Flush、StoreHandle/Rocks/Timer 与其余 HA service/actor（90/250）；BrokerStats observer、ConsumeQueueExt 显式锁 owner、HA notification/connection registry 窄能力、未共享 HA child direct ownership、commit-to-flush 窄唤醒能力、HA confirm/epoch 原子发布、HA connection runtime handle 与 CommitLog shared disk-flush 已完成。
-3. 先迁移 Store 对 `WeakArcMut` 的剩余使用并移除其余 nightly feature；公开 `arc_mut.rs`/re-export 的 destructive 删除受 next-major 两轮弃用与 Release Manager/HUMAN Gate 约束，不能静默重置 public API baseline。
+2. Store MappedFileQueue/其余 ConsumeQueue、CommitLog/Flush、StoreHandle/Rocks/Timer 与其余 HA service/actor（88/243）；BrokerStats observer、ConsumeQueueExt 显式锁 owner、HA replication-state callback、未共享 HA child direct ownership、commit-to-flush 窄唤醒能力、HA confirm/epoch 原子发布、HA connection runtime handle 与 CommitLog shared disk-flush 已完成。
+3. Production `WeakArcMut` 已清零；继续迁移 test/compatibility 中受控使用并移除其余 nightly feature。公开 `arc_mut.rs`/re-export 的 destructive 删除受 next-major 两轮弃用与 Release Manager/HUMAN Gate 约束，不能静默重置 public API baseline。
 4. 对同一候选快照执行 stable feature matrix、Miri/Loom 可用切片、soak/SLO fault、dashboard/runbook、动态
    Kind/K3d/container、M10 固定硬件和 Human Gate。
 

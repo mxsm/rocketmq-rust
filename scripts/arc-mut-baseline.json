@@ -4676,28 +4676,22 @@
           "line": 46
         },
         {
-          "id": "81d67e0622537835e5ddd119",
-          "fingerprint": "f778d96acac1a5f9fdd1c23e",
+          "id": "bad2ecd9d5aafdda1dfe700f",
+          "fingerprint": "c480c2e078ef28cc6ccac8a9",
           "item": "struct AutoSwitchHAService",
-          "line": 47
+          "line": 46
         },
         {
-          "id": "c35980021309c10d8bc30fdb",
-          "fingerprint": "1d97658e4780c6ceae8a4f95",
+          "id": "986118788ce5ef833c579a35",
+          "fingerprint": "1842dbf8cfbf74a8f9ba8e29",
           "item": "fn new",
-          "line": 52
+          "line": 51
         },
         {
           "id": "2207f2ab20ff84fad9a70823",
           "fingerprint": "3212bd4ed39261093870b3a3",
           "item": "fn init",
           "line": 65
-        },
-        {
-          "id": "1f4d630df0b166ee9e687024",
-          "fingerprint": "9aa0e00527f79a57c20c4686",
-          "item": "fn init",
-          "line": 68
         }
       ],
       "owner": "store",
@@ -4770,10 +4764,10 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "06ba5bbcf23316cc0f7bd3c2",
-          "fingerprint": "da8d30ab543f8684f7d2b7c8",
+          "id": "5e10889f36c46c8b963ea3f2",
+          "fingerprint": "b857e655a573cb74a746cb21",
           "item": "struct AutoSwitchHAService",
-          "line": 47
+          "line": 46
         },
         {
           "id": "2946430ecc346d640de71250",
@@ -5294,8 +5288,8 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "8a780fe5b0631019193be654",
-          "fingerprint": "d871463cf58a7cafb0c8c77b",
+          "id": "186ca8348e96fba01206a620",
+          "fingerprint": "945de8863a09ceb6a69a827b",
           "item": "<module>",
           "line": 25
         }
@@ -5331,22 +5325,10 @@
           "line": 90
         },
         {
-          "id": "f0d88775ca8c5fee15962268",
-          "fingerprint": "441694cf10fdff4c02c0cc7e",
-          "item": "fn auto_switch_service",
-          "line": 145
-        },
-        {
           "id": "e718591089641e44d89339b7",
           "fingerprint": "3212bd4ed39261093870b3a3",
           "item": "fn init",
           "line": 157
-        },
-        {
-          "id": "41176db98e1ae352fb638d08",
-          "fingerprint": "2edd075030156de61bd9b641",
-          "item": "fn init",
-          "line": 162
         },
         {
           "id": "2bb4e6a6c5022de18e2fd532",
@@ -5502,56 +5484,6 @@
           "fingerprint": "929539ec6ab7778d1c57be7a",
           "item": "fn new_test_message_store",
           "line": 652
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "767253a5cc3c3c1d16864711",
-      "path": "rocketmq-store/src/ha/default_ha_service.rs",
-      "symbol": "WeakArcMut",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "6e99265dcf58c7f54494ca4d",
-          "fingerprint": "e2b6495d6ee260c5dba448f1",
-          "item": "<module>",
-          "line": 26
-        }
-      ],
-      "owner": "store",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "c43dbf866172ba4303cb64cf",
-      "path": "rocketmq-store/src/ha/default_ha_service.rs",
-      "symbol": "WeakArcMut",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "080167291bbc09f1a550a128",
-          "fingerprint": "9d6c8f400d376765a02dcf4d",
-          "item": "struct DefaultHAService",
-          "line": 85
-        },
-        {
-          "id": "9ad8b53023a79dd7f42ab4c0",
-          "fingerprint": "5b01b0c60d49f25c9fe1762f",
-          "item": "fn set_auto_switch_service",
-          "line": 141
-        },
-        {
-          "id": "2333ab338ede1d29d8d356aa",
-          "fingerprint": "9f6d912a4060e3ba50c846e6",
-          "item": "fn auto_switch_service",
-          "line": 146
         }
       ],
       "owner": "store",
