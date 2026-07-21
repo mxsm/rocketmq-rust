@@ -14,3 +14,5 @@
 
 pub(crate) mod pop_buffer_merge_service;
 pub(super) mod pop_revive_service;
+
+pub(crate) use pop_revive_service::PopReviveService;

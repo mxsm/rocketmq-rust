@@ -3452,13 +3452,41 @@ Broker processor registry wrapper 随 Issue #8517 完成以下收口：
 | runtime / architecture guards | enforcing runtime audit、dependency fixtures/target/baseline、release、8-profile/11-variant performance、60/60 architecture tests 与 AGENTS routing 通过；目标 compatibility 35/35、test edge 3/3、release topology 32/32、66 comparisons/0 failures |
 | root workspace final gates | `cargo fmt --all -- --check` 与 workspace all-target/all-feature strict Clippy 通过；Windows linker stdout 与既有 future-incompatibility note 不受 `-D warnings` 管辖 |
 
+## M11-12bc53 实现
+
+Ack 内部 capability 随 Issue #8519 完成以下收口：
+
+- `AckMessageProcessor` 删除完整 `BrokerRuntimeInner` 与强 `PopMessageProcessor` owner，组合根显式注入启动期
+  revive topic/store host policy、共享 TopicConfig/PopInflight 与弱 ConsumerOffset/ConsumerOrder/EscapeBridge/POP capability；Ack 源文件不再导入或使用
+  `ArcMut`，Store/order provider 退出时 fail closed，不再通过 Store `unwrap` 触发恢复性 panic。
+- PopRevive service 由 Broker composition root 构造，Ack 只持 `Vec<Arc<PopReviveService<_>>>`；start、
+  merge-and-revive 与 revive-from-checkpoint task receiver 改为标准 Arc。并发更新的 revive timestamp 改为
+  `AtomicI64`，retry-topic helper 收窄为共享借用，既有 TaskGroup/cancellation/shutdown 顺序保持不变。
+- PopInflight counter 增加共享 Clone handle，克隆只共享既有原子与 DashMap 状态；Ack 不再为 decrement 访问完整
+  runtime。新增 policy 快照、弱 provider 退出和 clone counter 共享更新测试。
+- reviewed baseline 从 260 identities / 787 occurrences 降至 257 / 779；production 从 121/332 降至
+  118/324，test 保持 125/415，compatibility 保持 14/40。Broker production 从 39/98 降至 36/90，Store
+  保持 82/234；净删除 3 个 production identities/8 occurrences，其中 Ack owner 5 occurrences、PopRevive
+  task receiver 3 occurrences，无 relocation、新增 identity 或临时 approval。
+- 执行清单 R02 完成；31 项最小审查清单已完成 1 项、剩余 30 项。正式进度仍为 75/82，PR-M11-12 未提前关闭。
+
+## M11-12bc53 验证
+
+| 命令 | 结果 |
+|---|---|
+| Broker check / focused / strict Clippy | `cargo check -p rocketmq-broker` 通过；Ack policy/weak capability、共享 inflight counter 与两个 PopRevive 并发/可见性测试共 5/5 通过；Broker all-target/all-feature strict Clippy 通过 |
+| reviewed baseline / fixtures | 正式最小 baseline 补丁从 260/787 精确降至 257/779；`python scripts/arc_mut_guard.py`、candidate compare、24/24 fixtures 与 67/67 guard tests 通过，无 relocation、新增 identity 或临时 approval |
+| Broker broad lib suites | default suite 未通过：618 passed、26 failed、1 ignored；相对已登记 25 项多出的固定端口 controller 并行冲突与同组 controller 用例均隔离复跑 1/1 通过。all-feature suite 未通过：665 passed、24 failed、1 ignored，失败少于已登记基线；新增 2 个 Ack 测试与全部聚焦项均通过，无新增可复现失败 |
+| runtime / architecture guards | enforcing runtime audit、dependency fixtures/target/baseline、release、8-profile/11-variant performance、60/60 architecture tests 与 AGENTS routing 通过；目标 compatibility 35/35、test edge 3/3、release topology 32/32、66 comparisons/0 failures |
+| root workspace final gates | `cargo fmt --all -- --check` 与 workspace all-target/all-feature strict Clippy 通过；`git diff --check` 通过；Windows linker stdout 与既有 future-incompatibility note 不受 `-D warnings` 管辖 |
+
 ## 剩余切片与 Gate
 
-2026-07-22 盘点将全部剩余工作固化为 31 个最小可审查单元：16 个 production owner、2 个
-test/compatibility、7 个 M10/Phase 3 动态验收与签署、6 个 M12；这只是执行层下界，正式进度仍为 75/82。
+2026-07-22 盘点将执行工作固化为 31 个最小可审查单元：16 个 production owner、2 个
+test/compatibility、7 个 M10/Phase 3 动态验收与签署、6 个 M12；R02 已完成，当前剩余 30 个，正式进度仍为 75/82。
 完整逐项 checklist 见 `docs/plans/architecture-refactor-migration/REMAINING-TASKS.md`。
 
-1. Broker BrokerRuntimeInner capability carrier、Ack 内部 runtime/revive capability 与其他 admin/processor/leaf owner（39/98）；processor registry 的 Ack/ChangeInvisible/AdminBroker ArcMut wrapper、transaction bridge/Store compatibility、Producer/ColdData admin leaf、Schedule hook、put-message preflight、ConsumerOrderInfoManager、TopicRouteInfoManager、TopicQueueMappingCleanService、MessageArrivingListener、ClientHousekeepingService、ClientManage heartbeat registration/retry-topic capability、ConsumerManage list/offset capability、Query Assignment、QueryMessage/RecallMessage/EndTransaction/PeekMessage/Notification/ChangeInvisibleTime Store capability、POP long-polling、POP Lite processor/long-polling、LiteSubscriptionCtl、LiteManager 与 SlaveSynchronize 显式 policy/query/view/provider/dispatcher/TaskGroup、LiteManager/LiteSubscriptionCtl 标准 Arc wrapper、crate-wide mut_from_ref lint allowance、PollingInfo weak provider、SubscriptionGroup config lookup、HA diagnostics/control/min-broker transition、controller role-change duplicate owner、BatchMq、SubscriptionGroup、MessageRelated、Offset、Consumer、Topic handler 与未编译 V2 示例残留已退出 leaf-level 完整 runtime/store owner，LiteLifecycle 只读 Store carrier 已收窄为普通借用。
+1. Broker BrokerRuntimeInner capability carrier 与其他 admin/processor/leaf owner（36/90）；Ack 内部 runtime/revive capability 与 processor registry 的 Ack/ChangeInvisible/AdminBroker ArcMut wrapper、transaction bridge/Store compatibility、Producer/ColdData admin leaf、Schedule hook、put-message preflight、ConsumerOrderInfoManager、TopicRouteInfoManager、TopicQueueMappingCleanService、MessageArrivingListener、ClientHousekeepingService、ClientManage heartbeat registration/retry-topic capability、ConsumerManage list/offset capability、Query Assignment、QueryMessage/RecallMessage/EndTransaction/PeekMessage/Notification/ChangeInvisibleTime Store capability、POP long-polling、POP Lite processor/long-polling、LiteSubscriptionCtl、LiteManager 与 SlaveSynchronize 显式 policy/query/view/provider/dispatcher/TaskGroup、LiteManager/LiteSubscriptionCtl 标准 Arc wrapper、crate-wide mut_from_ref lint allowance、PollingInfo weak provider、SubscriptionGroup config lookup、HA diagnostics/control/min-broker transition、controller role-change duplicate owner、BatchMq、SubscriptionGroup、MessageRelated、Offset、Consumer、Topic handler 与未编译 V2 示例残留已退出 leaf-level 完整 runtime/store owner，LiteLifecycle 只读 Store carrier 已收窄为普通借用。
 2. Store MappedFileQueue/其余 ConsumeQueue、CommitLog/Flush、StoreHandle/Rocks/Timer 与其余 HA service/actor（82/234）；BrokerStats observer、ConsumeQueueExt 显式锁 owner、HA replication-state callback、未共享 HA child direct ownership、commit-to-flush 窄唤醒能力、HA confirm/epoch 原子发布、HA connection runtime handle、CommitLog shared disk-flush、auto-switch client construction 与 single delegate Store owner 已完成。
 3. Production `WeakArcMut` 已清零；继续迁移 test/compatibility 中受控使用并移除其余 nightly feature。公开 `arc_mut.rs`/re-export 的 destructive 删除受 next-major 两轮弃用与 Release Manager/HUMAN Gate 约束，不能静默重置 public API baseline。
 4. 对同一候选快照执行 stable feature matrix、Miri/Loom 可用切片、soak/SLO fault、dashboard/runbook、动态

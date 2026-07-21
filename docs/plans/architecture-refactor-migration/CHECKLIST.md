@@ -40,18 +40,18 @@
 PR-M10-05 已完成性能门禁实现；真实固定硬件 baseline/candidate 与 HUMAN M10 Gate 尚未完成，因此 M10 为
 `待验收`而非`已完成`。M11 为`实施中`，当前下一工作包为 PR-M11-12。
 
-执行层按当前热点进一步拆为 31 个最小可审查单元：16 个 production owner、2 个 test/compatibility、7 个
-M10/Phase 3 动态验收与签署、6 个 M12。该数字是剩余实施下界，不替代 82 个顶层工作包口径；逐项 checklist
+执行层清单共 31 个最小可审查单元：16 个 production owner、2 个 test/compatibility、7 个
+M10/Phase 3 动态验收与签署、6 个 M12；R02 已完成，当前剩余 30 个。该数字不替代 82 个顶层工作包口径；逐项 checklist
 及每组精确 baseline 见 [`REMAINING-TASKS.md`](REMAINING-TASKS.md#执行层最小审查清单31-项)。
 
-PR-M11-12 的内部子切片不重复计入 82 个顶层工作包。Issue #8517 的 M11-12bc52 子切片完成后，当前 ArcMut reviewed
-baseline 为 260 identities / 787 occurrences，其中 production 为 121/332、test 为 125/415、compatibility
+PR-M11-12 的内部子切片不重复计入 82 个顶层工作包。Issue #8519 的 M11-12bc53 子切片完成后，当前 ArcMut reviewed
+baseline 为 257 identities / 779 occurrences，其中 production 为 118/324、test 为 125/415、compatibility
 为 14/40。production 剩余分布和完成目标如下：
 
 | owner | identity / occurrence | PR-M11-12 完成目标 |
 |---|---:|---|
 | Client | 0 / 0 | 已完成 DefaultMQProducer facade/implementation/registry 标准 Arc/Weak、配置快照、生命周期/任务接纳边界，并拆除强引用环 |
-| Broker | 39 / 98 | Ack/ChangeInvisible 共享请求入口、Ack runtime 标准 Arc、Admin async-mutex wrapper、Topic route/queue mapping、TopicConfig value/coordinator、TopicRouteInfo capability、topic-mapping cleanup capability、message-arriving weak listener、client-housekeeping narrow handle、client heartbeat registration/retry-topic capability、consumer-list/offset request capability、Query Assignment、QueryMessage/RecallMessage/EndTransaction/PeekMessage/Notification/ChangeInvisibleTime Store capability、POP long-polling、POP Lite processor/long-polling、LiteSubscriptionCtl 与 LiteManager 显式 policy/query/view/provider/dispatcher/TaskGroup、LiteManager/LiteSubscriptionCtl 标准 Arc 共享 wrapper、slave metadata synchronization policy/weak provider/late binding、crate-wide mut_from_ref lint allowance 删除、transaction Store compatibility、PollingInfo weak query、SubscriptionGroup 配置查询与 Store 版本 capability、HA diagnostics/control/min-broker transition、controller role-change duplicate owner、batch lock、subscription-group/message-related/offset/consumer/topic Admin request borrow、POP/Pull、offset、schedule service/root/hook、put-message preflight、transaction service/check listener/bridge、ConsumerOrderInfo capability、核心 processor root、auth/Producer/ColdData admin、统计 handler 与未编译 V2 示例残留已完成；继续完成 BrokerRuntime carrier、Ack 内部 runtime/revive owner 与其他 admin/processor 安全化 |
+| Broker | 36 / 90 | Ack 已改持显式 policy、共享 Topic/Inflight 与弱 Offset/Order/Store/POP capability，内部 runtime/revive ArcMut owner 已清零；ChangeInvisible 共享请求入口、Admin async-mutex wrapper、Topic route/queue mapping、TopicConfig value/coordinator、TopicRouteInfo capability、topic-mapping cleanup capability、message-arriving weak listener、client-housekeeping narrow handle、client heartbeat registration/retry-topic capability、consumer-list/offset request capability、Query Assignment、QueryMessage/RecallMessage/EndTransaction/PeekMessage/Notification/ChangeInvisibleTime Store capability、POP long-polling、POP Lite processor/long-polling、LiteSubscriptionCtl 与 LiteManager 显式 policy/query/view/provider/dispatcher/TaskGroup、LiteManager/LiteSubscriptionCtl 标准 Arc 共享 wrapper、slave metadata synchronization policy/weak provider/late binding、crate-wide mut_from_ref lint allowance 删除、transaction Store compatibility、PollingInfo weak query、SubscriptionGroup 配置查询与 Store 版本 capability、HA diagnostics/control/min-broker transition、controller role-change duplicate owner、batch lock、subscription-group/message-related/offset/consumer/topic Admin request borrow、POP/Pull、offset、schedule service/root/hook、put-message preflight、transaction service/check listener/bridge、ConsumerOrderInfo capability、核心 processor root、auth/Producer/ColdData admin、统计 handler 与未编译 V2 示例残留已完成；继续完成 BrokerRuntime carrier 与其他 admin/processor/service 安全化 |
 | Store | 82 / 234 | TopicConfig 只读代际 carrier、BrokerStats observer、ConsumeQueueExt 显式锁 owner、HA notification/connection registry 窄能力、未共享 HA child 直接 ownership、commit-to-flush 窄唤醒能力、HA confirm/epoch 原子发布、HA connection runtime handle、CommitLog shared disk-flush、auto-switch replication-state/client construction 与单一 delegate Store owner 已完成；production `WeakArcMut` 已清零，继续完成 message store、CommitLog/Flush、其余 queue、Rocks/Timer 与其他 HA service/actor 安全化 |
 
 ArcMut production/public compatibility 清零之后，PR-M11-12 还必须在同一冻结候选快照完成 stable feature matrix、
@@ -847,7 +847,8 @@ M09-04 再删除 MCP 未使用的 Auth/Error direct edges，并把承担 owned t
   - [x] Issue #8511 后实际快照降至 264 identities/798 occurrences：production 124/342、test 126/416、compatibility 14/40、Broker production 42/108；SlaveSynchronize 完整 runtime owner、构造传播与 subscription-group `mut_from_ref` 净删除 3 production identities/4 occurrences，无 relocation、新增 identity 或临时 approval
   - [x] Issue #8513 后实际快照降至 263 identities/797 occurrences：production 123/341、test 126/416、compatibility 14/40、Broker production 41/107；Broker crate-wide `clippy::mut_from_ref` allowance 净删除 1 production identity/1 occurrence，无 relocation、新增 identity 或临时 approval
   - [x] Issue #8517 后实际快照降至 260 identities/787 occurrences：production 121/332、test 125/415、compatibility 14/40、Broker production 39/98；三个遗留 processor 外层 wrapper 退出 ArcMut，净删除 2 production identities/9 occurrences 与 1 test identity/1 occurrence，无 relocation、新增 identity 或临时 approval
-  - [ ] M11-12bc53 及后续：Broker aggregate/leaf、Store WAL/其余 queue/timer/HA、compatibility 删除、stable/Miri/Loom/soak/SLO 与同一候选快照 Gate 仍待完成
+  - [x] Issue #8519 后实际快照降至 257 identities/779 occurrences：production 118/324、test 125/415、compatibility 14/40、Broker production 36/90；Ack 完整 runtime/revive owner 净删除 3 production identities/5 occurrences，PopRevive task receiver 改为标准 Arc 并减少同一保留 identity 的 3 occurrences，无 relocation、新增 identity 或临时 approval
+  - [ ] M11-12bc54 及后续：Broker aggregate/leaf、Store WAL/其余 queue/timer/HA、compatibility 删除、stable/Miri/Loom/soak/SLO 与同一候选快照 Gate 仍待完成
   - [ ] 总进度仍为 75/82；本子切片不提前计作完成工作包，M10/Kind-K3d/container dynamic/HUMAN Gate 保持开放
 - [ ] 对应任务文档的 Exit Checklist 全部通过
 
