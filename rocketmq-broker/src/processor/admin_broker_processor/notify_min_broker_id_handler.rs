@@ -25,7 +25,6 @@ use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::header::namesrv::brokerid_change_request_header::NotifyMinBrokerIdChangeRequestHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_rust::ArcMut;
 use rocketmq_rust::RocketMQTokioRwLock;
 use rocketmq_store::base::message_store::MessageStore;
 use tracing::error;
@@ -35,8 +34,7 @@ use tracing::warn;
 use crate::broker_runtime::BrokerRuntimeInner;
 
 #[derive(Clone)]
-pub struct NotifyMinBrokerChangeIdHandler<MS: MessageStore> {
-    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+pub struct NotifyMinBrokerChangeIdHandler {
     lock: Arc<RocketMQTokioRwLock<MinBrokerIngroup>>,
 }
 
@@ -55,16 +53,16 @@ impl MinBrokerIngroup {
     }
 }
 
-impl<MS: MessageStore> NotifyMinBrokerChangeIdHandler<MS> {
-    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
+impl NotifyMinBrokerChangeIdHandler {
+    pub fn new() -> Self {
         Self {
-            broker_runtime_inner,
             lock: Arc::new(RocketMQTokioRwLock::new(MinBrokerIngroup::new())),
         }
     }
 
-    pub async fn notify_min_broker_id_change(
+    pub async fn notify_min_broker_id_change<MS: MessageStore>(
         &mut self,
+        broker_runtime_inner: &mut BrokerRuntimeInner<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -74,7 +72,7 @@ impl<MS: MessageStore> NotifyMinBrokerChangeIdHandler<MS> {
             .decode_command_custom_header::<NotifyMinBrokerIdChangeRequestHeader>()
             .unwrap();
 
-        let broker_config = self.broker_runtime_inner.broker_config();
+        let broker_config = broker_runtime_inner.broker_config();
 
         let latest_broker_id = change_header.min_broker_id.expect("min broker id not must be present");
 
@@ -83,23 +81,28 @@ impl<MS: MessageStore> NotifyMinBrokerChangeIdHandler<MS> {
             broker_config.broker_identity.broker_id, latest_broker_id
         );
 
-        self.update_min_broker(change_header).await;
+        self.update_min_broker(broker_runtime_inner, change_header).await;
 
         let response = RemotingCommand::create_response_command();
         Ok(Some(response.set_code(ResponseCode::Success)))
     }
 
-    async fn update_min_broker(&mut self, change_header: NotifyMinBrokerIdChangeRequestHeader) {
-        let broker_config = self.broker_runtime_inner.broker_config();
+    async fn update_min_broker<MS: MessageStore>(
+        &mut self,
+        broker_runtime_inner: &mut BrokerRuntimeInner<MS>,
+        change_header: NotifyMinBrokerIdChangeRequestHeader,
+    ) {
+        let broker_config = broker_runtime_inner.broker_config();
 
         if broker_config.enable_slave_acting_master && broker_config.broker_identity.broker_id != MASTER_ID {
             if self.lock.try_write_timeout(Duration::from_millis(3000)).await.is_some() {
                 if let Some(min_broker_id) = change_header.min_broker_id {
-                    if min_broker_id != self.broker_runtime_inner.get_min_broker_id_in_group() {
+                    if min_broker_id != broker_runtime_inner.get_min_broker_id_in_group() {
                         // on min broker change
                         let min_broker_addr = change_header.min_broker_addr.as_deref().unwrap();
 
                         self.on_min_broker_change(
+                            broker_runtime_inner,
                             min_broker_id,
                             min_broker_addr,
                             &change_header.offline_broker_addr,
@@ -114,8 +117,9 @@ impl<MS: MessageStore> NotifyMinBrokerChangeIdHandler<MS> {
         }
     }
 
-    async fn on_min_broker_change(
+    async fn on_min_broker_change<MS: MessageStore>(
         &self,
+        broker_runtime_inner: &mut BrokerRuntimeInner<MS>,
         min_broker_id: u64,
         min_broker_addr: &str,
         offline_broker_addr: &Option<CheetahString>,
@@ -123,8 +127,8 @@ impl<MS: MessageStore> NotifyMinBrokerChangeIdHandler<MS> {
     ) {
         info!(
             "Min broker changed, old: {}-{}, new {}-{}",
-            self.broker_runtime_inner.get_min_broker_id_in_group(),
-            self.broker_runtime_inner.get_broker_addr(),
+            broker_runtime_inner.get_min_broker_id_in_group(),
+            broker_runtime_inner.get_broker_addr(),
             min_broker_id,
             min_broker_addr
         );
@@ -135,28 +139,28 @@ impl<MS: MessageStore> NotifyMinBrokerChangeIdHandler<MS> {
             lock_guard.min_broker_addr_in_group = Arc::new(CheetahString::from_slice(min_broker_addr));
         }
 
-        let should_start = self.broker_runtime_inner.get_min_broker_id_in_group() == min_broker_id;
+        let should_start = broker_runtime_inner.get_min_broker_id_in_group() == min_broker_id;
 
-        self.change_special_service_status(should_start).await;
+        Self::change_special_service_status(broker_runtime_inner, should_start).await;
 
         // master offline
         if let Some(offline_broker_addr) = offline_broker_addr {
-            if let Some(slave_sync) = self.broker_runtime_inner.slave_synchronize() {
-                if let Some(master_addr) = slave_sync.master_addr() {
-                    if !master_addr.is_empty() && offline_broker_addr.eq(master_addr.deref()) {
-                        self.on_master_offline().await;
-                    }
-                }
+            let master_is_offline = broker_runtime_inner
+                .slave_synchronize()
+                .and_then(|slave_sync| slave_sync.master_addr())
+                .is_some_and(|master_addr| !master_addr.is_empty() && offline_broker_addr.eq(master_addr.deref()));
+            if master_is_offline {
+                Self::on_master_offline(broker_runtime_inner).await;
             }
         }
 
         //master online
         if min_broker_id == MASTER_ID && !min_broker_addr.is_empty() {
-            self.on_master_on_line(min_broker_addr, master_ha_addr).await;
+            Self::on_master_on_line(broker_runtime_inner, min_broker_addr, master_ha_addr).await;
         }
 
         if min_broker_id == MASTER_ID {
-            let pull_request_hold_service = self.broker_runtime_inner.pull_request_hold_service();
+            let pull_request_hold_service = broker_runtime_inner.pull_request_hold_service();
             if let Some(pull_request_hold_service) = pull_request_hold_service {
                 pull_request_hold_service.notify_master_online();
             } else {
@@ -165,21 +169,19 @@ impl<MS: MessageStore> NotifyMinBrokerChangeIdHandler<MS> {
         }
     }
 
-    async fn change_special_service_status(&self, should_start: bool) {
-        self.broker_runtime_inner
-            .mut_from_ref()
-            .change_special_service_status(should_start)
-            .await;
+    async fn change_special_service_status<MS: MessageStore>(
+        broker_runtime_inner: &mut BrokerRuntimeInner<MS>,
+        should_start: bool,
+    ) {
+        broker_runtime_inner.change_special_service_status(should_start).await;
     }
 
-    async fn on_master_offline(&self) {
-        let broker_runtime_inner = self.broker_runtime_inner.mut_from_ref();
-
+    async fn on_master_offline<MS: MessageStore>(broker_runtime_inner: &mut BrokerRuntimeInner<MS>) {
         if let Some(slave_synchronize) = broker_runtime_inner.slave_synchronize() {
             if let Some(master_addr) = slave_synchronize.master_addr() {
                 let vip_channel = mix_all::broker_vip_channel(true, master_addr.as_str());
                 let addr_list = vec![master_addr.to_string(), vip_channel.to_string()];
-                self.broker_runtime_inner.broker_outer_api().close_channel(addr_list);
+                broker_runtime_inner.broker_outer_api().close_channel(addr_list);
             }
         }
 
@@ -189,11 +191,14 @@ impl<MS: MessageStore> NotifyMinBrokerChangeIdHandler<MS> {
         }
     }
 
-    async fn on_master_on_line(&self, master_addr: &str, master_ha_addr: &Option<CheetahString>) {
-        let need_sync_master_flush_offset = if let Some(message_store) = self.broker_runtime_inner.message_store() {
+    async fn on_master_on_line<MS: MessageStore>(
+        broker_runtime_inner: &BrokerRuntimeInner<MS>,
+        master_addr: &str,
+        master_ha_addr: &Option<CheetahString>,
+    ) {
+        let need_sync_master_flush_offset = if let Some(message_store) = broker_runtime_inner.message_store() {
             message_store.get_master_flushed_offset() == 0x0000
-                && self
-                    .broker_runtime_inner
+                && broker_runtime_inner
                     .message_store_config()
                     .sync_master_flush_offset_when_startup
         } else {
@@ -201,15 +206,14 @@ impl<MS: MessageStore> NotifyMinBrokerChangeIdHandler<MS> {
         };
 
         if master_ha_addr.is_none() || need_sync_master_flush_offset {
-            let broker_sync_info = self
-                .broker_runtime_inner
+            let broker_sync_info = broker_runtime_inner
                 .broker_outer_api()
                 .retrieve_broker_ha_info(Some(&CheetahString::from(master_addr)))
                 .await;
 
             match broker_sync_info {
                 Ok(broker_sync_info) => {
-                    if let Some(message_store) = self.broker_runtime_inner.message_store() {
+                    if let Some(message_store) = broker_runtime_inner.message_store() {
                         if need_sync_master_flush_offset {
                             info!(
                                 "Set master flush offset in slave to {}",
@@ -236,7 +240,7 @@ impl<MS: MessageStore> NotifyMinBrokerChangeIdHandler<MS> {
             };
         }
 
-        if let Some(message_store) = self.broker_runtime_inner.message_store() {
+        if let Some(message_store) = broker_runtime_inner.message_store() {
             if master_ha_addr.is_some() {
                 if let Some(master_ha_addr) = master_ha_addr {
                     message_store.update_ha_master_address(master_ha_addr.as_str()).await;
