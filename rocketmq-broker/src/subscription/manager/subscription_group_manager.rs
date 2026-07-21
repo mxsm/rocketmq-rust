@@ -98,6 +98,10 @@ impl SubscriptionGroupConfigLookup {
     pub(crate) fn contains_subscription_group(&self, group: &CheetahString) -> bool {
         self.manager.contains_subscription_group(group)
     }
+
+    pub(crate) fn get_forbidden(&self, group: &CheetahString, topic: &CheetahString, forbidden_index: i32) -> bool {
+        self.manager.get_forbidden(group, topic, forbidden_index)
+    }
 }
 
 impl SubscriptionGroupManager {

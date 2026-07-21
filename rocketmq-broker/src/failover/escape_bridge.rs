@@ -37,6 +37,7 @@ use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::base::query_message_result::QueryMessageResult;
 use rocketmq_store::base::select_result::SelectMappedBufferResult;
+use rocketmq_store::filter::ArcMessageFilter;
 use rocketmq_store::ha::ha_connection_state_notification_request::HAConnectionStateNotificationRequest;
 use rocketmq_store::ha::ha_service::HAService;
 use rocketmq_store::store_api_adapter::LegacyAppendReceipt;
@@ -315,6 +316,51 @@ impl<MS: MessageStore> EscapeBridge<MS> {
         Ok(message_store
             .get_message(group, topic, queue_id, offset, nums, None)
             .await)
+    }
+
+    #[allow(clippy::too_many_arguments, reason = "preserves the Store pull read contract")]
+    pub(crate) async fn get_message_with_size_limit_from_local_store(
+        &self,
+        group: &CheetahString,
+        topic: &CheetahString,
+        queue_id: i32,
+        offset: i64,
+        max_msg_nums: i32,
+        max_msg_bytes: i32,
+        message_filter: ArcMessageFilter,
+    ) -> Result<Option<GetMessageResult>, MessageStoreUnavailable> {
+        let message_store = self
+            .broker_runtime_inner
+            .message_store()
+            .cloned()
+            .ok_or(MessageStoreUnavailable)?;
+        Ok(message_store
+            .get_message_with_size_limit(
+                group,
+                topic,
+                queue_id,
+                offset,
+                max_msg_nums,
+                max_msg_bytes,
+                Some(message_filter),
+            )
+            .await)
+    }
+
+    #[cfg(feature = "local_file_store")]
+    pub(crate) fn is_message_in_cold_area(
+        &self,
+        group: &CheetahString,
+        topic: &CheetahString,
+        queue_id: i32,
+        queue_offset: i64,
+    ) -> Result<bool, MessageStoreUnavailable> {
+        self.try_with_message_store(|store| {
+            store
+                .get_commit_log()
+                .get_cold_data_check_service()
+                .is_msg_in_cold_area(group, topic, queue_id, queue_offset)
+        })
     }
 
     pub(crate) fn look_message_by_offset_from_local_store(

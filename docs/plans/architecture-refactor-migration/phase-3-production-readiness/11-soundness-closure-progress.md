@@ -3538,13 +3538,42 @@ Broker send/reply capability 随 Issue #8523 完成以下收口：
 | runtime / architecture guards | enforcing runtime audit、dependency fixtures/target/baseline、release、8-profile/11-variant performance、60/60 architecture tests 与 AGENTS routing 通过；目标 compatibility 35/35、test edge 3/3、release topology 32/32、66 comparisons/0 failures。额外 error architecture guard 如实发现未改动文件中的既有 4 条基线 finding：Client retry token 2 条、Schedule source stringification 2 条 |
 | root workspace final gates | `cargo fmt --all -- --check` 与 workspace all-target/all-feature strict Clippy 通过；`git diff --check` 通过；Windows linker stdout 与既有 future-incompatibility note 不受 `-D warnings` 管辖 |
 
+## M11-12bc56 实现
+
+Broker pull capability 随 Issue #8525 完成以下收口：
+
+- `PullMessageProcessor` 与 `DefaultPullMessageResultHandler` 删除完整 `BrokerRuntimeInner` owner、`ArcMut`、
+  `use super::*` 测试依赖和构造传播，改为共享 `Arc<PullMessageProcessorContext>`。
+- 新增基于 `ArcSwap` 的 `PullMessagePolicyState`。Broker/Store 配置与 controller broker ID/role 变化时发布完整
+  不可变代际；请求路径不持有配置锁或完整 runtime。
+- RPC、consumer、filter、subscription、topic、queue mapping、offset、broadcast offset、stats、live role、
+  cold-data 与 long-polling 由显式 capability 组合；long-polling 服务在 runtime 初始化阶段一次安装。
+- Store 访问只持标准 `Weak<EscapeBridge>`，并通过 `EscapeBridge` 的本地读取、offset/time、cold-area
+  provider 方法访问底层 Store；provider 不可用时返回系统错误并 fail closed，不再依赖 `unwrap` 隐含生命周期。
+- reviewed baseline 从 247 identities / 760 occurrences 降至 241 / 749；production 从 110/307 降至
+  106/300，test 从 123/413 降至 121/409，compatibility 保持 14/40。Broker production 从 28/73 降至
+  24/66，Store 保持 82/234；净删除 4 个 production identities/7 occurrences 与 2 个 test identities/4
+  occurrences。1 个保留 BrokerRuntime root constructor 经临时 ADR-013 一对一 relocation 审核，无新增 identity
+  或提交态临时 approval。
+- 执行清单 R05 完成；31 项最小审查清单已完成 4 项、剩余 27 项。正式进度仍为 75/82，PR-M11-12 未提前关闭。
+
+## M11-12bc56 验证
+
+| 命令 | 结果 |
+|---|---|
+| Broker check / focused / strict Clippy | `cargo check -p rocketmq-broker` 通过；pull capability/policy/provider/source-contract 与请求处理聚焦测试 18/18 通过；Broker all-target/all-feature strict Clippy 通过 |
+| reviewed baseline / fixtures | 正式最小 baseline 补丁从 247/760 精确降至 241/749；`python scripts/arc_mut_guard.py`、candidate compare、24/24 fixtures 与 67/67 guard tests 通过；1 个保留 BrokerRuntime root constructor 完成临时 ADR-013 一对一 relocation 审核，无新增 identity 或提交态临时 approval |
+| Broker broad lib suites | default suite 未通过：628 passed、24 failed、1 ignored；all-feature suite 原始结果 672 passed、25 failed、1 ignored，多出的 absolute-deadline 瞬态隔离复跑 1/1 通过，因此可复现失败集保持既有 lifecycle/Lite/subscription 24 项。新增 pull 测试与全部聚焦项均通过 |
+| runtime / architecture guards | enforcing runtime audit、dependency fixtures/target/baseline、release、8-profile/11-variant performance、60/60 architecture tests 与 AGENTS routing 通过；目标 compatibility 35/35、test edge 3/3、release topology 32/32、66 comparisons/0 failures。额外 error architecture guard 如实发现未改动文件中的既有 4 条基线 finding：Client retry token 2 条、Schedule source stringification 2 条 |
+| root workspace final gates | `cargo fmt --all -- --check` 与 workspace all-target/all-feature strict Clippy 通过；`git diff --check` 通过；Windows linker stdout 与既有 future-incompatibility note 不受 `-D warnings` 管辖 |
+
 ## 剩余切片与 Gate
 
 2026-07-22 盘点将执行工作固化为 31 个最小可审查单元：16 个 production owner、2 个
-test/compatibility、7 个 M10/Phase 3 动态验收与签署、6 个 M12；R02、R03、R08 已完成，当前剩余 28 个，正式进度仍为 75/82。
+test/compatibility、7 个 M10/Phase 3 动态验收与签署、6 个 M12；R02、R03、R05、R08 已完成，当前剩余 27 个，正式进度仍为 75/82。
 完整逐项 checklist 见 `docs/plans/architecture-refactor-migration/REMAINING-TASKS.md`。
 
-1. Broker BrokerRuntimeInner capability carrier 与其他 admin/processor/leaf owner（28/73）；Ack 内部 runtime/revive capability、send/reply 完整 runtime owner、pre-online 完整 runtime owner 与 processor registry 的 Ack/ChangeInvisible/AdminBroker ArcMut wrapper、transaction bridge/Store compatibility、Producer/ColdData admin leaf、Schedule hook、put-message preflight、ConsumerOrderInfoManager、TopicRouteInfoManager、TopicQueueMappingCleanService、MessageArrivingListener、ClientHousekeepingService、ClientManage heartbeat registration/retry-topic capability、ConsumerManage list/offset capability、Query Assignment、QueryMessage/RecallMessage/EndTransaction/PeekMessage/Notification/ChangeInvisibleTime Store capability、POP long-polling、POP Lite processor/long-polling、LiteSubscriptionCtl、LiteManager 与 SlaveSynchronize 显式 policy/query/view/provider/dispatcher/TaskGroup、LiteManager/LiteSubscriptionCtl 标准 Arc wrapper、crate-wide mut_from_ref lint allowance、PollingInfo weak provider、SubscriptionGroup config lookup、HA diagnostics/control/min-broker transition、controller role-change duplicate owner、BatchMq、SubscriptionGroup、MessageRelated、Offset、Consumer、Topic handler 与未编译 V2 示例残留已退出 leaf-level 完整 runtime/store owner；send/reply 已使用标准 Arc、热更新 policy、弱 Store 与显式 Topic/订阅/重平衡/统计/reply-channel capability，pre-online 已使用显式 policy/live role/弱 Store 与 metadata/registration/special-service capability 并挂载父 TaskGroup，LiteLifecycle 只读 Store carrier 已收窄为普通借用。
+1. Broker BrokerRuntimeInner capability carrier 与其他 admin/processor/leaf owner（24/66）；Ack 内部 runtime/revive capability、send/reply 与 pull 完整 runtime owner、pre-online 完整 runtime owner 与 processor registry 的 Ack/ChangeInvisible/AdminBroker ArcMut wrapper、transaction bridge/Store compatibility、Producer/ColdData admin leaf、Schedule hook、put-message preflight、ConsumerOrderInfoManager、TopicRouteInfoManager、TopicQueueMappingCleanService、MessageArrivingListener、ClientHousekeepingService、ClientManage heartbeat registration/retry-topic capability、ConsumerManage list/offset capability、Query Assignment、QueryMessage/RecallMessage/EndTransaction/PeekMessage/Notification/ChangeInvisibleTime Store capability、POP long-polling、POP Lite processor/long-polling、LiteSubscriptionCtl、LiteManager 与 SlaveSynchronize 显式 policy/query/view/provider/dispatcher/TaskGroup、LiteManager/LiteSubscriptionCtl 标准 Arc wrapper、crate-wide mut_from_ref lint allowance、PollingInfo weak provider、SubscriptionGroup config lookup、HA diagnostics/control/min-broker transition、controller role-change duplicate owner、BatchMq、SubscriptionGroup、MessageRelated、Offset、Consumer、Topic handler 与未编译 V2 示例残留已退出 leaf-level 完整 runtime/store owner；send/reply 已使用标准 Arc、热更新 policy、弱 Store 与显式 Topic/订阅/重平衡/统计/reply-channel capability，pull 已使用显式 RPC/Topic/Subscription/Filter/Consumer/Offset/Stats/ColdData/LongPolling capability 与弱 Store provider，pre-online 已使用显式 policy/live role/弱 Store 与 metadata/registration/special-service capability 并挂载父 TaskGroup，LiteLifecycle 只读 Store carrier 已收窄为普通借用。
 2. Store MappedFileQueue/其余 ConsumeQueue、CommitLog/Flush、StoreHandle/Rocks/Timer 与其余 HA service/actor（82/234）；BrokerStats observer、ConsumeQueueExt 显式锁 owner、HA replication-state callback、未共享 HA child direct ownership、commit-to-flush 窄唤醒能力、HA confirm/epoch 原子发布、HA connection runtime handle、CommitLog shared disk-flush、auto-switch client construction 与 single delegate Store owner 已完成。
 3. Production `WeakArcMut` 已清零；继续迁移 test/compatibility 中受控使用并移除其余 nightly feature。公开 `arc_mut.rs`/re-export 的 destructive 删除受 next-major 两轮弃用与 Release Manager/HUMAN Gate 约束，不能静默重置 public API baseline。
 4. 对同一候选快照执行 stable feature matrix、Miri/Loom 可用切片、soak/SLO fault、dashboard/runbook、动态

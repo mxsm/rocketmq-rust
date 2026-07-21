@@ -64,7 +64,7 @@ pub struct ColdDataPullRequestHoldService {
 }
 
 impl ColdDataPullRequestHoldService {
-    pub fn start(&mut self) {
+    pub fn start(&self) {
         warn!("ColdDataPullRequestHoldService started not implemented");
     }
 
@@ -79,7 +79,7 @@ impl ColdDataPullRequestHoldService {
         // after a delay and processes them with rate limiting
     }
 
-    pub fn shutdown(&mut self) {
+    pub fn shutdown(&self) {
         warn!("ColdDataPullRequestHoldService shutdown not implemented");
     }
 }

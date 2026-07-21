@@ -190,6 +190,9 @@ use crate::processor::pop_lite_message_processor::PopLiteOffsetCapability;
 use crate::processor::pop_message_processor::PopMessageProcessor;
 use crate::processor::pop_message_processor::QueueLockManager;
 use crate::processor::processor_service::PopReviveService;
+use crate::processor::pull_message_processor::capability::PullMessagePolicyState;
+use crate::processor::pull_message_processor::capability::PullMessageProcessorContext;
+use crate::processor::pull_message_processor::capability::PullMessageStoreCapability;
 use crate::processor::pull_message_processor::PullMessageProcessor;
 use crate::processor::query_assignment_processor::QueryAssignmentProcessor;
 use crate::processor::query_message_processor::QueryMessageProcessor;
@@ -1126,6 +1129,7 @@ impl BrokerRuntime {
         let online_role_state = Arc::new(BrokerOnlineRoleState::new(broker_config.broker_identity.broker_id));
         let send_message_policy_state =
             SendMessagePolicyState::from_configs(&broker_config, &message_store_config, store_host);
+        let pull_message_policy_state = PullMessagePolicyState::from_configs(&broker_config, &message_store_config);
 
         let mut inner = ArcMut::new(BrokerRuntimeInner::<GenericMessageStore> {
             shutdown: Arc::new(AtomicBool::new(false)),
@@ -1134,6 +1138,7 @@ impl BrokerRuntime {
             broker_config: broker_config.clone(),
             message_store_config: message_store_config.clone(),
             send_message_policy_state,
+            pull_message_policy_state,
             //server_config,
             topic_config_manager: None,
             topic_config_coordinator: None,
@@ -1173,7 +1178,7 @@ impl BrokerRuntime {
             observability_guard: None,
             #[cfg(feature = "otel-metrics")]
             observability_metrics_initialized: false,
-            cold_data_pull_request_hold_service: Some(ColdDataPullRequestHoldService::default()),
+            cold_data_pull_request_hold_service: Some(Arc::new(ColdDataPullRequestHoldService::default())),
             cold_data_cg_ctr_service: Some(Arc::new(ColdDataCgCtrService::new(
                 message_store_config.cold_data_flow_control_enable,
             ))),
@@ -1333,6 +1338,11 @@ impl BrokerRuntime {
 
     pub(crate) fn inner_for_test(&mut self) -> &mut ArcMut<BrokerRuntimeInner<GenericMessageStore>> {
         &mut self.inner
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pull_message_context_for_test(&self) -> Arc<PullMessageProcessorContext<GenericMessageStore>> {
+        self.inner.build_pull_message_context()
     }
 
     pub(crate) fn auth_metrics_snapshot(&self) -> Option<AuthMetricsSnapshot> {
@@ -2519,18 +2529,22 @@ impl BrokerRuntime {
             self.inner.transactional_message_service.as_ref().unwrap().clone(),
             send_message_context,
         );
+        let pull_message_context = self.inner.build_pull_message_context();
         let pull_message_result_handler = Arc::new(DefaultPullMessageResultHandler::new(
             Arc::new(Default::default()), //optimize
-            self.inner.clone(),
+            Arc::clone(&pull_message_context),
         ));
 
         let pull_message_processor = Arc::new(PullMessageProcessor::new(
             pull_message_result_handler,
-            self.inner.clone(),
+            Arc::clone(&pull_message_context),
         ));
 
         let consumer_manage_processor = self.inner.build_consumer_manage_processor();
         let pull_request_hold_service = Arc::new(PullRequestHoldService::new(Arc::downgrade(&pull_message_processor)));
+        if !pull_message_context.install_pull_request_hold_service(Arc::clone(&pull_request_hold_service)) {
+            warn!("Pull request hold service is already installed in the pull processor context");
+        }
         self.inner.pull_request_hold_service = Some(Arc::clone(&pull_request_hold_service));
 
         let pop_message_processor = PopMessageProcessor::new(self.inner.clone());
@@ -3823,6 +3837,7 @@ pub(crate) struct BrokerRuntimeInner<MS: MessageStore> {
     broker_config: Arc<BrokerConfig>,
     message_store_config: Arc<MessageStoreConfig>,
     send_message_policy_state: SendMessagePolicyState,
+    pull_message_policy_state: PullMessagePolicyState,
     topic_config_manager: Option<Arc<TopicConfigManager>>,
     topic_config_coordinator: Option<Arc<TopicConfigCoordinator>>,
     topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
@@ -3860,7 +3875,7 @@ pub(crate) struct BrokerRuntimeInner<MS: MessageStore> {
     observability_guard: Option<rocketmq_observability::TelemetryRuntimeGuard>,
     #[cfg(feature = "otel-metrics")]
     observability_metrics_initialized: bool,
-    cold_data_pull_request_hold_service: Option<ColdDataPullRequestHoldService>,
+    cold_data_pull_request_hold_service: Option<Arc<ColdDataPullRequestHoldService>>,
     cold_data_cg_ctr_service: Option<Arc<ColdDataCgCtrService>>,
     is_schedule_service_start: Arc<AtomicBool>,
     is_transaction_check_service_start: Arc<AtomicBool>,
@@ -3902,6 +3917,26 @@ pub(crate) fn broker_task_group_or_current(
 }
 
 impl<MS: MessageStore> BrokerRuntimeInner<MS> {
+    fn build_pull_message_context(&self) -> Arc<PullMessageProcessorContext<MS>> {
+        let escape_bridge = self.escape_bridge();
+        Arc::new(PullMessageProcessorContext::new(
+            self.pull_message_policy_state.clone(),
+            self.broker_outer_api().rpc_client().clone(),
+            self.consumer_manager().clone_shared_state(),
+            Arc::new(self.consumer_filter_manager().clone()),
+            self.subscription_group_manager().config_lookup(),
+            self.topic_config_manager_handle(),
+            self.topic_queue_mapping_manager_handle(),
+            &self.consumer_offset_manager,
+            self.broadcast_offset_manager().pull_capability(),
+            self.broker_stats_manager_handle(),
+            Arc::clone(&self.online_role_state),
+            PullMessageStoreCapability::new(&escape_bridge),
+            self.cold_data_cg_ctr_service_handle(),
+            self.cold_data_pull_request_hold_service.clone(),
+        ))
+    }
+
     fn build_consumer_manage_processor(&self) -> ConsumerManageProcessor<MS> {
         ConsumerManageProcessor::new(ConsumerManageProcessorContext {
             consumer_view: self.consumer_manager().assignment_view(),
@@ -4470,7 +4505,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
 
     #[inline]
     pub fn cold_data_pull_request_hold_service(&self) -> Option<&ColdDataPullRequestHoldService> {
-        self.cold_data_pull_request_hold_service.as_ref()
+        self.cold_data_pull_request_hold_service.as_deref()
     }
 
     #[inline]
@@ -4511,6 +4546,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         self.online_role_state
             .set_local_broker_id(broker_config.broker_identity.broker_id);
         self.send_message_policy_state.update_broker_config(&broker_config);
+        self.pull_message_policy_state.update_broker_config(&broker_config);
         self.broker_config = Arc::new(broker_config);
     }
 
@@ -4521,6 +4557,8 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         }
         self.send_message_policy_state
             .update_message_store_config(&message_store_config);
+        self.pull_message_policy_state
+            .update_store_config(&message_store_config);
         self.message_store_config = Arc::new(message_store_config);
     }
 
@@ -5423,6 +5461,9 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         this.send_message_policy_state.update_broker_config(&this.broker_config);
         this.send_message_policy_state
             .update_message_store_config(&this.message_store_config);
+        this.pull_message_policy_state.update_broker_config(&this.broker_config);
+        this.pull_message_policy_state
+            .update_store_config(&this.message_store_config);
 
         match role {
             BrokerReplicaRole::Master => {
