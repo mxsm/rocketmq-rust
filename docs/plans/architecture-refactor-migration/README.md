@@ -772,6 +772,14 @@ offset update/query、Store fallback、forward timeout 与 RPC error mapping 语
 Store production 82/234），净删除 2 个 production identity/3 occurrence，无 relocation、新增 identity 或临时
 approval。总进度仍为 75/82，下一子切片 M11-12bc39 继续 Broker aggregate/leaf 或 Store WAL/queue/timer/HA owner。
 
+Broker query-message runtime capability 随 Issue #8489 收窄：`QueryMessageProcessor` 不再持有完整
+`ArcMut<BrokerRuntimeInner>`，只注入默认查询上限与 `QueryMessageStoreCapability`；该 capability 复用既有
+`Weak<EscapeBridge>` Store provider，不新增或转移 `ArcMut` owner，也不强保活 runtime。QueryMessage/ViewMessageById 的 Store-absent、索引安全、
+响应 body 与物理 offset 查询语义保持不变。ArcMut 快照降至 295 identities/852 occurrences（production 149/390、
+test 132/422、compatibility 14/40、Broker production 67/156、Store production 82/234），净删除 2 个 production
+identity/3 occurrence 与 1 个 test identity/1 occurrence，无 relocation、新增 identity 或临时 approval。总进度仍为
+75/82，下一子切片 M11-12bc40 继续 Broker aggregate/leaf 或 Store WAL/queue/timer/HA owner。
+
 ### 9.3 证据目录
 
 - 运行期生成物：`target/architecture-refactor/Mxx/<run-id>/`，不提交 Git。

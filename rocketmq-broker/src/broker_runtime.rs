@@ -147,6 +147,7 @@ use crate::processor::pop_message_processor::PopMessageProcessor;
 use crate::processor::pull_message_processor::PullMessageProcessor;
 use crate::processor::query_assignment_processor::QueryAssignmentProcessor;
 use crate::processor::query_message_processor::QueryMessageProcessor;
+use crate::processor::query_message_processor::QueryMessageStoreCapability;
 use crate::processor::recall_message_processor::RecallMessageProcessor;
 use crate::processor::reply_message_processor::ReplyMessageProcessor;
 use crate::processor::send_message_processor::SendMessageProcessor;
@@ -2664,7 +2665,10 @@ impl BrokerRuntime {
         );
 
         //QueryMessageProcessor
-        let query_message_processor = Arc::new(QueryMessageProcessor::new(self.inner.clone()));
+        let query_message_processor = Arc::new(QueryMessageProcessor::new(
+            self.inner.message_store_config().default_query_max_num,
+            QueryMessageStoreCapability::new(&self.escape_bridge_owner),
+        ));
         broker_request_processor.register_processor(
             RequestCode::QueryMessage as i32,
             BrokerProcessorType::QueryMessage(query_message_processor.clone()),

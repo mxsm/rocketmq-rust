@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::Arc;
+use std::sync::Weak;
+
 use cheetah_string::CheetahString;
 use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::mix_all::UNIQUE_MSG_QUERY_FLAG;
@@ -25,16 +28,62 @@ use rocketmq_remoting::protocol::header::view_message_request_header::ViewMessag
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
-use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::base::query_message_result::QueryMessageResult;
 use tracing::info;
 use tracing::warn;
 
-use crate::broker_runtime::BrokerRuntimeInner;
+use crate::failover::escape_bridge::EscapeBridge;
+use crate::failover::escape_bridge::MessageStoreUnavailable;
+
+pub(crate) struct QueryMessageStoreCapability<MS: MessageStore> {
+    escape_bridge: Weak<EscapeBridge<MS>>,
+}
+
+impl<MS: MessageStore> QueryMessageStoreCapability<MS> {
+    pub(crate) fn new(escape_bridge: &Arc<EscapeBridge<MS>>) -> Self {
+        Self {
+            escape_bridge: Arc::downgrade(escape_bridge),
+        }
+    }
+
+    async fn query_message(
+        &self,
+        topic: &CheetahString,
+        key: &CheetahString,
+        max_num: i32,
+        begin_timestamp: i64,
+        end_timestamp: i64,
+    ) -> Result<Option<QueryMessageResult>, MessageStoreUnavailable> {
+        self.escape_bridge
+            .upgrade()
+            .ok_or(MessageStoreUnavailable)?
+            .query_message_from_store(topic, key, max_num, begin_timestamp, end_timestamp)
+            .await
+    }
+
+    fn select_message_by_offset(
+        &self,
+        offset: i64,
+    ) -> Result<Option<rocketmq_store::base::select_result::SelectMappedBufferResult>, MessageStoreUnavailable> {
+        self.escape_bridge
+            .upgrade()
+            .ok_or(MessageStoreUnavailable)?
+            .select_message_from_store(offset)
+    }
+}
+
+impl<MS: MessageStore> Clone for QueryMessageStoreCapability<MS> {
+    fn clone(&self) -> Self {
+        Self {
+            escape_bridge: Weak::clone(&self.escape_bridge),
+        }
+    }
+}
 
 pub struct QueryMessageProcessor<MS: MessageStore> {
-    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+    default_query_max_num: i32,
+    query_store: QueryMessageStoreCapability<MS>,
 }
 
 fn query_index_type(request_header: &QueryMessageRequestHeader, is_unique_key: bool) -> Option<&str> {
@@ -93,15 +142,19 @@ where
 }
 
 impl<MS: MessageStore> QueryMessageProcessor<MS> {
-    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
-        Self { broker_runtime_inner }
+    pub(crate) fn new(default_query_max_num: usize, query_store: QueryMessageStoreCapability<MS>) -> Self {
+        Self {
+            default_query_max_num: default_query_max_num as i32,
+            query_store,
+        }
     }
 }
 
 impl<MS: MessageStore> Clone for QueryMessageProcessor<MS> {
     fn clone(&self) -> Self {
         Self {
-            broker_runtime_inner: self.broker_runtime_inner.clone(),
+            default_query_max_num: self.default_query_max_num,
+            query_store: self.query_store.clone(),
         }
     }
 }
@@ -159,24 +212,14 @@ where
                 .as_deref()
                 .is_some_and(|idx_type| idx_type == MessageConst::INDEX_UNIQUE_TYPE)
         {
-            request_header.max_num = self.broker_runtime_inner.message_store_config().default_query_max_num as i32;
+            request_header.max_num = self.default_query_max_num;
         }
         let typed_query_key = query_index_type
             .as_deref()
             .map(|idx_type| CheetahString::from_string(format!("{}#{}", idx_type, request_header.key.as_str())));
         let query_key = typed_query_key.as_ref().unwrap_or(&request_header.key);
-        let message_store = match self.broker_runtime_inner.message_store() {
-            Some(store) => store,
-            None => {
-                return Ok(Some(
-                    response
-                        .set_code(ResponseCode::SystemError)
-                        .set_remark("message store is none"),
-                ));
-            }
-        };
-
-        let Some(query_message_result) = message_store
+        let query_message_result = self
+            .query_store
             .query_message(
                 request_header.topic.as_ref(),
                 query_key,
@@ -184,13 +227,23 @@ where
                 request_header.begin_timestamp,
                 request_header.end_timestamp,
             )
-            .await
-        else {
-            return Ok(Some(
-                response
-                    .set_code(ResponseCode::QueryNotFound)
-                    .set_remark("query message failed, no result returned"),
-            ));
+            .await;
+        let query_message_result = match query_message_result {
+            Ok(Some(query_message_result)) => query_message_result,
+            Ok(None) => {
+                return Ok(Some(
+                    response
+                        .set_code(ResponseCode::QueryNotFound)
+                        .set_remark("query message failed, no result returned"),
+                ));
+            }
+            Err(MessageStoreUnavailable) => {
+                return Ok(Some(
+                    response
+                        .set_code(ResponseCode::SystemError)
+                        .set_remark("message store is none"),
+                ));
+            }
         };
 
         let response_header = response.read_custom_header_mut::<QueryMessageResponseHeader>().unwrap();
@@ -223,9 +276,9 @@ where
         let mut response = RemotingCommand::create_response_command();
         let request_header = request.decode_command_custom_header::<ViewMessageRequestHeader>()?;
 
-        let message_store = match self.broker_runtime_inner.message_store() {
-            Some(store) => store,
-            None => {
+        let select_mapped_buffer_result = match self.query_store.select_message_by_offset(request_header.offset) {
+            Ok(result) => result,
+            Err(MessageStoreUnavailable) => {
                 return Ok(Some(
                     response
                         .set_code(ResponseCode::SystemError)
@@ -233,8 +286,6 @@ where
                 ));
             }
         };
-
-        let select_mapped_buffer_result = message_store.select_one_message_by_offset(request_header.offset);
         if let Some(result) = select_mapped_buffer_result {
             let message_data = result.get_bytes();
             if let Some(body) = message_data {
@@ -253,6 +304,7 @@ where
 mod tests {
     use super::*;
     use rocketmq_store::base::query_message_result::QueryMessageResult;
+    use rocketmq_store::message_store::GenericMessageStore;
 
     fn header(index_type: Option<&'static str>) -> QueryMessageRequestHeader {
         QueryMessageRequestHeader {
@@ -312,5 +364,33 @@ mod tests {
         assert!(remark.contains("index safe offset 128"));
         assert!(remark.contains("confirm offset 256"));
         assert!(remark.contains("background Index rebuild"));
+    }
+
+    #[test]
+    fn query_processor_source_uses_only_the_query_store_capability() {
+        let source = include_str!("query_message_processor.rs");
+
+        assert!(!source.contains(concat!("ArcMut<Broker", "RuntimeInner")));
+        assert!(!source.contains(concat!("broker_runtime", "_inner")));
+        assert!(source.contains("QueryMessageStoreCapability"));
+        assert!(source.contains(concat!("Weak<Escape", "Bridge")));
+    }
+
+    #[tokio::test]
+    async fn query_store_capability_fails_closed_after_provider_shutdown() {
+        let capability = QueryMessageStoreCapability::<GenericMessageStore> {
+            escape_bridge: Weak::new(),
+        };
+        let topic = CheetahString::from_static_str("TopicA");
+        let key = CheetahString::from_static_str("KeyA");
+
+        assert!(matches!(
+            capability.query_message(&topic, &key, 32, 0, i64::MAX).await,
+            Err(MessageStoreUnavailable)
+        ));
+        assert!(matches!(
+            capability.select_message_by_offset(0),
+            Err(MessageStoreUnavailable)
+        ));
     }
 }
