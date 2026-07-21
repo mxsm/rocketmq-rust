@@ -605,10 +605,10 @@
           "line": 2498
         },
         {
-          "id": "e003cfa8512a2b810c0757d6",
-          "fingerprint": "a537097d2f3e1cde35c3d52e",
+          "id": "6976451526277a1a24c110a1",
+          "fingerprint": "f858d8edbb988d06f665a7b8",
           "item": "fn init_processor",
-          "line": 2582
+          "line": 2678
         },
         {
           "id": "4899f108c82dd486c0cf801c",
@@ -1587,50 +1587,6 @@
           "fingerprint": "286eebedbdeff2ebb0de155e",
           "item": "fn new",
           "line": 134
-        }
-      ],
-      "owner": "broker",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "83f43483460503fe8f17d97c",
-      "path": "rocketmq-broker/src/processor/change_invisible_time_processor.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "45c28392d74c5f88137f5a6d",
-          "fingerprint": "e48428a219f57ef2df2dc9c4",
-          "item": "<module>",
-          "line": 37
-        }
-      ],
-      "owner": "broker",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "756dc200e068b0a5b4f11435",
-      "path": "rocketmq-broker/src/processor/change_invisible_time_processor.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "d7e34d4232e8bfb7c99d82d1",
-          "fingerprint": "83a84c92b26142f53d5b26e2",
-          "item": "struct ChangeInvisibleTimeProcessor",
-          "line": 53
-        },
-        {
-          "id": "38fd9ed80870e01aa833fd87",
-          "fingerprint": "bc83074af3b3627b14046aad",
-          "item": "fn new",
-          "line": 92
         }
       ],
       "owner": "broker",

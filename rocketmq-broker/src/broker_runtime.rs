@@ -131,7 +131,12 @@ use crate::out_api::broker_outer_api::BrokerOuterAPI;
 use crate::plugin::broker_attached_plugin::BrokerAttachedPlugin;
 use crate::processor::ack_message_processor::AckMessageProcessor;
 use crate::processor::admin_broker_processor::AdminBrokerProcessor;
+use crate::processor::change_invisible_time_processor::ChangeInvisibleTimeOrderCapability;
+use crate::processor::change_invisible_time_processor::ChangeInvisibleTimePolicy;
+use crate::processor::change_invisible_time_processor::ChangeInvisibleTimePopCapability;
 use crate::processor::change_invisible_time_processor::ChangeInvisibleTimeProcessor;
+use crate::processor::change_invisible_time_processor::ChangeInvisibleTimeProcessorContext;
+use crate::processor::change_invisible_time_processor::ChangeInvisibleTimeStoreCapability;
 use crate::processor::client_manage_processor::ClientManageProcessor;
 use crate::processor::client_manage_processor::ClientManageProcessorContext;
 use crate::processor::consumer_manage_processor::ConsumerManageProcessor;
@@ -2666,11 +2671,21 @@ impl BrokerRuntime {
             BrokerProcessorType::Ack(ack_message_processor),
         );
         //ChangeInvisibleTimeProcessor
+        let change_invisible_escape_bridge = self.inner.escape_bridge();
+        let change_invisible_order_info = self.inner.consumer_order_info_manager_handle();
         broker_request_processor.register_processor(
             RequestCode::ChangeMessageInvisibleTime as i32,
             BrokerProcessorType::ChangeInvisible(ArcMut::new(ChangeInvisibleTimeProcessor::new(
-                pop_message_processor,
-                self.inner.clone(),
+                ChangeInvisibleTimeProcessorContext::new(
+                    ChangeInvisibleTimePolicy::from_config(self.inner.broker_config(), self.inner.store_host()),
+                    self.inner.topic_config_manager_handle(),
+                    self.inner.consumer_offset_manager_handle().query_capability(),
+                    ChangeInvisibleTimeOrderCapability::new(&change_invisible_order_info),
+                    self.inner.broker_stats_manager_handle(),
+                    ChangeInvisibleTimeStoreCapability::new(&change_invisible_escape_bridge),
+                    ChangeInvisibleTimePopCapability::new(pop_message_processor.pop_buffer_merge_service()),
+                    pop_message_processor.queue_lock_manager().clone(),
+                ),
             ))),
         );
         //notificationProcessor
