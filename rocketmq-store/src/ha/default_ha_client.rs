@@ -686,7 +686,7 @@ impl ReaderTask {
         let max_phy_offset = store.get_max_phy_offset().max(min_phy_offset);
         let confirm_offset =
             rocketmq_store_local::ha::wire::clamp_confirm_offset(confirm_offset, min_phy_offset, max_phy_offset);
-        store.clone().mut_from_ref().set_confirm_offset(confirm_offset);
+        store.publish_confirm_offset(confirm_offset);
     }
 
     // Move the unconsumed data to the start of the buffer to save space.

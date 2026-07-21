@@ -1,7 +1,7 @@
 # 架构重构剩余任务盘点
 
 > 盘点日期：2026-07-21
-> 代码基线：Issue #8456 / M11-12bc25 完成后
+> 代码基线：Issue #8459 / M11-12bc26 完成后
 > 统计规则：82 个顶层 `PR-Mxx-yy` 工作包与 M11-12 内部实施切片分开统计，禁止重复计数。
 
 ## 结论
@@ -19,13 +19,13 @@ owner 清零、compatibility 删除和同一候选快照验收。
 
 ## PR-M11-12 剩余实现
 
-Issue #8456 后 reviewed ArcMut baseline 为 344 identities / 932 occurrences：production 186/454、test
+Issue #8459 后 reviewed ArcMut baseline 为 342 identities / 926 occurrences：production 184/448、test
 144/438、compatibility 14/40。production 全部分布在 Broker 与 Store。
 
 | owner | 剩余 identity / occurrence | 完成条件 |
 |---|---:|---|
 | Broker | 85 / 184 | transaction bridge、Producer/ColdData admin leaf、Schedule hook、put-message preflight、ConsumerOrderInfoManager、TopicRouteInfoManager、MessageArrivingListener、ClientHousekeepingService、HA diagnostics/control/min-broker transition、BatchMq lock/unlock、SubscriptionGroup/MessageRelated/Offset/Consumer Admin 与未编译 V2 示例残留已退出 leaf-level 完整 runtime/store owner；LiteLifecycle 只读 API 已改为普通借用；继续让显式 Store 兼容边界、BrokerRuntime aggregate carrier、其余 admin/processor/service 不再传播不安全共享可变 owner |
-| Store | 101 / 270 | BrokerStats observer、ConsumeQueueExt owner、HA notification/connection registry capability、未共享 HA child 与 commit-to-flush 窄唤醒能力已收窄；其余 MessageStore、CommitLog/Flush、queue、Rocks/Timer 与 HA service/actor 改为独占 owner、标准 Arc/Weak 或显式 actor/锁边界 |
+| Store | 99 / 264 | BrokerStats observer、ConsumeQueueExt owner、HA notification/connection registry capability、未共享 HA child、commit-to-flush 窄唤醒能力与 HA confirm/epoch 原子发布已收窄；其余 MessageStore、CommitLog/Flush、queue、Rocks/Timer 与 HA service/actor 改为独占 owner、标准 Arc/Weak 或显式 actor/锁边界 |
 | compatibility | 14 / 40 | 先迁移 Store 对 `WeakArcMut` 的剩余使用；公开 `ArcMut`/`WeakArcMut`/`SyncUnsafeCellWrapper` 删除必须满足 next-major 两轮弃用与独立 HUMAN/Release Manager 批准，不能通过重置 API baseline 提前关闭 |
 
 建议按以下最小可审查批次继续推进；它们是 PR-M11-12 的内部切片，不增加 82 个顶层工作包总数：
@@ -169,6 +169,12 @@ group-commit/flush-realtime `Notify` 与 timed policy 的 `FlushWakeup`；`Commi
 manager，sync/async timed policy 与原 TaskGroup 生命周期保持不变。production 净删除 2 identities / 4 occurrences，
 因此 reviewed 总量降至 344/932、production 降至 186/454、Store 降至 101/270；test 144/438、Broker 85/184
 与 compatibility 14/40 不增。2 个保留 import occurrence 经一对一指纹审核更新，无新增 identity。
+
+M11-12bc26 将 HA confirm offset 从普通 `i64` 改为 `AtomicI64` 共享发布，并为已有原子 epoch start offset 与
+state-machine version 增加窄发布入口；Auto-switch HA service 与 HA reader 不再通过 `mut_from_ref` 取得完整
+`LocalFileMessageStore` 可变引用。confirm offset 下降、reader clamp 与 Advanced epoch 发布顺序保持不变。
+production 净删除 2 identities / 6 occurrences，因此 reviewed 总量降至 342/926、production 降至 184/448、
+Store 降至 99/264；test 144/438、Broker 85/184 与 compatibility 14/40 不增，无 relocation。
 
 ## PR-M12 剩余工作包
 

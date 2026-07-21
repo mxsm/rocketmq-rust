@@ -751,7 +751,11 @@ impl CommitLog {
     }
 
     pub fn set_confirm_offset(&mut self, phy_offset: i64) {
-        self.runtime_state.set_confirm_offset(phy_offset);
+        self.publish_confirm_offset(phy_offset);
+    }
+
+    pub(crate) fn publish_confirm_offset(&self, phy_offset: i64) {
+        self.runtime_state.publish_confirm_offset(phy_offset);
         self.store_checkpoint.set_confirm_phy_offset(phy_offset as u64);
     }
 

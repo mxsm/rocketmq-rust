@@ -15,6 +15,7 @@
 //! Runtime-neutral state owned by the Local CommitLog boundary.
 
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicI64;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -164,7 +165,7 @@ impl CommitLogActiveMemoryLock {
 #[doc(hidden)]
 #[derive(Debug)]
 pub struct CommitLogRuntimeState {
-    confirm_offset: i64,
+    confirm_offset: AtomicI64,
     put_message_lock_stats: CommitLogPutMessageLockStats,
     begin_time_in_lock: Arc<AtomicU64>,
     active_memory_lock: Mutex<CommitLogActiveMemoryLock>,
@@ -177,7 +178,7 @@ impl CommitLogRuntimeState {
     #[doc(hidden)]
     pub fn new(memory_lock_warn_only: bool, memory_lock_budget_bytes: u64) -> Self {
         Self {
-            confirm_offset: -1,
+            confirm_offset: AtomicI64::new(-1),
             put_message_lock_stats: CommitLogPutMessageLockStats::default(),
             begin_time_in_lock: Arc::new(AtomicU64::new(0)),
             active_memory_lock: Mutex::new(CommitLogActiveMemoryLock::new(
@@ -192,13 +193,19 @@ impl CommitLogRuntimeState {
     /// Returns the stored confirm offset without applying HA/config policy.
     #[doc(hidden)]
     pub fn confirm_offset(&self) -> i64 {
-        self.confirm_offset
+        self.confirm_offset.load(Ordering::SeqCst)
     }
 
     /// Replaces the stored confirm offset.
     #[doc(hidden)]
     pub fn set_confirm_offset(&mut self, confirm_offset: i64) {
-        self.confirm_offset = confirm_offset;
+        self.publish_confirm_offset(confirm_offset);
+    }
+
+    /// Publishes the stored confirm offset through the shared HA boundary.
+    #[doc(hidden)]
+    pub fn publish_confirm_offset(&self, confirm_offset: i64) {
+        self.confirm_offset.store(confirm_offset, Ordering::SeqCst);
     }
 
     /// Returns the current put-message lock timing snapshot.
@@ -247,5 +254,21 @@ impl CommitLogRuntimeState {
     #[doc(hidden)]
     pub fn load_statistics(&self) -> LoadStatistics {
         self.last_load_statistics.lock().clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CommitLogRuntimeState;
+
+    #[test]
+    fn shared_confirm_offset_publication_preserves_decreases() {
+        let state = CommitLogRuntimeState::new(true, 0);
+
+        state.publish_confirm_offset(128);
+        assert_eq!(state.confirm_offset(), 128);
+
+        state.publish_confirm_offset(64);
+        assert_eq!(state.confirm_offset(), 64);
     }
 }
