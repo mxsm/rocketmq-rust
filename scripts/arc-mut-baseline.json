@@ -1582,69 +1582,6 @@
       "adr": "ADR-002"
     },
     {
-      "identity": "2cbf19c5585608c3e2669169",
-      "path": "rocketmq-broker/src/processor/admin_broker_processor/topic_request_handler.rs",
-      "symbol": "*",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "f2e66655c0874e511bcddd29",
-          "fingerprint": "f0a573438a21979c4c8219d8",
-          "item": "mod tests",
-          "line": 776
-        }
-      ],
-      "owner": "broker",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "02749549b6489125c41327ac",
-      "path": "rocketmq-broker/src/processor/admin_broker_processor/topic_request_handler.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "418ecd7ab9a818a2c61310bd",
-          "fingerprint": "353397efe163cf37285096f9",
-          "item": "<module>",
-          "line": 49
-        }
-      ],
-      "owner": "broker",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "4f52c6a4c88e40ac1e76ef5d",
-      "path": "rocketmq-broker/src/processor/admin_broker_processor/topic_request_handler.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "1f85c444b28325eddab9f786",
-          "fingerprint": "01172cde7d66acfbdc3b7170",
-          "item": "struct TopicRequestHandler",
-          "line": 122
-        },
-        {
-          "id": "5255ebd56c0d15233bc39f81",
-          "fingerprint": "4c2ed25434f2a642d6be176b",
-          "item": "fn new",
-          "line": 126
-        }
-      ],
-      "owner": "broker",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
       "identity": "21c2f5279a6f17e611af4850",
       "path": "rocketmq-broker/src/processor/admin_broker_processor.rs",
       "symbol": "*",

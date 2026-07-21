@@ -84,7 +84,7 @@ mod update_global_white_addrs_config_request_handler;
 mod update_user_request_handler;
 
 pub struct AdminBrokerProcessor<MS: MessageStore> {
-    topic_request_handler: TopicRequestHandler<MS>,
+    topic_request_handler: TopicRequestHandler,
     broker_config_request_handler: BrokerConfigRequestHandler<MS>,
     consumer_request_handler: ConsumerRequestHandler,
     offset_request_handler: OffsetRequestHandler,
@@ -134,7 +134,7 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
         broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
         auth_admin_service: Arc<AuthAdminService>,
     ) -> Self {
-        let topic_request_handler = TopicRequestHandler::new(broker_runtime_inner.clone());
+        let topic_request_handler = TopicRequestHandler::new();
         let broker_config_request_handler = BrokerConfigRequestHandler::new(broker_runtime_inner.clone());
         let consumer_request_handler = ConsumerRequestHandler::new();
         let offset_request_handler = OffsetRequestHandler::new();
@@ -214,22 +214,30 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
         match request_code {
             RequestCode::UpdateAndCreateTopic => {
                 self.topic_request_handler
-                    .update_and_create_topic(channel, ctx, request_code, request)
+                    .update_and_create_topic(&self.broker_config_request_handler, channel, ctx, request_code, request)
                     .await
             }
             RequestCode::UpdateAndCreateTopicList => {
                 self.topic_request_handler
-                    .update_and_create_topic_list(channel, ctx, request_code, request)
+                    .update_and_create_topic_list(
+                        &self.broker_config_request_handler,
+                        channel,
+                        ctx,
+                        request_code,
+                        request,
+                    )
                     .await
             }
             RequestCode::DeleteTopicInBroker => {
+                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner_mut();
                 self.topic_request_handler
-                    .delete_topic(channel, ctx, request_code, request)
+                    .delete_topic(broker_runtime_inner, channel, ctx, request_code, request)
                     .await
             }
             RequestCode::GetAllTopicConfig => {
+                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner();
                 self.topic_request_handler
-                    .get_all_topic_config(channel, ctx, request_code, request)
+                    .get_all_topic_config(broker_runtime_inner, channel, ctx, request_code, request)
                     .await
             }
             RequestCode::GetTimerCheckPoint => {
@@ -344,8 +352,9 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .await
             }
             RequestCode::GetTopicStatsInfo => {
+                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner();
                 self.topic_request_handler
-                    .get_topic_stats_info(channel, ctx, request_code, request)
+                    .get_topic_stats_info(broker_runtime_inner, channel, ctx, request_code, request)
                     .await
             }
             RequestCode::GetConsumerConnectionList => {
@@ -397,13 +406,15 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .await
             }
             RequestCode::QueryTopicConsumeByWho => {
+                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner();
                 self.topic_request_handler
-                    .query_topic_consume_by_who(channel, ctx, request_code, request)
+                    .query_topic_consume_by_who(broker_runtime_inner, channel, ctx, request_code, request)
                     .await
             }
             RequestCode::QueryTopicsByConsumer => {
+                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner();
                 self.topic_request_handler
-                    .query_topics_by_consumer(channel, ctx, request_code, request)
+                    .query_topics_by_consumer(broker_runtime_inner, channel, ctx, request_code, request)
                     .await
             }
             RequestCode::QuerySubscriptionByConsumer => {
@@ -436,8 +447,9 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .await
             }
             RequestCode::CleanUnusedTopic => {
+                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner();
                 self.topic_request_handler
-                    .clean_unused_topic(channel, ctx, request_code, request)
+                    .clean_unused_topic(broker_runtime_inner, channel, ctx, request_code, request)
                     .await
             }
             RequestCode::GetConsumerRunningInfo => {
@@ -533,13 +545,20 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .await
             }
             RequestCode::GetTopicConfig => {
+                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner();
                 self.topic_request_handler
-                    .get_topic_config(channel, ctx, request_code, request)
+                    .get_topic_config(broker_runtime_inner, channel, ctx, request_code, request)
                     .await
             }
             RequestCode::UpdateAndCreateStaticTopic => {
                 self.topic_request_handler
-                    .update_and_create_static_topic(channel, ctx, request_code, request)
+                    .update_and_create_static_topic(
+                        &self.broker_config_request_handler,
+                        channel,
+                        ctx,
+                        request_code,
+                        request,
+                    )
                     .await
             }
             RequestCode::NotifyMinBrokerIdChange => {

@@ -14,9 +14,11 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
+use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::constant::file_readahead_mode::READ_AHEAD_MODE;
 use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::mix_all;
@@ -30,6 +32,7 @@ use rocketmq_remoting::protocol::header::export_rocksdb_config_to_json_request_h
 #[cfg(feature = "rocksdb_store")]
 use rocketmq_remoting::protocol::header::export_rocksdb_config_to_json_request_header::ExportRocksdbConfigType;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+use rocketmq_remoting::protocol::DataVersion;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
@@ -38,6 +41,7 @@ use rocketmq_store::utils::ffi::MADV_RANDOM;
 use sysinfo::Disks;
 
 use crate::broker_runtime::BrokerRuntimeInner;
+use crate::topic::manager::topic_config_coordinator::TopicRegistrationAction;
 
 #[derive(Clone)]
 pub(super) struct BrokerConfigRequestHandler<MS: MessageStore> {
@@ -55,6 +59,32 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
 
     pub(super) fn broker_runtime_inner_mut(&mut self) -> &mut BrokerRuntimeInner<MS> {
         self.broker_runtime_inner.as_mut()
+    }
+
+    pub(super) async fn persist_and_register_topic_updates(
+        &self,
+        topic_config_list: Vec<Arc<TopicConfig>>,
+        data_version: DataVersion,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        let runtime = self.broker_runtime_inner.clone();
+        let single_topic_registration = runtime.broker_config().enable_single_topic_register;
+        let registration: TopicRegistrationAction = Box::new(move || {
+            Box::pin(async move {
+                if single_topic_registration {
+                    for topic_config in topic_config_list {
+                        runtime.register_single_topic_all(topic_config).await;
+                    }
+                } else {
+                    BrokerRuntimeInner::<MS>::register_increment_broker_data(runtime, topic_config_list, data_version)
+                        .await;
+                }
+                Ok(())
+            })
+        });
+        self.broker_runtime_inner
+            .topic_config_coordinator()
+            .persist_and_register_wait(registration)
+            .await
     }
 
     pub(super) async fn apply_controller_role_change(

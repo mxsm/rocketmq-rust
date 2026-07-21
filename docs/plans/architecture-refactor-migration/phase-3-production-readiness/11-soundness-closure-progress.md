@@ -2893,9 +2893,30 @@ Store HA replication-state callback 随 Issue #8469 完成以下边界收敛：
 | runtime / architecture guards | enforcing runtime audit、dependency fixtures/target/baseline、release、8-profile/11-variant performance、127/127 guard tests 与 AGENTS routing 通过；目标 compatibility 35/35、test edge 3/3、release topology 32/32 |
 | root workspace final gates | `cargo fmt --all -- --check` 与 workspace all-target/all-feature strict Clippy 通过；最终补丁后复跑 `git diff --check`；Windows linker stdout 与既有 future-incompatibility note 不受 `-D warnings` 管辖 |
 
+## M11-12bc31 实现
+
+Broker Topic Admin request borrow 随 Issue #8471 完成以下边界收敛：
+
+- `TopicRequestHandler<MS>` 改为无状态、非泛型 `TopicRequestHandler`，删除完整 `ArcMut<BrokerRuntimeInner>` field、constructor clone 与模块 import。
+- `AdminBrokerProcessor` 复用 `BrokerConfigRequestHandler` 已有 runtime owner：topic 查询与 clean 请求取得请求期共享借用，删除请求取得请求期独占借用。
+- create/update 继续先更新 TopicConfig 与可选静态映射，再由 BrokerConfig handler 的窄动作执行 coordinator persist 和原 single/increment registration；注册闭包中的 runtime clone 只存在于请求期异步动作。
+- Topic validation、system/Mixed 限制、idempotency、DataVersion、POP retry v2/v1/main 删除顺序、config/mapping/offset/inflight/Store 清理、stats/query 响应保持不变。
+- 零大小回归证明 Topic handler 不再保活完整 runtime；reviewed baseline 从 328 identities / 899 occurrences 降至 325 / 895，production 从 171/424 降至 169/421，test 从 143/435 降至 142/434，compatibility 保持 14/40。Broker production 从 83/181 降至 81/178，Store 保持 88/243；净删除 2 个 production identity/3 occurrences 与 1 个 test identity/1 occurrence，无 relocation。
+
+## M11-12bc31 验证
+
+| 命令 | 结果 |
+|---|---|
+| Broker check / focused / compatibility / strict Clippy | `cargo check -p rocketmq-broker --all-features` 通过；Topic handler 3/3 与 phase3/5/6 跨处理器回归 3/3 通过；Broker all-target/all-feature strict Clippy 通过 |
+| Broker all-feature lib | 612 passed、25 failed、1 ignored；失败仍集中于既有 lifecycle/Lite/subscription 动态基线，无 Topic Admin 新失败，因此全套如实记为未通过 |
+| Store all-feature lib / RocksDB 专项 | Store 507/507；Store/Broker `rocksdb_store` strict Clippy 通过；foundation 82/82、semantics 9/9、Broker rocksdb 21/21、pop_consumer 4/4 通过 |
+| reviewed baseline / fixtures | `--prune-resolved` 候选与正式最小补丁均从 328/899 精确降至 325/895；`python scripts/arc_mut_guard.py`、24/24 fixtures 与 67/67 ArcMut guard tests 通过，无 relocation、新增 identity 或临时 approval |
+| runtime / architecture guards | enforcing runtime audit、dependency fixtures/target/baseline、release、8-profile/11-variant performance、architecture 60/60 与 AGENTS routing 通过；目标 compatibility 35/35、test edge 3/3、release topology 32/32 |
+| root workspace final gates | `cargo fmt --all -- --check`、workspace all-target/all-feature strict Clippy 与 `git diff --check` 通过；Windows linker stdout 与既有 future-incompatibility note 不受 `-D warnings` 管辖 |
+
 ## 剩余切片与 Gate
 
-1. Broker BrokerRuntimeInner capability carrier 与其他 admin/processor/leaf owner（83/181）；transaction bridge、Producer/ColdData admin leaf、Schedule hook、put-message preflight、ConsumerOrderInfoManager、TopicRouteInfoManager、MessageArrivingListener、ClientHousekeepingService、HA diagnostics/control/min-broker transition、controller role-change duplicate owner、BatchMq、SubscriptionGroup、MessageRelated、Offset、Consumer handler 与未编译 V2 示例残留已退出 leaf-level 完整 runtime/store owner，LiteLifecycle 只读 Store carrier 已收窄为普通借用，显式 Store 兼容 owner 留待 Store 批次删除。
+1. Broker BrokerRuntimeInner capability carrier 与其他 admin/processor/leaf owner（81/178）；transaction bridge、Producer/ColdData admin leaf、Schedule hook、put-message preflight、ConsumerOrderInfoManager、TopicRouteInfoManager、MessageArrivingListener、ClientHousekeepingService、HA diagnostics/control/min-broker transition、controller role-change duplicate owner、BatchMq、SubscriptionGroup、MessageRelated、Offset、Consumer、Topic handler 与未编译 V2 示例残留已退出 leaf-level 完整 runtime/store owner，LiteLifecycle 只读 Store carrier 已收窄为普通借用，显式 Store 兼容 owner 留待 Store 批次删除。
 2. Store MappedFileQueue/其余 ConsumeQueue、CommitLog/Flush、StoreHandle/Rocks/Timer 与其余 HA service/actor（88/243）；BrokerStats observer、ConsumeQueueExt 显式锁 owner、HA replication-state callback、未共享 HA child direct ownership、commit-to-flush 窄唤醒能力、HA confirm/epoch 原子发布、HA connection runtime handle 与 CommitLog shared disk-flush 已完成。
 3. Production `WeakArcMut` 已清零；继续迁移 test/compatibility 中受控使用并移除其余 nightly feature。公开 `arc_mut.rs`/re-export 的 destructive 删除受 next-major 两轮弃用与 Release Manager/HUMAN Gate 约束，不能静默重置 public API baseline。
 4. 对同一候选快照执行 stable feature matrix、Miri/Loom 可用切片、soak/SLO fault、dashboard/runbook、动态

@@ -702,6 +702,15 @@ Store production 88/243），净删除 2 个 production identity/7 occurrence；
 一对一 relocation 审核，无新增 identity，production `WeakArcMut` 已清零。总进度仍为 75/82，下一子切片
 M11-12bc31 继续 Broker aggregate/leaf 或 Store WAL/queue/timer/HA owner。
 
+Broker Topic Admin 重复 owner 随 Issue #8471 收窄：`TopicRequestHandler` 改为无状态、非泛型 leaf，topic 查询与
+clean 请求从父层既有 `BrokerConfigRequestHandler` 取得请求期共享 runtime 借用，删除请求取得独占借用；create/update
+继续先更新 TopicConfig/静态映射，再由 BrokerConfig owner 执行原有 coordinator persist 和 single/increment broker
+registration。Topic 校验、Mixed/system 限制、删除 POP retry v2/v1/main 顺序、offset/inflight/Store 清理、stats/query
+响应保持不变；零大小回归证明 handler 不再保活完整 runtime。ArcMut 快照降至 325 identities/895 occurrences
+（production 169/421、test 142/434、compatibility 14/40、Broker production 81/178、Store production 88/243），
+净删除 2 个 production identity/3 occurrence 与 1 个 test identity/1 occurrence，无 relocation。总进度仍为
+75/82，下一子切片 M11-12bc32 继续 Broker aggregate/leaf 或 Store WAL/queue/timer/HA owner。
+
 ### 9.3 证据目录
 
 - 运行期生成物：`target/architecture-refactor/Mxx/<run-id>/`，不提交 Git。

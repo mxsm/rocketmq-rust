@@ -12,9 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
-use std::sync::Arc;
-
 use cheetah_string::CheetahString;
 use rocketmq_common::common::attribute::attribute_parser::AttributeParser;
 use rocketmq_common::common::attribute::topic_message_type::TopicMessageType;
@@ -42,16 +39,15 @@ use rocketmq_remoting::protocol::header::query_topics_by_consumer_request_header
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::static_topic::topic_config_and_queue_mapping::TopicConfigAndQueueMapping;
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
-use rocketmq_remoting::protocol::DataVersion;
 use rocketmq_remoting::protocol::RemotingDeserializable;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
+use std::collections::HashMap;
 use tracing::info;
 
 use crate::broker_runtime::BrokerRuntimeInner;
-use crate::topic::manager::topic_config_coordinator::TopicRegistrationAction;
+use crate::processor::admin_broker_processor::broker_config_request_handler::BrokerConfigRequestHandler;
 
 fn decode_topic_queue_mapping_detail(body: &[u8]) -> Result<TopicQueueMappingDetail, String> {
     match serde_json::from_slice::<TopicQueueMappingDetail>(body) {
@@ -117,51 +113,23 @@ fn quote_unquoted_numeric_json_keys(input: &str) -> String {
     output
 }
 
-#[derive(Clone)]
-pub(super) struct TopicRequestHandler<MS: MessageStore> {
-    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
-}
+#[derive(Clone, Copy, Default)]
+pub(super) struct TopicRequestHandler;
 
-impl<MS: MessageStore> TopicRequestHandler<MS> {
-    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
-        TopicRequestHandler { broker_runtime_inner }
+impl TopicRequestHandler {
+    pub fn new() -> Self {
+        Self
     }
 
-    async fn persist_and_register_topic_updates(
+    pub async fn update_and_create_topic<MS: MessageStore>(
         &self,
-        topic_config_list: Vec<Arc<TopicConfig>>,
-        data_version: DataVersion,
-    ) -> rocketmq_error::RocketMQResult<()> {
-        let runtime = self.broker_runtime_inner.clone();
-        let single_topic_registration = runtime.broker_config().enable_single_topic_register;
-        let registration: TopicRegistrationAction = Box::new(move || {
-            Box::pin(async move {
-                if single_topic_registration {
-                    for topic_config in topic_config_list {
-                        runtime.register_single_topic_all(topic_config).await;
-                    }
-                } else {
-                    BrokerRuntimeInner::<MS>::register_increment_broker_data(runtime, topic_config_list, data_version)
-                        .await;
-                }
-                Ok(())
-            })
-        });
-        self.broker_runtime_inner
-            .topic_config_coordinator()
-            .persist_and_register_wait(registration)
-            .await
-    }
-}
-
-impl<MS: MessageStore> TopicRequestHandler<MS> {
-    pub async fn update_and_create_topic(
-        &mut self,
+        broker_config_request_handler: &BrokerConfigRequestHandler<MS>,
         channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let broker_runtime_inner = broker_config_request_handler.broker_runtime_inner();
         let response = RemotingCommand::create_response_command();
         let request_header = request
             .decode_command_custom_header::<CreateTopicRequestHeader>()
@@ -180,8 +148,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
                     .set_remark(result.remark().clone()),
             ));
         }
-        if self
-            .broker_runtime_inner
+        if broker_runtime_inner
             .broker_config()
             .validate_system_topic_when_update_topic
             && TopicValidator::is_system_topic(topic.as_str())
@@ -220,7 +187,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
             attributes,
         };
         if topic_config.get_topic_message_type() == TopicMessageType::Mixed
-            && !self.broker_runtime_inner.broker_config().enable_mixed_message_type
+            && !broker_runtime_inner.broker_config().enable_mixed_message_type
         {
             return Ok(Some(
                 response
@@ -229,8 +196,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
             ));
         }
 
-        let topic_config_origin = self
-            .broker_runtime_inner
+        let topic_config_origin = broker_runtime_inner
             .topic_config_manager()
             .get_topic_config(topic.as_str());
         if topic_config_origin.as_deref() == Some(&topic_config) {
@@ -242,24 +208,26 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
             );
             return Ok(Some(response.set_code(ResponseCode::Success)));
         }
-        let update = self.broker_runtime_inner.topic_config_manager().update_topic_config(
-            topic_config,
-            self.broker_runtime_inner.topic_config_state_machine_version(),
-        );
+        let update = broker_runtime_inner
+            .topic_config_manager()
+            .update_topic_config(topic_config, broker_runtime_inner.topic_config_state_machine_version());
 
-        self.persist_and_register_topic_updates(vec![update.topic_config], update.data_version)
+        broker_config_request_handler
+            .persist_and_register_topic_updates(vec![update.topic_config], update.data_version)
             .await?;
 
         Ok(Some(response.set_code(ResponseCode::Success)))
     }
 
-    pub async fn update_and_create_static_topic(
-        &mut self,
+    pub async fn update_and_create_static_topic<MS: MessageStore>(
+        &self,
+        broker_config_request_handler: &BrokerConfigRequestHandler<MS>,
         channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let broker_runtime_inner = broker_config_request_handler.broker_runtime_inner();
         let response = RemotingCommand::create_response_command();
         let request_header = request.decode_command_custom_header::<CreateTopicRequestHeader>()?;
         info!(
@@ -295,8 +263,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
                     .set_remark(result.remark().clone()),
             ));
         }
-        if self
-            .broker_runtime_inner
+        if broker_runtime_inner
             .broker_config()
             .validate_system_topic_when_update_topic
             && TopicValidator::is_system_topic(topic.as_str())
@@ -329,10 +296,9 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
             order: request_header.order,
             attributes,
         };
-        let update = self.broker_runtime_inner.topic_config_manager().update_topic_config(
-            topic_config,
-            self.broker_runtime_inner.topic_config_state_machine_version(),
-        );
+        let update = broker_runtime_inner
+            .topic_config_manager()
+            .update_topic_config(topic_config, broker_runtime_inner.topic_config_state_machine_version());
 
         topic_queue_mapping_detail.topic_queue_mapping_info.topic = Some(topic.clone());
         if topic_queue_mapping_detail.topic_queue_mapping_info.total_queues <= 0 {
@@ -340,25 +306,28 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
         }
         if topic_queue_mapping_detail.topic_queue_mapping_info.bname.is_none() {
             topic_queue_mapping_detail.topic_queue_mapping_info.bname =
-                Some(self.broker_runtime_inner.broker_config().broker_name().clone());
+                Some(broker_runtime_inner.broker_config().broker_name().clone());
         }
-        self.broker_runtime_inner
+        broker_runtime_inner
             .topic_queue_mapping_manager()
             .update_topic_queue_mapping(topic_queue_mapping_detail);
 
-        self.persist_and_register_topic_updates(vec![update.topic_config], update.data_version)
+        broker_config_request_handler
+            .persist_and_register_topic_updates(vec![update.topic_config], update.data_version)
             .await?;
 
         Ok(Some(response.set_code(ResponseCode::Success)))
     }
 
-    pub async fn update_and_create_topic_list(
-        &mut self,
+    pub async fn update_and_create_topic_list<MS: MessageStore>(
+        &self,
+        broker_config_request_handler: &BrokerConfigRequestHandler<MS>,
         channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let broker_runtime_inner = broker_config_request_handler.broker_runtime_inner();
         let request_body = CreateTopicListRequestBody::decode(request.body().as_ref().unwrap().as_ref()).unwrap();
         let mut topic_names = String::new();
         for topic_config in request_body.topic_config_list.iter() {
@@ -381,8 +350,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
                         .set_remark(result.remark().clone()),
                 ));
             }
-            if self
-                .broker_runtime_inner
+            if broker_runtime_inner
                 .broker_config()
                 .validate_system_topic_when_update_topic
                 && TopicValidator::is_system_topic(topic)
@@ -394,7 +362,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
                 ));
             }
             if topic_config.get_topic_message_type() == TopicMessageType::Mixed
-                && !self.broker_runtime_inner.broker_config().enable_mixed_message_type
+                && !broker_runtime_inner.broker_config().enable_mixed_message_type
             {
                 return Ok(Some(
                     response
@@ -402,7 +370,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
                         .set_remark("MIXED message type is not supported.".to_string()),
                 ));
             }
-            let topic_config_origin = self.broker_runtime_inner.topic_config_manager().get_topic_config(topic);
+            let topic_config_origin = broker_runtime_inner.topic_config_manager().get_topic_config(topic);
             if topic_config_origin.is_some() && topic_config.clone() == *topic_config_origin.unwrap() {
                 info!(
                     "Broker receive request to update or create topic={}, but topicConfig has  no changes , so \
@@ -415,20 +383,19 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
         }
 
         let mut topic_config_list = request_body.topic_config_list;
-        let (topic_config_list, data_version) = self
-            .broker_runtime_inner
-            .topic_config_manager()
-            .update_topic_config_list(
-                topic_config_list.as_mut_slice(),
-                self.broker_runtime_inner.topic_config_state_machine_version(),
-            );
-        self.persist_and_register_topic_updates(topic_config_list, data_version)
+        let (topic_config_list, data_version) = broker_runtime_inner.topic_config_manager().update_topic_config_list(
+            topic_config_list.as_mut_slice(),
+            broker_runtime_inner.topic_config_state_machine_version(),
+        );
+        broker_config_request_handler
+            .persist_and_register_topic_updates(topic_config_list, data_version)
             .await?;
         Ok(Some(response.set_code(ResponseCode::Success)))
     }
 
-    pub async fn delete_topic(
-        &mut self,
+    pub async fn delete_topic<MS: MessageStore>(
+        &self,
+        broker_runtime_inner: &mut BrokerRuntimeInner<MS>,
         channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -451,8 +418,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
                     .set_remark("he specified topic is blank."),
             ));
         }
-        if self
-            .broker_runtime_inner
+        if broker_runtime_inner
             .broker_config()
             .validate_system_topic_when_update_topic
             && TopicValidator::is_system_topic(topic)
@@ -463,42 +429,40 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
                     .set_remark(format!("The topic[{topic}] is conflict with system topic.",)),
             ));
         }
-        let groups = self
-            .broker_runtime_inner
+        let groups = broker_runtime_inner
             .consumer_offset_manager()
             .which_group_by_topic(topic);
         for group in groups.iter() {
             let pop_retry_topic_v2 =
                 CheetahString::from_string(KeyBuilder::build_pop_retry_topic(topic, group.as_str(), true));
-            if self
-                .broker_runtime_inner
+            if broker_runtime_inner
                 .topic_config_manager()
                 .select_topic_config(pop_retry_topic_v2.as_ref())
                 .is_some()
             {
-                self.delete_topic_in_broker(pop_retry_topic_v2.as_ref());
+                self.delete_topic_in_broker(broker_runtime_inner, pop_retry_topic_v2.as_ref());
             }
             let pop_retry_topic_v1 =
                 CheetahString::from_string(KeyBuilder::build_pop_retry_topic_v1(topic, group.as_str()));
-            if self
-                .broker_runtime_inner
+            if broker_runtime_inner
                 .topic_config_manager()
                 .select_topic_config(pop_retry_topic_v1.as_ref())
                 .is_some()
             {
-                self.delete_topic_in_broker(pop_retry_topic_v1.as_ref());
+                self.delete_topic_in_broker(broker_runtime_inner, pop_retry_topic_v1.as_ref());
             }
         }
-        self.delete_topic_in_broker(topic);
-        self.broker_runtime_inner
+        self.delete_topic_in_broker(broker_runtime_inner, topic);
+        broker_runtime_inner
             .topic_config_coordinator()
             .persist_and_wait()
             .await?;
         Ok(Some(response.set_code(ResponseCode::Success)))
     }
 
-    pub async fn get_all_topic_config(
-        &mut self,
+    pub async fn get_all_topic_config<MS: MessageStore>(
+        &self,
+        broker_runtime_inner: &BrokerRuntimeInner<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -506,17 +470,15 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut response = RemotingCommand::create_response_command();
         let (topic_config_table, topic_config_data_version) =
-            self.broker_runtime_inner.topic_config_manager().metadata_snapshot();
+            broker_runtime_inner.topic_config_manager().metadata_snapshot();
         let topic_config_and_mapping_serialize_wrapper = TopicConfigAndMappingSerializeWrapper {
-            topic_queue_mapping_detail_map: self
-                .broker_runtime_inner
+            topic_queue_mapping_detail_map: broker_runtime_inner
                 .topic_queue_mapping_manager()
                 .topic_queue_mapping_table
                 .iter()
                 .map(|entry| (entry.key().clone(), (**entry.value()).clone()))
                 .collect(),
-            mapping_data_version: self
-                .broker_runtime_inner
+            mapping_data_version: broker_runtime_inner
                 .topic_queue_mapping_manager()
                 .data_version
                 .lock()
@@ -537,7 +499,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
     }
 
     pub async fn get_system_topic_list_from_broker(
-        &mut self,
+        &self,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -553,8 +515,9 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
         Ok(Some(response))
     }
 
-    pub async fn get_topic_stats_info(
-        &mut self,
+    pub async fn get_topic_stats_info<MS: MessageStore>(
+        &self,
+        broker_runtime_inner: &BrokerRuntimeInner<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -565,10 +528,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
             .decode_command_custom_header::<GetTopicStatsRequestHeader>()
             .unwrap();
         let topic = request_header.topic.as_ref();
-        let topic_config = self
-            .broker_runtime_inner
-            .topic_config_manager()
-            .select_topic_config(topic);
+        let topic_config = broker_runtime_inner.topic_config_manager().select_topic_config(topic);
         if topic_config.is_none() {
             return Ok(Some(
                 response
@@ -583,18 +543,18 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
         for i in 0..max_queue_nums {
             let mut message_queue = MessageQueue::new();
             message_queue.set_topic(topic.clone());
-            message_queue.set_broker_name(self.broker_runtime_inner.broker_config().broker_name().clone());
+            message_queue.set_broker_name(broker_runtime_inner.broker_config().broker_name().clone());
             message_queue.set_queue_id(i as i32);
             let mut topic_offset = TopicOffset::new();
             let min = std::cmp::max(
-                self.broker_runtime_inner
+                broker_runtime_inner
                     .message_store()
                     .unwrap()
                     .get_min_offset_in_queue(topic, i as i32),
                 0,
             );
             let max = std::cmp::max(
-                self.broker_runtime_inner
+                broker_runtime_inner
                     .message_store()
                     .unwrap()
                     .get_max_offset_in_queue(topic, i as i32),
@@ -602,8 +562,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
             );
             let mut timestamp = 0;
             if max > 0 {
-                timestamp = self
-                    .broker_runtime_inner
+                timestamp = broker_runtime_inner
                     .message_store()
                     .unwrap()
                     .get_message_store_timestamp(topic, i as i32, max - 1);
@@ -618,8 +577,9 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
         Ok(Some(response))
     }
 
-    pub async fn get_topic_config(
-        &mut self,
+    pub async fn get_topic_config<MS: MessageStore>(
+        &self,
+        broker_runtime_inner: &BrokerRuntimeInner<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -628,10 +588,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
         let mut response = RemotingCommand::create_response_command();
         let request_header = request.decode_command_custom_header::<GetTopicConfigRequestHeader>()?;
         let topic = &request_header.topic;
-        let topic_config = self
-            .broker_runtime_inner
-            .topic_config_manager()
-            .select_topic_config(topic);
+        let topic_config = broker_runtime_inner.topic_config_manager().select_topic_config(topic);
         if topic_config.is_none() {
             return Ok(Some(
                 response
@@ -643,8 +600,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
         if let Some(value) = request_header.topic_request_header.as_ref() {
             if let Some(lo) = value.get_lo() {
                 if *lo {
-                    topic_queue_mapping_detail = self
-                        .broker_runtime_inner
+                    topic_queue_mapping_detail = broker_runtime_inner
                         .topic_queue_mapping_manager()
                         .topic_queue_mapping_table
                         .get(topic)
@@ -658,8 +614,9 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
         Ok(Some(response))
     }
 
-    pub async fn query_topic_consume_by_who(
-        &mut self,
+    pub async fn query_topic_consume_by_who<MS: MessageStore>(
+        &self,
+        broker_runtime_inner: &BrokerRuntimeInner<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -668,12 +625,10 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
         let mut response = RemotingCommand::create_response_command();
         let request_header = request.decode_command_custom_header::<QueryTopicConsumeByWhoRequestHeader>()?;
         let topic = request_header.topic.as_ref();
-        let mut groups = self
-            .broker_runtime_inner
+        let mut groups = broker_runtime_inner
             .consumer_manager()
             .query_topic_consume_by_who(topic);
-        let group_in_offset = self
-            .broker_runtime_inner
+        let group_in_offset = broker_runtime_inner
             .consumer_offset_manager()
             .which_group_by_topic(topic);
         groups.extend(group_in_offset);
@@ -682,8 +637,9 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
         Ok(Some(response))
     }
 
-    pub async fn query_topics_by_consumer(
-        &mut self,
+    pub async fn query_topics_by_consumer<MS: MessageStore>(
+        &self,
+        broker_runtime_inner: &BrokerRuntimeInner<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -693,14 +649,13 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
         let request_header = request
             .decode_command_custom_header::<QueryTopicsByConsumerRequestHeader>()
             .unwrap();
-        let topics = self
-            .broker_runtime_inner
+        let topics = broker_runtime_inner
             .consumer_offset_manager()
             .which_topic_by_consumer(request_header.get_group());
         let broker_addr = format!(
             "{}:{}",
-            self.broker_runtime_inner.broker_config().broker_ip1,
-            self.broker_runtime_inner.server_config().listen_port
+            broker_runtime_inner.broker_config().broker_ip1,
+            broker_runtime_inner.server_config().listen_port
         );
         let topic_list = TopicList {
             topic_list: topics.into_iter().collect(),
@@ -710,21 +665,21 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
         Ok(Some(response))
     }
 
-    pub async fn clean_unused_topic(
-        &mut self,
+    pub async fn clean_unused_topic<MS: MessageStore>(
+        &self,
+        broker_runtime_inner: &BrokerRuntimeInner<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let retain_topics = self
-            .broker_runtime_inner
+        let retain_topics = broker_runtime_inner
             .topic_config_manager()
             .topic_config_table_hash_map()
             .keys()
             .map(|topic| topic.to_string())
             .collect();
-        self.broker_runtime_inner
+        broker_runtime_inner
             .message_store()
             .unwrap()
             .clean_unused_topic(&retain_topics);
@@ -733,18 +688,22 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
         ))
     }
 
-    fn delete_topic_in_broker(&mut self, topic: &CheetahString) {
-        self.broker_runtime_inner
+    fn delete_topic_in_broker<MS: MessageStore>(
+        &self,
+        broker_runtime_inner: &mut BrokerRuntimeInner<MS>,
+        topic: &CheetahString,
+    ) {
+        broker_runtime_inner
             .topic_config_manager()
-            .delete_topic_config(topic, self.broker_runtime_inner.topic_config_state_machine_version());
-        self.broker_runtime_inner.topic_queue_mapping_manager().delete(topic);
-        self.broker_runtime_inner
+            .delete_topic_config(topic, broker_runtime_inner.topic_config_state_machine_version());
+        broker_runtime_inner.topic_queue_mapping_manager().delete(topic);
+        broker_runtime_inner
             .consumer_offset_manager()
             .clean_offset_by_topic(topic);
-        self.broker_runtime_inner
+        broker_runtime_inner
             .pop_inflight_message_counter()
             .clear_in_flight_message_num_by_topic_name(topic);
-        self.broker_runtime_inner
+        broker_runtime_inner
             .message_store_mut()
             .as_mut()
             .unwrap()
@@ -769,12 +728,15 @@ mod tests {
     use rocketmq_remoting::net::channel::ChannelInner;
     use rocketmq_remoting::protocol::header::create_topic_request_header::CreateTopicRequestHeader;
     use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+    use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
     use rocketmq_remoting::protocol::RemotingSerializable;
     use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
 
-    use super::*;
+    use super::decode_topic_queue_mapping_detail;
+    use super::TopicRequestHandler;
     use crate::broker_runtime::BrokerRuntime;
+    use crate::processor::admin_broker_processor::broker_config_request_handler::BrokerConfigRequestHandler;
 
     fn temp_test_root(label: &str) -> std::path::PathBuf {
         let millis = SystemTime::now()
@@ -814,6 +776,11 @@ mod tests {
     }
 
     #[test]
+    fn topic_request_handler_is_stateless() {
+        assert_eq!(std::mem::size_of::<TopicRequestHandler>(), 0);
+    }
+
+    #[test]
     fn decode_topic_queue_mapping_detail_accepts_java_fastjson_numeric_keys() {
         let body = br#"{"topic":"static-topic","scope":"__global__","totalQueues":2,"bname":"interopBroker","epoch":1,"dirty":false,"currIdMap":{0:0,1:1},"hostedQueues":{0:[{"gen":0,"queueId":0,"bname":"interopBroker","logicOffset":0,"startOffset":0,"endOffset":-1,"timeOfStart":-1,"timeOfEnd":-1}],1:[{"gen":0,"queueId":1,"bname":"interopBroker","logicOffset":0,"startOffset":0,"endOffset":-1,"timeOfStart":-1,"timeOfEnd":-1}]}}"#;
 
@@ -843,7 +810,8 @@ mod tests {
     async fn update_and_create_static_topic_persists_mapping_detail() {
         let mut runtime = new_test_runtime("static-topic").await;
         let inner = runtime.inner_for_test().clone();
-        let mut handler = TopicRequestHandler::new(inner.clone());
+        let handler = TopicRequestHandler::new();
+        let broker_config_request_handler = BrokerConfigRequestHandler::new(inner.clone());
 
         let detail = TopicQueueMappingDetail {
             topic_queue_mapping_info:
@@ -881,7 +849,13 @@ mod tests {
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
 
         let response = handler
-            .update_and_create_static_topic(channel, ctx, RequestCode::UpdateAndCreateStaticTopic, &mut request)
+            .update_and_create_static_topic(
+                &broker_config_request_handler,
+                channel,
+                ctx,
+                RequestCode::UpdateAndCreateStaticTopic,
+                &mut request,
+            )
             .await
             .expect("update and create static topic should succeed")
             .expect("update and create static topic should return response");
