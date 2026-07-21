@@ -7,7 +7,8 @@
 > 当前复核状态：根 workspace 已达到目标 32 个 package；75/82 工作包完成，PR-M11-12 进行中，
 > PR-M12-01～06 未开始，合计剩余 7 个
 
-剩余任务数量、M11-12 内部执行批次与 M12 六个工作包见 [`REMAINING-TASKS.md`](REMAINING-TASKS.md)。
+剩余任务数量、M11-12 内部执行批次与 M12 六个工作包见 [`REMAINING-TASKS.md`](REMAINING-TASKS.md)：正式口径
+剩余 7 个工作包，当前执行层下界为 31 个最小可审查单元。
 
 ## 1. 使用方式
 

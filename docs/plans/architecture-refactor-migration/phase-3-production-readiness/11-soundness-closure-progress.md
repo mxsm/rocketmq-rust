@@ -3429,6 +3429,10 @@ Broker mut-from-ref lint boundary 随 Issue #8513 完成以下收口：
 
 ## 剩余切片与 Gate
 
+2026-07-22 盘点将全部剩余工作固化为 31 个最小可审查单元：16 个 production owner、2 个
+test/compatibility、7 个 M10/Phase 3 动态验收与签署、6 个 M12；这只是执行层下界，正式进度仍为 75/82。
+完整逐项 checklist 见 `docs/plans/architecture-refactor-migration/REMAINING-TASKS.md`。
+
 1. Broker BrokerRuntimeInner capability carrier 与其他 admin/processor/leaf owner（41/107）；transaction bridge/Store compatibility、Producer/ColdData admin leaf、Schedule hook、put-message preflight、ConsumerOrderInfoManager、TopicRouteInfoManager、TopicQueueMappingCleanService、MessageArrivingListener、ClientHousekeepingService、ClientManage heartbeat registration/retry-topic capability、ConsumerManage list/offset capability、Query Assignment、QueryMessage/RecallMessage/EndTransaction/PeekMessage/Notification/ChangeInvisibleTime Store capability、POP long-polling、POP Lite processor/long-polling、LiteSubscriptionCtl、LiteManager 与 SlaveSynchronize 显式 policy/query/view/provider/dispatcher/TaskGroup、LiteManager/LiteSubscriptionCtl 标准 Arc wrapper、crate-wide mut_from_ref lint allowance、PollingInfo weak provider、SubscriptionGroup config lookup、HA diagnostics/control/min-broker transition、controller role-change duplicate owner、BatchMq、SubscriptionGroup、MessageRelated、Offset、Consumer、Topic handler 与未编译 V2 示例残留已退出 leaf-level 完整 runtime/store owner，LiteLifecycle 只读 Store carrier 已收窄为普通借用。
 2. Store MappedFileQueue/其余 ConsumeQueue、CommitLog/Flush、StoreHandle/Rocks/Timer 与其余 HA service/actor（82/234）；BrokerStats observer、ConsumeQueueExt 显式锁 owner、HA replication-state callback、未共享 HA child direct ownership、commit-to-flush 窄唤醒能力、HA confirm/epoch 原子发布、HA connection runtime handle、CommitLog shared disk-flush、auto-switch client construction 与 single delegate Store owner 已完成。
 3. Production `WeakArcMut` 已清零；继续迁移 test/compatibility 中受控使用并移除其余 nightly feature。公开 `arc_mut.rs`/re-export 的 destructive 删除受 next-major 两轮弃用与 Release Manager/HUMAN Gate 约束，不能静默重置 public API baseline。
