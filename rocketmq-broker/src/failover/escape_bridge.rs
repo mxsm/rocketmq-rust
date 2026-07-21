@@ -16,6 +16,7 @@ use bytes::Bytes;
 use cheetah_string::CheetahString;
 use futures::future::BoxFuture;
 use futures::FutureExt;
+use rocketmq_common::common::broker::broker_role::BrokerRole;
 use rocketmq_common::common::hasher::string_hasher::JavaStringHasher;
 use rocketmq_common::common::message::message_decoder;
 use rocketmq_common::common::message::message_ext::MessageExt;
@@ -156,6 +157,22 @@ impl<MS: MessageStore> EscapeBridge<MS> {
             .message_store()
             .ok_or(MessageStoreUnavailable)?;
         Ok(message_store.select_one_message_by_offset(offset))
+    }
+
+    pub(crate) async fn put_message_to_local_store(
+        &self,
+        message: MessageExtBrokerInner,
+    ) -> Result<PutMessageResult, MessageStoreUnavailable> {
+        let mut message_store = self
+            .broker_runtime_inner
+            .message_store()
+            .cloned()
+            .ok_or(MessageStoreUnavailable)?;
+        Ok(message_store.put_message(message).await)
+    }
+
+    pub(crate) fn is_message_store_slave(&self) -> bool {
+        self.broker_runtime_inner.message_store_config().broker_role == BrokerRole::Slave
     }
 }
 

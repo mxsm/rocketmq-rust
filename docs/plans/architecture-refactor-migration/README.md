@@ -780,6 +780,15 @@ test 132/422、compatibility 14/40、Broker production 67/156、Store production
 identity/3 occurrence 与 1 个 test identity/1 occurrence，无 relocation、新增 identity 或临时 approval。总进度仍为
 75/82，下一子切片 M11-12bc40 继续 Broker aggregate/leaf 或 Store WAL/queue/timer/HA owner。
 
+Broker recall-message runtime capability 随 Issue #8491 收窄：`RecallMessageProcessor` 不再持有完整
+`ArcMut<BrokerRuntimeInner>`，只注入启动期 recall policy、共享 Topic/Stats handle 与 `Weak<EscapeBridge>` Store
+capability；broker role 保持 live 读取，controller 降级为 Slave 后不会使用旧快照，provider shutdown 与 Store 缺失均
+fail closed。Recall 校验顺序、tombstone properties、直接本地 Store put、put-result/统计映射保持不变。ArcMut 快照降至
+292 identities/848 occurrences（production 147/387、test 131/421、compatibility 14/40、Broker production 65/153、
+Store production 82/234），净删除 2 个 production identity/3 occurrence 与 1 个 test identity/1 occurrence，无
+relocation、新增 identity 或临时 approval。总进度仍为 75/82，下一子切片 M11-12bc41 继续 Broker aggregate/leaf 或
+Store WAL/queue/timer/HA owner。
+
 ### 9.3 证据目录
 
 - 运行期生成物：`target/architecture-refactor/Mxx/<run-id>/`，不提交 Git。

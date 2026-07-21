@@ -12,9 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::net::SocketAddr;
+use std::sync::Arc;
+use std::sync::Weak;
+
 use bytes::Bytes;
 use cheetah_string::CheetahString;
-use rocketmq_common::common::broker::broker_role::BrokerRole;
+use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
@@ -34,35 +38,136 @@ use rocketmq_remoting::protocol::header::recall_message_response_header::RecallM
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
-use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
+use rocketmq_store::config::message_store_config::MessageStoreConfig;
+use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
 use rocketmq_store::timer::timer_message_store::build_delete_key;
 use tracing::info;
 use tracing::warn;
 
-use crate::broker_runtime::BrokerRuntimeInner;
+use crate::failover::escape_bridge::EscapeBridge;
+use crate::failover::escape_bridge::MessageStoreUnavailable;
+use crate::topic::manager::topic_config_manager::TopicConfigManager;
 
 const RECALL_MESSAGE_TAG: &str = "_RECALL_TAG_";
 
-pub struct RecallMessageProcessor<MS: MessageStore> {
-    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+#[derive(Clone)]
+pub(crate) struct RecallMessagePolicy {
+    region_id: CheetahString,
+    recall_message_enable: bool,
+    start_accept_send_request_time_stamp: i64,
+    broker_permission: u32,
+    allow_recall_when_broker_not_writeable: bool,
+    broker_name: CheetahString,
+    timer_max_delay_sec: i64,
+    store_host: SocketAddr,
 }
 
-impl<MS> RecallMessageProcessor<MS>
-where
-    MS: MessageStore,
-{
-    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
-        Self { broker_runtime_inner }
+impl RecallMessagePolicy {
+    pub(crate) fn from_configs(
+        broker_config: &BrokerConfig,
+        message_store_config: &MessageStoreConfig,
+        store_host: SocketAddr,
+    ) -> Self {
+        Self {
+            region_id: broker_config.region_id.clone(),
+            recall_message_enable: broker_config.recall_message_enable,
+            start_accept_send_request_time_stamp: broker_config.start_accept_send_request_time_stamp,
+            broker_permission: broker_config.broker_permission,
+            allow_recall_when_broker_not_writeable: broker_config.allow_recall_when_broker_not_writeable,
+            broker_name: broker_config.broker_name().clone(),
+            timer_max_delay_sec: message_store_config.timer_max_delay_sec as i64,
+            store_host,
+        }
+    }
+}
+
+pub(crate) struct RecallMessageStoreCapability<MS: MessageStore> {
+    escape_bridge: Weak<EscapeBridge<MS>>,
+}
+
+impl<MS: MessageStore> RecallMessageStoreCapability<MS> {
+    pub(crate) fn new(escape_bridge: &Arc<EscapeBridge<MS>>) -> Self {
+        Self {
+            escape_bridge: Arc::downgrade(escape_bridge),
+        }
+    }
+
+    async fn put_message(&self, message: MessageExtBrokerInner) -> Result<PutMessageResult, MessageStoreUnavailable> {
+        self.escape_bridge
+            .upgrade()
+            .ok_or(MessageStoreUnavailable)?
+            .put_message_to_local_store(message)
+            .await
+    }
+
+    fn is_slave(&self) -> Result<bool, MessageStoreUnavailable> {
+        Ok(self
+            .escape_bridge
+            .upgrade()
+            .ok_or(MessageStoreUnavailable)?
+            .is_message_store_slave())
+    }
+}
+
+impl<MS: MessageStore> Clone for RecallMessageStoreCapability<MS> {
+    fn clone(&self) -> Self {
+        Self {
+            escape_bridge: Weak::clone(&self.escape_bridge),
+        }
+    }
+}
+
+pub(crate) struct RecallMessageProcessorContext<MS: MessageStore> {
+    policy: RecallMessagePolicy,
+    topic_config_manager: Arc<TopicConfigManager>,
+    message_store: RecallMessageStoreCapability<MS>,
+    broker_stats_manager: Arc<BrokerStatsManager>,
+}
+
+impl<MS: MessageStore> RecallMessageProcessorContext<MS> {
+    pub(crate) fn new(
+        policy: RecallMessagePolicy,
+        topic_config_manager: Arc<TopicConfigManager>,
+        message_store: RecallMessageStoreCapability<MS>,
+        broker_stats_manager: Arc<BrokerStatsManager>,
+    ) -> Self {
+        Self {
+            policy,
+            topic_config_manager,
+            message_store,
+            broker_stats_manager,
+        }
+    }
+}
+
+impl<MS: MessageStore> Clone for RecallMessageProcessorContext<MS> {
+    fn clone(&self) -> Self {
+        Self {
+            policy: self.policy.clone(),
+            topic_config_manager: Arc::clone(&self.topic_config_manager),
+            message_store: self.message_store.clone(),
+            broker_stats_manager: Arc::clone(&self.broker_stats_manager),
+        }
+    }
+}
+
+pub struct RecallMessageProcessor<MS: MessageStore> {
+    context: RecallMessageProcessorContext<MS>,
+}
+
+impl<MS: MessageStore> RecallMessageProcessor<MS> {
+    pub(crate) fn new(context: RecallMessageProcessorContext<MS>) -> Self {
+        Self { context }
     }
 }
 
 impl<MS: MessageStore> Clone for RecallMessageProcessor<MS> {
     fn clone(&self) -> Self {
         Self {
-            broker_runtime_inner: self.broker_runtime_inner.clone(),
+            context: self.context.clone(),
         }
     }
 }
@@ -127,18 +232,18 @@ where
         let mut response = RemotingCommand::create_response_command_with_header(RecallMessageResponseHeader::default());
         response.set_opaque_mut(request.opaque());
 
-        let region_id = self.broker_runtime_inner.broker_config().region_id.clone();
+        let region_id = self.context.policy.region_id.clone();
         response.add_ext_field(MessageConst::PROPERTY_MSG_REGION, region_id);
 
         let request_header = request.decode_command_custom_header::<RecallMessageRequestHeader>()?;
 
-        if !self.broker_runtime_inner.broker_config().recall_message_enable {
+        if !self.context.policy.recall_message_enable {
             return Ok(response
                 .set_code(ResponseCode::NoPermission)
                 .set_remark(CheetahString::from_static_str("recall failed, operation is forbidden")));
         }
 
-        if self.broker_runtime_inner.message_store_config().broker_role == BrokerRole::Slave {
+        if !matches!(self.context.message_store.is_slave(), Ok(false)) {
             return Ok(response
                 .set_code(ResponseCode::SlaveNotAvailable)
                 .set_remark(CheetahString::from_static_str(
@@ -146,21 +251,15 @@ where
                 )));
         }
 
-        let start_timestamp = self
-            .broker_runtime_inner
-            .broker_config()
-            .start_accept_send_request_time_stamp;
+        let start_timestamp = self.context.policy.start_accept_send_request_time_stamp;
         if current_millis() < start_timestamp as u64 {
             return Ok(response.set_code(ResponseCode::ServiceNotAvailable).set_remark(
                 CheetahString::from_static_str("recall failed, broker service not available"),
             ));
         }
 
-        let broker_permission = self.broker_runtime_inner.broker_config().broker_permission;
-        let allow_recall_when_not_writeable = self
-            .broker_runtime_inner
-            .broker_config()
-            .allow_recall_when_broker_not_writeable;
+        let broker_permission = self.context.policy.broker_permission;
+        let allow_recall_when_not_writeable = self.context.policy.allow_recall_when_broker_not_writeable;
 
         if !PermName::is_writeable(broker_permission) && !allow_recall_when_not_writeable {
             return Ok(response.set_code(ResponseCode::ServiceNotAvailable).set_remark(
@@ -169,8 +268,8 @@ where
         }
 
         let _topic_config = self
-            .broker_runtime_inner
-            .topic_config_manager()
+            .context
+            .topic_config_manager
             .select_topic_config(request_header.topic());
 
         if _topic_config.is_none() {
@@ -202,7 +301,7 @@ where
                 .set_remark(CheetahString::from_static_str("recall failed, topic not match")));
         }
 
-        let broker_name = self.broker_runtime_inner.broker_config().broker_name();
+        let broker_name = &self.context.policy.broker_name;
         if broker_name.as_str() != handle_broker_name {
             return Ok(response
                 .set_code(ResponseCode::IllegalOperation)
@@ -214,7 +313,7 @@ where
         let timestamp = handle_timestamp_str.parse::<i64>().unwrap_or(-1);
         let current_time_millis = current_millis() as i64;
         let time_left = timestamp - current_time_millis;
-        let timer_max_delay_sec = self.broker_runtime_inner.message_store_config().timer_max_delay_sec as i64;
+        let timer_max_delay_sec = self.context.policy.timer_max_delay_sec;
 
         if time_left <= 0 || time_left >= timer_max_delay_sec * 1000 {
             return Ok(response
@@ -231,13 +330,14 @@ where
         );
 
         let begin_time_millis = current_millis();
-        let put_message_result = self
-            .broker_runtime_inner
-            .message_store_mut()
-            .as_mut()
-            .expect("message store not initialized")
-            .put_message(msg_inner)
-            .await;
+        let put_message_result = match self.context.message_store.put_message(msg_inner).await {
+            Ok(put_message_result) => put_message_result,
+            Err(MessageStoreUnavailable) => {
+                return Ok(response
+                    .set_code(ResponseCode::SystemError)
+                    .set_remark(CheetahString::from_static_str("recall failed, execute error")));
+            }
+        };
 
         self.handle_put_message_result(
             put_message_result,
@@ -297,7 +397,7 @@ where
         let properties_string = MessageDecoder::message_properties_to_string(&properties);
 
         let born_host = ctx.remote_address();
-        let store_host = self.broker_runtime_inner.store_host();
+        let store_host = self.context.policy.store_host;
 
         let mut message = Message::builder()
             .topic(handle_topic)
@@ -359,21 +459,17 @@ where
                 let msg_num = append_result.msg_num;
                 let wrote_bytes = append_result.wrote_bytes;
 
-                self.broker_runtime_inner
-                    .broker_stats_manager()
-                    .inc_topic_put_nums(&topic, msg_num, 1);
+                self.context.broker_stats_manager.inc_topic_put_nums(&topic, msg_num, 1);
 
-                self.broker_runtime_inner
-                    .broker_stats_manager()
+                self.context
+                    .broker_stats_manager
                     .inc_topic_put_size(&topic, wrote_bytes);
 
-                self.broker_runtime_inner
-                    .broker_stats_manager()
-                    .inc_broker_put_nums(&topic, msg_num);
+                self.context.broker_stats_manager.inc_broker_put_nums(&topic, msg_num);
 
                 let latency = (current_millis() - begin_time_millis) as i32;
-                self.broker_runtime_inner
-                    .broker_stats_manager()
+                self.context
+                    .broker_stats_manager
                     .inc_topic_put_latency(&topic, 0, latency);
 
                 {
@@ -416,6 +512,7 @@ fn recall_response_header_missing() -> RocketMQError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rocketmq_store::message_store::GenericMessageStore;
 
     #[test]
     fn test_recall_message_tag_constant() {
@@ -427,5 +524,56 @@ mod tests {
         let error = recall_response_header_missing();
 
         assert_eq!(error.kind(), rocketmq_error::ErrorKind::ResponseProcessFailed);
+    }
+
+    #[test]
+    fn recall_policy_captures_only_required_startup_values() {
+        let broker_config = BrokerConfig {
+            region_id: CheetahString::from_static_str("region-a"),
+            recall_message_enable: false,
+            start_accept_send_request_time_stamp: 42,
+            broker_permission: 3,
+            allow_recall_when_broker_not_writeable: true,
+            ..Default::default()
+        };
+        let message_store_config = MessageStoreConfig {
+            timer_max_delay_sec: 99,
+            ..Default::default()
+        };
+        let store_host = "127.0.0.1:10911".parse().expect("valid store host");
+
+        let policy = RecallMessagePolicy::from_configs(&broker_config, &message_store_config, store_host);
+
+        assert_eq!(policy.region_id, "region-a");
+        assert!(!policy.recall_message_enable);
+        assert_eq!(policy.start_accept_send_request_time_stamp, 42);
+        assert_eq!(policy.broker_permission, 3);
+        assert!(policy.allow_recall_when_broker_not_writeable);
+        assert_eq!(policy.broker_name, broker_config.broker_name().clone());
+        assert_eq!(policy.timer_max_delay_sec, 99);
+        assert_eq!(policy.store_host, store_host);
+    }
+
+    #[tokio::test]
+    async fn recall_put_capability_fails_closed_after_provider_shutdown() {
+        let capability = RecallMessageStoreCapability::<GenericMessageStore> {
+            escape_bridge: Weak::new(),
+        };
+
+        assert!(matches!(capability.is_slave(), Err(MessageStoreUnavailable)));
+        assert!(matches!(
+            capability.put_message(MessageExtBrokerInner::default()).await,
+            Err(MessageStoreUnavailable)
+        ));
+    }
+
+    #[test]
+    fn recall_processor_source_uses_only_explicit_capabilities() {
+        let source = include_str!("recall_message_processor.rs");
+
+        assert!(!source.contains(concat!("ArcMut<Broker", "RuntimeInner")));
+        assert!(!source.contains(concat!("broker_runtime", "_inner")));
+        assert!(source.contains("RecallMessageProcessorContext"));
+        assert!(source.contains(concat!("Weak<Escape", "Bridge")));
     }
 }
