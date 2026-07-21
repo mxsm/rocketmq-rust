@@ -94,6 +94,10 @@ impl SubscriptionGroupConfigLookup {
     pub(crate) fn find_subscription_group_config(&self, group: &CheetahString) -> Option<Arc<SubscriptionGroupConfig>> {
         self.manager.find_subscription_group_config(group)
     }
+
+    pub(crate) fn contains_subscription_group(&self, group: &CheetahString) -> bool {
+        self.manager.contains_subscription_group(group)
+    }
 }
 
 impl SubscriptionGroupManager {

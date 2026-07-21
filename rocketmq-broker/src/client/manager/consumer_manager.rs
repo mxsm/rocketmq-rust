@@ -175,6 +175,10 @@ impl ConsumerAssignmentView {
             .get(group)
             .map_or_else(Vec::new, |info| info.get_all_client_ids())
     }
+
+    pub(crate) fn client_ids_if_present(&self, group: &CheetahString) -> Option<Vec<CheetahString>> {
+        self.consumer_table.get(group).map(|info| info.get_all_client_ids())
+    }
 }
 
 impl Clone for ConsumerConnectionHousekeeping {
@@ -1125,6 +1129,7 @@ mod tests {
         };
         let group = CheetahString::from_static_str("assignment-group");
         assert!(view.client_ids(&group).is_empty());
+        assert_eq!(view.client_ids_if_present(&group), None);
 
         let group_info = ConsumerGroupInfo::with_group_name(group.clone());
         let client = ClientChannelInfo::new(
@@ -1142,8 +1147,13 @@ mod tests {
             view.client_ids(&group),
             vec![CheetahString::from_static_str("assignment-client")]
         );
+        assert_eq!(
+            view.client_ids_if_present(&group),
+            Some(vec![CheetahString::from_static_str("assignment-client")])
+        );
 
         assert!(group_info.unregister_channel(&client));
         assert!(view.client_ids(&group).is_empty());
+        assert_eq!(view.client_ids_if_present(&group), Some(Vec::new()));
     }
 }
