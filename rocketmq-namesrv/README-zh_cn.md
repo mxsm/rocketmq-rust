@@ -93,18 +93,29 @@ cargo run -p rocketmq-namesrv --bin rocketmq-namesrv-rust -- \
   --bindAddress 0.0.0.0
 ```
 
-使用示例配置文件启动：
+使用配置文件启动。`resource/` 下提供了三个示例，可按需选择
+（它们的区别请参见下方的[配置](#配置)）：
 
 ```bash
+# 精简开发基线：只设置本地运行时通常需要覆盖的配置项。
+cargo run -p rocketmq-namesrv --bin rocketmq-namesrv-rust -- \
+  -c rocketmq-namesrv/resource/namesrv.toml
+
+# 包含所有可用配置项，并完整标注默认值。该文件仅供参考，
+# 未检查其路径设置前请勿直接使用。
 cargo run -p rocketmq-namesrv --bin rocketmq-namesrv-rust -- \
   -c rocketmq-namesrv/resource/namesrv-example.toml
+
+# 面向生产的基线，使用更大的线程池和队列容量。
+cargo run -p rocketmq-namesrv --bin rocketmq-namesrv-rust -- \
+  -c rocketmq-namesrv/resource/namesrv-production.toml
 ```
 
 打印合并后的配置并退出：
 
 ```bash
 cargo run -p rocketmq-namesrv --bin rocketmq-namesrv-rust -- \
-  -c rocketmq-namesrv/resource/namesrv-example.toml \
+  -c rocketmq-namesrv/resource/namesrv.toml \
   -p
 ```
 
@@ -116,8 +127,16 @@ cargo run -p rocketmq-namesrv --bin rocketmq-namesrv-rust -- \
 
 ## 配置
 
-示例文件 [`resource/namesrv-example.toml`](resource/namesrv-example.toml) 记录了支持的配置项。配置模型支持 Java 风格
-camelCase key；存在 serde alias 的字段也可使用 Rust 风格字段名。
+`resource/` 下提供了三个用途各异的示例配置文件：
+
+| 文件 | 用途 |
+| ---- | ---- |
+| [`resource/namesrv.toml`](resource/namesrv.toml) | 精简开发基线，只设置本地运行时可能需要修改的配置项；其他配置项使用内置默认值。 |
+| [`resource/namesrv-example.toml`](resource/namesrv-example.toml) | 完整注释参考，记录每个受支持的配置项及其默认值。不应在未修改的情况下直接使用，请先检查其中的路径设置。 |
+| [`resource/namesrv-production.toml`](resource/namesrv-production.toml) | 面向生产的基线，线程池和队列容量高于默认值；部署前请根据自身容量规划进行检查。 |
+
+配置模型支持 Java 风格的 camelCase key；存在 serde alias 的字段也可使用
+Rust 风格字段名。
 
 | Key | 默认值 | 作用 |
 | --- | ------ | ---- |
