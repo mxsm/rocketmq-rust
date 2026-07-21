@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub(crate) mod capability;
+
 use std::collections::hash_map::DefaultHasher;
 use std::future::Future;
 use std::hash::Hash;
@@ -52,7 +54,6 @@ use rocketmq_remoting::runtime::processor::RejectRequestResponse;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskKind;
-use rocketmq_rust::ArcMut;
 use rocketmq_store::base::get_message_result::GetMessageResult;
 use rocketmq_store::base::message_status_enum::GetMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
@@ -63,7 +64,6 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
-use crate::broker_runtime::BrokerRuntimeInner;
 use crate::client::consumer_group_info::ConsumerGroupInfo;
 use crate::coldctr::cold_data_pull_request_hold_service::ColdDataPullRequest;
 use crate::coldctr::cold_data_pull_request_hold_service::NO_SUSPEND_KEY;
@@ -72,6 +72,7 @@ use crate::filter::expression_for_retry_message_filter::ExpressionForRetryMessag
 use crate::filter::expression_message_filter::ExpressionMessageFilter;
 use crate::long_polling::long_polling_service::pull_request_hold_service::PullRequestProcessor;
 use crate::processor::default_pull_message_result_handler::DefaultPullMessageResultHandler;
+use crate::processor::pull_message_processor::capability::PullMessageProcessorContext;
 use crate::processor::pull_message_result_handler::PullMessageResultHandler;
 
 const WAKEUP_WRITE_LOCK_SHARDS: usize = 64;
@@ -125,7 +126,7 @@ pub struct PullMessageProcessor<MS: MessageStore> {
     /// Sharded write guards used only for suspended-pull wakeup responses.
     /// Same-channel responses map to the same guard; unrelated channels can write in parallel.
     wakeup_write_locks: Arc<Vec<Arc<Mutex<()>>>>,
-    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+    context: Arc<PullMessageProcessorContext<MS>>,
     wakeup_task_group: OnceLock<TaskGroup>,
 }
 
@@ -176,9 +177,8 @@ where
     }
 
     pub(crate) fn reject_request_shared(&self) -> RejectRequestResponse {
-        if !self.broker_runtime_inner.broker_config().slave_read_enable
-            && self.broker_runtime_inner.message_store_config().broker_role == BrokerRole::Slave
-        {
+        let policy = self.context.policy();
+        if !policy.slave_read_enable && policy.broker_role == BrokerRole::Slave {
             return (
                 true,
                 Some(RemotingCommand::create_response_command_with_code_remark(
@@ -203,12 +203,12 @@ where
 {
     pub fn new(
         pull_message_result_handler: Arc<DefaultPullMessageResultHandler<MS>>,
-        broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+        context: Arc<PullMessageProcessorContext<MS>>,
     ) -> Self {
         Self {
             pull_message_result_handler,
             wakeup_write_locks: new_wakeup_write_locks(),
-            broker_runtime_inner,
+            context,
             wakeup_task_group: OnceLock::new(),
         }
     }
@@ -304,12 +304,8 @@ where
         sys_flag = PullSysFlag::clear_commit_offset_flag(sys_flag as u32) as i32;
         request_header.sys_flag = sys_flag;
         let rpc_request = RpcRequest::new(RequestCode::PullMessage.to_i32(), request_header.clone(), None);
-        let rpc_response = self
-            .broker_runtime_inner
-            .broker_outer_api()
-            .rpc_client()
-            .invoke(rpc_request, self.broker_runtime_inner.broker_config().forward_timeout)
-            .await;
+        let forward_timeout = self.context.policy().forward_timeout;
+        let rpc_response = self.context.rpc_client().invoke(rpc_request, forward_timeout).await;
         let mut rpc_response = match rpc_response {
             Ok(value) => value,
             Err(err) => {
@@ -353,13 +349,13 @@ where
             ));
         }
         let subscription_data = subscription_data.unwrap();
-        self.broker_runtime_inner.consumer_manager().compensate_subscribe_data(
+        self.context.consumers().compensate_subscribe_data(
             request_header.consumer_group.as_ref(),
             request_header.topic.as_ref(),
             &subscription_data,
         );
         let consumer_filter_data = if !ExpressionType::is_tag_type(Some(subscription_data.expression_type.as_str())) {
-            let consumer_filter_data = self.broker_runtime_inner.consumer_filter_manager().resolve(
+            let consumer_filter_data = self.context.filters().resolve(
                 request_header.topic.clone(),
                 request_header.consumer_group.clone(),
                 request_header.subscription.clone(),
@@ -394,8 +390,8 @@ where
         response_header: &mut PullMessageResponseHeader,
     ) -> Result<SubscriptionDataResult, RemotingCommand> {
         let consumer_group_info = self
-            .broker_runtime_inner
-            .consumer_manager()
+            .context
+            .consumers()
             .get_consumer_group_info(request_header.consumer_group.as_ref());
         if consumer_group_info.is_none() {
             warn!(
@@ -428,7 +424,7 @@ where
             ));
         }
 
-        let read_forbidden = self.broker_runtime_inner.subscription_group_manager().get_forbidden(
+        let read_forbidden = self.context.subscription_groups().get_forbidden(
             subscription_group_config.group_name(),
             &request_header.topic,
             PermName::INDEX_PERM_READ as i32,
@@ -478,8 +474,8 @@ where
 
         let consumer_filter_data = if !ExpressionType::is_tag_type(Some(subscription_data.expression_type.as_str())) {
             let consumer_filter_data = self
-                .broker_runtime_inner
-                .consumer_filter_manager()
+                .context
+                .filters()
                 .get_consumer_filter_data(request_header.topic.as_ref(), request_header.consumer_group.as_ref());
             if consumer_filter_data.is_none() {
                 return Err(Self::error_response(
@@ -520,13 +516,13 @@ where
         consumer_filter_data: Option<ConsumerFilterData>,
     ) -> ArcMessageFilter {
         // TODO: Consider optimizing consumer_filter_manager clone - Arc wrapper might be better
-        if self.broker_runtime_inner.broker_config().filter_support_retry {
+        if self.context.policy().filter_support_retry {
             Arc::new(ExpressionForRetryMessageFilter)
         } else {
             Arc::new(ExpressionMessageFilter::new(
                 Some(subscription_data.clone()),
                 consumer_filter_data,
-                Arc::new(self.broker_runtime_inner.consumer_filter_manager().clone()),
+                Arc::clone(self.context.filters()),
             ))
         }
     }
@@ -691,36 +687,29 @@ where
             .unwrap();
         //info!("receive pull message request: {:?}", request_header);
         let mut response_header = PullMessageResponseHeader::default();
+        let policy = self.context.policy();
 
-        if !PermName::is_readable(self.broker_runtime_inner.broker_config().broker_permission) {
+        if !PermName::is_readable(policy.broker_permission) {
             response_header.forbidden_type = Some(ForbiddenType::BROKER_FORBIDDEN);
             return Ok(Some(
                 response
                     .set_code(ResponseCode::NoPermission)
                     .set_command_custom_header(response_header)
-                    .set_remark(format!(
-                        "the broker[{}] pulling message is forbidden",
-                        self.broker_runtime_inner.broker_config().broker_ip1
-                    )),
+                    .set_remark(format!("the broker[{}] pulling message is forbidden", policy.broker_ip)),
             ));
         }
-        if RequestCode::LitePullMessage == request_code
-            && !self.broker_runtime_inner.broker_config().lite_pull_message_enable
-        {
+        if RequestCode::LitePullMessage == request_code && !policy.lite_pull_message_enable {
             response_header.forbidden_type = Some(ForbiddenType::BROKER_FORBIDDEN);
             return Ok(Some(
                 response
                     .set_code(ResponseCode::NoPermission)
                     .set_command_custom_header(response_header)
-                    .set_remark(format!(
-                        "the broker[{}] pulling message is forbidden",
-                        self.broker_runtime_inner.broker_config().broker_ip1
-                    )),
+                    .set_remark(format!("the broker[{}] pulling message is forbidden", policy.broker_ip)),
             ));
         }
         let subscription_group_config = self
-            .broker_runtime_inner
-            .subscription_group_manager()
+            .context
+            .subscription_groups()
             .find_subscription_group_config(request_header.consumer_group.as_ref());
 
         if subscription_group_config.is_none() {
@@ -747,10 +736,7 @@ where
                     )),
             ));
         }
-        let topic_config = self
-            .broker_runtime_inner
-            .topic_config_manager()
-            .select_topic_config(request_header.topic.as_ref());
+        let topic_config = self.context.topics().select_topic_config(request_header.topic.as_ref());
         if topic_config.is_none() {
             error!(
                 "the topic {} not exist, consumer: {}",
@@ -778,8 +764,8 @@ where
             ));
         }
         let mut topic_queue_mapping_context = self
-            .broker_runtime_inner
-            .topic_queue_mapping_manager()
+            .context
+            .topic_mappings()
             .build_topic_queue_mapping_context(&request_header, false);
         if let Some(resp) = self
             .rewrite_request_for_static_topic(&mut request_header, &mut topic_queue_mapping_context)
@@ -804,9 +790,11 @@ where
         }
         let (consume_type, message_model) =
             consumer_compensation_for_request_source(RequestSource::parse_integer(request_header.request_source));
-        self.broker_runtime_inner
-            .consumer_manager()
-            .compensate_basic_consumer_info(request_header.consumer_group.as_ref(), consume_type, message_model);
+        self.context.consumers().compensate_basic_consumer_info(
+            request_header.consumer_group.as_ref(),
+            consume_type,
+            message_model,
+        );
         let has_subscription_flag = PullSysFlag::has_subscription_flag(request_header.sys_flag as u32);
 
         // Get subscription data and consumer filter data using helper methods
@@ -830,7 +818,7 @@ where
         };
 
         if !ExpressionType::is_tag_type(Some(subscription_data.expression_type.as_str()))
-            && !self.broker_runtime_inner.broker_config().enable_property_filter
+            && !policy.enable_property_filter
         {
             return Ok(Some(
                 response
@@ -848,60 +836,50 @@ where
         // ColdDataFlow control
         cfg_if::cfg_if! {
             if #[cfg(feature = "local_file_store")] {
-                if let Some(cold_data_cg_ctr_service) = self.broker_runtime_inner.cold_data_cg_ctr_service() {
+                if let Some(cold_data_cg_ctr_service) = self.context.cold_data_flow() {
                     if cold_data_cg_ctr_service.is_cg_need_cold_data_flow_ctr(request_header.consumer_group.as_str()) {
-                        // Check if message is in cold data area
-                        if let Some(message_store) = self.broker_runtime_inner.message_store() {
-                            let is_msg_logic_cold = message_store
-                                .get_commit_log()
-                                .get_cold_data_check_service()
-                                .is_msg_in_cold_area(
-                                    &request_header.consumer_group,
-                                    &request_header.topic,
-                                    request_header.queue_id,
-                                    request_header.queue_offset,
-                                );
+                        let is_msg_logic_cold = self.context.store().is_message_in_cold_area(
+                            &request_header.consumer_group,
+                            &request_header.topic,
+                            request_header.queue_id,
+                            request_header.queue_offset,
+                        ).unwrap_or(false);
 
-                            if is_msg_logic_cold {
-                                // Get consumer type
-                                let consumer_group_info = self
-                                    .broker_runtime_inner
-                                    .consumer_manager()
-                                    .get_consumer_group_info(request_header.consumer_group.as_ref());
+                        if is_msg_logic_cold {
+                            let consumer_group_info = self
+                                .context
+                                .consumers()
+                                .get_consumer_group_info(request_header.consumer_group.as_ref());
 
-                                if let Some(ref cg_info) = consumer_group_info {
-                                    match cg_info.get_consume_type() {
-                                        ConsumeType::ConsumePassively => {
-                                            // PUSH consumer: return SYSTEM_BUSY immediately
-                                            return Ok(Some(
-                                                response
-                                                    .set_code(ResponseCode::SystemBusy)
-                                                    .set_remark("This consumer group is reading cold data. It has been flow control"),
-                                            ));
-                                        }
-                                        ConsumeType::ConsumeActively => {
-                                            // PULL consumer: suspend request if allowed
-                                            if broker_allow_flow_ctr_suspend {
-                                                if let Some(cold_data_hold_service) = self.broker_runtime_inner.cold_data_pull_request_hold_service() {
-                                                    let now = self.broker_runtime_inner.message_store().unwrap().now();
-                                                    let pull_request = ColdDataPullRequest::new(
-                                                        request.clone(),
-                                                        channel.clone(),
-                                                        1000, // timeout millis
-                                                        now,
-                                                        request_header.queue_offset,
-                                                        subscription_data.clone(),
-                                                        message_filter.clone(),
-                                                    );
-                                                    cold_data_hold_service.suspend_cold_data_read_request(pull_request);
+                            if let Some(ref cg_info) = consumer_group_info {
+                                match cg_info.get_consume_type() {
+                                    ConsumeType::ConsumePassively => {
+                                        return Ok(Some(
+                                            response
+                                                .set_code(ResponseCode::SystemBusy)
+                                                .set_remark("This consumer group is reading cold data. It has been flow control"),
+                                        ));
+                                    }
+                                    ConsumeType::ConsumeActively => {
+                                        if broker_allow_flow_ctr_suspend {
+                                            if let Ok(now) = self.context.store().now() {
+                                                let pull_request = ColdDataPullRequest::new(
+                                                    request.clone(),
+                                                    channel.clone(),
+                                                    1000,
+                                                    now,
+                                                    request_header.queue_offset,
+                                                    subscription_data.clone(),
+                                                    message_filter.clone(),
+                                                );
+                                                if self.context.suspend_cold_data_pull(pull_request) {
                                                     return Ok(None);
                                                 }
                                             }
-                                            // If not suspended, limit to 1 message
-                                            request_header.max_msg_nums = 1;
                                         }
-                                        _ => {}
+                                        request_header.max_msg_nums = 1;
                                     }
+                                    _ => {}
                                 }
                             }
                         }
@@ -910,30 +888,27 @@ where
             }
         }
 
-        let use_reset_offset_feature = self.broker_runtime_inner.broker_config().use_server_side_reset_offset;
+        let use_reset_offset_feature = policy.use_server_side_reset_offset;
         let topic = request_header.topic.as_ref();
         let group = request_header.consumer_group.as_ref();
         let queue_id = request_header.queue_id;
-        let reset_offset = self
-            .broker_runtime_inner
-            .consumer_offset_manager()
-            .query_then_erase_reset_offset(topic, group, queue_id);
+        let reset_offset = self.context.query_reset_offset(topic, group, queue_id);
         let get_message_result = if let (true, Some(reset_offset)) = (use_reset_offset_feature, reset_offset) {
+            let (Ok(min_offset), Ok(max_offset)) = (
+                self.context.store().min_offset(topic, queue_id),
+                self.context.store().max_offset(topic, queue_id),
+            ) else {
+                return Ok(Some(
+                    response
+                        .set_code(ResponseCode::SystemError)
+                        .set_remark("message store is unavailable"),
+                ));
+            };
             let mut get_message_result = GetMessageResult::new();
             get_message_result.set_status(Some(GetMessageStatus::OffsetReset));
             get_message_result.set_next_begin_offset(reset_offset);
-            get_message_result.set_min_offset(
-                self.broker_runtime_inner
-                    .message_store()
-                    .unwrap()
-                    .get_min_offset_in_queue(topic, queue_id),
-            );
-            get_message_result.set_max_offset(
-                self.broker_runtime_inner
-                    .message_store()
-                    .unwrap()
-                    .get_max_offset_in_queue(topic, queue_id),
-            );
+            get_message_result.set_min_offset(min_offset);
+            get_message_result.set_max_offset(max_offset);
             get_message_result.set_suggest_pulling_from_slave(false);
             Some(get_message_result)
         } else {
@@ -945,20 +920,29 @@ where
                 get_message_result.set_next_begin_offset(broadcast_init_offset);
                 Some(get_message_result)
             } else {
-                let result = self
-                    .broker_runtime_inner
-                    .message_store()
-                    .unwrap()
-                    .get_message_with_size_limit(
+                let result = match self
+                    .context
+                    .store()
+                    .get_message(
                         group,
                         topic,
                         queue_id,
                         request_header.queue_offset,
                         request_header.max_msg_nums,
                         store_read_max_msg_bytes(request_header.max_msg_bytes),
-                        Some(message_filter.clone()),
+                        message_filter.clone(),
                     )
-                    .await;
+                    .await
+                {
+                    Ok(result) => result,
+                    Err(_) => {
+                        return Ok(Some(
+                            response
+                                .set_code(ResponseCode::SystemError)
+                                .set_remark("message store is unavailable"),
+                        ));
+                    }
+                };
                 if result.is_none() {
                     return Ok(Some(
                         response
@@ -968,7 +952,7 @@ where
                 }
                 // Accumulate cold data read bytes for flow control
                 if let Some(ref result) = result {
-                    if let Some(cold_data_cg_ctr_service) = self.broker_runtime_inner.cold_data_cg_ctr_service() {
+                    if let Some(cold_data_cg_ctr_service) = self.context.cold_data_flow() {
                         cold_data_cg_ctr_service.cold_acc(group.as_str(), result.cold_data_sum());
                     }
                 }
@@ -1005,13 +989,10 @@ where
         request_header: &PullMessageRequestHeader,
         channel: &Channel,
     ) -> i64 {
-        if !self.broker_runtime_inner.broker_config().enable_broadcast_offset_store {
+        if !self.context.policy().enable_broadcast_offset_store {
             return -1;
         }
-        let consumer_group_info = self
-            .broker_runtime_inner
-            .consumer_manager()
-            .get_consumer_group_info(group);
+        let consumer_group_info = self.context.consumers().get_consumer_group_info(group);
         let proxy_pull_broadcast =
             RequestSource::ProxyForBroadcast == From::from(request_header.request_source.unwrap_or(-2));
 
@@ -1026,7 +1007,7 @@ where
                     Some(value) => Some(value.client_id().clone()),
                 }
             };
-            return self.broker_runtime_inner.broadcast_offset_manager().query_init_offset(
+            return self.context.query_broadcast_offset(
                 topic,
                 group,
                 queue_id,
@@ -1079,16 +1060,12 @@ where
     MS: MessageStore + Send + Sync + 'static,
 {
     fn long_polling_scan_config(&self) -> (bool, u64) {
-        (
-            self.broker_runtime_inner.broker_config().long_polling_enable,
-            self.broker_runtime_inner.broker_config().short_polling_time_mills,
-        )
+        let policy = self.context.policy();
+        (policy.long_polling_enable, policy.short_polling_time_millis)
     }
 
     fn max_offset_in_queue(&self, topic: &CheetahString, queue_id: i32) -> Option<i64> {
-        self.broker_runtime_inner
-            .message_store()
-            .map(|message_store| message_store.get_max_offset_in_queue(topic, queue_id))
+        self.context.store().max_offset(topic, queue_id).ok()
     }
 
     fn execute_request_when_wakeup(
@@ -1134,6 +1111,7 @@ fn consumer_compensation_for_request_source(request_source: RequestSource) -> (C
 mod tests {
     use std::collections::HashMap;
     use std::collections::HashSet;
+    use std::net::SocketAddr;
     use std::path::PathBuf;
     use std::sync::atomic::AtomicBool;
     use std::sync::atomic::Ordering;
@@ -1144,22 +1122,36 @@ mod tests {
     use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
     use rocketmq_common::common::filter::expression_type::ExpressionType;
     use rocketmq_common::common::sys_flag::pull_sys_flag::PullSysFlag;
+    use rocketmq_remoting::code::response_code::ResponseCode;
     use rocketmq_remoting::connection::Connection;
     use rocketmq_remoting::net::channel::Channel;
     use rocketmq_remoting::net::channel::ChannelInner;
+    use rocketmq_remoting::protocol::header::pull_message_request_header::PullMessageRequestHeader;
+    use rocketmq_remoting::protocol::header::pull_message_response_header::PullMessageResponseHeader;
     use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
     use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
     use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
     use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+    use rocketmq_remoting::protocol::request_source::RequestSource;
     use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
     use rocketmq_remoting::protocol::LanguageCode;
+    use rocketmq_runtime::TaskGroup;
+    use rocketmq_store::base::message_store::MessageStore;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
+    use rocketmq_store::log_file::MAX_PULL_MSG_SIZE;
 
-    use super::*;
+    use super::consumer_compensation_for_request_source;
+    use super::is_broadcast;
+    use super::spawn_wakeup_pull_task;
+    use super::store_read_max_msg_bytes;
+    use super::wakeup_write_lock_index;
+    use super::PullMessageProcessor;
+    use super::WAKEUP_WRITE_LOCK_SHARDS;
     use crate::broker_runtime::BrokerRuntime;
     use crate::client::client_channel_info::ClientChannelInfo;
     use crate::client::consumer_group_info::ConsumerGroupInfo;
     use crate::processor::default_pull_message_result_handler::DefaultPullMessageResultHandler;
+    use crate::processor::pull_message_processor::capability::PullMessageProcessorContext;
 
     fn temp_test_root(label: &str) -> PathBuf {
         let mut path = std::env::temp_dir();
@@ -1226,9 +1218,12 @@ mod tests {
         assert!(dropped.load(Ordering::Acquire));
     }
 
-    fn new_processor<MS: MessageStore>(inner: ArcMut<BrokerRuntimeInner<MS>>) -> PullMessageProcessor<MS> {
-        let handler = Arc::new(DefaultPullMessageResultHandler::new(Arc::new(vec![]), inner.clone()));
-        PullMessageProcessor::new(handler, inner)
+    fn new_processor<MS: MessageStore>(context: Arc<PullMessageProcessorContext<MS>>) -> PullMessageProcessor<MS> {
+        let handler = Arc::new(DefaultPullMessageResultHandler::new(
+            Arc::new(vec![]),
+            Arc::clone(&context),
+        ));
+        PullMessageProcessor::new(handler, context)
     }
 
     fn request_with_subscription(topic: &str, group: &str, expression: &str, version: i64) -> PullMessageRequestHeader {
@@ -1284,11 +1279,11 @@ mod tests {
     }
 
     async fn register_consumer_group_without_subscriptions<MS: MessageStore>(
-        inner: &ArcMut<BrokerRuntimeInner<MS>>,
+        context: &PullMessageProcessorContext<MS>,
         group: &str,
         client_id: &str,
     ) {
-        inner.consumer_manager().register_consumer_without_sub(
+        context.consumers().register_consumer_without_sub(
             &group.into(),
             new_client_channel_info(client_id).await,
             ConsumeType::ConsumePassively,
@@ -1299,14 +1294,14 @@ mod tests {
     }
 
     fn inject_subscription<MS: MessageStore>(
-        inner: &ArcMut<BrokerRuntimeInner<MS>>,
+        context: &PullMessageProcessorContext<MS>,
         group: &str,
         topic: &str,
         expression: &str,
         version: i64,
     ) {
-        let group_info = inner
-            .consumer_manager()
+        let group_info = context
+            .consumers()
             .get_consumer_group_info(&group.into())
             .expect("registered consumer group should exist");
         group_info.get_subscription_table().insert(
@@ -1399,11 +1394,23 @@ mod tests {
     }
 
     #[test]
+    fn pull_processors_depend_only_on_explicit_context() {
+        let processor = include_str!("pull_message_processor.rs");
+        let result_handler = include_str!("default_pull_message_result_handler.rs");
+
+        for source in [processor, result_handler] {
+            assert!(!source.contains(concat!("Broker", "RuntimeInner")));
+            assert!(!source.contains(concat!("Arc", "Mut")));
+            assert!(!source.contains(concat!("use super", "::*")));
+        }
+    }
+
+    #[test]
     fn get_subscription_data_with_flag_builds_request_scoped_filter_data() {
         let async_runtime = tokio::runtime::Runtime::new().expect("create tokio runtime");
-        let mut runtime = async_runtime.block_on(new_test_runtime("with-flag-builds-request-scoped", true));
-        let inner = runtime.inner_for_test().clone();
-        let processor = new_processor(inner.clone());
+        let runtime = async_runtime.block_on(new_test_runtime("with-flag-builds-request-scoped", true));
+        let context = runtime.pull_message_context_for_test();
+        let processor = new_processor(Arc::clone(&context));
         let request_header = request_with_subscription("topic-a", "group-a", "color = 'blue'", 11);
 
         let result = match processor
@@ -1418,8 +1425,8 @@ mod tests {
             .expect("request scoped filter data should be returned");
         assert!(filter_data.compiled_expression().is_some());
         assert!(filter_data.bloom_filter_data().is_some());
-        assert!(inner
-            .consumer_filter_manager()
+        assert!(context
+            .filters()
             .get_consumer_filter_data(&"topic-a".into(), &"group-a".into())
             .is_none());
 
@@ -1429,9 +1436,9 @@ mod tests {
     #[test]
     fn get_subscription_data_with_flag_reuses_registered_filter_data() {
         let async_runtime = tokio::runtime::Runtime::new().expect("create tokio runtime");
-        let mut runtime = async_runtime.block_on(new_test_runtime("with-flag-reuses-registered", true));
-        let inner = runtime.inner_for_test().clone();
-        inner.consumer_filter_manager().register(
+        let runtime = async_runtime.block_on(new_test_runtime("with-flag-reuses-registered", true));
+        let context = runtime.pull_message_context_for_test();
+        context.filters().register(
             "group-a",
             &std::collections::HashSet::from([SubscriptionData {
                 topic: "topic-a".into(),
@@ -1441,11 +1448,11 @@ mod tests {
                 ..Default::default()
             }]),
         );
-        let registered = inner
-            .consumer_filter_manager()
+        let registered = context
+            .filters()
             .get_consumer_filter_data(&"topic-a".into(), &"group-a".into())
             .expect("registered filter data should exist");
-        let processor = new_processor(inner.clone());
+        let processor = new_processor(Arc::clone(&context));
         let request_header = request_with_subscription("topic-a", "group-a", "color = 'blue'", 11);
 
         let result = match processor
@@ -1469,13 +1476,13 @@ mod tests {
     #[test]
     fn get_subscription_data_without_flag_returns_filter_data_not_exist_when_sql_filter_missing() {
         let async_runtime = tokio::runtime::Runtime::new().expect("create tokio runtime");
-        let mut runtime = async_runtime.block_on(new_test_runtime("without-flag-filter-missing", true));
-        let inner = runtime.inner_for_test().clone();
+        let runtime = async_runtime.block_on(new_test_runtime("without-flag-filter-missing", true));
+        let context = runtime.pull_message_context_for_test();
         async_runtime.block_on(register_consumer_group_without_subscriptions(
-            &inner, "group-a", "client-a",
+            &context, "group-a", "client-a",
         ));
-        inject_subscription(&inner, "group-a", "topic-a", "color = 'blue'", 11);
-        let processor = new_processor(inner.clone());
+        inject_subscription(&context, "group-a", "topic-a", "color = 'blue'", 11);
+        let processor = new_processor(Arc::clone(&context));
         let request_header = request_without_subscription("topic-a", "group-a", 11);
         let mut response_header = PullMessageResponseHeader::default();
 
@@ -1497,13 +1504,13 @@ mod tests {
     #[test]
     fn get_subscription_data_without_flag_returns_filter_data_not_latest_when_filter_version_lags() {
         let async_runtime = tokio::runtime::Runtime::new().expect("create tokio runtime");
-        let mut runtime = async_runtime.block_on(new_test_runtime("without-flag-filter-stale", true));
-        let inner = runtime.inner_for_test().clone();
+        let runtime = async_runtime.block_on(new_test_runtime("without-flag-filter-stale", true));
+        let context = runtime.pull_message_context_for_test();
         async_runtime.block_on(register_consumer_group_without_subscriptions(
-            &inner, "group-a", "client-a",
+            &context, "group-a", "client-a",
         ));
-        inject_subscription(&inner, "group-a", "topic-a", "color = 'blue'", 11);
-        inner.consumer_filter_manager().register(
+        inject_subscription(&context, "group-a", "topic-a", "color = 'blue'", 11);
+        context.filters().register(
             "group-a",
             &HashSet::from([SubscriptionData {
                 topic: "topic-a".into(),
@@ -1513,7 +1520,7 @@ mod tests {
                 ..Default::default()
             }]),
         );
-        let processor = new_processor(inner.clone());
+        let processor = new_processor(Arc::clone(&context));
         let request_header = request_without_subscription("topic-a", "group-a", 11);
         let mut response_header = PullMessageResponseHeader::default();
 

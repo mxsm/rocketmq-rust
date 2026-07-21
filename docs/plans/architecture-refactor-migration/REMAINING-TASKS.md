@@ -1,7 +1,7 @@
 # 架构重构剩余任务盘点
 
 > 盘点日期：2026-07-22
-> 代码基线：Issue #8523 / M11-12bc55 完成后
+> 代码基线：Issue #8525 / M11-12bc56 完成后
 > 统计规则：82 个顶层 `PR-Mxx-yy` 工作包与 M11-12 内部实施切片分开统计，禁止重复计数。
 
 ## 结论
@@ -16,27 +16,27 @@ owner 清零、compatibility 删除和同一候选快照验收。
 | 里程碑 | 9 | 3 个未关闭 | M10 待验收、M11 实施中、M12 未开始 |
 | Phase Gate | 2 | 2 | Phase 3、Phase 4 |
 | 目标边界 crate | 10 | 0 | 根 workspace 已为目标 32 package |
-| 最小可审查执行单元 | 3 | 28 | 31 项清单中的 R02、R03、R08 已完成 |
+| 最小可审查执行单元 | 4 | 27 | 31 项清单中的 R02、R03、R05、R08 已完成 |
 
 按当前代码热点、兼容窗口和候选快照 Gate 进一步拆分的清单共 **31 个最小可审查单元**：
 16 个 production owner 收口、2 个 test/compatibility 收口、7 个 M10/Phase 3 动态验收与签署、6 个 M12
-工作包；R02、R03、R08 已完成，当前剩余 28 个。31 是 2026-07-22 基线上的执行估算，不是新的正式工作包总数；相邻单元可以合并到同一 PR，遇到高风险
+工作包；R02、R03、R05、R08 已完成，当前剩余 27 个。31 是 2026-07-22 基线上的执行估算，不是新的正式工作包总数；相邻单元可以合并到同一 PR，遇到高风险
 owner 也可以继续拆分，但 7 个正式工作包的统计口径保持不变。
 
 ## PR-M11-12 剩余实现
 
-Issue #8523 后 reviewed ArcMut baseline 为 247 identities / 760 occurrences：production 110/307、test
-123/413、compatibility 14/40。production 全部分布在 Broker 与 Store。
+Issue #8525 后 reviewed ArcMut baseline 为 241 identities / 749 occurrences：production 106/300、test
+121/409、compatibility 14/40。production 全部分布在 Broker 与 Store。
 
 | owner | 剩余 identity / occurrence | 完成条件 |
 |---|---:|---|
-| Broker | 28 / 73 | Ack 已改持显式 policy、共享 Topic/Inflight 与弱 Offset/Order/Store/POP capability，内部 runtime/revive ArcMut owner 已清零；send/reply 已改持标准 Arc、热更新 policy、弱 Store 与显式 Topic/订阅/重平衡/统计/reply-channel capability；pre-online 已改持显式 policy、live role、弱 Store/metadata、registration 与 special-service capability，并挂载父 TaskGroup、在 Store/metadata detach 前停止；ChangeInvisible 共享请求入口与 Admin async-mutex wrapper 已退出 processor registry 的 ArcMut；transaction bridge/Store compatibility、Producer/ColdData admin leaf、Schedule hook、put-message preflight、ConsumerOrderInfoManager、TopicRouteInfoManager、TopicQueueMappingCleanService、MessageArrivingListener、ClientHousekeepingService、ClientManage heartbeat registration/retry-topic capability、ConsumerManage list/offset capability、Query Assignment、QueryMessage/RecallMessage/EndTransaction/PeekMessage/Notification/ChangeInvisibleTime Store capability、POP long-polling、POP Lite processor/long-polling、LiteSubscriptionCtl 与 LiteManager 显式 policy/query/view/provider/dispatcher/TaskGroup、LiteManager/LiteSubscriptionCtl 标准 Arc wrapper、SlaveSynchronize policy/weak provider/late binding、crate-wide mut_from_ref lint allowance、PollingInfo weak provider 与 SubscriptionGroup config lookup、HA diagnostics/control/min-broker transition、controller role-change duplicate owner、BatchMq lock/unlock、SubscriptionGroup/MessageRelated/Offset/Consumer/Topic Admin 与未编译 V2 示例残留已退出 leaf-level 完整 runtime/store owner；LiteLifecycle 只读 API 已改为普通借用；继续收口 BrokerRuntime aggregate carrier 与其余 admin/processor/service |
+| Broker | 24 / 66 | Ack 已改持显式 policy、共享 Topic/Inflight 与弱 Offset/Order/Store/POP capability，内部 runtime/revive ArcMut owner 已清零；send/reply 已改持标准 Arc、热更新 policy、弱 Store 与显式 Topic/订阅/重平衡/统计/reply-channel capability；pull 已改持热更新 policy、显式 RPC/Topic/Subscription/Filter/Consumer/Offset/Stats/ColdData/LongPolling capability 与弱 Store provider；pre-online 已改持显式 policy、live role、弱 Store/metadata、registration 与 special-service capability，并挂载父 TaskGroup、在 Store/metadata detach 前停止；ChangeInvisible 共享请求入口与 Admin async-mutex wrapper 已退出 processor registry 的 ArcMut；transaction bridge/Store compatibility、Producer/ColdData admin leaf、Schedule hook、put-message preflight、ConsumerOrderInfoManager、TopicRouteInfoManager、TopicQueueMappingCleanService、MessageArrivingListener、ClientHousekeepingService、ClientManage heartbeat registration/retry-topic capability、ConsumerManage list/offset capability、Query Assignment、QueryMessage/RecallMessage/EndTransaction/PeekMessage/Notification/ChangeInvisibleTime Store capability、POP long-polling、POP Lite processor/long-polling、LiteSubscriptionCtl 与 LiteManager 显式 policy/query/view/provider/dispatcher/TaskGroup、LiteManager/LiteSubscriptionCtl 标准 Arc wrapper、SlaveSynchronize policy/weak provider/late binding、crate-wide mut_from_ref lint allowance、PollingInfo weak provider 与 SubscriptionGroup config lookup、HA diagnostics/control/min-broker transition、controller role-change duplicate owner、BatchMq lock/unlock、SubscriptionGroup/MessageRelated/Offset/Consumer/Topic Admin 与未编译 V2 示例残留已退出 leaf-level 完整 runtime/store owner；LiteLifecycle 只读 API 已改为普通借用；继续收口 BrokerRuntime aggregate carrier 与其余 admin/processor/service |
 | Store | 82 / 234 | BrokerStats observer、ConsumeQueueExt owner、HA notification/connection registry capability、未共享 HA child、commit-to-flush 窄唤醒能力、HA confirm/epoch 原子发布、HA connection runtime handle、CommitLog shared disk-flush、auto-switch replication-state/client construction 与单一 delegate Store owner 已收窄；production `WeakArcMut` 已清零，其余 MessageStore、CommitLog/Flush、queue、Rocks/Timer 与 HA service/actor 改为独占 owner、标准 Arc/Weak 或显式 actor/锁边界 |
 | compatibility | 14 / 40 | production Store `WeakArcMut` 已清零；继续迁移测试/兼容调用方，公开 `ArcMut`/`WeakArcMut`/`SyncUnsafeCellWrapper` 删除必须满足 next-major 两轮弃用与独立 HUMAN/Release Manager 批准，不能通过重置 API baseline 提前关闭 |
 
 建议按以下最小可审查批次继续推进；它们是 PR-M11-12 的内部切片，不增加 82 个顶层工作包总数：
 
-1. Broker aggregate：收窄 `BrokerRuntimeInner` 与启动 carrier（Broker 当前为 28/73）；Ack 内部 capability、send/reply 完整 runtime owner、pre-online 完整 runtime owner 与 processor registry 的三个遗留 ArcMut wrapper 已拆除，send/reply 使用标准 Arc、热更新 policy、弱 Store 与显式 Topic/订阅/重平衡/统计/reply-channel capability，pre-online 使用显式 policy/live role/弱 Store 与 metadata/registration/special-service capability 并挂载父 TaskGroup；Schedule hook、put-message preflight、transaction Store compatibility、ConsumerOrderInfoManager、TopicRouteInfoManager、TopicQueueMappingCleanService、MessageArrivingListener、ClientHousekeepingService、ClientManage heartbeat registration/retry-topic capability、ConsumerManage list/offset capability、Query Assignment、QueryMessage/RecallMessage/EndTransaction/PeekMessage/Notification/ChangeInvisibleTime Store capability、POP long-polling、POP Lite processor/long-polling、LiteSubscriptionCtl、LiteManager 与 SlaveSynchronize 完整 runtime owner、LiteManager/LiteSubscriptionCtl ArcMut wrapper、crate-wide mut_from_ref lint allowance、PollingInfo 与 SubscriptionGroup config lookup 完整 runtime 强保活边已拆除，HA diagnostics/control/min-broker transition、controller role-change duplicate owner、BatchMq、SubscriptionGroup、MessageRelated、Offset、Consumer 与 Topic handler 已改为父层请求期借用，未编译 V2 示例残留已清理；继续清理其他 admin/processor leaf。
+1. Broker aggregate：收窄 `BrokerRuntimeInner` 与启动 carrier（Broker 当前为 24/66）；Ack 内部 capability、send/reply、pull 与 pre-online 完整 runtime owner，以及 processor registry 的三个遗留 ArcMut wrapper 已拆除。send/reply 使用标准 Arc、热更新 policy、弱 Store 与显式 Topic/订阅/重平衡/统计/reply-channel capability；pull 使用热更新 policy、显式 RPC/Topic/Subscription/Filter/Consumer/Offset/Stats/ColdData/LongPolling capability 与弱 Store provider；pre-online 使用显式 policy/live role/弱 Store 与 metadata/registration/special-service capability 并挂载父 TaskGroup。Schedule hook、put-message preflight、transaction Store compatibility、ConsumerOrderInfoManager、TopicRouteInfoManager、TopicQueueMappingCleanService、MessageArrivingListener、ClientHousekeepingService、ClientManage heartbeat registration/retry-topic capability、ConsumerManage list/offset capability、Query Assignment、QueryMessage/RecallMessage/EndTransaction/PeekMessage/Notification/ChangeInvisibleTime Store capability、POP long-polling、POP Lite processor/long-polling、LiteSubscriptionCtl、LiteManager 与 SlaveSynchronize 完整 runtime owner、LiteManager/LiteSubscriptionCtl ArcMut wrapper、crate-wide mut_from_ref lint allowance、PollingInfo 与 SubscriptionGroup config lookup 完整 runtime 强保活边已拆除，HA diagnostics/control/min-broker transition、controller role-change duplicate owner、BatchMq、SubscriptionGroup、MessageRelated、Offset、Consumer 与 Topic handler 已改为父层请求期借用，未编译 V2 示例残留已清理；继续清理其他 admin/processor leaf。
 2. Broker leaf：完成其余 admin/processor/revive/offset leaf owner；transaction bridge 已由 M11-12bc4 收窄，Producer/ColdData admin handler 已由 M11-12bc5 改持 live registry/standard Arc capability，Schedule hook 已由 M11-12bc6 改持三项显式能力，Topic Admin 已由 M11-12bc31 改为无状态 leaf，slave metadata synchronization 已由 M11-12bc50 改持显式 policy/弱 provider/晚绑定 capability。
 3. Store WAL：commit worker 已只持 `Notify` 唤醒能力，CommitLog disk-flush 已通过共享 receiver enqueue，transaction 的直接 Store 兼容 owner 已删除；继续收口 Local/Rocks MessageStore、CommitLog 与 Flush manager。
 4. Store queue：ConsumeQueueExt 已改用显式锁 owner；继续收口其余 ConsumeQueue、queue store、index/mapped-file carrier。
@@ -51,7 +51,7 @@ Issue #8523 后 reviewed ArcMut baseline 为 247 identities / 760 occurrences：
 ## 执行层最小审查清单（31 项）
 
 > 本清单给出当前可执行下界。`identity / occurrence` 来自 Issue #8521 后通过
-> `python scripts/arc_mut_guard.py` 验证的 reviewed baseline；production 16 项精确合计 Broker 28/73、Store
+> `python scripts/arc_mut_guard.py` 验证的 reviewed baseline；production 16 项精确合计 Broker 24/66、Store
 > 82/234。test 条目会随相邻 production 切片同步下降，因此 R17 只在 production 收口后处理真实余量。
 
 ### Production owner（16 项）
@@ -60,7 +60,7 @@ Issue #8523 后 reviewed ArcMut baseline 为 247 identities / 760 occurrences：
 - [x] R02 Broker Ack 内部 capability：Issue #8519 已删除 `ack_message_processor.rs` 的完整 runtime/revive ArcMut owner（3/5），改持显式 policy/capability，PopRevive task receiver 同步改为标准 Arc。
 - [x] R03 Broker send/reply：Issue #8523 已删除 `send_message_processor.rs` 与 `reply_message_processor.rs` 的完整 runtime/ArcMut owner（6/13），改持标准 Arc、热更新 policy、弱 Store 与显式 Topic/订阅/重平衡/统计/reply-channel capability；测试 glob 同步删除 2/2。
 - [ ] R04 Broker POP：`pop_message_processor.rs`、`pop_buffer_merge_service.rs`、`pop_revive_service.rs`（8/17；PopRevive task receiver 的 3 occurrences 已由 bc53 删除）。
-- [ ] R05 Broker pull：`pull_message_processor.rs` 与 `default_pull_message_result_handler.rs`（4/7）。
+- [x] R05 Broker pull：Issue #8525 已删除 `pull_message_processor.rs` 与 `default_pull_message_result_handler.rs` 的完整 runtime/ArcMut owner（4/7），改持热更新 policy、显式 RPC/Topic/Subscription/Filter/Consumer/Offset/Stats/ColdData/LongPolling capability 与弱 Store provider；测试 glob/ArcMut helper 同步删除 2/4。
 - [ ] R06 Broker admin config：`admin_broker_processor.rs` 与 `broker_config_request_handler.rs`（5/7）。
 - [ ] R07 Broker offset/failover：`consumer_offset_manager.rs` 与 `escape_bridge.rs`（4/8）。
 - [x] R08 Broker pre-online：Issue #8521 已删除 `broker_pre_online_service.rs` 的完整 runtime owner（2/3），改持显式 policy/live role/弱 Store 与 metadata/registration/special-service capability；bc54 同步删除 R01 中无调用方的 runtime start helper 1 occurrence。
@@ -75,7 +75,7 @@ Issue #8523 后 reviewed ArcMut baseline 为 247 identities / 760 occurrences：
 
 ### Caller 与 compatibility（2 项）
 
-- [ ] R17 Test/bench caller 迁移：在 R01～R16 后重新盘点并清理真实余量；当前上界为 123 identities / 413 occurrences（Store 90/296、Broker 27/38、Client 4/71、runtime-foundation 2/8）。
+- [ ] R17 Test/bench caller 迁移：在 R01～R16 后重新盘点并清理真实余量；当前上界为 121 identities / 409 occurrences（Store 90/296、Broker 25/34、Client 4/71、runtime-foundation 2/8）。
 - [ ] R18 Public compatibility 删除：在 next-major 两轮弃用和 Release Manager/HUMAN 批准后，删除 `rocketmq/src/arc_mut.rs` 与 `rocketmq/src/lib.rs` 的 14 identities / 40 occurrences；不得以重置 public API baseline 代替迁移。
 
 ### M10 / Phase 3 候选快照 Gate（7 项）
@@ -435,6 +435,16 @@ NotStarted；reply 保持 push-first 顺序并在 Store 缺失时 fail closed。
 247/760、production 降至 110/307、test 降至 123/413、Broker 降至 28/73；Store 82/234 与 compatibility
 14/40 不增。1 个保留 BrokerRuntime root constructor 经临时 ADR-013 一对一 relocation 审核，无新增 identity 或
 提交态临时 approval。R03 完成，31 项执行清单已完成 3 项、剩余 28 项。
+
+M11-12bc56 收窄 Broker pull 边界：`PullMessageProcessor` 与 `DefaultPullMessageResultHandler` 删除完整
+`BrokerRuntimeInner`/`ArcMut` owner，改持基于 `ArcSwap` 的热更新 pull policy、显式 RPC/Topic/Subscription/Filter/
+Consumer/Offset/Stats/ColdData/LongPolling capability 和弱 `EscapeBridge` Store provider。组合根一次安装 long-polling
+service，保持 processor 弱回边；Store/provider 退出时 offset/read 路径返回协议级 `SystemError` 或无 offset，替代原有
+`unwrap`。PullMessage/LitePullMessage 的校验、转发、过滤、静态 Topic、冷数据、offset、统计、挂起与唤醒语义保持不变。
+production 净删除 4 identities / 7 occurrences，test glob/ArcMut helper 同步删除 2/4，因此 reviewed 总量降至
+241/749、production 降至 106/300、test 降至 121/409、Broker 降至 24/66；Store 82/234 与 compatibility
+14/40 不增。1 个保留 BrokerRuntime root constructor 经临时 ADR-013 一对一 relocation 审核，无新增 identity 或
+提交态临时 approval。R05 完成，31 项执行清单已完成 4 项、剩余 27 项。
 
 ## PR-M12 剩余工作包
 

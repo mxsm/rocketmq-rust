@@ -8,7 +8,7 @@
 > PR-M12-01～06 未开始，合计剩余 7 个
 
 剩余任务数量、M11-12 内部执行批次与 M12 六个工作包见 [`REMAINING-TASKS.md`](REMAINING-TASKS.md)：正式口径
-剩余 7 个工作包；31 个最小可审查单元已完成 3 个，当前剩余 28 个。
+剩余 7 个工作包；31 个最小可审查单元已完成 4 个，当前剩余 27 个。
 
 ## 1. 使用方式
 
@@ -925,6 +925,16 @@ Topic/Subscription/Rebalance/Stats 与 producer reply-channel capability。send 
 6 个 production identities/13 occurrences 与 2 个 test identities/2 occurrences；1 个保留 BrokerRuntime root
 constructor 经临时 ADR-013 一对一 relocation 审核，无新增 identity 或提交态临时 approval。R02、R03、R08 已完成，
 31 项执行清单剩余 28 项；总进度仍为 75/82，下一子切片 M11-12bc56 继续 Broker/Store owner。
+
+Broker pull capability 随 Issue #8525 收口：`PullMessageProcessor` 与 `DefaultPullMessageResultHandler` 不再持有完整
+`BrokerRuntimeInner`/`ArcMut` owner，改持原子发布的 pull policy、显式 RPC/Topic/Subscription/Filter/Consumer/
+Offset/Stats/ColdData/LongPolling capability 和弱 `EscapeBridge` Store provider。组合根一次安装 long-polling service，
+保持 processor 弱回边；Store/provider 退出时 fail closed，不再通过 `unwrap` 处理请求期不可用。PullMessage 与
+LitePullMessage 的校验、转发、过滤、静态 Topic、冷数据、offset、统计、挂起与唤醒语义保持不变。ArcMut 快照降至
+241 identities/749 occurrences（production 106/300、test 121/409、compatibility 14/40、Broker production 24/66、
+Store production 82/234），净删除 4 个 production identities/7 occurrences 与 2 个 test identities/4 occurrences；
+1 个保留 BrokerRuntime root constructor 经临时 ADR-013 一对一 relocation 审核，无新增 identity 或提交态临时 approval。
+R02、R03、R05、R08 已完成，31 项执行清单剩余 27 项；总进度仍为 75/82，下一子切片 M11-12bc57 继续 Broker/Store owner。
 
 ### 9.3 证据目录
 

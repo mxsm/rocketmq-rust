@@ -218,7 +218,7 @@ impl ConsumerManager {
         }
     }
 
-    fn clone_shared_state(&self) -> Self {
+    pub(crate) fn clone_shared_state(&self) -> Self {
         Self {
             consumer_table: Arc::clone(&self.consumer_table),
             consumer_compensation_table: Arc::clone(&self.consumer_compensation_table),
