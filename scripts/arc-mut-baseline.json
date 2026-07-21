@@ -1683,69 +1683,6 @@
       "adr": "ADR-002"
     },
     {
-      "identity": "95812b573e23db203dd99ca6",
-      "path": "rocketmq-broker/src/processor/client_manage_processor.rs",
-      "symbol": "*",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "a1256512c79928f0e0b9ab08",
-          "fingerprint": "148c6a13021dff2aff9fea9f",
-          "item": "mod tests",
-          "line": 438
-        }
-      ],
-      "owner": "broker",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "62da4f3ede1b77333e948a91",
-      "path": "rocketmq-broker/src/processor/client_manage_processor.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "dd01b254d6ba8360a8d24354",
-          "fingerprint": "5441270664cadb1d57102113",
-          "item": "<module>",
-          "line": 38
-        }
-      ],
-      "owner": "broker",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "716f4fc8b7ed70a480e8c3da",
-      "path": "rocketmq-broker/src/processor/client_manage_processor.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "5923dd22909865f017af1c49",
-          "fingerprint": "22039858251a2ef6b2a1bc40",
-          "item": "struct ClientManageProcessor",
-          "line": 49
-        },
-        {
-          "id": "887869fdefc0a1588a1b01fc",
-          "fingerprint": "1fe88213f7fb3cfc3eb42806",
-          "item": "fn new",
-          "line": 88
-        }
-      ],
-      "owner": "broker",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
       "identity": "9f09e3dba7fad1eea8a4c643",
       "path": "rocketmq-broker/src/processor/consumer_manage_processor.rs",
       "symbol": "ArcMut",

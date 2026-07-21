@@ -74,6 +74,37 @@ pub(crate) struct ProducerConnectionHousekeeping {
     manager: ProducerManager,
 }
 
+/// Shared producer registration capability for client heartbeat processing.
+///
+/// This handle shares the live connection tables but does not expose channel selection,
+/// configuration mutation, housekeeping scans, or the complete Broker runtime.
+pub(crate) struct ProducerClientRegistration {
+    manager: ProducerManager,
+}
+
+impl Clone for ProducerClientRegistration {
+    fn clone(&self) -> Self {
+        Self {
+            manager: self.manager.clone_shared_state(),
+        }
+    }
+}
+
+impl ProducerClientRegistration {
+    pub(crate) fn register_producer(&self, group: &ProducerGroupName, client: &ClientChannelInfo) {
+        self.manager.register_producer(group, client);
+    }
+
+    pub(crate) fn unregister_producer(
+        &self,
+        group: &str,
+        client: &ClientChannelInfo,
+        context: &ConnectionHandlerContext,
+    ) {
+        self.manager.unregister_producer(group, client, context);
+    }
+}
+
 impl Clone for ProducerConnectionHousekeeping {
     fn clone(&self) -> Self {
         Self {
@@ -167,6 +198,12 @@ fn producer_table_snapshot(
 }
 
 impl ProducerManager {
+    pub(crate) fn client_registration(&self) -> ProducerClientRegistration {
+        ProducerClientRegistration {
+            manager: self.clone_shared_state(),
+        }
+    }
+
     pub(crate) fn connection_housekeeping(&self) -> ProducerConnectionHousekeeping {
         ProducerConnectionHousekeeping {
             manager: self.clone_shared_state(),

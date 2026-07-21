@@ -90,13 +90,23 @@ where
         if let Some(topic_config) = self.topic_config_manager.select_topic_config(topic) {
             return Some(topic_config);
         }
+        self.select_or_create_send_back_topic_with(topic, 1, false, 0).await
+    }
+
+    pub(crate) async fn select_or_create_send_back_topic_with(
+        self: &Arc<Self>,
+        topic: &CheetahString,
+        queue_nums: i32,
+        is_order: bool,
+        topic_sys_flag: u32,
+    ) -> Option<Arc<TopicConfig>> {
         let start_time = Instant::now();
         let creation = self.topic_config_manager.create_topic_in_send_message_back_method(
             topic,
-            1,
+            queue_nums,
             PermName::PERM_WRITE | PermName::PERM_READ,
-            false,
-            0,
+            is_order,
+            topic_sys_flag,
             self.message_store.state_machine_version(),
         )?;
         Some(self.complete_creation(creation, start_time).await)

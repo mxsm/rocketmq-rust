@@ -95,6 +95,74 @@ pub(crate) struct ConsumerConnectionHousekeeping {
     manager: ConsumerManager,
 }
 
+/// Shared consumer registration capability for client heartbeat processing.
+///
+/// The handle shares the live consumer tables and listeners but exposes only heartbeat
+/// registration and explicit client unregistration.
+pub(crate) struct ConsumerClientRegistration {
+    manager: ConsumerManager,
+}
+
+impl Clone for ConsumerClientRegistration {
+    fn clone(&self) -> Self {
+        Self {
+            manager: self.manager.clone_shared_state(),
+        }
+    }
+}
+
+impl ConsumerClientRegistration {
+    pub(crate) fn register_consumer(
+        &self,
+        group: &CheetahString,
+        client: ClientChannelInfo,
+        consume_type: ConsumeType,
+        message_model: MessageModel,
+        consume_from_where: ConsumeFromWhere,
+        subscriptions: HashSet<SubscriptionData>,
+        notify_consumer_ids_changed: bool,
+    ) -> bool {
+        self.manager.register_consumer(
+            group,
+            client,
+            consume_type,
+            message_model,
+            consume_from_where,
+            subscriptions,
+            notify_consumer_ids_changed,
+        )
+    }
+
+    pub(crate) fn register_consumer_without_sub(
+        &self,
+        group: &CheetahString,
+        client: ClientChannelInfo,
+        consume_type: ConsumeType,
+        message_model: MessageModel,
+        consume_from_where: ConsumeFromWhere,
+        notify_consumer_ids_changed: bool,
+    ) -> bool {
+        self.manager.register_consumer_without_sub(
+            group,
+            client,
+            consume_type,
+            message_model,
+            consume_from_where,
+            notify_consumer_ids_changed,
+        )
+    }
+
+    pub(crate) fn unregister_consumer(
+        &self,
+        group: &str,
+        client: &ClientChannelInfo,
+        notify_consumer_ids_changed: bool,
+    ) {
+        self.manager
+            .unregister_consumer(group, client, notify_consumer_ids_changed);
+    }
+}
+
 /// Read-only access to the live consumer table for assignment decisions.
 #[derive(Clone)]
 pub(crate) struct ConsumerAssignmentView {
@@ -128,6 +196,12 @@ impl ConsumerConnectionHousekeeping {
 }
 
 impl ConsumerManager {
+    pub(crate) fn client_registration(&self) -> ConsumerClientRegistration {
+        ConsumerClientRegistration {
+            manager: self.clone_shared_state(),
+        }
+    }
+
     pub(crate) fn assignment_view(&self) -> ConsumerAssignmentView {
         ConsumerAssignmentView {
             consumer_table: Arc::clone(&self.consumer_table),

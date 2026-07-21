@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::constant::PermName;
+use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::filter::expression_type::ExpressionType;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::common::mix_all::IS_SUB_CHANGE;
@@ -35,18 +35,35 @@ use rocketmq_remoting::protocol::heartbeat::heartbeat_data::HeartbeatData;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
-use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
 use tracing::info;
 use tracing::warn;
 
-use crate::broker_runtime::BrokerRuntimeInner;
 use crate::client::client_channel_info::ClientChannelInfo;
+use crate::client::manager::consumer_manager::ConsumerClientRegistration;
+use crate::client::manager::producer_manager::ProducerClientRegistration;
+use crate::subscription::manager::subscription_group_manager::SubscriptionGroupConfigLookup;
+use crate::topic::manager::topic_config_manager::TopicConfigManager;
+use crate::transaction::queue::transaction_topic_registration::TransactionTopicRegistration;
 
 pub struct ClientManageProcessor<MS: MessageStore> {
     consumer_group_heartbeat_table:
         Arc<parking_lot::RwLock<HashMap<CheetahString /* ConsumerGroup */, i32 /* HeartbeatFingerprint */>>>,
-    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+    broker_config: Arc<BrokerConfig>,
+    topic_config_manager: Arc<TopicConfigManager>,
+    subscription_group_lookup: SubscriptionGroupConfigLookup,
+    producer_registration: ProducerClientRegistration,
+    consumer_registration: ConsumerClientRegistration,
+    retry_topic_registration: Arc<TransactionTopicRegistration<MS>>,
+}
+
+pub(crate) struct ClientManageProcessorContext<MS: MessageStore> {
+    pub(crate) broker_config: Arc<BrokerConfig>,
+    pub(crate) topic_config_manager: Arc<TopicConfigManager>,
+    pub(crate) subscription_group_lookup: SubscriptionGroupConfigLookup,
+    pub(crate) producer_registration: ProducerClientRegistration,
+    pub(crate) consumer_registration: ConsumerClientRegistration,
+    pub(crate) retry_topic_registration: Arc<TransactionTopicRegistration<MS>>,
 }
 
 impl<MS> RequestProcessor for ClientManageProcessor<MS>
@@ -85,10 +102,15 @@ impl<MS> ClientManageProcessor<MS>
 where
     MS: MessageStore,
 {
-    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
+    pub(crate) fn new(context: ClientManageProcessorContext<MS>) -> Self {
         Self {
             consumer_group_heartbeat_table: Arc::new(parking_lot::RwLock::new(HashMap::new())),
-            broker_runtime_inner,
+            broker_config: context.broker_config,
+            topic_config_manager: context.topic_config_manager,
+            subscription_group_lookup: context.subscription_group_lookup,
+            producer_registration: context.producer_registration,
+            consumer_registration: context.consumer_registration,
+            retry_topic_registration: context.retry_topic_registration,
         }
     }
 }
@@ -141,7 +163,7 @@ where
             return Ok(Some(response));
         }
 
-        if !self.broker_runtime_inner.broker_config().enable_property_filter {
+        if !self.broker_config.enable_property_filter {
             return Ok(Some(response.set_code(ResponseCode::SystemError).set_remark(format!(
                 "The broker does not support consumer to filter message by {}",
                 subscription_data.expression_type
@@ -181,23 +203,19 @@ where
         );
 
         if let Some(ref group) = request_header.producer_group {
-            self.broker_runtime_inner
-                .producer_manager()
+            self.producer_registration
                 .unregister_producer(group, &client_channel_info, &ctx);
         }
 
         if let Some(ref group) = request_header.consumer_group {
-            let subscription_group_config = self
-                .broker_runtime_inner
-                .subscription_group_manager()
-                .find_subscription_group_config(group);
+            let subscription_group_config = self.subscription_group_lookup.find_subscription_group_config(group);
             let is_notify_consumer_ids_changed_enable =
                 if let Some(ref subscription_group_config) = subscription_group_config {
                     subscription_group_config.notify_consumer_ids_changed_enable()
                 } else {
                     true
                 };
-            self.broker_runtime_inner.consumer_manager().unregister_consumer(
+            self.consumer_registration.unregister_consumer(
                 group,
                 &client_channel_info,
                 is_notify_consumer_ids_changed_enable,
@@ -230,7 +248,7 @@ where
 
         //do consumer data handle
         for consumer_data in heartbeat_data.consumer_data_set.iter() {
-            if self.broker_runtime_inner.broker_config().reject_pull_consumer_enable
+            if self.broker_config.reject_pull_consumer_enable
                 && ConsumeType::ConsumeActively == consumer_data.consume_type
             {
                 continue;
@@ -241,8 +259,7 @@ where
             let mut has_order_topic_sub = false;
             for subscription_data in consumer_data.subscription_data_set.iter() {
                 if self
-                    .broker_runtime_inner
-                    .topic_config_manager()
+                    .topic_config_manager
                     .is_order_topic(subscription_data.topic.as_str())
                 {
                     has_order_topic_sub = true;
@@ -250,8 +267,7 @@ where
                 }
             }
             let subscription_group_config = self
-                .broker_runtime_inner
-                .subscription_group_manager()
+                .subscription_group_lookup
                 .find_subscription_group_config(consumer_data.group_name.as_ref());
             if subscription_group_config.is_none() {
                 continue;
@@ -264,15 +280,16 @@ where
                 0
             };
             let new_topic = CheetahString::from_string(mix_all::get_retry_topic(consumer_data.group_name.as_str()));
-            crate::broker_runtime::create_topic_in_send_message_back!(
-                self.broker_runtime_inner.clone(),
-                &new_topic,
-                subscription_group_config.retry_queue_nums(),
-                PermName::PERM_WRITE | PermName::PERM_READ,
-                has_order_topic_sub,
-                topic_sys_flag,
-            );
-            let changed = self.broker_runtime_inner.consumer_manager().register_consumer(
+            let _ = self
+                .retry_topic_registration
+                .select_or_create_send_back_topic_with(
+                    &new_topic,
+                    subscription_group_config.retry_queue_nums(),
+                    has_order_topic_sub,
+                    topic_sys_flag,
+                )
+                .await;
+            let changed = self.consumer_registration.register_consumer(
                 consumer_data.group_name.as_ref(),
                 client_channel_info.clone(),
                 consumer_data.consume_type,
@@ -291,8 +308,7 @@ where
         }
         //do producer data handle
         for producer_data in heartbeat_data.producer_data_set.iter() {
-            self.broker_runtime_inner
-                .producer_manager()
+            self.producer_registration
                 .register_producer(&producer_data.group_name, &client_channel_info);
         }
         let mut response_command = RemotingCommand::create_response_command();
@@ -311,7 +327,7 @@ where
     ) -> Option<RemotingCommand> {
         let mut is_sub_change = false;
         for consumer_data in heartbeat_data.consumer_data_set.iter() {
-            if self.broker_runtime_inner.broker_config().reject_pull_consumer_enable
+            if self.broker_config.reject_pull_consumer_enable
                 && ConsumeType::ConsumeActively == consumer_data.consume_type
             {
                 continue;
@@ -330,8 +346,7 @@ where
             let mut has_order_topic_sub = false;
             for subscription_data in consumer_data.subscription_data_set.iter() {
                 if self
-                    .broker_runtime_inner
-                    .topic_config_manager()
+                    .topic_config_manager
                     .is_order_topic(subscription_data.topic.as_str())
                 {
                     has_order_topic_sub = true;
@@ -340,8 +355,7 @@ where
             }
 
             let Some(subscription_group_config) = self
-                .broker_runtime_inner
-                .subscription_group_manager()
+                .subscription_group_lookup
                 .find_subscription_group_config(consumer_data.group_name.as_ref())
             else {
                 continue;
@@ -353,28 +367,27 @@ where
                 0
             };
             let new_topic = CheetahString::from_string(mix_all::get_retry_topic(consumer_data.group_name.as_str()));
-            crate::broker_runtime::create_topic_in_send_message_back!(
-                self.broker_runtime_inner.clone(),
-                &new_topic,
-                subscription_group_config.retry_queue_nums(),
-                PermName::PERM_WRITE | PermName::PERM_READ,
-                has_order_topic_sub,
-                topic_sys_flag,
-            );
+            let _ = self
+                .retry_topic_registration
+                .select_or_create_send_back_topic_with(
+                    &new_topic,
+                    subscription_group_config.retry_queue_nums(),
+                    has_order_topic_sub,
+                    topic_sys_flag,
+                )
+                .await;
 
             let changed = if heartbeat_data.is_without_sub {
-                self.broker_runtime_inner
-                    .consumer_manager()
-                    .register_consumer_without_sub(
-                        consumer_data.group_name.as_ref(),
-                        client_channel_info.clone(),
-                        consumer_data.consume_type,
-                        consumer_data.message_model,
-                        consumer_data.consume_from_where,
-                        is_notify_consumer_ids_changed_enable,
-                    )
+                self.consumer_registration.register_consumer_without_sub(
+                    consumer_data.group_name.as_ref(),
+                    client_channel_info.clone(),
+                    consumer_data.consume_type,
+                    consumer_data.message_model,
+                    consumer_data.consume_from_where,
+                    is_notify_consumer_ids_changed_enable,
+                )
             } else {
-                self.broker_runtime_inner.consumer_manager().register_consumer(
+                self.consumer_registration.register_consumer(
                     consumer_data.group_name.as_ref(),
                     client_channel_info.clone(),
                     consumer_data.consume_type,
@@ -397,8 +410,7 @@ where
 
         //handle producer data
         for producer_data in heartbeat_data.producer_data_set.iter() {
-            self.broker_runtime_inner
-                .producer_manager()
+            self.producer_registration
                 .register_producer(&producer_data.group_name, &client_channel_info);
         }
         let mut response_command = RemotingCommand::create_response_command();
@@ -413,7 +425,12 @@ impl<MS: MessageStore> Clone for ClientManageProcessor<MS> {
     fn clone(&self) -> Self {
         Self {
             consumer_group_heartbeat_table: self.consumer_group_heartbeat_table.clone(),
-            broker_runtime_inner: self.broker_runtime_inner.clone(),
+            broker_config: Arc::clone(&self.broker_config),
+            topic_config_manager: Arc::clone(&self.topic_config_manager),
+            subscription_group_lookup: self.subscription_group_lookup.clone(),
+            producer_registration: self.producer_registration.clone(),
+            consumer_registration: self.consumer_registration.clone(),
+            retry_topic_registration: Arc::clone(&self.retry_topic_registration),
         }
     }
 }
@@ -431,6 +448,7 @@ mod tests {
     use rocketmq_remoting::protocol::header::empty_header::EmptyHeader;
     use rocketmq_remoting::protocol::heartbeat::consumer_data::ConsumerData;
     use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
+    use rocketmq_remoting::protocol::heartbeat::producer_data::ProducerData;
     use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
     use tokio::net::TcpStream;
@@ -442,6 +460,15 @@ mod tests {
     use rocketmq_remoting::connection::Connection;
     use rocketmq_remoting::net::channel::ChannelInner;
     use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
+
+    #[test]
+    fn production_processor_has_no_complete_runtime_owner() {
+        let source = include_str!("client_manage_processor.rs");
+        let production_source = source.split("#[cfg(test)]").next().expect("production source");
+
+        assert!(!production_source.contains("ArcMut"));
+        assert!(!production_source.contains("BrokerRuntimeInner"));
+    }
 
     fn temp_test_root(label: &str) -> PathBuf {
         let unique = format!(
@@ -494,7 +521,7 @@ mod tests {
     async fn check_client_config_rejects_property_filter_when_disabled() {
         let mut runtime = new_test_runtime("check-client-filter-disabled", false).await;
         let inner = runtime.inner_for_test().clone();
-        let processor = ClientManageProcessor::new(inner);
+        let processor = inner.build_client_manage_processor();
         let mut request = check_request(SubscriptionData {
             topic: "topic-a".into(),
             sub_string: "a > 1".into(),
@@ -522,7 +549,7 @@ mod tests {
     async fn check_client_config_accepts_valid_property_filter_when_enabled() {
         let mut runtime = new_test_runtime("check-client-filter-enabled-valid", true).await;
         let inner = runtime.inner_for_test().clone();
-        let processor = ClientManageProcessor::new(inner);
+        let processor = inner.build_client_manage_processor();
         let mut request = check_request(SubscriptionData {
             topic: "topic-a".into(),
             sub_string: "region IN ('hz', 'sh') AND name CONTAINS 'rocket' AND score BETWEEN 0 AND 100".into(),
@@ -546,7 +573,7 @@ mod tests {
     async fn check_client_config_rejects_invalid_property_filter_when_enabled() {
         let mut runtime = new_test_runtime("check-client-filter-enabled-invalid", true).await;
         let inner = runtime.inner_for_test().clone();
-        let processor = ClientManageProcessor::new(inner);
+        let processor = inner.build_client_manage_processor();
         let mut request = check_request(SubscriptionData {
             topic: "topic-a".into(),
             sub_string: "a >".into(),
@@ -573,7 +600,7 @@ mod tests {
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let client_channel_info = ClientChannelInfo::new(channel.clone(), "client-id".into(), Default::default(), 0);
-        let mut processor = ClientManageProcessor::new(inner.clone());
+        let mut processor = inner.build_client_manage_processor();
         processor
             .consumer_group_heartbeat_table
             .write()
@@ -616,6 +643,116 @@ mod tests {
             .get_consumer_group_info(&CheetahString::from_static_str("group-a"))
             .expect("consumer should be registered");
         assert!(consumer_group_info.get_subscription_table().is_empty());
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn heart_beat_v1_and_unregister_share_live_client_registries() {
+        let mut runtime = new_test_runtime("heartbeat-v1-unregister", false).await;
+        let inner = runtime.inner_for_test().clone();
+        let channel = create_test_channel().await;
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let producer_group = CheetahString::from_static_str("producer-group");
+        let consumer_group = CheetahString::from_static_str("group-a");
+        let heartbeat_data = HeartbeatData {
+            client_id: "client-id".into(),
+            heartbeat_fingerprint: 0,
+            is_without_sub: false,
+            consumer_data_set: HashSet::from([ConsumerData {
+                group_name: consumer_group.clone(),
+                consume_type: ConsumeType::ConsumePassively,
+                message_model: MessageModel::Clustering,
+                consume_from_where: ConsumeFromWhere::ConsumeFromLastOffset,
+                subscription_data_set: HashSet::new(),
+                unit_mode: false,
+            }]),
+            producer_data_set: HashSet::from([ProducerData {
+                group_name: producer_group.clone(),
+            }]),
+        };
+        let mut heartbeat_request = RemotingCommand::create_request_command(RequestCode::HeartBeat, EmptyHeader {})
+            .set_body(Bytes::from(
+                serde_json::to_vec(&heartbeat_data).expect("serialize heartbeat"),
+            ));
+        let mut processor = inner.build_client_manage_processor();
+
+        let heartbeat_response = processor
+            .heart_beat(channel.clone(), ctx.clone(), &mut heartbeat_request)
+            .await
+            .expect("heartbeat should succeed")
+            .expect("heartbeat should return response");
+
+        assert_eq!(
+            RemotingResponseCode::from(heartbeat_response.code()),
+            RemotingResponseCode::Success
+        );
+        assert!(inner.producer_manager().group_online(producer_group.as_str()));
+        assert!(inner
+            .consumer_manager()
+            .get_consumer_group_info(&consumer_group)
+            .is_some());
+
+        let mut unregister_request = RemotingCommand::create_request_command(
+            RequestCode::UnregisterClient,
+            UnregisterClientRequestHeader {
+                client_id: "client-id".into(),
+                producer_group: Some(producer_group.clone()),
+                consumer_group: Some(consumer_group.clone()),
+                rpc_request_header: None,
+            },
+        );
+        unregister_request.make_custom_header_to_net();
+        let unregister_response = processor
+            .unregister_client(channel, ctx, &mut unregister_request)
+            .expect("unregister should succeed")
+            .expect("unregister should return response");
+
+        assert_eq!(
+            RemotingResponseCode::from(unregister_response.code()),
+            RemotingResponseCode::Success
+        );
+        assert!(!inner.producer_manager().group_online(producer_group.as_str()));
+        assert!(inner
+            .consumer_manager()
+            .get_consumer_group_info(&consumer_group)
+            .is_none());
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn explicit_client_capabilities_share_live_state_and_preserve_retry_topic_options() {
+        let mut runtime = new_test_runtime("explicit-client-capabilities", false).await;
+        let inner = runtime.inner_for_test().clone();
+        let processor = inner.build_client_manage_processor();
+        let channel = create_test_channel().await;
+        let client_channel_info = ClientChannelInfo::new(channel, "client-id".into(), Default::default(), 0);
+        let producer_group = CheetahString::from_static_str("producer-group");
+
+        processor
+            .producer_registration
+            .register_producer(&producer_group, &client_channel_info);
+        assert!(inner.producer_manager().group_online(producer_group.as_str()));
+
+        let retry_topic = CheetahString::from_static_str("%RETRY%explicit-client-capabilities");
+        let topic_sys_flag = topic_sys_flag::build_sys_flag(false, true);
+        let topic_config = processor
+            .retry_topic_registration
+            .select_or_create_send_back_topic_with(&retry_topic, 3, true, topic_sys_flag)
+            .await
+            .expect("retry topic should be created");
+
+        assert_eq!(topic_config.read_queue_nums, 3);
+        assert_eq!(topic_config.write_queue_nums, 3);
+        assert_eq!(topic_config.topic_sys_flag, topic_sys_flag);
+        assert!(topic_config.order);
+        assert_eq!(
+            inner
+                .topic_config_manager()
+                .select_topic_config(&retry_topic)
+                .expect("live topic manager should contain retry topic")
+                .as_ref(),
+            topic_config.as_ref()
+        );
         let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }
 }
