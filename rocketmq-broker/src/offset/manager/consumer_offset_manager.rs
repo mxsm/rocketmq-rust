@@ -21,6 +21,7 @@ use std::path::Path;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::Weak;
 
 use arc_swap::ArcSwap;
 use cheetah_string::CheetahBuilder;
@@ -94,6 +95,31 @@ pub(crate) struct ConsumerOffsetRequestCapability<MS: MessageStore> {
     manager: Arc<ConsumerOffsetManager<MS>>,
 }
 
+/// Read-only consumer offset view that does not keep the manager or Store alive.
+pub(crate) struct ConsumerOffsetQueryCapability<MS: MessageStore> {
+    manager: Weak<ConsumerOffsetManager<MS>>,
+}
+
+impl<MS: MessageStore> Clone for ConsumerOffsetQueryCapability<MS> {
+    fn clone(&self) -> Self {
+        Self {
+            manager: Weak::clone(&self.manager),
+        }
+    }
+}
+
+impl<MS> ConsumerOffsetQueryCapability<MS>
+where
+    MS: MessageStore,
+{
+    pub(crate) fn query_offset(&self, group: &CheetahString, topic: &CheetahString, queue_id: i32) -> i64 {
+        self.manager
+            .upgrade()
+            .map(|manager| manager.query_offset(group, topic, queue_id))
+            .unwrap_or(-1)
+    }
+}
+
 impl<MS: MessageStore> Clone for ConsumerOffsetRequestCapability<MS> {
     fn clone(&self) -> Self {
         Self {
@@ -149,6 +175,12 @@ where
     pub(crate) fn request_capability(self: &Arc<Self>) -> ConsumerOffsetRequestCapability<MS> {
         ConsumerOffsetRequestCapability {
             manager: Arc::clone(self),
+        }
+    }
+
+    pub(crate) fn query_capability(self: &Arc<Self>) -> ConsumerOffsetQueryCapability<MS> {
+        ConsumerOffsetQueryCapability {
+            manager: Arc::downgrade(self),
         }
     }
 
@@ -982,6 +1014,20 @@ mod tests {
         assert!(capability.has_offset_reset(group.as_str(), topic.as_str(), 0));
         assert_eq!(capability.min_offset_in_queue(&topic, 0), 0);
         assert!(!capability.check_in_mem_by_consume_offset(&topic, 0));
+    }
+
+    #[test]
+    fn query_capability_reads_live_offsets_without_keeping_manager_alive() {
+        let manager = Arc::new(new_manager());
+        let capability = manager.query_capability();
+        let topic = CheetahString::from_static_str("topic-a");
+        let group = CheetahString::from_static_str("group-a");
+
+        manager.commit_offset("127.0.0.1:10911".into(), &group, &topic, 0, 42);
+        assert_eq!(capability.query_offset(&group, &topic, 0), 42);
+
+        drop(manager);
+        assert_eq!(capability.query_offset(&group, &topic, 0), -1);
     }
 
     #[test]
