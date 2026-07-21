@@ -164,6 +164,7 @@ use crate::topic::manager::topic_config_manager::TopicConfigManager;
 use crate::topic::manager::topic_config_manager::TopicConfigUpdate;
 use crate::topic::manager::topic_queue_mapping_manager::TopicQueueMappingManager;
 use crate::topic::manager::topic_route_info_manager::TopicRouteInfoManager;
+use crate::topic::topic_queue_mapping_clean_service::TopicQueueMappingCleanConfig;
 use crate::topic::topic_queue_mapping_clean_service::TopicQueueMappingCleanService;
 use crate::transaction::queue::default_transactional_message_check_listener::DefaultTransactionalMessageCheckListener;
 use crate::transaction::queue::default_transactional_message_service::DefaultTransactionalMessageService;
@@ -1314,7 +1315,7 @@ impl BrokerRuntime {
         )));
         inner.slave_synchronize = Some(SlaveSynchronize::new(inner.clone()));
         inner.broker_pre_online_service = Some(BrokerPreOnlineService::new(inner.clone()));
-        inner.topic_queue_mapping_clean_service = Some(TopicQueueMappingCleanService::new(inner.clone()));
+        inner.topic_queue_mapping_clean_service = Some(inner.build_topic_queue_mapping_clean_service());
         Self {
             inner,
             escape_bridge_owner: escape_bridge,
@@ -2258,7 +2259,7 @@ impl BrokerRuntime {
         self.initialize_observability();
 
         if self.inner.topic_queue_mapping_clean_service.is_none() {
-            self.inner.topic_queue_mapping_clean_service = Some(TopicQueueMappingCleanService::new(self.inner.clone()));
+            self.inner.topic_queue_mapping_clean_service = Some(self.inner.build_topic_queue_mapping_clean_service());
         }
     }
 
@@ -3694,7 +3695,7 @@ pub(crate) struct BrokerRuntimeInner<MS: MessageStore> {
     consumer_manager: ConsumerManager,
     broadcast_offset_manager: BroadcastOffsetManager,
     broker_stats_manager: Option<Arc<BrokerStatsManager>>,
-    topic_queue_mapping_clean_service: Option<TopicQueueMappingCleanService<MS>>,
+    topic_queue_mapping_clean_service: Option<TopicQueueMappingCleanService>,
     update_master_haserver_addr_periodically: bool,
     should_start_time: Arc<AtomicU64>,
     is_isolated: Arc<AtomicBool>,
@@ -3756,6 +3757,20 @@ pub(crate) fn broker_task_group_or_current(
 }
 
 impl<MS: MessageStore> BrokerRuntimeInner<MS> {
+    fn build_topic_queue_mapping_clean_service(&self) -> TopicQueueMappingCleanService {
+        let config = TopicQueueMappingCleanConfig::new(
+            self.broker_config.broker_name().clone(),
+            self.broker_config.forward_timeout,
+            self.message_store_config.delete_when.clone(),
+        );
+        TopicQueueMappingCleanService::new(
+            config,
+            Arc::clone(&self.topic_queue_mapping_manager),
+            self.broker_outer_api.clone(),
+            self.broker_service_task_group(),
+        )
+    }
+
     pub(crate) fn auth_metrics_snapshot(&self) -> Option<AuthMetricsSnapshot> {
         self.auth_runtime.as_ref().map(|runtime| runtime.metrics_snapshot())
     }
@@ -3850,7 +3865,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn topic_queue_mapping_clean_service_mut(&mut self) -> Option<&mut TopicQueueMappingCleanService<MS>> {
+    pub fn topic_queue_mapping_clean_service_mut(&mut self) -> Option<&mut TopicQueueMappingCleanService> {
         self.topic_queue_mapping_clean_service.as_mut()
     }
 
@@ -4109,12 +4124,12 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn topic_queue_mapping_clean_service(&self) -> &Option<TopicQueueMappingCleanService<MS>> {
+    pub fn topic_queue_mapping_clean_service(&self) -> &Option<TopicQueueMappingCleanService> {
         &self.topic_queue_mapping_clean_service
     }
 
     #[inline]
-    pub fn topic_queue_mapping_clean_service_unchecked(&self) -> &TopicQueueMappingCleanService<MS> {
+    pub fn topic_queue_mapping_clean_service_unchecked(&self) -> &TopicQueueMappingCleanService {
         unsafe { self.topic_queue_mapping_clean_service.as_ref().unwrap_unchecked() }
     }
 
@@ -4309,7 +4324,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     #[inline]
     pub fn set_topic_queue_mapping_clean_service(
         &mut self,
-        topic_queue_mapping_clean_service: TopicQueueMappingCleanService<MS>,
+        topic_queue_mapping_clean_service: TopicQueueMappingCleanService,
     ) {
         self.topic_queue_mapping_clean_service = Some(topic_queue_mapping_clean_service);
     }

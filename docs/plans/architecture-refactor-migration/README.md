@@ -748,6 +748,14 @@ production 75/168、Store production 82/234），净删除 4 个 production iden
 identity/1 occurrence，无 relocation、新增 identity 或临时 approval。总进度仍为 75/82，下一子切片 M11-12bc36
 继续 Broker aggregate/leaf 或 Store WAL/queue/timer/HA owner。
 
+Broker TopicQueueMappingClean runtime capability 随 Issue #8483 收窄：服务改为非泛型，只持 broker 名称、转发超时、
+delete window 的启动期快照，共享 `TopicQueueMappingManager`、可克隆 `BrokerOuterAPI` 与可选父 TaskGroup；定时任务仍优先
+挂在 Broker service TaskGroup 下，无显式 context 时保留 ambient Tokio fallback。expired item/old generation 清理、持久化、
+幂等启动与有界 shutdown 语义保持不变。ArcMut 快照降至 303 identities/863 occurrences（production 155/399、
+test 134/424、compatibility 14/40、Broker production 73/165、Store production 82/234），净删除 2 个 production
+identity/3 occurrence 与 5 个 test identity/7 occurrence，无 relocation、新增 identity 或临时 approval。总进度仍为
+75/82，下一子切片 M11-12bc37 继续 Broker aggregate/leaf 或 Store WAL/queue/timer/HA owner。
+
 ### 9.3 证据目录
 
 - 运行期生成物：`target/architecture-refactor/Mxx/<run-id>/`，不提交 Git。

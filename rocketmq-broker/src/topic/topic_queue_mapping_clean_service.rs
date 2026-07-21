@@ -37,12 +37,12 @@ use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
-use rocketmq_rust::ArcMut;
-use rocketmq_store::base::message_store::MessageStore;
 use tracing::info;
 use tracing::warn;
 
-use crate::broker_runtime::BrokerRuntimeInner;
+use crate::broker_runtime::broker_task_group_or_current;
+use crate::out_api::broker_outer_api::BrokerOuterAPI;
+use crate::topic::manager::topic_queue_mapping_manager::TopicQueueMappingManager;
 
 const INITIAL_DELAY: Duration = Duration::from_secs(5 * 60);
 const CLEAN_INTERVAL: Duration = Duration::from_secs(5 * 60);
@@ -55,17 +55,37 @@ struct CleanServiceLifecycle {
     scheduled_tasks: Option<ScheduledTaskGroup>,
 }
 
-struct TopicQueueMappingCleanServiceInner<MS: MessageStore> {
-    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+#[derive(Clone)]
+pub(crate) struct TopicQueueMappingCleanConfig {
+    current_broker: CheetahString,
+    forward_timeout: u64,
+    delete_when: String,
+}
+
+impl TopicQueueMappingCleanConfig {
+    pub(crate) fn new(current_broker: CheetahString, forward_timeout: u64, delete_when: String) -> Self {
+        Self {
+            current_broker,
+            forward_timeout,
+            delete_when,
+        }
+    }
+}
+
+struct TopicQueueMappingCleanServiceInner {
+    config: TopicQueueMappingCleanConfig,
+    topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
+    broker_outer_api: BrokerOuterAPI,
+    parent_task_group: Option<TaskGroup>,
     running: AtomicBool,
     lifecycle: Mutex<CleanServiceLifecycle>,
 }
 
-pub struct TopicQueueMappingCleanService<MS: MessageStore> {
-    inner: Arc<TopicQueueMappingCleanServiceInner<MS>>,
+pub struct TopicQueueMappingCleanService {
+    inner: Arc<TopicQueueMappingCleanServiceInner>,
 }
 
-impl<MS: MessageStore> Clone for TopicQueueMappingCleanService<MS> {
+impl Clone for TopicQueueMappingCleanService {
     fn clone(&self) -> Self {
         Self {
             inner: Arc::clone(&self.inner),
@@ -73,11 +93,19 @@ impl<MS: MessageStore> Clone for TopicQueueMappingCleanService<MS> {
     }
 }
 
-impl<MS: MessageStore> TopicQueueMappingCleanService<MS> {
-    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
+impl TopicQueueMappingCleanService {
+    pub(crate) fn new(
+        config: TopicQueueMappingCleanConfig,
+        topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
+        broker_outer_api: BrokerOuterAPI,
+        parent_task_group: Option<TaskGroup>,
+    ) -> Self {
         Self {
             inner: Arc::new(TopicQueueMappingCleanServiceInner {
-                broker_runtime_inner,
+                config,
+                topic_queue_mapping_manager,
+                broker_outer_api,
+                parent_task_group,
                 running: AtomicBool::new(false),
                 lifecycle: Mutex::new(CleanServiceLifecycle::default()),
             }),
@@ -98,7 +126,8 @@ impl<MS: MessageStore> TopicQueueMappingCleanService<MS> {
             return;
         }
 
-        let Some(task_group) = self.inner.broker_runtime_inner.broker_task_group_or_current(
+        let Some(task_group) = broker_task_group_or_current(
+            self.inner.parent_task_group.as_ref(),
             "rocketmq-broker.topic-queue-mapping-clean",
             "failed to start TopicQueueMappingCleanService outside Tokio runtime",
         ) else {
@@ -198,16 +227,16 @@ impl<MS: MessageStore> TopicQueueMappingCleanService<MS> {
         }
 
         let start = Instant::now();
-        let broker_runtime_inner = &self.inner.broker_runtime_inner;
-        let current_broker = broker_runtime_inner.broker_config().broker_name().clone();
-        let timeout_millis = broker_runtime_inner.broker_config().forward_timeout;
-        let snapshot = broker_runtime_inner
-            .topic_queue_mapping_manager()
+        let current_broker = &self.inner.config.current_broker;
+        let timeout_millis = self.inner.config.forward_timeout;
+        let snapshot = self
+            .inner
+            .topic_queue_mapping_manager
             .snapshot_topic_queue_mapping_table();
         let mut changed = false;
 
         for (topic, mapping_detail) in snapshot {
-            if !Self::is_current_broker_mapping(&mapping_detail, &current_broker) {
+            if !Self::is_current_broker_mapping(&mapping_detail, current_broker) {
                 warn!(
                     "TopicQueueMappingDetail for topic {} should not exist in broker {}: {:?}",
                     topic, current_broker, mapping_detail
@@ -235,8 +264,9 @@ impl<MS: MessageStore> TopicQueueMappingCleanService<MS> {
                 continue;
             }
 
-            if let Err(err) = broker_runtime_inner
-                .broker_outer_api()
+            if let Err(err) = self
+                .inner
+                .broker_outer_api
                 .get_topic_route_info_from_name_server(&topic, timeout_millis, true)
                 .await
             {
@@ -248,8 +278,9 @@ impl<MS: MessageStore> TopicQueueMappingCleanService<MS> {
 
             let mut stats_table = HashMap::new();
             for broker_name in brokers {
-                match broker_runtime_inner
-                    .broker_outer_api()
+                match self
+                    .inner
+                    .broker_outer_api
                     .get_topic_stats_info_from_broker(&broker_name, &topic, timeout_millis)
                     .await
                 {
@@ -306,10 +337,12 @@ impl<MS: MessageStore> TopicQueueMappingCleanService<MS> {
                 let Some(expected_bname) = mapping_detail.topic_queue_mapping_info.bname.as_ref() else {
                     continue;
                 };
-                if broker_runtime_inner
-                    .topic_queue_mapping_manager()
-                    .replace_cleaned_queue_items(&topic, expected_epoch, expected_bname, &replacements)
-                {
+                if self.inner.topic_queue_mapping_manager.replace_cleaned_queue_items(
+                    &topic,
+                    expected_epoch,
+                    expected_bname,
+                    &replacements,
+                ) {
                     changed = true;
                 }
             }
@@ -318,10 +351,7 @@ impl<MS: MessageStore> TopicQueueMappingCleanService<MS> {
         }
 
         if changed {
-            broker_runtime_inner
-                .topic_queue_mapping_manager()
-                .persist_clean_result()
-                .await?;
+            self.inner.topic_queue_mapping_manager.persist_clean_result().await?;
             info!("cleanItemExpired changed");
         }
         info!("cleanItemExpired cost {} ms", start.elapsed().as_millis());
@@ -334,17 +364,17 @@ impl<MS: MessageStore> TopicQueueMappingCleanService<MS> {
         }
 
         let start = Instant::now();
-        let broker_runtime_inner = &self.inner.broker_runtime_inner;
-        let current_broker = broker_runtime_inner.broker_config().broker_name().clone();
-        let timeout_millis = broker_runtime_inner.broker_config().forward_timeout;
-        let snapshot = broker_runtime_inner
-            .topic_queue_mapping_manager()
+        let current_broker = &self.inner.config.current_broker;
+        let timeout_millis = self.inner.config.forward_timeout;
+        let snapshot = self
+            .inner
+            .topic_queue_mapping_manager
             .snapshot_topic_queue_mapping_table();
         let client_metadata = ClientMetadata::new();
         let mut changed = false;
 
         for (topic, mapping_detail) in snapshot {
-            if !Self::is_current_broker_mapping(&mapping_detail, &current_broker) {
+            if !Self::is_current_broker_mapping(&mapping_detail, current_broker) {
                 warn!(
                     "TopicQueueMappingDetail for topic {} should not exist in broker {}: {:?}",
                     topic, current_broker, mapping_detail
@@ -380,8 +410,9 @@ impl<MS: MessageStore> TopicQueueMappingCleanService<MS> {
                 continue;
             }
 
-            let topic_route_data = match broker_runtime_inner
-                .broker_outer_api()
+            let topic_route_data = match self
+                .inner
+                .broker_outer_api
                 .get_topic_route_info_from_name_server(&topic, timeout_millis, true)
                 .await
             {
@@ -420,8 +451,9 @@ impl<MS: MessageStore> TopicQueueMappingCleanService<MS> {
 
             let mut mapping_detail_by_broker = HashMap::new();
             for broker_name in brokers_to_fetch {
-                match broker_runtime_inner
-                    .broker_outer_api()
+                match self
+                    .inner
+                    .broker_outer_api
                     .get_topic_config_from_broker(&broker_name, &topic, true, timeout_millis)
                     .await
                 {
@@ -478,10 +510,12 @@ impl<MS: MessageStore> TopicQueueMappingCleanService<MS> {
 
             if !expected_items_to_delete.is_empty() {
                 let expected_epoch = mapping_detail.topic_queue_mapping_info.epoch;
-                if broker_runtime_inner
-                    .topic_queue_mapping_manager()
-                    .remove_cleaned_hosted_queues(&topic, expected_epoch, expected_bname, &expected_items_to_delete)
-                {
+                if self.inner.topic_queue_mapping_manager.remove_cleaned_hosted_queues(
+                    &topic,
+                    expected_epoch,
+                    expected_bname,
+                    &expected_items_to_delete,
+                ) {
                     changed = true;
                     for (qid, items) in expected_items_to_delete {
                         info!(
@@ -496,17 +530,14 @@ impl<MS: MessageStore> TopicQueueMappingCleanService<MS> {
         }
 
         if changed {
-            broker_runtime_inner
-                .topic_queue_mapping_manager()
-                .persist_clean_result()
-                .await?;
+            self.inner.topic_queue_mapping_manager.persist_clean_result().await?;
         }
         info!("cleanItemListMoreThanSecondGen cost {} ms", start.elapsed().as_millis());
         Ok(changed)
     }
 
     fn is_time_to_clean(&self) -> bool {
-        is_it_time_to_do(&self.inner.broker_runtime_inner.message_store_config().delete_when)
+        is_it_time_to_do(&self.inner.config.delete_when)
     }
 
     fn is_current_broker_mapping(mapping_detail: &TopicQueueMappingDetail, broker_name: &CheetahString) -> bool {
@@ -525,13 +556,10 @@ mod tests {
     use rocketmq_common::common::broker::broker_config::BrokerConfig;
     use rocketmq_runtime::RuntimeContext;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
-    use rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore;
 
     use crate::broker_runtime::BrokerRuntime;
 
     use super::*;
-
-    type LocalCleanService = TopicQueueMappingCleanService<LocalFileMessageStore>;
 
     #[test]
     fn should_remove_earliest_item_when_queue_is_empty() {
@@ -539,7 +567,7 @@ mod tests {
         offset.set_min_offset(10);
         offset.set_max_offset(10);
 
-        assert!(LocalCleanService::should_remove_earliest_item(&offset));
+        assert!(TopicQueueMappingCleanService::should_remove_earliest_item(&offset));
     }
 
     #[test]
@@ -548,7 +576,7 @@ mod tests {
         offset.set_min_offset(-1);
         offset.set_max_offset(0);
 
-        assert!(LocalCleanService::should_remove_earliest_item(&offset));
+        assert!(TopicQueueMappingCleanService::should_remove_earliest_item(&offset));
     }
 
     #[test]
@@ -557,7 +585,18 @@ mod tests {
         offset.set_min_offset(10);
         offset.set_max_offset(20);
 
-        assert!(!LocalCleanService::should_remove_earliest_item(&offset));
+        assert!(!TopicQueueMappingCleanService::should_remove_earliest_item(&offset));
+    }
+
+    #[test]
+    fn production_service_has_no_complete_runtime_owner() {
+        let source = include_str!("topic_queue_mapping_clean_service.rs");
+        let production_source = source.split("#[cfg(test)]").next().expect("production source");
+
+        assert!(!production_source.contains("ArcMut"));
+        assert!(!production_source.contains("BrokerRuntimeInner"));
+        assert!(!production_source.contains("MessageStore"));
+        assert!(!production_source.contains("TopicQueueMappingCleanService<"));
     }
 
     #[tokio::test]
