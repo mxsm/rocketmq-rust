@@ -88,6 +88,7 @@ use tracing::info;
 use tracing::warn;
 
 use crate::auth::auth_admin_service::AuthAdminService;
+use crate::broker::broker_admin_runtime_handle::BrokerAdminRuntimeHandle;
 use crate::broker::broker_hook::BrokerShutdownHook;
 use crate::broker::broker_pre_online_capability::BrokerOnlineRoleState;
 use crate::broker::broker_pre_online_capability::BrokerOnlineTransitionCapability;
@@ -1343,6 +1344,15 @@ impl BrokerRuntime {
     #[cfg(test)]
     pub(crate) fn pull_message_context_for_test(&self) -> Arc<PullMessageProcessorContext<GenericMessageStore>> {
         self.inner.build_pull_message_context()
+    }
+
+    fn admin_runtime_handle(&self) -> BrokerAdminRuntimeHandle<GenericMessageStore> {
+        BrokerAdminRuntimeHandle(self.inner.clone())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn admin_runtime_handle_for_test(&self) -> BrokerAdminRuntimeHandle<GenericMessageStore> {
+        self.admin_runtime_handle()
     }
 
     pub(crate) fn auth_metrics_snapshot(&self) -> Option<AuthMetricsSnapshot> {
@@ -2925,7 +2935,7 @@ impl BrokerRuntime {
                 .expect("broker auth admin service initialization must succeed"),
         });
         let admin_broker_processor = Arc::new(Mutex::new(AdminBrokerProcessor::new(
-            self.inner.clone(),
+            self.admin_runtime_handle(),
             auth_admin_service,
         )));
         broker_request_processor.register_default_processor(BrokerProcessorType::AdminBroker(admin_broker_processor));

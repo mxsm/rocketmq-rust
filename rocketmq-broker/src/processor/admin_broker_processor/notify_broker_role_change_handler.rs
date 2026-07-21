@@ -134,7 +134,7 @@ mod tests {
             Arc::new(MessageStoreConfig::default()),
         );
         let inner = runtime.inner_for_test().clone();
-        let broker_config_request_handler = BrokerConfigRequestHandler::new(inner.clone());
+        let broker_config_request_handler = BrokerConfigRequestHandler::new(runtime.admin_runtime_handle_for_test());
         let strong_count_before = inner.strong_count();
         let handler = NotifyBrokerRoleChangeHandler::new();
 
