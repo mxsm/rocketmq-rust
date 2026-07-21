@@ -92,6 +92,7 @@ mod tests {
     use crate::processor::admin_broker_processor::batch_mq_handler::BatchMqHandler;
     use crate::processor::admin_broker_processor::broker_epoch_cache_handler::BrokerEpochCacheHandler;
     use crate::processor::admin_broker_processor::reset_master_flusg_offset_handler::ResetMasterFlushOffsetHandler;
+    use crate::processor::admin_broker_processor::subscription_group_handler::SubscriptionGroupHandler;
     use crate::processor::admin_broker_processor::update_broker_ha_handler::UpdateBrokerHaHandler;
 
     use super::*;
@@ -201,6 +202,7 @@ mod tests {
             let _reset_flush_offset_handler = ResetMasterFlushOffsetHandler::new();
             let _update_broker_ha_handler = UpdateBrokerHaHandler::new();
             let _batch_mq_handler = BatchMqHandler::new();
+            let _subscription_group_handler = SubscriptionGroupHandler::new();
             assert_eq!(inner.strong_count(), strong_count_before);
         }
         assert_eq!(inner.strong_count(), strong_count_before);

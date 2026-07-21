@@ -89,7 +89,7 @@ pub struct AdminBrokerProcessor<MS: MessageStore> {
     consumer_request_handler: ConsumerRequestHandler<MS>,
     offset_request_handler: OffsetRequestHandler<MS>,
     batch_mq_handler: BatchMqHandler,
-    subscription_group_handler: SubscriptionGroupHandler<MS>,
+    subscription_group_handler: SubscriptionGroupHandler,
 
     notify_min_broker_handler: NotifyMinBrokerChangeIdHandler<MS>,
     update_broker_ha_handler: UpdateBrokerHaHandler,
@@ -139,7 +139,7 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
         let consumer_request_handler = ConsumerRequestHandler::new(broker_runtime_inner.clone());
         let offset_request_handler = OffsetRequestHandler::new(broker_runtime_inner.clone());
         let batch_mq_handler = BatchMqHandler::new();
-        let subscription_group_handler = SubscriptionGroupHandler::new(broker_runtime_inner.clone());
+        let subscription_group_handler = SubscriptionGroupHandler::new();
 
         let notify_min_broker_handler = NotifyMinBrokerChangeIdHandler::new(broker_runtime_inner.clone());
 
@@ -310,13 +310,21 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .await
             }
             RequestCode::UpdateAndCreateSubscriptionGroup => {
+                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner_mut();
                 self.subscription_group_handler
-                    .update_and_create_subscription_group(channel, ctx, request_code, request)
+                    .update_and_create_subscription_group(broker_runtime_inner, channel, ctx, request_code, request)
                     .await
             }
             RequestCode::UpdateAndCreateSubscriptionGroupList => {
+                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner_mut();
                 self.subscription_group_handler
-                    .update_and_create_subscription_group_list(channel, ctx, request_code, request)
+                    .update_and_create_subscription_group_list(
+                        broker_runtime_inner,
+                        channel,
+                        ctx,
+                        request_code,
+                        request,
+                    )
                     .await
             }
             RequestCode::GetAllSubscriptionGroupConfig => {
@@ -325,8 +333,9 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .await
             }
             RequestCode::DeleteSubscriptionGroup => {
+                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner_mut();
                 self.subscription_group_handler
-                    .delete_subscription_group(channel, ctx, request_code, request)
+                    .delete_subscription_group(broker_runtime_inner, channel, ctx, request_code, request)
                     .await
             }
             RequestCode::GetTopicStatsInfo => {
@@ -461,13 +470,15 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .await
             }
             RequestCode::UpdateAndGetGroupForbidden => {
+                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner_mut();
                 self.subscription_group_handler
-                    .update_and_get_group_forbidden(channel, ctx, request_code, request)
+                    .update_and_get_group_forbidden(broker_runtime_inner, channel, ctx, request_code, request)
                     .await
             }
             RequestCode::GetSubscriptionGroupConfig => {
+                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner();
                 self.subscription_group_handler
-                    .get_subscription_group_config(channel, ctx, request_code, request)
+                    .get_subscription_group_config(broker_runtime_inner, channel, ctx, request_code, request)
                     .await
             }
             RequestCode::UpdateAndCreateAclConfig => Ok(get_legacy_acl_cmd_response(

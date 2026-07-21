@@ -1827,69 +1827,6 @@
       "adr": "ADR-002"
     },
     {
-      "identity": "83d292fb6470493bcaf22ecd",
-      "path": "rocketmq-broker/src/processor/admin_broker_processor/subscription_group_handler.rs",
-      "symbol": "*",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "9a000188e20ed5e54e6d5dd5",
-          "fingerprint": "f0a573438a21979c4c8219d8",
-          "item": "mod tests",
-          "line": 323
-        }
-      ],
-      "owner": "broker",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "9d6a651a7b2e8b35cb695067",
-      "path": "rocketmq-broker/src/processor/admin_broker_processor/subscription_group_handler.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "3673a9d2f9b9153afea4796d",
-          "fingerprint": "353397efe163cf37285096f9",
-          "item": "<module>",
-          "line": 33
-        }
-      ],
-      "owner": "broker",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "e66af6fdf692c054d95fcbb1",
-      "path": "rocketmq-broker/src/processor/admin_broker_processor/subscription_group_handler.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "46cd9024e257cb5264b3f1d7",
-          "fingerprint": "fec45b41da270bdf0c4198da",
-          "item": "struct SubscriptionGroupHandler",
-          "line": 43
-        },
-        {
-          "id": "3dce52a0b60217456cd1f85e",
-          "fingerprint": "7f2dacb8836f59fff72f097b",
-          "item": "fn new",
-          "line": 47
-        }
-      ],
-      "owner": "broker",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
       "identity": "2cbf19c5585608c3e2669169",
       "path": "rocketmq-broker/src/processor/admin_broker_processor/topic_request_handler.rs",
       "symbol": "*",

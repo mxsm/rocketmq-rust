@@ -51,6 +51,10 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
     pub(super) fn broker_runtime_inner(&self) -> &BrokerRuntimeInner<MS> {
         self.broker_runtime_inner.as_ref()
     }
+
+    pub(super) fn broker_runtime_inner_mut(&mut self) -> &mut BrokerRuntimeInner<MS> {
+        self.broker_runtime_inner.as_mut()
+    }
 }
 impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
     pub async fn update_broker_config(

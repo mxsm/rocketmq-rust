@@ -611,6 +611,14 @@ Broker batch lock handler 随 Issue #8444 收窄：`BatchMqHandler` 删除完整
 identities/3 occurrences，且无 relocation。总进度仍为 75/82，下一子切片 M11-12bc20 继续 Broker aggregate/leaf
 或 Store WAL/queue/timer/HA owner。
 
+Subscription-group Admin handler 随 Issue #8446 收窄：`SubscriptionGroupHandler` 删除完整 runtime 字段、Clone 与
+struct-level `MessageStore` 泛型，改为无状态 leaf；Admin dispatch 在 manager 写请求期间从 broker-config handler
+现有 owner 取得请求期独占借用，配置读取使用共享借用，并删除从未被 dispatch 调用的重复 unlock 实现。create/list/
+forbidden 聚焦回归通过，delete-offset-cleanup 复现既有同名基线失败，ownership 回归 3/3 通过。ArcMut 快照降至
+355 identities/950 occurrences（production 197/472、test 144/438、compatibility 14/40、Broker production
+94/198），净删除 2 个 production identities/3 occurrences 与 1 个 test identity/1 occurrence，且无 relocation。
+总进度仍为 75/82，下一子切片 M11-12bc21 继续 Broker aggregate/leaf 或 Store WAL/queue/timer/HA owner。
+
 ### 9.3 证据目录
 
 - 运行期生成物：`target/architecture-refactor/Mxx/<run-id>/`，不提交 Git。
