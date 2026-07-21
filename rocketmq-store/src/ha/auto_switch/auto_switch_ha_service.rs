@@ -16,7 +16,6 @@ use std::collections::HashSet;
 use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
 
-use rocketmq_common::common::broker::broker_role::BrokerRole;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::protocol::body::ha_connection_runtime_info::HAConnectionRuntimeInfo;
 use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
@@ -25,7 +24,6 @@ use tokio::sync::Notify;
 
 use crate::base::message_store::MessageStore;
 use crate::ha::auto_switch::auto_switch_ha_client::AutoSwitchHAClient;
-use crate::ha::default_ha_client::DefaultHAClient;
 use crate::ha::default_ha_service::DefaultHAService;
 use crate::ha::general_ha_client::GeneralHAClient;
 use crate::ha::general_ha_service::GeneralHAService;
@@ -36,7 +34,6 @@ use crate::ha::ha_connection_state_notification_request::HAConnectionStateNotifi
 use crate::ha::ha_service::HAAckedReplicaSnapshot;
 use crate::ha::ha_service::HAService;
 use crate::log_file::group_commit_request::GroupCommitRequest;
-use crate::message_store::local_file_message_store::LocalFileMessageStore;
 use crate::store_error::HAResult;
 use rocketmq_store_local::ha::replication::EpochTransition;
 use rocketmq_store_local::ha::replication::HAReplicaRuntimeSnapshot;
@@ -44,16 +41,18 @@ use rocketmq_store_local::ha::replication::ReplicationStateRoot;
 
 pub struct AutoSwitchHAService {
     delegate: ArcMut<DefaultHAService>,
-    message_store: ArcMut<LocalFileMessageStore>,
     replication: Arc<ReplicationStateRoot>,
 }
 
 impl AutoSwitchHAService {
-    pub fn new(message_store: ArcMut<LocalFileMessageStore>) -> Self {
-        let is_master = message_store.message_store_config_ref().broker_role != BrokerRole::Slave;
+    pub fn new(delegate: DefaultHAService) -> Self {
+        let is_master = delegate
+            .get_default_message_store()
+            .message_store_config_ref()
+            .broker_role
+            != rocketmq_common::common::broker::broker_role::BrokerRole::Slave;
         Self {
-            delegate: ArcMut::new(DefaultHAService::new(message_store.clone())),
-            message_store,
+            delegate: ArcMut::new(delegate),
             replication: Arc::new(ReplicationStateRoot::new(is_master)),
         }
     }
@@ -65,7 +64,8 @@ impl AutoSwitchHAService {
     pub(crate) fn init(this: &mut ArcMut<Self>, general_ha_service: GeneralHAService) -> HAResult<()> {
         let mut delegate = this.delegate.clone();
         DefaultHAService::init(&mut delegate, general_ha_service)?;
-        let client = DefaultHAClient::new(this.message_store.clone())
+        let client = delegate
+            .create_default_ha_client()
             .map_err(|error| crate::store_error::HAError::Service(error.to_string()))?;
         let client = AutoSwitchHAClient::from_delegate(client, None);
         delegate.set_general_ha_client(GeneralHAClient::new_with_auto_switch_ha_client(client));
@@ -112,10 +112,11 @@ impl AutoSwitchHAService {
     pub fn set_sync_state_set(&self, sync_state_set: HashSet<i64>) {
         self.replication.replace_sync_state_set(sync_state_set);
 
-        let max_phy_offset = self.message_store.get_max_phy_offset();
-        let current_confirm_offset = self.message_store.get_commit_log().get_confirm_offset_directly();
+        let message_store = self.delegate.get_default_message_store();
+        let max_phy_offset = message_store.get_max_phy_offset();
+        let current_confirm_offset = message_store.get_commit_log().get_confirm_offset_directly();
         let confirm_offset = self.compute_confirm_offset(current_confirm_offset, max_phy_offset);
-        self.message_store.publish_confirm_offset(confirm_offset);
+        message_store.publish_confirm_offset(confirm_offset);
     }
 
     pub fn is_synchronizing_sync_state_set(&self) -> bool {
@@ -130,14 +131,19 @@ impl AutoSwitchHAService {
     pub fn maybe_shrink_sync_state_set(&self) -> HashSet<i64> {
         let now = current_millis();
         let timeout_millis = self
-            .message_store
+            .delegate
+            .get_default_message_store()
             .message_store_config_ref()
             .ha_max_time_slave_not_catchup as u64;
         self.replication.maybe_shrink_sync_state_set(now, timeout_millis)
     }
 
     pub fn maybe_expand_in_sync_state_set(&self, slave_broker_id: i64, slave_max_offset: i64) -> Option<HashSet<i64>> {
-        let confirm_offset = self.message_store.get_commit_log().get_confirm_offset_directly();
+        let confirm_offset = self
+            .delegate
+            .get_default_message_store()
+            .get_commit_log()
+            .get_confirm_offset_directly();
         self.replication
             .maybe_expand_sync_state_set(slave_broker_id, slave_max_offset, confirm_offset)
     }
@@ -147,10 +153,11 @@ impl AutoSwitchHAService {
             return;
         }
 
-        let max_phy_offset = self.message_store.get_max_phy_offset();
-        let current_confirm_offset = self.message_store.get_commit_log().get_confirm_offset_directly();
+        let message_store = self.delegate.get_default_message_store();
+        let max_phy_offset = message_store.get_max_phy_offset();
+        let current_confirm_offset = message_store.get_commit_log().get_confirm_offset_directly();
         let confirm_offset = self.compute_confirm_offset(current_confirm_offset, max_phy_offset);
-        self.message_store.publish_confirm_offset(confirm_offset);
+        message_store.publish_confirm_offset(confirm_offset);
     }
 
     fn tracked_sync_state_set_size(&self) -> Option<usize> {
@@ -164,9 +171,12 @@ impl AutoSwitchHAService {
 
     pub fn compute_confirm_offset(&self, current_confirm_offset: i64, max_phy_offset: i64) -> i64 {
         let runtime_info = self.get_runtime_info(max_phy_offset);
-        let expected_sync_state_set_size = self
-            .tracked_sync_state_set_size()
-            .unwrap_or_else(|| self.message_store.get_alive_replica_num_in_group().max(1) as usize);
+        let expected_sync_state_set_size = self.tracked_sync_state_set_size().unwrap_or_else(|| {
+            self.delegate
+                .get_default_message_store()
+                .get_alive_replica_num_in_group()
+                .max(1) as usize
+        });
         Self::compute_confirm_offset_from_runtime(
             current_confirm_offset,
             max_phy_offset,
@@ -210,28 +220,27 @@ impl AutoSwitchHAService {
             EpochTransition::Rejected => return false,
             EpochTransition::Unchanged => {}
             EpochTransition::Advanced { epoch } => {
-                let epoch_start_offset = self
-                    .message_store
+                let message_store = self.delegate.get_default_message_store();
+                let epoch_start_offset = message_store
                     .get_max_phy_offset()
-                    .max(self.message_store.get_min_phy_offset());
-                self.message_store.publish_state_machine_version(epoch as i64);
-                self.message_store
-                    .publish_controller_epoch_start_offset(epoch_start_offset);
+                    .max(message_store.get_min_phy_offset());
+                message_store.publish_state_machine_version(epoch as i64);
+                message_store.publish_controller_epoch_start_offset(epoch_start_offset);
             }
         }
         true
     }
 
     fn refresh_confirm_offset_after_role_change(&self) {
-        let min_phy_offset = self.message_store.get_min_phy_offset();
-        let max_phy_offset = self.message_store.get_max_phy_offset().max(min_phy_offset);
+        let message_store = self.delegate.get_default_message_store();
+        let min_phy_offset = message_store.get_min_phy_offset();
+        let max_phy_offset = message_store.get_max_phy_offset().max(min_phy_offset);
         let next_confirm_offset = if self.replication.is_master() {
             max_phy_offset
         } else {
-            self.message_store.get_commit_log().get_confirm_offset_directly()
+            message_store.get_commit_log().get_confirm_offset_directly()
         };
-        self.message_store
-            .publish_confirm_offset(next_confirm_offset.clamp(min_phy_offset, max_phy_offset));
+        message_store.publish_confirm_offset(next_confirm_offset.clamp(min_phy_offset, max_phy_offset));
     }
 
     pub fn current_master_epoch(&self) -> i32 {
@@ -304,7 +313,12 @@ impl HAService for AutoSwitchHAService {
     fn in_sync_replicas_nums(&self, _master_put_where: i64) -> i32 {
         self.tracked_sync_state_set_size()
             .map(|size| size.max(1) as i32)
-            .unwrap_or_else(|| self.message_store.get_alive_replica_num_in_group().max(1))
+            .unwrap_or_else(|| {
+                self.delegate
+                    .get_default_message_store()
+                    .get_alive_replica_num_in_group()
+                    .max(1)
+            })
     }
 
     fn get_connection_count(&self) -> &AtomicU32 {
@@ -392,7 +406,9 @@ mod tests {
     use crate::config::message_store_config::MessageStoreConfig;
     use crate::ha::ha_client::HAClient;
 
-    fn new_test_message_store(root: &Path) -> ArcMut<LocalFileMessageStore> {
+    fn new_test_message_store(
+        root: &Path,
+    ) -> ArcMut<crate::message_store::local_file_message_store::LocalFileMessageStore> {
         std::fs::create_dir_all(root).expect("create temp root dir");
 
         let broker_config = BrokerConfig {
@@ -408,13 +424,15 @@ mod tests {
         };
 
         let topic_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>> = Arc::new(DashMap::new());
-        let mut store = ArcMut::new(LocalFileMessageStore::new(
-            Arc::new(message_store_config),
-            Arc::new(broker_config),
-            topic_table,
-            None,
-            false,
-        ));
+        let mut store = ArcMut::new(
+            crate::message_store::local_file_message_store::LocalFileMessageStore::new(
+                Arc::new(message_store_config),
+                Arc::new(broker_config),
+                topic_table,
+                None,
+                false,
+            ),
+        );
         let store_clone = store.clone();
         store.set_message_store_arc(store_clone);
         store
@@ -444,13 +462,28 @@ mod tests {
         }
     }
 
+    #[test]
+    fn constructor_keeps_message_store_ownership_in_delegate() {
+        let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-auto-switch-owner-{}", current_millis()));
+        let store = new_test_message_store(&temp_root);
+        let strong_count_before = store.strong_count();
+
+        let service = AutoSwitchHAService::new(DefaultHAService::new(store.clone()));
+
+        assert_eq!(store.strong_count(), strong_count_before + 1);
+        drop(service);
+        assert_eq!(store.strong_count(), strong_count_before);
+
+        let _ = std::fs::remove_dir_all(temp_root);
+    }
+
     #[tokio::test]
     async fn auto_switch_service_initializes_client_and_tracks_sync_state_set_size() {
         let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-auto-switch-ha-service-{}", current_millis()));
         let store = new_test_message_store(&temp_root);
         store.set_alive_replica_num_in_group(3);
 
-        let mut service = ArcMut::new(AutoSwitchHAService::new(store.clone()));
+        let mut service = ArcMut::new(AutoSwitchHAService::new(DefaultHAService::new(store.clone())));
         let general_service = GeneralHAService::new_with_auto_switch_ha_service(service.clone());
         AutoSwitchHAService::init(&mut service, general_service).expect("init auto switch ha service");
 
@@ -480,7 +513,7 @@ mod tests {
         let mut store = new_test_message_store(&temp_root);
         store.init().await.expect("init message store");
 
-        let mut service = ArcMut::new(AutoSwitchHAService::new(store.clone()));
+        let mut service = ArcMut::new(AutoSwitchHAService::new(DefaultHAService::new(store.clone())));
         let general_service = GeneralHAService::new_with_auto_switch_ha_service(service.clone());
         AutoSwitchHAService::init(&mut service, general_service).expect("init auto switch ha service");
 
@@ -523,7 +556,7 @@ mod tests {
             .await
             .expect("append data");
 
-        let mut service = ArcMut::new(AutoSwitchHAService::new(store.clone()));
+        let mut service = ArcMut::new(AutoSwitchHAService::new(DefaultHAService::new(store.clone())));
         let general_service = GeneralHAService::new_with_auto_switch_ha_service(service.clone());
         AutoSwitchHAService::init(&mut service, general_service).expect("init auto switch ha service");
         service.sync_controller_sync_state_set(7, &HashSet::from([7_i64]));
@@ -553,7 +586,7 @@ mod tests {
             .await
             .expect("append data");
 
-        let mut service = ArcMut::new(AutoSwitchHAService::new(store.clone()));
+        let mut service = ArcMut::new(AutoSwitchHAService::new(DefaultHAService::new(store.clone())));
         let general_service = GeneralHAService::new_with_auto_switch_ha_service(service.clone());
         AutoSwitchHAService::init(&mut service, general_service).expect("init auto switch ha service");
         service.sync_controller_sync_state_set(7, &HashSet::from([7_i64]));
@@ -582,7 +615,7 @@ mod tests {
         let mut store = new_test_message_store(&temp_root);
         store.init().await.expect("init message store");
 
-        let mut service = ArcMut::new(AutoSwitchHAService::new(store.clone()));
+        let mut service = ArcMut::new(AutoSwitchHAService::new(DefaultHAService::new(store.clone())));
         let general_service = GeneralHAService::new_with_auto_switch_ha_service(service.clone());
         AutoSwitchHAService::init(&mut service, general_service).expect("init auto switch ha service");
         service.sync_controller_sync_state_set(7, &HashSet::from([7_i64, 9_i64, 10_i64]));
@@ -608,7 +641,7 @@ mod tests {
             .await
             .expect("append data");
 
-        let mut service = ArcMut::new(AutoSwitchHAService::new(store.clone()));
+        let mut service = ArcMut::new(AutoSwitchHAService::new(DefaultHAService::new(store.clone())));
         let general_service = GeneralHAService::new_with_auto_switch_ha_service(service.clone());
         AutoSwitchHAService::init(&mut service, general_service).expect("init auto switch ha service");
         service.sync_controller_sync_state_set(7, &HashSet::from([7_i64]));
@@ -638,7 +671,7 @@ mod tests {
             .await
             .expect("append data");
 
-        let mut service = ArcMut::new(AutoSwitchHAService::new(store.clone()));
+        let mut service = ArcMut::new(AutoSwitchHAService::new(DefaultHAService::new(store.clone())));
         let general_service = GeneralHAService::new_with_auto_switch_ha_service(service.clone());
         AutoSwitchHAService::init(&mut service, general_service).expect("init auto switch ha service");
         service.sync_controller_sync_state_set(7, &HashSet::from([7_i64]));
@@ -679,7 +712,7 @@ mod tests {
             .expect("append data");
         store.set_confirm_offset(0);
 
-        let mut service = ArcMut::new(AutoSwitchHAService::new(store.clone()));
+        let mut service = ArcMut::new(AutoSwitchHAService::new(DefaultHAService::new(store.clone())));
         let general_service = GeneralHAService::new_with_auto_switch_ha_service(service.clone());
         AutoSwitchHAService::init(&mut service, general_service).expect("init auto switch ha service");
 
@@ -701,7 +734,7 @@ mod tests {
         let mut store = new_test_message_store(&temp_root);
         store.init().await.expect("init message store");
 
-        let mut service = ArcMut::new(AutoSwitchHAService::new(store.clone()));
+        let mut service = ArcMut::new(AutoSwitchHAService::new(DefaultHAService::new(store.clone())));
         let general_service = GeneralHAService::new_with_auto_switch_ha_service(service.clone());
         AutoSwitchHAService::init(&mut service, general_service).expect("init auto switch ha service");
 

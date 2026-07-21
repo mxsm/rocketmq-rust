@@ -40,6 +40,7 @@ use crate::config::message_store_config::MessageStoreConfig;
 use crate::ha::auto_switch::auto_switch_ha_connection::AutoSwitchHAConnection;
 use crate::ha::auto_switch::auto_switch_ha_service::AutoSwitchHAService;
 use crate::ha::default_ha_client::DefaultHAClient;
+use crate::ha::default_ha_client::HAClientError;
 use crate::ha::default_ha_connection::DefaultHAConnection;
 use crate::ha::default_ha_connection::HAConnectionRuntimeHandle;
 use crate::ha::general_ha_client::GeneralHAClient;
@@ -124,10 +125,15 @@ impl DefaultHAService {
             return Ok(false);
         }
 
-        let client = DefaultHAClient::new(self.default_message_store.clone())
+        let client = self
+            .create_default_ha_client()
             .map_err(|e| HAError::Service(format!("Failed to create DefaultHAClient: {e}")))?;
         self.ha_client = Some(GeneralHAClient::new_with_default_ha_client(client));
         Ok(true)
+    }
+
+    pub(crate) fn create_default_ha_client(&self) -> Result<DefaultHAClient, HAClientError> {
+        DefaultHAClient::new(self.default_message_store.clone())
     }
 
     pub(crate) fn set_ha_client_reported_broker_id(&self, broker_id: Option<i64>) {
@@ -801,7 +807,7 @@ mod tests {
     fn new_auto_switch_services(root: &Path) -> (ArcMut<DefaultHAService>, ArcMut<AutoSwitchHAService>) {
         let store = new_test_message_store(root, true);
         let mut default_service = ArcMut::new(DefaultHAService::new(store.clone()));
-        let auto_switch_service = ArcMut::new(AutoSwitchHAService::new(store));
+        let auto_switch_service = ArcMut::new(AutoSwitchHAService::new(DefaultHAService::new(store)));
 
         DefaultHAService::init(
             &mut default_service,
@@ -874,7 +880,7 @@ mod tests {
         let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-default-ha-shutdown-{}", current_millis()));
         let store = new_test_message_store(&temp_root, true);
         let mut service = ArcMut::new(DefaultHAService::new(store.clone()));
-        let auto_switch_service = ArcMut::new(AutoSwitchHAService::new(store));
+        let auto_switch_service = ArcMut::new(AutoSwitchHAService::new(DefaultHAService::new(store)));
 
         DefaultHAService::init(
             &mut service,
@@ -902,7 +908,7 @@ mod tests {
         let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-default-ha-init-{}", current_millis()));
         let store = new_test_message_store(&temp_root, true);
         let mut service = ArcMut::new(DefaultHAService::new(store.clone()));
-        let auto_switch_service = ArcMut::new(AutoSwitchHAService::new(store));
+        let auto_switch_service = ArcMut::new(AutoSwitchHAService::new(DefaultHAService::new(store)));
 
         DefaultHAService::init(
             &mut service,

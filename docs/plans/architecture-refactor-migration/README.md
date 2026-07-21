@@ -729,6 +729,15 @@ occurrences（production 163/414、test 140/432、compatibility 14/40、Broker p
 经临时 ADR-013 一对一 relocation 审核，无新增 identity。总进度仍为 75/82，下一子切片 M11-12bc34 优先收窄
 Store auto-switch service 的重复完整 delegate owner，或继续 Broker aggregate/leaf。
 
+Store auto-switch 单一 delegate owner 随 Issue #8478 收窄：`AutoSwitchHAService` 构造改接收已完成 Store 绑定的
+`DefaultHAService`，删除 wrapper 自身重复的完整 `ArcMut<LocalFileMessageStore>` field。初始角色、sync-state、confirm
+offset、epoch publication、alive replica 查询和 client 构造均经唯一 delegate；crate-private client factory 保留原
+`HAClientError` 映射与 Default/AutoSwitch 初始化顺序。强引用回归证明 wrapper 只保留 delegate 所需的一份 Store owner。
+ArcMut 快照降至 315 identities/881 occurrences（production 161/409、test 140/432、compatibility 14/40、Broker
+production 79/175、Store production 82/234），净删除 2 个 production identity/5 occurrence；18 个保留 occurrence
+经临时 ADR-013 一对一 relocation 审核，无新增 identity。总进度仍为 75/82，下一子切片 M11-12bc35 继续 Broker
+aggregate/leaf 或 Store WAL/queue/timer/HA owner。
+
 ### 9.3 证据目录
 
 - 运行期生成物：`target/architecture-refactor/Mxx/<run-id>/`，不提交 Git。
