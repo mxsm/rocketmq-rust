@@ -1042,69 +1042,6 @@
       "adr": "ADR-002"
     },
     {
-      "identity": "c0078910ea2a5619ae2ba85b",
-      "path": "rocketmq-broker/src/client/client_housekeeping_service.rs",
-      "symbol": "*",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "3ed0d03a2f83e4cb74e444ff",
-          "fingerprint": "40a8ffe2dcd83c12313da3c2",
-          "item": "mod tests",
-          "line": 233
-        }
-      ],
-      "owner": "broker",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "e42551a26ed3a8de73b7c5c1",
-      "path": "rocketmq-broker/src/client/client_housekeeping_service.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "918423496086304dcb10a3d2",
-          "fingerprint": "30ce7566075a2c3c991fa798",
-          "item": "<module>",
-          "line": 29
-        }
-      ],
-      "owner": "broker",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "d99de9e08c91293cf7d31ca3",
-      "path": "rocketmq-broker/src/client/client_housekeeping_service.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "15c5cfded83f6e2cbac69242",
-          "fingerprint": "9ccc93ca0734b8fce393f235",
-          "item": "struct ClientHousekeepingService",
-          "line": 40
-        },
-        {
-          "id": "7168f2110baa7f9eee702f00",
-          "fingerprint": "1fe88213f7fb3cfc3eb42806",
-          "item": "fn new",
-          "line": 63
-        }
-      ],
-      "owner": "broker",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
       "identity": "2278d410debc604733d1a654",
       "path": "rocketmq-broker/src/failover/escape_bridge.rs",
       "symbol": "*",

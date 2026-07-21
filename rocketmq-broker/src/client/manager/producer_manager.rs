@@ -65,6 +65,33 @@ pub struct ProducerManager {
     broker_config: Option<Arc<BrokerConfig>>,
 }
 
+/// Shared producer-connection mutation capability for Broker housekeeping.
+///
+/// The handle shares the live manager state but exposes only inactive-channel scanning and
+/// channel-close cleanup. It cannot register producers, select channels, or mutate manager
+/// configuration.
+pub(crate) struct ProducerConnectionHousekeeping {
+    manager: ProducerManager,
+}
+
+impl Clone for ProducerConnectionHousekeeping {
+    fn clone(&self) -> Self {
+        Self {
+            manager: self.manager.clone_shared_state(),
+        }
+    }
+}
+
+impl ProducerConnectionHousekeeping {
+    pub(crate) fn scan_not_active_channel(&self) {
+        self.manager.scan_not_active_channel();
+    }
+
+    pub(crate) fn do_channel_close_event(&self, remote_addr: &str, channel: &Channel) -> bool {
+        self.manager.do_channel_close_event(remote_addr, channel)
+    }
+}
+
 /// Shared read capability for producer channel selection and connection snapshots.
 ///
 /// This view deliberately omits broker configuration and mutation hooks so transaction checking
@@ -140,6 +167,24 @@ fn producer_table_snapshot(
 }
 
 impl ProducerManager {
+    pub(crate) fn connection_housekeeping(&self) -> ProducerConnectionHousekeeping {
+        ProducerConnectionHousekeeping {
+            manager: self.clone_shared_state(),
+        }
+    }
+
+    fn clone_shared_state(&self) -> Self {
+        Self {
+            group_channel_table: Arc::clone(&self.group_channel_table),
+            client_channel_table: Arc::clone(&self.client_channel_table),
+            channel_to_groups: Arc::clone(&self.channel_to_groups),
+            positive_atomic_counter: Arc::clone(&self.positive_atomic_counter),
+            producer_change_listener_vec: Arc::clone(&self.producer_change_listener_vec),
+            broker_stats_manager: self.broker_stats_manager.clone(),
+            broker_config: self.broker_config.clone(),
+        }
+    }
+
     pub(crate) fn channel_registry(&self) -> ProducerChannelRegistry {
         ProducerChannelRegistry {
             group_channel_table: Arc::clone(&self.group_channel_table),

@@ -86,7 +86,53 @@ pub struct ConsumerManager {
     subscription_expired_timeout: u64,
 }
 
+/// Shared consumer-connection mutation capability for Broker housekeeping.
+///
+/// The handle shares the live manager state but exposes only inactive-channel scanning and
+/// channel-close cleanup. It cannot register consumers, query subscriptions, or mutate manager
+/// configuration.
+pub(crate) struct ConsumerConnectionHousekeeping {
+    manager: ConsumerManager,
+}
+
+impl Clone for ConsumerConnectionHousekeeping {
+    fn clone(&self) -> Self {
+        Self {
+            manager: self.manager.clone_shared_state(),
+        }
+    }
+}
+
+impl ConsumerConnectionHousekeeping {
+    pub(crate) fn scan_not_active_channel(&self) {
+        self.manager.scan_not_active_channel();
+    }
+
+    pub(crate) fn do_channel_close_event(&self, remote_addr: &str, channel: &Channel) -> bool {
+        self.manager.do_channel_close_event(remote_addr, channel)
+    }
+}
+
 impl ConsumerManager {
+    pub(crate) fn connection_housekeeping(&self) -> ConsumerConnectionHousekeeping {
+        ConsumerConnectionHousekeeping {
+            manager: self.clone_shared_state(),
+        }
+    }
+
+    fn clone_shared_state(&self) -> Self {
+        Self {
+            consumer_table: Arc::clone(&self.consumer_table),
+            consumer_compensation_table: Arc::clone(&self.consumer_compensation_table),
+            topic_group_table: Arc::clone(&self.topic_group_table),
+            consumer_ids_change_listener_list: Arc::clone(&self.consumer_ids_change_listener_list),
+            broker_stats_manager: self.broker_stats_manager.clone(),
+            broker_config: self.broker_config.clone(),
+            channel_expired_timeout: self.channel_expired_timeout,
+            subscription_expired_timeout: self.subscription_expired_timeout,
+        }
+    }
+
     /// Creates a new ConsumerManager instance.
     ///
     /// # Arguments
