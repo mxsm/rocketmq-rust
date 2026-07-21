@@ -1,7 +1,7 @@
 # 架构重构剩余任务盘点
 
 > 盘点日期：2026-07-21
-> 代码基线：Issue #8440 / M11-12bc17 完成后
+> 代码基线：Issue #8442 / M11-12bc18 完成后
 > 统计规则：82 个顶层 `PR-Mxx-yy` 工作包与 M11-12 内部实施切片分开统计，禁止重复计数。
 
 ## 结论
@@ -19,18 +19,18 @@ owner 清零、compatibility 删除和同一候选快照验收。
 
 ## PR-M11-12 剩余实现
 
-Issue #8440 后 reviewed ArcMut baseline 为 364 identities / 963 occurrences：production 205/484、test
+Issue #8442 后 reviewed ArcMut baseline 为 360 identities / 957 occurrences：production 201/478、test
 145/439、compatibility 14/40。production 全部分布在 Broker 与 Store。
 
 | owner | 剩余 identity / occurrence | 完成条件 |
 |---|---:|---|
-| Broker | 102 / 210 | transaction bridge、Producer/ColdData admin leaf、Schedule hook、put-message preflight、ConsumerOrderInfoManager、TopicRouteInfoManager、MessageArrivingListener、ClientHousekeepingService、HA status/Broker epoch read-only diagnostics 与未编译 V2 示例残留已退出 leaf-level 完整 runtime/store owner；LiteLifecycle 只读 API 已改为普通借用；继续让显式 Store 兼容边界、BrokerRuntime aggregate carrier、其余 admin/processor/service 不再传播不安全共享可变 owner |
+| Broker | 98 / 204 | transaction bridge、Producer/ColdData admin leaf、Schedule hook、put-message preflight、ConsumerOrderInfoManager、TopicRouteInfoManager、MessageArrivingListener、ClientHousekeepingService、HA status/Broker epoch diagnostics、reset-flush-offset/exchange-HA-info control 与未编译 V2 示例残留已退出 leaf-level 完整 runtime/store owner；LiteLifecycle 只读 API 已改为普通借用；继续让显式 Store 兼容边界、BrokerRuntime aggregate carrier、其余 admin/processor/service 不再传播不安全共享可变 owner |
 | Store | 103 / 274 | BrokerStats observer、ConsumeQueueExt owner、HA notification/connection registry capability 与未共享 HA child 已收窄；其余 MessageStore、CommitLog/Flush、queue、Rocks/Timer 与 HA service/actor 改为独占 owner、标准 Arc/Weak 或显式 actor/锁边界 |
 | compatibility | 14 / 40 | 先迁移 Store 对 `WeakArcMut` 的剩余使用；公开 `ArcMut`/`WeakArcMut`/`SyncUnsafeCellWrapper` 删除必须满足 next-major 两轮弃用与独立 HUMAN/Release Manager 批准，不能通过重置 API baseline 提前关闭 |
 
 建议按以下最小可审查批次继续推进；它们是 PR-M11-12 的内部切片，不增加 82 个顶层工作包总数：
 
-1. Broker aggregate：收窄 `BrokerRuntimeInner`、processor variant 和启动 carrier（Broker 当前为 102/210）；Schedule hook、put-message preflight、ConsumerOrderInfoManager、TopicRouteInfoManager、MessageArrivingListener 与 ClientHousekeepingService 强保活边已拆除，HA status/Broker epoch diagnostics 已改为父层普通借用，未编译 V2 示例残留已清理；继续清理只读取少量能力的 admin/processor leaf。
+1. Broker aggregate：收窄 `BrokerRuntimeInner`、processor variant 和启动 carrier（Broker 当前为 98/204）；Schedule hook、put-message preflight、ConsumerOrderInfoManager、TopicRouteInfoManager、MessageArrivingListener 与 ClientHousekeepingService 强保活边已拆除，HA diagnostics/control handler 已改为父层普通借用，未编译 V2 示例残留已清理；继续清理只读取少量能力的 admin/processor leaf。
 2. Broker leaf：完成其余 admin/processor/revive/slave/offset leaf owner；transaction bridge 已由 M11-12bc4 收窄，Producer/ColdData admin handler 已由 M11-12bc5 改持 live registry/standard Arc capability，Schedule hook 已由 M11-12bc6 改持三项显式能力。
 3. Store WAL：收口 Local/Rocks MessageStore、CommitLog 与 Flush manager，并替换 transaction 的直接 Store 兼容 owner。
 4. Store queue：ConsumeQueueExt 已改用显式锁 owner；继续收口其余 ConsumeQueue、queue store、index/mapped-file carrier。
@@ -121,6 +121,12 @@ M11-12bc17 让 Admin dispatch 复用 broker-config handler 已登记的 runtime 
 只接受普通共享 runtime 借用且不新增父层 owner。响应、缺失 Store/HA 与 controller-mode 错误语义保持不变。production 净删除 4 identities /
 6 occurrences，test glob 净删除 1/1，因此 reviewed 总量降至 364/963、production 降至 205/484、Broker 降至
 102/210、test 降至 145/439；Store 103/274 与 compatibility 14/40 不增，无 relocation。
+
+M11-12bc18 将 `ResetMasterFlushOffsetHandler` 与 `UpdateBrokerHaHandler` 改为无状态 leaf；两者删除 runtime field、Clone
+与 struct-level `MessageStore` 泛型，Admin dispatch 从 broker-config handler 现有 owner 取得普通 runtime 借用。
+master/slave、offset update、HA address exchange 语义保持不变且不新增父层 owner。production 净删除 4 identities /
+6 occurrences，因此 reviewed 总量降至 360/957、production 降至 201/478、Broker 降至 98/204；test 145/439、
+Store 103/274 与 compatibility 14/40 不增，无 relocation。
 
 ## PR-M12 剩余工作包
 

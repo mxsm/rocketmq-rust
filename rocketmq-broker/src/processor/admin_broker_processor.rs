@@ -92,8 +92,8 @@ pub struct AdminBrokerProcessor<MS: MessageStore> {
     subscription_group_handler: SubscriptionGroupHandler<MS>,
 
     notify_min_broker_handler: NotifyMinBrokerChangeIdHandler<MS>,
-    update_broker_ha_handler: UpdateBrokerHaHandler<MS>,
-    reset_master_flusg_offset_handler: ResetMasterFlushOffsetHandler<MS>,
+    update_broker_ha_handler: UpdateBrokerHaHandler,
+    reset_master_flusg_offset_handler: ResetMasterFlushOffsetHandler,
     broker_epoch_cache_handler: BrokerEpochCacheHandler,
     notify_broker_role_change_handler: NotifyBrokerRoleChangeHandler<MS>,
     message_related_handler: MessageRelatedHandler<MS>,
@@ -143,9 +143,9 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
 
         let notify_min_broker_handler = NotifyMinBrokerChangeIdHandler::new(broker_runtime_inner.clone());
 
-        let update_broker_ha_handler = UpdateBrokerHaHandler::new(broker_runtime_inner.clone());
+        let update_broker_ha_handler = UpdateBrokerHaHandler::new();
 
-        let reset_master_flusg_offset_handler = ResetMasterFlushOffsetHandler::new(broker_runtime_inner.clone());
+        let reset_master_flusg_offset_handler = ResetMasterFlushOffsetHandler::new();
 
         let broker_epoch_cache_handler = BrokerEpochCacheHandler::new();
 
@@ -511,8 +511,9 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .await
             }
             RequestCode::ExchangeBrokerHaInfo => {
+                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner();
                 self.update_broker_ha_handler
-                    .update_broker_ha_info(channel, ctx, request_code, request)
+                    .update_broker_ha_info(broker_runtime_inner, channel, ctx, request_code, request)
                     .await
             }
             RequestCode::GetBrokerHaStatus => {
@@ -522,8 +523,9 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .await
             }
             RequestCode::ResetMasterFlushOffset => {
+                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner();
                 self.reset_master_flusg_offset_handler
-                    .reset_master_flush_offset(channel, ctx, request_code, request)
+                    .reset_master_flush_offset(broker_runtime_inner, channel, ctx, request_code, request)
                     .await
             }
             RequestCode::GetBrokerEpochCache => {

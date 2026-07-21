@@ -595,6 +595,14 @@ HA status 与 ownership 回归 3/3 通过。ArcMut 快照降至 364 identities/9
 1 个 test identity/1 occurrence，且无 relocation。总进度仍为 75/82，下一子切片 M11-12bc18 继续 Broker
 aggregate/leaf 或 Store WAL/queue/timer/HA owner。
 
+Broker HA control handlers 随 Issue #8442 收窄：`ResetMasterFlushOffsetHandler` 与 `UpdateBrokerHaHandler` 删除各自的
+完整 runtime 字段、Clone 和 struct-level `MessageStore` 泛型，改为无状态 leaf；Admin dispatch 复用 broker-config
+handler 已登记的 owner，并在 reset-flush-offset/exchange-HA-info 请求期间传入普通 `&BrokerRuntimeInner` 借用。
+master/slave、offset 与 HA address 行为保持不变，ownership 回归 3/3 通过。ArcMut 快照降至 360 identities/957
+occurrences（production 201/478、test 145/439、compatibility 14/40、Broker production 98/204），净删除 4 个
+production identities/6 occurrences，且无 relocation。总进度仍为 75/82，下一子切片 M11-12bc19 继续 Broker
+aggregate/leaf 或 Store WAL/queue/timer/HA owner。
+
 ### 9.3 证据目录
 
 - 运行期生成物：`target/architecture-refactor/Mxx/<run-id>/`，不提交 Git。
