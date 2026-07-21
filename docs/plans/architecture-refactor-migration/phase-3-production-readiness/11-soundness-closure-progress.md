@@ -2956,10 +2956,31 @@ Broker Query Assignment runtime capability 随 Issue #8475 完成以下边界收
 | disk recovery | 首次 focused build 因 D 盘空间耗尽失败；按用户授权执行 `cargo clean` 释放 201.2 GiB 后，以上命令在同一源码快照重新执行并取得所列结果 |
 | root workspace final gates | `cargo fmt --all -- --check` 与 workspace all-target/all-feature strict Clippy 通过；最终补丁后复跑 `git diff --check`；Windows linker stdout 与既有 future-incompatibility note 不受 `-D warnings` 管辖 |
 
+## M11-12bc34 实现
+
+Store auto-switch single delegate ownership 随 Issue #8478 完成以下边界收敛：
+
+- `AutoSwitchHAService::new` 改为接收 owned `DefaultHAService`，wrapper 删除重复的完整 `ArcMut<LocalFileMessageStore>` field、production import 与构造参数。
+- 初始 master/slave 角色、sync-state confirm-offset 更新、HA timeout/alive-replica 查询、epoch/state-machine publication 与角色切换后的 confirm-offset refresh 均经唯一 delegate 的只读 Store 访问。
+- `DefaultHAService::create_default_ha_client` 作为 crate-private 窄构造能力复用其 Store owner；AutoSwitch init 继续先初始化 delegate，再按原 `HAClientError` 到 `HAError::Service` 映射包装 client 并安装。
+- LocalFileMessageStore production 入口与既有 HA 测试显式先构造 delegate；强引用回归证明 AutoSwitch wrapper 只增加 delegate 所需的一份 Store strong owner，drop 后恢复原计数。
+- reviewed baseline 从 317 identities / 886 occurrences 降至 315 / 881；production 从 163/414 降至 161/409，test 保持 140/432，compatibility 保持 14/40。Store production 从 84/239 降至 82/234，Broker 保持 79/175；净删除 2 个 production identity/5 occurrences，18 个保留 occurrence 经同 item 一对一指纹审核更新，无新增 identity。
+
+## M11-12bc34 验证
+
+| 命令 | 结果 |
+|---|---|
+| Store check / focused / strict Clippy | `cargo check -p rocketmq-store --all-features` 通过；AutoSwitch HA 12/12（含单一 Store owner 回归）与 Default HA 11/11 通过；Store all-target/all-feature strict Clippy 通过 |
+| Store / Broker all-feature lib | Store 508/508；Broker 614 passed、25 failed、1 ignored，失败与 bc33 一致，集中于既有 lifecycle/Lite/subscription/controller 动态基线，无 AutoSwitch/Default HA 单元失败，因此 Broker 全套如实记为未通过 |
+| Store/RocksDB 专项 | Store/Broker `rocksdb_store` strict Clippy 通过；foundation 82/82、semantics 9/9、Broker rocksdb 21/21、pop_consumer 4/4 通过 |
+| reviewed baseline / fixtures | `--apply-reviewed-reductions` 从 317/886 精确降至 315/881，18 个保留 occurrence 通过同 item 一对一审核；`python scripts/arc_mut_guard.py`、24/24 fixtures 与 67/67 ArcMut guard tests 通过，无新增 identity 或提交态临时 approval |
+| runtime / architecture guards | enforcing runtime audit、dependency fixtures/target/baseline、release、8-profile/11-variant performance、127/127 guard tests 与 AGENTS routing 通过；目标 compatibility 35/35、test edge 3/3、release topology 32/32 |
+| root workspace final gates | `cargo fmt --all -- --check` 与 workspace all-target/all-feature strict Clippy 通过；最终补丁后复跑 `git diff --check`；Windows linker stdout 与既有 future-incompatibility note 不受 `-D warnings` 管辖 |
+
 ## 剩余切片与 Gate
 
 1. Broker BrokerRuntimeInner capability carrier 与其他 admin/processor/leaf owner（79/175）；transaction bridge、Producer/ColdData admin leaf、Schedule hook、put-message preflight、ConsumerOrderInfoManager、TopicRouteInfoManager、MessageArrivingListener、ClientHousekeepingService、Query Assignment capability、HA diagnostics/control/min-broker transition、controller role-change duplicate owner、BatchMq、SubscriptionGroup、MessageRelated、Offset、Consumer、Topic handler 与未编译 V2 示例残留已退出 leaf-level 完整 runtime/store owner，LiteLifecycle 只读 Store carrier 已收窄为普通借用，显式 Store 兼容 owner 留待 Store 批次删除。
-2. Store MappedFileQueue/其余 ConsumeQueue、CommitLog/Flush、StoreHandle/Rocks/Timer 与其余 HA service/actor（84/239）；BrokerStats observer、ConsumeQueueExt 显式锁 owner、HA replication-state callback、未共享 HA child direct ownership、commit-to-flush 窄唤醒能力、HA confirm/epoch 原子发布、HA connection runtime handle、CommitLog shared disk-flush 与 auto-switch client construction capability 已完成。
+2. Store MappedFileQueue/其余 ConsumeQueue、CommitLog/Flush、StoreHandle/Rocks/Timer 与其余 HA service/actor（82/234）；BrokerStats observer、ConsumeQueueExt 显式锁 owner、HA replication-state callback、未共享 HA child direct ownership、commit-to-flush 窄唤醒能力、HA confirm/epoch 原子发布、HA connection runtime handle、CommitLog shared disk-flush、auto-switch client construction 与 single delegate Store owner 已完成。
 3. Production `WeakArcMut` 已清零；继续迁移 test/compatibility 中受控使用并移除其余 nightly feature。公开 `arc_mut.rs`/re-export 的 destructive 删除受 next-major 两轮弃用与 Release Manager/HUMAN Gate 约束，不能静默重置 public API baseline。
 4. 对同一候选快照执行 stable feature matrix、Miri/Loom 可用切片、soak/SLO fault、dashboard/runbook、动态
    Kind/K3d/container、M10 固定硬件和 Human Gate。
