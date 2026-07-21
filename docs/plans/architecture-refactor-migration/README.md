@@ -711,6 +711,15 @@ registration。Topic 校验、Mixed/system 限制、删除 POP retry v2/v1/main 
 净删除 2 个 production identity/3 occurrence 与 1 个 test identity/1 occurrence，无 relocation。总进度仍为
 75/82，下一子切片 M11-12bc32 继续 Broker aggregate/leaf 或 Store WAL/queue/timer/HA owner。
 
+Store auto-switch client 构造边界随 Issue #8473 收窄：`AutoSwitchHAClient` 不再直接接收、保存构造所需的完整
+`ArcMut<LocalFileMessageStore>`，而是通过 crate-private `from_delegate` 包装已完成初始化的 `DefaultHAClient`；
+`AutoSwitchHAService` 仍按原顺序构造 delegate、映射 `HAClientError` 为 `HAError::Service`，再包装并安装客户端。
+delegate 报告 broker ID、wrapper 原子 broker ID、master address 与运行状态语义保持不变。ArcMut 快照降至
+320 identities/890 occurrences（production 165/417、test 141/433、compatibility 14/40、Broker production
+81/178、Store production 84/239），净删除 4 个 production identity/4 occurrence 与 1 个 test identity/1 occurrence；
+4 个保留 test occurrence 经临时 ADR-013 一对一 relocation 审核，无新增 identity。总进度仍为 75/82，下一子切片
+M11-12bc33 继续 Broker aggregate/leaf 或 Store WAL/queue/timer/HA owner。
+
 ### 9.3 证据目录
 
 - 运行期生成物：`target/architecture-refactor/Mxx/<run-id>/`，不提交 Git。
