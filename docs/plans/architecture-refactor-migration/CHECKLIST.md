@@ -23,7 +23,7 @@
 | Phase 3 | M10–M11 | 进行中 | Codex 执行组 | 8–12 周 | — | [`phase-3-production-readiness/`](phase-3-production-readiness/) |
 | Phase 4 | M12 | 未开始 | 待分配 | 8–12 周 | — | — |
 
-### 2.1 剩余重构盘点（2026-07-21）
+### 2.1 剩余重构盘点（2026-07-22）
 
 > 统计口径：只统计 82 个顶层 `PR-Mxx-yy` 工作包；M06-03a～ah 等内部迁移证据不重复计数。
 > 详细 owner 热点、M11-12 建议批次与 M12 清单见 [`REMAINING-TASKS.md`](REMAINING-TASKS.md)。
@@ -39,6 +39,10 @@
 剩余 7 个工作包分布：M10 为 0 个、M11 为 1 个且正在实施、M12 为 6 个且尚未开始。
 PR-M10-05 已完成性能门禁实现；真实固定硬件 baseline/candidate 与 HUMAN M10 Gate 尚未完成，因此 M10 为
 `待验收`而非`已完成`。M11 为`实施中`，当前下一工作包为 PR-M11-12。
+
+执行层按当前热点进一步拆为 31 个最小可审查单元：16 个 production owner、2 个 test/compatibility、7 个
+M10/Phase 3 动态验收与签署、6 个 M12。该数字是剩余实施下界，不替代 82 个顶层工作包口径；逐项 checklist
+及每组精确 baseline 见 [`REMAINING-TASKS.md`](REMAINING-TASKS.md#执行层最小审查清单31-项)。
 
 PR-M11-12 的内部子切片不重复计入 82 个顶层工作包。Issue #8513 的 M11-12bc51 子切片完成后，当前 ArcMut reviewed
 baseline 为 263 identities / 797 occurrences，其中 production 为 123/341、test 为 126/416、compatibility

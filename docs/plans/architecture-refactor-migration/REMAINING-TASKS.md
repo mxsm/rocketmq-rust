@@ -17,6 +17,11 @@ owner 清零、compatibility 删除和同一候选快照验收。
 | Phase Gate | 2 | 2 | Phase 3、Phase 4 |
 | 目标边界 crate | 10 | 0 | 根 workspace 已为目标 32 package |
 
+按当前代码热点、兼容窗口和候选快照 Gate 进一步拆分，建议以 **31 个最小可审查单元**管理剩余执行：
+16 个 production owner 收口、2 个 test/compatibility 收口、7 个 M10/Phase 3 动态验收与签署、6 个 M12
+工作包。31 是 2026-07-22 基线上的执行估算，不是新的正式工作包总数；相邻单元可以合并到同一 PR，遇到高风险
+owner 也可以继续拆分，但 7 个正式工作包的统计口径保持不变。
+
 ## PR-M11-12 剩余实现
 
 Issue #8513 后 reviewed ArcMut baseline 为 263 identities / 797 occurrences：production 123/341、test
@@ -41,6 +46,55 @@ Issue #8513 后 reviewed ArcMut baseline 为 263 identities / 797 occurrences：
 
 上述 7 个批次是依据当前代码热点形成的执行计划，不是“还剩 7 个正式工作包”。实际 PR 数可因每个切片的风险与审查
 大小拆分，但完成目标不能通过合并批次而减少。
+
+## 执行层最小审查清单（31 项）
+
+> 本清单给出当前可执行下界。`identity / occurrence` 来自 Issue #8513 后通过
+> `python scripts/arc_mut_guard.py` 验证的 reviewed baseline；production 16 项精确合计 Broker 41/107、Store
+> 82/234。test 条目会随相邻 production 切片同步下降，因此 R17 只在 production 收口后处理真实余量。
+
+### Production owner（16 项）
+
+- [ ] R01 Broker runtime aggregate：`broker_runtime.rs` 的 root carrier、controller/start helper 与 Local/Rocks 构造边界（7/40）。
+- [ ] R02 Broker processor wrapper：`processor.rs` 与 `ack_message_processor.rs` 的共享 wrapper/请求期可变访问（5/9）。
+- [ ] R03 Broker send/reply：`send_message_processor.rs` 与 `reply_message_processor.rs` 的 processor/store capability（6/13）。
+- [ ] R04 Broker POP：`pop_message_processor.rs`、`pop_buffer_merge_service.rs`、`pop_revive_service.rs`（8/20）。
+- [ ] R05 Broker pull：`pull_message_processor.rs` 与 `default_pull_message_result_handler.rs`（4/7）。
+- [ ] R06 Broker admin config：`admin_broker_processor.rs` 与 `broker_config_request_handler.rs`（5/7）。
+- [ ] R07 Broker offset/failover：`consumer_offset_manager.rs` 与 `escape_bridge.rs`（4/8）。
+- [ ] R08 Broker pre-online：`broker_pre_online_service.rs` 启动与角色切换 capability（2/3）。
+- [ ] R09 Store root facade：`lib.rs`、`message_store.rs`、`base/message_store.rs` 的 concrete alias/unsafe facade（13/20）。
+- [ ] R10 Store LocalFile root：`local_file_message_store.rs` 的内部 owner 与 `mut_from_ref`（8/54）。
+- [ ] R11 Store RocksDB root：`rocksdb_message_store.rs` 的 Local/Rocks delegate 与 unsafe wrapper（12/34）。
+- [ ] R12 Store queue：queue facade、consume-queue store、local queue store 与 single queue（19/39）。
+- [ ] R13 Store WAL/flush：`commit_log.rs` 与 `default_flush_manager.rs`（7/28）。
+- [ ] R14 Store timer：`timer_message_store.rs` 的 LocalStore 回指与可变访问（5/12）。
+- [ ] R15 Store default HA：Default HA service/client/connection 的 service/actor ownership（13/38）。
+- [ ] R16 Store general/auto-switch HA：General 与 AutoSwitch HA service 的剩余 carrier（5/9）。
+
+### Caller 与 compatibility（2 项）
+
+- [ ] R17 Test/bench caller 迁移：在 R01～R16 后重新盘点并清理真实余量；当前上界为 126 identities / 416 occurrences（Store 90/296、Broker 30/41、Client 4/71、runtime-foundation 2/8）。
+- [ ] R18 Public compatibility 删除：在 next-major 两轮弃用和 Release Manager/HUMAN 批准后，删除 `rocketmq/src/arc_mut.rs` 与 `rocketmq/src/lib.rs` 的 14 identities / 40 occurrences；不得以重置 public API baseline 代替迁移。
+
+### M10 / Phase 3 候选快照 Gate（7 项）
+
+- [ ] R19 M10 固定硬件 baseline/candidate、正确性优先性能 Gate 与 HUMAN 签署。
+- [ ] R20 M11 五服务镜像动态构建/启动、non-root/read-only、SBOM、签名与漏洞策略验证。
+- [ ] R21 M11 Kind/K3d 七类 fault/rolling 场景和持久化证据验证。
+- [ ] R22 同一冻结 commit 的 stable default、完整 feature matrix 与 nightly surface 删除验证。
+- [ ] R23 Miri/Loom 可用切片、soundness proof 与保留 wrapper ADR 审核。
+- [ ] R24 Soak/SLO fault、dashboard、alert、runbook、rollback 与 evidence index 对齐。
+- [ ] R25 冻结 Phase 3 候选快照，完成 `[ARCH]`、`[REV]`、`[TEST]`、`[HUMAN]` 签署。
+
+### Phase 4 / M12（6 项）
+
+- [ ] R26 / PR-M12-01：Evidence normalization 与 Knowledge Graph。
+- [ ] R27 / PR-M12-02：受控 RAG。
+- [ ] R28 / PR-M12-03：多领域确定性诊断。
+- [ ] R29 / PR-M12-04：冻结 Plan contract 并证明无副作用。
+- [ ] R30 / PR-M12-05：仅在 HUMAN 单独批准后实现独立 Apply；若拒绝实施，以签署的 no-Apply 决策关闭条件分支。
+- [ ] R31 / PR-M12-06：Eval、red-team 与离线 fallback，并关闭 Phase 4 Gate。
 
 M11-12bc4 没有虚报数量下降：transaction bridge 删除了完整 `BrokerRuntimeInner` 访问，offset、Topic registration、
 EscapeBridge 使用窄标准 `Arc` capability；原有 2 个 ArcMut identity / 3 个 occurrence 被搬到显式
