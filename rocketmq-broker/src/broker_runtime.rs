@@ -120,6 +120,7 @@ use crate::hook::schedule_message_hook::ScheduleMessageHook;
 use crate::latency::broker_fast_failure::BrokerFastFailure;
 use crate::lite::lite_event_dispatcher::LiteEventDispatcher;
 use crate::lite::lite_lifecycle_manager::LiteLifecycleManager;
+use crate::lite::lite_sharding::LiteShardingView;
 use crate::long_polling::long_polling_service::pop_lite_long_polling_service::PopLiteLongPollingPolicy;
 use crate::long_polling::long_polling_service::pop_lite_long_polling_service::PopLiteLongPollingServiceContext;
 use crate::long_polling::long_polling_service::pop_long_polling_service::PopLongPollingPolicy;
@@ -148,7 +149,11 @@ use crate::processor::end_transaction_processor::EndTransactionPolicy;
 use crate::processor::end_transaction_processor::EndTransactionProcessor;
 use crate::processor::end_transaction_processor::EndTransactionProcessorContext;
 use crate::processor::end_transaction_processor::EndTransactionStoreCapability;
+use crate::processor::lite_manager_processor::LiteManagerContext;
+use crate::processor::lite_manager_processor::LiteManagerOffsetCapability;
+use crate::processor::lite_manager_processor::LiteManagerPolicy;
 use crate::processor::lite_manager_processor::LiteManagerProcessor;
+use crate::processor::lite_manager_processor::LiteManagerStoreCapability;
 use crate::processor::lite_subscription_ctl_processor::LiteSubscriptionCtlContext;
 use crate::processor::lite_subscription_ctl_processor::LiteSubscriptionCtlPolicy;
 use crate::processor::lite_subscription_ctl_processor::LiteSubscriptionCtlProcessor;
@@ -2821,7 +2826,25 @@ impl BrokerRuntime {
             BrokerProcessorType::QueryAssignment(query_assignment_processor),
         );
 
-        let lite_manager_processor = Arc::new(LiteManagerProcessor::new(self.inner.clone()));
+        let lite_manager_processor = Arc::new(LiteManagerProcessor::new({
+            let consumer_offset_manager = self.inner.consumer_offset_manager_handle();
+            let escape_bridge = self.inner.escape_bridge();
+            LiteManagerContext::new(
+                LiteManagerPolicy::from_configs(self.inner.broker_config(), self.inner.message_store_config()),
+                self.inner.topic_config_manager_handle(),
+                self.inner.subscription_group_manager().clone(),
+                self.inner.lite_subscription_registry().clone(),
+                self.inner.lite_event_dispatcher().clone(),
+                self.inner.lite_lifecycle_manager().clone(),
+                LiteShardingView::new(
+                    self.inner.broker_config().broker_name().clone(),
+                    self.inner.topic_route_info_manager(),
+                ),
+                LiteManagerOffsetCapability::new(&consumer_offset_manager),
+                LiteManagerStoreCapability::new(&escape_bridge),
+                pop_lite_message_processor_provider.clone(),
+            )
+        }));
         broker_request_processor.register_processor(
             RequestCode::GetBrokerLiteInfo as i32,
             BrokerProcessorType::LiteManager(Arc::clone(&lite_manager_processor)),

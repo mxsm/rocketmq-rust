@@ -16,9 +16,11 @@ use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::sync::Weak;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::attribute::topic_message_type::TopicMessageType;
+use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::entity::ClientGroup;
 use rocketmq_common::common::lite::get_lite_topic;
@@ -43,24 +45,221 @@ use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
-use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
+use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use rocketmq_store::queue::consume_queue_store::ConsumeQueueStoreTrait;
 use rocketmq_store::queue::local_file_consume_queue_store::ConsumeQueueStore;
 use tracing::warn;
 
-use crate::broker_runtime::BrokerRuntimeInner;
+use crate::failover::escape_bridge::EscapeBridge;
 use crate::lite::lite_consumer_lag_calculator::LiteConsumerLagCalculator;
-use crate::lite::lite_sharding::LiteSharding;
+use crate::lite::lite_consumer_lag_calculator::LiteConsumerLagDataSource;
+use crate::lite::lite_consumer_lag_calculator::LiteOffsetTable;
+use crate::lite::lite_event_dispatcher::LiteEventDispatcher;
+use crate::lite::lite_lifecycle_manager::LiteLifecycleManager;
+use crate::lite::lite_sharding::LiteShardingView;
+use crate::offset::manager::consumer_offset_manager::ConsumerOffsetManager;
+use crate::processor::pop_lite_message_processor::PopLiteMessageProcessor;
 use crate::subscription::lite_subscription_registry::LiteSubscriptionRecord;
+use crate::subscription::lite_subscription_registry::LiteSubscriptionRegistry;
+use crate::subscription::manager::subscription_group_manager::SubscriptionGroupManager;
+use crate::topic::manager::topic_config_manager::TopicConfigManager;
+
+pub(crate) struct LiteManagerPolicy {
+    store_type: CheetahString,
+    max_lmq_num: i32,
+    broker_name: CheetahString,
+    max_client_event_count: i32,
+    dispatch_delay_millis: u64,
+}
+
+impl LiteManagerPolicy {
+    pub(crate) fn from_configs(broker_config: &BrokerConfig, message_store_config: &MessageStoreConfig) -> Self {
+        Self {
+            store_type: CheetahString::from_slice(message_store_config.store_type.get_store_type()),
+            max_lmq_num: message_store_config.max_lmq_consume_queue_num as i32,
+            broker_name: broker_config.broker_name().clone(),
+            max_client_event_count: broker_config.max_client_event_count,
+            dispatch_delay_millis: broker_config.lite_event_full_dispatch_delay_time,
+        }
+    }
+}
+
+pub(crate) struct LiteManagerOffsetCapability<MS: MessageStore> {
+    manager: Weak<ConsumerOffsetManager<MS>>,
+}
+
+impl<MS: MessageStore> LiteManagerOffsetCapability<MS> {
+    pub(crate) fn new(manager: &Arc<ConsumerOffsetManager<MS>>) -> Self {
+        Self {
+            manager: Arc::downgrade(manager),
+        }
+    }
+
+    fn query_offset(&self, group: &CheetahString, topic: &CheetahString) -> i64 {
+        self.manager
+            .upgrade()
+            .map(|manager| manager.query_offset(group, topic, 0))
+            .unwrap_or(-1)
+    }
+
+    fn offset_table_snapshot(&self) -> LiteOffsetTable {
+        self.manager
+            .upgrade()
+            .map(|manager| manager.offset_table_snapshot())
+            .unwrap_or_default()
+    }
+
+    fn offset_table_len(&self) -> usize {
+        self.manager
+            .upgrade()
+            .map(|manager| manager.offset_table_len())
+            .unwrap_or(0)
+    }
+}
+
+pub(crate) struct LiteManagerStoreCapability<MS: MessageStore> {
+    escape_bridge: Weak<EscapeBridge<MS>>,
+}
+
+impl<MS: MessageStore> LiteManagerStoreCapability<MS> {
+    pub(crate) fn new(escape_bridge: &Arc<EscapeBridge<MS>>) -> Self {
+        Self {
+            escape_bridge: Arc::downgrade(escape_bridge),
+        }
+    }
+
+    fn is_available(&self) -> bool {
+        self.escape_bridge.strong_count() > 0
+    }
+
+    fn with_store<R>(&self, operation: impl FnOnce(&MS) -> R) -> Option<R> {
+        self.escape_bridge.upgrade()?.try_with_message_store(operation).ok()
+    }
+
+    fn queue_store_stats(&self) -> (i32, i32) {
+        self.with_store(|store| {
+            let Some(queue_store) = store.get_queue_store().downcast_ref::<ConsumeQueueStore>() else {
+                return (0, 0);
+            };
+
+            let consume_queue_table = queue_store.get_consume_queue_table();
+            let cq_table_size = consume_queue_table
+                .lock()
+                .values()
+                .map(|queue_map| queue_map.len() as i32)
+                .sum();
+            (queue_store.get_lmq_num(), cq_table_size)
+        })
+        .unwrap_or_default()
+    }
+
+    fn topic_offset(&self, lmq_name: &CheetahString) -> Option<TopicOffset> {
+        self.with_store(|store| {
+            let min_offset = store.get_min_offset_in_queue(lmq_name, 0);
+            let max_offset = store.get_max_offset_in_queue(lmq_name, 0);
+            let last_update_timestamp = if max_offset > 0 {
+                store.get_message_store_timestamp(lmq_name, 0, max_offset - 1)
+            } else {
+                -1
+            };
+
+            let mut topic_offset = TopicOffset::new();
+            topic_offset.set_min_offset(min_offset);
+            topic_offset.set_max_offset(max_offset);
+            topic_offset.set_last_update_timestamp(last_update_timestamp);
+            topic_offset
+        })
+    }
+
+    fn max_offset(&self, lifecycle_manager: &LiteLifecycleManager, lmq_name: &CheetahString) -> i64 {
+        self.with_store(|store| lifecycle_manager.get_max_offset_in_queue(Some(store), lmq_name))
+            .unwrap_or(0)
+    }
+
+    fn is_lmq_exist(&self, lifecycle_manager: &LiteLifecycleManager, lmq_name: &CheetahString) -> bool {
+        self.with_store(|store| lifecycle_manager.is_lmq_exist(Some(store), lmq_name))
+            .unwrap_or(false)
+    }
+
+    fn message_store_timestamp(&self, lmq_name: &CheetahString, offset: i64) -> i64 {
+        self.with_store(|store| store.get_message_store_timestamp(lmq_name, 0, offset))
+            .unwrap_or(0)
+    }
+}
+
+pub(crate) struct LiteManagerContext<MS: MessageStore> {
+    policy: LiteManagerPolicy,
+    topic_config_manager: Arc<TopicConfigManager>,
+    subscription_group_manager: SubscriptionGroupManager,
+    lite_subscription_registry: LiteSubscriptionRegistry,
+    lite_event_dispatcher: LiteEventDispatcher,
+    lite_lifecycle_manager: LiteLifecycleManager,
+    sharding: LiteShardingView,
+    consumer_offset: LiteManagerOffsetCapability<MS>,
+    message_store: LiteManagerStoreCapability<MS>,
+    pop_lite_message_processor: Weak<PopLiteMessageProcessor<MS>>,
+}
+
+impl<MS: MessageStore> LiteManagerContext<MS> {
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "composition root wires explicit Lite manager capabilities"
+    )]
+    pub(crate) fn new(
+        policy: LiteManagerPolicy,
+        topic_config_manager: Arc<TopicConfigManager>,
+        subscription_group_manager: SubscriptionGroupManager,
+        lite_subscription_registry: LiteSubscriptionRegistry,
+        lite_event_dispatcher: LiteEventDispatcher,
+        lite_lifecycle_manager: LiteLifecycleManager,
+        sharding: LiteShardingView,
+        consumer_offset: LiteManagerOffsetCapability<MS>,
+        message_store: LiteManagerStoreCapability<MS>,
+        pop_lite_message_processor: Weak<PopLiteMessageProcessor<MS>>,
+    ) -> Self {
+        Self {
+            policy,
+            topic_config_manager,
+            subscription_group_manager,
+            lite_subscription_registry,
+            lite_event_dispatcher,
+            lite_lifecycle_manager,
+            sharding,
+            consumer_offset,
+            message_store,
+            pop_lite_message_processor,
+        }
+    }
+
+    fn order_info_count(&self) -> i32 {
+        self.pop_lite_message_processor
+            .upgrade()
+            .map_or(0, |processor| processor.order_info_count())
+    }
+}
+
+impl<MS: MessageStore> LiteConsumerLagDataSource for LiteManagerContext<MS> {
+    fn offset_table_snapshot(&self) -> LiteOffsetTable {
+        self.consumer_offset.offset_table_snapshot()
+    }
+
+    fn max_offset(&self, lmq_name: &CheetahString) -> i64 {
+        self.message_store.max_offset(&self.lite_lifecycle_manager, lmq_name)
+    }
+
+    fn message_store_timestamp(&self, lmq_name: &CheetahString, offset: i64) -> i64 {
+        self.message_store.message_store_timestamp(lmq_name, offset)
+    }
+}
 
 pub(crate) struct LiteManagerProcessor<MS: MessageStore> {
-    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+    context: LiteManagerContext<MS>,
 }
 
 impl<MS: MessageStore> LiteManagerProcessor<MS> {
-    pub(crate) fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
-        Self { broker_runtime_inner }
+    pub(crate) fn new(context: LiteManagerContext<MS>) -> Self {
+        Self { context }
     }
 }
 
@@ -106,41 +305,21 @@ impl<MS: MessageStore> LiteManagerProcessor<MS> {
         &self,
         request: &RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let subscriptions = self
-            .broker_runtime_inner
-            .lite_subscription_registry()
-            .all_subscriptions();
+        let subscriptions = self.context.lite_subscription_registry.all_subscriptions();
         let topic_meta = self.build_lite_topic_meta();
         let group_meta = self.build_lite_group_meta();
         let unique_lmq_count = self.unique_lmq_count(&subscriptions);
         let (store_lmq_num, cq_table_size) = self.queue_store_stats();
 
         let mut body = GetBrokerLiteInfoResponseBody::new();
-        body.set_store_type(CheetahString::from_static_str(
-            self.broker_runtime_inner
-                .message_store_config()
-                .store_type
-                .get_store_type(),
-        ));
-        body.set_max_lmq_num(
-            self.broker_runtime_inner
-                .message_store_config()
-                .max_lmq_consume_queue_num as i32,
-        );
+        body.set_store_type(self.context.policy.store_type.clone());
+        body.set_max_lmq_num(self.context.policy.max_lmq_num);
         body.set_current_lmq_num(store_lmq_num.max(unique_lmq_count));
-        body.set_lite_subscription_count(
-            self.broker_runtime_inner
-                .lite_subscription_registry()
-                .active_subscription_num() as i32,
-        );
-        body.set_order_info_count(
-            self.broker_runtime_inner
-                .pop_lite_message_processor()
-                .map_or(0, |processor| processor.order_info_count()),
-        );
+        body.set_lite_subscription_count(self.context.lite_subscription_registry.active_subscription_num() as i32);
+        body.set_order_info_count(self.context.order_info_count());
         body.set_cq_table_size(cq_table_size);
-        body.set_offset_table_size(self.broker_runtime_inner.consumer_offset_manager().offset_table_len() as i32);
-        body.set_event_map_size(self.broker_runtime_inner.lite_event_dispatcher().event_map_size() as i32);
+        body.set_offset_table_size(self.context.consumer_offset.offset_table_len() as i32);
+        body.set_event_map_size(self.context.lite_event_dispatcher.event_map_size() as i32);
         body.set_topic_meta(topic_meta);
         body.set_group_meta(group_meta);
 
@@ -158,16 +337,16 @@ impl<MS: MessageStore> LiteManagerProcessor<MS> {
         };
 
         let subscriptions = self
-            .broker_runtime_inner
-            .lite_subscription_registry()
+            .context
+            .lite_subscription_registry
             .all_subscriptions()
             .into_iter()
             .filter(|subscription| subscription.topic == request_header.topic)
             .collect::<Vec<_>>();
         let groups = self.lite_bound_groups(&request_header.topic);
         let lite_topic_count = self
-            .broker_runtime_inner
-            .lite_lifecycle_manager()
+            .context
+            .lite_lifecycle_manager
             .get_lite_topic_count(&subscriptions, &request_header.topic);
 
         let mut body = GetParentTopicInfoResponseBody::new();
@@ -199,8 +378,8 @@ impl<MS: MessageStore> LiteManagerProcessor<MS> {
         };
         let lmq_name = CheetahString::from_string(lmq_name);
         let subscribers = self
-            .broker_runtime_inner
-            .lite_subscription_registry()
+            .context
+            .lite_subscription_registry
             .all_subscriptions()
             .into_iter()
             .filter(|subscription| {
@@ -226,8 +405,7 @@ impl<MS: MessageStore> LiteManagerProcessor<MS> {
             .with_lite_topic(lite_topic)
             .with_subscriber(subscribers)
             .with_sharding_to_broker(
-                LiteSharding::sharding_by_lmq_name(self.broker_runtime_inner.as_ref(), &parent_topic, &lmq_name)
-                    == *self.broker_runtime_inner.broker_config().broker_name(),
+                self.context.sharding.sharding_by_lmq_name(&parent_topic, &lmq_name) == self.context.policy.broker_name,
             );
         if let Some(topic_offset) = self.topic_offset_for_lmq(&lmq_name) {
             body.with_topic_offset(topic_offset);
@@ -269,10 +447,10 @@ impl<MS: MessageStore> LiteManagerProcessor<MS> {
             return Ok(Some(self.response_with_code(request, code, remark)));
         }
 
-        let Some(subscription) = self
-            .broker_runtime_inner
-            .lite_subscription_registry()
-            .lite_subscription(&client_id, &group, &parent_topic)
+        let Some(subscription) =
+            self.context
+                .lite_subscription_registry
+                .lite_subscription(&client_id, &group, &parent_topic)
         else {
             return Ok(Some(self.response_with_code(
                 request,
@@ -286,8 +464,8 @@ impl<MS: MessageStore> LiteManagerProcessor<MS> {
 
         let lite_topic_set = self.decode_lite_topic_set(subscription.lite_topic_set(), request_header.max_count);
         let last_access_time = self
-            .broker_runtime_inner
-            .lite_event_dispatcher()
+            .context
+            .lite_event_dispatcher
             .get_client_last_access_time(&client_id)
             .max(subscription.update_time().max(0) as u64);
         let mut body = GetLiteClientInfoResponseBody::new();
@@ -322,14 +500,9 @@ impl<MS: MessageStore> LiteManagerProcessor<MS> {
 
         if lite_topic.is_empty() {
             let (lag_count_top_k, total_lag_count) =
-                LiteConsumerLagCalculator::get_lag_count_top_k(self.broker_runtime_inner.as_ref(), &group, top_k);
+                LiteConsumerLagCalculator::get_lag_count_top_k(&self.context, &group, top_k);
             let (lag_timestamp_top_k, earliest_unconsumed_timestamp) =
-                LiteConsumerLagCalculator::get_lag_timestamp_top_k(
-                    self.broker_runtime_inner.as_ref(),
-                    &group,
-                    &bind_topic,
-                    top_k,
-                );
+                LiteConsumerLagCalculator::get_lag_timestamp_top_k(&self.context, &group, &bind_topic, top_k);
 
             body.with_total_lag_count(total_lag_count)
                 .with_earliest_unconsumed_timestamp(earliest_unconsumed_timestamp)
@@ -346,10 +519,7 @@ impl<MS: MessageStore> LiteManagerProcessor<MS> {
             let lmq_name = CheetahString::from_string(lmq_name);
             let broker_offset = self.lmq_broker_offset(&lmq_name);
             if broker_offset > 0 {
-                let commit_offset = self
-                    .broker_runtime_inner
-                    .consumer_offset_manager()
-                    .query_offset(&group, &lmq_name, 0);
+                let commit_offset = self.context.consumer_offset.query_offset(&group, &lmq_name);
                 if commit_offset >= 0 {
                     let mut offset_wrapper = OffsetWrapper::new();
                     offset_wrapper.set_broker_offset(broker_offset);
@@ -381,7 +551,7 @@ impl<MS: MessageStore> LiteManagerProcessor<MS> {
             Err((code, remark)) => return Ok(Some(self.response_with_code(request, code, remark))),
         };
 
-        let dispatcher = self.broker_runtime_inner.lite_event_dispatcher();
+        let dispatcher = &self.context.lite_event_dispatcher;
         let (max_event_count, dispatch_delay_millis) = self.lite_dispatch_policy(&group);
         if let Some(client_id) = client_id.filter(|client_id| !client_id.is_empty()) {
             let lmq_names = self.dispatchable_lmq_for_client(&client_id, &group, &bind_topic);
@@ -427,8 +597,8 @@ impl<MS: MessageStore> LiteManagerProcessor<MS> {
     }
 
     fn build_lite_topic_meta(&self) -> HashMap<CheetahString, i32> {
-        self.broker_runtime_inner
-            .topic_config_manager()
+        self.context
+            .topic_config_manager
             .topic_config_table()
             .iter()
             .filter_map(|entry| {
@@ -439,8 +609,8 @@ impl<MS: MessageStore> LiteManagerProcessor<MS> {
     }
 
     fn build_lite_group_meta(&self) -> HashMap<CheetahString, HashSet<CheetahString>> {
-        self.broker_runtime_inner
-            .subscription_group_manager()
+        self.context
+            .subscription_group_manager
             .subscription_group_table()
             .iter()
             .filter_map(|entry| {
@@ -459,8 +629,8 @@ impl<MS: MessageStore> LiteManagerProcessor<MS> {
     }
 
     fn lite_bound_groups(&self, parent_topic: &CheetahString) -> HashSet<CheetahString> {
-        self.broker_runtime_inner
-            .subscription_group_manager()
+        self.context
+            .subscription_group_manager
             .subscription_group_table()
             .iter()
             .filter_map(|entry| (entry.value().lite_bind_topic() == Some(parent_topic)).then(|| entry.key().clone()))
@@ -473,8 +643,8 @@ impl<MS: MessageStore> LiteManagerProcessor<MS> {
         group: &CheetahString,
         parent_topic: &CheetahString,
     ) -> HashSet<CheetahString> {
-        self.broker_runtime_inner
-            .lite_subscription_registry()
+        self.context
+            .lite_subscription_registry
             .all_subscriptions()
             .into_iter()
             .filter(|subscription| {
@@ -492,8 +662,8 @@ impl<MS: MessageStore> LiteManagerProcessor<MS> {
         group: &CheetahString,
         parent_topic: &CheetahString,
     ) -> HashMap<CheetahString, HashSet<CheetahString>> {
-        self.broker_runtime_inner
-            .lite_subscription_registry()
+        self.context
+            .lite_subscription_registry
             .all_subscriptions()
             .into_iter()
             .filter(|subscription| subscription.group == *group && subscription.topic == *parent_topic)
@@ -511,62 +681,33 @@ impl<MS: MessageStore> LiteManagerProcessor<MS> {
     }
 
     fn has_dispatchable_messages(&self, group: &CheetahString, lmq_name: &CheetahString) -> bool {
-        let lifecycle_manager = self.broker_runtime_inner.lite_lifecycle_manager();
-        if !lifecycle_manager.is_lmq_exist(self.broker_runtime_inner.message_store_ref(), lmq_name) {
+        if !self
+            .context
+            .message_store
+            .is_lmq_exist(&self.context.lite_lifecycle_manager, lmq_name)
+        {
             return false;
         }
 
-        let broker_offset =
-            lifecycle_manager.get_max_offset_in_queue(self.broker_runtime_inner.message_store_ref(), lmq_name);
-        broker_offset > 0
-            && self
-                .broker_runtime_inner
-                .consumer_offset_manager()
-                .query_offset(group, lmq_name, 0)
-                < broker_offset
+        let broker_offset = self
+            .context
+            .message_store
+            .max_offset(&self.context.lite_lifecycle_manager, lmq_name);
+        broker_offset > 0 && self.context.consumer_offset.query_offset(group, lmq_name) < broker_offset
     }
 
     fn queue_store_stats(&self) -> (i32, i32) {
-        let Some(queue_store) = self.queue_store() else {
-            return (0, 0);
-        };
-
-        let consume_queue_table = queue_store.get_consume_queue_table();
-        let cq_table_size = consume_queue_table
-            .lock()
-            .values()
-            .map(|queue_map| queue_map.len() as i32)
-            .sum();
-        (queue_store.get_lmq_num(), cq_table_size)
+        self.context.message_store.queue_store_stats()
     }
 
     fn topic_offset_for_lmq(&self, lmq_name: &CheetahString) -> Option<TopicOffset> {
-        let message_store = self.broker_runtime_inner.message_store()?;
-        let min_offset = message_store.get_min_offset_in_queue(lmq_name, 0);
-        let max_offset = message_store.get_max_offset_in_queue(lmq_name, 0);
-        let last_update_timestamp = if max_offset > 0 {
-            message_store.get_message_store_timestamp(lmq_name, 0, max_offset - 1)
-        } else {
-            -1
-        };
-
-        let mut topic_offset = TopicOffset::new();
-        topic_offset.set_min_offset(min_offset);
-        topic_offset.set_max_offset(max_offset);
-        topic_offset.set_last_update_timestamp(last_update_timestamp);
-        Some(topic_offset)
-    }
-
-    fn queue_store(&self) -> Option<&ConsumeQueueStore> {
-        self.broker_runtime_inner
-            .message_store()
-            .and_then(|message_store| message_store.get_queue_store().downcast_ref::<ConsumeQueueStore>())
+        self.context.message_store.topic_offset(lmq_name)
     }
 
     fn lmq_broker_offset(&self, lmq_name: &CheetahString) -> i64 {
-        self.broker_runtime_inner
-            .lite_lifecycle_manager()
-            .get_max_offset_in_queue(self.broker_runtime_inner.message_store_ref(), lmq_name)
+        self.context
+            .message_store
+            .max_offset(&self.context.lite_lifecycle_manager, lmq_name)
     }
 
     fn earliest_unconsumed_timestamp(&self, lmq_name: &CheetahString, commit_offset: i64) -> i64 {
@@ -574,14 +715,10 @@ impl<MS: MessageStore> LiteManagerProcessor<MS> {
             return 0;
         }
 
-        self.broker_runtime_inner
-            .message_store()
-            .map(|message_store| {
-                message_store
-                    .get_message_store_timestamp(lmq_name, 0, commit_offset)
-                    .max(0)
-            })
-            .unwrap_or(0)
+        self.context
+            .message_store
+            .message_store_timestamp(lmq_name, commit_offset)
+            .max(0)
     }
 
     fn last_consumed_timestamp(&self, lmq_name: &CheetahString, commit_offset: i64) -> i64 {
@@ -589,14 +726,10 @@ impl<MS: MessageStore> LiteManagerProcessor<MS> {
             return 0;
         }
 
-        self.broker_runtime_inner
-            .message_store()
-            .map(|message_store| {
-                message_store
-                    .get_message_store_timestamp(lmq_name, 0, commit_offset - 1)
-                    .max(0)
-            })
-            .unwrap_or(0)
+        self.context
+            .message_store
+            .message_store_timestamp(lmq_name, commit_offset - 1)
+            .max(0)
     }
 
     fn decode_lite_topic_set(&self, lmq_name_set: &HashSet<CheetahString>, max_count: i32) -> HashSet<CheetahString> {
@@ -611,16 +744,15 @@ impl<MS: MessageStore> LiteManagerProcessor<MS> {
     }
 
     fn lite_dispatch_policy(&self, group: &CheetahString) -> (usize, u64) {
-        let broker_config = self.broker_runtime_inner.broker_config();
         let max_event_count = self
-            .broker_runtime_inner
-            .subscription_group_manager()
+            .context
+            .subscription_group_manager
             .find_subscription_group_config(group)
             .map(|config| config.max_client_event_count())
             .filter(|count| *count > 0)
-            .unwrap_or(broker_config.max_client_event_count)
+            .unwrap_or(self.context.policy.max_client_event_count)
             .max(1) as usize;
-        (max_event_count, broker_config.lite_event_full_dispatch_delay_time)
+        (max_event_count, self.context.policy.dispatch_delay_millis)
     }
 
     fn validate_consumer_group(
@@ -632,8 +764,8 @@ impl<MS: MessageStore> LiteManagerProcessor<MS> {
         (ResponseCode, CheetahString),
     > {
         let group_config = self
-            .broker_runtime_inner
-            .subscription_group_manager()
+            .context
+            .subscription_group_manager
             .subscription_group_table()
             .get(group)
             .map(|entry| std::sync::Arc::clone(entry.value()))
@@ -665,8 +797,8 @@ impl<MS: MessageStore> LiteManagerProcessor<MS> {
         topic: &CheetahString,
     ) -> Result<Arc<TopicConfig>, (ResponseCode, CheetahString)> {
         let topic_config = self
-            .broker_runtime_inner
-            .topic_config_manager()
+            .context
+            .topic_config_manager
             .select_topic_config(topic)
             .ok_or_else(|| {
                 (
@@ -687,8 +819,8 @@ impl<MS: MessageStore> LiteManagerProcessor<MS> {
 
     fn validate_lite_group(&self, group: &CheetahString) -> Result<CheetahString, (ResponseCode, CheetahString)> {
         let group_config = self
-            .broker_runtime_inner
-            .subscription_group_manager()
+            .context
+            .subscription_group_manager
             .subscription_group_table()
             .get(group)
             .map(|entry| std::sync::Arc::clone(entry.value()))
@@ -727,5 +859,86 @@ impl<MS: MessageStore> LiteManagerProcessor<MS> {
         remark: impl Into<CheetahString>,
     ) -> RemotingCommand {
         RemotingCommand::create_response_command_with_code_remark(code, remark).set_opaque(request.opaque())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use cheetah_string::CheetahString;
+    use rocketmq_common::common::broker::broker_config::BrokerConfig;
+    use rocketmq_store::config::message_store_config::MessageStoreConfig;
+
+    use super::LiteManagerOffsetCapability;
+    use super::LiteManagerPolicy;
+    use super::LiteManagerStoreCapability;
+    use crate::broker_runtime::BrokerRuntime;
+    use crate::lite::lite_lifecycle_manager::LiteLifecycleManager;
+
+    #[test]
+    fn lite_manager_policy_captures_only_required_startup_values() {
+        let broker_config = BrokerConfig {
+            max_client_event_count: 17,
+            lite_event_full_dispatch_delay_time: 29,
+            ..Default::default()
+        };
+        let message_store_config = MessageStoreConfig {
+            max_lmq_consume_queue_num: 23,
+            ..Default::default()
+        };
+
+        let policy = LiteManagerPolicy::from_configs(&broker_config, &message_store_config);
+
+        assert_eq!(policy.store_type, message_store_config.store_type.get_store_type());
+        assert_eq!(policy.max_lmq_num, 23);
+        assert_eq!(policy.broker_name, *broker_config.broker_name());
+        assert_eq!(policy.max_client_event_count, 17);
+        assert_eq!(policy.dispatch_delay_millis, 29);
+    }
+
+    #[test]
+    fn lite_manager_source_uses_only_explicit_capabilities() {
+        let source = include_str!("lite_manager_processor.rs");
+        let sharding_source = include_str!("../lite/lite_sharding.rs");
+        let lag_source = include_str!("../lite/lite_consumer_lag_calculator.rs");
+
+        assert!(!source.contains(concat!("rocketmq_rust::", "ArcMut")));
+        assert!(!source.contains(concat!("BrokerRuntime", "Inner")));
+        assert!(!source.contains(concat!("broker_runtime", "_inner")));
+        assert!(source.contains("context: LiteManagerContext<MS>"));
+        assert!(source.contains("consumer_offset: LiteManagerOffsetCapability<MS>"));
+        assert!(source.contains("message_store: LiteManagerStoreCapability<MS>"));
+        assert!(!sharding_source.contains(concat!("BrokerRuntime", "Inner")));
+        assert!(!lag_source.contains(concat!("BrokerRuntime", "Inner")));
+    }
+
+    #[test]
+    fn lite_manager_weak_providers_do_not_keep_runtime_or_store_alive() {
+        let broker_config = Arc::new(BrokerConfig::default());
+        let message_store_config = Arc::new(MessageStoreConfig::default());
+        let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
+        let inner = runtime.inner_for_test();
+        let offset_manager = inner.consumer_offset_manager_handle();
+        let offset = LiteManagerOffsetCapability::new(&offset_manager);
+        let escape_bridge = inner.escape_bridge();
+        let store = LiteManagerStoreCapability::new(&escape_bridge);
+        let group = CheetahString::from_static_str("group");
+        let topic = CheetahString::from_static_str("topic");
+
+        assert!(store.is_available());
+        drop(offset_manager);
+        drop(escape_bridge);
+        drop(runtime);
+
+        assert!(!store.is_available());
+        assert_eq!(offset.query_offset(&group, &topic), -1);
+        assert!(offset.offset_table_snapshot().is_empty());
+        assert_eq!(offset.offset_table_len(), 0);
+        assert_eq!(store.queue_store_stats(), (0, 0));
+        assert!(store.topic_offset(&topic).is_none());
+        assert_eq!(store.max_offset(&LiteLifecycleManager, &topic), 0);
+        assert!(!store.is_lmq_exist(&LiteLifecycleManager, &topic));
+        assert_eq!(store.message_store_timestamp(&topic, 0), 0);
     }
 }
