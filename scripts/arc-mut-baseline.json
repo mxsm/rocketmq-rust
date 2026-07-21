@@ -499,50 +499,6 @@
       "adr": "ADR-013"
     },
     {
-      "identity": "db04dbe18d0035a9a9917eb6",
-      "path": "rocketmq-broker/src/broker/broker_pre_online_service.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "e1e3b99509ce5cd0c6593b07",
-          "fingerprint": "5dd89e4dbbc3778564f25a09",
-          "item": "<module>",
-          "line": 32
-        }
-      ],
-      "owner": "broker",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "a56dd7343b73020fed303b42",
-      "path": "rocketmq-broker/src/broker/broker_pre_online_service.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "d22e07a7cd29eda693d175a3",
-          "fingerprint": "2644288fe73b279f62c10192",
-          "item": "fn new",
-          "line": 48
-        },
-        {
-          "id": "8c2d42072f3cee4b7583ca5f",
-          "fingerprint": "f058b6090fc29c099133eff4",
-          "item": "struct BrokerPreOnlineServiceInner",
-          "line": 59
-        }
-      ],
-      "owner": "broker",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
       "identity": "10374c39288235b4a31d1d0b",
       "path": "rocketmq-broker/src/broker_runtime.rs",
       "symbol": "*",
@@ -569,10 +525,10 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "6a6aaf2a64b6850b0b272f87",
-          "fingerprint": "41fa01e0392f1e1ceb745653",
+          "id": "d55f3d49e13d1a2dcf67c15d",
+          "fingerprint": "8885a224a195a724fdcf9377",
           "item": "fn new_with_optional_service_context",
-          "line": 1151
+          "line": 1209
         },
         {
           "id": "96382769b35a09684edebc18",
@@ -746,10 +702,10 @@
           "line": 4469
         },
         {
-          "id": "397e52506121c49464b3bd42",
-          "fingerprint": "604fe15af2dc366b3c1d1774",
+          "id": "3966ba434e53ab9a1d4dccc3",
+          "fingerprint": "0a2c8cfe808bd3a78bc41f95",
           "item": "fn bootstrap_controller_mode",
-          "line": 4530
+          "line": 4883
         },
         {
           "id": "f772ab897753003c3b31ce78",
@@ -800,16 +756,10 @@
           "line": 4983
         },
         {
-          "id": "bcd154dd4496146de09f72ed",
-          "fingerprint": "137d02287d2e84512645a7bd",
-          "item": "fn start_service",
-          "line": 5083
-        },
-        {
-          "id": "2e408d42e425425565e4bb10",
-          "fingerprint": "29427e076444659b1b597065",
+          "id": "4b58302b045bdc7b0cbb3c02",
+          "fingerprint": "82387568b5849e959cccb35c",
           "item": "fn apply_controller_role_change",
-          "line": 5107
+          "line": 5436
         }
       ],
       "owner": "broker",

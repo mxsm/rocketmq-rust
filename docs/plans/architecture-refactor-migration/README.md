@@ -8,7 +8,7 @@
 > PR-M12-01～06 未开始，合计剩余 7 个
 
 剩余任务数量、M11-12 内部执行批次与 M12 六个工作包见 [`REMAINING-TASKS.md`](REMAINING-TASKS.md)：正式口径
-剩余 7 个工作包；31 个最小可审查单元已完成 1 个，当前剩余 30 个。
+剩余 7 个工作包；31 个最小可审查单元已完成 2 个，当前剩余 29 个。
 
 ## 1. 使用方式
 
@@ -905,6 +905,16 @@ Store `unwrap`。PopRevive service 在组合根构造并以标准 Arc 持有，s
 14/40、Broker production 36/90、Store production 82/234），净删除 3 个 production identities/8 occurrences，
 其中 Ack owner 为 5 occurrences、PopRevive task receiver 为 3 occurrences，无 relocation、新增 identity 或临时 approval。
 R02 已完成，31 项执行清单剩余 30 项；总进度仍为 75/82，下一子切片 M11-12bc54 继续 Broker/Store owner。
+
+Broker pre-online capability 随 Issue #8521 收口：service 不再持有完整 `BrokerRuntimeInner`，改持启动期 policy、
+live broker role、弱 Store/HA 与 metadata provider、registration capability 和显式 special-service capability；controller
+角色切换实时发布到共享 role state，Store/provider 退出时 fail closed。service 延迟到依赖可用后构造，后台任务挂载 Broker
+父 `TaskGroup`，并在 Store/metadata detach 前停止；transaction check service 改用标准 Arc 以提供弱 capability。
+ArcMut 快照降至 255 identities/775 occurrences（production 116/320、test 125/415、compatibility 14/40、
+Broker production 34/86、Store production 82/234），净删除 2 个 production identities/4 occurrences，其中
+pre-online owner 为 3 occurrences、无调用方的 runtime start helper 为 1 occurrence；3 个保留 occurrence 完成一对一
+指纹审核，无新增 identity 或临时 approval。R02、R08 已完成，31 项执行清单剩余 29 项；总进度仍为 75/82，
+下一子切片 M11-12bc55 继续 Broker/Store owner。
 
 ### 9.3 证据目录
 

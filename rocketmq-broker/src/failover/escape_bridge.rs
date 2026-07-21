@@ -36,6 +36,8 @@ use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::base::query_message_result::QueryMessageResult;
 use rocketmq_store::base::select_result::SelectMappedBufferResult;
+use rocketmq_store::ha::ha_connection_state_notification_request::HAConnectionStateNotificationRequest;
+use rocketmq_store::ha::ha_service::HAService;
 use tracing::error;
 use tracing::warn;
 
@@ -140,6 +142,47 @@ impl<MS: MessageStore> EscapeBridge<MS> {
             .message_store()
             .ok_or(MessageStoreUnavailable)?;
         Ok(operation(message_store.as_ref()))
+    }
+
+    pub(crate) fn pre_online_broker_init_max_offset(&self) -> Result<i64, MessageStoreUnavailable> {
+        self.try_with_message_store(MessageStore::get_broker_init_max_offset)
+    }
+
+    pub(crate) fn pre_online_master_flushed_offset(&self) -> Result<i64, MessageStoreUnavailable> {
+        self.try_with_message_store(MessageStore::get_master_flushed_offset)
+    }
+
+    pub(crate) fn pre_online_set_master_flushed_offset(&self, offset: i64) -> Result<(), MessageStoreUnavailable> {
+        self.try_with_message_store(|store| store.set_master_flushed_offset(offset))
+    }
+
+    pub(crate) async fn pre_online_submit_ha_transfer(
+        &self,
+        request: HAConnectionStateNotificationRequest,
+    ) -> Result<bool, MessageStoreUnavailable> {
+        let message_store = self
+            .broker_runtime_inner
+            .message_store()
+            .ok_or(MessageStoreUnavailable)?;
+        let Some(ha_service) = message_store.get_ha_service() else {
+            return Ok(false);
+        };
+        ha_service.put_group_connection_state_request(request).await;
+        Ok(true)
+    }
+
+    pub(crate) async fn pre_online_update_master_addresses(
+        &self,
+        master_ha_address: &CheetahString,
+        master_address: &CheetahString,
+    ) -> Result<(), MessageStoreUnavailable> {
+        let message_store = self
+            .broker_runtime_inner
+            .message_store()
+            .ok_or(MessageStoreUnavailable)?;
+        message_store.update_ha_master_address(master_ha_address.as_str()).await;
+        message_store.update_master_address(master_address);
+        Ok(())
     }
 
     pub(crate) async fn query_message_from_store(

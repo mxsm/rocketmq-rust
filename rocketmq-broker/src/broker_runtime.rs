@@ -89,6 +89,13 @@ use tracing::warn;
 
 use crate::auth::auth_admin_service::AuthAdminService;
 use crate::broker::broker_hook::BrokerShutdownHook;
+use crate::broker::broker_pre_online_capability::BrokerOnlineRoleState;
+use crate::broker::broker_pre_online_capability::BrokerOnlineTransitionCapability;
+use crate::broker::broker_pre_online_capability::BrokerPreOnlineContext;
+use crate::broker::broker_pre_online_capability::BrokerPreOnlinePolicy;
+use crate::broker::broker_pre_online_capability::BrokerPreOnlineStoreCapability;
+use crate::broker::broker_pre_online_capability::BrokerRegistrationCapability;
+use crate::broker::broker_pre_online_capability::BrokerSpecialServiceCapability;
 use crate::broker::broker_pre_online_service::BrokerPreOnlineService;
 use crate::client::client_housekeeping_service::ClientHousekeepingService;
 use crate::client::consumer_ids_change_listener::ConsumerIdsChangeListener;
@@ -1197,6 +1204,7 @@ impl BrokerRuntime {
             message_store_config.clone(),
             None,
         ));
+        let online_role_state = Arc::new(BrokerOnlineRoleState::new(broker_config.broker_identity.broker_id));
 
         let mut inner = ArcMut::new(BrokerRuntimeInner::<GenericMessageStore> {
             shutdown: Arc::new(AtomicBool::new(false)),
@@ -1228,7 +1236,7 @@ impl BrokerRuntime {
             topic_queue_mapping_clean_service: None,
             update_master_haserver_addr_periodically: false,
             should_start_time: Default::default(),
-            is_isolated: Default::default(),
+            online_role_state,
             pull_request_hold_service: None,
             rebalance_lock_manager: Default::default(),
             broker_member_group,
@@ -1261,8 +1269,6 @@ impl BrokerRuntime {
             slave_synchronize: None,
             last_sync_time_ms: AtomicU64::new(current_millis()),
             broker_pre_online_service: None,
-            min_broker_id_in_group: AtomicU64::new(0),
-            min_broker_addr_in_group: Default::default(),
             service_context,
             lock: Default::default(),
         });
@@ -1371,7 +1377,6 @@ impl BrokerRuntime {
             inner.subscription_group_manager().clone(),
             SlaveTimerStoreCapability::new(&escape_bridge),
         )));
-        inner.broker_pre_online_service = Some(BrokerPreOnlineService::new(inner.clone()));
         inner.topic_queue_mapping_clean_service = Some(inner.build_topic_queue_mapping_clean_service());
         Self {
             inner,
@@ -1491,6 +1496,14 @@ impl BrokerRuntime {
         progress.complete("remoting");
         shutdown_report.request_processor = self.shutdown_request_processor_tasks(deadline).await;
         progress.complete("request_processor");
+
+        // Pre-online synchronization depends on metadata providers and Store/HA. Stop it before
+        // detaching any of those providers so shutdown cannot race another online transition.
+        if let Some(broker_pre_online_service) = self.inner.broker_pre_online_service.take() {
+            if let Err(error) = broker_pre_online_service.shutdown().await {
+                warn!(?error, "Failed to shutdown BrokerPreOnlineService cleanly");
+            }
+        }
 
         if let Some(slave_synchronize) = self.inner.slave_synchronize() {
             slave_synchronize.release_runtime_capabilities();
@@ -1769,10 +1782,6 @@ impl BrokerRuntime {
             BrokerShutdownComponentReport::skipped("topic_route")
         };
         progress.complete("topic_route");
-
-        if let Some(broker_pre_online_service) = self.inner.broker_pre_online_service.as_mut() {
-            broker_pre_online_service.shutdown().await;
-        }
 
         if let Some(cold_data_pull_request_hold_service) = self.inner.cold_data_pull_request_hold_service.as_mut() {
             cold_data_pull_request_hold_service.shutdown();
@@ -3222,7 +3231,11 @@ impl BrokerRuntime {
         self.inner.transactional_message_check_listener = Some(listener.clone());
         self.inner.transactional_message_check_service =
             self.inner.transactional_message_service.as_ref().map(|service| {
-                TransactionalMessageCheckService::new(self.inner.broker_config_arc(), service.clone(), listener)
+                Arc::new(TransactionalMessageCheckService::new(
+                    self.inner.broker_config_arc(),
+                    service.clone(),
+                    listener,
+                ))
             });
         self.inner.transaction_metrics_flush_service = Some(TransactionMetricsFlushService);
         true
@@ -3394,7 +3407,11 @@ impl BrokerRuntime {
             topic_route_info_manager.start();
         }
 
-        if let Some(broker_pre_online_service) = self.inner.broker_pre_online_service.as_mut() {
+        if self.inner.broker_pre_online_service.is_none() {
+            self.inner.broker_pre_online_service =
+                Some(self.inner.build_broker_pre_online_service(&self.escape_bridge_owner));
+        }
+        if let Some(broker_pre_online_service) = self.inner.broker_pre_online_service.as_ref() {
             if let Err(error) = broker_pre_online_service.start().await {
                 error!("Failed to start broker pre-online service: {error}");
             }
@@ -3422,10 +3439,10 @@ impl BrokerRuntime {
             Ordering::Release,
         );
         if self.inner.broker_config.enable_controller_mode {
-            self.inner.is_isolated.store(true, Ordering::Release);
+            self.inner.online_role_state.set_isolated(true);
         }
         if self.inner.message_store_config.total_replicas > 1 && self.inner.broker_config.enable_slave_acting_master {
-            self.inner.is_isolated.store(true, Ordering::Release);
+            self.inner.online_role_state.set_isolated(true);
         }
 
         self.inner.broker_outer_api.start().await;
@@ -3438,7 +3455,7 @@ impl BrokerRuntime {
             BrokerRuntimeInner::bootstrap_controller_mode(self.inner.clone()).await;
         }
 
-        if !self.inner.is_isolated.load(Ordering::Acquire)
+        if !self.inner.online_role_state.is_isolated()
             && !self.inner.message_store_config.enable_dledger_commit_log
             && !self.inner.broker_config.duplication_enable
         {
@@ -3464,7 +3481,7 @@ impl BrokerRuntime {
                         info!("Register to namesrv after {}", start_time);
                         return Ok(());
                     }
-                    if broker_runtime_inner.is_isolated.load(Ordering::Relaxed) {
+                    if broker_runtime_inner.online_role_state.is_isolated() {
                         info!("Skip register for broker is isolated");
                         return Ok(());
                     }
@@ -3538,7 +3555,7 @@ impl BrokerRuntime {
                     if ctx.is_cancelled() || inner_.shutdown.load(Ordering::Acquire) {
                         return Ok(());
                     }
-                    if inner_.is_isolated.load(Ordering::Acquire) {
+                    if inner_.online_role_state.is_isolated() {
                         if inner_.broker_config.enable_controller_mode {
                             BrokerRuntimeInner::bootstrap_controller_mode(inner_.clone()).await;
                         }
@@ -3602,7 +3619,7 @@ impl BrokerRuntime {
         self.inner.change_special_service_status(is_master).await;
         self.register_broker_all(true, false, self.inner.broker_config.force_register)
             .await;
-        self.inner.is_isolated.store(false, Ordering::Release);
+        self.inner.online_role_state.set_isolated(false);
     }
 
     /// Register broker to name remoting_server
@@ -3885,12 +3902,12 @@ pub(crate) struct BrokerRuntimeInner<MS: MessageStore> {
     topic_queue_mapping_clean_service: Option<TopicQueueMappingCleanService>,
     update_master_haserver_addr_periodically: bool,
     should_start_time: Arc<AtomicU64>,
-    is_isolated: Arc<AtomicBool>,
+    online_role_state: Arc<BrokerOnlineRoleState>,
     pull_request_hold_service: Option<Arc<PullRequestHoldService<MS>>>,
     rebalance_lock_manager: RebalanceLockManager,
     broker_member_group: BrokerMemberGroup,
     transactional_message_check_listener: Option<DefaultTransactionalMessageCheckListener>,
-    transactional_message_check_service: Option<TransactionalMessageCheckService<MS>>,
+    transactional_message_check_service: Option<Arc<TransactionalMessageCheckService<MS>>>,
     transaction_metrics_flush_service: Option<TransactionMetricsFlushService>,
     topic_route_info_manager: Option<TopicRouteInfoManager>,
     escape_bridge: Option<Weak<EscapeBridge<MS>>>,
@@ -3917,8 +3934,6 @@ pub(crate) struct BrokerRuntimeInner<MS: MessageStore> {
     slave_synchronize: Option<SlaveSynchronize<MS>>,
     last_sync_time_ms: AtomicU64,
     broker_pre_online_service: Option<BrokerPreOnlineService<MS>>,
-    min_broker_id_in_group: AtomicU64,
-    min_broker_addr_in_group: Mutex<Option<CheetahString>>,
     service_context: Option<ServiceContext>,
     lock: Mutex<()>,
 }
@@ -3972,6 +3987,59 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             update_master_haserver_addr_periodically: self.update_master_haserver_addr_periodically,
             shutdown: Arc::clone(&self.shutdown),
         }))
+    }
+
+    fn build_broker_pre_online_service(&self, escape_bridge: &Arc<EscapeBridge<MS>>) -> BrokerPreOnlineService<MS> {
+        let policy = BrokerPreOnlinePolicy::from_configs(
+            self.broker_config(),
+            self.message_store_config(),
+            self.get_broker_addr().clone(),
+            self.get_ha_server_addr(),
+        );
+        let role_state = Arc::clone(&self.online_role_state);
+        let schedule = self.schedule_message_service().clone();
+        let topic_config_manager = self.topic_config_manager_handle();
+        let topic_config_coordinator = self.topic_config_coordinator_handle();
+        let topic_queue_mapping_manager = self.topic_queue_mapping_manager_handle();
+        let shutdown = Arc::clone(&self.shutdown);
+        let special_services = BrokerSpecialServiceCapability::new(
+            &schedule,
+            self.timer_message_store(),
+            self.transactional_message_check_service.as_ref(),
+            self.ack_message_processor.as_ref(),
+            &self.broker_attached_plugins,
+            Arc::clone(&self.is_schedule_service_start),
+            Arc::clone(&self.is_transaction_check_service_start),
+            Arc::clone(&shutdown),
+        );
+        let registration = BrokerRegistrationCapability::new(
+            policy.clone(),
+            Arc::clone(&role_state),
+            &topic_config_manager,
+            &topic_config_coordinator,
+            &topic_queue_mapping_manager,
+            self.broker_outer_api().clone(),
+            Arc::clone(&shutdown),
+        );
+        let transition = BrokerOnlineTransitionCapability::new(
+            policy.clone(),
+            Arc::clone(&role_state),
+            special_services,
+            registration,
+            Arc::clone(&shutdown),
+        );
+        let context = BrokerPreOnlineContext::new(
+            policy,
+            role_state,
+            self.broker_outer_api().clone(),
+            BrokerPreOnlineStoreCapability::new(escape_bridge),
+            &self.consumer_offset_manager,
+            &schedule,
+            self.timer_message_store(),
+            &self.broker_attached_plugins,
+            transition,
+        );
+        BrokerPreOnlineService::new(context, self.broker_service_task_group())
     }
 
     pub(crate) fn build_client_manage_processor(&self) -> ClientManageProcessor<MS> {
@@ -4123,7 +4191,9 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn transactional_message_check_service_mut(&mut self) -> Option<&mut TransactionalMessageCheckService<MS>> {
+    pub fn transactional_message_check_service_mut(
+        &mut self,
+    ) -> Option<&mut Arc<TransactionalMessageCheckService<MS>>> {
         self.transactional_message_check_service.as_mut()
     }
 
@@ -4384,7 +4454,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
 
     #[inline]
     pub fn is_isolated(&self) -> &AtomicBool {
-        &self.is_isolated
+        self.online_role_state.isolated_flag()
     }
 
     #[inline]
@@ -4418,7 +4488,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn transactional_message_check_service(&self) -> &Option<TransactionalMessageCheckService<MS>> {
+    pub fn transactional_message_check_service(&self) -> &Option<Arc<TransactionalMessageCheckService<MS>>> {
         &self.transactional_message_check_service
     }
 
@@ -4494,6 +4564,8 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
 
     #[inline]
     pub fn set_broker_config(&mut self, broker_config: BrokerConfig) {
+        self.online_role_state
+            .set_local_broker_id(broker_config.broker_identity.broker_id);
         self.broker_config = Arc::new(broker_config);
     }
 
@@ -4579,11 +4651,6 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn set_is_isolated(&mut self, is_isolated: Arc<AtomicBool>) {
-        self.is_isolated = is_isolated;
-    }
-
-    #[inline]
     pub fn set_pull_request_hold_service(&mut self, pull_request_hold_service: Arc<PullRequestHoldService<MS>>) {
         self.pull_request_hold_service = Some(pull_request_hold_service);
     }
@@ -4599,7 +4666,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     pub fn get_min_broker_id_in_group(&self) -> u64 {
-        self.broker_config.broker_identity.broker_id
+        self.online_role_state.min_broker_id()
     }
 
     #[inline]
@@ -4615,7 +4682,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         &mut self,
         transactional_message_check_service: TransactionalMessageCheckService<MS>,
     ) {
-        self.transactional_message_check_service = Some(transactional_message_check_service);
+        self.transactional_message_check_service = Some(Arc::new(transactional_message_check_service));
     }
 
     #[inline]
@@ -4810,7 +4877,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
                 self.broker_addr.clone(),
             ));
         }
-        self.is_isolated.store(true, Ordering::Release);
+        self.online_role_state.set_isolated(true);
     }
 
     pub async fn bootstrap_controller_mode(mut this: ArcMut<Self>) {
@@ -5120,7 +5187,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     async fn sync_controller_replica_info(this: ArcMut<Self>) {
-        if !this.broker_config.enable_controller_mode || this.is_isolated.load(Ordering::Acquire) {
+        if !this.broker_config.enable_controller_mode || this.online_role_state.is_isolated() {
             return;
         }
 
@@ -5259,7 +5326,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
                 &broker_member_group.broker_addrs,
                 this.broker_config.broker_identity.broker_id,
             ) as i32);
-        if !this.is_isolated.load(Ordering::Acquire) {
+        if !this.online_role_state.is_isolated() {
             let min_broker_id = broker_member_group.minimum_broker_id();
             let min_broker_addr = broker_member_group.broker_addrs.get(&min_broker_id).cloned();
             BrokerRuntimeInner::update_min_broker(this, min_broker_id, min_broker_addr).await;
@@ -5270,11 +5337,11 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         if this.broker_config.enable_slave_acting_master && this.broker_config.broker_identity.broker_id != MASTER_ID {
             let mut this_clone = this.clone();
             if let Ok(lock) = this.lock.try_lock() {
-                let min_broker_id_in_group = this.min_broker_id_in_group.load(Ordering::SeqCst);
+                let min_broker_id_in_group = this.online_role_state.min_broker_id();
                 if min_broker_id != min_broker_id_in_group {
                     let mut offline_broker_addr = None;
                     if min_broker_id > min_broker_id_in_group {
-                        offline_broker_addr = this.min_broker_addr_in_group.lock().await.clone();
+                        offline_broker_addr = this.online_role_state.min_broker_addr().await;
                     }
                     this_clone
                         .on_min_broker_change(min_broker_id, min_broker_addr, offline_broker_addr, None)
@@ -5365,30 +5432,6 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         }
     }
 
-    pub async fn start_service(
-        mut this: ArcMut<BrokerRuntimeInner<MS>>,
-        min_broker_id: u64,
-        min_broker_addr: Option<CheetahString>,
-    ) {
-        info!(
-            "{} start service, min broker id is {}, min broker addr: {:?}",
-            this.broker_config.broker_identity.get_canonical_name(),
-            min_broker_id,
-            min_broker_addr
-        );
-
-        this.min_broker_id_in_group.store(min_broker_id, Ordering::SeqCst);
-        let mut guard = this.min_broker_addr_in_group.lock().await;
-        *guard = min_broker_addr;
-        drop(guard);
-        let flag = this.broker_config.broker_identity.broker_id == min_broker_id;
-        this.change_special_service_status(flag).await;
-        let this_clone = this.clone();
-        this.register_broker_all_inner(this_clone, true, false, this.broker_config.force_register)
-            .await;
-        this.is_isolated.store(false, Ordering::SeqCst);
-    }
-
     pub async fn apply_controller_role_change(
         mut this: ArcMut<BrokerRuntimeInner<MS>>,
         controller_leader_address: Option<CheetahString>,
@@ -5429,6 +5472,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             Arc::make_mut(&mut this.message_store_config).broker_role = target_broker_role;
         }
         Arc::make_mut(&mut this.broker_config).broker_identity.broker_id = outcome.local_broker_id;
+        this.online_role_state.set_local_broker_id(outcome.local_broker_id);
 
         match role {
             BrokerReplicaRole::Master => {
@@ -5475,7 +5519,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             }
         }
 
-        this.is_isolated.store(false, Ordering::Release);
+        this.online_role_state.set_isolated(false);
         if outcome.should_register_to_namesrv {
             let this_clone = this.clone();
             this.register_broker_all_inner(this_clone, true, false, this.broker_config.force_register)
@@ -5548,19 +5592,16 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         offline_broker_addr: Option<CheetahString>,
         master_ha_addr: Option<CheetahString>,
     ) {
-        let min_broker_id_in_group_old = self.min_broker_id_in_group.load(Ordering::SeqCst);
-        let mut min_broker_addr_in_group_old = self.min_broker_addr_in_group.lock().await;
+        let (min_broker_id_in_group_old, min_broker_addr_in_group_old) = self
+            .online_role_state
+            .replace_min_broker(min_broker_id, min_broker_addr.clone())
+            .await;
         info!(
             "Min broker changed, old: {}-{:?}, new {}-{:?}",
             min_broker_id_in_group_old, min_broker_addr_in_group_old, min_broker_id, min_broker_addr
         );
-        self.min_broker_id_in_group.store(min_broker_id, Ordering::SeqCst);
-        *min_broker_addr_in_group_old = min_broker_addr.clone();
-        drop(min_broker_addr_in_group_old);
-        self.change_special_service_status(
-            self.broker_config.broker_identity.broker_id == self.min_broker_id_in_group.load(Ordering::SeqCst),
-        )
-        .await;
+        self.change_special_service_status(self.online_role_state.local_broker_id() == min_broker_id)
+            .await;
         let current_slave_master_addr = self.slave_synchronize().unwrap().master_addr();
         if offline_broker_addr.is_some() && offline_broker_addr.as_ref() == current_slave_master_addr.as_deref() {
             //master offline
@@ -5573,7 +5614,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         }
 
         // notify PullRequest on hold to pull from master.
-        if self.min_broker_id_in_group.load(Ordering::SeqCst) == MASTER_ID {
+        if self.online_role_state.min_broker_id() == MASTER_ID {
             self.pull_request_hold_service_unchecked().notify_master_online();
         }
     }
