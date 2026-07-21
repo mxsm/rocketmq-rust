@@ -16,14 +16,11 @@ use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use rocketmq_rust::ArcMut;
 use tokio::sync::Mutex;
 
 use crate::ha::default_ha_client::DefaultHAClient;
-use crate::ha::default_ha_client::HAClientError;
 use crate::ha::ha_client::HAClient;
 use crate::ha::ha_connection_state::HAConnectionState;
-use crate::message_store::local_file_message_store::LocalFileMessageStore;
 
 pub struct AutoSwitchHAClient {
     delegate: DefaultHAClient,
@@ -33,15 +30,14 @@ pub struct AutoSwitchHAClient {
 }
 
 impl AutoSwitchHAClient {
-    pub fn new(message_store: ArcMut<LocalFileMessageStore>, broker_id: Option<i64>) -> Result<Self, HAClientError> {
-        let client = DefaultHAClient::new(message_store)?;
-        client.set_reported_broker_id(broker_id);
-        Ok(Self {
-            delegate: client,
+    pub(crate) fn from_delegate(delegate: DefaultHAClient, broker_id: Option<i64>) -> Self {
+        delegate.set_reported_broker_id(broker_id);
+        Self {
+            delegate,
             reported_broker_id: Arc::new(AtomicI64::new(broker_id.unwrap_or(-1))),
             master_address: Arc::new(Mutex::new(None)),
             ha_master_address: Arc::new(Mutex::new(None)),
-        })
+        }
     }
 
     pub fn set_reported_broker_id(&self, broker_id: Option<i64>) {
@@ -159,7 +155,9 @@ mod tests {
     use super::*;
     use crate::config::message_store_config::MessageStoreConfig;
 
-    fn new_test_message_store(root: &Path) -> ArcMut<LocalFileMessageStore> {
+    fn new_test_message_store(
+        root: &Path,
+    ) -> rocketmq_rust::ArcMut<crate::message_store::local_file_message_store::LocalFileMessageStore> {
         std::fs::create_dir_all(root).expect("create temp root dir");
 
         let broker_config = BrokerConfig {
@@ -174,13 +172,15 @@ mod tests {
         };
 
         let topic_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>> = Arc::new(DashMap::new());
-        let mut store = ArcMut::new(LocalFileMessageStore::new(
-            Arc::new(message_store_config),
-            Arc::new(broker_config),
-            topic_table,
-            None,
-            false,
-        ));
+        let mut store = rocketmq_rust::ArcMut::new(
+            crate::message_store::local_file_message_store::LocalFileMessageStore::new(
+                Arc::new(message_store_config),
+                Arc::new(broker_config),
+                topic_table,
+                None,
+                false,
+            ),
+        );
         let store_clone = store.clone();
         store.set_message_store_arc(store_clone);
         store
@@ -191,7 +191,8 @@ mod tests {
         let temp_root =
             std::env::temp_dir().join(format!("rocketmq-rust-auto-switch-client-target-{}", current_millis()));
         let store = new_test_message_store(&temp_root);
-        let client = AutoSwitchHAClient::new(store, Some(9)).expect("create auto switch client");
+        let delegate = DefaultHAClient::new(store).expect("create default HA client");
+        let client = AutoSwitchHAClient::from_delegate(delegate, Some(9));
 
         assert_eq!(client.reported_broker_id(), Some(9));
 
@@ -208,7 +209,8 @@ mod tests {
         let temp_root =
             std::env::temp_dir().join(format!("rocketmq-rust-auto-switch-client-clear-{}", current_millis()));
         let store = new_test_message_store(&temp_root);
-        let client = AutoSwitchHAClient::new(store, Some(11)).expect("create auto switch client");
+        let delegate = DefaultHAClient::new(store).expect("create default HA client");
+        let client = AutoSwitchHAClient::from_delegate(delegate, Some(11));
 
         client.sync_controller_master_target("127.0.0.1:10912").await;
         client.clear_controller_master_target().await;

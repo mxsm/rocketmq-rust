@@ -25,6 +25,7 @@ use tokio::sync::Notify;
 
 use crate::base::message_store::MessageStore;
 use crate::ha::auto_switch::auto_switch_ha_client::AutoSwitchHAClient;
+use crate::ha::default_ha_client::DefaultHAClient;
 use crate::ha::default_ha_service::DefaultHAService;
 use crate::ha::general_ha_client::GeneralHAClient;
 use crate::ha::general_ha_service::GeneralHAService;
@@ -64,8 +65,9 @@ impl AutoSwitchHAService {
     pub(crate) fn init(this: &mut ArcMut<Self>, general_ha_service: GeneralHAService) -> HAResult<()> {
         let mut delegate = this.delegate.clone();
         DefaultHAService::init(&mut delegate, general_ha_service)?;
-        let client = AutoSwitchHAClient::new(this.message_store.clone(), None)
+        let client = DefaultHAClient::new(this.message_store.clone())
             .map_err(|error| crate::store_error::HAError::Service(error.to_string()))?;
+        let client = AutoSwitchHAClient::from_delegate(client, None);
         delegate.set_general_ha_client(GeneralHAClient::new_with_auto_switch_ha_client(client));
         Ok(())
     }

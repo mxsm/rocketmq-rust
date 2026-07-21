@@ -4299,25 +4299,6 @@
       "adr": "ADR-013"
     },
     {
-      "identity": "de5871b43b557c9844ffe203",
-      "path": "rocketmq-store/src/ha/auto_switch/auto_switch_ha_client.rs",
-      "symbol": "*",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "f30268a0ca67e7739b4f46cb",
-          "fingerprint": "cb757d2dc86a23f3d2f8d598",
-          "item": "mod tests",
-          "line": 159
-        }
-      ],
-      "owner": "store",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
       "identity": "7135277e44e4f197f7a2d6a5",
       "path": "rocketmq-store/src/ha/auto_switch/auto_switch_ha_client.rs",
       "symbol": "ArcMut",
@@ -4325,48 +4306,10 @@
       "category": "test",
       "occurrences": [
         {
-          "id": "87df086a2f73a88daff8f318",
-          "fingerprint": "88a50625f8b4ef1eb68814de",
+          "id": "8f69294e62ae6211395bdb83",
+          "fingerprint": "cf73d6cce989aefbf9afb385",
           "item": "fn new_test_message_store",
-          "line": 177
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "4e8c5dd32a9f31ff326da6d7",
-      "path": "rocketmq-store/src/ha/auto_switch/auto_switch_ha_client.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "a88ef5629b6453d2f714d2f0",
-          "fingerprint": "bfa385a0587f562fe3bd7700",
-          "item": "<module>",
-          "line": 19
-        }
-      ],
-      "owner": "store",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "80aa5156c14fc2f87d3373f5",
-      "path": "rocketmq-store/src/ha/auto_switch/auto_switch_ha_client.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "1955ad8e3f621b835b3297d5",
-          "fingerprint": "731a590d4bcde96df1d2ccd9",
-          "item": "fn new",
-          "line": 36
+          "line": 175
         }
       ],
       "owner": "store",
@@ -4382,10 +4325,10 @@
       "category": "test",
       "occurrences": [
         {
-          "id": "9daf8585b48a1575f0ce01cd",
-          "fingerprint": "508b00dba74283df96909907",
+          "id": "9198d84435b19788ff1b9d02",
+          "fingerprint": "7da4bb855d1cc884f6a7030f",
           "item": "fn new_test_message_store",
-          "line": 162
+          "line": 160
         }
       ],
       "owner": "store",
@@ -4401,48 +4344,10 @@
       "category": "test",
       "occurrences": [
         {
-          "id": "e2cbed1659392547be2da38c",
-          "fingerprint": "92cd79aafb87511baa6f4a3f",
+          "id": "a97b2b99dfb75c5bead0ddce",
+          "fingerprint": "073cd55648937ca9b1d7ed90",
           "item": "fn new_test_message_store",
-          "line": 177
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "8a372a2fcb12dcd524f0f504",
-      "path": "rocketmq-store/src/ha/auto_switch/auto_switch_ha_client.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "ddb60b3580890df47eb43bb9",
-          "fingerprint": "c1f2a760589f4a1e176d58f8",
-          "item": "<module>",
-          "line": 26
-        }
-      ],
-      "owner": "store",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "4d58ff02c89de9a36ed39745",
-      "path": "rocketmq-store/src/ha/auto_switch/auto_switch_ha_client.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "440357fc171fad7b423cff62",
-          "fingerprint": "395d2c8a990f9716fc70c2f3",
-          "item": "fn new",
-          "line": 36
+          "line": 176
         }
       ],
       "owner": "store",
@@ -4458,10 +4363,10 @@
       "category": "test",
       "occurrences": [
         {
-          "id": "5e953d3db26fb3e7cb05988e",
-          "fingerprint": "d7425232be170cd9e4ba9687",
+          "id": "1150183f03714cf0743bedf3",
+          "fingerprint": "9ac093fd41632358f495915c",
           "item": "fn new_test_message_store",
-          "line": 162
+          "line": 160
         }
       ],
       "owner": "store",
