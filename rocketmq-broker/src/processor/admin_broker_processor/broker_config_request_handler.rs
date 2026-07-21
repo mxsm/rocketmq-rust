@@ -1049,6 +1049,32 @@ mod tests {
         let _ = fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }
 
+    #[test]
+    fn query_assignment_defaults_remain_startup_only() {
+        let properties = std::collections::HashMap::from([
+            ("brokerName".into(), "renamed".into()),
+            ("defaultMessageRequestMode".into(), "POP".into()),
+            ("defaultPopShareQueueNum".into(), "2".into()),
+            ("serverLoadBalancerEnable".into(), "true".into()),
+        ]);
+        let unsupported =
+            BrokerConfigRequestHandler::<rocketmq_store::message_store::GenericMessageStore>::apply_supported_broker_config_properties(
+                &mut BrokerConfig::default(),
+                &properties,
+            )
+            .expect("startup-only keys should be reported, not parsed");
+
+        assert_eq!(
+            unsupported,
+            [
+                "brokerName",
+                "defaultMessageRequestMode",
+                "defaultPopShareQueueNum",
+                "serverLoadBalancerEnable",
+            ]
+        );
+    }
+
     #[tokio::test]
     async fn export_rocksdb_config_without_rocksdb_returns_not_supported() {
         let mut runtime = new_test_runtime("export-config", false).await;

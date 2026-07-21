@@ -95,6 +95,20 @@ pub(crate) struct ConsumerConnectionHousekeeping {
     manager: ConsumerManager,
 }
 
+/// Read-only access to the live consumer table for assignment decisions.
+#[derive(Clone)]
+pub(crate) struct ConsumerAssignmentView {
+    consumer_table: Arc<DashMap<CheetahString, ConsumerGroupInfo>>,
+}
+
+impl ConsumerAssignmentView {
+    pub(crate) fn client_ids(&self, group: &CheetahString) -> Vec<CheetahString> {
+        self.consumer_table
+            .get(group)
+            .map_or_else(Vec::new, |info| info.get_all_client_ids())
+    }
+}
+
 impl Clone for ConsumerConnectionHousekeeping {
     fn clone(&self) -> Self {
         Self {
@@ -114,6 +128,12 @@ impl ConsumerConnectionHousekeeping {
 }
 
 impl ConsumerManager {
+    pub(crate) fn assignment_view(&self) -> ConsumerAssignmentView {
+        ConsumerAssignmentView {
+            consumer_table: Arc::clone(&self.consumer_table),
+        }
+    }
+
     pub(crate) fn connection_housekeeping(&self) -> ConsumerConnectionHousekeeping {
         ConsumerConnectionHousekeeping {
             manager: self.clone_shared_state(),
@@ -989,4 +1009,67 @@ impl ConsumerManager {
 /// `true` if broadcasting mode
 fn is_broadcast_mode(message_model: MessageModel) -> bool {
     message_model == MessageModel::Broadcasting
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use cheetah_string::CheetahString;
+    use dashmap::DashMap;
+    use parking_lot::Mutex;
+    use rocketmq_remoting::base::response_future::ResponseFuture;
+    use rocketmq_remoting::connection::Connection;
+    use rocketmq_remoting::net::channel::Channel;
+    use rocketmq_remoting::net::channel::ChannelInner;
+    use rocketmq_remoting::protocol::LanguageCode;
+    use tokio::net::TcpStream;
+
+    use super::ConsumerAssignmentView;
+    use crate::client::client_channel_info::ClientChannelInfo;
+    use crate::client::consumer_group_info::ConsumerGroupInfo;
+
+    async fn create_test_channel() -> Channel {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind local test listener");
+        let local_addr = listener.local_addr().expect("local listener addr");
+        let std_stream = std::net::TcpStream::connect(local_addr).expect("connect local test listener");
+        std_stream.set_nonblocking(true).expect("set nonblocking");
+        drop(listener);
+        let tcp_stream = TcpStream::from_std(std_stream).expect("convert tcp stream");
+        let connection = Connection::new(tcp_stream);
+        let response_table = Arc::new(Mutex::new(HashMap::<i32, ResponseFuture>::new()));
+        let inner = Arc::new(ChannelInner::new(connection, response_table));
+        Channel::new(inner, local_addr, local_addr)
+    }
+
+    #[tokio::test]
+    async fn consumer_assignment_view_tracks_live_primary_client_ids() {
+        let consumer_table = Arc::new(DashMap::new());
+        let view = ConsumerAssignmentView {
+            consumer_table: Arc::clone(&consumer_table),
+        };
+        let group = CheetahString::from_static_str("assignment-group");
+        assert!(view.client_ids(&group).is_empty());
+
+        let group_info = ConsumerGroupInfo::with_group_name(group.clone());
+        let client = ClientChannelInfo::new(
+            create_test_channel().await,
+            "assignment-client".into(),
+            LanguageCode::default(),
+            1,
+        );
+        group_info
+            .get_channel_info_table()
+            .insert(client.channel().clone(), client.clone());
+        consumer_table.insert(group.clone(), group_info.clone());
+
+        assert_eq!(
+            view.client_ids(&group),
+            vec![CheetahString::from_static_str("assignment-client")]
+        );
+
+        assert!(group_info.unregister_channel(&client));
+        assert!(view.client_ids(&group).is_empty());
+    }
 }

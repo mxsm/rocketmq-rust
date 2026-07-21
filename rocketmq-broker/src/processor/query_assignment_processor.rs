@@ -12,11 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::broker_runtime::BrokerRuntimeInner;
+use crate::client::manager::consumer_manager::ConsumerAssignmentView;
 
 use crate::load_balance::message_request_mode_manager::MessageRequestModeManager;
 
+use crate::topic::manager::topic_route_info_manager::TopicRouteInfoManager;
+
 use cheetah_string::CheetahString;
+use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_common::common::message::message_enum::MessageRequestMode;
 use rocketmq_common::common::message::message_queue::MessageQueue;
@@ -38,10 +41,8 @@ use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::RemotingDeserializable;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_rust::ArcMut;
-
 use rocketmq_remoting::runtime::processor::RequestProcessor;
-use rocketmq_store::base::message_store::MessageStore;
+use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -53,25 +54,21 @@ use tracing::warn;
 /// This struct manages the message request modes and load balancing strategies
 /// for message queues. It interacts with the broker runtime to process assignment
 /// requests and allocate message queues to consumers.
-///
-/// # Type Parameters
-///
-/// * `MS` - A type that implements the `MessageStore` trait, representing the message store used by
-///   the broker.
-pub struct QueryAssignmentProcessor<MS: MessageStore> {
+pub struct QueryAssignmentProcessor {
     // Manages the message request modes for different topics and consumer groups.
     message_request_mode_manager: MessageRequestModeManager,
 
     // A map of load balancing strategies for message queue allocation.
     load_strategy: HashMap<CheetahString, Arc<dyn AllocateMessageQueueStrategy>>,
 
-    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+    // These assignment defaults are startup configuration and are not part of BrokerConfig's
+    // dynamic-update allowlist. If that changes, this must become a narrow live-config handle.
+    broker_config: Arc<BrokerConfig>,
+    topic_route_info_manager: TopicRouteInfoManager,
+    consumer_assignment_view: ConsumerAssignmentView,
 }
 
-impl<MS> RequestProcessor for QueryAssignmentProcessor<MS>
-where
-    MS: MessageStore,
-{
+impl RequestProcessor for QueryAssignmentProcessor {
     async fn process_request(
         &mut self,
         channel: Channel,
@@ -100,8 +97,13 @@ where
     }
 }
 
-impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
-    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
+impl QueryAssignmentProcessor {
+    pub(crate) fn new(
+        broker_config: Arc<BrokerConfig>,
+        message_store_config: Arc<MessageStoreConfig>,
+        topic_route_info_manager: TopicRouteInfoManager,
+        consumer_assignment_view: ConsumerAssignmentView,
+    ) -> Self {
         let allocate_message_queue_averagely: Arc<dyn AllocateMessageQueueStrategy> =
             Arc::new(AllocateMessageQueueAveragely);
         let allocate_message_queue_averagely_by_circle: Arc<dyn AllocateMessageQueueStrategy> =
@@ -115,12 +117,14 @@ impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
             CheetahString::from_static_str(allocate_message_queue_averagely_by_circle.get_name()),
             allocate_message_queue_averagely_by_circle,
         );
-        let manager = MessageRequestModeManager::new(Arc::new(broker_runtime_inner.message_store_config().clone()));
+        let manager = MessageRequestModeManager::new(message_store_config);
         let _ = manager.load();
         Self {
             message_request_mode_manager: manager,
             load_strategy,
-            broker_runtime_inner,
+            broker_config,
+            topic_route_info_manager,
+            consumer_assignment_view,
         }
     }
 
@@ -139,17 +143,19 @@ impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
     }
 }
 
-impl<MS: MessageStore> Clone for QueryAssignmentProcessor<MS> {
+impl Clone for QueryAssignmentProcessor {
     fn clone(&self) -> Self {
         Self {
             message_request_mode_manager: self.message_request_mode_manager.clone(),
             load_strategy: self.load_strategy.clone(),
-            broker_runtime_inner: self.broker_runtime_inner.clone(),
+            broker_config: Arc::clone(&self.broker_config),
+            topic_route_info_manager: self.topic_route_info_manager.clone(),
+            consumer_assignment_view: self.consumer_assignment_view.clone(),
         }
     }
 }
 
-impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
+impl QueryAssignmentProcessor {
     pub async fn process_request_inner(
         &mut self,
         channel: Channel,
@@ -230,10 +236,10 @@ impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
                     // retry topic must be pull mode
                     body.mode = MessageRequestMode::Pull;
                 } else {
-                    body.mode = self.broker_runtime_inner.broker_config().default_message_request_mode;
+                    body.mode = self.broker_config.default_message_request_mode;
                 }
                 if body.mode == MessageRequestMode::Pop {
-                    body.pop_share_queue_num = self.broker_runtime_inner.broker_config().default_pop_share_queue_num;
+                    body.pop_share_queue_num = self.broker_config.default_pop_share_queue_num;
                 }
                 body
             };
@@ -327,11 +333,7 @@ impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
         match message_model {
             // handle broadcasting consumer, this mode returns all message queues
             MessageModel::Broadcasting => {
-                let assigned_queue_set = self
-                    .broker_runtime_inner
-                    .topic_route_info_manager()
-                    .get_topic_subscribe_info(topic)
-                    .await;
+                let assigned_queue_set = self.topic_route_info_manager.get_topic_subscribe_info(topic).await;
                 if assigned_queue_set.is_none() {
                     warn!(
                         "QueryLoad: no assignment for group[{}], the topic[{}] does not exist.",
@@ -347,16 +349,13 @@ impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
                     let mut set = HashSet::new();
                     let queue = MessageQueue::from_parts(
                         topic.clone(),
-                        self.broker_runtime_inner.broker_config().broker_name().clone(),
+                        self.broker_config.broker_name().clone(),
                         mix_all::LMQ_QUEUE_ID as i32,
                     );
                     set.insert(queue);
                     Some(set)
                 } else {
-                    self.broker_runtime_inner
-                        .topic_route_info_manager()
-                        .get_topic_subscribe_info(topic)
-                        .await
+                    self.topic_route_info_manager.get_topic_subscribe_info(topic).await
                 };
 
                 if mq_set.is_none() {
@@ -369,15 +368,11 @@ impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
                     return None;
                 }
 
-                if !self.broker_runtime_inner.broker_config().server_load_balancer_enable {
+                if !self.broker_config.server_load_balancer_enable {
                     return mq_set;
                 }
                 // get all consumer ids for the consumer group
-                let consumer_group_info = self
-                    .broker_runtime_inner
-                    .consumer_manager()
-                    .get_consumer_group_info(consumer_group);
-                let mut cid_all = consumer_group_info.map_or_else(Vec::new, |info| info.get_all_client_ids());
+                let mut cid_all = self.consumer_assignment_view.client_ids(consumer_group);
                 if cid_all.is_empty() {
                     warn!(
                         "QueryLoad: no assignment for group[{}] topic[{}], get consumer id list failed",
@@ -531,10 +526,15 @@ fn allocate(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use cheetah_string::CheetahString;
     use rocketmq_common::common::message::message_queue::MessageQueue;
+    use rocketmq_model::allocation::AllocateMessageQueueAveragely;
+    use rocketmq_model::allocation::AllocateMessageQueueAveragelyByCircle;
+    use rocketmq_model::allocation::AllocateMessageQueueStrategy;
 
-    use super::*;
+    use super::allocate;
 
     #[test]
     fn allocate_returns_error_when_current_cid_is_empty() {
