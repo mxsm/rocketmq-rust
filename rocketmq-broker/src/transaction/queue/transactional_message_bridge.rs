@@ -16,6 +16,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::sync::Weak;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::config::TopicConfig;
@@ -52,7 +53,7 @@ pub(crate) struct TransactionalMessageBridgeContext<MS: MessageStore> {
     pub(crate) consumer_offset_manager: Arc<ConsumerOffsetManager<MS>>,
     pub(crate) message_store: TransactionMessageStore<MS>,
     pub(crate) topic_registration: Arc<TransactionTopicRegistration<MS>>,
-    pub(crate) escape_bridge: Arc<EscapeBridge<MS>>,
+    pub(crate) escape_bridge: Weak<EscapeBridge<MS>>,
 }
 
 pub struct TransactionalMessageBridge<MS: MessageStore> {
@@ -62,7 +63,7 @@ pub struct TransactionalMessageBridge<MS: MessageStore> {
     consumer_offset_manager: Arc<ConsumerOffsetManager<MS>>,
     message_store: TransactionMessageStore<MS>,
     topic_registration: Arc<TransactionTopicRegistration<MS>>,
-    escape_bridge: Arc<EscapeBridge<MS>>,
+    escape_bridge: Weak<EscapeBridge<MS>>,
 }
 
 impl<MS> TransactionalMessageBridge<MS>
@@ -325,7 +326,10 @@ where
     }
 
     pub async fn escape_message(&mut self, message_inner: MessageExtBrokerInner) -> bool {
-        let put_message_result = self.escape_bridge.put_message(message_inner).await;
+        let Some(escape_bridge) = self.escape_bridge.upgrade() else {
+            return false;
+        };
+        let put_message_result = escape_bridge.put_message(message_inner).await;
         put_message_result.is_ok()
     }
 }

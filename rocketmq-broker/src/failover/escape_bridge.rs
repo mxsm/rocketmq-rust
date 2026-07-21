@@ -171,6 +171,68 @@ impl<MS: MessageStore> EscapeBridge<MS> {
         Ok(message_store.put_message(message).await)
     }
 
+    pub(crate) fn get_min_offset_from_local_store(
+        &self,
+        topic: &CheetahString,
+        queue_id: i32,
+    ) -> Result<i64, MessageStoreUnavailable> {
+        let message_store = self
+            .broker_runtime_inner
+            .message_store()
+            .ok_or(MessageStoreUnavailable)?;
+        Ok(message_store.get_min_offset_in_queue(topic, queue_id))
+    }
+
+    pub(crate) async fn get_message_from_local_store(
+        &self,
+        group: &CheetahString,
+        topic: &CheetahString,
+        queue_id: i32,
+        offset: i64,
+        nums: i32,
+    ) -> Result<Option<GetMessageResult>, MessageStoreUnavailable> {
+        let message_store = self
+            .broker_runtime_inner
+            .message_store()
+            .ok_or(MessageStoreUnavailable)?;
+        Ok(message_store
+            .get_message(group, topic, queue_id, offset, nums, None)
+            .await)
+    }
+
+    pub(crate) fn look_message_by_offset_from_local_store(
+        &self,
+        offset: i64,
+    ) -> Result<Option<MessageExt>, MessageStoreUnavailable> {
+        let message_store = self
+            .broker_runtime_inner
+            .message_store()
+            .ok_or(MessageStoreUnavailable)?;
+        Ok(message_store.look_message_by_offset(offset))
+    }
+
+    pub(crate) fn local_store_state_machine_version(&self) -> Result<i64, MessageStoreUnavailable> {
+        let message_store = self
+            .broker_runtime_inner
+            .message_store()
+            .ok_or(MessageStoreUnavailable)?;
+        Ok(message_store.get_state_machine_version())
+    }
+
+    pub(crate) async fn update_local_store_master_address(
+        &self,
+        master_addr: &CheetahString,
+    ) -> Result<(), MessageStoreUnavailable> {
+        let message_store = self
+            .broker_runtime_inner
+            .message_store()
+            .cloned()
+            .ok_or(MessageStoreUnavailable)?;
+        message_store.update_ha_master_address(master_addr.as_str()).await;
+        message_store.update_master_address(master_addr);
+        Ok(())
+    }
+
     pub(crate) fn is_message_store_slave(&self) -> bool {
         self.broker_runtime_inner.message_store_config().broker_role == BrokerRole::Slave
     }
