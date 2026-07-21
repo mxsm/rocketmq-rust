@@ -149,6 +149,8 @@ use crate::processor::end_transaction_processor::EndTransactionProcessor;
 use crate::processor::end_transaction_processor::EndTransactionProcessorContext;
 use crate::processor::end_transaction_processor::EndTransactionStoreCapability;
 use crate::processor::lite_manager_processor::LiteManagerProcessor;
+use crate::processor::lite_subscription_ctl_processor::LiteSubscriptionCtlContext;
+use crate::processor::lite_subscription_ctl_processor::LiteSubscriptionCtlPolicy;
 use crate::processor::lite_subscription_ctl_processor::LiteSubscriptionCtlProcessor;
 use crate::processor::notification_processor::NotificationPolicy;
 use crate::processor::notification_processor::NotificationPopOffsetCapability;
@@ -2576,6 +2578,7 @@ impl BrokerRuntime {
             pop_lite_queue_lock_manager,
             pop_lite_long_polling_context,
         ));
+        let pop_lite_message_processor_provider = Arc::downgrade(&pop_lite_message_processor);
         self.inner.pop_lite_message_processor = Some(pop_lite_message_processor.clone());
         let ack_message_processor = ArcMut::new(AckMessageProcessor::new(
             self.inner.clone(),
@@ -2818,35 +2821,46 @@ impl BrokerRuntime {
             BrokerProcessorType::QueryAssignment(query_assignment_processor),
         );
 
+        let lite_manager_processor = Arc::new(LiteManagerProcessor::new(self.inner.clone()));
         broker_request_processor.register_processor(
             RequestCode::GetBrokerLiteInfo as i32,
-            BrokerProcessorType::LiteManager(ArcMut::new(LiteManagerProcessor::new(self.inner.clone()))),
+            BrokerProcessorType::LiteManager(Arc::clone(&lite_manager_processor)),
         );
         broker_request_processor.register_processor(
             RequestCode::GetParentTopicInfo as i32,
-            BrokerProcessorType::LiteManager(ArcMut::new(LiteManagerProcessor::new(self.inner.clone()))),
+            BrokerProcessorType::LiteManager(Arc::clone(&lite_manager_processor)),
         );
         broker_request_processor.register_processor(
             RequestCode::GetLiteTopicInfo as i32,
-            BrokerProcessorType::LiteManager(ArcMut::new(LiteManagerProcessor::new(self.inner.clone()))),
+            BrokerProcessorType::LiteManager(Arc::clone(&lite_manager_processor)),
         );
         broker_request_processor.register_processor(
             RequestCode::GetLiteClientInfo as i32,
-            BrokerProcessorType::LiteManager(ArcMut::new(LiteManagerProcessor::new(self.inner.clone()))),
+            BrokerProcessorType::LiteManager(Arc::clone(&lite_manager_processor)),
         );
         broker_request_processor.register_processor(
             RequestCode::GetLiteGroupInfo as i32,
-            BrokerProcessorType::LiteManager(ArcMut::new(LiteManagerProcessor::new(self.inner.clone()))),
+            BrokerProcessorType::LiteManager(Arc::clone(&lite_manager_processor)),
         );
         broker_request_processor.register_processor(
             RequestCode::TriggerLiteDispatch as i32,
-            BrokerProcessorType::LiteManager(ArcMut::new(LiteManagerProcessor::new(self.inner.clone()))),
+            BrokerProcessorType::LiteManager(lite_manager_processor),
         );
         broker_request_processor.register_processor(
             RequestCode::LiteSubscriptionCtl as i32,
-            BrokerProcessorType::LiteSubscriptionCtl(ArcMut::new(LiteSubscriptionCtlProcessor::new(
-                self.inner.clone(),
-            ))),
+            BrokerProcessorType::LiteSubscriptionCtl(Arc::new(LiteSubscriptionCtlProcessor::new({
+                let consumer_offset_manager = self.inner.consumer_offset_manager_handle();
+                let escape_bridge = self.inner.escape_bridge();
+                LiteSubscriptionCtlContext::new(
+                    LiteSubscriptionCtlPolicy::from_config(self.inner.broker_config()),
+                    self.inner.lite_subscription_registry().clone(),
+                    self.inner.lite_event_dispatcher().clone(),
+                    self.inner.subscription_group_manager().clone(),
+                    PopLiteOffsetCapability::new(&consumer_offset_manager),
+                    PopLiteMessageStoreCapability::new(&escape_bridge),
+                    pop_lite_message_processor_provider,
+                )
+            }))),
         );
 
         //EndTransactionProcessor

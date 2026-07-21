@@ -64,9 +64,9 @@ impl<MS: MessageStore> LiteManagerProcessor<MS> {
     }
 }
 
-impl<MS: MessageStore> RequestProcessor for LiteManagerProcessor<MS> {
-    async fn process_request(
-        &mut self,
+impl<MS: MessageStore> LiteManagerProcessor<MS> {
+    pub(crate) async fn process_request_shared(
+        &self,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
@@ -87,6 +87,17 @@ impl<MS: MessageStore> RequestProcessor for LiteManagerProcessor<MS> {
                 )))
             }
         }
+    }
+}
+
+impl<MS: MessageStore> RequestProcessor for LiteManagerProcessor<MS> {
+    async fn process_request(
+        &mut self,
+        channel: Channel,
+        ctx: ConnectionHandlerContext,
+        request: &mut RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        self.process_request_shared(channel, ctx, request).await
     }
 }
 

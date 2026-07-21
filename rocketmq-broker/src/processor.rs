@@ -93,8 +93,8 @@ pub enum BrokerProcessorType<MS: MessageStore, TS> {
     ClientManage(Arc<ClientManageProcessor<MS>>),
     ConsumerManage(Arc<ConsumerManageProcessor<MS>>),
     QueryAssignment(Arc<QueryAssignmentProcessor>),
-    LiteManager(ArcMut<LiteManagerProcessor<MS>>),
-    LiteSubscriptionCtl(ArcMut<LiteSubscriptionCtlProcessor<MS>>),
+    LiteManager(Arc<LiteManagerProcessor<MS>>),
+    LiteSubscriptionCtl(Arc<LiteSubscriptionCtlProcessor<MS>>),
     EndTransaction(Arc<EndTransactionProcessor<TS, MS>>),
     AdminBroker(ArcMut<AdminBrokerProcessor<MS>>),
 }
@@ -197,9 +197,11 @@ where
             BrokerProcessorType::QueryAssignment(processor) => {
                 processor.process_request_shared(channel, ctx, request).await
             }
-            BrokerProcessorType::LiteManager(processor) => processor.process_request(channel, ctx, request).await,
+            BrokerProcessorType::LiteManager(processor) => {
+                processor.process_request_shared(channel, ctx, request).await
+            }
             BrokerProcessorType::LiteSubscriptionCtl(processor) => {
-                processor.process_request(channel, ctx, request).await
+                processor.process_request_shared(channel, ctx, request).await
             }
             BrokerProcessorType::EndTransaction(processor) => {
                 processor.process_request_shared(channel, ctx, request).await

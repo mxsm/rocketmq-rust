@@ -852,6 +852,16 @@ offset 校正、顺序消费、事件重排和 polling 语义保持不变。ArcM
 净删除 2 个 production identity/5 occurrences 与 2 个 test identity/2 occurrences，无 relocation、新增 identity 或
 临时 approval。总进度仍为 75/82，下一子切片 M11-12bc48 继续 Broker aggregate/leaf 或 Store WAL/queue/timer/HA owner。
 
+Lite subscription control runtime capability 随 Issue #8507 收窄：`LiteSubscriptionCtlProcessor` 删除完整
+`ArcMut<BrokerRuntimeInner<MS>>` owner，改持容量 policy、共享 subscription registry/event dispatcher/group view、弱
+consumer-offset/Store provider 和弱 POP Lite order-info provider；provider 退出后 query/max-offset/reset/order clear
+均 fail closed。partial/complete add/remove、exclusive、quota、offset reset 与 order-info 清理语义保持不变。
+`LiteManager` 与 `LiteSubscriptionCtl` 的无状态外层 wrapper 同步改为标准 Arc，六个 LiteManager 路由共享单一 processor。
+ArcMut 快照降至 269 identities/805 occurrences（production 129/349、test 126/416、compatibility 14/40、Broker
+production 47/115、Store production 82/234），净删除 2 个 production identity/12 occurrences 与 2 个 test
+identity/2 occurrences，无 relocation、新增 identity 或临时 approval。总进度仍为 75/82，下一子切片 M11-12bc49
+继续 Broker aggregate/leaf 或 Store WAL/queue/timer/HA owner。
+
 ### 9.3 证据目录
 
 - 运行期生成物：`target/architecture-refactor/Mxx/<run-id>/`，不提交 Git。
