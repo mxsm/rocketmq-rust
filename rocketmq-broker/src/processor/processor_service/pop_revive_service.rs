@@ -40,7 +40,6 @@ use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_common::MessageAccessor::MessageAccessor;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_runtime::TaskGroup;
-use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_status_enum::AppendMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::pop::ack_msg::AckMsg;
@@ -53,8 +52,8 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
-use crate::broker_runtime::BrokerRuntimeInner;
 use crate::metrics::pop_metrics_manager;
+use crate::processor::pop_message_processor::capability::PopReviveContext;
 use crate::processor::pop_message_processor::PopMessageProcessor;
 use crate::store_read::decode_read_outcome;
 
@@ -70,7 +69,7 @@ const INFLIGHT_WAIT_INTERVAL_MS: u64 = 100;
 pub struct PopReviveService<MS: MessageStore> {
     ck_rewrite_intervals_in_seconds: [i32; 17],
     queue_id: i32,
-    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+    context: Arc<PopReviveContext<MS>>,
     revive_topic: CheetahString,
     current_revive_message_timestamp: AtomicI64,
     should_run_pop_revive: Arc<AtomicBool>,
@@ -81,19 +80,15 @@ pub struct PopReviveService<MS: MessageStore> {
     task_group: Mutex<Option<TaskGroup>>,
 }
 impl<MS: MessageStore> PopReviveService<MS> {
-    pub fn new(
-        revive_topic: CheetahString,
-        queue_id: i32,
-        broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
-    ) -> Self {
-        let revive_offset = broker_runtime_inner.consumer_offset_manager().query_offset(
+    pub fn new(revive_topic: CheetahString, queue_id: i32, context: Arc<PopReviveContext<MS>>) -> Self {
+        let revive_offset = context.offsets.query_offset(
             &CheetahString::from_static_str(PopAckConstants::REVIVE_GROUP),
             &revive_topic,
             queue_id,
         );
         Self {
             queue_id,
-            broker_runtime_inner,
+            context,
             revive_topic,
             current_revive_message_timestamp: AtomicI64::new(-1),
             should_run_pop_revive: Arc::new(AtomicBool::new(false)),
@@ -116,7 +111,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
             msg_inner.set_topic(CheetahString::from_string(KeyBuilder::build_pop_retry_topic(
                 pop_check_point.topic.as_str(),
                 pop_check_point.cid.as_str(),
-                self.broker_runtime_inner.broker_config().enable_retry_topic_v2,
+                self.context.policy.snapshot().enable_retry_topic_v2,
             )));
         } else {
             // Already retry topic -> keep it unchanged
@@ -152,11 +147,9 @@ impl<MS: MessageStore> PopReviveService<MS> {
         let retry_topic = msg_inner.get_topic().clone();
         self.add_retry_topic_if_not_exist(&retry_topic, &pop_check_point.cid)
             .await;
-        let put_message_result = self
-            .broker_runtime_inner
-            .escape_bridge()
-            .put_message_to_specific_queue(msg_inner)
-            .await;
+        let Ok(put_message_result) = self.context.store.put_specific(msg_inner).await else {
+            return false;
+        };
         if put_message_result.append_message_result().is_none()
             || put_message_result.append_message_result().unwrap().status != AppendMessageStatus::PutOk
         {
@@ -168,8 +161,8 @@ impl<MS: MessageStore> PopReviveService<MS> {
         }
 
         // Update statistics after successful put
-        self.broker_runtime_inner
-            .pop_inflight_message_counter()
+        self.context
+            .inflight
             .decrement_in_flight_message_num_checkpoint(pop_check_point);
 
         // Record observability metrics
@@ -178,15 +171,11 @@ impl<MS: MessageStore> PopReviveService<MS> {
             put_message_result.put_message_status(),
         );
 
-        self.broker_runtime_inner
-            .broker_stats_manager()
-            .inc_broker_put_nums(&pop_check_point.topic, 1);
-        self.broker_runtime_inner
-            .broker_stats_manager()
-            .inc_topic_put_nums(&retry_topic, 1, 1);
+        self.context.stats.inc_broker_put_nums(&pop_check_point.topic, 1);
+        self.context.stats.inc_topic_put_nums(&retry_topic, 1, 1);
         if let Some(append_result) = put_message_result.append_message_result() {
-            self.broker_runtime_inner
-                .broker_stats_manager()
+            self.context
+                .stats
                 .inc_topic_put_size(&retry_topic, append_result.wrote_bytes);
         }
 
@@ -194,11 +183,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
     }
 
     pub async fn add_retry_topic_if_not_exist(&self, topic: &CheetahString, consumer_group: &CheetahString) {
-        if let Some(_topic_config) = self
-            .broker_runtime_inner
-            .topic_config_manager()
-            .select_topic_config(topic)
-        {
+        if self.context.topics.select_topic_config(topic).is_some() {
             return;
         }
         let mut topic_config = TopicConfig::new(topic.clone());
@@ -207,34 +192,19 @@ impl<MS: MessageStore> PopReviveService<MS> {
         topic_config.topic_filter_type = TopicFilterType::SingleTag;
         topic_config.perm = 6;
         topic_config.topic_sys_flag = 0;
-        let _ = self.broker_runtime_inner.topic_config_manager().update_topic_config(
-            topic_config,
-            self.broker_runtime_inner.topic_config_state_machine_version(),
-        );
-        if let Err(error) = self
-            .broker_runtime_inner
-            .topic_config_coordinator()
-            .persist_and_wait()
-            .await
-        {
+        self.context.update_retry_topic(topic_config);
+        if let Err(error) = self.context.topic_coordinator.persist_and_wait().await {
             warn!(?error, topic = %topic, "failed to persist POP retry topic");
         }
         self.init_pop_retry_offset(topic, consumer_group);
     }
 
     fn init_pop_retry_offset(&self, topic: &CheetahString, consumer_group: &CheetahString) {
-        let offset = self
-            .broker_runtime_inner
-            .consumer_offset_manager()
-            .query_offset(consumer_group, topic, 0);
+        let offset = self.context.offsets.query_offset(consumer_group, topic, 0);
         if offset < 0 {
-            self.broker_runtime_inner.consumer_offset_manager().commit_offset(
-                "initPopRetryOffset".into(),
-                consumer_group,
-                topic,
-                0,
-                0,
-            );
+            self.context
+                .offsets
+                .commit_offset("initPopRetryOffset".into(), consumer_group, topic, 0, 0);
         }
     }
 
@@ -255,7 +225,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
             if !self.should_run_pop_revive.load(Ordering::Acquire) {
                 return None;
             }
-            self.broker_runtime_inner.consumer_offset_manager().commit_offset(
+            self.context.offsets.commit_offset(
                 CheetahString::from_static_str(PopAckConstants::LOCAL_HOST),
                 &CheetahString::from_static_str(PopAckConstants::REVIVE_GROUP),
                 &self.revive_topic,
@@ -275,18 +245,19 @@ impl<MS: MessageStore> PopReviveService<MS> {
         nums: i32,
         de_compress_body: bool,
     ) -> Option<ReadOutcome<MessageExt>> {
-        let message_store = self.broker_runtime_inner.message_store()?;
-        let get_message_result = message_store
+        let get_message_result = self
+            .context
+            .store
             .get_message(
                 group, topic, queue_id, offset, nums, //    128 * 1024 * 1024,
                 None,
             )
-            .await;
+            .await
+            .ok()?;
         if let Some(get_message_result) = get_message_result {
             decode_read_outcome(get_message_result, de_compress_body)
         } else {
-            if let Some(store) = self.broker_runtime_inner.message_store() {
-                let max_queue_offset = store.get_max_offset_in_queue(topic, queue_id);
+            if let Ok(max_queue_offset) = self.context.store.max_offset(topic, queue_id) {
                 if max_queue_offset > offset {
                     error!(
                         "get message from store return null. topic={}, groupId={}, requestOffset={}, maxQueueOffset={}",
@@ -308,10 +279,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
         }
 
         this.shutdown.store(false, Ordering::Release);
-        let Some(task_group) = this.broker_runtime_inner.broker_task_group_or_current(
-            format!("rocketmq-broker.pop-revive.{}", this.queue_id),
-            "failed to start PopReviveService outside Tokio runtime",
-        ) else {
+        let Some(task_group) = this.context.task_group(this.queue_id) else {
             this.running.store(false, Ordering::Release);
             warn!(
                 revive_queue_id = this.queue_id,
@@ -329,10 +297,10 @@ impl<MS: MessageStore> PopReviveService<MS> {
                     break;
                 }
 
-                if current_millis() < service.broker_runtime_inner.should_start_time().load(Relaxed) {
+                if current_millis() < service.context.should_start_time.load(Relaxed) {
                     info!(
                         "PopReviveService Ready to run after {}",
-                        service.broker_runtime_inner.should_start_time().load(Relaxed)
+                        service.context.should_start_time.load(Relaxed)
                     );
                     tokio::select! {
                         _ = cancellation_token.cancelled() => break,
@@ -343,23 +311,17 @@ impl<MS: MessageStore> PopReviveService<MS> {
                 tokio::select! {
                     _ = cancellation_token.cancelled() => break,
                     _ = tokio::time::sleep(tokio::time::Duration::from_millis(
-                        service.broker_runtime_inner.broker_config().revive_interval,
+                        service.context.policy.snapshot().revive_interval,
                     )) => {}
                 }
                 if !service.should_run_pop_revive.load(Ordering::Acquire) {
                     continue;
                 }
-                if !service
-                    .broker_runtime_inner
-                    .message_store()
-                    .unwrap()
-                    .get_message_store_config()
-                    .timer_wheel_enable
-                {
+                if !service.context.policy.snapshot().timer_wheel_enable {
                     info!("skip revive topic because timerWheelEnable is false");
                     continue;
                 }
-                if service.broker_runtime_inner.broker_config().enable_pop_log {
+                if service.context.policy.snapshot().enable_pop_log {
                     info!(
                         "start revive topic={}, reviveQueueId={}",
                         service.revive_topic, service.queue_id
@@ -393,7 +355,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
                         .current_revive_message_timestamp
                         .store(current_millis() as i64, Ordering::Release);
                 }
-                if service.broker_runtime_inner.broker_config().enable_pop_log {
+                if service.context.policy.snapshot().enable_pop_log {
                     info!(
                         "reviveQueueId={}, revive finish,old offset is {}, new offset is {}, ckDelay={}  ",
                         service.queue_id, consume_revive_obj.old_offset, consume_revive_obj.new_offset, delay
@@ -404,10 +366,10 @@ impl<MS: MessageStore> PopReviveService<MS> {
                     tokio::select! {
                         _ = cancellation_token.cancelled() => break,
                         _ = tokio::time::sleep(tokio::time::Duration::from_millis(
-                            slow * service.broker_runtime_inner.broker_config().revive_interval,
+                            slow * service.context.policy.snapshot().revive_interval,
                         )) => {}
                     }
-                    if slow < service.broker_runtime_inner.broker_config().revive_max_slow {
+                    if slow < service.context.policy.snapshot().revive_max_slow {
                         slow += 1;
                     }
                 }
@@ -447,14 +409,14 @@ impl<MS: MessageStore> PopReviveService<MS> {
         let mut mock_point_map = HashMap::new();
         let _start_scan_time = current_millis();
         let mut end_time = 0;
-        let consume_offset = self.broker_runtime_inner.consumer_offset_manager().query_offset(
+        let consume_offset = self.context.offsets.query_offset(
             &CheetahString::from_static_str(PopAckConstants::REVIVE_GROUP),
             &self.revive_topic,
             self.queue_id,
         );
         let old_offset = self.revive_offset.load(Ordering::Acquire).max(consume_offset);
         consume_revive_obj.old_offset = old_offset;
-        if self.broker_runtime_inner.broker_config().enable_pop_log {
+        if self.context.policy.snapshot().enable_pop_log {
             info!("reviveQueueId={}, old offset is {}", self.queue_id, old_offset);
         }
         let mut offset = old_offset + 1;
@@ -474,12 +436,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
             if message_exts.is_none() || message_exts.as_ref().unwrap().is_empty() {
                 let old = end_time;
                 // Safely get timer message store delays
-                let (timer_delay, commit_log_delay) = self
-                    .broker_runtime_inner
-                    .message_store()
-                    .and_then(|s| s.get_timer_message_store())
-                    .map(|timer_store| (timer_store.get_dequeue_behind(), timer_store.get_enqueue_behind()))
-                    .unwrap_or((0, 0));
+                let (timer_delay, commit_log_delay) = self.context.store.timer_lag().unwrap_or((0, 0));
                 if end_time != 0
                     && current_millis() - end_time > (3 * PopAckConstants::SECOND) as u64
                     && timer_delay <= 0
@@ -487,7 +444,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
                 {
                     end_time = current_millis();
                 }
-                if self.broker_runtime_inner.broker_config().enable_pop_log {
+                if self.context.policy.snapshot().enable_pop_log {
                     info!(
                         "reviveQueueId={}, offset is {}, can not get new msg, old endTime {}, new endTime {}, \
                          timerDelay={}, commitLogDelay={}",
@@ -509,7 +466,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
                 no_msg_count = 0;
             }
 
-            if current_millis() > self.broker_runtime_inner.broker_config().revive_scan_time {
+            if current_millis() > self.context.policy.snapshot().revive_scan_time {
                 info!("reviveQueueId={}, scan timeout", self.queue_id);
                 break;
             }
@@ -517,7 +474,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
             for message_ext in message_exts.unwrap() {
                 if PopAckConstants::CK_TAG == message_ext.tags().unwrap_or_default() {
                     // let raw = String::from_utf8(message_ext.get_body().to_vec()).unwrap();
-                    if self.broker_runtime_inner.broker_config().enable_pop_log {
+                    if self.context.policy.snapshot().enable_pop_log {
                         info!(
                             "reviveQueueId={},find ck, offset:{}",
                             message_ext.queue_id, message_ext.queue_offset
@@ -608,7 +565,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
                             error!("invalid ack index, {}, {}", ack_msg, point);
                         }
                     } else {
-                        if !self.broker_runtime_inner.broker_config().enable_skip_long_awaiting_ack {
+                        if !self.context.policy.snapshot().enable_skip_long_awaiting_ack {
                             continue;
                         }
                         if self.mock_ck_for_ack(&message_ext, &ack_msg, &merge_key, &mut mock_point_map)
@@ -619,7 +576,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
                     }
                 } else if PopAckConstants::BATCH_ACK_TAG == message_ext.tags().unwrap_or_default() {
                     //let raw = String::from_utf8(message_ext.get_body().to_vec()).unwrap();
-                    if self.broker_runtime_inner.broker_config().enable_pop_log {
+                    if self.context.policy.snapshot().enable_pop_log {
                         info!(
                             "reviveQueueId={}, find batch ack, offset:{},",
                             message_ext.queue_id, message_ext.queue_offset,
@@ -666,7 +623,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
                             }
                         }
                     } else {
-                        if !self.broker_runtime_inner.broker_config().enable_skip_long_awaiting_ack {
+                        if !self.context.policy.snapshot().enable_skip_long_awaiting_ack {
                             continue;
                         }
                         if self.mock_ck_for_ack(&message_ext, &b_ack_msg, &merge_key, &mut mock_point_map)
@@ -696,7 +653,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
     ) -> bool {
         let now = current_millis();
         let ack_wait_time = now - message_ext.get_deliver_time_ms();
-        let revive_ack_wait_ms = self.broker_runtime_inner.broker_config().revive_ack_wait_ms;
+        let revive_ack_wait_ms = self.context.policy.snapshot().revive_ack_wait_ms;
         if ack_wait_time > revive_ack_wait_ms {
             // will use the revive_offset of pop_check_point to commit offset in merge_and_revive
             let mock_point = self.create_mock_ck_for_ack(ack_msg, message_ext.queue_offset());
@@ -731,7 +688,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
         let mut new_offset = consume_revive_obj.old_offset;
         let end_time = consume_revive_obj.end_time;
         let sort_list = consume_revive_obj.gen_sort_list();
-        if this.broker_runtime_inner.broker_config().enable_pop_log {
+        if this.context.policy.snapshot().enable_pop_log {
             info!("reviveQueueId={}, ck listSize={}", &this.queue_id, sort_list.len());
         }
         if !sort_list.is_empty() {
@@ -764,12 +721,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
                 pop_check_point.topic.as_str(),
                 pop_check_point.cid.as_str(),
             ));
-            if this
-                .broker_runtime_inner
-                .topic_config_manager()
-                .select_topic_config(&normal_topic)
-                .is_none()
-            {
+            if this.context.topics.select_topic_config(&normal_topic).is_none() {
                 info!(
                     "reviveQueueId={}, can not get normal topic {}, then continue",
                     this.queue_id, pop_check_point.topic
@@ -778,8 +730,8 @@ impl<MS: MessageStore> PopReviveService<MS> {
                 continue;
             }
             if this
-                .broker_runtime_inner
-                .subscription_group_manager()
+                .context
+                .subscriptions
                 .find_subscription_group_config(&pop_check_point.cid)
                 .is_none()
             {
@@ -840,7 +792,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
                 );
                 return Ok(());
             }
-            this.broker_runtime_inner.consumer_offset_manager().commit_offset(
+            this.context.offsets.commit_offset(
                 CheetahString::from_static_str(PopAckConstants::LOCAL_HOST),
                 &CheetahString::from_static_str(PopAckConstants::REVIVE_GROUP),
                 &this.revive_topic,
@@ -856,10 +808,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
     async fn re_put_ck(&self, old_ck: &PopCheckPoint, pair: &(i64, bool)) {
         let re_put_times = old_ck.parse_re_put_times();
         if re_put_times >= self.ck_rewrite_intervals_in_seconds.len() as i32
-            && self
-                .broker_runtime_inner
-                .broker_config()
-                .skip_when_ck_re_put_reach_max_times
+            && self.context.policy.snapshot().skip_when_ck_re_put_reach_max_times
         {
             info!(
                 "rePut CK reach max times, drop it. {}, {}, {:?}, {}-{}, {}, {}, {}",
@@ -900,17 +849,12 @@ impl<MS: MessageStore> PopReviveService<MS> {
         }
 
         let ck_msg = PopMessageProcessor::<MS>::build_ck_msg(
-            self.broker_runtime_inner.store_host(),
+            self.context.policy.snapshot().store_host,
             &new_ck,
             self.queue_id,
             self.revive_topic.clone(),
         );
-        self.broker_runtime_inner
-            .message_store()
-            .unwrap()
-            .mut_from_ref()
-            .put_message(ck_msg)
-            .await;
+        let _ = self.context.store.put_local(ck_msg).await;
     }
 
     async fn revive_msg_from_ck(this: Arc<Self>, pop_check_point: &PopCheckPoint) {
@@ -996,7 +940,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
             match ck_to_remove {
                 Some(ck) => {
                     // Commit offset and remove
-                    this.broker_runtime_inner.consumer_offset_manager().commit_offset(
+                    this.context.offsets.commit_offset(
                         CheetahString::from_static_str(PopAckConstants::LOCAL_HOST),
                         &CheetahString::from_static_str(PopAckConstants::REVIVE_GROUP),
                         &this.revive_topic,
@@ -1023,8 +967,8 @@ impl<MS: MessageStore> PopReviveService<MS> {
         let topic = pop_check_point.get_topic();
         let queue_id = pop_check_point.get_queue_id();
         let broker_name = pop_check_point.get_broker_name().unwrap();
-        self.broker_runtime_inner
-            .escape_bridge()
+        self.context
+            .store
             .get_message_async(topic, offset, queue_id, broker_name, false)
             .await
     }
@@ -1035,9 +979,10 @@ impl<MS: MessageStore> PopReviveService<MS> {
             return 0;
         }
         let max_offset = self
-            .broker_runtime_inner
-            .message_store_unchecked()
-            .get_max_offset_in_queue(&self.revive_topic, self.queue_id);
+            .context
+            .store
+            .max_offset(&self.revive_topic, self.queue_id)
+            .unwrap_or(0);
         let revive_offset = self.revive_offset.load(Ordering::Acquire);
         if max_offset - revive_offset > 1 {
             let now = current_millis() as i64;
@@ -1051,9 +996,10 @@ impl<MS: MessageStore> PopReviveService<MS> {
             return 0;
         }
         let max_offset = self
-            .broker_runtime_inner
-            .message_store_unchecked()
-            .get_max_offset_in_queue(&self.revive_topic, self.queue_id);
+            .context
+            .store
+            .max_offset(&self.revive_topic, self.queue_id)
+            .unwrap_or(0);
         let revive_offset = self.revive_offset.load(Ordering::Acquire);
         let diff = max_offset - revive_offset;
         std::cmp::max(0, diff)

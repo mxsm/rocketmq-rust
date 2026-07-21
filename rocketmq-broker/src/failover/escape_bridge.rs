@@ -269,6 +269,20 @@ impl<MS: MessageStore> EscapeBridge<MS> {
             .await
     }
 
+    pub(crate) async fn get_message_with_filter_from_local_store(
+        &self,
+        group: &CheetahString,
+        topic: &CheetahString,
+        queue_id: i32,
+        offset: i64,
+        nums: i32,
+        message_filter: Option<ArcMessageFilter>,
+    ) -> Result<Option<GetMessageResult>, MessageStoreUnavailable> {
+        self.message_store
+            .get_message_with_filter(group, topic, queue_id, offset, nums, message_filter)
+            .await
+    }
+
     #[allow(clippy::too_many_arguments, reason = "preserves the Store pull read contract")]
     pub(crate) async fn get_message_with_size_limit_from_local_store(
         &self,
@@ -337,6 +351,10 @@ impl<MS: MessageStore> EscapeBridge<MS> {
         queue_id: i32,
     ) -> Result<bool, MessageStoreUnavailable> {
         self.message_store.check_in_mem_by_consume_offset(topic, queue_id)
+    }
+
+    pub(crate) fn local_timer_lag(&self) -> Result<(i64, i64), MessageStoreUnavailable> {
+        self.message_store.timer_lag()
     }
 }
 

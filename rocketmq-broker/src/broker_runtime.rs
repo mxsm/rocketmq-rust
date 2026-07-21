@@ -190,6 +190,13 @@ use crate::processor::pop_lite_message_processor::PopLiteMessageProcessor;
 use crate::processor::pop_lite_message_processor::PopLiteMessageProcessorContext;
 use crate::processor::pop_lite_message_processor::PopLiteMessageStoreCapability;
 use crate::processor::pop_lite_message_processor::PopLiteOffsetCapability;
+use crate::processor::pop_message_processor::capability::PopBufferMergeContext;
+use crate::processor::pop_message_processor::capability::PopConsumerCapability;
+use crate::processor::pop_message_processor::capability::PopMessageProcessorContext;
+use crate::processor::pop_message_processor::capability::PopOrderCapability;
+use crate::processor::pop_message_processor::capability::PopPolicyState;
+use crate::processor::pop_message_processor::capability::PopReviveContext;
+use crate::processor::pop_message_processor::capability::PopStoreCapability;
 use crate::processor::pop_message_processor::PopMessageProcessor;
 use crate::processor::pop_message_processor::QueueLockManager;
 use crate::processor::processor_service::PopReviveService;
@@ -1131,6 +1138,7 @@ impl BrokerRuntime {
         let send_message_policy_state =
             SendMessagePolicyState::from_configs(&broker_config, &message_store_config, store_host);
         let pull_message_policy_state = PullMessagePolicyState::from_configs(&broker_config, &message_store_config);
+        let pop_policy_state = PopPolicyState::from_configs(&broker_config, &message_store_config, store_host);
         let escape_bridge_policy_state = EscapeBridgePolicyState::from_configs(&broker_config, &message_store_config);
 
         let mut inner = ArcMut::new(BrokerRuntimeInner::<GenericMessageStore> {
@@ -1141,6 +1149,7 @@ impl BrokerRuntime {
             message_store_config: message_store_config.clone(),
             send_message_policy_state,
             pull_message_policy_state,
+            pop_policy_state,
             escape_bridge_policy_state,
             //server_config,
             topic_config_manager: None,
@@ -1351,6 +1360,31 @@ impl BrokerRuntime {
     #[cfg(test)]
     pub(crate) fn pull_message_context_for_test(&self) -> Arc<PullMessageProcessorContext<GenericMessageStore>> {
         self.inner.build_pull_message_context()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pop_message_processor_for_test(&self) -> Arc<PopMessageProcessor<GenericMessageStore>> {
+        self.inner.build_pop_message_processor()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn seed_pop_topic_and_group_for_test(&mut self, topic: &str, group: &str) {
+        let _ = self
+            .inner
+            .topic_config_manager()
+            .update_topic_config(TopicConfig::with_queues(topic, 1, 1), 0);
+        let mut config = SubscriptionGroupConfig::new(CheetahString::from_slice(group));
+        self.inner
+            .subscription_group_manager_mut()
+            .update_subscription_group_config(&mut config);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_pop_consumer_filter_data_for_test(&self, topic: &str, group: &str) -> bool {
+        self.inner
+            .consumer_filter_manager()
+            .get_consumer_filter_data(&topic.into(), &group.into())
+            .is_some()
     }
 
     fn admin_runtime_handle(&self) -> BrokerAdminRuntimeHandle<GenericMessageStore> {
@@ -2562,7 +2596,7 @@ impl BrokerRuntime {
         }
         self.inner.pull_request_hold_service = Some(Arc::clone(&pull_request_hold_service));
 
-        let pop_message_processor = PopMessageProcessor::new(self.inner.clone());
+        let pop_message_processor = self.inner.build_pop_message_processor();
         let polling_count_provider = pop_message_processor.polling_count_provider();
         self.inner.pop_message_processor = Some(pop_message_processor.clone());
         let pop_lite_topic_config_manager = self.inner.topic_config_manager_handle();
@@ -2594,12 +2628,13 @@ impl BrokerRuntime {
         self.inner.pop_lite_message_processor = Some(pop_lite_message_processor.clone());
         let ack_policy = AckMessagePolicy::from_config(self.inner.broker_config(), self.inner.store_host());
         let is_run_pop_revive = self.inner.broker_config().broker_identity.broker_id == MASTER_ID;
+        let pop_revive_context = self.inner.build_pop_revive_context();
         let pop_revive_services = (0..self.inner.broker_config().revive_queue_num)
             .map(|queue_id| {
                 let service = Arc::new(PopReviveService::new(
                     ack_policy.revive_topic().clone(),
                     queue_id as i32,
-                    self.inner.clone(),
+                    Arc::clone(&pop_revive_context),
                 ));
                 service.set_should_run_pop_revive(is_run_pop_revive);
                 service
@@ -3853,6 +3888,7 @@ pub(crate) struct BrokerRuntimeInner<MS: MessageStore> {
     message_store_config: Arc<MessageStoreConfig>,
     send_message_policy_state: SendMessagePolicyState,
     pull_message_policy_state: PullMessagePolicyState,
+    pop_policy_state: PopPolicyState,
     escape_bridge_policy_state: EscapeBridgePolicyState,
     topic_config_manager: Option<Arc<TopicConfigManager>>,
     topic_config_coordinator: Option<Arc<TopicConfigCoordinator>>,
@@ -3950,6 +3986,62 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             PullMessageStoreCapability::new(&escape_bridge),
             self.cold_data_cg_ctr_service_handle(),
             self.cold_data_pull_request_hold_service.clone(),
+        ))
+    }
+
+    fn build_pop_message_processor(&self) -> Arc<PopMessageProcessor<MS>> {
+        let topics = self.topic_config_manager_handle();
+        let subscriptions = self.subscription_group_manager().config_lookup();
+        let offsets = self.consumer_offset_manager_handle().request_capability();
+        let order = self.consumer_order_info_manager_handle();
+        let escape_bridge = self.escape_bridge();
+        let parent_task_group = self.broker_service_task_group();
+        let queue_lock_manager = parent_task_group
+            .clone()
+            .map(QueueLockManager::new_with_parent_task_group)
+            .unwrap_or_else(QueueLockManager::new);
+        let context = Arc::new(PopMessageProcessorContext::new(
+            self.pop_policy_state.clone(),
+            Arc::clone(&topics),
+            subscriptions.clone(),
+            PopConsumerCapability::new(self.consumer_manager()),
+            Arc::new(self.consumer_filter_manager().clone()),
+            offsets.clone(),
+            PopOrderCapability::new(&order),
+            PopStoreCapability::new(&escape_bridge),
+            self.broker_stats_manager_handle(),
+            self.pop_inflight_message_counter().clone(),
+        ));
+        let buffer_context = Arc::new(PopBufferMergeContext::new(
+            self.pop_policy_state.clone(),
+            Arc::clone(&topics),
+            subscriptions.clone(),
+            offsets,
+            PopStoreCapability::new(&escape_bridge),
+            parent_task_group.clone(),
+        ));
+        let long_polling_context = PopLongPollingServiceContext::new(
+            PopLongPollingPolicy::from_config(self.broker_config()),
+            topics,
+            subscriptions,
+            parent_task_group,
+        );
+        PopMessageProcessor::new(context, buffer_context, long_polling_context, queue_lock_manager)
+    }
+
+    fn build_pop_revive_context(&self) -> Arc<PopReviveContext<MS>> {
+        let escape_bridge = self.escape_bridge();
+        Arc::new(PopReviveContext::new(
+            self.pop_policy_state.clone(),
+            self.topic_config_manager_handle(),
+            self.topic_config_coordinator_handle(),
+            self.subscription_group_manager().config_lookup(),
+            self.consumer_offset_manager_handle().request_capability(),
+            PopStoreCapability::new(&escape_bridge),
+            self.broker_stats_manager_handle(),
+            self.pop_inflight_message_counter().clone(),
+            Arc::clone(&self.should_start_time),
+            self.broker_service_task_group(),
         ))
     }
 
@@ -4555,6 +4647,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     pub fn set_store_host(&mut self, store_host: SocketAddr) {
         self.store_host = store_host;
         self.send_message_policy_state.update_store_host(store_host);
+        self.pop_policy_state.update_store_host(store_host);
     }
 
     #[inline]
@@ -4563,6 +4656,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             .set_local_broker_id(broker_config.broker_identity.broker_id);
         self.send_message_policy_state.update_broker_config(&broker_config);
         self.pull_message_policy_state.update_broker_config(&broker_config);
+        self.pop_policy_state.update_broker_config(&broker_config);
         self.escape_bridge_policy_state.update_broker_config(&broker_config);
         self.broker_config = Arc::new(broker_config);
     }
@@ -4576,6 +4670,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             .update_message_store_config(&message_store_config);
         self.pull_message_policy_state
             .update_store_config(&message_store_config);
+        self.pop_policy_state.update_store_config(&message_store_config);
         self.escape_bridge_policy_state
             .update_message_store_config(&message_store_config);
         self.message_store_config = Arc::new(message_store_config);
@@ -5487,6 +5582,8 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         this.pull_message_policy_state.update_broker_config(&this.broker_config);
         this.pull_message_policy_state
             .update_store_config(&this.message_store_config);
+        this.pop_policy_state.update_broker_config(&this.broker_config);
+        this.pop_policy_state.update_store_config(&this.message_store_config);
         this.escape_bridge_policy_state
             .update_broker_config(&this.broker_config);
         this.escape_bridge_policy_state

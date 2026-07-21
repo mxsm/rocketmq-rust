@@ -280,6 +280,22 @@ impl<MS: MessageStore> EscapeBridgeStoreCapability<MS> {
             .await)
     }
 
+    pub(crate) async fn get_message_with_filter(
+        &self,
+        group: &CheetahString,
+        topic: &CheetahString,
+        queue_id: i32,
+        offset: i64,
+        nums: i32,
+        message_filter: Option<ArcMessageFilter>,
+    ) -> Result<Option<GetMessageResult>, MessageStoreUnavailable> {
+        let owner = self.owner()?;
+        Ok(owner
+            .store()
+            .get_message(group, topic, queue_id, offset, nums, message_filter)
+            .await)
+    }
+
     #[allow(clippy::too_many_arguments, reason = "preserves the Store pull read contract")]
     pub(crate) async fn get_message_with_size_limit(
         &self,
@@ -331,6 +347,15 @@ impl<MS: MessageStore> EscapeBridgeStoreCapability<MS> {
         queue_id: i32,
     ) -> Result<bool, MessageStoreUnavailable> {
         self.with_store(|store| store.check_in_mem_by_consume_offset(topic, queue_id, 0, 1))
+    }
+
+    pub(crate) fn timer_lag(&self) -> Result<(i64, i64), MessageStoreUnavailable> {
+        self.with_store(|store| {
+            store
+                .get_timer_message_store()
+                .map(|timer_store| (timer_store.get_dequeue_behind(), timer_store.get_enqueue_behind()))
+                .unwrap_or((0, 0))
+        })
     }
 }
 

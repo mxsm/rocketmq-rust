@@ -8,7 +8,7 @@
 > PR-M12-01～06 未开始，合计剩余 7 个
 
 剩余任务数量、M11-12 内部执行批次与 M12 六个工作包见 [`REMAINING-TASKS.md`](REMAINING-TASKS.md)：正式口径
-剩余 7 个工作包；31 个最小可审查单元已完成 6 个，当前剩余 25 个。
+剩余 7 个工作包；31 个最小可审查单元已完成 7 个，当前剩余 24 个。
 
 ## 1. 使用方式
 
@@ -953,6 +953,17 @@ ADR-013 从原 failover owner 一对一迁移到 R01 组合根后续清理；目
 快照净降至 232 identities/734 occurrences（production 99/287、test 119/407、compatibility 14/40、Broker
 production 17/53、Store production 82/234）。R02、R03、R05、R06、R07、R08 已完成，31 项执行清单剩余
 25 项；总进度仍为 75/82，下一子切片 M11-12bc59 继续 Broker/Store owner。
+
+Broker POP capability 随 Issue #8531 收口：`PopMessageProcessor`、`PopBufferMergeService` 与
+`PopReviveService` 不再持有完整 `BrokerRuntimeInner`、ArcMut 或调用 `mut_from_ref`，改持热更新
+`PopPolicyState`、显式 Topic/Subscription/Filter/Consumer/Offset/Order/Stats/Inflight capability、弱
+`EscapeBridge` Store provider 与父 `TaskGroup`。POP 请求聚合由共享可变 `GetMessageResult` 改为栈上独占值和
+串行 `&mut` 借用；普通 broker/store config 更新与 controller role-change 均发布新的 policy 代际。本组 8 个
+production identities/17 occurrences 与 3 个 test identities/3 occurrences 全部删除，无 relocation、新增
+identity 或临时 approval。reviewed ArcMut 快照净降至 221 identities/714 occurrences（production 91/270、
+test 116/404、compatibility 14/40、Broker production 9/36、Store production 82/234）。R02、R03、R04、R05、
+R06、R07、R08 已完成，31 项执行清单剩余 24 项；总进度仍为 75/82，下一子切片 M11-12bc60 继续唯一
+Broker aggregate root 或 Store owner。
 
 ### 9.3 证据目录
 
