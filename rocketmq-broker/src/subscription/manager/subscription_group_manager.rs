@@ -22,6 +22,7 @@ use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use rocketmq_common::common::attribute::attribute_util::AttributeUtil;
 use rocketmq_common::common::attribute::subscription_group_attributes::SubscriptionGroupAttributes;
+use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_common::common::mix_all::is_sys_consumer_group;
 use rocketmq_common::common::topic::TopicValidator;
@@ -30,8 +31,8 @@ use rocketmq_remoting::protocol::data_version_facade::DataVersionExt;
 use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 use rocketmq_remoting::protocol::DataVersion;
 use rocketmq_remoting::protocol::RemotingSerializable;
-use rocketmq_rust::ArcMut;
-use rocketmq_store::base::message_store::MessageStore;
+use rocketmq_store::base::message_store::StateMachineVersionView;
+use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use serde::Deserialize;
 use serde::Serialize;
 use tracing::error;
@@ -39,14 +40,36 @@ use tracing::info;
 use tracing::warn;
 
 use crate::broker_path_config_helper::get_subscription_group_path;
-use crate::broker_runtime::BrokerRuntimeInner;
 #[cfg(feature = "rocksdb_store")]
 use crate::config::rocksdb_manager::RocksDbBrokerConfigManager;
 
 pub const CHARACTER_MAX_LENGTH: usize = 255;
 pub const TOPIC_MAX_LENGTH: usize = 127;
 
-pub(crate) struct SubscriptionGroupManager<MS: MessageStore> {
+#[derive(Clone)]
+pub(crate) struct SubscriptionGroupManagerConfig {
+    store_path_root_dir: CheetahString,
+    auto_create_subscription_group: bool,
+    #[cfg(feature = "rocksdb_store")]
+    real_time_persist_rocksdb_config: bool,
+}
+
+impl SubscriptionGroupManagerConfig {
+    pub(crate) fn from_configs(broker_config: &BrokerConfig, message_store_config: &MessageStoreConfig) -> Self {
+        #[cfg(not(feature = "rocksdb_store"))]
+        let _ = message_store_config;
+
+        Self {
+            store_path_root_dir: broker_config.store_path_root_dir.clone(),
+            auto_create_subscription_group: broker_config.auto_create_subscription_group,
+            #[cfg(feature = "rocksdb_store")]
+            real_time_persist_rocksdb_config: message_store_config.real_time_persist_rocksdb_config,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct SubscriptionGroupManager {
     /// Subscription group configuration table (group_name -> config)
     subscription_group_table: Arc<DashMap<CheetahString, Arc<SubscriptionGroupConfig>>>,
 
@@ -56,15 +79,24 @@ pub(crate) struct SubscriptionGroupManager<MS: MessageStore> {
     /// Data version for tracking configuration changes
     data_version: Arc<parking_lot::RwLock<DataVersion>>,
 
-    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+    config: SubscriptionGroupManagerConfig,
+    state_machine_version: StateMachineVersionView,
     #[cfg(feature = "rocksdb_store")]
     rocksdb_config_manager: Option<Arc<RocksDbBrokerConfigManager>>,
 }
 
-impl<MS> SubscriptionGroupManager<MS>
-where
-    MS: MessageStore,
-{
+#[derive(Clone)]
+pub(crate) struct SubscriptionGroupConfigLookup {
+    manager: SubscriptionGroupManager,
+}
+
+impl SubscriptionGroupConfigLookup {
+    pub(crate) fn find_subscription_group_config(&self, group: &CheetahString) -> Option<Arc<SubscriptionGroupConfig>> {
+        self.manager.find_subscription_group_config(group)
+    }
+}
+
+impl SubscriptionGroupManager {
     #[inline]
     fn record_consumer_group_create_latency(start_time: Instant) {
         if let Some(metrics) = crate::metrics::broker_metrics_manager::BrokerMetricsManager::try_global() {
@@ -72,14 +104,15 @@ where
         }
     }
 
-    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> SubscriptionGroupManager<MS> {
+    pub fn new(config: SubscriptionGroupManagerConfig, state_machine_version: StateMachineVersionView) -> Self {
         let mut manager = Self {
             subscription_group_table: Arc::new(DashMap::new()),
             forbidden_table: Arc::new(DashMap::new()),
             data_version: Arc::new(parking_lot::RwLock::new(
                 rocketmq_remoting::protocol::data_version_facade::new_data_version(),
             )),
-            broker_runtime_inner,
+            config,
+            state_machine_version,
             #[cfg(feature = "rocksdb_store")]
             rocksdb_config_manager: None,
         };
@@ -89,10 +122,11 @@ where
 
     #[cfg(feature = "rocksdb_store")]
     pub(crate) fn new_with_rocksdb_config_manager(
-        broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+        config: SubscriptionGroupManagerConfig,
+        state_machine_version: StateMachineVersionView,
         rocksdb_config_manager: Arc<RocksDbBrokerConfigManager>,
     ) -> Self {
-        let mut manager = Self::new(broker_runtime_inner);
+        let mut manager = Self::new(config, state_machine_version);
         manager.rocksdb_config_manager = Some(rocksdb_config_manager);
         manager
     }
@@ -151,6 +185,10 @@ where
     /// Get the subscription group table
     pub fn subscription_group_table(&self) -> &Arc<DashMap<CheetahString, Arc<SubscriptionGroupConfig>>> {
         &self.subscription_group_table
+    }
+
+    pub(crate) fn config_lookup(&self) -> SubscriptionGroupConfigLookup {
+        SubscriptionGroupConfigLookup { manager: self.clone() }
     }
 
     /// Get the forbidden table
@@ -306,13 +344,9 @@ where
     }
 
     fn update_data_version(&self) {
-        let state_machine_version = self
-            .broker_runtime_inner
-            .message_store()
-            .map(|store| store.get_state_machine_version())
-            .unwrap_or(0);
-
-        self.data_version.write().next_version_with(state_machine_version);
+        self.data_version
+            .write()
+            .next_version_with(self.state_machine_version.get());
     }
 
     pub fn data_version(&self) -> Arc<parking_lot::RwLock<DataVersion>> {
@@ -490,11 +524,7 @@ where
         &self,
         rocksdb_config_manager: &RocksDbBrokerConfigManager,
     ) -> Result<(), rocketmq_error::RocketMQError> {
-        if self
-            .broker_runtime_inner
-            .message_store_config()
-            .real_time_persist_rocksdb_config
-        {
+        if self.config.real_time_persist_rocksdb_config {
             rocksdb_config_manager.flush_wal()?;
         }
         Ok(())
@@ -541,7 +571,7 @@ where
     }
 }
 
-impl<MS: MessageStore> ConfigManager for SubscriptionGroupManager<MS> {
+impl ConfigManager for SubscriptionGroupManager {
     fn load(&self) -> bool {
         #[cfg(feature = "rocksdb_store")]
         if self.rocksdb_config_manager.is_some() {
@@ -573,7 +603,7 @@ impl<MS: MessageStore> ConfigManager for SubscriptionGroupManager<MS> {
     }
 
     fn config_file_path(&self) -> String {
-        get_subscription_group_path(self.broker_runtime_inner.broker_config().store_path_root_dir.as_str())
+        get_subscription_group_path(self.config.store_path_root_dir.as_str())
     }
 
     fn encode_pretty(&self, pretty_format: bool) -> String {
@@ -629,10 +659,7 @@ impl<MS: MessageStore> ConfigManager for SubscriptionGroupManager<MS> {
     }
 }
 
-impl<MS> SubscriptionGroupManager<MS>
-where
-    MS: MessageStore,
-{
+impl SubscriptionGroupManager {
     pub fn contains_subscription_group(&self, group: &CheetahString) -> bool {
         if group.is_empty() {
             return false;
@@ -643,8 +670,7 @@ where
     pub fn find_subscription_group_config(&self, group: &CheetahString) -> Option<Arc<SubscriptionGroupConfig>> {
         let mut subscription_group_config = self.find_subscription_group_config_inner(group);
         if subscription_group_config.is_none()
-            && (self.broker_runtime_inner.broker_config().auto_create_subscription_group
-                || is_sys_consumer_group(group))
+            && (self.config.auto_create_subscription_group || is_sys_consumer_group(group))
         {
             let start_time = Instant::now();
             if group.len() > CHARACTER_MAX_LENGTH || TopicValidator::is_topic_or_group_illegal(group) {
@@ -1198,27 +1224,25 @@ mod tests {
         use rocketmq_common::common::broker::broker_config::BrokerConfig;
         use rocketmq_store::config::message_store_config::MessageStoreConfig;
 
-        use crate::broker_runtime::BrokerRuntime;
         use crate::config::rocksdb_manager::RocksDbBrokerConfigManager;
         use crate::config::rocksdb_manager::RocksDbBrokerConfigManagerConfig;
 
         let temp_dir = tempfile::TempDir::new().expect("temp dir should be created");
         let root = CheetahString::from_string(temp_dir.path().to_string_lossy().to_string());
-        let mut runtime = BrokerRuntime::new(
-            Arc::new(BrokerConfig {
-                store_path_root_dir: root.clone(),
-                ..BrokerConfig::default()
-            }),
-            Arc::new(MessageStoreConfig {
-                store_path_root_dir: root,
-                real_time_persist_rocksdb_config: true,
-                ..MessageStoreConfig::default()
-            }),
-        );
-        let inner = runtime.inner_for_test().clone();
+        let broker_config = BrokerConfig {
+            store_path_root_dir: root.clone(),
+            ..BrokerConfig::default()
+        };
+        let message_store_config = MessageStoreConfig {
+            store_path_root_dir: root,
+            real_time_persist_rocksdb_config: true,
+            ..MessageStoreConfig::default()
+        };
+        let manager_config = SubscriptionGroupManagerConfig::from_configs(&broker_config, &message_store_config);
         let rocksdb_path = temp_dir.path().join("config").join("subscriptionGroups");
         let mut manager = SubscriptionGroupManager::new_with_rocksdb_config_manager(
-            inner.clone(),
+            manager_config.clone(),
+            StateMachineVersionView::default(),
             Arc::new(
                 RocksDbBrokerConfigManager::open(RocksDbBrokerConfigManagerConfig::subscription_group(
                     rocksdb_path.clone(),
@@ -1235,7 +1259,8 @@ mod tests {
         drop(manager);
 
         let restarted = SubscriptionGroupManager::new_with_rocksdb_config_manager(
-            inner,
+            manager_config,
+            StateMachineVersionView::default(),
             Arc::new(
                 RocksDbBrokerConfigManager::open(RocksDbBrokerConfigManagerConfig::subscription_group(rocksdb_path))
                     .expect("rocksdb config manager should reopen"),
@@ -1253,27 +1278,25 @@ mod tests {
         use rocketmq_common::common::broker::broker_config::BrokerConfig;
         use rocketmq_store::config::message_store_config::MessageStoreConfig;
 
-        use crate::broker_runtime::BrokerRuntime;
         use crate::config::rocksdb_manager::RocksDbBrokerConfigManager;
         use crate::config::rocksdb_manager::RocksDbBrokerConfigManagerConfig;
 
         let temp_dir = tempfile::TempDir::new().expect("temp dir should be created");
         let root = CheetahString::from_string(temp_dir.path().to_string_lossy().to_string());
-        let mut runtime = BrokerRuntime::new(
-            Arc::new(BrokerConfig {
-                store_path_root_dir: root.clone(),
-                ..BrokerConfig::default()
-            }),
-            Arc::new(MessageStoreConfig {
-                store_path_root_dir: root,
-                real_time_persist_rocksdb_config: true,
-                ..MessageStoreConfig::default()
-            }),
-        );
-        let inner = runtime.inner_for_test().clone();
+        let broker_config = BrokerConfig {
+            store_path_root_dir: root.clone(),
+            ..BrokerConfig::default()
+        };
+        let message_store_config = MessageStoreConfig {
+            store_path_root_dir: root,
+            real_time_persist_rocksdb_config: true,
+            ..MessageStoreConfig::default()
+        };
+        let manager_config = SubscriptionGroupManagerConfig::from_configs(&broker_config, &message_store_config);
         let rocksdb_path = temp_dir.path().join("config").join("subscriptionGroups-delete");
         let mut manager = SubscriptionGroupManager::new_with_rocksdb_config_manager(
-            inner.clone(),
+            manager_config.clone(),
+            StateMachineVersionView::default(),
             Arc::new(
                 RocksDbBrokerConfigManager::open(RocksDbBrokerConfigManagerConfig::subscription_group(
                     rocksdb_path.clone(),
@@ -1291,7 +1314,8 @@ mod tests {
         drop(manager);
 
         let restarted = SubscriptionGroupManager::new_with_rocksdb_config_manager(
-            inner,
+            manager_config,
+            StateMachineVersionView::default(),
             Arc::new(
                 RocksDbBrokerConfigManager::open(RocksDbBrokerConfigManagerConfig::subscription_group(rocksdb_path))
                     .expect("rocksdb config manager should reopen"),

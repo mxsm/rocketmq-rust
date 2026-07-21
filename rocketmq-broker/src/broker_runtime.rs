@@ -154,6 +154,7 @@ use crate::schedule::schedule_message_service::ScheduleMessageService;
 use crate::slave::slave_synchronize::SlaveSynchronize;
 use crate::subscription::lite_subscription_registry::LiteSubscriptionRegistry;
 use crate::subscription::manager::subscription_group_manager::SubscriptionGroupManager;
+use crate::subscription::manager::subscription_group_manager::SubscriptionGroupManagerConfig;
 use crate::topic::manager::topic_config_coordinator::TopicConfigCoordinator;
 use crate::topic::manager::topic_config_coordinator::TopicConfigCoordinatorShutdownReport;
 use crate::topic::manager::topic_config_coordinator::TopicRegistrationAction;
@@ -1261,19 +1262,31 @@ impl BrokerRuntime {
         ));
         let escape_bridge = Arc::new(EscapeBridge::new(inner.clone()));
         inner.escape_bridge = Some(Arc::downgrade(&escape_bridge));
+        let subscription_group_manager_config = SubscriptionGroupManagerConfig::from_configs(
+            inner.broker_config.as_ref(),
+            inner.message_store_config.as_ref(),
+        );
+        let state_machine_version = inner
+            .message_store()
+            .map(|message_store| message_store.state_machine_version_view())
+            .unwrap_or_default();
         #[cfg(feature = "rocksdb_store")]
         {
             inner.subscription_group_manager = Some(match rocksdb_config_managers.as_ref() {
                 Some(managers) => SubscriptionGroupManager::new_with_rocksdb_config_manager(
-                    inner.clone(),
+                    subscription_group_manager_config,
+                    state_machine_version,
                     Arc::clone(&managers.subscription_group),
                 ),
-                None => SubscriptionGroupManager::new(inner.clone()),
+                None => SubscriptionGroupManager::new(subscription_group_manager_config, state_machine_version),
             });
         }
         #[cfg(not(feature = "rocksdb_store"))]
         {
-            inner.subscription_group_manager = Some(SubscriptionGroupManager::new(inner.clone()));
+            inner.subscription_group_manager = Some(SubscriptionGroupManager::new(
+                subscription_group_manager_config,
+                state_machine_version,
+            ));
         }
         let consumer_order_info_manager = ConsumerOrderInfoManager::new(
             inner.broker_config.store_path_root_dir.clone(),
@@ -2504,6 +2517,7 @@ impl BrokerRuntime {
         self.inner.pull_request_hold_service = Some(Arc::clone(&pull_request_hold_service));
 
         let pop_message_processor = PopMessageProcessor::new(self.inner.clone());
+        let polling_count_provider = pop_message_processor.polling_count_provider();
         self.inner.pop_message_processor = Some(pop_message_processor.clone());
         let pop_lite_message_processor = PopLiteMessageProcessor::new(self.inner.clone());
         self.inner.pop_lite_message_processor = Some(pop_lite_message_processor.clone());
@@ -2620,7 +2634,12 @@ impl BrokerRuntime {
         //pollingInfoProcessor
         broker_request_processor.register_processor(
             RequestCode::PollingInfo as i32,
-            BrokerProcessorType::PollingInfo(Arc::new(PollingInfoProcessor::new(self.inner.clone()))),
+            BrokerProcessorType::PollingInfo(Arc::new(PollingInfoProcessor::new(
+                self.inner.broker_config_arc(),
+                self.inner.topic_config_manager_handle(),
+                self.inner.subscription_group_manager().config_lookup(),
+                polling_count_provider,
+            ))),
         );
 
         //ReplyMessageProcessor
@@ -3660,7 +3679,7 @@ pub(crate) struct BrokerRuntimeInner<MS: MessageStore> {
     topic_config_coordinator: Option<Arc<TopicConfigCoordinator>>,
     topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
     consumer_offset_manager: Arc<ConsumerOffsetManager<MS>>,
-    subscription_group_manager: Option<SubscriptionGroupManager<MS>>,
+    subscription_group_manager: Option<SubscriptionGroupManager>,
     consumer_filter_manager: Option<ConsumerFilterManager>,
     consumer_order_info_manager: Option<ConsumerOrderInfoManager>,
     message_store: Option<ArcMut<MS>>,
@@ -3771,12 +3790,12 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn subscription_group_manager_mut(&mut self) -> &mut SubscriptionGroupManager<MS> {
+    pub fn subscription_group_manager_mut(&mut self) -> &mut SubscriptionGroupManager {
         self.subscription_group_manager.as_mut().unwrap()
     }
 
     #[inline]
-    pub fn subscription_group_manager_unchecked_mut(&mut self) -> &mut SubscriptionGroupManager<MS> {
+    pub fn subscription_group_manager_unchecked_mut(&mut self) -> &mut SubscriptionGroupManager {
         unsafe { self.subscription_group_manager.as_mut().unwrap_unchecked() }
     }
 
@@ -3951,12 +3970,12 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn subscription_group_manager(&self) -> &SubscriptionGroupManager<MS> {
+    pub fn subscription_group_manager(&self) -> &SubscriptionGroupManager {
         self.subscription_group_manager.as_ref().unwrap()
     }
 
     #[inline]
-    pub fn subscription_group_manager_unchecked(&self) -> &SubscriptionGroupManager<MS> {
+    pub fn subscription_group_manager_unchecked(&self) -> &SubscriptionGroupManager {
         unsafe { self.subscription_group_manager.as_ref().unwrap_unchecked() }
     }
 
@@ -4238,7 +4257,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn set_subscription_group_manager(&mut self, subscription_group_manager: SubscriptionGroupManager<MS>) {
+    pub fn set_subscription_group_manager(&mut self, subscription_group_manager: SubscriptionGroupManager) {
         self.subscription_group_manager = Some(subscription_group_manager);
     }
 
