@@ -86,7 +86,7 @@ mod update_user_request_handler;
 pub struct AdminBrokerProcessor<MS: MessageStore> {
     topic_request_handler: TopicRequestHandler<MS>,
     broker_config_request_handler: BrokerConfigRequestHandler<MS>,
-    consumer_request_handler: ConsumerRequestHandler<MS>,
+    consumer_request_handler: ConsumerRequestHandler,
     offset_request_handler: OffsetRequestHandler,
     batch_mq_handler: BatchMqHandler,
     subscription_group_handler: SubscriptionGroupHandler,
@@ -136,7 +136,7 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
     ) -> Self {
         let topic_request_handler = TopicRequestHandler::new(broker_runtime_inner.clone());
         let broker_config_request_handler = BrokerConfigRequestHandler::new(broker_runtime_inner.clone());
-        let consumer_request_handler = ConsumerRequestHandler::new(broker_runtime_inner.clone());
+        let consumer_request_handler = ConsumerRequestHandler::new();
         let offset_request_handler = OffsetRequestHandler::new();
         let batch_mq_handler = BatchMqHandler::new();
         let subscription_group_handler = SubscriptionGroupHandler::new();
@@ -349,8 +349,9 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .await
             }
             RequestCode::GetConsumerConnectionList => {
+                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner();
                 self.consumer_request_handler
-                    .get_consumer_connection_list(channel, ctx, request_code, request)
+                    .get_consumer_connection_list(broker_runtime_inner, channel, ctx, request_code, request)
                     .await
             }
             RequestCode::GetProducerConnectionList => {
@@ -360,13 +361,15 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
             }
             RequestCode::GetAllProducerInfo => self.producer_request_handler.get_all_producer_info(ctx, request).await,
             RequestCode::GetConsumeStats => {
+                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner();
                 self.consumer_request_handler
-                    .get_consume_stats(channel, ctx, request_code, request)
+                    .get_consume_stats(broker_runtime_inner, channel, ctx, request_code, request)
                     .await
             }
             RequestCode::GetAllConsumerOffset => {
+                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner();
                 self.consumer_request_handler
-                    .get_all_consumer_offset(channel, ctx, request_code, request)
+                    .get_all_consumer_offset(broker_runtime_inner, channel, ctx, request_code, request)
                     .await
             }
             RequestCode::GetAllDelayOffset => {
@@ -376,18 +379,21 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .await
             }
             RequestCode::GetAllMessageRequestMode => {
+                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner();
                 self.consumer_request_handler
-                    .get_all_message_request_mode(channel, ctx, request_code, request)
+                    .get_all_message_request_mode(broker_runtime_inner, channel, ctx, request_code, request)
                     .await
             }
             RequestCode::InvokeBrokerToResetOffset => {
+                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner_mut();
                 self.consumer_request_handler
-                    .invoke_broker_to_reset_offset(channel, ctx, request_code, request)
+                    .invoke_broker_to_reset_offset(broker_runtime_inner, channel, ctx, request_code, request)
                     .await
             }
             RequestCode::InvokeBrokerToGetConsumerStatus => {
+                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner();
                 self.consumer_request_handler
-                    .invoke_broker_to_get_consumer_status(channel, ctx, request_code, request)
+                    .invoke_broker_to_get_consumer_status(broker_runtime_inner, channel, ctx, request_code, request)
                     .await
             }
             RequestCode::QueryTopicConsumeByWho => {
@@ -401,13 +407,15 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .await
             }
             RequestCode::QuerySubscriptionByConsumer => {
+                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner();
                 self.consumer_request_handler
-                    .query_subscription_by_consumer(channel, ctx, request_code, request)
+                    .query_subscription_by_consumer(broker_runtime_inner, channel, ctx, request_code, request)
                     .await
             }
             RequestCode::QueryConsumeTimeSpan => {
+                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner();
                 self.consumer_request_handler
-                    .query_consume_time_span(channel, ctx, request_code, request)
+                    .query_consume_time_span(broker_runtime_inner, channel, ctx, request_code, request)
                     .await
             }
             RequestCode::GetSystemTopicListFromBroker => {
@@ -433,23 +441,27 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .await
             }
             RequestCode::GetConsumerRunningInfo => {
+                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner();
                 self.consumer_request_handler
-                    .get_consumer_running_info(channel, ctx, request_code, request)
+                    .get_consumer_running_info(broker_runtime_inner, channel, ctx, request_code, request)
                     .await
             }
             RequestCode::QueryCorrectionOffset => {
+                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner();
                 self.consumer_request_handler
-                    .query_correction_offset(channel, ctx, request_code, request)
+                    .query_correction_offset(broker_runtime_inner, channel, ctx, request_code, request)
                     .await
             }
             RequestCode::ConsumeMessageDirectly => {
+                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner();
                 self.consumer_request_handler
-                    .consume_message_directly(channel, ctx, request_code, request)
+                    .consume_message_directly(broker_runtime_inner, channel, ctx, request_code, request)
                     .await
             }
             RequestCode::CloneGroupOffset => {
+                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner();
                 self.consumer_request_handler
-                    .clone_group_offset(channel, ctx, request_code, request)
+                    .clone_group_offset(broker_runtime_inner, channel, ctx, request_code, request)
                     .await
             }
             RequestCode::ViewBrokerStatsData => {
@@ -458,8 +470,9 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .await
             }
             RequestCode::GetBrokerConsumeStats => {
+                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner();
                 self.consumer_request_handler
-                    .get_broker_consume_stats(channel, ctx, request_code, request)
+                    .get_broker_consume_stats(broker_runtime_inner, channel, ctx, request_code, request)
                     .await
             }
             RequestCode::QueryConsumeQueue => {
