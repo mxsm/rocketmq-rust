@@ -190,6 +190,9 @@ use crate::processor::BrokerProcessorType;
 use crate::processor::BrokerRequestProcessor;
 use crate::schedule::schedule_message_service::ScheduleMessageService;
 use crate::slave::slave_synchronize::SlaveSynchronize;
+use crate::slave::slave_synchronize::SlaveSynchronizeContext;
+use crate::slave::slave_synchronize::SlaveSynchronizePolicy;
+use crate::slave::slave_synchronize::SlaveTimerStoreCapability;
 use crate::subscription::lite_subscription_registry::LiteSubscriptionRegistry;
 use crate::subscription::manager::subscription_group_manager::SubscriptionGroupManager;
 use crate::subscription::manager::subscription_group_manager::SubscriptionGroupManagerConfig;
@@ -1351,7 +1354,16 @@ impl BrokerRuntime {
             stats_manager,
             inner.broker_service_task_group(),
         )));
-        inner.slave_synchronize = Some(SlaveSynchronize::new(inner.clone()));
+        inner.slave_synchronize = Some(SlaveSynchronize::new(SlaveSynchronizeContext::new(
+            SlaveSynchronizePolicy::from_config(inner.get_broker_addr().clone(), inner.message_store_config()),
+            inner.broker_outer_api().clone(),
+            inner.topic_config_manager_handle(),
+            inner.topic_config_coordinator_handle(),
+            inner.topic_queue_mapping_manager_handle(),
+            inner.schedule_message_service().clone(),
+            inner.subscription_group_manager().clone(),
+            SlaveTimerStoreCapability::new(&escape_bridge),
+        )));
         inner.broker_pre_online_service = Some(BrokerPreOnlineService::new(inner.clone()));
         inner.topic_queue_mapping_clean_service = Some(inner.build_topic_queue_mapping_clean_service());
         Self {
@@ -1472,6 +1484,10 @@ impl BrokerRuntime {
         progress.complete("remoting");
         shutdown_report.request_processor = self.shutdown_request_processor_tasks(deadline).await;
         progress.complete("request_processor");
+
+        if let Some(slave_synchronize) = self.inner.slave_synchronize() {
+            slave_synchronize.release_runtime_capabilities();
+        }
 
         // Scheduled delivery must drain and persist its final coherent offset snapshot while the
         // message store is still available. Detach the service only after that owned shutdown
@@ -2202,6 +2218,10 @@ impl BrokerRuntime {
             warn!("Unknown store type");
             return false;
         }
+        let consumer_offset_manager = self.inner.consumer_offset_manager_handle();
+        if let Some(slave_synchronize) = self.inner.slave_synchronize() {
+            slave_synchronize.bind_consumer_offset_manager(&consumer_offset_manager);
+        }
         let filter: Arc<dyn CommitLogDispatcher> = Arc::new(CommitLogDispatcherCalcBitMap::new(
             self.inner.broker_config.clone(),
             self.inner.consumer_filter_manager.clone().unwrap(),
@@ -2596,6 +2616,10 @@ impl BrokerRuntime {
             self.inner.topic_route_info_manager().clone(),
             self.inner.consumer_manager().assignment_view(),
         ));
+        if let Some(slave_synchronize) = self.inner.slave_synchronize() {
+            slave_synchronize
+                .bind_message_request_mode_manager(query_assignment_processor.message_request_mode_manager());
+        }
         self.inner.query_assignment_processor = Some(query_assignment_processor.clone());
 
         let notification_escape_bridge = self.inner.escape_bridge();

@@ -2329,69 +2329,6 @@
       "adr": "ADR-002"
     },
     {
-      "identity": "2b14e7f9ad0e105a42808226",
-      "path": "rocketmq-broker/src/slave/slave_synchronize.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "7bd6179cae1e7599f4ca44af",
-          "fingerprint": "fba14d22412ade0a6180aec0",
-          "item": "<module>",
-          "line": 22
-        }
-      ],
-      "owner": "broker",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "708a7f355c9ee5c051f68791",
-      "path": "rocketmq-broker/src/slave/slave_synchronize.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "5bb87903a3a6dce291645b37",
-          "fingerprint": "086852300ab324a0d5f8c221",
-          "item": "struct SlaveSynchronize",
-          "line": 32
-        },
-        {
-          "id": "b77b046feb67043a7258e2f1",
-          "fingerprint": "1fe88213f7fb3cfc3eb42806",
-          "item": "fn new",
-          "line": 60
-        }
-      ],
-      "owner": "broker",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "a68301c46744333192c221de",
-      "path": "rocketmq-broker/src/slave/slave_synchronize.rs",
-      "symbol": "mut_from_ref",
-      "kind": "mut_from_ref_call",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "8271b1faef87df463b3c9cc6",
-          "fingerprint": "ad0fc2f2205a1a0b740782b7",
-          "item": "fn sync_subscription_group_config",
-          "line": 292
-        }
-      ],
-      "owner": "broker",
-      "reason": "Legacy safe mutable-reference escape pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
       "identity": "3186279d41c31c592473790d",
       "path": "rocketmq-client/benches/client_hot_path_benchmark.rs",
       "symbol": "ArcMut",

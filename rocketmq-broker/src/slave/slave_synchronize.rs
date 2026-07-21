@@ -13,24 +13,178 @@
 // limitations under the License.
 
 use std::sync::Arc;
+use std::sync::OnceLock;
+use std::sync::Weak;
 
 use arc_swap::ArcSwapOption;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_error::RocketMQResult;
-use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
+use rocketmq_store::config::message_store_config::MessageStoreConfig;
+use rocketmq_store::timer::timer_message_store::TimerMessageStore;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
 
-use crate::broker_runtime::BrokerRuntimeInner;
+use crate::failover::escape_bridge::EscapeBridge;
+use crate::load_balance::message_request_mode_manager::MessageRequestModeManager;
+use crate::offset::manager::consumer_offset_manager::ConsumerOffsetManager;
+use crate::out_api::broker_outer_api::BrokerOuterAPI;
 use crate::schedule::delay_offset_serialize_wrapper::DelayOffsetSerializeWrapper;
+use crate::schedule::schedule_message_service::ScheduleMessageService;
+use crate::subscription::manager::subscription_group_manager::SubscriptionGroupManager;
+use crate::topic::manager::topic_config_coordinator::TopicConfigCoordinator;
+use crate::topic::manager::topic_config_manager::TopicConfigManager;
+use crate::topic::manager::topic_queue_mapping_manager::TopicQueueMappingManager;
 
 pub(crate) struct SlaveSynchronize<MS: MessageStore> {
-    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+    context: SlaveSynchronizeContext<MS>,
     master_addr: Arc<SlaveMasterAddress>,
+}
+
+pub(crate) struct SlaveSynchronizePolicy {
+    broker_addr: CheetahString,
+    timer_wheel_enable: bool,
+}
+
+impl SlaveSynchronizePolicy {
+    pub(crate) fn from_config(broker_addr: CheetahString, message_store_config: &MessageStoreConfig) -> Self {
+        Self {
+            broker_addr,
+            timer_wheel_enable: message_store_config.timer_wheel_enable,
+        }
+    }
+}
+
+#[derive(Clone, Default)]
+struct SlaveMessageRequestModeCapability {
+    manager: Arc<ArcSwapOption<MessageRequestModeManager>>,
+}
+
+impl SlaveMessageRequestModeCapability {
+    fn bind(&self, manager: &MessageRequestModeManager) {
+        self.manager.store(Some(Arc::new(manager.clone())));
+    }
+
+    fn manager(&self) -> Option<Arc<MessageRequestModeManager>> {
+        self.manager.load_full()
+    }
+
+    fn clear(&self) {
+        self.manager.store(None);
+    }
+}
+
+struct SlaveConsumerOffsetCapability<MS: MessageStore> {
+    manager: Arc<OnceLock<Weak<ConsumerOffsetManager<MS>>>>,
+}
+
+impl<MS: MessageStore> Default for SlaveConsumerOffsetCapability<MS> {
+    fn default() -> Self {
+        Self {
+            manager: Arc::new(OnceLock::new()),
+        }
+    }
+}
+
+impl<MS: MessageStore> SlaveConsumerOffsetCapability<MS> {
+    fn bind(&self, manager: &Arc<ConsumerOffsetManager<MS>>) {
+        self.manager.get_or_init(|| Arc::downgrade(manager));
+    }
+
+    fn manager(&self) -> Option<Arc<ConsumerOffsetManager<MS>>> {
+        self.manager.get()?.upgrade()
+    }
+}
+
+#[derive(Clone, Default)]
+struct SlaveSubscriptionGroupCapability {
+    manager: Arc<ArcSwapOption<SubscriptionGroupManager>>,
+}
+
+impl SlaveSubscriptionGroupCapability {
+    fn new(manager: &SubscriptionGroupManager) -> Self {
+        let capability = Self::default();
+        capability.manager.store(Some(Arc::new(manager.clone())));
+        capability
+    }
+
+    fn manager(&self) -> Option<Arc<SubscriptionGroupManager>> {
+        self.manager.load_full()
+    }
+
+    fn clear(&self) {
+        self.manager.store(None);
+    }
+}
+
+pub(crate) struct SlaveTimerStoreCapability<MS: MessageStore> {
+    escape_bridge: Weak<EscapeBridge<MS>>,
+}
+
+impl<MS: MessageStore> SlaveTimerStoreCapability<MS> {
+    pub(crate) fn new(escape_bridge: &Arc<EscapeBridge<MS>>) -> Self {
+        Self {
+            escape_bridge: Arc::downgrade(escape_bridge),
+        }
+    }
+
+    fn is_available(&self) -> bool {
+        self.escape_bridge.strong_count() > 0
+    }
+
+    fn timer_message_store(&self) -> Option<Arc<TimerMessageStore>> {
+        self.escape_bridge
+            .upgrade()?
+            .try_with_message_store(|store| store.get_timer_message_store().cloned())
+            .ok()
+            .flatten()
+    }
+}
+
+pub(crate) struct SlaveSynchronizeContext<MS: MessageStore> {
+    policy: SlaveSynchronizePolicy,
+    broker_outer_api: BrokerOuterAPI,
+    topic_config_manager: Weak<TopicConfigManager>,
+    topic_config_coordinator: Weak<TopicConfigCoordinator>,
+    topic_queue_mapping_manager: Weak<TopicQueueMappingManager>,
+    consumer_offset_manager: SlaveConsumerOffsetCapability<MS>,
+    schedule_message_service: Weak<ScheduleMessageService<MS>>,
+    subscription_group_manager: SlaveSubscriptionGroupCapability,
+    timer_store: SlaveTimerStoreCapability<MS>,
+    message_request_mode: SlaveMessageRequestModeCapability,
+}
+
+impl<MS: MessageStore> SlaveSynchronizeContext<MS> {
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the composition root wires explicit slave synchronization capabilities"
+    )]
+    pub(crate) fn new(
+        policy: SlaveSynchronizePolicy,
+        broker_outer_api: BrokerOuterAPI,
+        topic_config_manager: Arc<TopicConfigManager>,
+        topic_config_coordinator: Arc<TopicConfigCoordinator>,
+        topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
+        schedule_message_service: Arc<ScheduleMessageService<MS>>,
+        subscription_group_manager: SubscriptionGroupManager,
+        timer_store: SlaveTimerStoreCapability<MS>,
+    ) -> Self {
+        Self {
+            policy,
+            broker_outer_api,
+            topic_config_manager: Arc::downgrade(&topic_config_manager),
+            topic_config_coordinator: Arc::downgrade(&topic_config_coordinator),
+            topic_queue_mapping_manager: Arc::downgrade(&topic_queue_mapping_manager),
+            consumer_offset_manager: SlaveConsumerOffsetCapability::default(),
+            schedule_message_service: Arc::downgrade(&schedule_message_service),
+            subscription_group_manager: SlaveSubscriptionGroupCapability::new(&subscription_group_manager),
+            timer_store,
+            message_request_mode: SlaveMessageRequestModeCapability::default(),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -57,11 +211,24 @@ impl<MS> SlaveSynchronize<MS>
 where
     MS: MessageStore,
 {
-    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
+    pub(crate) fn new(context: SlaveSynchronizeContext<MS>) -> Self {
         Self {
-            broker_runtime_inner,
+            context,
             master_addr: Arc::new(SlaveMasterAddress::default()),
         }
+    }
+
+    pub(crate) fn bind_message_request_mode_manager(&self, manager: &MessageRequestModeManager) {
+        self.context.message_request_mode.bind(manager);
+    }
+
+    pub(crate) fn bind_consumer_offset_manager(&self, manager: &Arc<ConsumerOffsetManager<MS>>) {
+        self.context.consumer_offset_manager.bind(manager);
+    }
+
+    pub(crate) fn release_runtime_capabilities(&self) {
+        self.context.message_request_mode.clear();
+        self.context.subscription_group_manager.clear();
     }
 
     pub fn master_addr(&self) -> Option<Arc<CheetahString>> {
@@ -82,12 +249,7 @@ where
         self.sync_delay_offset().await;
         self.sync_subscription_group_config().await;
         self.sync_message_request_mode().await;
-        if self
-            .broker_runtime_inner
-            .message_store_unchecked()
-            .get_message_store_config()
-            .timer_wheel_enable
-        {
+        if self.context.policy.timer_wheel_enable {
             self.sync_timer_metrics().await;
         }
     }
@@ -99,10 +261,10 @@ where
                 warn!("Master address is not set");
                 (false, None)
             }
-            Some(addr) if addr.as_str() == self.broker_runtime_inner.get_broker_addr() => {
+            Some(addr) if addr.as_str() == self.context.policy.broker_addr.as_str() => {
                 warn!(
                     "Master address is the same as broker address: {}",
-                    self.broker_runtime_inner.get_broker_addr()
+                    self.context.policy.broker_addr
                 );
                 (false, None)
             }
@@ -117,19 +279,14 @@ where
         }
 
         if let Some(master_addr) = master_addr {
-            let Some(timer_message_store) = self.broker_runtime_inner.timer_message_store() else {
+            let Some(timer_message_store) = self.context.timer_store.timer_message_store() else {
                 return;
             };
             if timer_message_store.is_should_running_dequeue() {
                 return;
             }
 
-            match self
-                .broker_runtime_inner
-                .broker_outer_api()
-                .get_timer_check_point(&master_addr)
-                .await
-            {
+            match self.context.broker_outer_api.get_timer_check_point(&master_addr).await {
                 Ok(Some(checkpoint_snapshot)) => {
                     match timer_message_store.sync_checkpoint_from_master(&checkpoint_snapshot) {
                         Ok(true) => {
@@ -170,38 +327,47 @@ where
     }
 
     async fn sync_topic_config_internal(&self, master_addr: &CheetahString) -> RocketMQResult<()> {
-        let topic_wrapper = self
-            .broker_runtime_inner
-            .broker_outer_api()
-            .get_all_topic_config(master_addr)
-            .await?;
+        let topic_wrapper = self.context.broker_outer_api.get_all_topic_config(master_addr).await?;
         if topic_wrapper.is_none() {
             warn!("GetAllTopicConfig return null, {}", master_addr);
             return Ok(());
         }
 
         let topic_wrapper = topic_wrapper.unwrap();
-        let topic_config_manager = self.broker_runtime_inner.topic_config_manager();
+        let Some(topic_config_manager) = self.context.topic_config_manager.upgrade() else {
+            warn!(
+                "Topic config manager is unavailable, skip synchronization from {}",
+                master_addr
+            );
+            return Ok(());
+        };
         if topic_config_manager.replace_topic_config_table_from_master(
             topic_wrapper.topic_config_serialize_wrapper.topic_config_table.clone(),
             topic_wrapper.topic_config_serialize_wrapper.data_version(),
         ) {
-            self.broker_runtime_inner
-                .topic_config_coordinator()
-                .persist_and_wait()
-                .await?;
+            let Some(topic_config_coordinator) = self.context.topic_config_coordinator.upgrade() else {
+                warn!("Topic config coordinator is unavailable, skip persistence after synchronization");
+                return Ok(());
+            };
+            topic_config_coordinator.persist_and_wait().await?;
         }
 
         // Sync topic queue mapping if present and data version differs
         let version = topic_wrapper.mapping_data_version;
-        if version != self.broker_runtime_inner.topic_queue_mapping_manager().data_version() {
-            self.broker_runtime_inner
-                .topic_queue_mapping_manager()
+        let Some(topic_queue_mapping_manager) = self.context.topic_queue_mapping_manager.upgrade() else {
+            warn!(
+                "Topic queue mapping manager is unavailable, skip synchronization from {}",
+                master_addr
+            );
+            return Ok(());
+        };
+        if version != topic_queue_mapping_manager.data_version() {
+            topic_queue_mapping_manager
                 .data_version_clone()
                 .lock()
                 .assign_new_one(&version);
 
-            self.broker_runtime_inner.topic_queue_mapping_manager().persist();
+            topic_queue_mapping_manager.persist();
         }
         Ok(())
     }
@@ -211,14 +377,20 @@ where
         if flag {
             if let Some(master_addr) = master_addr {
                 match self
-                    .broker_runtime_inner
-                    .broker_outer_api()
+                    .context
+                    .broker_outer_api
                     .get_all_consumer_offset(&master_addr)
                     .await
                 {
                     Ok(offset_wrapper) => {
                         if let Some(offset_wrapper) = offset_wrapper {
-                            let consumer_offset_manager = self.broker_runtime_inner.consumer_offset_manager();
+                            let Some(consumer_offset_manager) = self.context.consumer_offset_manager.manager() else {
+                                warn!(
+                                    "Consumer offset manager is unavailable, skip synchronization from {}",
+                                    master_addr
+                                );
+                                return;
+                            };
                             let data_version = offset_wrapper.data_version().clone();
                             consumer_offset_manager
                                 .merge_offsets_from_peer(offset_wrapper.offset_table(), data_version);
@@ -240,12 +412,7 @@ where
         let (flag, master_addr) = self.check_master_addr();
         if flag {
             if let Some(master_addr) = master_addr {
-                match self
-                    .broker_runtime_inner
-                    .broker_outer_api()
-                    .get_delay_offset(&master_addr)
-                    .await
-                {
+                match self.context.broker_outer_api.get_delay_offset(&master_addr).await {
                     Ok(offset) => {
                         if let Some(offset) = offset {
                             let snapshot = match SerdeJsonUtils::from_json_str::<DelayOffsetSerializeWrapper>(&offset) {
@@ -255,9 +422,14 @@ where
                                     return;
                                 }
                             };
-                            if let Err(e) = self
-                                .broker_runtime_inner
-                                .schedule_message_service()
+                            let Some(schedule_message_service) = self.context.schedule_message_service.upgrade() else {
+                                warn!(
+                                    "Schedule message service is unavailable, skip synchronization from {}",
+                                    master_addr
+                                );
+                                return;
+                            };
+                            if let Err(e) = schedule_message_service
                                 .sync_delay_offset_from_peer(offset.as_str(), &snapshot)
                                 .await
                             {
@@ -280,17 +452,21 @@ where
         if flag {
             if let Some(master_addr) = master_addr {
                 match self
-                    .broker_runtime_inner
-                    .broker_outer_api()
+                    .context
+                    .broker_outer_api
                     .get_all_subscription_group_config(&master_addr)
                     .await
                 {
                     Ok(subscription_wrapper) => {
                         if let Some(subscription_wrapper) = subscription_wrapper {
-                            let subscription_group_manager = self
-                                .broker_runtime_inner
-                                .mut_from_ref()
-                                .subscription_group_manager_mut();
+                            let Some(subscription_group_manager) = self.context.subscription_group_manager.manager()
+                            else {
+                                warn!(
+                                    "Subscription group manager is unavailable, skip synchronization from {}",
+                                    master_addr
+                                );
+                                return;
+                            };
 
                             // Compare data versions using read locks
                             let current_version = subscription_group_manager.data_version().read().clone();
@@ -327,17 +503,20 @@ where
         if flag {
             if let Some(master_addr) = master_addr {
                 match self
-                    .broker_runtime_inner
-                    .broker_outer_api()
+                    .context
+                    .broker_outer_api
                     .get_message_request_mode(&master_addr)
                     .await
                 {
                     Ok(mode) => {
                         if let Some(mode) = mode {
-                            let query_assignment_processor =
-                                self.broker_runtime_inner.query_assignment_processor_unchecked();
-                            let message_request_mode_manager =
-                                query_assignment_processor.message_request_mode_manager();
+                            let Some(message_request_mode_manager) = self.context.message_request_mode.manager() else {
+                                warn!(
+                                    "Message request mode manager is not bound, skip synchronization from {}",
+                                    master_addr
+                                );
+                                return;
+                            };
                             let message_request_mode_map = message_request_mode_manager.message_request_mode_map();
                             let mut message_request_mode_map = message_request_mode_map.lock();
                             message_request_mode_map.clear();
@@ -363,16 +542,11 @@ where
         }
 
         if let Some(master_addr) = master_addr {
-            let Some(timer_message_store) = self.broker_runtime_inner.timer_message_store() else {
+            let Some(timer_message_store) = self.context.timer_store.timer_message_store() else {
                 return;
             };
 
-            match self
-                .broker_runtime_inner
-                .broker_outer_api()
-                .get_timer_metrics(&master_addr)
-                .await
-            {
+            match self.context.broker_outer_api.get_timer_metrics(&master_addr).await {
                 Ok(Some(metrics_wrapper)) => {
                     if timer_message_store.timer_metrics.data_version() != *metrics_wrapper.data_version() {
                         timer_message_store.timer_metrics.apply_wrapper(metrics_wrapper);
@@ -393,9 +567,20 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use cheetah_string::CheetahString;
+    use rocketmq_common::common::broker::broker_config::BrokerConfig;
+    use rocketmq_store::config::message_store_config::MessageStoreConfig;
+    use rocketmq_store::message_store::GenericMessageStore;
 
     use super::SlaveMasterAddress;
+    use super::SlaveMessageRequestModeCapability;
+    use super::SlaveSynchronizePolicy;
+    use super::SlaveTimerStoreCapability;
+    use crate::broker_runtime::BrokerRuntime;
+    use crate::load_balance::message_request_mode_manager::MessageRequestModeManager;
+    use crate::offset::manager::consumer_offset_manager::ConsumerOffsetManager;
 
     #[test]
     fn slave_master_address_publishes_immutable_generations() {
@@ -411,5 +596,76 @@ mod tests {
         assert_eq!(address.load().as_deref(), Some(&second));
         address.store(None);
         assert!(address.load().is_none());
+    }
+
+    #[test]
+    fn slave_synchronize_policy_captures_only_required_startup_values() {
+        let message_store_config = MessageStoreConfig {
+            timer_wheel_enable: true,
+            ..Default::default()
+        };
+        let broker_addr = CheetahString::from_static_str("192.0.2.10:10911");
+
+        let policy = SlaveSynchronizePolicy::from_config(broker_addr.clone(), &message_store_config);
+
+        assert_eq!(policy.broker_addr, broker_addr);
+        assert!(policy.timer_wheel_enable);
+    }
+
+    #[test]
+    fn slave_synchronize_source_uses_only_explicit_capabilities() {
+        let source = include_str!("slave_synchronize.rs");
+
+        assert!(!source.contains(concat!("rocketmq_rust::", "ArcMut")));
+        assert!(!source.contains(concat!("BrokerRuntime", "Inner")));
+        assert!(!source.contains(concat!("broker_runtime", "_inner")));
+        assert!(!source.contains(concat!("mut_", "from_ref")));
+        assert!(source.contains("context: SlaveSynchronizeContext<MS>"));
+        assert!(source.contains("consumer_offset_manager: SlaveConsumerOffsetCapability<MS>"));
+        assert!(source.contains("timer_store: SlaveTimerStoreCapability<MS>"));
+        assert!(source.contains("message_request_mode: SlaveMessageRequestModeCapability"));
+        assert!(source.contains("subscription_group_manager: SlaveSubscriptionGroupCapability"));
+        assert!(source.contains("schedule_message_service: Weak<ScheduleMessageService<MS>>"));
+    }
+
+    #[test]
+    fn slave_synchronize_request_mode_capability_supports_late_binding() {
+        let capability = SlaveMessageRequestModeCapability::default();
+        assert!(capability.manager().is_none());
+
+        let manager = MessageRequestModeManager::new(Arc::new(MessageStoreConfig::default()));
+        capability.bind(&manager);
+
+        assert!(capability.manager().is_some());
+    }
+
+    #[test]
+    fn slave_synchronize_weak_providers_do_not_keep_owners_alive() {
+        let broker_config = Arc::new(BrokerConfig::default());
+        let message_store_config = Arc::new(MessageStoreConfig::default());
+        let offset_manager = Arc::new(ConsumerOffsetManager::<GenericMessageStore>::new(
+            Arc::clone(&broker_config),
+            Arc::clone(&message_store_config),
+            None,
+        ));
+        let offset_capability = super::SlaveConsumerOffsetCapability::default();
+
+        assert!(offset_capability.manager().is_none());
+        offset_capability.bind(&offset_manager);
+        assert!(offset_capability.manager().is_some());
+        drop(offset_manager);
+        assert!(offset_capability.manager().is_none());
+
+        let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
+        let inner = runtime.inner_for_test();
+        let escape_bridge = inner.escape_bridge();
+        let capability = SlaveTimerStoreCapability::new(&escape_bridge);
+
+        assert!(capability.is_available());
+        drop(escape_bridge);
+        drop(runtime);
+
+        assert!(!capability.is_available());
+        assert!(capability.timer_message_store().is_none());
     }
 }
