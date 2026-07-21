@@ -38,15 +38,17 @@ use tokio::sync::Mutex as AsyncMutex;
 
 use crate::broker_runtime::BrokerRuntimeInner;
 use crate::lite::memory_consumer_order_info_manager::MemoryConsumerOrderInfoManager;
+use crate::long_polling::long_polling_service::pop_lite_long_polling_service::PopLiteLongPollingPolicy;
 use crate::long_polling::long_polling_service::pop_lite_long_polling_service::PopLiteLongPollingRequestProcessor;
 use crate::long_polling::long_polling_service::pop_lite_long_polling_service::PopLiteLongPollingService;
+use crate::long_polling::long_polling_service::pop_lite_long_polling_service::PopLiteLongPollingServiceContext;
 use crate::long_polling::polling_result::PollingResult;
 use crate::processor::pop_message_processor::queue_lock_manager_for_broker;
 use crate::processor::pop_message_processor::QueueLockManager;
 
 pub(crate) struct PopLiteMessageProcessor<MS: MessageStore> {
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
-    pop_lite_long_polling_service: Arc<PopLiteLongPollingService<MS, PopLiteMessageProcessor<MS>>>,
+    pop_lite_long_polling_service: Arc<PopLiteLongPollingService<PopLiteMessageProcessor<MS>>>,
     consumer_order_info_manager: MemoryConsumerOrderInfoManager,
     queue_lock_manager: QueueLockManager,
     lifecycle: AsyncMutex<()>,
@@ -66,9 +68,14 @@ enum PopLmqResult {
 impl<MS: MessageStore> PopLiteMessageProcessor<MS> {
     pub(crate) fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Arc<Self> {
         let queue_lock_manager = queue_lock_manager_for_broker(&broker_runtime_inner);
-        Arc::new_cyclic(|processor| Self {
+        let long_polling_context = PopLiteLongPollingServiceContext::new(
+            PopLiteLongPollingPolicy::from_config(broker_runtime_inner.broker_config()),
+            broker_runtime_inner.lite_event_dispatcher().clone(),
+            broker_runtime_inner.broker_service_task_group(),
+        );
+        Arc::new_cyclic(move |processor| Self {
             pop_lite_long_polling_service: Arc::new(PopLiteLongPollingService::new(
-                broker_runtime_inner.clone(),
+                long_polling_context,
                 processor.clone(),
             )),
             consumer_order_info_manager: MemoryConsumerOrderInfoManager::default(),
@@ -90,9 +97,7 @@ impl<MS: MessageStore> PopLiteMessageProcessor<MS> {
         self.queue_lock_manager.shutdown().await;
     }
 
-    pub(crate) fn pop_lite_long_polling_service(
-        &self,
-    ) -> &Arc<PopLiteLongPollingService<MS, PopLiteMessageProcessor<MS>>> {
+    pub(crate) fn pop_lite_long_polling_service(&self) -> &Arc<PopLiteLongPollingService<PopLiteMessageProcessor<MS>>> {
         &self.pop_lite_long_polling_service
     }
 
@@ -567,6 +572,7 @@ mod tests {
     use std::time::Duration;
 
     use rocketmq_common::common::broker::broker_config::BrokerConfig;
+    use rocketmq_runtime::RuntimeContext;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
     use rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore;
 
@@ -635,6 +641,33 @@ mod tests {
         assert!(!restarted_task_group.cancellation_token().is_cancelled());
         service.shutdown().await;
         assert!(!service.is_running());
+    }
+
+    #[tokio::test]
+    async fn pop_lite_long_polling_service_uses_broker_parent_task_group() {
+        let broker_config = Arc::new(BrokerConfig::default());
+        let message_store_config = Arc::new(MessageStoreConfig::default());
+        let runtime_context = RuntimeContext::from_current("pop-lite-long-polling-parent-test");
+        let broker_service = runtime_context.service_context("broker-service");
+        let mut runtime =
+            BrokerRuntime::new_with_service_context(broker_config, message_store_config, broker_service.clone());
+        let parent_id = runtime
+            .inner_for_test()
+            .broker_service_task_group()
+            .expect("broker service task group should exist")
+            .id();
+        let processor = PopLiteMessageProcessor::new(runtime.inner_for_test().clone());
+        let service = processor.pop_lite_long_polling_service.clone();
+
+        PopLiteLongPollingService::start(&service).await;
+        let task_group = service
+            .task_group_for_test()
+            .expect("POP Lite long-polling task group should be installed");
+
+        assert_eq!(task_group.parent_id(), Some(parent_id));
+        service.shutdown().await;
+        let report = broker_service.task_group().shutdown(Duration::from_secs(1)).await;
+        assert!(report.is_healthy(), "{}", report.to_json());
     }
 
     #[tokio::test]

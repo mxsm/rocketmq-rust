@@ -834,6 +834,15 @@ Broker production 53/135、Store production 82/234），净删除 2 个 producti
 processor wrapper 经 ADR-013 一对一 relocation 审核，无新增 identity 或临时 approval 提交。总进度仍为 75/82，
 下一子切片 M11-12bc46 继续 Broker aggregate/leaf 或 Store WAL/queue/timer/HA owner。
 
+POP Lite long-polling runtime capability 随 Issue #8503 收窄：`PopLiteLongPollingService` 删除完整
+`ArcMut<BrokerRuntimeInner<MS>>` owner 与 `MessageStore` 泛型，改持启动期容量 policy、可克隆的
+`LiteEventDispatcher` 和显式父 `TaskGroup`；processor 只在组合根提取这些能力。polling map 容量、全局/客户端限流、
+过期扫描、事件 wake-up、幂等启动和有界 shutdown 语义保持不变，service 不再延长完整 runtime/Store 生命周期。
+ArcMut 快照降至 277 identities/826 occurrences（production 133/366、test 130/420、compatibility 14/40、
+Broker production 51/132、Store production 82/234），净删除 2 个 production identity/3 occurrences，无
+relocation、新增 identity 或临时 approval。总进度仍为 75/82，下一子切片 M11-12bc47 继续 Broker aggregate/leaf
+或 Store WAL/queue/timer/HA owner。
+
 ### 9.3 证据目录
 
 - 运行期生成物：`target/architecture-refactor/Mxx/<run-id>/`，不提交 Git。
