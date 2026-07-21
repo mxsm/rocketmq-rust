@@ -86,7 +86,7 @@ pub enum BrokerProcessorType<MS: MessageStore, TS> {
     Ack(ArcMut<AckMessageProcessor<MS>>),
     ChangeInvisible(ArcMut<ChangeInvisibleTimeProcessor<MS>>),
     Notification(Arc<NotificationProcessor<MS>>),
-    PollingInfo(Arc<PollingInfoProcessor<MS>>),
+    PollingInfo(Arc<PollingInfoProcessor>),
     Reply(Arc<ReplyMessageProcessor<MS, TS>>),
     Recall(Arc<RecallMessageProcessor<MS>>),
     QueryMessage(Arc<QueryMessageProcessor<MS>>),

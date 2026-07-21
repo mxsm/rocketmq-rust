@@ -21,6 +21,7 @@ use std::sync::atomic::AtomicI64;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::Weak;
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -78,6 +79,7 @@ use tracing::warn;
 
 use crate::broker_runtime::BrokerRuntimeInner;
 use crate::filter::expression_message_filter::ExpressionMessageFilter;
+use crate::long_polling::long_polling_service::pop_long_polling_service::PollingCountProvider;
 use crate::long_polling::long_polling_service::pop_long_polling_service::PopLongPollingRequestProcessor;
 use crate::long_polling::long_polling_service::pop_long_polling_service::PopLongPollingService;
 use crate::long_polling::polling_header::PollingHeader;
@@ -1396,6 +1398,11 @@ where
     #[inline]
     pub fn pop_long_polling_service(&self) -> Option<&Arc<PopLongPollingService<MS, PopMessageProcessor<MS>>>> {
         Some(&self.pop_long_polling_service)
+    }
+
+    pub(crate) fn polling_count_provider(&self) -> Weak<dyn PollingCountProvider> {
+        let provider: Arc<dyn PollingCountProvider> = self.pop_long_polling_service.clone();
+        Arc::downgrade(&provider)
     }
 
     pub fn notify_message_arriving(&self, topic: &CheetahString, queue_id: i32, cid: &CheetahString) {

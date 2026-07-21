@@ -45,6 +45,7 @@ use crate::base::message_result::PutMessageResult;
 use crate::base::message_store::MessageStore;
 use crate::base::message_store::MessageStoreShutdownReport;
 use crate::base::message_store::PutMessagePreflight;
+use crate::base::message_store::StateMachineVersionView;
 use crate::base::message_store::StoreHealthSnapshot;
 use crate::base::query_message_result::QueryMessageResult;
 use crate::base::select_result::SelectMappedBufferResult;
@@ -723,6 +724,10 @@ impl MessageStore for GenericMessageStore {
 
     fn get_state_machine_version(&self) -> i64 {
         delegate_store!(self, get_state_machine_version())
+    }
+
+    fn state_machine_version_view(&self) -> StateMachineVersionView {
+        delegate_store!(self, state_machine_version_view())
     }
 
     fn check_message_and_return_size(

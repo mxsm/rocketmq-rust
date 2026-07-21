@@ -18,6 +18,7 @@ use std::collections::HashSet;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicI64;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -65,6 +66,30 @@ use crate::store_error::StoreErrorKind;
 use crate::timer::timer_message_store::TimerMessageStore;
 
 type AsyncResult<T> = Pin<Box<dyn Future<Output = Result<T, StoreError>> + Send>>;
+
+/// Read-only view of the message-store state-machine version.
+///
+/// Cloning this value preserves a live view of the same atomic version without exposing write
+/// access to consumers outside the store implementation.
+#[derive(Clone, Debug, Default)]
+pub struct StateMachineVersionView {
+    value: Arc<AtomicI64>,
+}
+
+impl StateMachineVersionView {
+    pub(crate) fn from_shared(value: Arc<AtomicI64>) -> Self {
+        Self { value }
+    }
+
+    fn snapshot(value: i64) -> Self {
+        Self::from_shared(Arc::new(AtomicI64::new(value)))
+    }
+
+    /// Returns the latest published state-machine version.
+    pub fn get(&self) -> i64 {
+        self.value.load(Ordering::Acquire)
+    }
+}
 
 /// Read-only state required to decide whether the store can accept a message.
 ///
@@ -745,6 +770,14 @@ pub trait MessageStoreInner: Sync + 'static {
     /// Get state machine version
     fn get_state_machine_version(&self) -> i64;
 
+    /// Returns a read-only state-machine version capability.
+    ///
+    /// Stores whose version can change after initialization should override this method with a
+    /// live view backed by the same state as [`MessageStore::get_state_machine_version`].
+    fn state_machine_version_view(&self) -> StateMachineVersionView {
+        StateMachineVersionView::snapshot(self.get_state_machine_version())
+    }
+
     /// Check message and return size
     fn check_message_and_return_size(
         &self,
@@ -815,6 +848,7 @@ pub trait MessageStoreInner: Sync + 'static {
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::AtomicI64;
     use std::sync::atomic::AtomicU64;
     use std::sync::atomic::Ordering;
     use std::sync::Arc;
@@ -822,6 +856,7 @@ mod tests {
     use rocketmq_common::TimeUtils::current_millis;
 
     use super::PutMessagePreflight;
+    use super::StateMachineVersionView;
     use crate::store::running_flags::RunningFlags;
 
     #[test]
@@ -855,5 +890,15 @@ mod tests {
         assert!(preflight.is_writeable());
         assert_eq!(preflight.flag_bits(), 0);
         assert!(!preflight.is_os_page_cache_busy(10));
+    }
+
+    #[test]
+    fn state_machine_version_view_tracks_live_store_state_without_write_access() {
+        let state_machine_version = Arc::new(AtomicI64::new(3));
+        let view = StateMachineVersionView::from_shared(Arc::clone(&state_machine_version));
+
+        assert_eq!(view.get(), 3);
+        state_machine_version.store(7, Ordering::Release);
+        assert_eq!(view.get(), 7);
     }
 }

@@ -49,6 +49,10 @@ use crate::long_polling::polling_header::PollingHeader;
 use crate::long_polling::polling_result::PollingResult;
 use crate::long_polling::pop_request::PopRequest;
 
+pub(crate) trait PollingCountProvider: Send + Sync {
+    fn polling_count(&self, key: &str) -> i32;
+}
+
 pub(crate) struct PopLongPollingService<MS: MessageStore, RP> {
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
     topic_cid_map: DashMap<CheetahString, DashMap<CheetahString, u8>>,
@@ -585,5 +589,15 @@ impl<MS: MessageStore, RP: PopLongPollingRequestProcessor + Sync + 'static> PopL
     #[cfg(test)]
     pub(crate) fn task_group_for_test(&self) -> Option<TaskGroup> {
         self.task_group.lock().as_ref().cloned()
+    }
+}
+
+impl<MS, RP> PollingCountProvider for PopLongPollingService<MS, RP>
+where
+    MS: MessageStore,
+    RP: PopLongPollingRequestProcessor + Sync + 'static,
+{
+    fn polling_count(&self, key: &str) -> i32 {
+        self.get_polling_num(key)
     }
 }

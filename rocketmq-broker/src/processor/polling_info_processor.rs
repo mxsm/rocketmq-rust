@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::Arc;
+use std::sync::Weak;
+
 use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::key_builder::KeyBuilder;
 use rocketmq_common::common::FAQUrl;
@@ -22,39 +25,59 @@ use rocketmq_remoting::protocol::header::polling_info_response_header::PollingIn
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
-use rocketmq_rust::ArcMut;
-use rocketmq_store::base::message_store::MessageStore;
 use tracing::error;
 use tracing::warn;
 
-use crate::broker_runtime::BrokerRuntimeInner;
+use rocketmq_common::common::broker::broker_config::BrokerConfig;
+
+use crate::long_polling::long_polling_service::pop_long_polling_service::PollingCountProvider;
+use crate::subscription::manager::subscription_group_manager::SubscriptionGroupConfigLookup;
+use crate::topic::manager::topic_config_manager::TopicConfigManager;
 
 /// PollingInfoProcessor handles requests for polling information from clients.
 /// It checks the number of polling requests for a specific topic, consumer group, and queue.
-pub struct PollingInfoProcessor<MS: MessageStore> {
-    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+pub struct PollingInfoProcessor {
+    broker_config: Arc<BrokerConfig>,
+    topic_config_manager: Arc<TopicConfigManager>,
+    subscription_group_lookup: SubscriptionGroupConfigLookup,
+    polling_count_provider: Weak<dyn PollingCountProvider>,
 }
 
-impl<MS: MessageStore> PollingInfoProcessor<MS> {
+impl PollingInfoProcessor {
     /// Create a new PollingInfoProcessor instance
     ///
     /// # Arguments
-    /// * `broker_runtime_inner` - The broker runtime containing all necessary managers and
-    ///   configurations
-    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
-        Self { broker_runtime_inner }
-    }
-}
-
-impl<MS: MessageStore> Clone for PollingInfoProcessor<MS> {
-    fn clone(&self) -> Self {
+    /// * `broker_config` - Immutable broker request policy.
+    /// * `topic_config_manager` - Live topic configuration capability.
+    /// * `subscription_group_lookup` - Live subscription-group lookup capability.
+    /// * `polling_count_provider` - Weak POP polling-count capability.
+    pub(crate) fn new(
+        broker_config: Arc<BrokerConfig>,
+        topic_config_manager: Arc<TopicConfigManager>,
+        subscription_group_lookup: SubscriptionGroupConfigLookup,
+        polling_count_provider: Weak<dyn PollingCountProvider>,
+    ) -> Self {
         Self {
-            broker_runtime_inner: self.broker_runtime_inner.clone(),
+            broker_config,
+            topic_config_manager,
+            subscription_group_lookup,
+            polling_count_provider,
         }
     }
 }
 
-impl<MS: MessageStore> RequestProcessor for PollingInfoProcessor<MS> {
+impl Clone for PollingInfoProcessor {
+    fn clone(&self) -> Self {
+        Self {
+            broker_config: Arc::clone(&self.broker_config),
+            topic_config_manager: Arc::clone(&self.topic_config_manager),
+            subscription_group_lookup: self.subscription_group_lookup.clone(),
+            polling_count_provider: self.polling_count_provider.clone(),
+        }
+    }
+}
+
+impl RequestProcessor for PollingInfoProcessor {
     async fn process_request(
         &mut self,
         channel: Channel,
@@ -65,7 +88,7 @@ impl<MS: MessageStore> RequestProcessor for PollingInfoProcessor<MS> {
     }
 }
 
-impl<MS: MessageStore> PollingInfoProcessor<MS> {
+impl PollingInfoProcessor {
     pub async fn process_request_shared(
         &self,
         channel: Channel,
@@ -98,19 +121,16 @@ impl<MS: MessageStore> PollingInfoProcessor<MS> {
         // Set response opaque to match request
         response.set_opaque_mut(request.opaque());
 
-        let broker_permission = self.broker_runtime_inner.broker_config().broker_permission;
+        let broker_permission = self.broker_config.broker_permission;
         if !PermName::is_readable(broker_permission) {
             let response = response.set_code(ResponseCode::NoPermission).set_remark(format!(
                 "the broker[{}] peeking message is forbidden",
-                self.broker_runtime_inner.broker_config().broker_ip1
+                self.broker_config.broker_ip1
             ));
             return Ok(Some(response));
         }
 
-        let topic_config = self
-            .broker_runtime_inner
-            .topic_config_manager()
-            .select_topic_config(&request_header.topic);
+        let topic_config = self.topic_config_manager.select_topic_config(&request_header.topic);
 
         if topic_config.is_none() {
             error!(
@@ -149,8 +169,7 @@ impl<MS: MessageStore> PollingInfoProcessor<MS> {
         }
 
         let subscription_group_config = self
-            .broker_runtime_inner
-            .subscription_group_manager()
+            .subscription_group_lookup
             .find_subscription_group_config(&request_header.consumer_group);
 
         if subscription_group_config.is_none() {
@@ -200,26 +219,56 @@ impl<MS: MessageStore> PollingInfoProcessor<MS> {
     /// # Returns
     /// The number of polling requests, or 0 if no polling requests exist
     fn get_polling_num(&self, key: &str) -> i32 {
-        // Access the polling map through PopMessageProcessor via pop_long_polling_service
-        // Note: In the current Rust implementation, we need to access the polling_map
-        // through the pop_long_polling_service which is part of the broker runtime
-
-        // Get the pop_long_polling_service if available
-        if let Some(pop_message_processor) = self.broker_runtime_inner.pop_message_processor() {
-            if let Some(pop_long_polling_service) = pop_message_processor.pop_long_polling_service() {
-                return pop_long_polling_service.get_polling_num(key);
-            }
-        }
-
-        // If no polling service or no entry found, return 0
-        0
+        self.polling_count_provider
+            .upgrade()
+            .map(|provider| provider.polling_count(key))
+            .unwrap_or_default()
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use cheetah_string::CheetahString;
+    use rocketmq_common::common::broker::broker_config::BrokerConfig;
     use rocketmq_common::common::key_builder::KeyBuilder;
+    use rocketmq_store::base::message_store::StateMachineVersionView;
+    use rocketmq_store::config::message_store_config::MessageStoreConfig;
+
+    use super::PollingCountProvider;
+    use super::PollingInfoProcessor;
+    use crate::subscription::manager::subscription_group_manager::SubscriptionGroupManager;
+    use crate::subscription::manager::subscription_group_manager::SubscriptionGroupManagerConfig;
+    use crate::topic::manager::topic_config_manager::TopicConfigManager;
+
+    struct FixedPollingCount(i32);
+
+    impl PollingCountProvider for FixedPollingCount {
+        fn polling_count(&self, _key: &str) -> i32 {
+            self.0
+        }
+    }
+
+    fn test_processor(provider: std::sync::Weak<dyn PollingCountProvider>) -> PollingInfoProcessor {
+        let broker_config = Arc::new(BrokerConfig::default());
+        let message_store_config = MessageStoreConfig::default();
+        let topic_config_manager = Arc::new(TopicConfigManager::new(
+            broker_config.as_ref(),
+            &message_store_config,
+            true,
+        ));
+        let subscription_group_manager = SubscriptionGroupManager::new(
+            SubscriptionGroupManagerConfig::from_configs(broker_config.as_ref(), &message_store_config),
+            StateMachineVersionView::default(),
+        );
+        PollingInfoProcessor::new(
+            broker_config,
+            topic_config_manager,
+            subscription_group_manager.config_lookup(),
+            provider,
+        )
+    }
 
     #[test]
     fn test_build_polling_key() {
@@ -232,5 +281,23 @@ mod tests {
         assert!(key.contains("TestTopic"));
         assert!(key.contains("TestConsumerGroup"));
         assert!(key.contains("0"));
+    }
+
+    #[test]
+    fn polling_count_provider_does_not_extend_pop_service_lifetime() {
+        let provider: Arc<dyn PollingCountProvider> = Arc::new(FixedPollingCount(7));
+        let processor = test_processor(Arc::downgrade(&provider));
+
+        assert_eq!(processor.get_polling_num("topic@group@0"), 7);
+        drop(provider);
+        assert_eq!(processor.get_polling_num("topic@group@0"), 0);
+    }
+
+    #[test]
+    fn source_does_not_retain_complete_broker_runtime() {
+        let source = include_str!("polling_info_processor.rs");
+
+        assert!(!source.contains(concat!("Arc", "Mut")));
+        assert!(!source.contains(concat!("BrokerRuntime", "Inner")));
     }
 }

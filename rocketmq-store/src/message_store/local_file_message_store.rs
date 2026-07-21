@@ -114,6 +114,7 @@ use crate::base::message_status_enum::PutMessageStatus;
 use crate::base::message_store::MessageStore;
 use crate::base::message_store::MessageStoreShutdownReport;
 use crate::base::message_store::PutMessagePreflight;
+use crate::base::message_store::StateMachineVersionView;
 use crate::base::message_store::StoreHealthRecorder;
 use crate::base::message_store::StoreHealthSnapshot;
 use crate::base::query_message_result::QueryMessageResult;
@@ -3743,6 +3744,10 @@ impl MessageStore for LocalFileMessageStore {
 
     fn get_state_machine_version(&self) -> i64 {
         self.state_machine_version.load(Ordering::SeqCst)
+    }
+
+    fn state_machine_version_view(&self) -> StateMachineVersionView {
+        StateMachineVersionView::from_shared(Arc::clone(&self.state_machine_version))
     }
 
     fn check_message_and_return_size(

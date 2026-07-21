@@ -738,6 +738,16 @@ production 79/175、Store production 82/234），净删除 2 个 production iden
 经临时 ADR-013 一对一 relocation 审核，无新增 identity。总进度仍为 75/82，下一子切片 M11-12bc35 继续 Broker
 aggregate/leaf 或 Store WAL/queue/timer/HA owner。
 
+Broker PollingInfo 与 SubscriptionGroup capability 随 Issue #8481 收窄：`PollingInfoProcessor` 改为非泛型，
+只注入启动期 `BrokerConfig`、共享 `TopicConfigManager`、仅暴露 find 的 live `SubscriptionGroupConfigLookup` 与弱
+`PollingCountProvider`，POP service 释放后查询安全回落为 0，不再保活完整 Broker runtime。作为前置解耦，
+`SubscriptionGroupManager` 删除 `ArcMut<BrokerRuntimeInner>` 和 MessageStore 泛型，改持 store path/auto-create/
+RocksDB WAL 配置快照与 Store 只读 `StateMachineVersionView`；自动创建、DataVersion、JSON/RocksDB 持久化语义保持不变。
+ArcMut 快照降至 310 identities/873 occurrences（production 157/402、test 139/431、compatibility 14/40、Broker
+production 75/168、Store production 82/234），净删除 4 个 production identity/7 occurrence 与 1 个 test
+identity/1 occurrence，无 relocation、新增 identity 或临时 approval。总进度仍为 75/82，下一子切片 M11-12bc36
+继续 Broker aggregate/leaf 或 Store WAL/queue/timer/HA owner。
+
 ### 9.3 证据目录
 
 - 运行期生成物：`target/architecture-refactor/Mxx/<run-id>/`，不提交 Git。
