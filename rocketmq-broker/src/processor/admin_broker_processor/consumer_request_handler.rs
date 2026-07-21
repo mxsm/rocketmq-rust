@@ -49,7 +49,6 @@ use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::LanguageCode;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
 use tracing::warn;
 
@@ -57,19 +56,18 @@ use crate::broker_runtime::BrokerRuntimeInner;
 use crate::client::net::broker_to_client::Broker2Client;
 
 #[derive(Clone)]
-pub(super) struct ConsumerRequestHandler<MS: MessageStore> {
-    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
-}
+pub(super) struct ConsumerRequestHandler;
 
-impl<MS: MessageStore> ConsumerRequestHandler<MS> {
-    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
-        Self { broker_runtime_inner }
+impl ConsumerRequestHandler {
+    pub fn new() -> Self {
+        Self
     }
 }
 
-impl<MS: MessageStore> ConsumerRequestHandler<MS> {
-    pub async fn get_consumer_connection_list(
+impl ConsumerRequestHandler {
+    pub async fn get_consumer_connection_list<MS: MessageStore>(
         &mut self,
+        broker_runtime_inner: &BrokerRuntimeInner<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -77,8 +75,7 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut response = RemotingCommand::create_response_command();
         let request_header = request.decode_command_custom_header::<GetConsumerConnectionListRequestHeader>()?;
-        let consumer_group_info = self
-            .broker_runtime_inner
+        let consumer_group_info = broker_runtime_inner
             .consumer_manager()
             .get_consumer_group_info(request_header.get_consumer_group());
         match consumer_group_info {
@@ -111,8 +108,9 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
         }
     }
 
-    pub async fn get_consume_stats(
+    pub async fn get_consume_stats<MS: MessageStore>(
         &mut self,
+        broker_runtime_inner: &BrokerRuntimeInner<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -125,18 +123,14 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
         let mut consume_stats = ConsumeStats::new();
         let mut topics = HashSet::new();
         if request_header.get_topic().is_empty() {
-            topics = self
-                .broker_runtime_inner
+            topics = broker_runtime_inner
                 .consumer_offset_manager()
                 .which_topic_by_consumer(request_header.get_consumer_group());
         } else {
             topics.insert(request_header.get_topic().clone());
         }
         for topic in topics.iter() {
-            let topic_config = self
-                .broker_runtime_inner
-                .topic_config_manager()
-                .select_topic_config(topic);
+            let topic_config = broker_runtime_inner.topic_config_manager().select_topic_config(topic);
             if topic_config.is_none() {
                 warn!(
                     "AdminBrokerProcessor#getConsumeStats: topic config does not exist, topic={}",
@@ -145,19 +139,16 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
                 continue;
             }
 
-            let mapping_detail = self
-                .broker_runtime_inner
+            let mapping_detail = broker_runtime_inner
                 .topic_queue_mapping_manager()
                 .get_topic_queue_mapping(topic);
 
-            let find_subscription_data = self
-                .broker_runtime_inner
+            let find_subscription_data = broker_runtime_inner
                 .consumer_manager()
                 .find_subscription_data(request_header.get_consumer_group(), topic);
 
             if find_subscription_data.is_none()
-                && self
-                    .broker_runtime_inner
+                && broker_runtime_inner
                     .consumer_manager()
                     .find_subscription_data_count(request_header.get_consumer_group())
                     > 0
@@ -174,13 +165,12 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
             for i in 0..topic_config.unwrap().get_read_queue_nums() {
                 let mut mq = MessageQueue::new();
                 mq.set_topic(topic.to_string().into());
-                mq.set_broker_name(self.broker_runtime_inner.broker_config().broker_name().clone());
+                mq.set_broker_name(broker_runtime_inner.broker_config().broker_name().clone());
                 mq.set_queue_id(i as i32);
 
                 let mut offset_wrapper = OffsetWrapper::new();
 
-                let mut broker_offset = self
-                    .broker_runtime_inner
+                let mut broker_offset = broker_runtime_inner
                     .message_store()
                     .unwrap()
                     .get_max_offset_in_queue(topic, i as i32);
@@ -188,7 +178,7 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
                     broker_offset = 0;
                 }
 
-                let mut consumer_offset = self.broker_runtime_inner.consumer_offset_manager().query_offset(
+                let mut consumer_offset = broker_runtime_inner.consumer_offset_manager().query_offset(
                     request_header.get_consumer_group(),
                     topic,
                     i as i32,
@@ -198,7 +188,7 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
                     consumer_offset = 0;
                 }
 
-                let pull_offset = self.broker_runtime_inner.consumer_offset_manager().query_offset(
+                let pull_offset = broker_runtime_inner.consumer_offset_manager().query_offset(
                     request_header.get_consumer_group(),
                     topic,
                     i as i32,
@@ -210,8 +200,7 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
 
                 let time_offset = consumer_offset - 1;
                 if time_offset >= 0 {
-                    let last_timestamp = self
-                        .broker_runtime_inner
+                    let last_timestamp = broker_runtime_inner
                         .message_store()
                         .unwrap()
                         .get_message_store_timestamp(topic, i as i32, time_offset);
@@ -223,8 +212,7 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
                 consume_stats.get_offset_table_mut().insert(mq, offset_wrapper);
             }
 
-            let consume_tps = self
-                .broker_runtime_inner
+            let consume_tps = broker_runtime_inner
                 .broker_stats_manager()
                 .tps_group_get_nums(request_header.get_consumer_group(), topic);
 
@@ -236,8 +224,9 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
         Ok(Some(response))
     }
 
-    pub async fn get_broker_consume_stats(
+    pub async fn get_broker_consume_stats<MS: MessageStore>(
         &mut self,
+        broker_runtime_inner: &BrokerRuntimeInner<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -248,23 +237,24 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
         let mut total_diff = 0i64;
         let mut total_inflight_diff = 0i64;
 
-        for entry in self
-            .broker_runtime_inner
+        for entry in broker_runtime_inner
             .subscription_group_manager()
             .subscription_group_table()
             .iter()
         {
             let group = entry.key().clone();
-            let topics = self
-                .broker_runtime_inner
+            let topics = broker_runtime_inner
                 .consumer_offset_manager()
                 .which_topic_by_consumer(&group);
             let mut consume_stats_list = Vec::new();
 
             for topic in topics {
-                let Some(consume_stats) =
-                    self.build_broker_topic_consume_stats(&group, &topic, request_header.is_order)
-                else {
+                let Some(consume_stats) = self.build_broker_topic_consume_stats(
+                    broker_runtime_inner,
+                    &group,
+                    &topic,
+                    request_header.is_order,
+                ) else {
                     continue;
                 };
 
@@ -280,7 +270,7 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
 
         let body = ConsumeStatsList {
             consume_stats_list: broker_consume_stats_list,
-            broker_addr: Some(self.broker_runtime_inner.get_broker_addr().clone()),
+            broker_addr: Some(broker_runtime_inner.get_broker_addr().clone()),
             total_diff,
             total_inflight_diff,
         };
@@ -292,21 +282,20 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
         ))
     }
 
-    pub async fn query_correction_offset(
+    pub async fn query_correction_offset<MS: MessageStore>(
         &mut self,
+        broker_runtime_inner: &BrokerRuntimeInner<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_header = request.decode_command_custom_header::<QueryCorrectionOffsetHeader>()?;
-        let mut correction_offsets = self
-            .broker_runtime_inner
+        let mut correction_offsets = broker_runtime_inner
             .consumer_offset_manager()
             .query_min_offset_in_all_group(&request_header.topic, request_header.filter_groups.as_ref());
 
-        if let Some(compare_offsets) = self
-            .broker_runtime_inner
+        if let Some(compare_offsets) = broker_runtime_inner
             .consumer_offset_manager()
             .query_offsets(&request_header.compare_group, &request_header.topic)
         {
@@ -330,8 +319,9 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
         ))
     }
 
-    pub async fn consume_message_directly(
+    pub async fn consume_message_directly<MS: MessageStore>(
         &mut self,
+        broker_runtime_inner: &BrokerRuntimeInner<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -358,14 +348,10 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
         };
 
         request.ensure_ext_fields_initialized();
-        request.add_ext_field(
-            "brokerName",
-            self.broker_runtime_inner.broker_config().broker_name().clone(),
-        );
+        request.add_ext_field("brokerName", broker_runtime_inner.broker_config().broker_name().clone());
 
         if let Some(topic) = request_header.topic.as_ref().filter(|topic| !topic.is_empty()) {
-            if let Some(topic_config) = self
-                .broker_runtime_inner
+            if let Some(topic_config) = broker_runtime_inner
                 .topic_config_manager()
                 .get_topic_config(topic.as_str())
             {
@@ -373,8 +359,7 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
             }
         }
 
-        if let Some(group_config) = self
-            .broker_runtime_inner
+        if let Some(group_config) = broker_runtime_inner
             .subscription_group_manager()
             .find_subscription_group_config(&request_header.consumer_group)
         {
@@ -392,8 +377,7 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
             }
         };
 
-        let Some(select_result) = self
-            .broker_runtime_inner
+        let Some(select_result) = broker_runtime_inner
             .message_store()
             .unwrap()
             .select_one_message_by_offset(message_id.offset)
@@ -414,6 +398,7 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
         request.set_body_mut_ref(body);
 
         self.call_consumer(
+            broker_runtime_inner,
             request.clone(),
             request_header.consumer_group.as_str(),
             client_id.as_str(),
@@ -421,16 +406,14 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
         .await
     }
 
-    fn build_broker_topic_consume_stats(
+    fn build_broker_topic_consume_stats<MS: MessageStore>(
         &self,
+        broker_runtime_inner: &BrokerRuntimeInner<MS>,
         group: &cheetah_string::CheetahString,
         topic: &cheetah_string::CheetahString,
         is_order: bool,
     ) -> Option<ConsumeStats> {
-        let topic_config = self
-            .broker_runtime_inner
-            .topic_config_manager()
-            .select_topic_config(topic);
+        let topic_config = broker_runtime_inner.topic_config_manager().select_topic_config(topic);
         let Some(topic_config) = topic_config else {
             warn!(
                 "AdminBrokerProcessor#fetchAllConsumeStatsInBroker: topic config does not exist, topic={}",
@@ -443,13 +426,11 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
             return None;
         }
 
-        let find_subscription_data = self
-            .broker_runtime_inner
+        let find_subscription_data = broker_runtime_inner
             .consumer_manager()
             .find_subscription_data(group, topic);
         if find_subscription_data.is_none()
-            && self
-                .broker_runtime_inner
+            && broker_runtime_inner
                 .consumer_manager()
                 .find_subscription_data_count(group)
                 > 0
@@ -462,8 +443,7 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
             return None;
         }
 
-        let message_store = self
-            .broker_runtime_inner
+        let message_store = broker_runtime_inner
             .message_store()
             .expect("message store should be initialized before broker consume stats");
         let mut consume_stats = ConsumeStats::new();
@@ -471,7 +451,7 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
             let queue_id = queue_id as i32;
             let mut mq = MessageQueue::new();
             mq.set_topic(topic.clone());
-            mq.set_broker_name(self.broker_runtime_inner.broker_config().broker_name().clone());
+            mq.set_broker_name(broker_runtime_inner.broker_config().broker_name().clone());
             mq.set_queue_id(queue_id);
 
             let mut offset_wrapper = OffsetWrapper::new();
@@ -480,8 +460,7 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
                 broker_offset = 0;
             }
 
-            let mut consumer_offset = self
-                .broker_runtime_inner
+            let mut consumer_offset = broker_runtime_inner
                 .consumer_offset_manager()
                 .query_offset(group, topic, queue_id);
             if consumer_offset < 0 {
@@ -502,23 +481,23 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
             consume_stats.get_offset_table_mut().insert(mq, offset_wrapper);
         }
 
-        let consume_tps = self
-            .broker_runtime_inner
+        let consume_tps = broker_runtime_inner
             .broker_stats_manager()
             .tps_group_get_nums(group, topic);
         consume_stats.set_consume_tps(consume_stats.get_consume_tps() + consume_tps);
         Some(consume_stats)
     }
 
-    pub async fn get_all_consumer_offset(
+    pub async fn get_all_consumer_offset<MS: MessageStore>(
         &mut self,
+        broker_runtime_inner: &BrokerRuntimeInner<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut response = RemotingCommand::create_response_command();
-        let content = self.broker_runtime_inner.consumer_offset_manager().encode();
+        let content = broker_runtime_inner.consumer_offset_manager().encode();
         if !content.is_empty() {
             response.set_body_mut_ref(content);
             Ok(Some(response))
@@ -531,15 +510,16 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
         }
     }
 
-    pub async fn get_all_message_request_mode(
+    pub async fn get_all_message_request_mode<MS: MessageStore>(
         &mut self,
+        broker_runtime_inner: &BrokerRuntimeInner<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut response = RemotingCommand::create_response_command();
-        let Some(query_assignment_processor) = self.broker_runtime_inner.query_assignment_processor() else {
+        let Some(query_assignment_processor) = broker_runtime_inner.query_assignment_processor() else {
             return Ok(Some(
                 response
                     .set_code(ResponseCode::SystemError)
@@ -565,8 +545,9 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
         Ok(Some(response.set_code(ResponseCode::Success)))
     }
 
-    pub async fn invoke_broker_to_reset_offset(
+    pub async fn invoke_broker_to_reset_offset<MS: MessageStore>(
         &mut self,
+        broker_runtime_inner: &mut BrokerRuntimeInner<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -574,8 +555,9 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_header = request.decode_command_custom_header::<ResetOffsetRequestHeader>()?;
 
-        let response = if self.broker_runtime_inner.broker_config().use_server_side_reset_offset {
+        let response = if broker_runtime_inner.broker_config().use_server_side_reset_offset {
             self.reset_offset_inner(
+                broker_runtime_inner,
                 &request_header.topic,
                 &request_header.group,
                 request_header.queue_id,
@@ -588,7 +570,7 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
             if request.language() == LanguageCode::CPP {
                 broker_to_client
                     .reset_offset_for_c(
-                        self.broker_runtime_inner.as_mut(),
+                        broker_runtime_inner,
                         &request_header.topic,
                         &request_header.group,
                         request_header.timestamp,
@@ -598,7 +580,7 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
             } else {
                 broker_to_client
                     .reset_offset(
-                        self.broker_runtime_inner.as_mut(),
+                        broker_runtime_inner,
                         &request_header.topic,
                         &request_header.group,
                         request_header.timestamp,
@@ -611,8 +593,9 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
         Ok(Some(response))
     }
 
-    pub async fn invoke_broker_to_get_consumer_status(
+    pub async fn invoke_broker_to_get_consumer_status<MS: MessageStore>(
         &mut self,
+        broker_runtime_inner: &BrokerRuntimeInner<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -623,7 +606,7 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
         Ok(Some(
             broker_to_client
                 .get_consume_status(
-                    self.broker_runtime_inner.as_ref(),
+                    broker_runtime_inner,
                     &request_header.topic,
                     &request_header.group,
                     request_header.client_addr.as_ref(),
@@ -632,8 +615,9 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
         ))
     }
 
-    pub async fn query_subscription_by_consumer(
+    pub async fn query_subscription_by_consumer<MS: MessageStore>(
         &mut self,
+        broker_runtime_inner: &BrokerRuntimeInner<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -641,8 +625,7 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_header = request.decode_command_custom_header::<QuerySubscriptionByConsumerRequestHeader>()?;
         let response_body = QuerySubscriptionResponseBody {
-            subscription_data: self
-                .broker_runtime_inner
+            subscription_data: broker_runtime_inner
                 .consumer_manager()
                 .find_subscription_data(&request_header.group, &request_header.topic),
             group: request_header.group,
@@ -656,8 +639,9 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
         ))
     }
 
-    pub async fn query_consume_time_span(
+    pub async fn query_consume_time_span<MS: MessageStore>(
         &mut self,
+        broker_runtime_inner: &BrokerRuntimeInner<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -666,11 +650,7 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
         let mut response = RemotingCommand::create_response_command();
         let request_header = request.decode_command_custom_header::<QueryConsumeTimeSpanRequestHeader>()?;
         let topic = request_header.topic;
-        let Some(topic_config) = self
-            .broker_runtime_inner
-            .topic_config_manager()
-            .select_topic_config(&topic)
-        else {
+        let Some(topic_config) = broker_runtime_inner.topic_config_manager().select_topic_config(&topic) else {
             return Ok(Some(
                 response
                     .set_code(ResponseCode::TopicNotExist)
@@ -678,8 +658,7 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
             ));
         };
 
-        let message_store = self
-            .broker_runtime_inner
+        let message_store = broker_runtime_inner
             .message_store()
             .expect("message store should be initialized before query consume time span");
         let mut time_span_set = Vec::with_capacity(topic_config.write_queue_nums as usize);
@@ -693,11 +672,10 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
                 min_time
             };
 
-            let consumer_offset = self.broker_runtime_inner.consumer_offset_manager().query_offset(
-                &request_header.group,
-                &topic,
-                queue_id,
-            );
+            let consumer_offset =
+                broker_runtime_inner
+                    .consumer_offset_manager()
+                    .query_offset(&request_header.group, &topic, queue_id);
             let consume_time = if consumer_offset > 0 {
                 message_store.get_message_store_timestamp(&topic, queue_id, consumer_offset - 1)
             } else {
@@ -718,7 +696,7 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
             let mut queue_time_span = QueueTimeSpan::default();
             queue_time_span.set_message_queue(MessageQueue::from_parts(
                 topic.clone(),
-                self.broker_runtime_inner.broker_config().broker_name().clone(),
+                broker_runtime_inner.broker_config().broker_name().clone(),
                 queue_id,
             ));
             queue_time_span.set_min_time_stamp(min_time);
@@ -737,8 +715,9 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
         Ok(Some(response.set_code(ResponseCode::Success)))
     }
 
-    pub async fn clone_group_offset(
+    pub async fn clone_group_offset<MS: MessageStore>(
         &mut self,
+        broker_runtime_inner: &BrokerRuntimeInner<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -749,15 +728,13 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
         if let Some(topic) = request_header.topic.clone().filter(|topic| !topic.is_empty()) {
             topics.insert(topic);
         } else {
-            topics = self
-                .broker_runtime_inner
+            topics = broker_runtime_inner
                 .consumer_offset_manager()
                 .which_topic_by_consumer(&request_header.src_group);
         }
 
         for topic in topics {
-            if self
-                .broker_runtime_inner
+            if broker_runtime_inner
                 .topic_config_manager()
                 .select_topic_config(&topic)
                 .is_none()
@@ -767,13 +744,11 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
             }
 
             if !request_header.offline
-                && self
-                    .broker_runtime_inner
+                && broker_runtime_inner
                     .consumer_manager()
                     .find_subscription_data_count(&request_header.src_group)
                     > 0
-                && self
-                    .broker_runtime_inner
+                && broker_runtime_inner
                     .consumer_manager()
                     .find_subscription_data(&request_header.src_group, &topic)
                     .is_none()
@@ -786,7 +761,7 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
                 continue;
             }
 
-            self.broker_runtime_inner.consumer_offset_manager().clone_offset(
+            broker_runtime_inner.consumer_offset_manager().clone_offset(
                 &request_header.src_group,
                 &request_header.dest_group,
                 &topic,
@@ -798,8 +773,9 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
         ))
     }
 
-    pub async fn get_consumer_running_info(
+    pub async fn get_consumer_running_info<MS: MessageStore>(
         &mut self,
+        broker_runtime_inner: &BrokerRuntimeInner<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -816,6 +792,7 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
         };
 
         self.call_consumer(
+            broker_runtime_inner,
             request.clone(),
             request_header.consumer_group.as_str(),
             request_header.client_id.as_str(),
@@ -823,16 +800,16 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
         .await
     }
 
-    async fn call_consumer(
+    async fn call_consumer<MS: MessageStore>(
         &mut self,
+        broker_runtime_inner: &BrokerRuntimeInner<MS>,
         request: RemotingCommand,
         consumer_group: &str,
         client_id: &str,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut response = RemotingCommand::create_response_command();
 
-        let client_channel_info = self
-            .broker_runtime_inner
+        let client_channel_info = broker_runtime_inner
             .consumer_manager()
             .find_channel_by_client_id(consumer_group, client_id);
 
@@ -879,8 +856,9 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
         }
     }
 
-    async fn reset_offset_inner(
+    async fn reset_offset_inner<MS: MessageStore>(
         &mut self,
+        broker_runtime_inner: &BrokerRuntimeInner<MS>,
         topic: &cheetah_string::CheetahString,
         group: &cheetah_string::CheetahString,
         queue_id: i32,
@@ -889,24 +867,19 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
     ) -> RemotingCommand {
         let mut response = RemotingCommand::create_response_command().set_code(ResponseCode::Success);
 
-        if self.broker_runtime_inner.message_store_config().broker_role == BrokerRole::Slave {
+        if broker_runtime_inner.message_store_config().broker_role == BrokerRole::Slave {
             return response
                 .set_code(ResponseCode::SystemError)
                 .set_remark("Can not reset offset in slave broker");
         }
 
-        let Some(topic_config) = self
-            .broker_runtime_inner
-            .topic_config_manager()
-            .select_topic_config(topic)
-        else {
+        let Some(topic_config) = broker_runtime_inner.topic_config_manager().select_topic_config(topic) else {
             return response
                 .set_code(ResponseCode::TopicNotExist)
                 .set_remark(format!("Topic {} does not exist", topic));
         };
 
-        if !self
-            .broker_runtime_inner
+        if !broker_runtime_inner
             .subscription_group_manager()
             .contains_subscription_group(group)
         {
@@ -917,7 +890,10 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
 
         let mut queue_offset_map = std::collections::HashMap::new();
         if queue_id >= 0 {
-            match self.resolve_reset_offset(topic, queue_id, timestamp, offset).await {
+            match self
+                .resolve_reset_offset(broker_runtime_inner, topic, queue_id, timestamp, offset)
+                .await
+            {
                 Ok(target_offset) => {
                     queue_offset_map.insert(queue_id, target_offset);
                 }
@@ -926,7 +902,7 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
         } else {
             for queue_index in 0..topic_config.read_queue_nums {
                 match self
-                    .resolve_reset_offset(topic, queue_index as i32, timestamp, None)
+                    .resolve_reset_offset(broker_runtime_inner, topic, queue_index as i32, timestamp, None)
                     .await
                 {
                     Ok(target_offset) => {
@@ -943,19 +919,19 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
                 .set_remark("No queues to reset.");
         }
 
-        let broker_name = self.broker_runtime_inner.broker_config().broker_name().clone();
+        let broker_name = broker_runtime_inner.broker_config().broker_name().clone();
         let mut body = ResetOffsetBody::new();
         for (queue_index, target_offset) in queue_offset_map {
-            self.broker_runtime_inner.consumer_offset_manager().assign_reset_offset(
+            broker_runtime_inner.consumer_offset_manager().assign_reset_offset(
                 topic,
                 group,
                 queue_index,
                 target_offset,
             );
-            self.broker_runtime_inner
+            broker_runtime_inner
                 .consumer_offset_manager()
                 .clear_pull_offset(group, topic);
-            self.broker_runtime_inner
+            broker_runtime_inner
                 .pop_inflight_message_counter()
                 .clear_in_flight_message_num(topic, group, queue_index);
             body.offset_table.insert(
@@ -968,16 +944,16 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
         response
     }
 
-    async fn resolve_reset_offset(
+    async fn resolve_reset_offset<MS: MessageStore>(
         &self,
+        broker_runtime_inner: &BrokerRuntimeInner<MS>,
         topic: &cheetah_string::CheetahString,
         queue_id: i32,
         timestamp: i64,
         offset: Option<i64>,
     ) -> Result<i64, RemotingCommand> {
         let mut response = RemotingCommand::create_response_command().set_code(ResponseCode::Success);
-        let message_store = self
-            .broker_runtime_inner
+        let message_store = broker_runtime_inner
             .message_store()
             .expect("message store should be initialized before admin request");
 
@@ -1145,13 +1121,19 @@ mod tests {
                 },
             );
 
-        let mut handler = ConsumerRequestHandler::new(inner.clone());
+        let mut handler = ConsumerRequestHandler::new();
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request =
             RemotingCommand::create_request_command(RequestCode::GetAllMessageRequestMode, EmptyHeader {});
         let mut response = handler
-            .get_all_message_request_mode(channel, ctx, RequestCode::GetAllMessageRequestMode, &mut request)
+            .get_all_message_request_mode(
+                inner.as_ref(),
+                channel,
+                ctx,
+                RequestCode::GetAllMessageRequestMode,
+                &mut request,
+            )
             .await
             .expect("get all message request mode should succeed")
             .expect("get all message request mode should return response");
@@ -1195,7 +1177,7 @@ mod tests {
             6,
         );
 
-        let mut handler = ConsumerRequestHandler::new(inner);
+        let mut handler = ConsumerRequestHandler::new();
         let mut request = RemotingCommand::create_request_command(
             RequestCode::GetBrokerConsumeStats,
             GetConsumeStatsInBrokerHeader { is_order: false },
@@ -1205,7 +1187,13 @@ mod tests {
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
 
         let mut response = handler
-            .get_broker_consume_stats(channel, ctx, RequestCode::GetBrokerConsumeStats, &mut request)
+            .get_broker_consume_stats(
+                inner.as_ref(),
+                channel,
+                ctx,
+                RequestCode::GetBrokerConsumeStats,
+                &mut request,
+            )
             .await
             .expect("get broker consume stats should succeed")
             .expect("get broker consume stats should return response");
@@ -1251,7 +1239,7 @@ mod tests {
             8,
         );
 
-        let mut handler = ConsumerRequestHandler::new(inner);
+        let mut handler = ConsumerRequestHandler::new();
         let mut request = RemotingCommand::create_request_command(
             RequestCode::QueryCorrectionOffset,
             QueryCorrectionOffsetHeader {
@@ -1266,7 +1254,13 @@ mod tests {
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
 
         let mut response = handler
-            .query_correction_offset(channel, ctx, RequestCode::QueryCorrectionOffset, &mut request)
+            .query_correction_offset(
+                inner.as_ref(),
+                channel,
+                ctx,
+                RequestCode::QueryCorrectionOffset,
+                &mut request,
+            )
             .await
             .expect("query correction offset should succeed")
             .expect("query correction offset should return response");
@@ -1300,7 +1294,7 @@ mod tests {
             .update_subscription_group_config(&mut group_config);
         let msg_id = put_test_message(inner.as_mut(), "topic-a").await;
 
-        let mut handler = ConsumerRequestHandler::new(inner);
+        let mut handler = ConsumerRequestHandler::new();
         let mut request = RemotingCommand::create_request_command(
             RequestCode::ConsumeMessageDirectly,
             ConsumeMessageDirectlyResultRequestHeader {
@@ -1319,7 +1313,13 @@ mod tests {
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
 
         let response = handler
-            .consume_message_directly(channel, ctx, RequestCode::ConsumeMessageDirectly, &mut request)
+            .consume_message_directly(
+                inner.as_ref(),
+                channel,
+                ctx,
+                RequestCode::ConsumeMessageDirectly,
+                &mut request,
+            )
             .await
             .expect("consume message directly should succeed")
             .expect("consume message directly should return response");
@@ -1348,7 +1348,7 @@ mod tests {
             .subscription_group_manager_mut()
             .update_subscription_group_config(&mut group_config);
 
-        let mut handler = ConsumerRequestHandler::new(inner.clone());
+        let mut handler = ConsumerRequestHandler::new();
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request = RemotingCommand::create_request_command(
@@ -1366,7 +1366,13 @@ mod tests {
         request.make_custom_header_to_net();
 
         let mut response = handler
-            .invoke_broker_to_reset_offset(channel, ctx, RequestCode::InvokeBrokerToResetOffset, &mut request)
+            .invoke_broker_to_reset_offset(
+                inner.as_mut(),
+                channel,
+                ctx,
+                RequestCode::InvokeBrokerToResetOffset,
+                &mut request,
+            )
             .await
             .expect("invoke broker to reset offset should succeed")
             .expect("invoke broker to reset offset should return response");
@@ -1391,7 +1397,7 @@ mod tests {
     async fn invoke_broker_to_get_consumer_status_returns_offline_group_error() {
         let mut runtime = new_test_runtime("consumer-status").await;
         let inner = runtime.inner_for_test().clone();
-        let mut handler = ConsumerRequestHandler::new(inner);
+        let mut handler = ConsumerRequestHandler::new();
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request = RemotingCommand::create_request_command(
@@ -1405,6 +1411,7 @@ mod tests {
 
         let response = handler
             .invoke_broker_to_get_consumer_status(
+                inner.as_ref(),
                 channel,
                 ctx,
                 RequestCode::InvokeBrokerToGetConsumerStatus,
@@ -1448,7 +1455,7 @@ mod tests {
             false,
         );
 
-        let mut handler = ConsumerRequestHandler::new(inner);
+        let mut handler = ConsumerRequestHandler::new();
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request = RemotingCommand::create_request_command(
@@ -1462,7 +1469,13 @@ mod tests {
         request.make_custom_header_to_net();
 
         let mut response = handler
-            .query_subscription_by_consumer(channel, ctx, RequestCode::QuerySubscriptionByConsumer, &mut request)
+            .query_subscription_by_consumer(
+                inner.as_ref(),
+                channel,
+                ctx,
+                RequestCode::QuerySubscriptionByConsumer,
+                &mut request,
+            )
             .await
             .expect("query subscription by consumer should succeed")
             .expect("query subscription by consumer should return response");
@@ -1495,7 +1508,7 @@ mod tests {
             .topic_config_manager()
             .update_topic_config(TopicConfig::with_queues("topic-a", 1, 1), 0);
 
-        let mut handler = ConsumerRequestHandler::new(inner);
+        let mut handler = ConsumerRequestHandler::new();
         let mut request = RemotingCommand::create_request_command(
             RequestCode::QueryConsumeTimeSpan,
             QueryConsumeTimeSpanRequestHeader {
@@ -1509,7 +1522,13 @@ mod tests {
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
 
         let mut response = handler
-            .query_consume_time_span(channel, ctx, RequestCode::QueryConsumeTimeSpan, &mut request)
+            .query_consume_time_span(
+                inner.as_ref(),
+                channel,
+                ctx,
+                RequestCode::QueryConsumeTimeSpan,
+                &mut request,
+            )
             .await
             .expect("query consume time span should succeed")
             .expect("query consume time span should return response");
@@ -1550,7 +1569,7 @@ mod tests {
             18,
         );
 
-        let mut handler = ConsumerRequestHandler::new(inner.clone());
+        let mut handler = ConsumerRequestHandler::new();
         let mut request = RemotingCommand::create_request_command(
             RequestCode::CloneGroupOffset,
             CloneGroupOffsetRequestHeader {
@@ -1566,7 +1585,13 @@ mod tests {
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
 
         let response = handler
-            .clone_group_offset(channel, ctx, RequestCode::CloneGroupOffset, &mut request)
+            .clone_group_offset(
+                inner.as_ref(),
+                channel,
+                ctx,
+                RequestCode::CloneGroupOffset,
+                &mut request,
+            )
             .await
             .expect("clone group offset should succeed")
             .expect("clone group offset should return response");

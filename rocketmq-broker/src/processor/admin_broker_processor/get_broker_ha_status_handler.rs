@@ -91,6 +91,7 @@ mod tests {
     use crate::broker_runtime::BrokerRuntime;
     use crate::processor::admin_broker_processor::batch_mq_handler::BatchMqHandler;
     use crate::processor::admin_broker_processor::broker_epoch_cache_handler::BrokerEpochCacheHandler;
+    use crate::processor::admin_broker_processor::consumer_request_handler::ConsumerRequestHandler;
     use crate::processor::admin_broker_processor::message_related_handler::MessageRelatedHandler;
     use crate::processor::admin_broker_processor::notify_min_broker_id_handler::NotifyMinBrokerChangeIdHandler;
     use crate::processor::admin_broker_processor::offset_request_handler::OffsetRequestHandler;
@@ -205,6 +206,7 @@ mod tests {
             let _reset_flush_offset_handler = ResetMasterFlushOffsetHandler::new();
             let _update_broker_ha_handler = UpdateBrokerHaHandler::new();
             let _batch_mq_handler = BatchMqHandler::new();
+            let _consumer_request_handler = ConsumerRequestHandler::new();
             let _subscription_group_handler = SubscriptionGroupHandler::new();
             let _message_related_handler = MessageRelatedHandler::new();
             let _notify_min_broker_handler = NotifyMinBrokerChangeIdHandler::new();
