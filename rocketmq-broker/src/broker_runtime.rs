@@ -148,7 +148,10 @@ use crate::processor::pull_message_processor::PullMessageProcessor;
 use crate::processor::query_assignment_processor::QueryAssignmentProcessor;
 use crate::processor::query_message_processor::QueryMessageProcessor;
 use crate::processor::query_message_processor::QueryMessageStoreCapability;
+use crate::processor::recall_message_processor::RecallMessagePolicy;
 use crate::processor::recall_message_processor::RecallMessageProcessor;
+use crate::processor::recall_message_processor::RecallMessageProcessorContext;
+use crate::processor::recall_message_processor::RecallMessageStoreCapability;
 use crate::processor::reply_message_processor::ReplyMessageProcessor;
 use crate::processor::send_message_processor::SendMessageProcessor;
 use crate::processor::BrokerProcessorType;
@@ -2658,7 +2661,16 @@ impl BrokerRuntime {
         );
 
         //RecallMessageProcessor
-        let recall_message_processor = Arc::new(RecallMessageProcessor::new(self.inner.clone()));
+        let recall_message_processor = Arc::new(RecallMessageProcessor::new(RecallMessageProcessorContext::new(
+            RecallMessagePolicy::from_configs(
+                self.inner.broker_config(),
+                self.inner.message_store_config(),
+                self.inner.store_host(),
+            ),
+            self.inner.topic_config_manager_handle(),
+            RecallMessageStoreCapability::new(&self.escape_bridge_owner),
+            self.inner.broker_stats_manager_handle(),
+        )));
         broker_request_processor.register_processor(
             RequestCode::RecallMessage as i32,
             BrokerProcessorType::Recall(recall_message_processor),
