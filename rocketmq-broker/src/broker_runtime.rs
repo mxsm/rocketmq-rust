@@ -1285,7 +1285,7 @@ impl BrokerRuntime {
         inner
             .consumer_manager
             .set_broker_stats_manager(Arc::downgrade(&stats_manager));
-        inner.broker_stats_manager = Some(stats_manager);
+        inner.broker_stats_manager = Some(stats_manager.clone());
         inner.schedule_message_service = Some(Arc::new(ScheduleMessageService::new(
             inner.broker_config.clone(),
             inner.message_store_config.clone(),
@@ -1293,7 +1293,12 @@ impl BrokerRuntime {
             inner.service_context.clone(),
             scheduled_task_manager.clone(),
         )));
-        inner.client_housekeeping_service = Some(Arc::new(ClientHousekeepingService::new(inner.clone())));
+        inner.client_housekeeping_service = Some(Arc::new(ClientHousekeepingService::new(
+            inner.producer_manager.connection_housekeeping(),
+            inner.consumer_manager.connection_housekeeping(),
+            stats_manager,
+            inner.broker_service_task_group(),
+        )));
         inner.slave_synchronize = Some(SlaveSynchronize::new(inner.clone()));
         inner.broker_pre_online_service = Some(BrokerPreOnlineService::new(inner.clone()));
         inner.topic_queue_mapping_clean_service = Some(TopicQueueMappingCleanService::new(inner.clone()));
@@ -3687,7 +3692,7 @@ pub(crate) struct BrokerRuntimeInner<MS: MessageStore> {
     cold_data_cg_ctr_service: Option<Arc<ColdDataCgCtrService>>,
     is_schedule_service_start: Arc<AtomicBool>,
     is_transaction_check_service_start: Arc<AtomicBool>,
-    client_housekeeping_service: Option<Arc<ClientHousekeepingService<MS>>>,
+    client_housekeeping_service: Option<Arc<ClientHousekeepingService>>,
     //Processor
     pop_message_processor: Option<Arc<PopMessageProcessor<MS>>>,
     pop_lite_message_processor: Option<Arc<PopLiteMessageProcessor<MS>>>,

@@ -26,28 +26,35 @@ use rocketmq_runtime::ScheduledTaskSnapshot;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskGroupLifecycleState;
-use rocketmq_rust::ArcMut;
-use rocketmq_store::base::message_store::MessageStore;
+use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
 use tokio::sync::Notify;
 use tracing::debug;
 use tracing::warn;
 
-use crate::broker_runtime::BrokerRuntimeInner;
+use crate::broker_runtime::broker_task_group_or_current;
+use crate::client::manager::consumer_manager::ConsumerConnectionHousekeeping;
+use crate::client::manager::producer_manager::ProducerConnectionHousekeeping;
 
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
-pub struct ClientHousekeepingService<MS: MessageStore> {
-    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+pub struct ClientHousekeepingService {
+    producer_housekeeping: ProducerConnectionHousekeeping,
+    consumer_housekeeping: ConsumerConnectionHousekeeping,
+    broker_stats_manager: Arc<BrokerStatsManager>,
+    parent_task_group: Option<TaskGroup>,
     shutdown: Arc<Notify>,
     shutdown_requested: Arc<AtomicBool>,
     task_group: Arc<Mutex<Option<TaskGroup>>>,
     scheduled_tasks: Arc<Mutex<Option<ScheduledTaskGroup>>>,
 }
 
-impl<MS: MessageStore> Clone for ClientHousekeepingService<MS> {
+impl Clone for ClientHousekeepingService {
     fn clone(&self) -> Self {
         Self {
-            broker_runtime_inner: self.broker_runtime_inner.clone(),
+            producer_housekeeping: self.producer_housekeeping.clone(),
+            consumer_housekeeping: self.consumer_housekeeping.clone(),
+            broker_stats_manager: Arc::clone(&self.broker_stats_manager),
+            parent_task_group: self.parent_task_group.clone(),
             shutdown: self.shutdown.clone(),
             shutdown_requested: self.shutdown_requested.clone(),
             task_group: self.task_group.clone(),
@@ -56,13 +63,18 @@ impl<MS: MessageStore> Clone for ClientHousekeepingService<MS> {
     }
 }
 
-impl<MS> ClientHousekeepingService<MS>
-where
-    MS: MessageStore,
-{
-    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
+impl ClientHousekeepingService {
+    pub fn new(
+        producer_housekeeping: ProducerConnectionHousekeeping,
+        consumer_housekeeping: ConsumerConnectionHousekeeping,
+        broker_stats_manager: Arc<BrokerStatsManager>,
+        parent_task_group: Option<TaskGroup>,
+    ) -> Self {
         Self {
-            broker_runtime_inner,
+            producer_housekeeping,
+            consumer_housekeeping,
+            broker_stats_manager,
+            parent_task_group,
             shutdown: Arc::new(Notify::new()),
             shutdown_requested: Arc::new(AtomicBool::new(false)),
             task_group: Arc::new(Mutex::new(None)),
@@ -128,8 +140,8 @@ where
     }
 
     fn scan_exception_channel(&self) {
-        self.broker_runtime_inner.producer_manager().scan_not_active_channel();
-        self.broker_runtime_inner.consumer_manager().scan_not_active_channel();
+        self.producer_housekeeping.scan_not_active_channel();
+        self.consumer_housekeeping.scan_not_active_channel();
     }
 
     fn task_group(&self) -> Option<TaskGroup> {
@@ -140,7 +152,8 @@ where
             }
         }
 
-        let group = self.broker_runtime_inner.broker_task_group_or_current(
+        let group = broker_task_group_or_current(
+            self.parent_task_group.as_ref(),
             "rocketmq-broker.client-housekeeping",
             "failed to start broker client housekeeping outside Tokio runtime",
         )?;
@@ -173,46 +186,27 @@ where
     }
 }
 
-impl<MS> ChannelEventListener for ClientHousekeepingService<MS>
-where
-    MS: MessageStore,
-{
+impl ChannelEventListener for ClientHousekeepingService {
     fn on_channel_connect(&self, _remote_addr: &str, _channel: &Channel) {
-        self.broker_runtime_inner
-            .broker_stats_manager()
-            .inc_channel_connect_num()
+        self.broker_stats_manager.inc_channel_connect_num()
     }
 
     fn on_channel_close(&self, remote_addr: &str, channel: &Channel) {
-        self.broker_runtime_inner
-            .producer_manager()
-            .do_channel_close_event(remote_addr, channel);
-        self.broker_runtime_inner
-            .consumer_manager()
-            .do_channel_close_event(remote_addr, channel);
-        self.broker_runtime_inner.broker_stats_manager().inc_channel_close_num()
+        self.producer_housekeeping.do_channel_close_event(remote_addr, channel);
+        self.consumer_housekeeping.do_channel_close_event(remote_addr, channel);
+        self.broker_stats_manager.inc_channel_close_num()
     }
 
     fn on_channel_exception(&self, remote_addr: &str, channel: &Channel) {
-        self.broker_runtime_inner
-            .producer_manager()
-            .do_channel_close_event(remote_addr, channel);
-        self.broker_runtime_inner
-            .consumer_manager()
-            .do_channel_close_event(remote_addr, channel);
-        self.broker_runtime_inner
-            .broker_stats_manager()
-            .inc_channel_exception_num()
+        self.producer_housekeeping.do_channel_close_event(remote_addr, channel);
+        self.consumer_housekeeping.do_channel_close_event(remote_addr, channel);
+        self.broker_stats_manager.inc_channel_exception_num()
     }
 
     fn on_channel_idle(&self, remote_addr: &str, channel: &Channel) {
-        self.broker_runtime_inner
-            .producer_manager()
-            .do_channel_close_event(remote_addr, channel);
-        self.broker_runtime_inner
-            .consumer_manager()
-            .do_channel_close_event(remote_addr, channel);
-        self.broker_runtime_inner.broker_stats_manager().inc_channel_idle_num()
+        self.producer_housekeeping.do_channel_close_event(remote_addr, channel);
+        self.consumer_housekeeping.do_channel_close_event(remote_addr, channel);
+        self.broker_stats_manager.inc_channel_idle_num()
     }
 
     fn on_channel_active(&self, _remote_addr: &str, _channel: &Channel) {
@@ -237,7 +231,13 @@ mod tests {
         let broker_config = Arc::new(BrokerConfig::default());
         let message_store_config = Arc::new(MessageStoreConfig::default());
         let mut broker_runtime = BrokerRuntime::new(broker_config, message_store_config);
-        let service = ClientHousekeepingService::new(broker_runtime.inner_for_test().clone());
+        let inner = broker_runtime.inner_for_test();
+        let service = ClientHousekeepingService::new(
+            inner.producer_manager().connection_housekeeping(),
+            inner.consumer_manager().connection_housekeeping(),
+            inner.broker_stats_manager_handle(),
+            inner.broker_service_task_group(),
+        );
 
         service.start();
         service.start();
@@ -261,7 +261,13 @@ mod tests {
         let message_store_config = Arc::new(MessageStoreConfig::default());
         let mut broker_runtime =
             BrokerRuntime::new_with_service_context(broker_config, message_store_config, broker_service.clone());
-        let service = ClientHousekeepingService::new(broker_runtime.inner_for_test().clone());
+        let inner = broker_runtime.inner_for_test();
+        let service = ClientHousekeepingService::new(
+            inner.producer_manager().connection_housekeeping(),
+            inner.consumer_manager().connection_housekeeping(),
+            inner.broker_stats_manager_handle(),
+            inner.broker_service_task_group(),
+        );
 
         service.start();
 
@@ -280,5 +286,25 @@ mod tests {
         assert!(report.is_healthy(), "{}", report.to_json());
         let broker_report = broker_service.task_group().shutdown(Duration::from_secs(1)).await;
         assert!(broker_report.is_healthy(), "{}", broker_report.to_json());
+    }
+
+    #[test]
+    fn service_does_not_retain_runtime_root() {
+        let broker_config = Arc::new(BrokerConfig::default());
+        let message_store_config = Arc::new(MessageStoreConfig::default());
+        let mut broker_runtime = BrokerRuntime::new(broker_config, message_store_config);
+        let inner = broker_runtime.inner_for_test();
+        let strong_count_before = inner.strong_count();
+
+        let service = ClientHousekeepingService::new(
+            inner.producer_manager().connection_housekeeping(),
+            inner.consumer_manager().connection_housekeeping(),
+            inner.broker_stats_manager_handle(),
+            inner.broker_service_task_group(),
+        );
+
+        assert_eq!(inner.strong_count(), strong_count_before);
+        drop(service);
+        assert_eq!(inner.strong_count(), strong_count_before);
     }
 }

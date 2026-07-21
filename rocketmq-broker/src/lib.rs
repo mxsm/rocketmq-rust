@@ -359,8 +359,12 @@ pub mod bench_support {
         let broker_config = Arc::new(BrokerConfig::default());
         let message_store_config = Arc::new(MessageStoreConfig::default());
         let mut runtime = crate::broker_runtime::BrokerRuntime::new(broker_config, message_store_config);
+        let inner = runtime.inner_for_test();
         let service = crate::client::client_housekeeping_service::ClientHousekeepingService::new(
-            runtime.inner_for_test().clone(),
+            inner.producer_manager().connection_housekeeping(),
+            inner.consumer_manager().connection_housekeeping(),
+            inner.broker_stats_manager_handle(),
+            inner.broker_service_task_group(),
         );
         service.start();
 
