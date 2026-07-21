@@ -135,7 +135,10 @@ use crate::processor::client_manage_processor::ClientManageProcessorContext;
 use crate::processor::consumer_manage_processor::ConsumerManageProcessor;
 use crate::processor::consumer_manage_processor::ConsumerManageProcessorContext;
 use crate::processor::default_pull_message_result_handler::DefaultPullMessageResultHandler;
+use crate::processor::end_transaction_processor::EndTransactionPolicy;
 use crate::processor::end_transaction_processor::EndTransactionProcessor;
+use crate::processor::end_transaction_processor::EndTransactionProcessorContext;
+use crate::processor::end_transaction_processor::EndTransactionStoreCapability;
 use crate::processor::lite_manager_processor::LiteManagerProcessor;
 use crate::processor::lite_subscription_ctl_processor::LiteSubscriptionCtlProcessor;
 use crate::processor::notification_processor::NotificationProcessor;
@@ -2767,7 +2770,11 @@ impl BrokerRuntime {
             RequestCode::EndTransaction as i32,
             BrokerProcessorType::EndTransaction(Arc::new(EndTransactionProcessor::new(
                 self.inner.transactional_message_service.as_ref().unwrap().clone(),
-                self.inner.clone(),
+                EndTransactionProcessorContext::new(
+                    EndTransactionPolicy::from_configs(self.inner.broker_config(), self.inner.message_store_config()),
+                    EndTransactionStoreCapability::new(&self.escape_bridge_owner),
+                    self.inner.broker_stats_manager_handle(),
+                ),
             ))),
         );
         let auth_admin_service = Arc::new(match &self.inner.auth_runtime {
