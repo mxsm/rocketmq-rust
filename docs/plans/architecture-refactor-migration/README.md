@@ -8,7 +8,7 @@
 > PR-M12-01～06 未开始，合计剩余 7 个
 
 剩余任务数量、M11-12 内部执行批次与 M12 六个工作包见 [`REMAINING-TASKS.md`](REMAINING-TASKS.md)：正式口径
-剩余 7 个工作包，当前执行层下界为 31 个最小可审查单元。
+剩余 7 个工作包；31 个最小可审查单元已完成 1 个，当前剩余 30 个。
 
 ## 1. 使用方式
 
@@ -896,6 +896,15 @@ Ack lifecycle 通过既有 atomic/TaskGroup 锁接受共享引用，AdminBroker 
 （production 121/332、test 125/415、compatibility 14/40、Broker production 39/98、Store production 82/234），
 净删除 2 个 production identities/9 occurrences 与 1 个 test identity/1 occurrence，无 relocation、新增 identity 或
 临时 approval。总进度仍为 75/82，下一子切片 M11-12bc53 继续 Ack 内部 capability 或其他 Broker/Store owner。
+
+Ack 内部 capability 随 Issue #8519 收口：`AckMessageProcessor` 不再持有完整 `BrokerRuntimeInner` 或强
+`PopMessageProcessor`，改持启动期 policy、共享 Topic/Inflight 能力与弱 Offset/Order/Store/POP provider；Offset/Order/Store
+provider 退出时返回稳定不可用结果，POP provider 退出时按 Store fallback 或无通知 fail closed，替代原有
+Store `unwrap`。PopRevive service 在组合根构造并以标准 Arc 持有，scan/revive task receiver 改为标准 Arc，可变进度时间戳
+改为原子状态。ArcMut 快照降至 257 identities/779 occurrences（production 118/324、test 125/415、compatibility
+14/40、Broker production 36/90、Store production 82/234），净删除 3 个 production identities/8 occurrences，
+其中 Ack owner 为 5 occurrences、PopRevive task receiver 为 3 occurrences，无 relocation、新增 identity 或临时 approval。
+R02 已完成，31 项执行清单剩余 30 项；总进度仍为 75/82，下一子切片 M11-12bc54 继续 Broker/Store owner。
 
 ### 9.3 证据目录
 

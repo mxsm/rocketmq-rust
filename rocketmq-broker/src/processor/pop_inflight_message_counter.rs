@@ -37,6 +37,7 @@ type TopicGroupKey = CheetahString;
 /// # Thread Safety
 /// - All operations are thread-safe and use atomic operations
 /// - Multiple POP requests/ACKs can be processed concurrently without data races
+#[derive(Clone)]
 pub(crate) struct PopInflightMessageCounter {
     /// Timestamp threshold: messages popped before this time are ignored during decrement
     should_start_time: Arc<AtomicU64>,
@@ -384,6 +385,19 @@ mod tests {
         counter.decrement_in_flight_message_num(&topic, &group, 0, 1, 3);
 
         assert_eq!(counter.get_group_pop_in_flight_message_num(&topic, &group, 1), 2);
+    }
+
+    #[test]
+    fn cloned_counter_observes_shared_updates() {
+        let counter = setup_counter();
+        let cloned = counter.clone();
+        let topic = CheetahString::from("test_topic");
+        let group = CheetahString::from("test_group");
+
+        counter.increment_in_flight_message_num(&topic, &group, 1, 5);
+        cloned.decrement_in_flight_message_num(&topic, &group, 0, 1, 2);
+
+        assert_eq!(counter.get_group_pop_in_flight_message_num(&topic, &group, 1), 3);
     }
 
     #[test]

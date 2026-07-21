@@ -72,7 +72,7 @@ pub struct PopReviveService<MS: MessageStore> {
     queue_id: i32,
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
     revive_topic: CheetahString,
-    current_revive_message_timestamp: i64,
+    current_revive_message_timestamp: AtomicI64,
     should_run_pop_revive: Arc<AtomicBool>,
     inflight_revive_request_map: Arc<tokio::sync::Mutex<BTreeMap<PopCheckPoint, (i64, bool)>>>,
     revive_offset: Arc<AtomicI64>,
@@ -95,7 +95,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
             queue_id,
             broker_runtime_inner,
             revive_topic,
-            current_revive_message_timestamp: -1,
+            current_revive_message_timestamp: AtomicI64::new(-1),
             should_run_pop_revive: Arc::new(AtomicBool::new(false)),
             inflight_revive_request_map: Arc::new(Default::default()),
             revive_offset: Arc::new(AtomicI64::new(revive_offset)),
@@ -108,7 +108,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
         }
     }
 
-    async fn revive_retry(&mut self, pop_check_point: &PopCheckPoint, message_ext: &MessageExt) -> bool {
+    async fn revive_retry(&self, pop_check_point: &PopCheckPoint, message_ext: &MessageExt) -> bool {
         let mut msg_inner = MessageExtBrokerInner::default();
         // Check if topic is NOT retry topic, then build retry topic
         if !pop_check_point.topic.starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX) {
@@ -193,7 +193,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
         true
     }
 
-    pub async fn add_retry_topic_if_not_exist(&mut self, topic: &CheetahString, consumer_group: &CheetahString) {
+    pub async fn add_retry_topic_if_not_exist(&self, topic: &CheetahString, consumer_group: &CheetahString) {
         if let Some(_topic_config) = self
             .broker_runtime_inner
             .topic_config_manager()
@@ -222,7 +222,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
         self.init_pop_retry_offset(topic, consumer_group);
     }
 
-    fn init_pop_retry_offset(&mut self, topic: &CheetahString, consumer_group: &CheetahString) {
+    fn init_pop_retry_offset(&self, topic: &CheetahString, consumer_group: &CheetahString) {
         let offset = self
             .broker_runtime_inner
             .consumer_offset_manager()
@@ -298,7 +298,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
         }
     }
 
-    pub fn start(this: ArcMut<Self>) {
+    pub fn start(this: Arc<Self>) {
         if this
             .running
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -320,7 +320,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
             return;
         };
         let cancellation_token = task_group.cancellation_token();
-        let mut service = this.clone();
+        let service = this.clone();
 
         if let Err(error) = task_group.spawn_service("broker.pop-revive.scan", async move {
             let mut slow = 1;
@@ -383,11 +383,15 @@ impl<MS: MessageStore> PopReviveService<MS> {
                 if let Some(ref sort_list) = consume_revive_obj.sort_list {
                     if !sort_list.is_empty() {
                         delay = (current_millis() - (sort_list[0].get_revive_time() as u64)) / 1000;
-                        service.current_revive_message_timestamp = sort_list[0].get_revive_time();
+                        service
+                            .current_revive_message_timestamp
+                            .store(sort_list[0].get_revive_time(), Ordering::Release);
                         slow = 1;
                     }
                 } else {
-                    service.current_revive_message_timestamp = current_millis() as i64;
+                    service
+                        .current_revive_message_timestamp
+                        .store(current_millis() as i64, Ordering::Release);
                 }
                 if service.broker_runtime_inner.broker_config().enable_pop_log {
                     info!(
@@ -721,7 +725,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
     }
 
     async fn merge_and_revive(
-        this: ArcMut<Self>,
+        this: Arc<Self>,
         consume_revive_obj: &mut ConsumeReviveObj,
     ) -> rocketmq_error::RocketMQResult<()> {
         let mut new_offset = consume_revive_obj.old_offset;
@@ -909,7 +913,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
             .await;
     }
 
-    async fn revive_msg_from_ck(this: ArcMut<Self>, pop_check_point: &PopCheckPoint) {
+    async fn revive_msg_from_ck(this: Arc<Self>, pop_check_point: &PopCheckPoint) {
         if !this.should_run_pop_revive.load(Ordering::Acquire) {
             info!(
                 "slave skip retry, revive topic={}, reviveQueueId={}",
@@ -930,7 +934,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
             }
             let msg_offset = pop_check_point.ack_offset_by_index(j);
 
-            let mut this_inner = this.clone();
+            let this_inner = this.clone();
 
             let future = async move {
                 let rst = this_inner.get_biz_message(pop_check_point, msg_offset).await;
@@ -1026,7 +1030,8 @@ impl<MS: MessageStore> PopReviveService<MS> {
     }
 
     pub fn get_revive_behind_millis(&self) -> i64 {
-        if self.current_revive_message_timestamp <= 0 {
+        let current_revive_message_timestamp = self.current_revive_message_timestamp.load(Ordering::Acquire);
+        if current_revive_message_timestamp <= 0 {
             return 0;
         }
         let max_offset = self
@@ -1036,13 +1041,13 @@ impl<MS: MessageStore> PopReviveService<MS> {
         let revive_offset = self.revive_offset.load(Ordering::Acquire);
         if max_offset - revive_offset > 1 {
             let now = current_millis() as i64;
-            return std::cmp::max(0, now - self.current_revive_message_timestamp);
+            return std::cmp::max(0, now - current_revive_message_timestamp);
         }
         0
     }
 
     pub fn get_revive_behind_messages(&self) -> i64 {
-        if self.current_revive_message_timestamp <= 0 {
+        if self.current_revive_message_timestamp.load(Ordering::Acquire) <= 0 {
             return 0;
         }
         let max_offset = self

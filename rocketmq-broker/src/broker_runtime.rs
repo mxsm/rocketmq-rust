@@ -132,7 +132,13 @@ use crate::offset::manager::consumer_offset_manager::ConsumerOffsetManager;
 use crate::offset::manager::consumer_order_info_manager::ConsumerOrderInfoManager;
 use crate::out_api::broker_outer_api::BrokerOuterAPI;
 use crate::plugin::broker_attached_plugin::BrokerAttachedPlugin;
+use crate::processor::ack_message_processor::AckMessageOffsetCapability;
+use crate::processor::ack_message_processor::AckMessageOrderCapability;
+use crate::processor::ack_message_processor::AckMessagePolicy;
+use crate::processor::ack_message_processor::AckMessagePopCapability;
 use crate::processor::ack_message_processor::AckMessageProcessor;
+use crate::processor::ack_message_processor::AckMessageProcessorContext;
+use crate::processor::ack_message_processor::AckMessageStoreCapability;
 use crate::processor::admin_broker_processor::AdminBrokerProcessor;
 use crate::processor::change_invisible_time_processor::ChangeInvisibleTimeOrderCapability;
 use crate::processor::change_invisible_time_processor::ChangeInvisibleTimePolicy;
@@ -176,6 +182,7 @@ use crate::processor::pop_lite_message_processor::PopLiteMessageStoreCapability;
 use crate::processor::pop_lite_message_processor::PopLiteOffsetCapability;
 use crate::processor::pop_message_processor::PopMessageProcessor;
 use crate::processor::pop_message_processor::QueueLockManager;
+use crate::processor::processor_service::PopReviveService;
 use crate::processor::pull_message_processor::PullMessageProcessor;
 use crate::processor::query_assignment_processor::QueryAssignmentProcessor;
 use crate::processor::query_message_processor::QueryMessageProcessor;
@@ -2605,10 +2612,32 @@ impl BrokerRuntime {
         ));
         let pop_lite_message_processor_provider = Arc::downgrade(&pop_lite_message_processor);
         self.inner.pop_lite_message_processor = Some(pop_lite_message_processor.clone());
-        let ack_message_processor = Arc::new(AckMessageProcessor::new(
-            self.inner.clone(),
-            pop_message_processor.clone(),
-        ));
+        let ack_policy = AckMessagePolicy::from_config(self.inner.broker_config(), self.inner.store_host());
+        let is_run_pop_revive = self.inner.broker_config().broker_identity.broker_id == MASTER_ID;
+        let pop_revive_services = (0..self.inner.broker_config().revive_queue_num)
+            .map(|queue_id| {
+                let service = Arc::new(PopReviveService::new(
+                    ack_policy.revive_topic().clone(),
+                    queue_id as i32,
+                    self.inner.clone(),
+                ));
+                service.set_should_run_pop_revive(is_run_pop_revive);
+                service
+            })
+            .collect();
+        let ack_escape_bridge = self.inner.escape_bridge();
+        let ack_offset_manager = self.inner.consumer_offset_manager_handle();
+        let ack_order_info = self.inner.consumer_order_info_manager_handle();
+        let ack_message_processor = Arc::new(AckMessageProcessor::new(AckMessageProcessorContext::new(
+            ack_policy,
+            self.inner.topic_config_manager_handle(),
+            AckMessageOffsetCapability::new(&ack_offset_manager),
+            AckMessageOrderCapability::new(&ack_order_info),
+            AckMessageStoreCapability::new(&ack_escape_bridge),
+            self.inner.pop_inflight_message_counter().clone(),
+            AckMessagePopCapability::new(&pop_message_processor),
+            pop_revive_services,
+        )));
         self.inner.ack_message_processor = Some(ack_message_processor.clone());
         let query_assignment_processor = Arc::new(QueryAssignmentProcessor::new(
             self.inner.broker_config_arc(),
