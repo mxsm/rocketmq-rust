@@ -4889,49 +4889,6 @@
       "adr": "ADR-013"
     },
     {
-      "identity": "5ba88f9581a8078b38af3d26",
-      "path": "rocketmq-store/src/ha/auto_switch/auto_switch_ha_service.rs",
-      "symbol": "mut_from_ref",
-      "kind": "mut_from_ref_call",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "be9142c031a7e6bb801e2a98",
-          "fingerprint": "f26fb880a9d928bd927ec162",
-          "item": "fn set_sync_state_set",
-          "line": 116
-        },
-        {
-          "id": "a6eee7c44dc4e7c41d082c3d",
-          "fingerprint": "7a17348b07a667ab265749c7",
-          "item": "fn update_confirm_offset_when_slave_ack",
-          "line": 154
-        },
-        {
-          "id": "0861b9b5206073884eea7596",
-          "fingerprint": "ae361ecb24065212a1a98603",
-          "item": "fn handle_connection_removed",
-          "line": 205
-        },
-        {
-          "id": "168cb56afd15ebc5b7a5d606",
-          "fingerprint": "77f5d1b2cef0f9de68ce5611",
-          "item": "fn apply_epoch_transition",
-          "line": 279
-        },
-        {
-          "id": "9e89ff40ee15c4c61fc60d7f",
-          "fingerprint": "7ae6c9b0b8c0629701ae09ec",
-          "item": "fn refresh_confirm_offset_after_role_change",
-          "line": 297
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy safe mutable-reference escape pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
       "identity": "df14a93c88f4b62845b3ddbe",
       "path": "rocketmq-store/src/ha/default_ha_client.rs",
       "symbol": "*",
@@ -5185,25 +5142,6 @@
       ],
       "owner": "store",
       "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "e24854c4cfa62b92b52ef485",
-      "path": "rocketmq-store/src/ha/default_ha_client.rs",
-      "symbol": "mut_from_ref",
-      "kind": "mut_from_ref_call",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "62a8c8336f52e3f9d909d4dd",
-          "fingerprint": "d1f02a68c4f4dcb3cb87bb96",
-          "item": "fn apply_master_confirm_offset",
-          "line": 689
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy safe mutable-reference escape pending ownership migration",
       "remove_by": "M11",
       "adr": "ADR-013"
     },

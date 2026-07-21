@@ -111,10 +111,7 @@ impl AutoSwitchHAService {
         let max_phy_offset = self.message_store.get_max_phy_offset();
         let current_confirm_offset = self.message_store.get_commit_log().get_confirm_offset_directly();
         let confirm_offset = self.compute_confirm_offset(current_confirm_offset, max_phy_offset);
-        self.message_store
-            .clone()
-            .mut_from_ref()
-            .set_confirm_offset(confirm_offset);
+        self.message_store.publish_confirm_offset(confirm_offset);
     }
 
     pub fn is_synchronizing_sync_state_set(&self) -> bool {
@@ -149,10 +146,7 @@ impl AutoSwitchHAService {
         let max_phy_offset = self.message_store.get_max_phy_offset();
         let current_confirm_offset = self.message_store.get_commit_log().get_confirm_offset_directly();
         let confirm_offset = self.compute_confirm_offset(current_confirm_offset, max_phy_offset);
-        self.message_store
-            .clone()
-            .mut_from_ref()
-            .set_confirm_offset(confirm_offset);
+        self.message_store.publish_confirm_offset(confirm_offset);
     }
 
     pub(crate) fn handle_connection_added(&self, connection: &GeneralHAConnection) {
@@ -200,10 +194,7 @@ impl AutoSwitchHAService {
             let max_phy_offset = self.message_store.get_max_phy_offset();
             let current_confirm_offset = self.message_store.get_commit_log().get_confirm_offset_directly();
             let confirm_offset = self.compute_confirm_offset(current_confirm_offset, max_phy_offset);
-            self.message_store
-                .clone()
-                .mut_from_ref()
-                .set_confirm_offset(confirm_offset);
+            self.message_store.publish_confirm_offset(confirm_offset);
         }
     }
 
@@ -275,10 +266,9 @@ impl AutoSwitchHAService {
                     .message_store
                     .get_max_phy_offset()
                     .max(self.message_store.get_min_phy_offset());
-                let message_store = self.message_store.clone();
-                let message_store = message_store.mut_from_ref();
-                message_store.set_state_machine_version(epoch as i64);
-                message_store.set_controller_epoch_start_offset(epoch_start_offset);
+                self.message_store.publish_state_machine_version(epoch as i64);
+                self.message_store
+                    .publish_controller_epoch_start_offset(epoch_start_offset);
             }
         }
         true
@@ -293,9 +283,7 @@ impl AutoSwitchHAService {
             self.message_store.get_commit_log().get_confirm_offset_directly()
         };
         self.message_store
-            .clone()
-            .mut_from_ref()
-            .set_confirm_offset(next_confirm_offset.clamp(min_phy_offset, max_phy_offset));
+            .publish_confirm_offset(next_confirm_offset.clamp(min_phy_offset, max_phy_offset));
     }
 
     pub fn current_master_epoch(&self) -> i32 {

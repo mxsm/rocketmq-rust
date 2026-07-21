@@ -2781,10 +2781,32 @@ Store flush wakeup capability 随 Issue #8456 完成以下边界收敛：
 | runtime / architecture guards | enforcing runtime audit、dependency fixtures/target/baseline、release、8-profile performance、architecture 60/60 与 AGENTS routing 通过；目标 compatibility 35/35、test edge 3/3、release topology 32/32 |
 | root workspace final gates | `cargo fmt --all -- --check` 与 workspace all-target/all-feature strict Clippy 通过；Windows linker stdout 与既有 future-incompatibility note 不受 `-D warnings` 管辖 |
 
+## M11-12bc26 实现
+
+Store HA replication state publication 随 Issue #8459 完成以下边界收敛：
+
+- `CommitLogRuntimeState::confirm_offset` 从普通 `i64` 改为 `AtomicI64`，共享读写使用 `SeqCst`；原有可变 setter facade 保持兼容并委托给共享发布入口。
+- `CommitLog` 与 `LocalFileMessageStore` 增加 crate-private confirm/epoch/state-machine 窄发布入口；auto-switch HA service 的 sync-state、slave ack、connection removal、epoch transition 与 role-change 路径不再取得完整 Store 可变引用。
+- HA reader 继续先将 master confirm offset clamp 到本地 `[min_phy_offset, max_phy_offset]` 再原子发布；confirm offset 允许在角色切换时下降，因此没有错误地使用单调 `fetch_max`。
+- epoch transition 仍只在 `Advanced` 时按 state-machine version、epoch start offset 的既有顺序发布；checkpoint 更新与公开 API 签名保持不变。
+- reviewed baseline 从 344 identities / 932 occurrences 降至 342 / 926；production 从 186/454 降至 184/448，test 保持 144/438，compatibility 保持 14/40。Store production 从 101/270 降至 99/264；净删除 2 个 production identity/6 occurrence，无 relocation、新增 identity 或临时 approval。
+
+## M11-12bc26 验证
+
+| 命令 | 结果 |
+|---|---|
+| Store Local / Store focused、all-feature check 与 strict Clippy | shared confirm offset 下降回归 1/1、HA confirm/role/epoch 回归 5/5；`cargo check -p rocketmq-store --all-features` 与 Store Local/Store all-target/all-feature strict Clippy 通过 |
+| Store Local / Store all-feature lib | Store Local 186/186、Store 507/507 通过 |
+| Broker all-feature lib 回归 | 610 passed、25 failed、1 ignored；失败集中于 lifecycle/Lite/subscription 动态基线，无 HA/confirm/epoch 新失败；独立 lifecycle probe 仍失败于 consumer-offset/subscription-group shutdown 健康度，`three_controller_two_broker` 串行重跑 4/4 通过，因此全量套件如实记为未通过 |
+| Store/RocksDB 专项 | Store/Broker `rocksdb_store` strict Clippy 通过；foundation 82/82、semantics 9/9、Broker rocksdb 21/21、pop_consumer 4/4 通过 |
+| reviewed baseline / fixtures | `--prune-resolved` 候选与正式补丁均从 344/932 精确降至 342/926；`python scripts/arc_mut_guard.py`、24/24 fixtures 与 67/67 guard tests 通过，无 relocation、新增 identity 或临时 approval |
+| runtime / architecture guards | enforcing runtime audit、dependency fixtures/target/baseline、release、8-profile/11-variant performance、architecture 60/60 与 AGENTS routing 通过；目标 compatibility 35/35、test edge 3/3、release topology 32/32 |
+| root workspace final gates | `cargo fmt --all -- --check`、workspace all-target/all-feature strict Clippy 与 `git diff --check` 通过；Windows linker stdout 与既有 future-incompatibility note 不受 `-D warnings` 管辖 |
+
 ## 剩余切片与 Gate
 
 1. Broker BrokerRuntimeInner capability carrier 与其他 admin/processor/leaf owner（85/184）；transaction bridge、Producer/ColdData admin leaf、Schedule hook、put-message preflight、ConsumerOrderInfoManager、TopicRouteInfoManager、MessageArrivingListener、ClientHousekeepingService、HA diagnostics/control/min-broker transition、BatchMq、SubscriptionGroup、MessageRelated、Offset、Consumer handler 与未编译 V2 示例残留已退出 leaf-level 完整 runtime/store owner，LiteLifecycle 只读 Store carrier 已收窄为普通借用，显式 Store 兼容 owner 留待 Store 批次删除。
-2. Store MappedFileQueue/其余 ConsumeQueue、CommitLog/Flush、StoreHandle/Rocks/Timer 与其余 HA service/actor（101/270）；BrokerStats observer、ConsumeQueueExt 显式锁 owner、HA notification/connection registry 窄能力、未共享 HA child direct ownership 与 commit-to-flush 窄唤醒能力已完成。
+2. Store MappedFileQueue/其余 ConsumeQueue、CommitLog/Flush、StoreHandle/Rocks/Timer 与其余 HA service/actor（99/264）；BrokerStats observer、ConsumeQueueExt 显式锁 owner、HA notification/connection registry 窄能力、未共享 HA child direct ownership、commit-to-flush 窄唤醒能力与 HA confirm/epoch 原子发布已完成。
 3. 先迁移 Store 对 `WeakArcMut` 的剩余使用并移除其余 nightly feature；公开 `arc_mut.rs`/re-export 的 destructive 删除受 next-major 两轮弃用与 Release Manager/HUMAN Gate 约束，不能静默重置 public API baseline。
 4. 对同一候选快照执行 stable feature matrix、Miri/Loom 可用切片、soak/SLO fault、dashboard/runbook、动态
    Kind/K3d/container、M10 固定硬件和 Human Gate。

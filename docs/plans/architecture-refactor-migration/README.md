@@ -656,6 +656,15 @@ occurrences（production 186/454、test 144/438、compatibility 14/40、Store pr
 production identities/4 occurrences；2 个保留 import occurrence 仅作一对一指纹更新，无新增 identity。
 总进度仍为 75/82，下一子切片 M11-12bc26 继续 Broker aggregate/leaf 或 Store WAL/queue/timer/HA owner。
 
+Store HA replication state publication 随 Issue #8459 收窄：`CommitLogRuntimeState::confirm_offset` 改为
+`AtomicI64`，保留原有可变 setter facade，并新增仅供 Store 内部 HA 路径使用的共享发布入口；controller epoch start
+offset 与 state-machine version 复用已有原子字段的窄发布入口。Auto-switch HA service 和 HA reader 不再通过
+`mut_from_ref` 取得完整 `LocalFileMessageStore` 可变引用，confirm offset 仍允许随角色切换下降，reader 仍先按本地
+min/max 物理位点 clamp，epoch transition 仍只在 Advanced 时按 state-machine version、epoch start offset 顺序发布。
+ArcMut 快照降至 342 identities/926 occurrences（production 184/448、test 144/438、compatibility 14/40、
+Store production 99/264），净删除 2 个 production identities/6 occurrences且无 relocation。总进度仍为 75/82，
+下一子切片 M11-12bc27 继续 Broker aggregate/leaf 或 Store WAL/queue/timer/HA owner。
+
 ### 9.3 证据目录
 
 - 运行期生成物：`target/architecture-refactor/Mxx/<run-id>/`，不提交 Git。

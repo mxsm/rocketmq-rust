@@ -1482,13 +1482,25 @@ impl LocalFileMessageStore {
     }
 
     pub fn set_state_machine_version(&mut self, state_machine_version: i64) {
+        self.publish_state_machine_version(state_machine_version);
+    }
+
+    pub(crate) fn publish_state_machine_version(&self, state_machine_version: i64) {
         self.state_machine_version
             .store(state_machine_version, Ordering::SeqCst);
     }
 
     pub fn set_controller_epoch_start_offset(&mut self, epoch_start_offset: i64) {
+        self.publish_controller_epoch_start_offset(epoch_start_offset);
+    }
+
+    pub(crate) fn publish_controller_epoch_start_offset(&self, epoch_start_offset: i64) {
         self.controller_epoch_start_offset
             .store(epoch_start_offset, Ordering::SeqCst);
+    }
+
+    pub(crate) fn publish_confirm_offset(&self, phy_offset: i64) {
+        self.commit_log.publish_confirm_offset(phy_offset);
     }
 
     pub fn get_controller_epoch_start_offset(&self) -> i64 {
@@ -3317,7 +3329,7 @@ impl MessageStore for LocalFileMessageStore {
     }
 
     fn set_confirm_offset(&mut self, phy_offset: i64) {
-        self.commit_log.set_confirm_offset(phy_offset);
+        self.publish_confirm_offset(phy_offset);
     }
 
     fn is_os_page_cache_busy(&self) -> bool {
