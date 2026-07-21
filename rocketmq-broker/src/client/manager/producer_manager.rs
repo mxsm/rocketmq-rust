@@ -143,6 +143,23 @@ impl ProducerChannelRegistry {
     }
 }
 
+/// Shared read capability for resolving a producer reply channel by client identifier.
+///
+/// The registry retains only the live client-channel index, so reply processing cannot access
+/// producer registration, housekeeping, configuration, or group-selection operations.
+#[derive(Clone)]
+pub(crate) struct ProducerReplyChannelRegistry {
+    client_channel_table: Arc<DashMap<CheetahString, Channel>>,
+}
+
+impl ProducerReplyChannelRegistry {
+    pub(crate) fn find_channel(&self, client_id: &str) -> Option<Channel> {
+        self.client_channel_table
+            .get(client_id)
+            .map(|entry| entry.value().clone())
+    }
+}
+
 fn select_available_channel(
     group_channel_table: &DashMap<ProducerGroupName, DashMap<Channel, ClientChannelInfo>>,
     positive_atomic_counter: &AtomicI32,
@@ -226,6 +243,12 @@ impl ProducerManager {
         ProducerChannelRegistry {
             group_channel_table: Arc::clone(&self.group_channel_table),
             positive_atomic_counter: Arc::clone(&self.positive_atomic_counter),
+        }
+    }
+
+    pub(crate) fn reply_channel_registry(&self) -> ProducerReplyChannelRegistry {
+        ProducerReplyChannelRegistry {
+            client_channel_table: Arc::clone(&self.client_channel_table),
         }
     }
 
@@ -835,6 +858,20 @@ mod tests {
         let producers = snapshot.data().get(group.as_str()).expect("producer group snapshot");
         assert_eq!(producers.len(), 1);
         assert_eq!(producers[0].client_id(), "client-id");
+    }
+
+    #[tokio::test]
+    async fn reply_channel_registry_observes_later_producer_registration() {
+        let manager = ProducerManager::new();
+        let registry = manager.reply_channel_registry();
+        assert!(registry.find_channel("reply-client-id").is_none());
+
+        let channel = create_test_channel().await;
+        let group = CheetahString::from_static_str("reply-producer");
+        let client = ClientChannelInfo::new(channel.clone(), "reply-client-id".into(), LanguageCode::default(), 1);
+        manager.register_producer(&group, &client);
+
+        assert_eq!(registry.find_channel("reply-client-id"), Some(channel));
     }
 
     #[test]

@@ -199,6 +199,10 @@ use crate::processor::recall_message_processor::RecallMessageProcessor;
 use crate::processor::recall_message_processor::RecallMessageProcessorContext;
 use crate::processor::recall_message_processor::RecallMessageStoreCapability;
 use crate::processor::reply_message_processor::ReplyMessageProcessor;
+use crate::processor::send_message_processor::capability::SendMessagePolicyState;
+use crate::processor::send_message_processor::capability::SendMessageProcessorContext;
+use crate::processor::send_message_processor::capability::SendMessageStoreCapability;
+use crate::processor::send_message_processor::capability::SendMessageTopicCapability;
 use crate::processor::send_message_processor::SendMessageProcessor;
 use crate::processor::BrokerProcessorType;
 use crate::processor::BrokerRequestProcessor;
@@ -280,91 +284,6 @@ where
     }
     topic_config
 }
-
-macro_rules! finish_topic_config_creation {
-    ($runtime:expr, $manager:expr, $creation:expr, $start_time:expr) => {{
-        let runtime = ($runtime).clone();
-        let async_persist = runtime.broker_config().async_topic_create_persist_enable;
-        let coordinator = runtime.topic_config_coordinator_handle();
-        let registration_runtime = runtime.clone();
-        $crate::broker_runtime::complete_topic_config_creation(
-            coordinator,
-            $creation,
-            $start_time,
-            async_persist,
-            move |update| {
-                let runtime = registration_runtime.clone();
-                async move {
-                    if runtime.broker_config().enable_single_topic_register {
-                        runtime.register_single_topic_all(update.topic_config).await;
-                    } else {
-                        $crate::broker_runtime::BrokerRuntimeInner::register_increment_broker_data(
-                            runtime,
-                            vec![update.topic_config],
-                            update.data_version,
-                        )
-                        .await;
-                    }
-                }
-            },
-        )
-        .await
-    }};
-}
-
-macro_rules! create_topic_in_send_message {
-    (
-        $runtime:expr,
-        $topic:expr,
-        $default_topic:expr,
-        $remote_address:expr,
-        $queue_nums:expr,
-        $topic_sys_flag:expr $(,)?
-    ) => {{
-        let runtime = ($runtime).clone();
-        let start_time = std::time::Instant::now();
-        let manager = runtime.topic_config_manager_handle();
-        match manager.create_topic_in_send_message_method(
-            $topic,
-            $default_topic,
-            $remote_address,
-            $queue_nums,
-            $topic_sys_flag,
-            runtime.topic_config_state_machine_version(),
-            runtime.broker_config().auto_create_topic_enable,
-        ) {
-            Some(creation) => Some($crate::broker_runtime::finish_topic_config_creation!(
-                runtime, manager, creation, start_time
-            )),
-            None => None,
-        }
-    }};
-}
-
-macro_rules! create_topic_in_send_message_back {
-    ($runtime:expr, $topic:expr, $queue_nums:expr, $perm:expr, $is_order:expr, $topic_sys_flag:expr $(,)?) => {{
-        let runtime = ($runtime).clone();
-        let start_time = std::time::Instant::now();
-        let manager = runtime.topic_config_manager_handle();
-        match manager.create_topic_in_send_message_back_method(
-            $topic,
-            $queue_nums,
-            $perm,
-            $is_order,
-            $topic_sys_flag,
-            runtime.topic_config_state_machine_version(),
-        ) {
-            Some(creation) => Some($crate::broker_runtime::finish_topic_config_creation!(
-                runtime, manager, creation, start_time
-            )),
-            None => None,
-        }
-    }};
-}
-
-pub(crate) use create_topic_in_send_message;
-pub(crate) use create_topic_in_send_message_back;
-pub(crate) use finish_topic_config_creation;
 
 const SCHEDULED_TASK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 const BROKER_OUTER_API_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
@@ -1205,6 +1124,8 @@ impl BrokerRuntime {
             None,
         ));
         let online_role_state = Arc::new(BrokerOnlineRoleState::new(broker_config.broker_identity.broker_id));
+        let send_message_policy_state =
+            SendMessagePolicyState::from_configs(&broker_config, &message_store_config, store_host);
 
         let mut inner = ArcMut::new(BrokerRuntimeInner::<GenericMessageStore> {
             shutdown: Arc::new(AtomicBool::new(false)),
@@ -1212,6 +1133,7 @@ impl BrokerRuntime {
             broker_addr: CheetahString::from(broker_address),
             broker_config: broker_config.clone(),
             message_store_config: message_store_config.clone(),
+            send_message_policy_state,
             //server_config,
             topic_config_manager: None,
             topic_config_coordinator: None,
@@ -2569,13 +2491,33 @@ impl BrokerRuntime {
     }
 
     fn init_processor(&mut self) -> (DefaultServerProcessor, FasterServerProcessor) {
+        let send_message_topic_capability = Arc::new(SendMessageTopicCapability::new(
+            self.inner.send_message_policy_state.clone(),
+            self.inner.topic_config_manager_handle(),
+            self.inner.topic_config_coordinator_handle(),
+            self.inner.topic_queue_mapping_manager_handle(),
+            self.inner.broker_outer_api().clone(),
+            TransactionMessageStore::new(&self.escape_bridge_owner),
+            self.inner.slave_synchronize().map(SlaveSynchronize::master_addr_handle),
+            self.inner.update_master_haserver_addr_periodically,
+            Arc::clone(&self.inner.shutdown),
+        ));
+        let send_message_context = Arc::new(SendMessageProcessorContext::new(
+            self.inner.send_message_policy_state.clone(),
+            SendMessageStoreCapability::new(&self.escape_bridge_owner),
+            send_message_topic_capability,
+            self.inner.subscription_group_manager().config_lookup(),
+            self.inner.rebalance_lock_manager().clone(),
+            self.inner.broker_stats_manager_handle(),
+            self.inner.producer_manager().reply_channel_registry(),
+        ));
         let send_message_processor = SendMessageProcessor::new(
             self.inner.transactional_message_service.as_ref().unwrap().clone(),
-            self.inner.clone(),
+            Arc::clone(&send_message_context),
         );
         let reply_message_processor = ReplyMessageProcessor::new(
             self.inner.transactional_message_service.as_ref().unwrap().clone(),
-            self.inner.clone(),
+            send_message_context,
         );
         let pull_message_result_handler = Arc::new(DefaultPullMessageResultHandler::new(
             Arc::new(Default::default()), //optimize
@@ -3880,6 +3822,7 @@ pub(crate) struct BrokerRuntimeInner<MS: MessageStore> {
     broker_addr: CheetahString,
     broker_config: Arc<BrokerConfig>,
     message_store_config: Arc<MessageStoreConfig>,
+    send_message_policy_state: SendMessagePolicyState,
     topic_config_manager: Option<Arc<TopicConfigManager>>,
     topic_config_coordinator: Option<Arc<TopicConfigCoordinator>>,
     topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
@@ -4560,12 +4503,14 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     #[inline]
     pub fn set_store_host(&mut self, store_host: SocketAddr) {
         self.store_host = store_host;
+        self.send_message_policy_state.update_store_host(store_host);
     }
 
     #[inline]
     pub fn set_broker_config(&mut self, broker_config: BrokerConfig) {
         self.online_role_state
             .set_local_broker_id(broker_config.broker_identity.broker_id);
+        self.send_message_policy_state.update_broker_config(&broker_config);
         self.broker_config = Arc::new(broker_config);
     }
 
@@ -4574,6 +4519,8 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         if let Some(topic_config_manager) = self.topic_config_manager.as_ref() {
             topic_config_manager.update_message_store_policy(&message_store_config);
         }
+        self.send_message_policy_state
+            .update_message_store_config(&message_store_config);
         self.message_store_config = Arc::new(message_store_config);
     }
 
@@ -5473,6 +5420,9 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         }
         Arc::make_mut(&mut this.broker_config).broker_identity.broker_id = outcome.local_broker_id;
         this.online_role_state.set_local_broker_id(outcome.local_broker_id);
+        this.send_message_policy_state.update_broker_config(&this.broker_config);
+        this.send_message_policy_state
+            .update_message_store_config(&this.message_store_config);
 
         match role {
             BrokerReplicaRole::Master => {

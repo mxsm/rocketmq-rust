@@ -34,7 +34,6 @@ use rocketmq_remoting::protocol::header::reply_message_request_header::ReplyMess
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
-use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
@@ -43,8 +42,8 @@ use rocketmq_store::stats::stats_type::StatsType;
 use tracing::info;
 use tracing::warn;
 
-use crate::broker_runtime::BrokerRuntimeInner;
 use crate::mqtrace::send_message_context::SendMessageContext;
+use crate::processor::send_message_processor::capability::SendMessageProcessorContext;
 use crate::processor::send_message_processor::Inner;
 use crate::transaction::transactional_message_service::TransactionalMessageService;
 
@@ -88,19 +87,13 @@ fn push_reply_call_failed_remark(sender_id: &str) -> String {
 ///                                              
 /// ```
 pub struct ReplyMessageProcessor<MS: MessageStore, TS> {
-    inner: Inner<MS, TS>,
+    inner: Arc<Inner<MS, TS>>,
 }
 
 impl<MS: MessageStore, TS> Clone for ReplyMessageProcessor<MS, TS> {
     fn clone(&self) -> Self {
         Self {
-            inner: Inner {
-                send_message_hook_vec: self.inner.send_message_hook_vec.clone(),
-                consume_message_hook_vec: self.inner.consume_message_hook_vec.clone(),
-                broker_to_client: self.inner.broker_to_client.clone(),
-                transactional_message_service: self.inner.transactional_message_service.clone(),
-                broker_runtime_inner: self.inner.broker_runtime_inner.clone(),
-            },
+            inner: Arc::clone(&self.inner),
         }
     }
 }
@@ -168,15 +161,15 @@ where
     MS: MessageStore,
     TS: TransactionalMessageService,
 {
-    pub fn new(transactional_message_service: Arc<TS>, broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
+    pub fn new(transactional_message_service: Arc<TS>, context: Arc<SendMessageProcessorContext<MS>>) -> Self {
         Self {
-            inner: Inner {
-                send_message_hook_vec: ArcMut::new(Vec::new()),
-                consume_message_hook_vec: ArcMut::new(Vec::new()),
+            inner: Arc::new(Inner {
+                send_message_hook_vec: Arc::new(Vec::new()),
+                consume_message_hook_vec: Arc::new(Vec::new()),
                 transactional_message_service,
                 broker_to_client: Default::default(),
-                broker_runtime_inner,
-            },
+                context,
+            }),
         }
     }
 }
@@ -218,14 +211,14 @@ where
     ) -> RemotingCommand {
         let mut response = RemotingCommand::create_response_command().set_opaque(request.opaque());
 
-        // Cache broker config values to reduce lock contention
+        // Keep one coherent policy generation for the request admission decision.
         let (region_id, trace_on, start_timstamp, store_reply_message_enable) = {
-            let config = self.inner.broker_runtime_inner.broker_config();
+            let policy = self.inner.context.policy.snapshot();
             (
-                config.region_id.clone(),
-                config.trace_on,
-                config.start_accept_send_request_time_stamp as u64,
-                config.store_reply_message_enable,
+                policy.region_id.clone(),
+                policy.trace_on,
+                policy.start_accept_send_request_time_stamp as u64,
+                policy.store_reply_message_enable,
             )
         };
 
@@ -246,12 +239,7 @@ where
             return response;
         }
         let mut queue_id_int = request_header.queue_id;
-        let topic_config = match self
-            .inner
-            .broker_runtime_inner
-            .topic_config_manager()
-            .select_topic_config(request_header.topic())
-        {
+        let topic_config = match self.inner.context.topics.select_topic_config(request_header.topic()) {
             Some(config) => config,
             None => {
                 warn!("Topic {} not found", request_header.topic());
@@ -282,17 +270,19 @@ where
             queue_id_int,
         );
 
-        // Use cached config value
+        // Preserve push-first semantics: optional persistence happens only after
+        // the client push attempt has completed.
         if store_reply_message_enable {
-            let Some(store) = self.inner.broker_runtime_inner.message_store_mut().as_mut() else {
-                const STORE_ERROR: &str = "message store not available";
-                warn!("process reply message, {}", STORE_ERROR);
-                return response
-                    .set_code(ResponseCode::SystemError)
-                    .set_remark(STORE_ERROR.to_string());
+            let put_message_result = match self.inner.context.store.put_message(msg_inner).await {
+                Ok(result) => result,
+                Err(_) => {
+                    const STORE_ERROR: &str = "message store not available";
+                    warn!("process reply message, {}", STORE_ERROR);
+                    return response
+                        .set_code(ResponseCode::SystemError)
+                        .set_remark(STORE_ERROR.to_string());
+                }
             };
-
-            let put_message_result = store.put_message(msg_inner).await;
             self.handle_put_message_result(
                 put_message_result,
                 request,
@@ -328,7 +318,7 @@ where
         msg_inner.properties_string = request_header.properties.clone().unwrap_or_default();
         msg_inner.message_ext_inner.born_timestamp = request_header.born_timestamp;
         msg_inner.message_ext_inner.born_host = channel.remote_address();
-        msg_inner.message_ext_inner.store_host = self.inner.broker_runtime_inner.store_host();
+        msg_inner.message_ext_inner.store_host = self.inner.context.policy.snapshot().store_host;
         msg_inner.message_ext_inner.reconsume_times = request_header.reconsume_times.unwrap_or(0);
         msg_inner
     }
@@ -360,12 +350,7 @@ where
                 false
             }
             PutMessageStatus::MessageIllegal => {
-                let max_size = self
-                    .inner
-                    .broker_runtime_inner
-                    .message_store()
-                    .map(|store| store.get_message_store_config().max_message_size)
-                    .unwrap_or(4 * 1024 * 1024); // Default 4MB
+                let max_size = self.inner.context.policy.snapshot().max_message_size;
                 warn!(
                     "the message is illegal, maybe msg body or properties length not matched. msg body length limit \
                      {}B.",
@@ -395,16 +380,15 @@ where
             .unwrap()
             .get(BrokerStatsManager::COMMERCIAL_OWNER)
             .cloned();
-        // Cache config values (extract immediately to release lock)
         let (commercial_size_per_msg, commercial_base_count) = {
-            let config = self.inner.broker_runtime_inner.broker_config();
-            (config.commercial_size_per_msg, config.commercial_base_count)
+            let policy = self.inner.context.policy.snapshot();
+            (policy.commercial_size_per_msg, policy.commercial_base_count)
         };
 
         if put_ok {
             // Cache append_message_result to avoid repeated unwrap
             let append_result = put_message_result.append_message_result().unwrap();
-            let stats_manager = self.inner.broker_runtime_inner.broker_stats_manager();
+            let stats_manager = &self.inner.context.broker_stats_manager;
 
             stats_manager.inc_topic_put_nums(topic, append_result.msg_num, 1);
             stats_manager.inc_topic_put_size(topic, append_result.wrote_bytes);
@@ -482,8 +466,8 @@ where
 
         let Some(mut reply_channel) = self
             .inner
-            .broker_runtime_inner
-            .producer_manager()
+            .context
+            .producer_reply_channels
             .find_channel(sender_id.as_str())
         else {
             // Format once for both logging and error return
@@ -515,9 +499,8 @@ where
             command.set_body_mut_ref(body);
         }
 
-        match self
-            .inner
-            .broker_to_client
+        let mut broker_to_client = self.inner.broker_to_client.clone();
+        match broker_to_client
             .call_client(&mut reply_channel, command, PUSH_REPLY_MESSAGE_TO_CLIENT_TIMEOUT_MILLIS)
             .await
         {
@@ -565,7 +548,7 @@ where
 
         // Cache addresses to avoid repeated .to_string() calls
         let born_host = CheetahString::from_string(channel.remote_address().to_string());
-        let store_host = CheetahString::from_string(self.inner.broker_runtime_inner.store_host().to_string());
+        let store_host = CheetahString::from_string(self.inner.context.policy.snapshot().store_host.to_string());
 
         ReplyMessageRequestHeader {
             born_host,
@@ -648,7 +631,15 @@ impl PushReplyResult {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use cheetah_string::CheetahString;
+    use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+    use rocketmq_common::common::message::MessageConst;
+    use rocketmq_common::common::message::MessageTrait;
+
+    use super::get_correlation_id_with_fallback;
+    use super::push_reply_call_failed_remark;
+    use super::PushReplyResult;
+    use super::PUSH_REPLY_MESSAGE_TO_CLIENT_TIMEOUT_MILLIS;
 
     #[test]
     fn test_get_correlation_id_with_fallback_new_property() {

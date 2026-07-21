@@ -8,7 +8,7 @@
 > PR-M12-01～06 未开始，合计剩余 7 个
 
 剩余任务数量、M11-12 内部执行批次与 M12 六个工作包见 [`REMAINING-TASKS.md`](REMAINING-TASKS.md)：正式口径
-剩余 7 个工作包；31 个最小可审查单元已完成 2 个，当前剩余 29 个。
+剩余 7 个工作包；31 个最小可审查单元已完成 3 个，当前剩余 28 个。
 
 ## 1. 使用方式
 
@@ -915,6 +915,16 @@ Broker production 34/86、Store production 82/234），净删除 2 个 productio
 pre-online owner 为 3 occurrences、无调用方的 runtime start helper 为 1 occurrence；3 个保留 occurrence 完成一对一
 指纹审核，无新增 identity 或临时 approval。R02、R08 已完成，31 项执行清单剩余 29 项；总进度仍为 75/82，
 下一子切片 M11-12bc55 继续 Broker/Store owner。
+
+Broker send/reply capability 随 Issue #8523 收口：两个 processor 及共享 `Inner` 不再持有完整
+`BrokerRuntimeInner` 或 `ArcMut`，改为标准 `Arc`、不可变 hook 集合、热更新 policy、弱 Store provider、显式
+Topic/Subscription/Rebalance/Stats 与 producer reply-channel capability。send append 保留 typed Store error，provider
+退出时返回 NotStarted；reply 保持先 push client、再按配置写 Store 的顺序，Store 缺失时 fail closed。旧 send-topic
+宏已由显式 Topic 创建/持久化/注册边界替代。ArcMut 快照降至 247 identities/760 occurrences（production
+110/307、test 123/413、compatibility 14/40、Broker production 28/73、Store production 82/234），净删除
+6 个 production identities/13 occurrences 与 2 个 test identities/2 occurrences；1 个保留 BrokerRuntime root
+constructor 经临时 ADR-013 一对一 relocation 审核，无新增 identity 或提交态临时 approval。R02、R03、R08 已完成，
+31 项执行清单剩余 28 项；总进度仍为 75/82，下一子切片 M11-12bc56 继续 Broker/Store owner。
 
 ### 9.3 证据目录
 

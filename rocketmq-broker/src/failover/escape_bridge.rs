@@ -18,6 +18,7 @@ use futures::future::BoxFuture;
 use futures::FutureExt;
 use rocketmq_common::common::broker::broker_role::BrokerRole;
 use rocketmq_common::common::hasher::string_hasher::JavaStringHasher;
+use rocketmq_common::common::message::message_batch::MessageExtBatch;
 use rocketmq_common::common::message::message_decoder;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
@@ -38,6 +39,15 @@ use rocketmq_store::base::query_message_result::QueryMessageResult;
 use rocketmq_store::base::select_result::SelectMappedBufferResult;
 use rocketmq_store::ha::ha_connection_state_notification_request::HAConnectionStateNotificationRequest;
 use rocketmq_store::ha::ha_service::HAService;
+use rocketmq_store::store_api_adapter::LegacyAppendReceipt;
+use rocketmq_store::store_api_adapter::LegacyMessageStoreAdapter;
+use rocketmq_store::store_api_adapter::LegacyMessageStoreHealthAdapter;
+use rocketmq_store::store_api_adapter::LegacyStoreHealthSnapshot;
+use rocketmq_store_api::MessageAppender;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreErrorKind;
+use rocketmq_store_api::StoreHealth;
+use rocketmq_store_api::StoreOperation;
 use tracing::error;
 use tracing::warn;
 
@@ -142,6 +152,39 @@ impl<MS: MessageStore> EscapeBridge<MS> {
             .message_store()
             .ok_or(MessageStoreUnavailable)?;
         Ok(operation(message_store.as_ref()))
+    }
+
+    pub(crate) fn send_message_store_health_snapshot(
+        &self,
+    ) -> Result<LegacyStoreHealthSnapshot, MessageStoreUnavailable> {
+        self.try_with_message_store(|store| LegacyMessageStoreHealthAdapter::new(store).health_snapshot())
+    }
+
+    pub(crate) async fn send_append_message(
+        &self,
+        message: MessageExtBrokerInner,
+    ) -> Result<LegacyAppendReceipt, StoreError> {
+        let mut message_store = self
+            .broker_runtime_inner
+            .message_store()
+            .cloned()
+            .ok_or_else(|| StoreError::new(StoreErrorKind::NotStarted, StoreOperation::Append))?;
+        let mut adapter = LegacyMessageStoreAdapter::new(message_store.as_mut());
+        adapter.append_message(message).await
+    }
+
+    pub(crate) async fn send_append_batch(&self, batch: MessageExtBatch) -> Result<LegacyAppendReceipt, StoreError> {
+        let mut message_store = self
+            .broker_runtime_inner
+            .message_store()
+            .cloned()
+            .ok_or_else(|| StoreError::new(StoreErrorKind::NotStarted, StoreOperation::Append))?;
+        let mut adapter = LegacyMessageStoreAdapter::new(message_store.as_mut());
+        adapter.append_message(batch).await
+    }
+
+    pub(crate) fn send_append_progress(&self) -> Result<(i64, i64), MessageStoreUnavailable> {
+        self.try_with_message_store(|store| (store.get_max_phy_offset(), store.get_flushed_where()))
     }
 
     pub(crate) fn pre_online_broker_init_max_offset(&self) -> Result<i64, MessageStoreUnavailable> {

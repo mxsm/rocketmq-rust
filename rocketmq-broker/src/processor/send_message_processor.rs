@@ -14,7 +14,6 @@
 
 use std::collections::HashMap;
 use std::future::Future;
-use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -70,7 +69,6 @@ use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_context::Topi
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_remoting::runtime::processor::RejectRequestResponse;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
-use rocketmq_rust::ArcMut;
 use rocketmq_store::base::flush_manager::SyncFlushRuntimeInfo;
 use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
@@ -79,8 +77,6 @@ use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
 use rocketmq_store::stats::stats_type::StatsType;
 use rocketmq_store::store_api_adapter::legacy_append_receipt;
 use rocketmq_store::store_api_adapter::LegacyAppendReceipt;
-use rocketmq_store::store_api_adapter::LegacyMessageStoreAdapter;
-use rocketmq_store::store_api_adapter::LegacyMessageStoreHealthAdapter;
 use rocketmq_store::store_api_adapter::LegacyStoreHealthSnapshot;
 use rocketmq_store_api::MessageAppender;
 use rocketmq_store_api::StoreHealth;
@@ -88,7 +84,6 @@ use tracing::debug;
 use tracing::info;
 use tracing::warn;
 
-use crate::broker_runtime::BrokerRuntimeInner;
 use crate::client::net::broker_to_client::Broker2Client;
 use crate::mqtrace::consume_message_context::ConsumeMessageContext;
 use crate::mqtrace::consume_message_hook::ConsumeMessageHook;
@@ -103,23 +98,24 @@ use crate::transaction::transactional_message_service::TransactionalMessageServi
 
 type StoreHealthSnapshot = LegacyStoreHealthSnapshot;
 
+pub(crate) mod capability;
 mod message_builder;
 
+use capability::SendMessagePolicy;
+use capability::SendMessageProcessorContext;
 use message_builder::clear_reserved_properties;
 use message_builder::enrich_send_message_request_properties;
 use message_builder::recall_handle_topic_and_timestamp;
 use message_builder::should_create_uniq_key;
 
 pub struct SendMessageProcessor<MS: MessageStore, TS> {
-    inner: ArcMut<Inner<MS, TS>>,
-    store_host: SocketAddr,
+    inner: Arc<Inner<MS, TS>>,
 }
 
 impl<MS: MessageStore, TS> Clone for SendMessageProcessor<MS, TS> {
     fn clone(&self) -> Self {
         Self {
-            inner: self.inner.clone(),
-            store_host: self.store_host,
+            inner: Arc::clone(&self.inner),
         }
     }
 }
@@ -151,12 +147,9 @@ where
     }
 
     fn reject_request(&self, _code: i32) -> RejectRequestResponse {
-        let enable_slave_acting_master = self
-            .inner
-            .broker_runtime_inner
-            .broker_config()
-            .enable_slave_acting_master;
-        let broker_role = self.inner.broker_runtime_inner.message_store_config().broker_role;
+        let policy = self.inner.context.policy.snapshot();
+        let enable_slave_acting_master = policy.enable_slave_acting_master;
+        let broker_role = policy.broker_role;
         if !enable_slave_acting_master && broker_role == BrokerRole::Slave {
             return (
                 true,
@@ -166,11 +159,19 @@ where
                 )),
             );
         }
-        let message_store = self.inner.broker_runtime_inner.message_store_unchecked().as_ref();
-        let store_health = LegacyMessageStoreHealthAdapter::new(message_store);
-        if let Some(remark) =
-            store_health_reject_remark_from(self.inner.broker_runtime_inner.broker_config(), &store_health)
-        {
+        let snapshot = match self.inner.context.store.health_snapshot() {
+            Ok(snapshot) => snapshot,
+            Err(_) => {
+                return (
+                    true,
+                    Some(RemotingCommand::create_response_command_with_code_remark(
+                        ResponseCode::SystemBusy,
+                        "store_backpressure reason=store_shutdown",
+                    )),
+                );
+            }
+        };
+        if let Some(remark) = store_health_reject_remark(policy.as_ref(), snapshot) {
             return (
                 true,
                 Some(RemotingCommand::create_response_command_with_code_remark(
@@ -269,8 +270,8 @@ where
                 }
                 let mapping_context = self
                     .inner
-                    .broker_runtime_inner
-                    .topic_queue_mapping_manager()
+                    .context
+                    .topics
                     .build_topic_queue_mapping_context(&request_header, true);
                 let rewrite_result =
                     TopicQueueMappingManager::rewrite_request_for_static_topic(&mut request_header, &mapping_context);
@@ -285,7 +286,7 @@ where
                 clear_reserved_properties(&mut request_header, &mut request_properties);
 
                 let execute_send_message_hook_after = {
-                    let inner = self.inner.clone();
+                    let inner = Arc::clone(&self.inner);
                     move |ctx: &mut SendMessageContext, cmd: &mut RemotingCommand| {
                         inner.execute_send_message_hook_after(Some(cmd), ctx)
                     }
@@ -328,17 +329,15 @@ where
     MS: MessageStore,
     TS: TransactionalMessageService,
 {
-    pub fn new(transactional_message_service: Arc<TS>, broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
-        let store_host = broker_runtime_inner.store_host();
+    pub fn new(transactional_message_service: Arc<TS>, context: Arc<SendMessageProcessorContext<MS>>) -> Self {
         Self {
-            inner: ArcMut::new(Inner {
-                send_message_hook_vec: ArcMut::new(Vec::new()),
-                consume_message_hook_vec: ArcMut::new(Vec::new()),
+            inner: Arc::new(Inner {
+                send_message_hook_vec: Arc::new(Vec::new()),
+                consume_message_hook_vec: Arc::new(Vec::new()),
                 transactional_message_service,
                 broker_to_client: Default::default(),
-                broker_runtime_inner,
+                context,
             }),
-            store_host,
         }
     }
 
@@ -362,8 +361,8 @@ where
         }
         let topic_config = self
             .inner
-            .broker_runtime_inner
-            .topic_config_manager()
+            .context
+            .topics
             .select_topic_config(request_header.topic())
             .ok_or_else(|| RocketMQError::TopicNotExist {
                 topic: request_header.topic().to_string(),
@@ -400,15 +399,9 @@ where
         message_ext.message_ext_inner.message.set_body(request.body().cloned());
         message_ext.message_ext_inner.born_timestamp = request_header.born_timestamp;
         message_ext.message_ext_inner.born_host = channel.remote_address();
-        message_ext.message_ext_inner.store_host = self.store_host;
+        message_ext.message_ext_inner.store_host = self.inner.context.policy.snapshot().store_host;
         message_ext.message_ext_inner.reconsume_times = request_header.reconsume_times.unwrap_or(0);
-        let cluster_name = self
-            .inner
-            .broker_runtime_inner
-            .broker_config()
-            .broker_identity
-            .broker_cluster_name
-            .clone();
+        let cluster_name = self.inner.context.policy.snapshot().broker_cluster_name.clone();
         message_ext.message_ext_inner.message.put_property(
             CheetahString::from_static_str(MessageConst::PROPERTY_CLUSTER),
             cluster_name,
@@ -462,14 +455,12 @@ where
         let topic = batch_message.message_ext_broker_inner.message_ext_inner.topic().clone();
         let topic_message_type = crate::metrics::broker_metrics_manager::get_message_type(&request_header);
         let append_receipt = if is_inner_batch {
-            let mut store =
-                LegacyMessageStoreAdapter::new(self.inner.broker_runtime_inner.message_store_unchecked_mut().as_mut());
+            let mut store = self.inner.context.store.clone();
             append_message_with_store(&mut store, batch_message.message_ext_broker_inner)
                 .await
                 .map_err(map_store_api_error)?
         } else {
-            let mut store =
-                LegacyMessageStoreAdapter::new(self.inner.broker_runtime_inner.message_store_unchecked_mut().as_mut());
+            let mut store = self.inner.context.store.clone();
             append_message_with_store(&mut store, batch_message)
                 .await
                 .map_err(map_store_api_error)?
@@ -522,8 +513,8 @@ where
 
         let mut topic_config = self
             .inner
-            .broker_runtime_inner
-            .topic_config_manager()
+            .context
+            .topics
             .select_topic_config(request_header.topic())
             .ok_or_else(|| RocketMQError::TopicNotExist {
                 topic: request_header.topic().to_string(),
@@ -593,7 +584,7 @@ where
 
         message_ext.message_ext_inner.born_timestamp = request_header.born_timestamp;
         message_ext.message_ext_inner.born_host = channel.remote_address();
-        message_ext.message_ext_inner.store_host = self.store_host;
+        message_ext.message_ext_inner.store_host = self.inner.context.policy.snapshot().store_host;
         message_ext.message_ext_inner.reconsume_times = request_header.reconsume_times.unwrap_or(0);
 
         message_ext
@@ -603,12 +594,7 @@ where
             .as_map_mut()
             .insert(
                 CheetahString::from_static_str(MessageConst::PROPERTY_CLUSTER),
-                self.inner
-                    .broker_runtime_inner
-                    .broker_config()
-                    .broker_identity
-                    .broker_cluster_name
-                    .clone(),
+                self.inner.context.policy.snapshot().broker_cluster_name.clone(),
             );
 
         message_ext.properties_string =
@@ -616,15 +602,11 @@ where
         let send_transaction_prepare_message = if tra_flag
             && !(message_ext.reconsume_times() > 0 && message_ext.message_ext_inner.message.delay_time_level() > 0)
         {
-            if self
-                .inner
-                .broker_runtime_inner
-                .broker_config()
-                .reject_transaction_message
-            {
+            let policy = self.inner.context.policy.snapshot();
+            if policy.reject_transaction_message {
                 return Ok(Some(response.set_code(ResponseCode::NoPermission).set_remark(format!(
                     "the broker[{}] sending transaction message is forbidden",
-                    self.inner.broker_runtime_inner.broker_config().broker_ip1
+                    policy.broker_ip
                 ))));
             }
             true
@@ -644,11 +626,15 @@ where
                     .await
                     .map_err(map_store_api_error)?
             };
-            let store = self.inner.broker_runtime_inner.message_store_unchecked().as_ref();
-            legacy_append_receipt(result, store.get_max_phy_offset(), store.get_flushed_where())
+            let (max_phy_offset, flushed_where) = self
+                .inner
+                .context
+                .store
+                .append_progress()
+                .map_err(|_| message_store_not_initialized())?;
+            legacy_append_receipt(result, max_phy_offset, flushed_where)
         } else {
-            let mut store =
-                LegacyMessageStoreAdapter::new(self.inner.broker_runtime_inner.message_store_unchecked_mut().as_mut());
+            let mut store = self.inner.context.store.clone();
             append_message_with_store(&mut store, message_ext)
                 .await
                 .map_err(map_store_api_error)?
@@ -789,35 +775,18 @@ where
             .result()
             .append_message_result()
             .expect("append result must exist for successful send");
+        let stats = &self.inner.context.broker_stats_manager;
         if TopicValidator::RMQ_SYS_SCHEDULE_TOPIC == topic {
-            self.inner
-                .broker_runtime_inner
-                .broker_stats_manager()
-                .inc_queue_put_nums(topic, queue_id, append_result.msg_num, 1);
-            self.inner
-                .broker_runtime_inner
-                .broker_stats_manager()
-                .inc_queue_put_size(topic, queue_id, append_result.wrote_bytes);
+            stats.inc_queue_put_nums(topic, queue_id, append_result.msg_num, 1);
+            stats.inc_queue_put_size(topic, queue_id, append_result.wrote_bytes);
         }
 
-        self.inner
-            .broker_runtime_inner
-            .broker_stats_manager()
-            .inc_topic_put_nums(topic, append_result.msg_num, 1);
-        self.inner
-            .broker_runtime_inner
-            .broker_stats_manager()
-            .inc_topic_put_size(topic, append_result.wrote_bytes);
-        self.inner
-            .broker_runtime_inner
-            .broker_stats_manager()
-            .inc_broker_put_nums(topic, append_result.msg_num);
+        stats.inc_topic_put_nums(topic, append_result.msg_num, 1);
+        stats.inc_topic_put_size(topic, append_result.wrote_bytes);
+        stats.inc_broker_put_nums(topic, append_result.msg_num);
         let latency_millis = begin_time_millis.elapsed().as_millis();
         let latency_ms_for_stats = latency_millis.min(i32::MAX as u128) as i32;
-        self.inner
-            .broker_runtime_inner
-            .broker_stats_manager()
-            .inc_topic_put_latency(topic, queue_id, latency_ms_for_stats);
+        stats.inc_topic_put_latency(topic, queue_id, latency_ms_for_stats);
 
         if let Some(metrics) = crate::metrics::broker_metrics_manager::BrokerMetricsManager::try_global() {
             let msg_num = u64::try_from(append_result.msg_num.max(0)).unwrap_or_default();
@@ -865,8 +834,9 @@ where
         owner_parent: Option<CheetahString>,
         owner_self: Option<CheetahString>,
     ) {
-        let commercial_size_per_msg = self.inner.broker_runtime_inner.broker_config().commercial_size_per_msg;
-        let commercial_base_count = self.inner.broker_runtime_inner.broker_config().commercial_base_count;
+        let policy = self.inner.context.policy.snapshot();
+        let commercial_size_per_msg = policy.commercial_size_per_msg;
+        let commercial_base_count = policy.commercial_base_count;
 
         send_message_context.msg_id = response_header.msg_id().clone();
         send_message_context.queue_id = Some(response_header.queue_id());
@@ -904,7 +874,7 @@ where
         owner_parent: Option<CheetahString>,
         owner_self: Option<CheetahString>,
     ) {
-        let commercial_size_per_msg = self.inner.broker_runtime_inner.broker_config().commercial_size_per_msg;
+        let commercial_size_per_msg = self.inner.context.policy.snapshot().commercial_size_per_msg;
 
         let msg_num = append_receipt
             .result()
@@ -1014,20 +984,15 @@ where
     }
 
     fn build_recall_handle(&self, message: &MessageExtBrokerInner) -> Option<CheetahString> {
+        let policy = self.inner.context.policy.snapshot();
         let (real_topic, timestamp) =
-            recall_handle_topic_and_timestamp(message, self.inner.broker_runtime_inner.message_store_config())?;
+            recall_handle_topic_and_timestamp(message, policy.timer_max_delay_sec, policy.timer_precision_ms)?;
         if real_topic.starts_with(RETRY_GROUP_TOPIC_PREFIX) {
             return None;
         }
 
         let uniq_id = MessageClientIDSetter::get_uniq_id(&message.message_ext_inner.message)?;
-        let broker_name = self
-            .inner
-            .broker_runtime_inner
-            .broker_config()
-            .broker_identity
-            .broker_name
-            .clone();
+        let broker_name = policy.broker_name.clone();
 
         Some(CheetahString::from_string(HandleV1::build_handle(
             real_topic,
@@ -1045,26 +1010,17 @@ where
         request_header: &SendMessageRequestHeader,
     ) -> RemotingCommand {
         let mut response = RemotingCommand::create_response_command_with_header(SendMessageResponseHeader::default());
+        let policy = self.inner.context.policy.snapshot();
         // set opaque
         response.with_opaque(request.opaque());
-        response.add_ext_field(
-            MessageConst::PROPERTY_MSG_REGION,
-            self.inner.broker_runtime_inner.broker_config().region_id(),
-        );
+        response.add_ext_field(MessageConst::PROPERTY_MSG_REGION, policy.region_id.clone());
         response.add_ext_field(
             MessageConst::PROPERTY_TRACE_SWITCH,
-            CheetahString::from_static_str(if self.inner.broker_runtime_inner.broker_config().trace_on {
-                "true"
-            } else {
-                "false"
-            }),
+            CheetahString::from_static_str(if policy.trace_on { "true" } else { "false" }),
         );
-        let start_timestamp = self
-            .inner
-            .broker_runtime_inner
-            .broker_config()
-            .start_accept_send_request_time_stamp;
-        if self.inner.broker_runtime_inner.message_store_unchecked().now() < (start_timestamp as u64) {
+        let start_timestamp = policy.start_accept_send_request_time_stamp;
+        let store_now = self.inner.context.store.now().unwrap_or_default();
+        if store_now < (start_timestamp as u64) {
             response = response
                 .set_code(RemotingSysResponseCode::SystemError)
                 .set_remark(format!(
@@ -1094,8 +1050,8 @@ where
             let group_name = CheetahString::from_string(KeyBuilder::parse_group(new_topic.as_str()));
             let subscription_group_config = self
                 .inner
-                .broker_runtime_inner
-                .subscription_group_manager()
+                .context
+                .subscription_groups
                 .find_subscription_group_config(group_name.as_ref());
             if subscription_group_config.is_none() {
                 response
@@ -1120,8 +1076,8 @@ where
             let mut send_retry_message_to_dead_letter_queue_directly = false;
             if self
                 .inner
-                .broker_runtime_inner
-                .rebalance_lock_manager()
+                .context
+                .rebalance_locks
                 .is_lock_all_expired(group_name.as_str())
             {
                 info!(
@@ -1139,14 +1095,18 @@ where
                 let topic_ = CheetahString::from_string(mix_all::get_dlq_topic(group_name.as_str()));
                 new_topic = &topic_;
                 let queue_id_int = self.inner.random_queue_id(retry_config::DLQ_NUMS_PER_GROUP) as i32;
-                let new_topic_config = crate::broker_runtime::create_topic_in_send_message_back!(
-                    self.inner.broker_runtime_inner.clone(),
-                    new_topic,
-                    retry_config::DLQ_NUMS_PER_GROUP as i32,
-                    PermName::PERM_WRITE | PermName::PERM_READ,
-                    false,
-                    0,
-                );
+                let new_topic_config = self
+                    .inner
+                    .context
+                    .topics
+                    .create_topic_in_send_message_back(
+                        new_topic,
+                        retry_config::DLQ_NUMS_PER_GROUP as i32,
+                        PermName::PERM_WRITE | PermName::PERM_READ,
+                        false,
+                        0,
+                    )
+                    .await;
                 msg.message.set_topic(new_topic.clone());
                 msg.queue_id = queue_id_int;
                 msg.message.set_delay_time_level(0);
@@ -1175,12 +1135,64 @@ fn has_registered_send_message_hooks(hooks: &[Box<dyn SendMessageHook>]) -> bool
     !hooks.is_empty()
 }
 
+trait SendBackpressurePolicy {
+    fn sync_flush_backlog_reject_depth(&self) -> u64;
+    fn sync_flush_backlog_reject_wait_millis(&self) -> u64;
+    fn ha_pending_reject_count(&self) -> u64;
+    fn ha_pending_reject_wait_millis(&self) -> u64;
+    fn reput_lag_reject_bytes(&self) -> i64;
+}
+
+impl SendBackpressurePolicy for BrokerConfig {
+    fn sync_flush_backlog_reject_depth(&self) -> u64 {
+        self.sync_flush_backlog_reject_depth
+    }
+
+    fn sync_flush_backlog_reject_wait_millis(&self) -> u64 {
+        self.sync_flush_backlog_reject_wait_millis
+    }
+
+    fn ha_pending_reject_count(&self) -> u64 {
+        self.ha_pending_reject_count
+    }
+
+    fn ha_pending_reject_wait_millis(&self) -> u64 {
+        self.ha_pending_reject_wait_millis
+    }
+
+    fn reput_lag_reject_bytes(&self) -> i64 {
+        self.reput_lag_reject_bytes
+    }
+}
+
+impl SendBackpressurePolicy for SendMessagePolicy {
+    fn sync_flush_backlog_reject_depth(&self) -> u64 {
+        self.sync_flush_backlog_reject_depth
+    }
+
+    fn sync_flush_backlog_reject_wait_millis(&self) -> u64 {
+        self.sync_flush_backlog_reject_wait_millis
+    }
+
+    fn ha_pending_reject_count(&self) -> u64 {
+        self.ha_pending_reject_count
+    }
+
+    fn ha_pending_reject_wait_millis(&self) -> u64 {
+        self.ha_pending_reject_wait_millis
+    }
+
+    fn reput_lag_reject_bytes(&self) -> i64 {
+        self.reput_lag_reject_bytes
+    }
+}
+
 fn sync_flush_backlog_reject_remark(
-    broker_config: &BrokerConfig,
+    policy: &impl SendBackpressurePolicy,
     runtime_info: SyncFlushRuntimeInfo,
 ) -> Option<String> {
-    let reject_depth = broker_config.sync_flush_backlog_reject_depth;
-    let reject_wait_millis = broker_config.sync_flush_backlog_reject_wait_millis;
+    let reject_depth = policy.sync_flush_backlog_reject_depth();
+    let reject_wait_millis = policy.sync_flush_backlog_reject_wait_millis();
     let depth_exceeded = reject_depth > 0 && runtime_info.queue_depth >= reject_depth;
     let wait_exceeded = reject_wait_millis > 0 && runtime_info.oldest_wait_millis >= reject_wait_millis;
 
@@ -1264,14 +1276,15 @@ fn map_store_api_error(error: rocketmq_store_api::StoreError) -> RocketMQError {
     }
 }
 
-fn store_health_reject_remark_from<S>(broker_config: &BrokerConfig, store: &S) -> Option<String>
+fn store_health_reject_remark_from<P, S>(policy: &P, store: &S) -> Option<String>
 where
+    P: SendBackpressurePolicy,
     S: StoreHealth<Snapshot = StoreHealthSnapshot>,
 {
-    store_health_reject_remark(broker_config, store.health_snapshot())
+    store_health_reject_remark(policy, store.health_snapshot())
 }
 
-fn store_health_reject_remark(broker_config: &BrokerConfig, snapshot: StoreHealthSnapshot) -> Option<String> {
+fn store_health_reject_remark(policy: &impl SendBackpressurePolicy, snapshot: StoreHealthSnapshot) -> Option<String> {
     if snapshot.shutdown {
         return Some("store_backpressure reason=store_shutdown".to_string());
     }
@@ -1294,12 +1307,12 @@ fn store_health_reject_remark(broker_config: &BrokerConfig, snapshot: StoreHealt
         oldest_wait_millis: snapshot.flush_backlog.oldest_wait_millis,
         ..SyncFlushRuntimeInfo::default()
     };
-    if let Some(remark) = sync_flush_backlog_reject_remark(broker_config, flush_backlog) {
+    if let Some(remark) = sync_flush_backlog_reject_remark(policy, flush_backlog) {
         return Some(format!("store_backpressure reason=sync_flush_backlog, {remark}"));
     }
 
-    let ha_count_threshold = broker_config.ha_pending_reject_count;
-    let ha_wait_threshold = broker_config.ha_pending_reject_wait_millis;
+    let ha_count_threshold = policy.ha_pending_reject_count();
+    let ha_wait_threshold = policy.ha_pending_reject_wait_millis();
     let ha_count_exceeded = ha_count_threshold > 0 && snapshot.replication_pending_count >= ha_count_threshold;
     let ha_wait_exceeded = ha_wait_threshold > 0 && snapshot.replication_oldest_wait_millis >= ha_wait_threshold;
     if ha_count_exceeded || ha_wait_exceeded {
@@ -1313,7 +1326,7 @@ fn store_health_reject_remark(broker_config: &BrokerConfig, snapshot: StoreHealt
         ));
     }
 
-    let reput_lag_threshold = broker_config.reput_lag_reject_bytes;
+    let reput_lag_threshold = policy.reput_lag_reject_bytes();
     if reput_lag_threshold > 0 && snapshot.dispatch_behind_bytes >= reput_lag_threshold {
         return Some(format!(
             "store_backpressure reason=reput_lag, dispatchBehindBytes={}, rejectBytes={}",
@@ -1328,11 +1341,11 @@ pub(crate) struct Inner<MS, TS>
 where
     MS: MessageStore,
 {
-    pub(crate) send_message_hook_vec: ArcMut<Vec<Box<dyn SendMessageHook>>>,
-    pub(crate) consume_message_hook_vec: ArcMut<Vec<Box<dyn ConsumeMessageHook>>>,
+    pub(crate) send_message_hook_vec: Arc<Vec<Box<dyn SendMessageHook>>>,
+    pub(crate) consume_message_hook_vec: Arc<Vec<Box<dyn ConsumeMessageHook>>>,
     pub(crate) broker_to_client: Broker2Client,
     pub(crate) transactional_message_service: Arc<TS>,
-    pub(crate) broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+    pub(crate) context: Arc<SendMessageProcessorContext<MS>>,
 }
 
 impl<MS, TS> Inner<MS, TS>
@@ -1383,24 +1396,22 @@ where
     }
 
     pub(crate) async fn consumer_send_msg_back(
-        &mut self,
+        &self,
         _channel: &Channel,
         _ctx: &ConnectionHandlerContext,
         request: &RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_header = request.decode_command_custom_header::<ConsumerSendMsgBackRequestHeader>()?;
-        if self.broker_runtime_inner.broker_config().broker_identity.broker_id != mix_all::MASTER_ID {
+        let policy = self.context.policy.snapshot();
+        if policy.broker_id != mix_all::MASTER_ID {
             return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
                 ResponseCode::SystemError,
-                format!(
-                    "no master available along with {}",
-                    self.broker_runtime_inner.broker_config().broker_ip1
-                ),
+                format!("no master available along with {}", policy.broker_ip),
             )));
         }
         let subscription_group_config = self
-            .broker_runtime_inner
-            .subscription_group_manager()
+            .context
+            .subscription_groups
             .find_subscription_group_config(&request_header.group);
         if subscription_group_config.is_none() {
             return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
@@ -1413,13 +1424,12 @@ where
             )));
         }
 
-        if !PermName::is_writeable(self.broker_runtime_inner.broker_config().broker_permission) {
+        if !PermName::is_writeable(policy.broker_permission) {
             return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
                 ResponseCode::NoPermission,
                 format!(
                     "the broker[{}-{}] sending message is forbidden",
-                    self.broker_runtime_inner.broker_config().broker_identity.broker_name,
-                    self.broker_runtime_inner.broker_config().broker_ip1
+                    policy.broker_name, policy.broker_ip
                 ),
             )));
         }
@@ -1438,14 +1448,17 @@ where
         } else {
             0
         };
-        let topic_config = crate::broker_runtime::create_topic_in_send_message_back!(
-            self.broker_runtime_inner.clone(),
-            &new_topic,
-            subscription_group_config.retry_queue_nums(),
-            PermName::PERM_WRITE | PermName::PERM_READ,
-            false,
-            topic_sys_flag,
-        );
+        let topic_config = self
+            .context
+            .topics
+            .create_topic_in_send_message_back(
+                &new_topic,
+                subscription_group_config.retry_queue_nums(),
+                PermName::PERM_WRITE | PermName::PERM_READ,
+                false,
+                topic_sys_flag,
+            )
+            .await;
         if topic_config.is_none() {
             return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
                 ResponseCode::SystemError,
@@ -1463,12 +1476,11 @@ where
             )));
         }
         // Early return: message not found
-        let message_store = self
-            .broker_runtime_inner
-            .message_store()
-            .ok_or_else(message_store_not_initialized)?;
-
-        let msg_ext: Option<MessageExt> = message_store.look_message_by_offset(request_header.offset);
+        let msg_ext: Option<MessageExt> = self
+            .context
+            .store
+            .look_message_by_offset(request_header.offset)
+            .map_err(|_| message_store_not_initialized())?;
         let Some(mut msg_ext) = msg_ext else {
             return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
                 ResponseCode::SystemError,
@@ -1506,14 +1518,17 @@ where
         let is_dlq = if msg_ext.reconsume_times >= max_reconsume_times || delay_level < 0 {
             new_topic = CheetahString::from_string(mix_all::get_dlq_topic(&request_header.group));
             queue_id_int = 0;
-            let topic_config_inner = crate::broker_runtime::create_topic_in_send_message_back!(
-                self.broker_runtime_inner.clone(),
-                &new_topic,
-                retry_config::DLQ_NUMS_PER_GROUP as i32,
-                PermName::PERM_WRITE | PermName::PERM_READ,
-                false,
-                0,
-            );
+            let topic_config_inner = self
+                .context
+                .topics
+                .create_topic_in_send_message_back(
+                    &new_topic,
+                    retry_config::DLQ_NUMS_PER_GROUP as i32,
+                    PermName::PERM_WRITE | PermName::PERM_READ,
+                    false,
+                    0,
+                )
+                .await;
             if topic_config_inner.is_none() {
                 return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
                     ResponseCode::SystemError,
@@ -1543,7 +1558,7 @@ where
         msg_inner.message_ext_inner.sys_flag = msg_ext.sys_flag;
         msg_inner.message_ext_inner.born_timestamp = msg_ext.born_timestamp;
         msg_inner.message_ext_inner.born_host = msg_ext.born_host;
-        msg_inner.message_ext_inner.store_host = self.broker_runtime_inner.store_host();
+        msg_inner.message_ext_inner.store_host = policy.store_host;
         msg_inner.message_ext_inner.reconsume_times = msg_ext.reconsume_times + 1;
 
         let origin_msg_id = if let Some(id) = MessageAccessor::get_origin_message_id(&msg_ext) {
@@ -1555,12 +1570,12 @@ where
         msg_inner.properties_string = message_properties_to_string(msg_ext.get_properties());
 
         let inner_topic = msg_inner.get_topic().clone();
-        let message_store = self
-            .broker_runtime_inner
-            .message_store_mut()
-            .as_mut()
-            .ok_or_else(message_store_not_initialized)?;
-        let put_message_result = message_store.put_message(msg_inner).await;
+        let put_message_result = self
+            .context
+            .store
+            .put_message(msg_inner)
+            .await
+            .map_err(|_| message_store_not_initialized())?;
         let commercial_owner = request
             .get_ext_fields()
             .and_then(|value| value.get(BrokerStatsManager::COMMERCIAL_OWNER).cloned());
@@ -1662,8 +1677,8 @@ where
         request: &RemotingCommand,
     ) -> (SendMessageContext, HashMap<CheetahString, CheetahString>) {
         let namespace = NamespaceUtil::get_namespace_from_resource(request_header.topic.as_str());
-        let broker_config = self.broker_runtime_inner.broker_config();
-        let region_id = broker_config.region_id().to_string();
+        let policy = self.context.policy.snapshot();
+        let region_id = policy.region_id.to_string();
 
         let mut send_message_context = SendMessageContext {
             namespace: CheetahString::from_string(namespace),
@@ -1674,7 +1689,7 @@ where
         send_message_context.body_length(request.body().as_ref().map_or_else(|| 0, |b| b.len() as i32));
         send_message_context.msg_props(request_header.properties.clone().unwrap_or_default());
         send_message_context.born_host(CheetahString::from_string(channel.remote_address().to_string()));
-        send_message_context.broker_addr(CheetahString::from_string(broker_config.get_broker_addr()));
+        send_message_context.broker_addr(policy.broker_addr.clone());
         send_message_context.queue_id(Some(request_header.queue_id));
         send_message_context.broker_region_id(CheetahString::from_string(region_id.clone()));
         send_message_context.born_time_stamp(request_header.born_timestamp);
@@ -1685,8 +1700,7 @@ where
                 send_message_context.commercial_owner(value.clone());
             }
         }
-        let properties =
-            enrich_send_message_request_properties(request_header, region_id.as_str(), broker_config.trace_on);
+        let properties = enrich_send_message_request_properties(request_header, region_id.as_str(), policy.trace_on);
 
         if let Some(unique_key) = properties.get(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX) {
             send_message_context.msg_unique_key = CheetahString::from_slice(unique_key);
@@ -1703,7 +1717,7 @@ where
     }
 
     pub(crate) async fn msg_check(
-        &mut self,
+        &self,
         channel: &Channel,
         _ctx: &ConnectionHandlerContext,
         _request: &RemotingCommand,
@@ -1711,16 +1725,14 @@ where
         response: &mut RemotingCommand,
     ) {
         //check broker permission
-        if !PermName::is_writeable(self.broker_runtime_inner.broker_config().broker_permission())
-            && self
-                .broker_runtime_inner
-                .topic_config_manager()
-                .is_order_topic(request_header.topic.as_str())
+        let policy = self.context.policy.snapshot();
+        if !PermName::is_writeable(policy.broker_permission)
+            && self.context.topics.is_order_topic(request_header.topic.as_str())
         {
             response.with_code(ResponseCode::NoPermission);
             response.with_remark(format!(
                 "the broker[{}] sending message is forbidden",
-                self.broker_runtime_inner.broker_config().broker_ip1.clone()
+                policy.broker_ip.clone()
             ));
             return;
         }
@@ -1741,10 +1753,7 @@ where
             ));
             return;
         }
-        let mut topic_config = self
-            .broker_runtime_inner
-            .topic_config_manager()
-            .select_topic_config(&request_header.topic);
+        let mut topic_config = self.context.topics.select_topic_config(&request_header.topic);
         if topic_config.is_none() {
             let mut topic_sys_flag = 0;
             if request_header.unit_mode.unwrap_or(false) {
@@ -1759,24 +1768,30 @@ where
                 request_header.topic(),
                 channel.remote_address(),
             );
-            topic_config = crate::broker_runtime::create_topic_in_send_message!(
-                self.broker_runtime_inner.clone(),
-                &request_header.topic,
-                &request_header.default_topic,
-                channel.remote_address(),
-                request_header.default_topic_queue_nums,
-                topic_sys_flag,
-            );
+            topic_config = self
+                .context
+                .topics
+                .create_topic_in_send_message(
+                    &request_header.topic,
+                    &request_header.default_topic,
+                    channel.remote_address(),
+                    request_header.default_topic_queue_nums,
+                    topic_sys_flag,
+                )
+                .await;
 
             if topic_config.is_none() && request_header.topic.starts_with(RETRY_GROUP_TOPIC_PREFIX) {
-                topic_config = crate::broker_runtime::create_topic_in_send_message_back!(
-                    self.broker_runtime_inner.clone(),
-                    request_header.topic.as_ref(),
-                    1,
-                    PermName::PERM_WRITE | PermName::PERM_READ,
-                    false,
-                    topic_sys_flag,
-                );
+                topic_config = self
+                    .context
+                    .topics
+                    .create_topic_in_send_message_back(
+                        request_header.topic.as_ref(),
+                        1,
+                        PermName::PERM_WRITE | PermName::PERM_READ,
+                        false,
+                        topic_sys_flag,
+                    )
+                    .await;
             }
 
             if topic_config.is_none() {
@@ -1845,9 +1860,34 @@ fn message_store_not_initialized() -> RocketMQError {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::future::Future;
+
+    use rocketmq_common::common::broker::broker_config::BrokerConfig;
+    use rocketmq_remoting::code::response_code::RemotingSysResponseCode;
+    use rocketmq_remoting::code::response_code::ResponseCode;
+    use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+    use rocketmq_store::base::flush_manager::SyncFlushRuntimeInfo;
+    use rocketmq_store::base::message_result::PutMessageResult;
+    use rocketmq_store::base::message_status_enum::PutMessageStatus;
+    use rocketmq_store::store_api_adapter::legacy_append_receipt;
+    use rocketmq_store::store_api_adapter::LegacyAppendReceipt;
     use rocketmq_store::store_api_adapter::LegacyFlushBacklog as FlushBacklog;
     use rocketmq_store::store_api_adapter::LegacyStoreHealthError;
+    use rocketmq_store::store_api_adapter::LegacyStoreHealthSnapshot;
+
+    use crate::mqtrace::send_message_context::SendMessageContext;
+    use crate::mqtrace::send_message_hook::SendMessageHook;
+    use crate::send_message_constants::error_messages;
+
+    use super::append_message_with_store;
+    use super::has_registered_send_message_hooks;
+    use super::map_put_status_to_response;
+    use super::map_store_api_error;
+    use super::message_store_not_initialized;
+    use super::store_health_reject_remark;
+    use super::store_health_reject_remark_from;
+    use super::sync_flush_backlog_reject_remark;
+    use super::StoreHealthSnapshot;
 
     struct CapabilityStore {
         health: LegacyStoreHealthSnapshot,
