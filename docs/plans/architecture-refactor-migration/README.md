@@ -626,6 +626,14 @@ ownership 回归通过。ArcMut 快照降至 353 identities/947 occurrences（pr
 compatibility 14/40、Broker production 92/195），净删除 2 个 production identities/3 occurrences，且无
 relocation。总进度仍为 75/82，下一子切片 M11-12bc22 继续 Broker aggregate/leaf 或 Store WAL/queue/timer/HA owner。
 
+Broker offset Admin handler 随 Issue #8450 收窄：`OffsetRequestHandler` 删除完整 runtime 字段、Clone 与 struct-level
+`MessageStore` 泛型，改为无状态 leaf；Admin dispatch 为 offset/delay/subscription/cleanup 请求传入父层现有 owner 的
+请求期共享借用，static-topic max/min/earliest 重写沿用同一借用，unsupported RocksDB 路径不再取得 runtime。
+offset 聚焦回归 5/5、ownership 回归通过。ArcMut 快照降至 351 identities/944 occurrences（production 193/466、
+test 144/438、compatibility 14/40、Broker production 90/192），净删除 2 个 production identities/3
+occurrences，且无 relocation。总进度仍为 75/82，下一子切片 M11-12bc23 继续 Broker aggregate/leaf 或 Store
+WAL/queue/timer/HA owner。
+
 ### 9.3 证据目录
 
 - 运行期生成物：`target/architecture-refactor/Mxx/<run-id>/`，不提交 Git。

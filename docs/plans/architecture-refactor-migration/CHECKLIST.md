@@ -40,14 +40,14 @@
 PR-M10-05 已完成性能门禁实现；真实固定硬件 baseline/candidate 与 HUMAN M10 Gate 尚未完成，因此 M10 为
 `待验收`而非`已完成`。M11 为`实施中`，当前下一工作包为 PR-M11-12。
 
-PR-M11-12 的内部子切片不重复计入 82 个顶层工作包。Issue #8448 的 M11-12bc21 子切片完成后，当前 ArcMut reviewed
-baseline 为 353 identities / 947 occurrences，其中 production 为 195/469、test 为 144/438、compatibility
+PR-M11-12 的内部子切片不重复计入 82 个顶层工作包。Issue #8450 的 M11-12bc22 子切片完成后，当前 ArcMut reviewed
+baseline 为 351 identities / 944 occurrences，其中 production 为 193/466、test 为 144/438、compatibility
 为 14/40。production 剩余分布和完成目标如下：
 
 | owner | identity / occurrence | PR-M11-12 完成目标 |
 |---|---:|---|
 | Client | 0 / 0 | 已完成 DefaultMQProducer facade/implementation/registry 标准 Arc/Weak、配置快照、生命周期/任务接纳边界，并拆除强引用环 |
-| Broker | 92 / 195 | Topic route/queue mapping、TopicConfig value/coordinator、TopicRouteInfo capability、message-arriving weak listener、client-housekeeping narrow handle、HA diagnostics/control、batch lock、subscription-group/message-related Admin request borrow、POP/Pull、offset、schedule service/root/hook、put-message preflight、transaction service/check listener/bridge、ConsumerOrderInfo capability、核心 processor root、auth/Producer/ColdData admin、统计 handler 与未编译 V2 示例残留已完成；继续删除显式 transaction Store 兼容 owner，并完成 BrokerRuntime carrier 与其他 admin/processor 安全化 |
+| Broker | 90 / 192 | Topic route/queue mapping、TopicConfig value/coordinator、TopicRouteInfo capability、message-arriving weak listener、client-housekeeping narrow handle、HA diagnostics/control、batch lock、subscription-group/message-related/offset Admin request borrow、POP/Pull、offset、schedule service/root/hook、put-message preflight、transaction service/check listener/bridge、ConsumerOrderInfo capability、核心 processor root、auth/Producer/ColdData admin、统计 handler 与未编译 V2 示例残留已完成；继续删除显式 transaction Store 兼容 owner，并完成 BrokerRuntime carrier 与其他 admin/processor 安全化 |
 | Store | 103 / 274 | TopicConfig 只读代际 carrier、BrokerStats observer、ConsumeQueueExt 显式锁 owner、HA notification/connection registry 窄能力与未共享 HA child 直接 ownership 已完成；继续完成 message store、CommitLog/Flush、其余 queue、Rocks/Timer 与其他 HA service/actor 安全化 |
 
 ArcMut production/public compatibility 清零之后，PR-M11-12 还必须在同一冻结候选快照完成 stable feature matrix、
@@ -706,7 +706,8 @@ M09-04 再删除 MCP 未使用的 Auth/Error direct edges，并把承担 owned t
   - [x] M11-12bc19 BatchMq borrow：handler 改为无状态 leaf，Admin dispatch 请求期借用 runtime；严格锁 fan-out 只 clone `BrokerOuterAPI` 窄能力，不再为每个副本 future 捕获完整 runtime
   - [x] M11-12bc20 SubscriptionGroup borrow：handler 改为无状态 leaf，Admin dispatch 仅在 manager 写请求期间取得现有 owner 的独占借用、读请求使用共享借用，并删除未被 dispatch 调用的重复 unlock 实现
   - [x] M11-12bc21 MessageRelated borrow：handler 改为无状态 leaf；search/query/POP rollback 使用请求期共享 runtime 借用，仅半消息重入写 Store 时使用独占借用，静态主题重写继续沿用同一共享借用
-  - [x] [`M11-12 进度证据`](phase-3-production-readiness/11-soundness-closure-progress.md) 记录父 Issue #8292、子切片 Issue #8293/#8295/#8297/#8299/#8301/#8303/#8307/#8309/#8311/#8313/#8315/#8317/#8319/#8321/#8323/#8325/#8327/#8329/#8331/#8333/#8335/#8337/#8339/#8341/#8343/#8345/#8347/#8349/#8351/#8353/#8355/#8357/#8359/#8361/#8363/#8365/#8367/#8369/#8371/#8375/#8377/#8379/#8381/#8383/#8385/#8387/#8389/#8391/#8393/#8395/#8398/#8400/#8402/#8404/#8406/#8408/#8410/#8412/#8414/#8416/#8419/#8421/#8423/#8425/#8427/#8429/#8431/#8433/#8435/#8438/#8440/#8442/#8444/#8446/#8448 与每次真实下降或经审核的边界搬迁
+  - [x] M11-12bc22 Offset borrow：handler 改为无状态 leaf；offset/delay/subscription/cleanup 请求与 static-topic max/min/earliest 重写只使用父层请求期共享 runtime 借用，unsupported RocksDB 路径无需 runtime
+  - [x] [`M11-12 进度证据`](phase-3-production-readiness/11-soundness-closure-progress.md) 记录父 Issue #8292、子切片 Issue #8293/#8295/#8297/#8299/#8301/#8303/#8307/#8309/#8311/#8313/#8315/#8317/#8319/#8321/#8323/#8325/#8327/#8329/#8331/#8333/#8335/#8337/#8339/#8341/#8343/#8345/#8347/#8349/#8351/#8353/#8355/#8357/#8359/#8361/#8363/#8365/#8367/#8369/#8371/#8375/#8377/#8379/#8381/#8383/#8385/#8387/#8389/#8391/#8393/#8395/#8398/#8400/#8402/#8404/#8406/#8408/#8410/#8412/#8414/#8416/#8419/#8421/#8423/#8425/#8427/#8429/#8431/#8433/#8435/#8438/#8440/#8442/#8444/#8446/#8448/#8450 与每次真实下降或经审核的边界搬迁
   - [x] Issue #8295 后累计降至 711 production/2,029 occurrence；Controller 配置债务清零但其他 Controller owner 仍有 31 条 production 债务
   - [x] Issue #8297 后实际快照降至 697 production/1,986 occurrence；Controller 降至 17 条/51 occurrence，Manager/heartbeat/embedded-NameServer owner 已退出 `ArcMut`
   - [x] Issue #8299 后实际快照降至 690 production/1,961 occurrence；Controller 降至 10 条/26 occurrence，Raft/OpenRaft owner 与 Manager Raft `mut_from_ref` 已清零
@@ -782,7 +783,8 @@ M09-04 再删除 MCP 未使用的 Auth/Error direct edges，并把承担 owned t
   - [x] Issue #8444 后实际快照降至 358 identities/954 occurrences：production 199/475、test 145/439、compatibility 14/40、Broker production 96/201；BatchMq leaf 净删除 2 个 production identity/3 occurrence，无 relocation
   - [x] Issue #8446 后实际快照降至 355 identities/950 occurrences：production 197/472、test 144/438、compatibility 14/40、Broker production 94/198；SubscriptionGroup leaf 净删除 2 个 production identity/3 occurrence 与 1 个 test identity/1 occurrence，无 relocation
   - [x] Issue #8448 后实际快照降至 353 identities/947 occurrences：production 195/469、test 144/438、compatibility 14/40、Broker production 92/195；MessageRelated leaf 净删除 2 个 production identity/3 occurrence，无 relocation
-  - [ ] M11-12bc22 及后续：Broker aggregate/leaf、Store WAL/其余 queue/timer/HA、compatibility 删除、stable/Miri/Loom/soak/SLO 与同一候选快照 Gate 仍待完成
+  - [x] Issue #8450 后实际快照降至 351 identities/944 occurrences：production 193/466、test 144/438、compatibility 14/40、Broker production 90/192；Offset leaf 净删除 2 个 production identity/3 occurrence，无 relocation
+  - [ ] M11-12bc23 及后续：Broker aggregate/leaf、Store WAL/其余 queue/timer/HA、compatibility 删除、stable/Miri/Loom/soak/SLO 与同一候选快照 Gate 仍待完成
   - [ ] 总进度仍为 75/82；本子切片不提前计作完成工作包，M10/Kind-K3d/container dynamic/HUMAN Gate 保持开放
 - [ ] 对应任务文档的 Exit Checklist 全部通过
 
