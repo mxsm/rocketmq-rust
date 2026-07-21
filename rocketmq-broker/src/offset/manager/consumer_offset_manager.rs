@@ -21,6 +21,7 @@ use std::path::Path;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::sync::Weak;
 
 use arc_swap::ArcSwap;
@@ -33,7 +34,6 @@ use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_remoting::protocol::data_version_facade::DataVersionExt;
 use rocketmq_remoting::protocol::DataVersion;
 use rocketmq_remoting::protocol::RemotingSerializable;
-use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use serde::de;
@@ -51,6 +51,7 @@ use tracing::warn;
 use crate::broker_path_config_helper::get_consumer_offset_path;
 #[cfg(feature = "rocksdb_store")]
 use crate::config::rocksdb_manager::RocksDbBrokerConfigManager;
+use crate::failover::escape_bridge::EscapeBridge;
 
 pub const TOPIC_GROUP_SEPARATOR: &str = "@";
 
@@ -82,9 +83,32 @@ pub(crate) struct ConsumerOffsetManager<MS: MessageStore> {
     broker_config: Arc<BrokerConfig>,
     message_store_config: Arc<MessageStoreConfig>,
     consumer_offset_wrapper: ConsumerOffsetWrapper,
-    message_store: Option<ArcMut<MS>>,
+    message_store: ConsumerOffsetStoreCapability<MS>,
     #[cfg(feature = "rocksdb_store")]
     rocksdb_config_manager: Option<Arc<RocksDbBrokerConfigManager>>,
+}
+
+/// Late-bound, non-owning Store query provider for offset processing.
+struct ConsumerOffsetStoreCapability<MS: MessageStore> {
+    provider: Arc<OnceLock<Weak<EscapeBridge<MS>>>>,
+}
+
+impl<MS: MessageStore> Default for ConsumerOffsetStoreCapability<MS> {
+    fn default() -> Self {
+        Self {
+            provider: Arc::new(OnceLock::new()),
+        }
+    }
+}
+
+impl<MS: MessageStore> ConsumerOffsetStoreCapability<MS> {
+    fn bind(&self, provider: &Arc<EscapeBridge<MS>>) {
+        let _ = self.provider.set(Arc::downgrade(provider));
+    }
+
+    fn provider(&self) -> Option<Arc<EscapeBridge<MS>>> {
+        self.provider.get().and_then(Weak::upgrade)
+    }
 }
 
 /// Narrow live offset capability used by consumer offset request processing.
@@ -154,16 +178,16 @@ where
     pub(crate) fn min_offset_in_queue(&self, topic: &CheetahString, queue_id: i32) -> i64 {
         self.manager
             .message_store
-            .as_ref()
-            .map(|store| store.get_min_offset_in_queue(topic, queue_id))
+            .provider()
+            .and_then(|store| store.get_min_offset_from_local_store(topic, queue_id).ok())
             .unwrap_or(0)
     }
 
     pub(crate) fn check_in_mem_by_consume_offset(&self, topic: &CheetahString, queue_id: i32) -> bool {
         self.manager
             .message_store
-            .as_ref()
-            .map(|store| store.check_in_mem_by_consume_offset(topic, queue_id, 0, 1))
+            .provider()
+            .and_then(|store| store.check_in_mem_by_consume_offset(topic, queue_id).ok())
             .unwrap_or(false)
     }
 }
@@ -184,11 +208,7 @@ where
         }
     }
 
-    pub fn new(
-        broker_config: Arc<BrokerConfig>,
-        message_store_config: Arc<MessageStoreConfig>,
-        message_store: Option<ArcMut<MS>>,
-    ) -> Self {
+    pub fn new(broker_config: Arc<BrokerConfig>, message_store_config: Arc<MessageStoreConfig>) -> Self {
         ConsumerOffsetManager {
             broker_config,
             message_store_config,
@@ -200,7 +220,7 @@ where
                 pull_offset_table: parking_lot::RwLock::new(HashMap::new()),
                 version_change_counter: AtomicI64::new(0),
             },
-            message_store,
+            message_store: ConsumerOffsetStoreCapability::default(),
             #[cfg(feature = "rocksdb_store")]
             rocksdb_config_manager: None,
         }
@@ -210,10 +230,9 @@ where
     pub fn new_with_rocksdb_config_manager(
         broker_config: Arc<BrokerConfig>,
         message_store_config: Arc<MessageStoreConfig>,
-        message_store: Option<ArcMut<MS>>,
         rocksdb_config_manager: Arc<RocksDbBrokerConfigManager>,
     ) -> Self {
-        let mut manager = Self::new(broker_config, message_store_config, message_store);
+        let mut manager = Self::new(broker_config, message_store_config);
         manager.rocksdb_config_manager = Some(rocksdb_config_manager);
         manager
     }
@@ -242,8 +261,8 @@ where
         })
     }
 
-    pub fn set_message_store(&mut self, message_store: Option<ArcMut<MS>>) {
-        self.message_store = message_store;
+    pub(crate) fn bind_message_store(&self, provider: &Arc<EscapeBridge<MS>>) {
+        self.message_store.bind(provider);
     }
 
     pub fn commit_pull_offset(
@@ -373,11 +392,11 @@ where
             + 1;
         let update_step = self.broker_config.consumer_offset_update_version_step;
         if update_step > 0 && committed_updates % update_step == 0 {
-            let state_machine_version = if let Some(ref message_store) = self.message_store {
-                message_store.get_state_machine_version()
-            } else {
-                0
-            };
+            let state_machine_version = self
+                .message_store
+                .provider()
+                .and_then(|store| store.local_store_state_machine_version().ok())
+                .unwrap_or(0);
             self.advance_data_version_with_locked(state_machine_version);
         }
     }
@@ -428,7 +447,7 @@ where
             })
             .unwrap_or_default();
 
-        let Some(message_store) = self.message_store.as_ref() else {
+        let Some(message_store) = self.message_store.provider() else {
             return HashMap::new();
         };
 
@@ -446,7 +465,9 @@ where
             }
 
             for (&queue_id, &offset) in offsets.iter() {
-                let min_offset = message_store.get_min_offset_in_queue(topic, queue_id);
+                let Ok(min_offset) = message_store.get_min_offset_from_local_store(topic, queue_id) else {
+                    continue;
+                };
                 if offset < min_offset {
                     continue;
                 }
@@ -982,7 +1003,6 @@ mod tests {
         ConsumerOffsetManager::new(
             Arc::new(BrokerConfig::default()),
             Arc::new(MessageStoreConfig::default()),
-            None,
         )
     }
 
@@ -1349,7 +1369,6 @@ mod tests {
                     real_time_persist_rocksdb_config: true,
                     ..MessageStoreConfig::default()
                 }),
-                None,
                 Arc::new(
                     RocksDbBrokerConfigManager::open(RocksDbBrokerConfigManagerConfig::consumer_offset(
                         rocksdb_path.clone(),
@@ -1374,7 +1393,6 @@ mod tests {
                     real_time_persist_rocksdb_config: true,
                     ..MessageStoreConfig::default()
                 }),
-                None,
                 Arc::new(
                     RocksDbBrokerConfigManager::open(RocksDbBrokerConfigManagerConfig::consumer_offset(rocksdb_path))
                         .expect("rocksdb config manager should reopen"),
@@ -1403,7 +1421,6 @@ mod tests {
                     real_time_persist_rocksdb_config: true,
                     ..MessageStoreConfig::default()
                 }),
-                None,
                 Arc::new(
                     RocksDbBrokerConfigManager::open(RocksDbBrokerConfigManagerConfig::consumer_offset(
                         rocksdb_path.clone(),
@@ -1428,7 +1445,6 @@ mod tests {
                     real_time_persist_rocksdb_config: true,
                     ..MessageStoreConfig::default()
                 }),
-                None,
                 Arc::new(
                     RocksDbBrokerConfigManager::open(RocksDbBrokerConfigManagerConfig::consumer_offset(rocksdb_path))
                         .expect("rocksdb config manager should reopen"),

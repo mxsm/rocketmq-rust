@@ -120,6 +120,8 @@ use crate::controller::replicas_manager::ControllerReplicaInfoFollowup;
 use crate::controller::replicas_manager::ControllerReplicaSyncFollowup;
 use crate::controller::replicas_manager::ReplicasManager;
 use crate::failover::escape_bridge::EscapeBridge;
+use crate::failover::escape_bridge_capability::EscapeBridgePolicyState;
+use crate::failover::escape_bridge_capability::LegacyEscapeStoreOwner;
 use crate::filter::commit_log_dispatcher_calc_bit_map::CommitLogDispatcherCalcBitMap;
 use crate::filter::manager::consumer_filter_manager::ConsumerFilterManager;
 use crate::hook::batch_check_before_put_message::BatchCheckBeforePutMessageHook;
@@ -1116,21 +1118,20 @@ impl BrokerRuntime {
             Some(managers) => ConsumerOffsetManager::new_with_rocksdb_config_manager(
                 broker_config.clone(),
                 message_store_config.clone(),
-                None,
                 Arc::clone(&managers.consumer_offset),
             ),
-            None => ConsumerOffsetManager::new(broker_config.clone(), message_store_config.clone(), None),
+            None => ConsumerOffsetManager::new(broker_config.clone(), message_store_config.clone()),
         });
         #[cfg(not(feature = "rocksdb_store"))]
         let consumer_offset_manager = Arc::new(ConsumerOffsetManager::new(
             broker_config.clone(),
             message_store_config.clone(),
-            None,
         ));
         let online_role_state = Arc::new(BrokerOnlineRoleState::new(broker_config.broker_identity.broker_id));
         let send_message_policy_state =
             SendMessagePolicyState::from_configs(&broker_config, &message_store_config, store_host);
         let pull_message_policy_state = PullMessagePolicyState::from_configs(&broker_config, &message_store_config);
+        let escape_bridge_policy_state = EscapeBridgePolicyState::from_configs(&broker_config, &message_store_config);
 
         let mut inner = ArcMut::new(BrokerRuntimeInner::<GenericMessageStore> {
             shutdown: Arc::new(AtomicBool::new(false)),
@@ -1140,6 +1141,7 @@ impl BrokerRuntime {
             message_store_config: message_store_config.clone(),
             send_message_policy_state,
             pull_message_policy_state,
+            escape_bridge_policy_state,
             //server_config,
             topic_config_manager: None,
             topic_config_coordinator: None,
@@ -1243,8 +1245,13 @@ impl BrokerRuntime {
             inner.broker_config.load_balance_poll_name_server_interval,
             inner.broker_service_task_group(),
         ));
-        let escape_bridge = Arc::new(EscapeBridge::new(inner.clone()));
+        let escape_bridge = Arc::new(EscapeBridge::new(
+            inner.escape_bridge_policy_state.clone(),
+            inner.topic_route_info_manager().clone(),
+            inner.broker_outer_api.clone(),
+        ));
         inner.escape_bridge = Some(Arc::downgrade(&escape_bridge));
+        inner.consumer_offset_manager.bind_message_store(&escape_bridge);
         let subscription_group_manager_config = SubscriptionGroupManagerConfig::from_configs(
             inner.broker_config.as_ref(),
             inner.message_store_config.as_ref(),
@@ -1771,7 +1778,7 @@ impl BrokerRuntime {
         let message_store_config = self.inner.message_store_config.clone();
         let consumer_offset_manager = std::mem::replace(
             &mut self.inner.consumer_offset_manager,
-            Arc::new(ConsumerOffsetManager::new(broker_config, message_store_config, None)),
+            Arc::new(ConsumerOffsetManager::new(broker_config, message_store_config)),
         );
         let result = if let Some(service_context) = self.inner.service_context.as_ref() {
             run_shutdown_blocking_operation(
@@ -2108,13 +2115,12 @@ impl BrokerRuntime {
             let message_store = ArcMut::new(GenericMessageStore::local_file(local_file_store));
             self.inner.broker_stats = Some(BrokerStats::from_manager(self.inner.broker_stats_manager.clone()));
             self.inner.message_store = Some(message_store.clone());
+            self.escape_bridge_owner
+                .bind_message_store(LegacyEscapeStoreOwner(message_store.clone()));
             let message_store_for_fast_failure = message_store.clone();
             self.inner
                 .broker_fast_failure
                 .set_page_cache_busy_checker(move || message_store_for_fast_failure.is_os_page_cache_busy());
-            Arc::get_mut(&mut self.inner.consumer_offset_manager)
-                .expect("consumer offset manager is not published before transaction initialization")
-                .set_message_store(Some(message_store));
             if let Some(message_store) = &mut self.inner.message_store {
                 match message_store.init().await {
                     Ok(_) => {
@@ -2148,13 +2154,12 @@ impl BrokerRuntime {
                 let message_store = ArcMut::new(GenericMessageStore::rocksdb(rocksdb_message_store));
                 self.inner.broker_stats = Some(BrokerStats::from_manager(self.inner.broker_stats_manager.clone()));
                 self.inner.message_store = Some(message_store.clone());
+                self.escape_bridge_owner
+                    .bind_message_store(LegacyEscapeStoreOwner(message_store.clone()));
                 let message_store_for_fast_failure = message_store.clone();
                 self.inner
                     .broker_fast_failure
                     .set_page_cache_busy_checker(move || message_store_for_fast_failure.is_os_page_cache_busy());
-                Arc::get_mut(&mut self.inner.consumer_offset_manager)
-                    .expect("consumer offset manager is not published before transaction initialization")
-                    .set_message_store(Some(message_store));
                 if let Some(message_store) = &mut self.inner.message_store {
                     match message_store.init().await {
                         Ok(_) => {
@@ -3848,6 +3853,7 @@ pub(crate) struct BrokerRuntimeInner<MS: MessageStore> {
     message_store_config: Arc<MessageStoreConfig>,
     send_message_policy_state: SendMessagePolicyState,
     pull_message_policy_state: PullMessagePolicyState,
+    escape_bridge_policy_state: EscapeBridgePolicyState,
     topic_config_manager: Option<Arc<TopicConfigManager>>,
     topic_config_coordinator: Option<Arc<TopicConfigCoordinator>>,
     topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
@@ -4557,6 +4563,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             .set_local_broker_id(broker_config.broker_identity.broker_id);
         self.send_message_policy_state.update_broker_config(&broker_config);
         self.pull_message_policy_state.update_broker_config(&broker_config);
+        self.escape_bridge_policy_state.update_broker_config(&broker_config);
         self.broker_config = Arc::new(broker_config);
     }
 
@@ -4569,6 +4576,8 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             .update_message_store_config(&message_store_config);
         self.pull_message_policy_state
             .update_store_config(&message_store_config);
+        self.escape_bridge_policy_state
+            .update_message_store_config(&message_store_config);
         self.message_store_config = Arc::new(message_store_config);
     }
 
@@ -4589,7 +4598,11 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
 
     #[inline]
     pub fn set_message_store(&mut self, message_store: MS) {
-        self.message_store = Some(ArcMut::new(message_store));
+        let message_store = ArcMut::new(message_store);
+        if let Some(escape_bridge) = self.escape_bridge.as_ref().and_then(Weak::upgrade) {
+            escape_bridge.bind_message_store(LegacyEscapeStoreOwner(message_store.clone()));
+        }
+        self.message_store = Some(message_store);
     }
 
     #[inline]
@@ -5474,6 +5487,10 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         this.pull_message_policy_state.update_broker_config(&this.broker_config);
         this.pull_message_policy_state
             .update_store_config(&this.message_store_config);
+        this.escape_bridge_policy_state
+            .update_broker_config(&this.broker_config);
+        this.escape_bridge_policy_state
+            .update_message_store_config(&this.message_store_config);
 
         match role {
             BrokerReplicaRole::Master => {

@@ -13,3 +13,4 @@
 // limitations under the License.
 
 pub mod escape_bridge;
+pub(crate) mod escape_bridge_capability;

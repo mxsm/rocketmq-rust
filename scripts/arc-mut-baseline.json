@@ -574,10 +574,10 @@
           "line": 2108
         },
         {
-          "id": "5a11a6fa9237fdd8ea0dafa1",
-          "fingerprint": "700bae83c5efcc96fd63bae4",
+          "id": "5b7b3163d443a001a0b3e66d",
+          "fingerprint": "fdf98a153c51f661eda8815f",
           "item": "fn set_message_store",
-          "line": 4233
+          "line": 4601
         }
       ],
       "owner": "broker",
@@ -939,61 +939,17 @@
       "adr": "ADR-002"
     },
     {
-      "identity": "2278d410debc604733d1a654",
-      "path": "rocketmq-broker/src/failover/escape_bridge.rs",
-      "symbol": "*",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "68303e8d7b3e8edfde882ba1",
-          "fingerprint": "c31c08686cbcb1bfe9f567f2",
-          "item": "mod tests",
-          "line": 509
-        }
-      ],
-      "owner": "broker",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "71a366a01416590f034e75a4",
-      "path": "rocketmq-broker/src/failover/escape_bridge.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "5cf05b5ce90918bb02a390eb",
-          "fingerprint": "4b5ca638cadae46f62d2b5cc",
-          "item": "<module>",
-          "line": 30
-        }
-      ],
-      "owner": "broker",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "5fe025087d72cc7a8a8b8838",
-      "path": "rocketmq-broker/src/failover/escape_bridge.rs",
+      "identity": "e460a18e6440058bc50fdca5",
+      "path": "rocketmq-broker/src/failover/escape_bridge_capability.rs",
       "symbol": "ArcMut",
       "kind": "type_reference",
       "category": "production",
       "occurrences": [
         {
-          "id": "39dedeef6192649d8ab56202",
-          "fingerprint": "f1e3e11c57c2a457bc663923",
-          "item": "struct EscapeBridge",
-          "line": 87
-        },
-        {
-          "id": "5a9ae3b8f5e1181c84e7a47e",
-          "fingerprint": "71909a0f1bdd1c0f54fed283",
-          "item": "fn new",
-          "line": 91
+          "id": "87c355866ebe4e1307d4ba0e",
+          "fingerprint": "b97de439bbbc3b9809d34d8c",
+          "item": "struct LegacyEscapeStoreOwner",
+          "line": 122
         }
       ],
       "owner": "broker",
@@ -1108,62 +1064,6 @@
           "fingerprint": "2862891aa50fb92941e077e0",
           "item": "fn new_store",
           "line": 222
-        }
-      ],
-      "owner": "broker",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "4e08d549e9698518ba84279d",
-      "path": "rocketmq-broker/src/offset/manager/consumer_offset_manager.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "046cc4ca0d765447f46b4957",
-          "fingerprint": "b9b70ca3feb4e4c879b7e9f8",
-          "item": "<module>",
-          "line": 35
-        }
-      ],
-      "owner": "broker",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "9ae333a1f26fea1fab18c2ff",
-      "path": "rocketmq-broker/src/offset/manager/consumer_offset_manager.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "83a52dc787f2a6c1ceb7922a",
-          "fingerprint": "5ad5e1b17a226a6621fdf5fd",
-          "item": "struct ConsumerOffsetManager",
-          "line": 84
-        },
-        {
-          "id": "c71959bfd6ab8361e0cb285a",
-          "fingerprint": "baf3fac4062f4c0c58cd4214",
-          "item": "fn new",
-          "line": 96
-        },
-        {
-          "id": "f1243ac1bb2728458310ea60",
-          "fingerprint": "b6cf9796d879472ea72b01ba",
-          "item": "fn new_with_rocksdb_config_manager",
-          "line": 119
-        },
-        {
-          "id": "f19ee8c8b6735abd5d76260c",
-          "fingerprint": "71d4256b414c8fed57421f6e",
-          "item": "fn set_message_store",
-          "line": 151
         }
       ],
       "owner": "broker",
