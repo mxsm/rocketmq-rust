@@ -42,6 +42,7 @@ use crate::ha::auto_switch::auto_switch_ha_connection::AutoSwitchHAConnection;
 use crate::ha::auto_switch::auto_switch_ha_service::AutoSwitchHAService;
 use crate::ha::default_ha_client::DefaultHAClient;
 use crate::ha::default_ha_connection::DefaultHAConnection;
+use crate::ha::default_ha_connection::HAConnectionRuntimeHandle;
 use crate::ha::general_ha_client::GeneralHAClient;
 use crate::ha::general_ha_connection::GeneralHAConnection;
 use crate::ha::general_ha_service::GeneralHAService;
@@ -206,6 +207,20 @@ impl DefaultHAService {
         connections.remove(connection.get_ha_connection_id());
     }
 
+    pub(crate) async fn remove_runtime_connection(&self, connection: &HAConnectionRuntimeHandle) {
+        self.handle_runtime_connection_removed(connection);
+
+        if let Some(ha_connection_state_notification_service) = &self.ha_connection_state_notification_service {
+            let connection_state = connection.current_state().await;
+            let _ = ha_connection_state_notification_service
+                .check_connection_state_and_notify(connection.remote_address(), connection_state)
+                .await;
+        }
+
+        let mut connections = self.connections.lock().await;
+        connections.remove(connection.connection_id());
+    }
+
     pub async fn destroy_connections(&self) {
         let connections = {
             let mut connections = self.connections.lock().await;
@@ -246,26 +261,54 @@ impl DefaultHAService {
 
     pub(crate) fn handle_connection_added(&self, connection: &GeneralHAConnection) {
         if let Some(auto_switch_service) = self.auto_switch_service() {
-            auto_switch_service.handle_connection_added(connection);
+            auto_switch_service.handle_connection_added(
+                Self::auto_switch_slave_broker_id(connection),
+                connection.get_slave_ack_offset(),
+            );
         }
     }
 
     pub(crate) fn handle_connection_ack(&self, connection: &GeneralHAConnection, slave_ack_offset: i64) {
         if let Some(auto_switch_service) = self.auto_switch_service() {
-            auto_switch_service.handle_connection_ack(connection, slave_ack_offset);
+            auto_switch_service.handle_connection_ack(Self::auto_switch_slave_broker_id(connection), slave_ack_offset);
         }
     }
 
     pub(crate) fn handle_connection_caught_up(&self, connection: &GeneralHAConnection) {
         if let Some(auto_switch_service) = self.auto_switch_service() {
-            auto_switch_service.handle_connection_caught_up(connection);
+            auto_switch_service.handle_connection_caught_up(Self::auto_switch_slave_broker_id(connection));
         }
     }
 
     pub(crate) fn handle_connection_removed(&self, connection: &GeneralHAConnection) {
         if let Some(auto_switch_service) = self.auto_switch_service() {
-            auto_switch_service.handle_connection_removed(connection);
+            auto_switch_service.handle_connection_removed(Self::auto_switch_slave_broker_id(connection));
         }
+    }
+
+    pub(crate) fn handle_runtime_connection_ack(&self, connection: &HAConnectionRuntimeHandle, slave_ack_offset: i64) {
+        if let Some(auto_switch_service) = self.auto_switch_service() {
+            auto_switch_service.handle_connection_ack(connection.slave_broker_id(), slave_ack_offset);
+        }
+    }
+
+    pub(crate) fn handle_runtime_connection_caught_up(&self, connection: &HAConnectionRuntimeHandle) {
+        if let Some(auto_switch_service) = self.auto_switch_service() {
+            auto_switch_service.handle_connection_caught_up(connection.slave_broker_id());
+        }
+    }
+
+    fn handle_runtime_connection_removed(&self, connection: &HAConnectionRuntimeHandle) {
+        if let Some(auto_switch_service) = self.auto_switch_service() {
+            auto_switch_service.handle_connection_removed(connection.slave_broker_id());
+        }
+    }
+
+    fn auto_switch_slave_broker_id(connection: &GeneralHAConnection) -> Option<i64> {
+        connection
+            .is_auto_switch()
+            .then(|| connection.slave_broker_id())
+            .flatten()
     }
 }
 
@@ -592,8 +635,7 @@ impl AcceptSocketService {
                                     .await
                                     {
                                         Ok(mut general_conn) => {
-                                            let conn_weak = ArcMut::downgrade(&general_conn);
-                                            if let Err(e) = general_conn.start(conn_weak).await {
+                                            if let Err(e) = general_conn.start().await {
                                                 error!("Error starting HAService: {}", e);
                                             } else {
                                                 info!("HAService accept new connection, {}", addr);
@@ -842,8 +884,7 @@ mod tests {
         )
         .await
         .expect("build auto-switch connection");
-        let connection_weak = ArcMut::downgrade(&connection);
-        connection.start(connection_weak).await.expect("start connection");
+        connection.start().await.expect("start connection");
         service.add_connection(connection).await;
 
         tokio::time::timeout(Duration::from_secs(3), service.destroy_connections())
@@ -956,8 +997,7 @@ mod tests {
         )
         .await
         .expect("build default connection");
-        let connection_weak = ArcMut::downgrade(&connection);
-        connection.start(connection_weak).await.expect("start connection");
+        connection.start().await.expect("start connection");
         service.add_connection(connection.clone()).await;
 
         client

@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_rust::WeakArcMut;
 use tokio::net::TcpStream;
 
 use crate::ha::auto_switch::auto_switch_ha_connection::AutoSwitchHAConnection;
@@ -73,10 +72,10 @@ impl GeneralHAConnection {
 }
 
 impl HAConnection for GeneralHAConnection {
-    async fn start(&mut self, conn: WeakArcMut<GeneralHAConnection>) -> Result<(), HAConnectionError> {
+    async fn start(&mut self) -> Result<(), HAConnectionError> {
         match (&mut self.default_ha_connection, &mut self.auto_switch_ha_connection) {
-            (Some(connection), _) => connection.start(conn).await,
-            (_, Some(connection)) => connection.start(conn).await,
+            (Some(connection), _) => connection.start().await,
+            (_, Some(connection)) => connection.start().await,
             (None, None) => Err(HAConnectionError::Connection("No HA connection set".to_string())),
         }
     }

@@ -14,12 +14,11 @@
 
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
-use rocketmq_rust::WeakArcMut;
 use tokio::net::TcpStream;
 
 use crate::ha::default_ha_connection::DefaultHAConnection;
-use crate::ha::general_ha_connection::GeneralHAConnection;
 use crate::ha::ha_connection::HAConnection;
 use crate::ha::ha_connection::HAConnectionId;
 use crate::ha::ha_connection_state::HAConnectionState;
@@ -27,14 +26,16 @@ use crate::ha::HAConnectionError;
 
 pub struct AutoSwitchHAConnection {
     delegate: DefaultHAConnection,
-    slave_broker_id: AtomicI64,
+    slave_broker_id: Arc<AtomicI64>,
 }
 
 impl AutoSwitchHAConnection {
-    pub fn new(delegate: DefaultHAConnection) -> Self {
+    pub fn new(mut delegate: DefaultHAConnection) -> Self {
+        let slave_broker_id = Arc::new(AtomicI64::new(-1));
+        delegate.set_runtime_slave_broker_id(Arc::clone(&slave_broker_id));
         Self {
             delegate,
-            slave_broker_id: AtomicI64::new(-1),
+            slave_broker_id,
         }
     }
 
@@ -52,8 +53,8 @@ impl AutoSwitchHAConnection {
 }
 
 impl HAConnection for AutoSwitchHAConnection {
-    async fn start(&mut self, conn: WeakArcMut<GeneralHAConnection>) -> Result<(), HAConnectionError> {
-        self.delegate.start(conn).await
+    async fn start(&mut self) -> Result<(), HAConnectionError> {
+        self.delegate.start().await
     }
 
     async fn shutdown(&mut self) {

@@ -2825,10 +2825,33 @@ Broker controller role-change notification 随 Issue #8461 完成以下边界收
 | runtime / architecture guards | enforcing runtime audit、dependency fixtures/target/baseline、release、8-profile/11-variant performance、architecture 60/60 与 AGENTS routing 通过；目标 compatibility 35/35、test edge 3/3、release topology 32/32 |
 | root workspace final gates | `cargo fmt --all -- --check`、workspace all-target/all-feature strict Clippy 与 `git diff --check` 通过；Windows linker stdout 与既有 future-incompatibility note 不受 `-D warnings` 管辖 |
 
+## M11-12bc28 实现
+
+Store HA connection weak self-cycle 随 Issue #8464 完成以下边界收敛：
+
+- `HAConnection::start` 删除 `WeakArcMut<GeneralHAConnection>` 参数，Default/General/AutoSwitch connection 不再要求 caller 在启动前创建完整 connection 的弱自引用。
+- read/write worker 改持 cloneable crate-private `HAConnectionRuntimeHandle`，只保留 connection id、remote address、共享 connection state 和 auto-switch 可选 slave broker id，不传播完整 connection owner。
+- `AutoSwitchHAConnection` 以标准 `Arc<AtomicI64>` 共享 slave broker id；reader 收到 controller-mode broker id 后通过窄 handle 发布，wrapper 与 service callback 读取同一原子值。
+- Default HA service 新增 runtime-handle ack/caught-up/removal 路径；状态通知、connection table 删除和 auto-switch sync-state 更新时间只消费窄 handle 或 slave id/ack 标量。
+- flow monitor shutdown、TaskGroup worker 所有权、connection state 先置为 Shutdown 再通知/移除以及现有 add/destroy compatibility facade 顺序保持不变。
+- reviewed baseline 从 340 identities / 923 occurrences 降至 331 / 907；production 从 182/445 降至 174/432，test 从 144/438 降至 143/435，compatibility 保持 14/40。Store production 从 99/264 降至 91/251；净删除 8 个 production identity/13 occurrence与 1 个 test identity/3 occurrence；1 个保留 import occurrence 经同位置指纹审核更新，无 relocation、新增 identity 或临时 approval。
+
+## M11-12bc28 验证
+
+| 命令 | 结果 |
+|---|---|
+| Store focused / all-feature check / strict Clippy | Default HA service 11/11；`cargo check -p rocketmq-store --all-features` 与 Store all-target/all-feature strict Clippy 通过 |
+| Store all-feature lib | 507/507 通过；HA connection 启停、auto-switch slave id/ack、sync-state 与 connection destruction 回归无新增失败 |
+| Broker all-feature lib / controller 回归 | 609 passed、27 failed、1 ignored；失败仍集中于 lifecycle/Lite/subscription 与 controller 动态基线，无 HA runtime-handle 新失败；`three_controller_two_broker` 串行重跑 3/4，唯一失败仍是 rejoin namesrv/store/HA slave-view 收敛超时，因此全套如实记为未通过 |
+| Store/RocksDB 专项 | Store/Broker `rocksdb_store` strict Clippy 通过；foundation 82/82、semantics 9/9、Broker rocksdb 21/21、pop_consumer 4/4 通过 |
+| reviewed baseline / fixtures | reviewed 候选与正式最小补丁均从 340/923 精确降至 331/907，1 个保留 import occurrence 经同位置指纹审核更新；`python scripts/arc_mut_guard.py`、24/24 fixtures 与 67/67 guard tests 通过，无 relocation、新增 identity 或临时 approval |
+| runtime / architecture guards | enforcing runtime audit、dependency fixtures/target/baseline、release、8-profile/11-variant performance、architecture 60/60 与 AGENTS routing 通过；目标 compatibility 35/35、test edge 3/3、release topology 32/32 |
+| root workspace final gates | `cargo fmt --all -- --check`、workspace all-target/all-feature strict Clippy 与 `git diff --check` 通过；Windows linker stdout 与既有 future-incompatibility note 不受 `-D warnings` 管辖 |
+
 ## 剩余切片与 Gate
 
 1. Broker BrokerRuntimeInner capability carrier 与其他 admin/processor/leaf owner（83/181）；transaction bridge、Producer/ColdData admin leaf、Schedule hook、put-message preflight、ConsumerOrderInfoManager、TopicRouteInfoManager、MessageArrivingListener、ClientHousekeepingService、HA diagnostics/control/min-broker transition、controller role-change duplicate owner、BatchMq、SubscriptionGroup、MessageRelated、Offset、Consumer handler 与未编译 V2 示例残留已退出 leaf-level 完整 runtime/store owner，LiteLifecycle 只读 Store carrier 已收窄为普通借用，显式 Store 兼容 owner 留待 Store 批次删除。
-2. Store MappedFileQueue/其余 ConsumeQueue、CommitLog/Flush、StoreHandle/Rocks/Timer 与其余 HA service/actor（99/264）；BrokerStats observer、ConsumeQueueExt 显式锁 owner、HA notification/connection registry 窄能力、未共享 HA child direct ownership、commit-to-flush 窄唤醒能力与 HA confirm/epoch 原子发布已完成。
+2. Store MappedFileQueue/其余 ConsumeQueue、CommitLog/Flush、StoreHandle/Rocks/Timer 与其余 HA service/actor（91/251）；BrokerStats observer、ConsumeQueueExt 显式锁 owner、HA notification/connection registry 窄能力、未共享 HA child direct ownership、commit-to-flush 窄唤醒能力、HA confirm/epoch 原子发布与 HA connection runtime handle 已完成。
 3. 先迁移 Store 对 `WeakArcMut` 的剩余使用并移除其余 nightly feature；公开 `arc_mut.rs`/re-export 的 destructive 删除受 next-major 两轮弃用与 Release Manager/HUMAN Gate 约束，不能静默重置 public API baseline。
 4. 对同一候选快照执行 stable feature matrix、Miri/Loom 可用切片、soak/SLO fault、dashboard/runbook、动态
    Kind/K3d/container、M10 固定硬件和 Human Gate。
