@@ -2998,7 +2998,7 @@ impl BrokerRuntime {
     async fn initial_transaction(&mut self) -> bool {
         cfg_if::cfg_if! {
             if #[cfg(feature = "local_file_store")] {
-                let message_store = TransactionMessageStore::new(self.inner.message_store_unchecked().clone());
+                let message_store = TransactionMessageStore::new(&self.escape_bridge_owner);
                 let topic_registration = self
                     .inner
                     .build_transaction_topic_registration(message_store.clone());
@@ -3008,7 +3008,7 @@ impl BrokerRuntime {
                     consumer_offset_manager: self.inner.consumer_offset_manager_handle(),
                     message_store,
                     topic_registration,
-                    escape_bridge: Arc::clone(&self.escape_bridge_owner),
+                    escape_bridge: Arc::downgrade(&self.escape_bridge_owner),
                 });
                 let service = Arc::new(DefaultTransactionalMessageService::new(
                     bridge,
@@ -3798,8 +3798,9 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     pub(crate) fn build_client_manage_processor(&self) -> ClientManageProcessor<MS> {
-        let retry_topic_registration = self
-            .build_transaction_topic_registration(TransactionMessageStore::new(self.message_store_unchecked().clone()));
+        let escape_bridge = self.escape_bridge();
+        let retry_topic_registration =
+            self.build_transaction_topic_registration(TransactionMessageStore::new(&escape_bridge));
         ClientManageProcessor::new(ClientManageProcessorContext {
             broker_config: self.broker_config_arc(),
             topic_config_manager: self.topic_config_manager_handle(),

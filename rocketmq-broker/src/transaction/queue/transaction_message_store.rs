@@ -12,38 +12,44 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::Arc;
+use std::sync::Weak;
+
 use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
-use rocketmq_rust::ArcMut;
 use rocketmq_store::base::get_message_result::GetMessageResult;
 use rocketmq_store::base::message_result::PutMessageResult;
+use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
 
-/// Transitional direct store owner for the transaction subsystem.
-///
-/// This isolates the remaining `ArcMut` dependency to the MessageStore boundary instead of
-/// retaining the complete broker runtime. It is not a soundness exemption: Store owner batches
-/// must replace it with a standard owner or actor before PR-M11-12 can close.
+use crate::failover::escape_bridge::EscapeBridge;
+
+/// Narrow, non-owning Store capability for the transaction subsystem.
 pub(crate) struct TransactionMessageStore<MS: MessageStore> {
-    owner: ArcMut<MS>,
+    escape_bridge: Weak<EscapeBridge<MS>>,
 }
 
 impl<MS: MessageStore> Clone for TransactionMessageStore<MS> {
     fn clone(&self) -> Self {
         Self {
-            owner: self.owner.clone(),
+            escape_bridge: Weak::clone(&self.escape_bridge),
         }
     }
 }
 
 impl<MS: MessageStore> TransactionMessageStore<MS> {
-    pub(crate) fn new(owner: ArcMut<MS>) -> Self {
-        Self { owner }
+    pub(crate) fn new(escape_bridge: &Arc<EscapeBridge<MS>>) -> Self {
+        Self {
+            escape_bridge: Arc::downgrade(escape_bridge),
+        }
     }
 
     pub(crate) fn get_min_offset_in_queue(&self, topic: &CheetahString, queue_id: i32) -> i64 {
-        self.owner.get_min_offset_in_queue(topic, queue_id)
+        self.escape_bridge
+            .upgrade()
+            .and_then(|provider| provider.get_min_offset_from_local_store(topic, queue_id).ok())
+            .unwrap_or(-1)
     }
 
     pub(crate) async fn get_message(
@@ -54,23 +60,81 @@ impl<MS: MessageStore> TransactionMessageStore<MS> {
         offset: i64,
         nums: i32,
     ) -> Option<GetMessageResult> {
-        self.owner.get_message(group, topic, queue_id, offset, nums, None).await
+        let provider = self.escape_bridge.upgrade()?;
+        provider
+            .get_message_from_local_store(group, topic, queue_id, offset, nums)
+            .await
+            .ok()
+            .flatten()
     }
 
     pub(crate) fn look_message_by_offset(&self, offset: i64) -> Option<MessageExt> {
-        self.owner.look_message_by_offset(offset)
+        self.escape_bridge
+            .upgrade()
+            .and_then(|provider| provider.look_message_by_offset_from_local_store(offset).ok())
+            .flatten()
     }
 
-    pub(crate) async fn put_message(&mut self, message: MessageExtBrokerInner) -> PutMessageResult {
-        self.owner.put_message(message).await
+    pub(crate) async fn put_message(&self, message: MessageExtBrokerInner) -> PutMessageResult {
+        let Some(provider) = self.escape_bridge.upgrade() else {
+            return PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable);
+        };
+        provider
+            .put_message_to_local_store(message)
+            .await
+            .unwrap_or_else(|_| PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable))
     }
 
-    pub(crate) fn state_machine_version(&self) -> i64 {
-        self.owner.get_state_machine_version()
+    pub(crate) fn state_machine_version(&self) -> Option<i64> {
+        self.escape_bridge
+            .upgrade()
+            .and_then(|provider| provider.local_store_state_machine_version().ok())
     }
 
     pub(crate) async fn update_master_address(&self, master_addr: &CheetahString) {
-        self.owner.update_ha_master_address(master_addr.as_str()).await;
-        self.owner.update_master_address(master_addr);
+        let Some(provider) = self.escape_bridge.upgrade() else {
+            return;
+        };
+        let _ = provider.update_local_store_master_address(master_addr).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rocketmq_store::message_store::GenericMessageStore;
+
+    #[tokio::test]
+    async fn transaction_store_fails_closed_after_provider_shutdown() {
+        let store = TransactionMessageStore::<GenericMessageStore> {
+            escape_bridge: Weak::new(),
+        };
+        let topic = CheetahString::from_static_str("transaction-topic");
+        let group = CheetahString::from_static_str("transaction-group");
+
+        assert_eq!(store.get_min_offset_in_queue(&topic, 0), -1);
+        assert!(store.get_message(&group, &topic, 0, 0, 1).await.is_none());
+        assert!(store.look_message_by_offset(0).is_none());
+        assert!(store.state_machine_version().is_none());
+        assert_eq!(
+            store
+                .put_message(MessageExtBrokerInner::default())
+                .await
+                .put_message_status(),
+            PutMessageStatus::ServiceNotAvailable
+        );
+        store
+            .update_master_address(&CheetahString::from_static_str("127.0.0.1:10912"))
+            .await;
+    }
+
+    #[test]
+    fn transaction_store_source_uses_weak_provider() {
+        let source = include_str!("transaction_message_store.rs");
+
+        assert!(source.contains("Weak<EscapeBridge<MS>>"));
+        assert!(!source.contains(concat!("rocketmq_rust::", "ArcMut")));
+        assert!(!source.contains(concat!("owner: Arc", "Mut<MS>")));
+        assert!(!source.contains(concat!("BrokerRuntime", "Inner")));
     }
 }

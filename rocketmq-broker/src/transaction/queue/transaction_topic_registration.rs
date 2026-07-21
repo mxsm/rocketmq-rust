@@ -101,23 +101,25 @@ where
         topic_sys_flag: u32,
     ) -> Option<Arc<TopicConfig>> {
         let start_time = Instant::now();
+        let state_machine_version = self.message_store.state_machine_version()?;
         let creation = self.topic_config_manager.create_topic_in_send_message_back_method(
             topic,
             queue_nums,
             PermName::PERM_WRITE | PermName::PERM_READ,
             is_order,
             topic_sys_flag,
-            self.message_store.state_machine_version(),
+            state_machine_version,
         )?;
         Some(self.complete_creation(creation, start_time).await)
     }
 
     pub(crate) async fn select_or_create_check_max_time_topic(self: &Arc<Self>) -> Option<Arc<TopicConfig>> {
         let start_time = Instant::now();
+        let state_machine_version = self.message_store.state_machine_version()?;
         let creation = self.topic_config_manager.create_topic_of_tran_check_max_time(
             TCMT_QUEUE_NUMS,
             PermName::PERM_READ | PermName::PERM_WRITE,
-            self.message_store.state_machine_version(),
+            state_machine_version,
         )?;
         Some(self.complete_creation(creation, start_time).await)
     }
@@ -262,7 +264,9 @@ where
         if let Some(master_addr) = &self.slave_master_addr {
             master_addr.store(Some(&result.master_addr));
         }
-        self.topic_config_manager
-            .update_order_topic_config(&result.kv_table, self.message_store.state_machine_version());
+        if let Some(state_machine_version) = self.message_store.state_machine_version() {
+            self.topic_config_manager
+                .update_order_topic_config(&result.kv_table, state_machine_version);
+        }
     }
 }

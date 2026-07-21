@@ -1323,8 +1323,11 @@ mod tests {
         assert!(!bridge_source.contains(concat!("BrokerRuntime", "Inner")));
         assert!(!bridge_source.contains("broker_runtime_inner"));
         assert!(!bridge_source.contains(concat!("Arc", "Mut")));
+        assert!(bridge_source.contains("escape_bridge: Weak<EscapeBridge<MS>>"));
+        assert!(!bridge_source.contains("escape_bridge: Arc<EscapeBridge<MS>>"));
         assert!(store_source.contains("struct TransactionMessageStore"));
-        assert!(store_source.contains("owner: ArcMut<MS>"));
+        assert!(store_source.contains("escape_bridge: Weak<EscapeBridge<MS>>"));
+        assert!(!store_source.contains(concat!("owner: Arc", "Mut<MS>")));
         assert!(!store_source.contains(concat!("BrokerRuntime", "Inner")));
         assert!(!service_source.contains(concat!("BrokerRuntime", "Inner")));
         assert!(!stats_source.contains(concat!("Arc", "Mut")));
