@@ -13,4 +13,5 @@
 // limitations under the License.
 
 pub mod broker_hook;
+pub(crate) mod broker_pre_online_capability;
 pub mod broker_pre_online_service;
