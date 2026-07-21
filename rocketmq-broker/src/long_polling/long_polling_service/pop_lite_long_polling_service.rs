@@ -23,19 +23,19 @@ use cheetah_string::CheetahString;
 use crossbeam_skiplist::SkipSet;
 use dashmap::DashMap;
 use parking_lot::Mutex;
+use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskKind;
-use rocketmq_rust::ArcMut;
-use rocketmq_store::base::message_store::MessageStore;
 use tokio::select;
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::sync::Mutex as AsyncMutex;
 use tracing::error;
 use tracing::warn;
 
-use crate::broker_runtime::BrokerRuntimeInner;
+use crate::broker_runtime::broker_task_group_or_current;
+use crate::lite::lite_event_dispatcher::LiteEventDispatcher;
 use crate::long_polling::polling_result::PollingResult;
 use crate::long_polling::pop_request::PopRequest;
 
@@ -49,8 +49,46 @@ pub(crate) trait LocalPopLiteLongPollingRequestProcessor {
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>>;
 }
 
-pub(crate) struct PopLiteLongPollingService<MS: MessageStore, RP> {
-    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+#[derive(Clone)]
+pub(crate) struct PopLiteLongPollingPolicy {
+    pop_polling_map_size: usize,
+    max_pop_polling_size: u64,
+    pop_polling_size: usize,
+}
+
+impl PopLiteLongPollingPolicy {
+    pub(crate) fn from_config(broker_config: &BrokerConfig) -> Self {
+        Self {
+            pop_polling_map_size: broker_config.pop_polling_map_size,
+            max_pop_polling_size: broker_config.max_pop_polling_size,
+            pop_polling_size: broker_config.pop_polling_size,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct PopLiteLongPollingServiceContext {
+    policy: PopLiteLongPollingPolicy,
+    lite_event_dispatcher: LiteEventDispatcher,
+    parent_task_group: Option<TaskGroup>,
+}
+
+impl PopLiteLongPollingServiceContext {
+    pub(crate) fn new(
+        policy: PopLiteLongPollingPolicy,
+        lite_event_dispatcher: LiteEventDispatcher,
+        parent_task_group: Option<TaskGroup>,
+    ) -> Self {
+        Self {
+            policy,
+            lite_event_dispatcher,
+            parent_task_group,
+        }
+    }
+}
+
+pub(crate) struct PopLiteLongPollingService<RP> {
+    context: PopLiteLongPollingServiceContext,
     polling_map: DashMap<CheetahString, SkipSet<Arc<PopRequest>>>,
     total_polling_num: AtomicU64,
     processor: Weak<RP>,
@@ -59,11 +97,11 @@ pub(crate) struct PopLiteLongPollingService<MS: MessageStore, RP> {
     task_group: Mutex<Option<TaskGroup>>,
 }
 
-impl<MS: MessageStore, RP: PopLiteLongPollingRequestProcessor + Sync + 'static> PopLiteLongPollingService<MS, RP> {
-    pub(crate) fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>, processor: Weak<RP>) -> Self {
+impl<RP: PopLiteLongPollingRequestProcessor + Sync + 'static> PopLiteLongPollingService<RP> {
+    pub(crate) fn new(context: PopLiteLongPollingServiceContext, processor: Weak<RP>) -> Self {
         Self {
-            broker_runtime_inner: broker_runtime_inner.clone(),
-            polling_map: DashMap::with_capacity(broker_runtime_inner.broker_config().pop_polling_map_size),
+            polling_map: DashMap::with_capacity(context.policy.pop_polling_map_size),
+            context,
             total_polling_num: AtomicU64::new(0),
             processor,
             running: AtomicBool::new(false),
@@ -82,7 +120,8 @@ impl<MS: MessageStore, RP: PopLiteLongPollingRequestProcessor + Sync + 'static> 
             return;
         }
 
-        let Some(task_group) = this.broker_runtime_inner.broker_task_group_or_current(
+        let Some(task_group) = broker_task_group_or_current(
+            this.context.parent_task_group.as_ref(),
             "rocketmq-broker.long-polling.pop-lite",
             "failed to start PopLiteLongPollingService outside Tokio runtime",
         ) else {
@@ -157,9 +196,7 @@ impl<MS: MessageStore, RP: PopLiteLongPollingRequestProcessor + Sync + 'static> 
             return;
         }
 
-        this.broker_runtime_inner
-            .lite_event_dispatcher()
-            .set_wakeup_sender(wakeup_tx);
+        this.context.lite_event_dispatcher.set_wakeup_sender(wakeup_tx);
     }
 
     pub(crate) async fn shutdown(&self) {
@@ -202,9 +239,7 @@ impl<MS: MessageStore, RP: PopLiteLongPollingRequestProcessor + Sync + 'static> 
             None,
         ));
 
-        if self.total_polling_num.load(Ordering::SeqCst)
-            >= self.broker_runtime_inner.broker_config().max_pop_polling_size
-        {
+        if self.total_polling_num.load(Ordering::SeqCst) >= self.context.policy.max_pop_polling_size {
             return PollingResult::PollingFull;
         }
 
@@ -213,7 +248,7 @@ impl<MS: MessageStore, RP: PopLiteLongPollingRequestProcessor + Sync + 'static> 
         }
 
         let queue = self.polling_map.entry(client_id.clone()).or_default();
-        if queue.len() > self.broker_runtime_inner.broker_config().pop_polling_size {
+        if queue.len() > self.context.policy.pop_polling_size {
             return PollingResult::PollingFull;
         }
 
@@ -304,5 +339,38 @@ impl<MS: MessageStore, RP: PopLiteLongPollingRequestProcessor + Sync + 'static> 
     #[cfg(test)]
     pub(crate) fn task_group_for_test(&self) -> Option<TaskGroup> {
         self.task_group.lock().as_ref().cloned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pop_lite_long_polling_policy_captures_only_required_startup_values() {
+        let broker_config = BrokerConfig {
+            pop_polling_map_size: 11,
+            max_pop_polling_size: 22,
+            pop_polling_size: 33,
+            ..Default::default()
+        };
+
+        let policy = PopLiteLongPollingPolicy::from_config(&broker_config);
+
+        assert_eq!(policy.pop_polling_map_size, 11);
+        assert_eq!(policy.max_pop_polling_size, 22);
+        assert_eq!(policy.pop_polling_size, 33);
+    }
+
+    #[test]
+    fn pop_lite_long_polling_source_uses_only_explicit_capabilities() {
+        let source = include_str!("pop_lite_long_polling_service.rs");
+
+        assert!(!source.contains(concat!("rocketmq_rust::", "ArcMut")));
+        assert!(!source.contains(concat!("BrokerRuntime", "Inner")));
+        assert!(!source.contains(concat!("Message", "Store")));
+        assert!(source.contains("PopLiteLongPollingServiceContext"));
+        assert!(source.contains("lite_event_dispatcher: LiteEventDispatcher"));
+        assert!(source.contains("parent_task_group: Option<TaskGroup>"));
     }
 }

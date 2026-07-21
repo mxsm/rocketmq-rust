@@ -3268,9 +3268,35 @@ Broker ChangeInvisibleTime runtime capability 随 Issue #8501 完成以下边界
 | runtime / architecture guards | enforcing runtime audit、dependency fixtures/target/baseline、release、8-profile/11-variant performance、60/60 architecture tests 与 AGENTS routing 通过；目标 compatibility 35/35、test edge 3/3、release topology 32/32 |
 | root workspace final gates | `cargo fmt --all -- --check`、workspace all-target/all-feature strict Clippy 与 `git diff --check` 通过；Windows linker stdout 与既有 future-incompatibility note 不受 `-D warnings` 管辖 |
 
+## M11-12bc46 实现
+
+Broker POP Lite long-polling runtime capability 随 Issue #8503 完成以下边界收敛：
+
+- `PopLiteLongPollingService` 删除完整 `ArcMut<BrokerRuntimeInner<MS>>` field、production import 与构造参数，并移除
+  `MessageStore` 泛型；service 不再直接或间接保活完整 runtime/Store。
+- `PopLiteLongPollingPolicy` 只快照 polling map 容量、全局 polling 上限和单客户端上限；
+  `PopLiteLongPollingServiceContext` 只组合 policy、可克隆 `LiteEventDispatcher` 与可选父 `TaskGroup`。
+- `PopLiteMessageProcessor` 仅在组合根从 runtime 提取上述能力；long-polling 的 scan/wakeup child task 明确挂在 Broker
+  service TaskGroup 下，缺少注入 context 时继续使用既有 ambient Tokio fallback。
+- polling map 容量、全局/客户端限流、过期扫描、事件 wake-up、幂等启动、并发 start/shutdown 串行化和有界 shutdown
+  语义保持不变；processor 的其余请求能力仍由后续独立切片收窄。
+- reviewed baseline 从 279 identities / 829 occurrences 降至 277 / 826；production 从 135/369 降至
+  133/366，test 保持 130/420，compatibility 保持 14/40。Broker production 从 53/135 降至 51/132，Store
+  保持 82/234；净删除 2 个 production identity/3 occurrences，无 relocation、新增 identity 或临时 approval。
+
+## M11-12bc46 验证
+
+| 命令 | 结果 |
+|---|---|
+| Broker check / focused / strict Clippy | `cargo check -p rocketmq-broker` 通过；POP Lite long-polling capability 6/6 与 phase3 真实 processor 路由 1/1 通过，覆盖 policy 快照、source contract、weak processor back-reference、父 TaskGroup、active scan owner release 与 start/shutdown/restart 串行化；Broker all-target/all-feature strict Clippy 通过 |
+| Broker broad lib suite | 649 passed、24 failed、1 ignored；24 项与 bc45 登记基线相同，仍集中于既有 lifecycle/Lite/subscription 行为基线；bc46 聚焦项全部通过，因此全套如实记为未通过 |
+| reviewed baseline / fixtures | 正式最小 baseline 补丁从 279/829 精确降至 277/826；`python scripts/arc_mut_guard.py`、candidate compare、24/24 fixtures 与 67/67 guard tests 通过，无 relocation、新增 identity 或临时 approval |
+| runtime / architecture guards | enforcing runtime audit、dependency fixtures/target/baseline、release、8-profile/11-variant performance、60/60 architecture tests 与 AGENTS routing 通过；目标 compatibility 35/35、test edge 3/3、release topology 32/32 |
+| root workspace final gates | `cargo fmt --all -- --check`、workspace all-target/all-feature strict Clippy 与 `git diff --check` 通过；Windows linker stdout 与既有 future-incompatibility note 不受 `-D warnings` 管辖 |
+
 ## 剩余切片与 Gate
 
-1. Broker BrokerRuntimeInner capability carrier 与其他 admin/processor/leaf owner（53/135）；transaction bridge/Store compatibility、Producer/ColdData admin leaf、Schedule hook、put-message preflight、ConsumerOrderInfoManager、TopicRouteInfoManager、TopicQueueMappingCleanService、MessageArrivingListener、ClientHousekeepingService、ClientManage heartbeat registration/retry-topic capability、ConsumerManage list/offset capability、Query Assignment、QueryMessage/RecallMessage/EndTransaction/PeekMessage/Notification/ChangeInvisibleTime Store capability、POP long-polling 显式 TaskGroup、PollingInfo weak provider、SubscriptionGroup config lookup、HA diagnostics/control/min-broker transition、controller role-change duplicate owner、BatchMq、SubscriptionGroup、MessageRelated、Offset、Consumer、Topic handler 与未编译 V2 示例残留已退出 leaf-level 完整 runtime/store owner，LiteLifecycle 只读 Store carrier 已收窄为普通借用。
+1. Broker BrokerRuntimeInner capability carrier 与其他 admin/processor/leaf owner（51/132）；transaction bridge/Store compatibility、Producer/ColdData admin leaf、Schedule hook、put-message preflight、ConsumerOrderInfoManager、TopicRouteInfoManager、TopicQueueMappingCleanService、MessageArrivingListener、ClientHousekeepingService、ClientManage heartbeat registration/retry-topic capability、ConsumerManage list/offset capability、Query Assignment、QueryMessage/RecallMessage/EndTransaction/PeekMessage/Notification/ChangeInvisibleTime Store capability、POP 与 POP Lite long-polling 显式 policy/dispatcher/TaskGroup、PollingInfo weak provider、SubscriptionGroup config lookup、HA diagnostics/control/min-broker transition、controller role-change duplicate owner、BatchMq、SubscriptionGroup、MessageRelated、Offset、Consumer、Topic handler 与未编译 V2 示例残留已退出 leaf-level 完整 runtime/store owner，LiteLifecycle 只读 Store carrier 已收窄为普通借用。
 2. Store MappedFileQueue/其余 ConsumeQueue、CommitLog/Flush、StoreHandle/Rocks/Timer 与其余 HA service/actor（82/234）；BrokerStats observer、ConsumeQueueExt 显式锁 owner、HA replication-state callback、未共享 HA child direct ownership、commit-to-flush 窄唤醒能力、HA confirm/epoch 原子发布、HA connection runtime handle、CommitLog shared disk-flush、auto-switch client construction 与 single delegate Store owner 已完成。
 3. Production `WeakArcMut` 已清零；继续迁移 test/compatibility 中受控使用并移除其余 nightly feature。公开 `arc_mut.rs`/re-export 的 destructive 删除受 next-major 两轮弃用与 Release Manager/HUMAN Gate 约束，不能静默重置 public API baseline。
 4. 对同一候选快照执行 stable feature matrix、Miri/Loom 可用切片、soak/SLO fault、dashboard/runbook、动态
