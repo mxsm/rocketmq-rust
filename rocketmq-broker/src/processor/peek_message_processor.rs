@@ -14,10 +14,13 @@
 
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::sync::Weak;
 
 use bytes::Bytes;
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
+use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::key_builder::KeyBuilder;
 use rocketmq_common::common::FAQUrl;
@@ -30,25 +33,155 @@ use rocketmq_remoting::protocol::header::pop_message_response_header::PopMessage
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
-use rocketmq_rust::ArcMut;
 use rocketmq_store::base::get_message_result::GetMessageResult;
 use rocketmq_store::base::message_status_enum::GetMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
+use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
 use tracing::error;
 use tracing::warn;
 
-use crate::broker_runtime::BrokerRuntimeInner;
+use crate::failover::escape_bridge::EscapeBridge;
+use crate::failover::escape_bridge::MessageStoreUnavailable;
+use crate::offset::manager::consumer_offset_manager::ConsumerOffsetQueryCapability;
+use crate::processor::processor_service::pop_buffer_merge_service::PopBufferMergeService;
+use crate::subscription::manager::subscription_group_manager::SubscriptionGroupConfigLookup;
+use crate::topic::manager::topic_config_manager::TopicConfigManager;
+
+#[derive(Clone)]
+pub(crate) struct PeekMessagePolicy {
+    broker_permission: u32,
+    broker_ip1: CheetahString,
+    revive_queue_num: u32,
+    transfer_msg_by_heap: bool,
+    enable_retry_topic_v2: bool,
+}
+
+impl PeekMessagePolicy {
+    pub(crate) fn from_config(broker_config: &BrokerConfig) -> Self {
+        Self {
+            broker_permission: broker_config.broker_permission,
+            broker_ip1: broker_config.broker_ip1().clone(),
+            revive_queue_num: broker_config.revive_queue_num,
+            transfer_msg_by_heap: broker_config.transfer_msg_by_heap,
+            enable_retry_topic_v2: broker_config.enable_retry_topic_v2,
+        }
+    }
+}
+
+pub(crate) struct PeekMessageStoreCapability<MS: MessageStore> {
+    escape_bridge: Weak<EscapeBridge<MS>>,
+}
+
+impl<MS: MessageStore> PeekMessageStoreCapability<MS> {
+    pub(crate) fn new(escape_bridge: &Arc<EscapeBridge<MS>>) -> Self {
+        Self {
+            escape_bridge: Arc::downgrade(escape_bridge),
+        }
+    }
+
+    fn now(&self) -> u64 {
+        self.escape_bridge
+            .upgrade()
+            .and_then(|bridge| bridge.local_store_now().ok())
+            .unwrap_or(0)
+    }
+
+    fn min_offset(&self, topic: &CheetahString, queue_id: i32) -> Result<i64, MessageStoreUnavailable> {
+        self.escape_bridge
+            .upgrade()
+            .ok_or(MessageStoreUnavailable)?
+            .get_min_offset_from_local_store(topic, queue_id)
+    }
+
+    fn max_offset(&self, topic: &CheetahString, queue_id: i32) -> Result<i64, MessageStoreUnavailable> {
+        self.escape_bridge
+            .upgrade()
+            .ok_or(MessageStoreUnavailable)?
+            .get_max_offset_from_local_store(topic, queue_id)
+    }
+
+    async fn get_message(
+        &self,
+        group: &CheetahString,
+        topic: &CheetahString,
+        queue_id: i32,
+        offset: i64,
+        max_msg_nums: i32,
+    ) -> Result<Option<GetMessageResult>, MessageStoreUnavailable> {
+        self.escape_bridge
+            .upgrade()
+            .ok_or(MessageStoreUnavailable)?
+            .get_message_from_local_store(group, topic, queue_id, offset, max_msg_nums)
+            .await
+    }
+}
+
+pub(crate) struct PeekPopOffsetCapability<MS: MessageStore> {
+    merge_service: Weak<PopBufferMergeService<MS>>,
+}
+
+impl<MS: MessageStore> PeekPopOffsetCapability<MS> {
+    pub(crate) fn new(merge_service: &Arc<PopBufferMergeService<MS>>) -> Self {
+        Self {
+            merge_service: Arc::downgrade(merge_service),
+        }
+    }
+
+    async fn latest_offset(&self, topic: &CheetahString, group: &CheetahString, queue_id: i32) -> i64 {
+        let Some(service) = self.merge_service.upgrade() else {
+            return -1;
+        };
+        let key = CheetahString::from_string(KeyBuilder::build_polling_key(topic.as_str(), group.as_str(), queue_id));
+        service.get_latest_offset(&key).await
+    }
+}
+
+pub(crate) struct PeekMessageProcessorContext<MS: MessageStore> {
+    policy: PeekMessagePolicy,
+    topic_config_manager: Arc<TopicConfigManager>,
+    subscription_group_lookup: SubscriptionGroupConfigLookup,
+    consumer_offset_query: ConsumerOffsetQueryCapability<MS>,
+    broker_stats_manager: Arc<BrokerStatsManager>,
+    message_store: PeekMessageStoreCapability<MS>,
+    pop_offset: PeekPopOffsetCapability<MS>,
+}
+
+impl<MS: MessageStore> PeekMessageProcessorContext<MS> {
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "constructor lists the complete narrow Peek capability boundary"
+    )]
+    pub(crate) fn new(
+        policy: PeekMessagePolicy,
+        topic_config_manager: Arc<TopicConfigManager>,
+        subscription_group_lookup: SubscriptionGroupConfigLookup,
+        consumer_offset_query: ConsumerOffsetQueryCapability<MS>,
+        broker_stats_manager: Arc<BrokerStatsManager>,
+        message_store: PeekMessageStoreCapability<MS>,
+        pop_offset: PeekPopOffsetCapability<MS>,
+    ) -> Self {
+        Self {
+            policy,
+            topic_config_manager,
+            subscription_group_lookup,
+            consumer_offset_query,
+            broker_stats_manager,
+            message_store,
+            pop_offset,
+        }
+    }
+}
 
 /// Handles peek message requests from clients.
 pub struct PeekMessageProcessor<MS: MessageStore> {
-    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+    context: PeekMessageProcessorContext<MS>,
     random_counter: AtomicU32,
 }
 
 impl<MS: MessageStore> PeekMessageProcessor<MS> {
-    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
+    pub(crate) fn new(context: PeekMessageProcessorContext<MS>) -> Self {
         Self {
-            broker_runtime_inner,
+            context,
             random_counter: AtomicU32::new(0),
         }
     }
@@ -82,11 +215,7 @@ impl<MS: MessageStore> PeekMessageProcessor<MS> {
         request: &mut RemotingCommand,
         _broker_allow_suspend: bool,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let begin_time_mills = self
-            .broker_runtime_inner
-            .message_store()
-            .map(|store| store.now())
-            .unwrap_or(0);
+        let begin_time_mills = self.context.message_store.now();
 
         let mut response = RemotingCommand::create_response_command_with_header(PopMessageResponseHeader::default())
             .set_opaque(request.opaque());
@@ -110,17 +239,17 @@ impl<MS: MessageStore> PeekMessageProcessor<MS> {
             }
         };
 
-        if !PermName::is_readable(self.broker_runtime_inner.broker_config().broker_permission) {
+        if !PermName::is_readable(self.context.policy.broker_permission) {
             let response = response.set_code(ResponseCode::NoPermission).set_remark(format!(
                 "the broker[{}] peeking message is forbidden",
-                self.broker_runtime_inner.broker_config().broker_ip1()
+                self.context.policy.broker_ip1
             ));
             return Ok(Some(response));
         }
 
         let topic_config = self
-            .broker_runtime_inner
-            .topic_config_manager()
+            .context
+            .topic_config_manager
             .select_topic_config(&request_header.topic);
 
         if topic_config.is_none() {
@@ -161,8 +290,8 @@ impl<MS: MessageStore> PeekMessageProcessor<MS> {
         }
 
         let subscription_group_config = self
-            .broker_runtime_inner
-            .subscription_group_manager()
+            .context
+            .subscription_group_lookup
             .find_subscription_group_config(&request_header.consumer_group);
 
         if subscription_group_config.is_none() {
@@ -188,15 +317,11 @@ impl<MS: MessageStore> PeekMessageProcessor<MS> {
 
         // Random seed for queue selection
         let random_q = self.random_counter.fetch_add(1, Ordering::Relaxed) % 100;
-        let revive_qid = (random_q % self.broker_runtime_inner.broker_config().revive_queue_num) as i32;
+        let revive_qid = (random_q % self.context.policy.revive_queue_num) as i32;
 
         let mut get_message_result = GetMessageResult::new_result_size(request_header.max_msg_nums as usize);
         let mut rest_num: i64 = 0;
-        let pop_time = self
-            .broker_runtime_inner
-            .message_store()
-            .map(|store| store.now())
-            .unwrap_or(0) as i64;
+        let pop_time = self.context.message_store.now() as i64;
 
         let need_retry = random_q.is_multiple_of(5);
 
@@ -277,22 +402,22 @@ impl<MS: MessageStore> PeekMessageProcessor<MS> {
         match response.code_ref() {
             &code if code == ResponseCode::Success as i32 => {
                 // Record statistics
-                self.broker_runtime_inner.broker_stats_manager().inc_group_get_nums(
+                self.context.broker_stats_manager.inc_group_get_nums(
                     &request_header.consumer_group,
                     &request_header.topic,
                     get_message_result.message_count(),
                 );
-                self.broker_runtime_inner.broker_stats_manager().inc_group_get_size(
+                self.context.broker_stats_manager.inc_group_get_size(
                     &request_header.consumer_group,
                     &request_header.topic,
                     get_message_result.buffer_total_size(),
                 );
-                self.broker_runtime_inner
-                    .broker_stats_manager()
+                self.context
+                    .broker_stats_manager
                     .inc_broker_get_nums(&request_header.topic, get_message_result.message_count());
 
                 // Transfer messages to response body
-                if self.broker_runtime_inner.broker_config().transfer_msg_by_heap {
+                if self.context.policy.transfer_msg_by_heap {
                     // Transfer by heap
                     let body = self.read_get_message_result(
                         &get_message_result,
@@ -301,16 +426,11 @@ impl<MS: MessageStore> PeekMessageProcessor<MS> {
                         request_header.queue_id,
                     );
 
-                    self.broker_runtime_inner.broker_stats_manager().inc_group_get_latency(
+                    self.context.broker_stats_manager.inc_group_get_latency(
                         &request_header.consumer_group,
                         &request_header.topic,
                         request_header.queue_id,
-                        (self
-                            .broker_runtime_inner
-                            .message_store()
-                            .map(|store| store.now())
-                            .unwrap_or(0)
-                            - begin_time_mills) as i32,
+                        self.context.message_store.now().saturating_sub(begin_time_mills) as i32,
                     );
 
                     if let Some(body_bytes) = body {
@@ -349,13 +469,10 @@ impl<MS: MessageStore> PeekMessageProcessor<MS> {
         let retry_topic = CheetahString::from_string(KeyBuilder::build_pop_retry_topic(
             request_header.topic.as_str(),
             request_header.consumer_group.as_str(),
-            self.broker_runtime_inner.broker_config().enable_retry_topic_v2,
+            self.context.policy.enable_retry_topic_v2,
         ));
 
-        let retry_topic_config = self
-            .broker_runtime_inner
-            .topic_config_manager()
-            .select_topic_config(&retry_topic);
+        let retry_topic_config = self.context.topic_config_manager.select_topic_config(&retry_topic);
 
         let mut rest_num = 0i64;
 
@@ -396,7 +513,7 @@ impl<MS: MessageStore> PeekMessageProcessor<MS> {
             CheetahString::from_string(KeyBuilder::build_pop_retry_topic(
                 request_header.topic.as_str(),
                 request_header.consumer_group.as_str(),
-                self.broker_runtime_inner.broker_config().enable_retry_topic_v2,
+                self.context.policy.enable_retry_topic_v2,
             ))
         } else {
             request_header.topic.clone()
@@ -407,13 +524,11 @@ impl<MS: MessageStore> PeekMessageProcessor<MS> {
             .get_pop_offset(&topic, &request_header.consumer_group, queue_id)
             .await;
 
-        // Get message store
-        let Some(message_store) = self.broker_runtime_inner.message_store() else {
+        let Ok(max_offset) = self.context.message_store.max_offset(&topic, queue_id) else {
             return rest_num;
         };
 
         // Calculate rest num (remaining messages in queue)
-        let max_offset = message_store.get_max_offset_in_queue(&topic, queue_id);
         rest_num += max_offset - offset;
 
         // Check if we already have enough messages
@@ -426,16 +541,20 @@ impl<MS: MessageStore> PeekMessageProcessor<MS> {
 
         // Get messages from store
         let mut offset_to_use = offset;
-        let get_message_tmp_result = message_store
+        let Ok(get_message_tmp_result) = self
+            .context
+            .message_store
             .get_message(
                 &request_header.consumer_group,
                 &topic,
                 queue_id,
                 offset_to_use,
                 max_to_fetch,
-                None,
             )
-            .await;
+            .await
+        else {
+            return rest_num;
+        };
 
         if let Some(mut tmp_result) = get_message_tmp_result {
             // Handle offset correction if needed
@@ -444,16 +563,19 @@ impl<MS: MessageStore> PeekMessageProcessor<MS> {
                 Some(GetMessageStatus::OffsetTooSmall) | Some(GetMessageStatus::OffsetOverflowBadly)
             ) {
                 offset_to_use = tmp_result.next_begin_offset();
-                tmp_result = message_store
+                tmp_result = self
+                    .context
+                    .message_store
                     .get_message(
                         &request_header.consumer_group,
                         &topic,
                         queue_id,
                         offset_to_use,
                         max_to_fetch,
-                        None,
                     )
                     .await
+                    .ok()
+                    .flatten()
                     .unwrap_or(tmp_result);
             }
 
@@ -468,30 +590,24 @@ impl<MS: MessageStore> PeekMessageProcessor<MS> {
 
     async fn get_pop_offset(&self, topic: &CheetahString, consumer_group: &CheetahString, queue_id: i32) -> i64 {
         // Get consumer offset
-        let mut offset =
-            self.broker_runtime_inner
-                .consumer_offset_manager()
-                .query_offset(consumer_group, topic, queue_id);
+        let mut offset = self
+            .context
+            .consumer_offset_query
+            .query_offset(consumer_group, topic, queue_id);
 
         // If no consumer offset, use min offset
         if offset < 0 {
-            if let Some(message_store) = self.broker_runtime_inner.message_store() {
-                offset = message_store.get_min_offset_in_queue(topic, queue_id);
+            if let Ok(min_offset) = self.context.message_store.min_offset(topic, queue_id) {
+                offset = min_offset;
             }
         }
 
         // Get pop buffer offset
-        let buffer_offset = if let Some(processor) = self.broker_runtime_inner.pop_message_processor() {
-            let service = processor.pop_buffer_merge_service();
-            let key = CheetahString::from_string(KeyBuilder::build_polling_key(
-                topic.as_str(),
-                consumer_group.as_str(),
-                queue_id,
-            ));
-            service.get_latest_offset(&key).await
-        } else {
-            -1
-        };
+        let buffer_offset = self
+            .context
+            .pop_offset
+            .latest_offset(topic, consumer_group, queue_id)
+            .await;
 
         if buffer_offset < 0 {
             offset
@@ -518,5 +634,75 @@ impl<MS: MessageStore> PeekMessageProcessor<MS> {
         }
 
         Some(bytes_mut.freeze())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rocketmq_store::message_store::GenericMessageStore;
+
+    #[test]
+    fn peek_policy_captures_only_required_startup_values() {
+        let broker_config = BrokerConfig {
+            broker_permission: 3,
+            broker_ip1: CheetahString::from_static_str("192.0.2.10"),
+            revive_queue_num: 12,
+            transfer_msg_by_heap: false,
+            enable_retry_topic_v2: true,
+            ..Default::default()
+        };
+
+        let policy = PeekMessagePolicy::from_config(&broker_config);
+
+        assert_eq!(policy.broker_permission, 3);
+        assert_eq!(policy.broker_ip1, "192.0.2.10");
+        assert_eq!(policy.revive_queue_num, 12);
+        assert!(!policy.transfer_msg_by_heap);
+        assert!(policy.enable_retry_topic_v2);
+    }
+
+    #[tokio::test]
+    async fn peek_store_capability_fails_closed_after_provider_shutdown() {
+        let capability = PeekMessageStoreCapability::<GenericMessageStore> {
+            escape_bridge: Weak::new(),
+        };
+        let topic = CheetahString::from_static_str("topic-a");
+        let group = CheetahString::from_static_str("group-a");
+
+        assert_eq!(capability.now(), 0);
+        assert!(capability.min_offset(&topic, 0).is_err());
+        assert!(capability.max_offset(&topic, 0).is_err());
+        assert!(capability.get_message(&group, &topic, 0, 0, 1).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn peek_pop_offset_capability_fails_closed_after_provider_shutdown() {
+        let capability = PeekPopOffsetCapability::<GenericMessageStore> {
+            merge_service: Weak::new(),
+        };
+
+        assert_eq!(
+            capability
+                .latest_offset(
+                    &CheetahString::from_static_str("topic-a"),
+                    &CheetahString::from_static_str("group-a"),
+                    0,
+                )
+                .await,
+            -1
+        );
+    }
+
+    #[test]
+    fn peek_processor_source_uses_only_explicit_capabilities() {
+        let source = include_str!("peek_message_processor.rs");
+
+        assert!(!source.contains(concat!("rocketmq_rust::", "ArcMut")));
+        assert!(!source.contains(concat!("BrokerRuntime", "Inner")));
+        assert!(source.contains("PeekMessageProcessorContext<MS>"));
+        assert!(source.contains("Weak<EscapeBridge<MS>>"));
+        assert!(source.contains("Weak<PopBufferMergeService<MS>>"));
+        assert!(source.contains("ConsumerOffsetQueryCapability<MS>"));
     }
 }

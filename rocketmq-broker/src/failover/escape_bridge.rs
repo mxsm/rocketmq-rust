@@ -183,6 +183,26 @@ impl<MS: MessageStore> EscapeBridge<MS> {
         Ok(message_store.get_min_offset_in_queue(topic, queue_id))
     }
 
+    pub(crate) fn get_max_offset_from_local_store(
+        &self,
+        topic: &CheetahString,
+        queue_id: i32,
+    ) -> Result<i64, MessageStoreUnavailable> {
+        let message_store = self
+            .broker_runtime_inner
+            .message_store()
+            .ok_or(MessageStoreUnavailable)?;
+        Ok(message_store.get_max_offset_in_queue(topic, queue_id))
+    }
+
+    pub(crate) fn local_store_now(&self) -> Result<u64, MessageStoreUnavailable> {
+        let message_store = self
+            .broker_runtime_inner
+            .message_store()
+            .ok_or(MessageStoreUnavailable)?;
+        Ok(message_store.now())
+    }
+
     pub(crate) async fn get_message_from_local_store(
         &self,
         group: &CheetahString,

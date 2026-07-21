@@ -142,7 +142,11 @@ use crate::processor::end_transaction_processor::EndTransactionStoreCapability;
 use crate::processor::lite_manager_processor::LiteManagerProcessor;
 use crate::processor::lite_subscription_ctl_processor::LiteSubscriptionCtlProcessor;
 use crate::processor::notification_processor::NotificationProcessor;
+use crate::processor::peek_message_processor::PeekMessagePolicy;
 use crate::processor::peek_message_processor::PeekMessageProcessor;
+use crate::processor::peek_message_processor::PeekMessageProcessorContext;
+use crate::processor::peek_message_processor::PeekMessageStoreCapability;
+use crate::processor::peek_message_processor::PeekPopOffsetCapability;
 use crate::processor::polling_info_processor::PollingInfoProcessor;
 use crate::processor::pop_inflight_message_counter::PopInflightMessageCounter;
 use crate::processor::pop_lite_message_processor::PopLiteMessageProcessor;
@@ -2602,7 +2606,17 @@ impl BrokerRuntime {
         );
 
         //PeekMessageProcessor
-        let peek_message_processor = Arc::new(PeekMessageProcessor::new(self.inner.clone()));
+        let escape_bridge = self.inner.escape_bridge();
+        let consumer_offset_query = self.inner.consumer_offset_manager_handle().query_capability();
+        let peek_message_processor = Arc::new(PeekMessageProcessor::new(PeekMessageProcessorContext::new(
+            PeekMessagePolicy::from_config(self.inner.broker_config()),
+            self.inner.topic_config_manager_handle(),
+            self.inner.subscription_group_manager().config_lookup(),
+            consumer_offset_query,
+            self.inner.broker_stats_manager_handle(),
+            PeekMessageStoreCapability::new(&escape_bridge),
+            PeekPopOffsetCapability::new(pop_message_processor.pop_buffer_merge_service()),
+        )));
         broker_request_processor.register_processor(
             RequestCode::PeekMessage as i32,
             BrokerProcessorType::Peek(peek_message_processor),
