@@ -94,7 +94,7 @@ pub struct AdminBrokerProcessor<MS: MessageStore> {
     notify_min_broker_handler: NotifyMinBrokerChangeIdHandler<MS>,
     update_broker_ha_handler: UpdateBrokerHaHandler<MS>,
     reset_master_flusg_offset_handler: ResetMasterFlushOffsetHandler<MS>,
-    broker_epoch_cache_handler: BrokerEpochCacheHandler<MS>,
+    broker_epoch_cache_handler: BrokerEpochCacheHandler,
     notify_broker_role_change_handler: NotifyBrokerRoleChangeHandler<MS>,
     message_related_handler: MessageRelatedHandler<MS>,
     producer_request_handler: ProducerRequestHandler,
@@ -110,7 +110,7 @@ pub struct AdminBrokerProcessor<MS: MessageStore> {
     list_acl_request_handler: ListAclRequestHandler,
     update_global_white_addrs_config_request_handler: UpdateGlobalWhiteAddrsConfigRequestHandler,
     update_cold_data_flow_ctr_group_config_request_handler: UpdateColdDataFlowCtrGroupConfigRequestHandler,
-    get_broker_ha_status_handler: GetBrokerHaStatusHandler<MS>,
+    get_broker_ha_status_handler: GetBrokerHaStatusHandler,
     broker_stats_handler: BrokerStatsHandler,
 }
 
@@ -147,7 +147,7 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
 
         let reset_master_flusg_offset_handler = ResetMasterFlushOffsetHandler::new(broker_runtime_inner.clone());
 
-        let broker_epoch_cache_handler = BrokerEpochCacheHandler::new(broker_runtime_inner.clone());
+        let broker_epoch_cache_handler = BrokerEpochCacheHandler::new();
 
         let notify_broker_role_change_handler = NotifyBrokerRoleChangeHandler::new(broker_runtime_inner.clone());
 
@@ -168,7 +168,7 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
             UpdateGlobalWhiteAddrsConfigRequestHandler::new(auth_admin_service);
         let update_cold_data_flow_ctr_group_config_request_handler =
             UpdateColdDataFlowCtrGroupConfigRequestHandler::new(broker_runtime_inner.cold_data_cg_ctr_service_handle());
-        let get_broker_ha_status_handler = GetBrokerHaStatusHandler::new(broker_runtime_inner.clone());
+        let get_broker_ha_status_handler = GetBrokerHaStatusHandler::new();
         let broker_stats_handler = BrokerStatsHandler::new(broker_runtime_inner.broker_stats_manager_handle());
 
         AdminBrokerProcessor {
@@ -516,8 +516,9 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .await
             }
             RequestCode::GetBrokerHaStatus => {
+                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner();
                 self.get_broker_ha_status_handler
-                    .get_broker_ha_status(channel, ctx, request_code, request)
+                    .get_broker_ha_status(broker_runtime_inner, channel, ctx, request_code, request)
                     .await
             }
             RequestCode::ResetMasterFlushOffset => {
@@ -526,8 +527,9 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .await
             }
             RequestCode::GetBrokerEpochCache => {
+                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner();
                 self.broker_epoch_cache_handler
-                    .get_broker_epoch_cache(channel, ctx, request_code, request)
+                    .get_broker_epoch_cache(broker_runtime_inner, channel, ctx, request_code, request)
                     .await
             }
             RequestCode::NotifyBrokerRoleChanged => {

@@ -587,6 +587,14 @@ back-reference 与 `MessageStore` 泛型，改持仅暴露 scan/close 的 Produc
 occurrence，且无 relocation。总进度仍为 75/82，下一子切片 M11-12bc17 继续 Broker aggregate/leaf 或 Store
 WAL/queue/timer/HA owner。
 
+Read-only Broker diagnostics 随 Issue #8440 收窄：Admin dispatch 复用 broker-config handler 已登记的 runtime owner，
+`GetBrokerHaStatusHandler` 与 `BrokerEpochCacheHandler` 删除各自的完整 runtime 字段、Clone 和 struct-level
+`MessageStore` 泛型，改为请求期间接受普通 `&BrokerRuntimeInner` 借用；响应与缺失 Store/HA 错误语义保持不变。
+HA status 与 ownership 回归 3/3 通过。ArcMut 快照降至 364 identities/963 occurrences（production 205/484、test
+145/439、compatibility 14/40、Broker production 102/210），净删除 4 个 production identities/6 occurrences 与
+1 个 test identity/1 occurrence，且无 relocation。总进度仍为 75/82，下一子切片 M11-12bc18 继续 Broker
+aggregate/leaf 或 Store WAL/queue/timer/HA owner。
+
 ### 9.3 证据目录
 
 - 运行期生成物：`target/architecture-refactor/Mxx/<run-id>/`，不提交 Git。

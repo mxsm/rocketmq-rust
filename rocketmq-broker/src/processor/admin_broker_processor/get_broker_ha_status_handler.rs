@@ -17,29 +17,25 @@ use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
 
 use crate::broker_runtime::BrokerRuntimeInner;
 
-#[derive(Clone)]
-pub struct GetBrokerHaStatusHandler<MS: MessageStore> {
-    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
-}
+pub struct GetBrokerHaStatusHandler;
 
-impl<MS: MessageStore> GetBrokerHaStatusHandler<MS> {
-    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
-        Self { broker_runtime_inner }
+impl GetBrokerHaStatusHandler {
+    pub const fn new() -> Self {
+        Self
     }
 
-    pub async fn get_broker_ha_status(
-        &mut self,
+    pub async fn get_broker_ha_status<MS: MessageStore>(
+        &self,
+        broker_runtime_inner: &BrokerRuntimeInner<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let broker_runtime_inner = self.broker_runtime_inner.as_mut();
         let response = RemotingCommand::create_response_command();
 
         let message_store = match broker_runtime_inner.message_store() {
@@ -93,6 +89,7 @@ mod tests {
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
 
     use crate::broker_runtime::BrokerRuntime;
+    use crate::processor::admin_broker_processor::broker_epoch_cache_handler::BrokerEpochCacheHandler;
 
     use super::*;
 
@@ -132,14 +129,20 @@ mod tests {
         let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
         assert!(runtime.initialize().await);
 
-        let inner = runtime.inner_for_test().clone();
-        let mut handler = GetBrokerHaStatusHandler::new(inner);
+        let inner = runtime.inner_for_test();
+        let handler = GetBrokerHaStatusHandler::new();
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request = RemotingCommand::create_remoting_command(RequestCode::GetBrokerHaStatus);
 
         let response = handler
-            .get_broker_ha_status(channel, ctx, RequestCode::GetBrokerHaStatus, &mut request)
+            .get_broker_ha_status(
+                inner.as_ref(),
+                channel,
+                ctx,
+                RequestCode::GetBrokerHaStatus,
+                &mut request,
+            )
             .await
             .expect("HA status should return broker response")
             .expect("HA status should return response");
@@ -157,14 +160,20 @@ mod tests {
         let broker_config = Arc::new(BrokerConfig::default());
         let message_store_config = Arc::new(MessageStoreConfig::default());
         let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
-        let inner = runtime.inner_for_test().clone();
-        let mut handler = GetBrokerHaStatusHandler::new(inner);
+        let inner = runtime.inner_for_test();
+        let handler = GetBrokerHaStatusHandler::new();
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request = RemotingCommand::create_remoting_command(RequestCode::GetBrokerHaStatus);
 
         let response = handler
-            .get_broker_ha_status(channel, ctx, RequestCode::GetBrokerHaStatus, &mut request)
+            .get_broker_ha_status(
+                inner.as_ref(),
+                channel,
+                ctx,
+                RequestCode::GetBrokerHaStatus,
+                &mut request,
+            )
             .await
             .expect("HA status should return broker response")
             .expect("HA status should return response");
@@ -173,5 +182,21 @@ mod tests {
         assert!(response
             .remark()
             .is_some_and(|remark| remark.contains("message store is not available")));
+    }
+
+    #[test]
+    fn read_only_diagnostic_handlers_do_not_retain_runtime_root() {
+        let broker_config = Arc::new(BrokerConfig::default());
+        let message_store_config = Arc::new(MessageStoreConfig::default());
+        let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
+        let inner = runtime.inner_for_test();
+        let strong_count_before = inner.strong_count();
+
+        {
+            let _ha_status_handler = GetBrokerHaStatusHandler::new();
+            let _epoch_cache_handler = BrokerEpochCacheHandler::new();
+            assert_eq!(inner.strong_count(), strong_count_before);
+        }
+        assert_eq!(inner.strong_count(), strong_count_before);
     }
 }
