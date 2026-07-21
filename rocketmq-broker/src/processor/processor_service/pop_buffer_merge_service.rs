@@ -44,7 +44,6 @@ use rocketmq_error::RocketMQResult;
 use rocketmq_error::UnifiedServiceError;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_runtime::TaskGroup;
-use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::pop::ack_msg::AckMsg;
@@ -57,13 +56,13 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
-use crate::broker_runtime::BrokerRuntimeInner;
 #[cfg(feature = "rocksdb_store")]
 use crate::pop::rocksdb_store::PopConsumerRecord;
 #[cfg(feature = "rocksdb_store")]
 use crate::pop::rocksdb_store::PopConsumerRetryType;
 #[cfg(feature = "rocksdb_store")]
 use crate::pop::rocksdb_store::PopConsumerRocksDbStore;
+use crate::processor::pop_message_processor::capability::PopBufferMergeContext;
 use crate::processor::pop_message_processor::PopMessageProcessor;
 use crate::processor::pop_message_processor::QueueLockManager;
 
@@ -86,7 +85,7 @@ pub(crate) struct PopBufferMergeService<MS: MessageStore> {
     running: AtomicBool,
     task_group: Mutex<Option<TaskGroup>>,
     start_time: Instant,
-    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+    context: Arc<PopBufferMergeContext<MS>>,
     #[cfg(feature = "rocksdb_store")]
     pop_consumer_store: Option<Arc<PopConsumerRocksDbStore>>,
 }
@@ -95,7 +94,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
     pub fn new(
         revive_topic: CheetahString,
         queue_lock_manager: QueueLockManager,
-        broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+        context: Arc<PopBufferMergeContext<MS>>,
         #[cfg(feature = "rocksdb_store")] pop_consumer_store: Option<Arc<PopConsumerRocksDbStore>>,
     ) -> Self {
         let interval = 5;
@@ -118,7 +117,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
             running: AtomicBool::new(false),
             task_group: Mutex::new(None),
             start_time: Instant::now(),
-            broker_runtime_inner,
+            context,
             #[cfg(feature = "rocksdb_store")]
             pop_consumer_store,
         }
@@ -139,9 +138,9 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
         revive_queue_offset: i64,
         next_begin_offset: i64,
     ) -> RocketMQResult<()> {
-        let broker_config = self.broker_runtime_inner.broker_config();
+        let policy = self.context.policy.snapshot();
 
-        if !broker_config.enable_pop_buffer_merge {
+        if !policy.enable_pop_buffer_merge {
             return Err(RocketMQError::ClientInvalidState {
                 expected: "buffer enabled",
                 actual: "buffer disabled".to_string(),
@@ -156,23 +155,23 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
         }
 
         let now = current_millis();
-        if point.get_revive_time() - (now as i64) < broker_config.pop_ck_stay_buffer_time_out as i64 + 1500 {
-            if broker_config.enable_pop_log {
+        if point.get_revive_time() - (now as i64) < policy.pop_ck_stay_buffer_time_out as i64 + 1500 {
+            if policy.enable_pop_log {
                 warn!("[PopBuffer]add ck, timeout, {:?}, {}", point, now);
             }
             return Err(RocketMQError::Timeout {
                 operation: "add_checkpoint",
-                timeout_ms: broker_config.pop_ck_stay_buffer_time_out,
+                timeout_ms: policy.pop_ck_stay_buffer_time_out,
             });
         }
 
         let current_counter = self.counter.load(Ordering::Acquire);
-        if current_counter as i64 > broker_config.pop_ck_max_buffer_size {
+        if current_counter as i64 > policy.pop_ck_max_buffer_size {
             warn!("[PopBuffer]add ck, max size, {:?}, {}", point, current_counter);
             return Err(RocketMQError::StorageOutOfSpace {
                 path: format!(
                     "PopBuffer(current={}, max={})",
-                    current_counter, broker_config.pop_ck_max_buffer_size
+                    current_counter, policy.pop_ck_max_buffer_size
                 ),
             });
         }
@@ -198,7 +197,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
                 code: -1,
                 message: format!(
                     "Queue full: size={}, max={}",
-                    queue_size, broker_config.pop_ck_offset_max_queue_size
+                    queue_size, policy.pop_ck_offset_max_queue_size
                 ),
                 broker_addr: None,
             });
@@ -221,7 +220,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
         self.write_pop_records_for_checkpoint(point_wrapper.get_ck())?;
         self.put_offset_queue(point_wrapper.clone()).await?;
 
-        if broker_config.enable_pop_log {
+        if policy.enable_pop_log {
             info!("[PopBuffer]add ck, {:?}", point_wrapper);
         }
 
@@ -240,8 +239,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
         match queue {
             None => true,
             Some(queue) => {
-                queue.lock().await.len()
-                    < self.broker_runtime_inner.broker_config().pop_ck_offset_max_queue_size as usize
+                queue.lock().await.len() < self.context.policy.snapshot().pop_ck_offset_max_queue_size as usize
             }
         }
     }
@@ -281,7 +279,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
 
         self.put_offset_queue(point_wrapper.clone()).await?;
 
-        if self.broker_runtime_inner.broker_config().enable_pop_log {
+        if self.context.policy.snapshot().enable_pop_log {
             info!("[PopBuffer]add ck just offset, {:?}", point_wrapper);
         }
 
@@ -292,7 +290,8 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
     }
 
     pub fn add_ack(&self, revive_qid: i32, ack_msg: &dyn AckMessage) -> bool {
-        if !self.broker_runtime_inner.broker_config().enable_pop_buffer_merge {
+        let policy = self.context.policy.snapshot();
+        if !policy.enable_pop_buffer_merge {
             return false;
         }
         if !self.serving.load(Ordering::Acquire) {
@@ -309,7 +308,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
         let point_wrapper = match self.buffer.get(&merge_key) {
             Some(wrapper) => wrapper,
             None => {
-                if self.broker_runtime_inner.broker_config().enable_pop_log {
+                if policy.enable_pop_log {
                     warn!("[PopBuffer]add ack fail, rqId={}, no ck, {}", revive_qid, ack_msg);
                 }
                 return false;
@@ -323,10 +322,8 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
         let revive_time = point.get_revive_time() as u64;
         let pop_time = point.pop_time as u64;
 
-        if revive_time > now
-            && (revive_time - now) < self.broker_runtime_inner.broker_config().pop_ck_stay_buffer_time_out + 1500
-        {
-            if self.broker_runtime_inner.broker_config().enable_pop_log {
+        if revive_time > now && (revive_time - now) < policy.pop_ck_stay_buffer_time_out + 1500 {
+            if policy.enable_pop_log {
                 warn!(
                     "[PopBuffer]add ack fail, rqId={}, almost timeout for revive, {:?}, {}, {}",
                     revive_qid,
@@ -337,10 +334,8 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
             }
             return false;
         }
-        if now > pop_time
-            && (now - pop_time) > self.broker_runtime_inner.broker_config().pop_ck_stay_buffer_time_out - 1500
-        {
-            if self.broker_runtime_inner.broker_config().enable_pop_log {
+        if now > pop_time && (now - pop_time) > policy.pop_ck_stay_buffer_time_out - 1500 {
+            if policy.enable_pop_log {
                 warn!(
                     "[PopBuffer]add ack fail, rqId={}, timeout for revive, {:?}, {}, {}",
                     revive_qid,
@@ -425,13 +420,12 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
     }
 
     fn is_should_running(&self) -> bool {
-        if self.broker_runtime_inner.broker_config().enable_slave_acting_master {
+        let policy = self.context.policy.snapshot();
+        if policy.enable_slave_acting_master {
             return true;
         }
-        self.master.store(
-            self.broker_runtime_inner.broker_config().broker_role != BrokerRole::Slave,
-            Ordering::Release,
-        );
+        self.master
+            .store(policy.broker_role != BrokerRole::Slave, Ordering::Release);
         self.master.load(Ordering::Acquire)
     }
 
@@ -442,10 +436,10 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
         batch_ack_index_list.clear();
         let scan_times = self.scan_times.load(Ordering::Acquire);
 
-        let broker_config = self.broker_runtime_inner.broker_config();
-        let pop_ck_stay_buffer_time_out = broker_config.pop_ck_stay_buffer_time_out as i64;
-        let pop_ck_stay_buffer_time = broker_config.pop_ck_stay_buffer_time as i64;
-        let enable_pop_log = broker_config.enable_pop_log;
+        let policy = self.context.policy.snapshot();
+        let pop_ck_stay_buffer_time_out = policy.pop_ck_stay_buffer_time_out as i64;
+        let pop_ck_stay_buffer_time = policy.pop_ck_stay_buffer_time as i64;
+        let enable_pop_log = policy.enable_pop_log;
 
         let now = current_millis() as i64;
         let mut remove_candidates = Vec::with_capacity(256);
@@ -494,7 +488,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
                 if !point_wrapper.is_ck_stored() {
                     continue;
                 }
-                if self.broker_runtime_inner.broker_config().enable_pop_batch_ack {
+                if policy.enable_pop_batch_ack {
                     // Before removing the CheckPoint from memory, store the messages that have been
                     // Acked in it as Ack messages on disk.
                     for i in 0..point.num {
@@ -568,7 +562,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
         }
 
         let eclipse = start_time.elapsed().as_millis() as i64;
-        if eclipse > self.broker_runtime_inner.broker_config().pop_ck_stay_buffer_time_out as i64 - 1000 {
+        if eclipse > policy.pop_ck_stay_buffer_time_out as i64 - 1000 {
             self.serving.store(false, Ordering::Release);
         } else if scan_times.is_multiple_of(self.count_of_second1) {
             info!(
@@ -603,21 +597,12 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
             let topic = key_array[0];
             let cid = key_array[1];
 
-            if self
-                .broker_runtime_inner
-                .topic_config_manager()
-                .select_topic_config(&topic.into())
-                .is_none()
-            {
+            if self.context.topics.select_topic_config(&topic.into()).is_none() {
                 info!("[PopBuffer]remove nonexistent topic {} in buffer", topic);
                 return false;
             }
 
-            if !self
-                .broker_runtime_inner
-                .subscription_group_manager()
-                .contains_subscription_group(&cid.into())
-            {
+            if !self.context.subscriptions.contains_subscription_group(&cid.into()) {
                 info!(
                     "[PopBuffer]remove nonexistent subscription group {} of topic {} in buffer",
                     cid, topic
@@ -673,10 +658,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
         }
 
         this.shutdown_requested.store(false, Ordering::Release);
-        let Some(task_group) = this.broker_runtime_inner.broker_task_group_or_current(
-            "rocketmq-broker.pop-buffer-merge",
-            "failed to start PopBufferMergeService outside Tokio runtime",
-        ) else {
+        let Some(task_group) = this.context.task_group() else {
             this.running.store(false, Ordering::Release);
             return;
         };
@@ -814,12 +796,10 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
         if !self.queue_lock_manager.try_lock_with_key(lock_key.clone()).await {
             return false;
         }
-        let consumer_offset_manager = self.broker_runtime_inner.consumer_offset_manager();
-        let offset = consumer_offset_manager.query_offset(
-            &pop_check_point.cid,
-            &pop_check_point.topic,
-            pop_check_point.queue_id,
-        );
+        let offset =
+            self.context
+                .offsets
+                .query_offset(&pop_check_point.cid, &pop_check_point.topic, pop_check_point.queue_id);
         if point_wrapper.next_begin_offset > offset {
             info!("Commit offset, {}, {}", point_wrapper, offset);
         } else {
@@ -828,7 +808,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
                 point_wrapper, offset
             )
         }
-        consumer_offset_manager.commit_offset(
+        self.context.offsets.commit_offset(
             "PopBufferMergeService".into(),
             &pop_check_point.cid,
             &pop_check_point.topic,
@@ -899,7 +879,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
 
         let mut guard = queue.lock().await;
 
-        let max_size = self.broker_runtime_inner.broker_config().pop_ck_offset_max_queue_size as usize;
+        let max_size = self.context.policy.snapshot().pop_ck_offset_max_queue_size as usize;
 
         if guard.len() >= max_size {
             return Err(RocketMQError::BrokerOperationFailed {
@@ -919,16 +899,14 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
             return;
         }
         let msg_inner = PopMessageProcessor::<MS>::build_ck_msg(
-            self.broker_runtime_inner.store_host(),
+            self.context.policy.snapshot().store_host,
             point_wrapper.get_ck(),
             point_wrapper.revive_queue_id,
             self.revive_topic.clone(),
         );
-        let put_message_result = self
-            .broker_runtime_inner
-            .escape_bridge()
-            .put_message_to_specific_queue(msg_inner)
-            .await;
+        let Ok(put_message_result) = self.context.store.put_specific(msg_inner).await else {
+            return;
+        };
         if !matches!(
             put_message_result.put_message_status(),
             PutMessageStatus::PutOk
@@ -1024,8 +1002,9 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
         msg.message_ext_inner.queue_id = point_wrapper.revive_queue_id;
         msg.set_tags(CheetahString::from_static_str(PopAckConstants::BATCH_ACK_TAG));
         msg.message_ext_inner.born_timestamp = current_millis() as i64;
-        msg.message_ext_inner.born_host = self.broker_runtime_inner.store_host();
-        msg.message_ext_inner.store_host = self.broker_runtime_inner.store_host();
+        let store_host = self.context.policy.snapshot().store_host;
+        msg.message_ext_inner.born_host = store_host;
+        msg.message_ext_inner.store_host = store_host;
         msg.set_delay_time_ms(point.get_revive_time() as u64);
         msg.put_property(
             CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
@@ -1033,11 +1012,9 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
         );
         msg.properties_string = message_decoder::message_properties_to_string(msg.get_properties());
 
-        let put_message_result = self
-            .broker_runtime_inner
-            .escape_bridge()
-            .put_message_to_specific_queue(msg)
-            .await;
+        let Ok(put_message_result) = self.context.store.put_specific(msg).await else {
+            return false;
+        };
         matches!(
             put_message_result.put_message_status(),
             PutMessageStatus::PutOk
@@ -1063,8 +1040,9 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
         msg.message_ext_inner.queue_id = point_wrapper.revive_queue_id;
         msg.set_tags(CheetahString::from_static_str(PopAckConstants::ACK_TAG));
         msg.message_ext_inner.born_timestamp = current_millis() as i64;
-        msg.message_ext_inner.born_host = self.broker_runtime_inner.store_host();
-        msg.message_ext_inner.store_host = self.broker_runtime_inner.store_host();
+        let store_host = self.context.policy.snapshot().store_host;
+        msg.message_ext_inner.born_host = store_host;
+        msg.message_ext_inner.store_host = store_host;
         msg.set_delay_time_ms(point.get_revive_time() as u64);
         msg.put_property(
             CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
@@ -1072,11 +1050,9 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
         );
         msg.properties_string = message_decoder::message_properties_to_string(msg.get_properties());
 
-        let put_message_result = self
-            .broker_runtime_inner
-            .escape_bridge()
-            .put_message_to_specific_queue(msg)
-            .await;
+        let Ok(put_message_result) = self.context.store.put_specific(msg).await else {
+            return false;
+        };
         matches!(
             put_message_result.put_message_status(),
             PutMessageStatus::PutOk

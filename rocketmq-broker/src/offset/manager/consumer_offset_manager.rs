@@ -175,6 +175,15 @@ where
         self.manager.query_offset(group, topic, queue_id)
     }
 
+    pub(crate) fn query_then_erase_reset_offset(
+        &self,
+        group: &CheetahString,
+        topic: &CheetahString,
+        queue_id: i32,
+    ) -> Option<i64> {
+        self.manager.query_then_erase_reset_offset(group, topic, queue_id)
+    }
+
     pub(crate) fn min_offset_in_queue(&self, topic: &CheetahString, queue_id: i32) -> i64 {
         self.manager
             .message_store
