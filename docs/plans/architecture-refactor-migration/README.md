@@ -619,6 +619,13 @@ forbidden 聚焦回归通过，delete-offset-cleanup 复现既有同名基线失
 94/198），净删除 2 个 production identities/3 occurrences 与 1 个 test identity/1 occurrence，且无 relocation。
 总进度仍为 75/82，下一子切片 M11-12bc21 继续 Broker aggregate/leaf 或 Store WAL/queue/timer/HA owner。
 
+Message-related Admin handler 随 Issue #8448 收窄：`MessageRelatedHandler` 删除完整 runtime 字段与 struct-level
+`MessageStore` 泛型，改为无状态 leaf；Admin dispatch 为 search/query/POP rollback 传入请求期共享 runtime 借用，
+仅在 resume-half-message 重入写 Store 时传入独占借用，静态主题重写沿用同一共享借用。消息处理聚焦回归 4/4、
+ownership 回归通过。ArcMut 快照降至 353 identities/947 occurrences（production 195/469、test 144/438、
+compatibility 14/40、Broker production 92/195），净删除 2 个 production identities/3 occurrences，且无
+relocation。总进度仍为 75/82，下一子切片 M11-12bc22 继续 Broker aggregate/leaf 或 Store WAL/queue/timer/HA owner。
+
 ### 9.3 证据目录
 
 - 运行期生成物：`target/architecture-refactor/Mxx/<run-id>/`，不提交 Git。
