@@ -1425,12 +1425,9 @@ impl CommitLog {
         #[cfg(feature = "observability")]
         let start_time = Instant::now();
 
-        // Acquire lock and immediately call handle_disk_flush which internally
-        // only triggers async operations without holding the lock
         let status = self
             .flush_manager
-            .mut_from_ref()
-            .handle_disk_flush(put_message_result, msg)
+            .handle_disk_flush_shared(put_message_result, msg)
             .await;
 
         #[cfg(feature = "observability")]

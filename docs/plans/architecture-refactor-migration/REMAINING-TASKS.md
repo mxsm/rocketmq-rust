@@ -1,7 +1,7 @@
 # 架构重构剩余任务盘点
 
 > 盘点日期：2026-07-21
-> 代码基线：Issue #8464 / M11-12bc28 完成后
+> 代码基线：Issue #8467 / M11-12bc29 完成后
 > 统计规则：82 个顶层 `PR-Mxx-yy` 工作包与 M11-12 内部实施切片分开统计，禁止重复计数。
 
 ## 结论
@@ -19,20 +19,20 @@ owner 清零、compatibility 删除和同一候选快照验收。
 
 ## PR-M11-12 剩余实现
 
-Issue #8464 后 reviewed ArcMut baseline 为 331 identities / 907 occurrences：production 174/432、test
+Issue #8467 后 reviewed ArcMut baseline 为 330 identities / 906 occurrences：production 173/431、test
 143/435、compatibility 14/40。production 全部分布在 Broker 与 Store。
 
 | owner | 剩余 identity / occurrence | 完成条件 |
 |---|---:|---|
 | Broker | 83 / 181 | transaction bridge、Producer/ColdData admin leaf、Schedule hook、put-message preflight、ConsumerOrderInfoManager、TopicRouteInfoManager、MessageArrivingListener、ClientHousekeepingService、HA diagnostics/control/min-broker transition、controller role-change duplicate owner、BatchMq lock/unlock、SubscriptionGroup/MessageRelated/Offset/Consumer Admin 与未编译 V2 示例残留已退出 leaf-level 完整 runtime/store owner；LiteLifecycle 只读 API 已改为普通借用；继续让显式 Store 兼容边界、BrokerRuntime aggregate carrier、其余 admin/processor/service 不再传播不安全共享可变 owner |
-| Store | 91 / 251 | BrokerStats observer、ConsumeQueueExt owner、HA notification/connection registry capability、未共享 HA child、commit-to-flush 窄唤醒能力、HA confirm/epoch 原子发布与 HA connection runtime handle 已收窄；其余 MessageStore、CommitLog/Flush、queue、Rocks/Timer 与 HA service/actor 改为独占 owner、标准 Arc/Weak 或显式 actor/锁边界 |
+| Store | 90 / 250 | BrokerStats observer、ConsumeQueueExt owner、HA notification/connection registry capability、未共享 HA child、commit-to-flush 窄唤醒能力、HA confirm/epoch 原子发布、HA connection runtime handle 与 CommitLog shared disk-flush 已收窄；其余 MessageStore、CommitLog/Flush、queue、Rocks/Timer 与 HA service/actor 改为独占 owner、标准 Arc/Weak 或显式 actor/锁边界 |
 | compatibility | 14 / 40 | 先迁移 Store 对 `WeakArcMut` 的剩余使用；公开 `ArcMut`/`WeakArcMut`/`SyncUnsafeCellWrapper` 删除必须满足 next-major 两轮弃用与独立 HUMAN/Release Manager 批准，不能通过重置 API baseline 提前关闭 |
 
 建议按以下最小可审查批次继续推进；它们是 PR-M11-12 的内部切片，不增加 82 个顶层工作包总数：
 
 1. Broker aggregate：收窄 `BrokerRuntimeInner`、processor variant 和启动 carrier（Broker 当前为 83/181）；Schedule hook、put-message preflight、ConsumerOrderInfoManager、TopicRouteInfoManager、MessageArrivingListener 与 ClientHousekeepingService 强保活边已拆除，HA diagnostics/control/min-broker transition、controller role-change duplicate owner、BatchMq、SubscriptionGroup、MessageRelated、Offset 与 Consumer handler 已改为父层请求期借用，未编译 V2 示例残留已清理；继续清理其他 admin/processor leaf。
 2. Broker leaf：完成其余 admin/processor/revive/slave/offset leaf owner；transaction bridge 已由 M11-12bc4 收窄，Producer/ColdData admin handler 已由 M11-12bc5 改持 live registry/standard Arc capability，Schedule hook 已由 M11-12bc6 改持三项显式能力。
-3. Store WAL：commit worker 已只持 `Notify` 唤醒能力；继续收口 Local/Rocks MessageStore、CommitLog 与 Flush manager，并替换 transaction 的直接 Store 兼容 owner。
+3. Store WAL：commit worker 已只持 `Notify` 唤醒能力，CommitLog disk-flush 已通过共享 receiver enqueue；继续收口 Local/Rocks MessageStore、CommitLog 与 Flush manager，并替换 transaction 的直接 Store 兼容 owner。
 4. Store queue：ConsumeQueueExt 已改用显式锁 owner；继续收口其余 ConsumeQueue、queue store、index/mapped-file carrier。
 5. Store timer/HA：BrokerStats observer、HA notification service、connection registry 查询、未共享 client/connection child 与 HA connection worker 自引用已退出多余 owner；继续收口 Timer、Default/General/AutoSwitch HA service 与其余 actor 回指。
 6. compatibility/stable：迁移剩余测试/兼容调用方和 Store `WeakArcMut`；按 next-major/HUMAN 窗口处理公开 facade，并替换 `sync_unsafe_cell`、`async_fn_traits`、`unboxed_closures` 等 nightly surface。
@@ -189,6 +189,13 @@ offset 与 sync-state 更新时间、shutdown/TaskGroup 顺序保持不变。pro
 test 净删除 1 identity / 3 occurrences，因此 reviewed 总量降至 331/907、production 降至 174/432、test 降至
 143/435、Store 降至 91/251；Broker 83/181 与 compatibility 14/40 不增，1 个保留 import occurrence 经同位置
 指纹审核更新，无 relocation。
+
+M11-12bc29 将 sync-flush enqueue 的真实只读边界显式化：`GroupCommitService::put_request` 改为 `&self`，
+`DefaultFlushManager` 以 crate-private shared 方法承载原实现，公开 `FlushManager` 的 `&mut self` 签名继续作为兼容
+facade；CommitLog 直接调用 shared 方法并删除唯一 `mut_from_ref`。cancellation、bounded channel backpressure、
+原子 enqueue stats、receiver timeout、状态映射与独占 start/shutdown lifecycle 保持不变。production 净删除
+1 identity / 1 occurrence，因此 reviewed 总量降至 330/906、production 降至 173/431、Store 降至 90/250；
+test 143/435、Broker 83/181 与 compatibility 14/40 不增，无 relocation。
 
 ## PR-M12 剩余工作包
 
