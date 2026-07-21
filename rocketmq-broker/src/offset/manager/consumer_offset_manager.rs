@@ -86,10 +86,72 @@ pub(crate) struct ConsumerOffsetManager<MS: MessageStore> {
     rocksdb_config_manager: Option<Arc<RocksDbBrokerConfigManager>>,
 }
 
+/// Narrow live offset capability used by consumer offset request processing.
+///
+/// The capability shares the existing manager owner and exposes only request-time offset
+/// operations plus the two Store reads required by the legacy query fallback.
+pub(crate) struct ConsumerOffsetRequestCapability<MS: MessageStore> {
+    manager: Arc<ConsumerOffsetManager<MS>>,
+}
+
+impl<MS: MessageStore> Clone for ConsumerOffsetRequestCapability<MS> {
+    fn clone(&self) -> Self {
+        Self {
+            manager: Arc::clone(&self.manager),
+        }
+    }
+}
+
+impl<MS> ConsumerOffsetRequestCapability<MS>
+where
+    MS: MessageStore,
+{
+    pub(crate) fn commit_offset(
+        &self,
+        client_host: CheetahString,
+        group: &CheetahString,
+        topic: &CheetahString,
+        queue_id: i32,
+        offset: i64,
+    ) {
+        self.manager.commit_offset(client_host, group, topic, queue_id, offset);
+    }
+
+    pub(crate) fn has_offset_reset(&self, group: &str, topic: &str, queue_id: i32) -> bool {
+        self.manager.has_offset_reset(group, topic, queue_id)
+    }
+
+    pub(crate) fn query_offset(&self, group: &CheetahString, topic: &CheetahString, queue_id: i32) -> i64 {
+        self.manager.query_offset(group, topic, queue_id)
+    }
+
+    pub(crate) fn min_offset_in_queue(&self, topic: &CheetahString, queue_id: i32) -> i64 {
+        self.manager
+            .message_store
+            .as_ref()
+            .map(|store| store.get_min_offset_in_queue(topic, queue_id))
+            .unwrap_or(0)
+    }
+
+    pub(crate) fn check_in_mem_by_consume_offset(&self, topic: &CheetahString, queue_id: i32) -> bool {
+        self.manager
+            .message_store
+            .as_ref()
+            .map(|store| store.check_in_mem_by_consume_offset(topic, queue_id, 0, 1))
+            .unwrap_or(false)
+    }
+}
+
 impl<MS> ConsumerOffsetManager<MS>
 where
     MS: MessageStore,
 {
+    pub(crate) fn request_capability(self: &Arc<Self>) -> ConsumerOffsetRequestCapability<MS> {
+        ConsumerOffsetRequestCapability {
+            manager: Arc::clone(self),
+        }
+    }
+
     pub fn new(
         broker_config: Arc<BrokerConfig>,
         message_store_config: Arc<MessageStoreConfig>,
@@ -903,6 +965,23 @@ mod tests {
         assert_eq!(owned_key, "topic-a@group-a");
         assert_eq!(lookup_key, "topic-a@group-a");
         assert_eq!(split_topic_group_key(&owned_key), Some(("topic-a", "group-a")));
+    }
+
+    #[test]
+    fn request_capability_shares_live_offset_state_without_store_fallback() {
+        let manager = Arc::new(new_manager());
+        let capability = manager.request_capability();
+        let topic = CheetahString::from_static_str("topic-a");
+        let group = CheetahString::from_static_str("group-a");
+
+        capability.commit_offset("127.0.0.1:10911".into(), &group, &topic, 0, 42);
+        assert_eq!(manager.query_offset(&group, &topic, 0), 42);
+        assert_eq!(capability.query_offset(&group, &topic, 0), 42);
+
+        manager.assign_reset_offset(&topic, &group, 0, 7);
+        assert!(capability.has_offset_reset(group.as_str(), topic.as_str(), 0));
+        assert_eq!(capability.min_offset_in_queue(&topic, 0), 0);
+        assert!(!capability.check_in_mem_by_consume_offset(&topic, 0));
     }
 
     #[test]

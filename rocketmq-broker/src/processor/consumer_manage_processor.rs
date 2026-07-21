@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::Arc;
+
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::error_response;
@@ -27,18 +29,40 @@ use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_context::Topi
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_utils::TopicQueueMappingUtils;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::rpc::rpc_client::RpcClient;
+use rocketmq_remoting::rpc::rpc_client_impl::RpcClientImpl;
 use rocketmq_remoting::rpc::rpc_request::RpcRequest;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
-use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
 use tracing::info;
 use tracing::warn;
 
-use crate::broker_runtime::BrokerRuntimeInner;
+use crate::client::manager::consumer_manager::ConsumerAssignmentView;
+use crate::offset::manager::consumer_offset_manager::ConsumerOffsetRequestCapability;
+use crate::subscription::manager::subscription_group_manager::SubscriptionGroupConfigLookup;
+use crate::topic::manager::topic_config_manager::TopicConfigManager;
+use crate::topic::manager::topic_queue_mapping_manager::TopicQueueMappingManager;
 
 pub struct ConsumerManageProcessor<MS: MessageStore> {
-    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+    consumer_view: ConsumerAssignmentView,
+    consumer_offset: ConsumerOffsetRequestCapability<MS>,
+    topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
+    subscription_group_lookup: SubscriptionGroupConfigLookup,
+    topic_config_manager: Arc<TopicConfigManager>,
+    rpc_client: RpcClientImpl,
+    use_server_side_reset_offset: bool,
+    forward_timeout: u64,
+}
+
+pub(crate) struct ConsumerManageProcessorContext<MS: MessageStore> {
+    pub(crate) consumer_view: ConsumerAssignmentView,
+    pub(crate) consumer_offset: ConsumerOffsetRequestCapability<MS>,
+    pub(crate) topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
+    pub(crate) subscription_group_lookup: SubscriptionGroupConfigLookup,
+    pub(crate) topic_config_manager: Arc<TopicConfigManager>,
+    pub(crate) rpc_client: RpcClientImpl,
+    pub(crate) use_server_side_reset_offset: bool,
+    pub(crate) forward_timeout: u64,
 }
 
 impl<MS> RequestProcessor for ConsumerManageProcessor<MS>
@@ -77,8 +101,17 @@ impl<MS> ConsumerManageProcessor<MS>
 where
     MS: MessageStore,
 {
-    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
-        Self { broker_runtime_inner }
+    pub(crate) fn new(context: ConsumerManageProcessorContext<MS>) -> Self {
+        Self {
+            consumer_view: context.consumer_view,
+            consumer_offset: context.consumer_offset,
+            topic_queue_mapping_manager: context.topic_queue_mapping_manager,
+            subscription_group_lookup: context.subscription_group_lookup,
+            topic_config_manager: context.topic_config_manager,
+            rpc_client: context.rpc_client,
+            use_server_side_reset_offset: context.use_server_side_reset_offset,
+            forward_timeout: context.forward_timeout,
+        }
     }
 
     pub async fn process_request_shared(
@@ -95,7 +128,14 @@ where
 impl<MS: MessageStore> Clone for ConsumerManageProcessor<MS> {
     fn clone(&self) -> Self {
         Self {
-            broker_runtime_inner: self.broker_runtime_inner.clone(),
+            consumer_view: self.consumer_view.clone(),
+            consumer_offset: self.consumer_offset.clone(),
+            topic_queue_mapping_manager: Arc::clone(&self.topic_queue_mapping_manager),
+            subscription_group_lookup: self.subscription_group_lookup.clone(),
+            topic_config_manager: Arc::clone(&self.topic_config_manager),
+            rpc_client: self.rpc_client.clone(),
+            use_server_side_reset_offset: self.use_server_side_reset_offset,
+            forward_timeout: self.forward_timeout,
         }
     }
 }
@@ -128,10 +168,7 @@ where
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let response = RemotingCommand::create_response_command();
         let request_header = request.decode_command_custom_header::<GetConsumerListByGroupRequestHeader>()?;
-        let consumer_group_info = self
-            .broker_runtime_inner
-            .consumer_manager()
-            .get_consumer_group_info(request_header.consumer_group.as_ref());
+        let consumer_group_info = self.consumer_view.client_ids_if_present(&request_header.consumer_group);
 
         match consumer_group_info {
             None => {
@@ -141,8 +178,7 @@ where
                     channel.remote_address()
                 );
             }
-            Some(info) => {
-                let client_ids = info.get_all_client_ids();
+            Some(client_ids) => {
                 if !client_ids.is_empty() {
                     let body = GetConsumerListByGroupResponseBody {
                         consumer_id_list: client_ids,
@@ -176,8 +212,7 @@ where
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut request_header = request.decode_command_custom_header::<UpdateConsumerOffsetRequestHeader>()?;
         let mut mapping_context = self
-            .broker_runtime_inner
-            .topic_queue_mapping_manager()
+            .topic_queue_mapping_manager
             .build_topic_queue_mapping_context(&request_header, false);
 
         let rewrite_result = self
@@ -191,11 +226,7 @@ where
         let queue_id = request_header.queue_id;
         let offset = request_header.commit_offset;
         let response = RemotingCommand::create_response_command();
-        if !self
-            .broker_runtime_inner
-            .subscription_group_manager()
-            .contains_subscription_group(group)
-        {
+        if !self.subscription_group_lookup.contains_subscription_group(group) {
             return Ok(Some(
                 response
                     .set_code(ResponseCode::SubscriptionGroupNotExist)
@@ -203,7 +234,7 @@ where
             ));
         }
 
-        if !self.broker_runtime_inner.topic_config_manager().contains_topic(topic) {
+        if !self.topic_config_manager.contains_topic(topic) {
             return Ok(Some(
                 response
                     .set_code(ResponseCode::TopicNotExist)
@@ -225,12 +256,7 @@ where
         //             .set_remark(format!("Offset is null, topic is {}", topic)),
         //     );
         // }
-        if self.broker_runtime_inner.broker_config().use_server_side_reset_offset
-            && self
-                .broker_runtime_inner
-                .consumer_offset_manager()
-                .has_offset_reset(topic, group, queue_id)
-        {
+        if self.use_server_side_reset_offset && self.consumer_offset.has_offset_reset(topic, group, queue_id) {
             info!(
                 "Update consumer offset is rejected because of previous offset-reset. Group={},Topic={}, QueueId={}, \
                  Offset={}",
@@ -242,7 +268,7 @@ where
                     .set_remark("Offset has been previously reset"),
             ));
         }
-        self.broker_runtime_inner.consumer_offset_manager().commit_offset(
+        self.consumer_offset.commit_offset(
             channel.remote_address().to_string().into(),
             group,
             topic,
@@ -260,8 +286,7 @@ where
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut request_header = request.decode_command_custom_header::<QueryConsumerOffsetRequestHeader>()?;
         let mut mapping_context = self
-            .broker_runtime_inner
-            .topic_queue_mapping_manager()
+            .topic_queue_mapping_manager
             .build_topic_queue_mapping_context(&request_header, false);
         if let Some(result) = self
             .rewrite_request_for_static_topic(&mut request_header, &mut mapping_context)
@@ -269,7 +294,7 @@ where
         {
             return Ok(Some(result));
         }
-        let offset = self.broker_runtime_inner.consumer_offset_manager().query_offset(
+        let offset = self.consumer_offset.query_offset(
             request_header.consumer_group.as_ref(),
             request_header.topic.as_ref(),
             request_header.queue_id,
@@ -281,10 +306,8 @@ where
             response = response.set_code(ResponseCode::Success);
         } else {
             let min_offset = self
-                .broker_runtime_inner
-                .message_store()
-                .map(|ms| ms.get_min_offset_in_queue(request_header.topic.as_ref(), request_header.queue_id))
-                .unwrap_or(0);
+                .consumer_offset
+                .min_offset_in_queue(request_header.topic.as_ref(), request_header.queue_id);
             if let Some(value) = request_header.set_zero_if_not_found {
                 if !value {
                     response = response
@@ -293,12 +316,8 @@ where
                 }
             } else if min_offset <= 0
                 && self
-                    .broker_runtime_inner
-                    .message_store()
-                    .map(|ms| {
-                        ms.check_in_mem_by_consume_offset(request_header.topic.as_ref(), request_header.queue_id, 0, 1)
-                    })
-                    .unwrap_or(false)
+                    .consumer_offset
+                    .check_in_mem_by_consume_offset(request_header.topic.as_ref(), request_header.queue_id)
             {
                 response_header.offset = Some(0);
                 response = response.set_code(ResponseCode::Success);
@@ -369,12 +388,7 @@ where
 
         // For non-local broker, forward the request via RPC
         let rpc_request = RpcRequest::new(RequestCode::UpdateConsumerOffset.to_i32(), request_header.clone(), None);
-        let rpc_response = self
-            .broker_runtime_inner
-            .broker_outer_api()
-            .rpc_client()
-            .invoke(rpc_request, self.broker_runtime_inner.broker_config().forward_timeout)
-            .await;
+        let rpc_response = self.rpc_client.invoke(rpc_request, self.forward_timeout).await;
 
         match rpc_response {
             Ok(response) => {
@@ -438,7 +452,7 @@ where
         for mapping_item in mapping_item_list_clone.iter().rev() {
             mapping_context.current_item = Some(mapping_item.clone());
             if mapping_item.bname == current_broker_name {
-                offset = self.broker_runtime_inner.consumer_offset_manager().query_offset(
+                offset = self.consumer_offset.query_offset(
                     request_header.consumer_group.as_ref(),
                     request_header.topic.as_ref(),
                     mapping_item.queue_id,
@@ -455,12 +469,7 @@ where
                 query_header.set_zero_if_not_found = Some(false);
 
                 let rpc_request = RpcRequest::new(RequestCode::QueryConsumerOffset.to_i32(), query_header, None);
-                let rpc_response = self
-                    .broker_runtime_inner
-                    .broker_outer_api()
-                    .rpc_client()
-                    .invoke(rpc_request, self.broker_runtime_inner.broker_config().forward_timeout)
-                    .await;
+                let rpc_response = self.rpc_client.invoke(rpc_request, self.forward_timeout).await;
 
                 match rpc_response {
                     Ok(response) => {
@@ -547,5 +556,17 @@ where
                 Some(current_item.compute_static_queue_offset_strictly(response_header.offset.unwrap_or(0)));
         }
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn production_processor_has_no_complete_runtime_owner() {
+        let source = include_str!("consumer_manage_processor.rs");
+        let production_source = source.split("#[cfg(test)]").next().expect("production source");
+
+        assert!(!production_source.contains("ArcMut"));
+        assert!(!production_source.contains("BrokerRuntimeInner"));
     }
 }

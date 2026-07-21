@@ -133,6 +133,7 @@ use crate::processor::change_invisible_time_processor::ChangeInvisibleTimeProces
 use crate::processor::client_manage_processor::ClientManageProcessor;
 use crate::processor::client_manage_processor::ClientManageProcessorContext;
 use crate::processor::consumer_manage_processor::ConsumerManageProcessor;
+use crate::processor::consumer_manage_processor::ConsumerManageProcessorContext;
 use crate::processor::default_pull_message_result_handler::DefaultPullMessageResultHandler;
 use crate::processor::end_transaction_processor::EndTransactionProcessor;
 use crate::processor::lite_manager_processor::LiteManagerProcessor;
@@ -2514,7 +2515,7 @@ impl BrokerRuntime {
             self.inner.clone(),
         ));
 
-        let consumer_manage_processor = ConsumerManageProcessor::new(self.inner.clone());
+        let consumer_manage_processor = self.inner.build_consumer_manage_processor();
         let pull_request_hold_service = Arc::new(PullRequestHoldService::new(Arc::downgrade(&pull_message_processor)));
         self.inner.pull_request_hold_service = Some(Arc::clone(&pull_request_hold_service));
 
@@ -3743,6 +3744,19 @@ pub(crate) fn broker_task_group_or_current(
 }
 
 impl<MS: MessageStore> BrokerRuntimeInner<MS> {
+    fn build_consumer_manage_processor(&self) -> ConsumerManageProcessor<MS> {
+        ConsumerManageProcessor::new(ConsumerManageProcessorContext {
+            consumer_view: self.consumer_manager().assignment_view(),
+            consumer_offset: self.consumer_offset_manager_handle().request_capability(),
+            topic_queue_mapping_manager: self.topic_queue_mapping_manager_handle(),
+            subscription_group_lookup: self.subscription_group_manager().config_lookup(),
+            topic_config_manager: self.topic_config_manager_handle(),
+            rpc_client: self.broker_outer_api().rpc_client().clone(),
+            use_server_side_reset_offset: self.broker_config().use_server_side_reset_offset,
+            forward_timeout: self.broker_config().forward_timeout,
+        })
+    }
+
     fn build_transaction_topic_registration(
         &self,
         message_store: TransactionMessageStore<MS>,
