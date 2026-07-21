@@ -120,6 +120,8 @@ use crate::hook::schedule_message_hook::ScheduleMessageHook;
 use crate::latency::broker_fast_failure::BrokerFastFailure;
 use crate::lite::lite_event_dispatcher::LiteEventDispatcher;
 use crate::lite::lite_lifecycle_manager::LiteLifecycleManager;
+use crate::long_polling::long_polling_service::pop_lite_long_polling_service::PopLiteLongPollingPolicy;
+use crate::long_polling::long_polling_service::pop_lite_long_polling_service::PopLiteLongPollingServiceContext;
 use crate::long_polling::long_polling_service::pop_long_polling_service::PopLongPollingPolicy;
 use crate::long_polling::long_polling_service::pop_long_polling_service::PopLongPollingServiceContext;
 use crate::long_polling::long_polling_service::pull_request_hold_service::PullRequestHoldService;
@@ -160,8 +162,13 @@ use crate::processor::peek_message_processor::PeekMessageStoreCapability;
 use crate::processor::peek_message_processor::PeekPopOffsetCapability;
 use crate::processor::polling_info_processor::PollingInfoProcessor;
 use crate::processor::pop_inflight_message_counter::PopInflightMessageCounter;
+use crate::processor::pop_lite_message_processor::PopLiteMessagePolicy;
 use crate::processor::pop_lite_message_processor::PopLiteMessageProcessor;
+use crate::processor::pop_lite_message_processor::PopLiteMessageProcessorContext;
+use crate::processor::pop_lite_message_processor::PopLiteMessageStoreCapability;
+use crate::processor::pop_lite_message_processor::PopLiteOffsetCapability;
 use crate::processor::pop_message_processor::PopMessageProcessor;
+use crate::processor::pop_message_processor::QueueLockManager;
 use crate::processor::pull_message_processor::PullMessageProcessor;
 use crate::processor::query_assignment_processor::QueryAssignmentProcessor;
 use crate::processor::query_message_processor::QueryMessageProcessor;
@@ -2544,7 +2551,31 @@ impl BrokerRuntime {
         let pop_message_processor = PopMessageProcessor::new(self.inner.clone());
         let polling_count_provider = pop_message_processor.polling_count_provider();
         self.inner.pop_message_processor = Some(pop_message_processor.clone());
-        let pop_lite_message_processor = PopLiteMessageProcessor::new(self.inner.clone());
+        let pop_lite_topic_config_manager = self.inner.topic_config_manager_handle();
+        let pop_lite_subscription_group_lookup = self.inner.subscription_group_manager().config_lookup();
+        let pop_lite_event_dispatcher = self.inner.lite_event_dispatcher().clone();
+        let pop_lite_parent_task_group = self.inner.broker_service_task_group();
+        let pop_lite_queue_lock_manager = pop_lite_parent_task_group
+            .clone()
+            .map(QueueLockManager::new_with_parent_task_group)
+            .unwrap_or_else(QueueLockManager::new);
+        let pop_lite_long_polling_context = PopLiteLongPollingServiceContext::new(
+            PopLiteLongPollingPolicy::from_config(self.inner.broker_config()),
+            pop_lite_event_dispatcher.clone(),
+            pop_lite_parent_task_group,
+        );
+        let pop_lite_offset_manager = self.inner.consumer_offset_manager_handle();
+        let pop_lite_escape_bridge = self.inner.escape_bridge();
+        let pop_lite_message_processor = PopLiteMessageProcessor::new(PopLiteMessageProcessorContext::new(
+            PopLiteMessagePolicy::from_config(self.inner.broker_config()),
+            pop_lite_topic_config_manager,
+            pop_lite_subscription_group_lookup,
+            PopLiteOffsetCapability::new(&pop_lite_offset_manager),
+            PopLiteMessageStoreCapability::new(&pop_lite_escape_bridge),
+            pop_lite_event_dispatcher,
+            pop_lite_queue_lock_manager,
+            pop_lite_long_polling_context,
+        ));
         self.inner.pop_lite_message_processor = Some(pop_lite_message_processor.clone());
         let ack_message_processor = ArcMut::new(AckMessageProcessor::new(
             self.inner.clone(),

@@ -131,6 +131,17 @@ impl<MS: MessageStore> EscapeBridge<MS> {
         operation(self.broker_runtime_inner.message_store_unchecked().as_ref())
     }
 
+    pub(crate) fn try_with_message_store<R>(
+        &self,
+        operation: impl FnOnce(&MS) -> R,
+    ) -> Result<R, MessageStoreUnavailable> {
+        let message_store = self
+            .broker_runtime_inner
+            .message_store()
+            .ok_or(MessageStoreUnavailable)?;
+        Ok(operation(message_store.as_ref()))
+    }
+
     pub(crate) async fn query_message_from_store(
         &self,
         topic: &CheetahString,
