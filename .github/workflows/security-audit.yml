@@ -1,0 +1,64 @@
+name: Security Audit
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - '**/Cargo.toml'
+      - '**/Cargo.lock'
+      - '.github/workflows/security-audit.yml'
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - '**/Cargo.toml'
+      - '**/Cargo.lock'
+      - '.github/workflows/security-audit.yml'
+  schedule:
+    # Run security audit daily at 00:00 UTC
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+# Cancel previous runs if a new commit is pushed
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  security-audit:
+    name: Cargo audit (${{ matrix.project }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - project: workspace
+            lockfile: Cargo.lock
+          - project: example
+            lockfile: rocketmq-example/Cargo.lock
+          - project: dashboard-gpui
+            lockfile: rocketmq-dashboard/rocketmq-dashboard-gpui/Cargo.lock
+            # RUSTSEC-2026-0194 and RUSTSEC-2026-0195 affect quick-xml 0.30.0
+            # (xcb) and 0.38.4 (wayland-scanner). Neither upstream dependency
+            # allows the fixed quick-xml 0.41 release yet.
+            ignored_advisories: >-
+              --ignore RUSTSEC-2026-0194
+              --ignore RUSTSEC-2026-0195
+          - project: dashboard-tauri
+            lockfile: rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/Cargo.lock
+          - project: dashboard-web-backend
+            lockfile: rocketmq-dashboard/rocketmq-dashboard-web/backend/Cargo.lock
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      - name: Audit dependencies
+        run: cargo audit --file "${{ matrix.lockfile }}" ${{ matrix.ignored_advisories }}
