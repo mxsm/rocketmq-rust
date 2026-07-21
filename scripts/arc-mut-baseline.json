@@ -1177,25 +1177,6 @@
       "adr": "ADR-002"
     },
     {
-      "identity": "f11a59104b83cf83bea95ef7",
-      "path": "rocketmq-broker/src/lib.rs",
-      "symbol": "mut_from_ref",
-      "kind": "mut_from_ref_call",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "9d621aa83b1b2c94fa6a78b5",
-          "fingerprint": "bbcc0d8eaef42adbd043e042",
-          "item": "<module>",
-          "line": 17
-        }
-      ],
-      "owner": "broker",
-      "reason": "Legacy safe mutable-reference escape pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
       "identity": "4e08d549e9698518ba84279d",
       "path": "rocketmq-broker/src/offset/manager/consumer_offset_manager.rs",
       "symbol": "ArcMut",
