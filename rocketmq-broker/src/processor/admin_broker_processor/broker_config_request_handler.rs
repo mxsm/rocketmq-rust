@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
@@ -54,6 +55,27 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
 
     pub(super) fn broker_runtime_inner_mut(&mut self) -> &mut BrokerRuntimeInner<MS> {
         self.broker_runtime_inner.as_mut()
+    }
+
+    pub(super) async fn apply_controller_role_change(
+        &self,
+        controller_leader_address: Option<CheetahString>,
+        new_master_broker_id: Option<u64>,
+        new_master_address: Option<CheetahString>,
+        new_master_epoch: Option<i32>,
+        sync_state_set_epoch: Option<i32>,
+        sync_state_set: HashSet<i64>,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        BrokerRuntimeInner::apply_controller_role_change(
+            self.broker_runtime_inner.clone(),
+            controller_leader_address,
+            new_master_broker_id,
+            new_master_address,
+            new_master_epoch,
+            sync_state_set_epoch,
+            sync_state_set,
+        )
+        .await
     }
 }
 impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {

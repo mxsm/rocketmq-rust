@@ -665,6 +665,15 @@ ArcMut 快照降至 342 identities/926 occurrences（production 184/448、test 1
 Store production 99/264），净删除 2 个 production identities/6 occurrences且无 relocation。总进度仍为 75/82，
 下一子切片 M11-12bc27 继续 Broker aggregate/leaf 或 Store WAL/queue/timer/HA owner。
 
+Broker controller role-change notification 随 Issue #8461 收窄：`NotifyBrokerRoleChangeHandler` 改为无状态、
+非泛型 leaf，不再与同一 `AdminBrokerProcessor` 内的 `BrokerConfigRequestHandler` 重复持有完整
+`ArcMut<BrokerRuntimeInner>`。请求仍由通知 handler 解码 header/body，并从 channel remote address 构造 controller
+leader address；真正的角色切换通过既有 BrokerConfig owner 的窄委托调用，controller 未初始化时仍返回 Success，
+应用失败仍映射为 `SystemError`，角色切换与 NameServer 注册顺序不变。所有权回归证明 handler 构造和未初始化请求
+不会增加 runtime strong count。ArcMut 快照降至 340 identities/923 occurrences（production 182/445、test 144/438、
+compatibility 14/40、Broker production 83/181），净删除 2 个 production identities/3 occurrences且无 relocation。
+总进度仍为 75/82，下一子切片 M11-12bc28 继续 Broker aggregate/leaf 或 Store WAL/queue/timer/HA owner。
+
 ### 9.3 证据目录
 
 - 运行期生成物：`target/architecture-refactor/Mxx/<run-id>/`，不提交 Git。

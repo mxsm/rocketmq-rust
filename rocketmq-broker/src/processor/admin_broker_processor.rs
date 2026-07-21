@@ -95,7 +95,7 @@ pub struct AdminBrokerProcessor<MS: MessageStore> {
     update_broker_ha_handler: UpdateBrokerHaHandler,
     reset_master_flusg_offset_handler: ResetMasterFlushOffsetHandler,
     broker_epoch_cache_handler: BrokerEpochCacheHandler,
-    notify_broker_role_change_handler: NotifyBrokerRoleChangeHandler<MS>,
+    notify_broker_role_change_handler: NotifyBrokerRoleChangeHandler,
     message_related_handler: MessageRelatedHandler,
     producer_request_handler: ProducerRequestHandler,
     create_acl_request_handler: CreateAclRequestHandler,
@@ -149,7 +149,7 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
 
         let broker_epoch_cache_handler = BrokerEpochCacheHandler::new();
 
-        let notify_broker_role_change_handler = NotifyBrokerRoleChangeHandler::new(broker_runtime_inner.clone());
+        let notify_broker_role_change_handler = NotifyBrokerRoleChangeHandler::new();
 
         let message_related_handler = MessageRelatedHandler::new();
         let producer_request_handler =
@@ -574,7 +574,13 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
             }
             RequestCode::NotifyBrokerRoleChanged => {
                 self.notify_broker_role_change_handler
-                    .notify_broker_role_changed(channel, ctx, request_code, request)
+                    .notify_broker_role_changed(
+                        &self.broker_config_request_handler,
+                        channel,
+                        ctx,
+                        request_code,
+                        request,
+                    )
                     .await
             }
             RequestCode::AuthCreateUser => {
