@@ -764,10 +764,10 @@
           "line": 3601
         },
         {
-          "id": "4ff86f94755506ecea829db9",
-          "fingerprint": "e8143bac4e115cee5a064d74",
+          "id": "6bafceefc5b2c1708bc3beb9",
+          "fingerprint": "813921bf42ae05f360697dd4",
           "item": "struct BrokerRuntimeInner",
-          "line": 3650
+          "line": 3734
         },
         {
           "id": "f248d64f116cda3a8fac82bc",
@@ -1274,50 +1274,6 @@
           "fingerprint": "e9d911094ce80b00f21f4c03",
           "item": "fn new",
           "line": 63
-        }
-      ],
-      "owner": "broker",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "727ce662afd29975b3e4de3a",
-      "path": "rocketmq-broker/src/long_polling/long_polling_service/pop_long_polling_service.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "12a74fff72afbe40c3b14c0a",
-          "fingerprint": "00dd38fabbb958fad4bc647e",
-          "item": "<module>",
-          "line": 37
-        }
-      ],
-      "owner": "broker",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "90811a0e168932d1ae090163",
-      "path": "rocketmq-broker/src/long_polling/long_polling_service/pop_long_polling_service.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "33a9b8881c7bc90f7c76fe13",
-          "fingerprint": "ac71779d0d2e4a11a395339c",
-          "item": "struct PopLongPollingService",
-          "line": 53
-        },
-        {
-          "id": "b320bfffd497ac2fda94a73e",
-          "fingerprint": "dc9d72fd67d70f856ad81177",
-          "item": "fn new",
-          "line": 76
         }
       ],
       "owner": "broker",
@@ -1851,50 +1807,6 @@
           "fingerprint": "c0fce5cb9b9f4c436a3a4976",
           "item": "fn seed_group_config",
           "line": 450
-        }
-      ],
-      "owner": "broker",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "05c0644cfe74400f000b7375",
-      "path": "rocketmq-broker/src/processor/notification_processor.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "4cca5515b050ac24855d2676",
-          "fingerprint": "155c1af5f9a8013af3dbd81c",
-          "item": "<module>",
-          "line": 32
-        }
-      ],
-      "owner": "broker",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "ad8f3ff48d3b4aeebc7a4480",
-      "path": "rocketmq-broker/src/processor/notification_processor.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "06349a591d5efde822c2d7c7",
-          "fingerprint": "6f5b1cd2b389808976628b3a",
-          "item": "struct NotificationProcessor",
-          "line": 45
-        },
-        {
-          "id": "0a67045a6449d80b44661607",
-          "fingerprint": "058ab311389f5715dc08828c",
-          "item": "fn new",
-          "line": 52
         }
       ],
       "owner": "broker",

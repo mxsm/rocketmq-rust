@@ -120,6 +120,8 @@ use crate::hook::schedule_message_hook::ScheduleMessageHook;
 use crate::latency::broker_fast_failure::BrokerFastFailure;
 use crate::lite::lite_event_dispatcher::LiteEventDispatcher;
 use crate::lite::lite_lifecycle_manager::LiteLifecycleManager;
+use crate::long_polling::long_polling_service::pop_long_polling_service::PopLongPollingPolicy;
+use crate::long_polling::long_polling_service::pop_long_polling_service::PopLongPollingServiceContext;
 use crate::long_polling::long_polling_service::pull_request_hold_service::PullRequestHoldService;
 use crate::long_polling::notify_message_arriving_listener::NotifyMessageArrivingListener;
 use crate::offset::manager::broadcast_offset_manager::BroadcastOffsetManager;
@@ -141,7 +143,11 @@ use crate::processor::end_transaction_processor::EndTransactionProcessorContext;
 use crate::processor::end_transaction_processor::EndTransactionStoreCapability;
 use crate::processor::lite_manager_processor::LiteManagerProcessor;
 use crate::processor::lite_subscription_ctl_processor::LiteSubscriptionCtlProcessor;
+use crate::processor::notification_processor::NotificationPolicy;
+use crate::processor::notification_processor::NotificationPopOffsetCapability;
 use crate::processor::notification_processor::NotificationProcessor;
+use crate::processor::notification_processor::NotificationProcessorContext;
+use crate::processor::notification_processor::NotificationStoreCapability;
 use crate::processor::peek_message_processor::PeekMessagePolicy;
 use crate::processor::peek_message_processor::PeekMessageProcessor;
 use crate::processor::peek_message_processor::PeekMessageProcessorContext;
@@ -1302,11 +1308,11 @@ impl BrokerRuntime {
                 state_machine_version,
             ));
         }
-        let consumer_order_info_manager = ConsumerOrderInfoManager::new(
+        let consumer_order_info_manager = Arc::new(ConsumerOrderInfoManager::new(
             inner.broker_config.store_path_root_dir.clone(),
             inner.topic_config_manager_handle(),
             Arc::clone(inner.subscription_group_manager().subscription_group_table()),
-        );
+        ));
         inner.consumer_order_info_manager = Some(consumer_order_info_manager);
         inner.producer_manager.set_broker_stats_manager(stats_manager.clone());
         inner
@@ -2548,7 +2554,25 @@ impl BrokerRuntime {
         ));
         self.inner.query_assignment_processor = Some(query_assignment_processor.clone());
 
-        let notification_processor = NotificationProcessor::new(self.inner.clone());
+        let notification_escape_bridge = self.inner.escape_bridge();
+        let notification_topic_config_manager = self.inner.topic_config_manager_handle();
+        let notification_subscription_group_lookup = self.inner.subscription_group_manager().config_lookup();
+        let notification_long_polling_context = PopLongPollingServiceContext::new(
+            PopLongPollingPolicy::from_config(self.inner.broker_config()),
+            Arc::clone(&notification_topic_config_manager),
+            notification_subscription_group_lookup.clone(),
+            self.inner.broker_service_task_group(),
+        );
+        let notification_processor = NotificationProcessor::new(NotificationProcessorContext::new(
+            NotificationPolicy::from_config(self.inner.broker_config()),
+            notification_topic_config_manager,
+            notification_subscription_group_lookup,
+            self.inner.consumer_order_info_manager_handle(),
+            self.inner.consumer_offset_manager_handle().query_capability(),
+            NotificationStoreCapability::new(&notification_escape_bridge),
+            NotificationPopOffsetCapability::new(pop_message_processor.pop_buffer_merge_service()),
+            notification_long_polling_context,
+        ));
         self.inner.notification_processor = Some(notification_processor.clone());
         let message_arriving_listener = NotifyMessageArrivingListener::new(
             &pull_request_hold_service,
@@ -3706,7 +3730,7 @@ pub(crate) struct BrokerRuntimeInner<MS: MessageStore> {
     consumer_offset_manager: Arc<ConsumerOffsetManager<MS>>,
     subscription_group_manager: Option<SubscriptionGroupManager>,
     consumer_filter_manager: Option<ConsumerFilterManager>,
-    consumer_order_info_manager: Option<ConsumerOrderInfoManager>,
+    consumer_order_info_manager: Option<Arc<ConsumerOrderInfoManager>>,
     message_store: Option<ArcMut<MS>>,
     broker_stats: Option<BrokerStats<MS>>,
     schedule_message_service: Option<Arc<ScheduleMessageService<MS>>>,
@@ -4075,6 +4099,14 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     #[inline]
     pub fn consumer_order_info_manager(&self) -> &ConsumerOrderInfoManager {
         self.consumer_order_info_manager.as_ref().unwrap()
+    }
+
+    pub(crate) fn consumer_order_info_manager_handle(&self) -> Arc<ConsumerOrderInfoManager> {
+        Arc::clone(
+            self.consumer_order_info_manager
+                .as_ref()
+                .expect("consumer order info manager should be initialized before request processors"),
+        )
     }
 
     #[inline]

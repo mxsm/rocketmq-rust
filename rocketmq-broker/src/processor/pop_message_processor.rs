@@ -80,8 +80,10 @@ use tracing::warn;
 use crate::broker_runtime::BrokerRuntimeInner;
 use crate::filter::expression_message_filter::ExpressionMessageFilter;
 use crate::long_polling::long_polling_service::pop_long_polling_service::PollingCountProvider;
+use crate::long_polling::long_polling_service::pop_long_polling_service::PopLongPollingPolicy;
 use crate::long_polling::long_polling_service::pop_long_polling_service::PopLongPollingRequestProcessor;
 use crate::long_polling::long_polling_service::pop_long_polling_service::PopLongPollingService;
+use crate::long_polling::long_polling_service::pop_long_polling_service::PopLongPollingServiceContext;
 use crate::long_polling::polling_header::PollingHeader;
 use crate::long_polling::polling_result::PollingResult;
 #[cfg(feature = "rocksdb_store")]
@@ -95,7 +97,7 @@ const QUEUE_LOCK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub struct PopMessageProcessor<MS: MessageStore> {
     ck_message_number: AtomicI64,
-    pop_long_polling_service: Arc<PopLongPollingService<MS, PopMessageProcessor<MS>>>,
+    pop_long_polling_service: Arc<PopLongPollingService<PopMessageProcessor<MS>>>,
     pop_buffer_merge_service: Arc<PopBufferMergeService<MS>>,
     queue_lock_manager: QueueLockManager,
     revive_topic: CheetahString,
@@ -118,10 +120,16 @@ impl<MS: MessageStore> PopMessageProcessor<MS> {
             queue_lock_manager.clone(),
             broker_runtime_inner.clone(),
         );
+        let long_polling_context = PopLongPollingServiceContext::new(
+            PopLongPollingPolicy::from_config(broker_runtime_inner.broker_config()),
+            broker_runtime_inner.topic_config_manager_handle(),
+            broker_runtime_inner.subscription_group_manager().config_lookup(),
+            broker_runtime_inner.broker_service_task_group(),
+        );
         Arc::new_cyclic(|processor| PopMessageProcessor {
             ck_message_number: Default::default(),
             pop_long_polling_service: Arc::new(PopLongPollingService::new(
-                broker_runtime_inner.clone(),
+                long_polling_context,
                 false,
                 processor.clone(),
             )),
@@ -1396,7 +1404,7 @@ where
     /// # Returns
     /// A reference to the PopLongPollingService instance
     #[inline]
-    pub fn pop_long_polling_service(&self) -> Option<&Arc<PopLongPollingService<MS, PopMessageProcessor<MS>>>> {
+    pub fn pop_long_polling_service(&self) -> Option<&Arc<PopLongPollingService<PopMessageProcessor<MS>>>> {
         Some(&self.pop_long_polling_service)
     }
 
