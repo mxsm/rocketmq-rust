@@ -36,7 +36,6 @@ use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::rpc::rpc_client::RpcClient;
 use rocketmq_remoting::rpc::rpc_request::RpcRequest;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::filter::MessageFilter;
@@ -47,43 +46,33 @@ use crate::broker_runtime::BrokerRuntimeInner;
 use crate::filter::expression_message_filter::ExpressionMessageFilter;
 use crate::transaction::queue::transactional_message_util::TransactionalMessageUtil;
 
-pub(super) struct MessageRelatedHandler<MS: MessageStore> {
-    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
-}
+pub(super) struct MessageRelatedHandler;
 
-impl<MS> MessageRelatedHandler<MS>
-where
-    MS: MessageStore,
-{
-    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
-        Self { broker_runtime_inner }
+impl MessageRelatedHandler {
+    pub const fn new() -> Self {
+        Self
     }
-}
 
-impl<MS> MessageRelatedHandler<MS>
-where
-    MS: MessageStore,
-{
-    pub async fn search_offset_by_timestamp(
-        &mut self,
+    pub async fn search_offset_by_timestamp<MS: MessageStore>(
+        &self,
+        broker_runtime_inner: &BrokerRuntimeInner<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let search_offset_request_header = request.decode_command_custom_header::<SearchOffsetRequestHeader>()?;
-        let mapping_context = self
-            .broker_runtime_inner
+        let mapping_context = broker_runtime_inner
             .topic_queue_mapping_manager()
             .build_topic_queue_mapping_context(&search_offset_request_header, false);
         let rewrite_result = self
-            .rewrite_request_for_static_topic(&search_offset_request_header, mapping_context)
+            .rewrite_request_for_static_topic(broker_runtime_inner, &search_offset_request_header, mapping_context)
             .await?;
         if rewrite_result.is_some() {
             return Ok(rewrite_result);
         }
         let response = RemotingCommand::create_response_command();
-        let message_store = match self.broker_runtime_inner.message_store() {
+        let message_store = match broker_runtime_inner.message_store() {
             Some(store) => store,
             None => {
                 return Ok(Some(
@@ -116,8 +105,9 @@ where
         Ok(Some(response.set_command_custom_header(response_header)))
     }
 
-    pub async fn resume_check_half_message(
-        &mut self,
+    pub async fn resume_check_half_message<MS: MessageStore>(
+        &self,
+        broker_runtime_inner: &mut BrokerRuntimeInner<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -145,8 +135,7 @@ where
             }
         };
 
-        let Some(mut message_ext) = self
-            .broker_runtime_inner
+        let Some(mut message_ext) = broker_runtime_inner
             .message_store()
             .unwrap()
             .look_message_by_offset(message_id.offset)
@@ -164,8 +153,7 @@ where
             CheetahString::from_static_str("0"),
         );
 
-        let put_message_result = self
-            .broker_runtime_inner
+        let put_message_result = broker_runtime_inner
             .message_store_mut()
             .as_mut()
             .unwrap()
@@ -183,8 +171,9 @@ where
         }
     }
 
-    pub async fn query_consume_queue(
-        &mut self,
+    pub async fn query_consume_queue<MS: MessageStore>(
+        &self,
+        broker_runtime_inner: &BrokerRuntimeInner<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -192,7 +181,7 @@ where
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_header = request.decode_command_custom_header::<QueryConsumeQueueRequestHeader>()?;
         let response = RemotingCommand::create_response_command().set_code(ResponseCode::Success);
-        let Some(message_store) = self.broker_runtime_inner.message_store() else {
+        let Some(message_store) = broker_runtime_inner.message_store() else {
             return Ok(Some(
                 response
                     .set_code(ResponseCode::SystemError)
@@ -219,14 +208,12 @@ where
             .as_ref()
             .filter(|consumer_group| !consumer_group.is_empty())
         {
-            let subscription_data = self
-                .broker_runtime_inner
+            let subscription_data = broker_runtime_inner
                 .consumer_manager()
                 .find_subscription_data(consumer_group, &request_header.topic);
             body.subscription_data = subscription_data.clone();
             if let Some(subscription_data) = subscription_data {
-                let consumer_filter_data = self
-                    .broker_runtime_inner
+                let consumer_filter_data = broker_runtime_inner
                     .consumer_filter_manager()
                     .get_consumer_filter_data(&request_header.topic, consumer_group);
                 body.filter_data = Some(match consumer_filter_data.as_ref() {
@@ -238,7 +225,7 @@ where
                 message_filter = Some(ExpressionMessageFilter::new(
                     Some(subscription_data),
                     consumer_filter_data,
-                    std::sync::Arc::new(self.broker_runtime_inner.consumer_filter_manager().clone()),
+                    std::sync::Arc::new(broker_runtime_inner.consumer_filter_manager().clone()),
                 ));
             } else {
                 body.filter_data = Some(CheetahString::from_string(format!(
@@ -298,15 +285,16 @@ where
         Ok(Some(response.set_body(body.encode()?)))
     }
 
-    pub async fn pop_rollback(
-        &mut self,
+    pub async fn pop_rollback<MS: MessageStore>(
+        &self,
+        broker_runtime_inner: &BrokerRuntimeInner<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let response = RemotingCommand::create_response_command();
-        let Some(pop_message_processor) = self.broker_runtime_inner.pop_message_processor().cloned() else {
+        let Some(pop_message_processor) = broker_runtime_inner.pop_message_processor().cloned() else {
             return Ok(Some(response.set_code(ResponseCode::Success)));
         };
 
@@ -327,8 +315,9 @@ where
         }
     }
 
-    async fn rewrite_request_for_static_topic(
-        &mut self,
+    async fn rewrite_request_for_static_topic<MS: MessageStore>(
+        &self,
+        broker_runtime_inner: &BrokerRuntimeInner<MS>,
         request_header: &SearchOffsetRequestHeader,
         mapping_context: TopicQueueMappingContext,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -363,7 +352,7 @@ where
 
             if mapping_detail.topic_queue_mapping_info.bname == item.bname {
                 // Local broker - query directly from message store
-                if let Some(message_store) = self.broker_runtime_inner.message_store() {
+                if let Some(message_store) = broker_runtime_inner.message_store() {
                     let local_offset = match message_store
                         .get_offset_in_queue_by_time_with_boundary_async(
                             &mapping_context.topic,
@@ -405,11 +394,10 @@ where
                     None,
                 );
 
-                let rpc_response = self
-                    .broker_runtime_inner
+                let rpc_response = broker_runtime_inner
                     .broker_outer_api()
                     .rpc_client()
-                    .invoke(rpc_request, self.broker_runtime_inner.broker_config().forward_timeout)
+                    .invoke(rpc_request, broker_runtime_inner.broker_config().forward_timeout)
                     .await;
 
                 match rpc_response {
@@ -618,7 +606,7 @@ mod tests {
             .and_then(|result| result.get_message_id())
             .expect("put message should return msg id");
 
-        let mut handler = MessageRelatedHandler::new(inner.clone());
+        let handler = MessageRelatedHandler::new();
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request = RemotingCommand::create_request_command(
@@ -631,7 +619,13 @@ mod tests {
         request.make_custom_header_to_net();
 
         let response = handler
-            .resume_check_half_message(channel, ctx, RequestCode::ResumeCheckHalfMessage, &mut request)
+            .resume_check_half_message(
+                inner.as_mut(),
+                channel,
+                ctx,
+                RequestCode::ResumeCheckHalfMessage,
+                &mut request,
+            )
             .await
             .expect("resume check half message should succeed")
             .expect("resume check half message should return response");
@@ -693,7 +687,7 @@ mod tests {
             ..Default::default()
         });
 
-        let mut handler = MessageRelatedHandler::new(inner.clone());
+        let handler = MessageRelatedHandler::new();
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request = RemotingCommand::create_request_command(
@@ -710,7 +704,13 @@ mod tests {
         request.make_custom_header_to_net();
 
         let mut response = handler
-            .query_consume_queue(channel, ctx, RequestCode::QueryConsumeQueue, &mut request)
+            .query_consume_queue(
+                inner.as_ref(),
+                channel,
+                ctx,
+                RequestCode::QueryConsumeQueue,
+                &mut request,
+            )
             .await
             .expect("query consume queue should succeed")
             .expect("query consume queue should return response");
@@ -760,14 +760,14 @@ mod tests {
             .await;
         assert!(service.get_offset_total_size().await > 0);
 
-        let mut handler = MessageRelatedHandler::new(inner.clone());
+        let handler = MessageRelatedHandler::new();
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request = RemotingCommand::create_request_command(RequestCode::PopRollback, EmptyHeader::default());
         request.make_custom_header_to_net();
 
         let response = handler
-            .pop_rollback(channel, ctx, RequestCode::PopRollback, &mut request)
+            .pop_rollback(inner.as_ref(), channel, ctx, RequestCode::PopRollback, &mut request)
             .await
             .expect("pop rollback should succeed")
             .expect("pop rollback should return response");

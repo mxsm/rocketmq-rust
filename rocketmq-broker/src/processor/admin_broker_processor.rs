@@ -96,7 +96,7 @@ pub struct AdminBrokerProcessor<MS: MessageStore> {
     reset_master_flusg_offset_handler: ResetMasterFlushOffsetHandler,
     broker_epoch_cache_handler: BrokerEpochCacheHandler,
     notify_broker_role_change_handler: NotifyBrokerRoleChangeHandler<MS>,
-    message_related_handler: MessageRelatedHandler<MS>,
+    message_related_handler: MessageRelatedHandler,
     producer_request_handler: ProducerRequestHandler,
     create_acl_request_handler: CreateAclRequestHandler,
     create_user_request_handler: CreateUserRequestHandler,
@@ -151,7 +151,7 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
 
         let notify_broker_role_change_handler = NotifyBrokerRoleChangeHandler::new(broker_runtime_inner.clone());
 
-        let message_related_handler = MessageRelatedHandler::new(broker_runtime_inner.clone());
+        let message_related_handler = MessageRelatedHandler::new();
         let producer_request_handler =
             ProducerRequestHandler::new(broker_runtime_inner.producer_manager().channel_registry());
         let create_acl_request_handler = CreateAclRequestHandler::new(auth_admin_service.clone());
@@ -273,8 +273,9 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .await
             }
             RequestCode::SearchOffsetByTimestamp => {
+                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner();
                 self.message_related_handler
-                    .search_offset_by_timestamp(channel, ctx, request_code, request)
+                    .search_offset_by_timestamp(broker_runtime_inner, channel, ctx, request_code, request)
                     .await
             }
             RequestCode::GetMaxOffset => {
@@ -455,8 +456,9 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .await
             }
             RequestCode::QueryConsumeQueue => {
+                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner();
                 self.message_related_handler
-                    .query_consume_queue(channel, ctx, request_code, request)
+                    .query_consume_queue(broker_runtime_inner, channel, ctx, request_code, request)
                     .await
             }
             RequestCode::CheckRocksdbCqWriteProgress => {
@@ -499,13 +501,15 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .await
             }
             RequestCode::ResumeCheckHalfMessage => {
+                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner_mut();
                 self.message_related_handler
-                    .resume_check_half_message(channel, ctx, request_code, request)
+                    .resume_check_half_message(broker_runtime_inner, channel, ctx, request_code, request)
                     .await
             }
             RequestCode::PopRollback => {
+                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner();
                 self.message_related_handler
-                    .pop_rollback(channel, ctx, request_code, request)
+                    .pop_rollback(broker_runtime_inner, channel, ctx, request_code, request)
                     .await
             }
             RequestCode::GetTopicConfig => {
