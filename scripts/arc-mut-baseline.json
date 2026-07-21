@@ -2529,69 +2529,6 @@
       "adr": "ADR-002"
     },
     {
-      "identity": "8a386478dc9945fb9393f211",
-      "path": "rocketmq-broker/src/processor/query_message_processor.rs",
-      "symbol": "*",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "e52e1aaa997f1799563a3e9f",
-          "fingerprint": "8ecdb9ab3ebaf3ef5c95297c",
-          "item": "mod tests",
-          "line": 254
-        }
-      ],
-      "owner": "broker",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "7e2a795368ea5ae687d45662",
-      "path": "rocketmq-broker/src/processor/query_message_processor.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "79794b8d9f150651be7fb3b8",
-          "fingerprint": "84f7c96608cf142127981528",
-          "item": "<module>",
-          "line": 28
-        }
-      ],
-      "owner": "broker",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "30a399b6e5c06924938f0792",
-      "path": "rocketmq-broker/src/processor/query_message_processor.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "1d8acd249b280cd55fce5d2c",
-          "fingerprint": "63e9ed5c69a9b7852b609833",
-          "item": "struct QueryMessageProcessor",
-          "line": 37
-        },
-        {
-          "id": "2e654b60a4c3f209dbdec570",
-          "fingerprint": "a7f67b1bbf911a9c63a2b1aa",
-          "item": "fn new",
-          "line": 96
-        }
-      ],
-      "owner": "broker",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
       "identity": "bf2ce2d59bc785fbbcab0b35",
       "path": "rocketmq-broker/src/processor/recall_message_processor.rs",
       "symbol": "*",

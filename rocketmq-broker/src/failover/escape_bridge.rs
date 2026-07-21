@@ -33,6 +33,8 @@ use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::base::message_status_enum::GetMessageStatus;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
+use rocketmq_store::base::query_message_result::QueryMessageResult;
+use rocketmq_store::base::select_result::SelectMappedBufferResult;
 use tracing::error;
 use tracing::warn;
 
@@ -41,6 +43,9 @@ use crate::transaction::queue::transactional_message_util::TransactionalMessageU
 
 const SEND_TIMEOUT: u64 = 3_000;
 const DEFAULT_PULL_TIMEOUT_MILLIS: u64 = 10_000;
+
+#[derive(Debug)]
+pub(crate) struct MessageStoreUnavailable;
 
 ///### RocketMQ's EscapeBridge for Dead Letter Queue (DLQ) Mechanism
 ///
@@ -123,6 +128,34 @@ impl<MS: MessageStore> EscapeBridge<MS> {
 
     pub(crate) fn with_message_store<R>(&self, operation: impl FnOnce(&MS) -> R) -> R {
         operation(self.broker_runtime_inner.message_store_unchecked().as_ref())
+    }
+
+    pub(crate) async fn query_message_from_store(
+        &self,
+        topic: &CheetahString,
+        key: &CheetahString,
+        max_num: i32,
+        begin_timestamp: i64,
+        end_timestamp: i64,
+    ) -> Result<Option<QueryMessageResult>, MessageStoreUnavailable> {
+        let message_store = self
+            .broker_runtime_inner
+            .message_store()
+            .ok_or(MessageStoreUnavailable)?;
+        Ok(message_store
+            .query_message(topic, key, max_num, begin_timestamp, end_timestamp)
+            .await)
+    }
+
+    pub(crate) fn select_message_from_store(
+        &self,
+        offset: i64,
+    ) -> Result<Option<SelectMappedBufferResult>, MessageStoreUnavailable> {
+        let message_store = self
+            .broker_runtime_inner
+            .message_store()
+            .ok_or(MessageStoreUnavailable)?;
+        Ok(message_store.select_one_message_by_offset(offset))
     }
 }
 
