@@ -47,6 +47,10 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
     pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
         BrokerConfigRequestHandler { broker_runtime_inner }
     }
+
+    pub(super) fn broker_runtime_inner(&self) -> &BrokerRuntimeInner<MS> {
+        self.broker_runtime_inner.as_ref()
+    }
 }
 impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
     pub async fn update_broker_config(

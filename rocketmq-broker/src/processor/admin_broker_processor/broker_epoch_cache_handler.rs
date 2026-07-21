@@ -19,30 +19,25 @@ use rocketmq_remoting::protocol::body::epoch_entry_cache::EpochEntryCache;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
 
 use crate::broker_runtime::BrokerRuntimeInner;
 
-#[derive(Clone)]
-pub struct BrokerEpochCacheHandler<MS: MessageStore> {
-    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
-}
+pub struct BrokerEpochCacheHandler;
 
-impl<MS: MessageStore> BrokerEpochCacheHandler<MS> {
-    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
-        Self { broker_runtime_inner }
+impl BrokerEpochCacheHandler {
+    pub const fn new() -> Self {
+        Self
     }
 
-    pub async fn get_broker_epoch_cache(
-        &mut self,
+    pub async fn get_broker_epoch_cache<MS: MessageStore>(
+        &self,
+        broker_runtime_inner: &BrokerRuntimeInner<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let broker_runtime_inner = self.broker_runtime_inner.as_mut();
-
         let broker_config = broker_runtime_inner.broker_config();
         let response = RemotingCommand::create_response_command();
 
