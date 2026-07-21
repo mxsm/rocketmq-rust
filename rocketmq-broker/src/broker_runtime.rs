@@ -131,6 +131,7 @@ use crate::processor::ack_message_processor::AckMessageProcessor;
 use crate::processor::admin_broker_processor::AdminBrokerProcessor;
 use crate::processor::change_invisible_time_processor::ChangeInvisibleTimeProcessor;
 use crate::processor::client_manage_processor::ClientManageProcessor;
+use crate::processor::client_manage_processor::ClientManageProcessorContext;
 use crate::processor::consumer_manage_processor::ConsumerManageProcessor;
 use crate::processor::default_pull_message_result_handler::DefaultPullMessageResultHandler;
 use crate::processor::end_transaction_processor::EndTransactionProcessor;
@@ -2672,7 +2673,7 @@ impl BrokerRuntime {
             BrokerProcessorType::QueryMessage(query_message_processor),
         );
         //ClientManageProcessor
-        let client_manage_processor = Arc::new(ClientManageProcessor::new(self.inner.clone()));
+        let client_manage_processor = Arc::new(self.inner.build_client_manage_processor());
         broker_request_processor.register_processor(
             RequestCode::HeartBeat as i32,
             BrokerProcessorType::ClientManage(client_manage_processor.clone()),
@@ -2974,24 +2975,9 @@ impl BrokerRuntime {
         cfg_if::cfg_if! {
             if #[cfg(feature = "local_file_store")] {
                 let message_store = TransactionMessageStore::new(self.inner.message_store_unchecked().clone());
-                let topic_registration = Arc::new(TransactionTopicRegistration::new(
-                    TransactionTopicRegistrationContext {
-                        broker_config: self.inner.broker_config_arc(),
-                        topic_config_manager: self.inner.topic_config_manager_handle(),
-                        topic_config_coordinator: self.inner.topic_config_coordinator_handle(),
-                        topic_queue_mapping_manager: self.inner.topic_queue_mapping_manager_handle(),
-                        broker_outer_api: self.inner.broker_outer_api().clone(),
-                        message_store: message_store.clone(),
-                        slave_master_addr: self
-                            .inner
-                            .slave_synchronize()
-                            .map(SlaveSynchronize::master_addr_handle),
-                        update_master_haserver_addr_periodically: self
-                            .inner
-                            .update_master_haserver_addr_periodically,
-                        shutdown: Arc::clone(&self.inner.shutdown),
-                    },
-                ));
+                let topic_registration = self
+                    .inner
+                    .build_transaction_topic_registration(message_store.clone());
                 let bridge = TransactionalMessageBridge::new(TransactionalMessageBridgeContext {
                     store_host: self.inner.store_host(),
                     broker_name: self.inner.broker_config().broker_name().clone(),
@@ -3757,6 +3743,36 @@ pub(crate) fn broker_task_group_or_current(
 }
 
 impl<MS: MessageStore> BrokerRuntimeInner<MS> {
+    fn build_transaction_topic_registration(
+        &self,
+        message_store: TransactionMessageStore<MS>,
+    ) -> Arc<TransactionTopicRegistration<MS>> {
+        Arc::new(TransactionTopicRegistration::new(TransactionTopicRegistrationContext {
+            broker_config: self.broker_config_arc(),
+            topic_config_manager: self.topic_config_manager_handle(),
+            topic_config_coordinator: self.topic_config_coordinator_handle(),
+            topic_queue_mapping_manager: self.topic_queue_mapping_manager_handle(),
+            broker_outer_api: self.broker_outer_api().clone(),
+            message_store,
+            slave_master_addr: self.slave_synchronize().map(SlaveSynchronize::master_addr_handle),
+            update_master_haserver_addr_periodically: self.update_master_haserver_addr_periodically,
+            shutdown: Arc::clone(&self.shutdown),
+        }))
+    }
+
+    pub(crate) fn build_client_manage_processor(&self) -> ClientManageProcessor<MS> {
+        let retry_topic_registration = self
+            .build_transaction_topic_registration(TransactionMessageStore::new(self.message_store_unchecked().clone()));
+        ClientManageProcessor::new(ClientManageProcessorContext {
+            broker_config: self.broker_config_arc(),
+            topic_config_manager: self.topic_config_manager_handle(),
+            subscription_group_lookup: self.subscription_group_manager().config_lookup(),
+            producer_registration: self.producer_manager().client_registration(),
+            consumer_registration: self.consumer_manager().client_registration(),
+            retry_topic_registration,
+        })
+    }
+
     fn build_topic_queue_mapping_clean_service(&self) -> TopicQueueMappingCleanService {
         let config = TopicQueueMappingCleanConfig::new(
             self.broker_config.broker_name().clone(),

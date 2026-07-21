@@ -3026,9 +3026,36 @@ Broker TopicQueueMappingClean runtime capability 随 Issue #8483 完成以下边
 | runtime / architecture guards | enforcing runtime audit、dependency fixtures/target/baseline、release、8-profile/11-variant performance、60/60 architecture tests 与 AGENTS routing 通过；目标 compatibility 35/35、test edge 3/3、release topology 32/32 |
 | root workspace final gates | `cargo fmt --all -- --check` 与 workspace all-target/all-feature strict Clippy 通过；`git diff --check` 通过；Windows linker stdout 与既有 future-incompatibility note 不受 `-D warnings` 管辖 |
 
+## M11-12bc37 实现
+
+Broker Client heartbeat runtime capability 随 Issue #8485 完成以下边界收敛：
+
+- `ClientManageProcessor` 删除完整 `ArcMut<BrokerRuntimeInner<MS>>` field、production import 与构造参数；保留的
+  `MessageStore` 泛型只来自显式 `TransactionTopicRegistration<MS>` Store 兼容边界，不再暴露完整 Broker runtime。
+- runtime 构造时注入启动期 `Arc<BrokerConfig>`、共享 `Arc<TopicConfigManager>`、live
+  `SubscriptionGroupConfigLookup`、Producer/Consumer registration handle 与 retry-topic registration capability。
+- Producer/Consumer handle 只暴露 heartbeat register/unregister 操作，并与主 manager 共享同一 live table；不暴露
+  channel selection、housekeeping、配置修改或完整 runtime。
+- heartbeat v1/v2 的 retry topic 创建复用显式 registration，保持队列数、读写权限、order、unit sys-flag、
+  state-machine version、异步持久化、single/increment NameServer registration 与 master address 更新语义。
+- reviewed baseline 从 303 identities / 863 occurrences 降至 300 / 859；production 从 155/399 降至
+  153/396，test 从 134/424 降至 133/423，compatibility 保持 14/40。Broker production 从 73/165 降至
+  71/162，Store 保持 82/234；净删除 2 个 production identity/3 occurrences 与 1 个 test identity/1
+  occurrence，无 relocation、新增 identity 或临时 approval。
+
+## M11-12bc37 验证
+
+| 命令 | 结果 |
+|---|---|
+| Broker check / focused / strict Clippy | `cargo check -p rocketmq-broker` 通过；ClientManage 7/7 通过，覆盖 production owner 源码合同、property filter、heartbeat v1/v2、Producer/Consumer live registration/unregister 与 retry-topic 参数；Broker all-target/all-feature strict Clippy 通过 |
+| Broker broad lib suite | 576 passed、24 failed、1 ignored；失败仍集中于既有 lifecycle/Lite/subscription 动态基线，bc37 的 7 项均通过，因此全套如实记为未通过 |
+| reviewed baseline / fixtures | `--apply-reviewed-reductions` 候选从 303/863 精确降至 300/859；正式最小 baseline 补丁后 `python scripts/arc_mut_guard.py`、candidate compare、24/24 fixtures 与 67/67 guard tests 通过，无 relocation、新增 identity 或临时 approval |
+| runtime / architecture guards | enforcing runtime audit、dependency fixtures/target/baseline、release、8-profile/11-variant performance、60/60 architecture tests 与 AGENTS routing 通过；目标 compatibility 35/35、test edge 3/3、release topology 32/32 |
+| root workspace final gates | `cargo fmt --all -- --check` 与 workspace all-target/all-feature strict Clippy 通过；最终补丁后复跑 `git diff --check`；Windows linker stdout 与既有 future-incompatibility note 不受 `-D warnings` 管辖 |
+
 ## 剩余切片与 Gate
 
-1. Broker BrokerRuntimeInner capability carrier 与其他 admin/processor/leaf owner（73/165）；transaction bridge、Producer/ColdData admin leaf、Schedule hook、put-message preflight、ConsumerOrderInfoManager、TopicRouteInfoManager、TopicQueueMappingCleanService、MessageArrivingListener、ClientHousekeepingService、Query Assignment、PollingInfo weak provider、SubscriptionGroup config lookup、HA diagnostics/control/min-broker transition、controller role-change duplicate owner、BatchMq、SubscriptionGroup、MessageRelated、Offset、Consumer、Topic handler 与未编译 V2 示例残留已退出 leaf-level 完整 runtime/store owner，LiteLifecycle 只读 Store carrier 已收窄为普通借用，显式 Store 兼容 owner 留待 Store 批次删除。
+1. Broker BrokerRuntimeInner capability carrier 与其他 admin/processor/leaf owner（71/162）；transaction bridge、Producer/ColdData admin leaf、Schedule hook、put-message preflight、ConsumerOrderInfoManager、TopicRouteInfoManager、TopicQueueMappingCleanService、MessageArrivingListener、ClientHousekeepingService、ClientManage heartbeat registration/retry-topic capability、Query Assignment、PollingInfo weak provider、SubscriptionGroup config lookup、HA diagnostics/control/min-broker transition、controller role-change duplicate owner、BatchMq、SubscriptionGroup、MessageRelated、Offset、Consumer、Topic handler 与未编译 V2 示例残留已退出 leaf-level 完整 runtime/store owner，LiteLifecycle 只读 Store carrier 已收窄为普通借用，显式 Store 兼容 owner 留待 Store 批次删除。
 2. Store MappedFileQueue/其余 ConsumeQueue、CommitLog/Flush、StoreHandle/Rocks/Timer 与其余 HA service/actor（82/234）；BrokerStats observer、ConsumeQueueExt 显式锁 owner、HA replication-state callback、未共享 HA child direct ownership、commit-to-flush 窄唤醒能力、HA confirm/epoch 原子发布、HA connection runtime handle、CommitLog shared disk-flush、auto-switch client construction 与 single delegate Store owner 已完成。
 3. Production `WeakArcMut` 已清零；继续迁移 test/compatibility 中受控使用并移除其余 nightly feature。公开 `arc_mut.rs`/re-export 的 destructive 删除受 next-major 两轮弃用与 Release Manager/HUMAN Gate 约束，不能静默重置 public API baseline。
 4. 对同一候选快照执行 stable feature matrix、Miri/Loom 可用切片、soak/SLO fault、dashboard/runbook、动态

@@ -756,6 +756,14 @@ test 134/424、compatibility 14/40、Broker production 73/165、Store production
 identity/3 occurrence 与 5 个 test identity/7 occurrence，无 relocation、新增 identity 或临时 approval。总进度仍为
 75/82，下一子切片 M11-12bc37 继续 Broker aggregate/leaf 或 Store WAL/queue/timer/HA owner。
 
+Broker Client heartbeat runtime capability 随 Issue #8485 收窄：`ClientManageProcessor` 不再持有完整
+`ArcMut<BrokerRuntimeInner>`，只注入启动配置、live Topic/SubscriptionGroup/Producer/Consumer 能力与显式 retry-topic
+registration。heartbeat v1/v2、unregister、property filter、重试主题参数、持久化和 NameServer registration 语义保持
+不变；显式 transaction Store 兼容边界仍计入后续债务。ArcMut 快照降至 300 identities/859 occurrences
+（production 153/396、test 133/423、compatibility 14/40、Broker production 71/162、Store production 82/234），
+净删除 2 个 production identity/3 occurrence 与 1 个 test identity/1 occurrence，无 relocation、新增 identity 或
+临时 approval。总进度仍为 75/82，下一子切片 M11-12bc38 继续 Broker aggregate/leaf 或 Store WAL/queue/timer/HA owner。
+
 ### 9.3 证据目录
 
 - 运行期生成物：`target/architecture-refactor/Mxx/<run-id>/`，不提交 Git。
