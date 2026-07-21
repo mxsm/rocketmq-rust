@@ -1,7 +1,7 @@
 # 架构重构剩余任务盘点
 
 > 盘点日期：2026-07-21
-> 代码基线：Issue #8499 / M11-12bc44 完成后
+> 代码基线：Issue #8501 / M11-12bc45 完成后
 > 统计规则：82 个顶层 `PR-Mxx-yy` 工作包与 M11-12 内部实施切片分开统计，禁止重复计数。
 
 ## 结论
@@ -19,18 +19,18 @@ owner 清零、compatibility 删除和同一候选快照验收。
 
 ## PR-M11-12 剩余实现
 
-Issue #8499 后 reviewed ArcMut baseline 为 281 identities / 832 occurrences：production 137/372、test
+Issue #8501 后 reviewed ArcMut baseline 为 279 identities / 829 occurrences：production 135/369、test
 130/420、compatibility 14/40。production 全部分布在 Broker 与 Store。
 
 | owner | 剩余 identity / occurrence | 完成条件 |
 |---|---:|---|
-| Broker | 55 / 138 | transaction bridge/Store compatibility、Producer/ColdData admin leaf、Schedule hook、put-message preflight、ConsumerOrderInfoManager、TopicRouteInfoManager、TopicQueueMappingCleanService、MessageArrivingListener、ClientHousekeepingService、ClientManage heartbeat registration/retry-topic capability、ConsumerManage list/offset capability、Query Assignment、QueryMessage/RecallMessage/EndTransaction/PeekMessage/Notification Store capability、POP long-polling 显式 TaskGroup、PollingInfo weak provider 与 SubscriptionGroup config lookup、HA diagnostics/control/min-broker transition、controller role-change duplicate owner、BatchMq lock/unlock、SubscriptionGroup/MessageRelated/Offset/Consumer/Topic Admin 与未编译 V2 示例残留已退出 leaf-level 完整 runtime/store owner；LiteLifecycle 只读 API 已改为普通借用；继续让 BrokerRuntime aggregate carrier、其余 admin/processor/service 不再传播不安全共享可变 owner |
+| Broker | 53 / 135 | transaction bridge/Store compatibility、Producer/ColdData admin leaf、Schedule hook、put-message preflight、ConsumerOrderInfoManager、TopicRouteInfoManager、TopicQueueMappingCleanService、MessageArrivingListener、ClientHousekeepingService、ClientManage heartbeat registration/retry-topic capability、ConsumerManage list/offset capability、Query Assignment、QueryMessage/RecallMessage/EndTransaction/PeekMessage/Notification/ChangeInvisibleTime Store capability、POP long-polling 显式 TaskGroup、PollingInfo weak provider 与 SubscriptionGroup config lookup、HA diagnostics/control/min-broker transition、controller role-change duplicate owner、BatchMq lock/unlock、SubscriptionGroup/MessageRelated/Offset/Consumer/Topic Admin 与未编译 V2 示例残留已退出 leaf-level 完整 runtime/store owner；LiteLifecycle 只读 API 已改为普通借用；继续让 BrokerRuntime aggregate carrier、其余 admin/processor/service 不再传播不安全共享可变 owner |
 | Store | 82 / 234 | BrokerStats observer、ConsumeQueueExt owner、HA notification/connection registry capability、未共享 HA child、commit-to-flush 窄唤醒能力、HA confirm/epoch 原子发布、HA connection runtime handle、CommitLog shared disk-flush、auto-switch replication-state/client construction 与单一 delegate Store owner 已收窄；production `WeakArcMut` 已清零，其余 MessageStore、CommitLog/Flush、queue、Rocks/Timer 与 HA service/actor 改为独占 owner、标准 Arc/Weak 或显式 actor/锁边界 |
 | compatibility | 14 / 40 | production Store `WeakArcMut` 已清零；继续迁移测试/兼容调用方，公开 `ArcMut`/`WeakArcMut`/`SyncUnsafeCellWrapper` 删除必须满足 next-major 两轮弃用与独立 HUMAN/Release Manager 批准，不能通过重置 API baseline 提前关闭 |
 
 建议按以下最小可审查批次继续推进；它们是 PR-M11-12 的内部切片，不增加 82 个顶层工作包总数：
 
-1. Broker aggregate：收窄 `BrokerRuntimeInner`、processor variant 和启动 carrier（Broker 当前为 55/138）；Schedule hook、put-message preflight、transaction Store compatibility、ConsumerOrderInfoManager、TopicRouteInfoManager、TopicQueueMappingCleanService、MessageArrivingListener、ClientHousekeepingService、ClientManage heartbeat registration/retry-topic capability、ConsumerManage list/offset capability、Query Assignment、QueryMessage/RecallMessage/EndTransaction/PeekMessage/Notification Store capability、POP long-polling 完整 runtime owner、PollingInfo 与 SubscriptionGroup config lookup 完整 runtime 强保活边已拆除，HA diagnostics/control/min-broker transition、controller role-change duplicate owner、BatchMq、SubscriptionGroup、MessageRelated、Offset、Consumer 与 Topic handler 已改为父层请求期借用，未编译 V2 示例残留已清理；继续清理其他 admin/processor leaf。
+1. Broker aggregate：收窄 `BrokerRuntimeInner`、processor variant 和启动 carrier（Broker 当前为 53/135）；Schedule hook、put-message preflight、transaction Store compatibility、ConsumerOrderInfoManager、TopicRouteInfoManager、TopicQueueMappingCleanService、MessageArrivingListener、ClientHousekeepingService、ClientManage heartbeat registration/retry-topic capability、ConsumerManage list/offset capability、Query Assignment、QueryMessage/RecallMessage/EndTransaction/PeekMessage/Notification/ChangeInvisibleTime Store capability、POP long-polling 完整 runtime owner、PollingInfo 与 SubscriptionGroup config lookup 完整 runtime 强保活边已拆除，HA diagnostics/control/min-broker transition、controller role-change duplicate owner、BatchMq、SubscriptionGroup、MessageRelated、Offset、Consumer 与 Topic handler 已改为父层请求期借用，未编译 V2 示例残留已清理；继续清理其他 admin/processor leaf。
 2. Broker leaf：完成其余 admin/processor/revive/slave/offset leaf owner；transaction bridge 已由 M11-12bc4 收窄，Producer/ColdData admin handler 已由 M11-12bc5 改持 live registry/standard Arc capability，Schedule hook 已由 M11-12bc6 改持三项显式能力，Topic Admin 已由 M11-12bc31 改为无状态 leaf。
 3. Store WAL：commit worker 已只持 `Notify` 唤醒能力，CommitLog disk-flush 已通过共享 receiver enqueue，transaction 的直接 Store 兼容 owner 已删除；继续收口 Local/Rocks MessageStore、CommitLog 与 Flush manager。
 4. Store queue：ConsumeQueueExt 已改用显式锁 owner；继续收口其余 ConsumeQueue、queue store、index/mapped-file carrier。
@@ -271,6 +271,13 @@ Topic/Subscription/Order 能力和弱 offset/Store/POP provider；后者删除 M
 退出时按既有 0、-1 或无消息语义 fail closed。production 净删除 4 identities / 6 occurrences，因此 reviewed 总量
 降至 281/832、production 降至 137/372、Broker 降至 55/138；test 130/420、Store 82/234 与 compatibility
 14/40 不增。1 个相邻保留 occurrence 经 ADR-013 一对一 relocation 审核，无新增 identity 或临时 approval 提交。
+
+M11-12bc45 收窄 `ChangeInvisibleTimeProcessor`：删除完整 runtime owner 与 `Arc<PopMessageProcessor>` 间接 owner，
+改持启动 policy、共享 Topic/Stats、弱 consumer offset/order/Store/POP provider 和独立 queue lock。普通 POP 与顺序 POP
+的 offset 校验、revive checkpoint/ack、统计、锁和响应语义在 provider 存活时保持不变；provider 退出时返回
+`ServiceNotAvailable` 或按原 fallback fail closed。production 净删除 2 identities / 3 occurrences，因此 reviewed
+总量降至 279/829、production 降至 135/369、Broker 降至 53/135；test 130/420、Store 82/234 与 compatibility
+14/40 不增。1 个保留的外层 processor wrapper 经 ADR-013 一对一 relocation 审核，无新增 identity 或临时 approval 提交。
 
 M11-12bc39 将 `QueryMessageProcessor` 从完整 `ArcMut<BrokerRuntimeInner>` owner 收窄为默认查询上限与
 `QueryMessageStoreCapability`。capability 复用既有 `Weak<EscapeBridge>` Store provider，只暴露 Store availability、索引查询与
