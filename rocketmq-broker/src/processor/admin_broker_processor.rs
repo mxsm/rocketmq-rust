@@ -91,7 +91,7 @@ pub struct AdminBrokerProcessor<MS: MessageStore> {
     batch_mq_handler: BatchMqHandler,
     subscription_group_handler: SubscriptionGroupHandler,
 
-    notify_min_broker_handler: NotifyMinBrokerChangeIdHandler<MS>,
+    notify_min_broker_handler: NotifyMinBrokerChangeIdHandler,
     update_broker_ha_handler: UpdateBrokerHaHandler,
     reset_master_flusg_offset_handler: ResetMasterFlushOffsetHandler,
     broker_epoch_cache_handler: BrokerEpochCacheHandler,
@@ -141,7 +141,7 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
         let batch_mq_handler = BatchMqHandler::new();
         let subscription_group_handler = SubscriptionGroupHandler::new();
 
-        let notify_min_broker_handler = NotifyMinBrokerChangeIdHandler::new(broker_runtime_inner.clone());
+        let notify_min_broker_handler = NotifyMinBrokerChangeIdHandler::new();
 
         let update_broker_ha_handler = UpdateBrokerHaHandler::new();
 
@@ -530,8 +530,9 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .await
             }
             RequestCode::NotifyMinBrokerIdChange => {
+                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner_mut();
                 self.notify_min_broker_handler
-                    .notify_min_broker_id_change(channel, ctx, request_code, request)
+                    .notify_min_broker_id_change(broker_runtime_inner, channel, ctx, request_code, request)
                     .await
             }
             RequestCode::ExchangeBrokerHaInfo => {
