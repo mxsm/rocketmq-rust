@@ -890,6 +890,13 @@ Broker mut-from-ref lint boundary 随 Issue #8513 收口：删除 `rocketmq-brok
 Store production 82/234），净删除 1 个 production identity/1 occurrence，无 relocation、新增 identity 或临时 approval。
 总进度仍为 75/82，下一子切片 M11-12bc52 继续 Broker aggregate/leaf 或 Store WAL/queue/timer/HA owner。
 
+Broker 最后三个 processor registry wrapper 随 Issue #8517 收口：Ack/ChangeInvisible 改用标准 Arc 与共享请求入口，
+Ack lifecycle 通过既有 atomic/TaskGroup 锁接受共享引用，AdminBroker 使用 `Arc<tokio::sync::Mutex<_>>` 显式串行化
+真实配置 mutation；request code、fast-failure 与默认 Admin 路由不变。ArcMut 快照降至 260 identities/787 occurrences
+（production 121/332、test 125/415、compatibility 14/40、Broker production 39/98、Store production 82/234），
+净删除 2 个 production identities/9 occurrences 与 1 个 test identity/1 occurrence，无 relocation、新增 identity 或
+临时 approval。总进度仍为 75/82，下一子切片 M11-12bc53 继续 Ack 内部 capability 或其他 Broker/Store owner。
+
 ### 9.3 证据目录
 
 - 运行期生成物：`target/architecture-refactor/Mxx/<run-id>/`，不提交 Git。
