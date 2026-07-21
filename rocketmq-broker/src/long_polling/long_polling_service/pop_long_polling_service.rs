@@ -26,6 +26,7 @@ use cheetah_string::CheetahString;
 use crossbeam_skiplist::SkipSet;
 use dashmap::DashMap;
 use parking_lot::Mutex;
+use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::key_builder::KeyBuilder;
 use rocketmq_common::common::pop_ack_constants::PopAckConstants;
 use rocketmq_common::TimeUtils::current_millis;
@@ -34,8 +35,6 @@ use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskKind;
-use rocketmq_rust::ArcMut;
-use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::consume_queue::cq_ext_unit::CqExtUnit;
 use rocketmq_store::filter::ArcMessageFilter;
 use tokio::select;
@@ -44,17 +43,60 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
-use crate::broker_runtime::BrokerRuntimeInner;
+use crate::broker_runtime::broker_task_group_or_current;
 use crate::long_polling::polling_header::PollingHeader;
 use crate::long_polling::polling_result::PollingResult;
 use crate::long_polling::pop_request::PopRequest;
+use crate::subscription::manager::subscription_group_manager::SubscriptionGroupConfigLookup;
+use crate::topic::manager::topic_config_manager::TopicConfigManager;
 
 pub(crate) trait PollingCountProvider: Send + Sync {
     fn polling_count(&self, key: &str) -> i32;
 }
 
-pub(crate) struct PopLongPollingService<MS: MessageStore, RP> {
-    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+#[derive(Clone)]
+pub(crate) struct PopLongPollingPolicy {
+    pop_polling_map_size: usize,
+    max_pop_polling_size: u64,
+    pop_polling_size: usize,
+}
+
+impl PopLongPollingPolicy {
+    pub(crate) fn from_config(broker_config: &BrokerConfig) -> Self {
+        Self {
+            pop_polling_map_size: broker_config.pop_polling_map_size,
+            max_pop_polling_size: broker_config.max_pop_polling_size,
+            pop_polling_size: broker_config.pop_polling_size,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct PopLongPollingServiceContext {
+    policy: PopLongPollingPolicy,
+    topic_config_manager: Arc<TopicConfigManager>,
+    subscription_group_lookup: SubscriptionGroupConfigLookup,
+    parent_task_group: Option<TaskGroup>,
+}
+
+impl PopLongPollingServiceContext {
+    pub(crate) fn new(
+        policy: PopLongPollingPolicy,
+        topic_config_manager: Arc<TopicConfigManager>,
+        subscription_group_lookup: SubscriptionGroupConfigLookup,
+        parent_task_group: Option<TaskGroup>,
+    ) -> Self {
+        Self {
+            policy,
+            topic_config_manager,
+            subscription_group_lookup,
+            parent_task_group,
+        }
+    }
+}
+
+pub(crate) struct PopLongPollingService<RP> {
+    context: PopLongPollingServiceContext,
     topic_cid_map: DashMap<CheetahString, DashMap<CheetahString, u8>>,
     polling_map: DashMap<CheetahString, SkipSet<Arc<PopRequest>>>,
     last_clean_time: AtomicU64,
@@ -76,16 +118,16 @@ pub(crate) trait LocalPopLongPollingRequestProcessor {
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>>;
 }
 
-impl<MS: MessageStore, RP: PopLongPollingRequestProcessor + Sync + 'static> PopLongPollingService<MS, RP> {
-    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>, notify_last: bool, processor: Weak<RP>) -> Self {
+impl<RP: PopLongPollingRequestProcessor + Sync + 'static> PopLongPollingService<RP> {
+    pub fn new(context: PopLongPollingServiceContext, notify_last: bool, processor: Weak<RP>) -> Self {
         Self {
             // 100000 topic default,  100000 lru topic + cid + qid
-            topic_cid_map: DashMap::with_capacity(broker_runtime_inner.broker_config().pop_polling_map_size),
-            polling_map: DashMap::with_capacity(broker_runtime_inner.broker_config().pop_polling_map_size),
+            topic_cid_map: DashMap::with_capacity(context.policy.pop_polling_map_size),
+            polling_map: DashMap::with_capacity(context.policy.pop_polling_map_size),
             last_clean_time: AtomicU64::new(0),
             total_polling_num: AtomicU64::new(0),
             notify_last,
-            broker_runtime_inner,
+            context,
             processor,
             running: AtomicBool::new(false),
             lifecycle: AsyncMutex::new(()),
@@ -103,7 +145,8 @@ impl<MS: MessageStore, RP: PopLongPollingRequestProcessor + Sync + 'static> PopL
             return;
         }
 
-        let Some(task_group) = this.broker_runtime_inner.broker_task_group_or_current(
+        let Some(task_group) = broker_task_group_or_current(
+            this.context.parent_task_group.as_ref(),
             "rocketmq-broker.long-polling.pop",
             "failed to start PopLongPollingService outside Tokio runtime",
         ) else {
@@ -197,12 +240,7 @@ impl<MS: MessageStore, RP: PopLongPollingRequestProcessor + Sync + 'static> PopL
             for topic_entry in self.topic_cid_map.iter() {
                 let topic = topic_entry.key();
 
-                if self
-                    .broker_runtime_inner
-                    .topic_config_manager()
-                    .select_topic_config(topic)
-                    .is_none()
-                {
+                if self.context.topic_config_manager.select_topic_config(topic).is_none() {
                     info!(target: "pop_logger", "remove non-existent topic {} in topicCidMap!", topic);
                     topic_keys_to_remove.push(topic.clone());
                     continue;
@@ -214,11 +252,7 @@ impl<MS: MessageStore, RP: PopLongPollingRequestProcessor + Sync + 'static> PopL
                 for cid_entry in cid_map.iter() {
                     let cid = cid_entry.key();
 
-                    let subscription_group_table = self
-                        .broker_runtime_inner
-                        .subscription_group_manager()
-                        .subscription_group_table();
-                    if !subscription_group_table.contains_key(cid) {
+                    if !self.context.subscription_group_lookup.contains_subscription_group(cid) {
                         info!(target: "pop_logger", "remove non-existent sub {} of topic {} in topicCidMap!", cid, topic);
                         cid_keys_to_remove.push(cid.clone());
                     }
@@ -255,21 +289,12 @@ impl<MS: MessageStore, RP: PopLongPollingRequestProcessor + Sync + 'static> PopL
                 let topic = CheetahString::from_slice(key_array[0]);
                 let cid = CheetahString::from_slice(key_array[1]);
 
-                if self
-                    .broker_runtime_inner
-                    .topic_config_manager()
-                    .select_topic_config(&topic)
-                    .is_none()
-                {
+                if self.context.topic_config_manager.select_topic_config(&topic).is_none() {
                     info!(target: "pop_logger", "remove non-existent topic {} in pollingMap!", topic);
                     polling_keys_to_remove.push(key.clone());
                     continue;
                 }
-                let subscription_group_table = self
-                    .broker_runtime_inner
-                    .subscription_group_manager()
-                    .subscription_group_table();
-                if !subscription_group_table.contains_key(&cid) {
+                if !self.context.subscription_group_lookup.contains_subscription_group(&cid) {
                     info!(target: "pop_logger", "remove non-existent sub {} of topic {} in pollingMap!", cid, topic);
                     polling_keys_to_remove.push(key.clone());
                 }
@@ -467,9 +492,7 @@ impl<MS: MessageStore, RP: PopLongPollingRequestProcessor + Sync + 'static> PopL
             message_filter,
         ));
 
-        if self.total_polling_num.load(Ordering::SeqCst)
-            >= self.broker_runtime_inner.broker_config().max_pop_polling_size
-        {
+        if self.total_polling_num.load(Ordering::SeqCst) >= self.context.policy.max_pop_polling_size {
             return PollingResult::PollingFull;
         }
 
@@ -483,7 +506,7 @@ impl<MS: MessageStore, RP: PopLongPollingRequestProcessor + Sync + 'static> PopL
             request_header.get_queue_id(),
         ));
         let queue = self.polling_map.entry(key).or_default();
-        if queue.len() > self.broker_runtime_inner.broker_config().pop_polling_size {
+        if queue.len() > self.context.policy.pop_polling_size {
             return PollingResult::PollingFull;
         }
 
@@ -592,9 +615,8 @@ impl<MS: MessageStore, RP: PopLongPollingRequestProcessor + Sync + 'static> PopL
     }
 }
 
-impl<MS, RP> PollingCountProvider for PopLongPollingService<MS, RP>
+impl<RP> PollingCountProvider for PopLongPollingService<RP>
 where
-    MS: MessageStore,
     RP: PopLongPollingRequestProcessor + Sync + 'static,
 {
     fn polling_count(&self, key: &str) -> i32 {
