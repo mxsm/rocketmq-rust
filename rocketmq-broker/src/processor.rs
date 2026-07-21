@@ -92,7 +92,7 @@ pub enum BrokerProcessorType<MS: MessageStore, TS> {
     QueryMessage(Arc<QueryMessageProcessor<MS>>),
     ClientManage(Arc<ClientManageProcessor<MS>>),
     ConsumerManage(Arc<ConsumerManageProcessor<MS>>),
-    QueryAssignment(Arc<QueryAssignmentProcessor<MS>>),
+    QueryAssignment(Arc<QueryAssignmentProcessor>),
     LiteManager(ArcMut<LiteManagerProcessor<MS>>),
     LiteSubscriptionCtl(ArcMut<LiteSubscriptionCtlProcessor<MS>>),
     EndTransaction(Arc<EndTransactionProcessor<TS, MS>>),
@@ -707,6 +707,7 @@ mod tests {
     fn core_processor_roots_use_standard_arc() {
         let processor_source = include_str!("processor.rs");
         let runtime_source = include_str!("broker_runtime.rs");
+        let query_assignment_source = include_str!("processor/query_assignment_processor.rs");
 
         for (variant, processor) in [
             ("Peek", "PeekMessageProcessor"),
@@ -736,6 +737,8 @@ mod tests {
         assert!(!runtime_source.contains(concat!("ArcMut::new(", "consumer_manage_processor")));
         assert!(!runtime_source.contains("query_assignment_processor_mut("));
         assert!(!runtime_source.contains("query_assignment_processor_unchecked_mut("));
+        assert!(!query_assignment_source.contains(concat!("Arc", "Mut")));
+        assert!(!query_assignment_source.contains("BrokerRuntimeInner"));
     }
 
     #[tokio::test]

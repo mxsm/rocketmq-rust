@@ -2512,7 +2512,12 @@ impl BrokerRuntime {
             pop_message_processor.clone(),
         ));
         self.inner.ack_message_processor = Some(ack_message_processor.clone());
-        let query_assignment_processor = Arc::new(QueryAssignmentProcessor::new(self.inner.clone()));
+        let query_assignment_processor = Arc::new(QueryAssignmentProcessor::new(
+            self.inner.broker_config_arc(),
+            self.inner.message_store_config_arc(),
+            self.inner.topic_route_info_manager().clone(),
+            self.inner.consumer_manager().assignment_view(),
+        ));
         self.inner.query_assignment_processor = Some(query_assignment_processor.clone());
 
         let notification_processor = NotificationProcessor::new(self.inner.clone());
@@ -3698,7 +3703,7 @@ pub(crate) struct BrokerRuntimeInner<MS: MessageStore> {
     pop_lite_message_processor: Option<Arc<PopLiteMessageProcessor<MS>>>,
     ack_message_processor: Option<ArcMut<AckMessageProcessor<MS>>>,
     notification_processor: Option<Arc<NotificationProcessor<MS>>>,
-    query_assignment_processor: Option<Arc<QueryAssignmentProcessor<MS>>>,
+    query_assignment_processor: Option<Arc<QueryAssignmentProcessor>>,
     auth_runtime: Option<Arc<AuthRuntime>>,
     broker_attached_plugins: Vec<Arc<dyn BrokerAttachedPlugin>>,
     transactional_message_service: Option<Arc<DefaultTransactionalMessageService<MS>>>,
@@ -3895,6 +3900,11 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     #[inline]
     pub fn message_store_config(&self) -> &MessageStoreConfig {
         &self.message_store_config
+    }
+
+    #[inline]
+    pub(crate) fn message_store_config_arc(&self) -> Arc<MessageStoreConfig> {
+        Arc::clone(&self.message_store_config)
     }
 
     #[inline]
@@ -5018,11 +5028,11 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         unsafe { self.notification_processor.as_ref().unwrap_unchecked() }
     }
 
-    pub fn query_assignment_processor_unchecked(&self) -> &Arc<QueryAssignmentProcessor<MS>> {
+    pub fn query_assignment_processor_unchecked(&self) -> &Arc<QueryAssignmentProcessor> {
         unsafe { self.query_assignment_processor.as_ref().unwrap_unchecked() }
     }
 
-    pub fn query_assignment_processor(&self) -> Option<&Arc<QueryAssignmentProcessor<MS>>> {
+    pub fn query_assignment_processor(&self) -> Option<&Arc<QueryAssignmentProcessor>> {
         self.query_assignment_processor.as_ref()
     }
 

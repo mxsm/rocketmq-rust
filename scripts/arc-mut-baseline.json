@@ -2680,69 +2680,6 @@
       "adr": "ADR-002"
     },
     {
-      "identity": "07f138ee9781251d9a09e91e",
-      "path": "rocketmq-broker/src/processor/query_assignment_processor.rs",
-      "symbol": "*",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "08be2299b6e6ba93e88d7a50",
-          "fingerprint": "59a3cbceeb7b13b1678da867",
-          "item": "mod tests",
-          "line": 537
-        }
-      ],
-      "owner": "broker",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "b9cd70adf00bff70e48be649",
-      "path": "rocketmq-broker/src/processor/query_assignment_processor.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "eb7adebece6c6ad8a35fd2f5",
-          "fingerprint": "76ecaae1196aa4a968807fa2",
-          "item": "<module>",
-          "line": 41
-        }
-      ],
-      "owner": "broker",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "889b58350975f5fd777de43d",
-      "path": "rocketmq-broker/src/processor/query_assignment_processor.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "9ddb0b0b65df4023b0d9acab",
-          "fingerprint": "21b67ce4484000f22adc88c2",
-          "item": "struct QueryAssignmentProcessor",
-          "line": 68
-        },
-        {
-          "id": "89111264b9a81847893f892f",
-          "fingerprint": "c1a5d4336979d8ceba89d7b1",
-          "item": "fn new",
-          "line": 104
-        }
-      ],
-      "owner": "broker",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
       "identity": "8a386478dc9945fb9393f211",
       "path": "rocketmq-broker/src/processor/query_message_processor.rs",
       "symbol": "*",
@@ -3120,8 +3057,8 @@
           "line": 87
         },
         {
-          "id": "231e94be8ae76a1f5ba10462",
-          "fingerprint": "c9faa12dfc7c1c73df47bccf",
+          "id": "bbab80e39392edaaa9b7e150",
+          "fingerprint": "45fae8fca60931f903a81e69",
           "item": "enum BrokerProcessorType",
           "line": 96
         },
