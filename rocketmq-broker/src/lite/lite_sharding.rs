@@ -12,32 +12,40 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::Arc;
+
 use cheetah_string::CheetahString;
+use dashmap::DashMap;
 use rocketmq_common::common::lite::get_lite_topic;
-use rocketmq_store::base::message_store::MessageStore;
 
-use crate::broker_runtime::BrokerRuntimeInner;
+use crate::topic::manager::topic_route_info_manager::TopicRouteInfoManager;
+use crate::topic::route::BrokerPublishRoute;
 
-pub(crate) struct LiteSharding;
+#[derive(Clone)]
+pub(crate) struct LiteShardingView {
+    current_broker: CheetahString,
+    topic_publish_info_table: Arc<DashMap<CheetahString, BrokerPublishRoute>>,
+}
 
-impl LiteSharding {
-    pub(crate) fn sharding_by_lmq_name<MS: MessageStore>(
-        broker_runtime_inner: &BrokerRuntimeInner<MS>,
-        parent_topic: &CheetahString,
-        lmq_name: &CheetahString,
-    ) -> CheetahString {
-        let current_broker = broker_runtime_inner.broker_config().broker_name().clone();
+impl LiteShardingView {
+    pub(crate) fn new(current_broker: CheetahString, route_info_manager: &TopicRouteInfoManager) -> Self {
+        Self {
+            current_broker,
+            topic_publish_info_table: Arc::clone(&route_info_manager.topic_publish_info_table),
+        }
+    }
+
+    pub(crate) fn sharding_by_lmq_name(&self, parent_topic: &CheetahString, lmq_name: &CheetahString) -> CheetahString {
         let Some(lite_topic) = get_lite_topic(lmq_name.as_str()) else {
-            return current_broker;
+            return self.current_broker.clone();
         };
 
-        let publish_info = broker_runtime_inner
-            .topic_route_info_manager()
+        let publish_info = self
             .topic_publish_info_table
             .get(parent_topic)
             .map(|entry| entry.value().clone());
         let Some(publish_info) = publish_info.filter(|info| !info.message_queues().is_empty()) else {
-            return current_broker;
+            return self.current_broker.clone();
         };
 
         let bucket = consistent_hash(
@@ -48,7 +56,7 @@ impl LiteSharding {
             .message_queues()
             .get(bucket)
             .map(|queue| queue.broker_name().clone())
-            .unwrap_or(current_broker)
+            .unwrap_or_else(|| self.current_broker.clone())
     }
 }
 

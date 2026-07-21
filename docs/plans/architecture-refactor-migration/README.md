@@ -862,6 +862,16 @@ production 47/115、Store production 82/234），净删除 2 个 production iden
 identity/2 occurrences，无 relocation、新增 identity 或临时 approval。总进度仍为 75/82，下一子切片 M11-12bc49
 继续 Broker aggregate/leaf 或 Store WAL/queue/timer/HA owner。
 
+Lite manager runtime capability 随 Issue #8509 收窄：`LiteManagerProcessor` 删除完整
+`ArcMut<BrokerRuntimeInner<MS>>` owner，改持 store/broker/dispatch policy 快照、显式 TopicConfig/SubscriptionGroup/
+LiteSubscription/LiteEvent/LiteLifecycle 与 sharding route view，以及弱 consumer-offset/Store/POP-order provider；provider
+退出后 offset snapshot/query/size、queue stats、Store offset/timestamp 与 order-info 查询均 fail closed。Lite lag calculator
+与 sharding helper 同步删除完整 runtime 参数，六个 Lite manager 请求的校验、sharding、lag/offset 和 dispatch 语义保持不变。
+ArcMut 快照降至 267 identities/802 occurrences（production 127/346、test 126/416、compatibility 14/40、Broker
+production 45/112、Store production 82/234），净删除 2 个 production identities/3 occurrences，无 relocation、新增
+identity 或临时 approval。总进度仍为 75/82，下一子切片 M11-12bc50 继续 Broker aggregate/leaf 或 Store
+WAL/queue/timer/HA owner。
+
 ### 9.3 证据目录
 
 - 运行期生成物：`target/architecture-refactor/Mxx/<run-id>/`，不提交 Git。
