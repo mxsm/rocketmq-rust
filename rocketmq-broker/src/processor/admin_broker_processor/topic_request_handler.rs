@@ -811,7 +811,7 @@ mod tests {
         let mut runtime = new_test_runtime("static-topic").await;
         let inner = runtime.inner_for_test().clone();
         let handler = TopicRequestHandler::new();
-        let broker_config_request_handler = BrokerConfigRequestHandler::new(inner.clone());
+        let broker_config_request_handler = BrokerConfigRequestHandler::new(runtime.admin_runtime_handle_for_test());
 
         let detail = TopicQueueMappingDetail {
             topic_queue_mapping_info:

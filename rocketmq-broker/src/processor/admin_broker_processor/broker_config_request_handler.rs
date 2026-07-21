@@ -34,31 +34,30 @@ use rocketmq_remoting::protocol::header::export_rocksdb_config_to_json_request_h
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::DataVersion;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::utils::ffi::MADV_NORMAL;
 use rocketmq_store::utils::ffi::MADV_RANDOM;
 use sysinfo::Disks;
 
-use crate::broker_runtime::BrokerRuntimeInner;
+use crate::broker::broker_admin_runtime_handle::BrokerAdminRuntimeHandle;
 use crate::topic::manager::topic_config_coordinator::TopicRegistrationAction;
 
 #[derive(Clone)]
 pub(super) struct BrokerConfigRequestHandler<MS: MessageStore> {
-    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+    broker_runtime_inner: BrokerAdminRuntimeHandle<MS>,
 }
 
 impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
-    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
+    pub fn new(broker_runtime_inner: BrokerAdminRuntimeHandle<MS>) -> Self {
         BrokerConfigRequestHandler { broker_runtime_inner }
     }
 
-    pub(super) fn broker_runtime_inner(&self) -> &BrokerRuntimeInner<MS> {
-        self.broker_runtime_inner.as_ref()
+    pub(super) fn broker_runtime_inner(&self) -> &BrokerAdminRuntimeHandle<MS> {
+        &self.broker_runtime_inner
     }
 
-    pub(super) fn broker_runtime_inner_mut(&mut self) -> &mut BrokerRuntimeInner<MS> {
-        self.broker_runtime_inner.as_mut()
+    pub(super) fn broker_runtime_inner_mut(&mut self) -> &mut BrokerAdminRuntimeHandle<MS> {
+        &mut self.broker_runtime_inner
     }
 
     pub(super) async fn persist_and_register_topic_updates(
@@ -75,7 +74,8 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
                         runtime.register_single_topic_all(topic_config).await;
                     }
                 } else {
-                    BrokerRuntimeInner::<MS>::register_increment_broker_data(runtime, topic_config_list, data_version)
+                    runtime
+                        .register_increment_broker_data(topic_config_list, data_version)
                         .await;
                 }
                 Ok(())
@@ -96,16 +96,17 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
         sync_state_set_epoch: Option<i32>,
         sync_state_set: HashSet<i64>,
     ) -> rocketmq_error::RocketMQResult<()> {
-        BrokerRuntimeInner::apply_controller_role_change(
-            self.broker_runtime_inner.clone(),
-            controller_leader_address,
-            new_master_broker_id,
-            new_master_address,
-            new_master_epoch,
-            sync_state_set_epoch,
-            sync_state_set,
-        )
-        .await
+        self.broker_runtime_inner
+            .clone()
+            .apply_controller_role_change(
+                controller_leader_address,
+                new_master_broker_id,
+                new_master_address,
+                new_master_epoch,
+                sync_state_set_epoch,
+                sync_state_set,
+            )
+            .await
     }
 }
 impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
@@ -156,7 +157,7 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
             )));
         }
 
-        let inner = self.broker_runtime_inner.mut_from_ref();
+        let inner = self.broker_runtime_inner.runtime_mut();
         inner.set_broker_config(updated_config);
         let broker_config_arc = inner.broker_config_arc();
         inner.producer_manager_mut().set_broker_config(broker_config_arc);
@@ -257,7 +258,7 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
 
         match self
             .broker_runtime_inner
-            .mut_from_ref()
+            .runtime_mut()
             .message_store_mut()
             .as_mut()
             .expect("message store should exist")
@@ -890,7 +891,7 @@ mod tests {
             .add_timing_count(&CheetahString::from_static_str("TimerTopicA"), 2);
         runtime.inner_for_test().set_timer_message_store(timer_message_store);
 
-        let handler = BrokerConfigRequestHandler::new(runtime.inner_for_test().clone());
+        let handler = BrokerConfigRequestHandler::new(runtime.admin_runtime_handle_for_test());
         let response = handler.build_timer_metrics_response();
 
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
@@ -915,7 +916,7 @@ mod tests {
         assert!(timer_message_store.load());
         runtime.inner_for_test().set_timer_message_store(timer_message_store);
 
-        let handler = BrokerConfigRequestHandler::new(runtime.inner_for_test().clone());
+        let handler = BrokerConfigRequestHandler::new(runtime.admin_runtime_handle_for_test());
         let response = handler.build_timer_checkpoint_response();
 
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
@@ -930,7 +931,7 @@ mod tests {
     async fn set_commitlog_read_mode_updates_store_config() {
         let mut runtime = new_test_runtime("commitlog-read-mode", false).await;
         let inner = runtime.inner_for_test().clone();
-        let mut handler = BrokerConfigRequestHandler::new(inner.clone());
+        let mut handler = BrokerConfigRequestHandler::new(runtime.admin_runtime_handle_for_test());
 
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
@@ -981,7 +982,7 @@ mod tests {
     async fn update_broker_config_applies_supported_runtime_properties() {
         let mut runtime = new_test_runtime("update-broker-config", false).await;
         let inner = runtime.inner_for_test().clone();
-        let mut handler = BrokerConfigRequestHandler::new(inner.clone());
+        let mut handler = BrokerConfigRequestHandler::new(runtime.admin_runtime_handle_for_test());
 
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
@@ -1011,7 +1012,7 @@ mod tests {
     async fn update_broker_config_rejects_unsupported_or_invalid_keys() {
         let mut runtime = new_test_runtime("update-broker-config-invalid", false).await;
         let inner = runtime.inner_for_test().clone();
-        let mut handler = BrokerConfigRequestHandler::new(inner.clone());
+        let mut handler = BrokerConfigRequestHandler::new(runtime.admin_runtime_handle_for_test());
 
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
@@ -1077,9 +1078,8 @@ mod tests {
 
     #[tokio::test]
     async fn export_rocksdb_config_without_rocksdb_returns_not_supported() {
-        let mut runtime = new_test_runtime("export-config", false).await;
-        let inner = runtime.inner_for_test().clone();
-        let mut handler = BrokerConfigRequestHandler::new(inner);
+        let runtime = new_test_runtime("export-config", false).await;
+        let mut handler = BrokerConfigRequestHandler::new(runtime.admin_runtime_handle_for_test());
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request = RemotingCommand::create_request_command(
@@ -1115,7 +1115,6 @@ mod tests {
     #[tokio::test]
     async fn export_rocksdb_config_to_json_writes_requested_json_files() {
         let mut runtime = new_rocksdb_config_runtime("export-rocksdb-config").await;
-        let inner = runtime.inner_for_test().clone();
         let topic = CheetahString::from_static_str("ExportTopic");
         let group = CheetahString::from_static_str("ExportGroup");
 
@@ -1140,7 +1139,7 @@ mod tests {
                 .update_subscription_group_config(&mut group_config);
         }
 
-        let mut handler = BrokerConfigRequestHandler::new(inner);
+        let mut handler = BrokerConfigRequestHandler::new(runtime.admin_runtime_handle_for_test());
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request = RemotingCommand::create_request_command(
@@ -1181,7 +1180,7 @@ mod tests {
     async fn switch_timer_engine_accepts_file_time_wheel_and_rejects_rocksdb() {
         let mut runtime = new_test_runtime("switch-timer-engine", true).await;
         let inner = runtime.inner_for_test().clone();
-        let mut handler = BrokerConfigRequestHandler::new(inner.clone());
+        let mut handler = BrokerConfigRequestHandler::new(runtime.admin_runtime_handle_for_test());
 
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));

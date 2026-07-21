@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::auth::auth_admin_service::AuthAdminService;
-use crate::broker_runtime::BrokerRuntimeInner;
+use crate::broker::broker_admin_runtime_handle::BrokerAdminRuntimeHandle;
 use crate::processor::admin_broker_processor::batch_mq_handler::BatchMqHandler;
 use crate::processor::admin_broker_processor::broker_config_request_handler::BrokerConfigRequestHandler;
 use crate::processor::admin_broker_processor::broker_epoch_cache_handler::BrokerEpochCacheHandler;
@@ -50,7 +50,6 @@ use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
-use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
 use std::sync::Arc;
 use tracing::warn;
@@ -130,10 +129,7 @@ where
 }
 
 impl<MS: MessageStore> AdminBrokerProcessor<MS> {
-    pub fn new(
-        broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
-        auth_admin_service: Arc<AuthAdminService>,
-    ) -> Self {
+    pub fn new(broker_runtime_inner: BrokerAdminRuntimeHandle<MS>, auth_admin_service: Arc<AuthAdminService>) -> Self {
         let topic_request_handler = TopicRequestHandler::new();
         let broker_config_request_handler = BrokerConfigRequestHandler::new(broker_runtime_inner.clone());
         let consumer_request_handler = ConsumerRequestHandler::new();
@@ -716,8 +712,12 @@ fn auth_admin_body_decode_error(operation: &'static str, error: RocketMQError) -
 #[cfg(test)]
 mod tests {
     use rocketmq_error::RocketMQError;
+    use rocketmq_remoting::code::request_code::RequestCode;
+    use rocketmq_remoting::code::response_code::ResponseCode;
+    use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 
-    use super::*;
+    use super::get_legacy_acl_cmd_response;
+    use super::map_auth_admin_error_response;
 
     #[test]
     fn auth_admin_handlers_do_not_retain_broker_runtime() {
@@ -734,8 +734,19 @@ mod tests {
             include_str!("admin_broker_processor/update_global_white_addrs_config_request_handler.rs"),
             include_str!("admin_broker_processor/update_user_request_handler.rs"),
         ] {
-            assert!(!source.contains("BrokerRuntimeInner"));
+            assert!(!source.contains(concat!("Broker", "RuntimeInner")));
             assert!(!source.contains(concat!("Arc", "Mut")));
+        }
+    }
+
+    #[test]
+    fn admin_config_compatibility_pointer_is_confined_to_the_composition_root() {
+        for source in [
+            include_str!("admin_broker_processor.rs"),
+            include_str!("admin_broker_processor/broker_config_request_handler.rs"),
+        ] {
+            assert!(!source.contains(concat!("Arc", "Mut")));
+            assert!(!source.contains(concat!("mut", "_from_ref")));
         }
     }
 
