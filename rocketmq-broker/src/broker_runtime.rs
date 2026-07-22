@@ -1199,7 +1199,6 @@ impl BrokerRuntime {
             broker_attached_plugins: vec![],
             transactional_message_service: None,
             slave_synchronize: None,
-            last_sync_time_ms: AtomicU64::new(current_millis()),
             broker_pre_online_service: None,
             service_context,
             lock: Default::default(),
@@ -2363,10 +2362,10 @@ impl BrokerRuntime {
                         broker_config.broker_identity.get_canonical_name(),
                     ));
                 let broker_permission = i64::from(broker_config.broker_permission);
-                let topic_num_inner = self.inner.clone();
-                let consumer_group_num_inner = self.inner.clone();
-                let producer_connections_inner = self.inner.clone();
-                let consumer_connections_inner = self.inner.clone();
+                let topic_config_manager = self.inner.topic_config_manager_handle();
+                let subscription_group_manager = self.inner.subscription_group_manager().clone();
+                let producer_manager = self.inner.producer_manager.clone_shared_state();
+                let consumer_manager = self.inner.consumer_manager.clone_shared_state();
                 crate::metrics::broker_metrics_manager::BrokerMetricsManager::init_global_with_observables_and_configs(
                     provider,
                     attributes_supplier,
@@ -2374,17 +2373,10 @@ impl BrokerRuntime {
                     sampling_config,
                     None::<fn() -> Vec<(String, i64)>>,
                     move || broker_permission,
+                    move || i64::try_from(topic_config_manager.topic_config_table().len()).unwrap_or(i64::MAX),
+                    move || i64::try_from(subscription_group_manager.group_count()).unwrap_or(i64::MAX),
                     move || {
-                        i64::try_from(topic_num_inner.topic_config_manager().topic_config_table().len())
-                            .unwrap_or(i64::MAX)
-                    },
-                    move || {
-                        i64::try_from(consumer_group_num_inner.subscription_group_manager().group_count())
-                            .unwrap_or(i64::MAX)
-                    },
-                    move || {
-                        producer_connections_inner
-                            .producer_manager()
+                        producer_manager
                             .connection_count_by_client_attrs()
                             .into_iter()
                             .map(|(language, version, count)| {
@@ -2399,8 +2391,7 @@ impl BrokerRuntime {
                             .collect()
                     },
                     move || {
-                        consumer_connections_inner
-                            .consumer_manager()
+                        consumer_manager
                             .connection_count_by_client_attrs()
                             .into_iter()
                             .map(|(group, language, version, consume_type, count)| {
@@ -2417,9 +2408,9 @@ impl BrokerRuntime {
                             .collect()
                     },
                 );
-                let pop_offset_inner = self.inner.clone();
-                let pop_checkpoint_inner = self.inner.clone();
-                let pop_revive_inner = self.inner.clone();
+                let pop_offset_processor = self.inner.pop_message_processor.clone();
+                let pop_checkpoint_processor = self.inner.pop_message_processor.clone();
+                let ack_message_processor = self.inner.ack_message_processor.clone();
                 crate::metrics::pop_metrics_manager::PopMetricsManager::init_global_with_observables(
                     provider,
                     Arc::new(crate::metrics::pop_metrics_manager::BrokerAttributesSupplier::new(
@@ -2428,8 +2419,8 @@ impl BrokerRuntime {
                         i64::try_from(broker_config.broker_identity.broker_id).unwrap_or(i64::MAX),
                     )),
                     move || {
-                        pop_offset_inner
-                            .pop_message_processor()
+                        pop_offset_processor
+                            .as_ref()
                             .map(|processor| {
                                 i64::try_from(processor.pop_buffer_merge_service().offset_buffer_size_snapshot())
                                     .unwrap_or(i64::MAX)
@@ -2437,8 +2428,8 @@ impl BrokerRuntime {
                             .unwrap_or(0)
                     },
                     move || {
-                        pop_checkpoint_inner
-                            .pop_message_processor()
+                        pop_checkpoint_processor
+                            .as_ref()
                             .map(|processor| {
                                 i64::try_from(processor.pop_buffer_merge_service().checkpoint_buffer_size())
                                     .unwrap_or(i64::MAX)
@@ -2446,8 +2437,7 @@ impl BrokerRuntime {
                             .unwrap_or(0)
                     },
                     move || {
-                        pop_revive_inner
-                            .ack_message_processor
+                        ack_message_processor
                             .as_ref()
                             .map(|processor| processor.pop_revive_metrics())
                             .unwrap_or_default()
@@ -2455,29 +2445,30 @@ impl BrokerRuntime {
                 );
 
                 let store_meter = rocketmq_observability::meter(provider, "rocketmq-store");
-                let store_observable_inner = self.inner.clone();
+                let store_observable = self.inner.escape_bridge().store_capability();
                 let _ = rocketmq_observability::metrics::store::init_global_with_observables(&store_meter, move || {
-                    let Some(message_store) = store_observable_inner.message_store() else {
-                        return rocketmq_observability::metrics::store::StoreObservableValues::default();
-                    };
-                    let max_phy_offset = message_store.get_max_phy_offset();
-                    let min_phy_offset = message_store.get_min_phy_offset();
-                    let earliest_message_time = message_store.get_earliest_message_time_store();
-                    rocketmq_observability::metrics::store::StoreObservableValues {
-                        storage_size_bytes: (max_phy_offset - min_phy_offset).max(0),
-                        flush_behind_bytes: (max_phy_offset - message_store.get_flushed_where()).max(0),
-                        dispatch_behind_bytes: message_store.dispatch_behind_bytes().max(0),
-                        message_reserve_time_millis: if earliest_message_time > 0 {
-                            current_millis() as i64 - earliest_message_time
-                        } else {
-                            0
-                        },
-                    }
+                    store_observable
+                        .with_store(|message_store| {
+                            let max_phy_offset = message_store.get_max_phy_offset();
+                            let min_phy_offset = message_store.get_min_phy_offset();
+                            let earliest_message_time = message_store.get_earliest_message_time_store();
+                            rocketmq_observability::metrics::store::StoreObservableValues {
+                                storage_size_bytes: (max_phy_offset - min_phy_offset).max(0),
+                                flush_behind_bytes: (max_phy_offset - message_store.get_flushed_where()).max(0),
+                                dispatch_behind_bytes: message_store.dispatch_behind_bytes().max(0),
+                                message_reserve_time_millis: if earliest_message_time > 0 {
+                                    current_millis() as i64 - earliest_message_time
+                                } else {
+                                    0
+                                },
+                            }
+                        })
+                        .unwrap_or_default()
                 });
 
-                let timer_observable_inner = self.inner.clone();
+                let timer_observable = self.inner.timer_message_store().cloned();
                 let _ = rocketmq_observability::metrics::timer::init_global_with_observables(&store_meter, move || {
-                    let Some(timer_message_store) = timer_observable_inner.timer_message_store() else {
+                    let Some(timer_message_store) = timer_observable.as_ref() else {
                         return rocketmq_observability::metrics::timer::TimerObservableValues::default();
                     };
                     let (timing_messages, message_snapshot) = timer_message_store.runtime_backlog_metrics();
@@ -2493,44 +2484,46 @@ impl BrokerRuntime {
 
                 #[cfg(feature = "rocksdb_store")]
                 {
-                    let rocksdb_observable_inner = self.inner.clone();
+                    let rocksdb_observable = self.inner.escape_bridge().store_capability();
                     let _ = rocketmq_observability::metrics::rocksdb::init_global_with_observables(
                         &store_meter,
                         move || {
-                            let Some(message_store) = rocksdb_observable_inner.message_store() else {
-                                return Default::default();
-                            };
-                            let Some(metrics) = message_store.rocksdb_ticker_metrics() else {
-                                return Default::default();
-                            };
-                            rocketmq_observability::metrics::rocksdb::RocksDbObservableValues {
-                                bytes_written: metrics.bytes_written,
-                                bytes_read: metrics.bytes_read,
-                                times_written_self: metrics.times_written_self,
-                                times_written_other: metrics.times_written_other,
-                                block_cache_hit: metrics.block_cache_hit,
-                                block_cache_miss: metrics.block_cache_miss,
-                                times_compressed: metrics.times_compressed,
-                                read_amplification_bytes: metrics.read_amplification_bytes,
-                                times_read: metrics.times_read,
-                            }
+                            rocksdb_observable
+                                .with_store(|message_store| {
+                                    let Some(metrics) = message_store.rocksdb_ticker_metrics() else {
+                                        return Default::default();
+                                    };
+                                    rocketmq_observability::metrics::rocksdb::RocksDbObservableValues {
+                                        bytes_written: metrics.bytes_written,
+                                        bytes_read: metrics.bytes_read,
+                                        times_written_self: metrics.times_written_self,
+                                        times_written_other: metrics.times_written_other,
+                                        block_cache_hit: metrics.block_cache_hit,
+                                        block_cache_miss: metrics.block_cache_miss,
+                                        times_compressed: metrics.times_compressed,
+                                        read_amplification_bytes: metrics.read_amplification_bytes,
+                                        times_read: metrics.times_read,
+                                    }
+                                })
+                                .unwrap_or_default()
                         },
                     );
                 }
 
                 #[cfg(feature = "tieredstore")]
                 {
-                    let tiered_store_observable_inner = self.inner.clone();
+                    let tiered_store_observable = self.inner.escape_bridge().store_capability();
                     let _ = rocketmq_observability::metrics::tiered_store::init_global_with_observables(
                         &store_meter,
                         move || {
-                            let Some(message_store) = tiered_store_observable_inner.message_store() else {
-                                return Default::default();
-                            };
-                            let Some(metrics) = message_store.tiered_store_metrics() else {
-                                return Default::default();
-                            };
-                            metrics.observable_values()
+                            tiered_store_observable
+                                .with_store(|message_store| {
+                                    message_store
+                                        .tiered_store_metrics()
+                                        .map(|metrics| metrics.observable_values())
+                                        .unwrap_or_default()
+                                })
+                                .unwrap_or_default()
                         },
                     );
                 }
@@ -2992,17 +2985,18 @@ impl BrokerRuntime {
     async fn initialize_scheduled_tasks(&mut self) {
         let initial_delay = compute_next_morning_time_millis() - current_millis();
         let period = Duration::from_secs(24 * 60 * 60);
-        let broker_stats_ = self.inner.clone();
+        let broker_stats_shutdown = Arc::clone(&self.inner.shutdown);
+        let broker_stats = self.inner.broker_stats.clone();
         Self::log_scheduled_task_start(
             "daily_broker_stats_record",
             self.scheduled_task_manager.add_fixed_rate_task_async(
                 Duration::from_millis(initial_delay),
                 period,
                 async move |ctx| {
-                    if ctx.is_cancelled() || broker_stats_.shutdown.load(Ordering::Acquire) {
+                    if ctx.is_cancelled() || broker_stats_shutdown.load(Ordering::Acquire) {
                         return Ok(());
                     }
-                    if let Some(broker_stats) = broker_stats_.broker_stats() {
+                    if let Some(broker_stats) = broker_stats.as_ref() {
                         broker_stats.record();
                     } else {
                         warn!("BrokerStats is not initialized");
@@ -3012,8 +3006,8 @@ impl BrokerRuntime {
             ),
         );
 
-        //need to optimize
-        let consumer_offset_manager_inner = self.inner.clone();
+        let consumer_offset_shutdown = Arc::clone(&self.inner.shutdown);
+        let consumer_offset_manager = self.inner.consumer_offset_manager_handle();
         let flush_consumer_offset_interval = self.inner.broker_config().flush_consumer_offset_interval;
 
         Self::log_scheduled_task_start(
@@ -3022,33 +3016,34 @@ impl BrokerRuntime {
                 Duration::from_secs(10),
                 Duration::from_millis(flush_consumer_offset_interval),
                 async move |ctx| {
-                    if ctx.is_cancelled() || consumer_offset_manager_inner.shutdown.load(Ordering::Acquire) {
+                    if ctx.is_cancelled() || consumer_offset_shutdown.load(Ordering::Acquire) {
                         return Ok(());
                     }
-                    consumer_offset_manager_inner.consumer_offset_manager.persist();
+                    consumer_offset_manager.persist();
                     Ok(())
                 },
             ),
         );
 
-        //need to optimize
-        let mut _inner = self.inner.clone();
+        let persistence_shutdown = Arc::clone(&self.inner.shutdown);
+        let consumer_filter_manager = self.inner.consumer_filter_manager.clone();
+        let consumer_order_info_manager = self.inner.consumer_order_info_manager.clone();
         Self::log_scheduled_task_start(
             "persist_consumer_filter_and_order_info",
             self.scheduled_task_manager.add_fixed_rate_task_async(
                 Duration::from_secs(10),
                 Duration::from_secs(10),
                 async move |ctx| {
-                    if ctx.is_cancelled() || _inner.shutdown.load(Ordering::Acquire) {
+                    if ctx.is_cancelled() || persistence_shutdown.load(Ordering::Acquire) {
                         return Ok(());
                     }
-                    if let Some(consumer_filter_manager_) = &mut _inner.consumer_filter_manager {
-                        consumer_filter_manager_.persist();
+                    if let Some(consumer_filter_manager) = consumer_filter_manager.as_ref() {
+                        consumer_filter_manager.persist();
                     } else {
                         warn!("ConsumerFilterManager is not initialized");
                     }
-                    if let Some(consumer_order_info_manager_) = &mut _inner.consumer_order_info_manager {
-                        consumer_order_info_manager_.persist();
+                    if let Some(consumer_order_info_manager) = consumer_order_info_manager.as_ref() {
+                        consumer_order_info_manager.persist();
                     } else {
                         warn!("ConsumerOrderInfoManager is not initialized");
                     }
@@ -3058,36 +3053,36 @@ impl BrokerRuntime {
             ),
         );
 
-        let mut runtime = self.inner.clone();
+        let protect_broker_shutdown = Arc::clone(&self.inner.shutdown);
         Self::log_scheduled_task_start(
             "protect_broker",
             self.scheduled_task_manager.add_fixed_rate_task_async(
                 Duration::from_mins(3),
                 Duration::from_mins(3),
                 async move |ctx| {
-                    if ctx.is_cancelled() || runtime.shutdown.load(Ordering::Acquire) {
+                    if ctx.is_cancelled() || protect_broker_shutdown.load(Ordering::Acquire) {
                         return Ok(());
                     }
-                    runtime.protect_broker();
                     Ok(())
                 },
             ),
         );
 
-        let message_store_inner = self.inner.clone();
+        let dispatch_report_shutdown = Arc::clone(&self.inner.shutdown);
+        let dispatch_report_store = self.inner.escape_bridge().store_capability();
         Self::log_scheduled_task_start(
             "report_dispatch_behind_bytes",
             self.scheduled_task_manager.add_fixed_rate_task_async(
                 Duration::from_secs(10),
                 Duration::from_secs(60),
                 async move |ctx| {
-                    if ctx.is_cancelled() || message_store_inner.shutdown.load(Ordering::Acquire) {
+                    if ctx.is_cancelled() || dispatch_report_shutdown.load(Ordering::Acquire) {
                         return Ok(());
                     }
-                    if let Some(message_store) = message_store_inner.message_store.as_ref() {
+                    if let Err(_unavailable) = dispatch_report_store.with_store(|message_store| {
                         let behind = message_store.dispatch_behind_bytes();
                         info!("Dispatch task fall behind commit log {behind}bytes");
-                    } else {
+                    }) {
                         warn!("MessageStore is not initialized");
                     }
                     Ok(())
@@ -3119,24 +3114,27 @@ impl BrokerRuntime {
                 } else {
                     self.inner.update_master_haserver_addr_periodically = true;
                 }
-                let inner_clone = self.inner.clone();
+                let slave_sync_shutdown = Arc::clone(&self.inner.shutdown);
+                let slave_synchronize = self.inner.slave_synchronize.clone();
+                let config_state = self.inner.config_state.clone();
+                let last_sync_time_ms = AtomicU64::new(current_millis());
                 Self::log_scheduled_task_start(
                     "slave_synchronize",
                     self.scheduled_task_manager.add_fixed_rate_task_async(
                         Duration::from_secs(10),
                         Duration::from_secs(3),
                         async move |ctx| {
-                            if ctx.is_cancelled() || inner_clone.shutdown.load(Ordering::Acquire) {
+                            if ctx.is_cancelled() || slave_sync_shutdown.load(Ordering::Acquire) {
                                 return Ok(());
                             }
-                            if current_millis() - inner_clone.last_sync_time_ms.load(Ordering::Relaxed) > 10_000 {
-                                if let Some(slave_synchronize) = &inner_clone.slave_synchronize {
+                            if current_millis() - last_sync_time_ms.load(Ordering::Relaxed) > 10_000 {
+                                if let Some(slave_synchronize) = slave_synchronize.as_ref() {
                                     slave_synchronize.sync_all().await;
                                 }
-                                inner_clone.last_sync_time_ms.store(current_millis(), Ordering::Relaxed);
+                                last_sync_time_ms.store(current_millis(), Ordering::Relaxed);
                             }
-                            if inner_clone.message_store_config().timer_wheel_enable {
-                                if let Some(slave_synchronize) = &inner_clone.slave_synchronize {
+                            if config_state.store_snapshot().timer_wheel_enable {
+                                if let Some(slave_synchronize) = slave_synchronize.as_ref() {
                                     slave_synchronize.sync_timer_check_point().await
                                 }
                             }
@@ -3145,17 +3143,17 @@ impl BrokerRuntime {
                     ),
                 );
             } else {
-                let inner_clone = self.inner.clone();
+                let master_diff_shutdown = Arc::clone(&self.inner.shutdown);
                 Self::log_scheduled_task_start(
                     "print_master_and_slave_diff",
                     self.scheduled_task_manager.add_fixed_rate_task_async(
                         Duration::from_secs(10),
                         Duration::from_secs(60),
                         async move |ctx| {
-                            if ctx.is_cancelled() || inner_clone.shutdown.load(Ordering::Acquire) {
+                            if ctx.is_cancelled() || master_diff_shutdown.load(Ordering::Acquire) {
                                 return Ok(());
                             }
-                            inner_clone.print_master_and_slave_diff();
+                            warn!("print_master_and_slave_diff not implemented");
                             Ok(())
                         },
                     ),
@@ -3170,17 +3168,30 @@ impl BrokerRuntime {
         if let Some(ref namesrv_address) = broker_config.namesrv_addr.clone() {
             self.update_namesrv_addr().await;
             info!("Set user specified name remoting_server address: {}", namesrv_address);
-            let mut broker_runtime = self.inner.clone();
+            let namesrv_shutdown = Arc::clone(&self.inner.shutdown);
+            let namesrv_config = self.inner.config_state.clone();
+            let broker_outer_api = self.inner.broker_outer_api.clone();
             Self::log_scheduled_task_start(
                 "update_namesrv_addr",
                 self.scheduled_task_manager.add_fixed_rate_no_overlap_task_async(
                     Duration::from_secs(10),
                     Duration::from_secs(60),
                     async move |ctx| {
-                        if ctx.is_cancelled() || broker_runtime.shutdown.load(Ordering::Acquire) {
+                        if ctx.is_cancelled() || namesrv_shutdown.load(Ordering::Acquire) {
                             return Ok(());
                         }
-                        broker_runtime.update_namesrv_addr_inner().await;
+                        let broker_config = namesrv_config.broker_snapshot();
+                        if broker_config.fetch_name_srv_addr_by_dns_lookup {
+                            if let Some(namesrv_addr) = &broker_config.namesrv_addr {
+                                broker_outer_api
+                                    .update_name_server_address_list_by_dns_lookup(namesrv_addr.clone())
+                                    .await;
+                            }
+                        } else if let Some(namesrv_addr) = &broker_config.namesrv_addr {
+                            broker_outer_api
+                                .update_name_server_address_list(namesrv_addr.clone())
+                                .await;
+                        }
                         Ok(())
                     },
                 ),
@@ -3544,17 +3555,18 @@ impl BrokerRuntime {
             self.start_service_without_condition().await;
         }
 
-        let inner = self.inner.clone();
+        let metadata_shutdown = Arc::clone(&self.inner.shutdown);
+        let broker_outer_api = self.inner.broker_outer_api.clone();
         let period = Duration::from_secs(5);
         let initial_delay = Duration::from_secs(10);
         Self::log_scheduled_task_start(
             "refresh_broker_metadata",
             self.scheduled_task_manager
                 .add_fixed_rate_task_async(initial_delay, period, async move |_ctx| {
-                    if inner.shutdown.load(Ordering::Acquire) {
+                    if metadata_shutdown.load(Ordering::Acquire) {
                         return Ok(());
                     }
-                    inner.broker_outer_api.refresh_metadata();
+                    broker_outer_api.refresh_metadata();
                     Ok(())
                 }),
         );
@@ -3816,7 +3828,6 @@ pub(crate) struct BrokerRuntimeInner<MS: MessageStore> {
     broker_attached_plugins: Vec<Arc<dyn BrokerAttachedPlugin>>,
     transactional_message_service: Option<Arc<DefaultTransactionalMessageService<MS>>>,
     slave_synchronize: Option<Arc<SlaveSynchronize<MS>>>,
-    last_sync_time_ms: AtomicU64,
     broker_pre_online_service: Option<BrokerPreOnlineService<MS>>,
     service_context: Option<ServiceContext>,
     lock: Mutex<()>,
@@ -4086,8 +4097,8 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn message_store_mut(&mut self) -> &mut Option<ArcMut<MS>> {
-        &mut self.message_store
+    pub fn message_store_mut(&mut self) -> Option<&mut MS> {
+        self.message_store.as_deref_mut()
     }
 
     #[inline]
@@ -4276,8 +4287,8 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn message_store(&self) -> Option<&ArcMut<MS>> {
-        self.message_store.as_ref()
+    pub fn message_store(&self) -> Option<&MS> {
+        self.message_store.as_deref()
     }
 
     #[inline]
@@ -4306,13 +4317,8 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn message_store_unchecked(&self) -> &ArcMut<MS> {
-        unsafe { self.message_store.as_ref().unwrap_unchecked() }
-    }
-
-    #[inline]
-    pub fn message_store_unchecked_mut(&mut self) -> &mut ArcMut<MS> {
-        unsafe { self.message_store.as_mut().unwrap_unchecked() }
+    pub fn message_store_unchecked_mut(&mut self) -> &mut MS {
+        unsafe { self.message_store.as_deref_mut().unwrap_unchecked() }
     }
 
     #[inline]
@@ -4672,8 +4678,6 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         self.pop_inflight_message_counter = pop_inflight_message_counter;
     }
 
-    fn protect_broker(&mut self) {}
-
     async fn update_namesrv_addr_inner(&mut self) {
         let broker_config = self.broker_config();
         if broker_config.fetch_name_srv_addr_by_dns_lookup {
@@ -4687,10 +4691,6 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
                 .update_name_server_address_list(namesrv_addr.clone())
                 .await;
         }
-    }
-
-    fn print_master_and_slave_diff(&self) {
-        warn!("print_master_and_slave_diff not implemented");
     }
 
     #[inline]
@@ -4953,6 +4953,19 @@ mod tests {
     const CONTROLLER_TEST_FALLBACK_EPHEMERAL_PORT_RANGE: RangeInclusive<u16> = 32_768..=60_999;
     static NEXT_CONTROLLER_TEST_PORT_BLOCK: AtomicU16 = AtomicU16::new(0);
     static NEXT_CONTROLLER_TEST_TEMP_ID: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn background_tasks_capture_narrow_capabilities() {
+        let production_source = include_str!("broker_runtime.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("broker runtime production source should precede its tests");
+
+        assert!(
+            !production_source.contains("self.inner.clone()"),
+            "background work must not retain the complete BrokerRuntimeInner root"
+        );
+    }
 
     fn next_controller_test_temp_id() -> u64 {
         NEXT_CONTROLLER_TEST_TEMP_ID.fetch_add(1, Ordering::Relaxed)
@@ -6179,7 +6192,6 @@ accounts:
         }
         inner
             .message_store_mut()
-            .as_mut()
             .expect("message store should be initialized")
             .consume_queue_store_mut()
             .set_topic_queue_table(topic_queue_table);
@@ -6278,7 +6290,6 @@ accounts:
 
         let put_result = inner
             .message_store_mut()
-            .as_mut()
             .expect("message store should be initialized")
             .put_message(message)
             .await;
@@ -6289,7 +6300,6 @@ accounts:
             .wrote_offset;
         inner
             .message_store_mut()
-            .as_mut()
             .expect("message store should be initialized")
             .reput_once()
             .await;
@@ -6963,7 +6973,7 @@ accounts:
             .inner
             .message_store()
             .expect("message store should be initialized");
-        let GenericMessageStore::RocksDBStore(rocksdb_owner) = message_store.as_ref() else {
+        let GenericMessageStore::RocksDBStore(rocksdb_owner) = message_store else {
             panic!("RocksDB store type should initialize the broker main store as GenericMessageStore::RocksDBStore");
         };
         assert!(rocksdb_owner.rocksdb_config().path.ends_with("consumequeue_rocksdb"));
@@ -7089,7 +7099,6 @@ accounts:
         runtime
             .inner
             .message_store_mut()
-            .as_mut()
             .expect("message store should be initialized")
             .reput_once()
             .await;
@@ -7121,7 +7130,6 @@ accounts:
         runtime
             .inner
             .message_store_mut()
-            .as_mut()
             .expect("message store should be initialized")
             .start()
             .await
@@ -7139,7 +7147,6 @@ accounts:
         let put_result = runtime
             .inner
             .message_store_mut()
-            .as_mut()
             .expect("message store should be initialized")
             .put_message(original)
             .await;
@@ -7199,7 +7206,6 @@ accounts:
         runtime
             .inner
             .message_store_mut()
-            .as_mut()
             .expect("message store should be initialized")
             .shutdown()
             .await;
@@ -7756,7 +7762,6 @@ accounts:
         runtime
             .inner
             .message_store_mut()
-            .as_mut()
             .expect("message store should be initialized")
             .reput_once()
             .await;
