@@ -4661,6 +4661,31 @@ CommitLog test root 随 Issue #8605 完成以下收口：
 | final gates | 首轮 format check 只发现 CommitLog 构造调用排版差异；执行 rustfmt 后，`cargo fmt --all -- --check`、workspace all-target/all-feature strict Clippy 与 `git diff --check` 通过，非零首轮未计作通过 |
 | reduced validation scope | 只运行两个直接受影响模块共 24 项测试、ArcMut 守卫和一次由 production HA wiring 触发的 runtime audit；最终 workspace 门禁只执行一次，不重复 Store/Broker 全包测试、额外 package check/Clippy、M06、RocksDB、telemetry、release、Rustdoc 或 routing gate |
 
+## M11-12bc95 实现
+
+LocalFile unit-test owner 随 Issue #8607 完成以下收口：
+
+- `new_test_store`、`new_configured_test_store`、controller/flush/async/unwired fixture 直接返回独占
+  `LocalFileMessageStore`；普通测试通过可变借用使用根，不再克隆或一次性 self-wire 完整 Store。
+- owned helper 显式关闭 Timer wheel 后复用 `wire_owned_root_dependencies`。仅三个验证 Timer 初始化、shutdown 与
+  dequeue 状态的兼容测试继续调用具名 `new_configured_test_store_with_broker` legacy helper，显式保留
+  `ArcMut<LocalFileMessageStore>`；没有以 `impl DerefMut` 或其他 opaque return 隐藏剩余完整 owner。
+- reviewed baseline 从 56/225 降至 55/210：production 保持 13/24，test 从 29/161 降至 28/146，
+  compatibility 保持 14/40；净删除 1 test identity/15 occurrences。两个保留 occurrence 仅使用忽略的临时
+  ADR-013 同 item relocation approval，无新增 identity 或提交态 approval。
+- Store test/bench caller 从 21/145 降至 20/130；R17 当前上界降至 28/146（Broker 6/8、Client 0/0、
+  runtime-foundation 2/8），执行清单保持完成 11 项、剩余 20 项，正式进度仍为 75/82。
+
+## M11-12bc95 验证
+
+| 命令 | 结果 |
+|---|---|
+| affected behavior | 最终 helper 结构下 6 个关键 exact tests 各 1/1 通过：三个 Timer compatibility 路径、controller confirm-offset、ConsumeQueue flush checkpoint 与 concurrent append；最终结构前另有 10 个 representative exact tests 通过，合计覆盖 13 个不同路径，每次其余 535 项均过滤 |
+| reviewed baseline / fixtures | 正式 baseline 与 reviewed candidate 的 semantic set 均为 55/210；candidate compare、直接 guard、27/27 fixtures 与 78/78 guard tests 通过；净删除 1 test identity/15 occurrences，两个保留 occurrence 仅使用忽略的临时 ADR-013 同 item relocation approval |
+| intentionally stopped broad runs | `cargo test -p rocketmq-store --lib message_store::local_file_message_store::tests` 超过四分钟仍未结束，未计作通过并只终止本次 cargo/test 进程；一次误加 `-- timer` 实际仍匹配整个模块，也停止且未计作通过。后续不重复这两个低收益全量运行 |
+| final gates | `cargo fmt --all -- --check`、workspace all-target/all-feature strict Clippy 与 `git diff --check` 通过；Clippy 复用现有增量缓存并在 16 秒内完成，Windows linker stdout 与既有 future-incompatibility note 不受 `-D warnings` 管辖 |
+| reduced validation scope | 本切片只修改 cfg(test) fixture/断言与 reviewed baseline，不修改 production、公开 API、runtime lifecycle 或 feature；使用关键 exact tests 加最终 workspace Clippy 对全部 test target 的编译/lint 兜底，不重复 Store/Broker 全包测试、额外 package check/Clippy、runtime audit、M06、RocksDB matrix、telemetry、release、Rustdoc 或 routing gate |
+
 ## 剩余切片与 Gate
 
 2026-07-23 盘点将执行工作固化为 31 个最小可审查单元：16 个 production owner、2 个

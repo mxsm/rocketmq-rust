@@ -5876,7 +5876,6 @@ mod tests {
     use rocketmq_common::common::topic::TopicValidator;
     use rocketmq_common::CRC32Utils::crc32;
     use rocketmq_common::TopicAttributes::TopicAttributes;
-    use rocketmq_rust::ArcMut;
     #[cfg(feature = "tieredstore")]
     use rocketmq_tieredstore::fetcher::TieredGetMessageStatus;
     #[cfg(feature = "tieredstore")]
@@ -5935,7 +5934,7 @@ mod tests {
     use crate::store_path_config_helper::get_store_checkpoint;
     use rocketmq_store_local::message_store::lifecycle::LocalStoreState;
 
-    fn new_test_store(temp_dir: &tempfile::TempDir) -> ArcMut<LocalFileMessageStore> {
+    fn new_test_store(temp_dir: &tempfile::TempDir) -> LocalFileMessageStore {
         new_configured_test_store(temp_dir, MessageStoreConfig::default())
     }
 
@@ -5969,26 +5968,62 @@ mod tests {
     fn new_configured_test_store(
         temp_dir: &tempfile::TempDir,
         message_store_config: MessageStoreConfig,
-    ) -> ArcMut<LocalFileMessageStore> {
-        new_configured_test_store_with_broker(temp_dir, message_store_config, BrokerConfig::default())
+    ) -> LocalFileMessageStore {
+        new_owned_test_store_with_broker(temp_dir, message_store_config, BrokerConfig::default())
+    }
+
+    fn new_owned_test_store_with_broker(
+        temp_dir: &tempfile::TempDir,
+        mut message_store_config: MessageStoreConfig,
+        broker_config: BrokerConfig,
+    ) -> LocalFileMessageStore {
+        message_store_config.store_path_root_dir = temp_dir.path().to_string_lossy().to_string().into();
+        message_store_config.timer_wheel_enable = false;
+        let mut store = LocalFileMessageStore::new(
+            Arc::new(message_store_config),
+            Arc::new(broker_config),
+            Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
+            None,
+            false,
+        );
+        store
+            .wire_owned_root_dependencies()
+            .expect("LocalFile tests should wire owned Store capabilities");
+        store
     }
 
     fn new_configured_test_store_with_broker(
         temp_dir: &tempfile::TempDir,
         mut message_store_config: MessageStoreConfig,
         broker_config: BrokerConfig,
-    ) -> ArcMut<LocalFileMessageStore> {
+    ) -> rocketmq_rust::ArcMut<LocalFileMessageStore> {
         message_store_config.store_path_root_dir = temp_dir.path().to_string_lossy().to_string().into();
-        let mut store = ArcMut::new(LocalFileMessageStore::new(
+        let mut store = rocketmq_rust::ArcMut::new(LocalFileMessageStore::new(
             Arc::new(message_store_config),
             Arc::new(broker_config),
             Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
             None,
             false,
         ));
+        assert!(store.get_timer_message_store().is_none());
         let store_clone = store.clone();
         store.set_message_store_arc(store_clone);
         store
+    }
+
+    fn new_controller_test_store(
+        temp_dir: &tempfile::TempDir,
+        mut message_store_config: MessageStoreConfig,
+    ) -> LocalFileMessageStore {
+        message_store_config.enable_controller_mode = true;
+        new_owned_test_store_with_broker(
+            temp_dir,
+            message_store_config,
+            BrokerConfig {
+                enable_controller_mode: true,
+                ..BrokerConfig::default()
+            },
+        )
     }
 
     #[test]
@@ -6012,18 +6047,18 @@ mod tests {
         store.unlock_mapped_file(&mapped_file);
     }
 
-    fn new_unwired_test_store(temp_dir: &tempfile::TempDir) -> ArcMut<LocalFileMessageStore> {
+    fn new_unwired_test_store(temp_dir: &tempfile::TempDir) -> LocalFileMessageStore {
         let message_store_config = MessageStoreConfig {
             store_path_root_dir: temp_dir.path().to_string_lossy().to_string().into(),
             ..MessageStoreConfig::default()
         };
-        ArcMut::new(LocalFileMessageStore::new(
+        LocalFileMessageStore::new(
             Arc::new(message_store_config),
             Arc::new(BrokerConfig::default()),
             Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
             None,
             false,
-        ))
+        )
     }
 
     #[tokio::test]
@@ -6262,16 +6297,15 @@ mod tests {
     }
 
     #[test]
-    fn reput_background_boundary_does_not_clone_the_local_store_root() {
+    fn reput_background_boundary_uses_owned_store_capabilities() {
         let temp_dir = tempdir().unwrap();
         let store = new_configured_test_store(&temp_dir, MessageStoreConfig::default());
-        let strong_count = store.strong_count();
 
         let inner = reput_inner_for_store(&store);
 
-        assert_eq!(store.strong_count(), strong_count);
+        assert_eq!(inner.commit_log.get_max_offset(), store.get_max_phy_offset());
         drop(inner);
-        assert_eq!(store.strong_count(), strong_count);
+        assert_eq!(store.get_max_phy_offset(), 0);
     }
 
     #[test]
@@ -6665,7 +6699,7 @@ mod tests {
         store.reput_message_service.shutdown().await;
     }
 
-    fn new_async_flush_test_store(temp_dir: &tempfile::TempDir) -> ArcMut<LocalFileMessageStore> {
+    fn new_async_flush_test_store(temp_dir: &tempfile::TempDir) -> LocalFileMessageStore {
         new_configured_test_store(
             temp_dir,
             MessageStoreConfig {
@@ -6716,7 +6750,7 @@ mod tests {
     }
 
     async fn append_encoded_test_message(
-        store: &mut ArcMut<LocalFileMessageStore>,
+        store: &mut LocalFileMessageStore,
         topic: &CheetahString,
         commit_log_offset: i64,
         store_timestamp: i64,
@@ -6726,7 +6760,7 @@ mod tests {
     }
 
     async fn append_encoded_test_message_with_key(
-        store: &mut ArcMut<LocalFileMessageStore>,
+        store: &mut LocalFileMessageStore,
         topic: &CheetahString,
         commit_log_offset: i64,
         store_timestamp: i64,
@@ -6780,24 +6814,14 @@ mod tests {
     #[test]
     fn set_message_store_arc_initializes_timer_message_store_when_timer_wheel_enabled() {
         let temp_dir = tempdir().unwrap();
-        let message_store_config = MessageStoreConfig {
-            store_path_root_dir: temp_dir.path().to_string_lossy().to_string().into(),
-            timer_wheel_enable: true,
-            ..MessageStoreConfig::default()
-        };
-
-        let mut store = ArcMut::new(LocalFileMessageStore::new(
-            Arc::new(message_store_config),
-            Arc::new(BrokerConfig::default()),
-            Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
-            None,
-            false,
-        ));
-
-        assert!(store.get_timer_message_store().is_none());
-
-        let store_clone = store.clone();
-        store.set_message_store_arc(store_clone);
+        let store = new_configured_test_store_with_broker(
+            &temp_dir,
+            MessageStoreConfig {
+                timer_wheel_enable: true,
+                ..MessageStoreConfig::default()
+            },
+            BrokerConfig::default(),
+        );
 
         assert!(store.root_dependencies_wired);
         assert!(store.get_timer_message_store().is_some());
@@ -7508,7 +7532,7 @@ mod tests {
     #[tokio::test]
     async fn shutdown_waits_for_stats_and_timer_background_tasks() {
         let temp_dir = tempdir().unwrap();
-        let mut store = new_configured_test_store(
+        let mut store = new_configured_test_store_with_broker(
             &temp_dir,
             MessageStoreConfig {
                 duplication_enable: true,
@@ -7516,6 +7540,7 @@ mod tests {
                 timer_wheel_enable: true,
                 ..MessageStoreConfig::default()
             },
+            BrokerConfig::default(),
         );
 
         store.init().await.expect("init store");
@@ -7677,7 +7702,7 @@ mod tests {
     #[test]
     fn current_index_safe_offset_is_bounded_by_confirm_offset() {
         let temp_dir = tempdir().unwrap();
-        let mut store = new_configured_test_store_with_broker(
+        let mut store = new_owned_test_store_with_broker(
             &temp_dir,
             MessageStoreConfig::default(),
             BrokerConfig {
@@ -7930,7 +7955,7 @@ mod tests {
     #[tokio::test]
     async fn background_index_rebuild_retries_then_fails_when_commitlog_data_missing() {
         let temp_dir = tempdir().unwrap();
-        let mut store = new_configured_test_store_with_broker(
+        let mut store = new_owned_test_store_with_broker(
             &temp_dir,
             MessageStoreConfig {
                 enable_background_index_rebuild: true,
@@ -8001,7 +8026,7 @@ mod tests {
     #[tokio::test]
     async fn recover_enables_local_file_consume_queue_concurrency_when_configured() {
         let temp_dir = tempdir().unwrap();
-        let mut store = new_configured_test_store_with_broker(
+        let mut store = new_owned_test_store_with_broker(
             &temp_dir,
             MessageStoreConfig {
                 enable_local_file_consume_queue_recovery_concurrently: true,
@@ -8048,12 +8073,13 @@ mod tests {
     #[test]
     fn sync_broker_role_updates_timer_dequeue_state() {
         let temp_dir = tempdir().unwrap();
-        let mut store = new_configured_test_store(
+        let mut store = new_configured_test_store_with_broker(
             &temp_dir,
             MessageStoreConfig {
                 timer_wheel_enable: true,
                 ..MessageStoreConfig::default()
             },
+            BrokerConfig::default(),
         );
 
         let timer_message_store = store
@@ -8094,23 +8120,13 @@ mod tests {
     #[tokio::test]
     async fn sync_broker_role_in_controller_mode_refreshes_confirm_offset_for_master() {
         let temp_dir = tempdir().unwrap();
-        let mut store = ArcMut::new(LocalFileMessageStore::new(
-            Arc::new(MessageStoreConfig {
-                store_path_root_dir: temp_dir.path().to_string_lossy().to_string().into(),
-                enable_controller_mode: true,
+        let mut store = new_controller_test_store(
+            &temp_dir,
+            MessageStoreConfig {
                 all_ack_in_sync_state_set: true,
                 ..MessageStoreConfig::default()
-            }),
-            Arc::new(BrokerConfig {
-                enable_controller_mode: true,
-                ..BrokerConfig::default()
-            }),
-            Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
-            None,
-            false,
-        ));
-        let store_clone = store.clone();
-        store.set_message_store_arc(store_clone);
+            },
+        );
         store.init().await.expect("init store");
         store.sync_controller_sync_state_set(7, &HashSet::from([7_i64]));
 
@@ -8439,20 +8455,14 @@ mod tests {
     #[tokio::test]
     async fn flush_consume_queue_service_start_persists_logic_checkpoint_to_disk() {
         let temp_dir = tempdir().unwrap();
-        let mut store = ArcMut::new(LocalFileMessageStore::new(
-            Arc::new(MessageStoreConfig {
-                store_path_root_dir: temp_dir.path().to_string_lossy().to_string().into(),
+        let store = new_configured_test_store(
+            &temp_dir,
+            MessageStoreConfig {
                 flush_interval_consume_queue: 10,
                 flush_consume_queue_thorough_interval: 10,
                 ..MessageStoreConfig::default()
-            }),
-            Arc::new(BrokerConfig::default()),
-            Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
-            None,
-            false,
-        ));
-        let store_clone = store.clone();
-        store.set_message_store_arc(store_clone);
+            },
+        );
 
         let expected_timestamp = 4321i64;
         store
@@ -9018,22 +9028,7 @@ mod tests {
     #[test]
     fn do_recheck_reput_offset_from_dispatchers_rewinds_to_dispatched_commitlog_offset() {
         let temp_dir = tempdir().unwrap();
-        let mut store = ArcMut::new(LocalFileMessageStore::new(
-            Arc::new(MessageStoreConfig {
-                store_path_root_dir: temp_dir.path().to_string_lossy().to_string().into(),
-                enable_controller_mode: true,
-                ..MessageStoreConfig::default()
-            }),
-            Arc::new(BrokerConfig {
-                enable_controller_mode: true,
-                ..BrokerConfig::default()
-            }),
-            Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
-            None,
-            false,
-        ));
-        let store_clone = store.clone();
-        store.set_message_store_arc(store_clone);
+        let mut store = new_controller_test_store(&temp_dir, MessageStoreConfig::default());
         let topic = CheetahString::from_static_str("recheck-reput-offset-topic");
 
         store.set_confirm_offset(256);
@@ -9068,22 +9063,7 @@ mod tests {
     #[test]
     fn do_recheck_reput_offset_from_dispatchers_uses_minimum_progress_across_cq_and_index() {
         let temp_dir = tempdir().unwrap();
-        let mut store = ArcMut::new(LocalFileMessageStore::new(
-            Arc::new(MessageStoreConfig {
-                store_path_root_dir: temp_dir.path().to_string_lossy().to_string().into(),
-                enable_controller_mode: true,
-                ..MessageStoreConfig::default()
-            }),
-            Arc::new(BrokerConfig {
-                enable_controller_mode: true,
-                ..BrokerConfig::default()
-            }),
-            Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
-            None,
-            false,
-        ));
-        let store_clone = store.clone();
-        store.set_message_store_arc(store_clone);
+        let mut store = new_controller_test_store(&temp_dir, MessageStoreConfig::default());
         let topic = CheetahString::from_static_str("recheck-reput-offset-with-index-topic");
 
         store.set_confirm_offset(256);
@@ -9129,22 +9109,7 @@ mod tests {
     #[test]
     fn get_dispatch_recovery_offset_respects_controller_epoch_start_offset() {
         let temp_dir = tempdir().unwrap();
-        let mut store = ArcMut::new(LocalFileMessageStore::new(
-            Arc::new(MessageStoreConfig {
-                store_path_root_dir: temp_dir.path().to_string_lossy().to_string().into(),
-                enable_controller_mode: true,
-                ..MessageStoreConfig::default()
-            }),
-            Arc::new(BrokerConfig {
-                enable_controller_mode: true,
-                ..BrokerConfig::default()
-            }),
-            Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
-            None,
-            false,
-        ));
-        let store_clone = store.clone();
-        store.set_message_store_arc(store_clone);
+        let mut store = new_controller_test_store(&temp_dir, MessageStoreConfig::default());
 
         store.set_controller_epoch_start_offset(180);
 
@@ -9154,22 +9119,7 @@ mod tests {
     #[test]
     fn do_recheck_reput_offset_from_dispatchers_respects_controller_epoch_start_offset_floor() {
         let temp_dir = tempdir().unwrap();
-        let mut store = ArcMut::new(LocalFileMessageStore::new(
-            Arc::new(MessageStoreConfig {
-                store_path_root_dir: temp_dir.path().to_string_lossy().to_string().into(),
-                enable_controller_mode: true,
-                ..MessageStoreConfig::default()
-            }),
-            Arc::new(BrokerConfig {
-                enable_controller_mode: true,
-                ..BrokerConfig::default()
-            }),
-            Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
-            None,
-            false,
-        ));
-        let store_clone = store.clone();
-        store.set_message_store_arc(store_clone);
+        let mut store = new_controller_test_store(&temp_dir, MessageStoreConfig::default());
         let topic = CheetahString::from_static_str("recheck-reput-offset-epoch-floor-topic");
 
         store.set_confirm_offset(256);
