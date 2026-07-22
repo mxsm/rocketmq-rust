@@ -1087,6 +1087,13 @@ handle。recovery/start/shutdown 与 `MessageStore::get_commit_log_mut` 保留 L
 Store production 52/110）；相对 bc72 净删除 2 个 production occurrences，无 relocation、新增 identity 或临时
 approval。R10 从 5/11 降至 5/9，仍未完成；31 项执行清单仍为完成 8 项、剩余 23 项，总进度仍为 75/82。
 
+Log-filter telemetry registry gate repair 随 Issue #8563 完成：PR #8559 已发布的 6 个 log-filter 指标补入 Rust
+metric catalog，精确记录 counter/gauge kind、unit、Observability owner 与空 label set；canonical registry/violation
+fixtures 由当前源码 inventory 重新生成，当前合同为 125 metrics、136 signals、68 attributes。telemetry semantic guard、
+8/8 Python mutation/确定性合同和 observability all-feature 测试恢复通过。该修复不修改指标名、label、exporter 或
+log-filter runtime 行为，也不改变 reviewed ArcMut baseline、31 项执行清单与 75/82 正式进度；下一 owner 切片仍为
+M11-12bc74。
+
 ### 9.3 证据目录
 
 - 运行期生成物：`target/architecture-refactor/Mxx/<run-id>/`，不提交 Git。

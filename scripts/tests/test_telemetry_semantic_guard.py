@@ -40,10 +40,35 @@ class TelemetrySemanticGuardTest(unittest.TestCase):
 
     def test_live_registry_matches_every_rust_signal(self) -> None:
         self.assertEqual([], guard.validate_registry(self.registry, self.inventory))
-        self.assertEqual(119, len(self.inventory["metrics"]))
+        self.assertEqual(125, len(self.inventory["metrics"]))
         self.assertEqual(4, len(self.inventory["spans"]))
         self.assertEqual(7, len(self.inventory["events"]))
-        self.assertEqual(130, len(self.registry["signals"]))
+        self.assertEqual(136, len(self.registry["signals"]))
+
+    def test_log_filter_metrics_have_stable_registry_contracts(self) -> None:
+        symbols = {
+            "LOG_FILTER_RELOAD_TOTAL",
+            "LOG_FILTER_ACTIVE",
+            "LOG_FILTER_EXPIRY_TIMESTAMP_SECONDS",
+            "LOG_FILTER_AUDIT_FAILURE_TOTAL",
+            "LOG_FILTER_AUTO_RESTORE_FAILURE_TOTAL",
+            "LOG_FILTER_ROLLBACK_FAILURE_TOTAL",
+        }
+        signals = {
+            signal["source_symbol"]: signal
+            for signal in self.registry["signals"]
+            if signal["source_symbol"] in symbols
+        }
+
+        self.assertEqual(symbols, set(signals))
+        for signal in signals.values():
+            self.assertEqual("metric", signal["signal_type"])
+            self.assertEqual("observability", signal["owner"])
+            self.assertEqual("stable", signal["stability"])
+            self.assertEqual("operational", signal["privacy"])
+            self.assertEqual([], signal["attributes"])
+            self.assertEqual(1, signal["cardinality_budget"])
+            self.assertEqual({"strategy": "aggregate"}, signal["sampling"])
 
     def test_generator_is_deterministic(self) -> None:
         self.assertEqual(self.registry, generator.build_registry())
@@ -59,7 +84,7 @@ class TelemetrySemanticGuardTest(unittest.TestCase):
             check=False,
         )
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
-        self.assertIn("metrics=119 spans=4 logs=7 attributes=66", result.stdout)
+        self.assertIn("metrics=125 spans=4 logs=7 attributes=68", result.stdout)
 
     def test_committed_violation_fixtures_are_rejected(self) -> None:
         fixture_ids = {fixture["id"] for fixture in self.fixtures}

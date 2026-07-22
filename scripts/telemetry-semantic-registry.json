@@ -509,9 +509,27 @@
       "redaction": "none"
     },
     {
+      "id": "service",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
       "id": "signal_type",
       "cardinality": "bounded",
       "privacy": "public",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "source",
+      "cardinality": "bounded",
+      "privacy": "operational",
       "max_distinct": 10000,
       "max_value_bytes": 256,
       "default_enabled": true,
@@ -3724,6 +3742,144 @@
       "owner": "proxy",
       "catalog": "rust",
       "family": "connection-bytes",
+      "stability": "stable",
+      "attributes": [],
+      "cardinality_budget": 1,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_observability_log_filter_reload_total",
+      "source_symbol": "LOG_FILTER_RELOAD_TOTAL",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "{reload}",
+      "owner": "observability",
+      "catalog": "rust",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [],
+      "cardinality_budget": 1,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_observability_log_filter_active",
+      "source_symbol": "LOG_FILTER_ACTIVE",
+      "signal_type": "metric",
+      "kind": "gauge",
+      "unit": "1",
+      "owner": "observability",
+      "catalog": "rust",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [],
+      "cardinality_budget": 1,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_observability_log_filter_expiry_timestamp_seconds",
+      "source_symbol": "LOG_FILTER_EXPIRY_TIMESTAMP_SECONDS",
+      "signal_type": "metric",
+      "kind": "gauge",
+      "unit": "s",
+      "owner": "observability",
+      "catalog": "rust",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [],
+      "cardinality_budget": 1,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_observability_log_filter_audit_failure_total",
+      "source_symbol": "LOG_FILTER_AUDIT_FAILURE_TOTAL",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "{failure}",
+      "owner": "observability",
+      "catalog": "rust",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [],
+      "cardinality_budget": 1,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_observability_log_filter_auto_restore_failure_total",
+      "source_symbol": "LOG_FILTER_AUTO_RESTORE_FAILURE_TOTAL",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "{failure}",
+      "owner": "observability",
+      "catalog": "rust",
+      "family": "recovery-cache",
+      "stability": "stable",
+      "attributes": [],
+      "cardinality_budget": 1,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_observability_log_filter_rollback_failure_total",
+      "source_symbol": "LOG_FILTER_ROLLBACK_FAILURE_TOTAL",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "{failure}",
+      "owner": "observability",
+      "catalog": "rust",
+      "family": "request",
       "stability": "stable",
       "attributes": [],
       "cardinality_budget": 1,
