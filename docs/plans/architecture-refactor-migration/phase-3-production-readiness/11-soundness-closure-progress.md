@@ -4637,6 +4637,30 @@ Single consume queue tests 随 Issue #8603 完成以下收口：
 | final gates | `cargo fmt --all -- --check`、workspace all-target/all-feature strict Clippy 与 `git diff --check` 通过 |
 | reduced validation scope | 本切片只改变 cfg(test) single queue owner，不修改 production queue behavior、runtime 或 feature；运行一个直接消费 fixture 的模块，并由最终 workspace Clippy 编译/lint 全部 target，不重复 Store/Broker 全包测试、runtime audit、M06、RocksDB matrix、telemetry、release、Rustdoc 或额外 package Clippy/check |
 
+## M11-12bc94 实现
+
+CommitLog test root 随 Issue #8605 完成以下收口：
+
+- `new_test_message_store[_with_config]` 直接返回独占 `LocalFileMessageStore`，删除 test-only ArcMut constructor、
+  clone、完整 Store self-wiring 与 `Box<dyn DerefMut>`；测试配置显式关闭不在范围内的 Timer wheel。
+- owned-root wiring 复用现有 `HAReplicaStoreHandle` 构造 Default/AutoSwitch HA pending service；ConsumeQueue 与 HA
+  只持有独立 capability，不再强制启用 duplication 或共享完整 Store。Timer 仍持有 legacy root facade，因此该路径继续
+  在 Timer enabled 时 fail closed。
+- reviewed baseline 从 57/226 降至 56/225：production 保持 13/24，test 从 30/162 降至 29/161，
+  compatibility 保持 14/40；净删除 1 test identity/1 occurrence，无 relocation、新 identity 或临时 approval。
+- Store test/bench caller 从 22/146 降至 21/145；R17 当前上界降至 29/161（Broker 6/8、Client 0/0、
+  runtime-foundation 2/8），执行清单保持完成 11 项、剩余 20 项，正式进度仍为 75/82。
+
+## M11-12bc94 验证
+
+| 命令 | 结果 |
+|---|---|
+| affected behavior | 首轮 CommitLog 模块测试 18/19 通过，统一开启 duplication 导致 controller confirm-offset 语义变化；恢复原配置并让 owned wiring 构造窄 HA service 后，CommitLog 19/19 与 owned-root wiring 5/5 通过 |
+| reviewed baseline / fixtures | 正式 baseline 与 reviewed candidate 的 semantic set 均为 56/225；直接 guard、candidate compare、27/27 fixtures 与 78/78 guard tests 通过；净删除 1 test identity/1 occurrence，无 relocation、新 identity 或临时 approval |
+| runtime boundary | `scripts/runtime-audit.ps1 -SkipBaseline -EnforceBoundaryBaseline` 通过，确认 HA capability wiring 未引入 detached task、blocking 或 shutdown 边界回归 |
+| final gates | 首轮 format check 只发现 CommitLog 构造调用排版差异；执行 rustfmt 后，`cargo fmt --all -- --check`、workspace all-target/all-feature strict Clippy 与 `git diff --check` 通过，非零首轮未计作通过 |
+| reduced validation scope | 只运行两个直接受影响模块共 24 项测试、ArcMut 守卫和一次由 production HA wiring 触发的 runtime audit；最终 workspace 门禁只执行一次，不重复 Store/Broker 全包测试、额外 package check/Clippy、M06、RocksDB、telemetry、release、Rustdoc 或 routing gate |
+
 ## 剩余切片与 Gate
 
 2026-07-23 盘点将执行工作固化为 31 个最小可审查单元：16 个 production owner、2 个
