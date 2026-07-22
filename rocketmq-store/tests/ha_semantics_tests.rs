@@ -26,7 +26,6 @@ use rocketmq_common::common::broker::broker_role::BrokerRole;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_common::common::message::MessageTrait;
-use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::config::flush_disk_type::FlushDiskType;
@@ -34,25 +33,27 @@ use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore;
 use tempfile::TempDir;
 
-fn new_test_store(message_store_config: MessageStoreConfig) -> ArcMut<LocalFileMessageStore> {
+fn new_test_store(message_store_config: MessageStoreConfig) -> LocalFileMessageStore {
     new_test_store_with_broker_config(message_store_config, BrokerConfig::default())
 }
 
 fn new_test_store_with_broker_config(
-    message_store_config: MessageStoreConfig,
+    mut message_store_config: MessageStoreConfig,
     broker_config: BrokerConfig,
-) -> ArcMut<LocalFileMessageStore> {
+) -> LocalFileMessageStore {
+    message_store_config.timer_wheel_enable = false;
     let topic_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>> = Arc::new(DashMap::new());
 
-    let mut store = ArcMut::new(LocalFileMessageStore::new(
+    let mut store = LocalFileMessageStore::new(
         Arc::new(message_store_config),
         Arc::new(broker_config),
         topic_table,
         None,
         false,
-    ));
-    let store_clone = store.clone();
-    store.set_message_store_arc(store_clone);
+    );
+    store
+        .wire_owned_root_dependencies()
+        .expect("HA semantics tests should wire owned Store capabilities");
     store
 }
 

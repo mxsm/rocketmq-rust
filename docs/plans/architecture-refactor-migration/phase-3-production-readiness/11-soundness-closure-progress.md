@@ -4686,6 +4686,33 @@ LocalFile unit-test owner 随 Issue #8607 完成以下收口：
 | final gates | `cargo fmt --all -- --check`、workspace all-target/all-feature strict Clippy 与 `git diff --check` 通过；Clippy 复用现有增量缓存并在 16 秒内完成，Windows linker stdout 与既有 future-incompatibility note 不受 `-D warnings` 管辖 |
 | reduced validation scope | 本切片只修改 cfg(test) fixture/断言与 reviewed baseline，不修改 production、公开 API、runtime lifecycle 或 feature；使用关键 exact tests 加最终 workspace Clippy 对全部 test target 的编译/lint 兜底，不重复 Store/Broker 全包测试、额外 package check/Clippy、runtime audit、M06、RocksDB matrix、telemetry、release、Rustdoc 或 routing gate |
 
+## M11-12bc96 实现
+
+Cross-crate LocalFile test roots 随 Issue #8609 完成以下批量收口：
+
+- 既有 `wire_owned_root_dependencies` 从 crate-private 提升为 additive public composition API，并补充
+  `# Errors` 契约；ConsumeQueue/HA wiring 行为不变，Timer enabled 仍返回 `StoreError::InvalidState`。
+- CommitLog recovery、HA semantics 与 Broker expression-filter fixture 显式关闭 Timer，直接返回独占
+  `LocalFileMessageStore`，删除 test-only ArcMut import、constructor、return type、clone 与 self-wiring。
+- BrokerRuntime controller role tests 删除自建 LocalFile/Generic ArcMut 链，复用已存在的 production
+  `initialize_message_store` 入口，并从 runtime Store accessor 验证 HA role 与配置状态；测试侧只剩 `use super::*`
+  带入的 1/1 import debt，随 R01 production root 一并删除。
+- reviewed baseline 从 55/210 降至 44/196：production 保持 13/24，test 从 28/146 降至 17/132，
+  compatibility 保持 14/40；净删除 11 test identities/14 occurrences，无 relocation、新 identity 或临时
+  approval。
+- Store test/bench caller 从 20/130 降至 14/123，Broker test caller 从 6/8 降至 1/1；R17 当前上界降至
+  17/132（Client 0/0、runtime-foundation 2/8），执行清单保持完成 11 项、剩余 20 项，正式进度仍为 75/82。
+
+## M11-12bc96 验证
+
+| 命令 | 结果 |
+|---|---|
+| affected behavior | HA semantics 3/3、Broker expression-filter store-read 1/1、BrokerRuntime controller role promote/demote 2/2 通过，共 6 条直接行为路径；Broker 两次首次 test-target link 分别约 115 秒与 50 秒，实际测试分别为 0.48 秒与 0.02 秒 |
+| CommitLog recovery timeout | 第一条 dirty-tail exact test 在 integration target 已编译后仍运行数分钟，按缩减验证策略停止且未计作通过；原计划另两条 recovery exact tests 未重复。最终 workspace all-target Clippy负责该 integration target 的完整编译/lint，不把超时伪报为 PASS |
+| reviewed baseline / fixtures | 正式 baseline 与 expanded reviewed candidate 的 semantic set 均为 44/196；candidate compare、直接 guard、27/27 fixtures 与 78/78 guard tests 通过；净删除 11 test identities/14 occurrences，无 relocation、新 identity 或临时 approval |
+| final gates | `cargo fmt --all -- --check`、workspace all-target/all-feature strict Clippy 与 `git diff --check` 通过；最终 Clippy 复用增量缓存并在 22 秒内完成，Windows linker stdout 与既有 future-incompatibility note 不受 `-D warnings` 管辖 |
+| reduced validation scope | 只验证四个直接 consumer 的代表行为、ArcMut 治理和一次最终 workspace 门禁；不重复 CommitLog recovery 全套、Store/Broker 全包测试、额外 package check/Clippy、runtime audit、M06、RocksDB matrix、telemetry、release、Rustdoc 或 routing gate。public doc 没有链接、示例或 feature-gated item，因此不增加独立 Rustdoc build |
+
 ## 剩余切片与 Gate
 
 2026-07-23 盘点将执行工作固化为 31 个最小可审查单元：16 个 production owner、2 个

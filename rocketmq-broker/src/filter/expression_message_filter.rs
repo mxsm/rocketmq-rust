@@ -182,7 +182,6 @@ mod tests {
     use rocketmq_common::common::message::MessageTrait;
     use rocketmq_common::MessageDecoder::message_properties_to_string;
     use rocketmq_remoting::protocol::filter::filter_api::FilterAPI;
-    use rocketmq_rust::ArcMut;
     use rocketmq_store::base::message_status_enum::GetMessageStatus;
     use rocketmq_store::base::message_status_enum::PutMessageStatus;
     use rocketmq_store::base::message_store::MessageStore;
@@ -219,25 +218,27 @@ mod tests {
         path
     }
 
-    fn new_store(temp_root: &Path, topic: &CheetahString) -> ArcMut<LocalFileMessageStore> {
+    fn new_store(temp_root: &Path, topic: &CheetahString) -> LocalFileMessageStore {
         let topic_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>> = Arc::new(DashMap::new());
         topic_table.insert(topic.clone(), Arc::new(TopicConfig::with_queues(topic.as_str(), 1, 1)));
 
-        let mut store = ArcMut::new(LocalFileMessageStore::new(
+        let mut store = LocalFileMessageStore::new(
             Arc::new(MessageStoreConfig {
                 store_path_root_dir: temp_root.to_string_lossy().to_string().into(),
                 read_uncommitted: true,
                 mapped_file_size_commit_log: 4096,
                 mapped_file_size_consume_queue: 200,
+                timer_wheel_enable: false,
                 ..MessageStoreConfig::default()
             }),
             Arc::new(BrokerConfig::default()),
             topic_table,
             None,
             false,
-        ));
-        let store_clone = store.clone();
-        store.set_message_store_arc(store_clone);
+        );
+        store
+            .wire_owned_root_dependencies()
+            .expect("expression filter tests should wire owned Store capabilities");
         store
     }
 
