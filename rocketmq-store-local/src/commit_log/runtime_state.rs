@@ -198,7 +198,7 @@ impl CommitLogRuntimeState {
 
     /// Replaces the stored confirm offset.
     #[doc(hidden)]
-    pub fn set_confirm_offset(&mut self, confirm_offset: i64) {
+    pub fn set_confirm_offset(&self, confirm_offset: i64) {
         self.publish_confirm_offset(confirm_offset);
     }
 

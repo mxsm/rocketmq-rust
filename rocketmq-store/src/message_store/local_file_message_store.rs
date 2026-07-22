@@ -143,6 +143,7 @@ use crate::kv::compaction_store::CompactionStore;
 use crate::log_file::commit_log;
 use crate::log_file::commit_log::CommitLog;
 use crate::log_file::commit_log::CommitLogCleanupHandle;
+use crate::log_file::commit_log::CommitLogReadHandle;
 use crate::log_file::commit_log::CommitLogStoreContext;
 use crate::log_file::mapped_file::MappedFile;
 use crate::log_file::MAX_PULL_MSG_SIZE;
@@ -166,7 +167,7 @@ use crate::store_path_config_helper::get_lock_file;
 use crate::store_path_config_helper::get_store_checkpoint;
 use crate::store_path_config_helper::get_store_path_consume_queue;
 #[cfg(feature = "tieredstore")]
-use crate::tieredstore::resolve_tiered_dispatch_body;
+use crate::tieredstore::resolve_tiered_dispatch_body_with_reader;
 #[cfg(feature = "tieredstore")]
 use crate::tieredstore::TieredStoreDecorator;
 use crate::timer::timer_message_store::TimerMessageStore;
@@ -558,8 +559,9 @@ impl LocalFileMessageStore {
             (*allocate_mapped_file_service).clone(),
         );
         commit_log.set_store_health_recorder(store_health_recorder.clone());
-        let commit_log = ArcMut::new(commit_log);
+        let commit_log_read = commit_log.read_handle();
         let commit_log_cleanup = commit_log.cleanup_handle();
+        let commit_log = ArcMut::new(commit_log);
         let compaction_store = Arc::new(CompactionStore::with_root(
             PathBuf::from(message_store_config.store_path_root_dir.as_str()).join("compaction"),
         ));
@@ -570,14 +572,14 @@ impl LocalFileMessageStore {
                 topic_config_table.clone(),
             )));
         }
-        let compaction_commit_log = commit_log.clone();
+        let compaction_commit_log = commit_log_read.clone();
         compaction_store.set_payload_resolver(move |physical_offset, size| {
             compaction_commit_log
                 .get_message(physical_offset, size)
                 .and_then(|result| result.get_bytes())
         });
         #[cfg(feature = "tieredstore")]
-        let tiered_store = Self::build_tiered_store(message_store_config.clone(), commit_log.clone(), &mut dispatcher)?;
+        let tiered_store = Self::build_tiered_store(message_store_config.clone(), commit_log_read, &mut dispatcher)?;
         #[cfg(feature = "tieredstore")]
         let minimum_pinned_wal_segment = tiered_store.as_ref().map(|tiered_store| {
             let tiered_store = tiered_store.clone();
@@ -684,7 +686,7 @@ impl LocalFileMessageStore {
     #[cfg(feature = "tieredstore")]
     fn build_tiered_store(
         message_store_config: Arc<MessageStoreConfig>,
-        commit_log: ArcMut<CommitLog>,
+        commit_log: CommitLogReadHandle,
         dispatcher: &mut CommitLogDispatcherDefault,
     ) -> Result<Option<Arc<TieredStoreDecorator>>, StoreError> {
         let Some(tiered_store_config) = message_store_config.tiered_store_config.clone() else {
@@ -697,7 +699,7 @@ impl LocalFileMessageStore {
         let tiered_store = Arc::new(TieredStoreDecorator::new(tiered_store_config)?);
         let commit_log_for_dispatch = commit_log;
         let body_resolver = Arc::new(move |request: &DispatchRequest| -> Option<Bytes> {
-            resolve_tiered_dispatch_body(&commit_log_for_dispatch, request)
+            resolve_tiered_dispatch_body_with_reader(&commit_log_for_dispatch, request)
         });
         dispatcher.add_dispatcher(tiered_store.commit_log_dispatcher(body_resolver));
 
@@ -1344,7 +1346,7 @@ impl LocalFileMessageStore {
             error!("scheduled store tasks not started: {error}");
             return;
         }
-        let self_check_commit_log = self.commit_log.clone();
+        let self_check_commit_log = self.commit_log.read_handle();
         let self_check_consume_queue_store = self.consume_queue_store.clone();
         let Some(store_checkpoint_arc) = self.store_checkpoint.clone() else {
             error!("scheduled store tasks not started: store checkpoint is not initialized");
@@ -1667,7 +1669,7 @@ impl LocalFileMessageStore {
         let runtime_context = self.reput_runtime_context();
         self.reput_message_service
             .run_once(
-                self.commit_log.clone(),
+                self.commit_log.read_handle(),
                 self.composition.reput(),
                 self.dispatcher.handle(),
                 self.notify_message_arrive_in_batch,
@@ -1841,7 +1843,7 @@ impl MessageStore for LocalFileMessageStore {
             self.ensure_message_store_arc("start")?;
             let reput_runtime_context = self.reput_runtime_context();
             self.reput_message_service.start(
-                self.commit_log.clone(),
+                self.commit_log.read_handle(),
                 self.composition.reput(),
                 self.dispatcher.handle(),
                 self.notify_message_arrive_in_batch,
@@ -1851,7 +1853,7 @@ impl MessageStore for LocalFileMessageStore {
             self.flush_consume_queue_service.start();
             self.commit_log.start();
             self.background_index_rebuild_service.start(
-                self.commit_log.clone(),
+                self.commit_log.read_handle(),
                 self.message_store_config.clone(),
                 self.index_service.clone(),
                 self.delay_level_table_ref().clone(),
@@ -4239,7 +4241,7 @@ impl BackgroundIndexRebuildService {
 
     fn start(
         &mut self,
-        commit_log: ArcMut<CommitLog>,
+        commit_log: CommitLogReadHandle,
         message_store_config: Arc<MessageStoreConfig>,
         index_service: IndexService,
         delay_level_table: BTreeMap<i32, i64>,
@@ -4333,7 +4335,7 @@ impl BackgroundIndexRebuildService {
 }
 
 struct BackgroundIndexRebuildWorker {
-    commit_log: ArcMut<CommitLog>,
+    commit_log: CommitLogReadHandle,
     message_store_config: Arc<MessageStoreConfig>,
     index_service: IndexService,
     delay_level_table: BTreeMap<i32, i64>,
@@ -4571,7 +4573,7 @@ impl ReputMessageService {
 
     pub fn start(
         &mut self,
-        commit_log: ArcMut<CommitLog>,
+        commit_log: CommitLogReadHandle,
         policy: ReputPolicy,
         dispatcher: CommitLogDispatchHandle,
         notify_message_arrive_in_batch: bool,
@@ -4744,7 +4746,7 @@ impl ReputMessageService {
 
     pub async fn run_once(
         &mut self,
-        commit_log: ArcMut<CommitLog>,
+        commit_log: CommitLogReadHandle,
         policy: ReputPolicy,
         dispatcher: CommitLogDispatchHandle,
         notify_message_arrive_in_batch: bool,
@@ -4824,7 +4826,7 @@ impl ReputMessageService {
 #[derive(Clone)]
 struct ReputMessageServiceInner {
     reput_from_offset: Arc<AtomicI64>,
-    commit_log: ArcMut<CommitLog>,
+    commit_log: CommitLogReadHandle,
     policy: ReputPolicy,
     dispatcher: CommitLogDispatchHandle,
     notify_message_arrive_in_batch: bool,
@@ -5886,7 +5888,7 @@ mod tests {
         let policy = store.composition.reput();
         ReputMessageServiceInner {
             reput_from_offset: Arc::new(AtomicI64::new(0)),
-            commit_log: store.commit_log.clone(),
+            commit_log: store.commit_log.read_handle(),
             policy,
             dispatcher: store.dispatcher.handle(),
             notify_message_arrive_in_batch: false,
@@ -6072,6 +6074,31 @@ mod tests {
         assert!(!commit_log_production.contains("message_store: ArcMut<LocalFileMessageStore>"));
     }
 
+    #[test]
+    fn commit_log_long_lived_readers_use_narrow_capability() {
+        let local_source = include_str!("local_file_message_store.rs").replace("\r\n", "\n");
+        let local_production = local_source
+            .split_once("#[cfg(test)]\nmod tests")
+            .map(|(source, _)| source)
+            .expect("LocalFileMessageStore production section");
+        assert_eq!(local_production.matches("ArcMut<CommitLog>").count(), 1);
+        assert!(local_production.contains("commit_log: CommitLogReadHandle"));
+        assert!(local_production.contains("self.commit_log.read_handle()"));
+        assert!(!local_production.contains("self_check_commit_log = self.commit_log.clone()"));
+
+        let commit_log_source = include_str!("../log_file/commit_log.rs").replace("\r\n", "\n");
+        let commit_log_production = commit_log_source
+            .split_once("#[cfg(test)]\nmod tests")
+            .map(|(source, _)| source)
+            .expect("CommitLog production section");
+        assert!(commit_log_production.contains("pub(crate) struct CommitLogReadHandle"));
+        assert!(commit_log_production.contains("mapped_file_queue: MappedFileQueueReadHandle"));
+        assert!(commit_log_production.contains("runtime_state: Arc<CommitLogRuntimeState>"));
+
+        let mapped_file_queue_source = include_str!("../consume_queue/mapped_file_queue.rs").replace("\r\n", "\n");
+        assert!(mapped_file_queue_source.contains("pub(crate) struct MappedFileQueueReadHandle"));
+    }
+
     #[tokio::test]
     async fn reput_shutdown_wait_uses_dispatch_progress_notification() {
         let temp_dir = tempdir().unwrap();
@@ -6148,7 +6175,7 @@ mod tests {
             append_encoded_test_message(&mut store, &topic, 0, 1_000, Bytes::from_static(b"backlog-body")).await;
 
         store.reput_message_service.set_reput_from_offset(0);
-        let commit_log = store.commit_log.clone();
+        let commit_log = store.commit_log.read_handle();
         let reput_policy = store.composition.reput();
         let dispatcher = store.dispatcher.handle();
         let runtime_context = store.reput_runtime_context();
@@ -7221,7 +7248,7 @@ mod tests {
     fn background_index_rebuild_is_disabled_by_default_for_store() {
         let temp_dir = tempdir().unwrap();
         let mut store = new_test_store(&temp_dir);
-        let commit_log = store.commit_log.clone();
+        let commit_log = store.commit_log.read_handle();
         let message_store_config = store.message_store_config.clone();
         let index_service = store.index_service.clone();
         let delay_level_table = store.delay_level_table_ref().clone();
@@ -7264,7 +7291,7 @@ mod tests {
         );
         store.set_confirm_offset(128);
 
-        let commit_log = store.commit_log.clone();
+        let commit_log = store.commit_log.read_handle();
         let message_store_config = store.message_store_config.clone();
         let index_service = store.index_service.clone();
         let delay_level_table = store.delay_level_table_ref().clone();
@@ -7333,7 +7360,7 @@ mod tests {
             "1"
         );
 
-        let commit_log = store.commit_log.clone();
+        let commit_log = store.commit_log.read_handle();
         let message_store_config = store.message_store_config.clone();
         let index_service = store.index_service.clone();
         let delay_level_table = store.delay_level_table_ref().clone();
@@ -7454,7 +7481,7 @@ mod tests {
         );
         store.set_confirm_offset(128);
 
-        let commit_log = store.commit_log.clone();
+        let commit_log = store.commit_log.read_handle();
         let message_store_config = store.message_store_config.clone();
         let index_service = store.index_service.clone();
         let delay_level_table = store.delay_level_table_ref().clone();

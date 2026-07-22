@@ -1651,10 +1651,7 @@ def abnormal_recovery_state_boundary_violations(source: str) -> list[str]:
 def store_normal_recovery_adapter_violations(commit_log: str) -> list[str]:
     violations: list[str] = []
     signatures = {
-        name: (
-            f"pubasyncfn{name}(&mutself,max_phy_offset_of_consume_queue:i64,"
-            "mutmessage_store:ArcMut<LocalFileMessageStore>,)"
-        )
+        name: f"pubasyncfn{name}(&mutself,max_phy_offset_of_consume_queue:i64)"
         for name in [
             "recover_normally_optimized",
             "recover_normally",
@@ -2318,7 +2315,7 @@ def store_abnormal_recovery_adapter_violations(commit_log: str) -> list[str]:
             violations.append(f"{name} driver failure handling changed")
         required_final = (
             "letcompletion=abnormal_recovery.completion(max_phy_offset_of_consume_queue);",
-            "apply_recovery_completion!(self,completion,max_phy_offset_of_consume_queue,message_store);",
+            "apply_recovery_completion!(self,completion,max_phy_offset_of_consume_queue);",
         )
         if any(fragment not in normalized for fragment in required_final):
             violations.append(f"{name} final abnormal watermarks changed")
@@ -7362,8 +7359,8 @@ def mapped_file_queue_storage_contract_violations(
         if store_compact.count(constructor) != 1:
             violations.append(f"Store mapped-file queue storage constructor changed: {constructor}")
     expected_accessor_counts = {
-        "self.storage.mapped_files()": 29,
-        "self.storage.mapped_file_size()": 18,
+        "self.storage.mapped_files()": 30,
+        "self.storage.mapped_file_size()": 19,
         "self.storage.store_path()": 6,
     }
     for accessor, expected_count in expected_accessor_counts.items():
@@ -8021,16 +8018,17 @@ def mapped_file_queue_io_contract_violations(
         "apply_load_outcome": (
             "letsuccess=outcome.is_success()",
             "letloaded_files=outcome.into_mapped_files()",
-            "files.extend(loaded_files)",
-            "self.storage.mapped_files().store(Arc::new(files))",
+            "if!loaded_files.is_empty()",
+            "self.update_mapped_file_generation(|current|",
+            "files.extend(loaded_files.iter().cloned())",
             "success",
         ),
         "do_create_mapped_file": (
             "letis_first=self.storage.mapped_files().load().is_empty()",
             "create_mapped_file_for_queue(",
             "self.allocate_mapped_file_service.as_ref()",
+            "self.update_mapped_file_generation(|current|",
             "files.push(arc_file.clone())",
-            "self.storage.mapped_files().store(Arc::new(files))",
             "Some(arc_file)",
         ),
     }.items():
@@ -8446,9 +8444,14 @@ def mapped_file_queue_metrics_contract_violations(
         "how_much_fall_behind": "mapped_file_queue_fall_behind(last.as_ref(),self.get_flushed_where())",
         "get_total_file_size": "mapped_file_queue_total_size(files.len(),self.storage.mapped_file_size())",
     }
+    queue_methods = inherent_method_records(
+        store_production,
+        "MappedFileQueue",
+        tuple(store_expected_calls),
+    )
     for method_name, expected_call in store_expected_calls.items():
-        body = compact_rust(named_function_body(store_production, method_name) or "")
-        if body.count(expected_call) != 1:
+        records = queue_methods[method_name]
+        if len(records) != 1 or records[0].cfg_gated or records[0].body.count(expected_call) != 1:
             violations.append(f"Store mapped-file queue metrics adapter changed: {method_name}")
     for method_name, forbidden_fragments in {
         "warmup_stats": ("warm_operations", "saturating_add"),
@@ -8459,7 +8462,8 @@ def mapped_file_queue_metrics_contract_violations(
         "get_mapped_memory_size": ("is_available",),
         "how_much_fall_behind": ("get_wrote_position",),
     }.items():
-        body = compact_rust(named_function_body(store_production, method_name) or "")
+        records = queue_methods[method_name]
+        body = records[0].body if len(records) == 1 else ""
         for fragment in forbidden_fragments:
             if fragment in body:
                 violations.append(f"Store retained mapped-file queue metrics owner: {method_name}: {fragment}")
@@ -8573,7 +8577,10 @@ def mapped_file_queue_maintenance_contract_violations(
         "letcurrent_files=self.storage.mapped_files().load()",
         "letSome(plan)=plan_mapped_file_queue_reset(",
         "ifletSome((index,position))=plan.target()",
-        "for&idxinplan.remove_indices().iter().rev(){new_files.remove(idx);}",
+        "if!plan.remove_indices().is_empty()",
+        "letremoval_candidates=plan.remove_indices().iter().map(|&index|current_files[index].clone()).collect()",
+        "drop(current_files)",
+        "self.delete_expired_file(removal_candidates)",
     ):
         if fragment not in store_compact:
             violations.append(f"Store mapped-file queue maintenance adapter changed: {fragment}")
@@ -8821,12 +8828,12 @@ def mapped_file_queue_runtime_state_contract_violations(
             if fragment not in body:
                 violations.append(f"Store mapped-file flush capability changed: {function_name}: {fragment}")
     store_compact = compact_rust(store_active)
-    for delegate in (
-        "self.flush_handle().commit(commit_least_pages)",
-        "self.flush_handle().try_flush(flush_least_pages)",
-        "runtime_state:self.runtime_state.clone()",
-    ):
-        if store_compact.count(delegate) != 1:
+    for delegate, expected_count in {
+        "self.flush_handle().commit(commit_least_pages)": 1,
+        "self.flush_handle().try_flush(flush_least_pages)": 1,
+        "runtime_state:self.runtime_state.clone()": 2,
+    }.items():
+        if store_compact.count(delegate) != expected_count:
             violations.append(f"Store mapped-file flush capability delegate changed: {delegate}")
 
     for test_name in (
@@ -8863,7 +8870,7 @@ def commit_log_runtime_state_contract_violations(
             "region_offset:u64,region_len:usize,"
         ),
         "CommitLogRuntimeState": (
-            "confirm_offset:i64,put_message_lock_stats:CommitLogPutMessageLockStats,"
+            "confirm_offset:AtomicI64,put_message_lock_stats:CommitLogPutMessageLockStats,"
             "begin_time_in_lock:Arc<AtomicU64>,active_memory_lock:Mutex<CommitLogActiveMemoryLock>,"
             "active_memory_lock_present:AtomicBool,last_load_statistics:Mutex<LoadStatistics>,"
         ),
@@ -8923,13 +8930,15 @@ def commit_log_runtime_state_contract_violations(
 
     expected_runtime_state_impl = (
         "#[doc(hidden)]pubfnnew(memory_lock_warn_only:bool,memory_lock_budget_bytes:u64)->Self{"
-        "Self{confirm_offset:-1,put_message_lock_stats:CommitLogPutMessageLockStats::default(),"
+        "Self{confirm_offset:AtomicI64::new(-1),put_message_lock_stats:CommitLogPutMessageLockStats::default(),"
         "begin_time_in_lock:Arc::new(AtomicU64::new(0)),active_memory_lock:Mutex::new("
         "CommitLogActiveMemoryLock::new(memory_lock_warn_only,memory_lock_budget_bytes,)),"
         "active_memory_lock_present:AtomicBool::new(false),last_load_statistics:Mutex::new("
         "LoadStatistics::default()),}}#[doc(hidden)]pubfnconfirm_offset(&self)->i64{"
-        "self.confirm_offset}#[doc(hidden)]pubfnset_confirm_offset(&mutself,confirm_offset:i64){"
-        "self.confirm_offset=confirm_offset;}#[doc(hidden)]pubfnput_message_lock_runtime_info(&self)"
+        "self.confirm_offset.load(Ordering::SeqCst)}#[doc(hidden)]pubfnset_confirm_offset(&self,confirm_offset:i64){"
+        "self.publish_confirm_offset(confirm_offset);}#[doc(hidden)]pubfnpublish_confirm_offset(&self,"
+        "confirm_offset:i64){self.confirm_offset.store(confirm_offset,Ordering::SeqCst);}#[doc(hidden)]"
+        "pubfnput_message_lock_runtime_info(&self)"
         "->CommitLogPutMessageLockRuntimeInfo{self.put_message_lock_stats.snapshot()}#[doc(hidden)]"
         "pubfnrecord_put_message_lock(&self,wait_millis:u64,hold_millis:u64){self."
         "put_message_lock_stats.record(wait_millis,hold_millis);}#[doc(hidden)]pubfn"
@@ -8947,6 +8956,7 @@ def commit_log_runtime_state_contract_violations(
 
     expected_imports = {
         "std::sync::atomic::AtomicBool",
+        "std::sync::atomic::AtomicI64",
         "std::sync::atomic::AtomicU64",
         "std::sync::atomic::Ordering",
         "std::sync::Arc",
@@ -9006,7 +9016,7 @@ def commit_log_runtime_state_contract_violations(
     store_adapter_fields = dict(store_commit_log_adapter_fields(store))
     if store_commit_log_fields != {"root": "CommitLogRoot<CommitLogAdapter>"}:
         violations.append("Store CommitLog must remain a single-field Local root facade")
-    if store_adapter_fields.get("runtime_state") != "super::CommitLogRuntimeState":
+    if store_adapter_fields.get("runtime_state") != "super::Arc<super::CommitLogRuntimeState>":
         violations.append("Store CommitLog adapter must hold one canonical Local runtime-state owner")
     for legacy_field in (
         "confirm_offset",
@@ -9022,13 +9032,13 @@ def commit_log_runtime_state_contract_violations(
         if re.search(rf"\bstruct\s+{item}\b", store_active):
             violations.append(f"Store retained CommitLog runtime-state owner: {item}")
     expected_store_flows = (
-        "runtime_state:CommitLogRuntimeState",
-        "runtime_state:CommitLogRuntimeState::new(",
+        "runtime_state:super::Arc<super::CommitLogRuntimeState>",
+        "runtime_state:Arc::new(CommitLogRuntimeState::new(",
         "pubfnput_message_lock_runtime_info(&self)->CommitLogPutMessageLockRuntimeInfo{"
         "self.runtime_state.put_message_lock_runtime_info()}",
         "self.runtime_state.record_put_message_lock(lock_wait_millis,elapsed_time_in_lock)",
         "self.runtime_state.clear_begin_time_in_lock()",
-        "self.runtime_state.set_confirm_offset(phy_offset)",
+        "self.runtime_state.publish_confirm_offset(phy_offset)",
         "self.runtime_state.set_load_statistics(stats.clone())",
         "self.runtime_state.load_statistics()",
         "self.runtime_state.active_memory_lock_parts()",
@@ -9046,6 +9056,7 @@ def commit_log_runtime_state_contract_violations(
         "active_window_reuses_only_offsets_inside_the_current_region",
         "active_file_requires_exact_region_and_take_clear_removes_identity",
         "composite_runtime_state_preserves_initial_values_and_updates",
+        "shared_runtime_state_arc_observes_confirm_offset_publication",
     )
     for test_name in required_tests:
         if named_function_body(local_tests, test_name) is None:
@@ -9110,7 +9121,7 @@ def commit_log_root_contract_violations(
         ("enabled_append_prop_crc", "bool"),
         ("store_context", "super::CommitLogStoreContext"),
         ("dispatcher", "super::CommitLogDispatchHandle"),
-        ("runtime_state", "super::CommitLogRuntimeState"),
+        ("runtime_state", "super::Arc<super::CommitLogRuntimeState>"),
         ("store_checkpoint", "super::Arc<super::StoreCheckpoint>"),
         ("append_message_callback", "super::Arc<super::DefaultAppendMessageCallback>"),
         ("put_message_lock", "super::Arc<tokio::sync::Mutex<()>>"),
@@ -12936,22 +12947,20 @@ def commit_log_recovery_route_contract_violations(
     expected_store_bodies = {
         "recover_normally": (
             "letoptimized_recovery_value=std::env::var().ok();letuse_optimized="
-            "optimized_recovery_requested(optimized_recovery_value.as_deref());letmessage_store="
-            "matchself.message_store_arc_or_error(){Ok(message_store)=>message_store,Err(error)=>{"
-            "error!();return;}};drive_commit_log_recovery(use_optimized,|step|asyncmove{matchstep{"
+            "optimized_recovery_requested(optimized_recovery_value.as_deref());"
+            "drive_commit_log_recovery(use_optimized,|step|asyncmove{matchstep{"
             "CommitLogRecoveryStep::Optimized=>{self.commit_log.recover_normally_optimized("
-            "max_phy_offset_of_consume_queue,message_store).await;}CommitLogRecoveryStep::Standard=>{"
-            "self.commit_log.recover_normally(max_phy_offset_of_consume_queue,message_store).await;}}}"
+            "max_phy_offset_of_consume_queue).await;}CommitLogRecoveryStep::Standard=>{"
+            "self.commit_log.recover_normally(max_phy_offset_of_consume_queue).await;}}}"
             ").await;"
         ),
         "recover_abnormally": (
             "letoptimized_recovery_value=std::env::var().ok();letuse_optimized="
-            "optimized_recovery_requested(optimized_recovery_value.as_deref());letmessage_store="
-            "matchself.message_store_arc_or_error(){Ok(message_store)=>message_store,Err(error)=>{"
-            "error!();return;}};drive_commit_log_recovery(use_optimized,|step|asyncmove{matchstep{"
+            "optimized_recovery_requested(optimized_recovery_value.as_deref());"
+            "drive_commit_log_recovery(use_optimized,|step|asyncmove{matchstep{"
             "CommitLogRecoveryStep::Optimized=>{self.commit_log.recover_abnormally_optimized("
-            "max_phy_offset_of_consume_queue,message_store).await;}CommitLogRecoveryStep::Standard=>{"
-            "self.commit_log.recover_abnormally(max_phy_offset_of_consume_queue,message_store).await;}}}"
+            "max_phy_offset_of_consume_queue).await;}CommitLogRecoveryStep::Standard=>{"
+            "self.commit_log.recover_abnormally(max_phy_offset_of_consume_queue).await;}}}"
             ").await;"
         ),
     }
@@ -12967,13 +12976,8 @@ def commit_log_recovery_route_contract_violations(
         if compact_rust(named_function_body(store, function_name) or "") != expected_body:
             violations.append(f"Store {function_name} recovery route adapter changed")
         raw_body = named_raw_function_body(store, function_name) or ""
-        expected_error = (
-            "skip normal recovery: {error}"
-            if function_name == "recover_normally"
-            else "skip abnormal recovery: {error}"
-        )
-        if raw_body.count(expected_error) != 1:
-            violations.append(f"Store {function_name} missing-store logging changed")
+        if "message_store_arc_or_error" in raw_body or "ArcMut<LocalFileMessageStore>" in raw_body:
+            violations.append(f"Store {function_name} regained a complete Local root")
 
     required_tests = (
         "optimized_recovery_value_preserves_legacy_truth_table",
@@ -13282,7 +13286,7 @@ def normal_recovery_segment_orchestration_contract_violations(
     abnormal_standard = named_function_body(store_production, "recover_abnormally") or ""
     empty_cleanup = (
         "warn!();apply_recovery_completion!(self,CommitLogRecoveryCompletion::Empty,"
-        "max_phy_offset_of_consume_queue,message_store,);"
+        "max_phy_offset_of_consume_queue,);"
     )
     for name, policy, body in (
         ("recover_normally_optimized", "Optimized", optimized),
@@ -13369,7 +13373,7 @@ def normal_recovery_segment_orchestration_contract_violations(
 
         completion_flow = (
             "letcompletion=normal_recovery.completion(max_phy_offset_of_consume_queue);",
-            "apply_recovery_completion!(self,completion,max_phy_offset_of_consume_queue,message_store);",
+            "apply_recovery_completion!(self,completion,max_phy_offset_of_consume_queue);",
         )
         if any(fragment not in compact_body for fragment in completion_flow):
             violations.append(f"Store {name} final recovery writes must flow from Local completion")
@@ -13402,19 +13406,19 @@ def normal_recovery_segment_orchestration_contract_violations(
         if extracted is not None:
             compact_completion_adapter = compact_rust(extracted[0])
     completion_contract = (
-        "($commit_log:ident,$completion:expr,$max_consume_queue_offset:expr,$message_store:ident$(,)?)=>{{",
+        "($commit_log:ident,$completion:expr,$max_consume_queue_offset:expr$(,)?)=>{{",
         "match$completion{CommitLogRecoveryCompletion::Empty=>{",
         "$commit_log.mapped_file_queue.set_flushed_where(0);",
         "$commit_log.mapped_file_queue.set_committed_where(0);",
-        "$message_store.consume_queue_store_mut().destroy();",
-        "$message_store.consume_queue_store_mut().load_after_destroy();",
+        "$commit_log.consume_queue_store.destroy();",
+        "$commit_log.consume_queue_store.load_after_destroy();",
         "CommitLogRecoveryCompletion::Recovered{confirm_offset,controller_confirm_offset,"
         "process_offset,truncate_consume_queue,}=>{",
         "if$commit_log.broker_config.enable_controller_mode{$commit_log.clamp_controller_recover_confirm_offset("
-        "$message_store.get_min_phy_offset(),controller_confirm_offset,);}else{"
+        "$commit_log.get_min_offset(),controller_confirm_offset,);}else{"
         "$commit_log.set_confirm_offset(confirm_offset);}",
         "iftruncate_consume_queue{warn!(",
-        "$message_store.truncate_dirty_logic_files(process_offset);}",
+        "$commit_log.consume_queue_store.truncate_dirty(process_offset);}",
         "$commit_log.mapped_file_queue.set_flushed_where(process_offset);",
         "$commit_log.mapped_file_queue.set_committed_where(process_offset);",
         "$commit_log.mapped_file_queue.truncate_dirty_files(process_offset);",
@@ -14969,7 +14973,9 @@ class StoreLocalContractTests(unittest.TestCase):
                 local,
                 module,
                 store.replace(
+                    "    pub(crate) allocate_mapped_file_service: Option<AllocateMappedFileService>,\n\n"
                     "    runtime_state: MappedFileQueueRuntimeState,",
+                    "    pub(crate) allocate_mapped_file_service: Option<AllocateMappedFileService>,\n\n"
                     "    flushed_where: Arc<AtomicU64>,\n    runtime_state: MappedFileQueueRuntimeState,",
                     1,
                 ),
@@ -15133,9 +15139,9 @@ class StoreLocalContractTests(unittest.TestCase):
                 local,
                 module,
                 store.replace(
-                    "        pub(super) runtime_state: super::CommitLogRuntimeState,",
+                    "        pub(super) runtime_state: super::Arc<super::CommitLogRuntimeState>,",
                     "        pub(super) confirm_offset: i64,\n"
-                    "        pub(super) runtime_state: super::CommitLogRuntimeState,",
+                    "        pub(super) runtime_state: super::Arc<super::CommitLogRuntimeState>,",
                     1,
                 ),
                 local_tests,
@@ -15750,8 +15756,8 @@ class StoreLocalContractTests(unittest.TestCase):
                 1,
             ),
             "optimized empty-file return removed": store.replace(
-                "                message_store,\n            );\n            return;",
-                "                message_store,\n            );",
+                "                max_phy_offset_of_consume_queue,\n            );\n            return;",
+                "                max_phy_offset_of_consume_queue,\n            );",
                 1,
             ),
             "optimized adapter failure continues": store.replace(
@@ -18802,8 +18808,8 @@ const RAW: &str = r#"type HeapRecord = Box<CommitLogRecord>;"#;
                 1,
             ),
             mutate_abnormal(
-                "apply_recovery_completion!(self, completion, max_phy_offset_of_consume_queue, message_store);",
-                "apply_recovery_completion!(self, CommitLogRecoveryCompletion::Empty, max_phy_offset_of_consume_queue, message_store);",
+                "apply_recovery_completion!(self, completion, max_phy_offset_of_consume_queue);",
+                "apply_recovery_completion!(self, CommitLogRecoveryCompletion::Empty, max_phy_offset_of_consume_queue);",
             ),
             mutate_abnormal(
                 "let completion = abnormal_recovery.completion(max_phy_offset_of_consume_queue);",

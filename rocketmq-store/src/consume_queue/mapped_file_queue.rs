@@ -64,6 +64,7 @@ use rocketmq_store_local::mapped_file::queue_storage::MappedFileQueueStorage;
 use tracing::error;
 
 use crate::base::allocate_mapped_file_service::AllocateMappedFileService;
+use crate::base::select_result::SelectMappedBufferResult;
 use crate::log_file::commit_log::CommitLog;
 use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use crate::log_file::mapped_file::default_mapped_file_impl::LazyMmapStats;
@@ -72,6 +73,102 @@ use crate::log_file::mapped_file::MappedFileResult;
 use crate::queue::single_consume_queue::CQ_STORE_UNIT_SIZE;
 
 type MappedFileGeneration = Arc<ArcSwap<Vec<Arc<DefaultMappedFile>>>>;
+
+/// Narrow, cloneable capability used by commit-log readers.
+///
+/// The handle observes the atomically published mapped-file generation and
+/// shared flush progress without exposing allocation, recovery, truncation, or
+/// destruction operations.
+#[derive(Clone)]
+pub(crate) struct MappedFileQueueReadHandle {
+    mapped_files: MappedFileGeneration,
+    mapped_file_size: u64,
+    runtime_state: MappedFileQueueRuntimeState,
+}
+
+impl MappedFileQueueReadHandle {
+    fn find_mapped_file_by_offset(
+        &self,
+        offset: i64,
+        return_first_on_not_found: bool,
+    ) -> Option<Arc<DefaultMappedFile>> {
+        let files = self.mapped_files.load();
+        let first = files.first()?.clone();
+        let last = files.last()?.clone();
+        match file_index_by_offset(
+            files.as_slice(),
+            self.mapped_file_size,
+            offset,
+            return_first_on_not_found,
+            first.get_file_from_offset(),
+            last.get_file_from_offset(),
+            |file| file.get_file_from_offset(),
+        ) {
+            Some(MappedFileQueueIndex::First) => Some(first),
+            Some(MappedFileQueueIndex::Indexed(index)) => Some(files[index].clone()),
+            None => None,
+        }
+    }
+
+    pub(crate) fn get_max_offset(&self) -> i64 {
+        let files = self.mapped_files.load();
+        mapped_file_queue_max_offset(files.last())
+    }
+
+    pub(crate) fn get_min_offset(&self) -> i64 {
+        match self.mapped_files.load().first() {
+            None => -1,
+            Some(mapped_file) if mapped_file.is_available() => mapped_file.get_file_from_offset() as i64,
+            Some(mapped_file) => self.roll_next_file(mapped_file.get_file_from_offset() as i64),
+        }
+    }
+
+    pub(crate) fn get_flushed_where(&self) -> i64 {
+        self.runtime_state.flushed_where()
+    }
+
+    pub(crate) fn check_self(&self) {
+        let mapped_files = self.mapped_files.load();
+        for_each_discontinuous_pair(
+            mapped_files.as_slice(),
+            self.mapped_file_size,
+            |file| file.get_file_from_offset(),
+            |previous, current| {
+                error!(
+                    "[BUG] The mappedFile queue's data is damaged, the adjacent mappedFile's offset don't match. pre \
+                     file {}, cur file {}",
+                    mapped_files[previous].get_file_name(),
+                    mapped_files[current].get_file_name()
+                );
+            },
+        );
+    }
+
+    pub(crate) fn roll_next_file(&self, offset: i64) -> i64 {
+        let mapped_file_size = self.mapped_file_size as i64;
+        offset + mapped_file_size - (offset % mapped_file_size)
+    }
+
+    pub(crate) fn get_data(&self, offset: i64) -> Option<SelectMappedBufferResult> {
+        let mapped_file = self.find_mapped_file_by_offset(offset, offset == 0)?;
+        let position = (offset % self.mapped_file_size as i64) as i32;
+        let mut result = mapped_file.select_mapped_buffer_with_position(position);
+        if let Some(result) = result.as_mut() {
+            result.mapped_file = Some(mapped_file);
+        }
+        result
+    }
+
+    pub(crate) fn get_message(&self, offset: i64, size: i32) -> Option<SelectMappedBufferResult> {
+        let mapped_file = self.find_mapped_file_by_offset(offset, offset == 0)?;
+        let position = (offset % self.mapped_file_size as i64) as i32;
+        let mut result = mapped_file.select_mapped_buffer(position, size);
+        if let Some(result) = result.as_mut() {
+            result.mapped_file = Some(mapped_file);
+        }
+        result
+    }
+}
 
 /// Narrow, cloneable capability used by background commit-log cleanup.
 ///
@@ -482,6 +579,15 @@ impl MappedFileQueue {
     #[inline]
     pub fn get_mapped_files(&self) -> &ArcSwap<Vec<Arc<DefaultMappedFile>>> {
         self.storage.mapped_files()
+    }
+
+    #[inline]
+    pub(crate) fn read_handle(&self) -> MappedFileQueueReadHandle {
+        MappedFileQueueReadHandle {
+            mapped_files: Arc::clone(self.storage.mapped_files()),
+            mapped_file_size: self.storage.mapped_file_size(),
+            runtime_state: self.runtime_state.clone(),
+        }
     }
 
     #[inline]
@@ -1417,6 +1523,28 @@ mod tests {
         assert_eq!(flush_handle.get_max_offset(), 12);
 
         drop(flush_handle);
+        queue.destroy();
+    }
+
+    #[test]
+    fn read_handle_observes_queue_generation_and_shared_progress() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let mut queue = MappedFileQueue::new(temp_dir.path().to_string_lossy().into_owned(), 1024, None);
+        let read_handle = queue.read_handle();
+
+        assert_eq!(read_handle.get_min_offset(), -1);
+        queue.set_flushed_where(7);
+        let mapped_file = queue.try_create_mapped_file(0).expect("create mapped file");
+        assert!(mapped_file.append_message_bytes(b"read-handle"));
+
+        assert_eq!(read_handle.get_min_offset(), 0);
+        assert_eq!(read_handle.get_max_offset(), 11);
+        assert_eq!(read_handle.get_flushed_where(), 7);
+        assert_eq!(read_handle.get_data(0).expect("read mapped data").size, 11);
+        assert_eq!(read_handle.get_message(0, 4).expect("read message slice").size, 4);
+        assert_eq!(read_handle.roll_next_file(12), 1024);
+
+        drop(read_handle);
         queue.destroy();
     }
 

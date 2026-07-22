@@ -45,6 +45,7 @@ use crate::base::select_result::SelectMappedBufferResult;
 use crate::base::select_result::SelectMappedBufferSourceKind;
 use crate::filter::ArcMessageFilter;
 use crate::log_file::commit_log::CommitLog;
+use crate::log_file::commit_log::CommitLogReadHandle;
 use crate::store_error::StoreError;
 
 pub type DispatchBodyResolver = dyn Fn(&DispatchRequest) -> Option<Bytes> + Send + Sync;
@@ -287,12 +288,26 @@ impl TieredStoreDecorator {
 }
 
 pub fn resolve_tiered_dispatch_body(commit_log: &CommitLog, request: &DispatchRequest) -> Option<Bytes> {
+    resolve_tiered_dispatch_body_with(request, |offset, size| commit_log.get_message(offset, size))
+}
+
+pub(crate) fn resolve_tiered_dispatch_body_with_reader(
+    commit_log: &CommitLogReadHandle,
+    request: &DispatchRequest,
+) -> Option<Bytes> {
+    resolve_tiered_dispatch_body_with(request, |offset, size| commit_log.get_message(offset, size))
+}
+
+fn resolve_tiered_dispatch_body_with(
+    request: &DispatchRequest,
+    read_message: impl FnOnce(i64, i32) -> Option<SelectMappedBufferResult>,
+) -> Option<Bytes> {
     if request.commit_log_offset < 0 || request.msg_size <= 0 {
         return None;
     }
 
     let size = usize::try_from(request.msg_size).ok()?;
-    let result = commit_log.get_message(request.commit_log_offset, request.msg_size)?;
+    let result = read_message(request.commit_log_offset, request.msg_size)?;
     let bytes = result.get_bytes()?;
     if bytes.len() < size {
         return None;
