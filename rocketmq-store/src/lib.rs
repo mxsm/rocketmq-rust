@@ -84,7 +84,6 @@ pub mod bench_support {
     use rocketmq_common::common::config::TopicConfig;
     use rocketmq_runtime::BlockingExecutorSnapshot;
     use rocketmq_runtime::ShutdownReport;
-    use rocketmq_rust::ArcMut;
     use serde::Serialize;
     use tokio::io::AsyncWrite;
 
@@ -102,7 +101,7 @@ pub mod bench_support {
     use crate::ha::transfer_engine::TransferStats;
     use crate::kv::compaction_service::CompactionService;
     use crate::kv::compaction_store::CompactionStore;
-    use crate::message_store::local_file_message_store::LocalFileMessageStore;
+    use crate::message_store::local_file_shared_owner::new_legacy_shared_owner;
     #[cfg(feature = "rocksdb_store")]
     use crate::rocksdb::config::RocksDbConfig;
     #[cfg(feature = "rocksdb_store")]
@@ -1172,15 +1171,13 @@ pub mod bench_support {
             clean_resource_interval: 1,
             ..MessageStoreConfig::default()
         };
-        let mut store = ArcMut::new(LocalFileMessageStore::new(
+        let mut store = new_legacy_shared_owner(
             Arc::new(config),
             Arc::new(BrokerConfig::default()),
             Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
             None,
             false,
-        ));
-        let store_clone = store.clone();
-        store.set_message_store_arc(store_clone);
+        );
         store.init().await.expect("local file store benchmark should init");
         store.start().await.expect("local file store benchmark should start");
 

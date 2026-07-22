@@ -1117,6 +1117,14 @@ rolled/due Timer 消息不再通过完整 Store 的 `mut_from_ref` 追加。revi
 相对 bc78 净删除 1 个 production identity/2 occurrences，无 relocation、新增 identity 或临时 approval。
 R14 从 3/7 降至 2/5，仍未完成；31 项执行清单保持完成 9 项、剩余 22 项，正式进度仍为 75/82。
 
+LocalFile lifecycle probe 的 shared-owner 构造随 Issue #8577 收回所有者边界：`bench_support` 不再导入或直接
+构造 `ArcMut<LocalFileMessageStore>`，专用 crate-private owner factory 负责兼容 shared owner 创建和一次性
+self-wiring，并以 opaque return 隐藏具体指针类型。reviewed 快照为 97 identities/382 occurrences
+（production 28/62、test 55/280、compatibility 14/40、Broker production 4/8、Store production 24/54）；
+相对 bc79 净删除 1 个 production identity/1 occurrence。constructor identity 经临时 ADR-013 一对一 owner
+relocation 审核，approval 仅位于忽略的 `target/`。R09 从 4/7 降至 2/5，R10 从 3/4 调整为 4/5；31 项
+执行清单保持完成 9 项、剩余 22 项，正式进度仍为 75/82。
+
 Default HA client runtime ownership 随 Issue #8567 完成收窄：`DefaultHAClient` 以标准 `Arc<Inner>` 共享只读组合根，
 `Inner` 仅保留原子、锁、Notify、flow monitor 与现有 LocalStore 兼容句柄；从未安装连接的 stream 字段和重复 buffer/
 dispatch/report 状态已删除，实际 reader/writer buffer 继续由每个 connection task 独占。reviewed 快照为 126 identities/

@@ -6231,6 +6231,24 @@ mod tests {
         assert!(init.contains("self.ha_service = Some(ha_service);"));
     }
 
+    #[test]
+    fn store_local_file_scheduled_lifecycle_probe_uses_owner_factory() {
+        let factory = include_str!("local_file_shared_owner.rs").replace("\r\n", "\n");
+        assert!(factory.contains("impl DerefMut<Target = LocalFileMessageStore> + Clone"));
+        assert_eq!(factory.matches("rocketmq_rust::ArcMut::new").count(), 1);
+        assert!(factory.contains("store.set_message_store_arc(store_clone);"));
+
+        let lib_source = include_str!("../lib.rs").replace("\r\n", "\n");
+        let probe = lib_source
+            .split_once("pub async fn run_store_local_file_scheduled_lifecycle_probe")
+            .and_then(|(_, source)| source.split_once("#[cfg(feature = \"rocksdb_store\")]"))
+            .map(|(source, _)| source)
+            .expect("local file scheduled lifecycle probe");
+        assert!(probe.contains("new_legacy_shared_owner("));
+        assert!(!probe.contains("ArcMut"));
+        assert!(!probe.contains("set_message_store_arc"));
+    }
+
     #[tokio::test]
     async fn reput_shutdown_wait_uses_dispatch_progress_notification() {
         let temp_dir = tempdir().unwrap();
