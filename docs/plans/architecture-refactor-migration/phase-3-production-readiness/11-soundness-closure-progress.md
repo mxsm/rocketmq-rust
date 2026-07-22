@@ -4545,6 +4545,29 @@ Client hot-path benchmark caller debt 随 Issue #8595 完成以下收口：
 | final gates | `cargo fmt --all -- --check`、workspace all-target/all-feature strict Clippy 与 `git diff --check` 通过；Windows linker stdout 与既有 future-incompatibility note 不受 `-D warnings` 管辖 |
 | reduced validation scope | 本切片仅修改 benchmark 的 immutable sharing primitive，不修改 production、公开 API、runtime lifecycle、协议或 Store，因此不运行 benchmark measurements、额外 `cargo check`、runtime audit、M06、RocksDB、dependency/release/performance/telemetry 矩阵、Rustdoc 或 AGENTS routing；最终 workspace Clippy 同时承担 benchmark target 编译与 lint |
 
+## M11-12bc90 实现
+
+RocksDB semantics test root 随 Issue #8597 完成以下收口：
+
+- `new_owned_test_store` 与 `new_owned_test_store_with_config` 直接返回独占 `RocksDBMessageStore`，九项语义测试
+  不再通过共享可变 wrapper 持有测试根。
+- 仅 `new_test_store` 兼容 helper 在把已完成断言的 owned Store 移交给 `GenericMessageStore` 时建立一个
+  `ArcMut`；该 wrapper 不再是通用 fixture，也不被其他 RocksDB 测试克隆。
+- reviewed baseline 从 67/241 降至 65/237：production 保持 13/24，test 从 40/177 降至 38/173，
+  compatibility 保持 14/40；净删除 2 test identities/4 occurrences，1 个保留 constructor 经忽略的临时
+  ADR-013 同 item relocation 审核，无新增 identity 或提交态 approval。
+- Store test/bench caller 从 32/161 降至 30/157；R17 当前上界降至 38/173（Broker 6/8、Client 0/0、
+  runtime-foundation 2/8），执行清单保持完成 11 项、剩余 20 项，正式进度仍为 75/82。
+
+## M11-12bc90 验证
+
+| 命令 | 结果 |
+|---|---|
+| affected behavior | `cargo test -p rocketmq-store --features rocksdb_store --test rocksdb_store_semantics_tests rocksdb_store_load_start_recover_round_trip -- --exact` 1/1 通过（8 项被过滤），覆盖 owned writer/reloaded root、持久化恢复、RocksDB CQ 读取和唯一 Generic Store 兼容移交 |
+| reviewed baseline / fixtures | 正式 baseline 与 reviewed candidate 的 semantic set 均为 65/237；直接 guard、candidate compare、27/27 fixtures 与 78/78 guard tests 通过；净删除 2 test identities/4 occurrences，临时 relocation approval 仅位于忽略的 `target/` |
+| final gates | `cargo fmt --all -- --check`、workspace all-target/all-feature strict Clippy 与 `git diff --check` 通过 |
+| reduced validation scope | 本切片只改变 RocksDB integration-test owner，不修改 RocksDB production behavior、feature 定义、runtime lifecycle 或公开 API；仅运行一个覆盖变更路径的 round-trip test，并由最终 workspace all-target/all-feature Clippy 编译/lint 全部测试 target，不重复 Store/Broker 全包测试、六条 RocksDB behavior matrix、额外 `cargo check`、runtime audit、M06、telemetry、release 或 Rustdoc |
+
 ## 剩余切片与 Gate
 
 2026-07-23 盘点将执行工作固化为 31 个最小可审查单元：16 个 production owner、2 个

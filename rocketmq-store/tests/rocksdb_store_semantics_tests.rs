@@ -30,7 +30,6 @@ use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_common::common::message::MessageTrait;
-use rocketmq_rust::ArcMut;
 use rocketmq_store::base::dispatch_request::DispatchRequest;
 use rocketmq_store::base::message_status_enum::GetMessageStatus;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
@@ -62,30 +61,30 @@ fn rocksdb_store_config_with_maintenance(temp_dir: &TempDir) -> MessageStoreConf
     }
 }
 
-fn new_test_store(temp_dir: &TempDir) -> ArcMut<RocksDBMessageStore> {
+fn new_owned_test_store(temp_dir: &TempDir) -> RocksDBMessageStore {
     let broker_config = Arc::new(BrokerConfig::default());
     let topic_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>> = Arc::new(DashMap::new());
 
-    ArcMut::new(
-        RocksDBMessageStore::try_new(
-            Arc::new(rocksdb_store_config(temp_dir)),
-            broker_config,
-            topic_table,
-            None,
-            false,
-        )
-        .expect("create RocksDB message store"),
+    RocksDBMessageStore::try_new(
+        Arc::new(rocksdb_store_config(temp_dir)),
+        broker_config,
+        topic_table,
+        None,
+        false,
     )
+    .expect("create RocksDB message store")
 }
 
-fn new_test_store_with_config(config: MessageStoreConfig) -> ArcMut<RocksDBMessageStore> {
+fn new_owned_test_store_with_config(config: MessageStoreConfig) -> RocksDBMessageStore {
     let broker_config = Arc::new(BrokerConfig::default());
     let topic_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>> = Arc::new(DashMap::new());
 
-    ArcMut::new(
-        RocksDBMessageStore::try_new(Arc::new(config), broker_config, topic_table, None, false)
-            .expect("create RocksDB message store"),
-    )
+    RocksDBMessageStore::try_new(Arc::new(config), broker_config, topic_table, None, false)
+        .expect("create RocksDB message store")
+}
+
+fn new_test_store(store: RocksDBMessageStore) -> GenericMessageStore {
+    GenericMessageStore::rocksdb(rocketmq_rust::ArcMut::new(store))
 }
 
 fn build_test_message(topic: &CheetahString, queue_id: i32, body: &'static [u8]) -> MessageExtBrokerInner {
@@ -135,7 +134,7 @@ async fn rocksdb_store_load_start_recover_round_trip() {
     let topic = CheetahString::from_static_str("rocksdb-round-trip-topic");
     let group = CheetahString::from_static_str("rocksdb-round-trip-group");
 
-    let mut writer = new_test_store(&temp_dir);
+    let mut writer = new_owned_test_store(&temp_dir);
     writer.init().await.expect("init writer");
     assert!(writer.load().await, "load writer");
     writer.start().await.expect("start writer");
@@ -151,7 +150,7 @@ async fn rocksdb_store_load_start_recover_round_trip() {
     writer.shutdown().await;
     drop(writer);
 
-    let mut reloaded = new_test_store(&temp_dir);
+    let mut reloaded = new_owned_test_store(&temp_dir);
     reloaded.init().await.expect("init reloaded store");
     assert!(reloaded.load().await, "load reloaded store");
     reloaded.start().await.expect("start reloaded store");
@@ -173,9 +172,7 @@ async fn rocksdb_store_load_start_recover_round_trip() {
         reloaded.get_message_store_timestamp(&topic, 0, 0) > 0,
         "RocksDB CQ timestamp should be recovered"
     );
-    assert_trait_reads_rocksdb_cq(reloaded.as_ref(), &group, &topic, wrote_offset).await;
-    let generic_store = GenericMessageStore::rocksdb(reloaded.clone());
-    assert_trait_reads_rocksdb_cq(&generic_store, &group, &topic, wrote_offset).await;
+    assert_trait_reads_rocksdb_cq(&reloaded, &group, &topic, wrote_offset).await;
 
     let overflow_result = reloaded
         .get_message(&group, &topic, 0, 1, 32, None)
@@ -183,12 +180,15 @@ async fn rocksdb_store_load_start_recover_round_trip() {
         .expect("overflow get message result");
     assert_eq!(overflow_result.status(), Some(GetMessageStatus::OffsetOverflowOne));
     assert_eq!(overflow_result.next_begin_offset(), 1);
+
+    let generic_store = new_test_store(reloaded);
+    assert_trait_reads_rocksdb_cq(&generic_store, &group, &topic, wrote_offset).await;
 }
 
 #[tokio::test]
 async fn rocksdb_message_store_start_and_shutdown_manage_rocksdb_maintenance_services() {
     let temp_dir = TempDir::new().expect("create temp dir");
-    let mut store = new_test_store_with_config(rocksdb_store_config_with_maintenance(&temp_dir));
+    let mut store = new_owned_test_store_with_config(rocksdb_store_config_with_maintenance(&temp_dir));
     store.init().await.expect("init store");
     assert!(store.load().await, "load store");
 
@@ -235,7 +235,7 @@ async fn rocksdb_query_message_after_dispatch() {
     let topic = CheetahString::from_static_str("rocksdb-query-topic");
     let key = CheetahString::from_static_str("rocksdb-query-key");
 
-    let mut store = new_test_store(&temp_dir);
+    let mut store = new_owned_test_store(&temp_dir);
     assert_eq!(
         store.get_dispatcher_list().len(),
         2,
@@ -289,7 +289,7 @@ async fn rocksdb_query_message_uses_rocksdb_index_without_local_file_index_dispa
     let key = CheetahString::from_static_str("rocksdb-query-rocks-index-only-key");
     let uniq_key = CheetahString::from_static_str("rocksdb-query-rocks-index-only-uniq");
 
-    let mut store = new_test_store(&temp_dir);
+    let mut store = new_owned_test_store(&temp_dir);
     store.init().await.expect("init store");
     assert!(store.load().await, "load store");
     store.start().await.expect("start store");
@@ -341,7 +341,7 @@ async fn rocksdb_recovery_skips_dirty_tail() {
     let temp_dir = TempDir::new().expect("create temp dir");
     let topic = CheetahString::from_static_str("rocksdb-recovery-topic");
 
-    let mut writer = new_test_store(&temp_dir);
+    let mut writer = new_owned_test_store(&temp_dir);
     writer.init().await.expect("init writer");
     assert!(writer.load().await, "load writer");
     writer.start().await.expect("start writer");
@@ -361,7 +361,7 @@ async fn rocksdb_recovery_skips_dirty_tail() {
     let commitlog_file = first_commitlog_file(temp_dir.path());
     corrupt_commitlog_tail(&commitlog_file, valid_end, &[0x13, 0x37, 0xC0, 0xDE]);
 
-    let mut reloaded = new_test_store(&temp_dir);
+    let mut reloaded = new_owned_test_store(&temp_dir);
     reloaded.init().await.expect("init reloaded store");
     assert!(reloaded.load().await, "load reloaded store");
 
@@ -379,7 +379,7 @@ async fn rocks_adapter_matches_the_frozen_local_pull_contract() {
     let rocks_dir = TempDir::new().expect("create RocksDB temp dir");
     let topic = CheetahString::from_static_str("adapter-parity-topic");
     let group = CheetahString::from_static_str("adapter-parity-group");
-    let mut rocks = new_test_store(&rocks_dir);
+    let mut rocks = new_owned_test_store(&rocks_dir);
 
     rocks.init().await.expect("init Rocks parity store");
     assert!(rocks.load().await, "load Rocks parity store");
@@ -413,7 +413,7 @@ async fn explicit_double_write_keeps_the_local_compatibility_mirror() {
     let topic = CheetahString::from_static_str("rocksdb-double-write-topic");
     let mut config = rocksdb_store_config(&temp_dir);
     config.rocksdb_cq_double_write_enable = true;
-    let mut store = new_test_store_with_config(config);
+    let mut store = new_owned_test_store_with_config(config);
     store.init().await.expect("init store");
     assert!(store.load().await, "load store");
     store.start().await.expect("start store");
@@ -433,7 +433,7 @@ async fn explicit_double_write_keeps_the_local_compatibility_mirror() {
 async fn restart_reput_advances_the_single_local_wal_queue_offset() {
     let temp_dir = TempDir::new().expect("create temp dir");
     let topic = CheetahString::from_static_str("rocksdb-restart-catchup-topic");
-    let mut writer = new_test_store(&temp_dir);
+    let mut writer = new_owned_test_store(&temp_dir);
     writer.init().await.expect("init writer");
     assert!(writer.load().await, "load writer");
 
@@ -452,7 +452,7 @@ async fn restart_reput_advances_the_single_local_wal_queue_offset() {
     writer.close_rocksdb();
     drop(writer);
 
-    let mut reloaded = new_test_store(&temp_dir);
+    let mut reloaded = new_owned_test_store(&temp_dir);
     reloaded.init().await.expect("init reloaded store");
     assert!(reloaded.load().await, "load reloaded store");
     reloaded.reput_once().await;
@@ -476,7 +476,7 @@ async fn restart_reput_advances_the_single_local_wal_queue_offset() {
 fn rocksdb_time_lookup_and_failure_mapping_stay_on_the_legacy_contract() {
     let temp_dir = TempDir::new().expect("create temp dir");
     let topic = CheetahString::from_static_str("rocksdb-time-topic");
-    let mut store = new_test_store(&temp_dir);
+    let mut store = new_owned_test_store(&temp_dir);
     for (queue_offset, store_timestamp) in [(0, 1_000), (1, 2_000), (2, 3_000)] {
         store.local_file_store_mut().do_dispatch(&mut DispatchRequest {
             topic: topic.clone(),
