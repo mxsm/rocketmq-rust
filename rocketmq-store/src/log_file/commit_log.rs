@@ -94,7 +94,7 @@ use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use crate::log_file::mapped_file::default_mapped_file_impl::LazyMmapStats;
 use crate::log_file::mapped_file::MappedFile;
 use crate::log_file::mapped_file::MappedFileAppend;
-use crate::message_store::local_file_message_store::CommitLogDispatcherDefault;
+use crate::message_store::local_file_message_store::CommitLogDispatchHandle;
 use crate::message_store::local_file_message_store::LocalFileMessageStore;
 use crate::queue::consume_queue_store::ConsumeQueueStoreTrait;
 use crate::queue::local_file_consume_queue_store::ConsumeQueueStore;
@@ -373,7 +373,7 @@ mod adapter {
         pub(super) broker_config: super::Arc<super::BrokerConfig>,
         pub(super) enabled_append_prop_crc: bool,
         pub(super) local_file_message_store: Option<super::ArcMut<super::LocalFileMessageStore>>,
-        pub(super) dispatcher: super::ArcMut<super::CommitLogDispatcherDefault>,
+        pub(super) dispatcher: super::CommitLogDispatchHandle,
         pub(super) runtime_state: super::CommitLogRuntimeState,
         pub(super) store_checkpoint: super::Arc<super::StoreCheckpoint>,
         pub(super) append_message_callback: super::Arc<super::DefaultAppendMessageCallback>,
@@ -381,7 +381,7 @@ mod adapter {
         pub(super) topic_queue_lock: super::Arc<super::TopicQueueLock>,
         pub(super) topic_config_table: super::Arc<super::DashMap<super::CheetahString, super::Arc<super::TopicConfig>>>,
         pub(super) consume_queue_store: super::ConsumeQueueStore,
-        pub(super) flush_manager: super::ArcMut<super::DefaultFlushManager>,
+        pub(super) flush_manager: super::DefaultFlushManager,
         pub(super) cold_data_check_service: super::Arc<super::ColdDataCheckService>,
     }
 }
@@ -404,10 +404,10 @@ impl DerefMut for CommitLog {
 }
 
 impl CommitLog {
-    pub fn new(
+    pub(crate) fn new(
         message_store_config: Arc<MessageStoreConfig>,
         broker_config: Arc<BrokerConfig>,
-        dispatcher: ArcMut<CommitLogDispatcherDefault>,
+        dispatcher: CommitLogDispatchHandle,
         store_checkpoint: Arc<StoreCheckpoint>,
         topic_config_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>>,
         consume_queue_store: ConsumeQueueStore,
@@ -443,11 +443,11 @@ impl CommitLog {
                 topic_queue_lock: Arc::new(TopicQueueLock::with_size(message_store_config.topic_queue_lock_num)),
                 topic_config_table,
                 consume_queue_store,
-                flush_manager: ArcMut::new(DefaultFlushManager::new(
+                flush_manager: DefaultFlushManager::new(
                     message_store_config.clone(),
                     mapped_file_flush,
                     store_checkpoint,
-                )),
+                ),
                 cold_data_check_service: Arc::new(Default::default()),
             }),
         }
@@ -730,8 +730,7 @@ impl CommitLog {
     }
 
     pub fn start(&mut self) {
-        let mut flush_manager = self.flush_manager.clone();
-        flush_manager.start();
+        self.flush_manager.start();
     }
 
     pub fn shutdown(&mut self) {
@@ -763,8 +762,7 @@ impl CommitLog {
     pub async fn shutdown_gracefully(
         &mut self,
     ) -> Result<crate::consume_queue::mapped_file_queue::FlushProgress, StoreError> {
-        let mut flush_manager = self.flush_manager.clone();
-        flush_manager.shutdown_gracefully().await
+        self.flush_manager.shutdown_gracefully().await
     }
 
     pub fn destroy(&mut self) {

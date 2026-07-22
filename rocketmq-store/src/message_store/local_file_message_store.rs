@@ -43,6 +43,7 @@ use std::sync::RwLock as StdRwLock;
 use std::time::Duration;
 use std::time::Instant;
 
+use arc_swap::ArcSwap;
 use bytes::Buf;
 use bytes::Bytes;
 use bytes::BytesMut;
@@ -354,7 +355,7 @@ pub struct LocalFileMessageStore {
     index_service: IndexService,
     allocate_mapped_file_service: Arc<AllocateMappedFileService>,
     consume_queue_store: ConsumeQueueStore,
-    dispatcher: ArcMut<CommitLogDispatcherDefault>,
+    dispatcher: CommitLogDispatcherDefault,
     #[cfg(feature = "tieredstore")]
     tiered_store: Option<Arc<TieredStoreDecorator>>,
     broker_init_max_offset: Arc<AtomicI64>,
@@ -517,7 +518,7 @@ impl LocalFileMessageStore {
         } else {
             Vec::new()
         };
-        let mut dispatcher = ArcMut::new(CommitLogDispatcherDefault { dispatcher_vec });
+        let mut dispatcher = CommitLogDispatcherDefault::with_dispatchers(dispatcher_vec);
 
         let memory_lock_budget_bytes = Self::effective_linux_memory_lock_budget_bytes(message_store_config.as_ref());
         let transient_store_pool = TransientStorePool::new_with_memory_lock_budget(
@@ -538,7 +539,7 @@ impl LocalFileMessageStore {
         let mut commit_log = CommitLog::new(
             message_store_config.clone(),
             broker_config.clone(),
-            dispatcher.clone(),
+            dispatcher.handle(),
             store_checkpoint.clone(),
             topic_config_table.clone(),
             consume_queue_store.clone(),
@@ -1674,7 +1675,7 @@ impl LocalFileMessageStore {
             .run_once(
                 self.commit_log.clone(),
                 self.composition.reput(),
-                self.dispatcher.clone(),
+                self.dispatcher.handle(),
                 self.notify_message_arrive_in_batch,
                 runtime_context,
             )
@@ -1848,7 +1849,7 @@ impl MessageStore for LocalFileMessageStore {
             self.reput_message_service.start(
                 self.commit_log.clone(),
                 self.composition.reput(),
-                self.dispatcher.clone(),
+                self.dispatcher.handle(),
                 self.notify_message_arrive_in_batch,
                 reput_runtime_context,
             );
@@ -3920,9 +3921,20 @@ impl MessageStore for LocalFileMessageStore {
             .map(|ha_service| ha_service.get_runtime_info(self.commit_log.get_max_offset()))
     }
 }
-#[derive(Default)]
 pub struct CommitLogDispatcherDefault {
     dispatcher_vec: Vec<Arc<dyn CommitLogDispatcher>>,
+    published: Arc<ArcSwap<Vec<Arc<dyn CommitLogDispatcher>>>>,
+}
+
+impl Default for CommitLogDispatcherDefault {
+    fn default() -> Self {
+        Self::with_dispatchers(Vec::new())
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct CommitLogDispatchHandle {
+    published: Arc<ArcSwap<Vec<Arc<dyn CommitLogDispatcher>>>>,
 }
 
 impl CommitLogDispatcherDefault {
@@ -3930,14 +3942,36 @@ impl CommitLogDispatcherDefault {
         Self::default()
     }
 
+    fn with_dispatchers(dispatcher_vec: Vec<Arc<dyn CommitLogDispatcher>>) -> Self {
+        let published = Arc::new(ArcSwap::from_pointee(dispatcher_vec.clone()));
+        Self {
+            dispatcher_vec,
+            published,
+        }
+    }
+
+    #[inline]
+    pub(crate) fn handle(&self) -> CommitLogDispatchHandle {
+        CommitLogDispatchHandle {
+            published: Arc::clone(&self.published),
+        }
+    }
+
+    #[inline]
+    fn publish(&self) {
+        self.published.store(Arc::new(self.dispatcher_vec.clone()));
+    }
+
     #[inline]
     pub fn add_dispatcher(&mut self, dispatcher: Arc<dyn CommitLogDispatcher>) {
         self.dispatcher_vec.push(dispatcher);
+        self.publish();
     }
 
     #[inline]
     pub fn add_first_dispatcher(&mut self, dispatcher: Arc<dyn CommitLogDispatcher>) {
         self.dispatcher_vec.insert(0, dispatcher);
+        self.publish();
     }
 
     #[inline]
@@ -3946,6 +3980,46 @@ impl CommitLogDispatcherDefault {
             .iter()
             .filter_map(|dispatcher| dispatcher.dispatch_progress_offset(commit_log_min_offset))
             .min()
+    }
+}
+
+impl CommitLogDispatcher for CommitLogDispatchHandle {
+    fn dispatch(&self, dispatch_request: &mut DispatchRequest) {
+        let dispatchers = self.published.load();
+        for dispatcher in dispatchers.iter() {
+            dispatcher.dispatch(dispatch_request);
+        }
+    }
+
+    fn dispatch_batch(&self, dispatch_requests: &mut [DispatchRequest]) {
+        let dispatchers = self.published.load();
+        for dispatcher in dispatchers.iter() {
+            dispatcher.dispatch_batch(dispatch_requests);
+        }
+    }
+
+    fn dispatch_async<'a>(
+        &'a self,
+        dispatch_request: &'a mut DispatchRequest,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
+        let dispatchers = self.published.load_full();
+        Box::pin(async move {
+            for dispatcher in dispatchers.iter() {
+                dispatcher.dispatch_async(dispatch_request).await;
+            }
+        })
+    }
+
+    fn dispatch_batch_async<'a>(
+        &'a self,
+        dispatch_requests: &'a mut [DispatchRequest],
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
+        let dispatchers = self.published.load_full();
+        Box::pin(async move {
+            for dispatcher in dispatchers.iter() {
+                dispatcher.dispatch_batch_async(dispatch_requests).await;
+            }
+        })
     }
 }
 
@@ -4502,7 +4576,7 @@ impl ReputMessageService {
         &mut self,
         commit_log: ArcMut<CommitLog>,
         policy: ReputPolicy,
-        dispatcher: ArcMut<CommitLogDispatcherDefault>,
+        dispatcher: CommitLogDispatchHandle,
         notify_message_arrive_in_batch: bool,
         runtime_context: ReputRuntimeContext,
     ) {
@@ -4675,7 +4749,7 @@ impl ReputMessageService {
         &mut self,
         commit_log: ArcMut<CommitLog>,
         policy: ReputPolicy,
-        dispatcher: ArcMut<CommitLogDispatcherDefault>,
+        dispatcher: CommitLogDispatchHandle,
         notify_message_arrive_in_batch: bool,
         runtime_context: ReputRuntimeContext,
     ) {
@@ -4755,13 +4829,13 @@ struct ReputMessageServiceInner {
     reput_from_offset: Arc<AtomicI64>,
     commit_log: ArcMut<CommitLog>,
     policy: ReputPolicy,
-    dispatcher: ArcMut<CommitLogDispatcherDefault>,
+    dispatcher: CommitLogDispatchHandle,
     notify_message_arrive_in_batch: bool,
     runtime_context: ReputRuntimeContext,
 }
 
 async fn dispatch_reput_batch(
-    dispatcher: &ArcMut<CommitLogDispatcherDefault>,
+    dispatcher: &CommitLogDispatchHandle,
     runtime_context: &ReputRuntimeContext,
     notify_message_arrive_in_batch: bool,
     dispatch_batch: &mut [DispatchRequest],
@@ -5573,6 +5647,7 @@ mod tests {
     use std::sync::atomic::AtomicI64;
     use std::sync::atomic::Ordering;
     use std::sync::Arc;
+    use std::sync::Mutex as StdMutex;
     use std::thread;
     use std::time::Duration;
     use std::time::Instant;
@@ -5622,10 +5697,12 @@ mod tests {
     use super::BackgroundIndexRebuildService;
     use super::BackgroundIndexRebuildState;
     use super::CleanCommitLogService;
+    use super::CommitLogDispatcherDefault;
     use super::DiskCleanDecision;
     use super::LocalFileMessageStore;
     use super::ReputMessageService;
     use super::ReputMessageServiceInner;
+    use crate::base::commit_log_dispatcher::CommitLogDispatcher;
     use crate::base::dispatch_request::DispatchRequest;
     use crate::base::message_arriving_listener::MessageArrivingListener;
     use crate::base::message_result::PutMessageResult;
@@ -5814,7 +5891,7 @@ mod tests {
             reput_from_offset: Arc::new(AtomicI64::new(0)),
             commit_log: store.commit_log.clone(),
             policy,
-            dispatcher: store.dispatcher.clone(),
+            dispatcher: store.dispatcher.handle(),
             notify_message_arrive_in_batch: false,
             runtime_context: store.reput_runtime_context(),
         }
@@ -5903,7 +5980,7 @@ mod tests {
         assert!(cleanup.contains("commit_log: CommitLogCleanupHandle"));
         assert!(!cleanup.contains("ArcMut<CommitLog>"));
 
-        let commit_log_source = include_str!("../log_file/commit_log.rs");
+        let commit_log_source = include_str!("../log_file/commit_log.rs").replace("\r\n", "\n");
         assert!(commit_log_source.contains("pub(crate) struct CommitLogCleanupHandle"));
         assert!(commit_log_source.contains("pub(crate) fn cleanup_handle(&self) -> CommitLogCleanupHandle"));
         assert!(commit_log_source.contains("pub fn delete_expired_files_by_time_before(\n        &mut self,"));
@@ -5921,6 +5998,56 @@ mod tests {
         assert!(production.contains("self.mapped_files.rcu(|current| update(current.as_slice()))"));
         assert!(production.contains("pub(crate) fn replace_mapped_files_exclusive(&mut self,"));
         assert_eq!(production.matches(".store(").count(), 1);
+    }
+
+    #[test]
+    fn dispatcher_handle_observes_ordered_registry_publication() {
+        struct RecordingDispatcher {
+            id: i32,
+            calls: Arc<StdMutex<Vec<i32>>>,
+        }
+
+        impl CommitLogDispatcher for RecordingDispatcher {
+            fn dispatch(&self, _dispatch_request: &mut DispatchRequest) {
+                self.calls.lock().unwrap().push(self.id);
+            }
+        }
+
+        let calls = Arc::new(StdMutex::new(Vec::new()));
+        let mut dispatcher = CommitLogDispatcherDefault::new();
+        let handle = dispatcher.handle();
+        dispatcher.add_dispatcher(Arc::new(RecordingDispatcher {
+            id: 2,
+            calls: Arc::clone(&calls),
+        }));
+        dispatcher.add_first_dispatcher(Arc::new(RecordingDispatcher {
+            id: 1,
+            calls: Arc::clone(&calls),
+        }));
+
+        handle.dispatch(&mut DispatchRequest::default());
+
+        assert_eq!(*calls.lock().unwrap(), vec![1, 2]);
+    }
+
+    #[test]
+    fn commit_log_child_source_contract_uses_narrow_dispatch_and_owned_flush_manager() {
+        let source = include_str!("local_file_message_store.rs").replace("\r\n", "\n");
+        let production = source
+            .split_once("#[cfg(test)]\nmod tests")
+            .map(|(source, _)| source)
+            .expect("LocalFileMessageStore production section");
+        assert!(!production.contains("ArcMut<CommitLogDispatcherDefault>"));
+        assert!(production.contains("dispatcher: CommitLogDispatcherDefault"));
+        assert!(production.contains("dispatcher: CommitLogDispatchHandle"));
+        assert!(production.contains("published: Arc<ArcSwap<Vec<Arc<dyn CommitLogDispatcher>>>>"));
+
+        let commit_log_source = include_str!("../log_file/commit_log.rs").replace("\r\n", "\n");
+        assert!(commit_log_source.contains("dispatcher: super::CommitLogDispatchHandle"));
+        assert!(commit_log_source.contains("flush_manager: super::DefaultFlushManager"));
+        assert!(!commit_log_source.contains("ArcMut<super::CommitLogDispatcherDefault>"));
+        assert!(!commit_log_source.contains("ArcMut<super::DefaultFlushManager>"));
+        assert!(!commit_log_source.contains("ArcMut::new(DefaultFlushManager::new"));
     }
 
     #[tokio::test]
@@ -6001,7 +6128,7 @@ mod tests {
         store.reput_message_service.set_reput_from_offset(0);
         let commit_log = store.commit_log.clone();
         let reput_policy = store.composition.reput();
-        let dispatcher = store.dispatcher.clone();
+        let dispatcher = store.dispatcher.handle();
         let runtime_context = store.reput_runtime_context();
         store
             .reput_message_service

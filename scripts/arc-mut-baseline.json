@@ -2254,25 +2254,6 @@
       "adr": "ADR-013"
     },
     {
-      "identity": "6cfd19594ff8995ac3392ad4",
-      "path": "rocketmq-store/src/log_file/commit_log.rs",
-      "symbol": "ArcMut",
-      "kind": "constructor",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "57e2db28ec3ea0f0223ccaa2",
-          "fingerprint": "c171dfdddf2e3b207512c8b0",
-          "item": "fn new",
-          "line": 448
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
       "identity": "5e5713691514ee5af81a7804",
       "path": "rocketmq-store/src/log_file/commit_log.rs",
       "symbol": "ArcMut",
@@ -2322,24 +2303,6 @@
           "fingerprint": "896f53f02ac4c9392d9832ce",
           "item": "struct CommitLog",
           "line": 375
-        },
-        {
-          "id": "528b792d585c0a3c9cd32d2f",
-          "fingerprint": "d7d8fb49e84f3cab2442e092",
-          "item": "struct CommitLog",
-          "line": 376
-        },
-        {
-          "id": "6ce27a967bfbc31c7c8f7642",
-          "fingerprint": "340f0f2f88a6a96a8adb9c81",
-          "item": "struct CommitLog",
-          "line": 384
-        },
-        {
-          "id": "647a8dc4d6f9e27f044a91ab",
-          "fingerprint": "88eb56cf27366e0877a492cb",
-          "item": "fn new",
-          "line": 410
         },
         {
           "id": "7b82a0c547144271333e00f4",
@@ -2453,12 +2416,6 @@
       "kind": "constructor",
       "category": "production",
       "occurrences": [
-        {
-          "id": "b080c014ce7957ffecaf38e5",
-          "fingerprint": "5040e978b1132c03d77be1ff",
-          "item": "fn try_new",
-          "line": 520
-        },
         {
           "id": "c5e9b5d0d1687a02dd7114e0",
           "fingerprint": "e893abf66595dac0474d0cfa",
@@ -2608,12 +2565,6 @@
           "line": 349
         },
         {
-          "id": "c0e1b409d21fc82c2f9a473a",
-          "fingerprint": "7555c33cb6cd42519deeda10",
-          "item": "struct LocalFileMessageStore",
-          "line": 357
-        },
-        {
           "id": "5ce5b945e839ffda6f34ee86",
           "fingerprint": "9156fee9804c415403ef7440",
           "item": "struct LocalFileMessageStore",
@@ -2662,46 +2613,22 @@
           "line": 4265
         },
         {
-          "id": "c8c33df458e91ac43f7a136d",
-          "fingerprint": "1bf34b406b76a833e0368333",
+          "id": "5b482fba338f5f442261d33c",
+          "fingerprint": "3bfb11db767b8b25f80d10d7",
           "item": "fn start",
-          "line": 4503
+          "line": 4577
         },
         {
-          "id": "63413da66caccd807736afd4",
-          "fingerprint": "dc12f0bbaf5e47150cb06067",
-          "item": "fn start",
-          "line": 4505
-        },
-        {
-          "id": "49176a08866976a5262ca1bb",
-          "fingerprint": "ed6efa371a8f7ce3408fba82",
+          "id": "b02407b0545390f9c902cc04",
+          "fingerprint": "474a0b4fe15a5f215913912e",
           "item": "fn run_once",
-          "line": 4676
+          "line": 4750
         },
         {
-          "id": "96c18f48782e7f2c4ff89a71",
-          "fingerprint": "dc12f0bbaf5e47150cb06067",
-          "item": "fn run_once",
-          "line": 4678
-        },
-        {
-          "id": "8b32503ae63fae88f2dab8d5",
-          "fingerprint": "030298b05e59c4e2e5a7e67b",
+          "id": "618fd4a80b0d0f6af4bc4414",
+          "fingerprint": "7e01cf08b99e694f093d9465",
           "item": "struct ReputMessageServiceInner",
-          "line": 4756
-        },
-        {
-          "id": "4214aace4f3ed839f46580fa",
-          "fingerprint": "dc12f0bbaf5e47150cb06067",
-          "item": "struct ReputMessageServiceInner",
-          "line": 4758
-        },
-        {
-          "id": "fb96d06143a859904324302b",
-          "fingerprint": "204151cb573aa3b740720df7",
-          "item": "fn dispatch_reput_batch",
-          "line": 4764
+          "line": 4830
         }
       ],
       "owner": "store",
