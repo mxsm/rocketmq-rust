@@ -22,7 +22,6 @@ use bytes::BytesMut;
 use futures_util::SinkExt;
 use futures_util::StreamExt;
 use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_rust::ArcMut;
 use tokio::net::tcp::OwnedReadHalf;
 use tokio::net::tcp::OwnedWriteHalf;
 use tokio::net::TcpStream;
@@ -37,12 +36,11 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
-use crate::base::message_store::MessageStore;
 use crate::ha::flow_monitor::FlowMonitor;
 use crate::ha::ha_client::HAClient;
 use crate::ha::ha_connection_state::HAConnectionState;
 use crate::ha::HAConnectionError;
-use crate::message_store::local_file_message_store::LocalFileMessageStore;
+use crate::message_store::local_file_message_store::HAReplicaStoreHandle;
 use crate::store_error::StoreError;
 
 /// Report header buffer size. Schema: slaveMaxOffset. Format:
@@ -85,8 +83,8 @@ struct Inner {
     current_reported_offset: Arc<AtomicI64>,
     reported_broker_id: Arc<AtomicI64>,
 
-    /// Message store reference
-    default_message_store: ArcMut<LocalFileMessageStore>,
+    /// Narrow replica-store capability
+    replica_store: HAReplicaStoreHandle,
 
     /// Current connection state
     current_state: Arc<RwLock<HAConnectionState>>,
@@ -128,7 +126,7 @@ impl Inner {
                     info!("HAClient connect to master {}", addr_str);
                     self.change_current_state(HAConnectionState::Transfer).await;
                     // Initialize current reported offset
-                    let max_offset = self.default_message_store.get_max_phy_offset();
+                    let max_offset = self.replica_store.get_max_phy_offset();
                     self.current_reported_offset.store(max_offset, Ordering::Release);
                     let now = current_millis();
                     self.last_read_timestamp.store(now, Ordering::SeqCst);
@@ -150,13 +148,10 @@ impl Inner {
 
     /// Check if it's time to report offset
     fn is_time_to_report_offset(&self) -> bool {
-        let now = self.default_message_store.now();
+        let now = current_millis();
         let last_write = self.last_write_timestamp.load(Ordering::SeqCst);
         let interval = now.saturating_sub(last_write);
-        let heartbeat_interval = self
-            .default_message_store
-            .get_message_store_config()
-            .ha_send_heartbeat_interval;
+        let heartbeat_interval = self.replica_store.message_store_config_ref().ha_send_heartbeat_interval;
 
         interval > heartbeat_interval
     }
@@ -174,8 +169,8 @@ impl Inner {
 
 impl DefaultHAClient {
     /// Create a new DefaultHAClient
-    pub fn new(default_message_store: ArcMut<LocalFileMessageStore>) -> Result<Self, HAClientError> {
-        let flow_monitor = Arc::new(FlowMonitor::new(default_message_store.message_store_config()));
+    pub(crate) fn new(replica_store: HAReplicaStoreHandle) -> Result<Self, HAClientError> {
+        let flow_monitor = Arc::new(FlowMonitor::new(replica_store.message_store_config()));
 
         let now = current_millis();
 
@@ -187,7 +182,7 @@ impl DefaultHAClient {
                 last_write_timestamp: Arc::new(AtomicU64::new(now)),
                 current_reported_offset: Arc::new(AtomicI64::new(0)),
                 reported_broker_id: Arc::new(AtomicI64::new(-1)),
-                default_message_store,
+                replica_store,
                 current_state: Arc::new(RwLock::new(HAConnectionState::Ready)),
                 flow_monitor,
                 shutdown_notify: Arc::new(Notify::new()),
@@ -313,7 +308,7 @@ impl HAClient for DefaultHAClient {
 
                             // reader task: read data from master and dispatch to message store
                             let reader_shutdown = client.shutdown_notify.clone();
-                            let store = client.default_message_store.clone();
+                            let replica_store = client.replica_store.clone();
                             let flow = client.flow_monitor.clone();
                             let mut reader_client = ReaderTask {
                                 reader: framed_rd,
@@ -321,11 +316,11 @@ impl HAClient for DefaultHAClient {
                                 dispatch_pos: 0,
                                 offset_tx,
                                 err_tx: err_tx.clone(),
-                                store,
+                                replica_store,
                                 flow_monitor: flow,
                                 last_read_timestamp: client.last_read_timestamp.clone(),
                                 enable_controller_mode: client
-                                    .default_message_store
+                                    .replica_store
                                     .message_store_config_ref()
                                     .enable_controller_mode,
                             };
@@ -349,11 +344,11 @@ impl HAClient for DefaultHAClient {
                             let writer_shutdown = client.shutdown_notify.clone();
                             let cfg = WriterCfg {
                                 heartbeat_interval_ms: client
-                                    .default_message_store
+                                    .replica_store
                                     .message_store_config_ref()
                                     .ha_send_heartbeat_interval,
                                 enable_controller_mode: client
-                                    .default_message_store
+                                    .replica_store
                                     .message_store_config_ref()
                                     .enable_controller_mode,
                             };
@@ -393,7 +388,7 @@ impl HAClient for DefaultHAClient {
                             // main loop for housekeeping and monitoring
                             let mut house = interval(Duration::from_millis(
                                 client
-                                    .default_message_store
+                                    .replica_store
                                     .message_store_config_ref()
                                     .ha_housekeeping_interval,
                             ));
@@ -409,7 +404,7 @@ impl HAClient for DefaultHAClient {
                                     _ = house.tick() => {
                                         let interval = current_millis().saturating_sub(client.last_read_timestamp.load(Ordering::SeqCst));
                                         // If the interval exceeds the configured value, it indicates that the connection may have been disconnected.
-                                        if interval > client.default_message_store.message_store_config_ref().ha_housekeeping_interval {
+                                        if interval > client.replica_store.message_store_config_ref().ha_housekeeping_interval {
                                             warn!(
                                                 "AutoRecoverHAClient, housekeeping, connection [{:?}] expired, {}",
                                                 client.ha_master_address().await, interval
@@ -566,7 +561,7 @@ struct ReaderTask {
     dispatch_pos: usize,
     offset_tx: tokio::sync::mpsc::UnboundedSender<i64>,
     err_tx: tokio::sync::mpsc::UnboundedSender<HAClientError>,
-    store: ArcMut<LocalFileMessageStore>,
+    replica_store: HAReplicaStoreHandle,
     flow_monitor: Arc<FlowMonitor>,
     /// Last time slave read data from master
     last_read_timestamp: Arc<AtomicU64>,
@@ -600,7 +595,7 @@ impl ReaderTask {
 
     async fn dispatch_read(&mut self) -> HAClientTaskResult<bool> {
         loop {
-            let slave_phy_offset = self.store.get_max_phy_offset();
+            let slave_phy_offset = self.replica_store.get_max_phy_offset();
             let frame = rocketmq_store_local::ha::wire::plan_replica_frame(
                 &self.buf,
                 self.dispatch_pos,
@@ -614,8 +609,8 @@ impl ReaderTask {
             let body = &self.buf[frame.body_range.clone()];
 
             if !body.is_empty() {
-                self.store
-                    .append_to_commit_log(
+                self.replica_store
+                    .append_replica_data(
                         frame.master_phy_offset,
                         body,
                         0,
@@ -625,18 +620,18 @@ impl ReaderTask {
                     .await?;
             }
 
-            Self::apply_master_confirm_offset(&self.store, frame.confirm_offset);
+            Self::apply_master_confirm_offset(&self.replica_store, frame.confirm_offset);
 
             self.dispatch_pos = frame.next_dispatch_position;
 
             if !body.is_empty() {
-                let cur = self.store.get_max_phy_offset();
+                let cur = self.replica_store.get_max_phy_offset();
                 let _ = self.offset_tx.send(cur);
             }
         }
     }
 
-    fn apply_master_confirm_offset(store: &ArcMut<LocalFileMessageStore>, confirm_offset: Option<i64>) {
+    fn apply_master_confirm_offset(store: &HAReplicaStoreHandle, confirm_offset: Option<i64>) {
         let Some(confirm_offset) = confirm_offset else {
             return;
         };
@@ -765,36 +760,41 @@ mod tests {
     use tokio::net::TcpListener;
 
     use super::*;
+    use crate::base::message_store::MessageStore;
     use crate::config::message_store_config::MessageStoreConfig;
     use crate::ha::default_ha_connection::decode_transfer_header;
     use crate::ha::default_ha_connection::encode_transfer_header;
     use crate::message_store::local_file_message_store::LocalFileMessageStore;
     use rocketmq_store_local::ha::wire::CONTROLLER_TRANSFER_HEADER_SIZE;
 
-    fn new_test_message_store(root: &Path) -> ArcMut<LocalFileMessageStore> {
+    fn new_test_message_store(root: &Path) -> LocalFileMessageStore {
         std::fs::create_dir_all(root).expect("create temp root dir");
 
         let broker_config = BrokerConfig {
+            duplication_enable: true,
             enable_controller_mode: true,
             ..BrokerConfig::default()
         };
 
         let message_store_config = MessageStoreConfig {
+            duplication_enable: true,
             enable_controller_mode: true,
             store_path_root_dir: root.to_string_lossy().into_owned().into(),
+            timer_wheel_enable: false,
             ..MessageStoreConfig::default()
         };
 
         let topic_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>> = Arc::new(DashMap::new());
-        let mut store = ArcMut::new(LocalFileMessageStore::new(
+        let mut store = LocalFileMessageStore::new(
             Arc::new(message_store_config),
             Arc::new(broker_config),
             topic_table,
             None,
             false,
-        ));
-        let store_clone = store.clone();
-        store.set_message_store_arc(store_clone);
+        );
+        store
+            .wire_owned_root_dependencies()
+            .expect("wire owned test store dependencies");
         store
     }
 
@@ -808,6 +808,8 @@ mod tests {
 
         assert!(production.contains("inner: Arc<Inner>,"));
         assert!(!production.contains("inner: ArcMut<Inner>,"));
+        assert!(production.contains("replica_store: HAReplicaStoreHandle,"));
+        assert!(!production.contains("ArcMut<LocalFileMessageStore>"));
         assert!(production.contains("inner: Arc::new(Inner {"));
         assert!(production.contains("let client = Arc::clone(&self.inner);"));
         assert!(!production.contains("ArcMut::new(Inner {"));
@@ -865,7 +867,7 @@ mod tests {
         );
         let header = decode_transfer_header(&encoded, true).expect("decode transfer header");
 
-        ReaderTask::apply_master_confirm_offset(&store, header.confirm_offset);
+        ReaderTask::apply_master_confirm_offset(&store.ha_replica_store_handle(), header.confirm_offset);
 
         assert_eq!(store.get_confirm_offset(), 4);
     }
@@ -907,7 +909,7 @@ mod tests {
             dispatch_pos: 0,
             offset_tx,
             err_tx,
-            store: store.clone(),
+            replica_store: store.ha_replica_store_handle(),
             flow_monitor: Arc::new(FlowMonitor::new(store.message_store_config())),
             last_read_timestamp: Arc::new(AtomicU64::new(0)),
             enable_controller_mode: true,

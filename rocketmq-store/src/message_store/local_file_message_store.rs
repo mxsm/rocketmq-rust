@@ -144,6 +144,7 @@ use crate::log_file::commit_log;
 use crate::log_file::commit_log::CommitLog;
 use crate::log_file::commit_log::CommitLogCleanupHandle;
 use crate::log_file::commit_log::CommitLogReadHandle;
+use crate::log_file::commit_log::CommitLogReplicaHandle;
 use crate::log_file::commit_log::CommitLogStoreContext;
 use crate::log_file::mapped_file::MappedFile;
 use crate::log_file::MAX_PULL_MSG_SIZE;
@@ -347,6 +348,70 @@ impl Drop for StoreLockGuard {
 enum PendingHAService {
     Default(Box<crate::ha::default_ha_service::DefaultHAService>),
     AutoSwitch(crate::ha::auto_switch::auto_switch_ha_service::AutoSwitchHAService),
+}
+
+/// Narrow Local Store capability used by HA replica readers.
+///
+/// The handle deliberately excludes queue, index, dispatcher, and lifecycle
+/// mutation APIs while retaining the exact raw-append and confirm publication
+/// state shared by the owning Store.
+#[derive(Clone)]
+pub(crate) struct HAReplicaStoreHandle {
+    message_store_config: Arc<MessageStoreConfig>,
+    shutdown: Arc<AtomicBool>,
+    commit_log: CommitLogReplicaHandle,
+}
+
+impl HAReplicaStoreHandle {
+    #[inline]
+    pub(crate) fn message_store_config(&self) -> Arc<MessageStoreConfig> {
+        self.message_store_config.clone()
+    }
+
+    #[inline]
+    pub(crate) fn message_store_config_ref(&self) -> &MessageStoreConfig {
+        self.message_store_config.as_ref()
+    }
+
+    #[inline]
+    pub(crate) fn get_max_phy_offset(&self) -> i64 {
+        self.commit_log.get_max_offset()
+    }
+
+    #[inline]
+    pub(crate) fn get_min_phy_offset(&self) -> i64 {
+        self.commit_log.get_min_offset()
+    }
+
+    pub(crate) async fn append_replica_data(
+        &self,
+        start_offset: i64,
+        data: &[u8],
+        data_start: i32,
+        data_length: i32,
+    ) -> Result<bool, StoreError> {
+        if self.shutdown.load(Ordering::Acquire) {
+            warn!("message store has shutdown, so replica append is forbidden");
+            return Ok(false);
+        }
+
+        let appended = self
+            .commit_log
+            .append_data(start_offset, data, data_start, data_length)
+            .await?;
+        if !appended {
+            error!(
+                "HA replica append failed, physical offset={}, data length={}",
+                start_offset, data_length
+            );
+        }
+        Ok(appended)
+    }
+
+    #[inline]
+    pub(crate) fn publish_confirm_offset(&self, phy_offset: i64) {
+        self.commit_log.publish_confirm_offset(phy_offset);
+    }
 }
 
 ///Using local files to store message data, which is also the default method.
@@ -739,6 +804,14 @@ impl LocalFileMessageStore {
 
     pub fn message_store_config(&self) -> Arc<MessageStoreConfig> {
         self.message_store_config.clone()
+    }
+
+    pub(crate) fn ha_replica_store_handle(&self) -> HAReplicaStoreHandle {
+        HAReplicaStoreHandle {
+            message_store_config: self.message_store_config.clone(),
+            shutdown: self.shutdown.clone(),
+            commit_log: self.commit_log.replica_handle(),
+        }
     }
 
     pub(crate) fn consume_queue_context(&self) -> ConsumeQueueStoreContext {
@@ -5996,6 +6069,33 @@ mod tests {
             .expect("duplication without timer can use an exclusively owned store");
 
         assert!(store.root_dependencies_wired);
+    }
+
+    #[tokio::test]
+    async fn ha_replica_handle_rejects_append_after_shutdown() {
+        let temp_dir = tempdir().unwrap();
+        let store = new_owned_wiring_test_store(
+            &temp_dir,
+            MessageStoreConfig {
+                duplication_enable: true,
+                timer_wheel_enable: false,
+                ..MessageStoreConfig::default()
+            },
+            BrokerConfig {
+                duplication_enable: true,
+                ..BrokerConfig::default()
+            },
+        );
+        let handle = store.ha_replica_store_handle();
+        store.shutdown.store(true, Ordering::Release);
+
+        let appended = handle
+            .append_replica_data(0, &[1, 2, 3, 4], 0, 4)
+            .await
+            .expect("shutdown replica append should fail closed without an error");
+
+        assert!(!appended);
+        assert_eq!(handle.get_max_phy_offset(), 0);
     }
 
     #[derive(Clone, Debug, PartialEq, Eq)]

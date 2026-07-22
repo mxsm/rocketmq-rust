@@ -45,6 +45,13 @@ class M06HALocalContractTests(unittest.TestCase):
         store_connection = source("rocketmq-store/src/ha/default_ha_connection.rs")
         store_client = source("rocketmq-store/src/ha/default_ha_client.rs")
         store_client_production = store_client.split("#[cfg(test)]", maxsplit=1)[0]
+        store_local = source(
+            "rocketmq-store/src/message_store/local_file_message_store.rs"
+        )
+        store_commit_log = source("rocketmq-store/src/log_file/commit_log.rs")
+        store_mapped_file_queue = source(
+            "rocketmq-store/src/consume_queue/mapped_file_queue.rs"
+        )
         store_auto_switch = source(
             "rocketmq-store/src/ha/auto_switch/auto_switch_ha_service.rs"
         )
@@ -133,6 +140,30 @@ class M06HALocalContractTests(unittest.TestCase):
             self.assertNotIn(unused_runtime_field, store_client_production)
         self.assertIn("buf: BytesMut", store_client_production)
         self.assertIn("report_offset: BytesMut", store_client_production)
+        self.assertNotIn(
+            "ArcMut<LocalFileMessageStore>", store_client_production
+        )
+        self.assertEqual(
+            store_client_production.count(
+                "\n    replica_store: HAReplicaStoreHandle,"
+            ),
+            2,
+        )
+        self.assertIn("ha_replica_store_handle()", store_default_service)
+        self.assertIn("pub(crate) struct HAReplicaStoreHandle", store_local)
+        self.assertIn("commit_log: CommitLogReplicaHandle", store_local)
+        self.assertIn("pub(crate) struct CommitLogReplicaHandle", store_commit_log)
+        for capability in (
+            "append: MappedFileQueueAppendHandle",
+            "put_message_lock: Arc<tokio::sync::Mutex<()>>",
+            "runtime_state: Arc<CommitLogRuntimeState>",
+            "store_checkpoint: Arc<StoreCheckpoint>",
+        ):
+            self.assertIn(capability, store_commit_log)
+        self.assertIn(
+            "pub(crate) struct MappedFileQueueAppendHandle",
+            store_mapped_file_queue,
+        )
 
         for owner in (
             "pub struct ReplicationStateRoot",
