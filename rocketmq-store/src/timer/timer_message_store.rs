@@ -978,7 +978,7 @@ impl TimerMessageStore {
                         processed += 1;
                         continue;
                     };
-                    let put_result = message_store.clone().mut_from_ref().put_message(rolled_message).await;
+                    let put_result = message_store.put_message_shared(rolled_message).await;
                     if !put_result.is_ok() {
                         warn!(
                             "roll timer message for slot {} failed with status {:?}",
@@ -1019,7 +1019,7 @@ impl TimerMessageStore {
                 continue;
             };
             let delivered_topic = deliver_message.get_topic().clone();
-            let put_result = message_store.clone().mut_from_ref().put_message(deliver_message).await;
+            let put_result = message_store.put_message_shared(deliver_message).await;
             if !put_result.is_ok() {
                 warn!(
                     "delay delivery for slot {} failed with status {:?}",

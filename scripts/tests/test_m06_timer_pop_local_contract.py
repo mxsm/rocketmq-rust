@@ -26,6 +26,26 @@ def source(relative: str) -> str:
 
 
 class M06TimerPopLocalContractTests(unittest.TestCase):
+    def test_timer_delivery_uses_shared_append_boundary(self) -> None:
+        timer = source("rocketmq-store/src/timer/timer_message_store.rs").split(
+            "#[cfg(test)]\nmod tests", maxsplit=1
+        )[0]
+        local_store = source(
+            "rocketmq-store/src/message_store/local_file_message_store.rs"
+        ).split("#[cfg(test)]\nmod tests", maxsplit=1)[0]
+        commit_log = source("rocketmq-store/src/log_file/commit_log.rs").split(
+            "#[cfg(test)]\nmod tests", maxsplit=1
+        )[0]
+
+        self.assertNotIn(".mut_from_ref()", timer)
+        self.assertEqual(timer.count(".put_message_shared("), 2)
+        self.assertIn("pub(crate) async fn put_message_shared(&self", local_store)
+        self.assertIn("pub(crate) async fn put_messages_shared(&self", local_store)
+        self.assertIn("self.put_message_shared(msg).await", local_store)
+        self.assertIn("self.put_messages_shared(message_ext_batch).await", local_store)
+        self.assertIn("pub async fn put_message(&self", commit_log)
+        self.assertIn("pub async fn put_messages(&self", commit_log)
+
     def test_timer_pop_services_stats_filter_and_hooks_have_local_owners(self) -> None:
         local_root = source("rocketmq-store-local/src/lib.rs")
         local_timer_root = source("rocketmq-store-local/src/timer.rs")

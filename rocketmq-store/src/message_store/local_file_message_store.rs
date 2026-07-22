@@ -1690,6 +1690,105 @@ impl LocalFileMessageStore {
         self.store_health_recorder.record_flush_failure(error);
     }
 
+    pub(crate) async fn put_message_shared(&self, mut msg: MessageExtBrokerInner) -> PutMessageResult {
+        if !self.is_store_available_for_io() {
+            warn!("message store has shutdown, so putMessage is forbidden");
+            return PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable);
+        }
+
+        for hook in self.put_message_hook_list.iter() {
+            if let Some(result) = hook.execute_before_put_message(&mut msg) {
+                return result;
+            }
+        }
+        let lmq_dispatch_queue_keys = self.prepare_lmq_dispatch(&mut msg);
+        let lmq_dispatch_message_num = self.get_lmq_dispatch_message_num(&msg);
+
+        if msg
+            .message_ext_inner
+            .properties()
+            .contains_key(MessageConst::PROPERTY_INNER_NUM)
+            && !MessageSysFlag::check(msg.sys_flag(), MessageSysFlag::INNER_BATCH_FLAG)
+        {
+            warn!(
+                "[BUG]The message had property {} but is not an inner batch",
+                MessageConst::PROPERTY_INNER_NUM
+            );
+            return PutMessageResult::new_default(PutMessageStatus::MessageIllegal);
+        }
+
+        if MessageSysFlag::check(msg.sys_flag(), MessageSysFlag::INNER_BATCH_FLAG) {
+            let topic_config = self.get_topic_config(msg.topic());
+            if !QueueTypeUtils::is_batch_cq_arc_mut(topic_config.as_ref()) {
+                error!("[BUG]The message is an inner batch but cq type is not batch cq");
+                return PutMessageResult::new_default(PutMessageStatus::MessageIllegal);
+            }
+        }
+        let begin_time = Instant::now();
+        let result = self.commit_log.put_message(msg).await;
+        let elapsed_time = begin_time.elapsed().as_millis();
+        if elapsed_time > 500 {
+            warn!(
+                "DefaultMessageStore#putMessage: CommitLog#putMessage cost {}ms",
+                elapsed_time,
+            );
+        }
+        self.store_stats_service
+            .set_put_message_entire_time_max(elapsed_time as u64);
+        if !result.is_ok() {
+            self.store_stats_service
+                .get_put_message_failed_times()
+                .fetch_add(1, Ordering::AcqRel);
+        }
+
+        if result.is_ok() {
+            if !lmq_dispatch_queue_keys.is_empty() {
+                self.update_lmq_offsets(&lmq_dispatch_queue_keys, lmq_dispatch_message_num);
+            }
+            self.reput_message_service.notify_new_message();
+        }
+
+        result
+    }
+
+    pub(crate) async fn put_messages_shared(&self, mut message_ext_batch: MessageExtBatch) -> PutMessageResult {
+        if !self.is_store_available_for_io() {
+            warn!("message store has shutdown, so putMessages is forbidden");
+            return PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable);
+        }
+
+        for hook in self.put_message_hook_list.iter() {
+            if let Some(result) = hook.execute_before_put_message(&mut message_ext_batch.message_ext_broker_inner) {
+                return result;
+            }
+        }
+        let lmq_dispatch_queue_keys = self.prepare_lmq_dispatch(&mut message_ext_batch.message_ext_broker_inner);
+        let lmq_dispatch_message_num = self.get_lmq_dispatch_message_num(&message_ext_batch.message_ext_broker_inner);
+
+        let begin_time = Instant::now();
+        let result = self.commit_log.put_messages(message_ext_batch).await;
+        let elapsed_time = begin_time.elapsed().as_millis();
+        if elapsed_time > 500 {
+            warn!("not in lock eclipse time(ms) {}ms", elapsed_time,);
+        }
+        self.store_stats_service
+            .set_put_message_entire_time_max(elapsed_time as u64);
+        if !result.is_ok() {
+            self.store_stats_service
+                .get_put_message_failed_times()
+                .fetch_add(1, Ordering::Relaxed);
+        }
+
+        if result.is_ok() {
+            if !lmq_dispatch_queue_keys.is_empty() {
+                self.update_lmq_offsets(&lmq_dispatch_queue_keys, lmq_dispatch_message_num);
+            }
+            self.reput_message_service.notify_new_message();
+        }
+
+        result
+    }
+
     pub async fn reput_once(&mut self) {
         if self.reput_message_service.reput_from_offset.is_none() {
             let start_offset = self.get_dispatch_recovery_offset().max(0);
@@ -2093,107 +2192,12 @@ impl MessageStore for LocalFileMessageStore {
         ));
     }
 
-    async fn put_message(&mut self, mut msg: MessageExtBrokerInner) -> PutMessageResult {
-        if !self.is_store_available_for_io() {
-            warn!("message store has shutdown, so putMessage is forbidden");
-            return PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable);
-        }
-
-        for hook in self.put_message_hook_list.iter() {
-            if let Some(result) = hook.execute_before_put_message(&mut msg) {
-                return result;
-            }
-        }
-        let lmq_dispatch_queue_keys = self.prepare_lmq_dispatch(&mut msg);
-        let lmq_dispatch_message_num = self.get_lmq_dispatch_message_num(&msg);
-
-        if msg
-            .message_ext_inner
-            .properties()
-            .contains_key(MessageConst::PROPERTY_INNER_NUM)
-            && !MessageSysFlag::check(msg.sys_flag(), MessageSysFlag::INNER_BATCH_FLAG)
-        {
-            warn!(
-                "[BUG]The message had property {} but is not an inner batch",
-                MessageConst::PROPERTY_INNER_NUM
-            );
-            return PutMessageResult::new_default(PutMessageStatus::MessageIllegal);
-        }
-
-        if MessageSysFlag::check(msg.sys_flag(), MessageSysFlag::INNER_BATCH_FLAG) {
-            let topic_config = self.get_topic_config(msg.topic());
-            if !QueueTypeUtils::is_batch_cq_arc_mut(topic_config.as_ref()) {
-                error!("[BUG]The message is an inner batch but cq type is not batch cq");
-                return PutMessageResult::new_default(PutMessageStatus::MessageIllegal);
-            }
-        }
-        let begin_time = Instant::now();
-        //put message to commit log
-        let result = self.commit_log.put_message(msg).await;
-        let elapsed_time = begin_time.elapsed().as_millis();
-        if elapsed_time > 500 {
-            warn!(
-                "DefaultMessageStore#putMessage: CommitLog#putMessage cost {}ms",
-                elapsed_time,
-            );
-        }
-        self.store_stats_service
-            .set_put_message_entire_time_max(elapsed_time as u64);
-        if !result.is_ok() {
-            self.store_stats_service
-                .get_put_message_failed_times()
-                .fetch_add(1, Ordering::AcqRel);
-        }
-
-        // Notify ReputMessageService that new message has arrived
-        if result.is_ok() {
-            if !lmq_dispatch_queue_keys.is_empty() {
-                self.update_lmq_offsets(&lmq_dispatch_queue_keys, lmq_dispatch_message_num);
-            }
-            self.reput_message_service.notify_new_message();
-        }
-
-        result
+    async fn put_message(&mut self, msg: MessageExtBrokerInner) -> PutMessageResult {
+        self.put_message_shared(msg).await
     }
 
-    async fn put_messages(&mut self, mut message_ext_batch: MessageExtBatch) -> PutMessageResult {
-        if !self.is_store_available_for_io() {
-            warn!("message store has shutdown, so putMessages is forbidden");
-            return PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable);
-        }
-
-        for hook in self.put_message_hook_list.iter() {
-            if let Some(result) = hook.execute_before_put_message(&mut message_ext_batch.message_ext_broker_inner) {
-                return result;
-            }
-        }
-        let lmq_dispatch_queue_keys = self.prepare_lmq_dispatch(&mut message_ext_batch.message_ext_broker_inner);
-        let lmq_dispatch_message_num = self.get_lmq_dispatch_message_num(&message_ext_batch.message_ext_broker_inner);
-
-        let begin_time = Instant::now();
-        //put message to commit log
-        let result = self.commit_log.put_messages(message_ext_batch).await;
-        let elapsed_time = begin_time.elapsed().as_millis();
-        if elapsed_time > 500 {
-            warn!("not in lock eclipse time(ms) {}ms", elapsed_time,);
-        }
-        self.store_stats_service
-            .set_put_message_entire_time_max(elapsed_time as u64);
-        if !result.is_ok() {
-            self.store_stats_service
-                .get_put_message_failed_times()
-                .fetch_add(1, Ordering::Relaxed);
-        }
-
-        // Notify ReputMessageService that new messages have arrived
-        if result.is_ok() {
-            if !lmq_dispatch_queue_keys.is_empty() {
-                self.update_lmq_offsets(&lmq_dispatch_queue_keys, lmq_dispatch_message_num);
-            }
-            self.reput_message_service.notify_new_message();
-        }
-
-        result
+    async fn put_messages(&mut self, message_ext_batch: MessageExtBatch) -> PutMessageResult {
+        self.put_messages_shared(message_ext_batch).await
     }
 
     async fn get_message(
@@ -8393,6 +8397,25 @@ mod tests {
         assert_eq!(append_result.msg_num, 3);
         assert_eq!(stats.get_put_message_times_total(), 3);
         assert_eq!(stats.get_put_message_size_total(), append_result.wrote_bytes as u64);
+    }
+
+    #[tokio::test]
+    async fn shared_put_message_serializes_concurrent_appends() {
+        let temp_dir = tempdir().unwrap();
+        let store = new_async_flush_test_store(&temp_dir);
+        let topic = CheetahString::from_static_str("shared-put-message-topic");
+
+        let first = store.put_message_shared(build_test_message(&topic, Bytes::from_static(b"first")));
+        let second = store.put_message_shared(build_test_message(&topic, Bytes::from_static(b"second")));
+        let (first, second) = tokio::join!(first, second);
+
+        assert_eq!(first.put_message_status(), PutMessageStatus::PutOk);
+        assert_eq!(second.put_message_status(), PutMessageStatus::PutOk);
+        assert_ne!(
+            first.append_message_result().expect("first append").wrote_offset,
+            second.append_message_result().expect("second append").wrote_offset
+        );
+        assert_eq!(store.get_runtime_info()["putMessageLockAcquireTotal"], "2");
     }
 
     #[tokio::test]
