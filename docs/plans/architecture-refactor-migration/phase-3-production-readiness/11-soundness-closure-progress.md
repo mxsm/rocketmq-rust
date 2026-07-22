@@ -4502,6 +4502,29 @@ General HA composition root 随 Issue #8591 完成以下收口：
 | runtime / final gates | enforcing runtime audit、`cargo fmt --all -- --check` 与 workspace all-target/all-feature strict Clippy 通过；首轮 Clippy 发现 cfg(test) support module 后仍有一个公开 re-export，触发 `items_after_test_module`，调整顺序后重跑取得 0 退出码，先前非零结果未计作通过；Windows linker stdout 与既有 future-incompatibility note 不受 `-D warnings` 管辖；`git diff --check` 在最终文档快照执行 |
 | reduced validation scope | 不重复 package strict Clippy、额外 `cargo check`、Store/Broker 全量 lib、RocksDB 六项专项、dependency/release/performance/telemetry 矩阵、Rustdoc 或 AGENTS routing；37 项定向回归覆盖 root 初始化、role/replication callback、连接生命周期、Weak 释放和 shutdown，M06 固定 Arc/Weak/source contract，runtime audit 覆盖 HA TaskGroup/shutdown，最终 workspace Clippy 覆盖全 workspace 编译/lint；D 盘剩余 60.35 GiB，保留 Cargo cache且未执行 `cargo clean` |
 
+## M11-12bc88 实现
+
+LitePull test caller debt 随 Issue #8593 完成以下收口：
+
+- `DefaultLitePullConsumerImpl::new` 已把 `AsRef<ClientConfig>` 与 `AsRef<LitePullConsumerConfig>` 克隆到
+  ArcSwap-owned immutable values；39 项模块测试不需要共享可变配置 root。
+- 测试中的 68 个 `ArcMut::new(config)` 全部改为标准 `Arc::new`，并删除唯一 test-only `ArcMut` import；
+  production consumer、公开构造签名、lifecycle、rebalance、poll、hook 与 shutdown 行为不变。
+- reviewed baseline 从 71/312 降至 69/243：production 保持 13/24，test 从 44/248 降至 42/179，
+  compatibility 保持 14/40；净删除 2 identities/69 occurrences，无 relocation、新 identity 或临时 approval。
+- R17 当前上界降至 42/179（Store 32/161、Broker 6/8、Client 2/2、runtime-foundation 2/8）；R10 按
+  bc87 后实际 production snapshot 从文档中的 3/4 校正为 2/2，仍因完整根 wiring carrier 保持开放。
+  31 项执行清单保持完成 11 项、剩余 20 项，正式进度仍为 75/82。
+
+## M11-12bc88 验证
+
+| 命令 | 结果 |
+|---|---|
+| affected behavior | `cargo test -p rocketmq-client-rust --lib default_lite_pull_consumer_impl::tests` 39/39 通过，覆盖配置校验、生命周期、rebalance、assign/seek/commit、poll、hook、flow control 与 shutdown；该命令已承担受影响 client test target 编译，不重复 `cargo check` 或 client 全量测试 |
+| reviewed baseline / fixtures | 正式 baseline 与 reviewed candidate 的 semantic set 均为 69/243；直接 guard、candidate compare、27/27 fixtures 与 78/78 guard tests 通过；净删除 2 test identities/69 occurrences，无 relocation、新 identity 或临时 approval |
+| final gates | `cargo fmt --all -- --check`、workspace all-target/all-feature strict Clippy 与 `git diff --check` 通过；Windows linker stdout 与既有 future-incompatibility note 不受 `-D warnings` 管辖 |
+| reduced validation scope | 本切片仅替换 test-only config wrapper，不修改 production lifecycle/runtime、协议、Store、feature 或公开 API，因此不运行 runtime audit、M06、RocksDB、dependency/release/performance/telemetry 矩阵、Rustdoc 或 AGENTS routing；D 盘剩余 55.66 GiB，空间充足，保留 Cargo cache且未执行 `cargo clean` |
+
 ## 剩余切片与 Gate
 
 2026-07-23 盘点将执行工作固化为 31 个最小可审查单元：16 个 production owner、2 个

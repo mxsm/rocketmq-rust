@@ -1187,6 +1187,13 @@ identities/35 occurrences（production 5/9、test 5/26）。3 个 test identity 
 ADR-013 approval，无新增 governed debt 或提交态 approval。R15、R16 均降至 0/0 并完成；31 项执行清单现为
 完成 11 项、剩余 20 项，正式进度仍为 75/82。
 
+LitePull test caller debt 随 Issue #8593 继续收口：`DefaultLitePullConsumerImpl::new` 已在构造边界克隆不可变
+Client/LitePull 配置，39 项模块测试中的 68 个 `ArcMut::new(config)` 因此改为标准 `Arc::new` 并删除 test-only
+import，不改变 production consumer 或公开 API。reviewed 快照从 71/312 降至 69/243：production 保持
+13/24，test 从 44/248 降至 42/179，compatibility 保持 14/40；净删除 2 identities/69 occurrences，无
+relocation、新 identity 或临时 approval。R17 当前上界降至 42/179，执行清单保持完成 11 项、剩余 20 项，
+正式进度仍为 75/82。
+
 Default HA client runtime ownership 随 Issue #8567 完成收窄：`DefaultHAClient` 以标准 `Arc<Inner>` 共享只读组合根，
 `Inner` 仅保留原子、锁、Notify、flow monitor 与现有 LocalStore 兼容句柄；从未安装连接的 stream 字段和重复 buffer/
 dispatch/report 状态已删除，实际 reader/writer buffer 继续由每个 connection task 独占。reviewed 快照为 126 identities/
