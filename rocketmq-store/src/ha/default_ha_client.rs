@@ -14,7 +14,6 @@
 
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::AtomicU64;
-use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
@@ -64,7 +63,7 @@ type HAClientTaskResult<T> = Result<T, HAClientError>;
 
 /// Default HA Client implementation using bytes crate
 pub struct DefaultHAClient {
-    inner: ArcMut<Inner>,
+    inner: Arc<Inner>,
     /// Service task group
     service_group: Arc<RwLock<Option<rocketmq_runtime::TaskGroup>>>,
 }
@@ -76,12 +75,6 @@ struct Inner {
     /// Master address (atomic reference)
     master_address: Arc<tokio::sync::Mutex<Option<String>>>,
 
-    /// TCP connection to master
-    //socket_stream: Arc<RwLock<Option<TcpStream>>>,
-    write_stream: Option<FramedWrite<OwnedWriteHalf, BytesCodec>>,
-
-    read_stream: Option<FramedRead<OwnedReadHalf, BytesCodec>>,
-
     /// Last time slave read data from master
     last_read_timestamp: Arc<AtomicU64>,
 
@@ -91,18 +84,6 @@ struct Inner {
     /// Current reported offset
     current_reported_offset: Arc<AtomicI64>,
     reported_broker_id: Arc<AtomicI64>,
-
-    /// Dispatch position in read buffer
-    dispatch_position: AtomicUsize,
-
-    /// Read buffer using BytesMut for efficient manipulation
-    byte_buffer_read: BytesMut,
-
-    /// Backup buffer for reallocation
-    byte_buffer_backup: Arc<RwLock<BytesMut>>,
-
-    /// Report offset buffer
-    report_offset: BytesMut,
 
     /// Message store reference
     default_message_store: ArcMut<LocalFileMessageStore>,
@@ -118,13 +99,7 @@ struct Inner {
 }
 
 impl Inner {
-    async fn close_master(&mut self) {
-        //maybe not need to take, just set to None is ok
-        let write = self.write_stream.take();
-        let read = self.read_stream.take();
-        drop(write);
-        drop(read);
-
+    async fn close_master(&self) {
         let addr = self.master_ha_address.lock().await;
         info!("HAClient close connection with master {:?}", addr.as_ref());
 
@@ -133,21 +108,13 @@ impl Inner {
 
         // Reset state
         self.last_read_timestamp.store(0, Ordering::SeqCst);
-        self.dispatch_position.store(0, Ordering::SeqCst);
-
-        // Reset buffers using bytes operations
-
-        let mut backup_buffer = self.byte_buffer_backup.write().await;
-
-        self.byte_buffer_read.clear();
-        backup_buffer.clear();
     }
-    async fn close_master_and_wait(&mut self) {
+    async fn close_master_and_wait(&self) {
         self.close_master().await;
         sleep(Duration::from_secs(5)).await; // Wait for 5 seconds before retrying
     }
 
-    async fn connect_master(&mut self) -> Result<Option<TcpStream>, HAClientError> {
+    async fn connect_master(&self) -> Result<Option<TcpStream>, HAClientError> {
         let ha_address_guard = self.master_ha_address.lock().await;
         let addr = ha_address_guard.as_ref();
         if let Some(addr_str) = addr {
@@ -177,7 +144,7 @@ impl Inner {
         }
     }
 
-    pub fn notify_shutdown(&mut self) {
+    pub fn notify_shutdown(&self) {
         self.shutdown_notify.notify_waiters();
     }
 
@@ -213,20 +180,13 @@ impl DefaultHAClient {
         let now = current_millis();
 
         Ok(Self {
-            inner: ArcMut::new(Inner {
+            inner: Arc::new(Inner {
                 master_ha_address: Arc::new(tokio::sync::Mutex::new(None)),
                 master_address: Arc::new(tokio::sync::Mutex::new(None)),
-                //socket_stream: Arc::new(RwLock::new(None)),
-                write_stream: None,
-                read_stream: None,
                 last_read_timestamp: Arc::new(AtomicU64::new(now)),
                 last_write_timestamp: Arc::new(AtomicU64::new(now)),
                 current_reported_offset: Arc::new(AtomicI64::new(0)),
                 reported_broker_id: Arc::new(AtomicI64::new(-1)),
-                dispatch_position: AtomicUsize::new(0),
-                byte_buffer_read: BytesMut::with_capacity(READ_MAX_BUFFER_SIZE),
-                byte_buffer_backup: Arc::new(RwLock::new(BytesMut::with_capacity(READ_MAX_BUFFER_SIZE))),
-                report_offset: BytesMut::with_capacity(REPORT_HEADER_SIZE),
                 default_message_store,
                 current_state: Arc::new(RwLock::new(HAConnectionState::Ready)),
                 flow_monitor,
@@ -314,7 +274,7 @@ impl HAClient for DefaultHAClient {
             warn!("HAClient flow monitor not started: {error}");
             return;
         }
-        let mut client = ArcMut::clone(&self.inner);
+        let client = Arc::clone(&self.inner);
         let service_group = match crate::runtime::task_group("rocketmq-store.ha.client") {
             Ok(service_group) => service_group,
             Err(error) => {
@@ -590,8 +550,7 @@ impl HAClient for DefaultHAClient {
     }
 
     async fn close_master(&self) {
-        let mut inner = self.inner.clone();
-        inner.close_master().await;
+        self.inner.close_master().await;
     }
 
     fn get_transferred_byte_in_second(&self) -> i64 {
@@ -837,6 +796,36 @@ mod tests {
         let store_clone = store.clone();
         store.set_message_store_arc(store_clone);
         store
+    }
+
+    #[test]
+    fn client_runtime_uses_standard_arc_and_task_local_buffers() {
+        let source = include_str!("default_ha_client.rs").replace("\r\n", "\n");
+        let production = source
+            .split_once("#[cfg(test)]\nmod tests")
+            .map(|(source, _)| source)
+            .expect("DefaultHAClient production section");
+
+        assert!(production.contains("inner: Arc<Inner>,"));
+        assert!(!production.contains("inner: ArcMut<Inner>,"));
+        assert!(production.contains("inner: Arc::new(Inner {"));
+        assert!(production.contains("let client = Arc::clone(&self.inner);"));
+        assert!(!production.contains("ArcMut::new(Inner {"));
+        assert!(!production.contains("ArcMut::clone(&self.inner)"));
+        assert!(production.contains("async fn close_master(&self)"));
+        for unused_runtime_field in [
+            "write_stream:",
+            "read_stream:",
+            "dispatch_position:",
+            "byte_buffer_read:",
+            "byte_buffer_backup:",
+        ] {
+            assert!(!production.contains(unused_runtime_field));
+        }
+        assert!(production.contains("struct ReaderTask"));
+        assert!(production.contains("buf: BytesMut,"));
+        assert!(production.contains("struct WriterTask"));
+        assert!(production.contains("report_offset: BytesMut,"));
     }
 
     #[test]
