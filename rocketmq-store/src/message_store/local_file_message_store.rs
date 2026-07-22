@@ -170,6 +170,69 @@ use crate::timer::timer_message_store::TimerMessageStore;
 use crate::utils::ffi::MADV_NORMAL;
 use crate::utils::store_util::TOTAL_PHYSICAL_MEMORY_SIZE;
 
+type MessageArrivingListenerHandle = Arc<Box<dyn MessageArrivingListener + Sync + Send + 'static>>;
+
+#[derive(Clone, Default)]
+struct MessageArrivalCapability {
+    listener: Arc<parking_lot::RwLock<Option<MessageArrivingListenerHandle>>>,
+}
+
+impl MessageArrivalCapability {
+    fn replace(&self, listener: Option<MessageArrivingListenerHandle>) {
+        *self.listener.write() = listener;
+    }
+
+    fn snapshot(&self) -> Option<MessageArrivingListenerHandle> {
+        self.listener.read().clone()
+    }
+}
+
+#[derive(Clone)]
+struct ReputRuntimeContext {
+    message_store_config: Arc<MessageStoreConfig>,
+    max_delay_level: i32,
+    delay_level_table: Arc<BTreeMap<i32, i64>>,
+    store_stats_service: Arc<StoreStatsService>,
+    message_arrival: MessageArrivalCapability,
+    long_polling_enable: bool,
+}
+
+impl ReputRuntimeContext {
+    fn notify_message_arrive_for_multi_queue(&self, dispatch_request: &mut DispatchRequest) {
+        let Some(message_arriving_listener) = self.message_arrival.snapshot() else {
+            return;
+        };
+        notify_message_arrive_for_multi_dispatch(
+            self.message_store_config.as_ref(),
+            message_arriving_listener.as_ref().as_ref(),
+            dispatch_request,
+        );
+    }
+
+    fn notify_message_arrive_if_necessary(&self, dispatch_request: &mut DispatchRequest) {
+        if !self.long_polling_enable {
+            return;
+        }
+        let Some(message_arriving_listener) = self.message_arrival.snapshot() else {
+            return;
+        };
+        message_arriving_listener.arriving(
+            dispatch_request.topic.as_ref(),
+            dispatch_request.queue_id,
+            dispatch_request.consume_queue_offset + 1,
+            Some(dispatch_request.tags_code),
+            dispatch_request.store_timestamp,
+            dispatch_request.bit_map.clone(),
+            dispatch_request.properties_map.as_ref(),
+        );
+        notify_message_arrive_for_multi_dispatch(
+            self.message_store_config.as_ref(),
+            message_arriving_listener.as_ref().as_ref(),
+            dispatch_request,
+        );
+    }
+}
+
 fn murmur3_x64_128(bytes: &[u8], seed: u32) -> (u64, u64) {
     const C1: u64 = 0x87c3_7b91_1142_53d5;
     const C2: u64 = 0x4cf5_ad43_2745_937f;
@@ -307,7 +370,7 @@ pub struct LocalFileMessageStore {
     correct_logic_offset_service: Arc<CorrectLogicOffsetService>,
     clean_consume_queue_service: Arc<CleanConsumeQueueService>,
     broker_stats_manager: Option<Arc<BrokerStatsManager>>,
-    message_arriving_listener: Option<Arc<Box<dyn MessageArrivingListener + Sync + Send + 'static>>>,
+    message_arrival: MessageArrivalCapability,
     notify_message_arrive_in_batch: bool,
     store_stats_service: Arc<StoreStatsService>,
 
@@ -573,7 +636,7 @@ impl LocalFileMessageStore {
                 index_service.clone(),
             )),
             broker_stats_manager,
-            message_arriving_listener: None,
+            message_arrival: MessageArrivalCapability::default(),
             notify_message_arrive_in_batch,
             store_stats_service: Arc::new(StoreStatsService::new(Some(identity))),
             compaction_store,
@@ -775,6 +838,15 @@ impl LocalFileMessageStore {
                 "message store arc is not set; call set_message_store_arc before {operation}"
             ))
         })
+    }
+
+    fn ensure_message_store_arc(&self, operation: &str) -> Result<(), StoreError> {
+        if self.message_store_arc.is_some() {
+            return Ok(());
+        }
+        Err(StoreError::InvalidState(format!(
+            "message store arc is not set; call set_message_store_arc before {operation}"
+        )))
     }
 
     fn acquire_store_lock(&mut self) -> Result<(), StoreError> {
@@ -1271,13 +1343,12 @@ impl LocalFileMessageStore {
             return;
         }
 
-        let message_store = match self.message_store_arc_or_error("starting scheduled tasks") {
-            Ok(message_store) => message_store,
-            Err(error) => {
-                error!("scheduled store tasks not started: {error}");
-                return;
-            }
-        };
+        if let Err(error) = self.ensure_message_store_arc("starting scheduled tasks") {
+            error!("scheduled store tasks not started: {error}");
+            return;
+        }
+        let self_check_commit_log = self.commit_log.clone();
+        let self_check_consume_queue_store = self.consume_queue_store.clone();
         let Some(store_checkpoint_arc) = self.store_checkpoint.clone() else {
             error!("scheduled store tasks not started: store checkpoint is not initialized");
             return;
@@ -1325,13 +1396,19 @@ impl LocalFileMessageStore {
         if let Err(error) = scheduled_tasks.schedule_fixed_delay(
             ScheduledTaskConfig::fixed_delay("store-self-check-scheduler", Duration::from_secs(10 * 60)),
             move || {
-                let message_store = message_store.clone();
+                let commit_log = self_check_commit_log.clone();
+                let consume_queue_store = self_check_consume_queue_store.clone();
                 let active = Arc::clone(&store_self_check_active);
                 async move {
                     if !active.load(Ordering::Acquire) {
                         return;
                     }
-                    if !run_blocking_scheduled_task("store self check", move || message_store.check_self()).await {
+                    if !run_blocking_scheduled_task("store self check", move || {
+                        commit_log.check_self();
+                        ConsumeQueueStoreTrait::check_self(&consume_queue_store);
+                    })
+                    .await
+                    {
                         active.store(false, Ordering::Release);
                     }
                 }
@@ -1462,11 +1539,6 @@ impl LocalFileMessageStore {
         }
     }
 
-    fn check_self(&self) {
-        self.commit_log.check_self();
-        ConsumeQueueStoreTrait::check_self(&self.consume_queue_store);
-    }
-
     fn get_dispatch_recovery_offset(&self) -> i64 {
         let commit_log_min_offset = self.commit_log.get_min_offset();
         let dispatch_recovery_offset = self
@@ -1529,7 +1601,18 @@ impl LocalFileMessageStore {
         &mut self,
         message_arriving_listener: Option<Arc<Box<dyn MessageArrivingListener + Sync + Send + 'static>>>,
     ) {
-        self.message_arriving_listener = message_arriving_listener;
+        self.message_arrival.replace(message_arriving_listener);
+    }
+
+    fn reput_runtime_context(&self) -> ReputRuntimeContext {
+        ReputRuntimeContext {
+            message_store_config: self.message_store_config.clone(),
+            max_delay_level: self.max_delay_level,
+            delay_level_table: Arc::new(self.delay_level_table_ref().clone()),
+            store_stats_service: self.store_stats_service.clone(),
+            message_arrival: self.message_arrival.clone(),
+            long_polling_enable: self.broker_config.long_polling_enable,
+        }
     }
 
     fn do_recheck_reput_offset_from_dispatchers(&self) {
@@ -1581,17 +1664,17 @@ impl LocalFileMessageStore {
             let start_offset = self.get_dispatch_recovery_offset().max(0);
             self.reput_message_service.set_reput_from_offset(start_offset);
         }
-        let Some(message_store) = self.message_store_arc.clone() else {
+        if self.message_store_arc.is_none() {
             return;
-        };
+        }
+        let runtime_context = self.reput_runtime_context();
         self.reput_message_service
             .run_once(
                 self.commit_log.clone(),
-                self.message_store_config.clone(),
                 self.composition.reput(),
                 self.dispatcher.clone(),
                 self.notify_message_arrive_in_batch,
-                message_store,
+                runtime_context,
             )
             .await;
     }
@@ -1758,14 +1841,14 @@ impl MessageStore for LocalFileMessageStore {
 
             self.reput_message_service
                 .set_reput_from_offset(self.commit_log.get_confirm_offset());
-            let message_store_arc = self.message_store_arc_or_error("start")?;
+            self.ensure_message_store_arc("start")?;
+            let reput_runtime_context = self.reput_runtime_context();
             self.reput_message_service.start(
                 self.commit_log.clone(),
-                self.message_store_config.clone(),
                 self.composition.reput(),
                 self.dispatcher.clone(),
                 self.notify_message_arrive_in_batch,
-                message_store_arc,
+                reput_runtime_context,
             );
             self.do_recheck_reput_offset_from_dispatchers();
             self.flush_consume_queue_service.start();
@@ -3805,7 +3888,7 @@ impl MessageStore for LocalFileMessageStore {
 
     fn notify_message_arrive_if_necessary(&self, dispatch_request: &mut DispatchRequest) {
         if self.broker_config.long_polling_enable {
-            if let Some(ref message_arriving_listener) = self.message_arriving_listener {
+            if let Some(message_arriving_listener) = self.message_arrival.snapshot() {
                 message_arriving_listener.arriving(
                     dispatch_request.topic.as_ref(),
                     dispatch_request.queue_id,
@@ -4396,7 +4479,9 @@ struct ReputMessageService {
 impl ReputMessageService {
     fn notify_message_arrive4multi_queue(&self, dispatch_request: &mut DispatchRequest) {
         if let Some(inner) = self.inner.as_ref() {
-            inner.notify_message_arrive4multi_queue(dispatch_request);
+            inner
+                .runtime_context
+                .notify_message_arrive_for_multi_queue(dispatch_request);
         }
     }
 
@@ -4414,11 +4499,10 @@ impl ReputMessageService {
     pub fn start(
         &mut self,
         commit_log: ArcMut<CommitLog>,
-        message_store_config: Arc<MessageStoreConfig>,
         policy: ReputPolicy,
         dispatcher: ArcMut<CommitLogDispatcherDefault>,
         notify_message_arrive_in_batch: bool,
-        message_store: ArcMut<LocalFileMessageStore>,
+        runtime_context: ReputRuntimeContext,
     ) {
         if self.task_group.is_some() {
             return;
@@ -4444,11 +4528,10 @@ impl ReputMessageService {
         let mut inner = ReputMessageServiceInner {
             reput_from_offset,
             commit_log,
-            message_store_config,
             policy,
             dispatcher: dispatcher.clone(),
             notify_message_arrive_in_batch,
-            message_store: message_store.clone(),
+            runtime_context: runtime_context.clone(),
         };
         self.inner = Some(inner.clone());
 
@@ -4526,6 +4609,7 @@ impl ReputMessageService {
         }) {
             self.shutdown_token.cancel();
             self.dispatch_tx.take();
+            self.inner.take();
             error!("failed to spawn ReputMessageService reader: {error}");
             return;
         }
@@ -4538,7 +4622,7 @@ impl ReputMessageService {
                     Some(mut batch) = dispatch_rx.recv() => {
                         dispatch_reput_batch(
                             &dispatcher,
-                            &message_store,
+                            &runtime_context,
                             notify_message_arrive_in_batch,
                             &mut batch,
                         )
@@ -4549,7 +4633,7 @@ impl ReputMessageService {
                         while let Ok(mut batch) = dispatch_rx.try_recv() {
                             dispatch_reput_batch(
                                 &dispatcher,
-                                &message_store,
+                                &runtime_context,
                                 notify_message_arrive_in_batch,
                                 &mut batch,
                             )
@@ -4588,11 +4672,10 @@ impl ReputMessageService {
     pub async fn run_once(
         &mut self,
         commit_log: ArcMut<CommitLog>,
-        message_store_config: Arc<MessageStoreConfig>,
         policy: ReputPolicy,
         dispatcher: ArcMut<CommitLogDispatcherDefault>,
         notify_message_arrive_in_batch: bool,
-        message_store: ArcMut<LocalFileMessageStore>,
+        runtime_context: ReputRuntimeContext,
     ) {
         if self.reput_from_offset.is_none() {
             self.reput_from_offset = Some(Arc::new(AtomicI64::new(0)));
@@ -4605,11 +4688,10 @@ impl ReputMessageService {
             self.inner = Some(ReputMessageServiceInner {
                 reput_from_offset,
                 commit_log,
-                message_store_config,
                 policy,
                 dispatcher,
                 notify_message_arrive_in_batch,
-                message_store,
+                runtime_context,
             });
         }
         if let Some(inner) = self.inner.as_mut() {
@@ -4646,6 +4728,7 @@ impl ReputMessageService {
                 Err(error) => warn!("ReputMessageService task shutdown reported an error: {error}"),
             }
         }
+        self.inner.take();
 
         info!("ReputMessageService shutdown complete");
     }
@@ -4660,7 +4743,7 @@ impl ReputMessageService {
         let Some(inner) = self.inner.as_ref() else {
             return 0;
         };
-        inner.message_store.get_confirm_offset() - inner.reput_from_offset.load(Ordering::Relaxed)
+        inner.commit_log.get_confirm_offset() - inner.reput_from_offset.load(Ordering::Relaxed)
     }
 }
 
@@ -4669,44 +4752,33 @@ impl ReputMessageService {
 struct ReputMessageServiceInner {
     reput_from_offset: Arc<AtomicI64>,
     commit_log: ArcMut<CommitLog>,
-    message_store_config: Arc<MessageStoreConfig>,
     policy: ReputPolicy,
     dispatcher: ArcMut<CommitLogDispatcherDefault>,
     notify_message_arrive_in_batch: bool,
-    message_store: ArcMut<LocalFileMessageStore>,
+    runtime_context: ReputRuntimeContext,
 }
 
 async fn dispatch_reput_batch(
     dispatcher: &ArcMut<CommitLogDispatcherDefault>,
-    message_store: &ArcMut<LocalFileMessageStore>,
+    runtime_context: &ReputRuntimeContext,
     notify_message_arrive_in_batch: bool,
     dispatch_batch: &mut [DispatchRequest],
 ) {
     let batch_size = dispatch_batch.len();
     let started = Instant::now();
     dispatcher.dispatch_batch_async(dispatch_batch).await;
-    message_store
+    runtime_context
         .store_stats_service
         .record_reput_dispatch_batch(batch_size, started.elapsed());
 
     if !notify_message_arrive_in_batch {
         for req in dispatch_batch.iter_mut() {
-            message_store.notify_message_arrive_if_necessary(req);
+            runtime_context.notify_message_arrive_if_necessary(req);
         }
     }
 }
 
 impl ReputMessageServiceInner {
-    fn notify_message_arrive4multi_queue(&self, dispatch_request: &mut DispatchRequest) {
-        if let Some(message_arriving_listener) = self.message_store.message_arriving_listener.as_ref() {
-            notify_message_arrive_for_multi_dispatch(
-                self.message_store_config.as_ref(),
-                message_arriving_listener.as_ref().as_ref(),
-                dispatch_request,
-            );
-        }
-    }
-
     pub async fn do_reput(&mut self) {
         let reput_from_offset = self.reput_from_offset.load(Ordering::Relaxed);
         if reput_from_offset < self.commit_log.get_min_offset() {
@@ -4742,9 +4814,9 @@ impl ReputMessageServiceInner {
                     false,
                     false,
                     false,
-                    &self.message_store_config,
-                    self.message_store.max_delay_level,
-                    self.message_store.delay_level_table.as_ref(),
+                    &self.runtime_context.message_store_config,
+                    self.runtime_context.max_delay_level,
+                    self.runtime_context.delay_level_table.as_ref(),
                 );
                 let size = if dispatch_request.buffer_size == -1 {
                     dispatch_request.msg_size
@@ -4759,16 +4831,16 @@ impl ReputMessageServiceInner {
                     match dispatch_request.msg_size.cmp(&0) {
                         std::cmp::Ordering::Greater => {
                             // Update stats before moving dispatch_request
-                            if !self.message_store_config.duplication_enable
-                                && self.message_store_config.broker_role == BrokerRole::Slave
+                            if !self.runtime_context.message_store_config.duplication_enable
+                                && self.runtime_context.message_store_config.broker_role == BrokerRole::Slave
                             {
-                                self.message_store
+                                self.runtime_context
                                     .store_stats_service
                                     .add_single_put_message_topic_times_total(
                                         dispatch_request.topic.as_str(),
                                         dispatch_request.batch_size as usize,
                                     );
-                                self.message_store
+                                self.runtime_context
                                     .store_stats_service
                                     .add_single_put_message_topic_size_total(
                                         dispatch_request.topic.as_str(),
@@ -4783,7 +4855,7 @@ impl ReputMessageServiceInner {
                             if dispatch_batch.len() >= 32 {
                                 dispatch_reput_batch(
                                     &self.dispatcher,
-                                    &self.message_store,
+                                    &self.runtime_context,
                                     self.notify_message_arrive_in_batch,
                                     &mut dispatch_batch,
                                 )
@@ -4812,7 +4884,9 @@ impl ReputMessageServiceInner {
                     self.reput_from_offset.fetch_add(size as i64, Ordering::SeqCst);
                 } else {
                     do_next = false;
-                    if LocalFileMessageStore::is_dledger_commit_log_enabled_config(self.message_store_config.as_ref()) {
+                    if LocalFileMessageStore::is_dledger_commit_log_enabled_config(
+                        self.runtime_context.message_store_config.as_ref(),
+                    ) {
                         warn!("reput reached an unsupported DLedger branch; stopping batch dispatch for this tick");
                     }
                 }
@@ -4823,7 +4897,7 @@ impl ReputMessageServiceInner {
         if !dispatch_batch.is_empty() {
             dispatch_reput_batch(
                 &self.dispatcher,
-                &self.message_store,
+                &self.runtime_context,
                 self.notify_message_arrive_in_batch,
                 &mut dispatch_batch,
             )
@@ -4859,7 +4933,7 @@ impl ReputMessageServiceInner {
             self.commit_log.get_confirm_offset(),
             self.commit_log.get_max_offset(),
         );
-        self.message_store
+        self.runtime_context
             .store_stats_service
             .set_reput_dispatch_behind_bytes(behind);
     }
@@ -4913,9 +4987,9 @@ impl ReputMessageServiceInner {
                 false,
                 false,
                 false,
-                &self.message_store_config,
-                self.message_store.max_delay_level,
-                self.message_store.delay_level_table.as_ref(),
+                &self.runtime_context.message_store_config,
+                self.runtime_context.max_delay_level,
+                self.runtime_context.delay_level_table.as_ref(),
             );
             let size = if dispatch_request.buffer_size == -1 {
                 dispatch_request.msg_size
@@ -4931,16 +5005,16 @@ impl ReputMessageServiceInner {
                 match dispatch_request.msg_size.cmp(&0) {
                     std::cmp::Ordering::Greater => {
                         // Update stats before moving dispatch_request
-                        if !self.message_store_config.duplication_enable
-                            && self.message_store_config.broker_role == BrokerRole::Slave
+                        if !self.runtime_context.message_store_config.duplication_enable
+                            && self.runtime_context.message_store_config.broker_role == BrokerRole::Slave
                         {
-                            self.message_store
+                            self.runtime_context
                                 .store_stats_service
                                 .add_single_put_message_topic_times_total(
                                     dispatch_request.topic.as_str(),
                                     dispatch_request.batch_size as usize,
                                 );
-                            self.message_store
+                            self.runtime_context
                                 .store_stats_service
                                 .add_single_put_message_topic_size_total(
                                     dispatch_request.topic.as_str(),
@@ -4970,7 +5044,9 @@ impl ReputMessageServiceInner {
                 );
                 self.reput_from_offset.fetch_add(size as i64, Ordering::SeqCst);
             } else {
-                if LocalFileMessageStore::is_dledger_commit_log_enabled_config(self.message_store_config.as_ref()) {
+                if LocalFileMessageStore::is_dledger_commit_log_enabled_config(
+                    self.runtime_context.message_store_config.as_ref(),
+                ) {
                     warn!(
                         "read_and_parse_batch reached an unsupported DLedger branch; stopping batch dispatch for this \
                          tick"
@@ -5708,35 +5784,113 @@ mod tests {
         }
     }
 
-    fn install_recording_arriving_listener(
-        store: &mut LocalFileMessageStore,
-    ) -> Arc<std::sync::Mutex<Vec<RecordedArrival>>> {
+    fn recording_arriving_listener() -> (
+        super::MessageArrivingListenerHandle,
+        Arc<std::sync::Mutex<Vec<RecordedArrival>>>,
+    ) {
         let arrivals = Arc::new(std::sync::Mutex::new(Vec::new()));
         let listener: Box<dyn MessageArrivingListener + Sync + Send + 'static> = Box::new(RecordingArrivingListener {
             arrivals: Arc::clone(&arrivals),
         });
-        store.message_arriving_listener = Some(Arc::new(listener));
+        (Arc::new(listener), arrivals)
+    }
+
+    fn install_recording_arriving_listener(
+        store: &mut LocalFileMessageStore,
+    ) -> Arc<std::sync::Mutex<Vec<RecordedArrival>>> {
+        let (listener, arrivals) = recording_arriving_listener();
+        store.set_message_arriving_listener(Some(listener));
         arrivals
     }
 
-    fn reput_inner_for_store(store: ArcMut<LocalFileMessageStore>) -> ReputMessageServiceInner {
+    fn reput_inner_for_store(store: &LocalFileMessageStore) -> ReputMessageServiceInner {
         let policy = store.composition.reput();
         ReputMessageServiceInner {
             reput_from_offset: Arc::new(AtomicI64::new(0)),
             commit_log: store.commit_log.clone(),
-            message_store_config: store.message_store_config.clone(),
             policy,
             dispatcher: store.dispatcher.clone(),
             notify_message_arrive_in_batch: false,
-            message_store: store,
+            runtime_context: store.reput_runtime_context(),
         }
+    }
+
+    #[test]
+    fn reput_background_boundary_does_not_clone_the_local_store_root() {
+        let temp_dir = tempdir().unwrap();
+        let store = new_configured_test_store(&temp_dir, MessageStoreConfig::default());
+        let strong_count = store.strong_count();
+
+        let inner = reput_inner_for_store(&store);
+
+        assert_eq!(store.strong_count(), strong_count);
+        drop(inner);
+        assert_eq!(store.strong_count(), strong_count);
+    }
+
+    #[test]
+    fn reput_message_arrival_capability_observes_replace_and_clear() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_configured_test_store(
+            &temp_dir,
+            MessageStoreConfig {
+                enable_lmq: true,
+                ..MessageStoreConfig::default()
+            },
+        );
+        let first_arrivals = install_recording_arriving_listener(&mut store);
+        let runtime_context = store.reput_runtime_context();
+        let (replacement, replacement_arrivals) = recording_arriving_listener();
+        store.set_message_arriving_listener(Some(replacement));
+        let mut properties = HashMap::new();
+        properties.insert(
+            CheetahString::from_static_str(MessageConst::PROPERTY_INNER_MULTI_DISPATCH),
+            CheetahString::from_static_str("%LMQ%replacement"),
+        );
+        properties.insert(
+            CheetahString::from_static_str(MessageConst::PROPERTY_INNER_MULTI_QUEUE_OFFSET),
+            CheetahString::from_static_str("2"),
+        );
+        let mut dispatch_request = DispatchRequest {
+            topic: CheetahString::from_static_str("message-arrival-capability-topic"),
+            queue_id: 1,
+            properties_map: Some(properties),
+            ..DispatchRequest::default()
+        };
+
+        runtime_context.notify_message_arrive_for_multi_queue(&mut dispatch_request);
+
+        assert!(first_arrivals.lock().unwrap().is_empty());
+        assert_eq!(replacement_arrivals.lock().unwrap().len(), 1);
+
+        store.set_message_arriving_listener(None);
+        runtime_context.notify_message_arrive_for_multi_queue(&mut dispatch_request);
+        assert_eq!(replacement_arrivals.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn local_background_source_contract_excludes_direct_store_owner() {
+        let source = include_str!("local_file_message_store.rs");
+        let reput = source
+            .split_once("impl ReputMessageService {")
+            .and_then(|(_, source)| source.split_once("async fn run_blocking_scheduled_task"))
+            .map(|(source, _)| source)
+            .expect("ReputMessageService production section");
+        assert!(!reput.contains("ArcMut<LocalFileMessageStore>"));
+
+        let scheduled = source
+            .split_once("fn add_schedule_task(&mut self)")
+            .and_then(|(_, source)| source.split_once("async fn shutdown_schedule_tasks"))
+            .map(|(source, _)| source)
+            .expect("scheduled task production section");
+        assert!(!scheduled.contains("message_store.clone()"));
     }
 
     #[tokio::test]
     async fn reput_shutdown_wait_uses_dispatch_progress_notification() {
         let temp_dir = tempdir().unwrap();
         let store = new_configured_test_store(&temp_dir, MessageStoreConfig::default());
-        let mut inner = reput_inner_for_store(store);
+        let mut inner = reput_inner_for_store(&store);
         inner.set_reput_from_offset(-1);
 
         let service = ReputMessageService {
@@ -5769,6 +5923,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn reput_shutdown_releases_the_runtime_context() {
+        let temp_dir = tempdir().unwrap();
+        let store = new_configured_test_store(&temp_dir, MessageStoreConfig::default());
+        let reput_from_offset = Arc::new(AtomicI64::new(0));
+        let mut service = ReputMessageService {
+            shutdown_token: CancellationToken::new(),
+            new_message_notify: Arc::new(tokio::sync::Notify::new()),
+            dispatch_progress_notify: Arc::new(tokio::sync::Notify::new()),
+            pending_messages: Arc::new(AtomicI64::new(0)),
+            reput_from_offset: Some(reput_from_offset.clone()),
+            dispatch_tx: None,
+            inner: Some(ReputMessageServiceInner {
+                reput_from_offset,
+                ..reput_inner_for_store(&store)
+            }),
+            task_group: None,
+        };
+
+        service.shutdown().await;
+
+        assert!(service.inner.is_none());
+        assert!(service.reput_from_offset.is_some());
+    }
+
+    #[tokio::test]
     async fn reput_service_start_wakes_existing_commitlog_backlog() {
         let temp_dir = tempdir().unwrap();
         let mut store = new_configured_test_store(
@@ -5784,18 +5963,12 @@ mod tests {
 
         store.reput_message_service.set_reput_from_offset(0);
         let commit_log = store.commit_log.clone();
-        let message_store_config = store.message_store_config.clone();
         let reput_policy = store.composition.reput();
         let dispatcher = store.dispatcher.clone();
-        let message_store = store.clone();
-        store.reput_message_service.start(
-            commit_log,
-            message_store_config,
-            reput_policy,
-            dispatcher,
-            false,
-            message_store,
-        );
+        let runtime_context = store.reput_runtime_context();
+        store
+            .reput_message_service
+            .start(commit_log, reput_policy, dispatcher, false, runtime_context);
 
         tokio::time::timeout(Duration::from_secs(1), async {
             loop {
@@ -8524,7 +8697,7 @@ mod tests {
             },
         );
         let arrivals = install_recording_arriving_listener(&mut store);
-        let inner = reput_inner_for_store(store.clone());
+        let inner = reput_inner_for_store(&store);
         let mut properties = HashMap::new();
         properties.insert(
             CheetahString::from_static_str(MessageConst::PROPERTY_INNER_MULTI_DISPATCH),
@@ -8544,7 +8717,9 @@ mod tests {
             ..DispatchRequest::default()
         };
 
-        inner.notify_message_arrive4multi_queue(&mut dispatch_request);
+        inner
+            .runtime_context
+            .notify_message_arrive_for_multi_queue(&mut dispatch_request);
 
         let arrivals = arrivals.lock().unwrap();
         assert_eq!(arrivals.len(), 2);
@@ -8562,7 +8737,7 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let mut store = new_configured_test_store(&temp_dir, MessageStoreConfig::default());
         let arrivals = install_recording_arriving_listener(&mut store);
-        let inner = reput_inner_for_store(store.clone());
+        let inner = reput_inner_for_store(&store);
         let mut properties = HashMap::new();
         properties.insert(
             CheetahString::from_static_str(MessageConst::PROPERTY_INNER_MULTI_DISPATCH),
@@ -8579,7 +8754,9 @@ mod tests {
             ..DispatchRequest::default()
         };
 
-        inner.notify_message_arrive4multi_queue(&mut dispatch_request);
+        inner
+            .runtime_context
+            .notify_message_arrive_for_multi_queue(&mut dispatch_request);
 
         assert!(arrivals.lock().unwrap().is_empty());
     }
