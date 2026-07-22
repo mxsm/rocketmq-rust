@@ -16,6 +16,7 @@ use tokio::net::TcpStream;
 
 use crate::ha::auto_switch::auto_switch_ha_connection::AutoSwitchHAConnection;
 use crate::ha::default_ha_connection::DefaultHAConnection;
+use crate::ha::default_ha_connection::HAConnectionRuntimeHandle;
 use crate::ha::ha_connection::HAConnection;
 use crate::ha::ha_connection::HAConnectionId;
 use crate::ha::ha_connection_state::HAConnectionState;
@@ -68,6 +69,14 @@ impl GeneralHAConnection {
         self.auto_switch_ha_connection
             .as_ref()
             .and_then(|connection| connection.slave_broker_id())
+    }
+
+    pub(crate) fn runtime_handle(&self) -> Option<HAConnectionRuntimeHandle> {
+        match (&self.default_ha_connection, &self.auto_switch_ha_connection) {
+            (Some(connection), _) => Some(connection.runtime_handle()),
+            (_, Some(connection)) => Some(connection.runtime_handle()),
+            (None, None) => None,
+        }
     }
 }
 

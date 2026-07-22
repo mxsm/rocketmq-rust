@@ -1142,6 +1142,14 @@ raw append、physical offset 与 confirm clamp/publication 不再获得 queue/in
 无 relocation、新增 identity 或临时 approval。R15 从 8/26 降至 6/21；31 项执行清单保持完成 9 项、剩余
 22 项，正式进度仍为 75/82。
 
+Default HA connection registry 随 Issue #8583 改为唯一 owner：accept path 启动连接后把 owned
+`GeneralHAConnection` 移入注册表，移除/关闭先取出或 drain，再在锁外通知和 shutdown；需要跨锁等待的
+`connection_state` 只克隆既有 `HAConnectionRuntimeHandle`，不克隆完整可变连接根，也不持表锁跨 `.await`。
+reviewed 快照为 88 identities/366 occurrences（production 24/51、test 50/275、compatibility 14/40、Broker
+production 4/8、Store production 20/43）；相对 bc82 净删除 1 个 production identity/5 occurrences，无
+relocation、新增 identity 或临时 approval。R15 从 6/21 降至 5/16；31 项执行清单保持完成 9 项、剩余
+22 项，正式进度仍为 75/82。
+
 Default HA client runtime ownership 随 Issue #8567 完成收窄：`DefaultHAClient` 以标准 `Arc<Inner>` 共享只读组合根，
 `Inner` 仅保留原子、锁、Notify、flow monitor 与现有 LocalStore 兼容句柄；从未安装连接的 stream 字段和重复 buffer/
 dispatch/report 状态已删除，实际 reader/writer buffer 继续由每个 connection task 独占。reviewed 快照为 126 identities/

@@ -202,7 +202,7 @@ impl DefaultHAConnection {
         *state_guard = new_state;
     }
 
-    fn runtime_handle(&self) -> HAConnectionRuntimeHandle {
+    pub(crate) fn runtime_handle(&self) -> HAConnectionRuntimeHandle {
         HAConnectionRuntimeHandle {
             connection_id: self.id.clone(),
             remote_address: self.remote_addr.to_string(),
