@@ -798,6 +798,29 @@ impl LocalFileMessageStore {
         self.root_dependencies_wired = true;
     }
 
+    /// Completes root wiring when this store has exclusive ownership.
+    ///
+    /// This narrow path is intended for lifecycle probes that do not exercise Timer or HA.
+    /// It fails closed unless both configurations select duplication mode and the timer wheel
+    /// is disabled, because those services require a shared store owner.
+    pub(crate) fn wire_owned_root_dependencies(&mut self) -> Result<(), StoreError> {
+        if self.message_store_config.is_timer_wheel_enable() {
+            return Err(StoreError::InvalidState(
+                "owned message store wiring requires the timer wheel to be disabled".to_string(),
+            ));
+        }
+        if !self.message_store_config.duplication_enable || !self.broker_config.duplication_enable {
+            return Err(StoreError::InvalidState(
+                "owned message store wiring requires duplication mode in both message store and broker configuration"
+                    .to_string(),
+            ));
+        }
+
+        self.consume_queue_store.set_context(self.consume_queue_context());
+        self.root_dependencies_wired = true;
+        Ok(())
+    }
+
     #[inline]
     pub fn delay_level_table(&self) -> &Arc<BTreeMap<i32, i64>> {
         &self.delay_level_table
@@ -5886,6 +5909,95 @@ mod tests {
         ));
     }
 
+    fn new_owned_wiring_test_store(
+        temp_dir: &tempfile::TempDir,
+        mut message_store_config: MessageStoreConfig,
+        broker_config: BrokerConfig,
+    ) -> LocalFileMessageStore {
+        message_store_config.store_path_root_dir = temp_dir.path().to_string_lossy().to_string().into();
+        LocalFileMessageStore::new(
+            Arc::new(message_store_config),
+            Arc::new(broker_config),
+            Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
+            None,
+            false,
+        )
+    }
+
+    #[test]
+    fn owned_root_wiring_requires_consistent_duplication_mode() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_owned_wiring_test_store(
+            &temp_dir,
+            MessageStoreConfig {
+                duplication_enable: true,
+                timer_wheel_enable: false,
+                ..MessageStoreConfig::default()
+            },
+            BrokerConfig::default(),
+        );
+
+        let error = store
+            .wire_owned_root_dependencies()
+            .expect_err("broker and store duplication modes must agree");
+
+        assert!(matches!(
+            error,
+            StoreError::InvalidState(message) if message.contains("duplication mode")
+        ));
+        assert!(!store.root_dependencies_wired);
+    }
+
+    #[test]
+    fn owned_root_wiring_rejects_timer_wheel() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_owned_wiring_test_store(
+            &temp_dir,
+            MessageStoreConfig {
+                duplication_enable: true,
+                timer_wheel_enable: true,
+                ..MessageStoreConfig::default()
+            },
+            BrokerConfig {
+                duplication_enable: true,
+                ..BrokerConfig::default()
+            },
+        );
+
+        let error = store
+            .wire_owned_root_dependencies()
+            .expect_err("timer wiring requires a shared store owner");
+
+        assert!(matches!(
+            error,
+            StoreError::InvalidState(message) if message.contains("timer wheel")
+        ));
+        assert!(!store.root_dependencies_wired);
+    }
+
+    #[test]
+    fn owned_root_wiring_allows_duplication_without_timer() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_owned_wiring_test_store(
+            &temp_dir,
+            MessageStoreConfig {
+                duplication_enable: true,
+                timer_wheel_enable: false,
+                ..MessageStoreConfig::default()
+            },
+            BrokerConfig {
+                duplication_enable: true,
+                ..BrokerConfig::default()
+            },
+        );
+
+        store
+            .wire_owned_root_dependencies()
+            .expect("duplication without timer can use an exclusively owned store");
+
+        assert!(store.root_dependencies_wired);
+    }
+
     #[derive(Clone, Debug, PartialEq, Eq)]
     struct RecordedArrival {
         topic: CheetahString,
@@ -6215,7 +6327,7 @@ mod tests {
         assert!(!production.contains("message_store_arc: Option<ArcMut<LocalFileMessageStore>>"));
         assert!(!production.contains("fn message_store_arc_or_error"));
         assert!(!production.contains("self.message_store_arc"));
-        assert!(wiring.contains("self.consume_queue_store.set_message_store(message_store_arc.clone())"));
+        assert!(wiring.contains("self.consume_queue_store.set_context(self.consume_queue_context());"));
         assert!(wiring.contains("TimerMessageStore::new(Some(message_store_arc.clone()))"));
         assert!(wiring.contains("DefaultHAService::new(message_store_arc)"));
         assert!(wiring.contains("PendingHAService::AutoSwitch"));
@@ -6232,21 +6344,19 @@ mod tests {
     }
 
     #[test]
-    fn store_local_file_scheduled_lifecycle_probe_uses_owner_factory() {
-        let factory = include_str!("local_file_shared_owner.rs").replace("\r\n", "\n");
-        assert!(factory.contains("impl DerefMut<Target = LocalFileMessageStore> + Clone"));
-        assert_eq!(factory.matches("rocketmq_rust::ArcMut::new").count(), 1);
-        assert!(factory.contains("store.set_message_store_arc(store_clone);"));
-
+    fn owned_root_wiring_scheduled_lifecycle_probe_has_no_shared_owner() {
         let lib_source = include_str!("../lib.rs").replace("\r\n", "\n");
         let probe = lib_source
             .split_once("pub async fn run_store_local_file_scheduled_lifecycle_probe")
             .and_then(|(_, source)| source.split_once("#[cfg(feature = \"rocksdb_store\")]"))
             .map(|(source, _)| source)
             .expect("local file scheduled lifecycle probe");
-        assert!(probe.contains("new_legacy_shared_owner("));
+        assert!(probe.contains("LocalFileMessageStore::new("));
+        assert!(probe.contains("wire_owned_root_dependencies()"));
+        assert!(probe.contains("duplication_enable: true"));
         assert!(!probe.contains("ArcMut"));
         assert!(!probe.contains("set_message_store_arc"));
+        assert!(!lib_source.contains("local_file_shared_owner"));
     }
 
     #[tokio::test]

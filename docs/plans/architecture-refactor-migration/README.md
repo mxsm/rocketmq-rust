@@ -1125,6 +1125,14 @@ self-wiring，并以 opaque return 隐藏具体指针类型。reviewed 快照为
 relocation 审核，approval 仅位于忽略的 `target/`。R09 从 4/7 降至 2/5，R10 从 3/4 调整为 4/5；31 项
 执行清单保持完成 9 项、剩余 22 项，正式进度仍为 75/82。
 
+LocalFile lifecycle probe 的临时 shared-owner factory 随 Issue #8579 删除：probe 直接独占
+`LocalFileMessageStore`，owned root wiring 仅在 MessageStore/Broker duplication mode 一致开启且 Timer 关闭时
+成功，否则以 `InvalidState` fail closed；既有 init/start、四项 scheduled task 统计与 clean shutdown 语义保持。
+reviewed 快照为 96 identities/381 occurrences（production 27/61、test 55/280、compatibility 14/40、
+Broker production 4/8、Store production 23/53）；相对 bc80 净删除 1 个 production identity/1 occurrence，
+无 relocation、新增 identity 或临时 approval。R10 从 4/5 降至 3/4；31 项执行清单保持完成 9 项、剩余
+22 项，正式进度仍为 75/82。
+
 Default HA client runtime ownership 随 Issue #8567 完成收窄：`DefaultHAClient` 以标准 `Arc<Inner>` 共享只读组合根，
 `Inner` 仅保留原子、锁、Notify、flow monitor 与现有 LocalStore 兼容句柄；从未安装连接的 stream 字段和重复 buffer/
 dispatch/report 状态已删除，实际 reader/writer buffer 继续由每个 connection task 独占。reviewed 快照为 126 identities/
