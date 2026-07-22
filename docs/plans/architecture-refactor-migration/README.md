@@ -1159,6 +1159,15 @@ production 4/8、Store production 20/41）；相对 bc83 净删除 2 个 product
 occurrence 经临时 ADR-013 同 item 一对一 relocation 审核，无新增 identity 或提交态 approval。R15 从 5/16
 降至 5/14；31 项执行清单保持完成 9 项、剩余 22 项，正式进度仍为 75/82。
 
+Default HA connection service roots 随 Issue #8587 收窄为窄运行时上下文：accept socket、
+`DefaultHAConnection`、reader 与 writer task 不再持完整 `ArcMut<DefaultHAService>`，而仅持连接计数、replica
+store、replication progress、transfer metrics 与必要 callback。connection registry、group-transfer 与
+state-notification owner 均通过标准 `Weak` 访问，连接不能反向保活 service graph。reviewed 快照为
+84 identities/351 occurrences（production 21/37、test 49/274、compatibility 14/40、Broker production 4/8、
+Store production 17/29）；相对 bc84 净删除 4 identities/13 occurrences（production 3/12、test 1/1），无
+relocation、新增 identity 或临时 approval。R15 从 5/14 降至 2/2，剩余仅 Default HA 组合根初始化 carrier；
+31 项执行清单保持完成 9 项、剩余 22 项，正式进度仍为 75/82。
+
 Default HA client runtime ownership 随 Issue #8567 完成收窄：`DefaultHAClient` 以标准 `Arc<Inner>` 共享只读组合根，
 `Inner` 仅保留原子、锁、Notify、flow monitor 与现有 LocalStore 兼容句柄；从未安装连接的 stream 字段和重复 buffer/
 dispatch/report 状态已删除，实际 reader/writer buffer 继续由每个 connection task 独占。reviewed 快照为 126 identities/

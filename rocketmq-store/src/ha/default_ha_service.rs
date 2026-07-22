@@ -16,6 +16,8 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
+use std::sync::OnceLock;
+use std::sync::Weak;
 use std::time::Duration;
 
 use rocketmq_common::common::broker::broker_role::BrokerRole;
@@ -74,123 +76,104 @@ pub(crate) struct HAConnectionRuntimeSnapshot {
     pub slave_broker_id: Option<i64>,
 }
 
-pub struct DefaultHAService {
+/// Narrow runtime context shared with accepted Default HA connections.
+///
+/// The context deliberately keeps only weak references to the connection
+/// registry and child services. A registered connection therefore cannot keep
+/// its owning service graph alive.
+#[derive(Clone)]
+pub(crate) struct DefaultHAConnectionContext {
+    inner: Arc<DefaultHAConnectionContextInner>,
+}
+
+struct DefaultHAConnectionContextInner {
     connection_count: Arc<AtomicU32>,
-    connections: Arc<Mutex<HashMap<HAConnectionId, GeneralHAConnection>>>,
-    accept_socket_service: Option<AcceptSocketService>,
+    connections: Weak<Mutex<HashMap<HAConnectionId, GeneralHAConnection>>>,
     replica_store: HAReplicaStoreHandle,
     wait_notify_object: Arc<Notify>,
-    replication_progress: ReplicationProgress,
-    group_transfer_service: Option<GroupTransferService>,
-    ha_client: Option<GeneralHAClient>,
-    ha_connection_state_notification_service: Option<HAConnectionStateNotificationService>,
-    auto_switch_replication: Option<Arc<AutoSwitchReplicationState>>,
+    replication_progress: Arc<ReplicationProgress>,
+    group_transfer_service: OnceLock<Weak<GroupTransferService>>,
+    state_notification_service: OnceLock<Weak<HAConnectionStateNotificationService>>,
+    auto_switch_replication: OnceLock<Arc<AutoSwitchReplicationState>>,
     ha_transfer_metrics: Arc<HaTransferMetrics>,
 }
 
-impl DefaultHAService {
-    pub(crate) fn new(replica_store: HAReplicaStoreHandle) -> Self {
-        DefaultHAService {
-            connection_count: Arc::new(AtomicU32::new(0)),
-            connections: Arc::new(Mutex::new(HashMap::new())),
-            accept_socket_service: None,
-            replica_store,
-            wait_notify_object: Arc::new(Notify::new()),
-            replication_progress: ReplicationProgress::default(),
-            group_transfer_service: None,
-            ha_client: None,
-            ha_connection_state_notification_service: None,
-            auto_switch_replication: None,
-            ha_transfer_metrics: Arc::new(HaTransferMetrics::default()),
+impl DefaultHAConnectionContext {
+    fn new(
+        connection_count: Arc<AtomicU32>,
+        connections: &Arc<Mutex<HashMap<HAConnectionId, GeneralHAConnection>>>,
+        replica_store: HAReplicaStoreHandle,
+        wait_notify_object: Arc<Notify>,
+        replication_progress: Arc<ReplicationProgress>,
+        ha_transfer_metrics: Arc<HaTransferMetrics>,
+    ) -> Self {
+        Self {
+            inner: Arc::new(DefaultHAConnectionContextInner {
+                connection_count,
+                connections: Arc::downgrade(connections),
+                replica_store,
+                wait_notify_object,
+                replication_progress,
+                group_transfer_service: OnceLock::new(),
+                state_notification_service: OnceLock::new(),
+                auto_switch_replication: OnceLock::new(),
+                ha_transfer_metrics,
+            }),
         }
+    }
+
+    fn install_group_transfer_service(&self, service: &Arc<GroupTransferService>) -> HAResult<()> {
+        self.inner
+            .group_transfer_service
+            .set(Arc::downgrade(service))
+            .map_err(|_| HAError::Service("GroupTransferService already installed".to_string()))
+    }
+
+    fn install_state_notification_service(&self, service: &Arc<HAConnectionStateNotificationService>) -> HAResult<()> {
+        self.inner
+            .state_notification_service
+            .set(Arc::downgrade(service))
+            .map_err(|_| HAError::Service("HAConnectionStateNotificationService already installed".to_string()))
+    }
+
+    fn install_auto_switch_replication(&self, replication: Arc<AutoSwitchReplicationState>) -> HAResult<()> {
+        self.inner
+            .auto_switch_replication
+            .set(replication)
+            .map_err(|_| HAError::Service("AutoSwitch replication state already installed".to_string()))
+    }
+
+    pub(crate) fn get_connection_count(&self) -> &AtomicU32 {
+        self.inner.connection_count.as_ref()
     }
 
     pub(crate) fn replica_store(&self) -> &HAReplicaStoreHandle {
-        &self.replica_store
+        &self.inner.replica_store
     }
 
-    pub fn ha_transfer_metrics(&self) -> Arc<HaTransferMetrics> {
-        self.ha_transfer_metrics.clone()
+    pub(crate) fn ha_transfer_metrics(&self) -> Arc<HaTransferMetrics> {
+        self.inner.ha_transfer_metrics.clone()
     }
 
-    pub(crate) fn group_transfer_runtime_info(&self) -> GroupTransferRuntimeInfo {
-        self.group_transfer_service
-            .as_ref()
-            .map_or_else(GroupTransferRuntimeInfo::default, GroupTransferService::runtime_info)
-    }
-
-    pub(crate) fn ensure_ha_client(&mut self) -> HAResult<bool> {
-        if self.ha_client.is_some() {
-            return Ok(false);
-        }
-
-        let client = self
-            .create_default_ha_client()
-            .map_err(|e| HAError::Service(format!("Failed to create DefaultHAClient: {e}")))?;
-        self.ha_client = Some(GeneralHAClient::new_with_default_ha_client(client));
-        Ok(true)
-    }
-
-    pub(crate) fn create_default_ha_client(&self) -> Result<DefaultHAClient, HAClientError> {
-        DefaultHAClient::new(self.replica_store.clone())
-    }
-
-    pub(crate) fn set_ha_client_reported_broker_id(&self, broker_id: Option<i64>) {
-        if let Some(client) = &self.ha_client {
-            client.set_reported_broker_id(broker_id);
-        }
-    }
-
-    pub(crate) fn set_general_ha_client(&mut self, ha_client: GeneralHAClient) {
-        self.ha_client = Some(ha_client);
-    }
-
-    pub async fn notify_transfer_some(&self, offset: i64) {
-        self.replication_progress.record_ack(offset);
-
-        if let Some(service) = &self.group_transfer_service {
+    pub(crate) async fn notify_transfer_some(&self, offset: i64) {
+        self.inner.replication_progress.record_ack(offset);
+        if let Some(service) = self.inner.group_transfer_service.get().and_then(Weak::upgrade) {
             service.notify_transfer_some();
         }
     }
 
-    pub(crate) fn init(this: &mut ArcMut<Self>, general_ha_service: GeneralHAService) -> HAResult<()> {
-        // Initialize the DefaultHAService with the provided message store.
-        let config = this.replica_store.message_store_config();
-        let is_auto_switch = general_ha_service.is_auto_switch_enabled();
-        this.auto_switch_replication = match &general_ha_service {
-            GeneralHAService::AutoSwitchHAService(auto_switch_service) => Some(auto_switch_service.replication_state()),
-            GeneralHAService::DefaultHAService(_) => None,
-        };
-
-        let group_transfer_service = GroupTransferService::new(general_ha_service.clone());
-        this.group_transfer_service = Some(group_transfer_service);
-
-        if config.broker_role == BrokerRole::Slave && !is_auto_switch {
-            this.ensure_ha_client()?;
-        }
-
-        let state_notification_service =
-            HAConnectionStateNotificationService::new(general_ha_service, Arc::clone(&config));
-        this.ha_connection_state_notification_service = Some(state_notification_service);
-
-        let arc_mut = this.clone();
-        this.accept_socket_service = Some(AcceptSocketService::new(
-            this.replica_store.message_store_config(),
-            arc_mut,
-            is_auto_switch,
-        ));
-        Ok(())
-    }
-
-    pub async fn add_connection(&self, connection: GeneralHAConnection) {
-        let slave_broker_id = Self::auto_switch_slave_broker_id(&connection);
+    pub(crate) async fn add_connection(&self, connection: GeneralHAConnection) {
+        let slave_broker_id = DefaultHAService::auto_switch_slave_broker_id(&connection);
         let slave_ack_offset = connection.get_slave_ack_offset();
 
-        let mut connections = self.connections.lock().await;
+        let Some(connections) = self.inner.connections.upgrade() else {
+            return;
+        };
+        let mut connections = connections.lock().await;
         connections.insert(connection.get_ha_connection_id().clone(), connection);
         drop(connections);
 
-        if let Some(replication) = self.auto_switch_replication.as_deref() {
+        if let Some(replication) = self.inner.auto_switch_replication.get() {
             self.handle_auto_switch_connection_added(replication, slave_broker_id, slave_ack_offset);
         }
     }
@@ -198,91 +181,60 @@ impl DefaultHAService {
     pub(crate) async fn remove_runtime_connection(&self, connection: &HAConnectionRuntimeHandle) {
         self.handle_runtime_connection_removed(connection);
 
-        if let Some(ha_connection_state_notification_service) = &self.ha_connection_state_notification_service {
+        if let Some(service) = self.inner.state_notification_service.get().and_then(Weak::upgrade) {
             let connection_state = connection.current_state().await;
-            let _ = ha_connection_state_notification_service
+            let _ = service
                 .check_connection_state_and_notify(connection.remote_address(), connection_state)
                 .await;
         }
 
-        let mut connections = self.connections.lock().await;
-        connections.remove(connection.connection_id());
-    }
-
-    pub async fn destroy_connections(&self) {
-        let connections = {
-            let mut connections = self.connections.lock().await;
-            connections
-                .drain()
-                .map(|(_, connection)| connection)
-                .collect::<Vec<_>>()
-        };
-        for mut connection in connections {
-            let connection_id = connection.get_ha_connection_id().to_owned();
-            if timeout(Duration::from_secs(3), connection.shutdown()).await.is_err() {
-                warn!("Timed out shutting down HA connection {}", connection_id);
-            }
+        if let Some(connections) = self.inner.connections.upgrade() {
+            connections.lock().await.remove(connection.connection_id());
         }
     }
 
-    pub(crate) fn try_snapshot_connections(&self, master_put_where: i64) -> Vec<HAConnectionRuntimeSnapshot> {
-        self.connections
-            .try_lock()
-            .map(|connections| {
-                connections
-                    .values()
-                    .map(|connection| {
-                        let slave_ack_offset = connection.get_slave_ack_offset();
-                        HAConnectionRuntimeSnapshot {
-                            addr: connection.remote_address(),
-                            slave_ack_offset,
-                            diff: master_put_where.saturating_sub(slave_ack_offset),
-                            transferred_byte_in_second: connection.get_transferred_byte_in_second(),
-                            transfer_from_where: connection.get_transfer_from_where(),
-                            slave_broker_id: connection.slave_broker_id(),
-                        }
-                    })
-                    .collect()
-            })
-            .unwrap_or_default()
+    pub(crate) fn handle_runtime_connection_ack(&self, connection: &HAConnectionRuntimeHandle, slave_ack_offset: i64) {
+        if let Some(replication) = self.inner.auto_switch_replication.get() {
+            self.handle_auto_switch_connection_ack(replication, connection.slave_broker_id(), slave_ack_offset);
+        }
     }
 
-    pub(crate) fn handle_connection_ack(&self, connection: &GeneralHAConnection, slave_ack_offset: i64) {
-        if let Some(replication) = self.auto_switch_replication.as_deref() {
+    fn handle_connection_ack(&self, connection: &GeneralHAConnection, slave_ack_offset: i64) {
+        if let Some(replication) = self.inner.auto_switch_replication.get() {
             self.handle_auto_switch_connection_ack(
                 replication,
-                Self::auto_switch_slave_broker_id(connection),
+                DefaultHAService::auto_switch_slave_broker_id(connection),
                 slave_ack_offset,
             );
         }
     }
 
-    pub(crate) fn handle_connection_caught_up(&self, connection: &GeneralHAConnection) {
-        if let Some(replication) = self.auto_switch_replication.as_deref() {
-            Self::handle_auto_switch_connection_caught_up(replication, Self::auto_switch_slave_broker_id(connection));
+    fn handle_connection_caught_up(&self, connection: &GeneralHAConnection) {
+        if let Some(replication) = self.inner.auto_switch_replication.get() {
+            DefaultHAService::handle_auto_switch_connection_caught_up(
+                replication,
+                DefaultHAService::auto_switch_slave_broker_id(connection),
+            );
         }
     }
 
-    pub(crate) fn handle_connection_removed(&self, connection: &GeneralHAConnection) {
-        if let Some(replication) = self.auto_switch_replication.as_deref() {
-            self.handle_auto_switch_connection_removed(replication, Self::auto_switch_slave_broker_id(connection));
-        }
-    }
-
-    pub(crate) fn handle_runtime_connection_ack(&self, connection: &HAConnectionRuntimeHandle, slave_ack_offset: i64) {
-        if let Some(replication) = self.auto_switch_replication.as_deref() {
-            self.handle_auto_switch_connection_ack(replication, connection.slave_broker_id(), slave_ack_offset);
+    fn handle_connection_removed(&self, connection: &GeneralHAConnection) {
+        if let Some(replication) = self.inner.auto_switch_replication.get() {
+            self.handle_auto_switch_connection_removed(
+                replication,
+                DefaultHAService::auto_switch_slave_broker_id(connection),
+            );
         }
     }
 
     pub(crate) fn handle_runtime_connection_caught_up(&self, connection: &HAConnectionRuntimeHandle) {
-        if let Some(replication) = self.auto_switch_replication.as_deref() {
-            Self::handle_auto_switch_connection_caught_up(replication, connection.slave_broker_id());
+        if let Some(replication) = self.inner.auto_switch_replication.get() {
+            DefaultHAService::handle_auto_switch_connection_caught_up(replication, connection.slave_broker_id());
         }
     }
 
     fn handle_runtime_connection_removed(&self, connection: &HAConnectionRuntimeHandle) {
-        if let Some(replication) = self.auto_switch_replication.as_deref() {
+        if let Some(replication) = self.inner.auto_switch_replication.get() {
             self.handle_auto_switch_connection_removed(replication, connection.slave_broker_id());
         }
     }
@@ -314,16 +266,10 @@ impl DefaultHAService {
         };
 
         replication.record_caught_up(slave_broker_id, rocketmq_common::TimeUtils::current_millis());
-        let current_confirm_offset = self.replica_store.get_confirm_offset_directly();
+        let current_confirm_offset = self.inner.replica_store.get_confirm_offset_directly();
         let _ = replication.maybe_expand_sync_state_set(slave_broker_id, slave_ack_offset, current_confirm_offset);
         if replication.local_sync_state_set().contains(&slave_broker_id) {
             self.publish_auto_switch_confirm_offset(replication);
-        }
-    }
-
-    fn handle_auto_switch_connection_caught_up(replication: &AutoSwitchReplicationState, slave_broker_id: Option<i64>) {
-        if let Some(slave_broker_id) = slave_broker_id {
-            replication.record_caught_up(slave_broker_id, rocketmq_common::TimeUtils::current_millis());
         }
     }
 
@@ -332,7 +278,7 @@ impl DefaultHAService {
         replication: &AutoSwitchReplicationState,
         slave_broker_id: Option<i64>,
     ) {
-        if self.replica_store.is_shutdown() {
+        if self.inner.replica_store.is_shutdown() {
             return;
         }
 
@@ -346,19 +292,239 @@ impl DefaultHAService {
     }
 
     fn publish_auto_switch_confirm_offset(&self, replication: &AutoSwitchReplicationState) {
-        let max_phy_offset = self.replica_store.get_max_phy_offset();
-        let current_confirm_offset = self.replica_store.get_confirm_offset_directly();
-        let runtime_info = self.get_runtime_info(max_phy_offset);
+        let max_phy_offset = self.inner.replica_store.get_max_phy_offset();
+        let current_confirm_offset = self.inner.replica_store.get_confirm_offset_directly();
+        let runtime_info = self.runtime_info(max_phy_offset);
         let expected_sync_state_set_size = replication
             .tracked_sync_state_set_size()
-            .unwrap_or_else(|| self.replica_store.get_alive_replica_num_in_group().max(1) as usize);
+            .unwrap_or_else(|| self.inner.replica_store.get_alive_replica_num_in_group().max(1) as usize);
         let confirm_offset = AutoSwitchHAService::compute_confirm_offset_from_runtime(
             current_confirm_offset,
             max_phy_offset,
             expected_sync_state_set_size,
             &runtime_info,
         );
-        self.replica_store.publish_confirm_offset(confirm_offset);
+        self.inner.replica_store.publish_confirm_offset(confirm_offset);
+    }
+
+    fn try_snapshot_connections(&self, master_put_where: i64) -> Vec<HAConnectionRuntimeSnapshot> {
+        self.inner
+            .connections
+            .upgrade()
+            .and_then(|connections| {
+                connections.try_lock().ok().map(|connections| {
+                    connections
+                        .values()
+                        .map(|connection| {
+                            let slave_ack_offset = connection.get_slave_ack_offset();
+                            HAConnectionRuntimeSnapshot {
+                                addr: connection.remote_address(),
+                                slave_ack_offset,
+                                diff: master_put_where.saturating_sub(slave_ack_offset),
+                                transferred_byte_in_second: connection.get_transferred_byte_in_second(),
+                                transfer_from_where: connection.get_transfer_from_where(),
+                                slave_broker_id: connection.slave_broker_id(),
+                            }
+                        })
+                        .collect()
+                })
+            })
+            .unwrap_or_default()
+    }
+
+    fn runtime_info(&self, master_put_where: i64) -> HARuntimeInfo {
+        let connection_info = self
+            .try_snapshot_connections(master_put_where)
+            .into_iter()
+            .map(|connection| HAConnectionRuntimeInfo {
+                addr: connection.addr,
+                slave_ack_offset: connection.slave_ack_offset.max(0) as u64,
+                diff: connection.diff,
+                in_sync: connection.slave_ack_offset >= master_put_where,
+                transferred_byte_in_second: connection.transferred_byte_in_second.max(0) as u64,
+                transfer_from_where: connection.transfer_from_where.max(0) as u64,
+            })
+            .collect::<Vec<_>>();
+        HARuntimeInfo {
+            master: self.inner.replica_store.message_store_config_ref().broker_role != BrokerRole::Slave,
+            master_commit_log_max_offset: master_put_where.max(0) as u64,
+            in_sync_slave_nums: connection_info.iter().filter(|connection| connection.in_sync).count() as i32,
+            pending_group_transfer_request_count: 0,
+            pending_group_transfer_oldest_wait_millis: 0,
+            group_transfer_ack_notify_count: 0,
+            ha_connection_info: connection_info,
+            ha_client_runtime_info: HAClientRuntimeInfo::default(),
+        }
+    }
+}
+
+pub struct DefaultHAService {
+    connection_count: Arc<AtomicU32>,
+    connections: Arc<Mutex<HashMap<HAConnectionId, GeneralHAConnection>>>,
+    connection_context: DefaultHAConnectionContext,
+    accept_socket_service: Option<AcceptSocketService>,
+    replica_store: HAReplicaStoreHandle,
+    wait_notify_object: Arc<Notify>,
+    replication_progress: Arc<ReplicationProgress>,
+    group_transfer_service: Option<Arc<GroupTransferService>>,
+    ha_client: Option<GeneralHAClient>,
+    ha_connection_state_notification_service: Option<Arc<HAConnectionStateNotificationService>>,
+    ha_transfer_metrics: Arc<HaTransferMetrics>,
+}
+
+impl DefaultHAService {
+    pub(crate) fn new(replica_store: HAReplicaStoreHandle) -> Self {
+        let connection_count = Arc::new(AtomicU32::new(0));
+        let connections = Arc::new(Mutex::new(HashMap::new()));
+        let wait_notify_object = Arc::new(Notify::new());
+        let replication_progress = Arc::new(ReplicationProgress::default());
+        let ha_transfer_metrics = Arc::new(HaTransferMetrics::default());
+        let connection_context = DefaultHAConnectionContext::new(
+            connection_count.clone(),
+            &connections,
+            replica_store.clone(),
+            wait_notify_object.clone(),
+            replication_progress.clone(),
+            ha_transfer_metrics.clone(),
+        );
+        DefaultHAService {
+            connection_count,
+            connections,
+            connection_context,
+            accept_socket_service: None,
+            replica_store,
+            wait_notify_object,
+            replication_progress,
+            group_transfer_service: None,
+            ha_client: None,
+            ha_connection_state_notification_service: None,
+            ha_transfer_metrics,
+        }
+    }
+
+    pub(crate) fn connection_context(&self) -> DefaultHAConnectionContext {
+        self.connection_context.clone()
+    }
+
+    pub(crate) fn replica_store(&self) -> &HAReplicaStoreHandle {
+        &self.replica_store
+    }
+
+    pub fn ha_transfer_metrics(&self) -> Arc<HaTransferMetrics> {
+        self.ha_transfer_metrics.clone()
+    }
+
+    pub(crate) fn group_transfer_runtime_info(&self) -> GroupTransferRuntimeInfo {
+        self.group_transfer_service
+            .as_ref()
+            .map_or_else(GroupTransferRuntimeInfo::default, |service| service.runtime_info())
+    }
+
+    pub(crate) fn ensure_ha_client(&mut self) -> HAResult<bool> {
+        if self.ha_client.is_some() {
+            return Ok(false);
+        }
+
+        let client = self
+            .create_default_ha_client()
+            .map_err(|e| HAError::Service(format!("Failed to create DefaultHAClient: {e}")))?;
+        self.ha_client = Some(GeneralHAClient::new_with_default_ha_client(client));
+        Ok(true)
+    }
+
+    pub(crate) fn create_default_ha_client(&self) -> Result<DefaultHAClient, HAClientError> {
+        DefaultHAClient::new(self.replica_store.clone())
+    }
+
+    pub(crate) fn set_ha_client_reported_broker_id(&self, broker_id: Option<i64>) {
+        if let Some(client) = &self.ha_client {
+            client.set_reported_broker_id(broker_id);
+        }
+    }
+
+    pub(crate) fn set_general_ha_client(&mut self, ha_client: GeneralHAClient) {
+        self.ha_client = Some(ha_client);
+    }
+
+    pub async fn notify_transfer_some(&self, offset: i64) {
+        self.connection_context.notify_transfer_some(offset).await;
+    }
+
+    pub(crate) fn init(this: &mut ArcMut<Self>, general_ha_service: GeneralHAService) -> HAResult<()> {
+        // Initialize the DefaultHAService with the provided message store.
+        let config = this.replica_store.message_store_config();
+        let is_auto_switch = general_ha_service.is_auto_switch_enabled();
+        if let GeneralHAService::AutoSwitchHAService(auto_switch_service) = &general_ha_service {
+            this.connection_context
+                .install_auto_switch_replication(auto_switch_service.replication_state())?;
+        }
+
+        let group_transfer_service = Arc::new(GroupTransferService::new(general_ha_service.clone()));
+        this.connection_context
+            .install_group_transfer_service(&group_transfer_service)?;
+        this.group_transfer_service = Some(group_transfer_service);
+
+        if config.broker_role == BrokerRole::Slave && !is_auto_switch {
+            this.ensure_ha_client()?;
+        }
+
+        let state_notification_service = Arc::new(HAConnectionStateNotificationService::new(
+            general_ha_service,
+            Arc::clone(&config),
+        ));
+        this.connection_context
+            .install_state_notification_service(&state_notification_service)?;
+        this.ha_connection_state_notification_service = Some(state_notification_service);
+
+        this.accept_socket_service = Some(AcceptSocketService::new(
+            this.replica_store.message_store_config(),
+            this.connection_context.clone(),
+            is_auto_switch,
+        ));
+        Ok(())
+    }
+
+    pub async fn add_connection(&self, connection: GeneralHAConnection) {
+        self.connection_context.add_connection(connection).await;
+    }
+
+    pub async fn destroy_connections(&self) {
+        let connections = {
+            let mut connections = self.connections.lock().await;
+            connections
+                .drain()
+                .map(|(_, connection)| connection)
+                .collect::<Vec<_>>()
+        };
+        for mut connection in connections {
+            let connection_id = connection.get_ha_connection_id().to_owned();
+            if timeout(Duration::from_secs(3), connection.shutdown()).await.is_err() {
+                warn!("Timed out shutting down HA connection {}", connection_id);
+            }
+        }
+    }
+
+    pub(crate) fn try_snapshot_connections(&self, master_put_where: i64) -> Vec<HAConnectionRuntimeSnapshot> {
+        self.connection_context.try_snapshot_connections(master_put_where)
+    }
+
+    pub(crate) fn handle_connection_ack(&self, connection: &GeneralHAConnection, slave_ack_offset: i64) {
+        self.connection_context
+            .handle_connection_ack(connection, slave_ack_offset);
+    }
+
+    pub(crate) fn handle_connection_caught_up(&self, connection: &GeneralHAConnection) {
+        self.connection_context.handle_connection_caught_up(connection);
+    }
+
+    pub(crate) fn handle_connection_removed(&self, connection: &GeneralHAConnection) {
+        self.connection_context.handle_connection_removed(connection);
+    }
+
+    fn handle_auto_switch_connection_caught_up(replication: &AutoSwitchReplicationState, slave_broker_id: Option<i64>) {
+        if let Some(slave_broker_id) = slave_broker_id {
+            replication.record_caught_up(slave_broker_id, rocketmq_common::TimeUtils::current_millis());
+        }
     }
 
     fn auto_switch_slave_broker_id(connection: &GeneralHAConnection) -> Option<i64> {
@@ -377,12 +543,12 @@ impl HAService for DefaultHAService {
             .start()
             .await?;
         self.group_transfer_service
-            .as_mut()
+            .as_ref()
             .ok_or_else(|| HAError::Service("GroupTransferService not initialized".to_string()))?
             .start()
             .await?;
         self.ha_connection_state_notification_service
-            .as_mut()
+            .as_ref()
             .ok_or_else(|| HAError::Service("HAConnectionStateNotificationService not initialized".to_string()))?
             .start()
             .await?;
@@ -545,29 +711,7 @@ impl HAService for DefaultHAService {
     }
 
     fn get_runtime_info(&self, master_put_where: i64) -> HARuntimeInfo {
-        let mut runtime_info = HARuntimeInfo {
-            master: self.replica_store.message_store_config_ref().broker_role != BrokerRole::Slave,
-            master_commit_log_max_offset: master_put_where.max(0) as u64,
-            in_sync_slave_nums: (self.in_sync_replicas_nums(master_put_where) - 1).max(0),
-            pending_group_transfer_request_count: 0,
-            pending_group_transfer_oldest_wait_millis: 0,
-            group_transfer_ack_notify_count: 0,
-            ha_connection_info: Vec::new(),
-            ha_client_runtime_info: HAClientRuntimeInfo::default(),
-        };
-
-        runtime_info.ha_connection_info = self
-            .try_snapshot_connections(master_put_where)
-            .into_iter()
-            .map(|connection| HAConnectionRuntimeInfo {
-                addr: connection.addr,
-                slave_ack_offset: connection.slave_ack_offset.max(0) as u64,
-                diff: connection.diff,
-                in_sync: connection.slave_ack_offset >= master_put_where,
-                transferred_byte_in_second: connection.transferred_byte_in_second.max(0) as u64,
-                transfer_from_where: connection.transfer_from_where.max(0) as u64,
-            })
-            .collect();
+        let mut runtime_info = self.connection_context.runtime_info(master_put_where);
 
         if let Some(ha_client) = &self.ha_client {
             runtime_info.ha_client_runtime_info = HAClientRuntimeInfo {
@@ -608,14 +752,14 @@ struct AcceptSocketService {
     message_store_config: Arc<MessageStoreConfig>,
     is_auto_switch: bool,
     shutdown_token: CancellationToken,
-    default_ha_service: ArcMut<DefaultHAService>,
+    connection_context: DefaultHAConnectionContext,
     worker_group: Arc<Mutex<Option<rocketmq_runtime::TaskGroup>>>,
 }
 
 impl AcceptSocketService {
     pub fn new(
         message_store_config: Arc<MessageStoreConfig>,
-        default_ha_service: ArcMut<DefaultHAService>,
+        connection_context: DefaultHAConnectionContext,
         is_auto_switch: bool,
     ) -> Self {
         let ha_listen_port = message_store_config.ha_listen_port;
@@ -625,20 +769,20 @@ impl AcceptSocketService {
             message_store_config,
             is_auto_switch,
             shutdown_token: CancellationToken::new(),
-            default_ha_service,
+            connection_context,
             worker_group: Arc::new(Mutex::new(None)),
         }
     }
 
     async fn build_connection(
-        default_ha_service: ArcMut<DefaultHAService>,
+        connection_context: DefaultHAConnectionContext,
         message_store_config: Arc<MessageStoreConfig>,
         stream: TcpStream,
         addr: SocketAddr,
         is_auto_switch: bool,
     ) -> Result<GeneralHAConnection, crate::ha::HAConnectionError> {
         let default_connection =
-            DefaultHAConnection::new(default_ha_service, stream, message_store_config, addr).await?;
+            DefaultHAConnection::new(connection_context, stream, message_store_config, addr).await?;
         let general_connection = if is_auto_switch {
             GeneralHAConnection::new_with_auto_switch_ha_connection(AutoSwitchHAConnection::new(default_connection))
         } else {
@@ -661,13 +805,13 @@ impl AcceptSocketService {
         let shutdown_token = self.shutdown_token.clone();
         let is_auto_switch = self.is_auto_switch;
         let message_store_config = self.message_store_config.clone();
-        let default_ha_service = self.default_ha_service.clone();
+        let connection_context = self.connection_context.clone();
         let worker_group = crate::runtime::task_group("rocketmq-store.ha.accept")
             .map_err(|error| HAError::Service(error.to_string()))?;
         worker_group
             .spawn_service("ha-accept-socket-service", async move {
                 let message_store_config = message_store_config;
-                let default_ha_service = default_ha_service;
+                let connection_context = connection_context;
                 loop {
                     select! {
                         _ = shutdown_token.cancelled() => {
@@ -680,7 +824,7 @@ impl AcceptSocketService {
                                 Ok((stream, addr)) => {
                                     info!("HAService receive new connection, {}", addr);
                                     match AcceptSocketService::build_connection(
-                                        default_ha_service.clone(),
+                                        connection_context.clone(),
                                         message_store_config.clone(),
                                         stream,
                                         addr,
@@ -693,7 +837,7 @@ impl AcceptSocketService {
                                                 error!("Error starting HAService: {}", e);
                                             } else {
                                                 info!("HAService accept new connection, {}", addr);
-                                                default_ha_service.add_connection(general_conn).await;
+                                                connection_context.add_connection(general_conn).await;
                                             }
                                         }
                                         Err(e) => {
@@ -752,10 +896,36 @@ mod tests {
             .split("#[cfg(test)]")
             .next()
             .expect("production source");
+        let connection_production = include_str!("default_ha_connection.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("connection production source");
 
         assert!(production.contains("HashMap<HAConnectionId, GeneralHAConnection>"));
+        assert!(production.contains("connection_context: DefaultHAConnectionContext"));
+        assert!(production.contains("connections: Weak<Mutex<HashMap<HAConnectionId, GeneralHAConnection>>>"));
+        assert!(production.contains("group_transfer_service: OnceLock<Weak<GroupTransferService>>"));
+        assert!(production.contains("state_notification_service: OnceLock<Weak<HAConnectionStateNotificationService>>"));
         assert!(!production.contains("ArcMut<GeneralHAConnection>"));
         assert!(!production.contains("ArcMut::new(general_connection)"));
+        assert!(!production.contains("default_ha_service: ArcMut<DefaultHAService>"));
+        assert!(!connection_production.contains("ArcMut"));
+        assert!(!connection_production.contains("DefaultHAService"));
+    }
+
+    #[test]
+    fn connection_context_does_not_retain_registry_owner() {
+        let temp_root =
+            std::env::temp_dir().join(format!("rocketmq-rust-default-ha-runtime-context-{}", current_millis()));
+        let store = new_test_message_store(&temp_root, false);
+        let service = new_default_ha_service(store.as_ref());
+        let context = service.connection_context();
+
+        assert!(context.inner.connections.upgrade().is_some());
+        drop(service);
+        assert!(context.inner.connections.upgrade().is_none());
+
+        let _ = std::fs::remove_dir_all(temp_root);
     }
 
     fn new_test_message_store(root: &Path, enable_controller_mode: bool) -> ArcMut<LocalFileMessageStore> {
@@ -921,7 +1091,7 @@ mod tests {
         let (server_stream, remote_addr, _client) = new_server_stream().await;
 
         let mut connection = AcceptSocketService::build_connection(
-            service.clone(),
+            service.connection_context(),
             service.replica_store().message_store_config(),
             server_stream,
             remote_addr,
@@ -947,7 +1117,7 @@ mod tests {
         auto_switch_service.sync_controller_sync_state_set(7, &HashSet::from([7_i64]));
         let (server_stream, remote_addr, _client) = new_server_stream().await;
         let mut connection = AcceptSocketService::build_connection(
-            service.clone(),
+            service.connection_context(),
             service.replica_store().message_store_config(),
             server_stream,
             remote_addr,
@@ -976,7 +1146,7 @@ mod tests {
 
         let (server_stream, remote_addr, _client) = new_server_stream().await;
         let mut connection = AcceptSocketService::build_connection(
-            service.clone(),
+            service.connection_context(),
             service.replica_store().message_store_config(),
             server_stream,
             remote_addr,
@@ -1003,7 +1173,7 @@ mod tests {
 
         let (server_stream, remote_addr, _client) = new_server_stream().await;
         let mut connection = AcceptSocketService::build_connection(
-            service.clone(),
+            service.connection_context(),
             service.replica_store().message_store_config(),
             server_stream,
             remote_addr,
@@ -1032,7 +1202,7 @@ mod tests {
 
         let (server_stream, remote_addr, _client) = new_server_stream().await;
         let mut connection = AcceptSocketService::build_connection(
-            service.clone(),
+            service.connection_context(),
             service.replica_store().message_store_config(),
             server_stream,
             remote_addr,
@@ -1060,7 +1230,7 @@ mod tests {
         let service = ArcMut::new(new_default_ha_service(store.as_ref()));
         let (server_stream, remote_addr, mut client) = new_server_stream().await;
         let mut connection = AcceptSocketService::build_connection(
-            service.clone(),
+            service.connection_context(),
             service.replica_store().message_store_config(),
             server_stream,
             remote_addr,

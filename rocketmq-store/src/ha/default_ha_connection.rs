@@ -24,7 +24,6 @@ use bytes::Bytes;
 use bytes::BytesMut;
 use futures_util::StreamExt;
 use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_rust::ArcMut;
 use tokio::io::AsyncWrite;
 use tokio::net::tcp::OwnedReadHalf;
 use tokio::net::tcp::OwnedWriteHalf;
@@ -43,12 +42,11 @@ use tracing::warn;
 use crate::config::message_store_config::LinuxTransferEngine;
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::ha::default_ha_client::CONTROLLER_REPORT_HEADER_SIZE;
-use crate::ha::default_ha_service::DefaultHAService;
+use crate::ha::default_ha_service::DefaultHAConnectionContext;
 use crate::ha::flow_monitor::FlowMonitor;
 use crate::ha::ha_connection::HAConnection;
 use crate::ha::ha_connection::HAConnectionId;
 use crate::ha::ha_connection_state::HAConnectionState;
-use crate::ha::ha_service::HAService;
 use crate::ha::transfer_engine::select_transfer_engine_with_availability;
 use crate::ha::transfer_engine::HaTransferEngine;
 use crate::ha::transfer_engine::TransferEngineAvailability;
@@ -130,7 +128,7 @@ pub(crate) fn decode_transfer_header(
 }
 
 pub struct DefaultHAConnection {
-    ha_service: ArcMut<DefaultHAService>,
+    connection_context: DefaultHAConnectionContext,
     socket_stream: Option<TcpStream>,
     client_address: String,
     task_group: Arc<Mutex<Option<rocketmq_runtime::TaskGroup>>>,
@@ -148,8 +146,8 @@ pub struct DefaultHAConnection {
 
 impl DefaultHAConnection {
     /// Create a new DefaultHAConnection
-    pub async fn new(
-        ha_service: ArcMut<DefaultHAService>,
+    pub(crate) async fn new(
+        connection_context: DefaultHAConnectionContext,
         socket_stream: TcpStream,
         message_store_config: Arc<MessageStoreConfig>,
         remote_addr: SocketAddr,
@@ -172,12 +170,12 @@ impl DefaultHAConnection {
         let flow_monitor = Arc::new(FlowMonitor::new(message_store_config.clone()));
 
         // Increment connection count
-        ha_service.get_connection_count().fetch_add(1, Ordering::SeqCst);
+        connection_context.get_connection_count().fetch_add(1, Ordering::SeqCst);
 
         let (shutdown_sender, shutdown_receiver) = mpsc::channel::<()>(1);
 
         Ok(Self {
-            ha_service,
+            connection_context,
             socket_stream,
             client_address,
             task_group: Arc::new(Mutex::new(None)),
@@ -251,7 +249,7 @@ impl HAConnection for DefaultHAConnection {
                 }),
             ),
             self.client_address.clone(),
-            ArcMut::clone(&self.ha_service),
+            self.connection_context.clone(),
             Arc::clone(&self.current_state),
             self.slave_request_offset.clone(),
             self.slave_ack_offset.clone(),
@@ -263,7 +261,7 @@ impl HAConnection for DefaultHAConnection {
         let write_service = WriteSocketService::new(
             write,
             self.client_address.clone(),
-            ArcMut::clone(&self.ha_service),
+            self.connection_context.clone(),
             Arc::clone(&self.current_state),
             self.slave_request_offset.clone(),
             Arc::clone(&self.flow_monitor),
@@ -325,7 +323,7 @@ impl HAConnection for DefaultHAConnection {
         self.close();
 
         // Decrement connection count
-        let connection_count = self.ha_service.get_connection_count();
+        let connection_count = self.connection_context.get_connection_count();
         if connection_count.load(Ordering::SeqCst) > 0 {
             connection_count.fetch_sub(1, Ordering::SeqCst);
         }
@@ -380,7 +378,7 @@ const SELECT_TIMEOUT: Duration = Duration::from_millis(1000);
 pub struct ReadSocketService {
     reader: FramedRead<OwnedReadHalf, OffsetDecoder>,
     client_address: String,
-    ha_service: ArcMut<DefaultHAService>,
+    connection_context: DefaultHAConnectionContext,
     current_state: Arc<RwLock<HAConnectionState>>,
     slave_request_offset: Arc<AtomicI64>,
     slave_ack_offset: Arc<AtomicI64>,
@@ -395,7 +393,7 @@ impl ReadSocketService {
     pub async fn new(
         reader: FramedRead<OwnedReadHalf, OffsetDecoder>,
         client_address: String,
-        ha_service: ArcMut<DefaultHAService>,
+        connection_context: DefaultHAConnectionContext,
         current_state: Arc<RwLock<HAConnectionState>>,
         slave_request_offset: Arc<AtomicI64>,
         slave_ack_offset: Arc<AtomicI64>,
@@ -407,7 +405,7 @@ impl ReadSocketService {
         Ok(Self {
             reader,
             client_address,
-            ha_service,
+            connection_context,
             current_state,
             slave_request_offset,
             slave_ack_offset,
@@ -449,9 +447,9 @@ impl ReadSocketService {
                     if let Some(broker_id) = broker_id.filter(|broker_id| *broker_id >= 0) {
                         self.connection_runtime.set_slave_broker_id(broker_id);
                     }
-                    self.ha_service
+                    self.connection_context
                         .handle_runtime_connection_ack(&self.connection_runtime, offset);
-                    self.ha_service.notify_transfer_some(offset).await;
+                    self.connection_context.notify_transfer_some(offset).await;
                 }
                 Some(Err(e)) => {
                     error!("Stream error: {}", e);
@@ -528,7 +526,7 @@ impl ReadSocketService {
                     info!("slave[{}] request offset {}", self.client_address, read_offset);
                 }
 
-                self.ha_service.notify_transfer_some(read_offset).await;
+                self.connection_context.notify_transfer_some(read_offset).await;
             }
         }
 
@@ -563,7 +561,7 @@ impl ReadSocketService {
 pub struct WriteSocketService {
     writer: HaTransferEngine<OwnedWriteHalf>,
     client_address: String,
-    ha_service: ArcMut<DefaultHAService>,
+    connection_context: DefaultHAConnectionContext,
     current_state: Arc<RwLock<HAConnectionState>>,
     slave_request_offset: Arc<AtomicI64>, // this is the offset requested by the slave
     flow_monitor: Arc<FlowMonitor>,
@@ -580,7 +578,7 @@ impl WriteSocketService {
     pub async fn new(
         writer: OwnedWriteHalf,
         client_address: String,
-        ha_service: ArcMut<DefaultHAService>,
+        connection_context: DefaultHAConnectionContext,
         current_state: Arc<RwLock<HAConnectionState>>,
         slave_request_offset: Arc<AtomicI64>,
         flow_monitor: Arc<FlowMonitor>,
@@ -606,7 +604,7 @@ impl WriteSocketService {
                 "HA transfer engine fallback to {:?} for slave[{}]: {}",
                 selection.engine, client_address, reason
             );
-            ha_service.ha_transfer_metrics().record_fallback(
+            connection_context.ha_transfer_metrics().record_fallback(
                 transfer_engine_kind(preference),
                 selection.engine,
                 reason,
@@ -621,7 +619,7 @@ impl WriteSocketService {
         Ok(Self {
             writer,
             client_address,
-            ha_service,
+            connection_context,
             current_state,
             slave_request_offset,
             flow_monitor,
@@ -688,7 +686,7 @@ impl WriteSocketService {
         if self.next_transfer_from_where.load(Ordering::Relaxed) == -1 {
             // If next_transfer_from_where is -1, we need to set it to the master offset
             let next_offset = if slave_request_offset == 0 {
-                let mut master_offset = self.ha_service.replica_store().get_max_phy_offset();
+                let mut master_offset = self.connection_context.replica_store().get_max_phy_offset();
                 let mapped_file_size = self.message_store_config.mapped_file_size_commit_log;
                 master_offset = master_offset - (master_offset % mapped_file_size as i64);
                 if master_offset < 0 {
@@ -737,9 +735,9 @@ impl WriteSocketService {
         }
 
         let next_offset = self.next_transfer_from_where.load(Ordering::Relaxed);
-        let max_commit_log_offset = self.ha_service.replica_store().get_max_phy_offset();
+        let max_commit_log_offset = self.connection_context.replica_store().get_max_phy_offset();
         if next_offset >= max_commit_log_offset {
-            self.ha_service
+            self.connection_context
                 .handle_runtime_connection_caught_up(&self.connection_runtime);
             return Ok(());
         }
@@ -766,7 +764,7 @@ impl WriteSocketService {
                 heartbeat_due: false,
             },
             |offset, max_bytes, allow_cross_file| {
-                self.ha_service
+                self.connection_context
                     .replica_store()
                     .select_segments(offset, max_bytes, allow_cross_file)
             },
@@ -808,7 +806,7 @@ impl WriteSocketService {
 
     async fn send_heartbeat(&mut self) -> HAConnectionResult<()> {
         let next_offset = self.next_transfer_from_where.load(Ordering::Relaxed);
-        let confirm_offset = self.ha_service.replica_store().get_confirm_offset();
+        let confirm_offset = self.connection_context.replica_store().get_confirm_offset();
         let frame_header = encode_transfer_header(
             &mut self.byte_buffer_header,
             next_offset,
@@ -827,7 +825,7 @@ impl WriteSocketService {
         let stats = self.writer.send_batch(&batch).await?;
 
         self.last_write_timestamp.store(current_millis(), Ordering::Relaxed);
-        self.ha_service.ha_transfer_metrics().record_transfer(&stats);
+        self.connection_context.ha_transfer_metrics().record_transfer(&stats);
         self.flow_monitor.add_byte_count_transferred(stats.bytes_written as i64);
         self.last_write_over.store(true, Ordering::Relaxed);
 
@@ -835,7 +833,7 @@ impl WriteSocketService {
     }
 
     async fn send_data(&mut self, mut batch: TransferBatch) -> HAConnectionResult<()> {
-        let confirm_offset = self.ha_service.replica_store().get_confirm_offset();
+        let confirm_offset = self.connection_context.replica_store().get_confirm_offset();
         let header_bytes = encode_transfer_header(
             &mut self.byte_buffer_header,
             batch.start_offset,
@@ -848,7 +846,7 @@ impl WriteSocketService {
         let stats = self.writer.send_batch(&batch).await?;
 
         self.last_write_timestamp.store(current_millis(), Ordering::Relaxed);
-        self.ha_service.ha_transfer_metrics().record_transfer(&stats);
+        self.connection_context.ha_transfer_metrics().record_transfer(&stats);
         self.flow_monitor.add_byte_count_transferred(stats.bytes_written as i64);
         self.last_write_over.store(true, Ordering::Relaxed);
 
@@ -858,7 +856,7 @@ impl WriteSocketService {
     async fn cleanup(&mut self) {
         *self.current_state.write().await = HAConnectionState::Shutdown;
 
-        self.ha_service
+        self.connection_context
             .remove_runtime_connection(&self.connection_runtime)
             .await;
 
