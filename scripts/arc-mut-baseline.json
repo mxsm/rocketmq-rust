@@ -640,30 +640,6 @@
           "fingerprint": "993e032cc43bf3fde8bb9b8c",
           "item": "struct BrokerRuntimeInner",
           "line": 3775
-        },
-        {
-          "id": "4ade86c96052f2090dbb7f77",
-          "fingerprint": "cdae48c0ebbb111839de0523",
-          "item": "fn message_store_mut",
-          "line": 4090
-        },
-        {
-          "id": "bfb12f611c07f201feb00cc8",
-          "fingerprint": "7e8542f406042396ea595c53",
-          "item": "fn message_store",
-          "line": 4280
-        },
-        {
-          "id": "51723d390366120a3abf406a",
-          "fingerprint": "23ba055600cc3437a7375e8a",
-          "item": "fn message_store_unchecked",
-          "line": 4310
-        },
-        {
-          "id": "073675840d7d1847ac6b9986",
-          "fingerprint": "c827c069638d3aa68520a4e4",
-          "item": "fn message_store_unchecked_mut",
-          "line": 4315
         }
       ],
       "owner": "broker",
