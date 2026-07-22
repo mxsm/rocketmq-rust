@@ -17,6 +17,9 @@ pub(crate) mod ack_result;
 pub(crate) mod ack_status;
 pub mod allocate_message_queue_strategy;
 pub(crate) mod consumer_impl;
+/// Outcome of a push-consumer teardown. Applications use this to decide
+/// whether an in-process same-group replacement is safe.
+pub use consumer_impl::consume_message_service::ShutdownReport;
 pub mod default_mq_push_consumer;
 pub mod default_mq_push_consumer_builder;
 pub mod listener;
