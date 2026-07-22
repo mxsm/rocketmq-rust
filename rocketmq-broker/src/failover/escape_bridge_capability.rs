@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashSet;
+use std::ops::Deref;
 use std::ops::DerefMut;
 use std::sync::Arc;
 
@@ -36,12 +38,15 @@ use rocketmq_store::store_api_adapter::LegacyAppendReceipt;
 use rocketmq_store::store_api_adapter::LegacyMessageStoreAdapter;
 use rocketmq_store::store_api_adapter::LegacyMessageStoreHealthAdapter;
 use rocketmq_store::store_api_adapter::LegacyStoreHealthSnapshot;
+use rocketmq_store::store_error::HAError;
+use rocketmq_store::store_error::HAResult;
 use rocketmq_store_api::MessageAppender;
 use rocketmq_store_api::StoreError;
 use rocketmq_store_api::StoreErrorKind;
 use rocketmq_store_api::StoreHealth;
 use rocketmq_store_api::StoreOperation;
 
+use crate::controller::replicas_manager::BrokerReplicaRole;
 use crate::failover::escape_bridge::MessageStoreUnavailable;
 
 /// Immutable failover policy generation published by the broker composition root.
@@ -121,12 +126,36 @@ impl EscapeBridgePolicyState {
 pub(crate) struct LegacyEscapeStoreOwner<MS: MessageStore>(pub(crate) rocketmq_rust::ArcMut<MS>);
 
 impl<MS: MessageStore> LegacyEscapeStoreOwner<MS> {
-    fn store(&self) -> &MS {
+    pub(crate) fn store(&self) -> &MS {
         self.0.as_ref()
+    }
+
+    pub(crate) fn store_mut(&mut self) -> &mut MS {
+        self.0.as_mut()
     }
 
     fn cloned_store(&self) -> impl DerefMut<Target = MS> + Clone {
         self.0.clone()
+    }
+}
+
+impl<MS: MessageStore> Clone for LegacyEscapeStoreOwner<MS> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+impl<MS: MessageStore> Deref for LegacyEscapeStoreOwner<MS> {
+    type Target = MS;
+
+    fn deref(&self) -> &Self::Target {
+        self.store()
+    }
+}
+
+impl<MS: MessageStore> DerefMut for LegacyEscapeStoreOwner<MS> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.store_mut()
     }
 }
 
@@ -220,6 +249,76 @@ impl<MS: MessageStore> EscapeBridgeStoreCapability<MS> {
         store.update_ha_master_address(master_ha_address.as_str()).await;
         store.update_master_address(master_address);
         Ok(())
+    }
+
+    pub(crate) fn sync_controller_sync_state_set(
+        &self,
+        local_broker_id: i64,
+        sync_state_set: &HashSet<i64>,
+    ) -> Result<(), MessageStoreUnavailable> {
+        self.with_store(|store| store.sync_controller_sync_state_set(local_broker_id, sync_state_set))
+    }
+
+    pub(crate) async fn apply_controller_role(
+        &self,
+        previous_store_role: BrokerRole,
+        target_role: BrokerReplicaRole,
+        controller_broker_id: u64,
+        master_address: Option<&CheetahString>,
+        master_epoch: i32,
+    ) -> HAResult<()> {
+        let owner = match self.owner() {
+            Ok(owner) => owner,
+            Err(_) => return Ok(()),
+        };
+        let mut store = owner.cloned_store();
+        let Some(ha_service) = store.get_ha_service() else {
+            return Ok(());
+        };
+        let result = match target_role {
+            BrokerReplicaRole::Master => {
+                if previous_store_role == BrokerRole::SyncMaster {
+                    ha_service.change_to_master_when_last_role_is_master(master_epoch).await
+                } else {
+                    ha_service.change_to_master(master_epoch).await
+                }
+            }
+            BrokerReplicaRole::Slave => {
+                let master_address = master_address.ok_or_else(|| {
+                    HAError::Service("controller role change missing master address for store transition".to_owned())
+                })?;
+                let current_master_address = ha_service.get_runtime_info(0).ha_client_runtime_info.master_addr;
+                if previous_store_role == BrokerRole::Slave && current_master_address == master_address.as_str() {
+                    ha_service
+                        .change_to_slave_when_master_not_change(master_address.as_str(), master_epoch)
+                        .await
+                } else {
+                    ha_service
+                        .change_to_slave(master_address.as_str(), master_epoch, Some(controller_broker_id as i64))
+                        .await
+                }
+            }
+        };
+        result?;
+        store.sync_broker_role(match target_role {
+            BrokerReplicaRole::Master => BrokerRole::SyncMaster,
+            BrokerReplicaRole::Slave => BrokerRole::Slave,
+        });
+        Ok(())
+    }
+
+    pub(crate) fn master_flushed_offset(&self) -> Result<i64, MessageStoreUnavailable> {
+        self.with_store(MessageStore::get_master_flushed_offset)
+    }
+
+    pub(crate) async fn update_ha_master_address(&self, address: &str) -> Result<(), MessageStoreUnavailable> {
+        let owner = self.owner()?;
+        owner.store().update_ha_master_address(address).await;
+        Ok(())
+    }
+
+    pub(crate) fn wakeup_ha_client(&self) -> Result<(), MessageStoreUnavailable> {
+        self.with_store(MessageStore::wakeup_ha_client)
     }
 
     pub(crate) async fn query_message(
@@ -365,8 +464,11 @@ mod tests {
     use rocketmq_common::common::broker::broker_config::BrokerConfig;
     use rocketmq_common::common::broker::broker_role::BrokerRole;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
+    use rocketmq_store::message_store::GenericMessageStore;
 
     use super::EscapeBridgePolicyState;
+    use super::EscapeBridgeStoreCapability;
+    use crate::controller::replicas_manager::BrokerReplicaRole;
 
     #[test]
     fn failover_policy_publishes_broker_and_store_updates() {
@@ -390,5 +492,15 @@ mod tests {
         assert!(snapshot.enable_slave_acting_master);
         assert!(snapshot.enable_remote_escape);
         assert_eq!(snapshot.broker_role, BrokerRole::Slave);
+    }
+
+    #[tokio::test]
+    async fn controller_role_change_is_a_noop_before_store_binding() {
+        let store = EscapeBridgeStoreCapability::<GenericMessageStore>::default();
+
+        assert!(store
+            .apply_controller_role(BrokerRole::Slave, BrokerReplicaRole::Master, 0, None, 1)
+            .await
+            .is_ok());
     }
 }

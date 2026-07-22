@@ -34,7 +34,7 @@ use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerCon
 use rocketmq_store::base::message_store::MessageStore;
 use tracing::error;
 
-use crate::broker_runtime::BrokerRuntimeInner;
+use crate::broker::broker_admin_runtime::BrokerAdminRuntime;
 
 pub(super) struct OffsetRequestHandler;
 
@@ -45,7 +45,7 @@ impl OffsetRequestHandler {
 
     pub async fn get_max_offset<MS: MessageStore>(
         &self,
-        broker_runtime_inner: &BrokerRuntimeInner<MS>,
+        broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -78,7 +78,7 @@ impl OffsetRequestHandler {
 
     pub async fn get_min_offset<MS: MessageStore>(
         &self,
-        broker_runtime_inner: &BrokerRuntimeInner<MS>,
+        broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -112,7 +112,7 @@ impl OffsetRequestHandler {
 
     async fn handle_get_min_offset_for_static_topic<MS: MessageStore>(
         &self,
-        broker_runtime_inner: &BrokerRuntimeInner<MS>,
+        broker_runtime_inner: &BrokerAdminRuntime<MS>,
         mut request_header: GetMinOffsetRequestHeader,
         mapping_context: TopicQueueMappingContext,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -179,7 +179,7 @@ impl OffsetRequestHandler {
 
     async fn rewrite_request_for_static_topic<MS: MessageStore>(
         &self,
-        broker_runtime_inner: &BrokerRuntimeInner<MS>,
+        broker_runtime_inner: &BrokerAdminRuntime<MS>,
         mut request_header: GetMaxOffsetRequestHeader,
         mapping_context: TopicQueueMappingContext,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -246,7 +246,7 @@ impl OffsetRequestHandler {
 
     pub async fn get_all_delay_offset<MS: MessageStore>(
         &self,
-        broker_runtime_inner: &BrokerRuntimeInner<MS>,
+        broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -267,7 +267,7 @@ impl OffsetRequestHandler {
 
     pub async fn get_earliest_msg_store_time<MS: MessageStore>(
         &self,
-        broker_runtime_inner: &BrokerRuntimeInner<MS>,
+        broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -297,7 +297,7 @@ impl OffsetRequestHandler {
 
     pub async fn clean_expired_consumequeue<MS: MessageStore>(
         &self,
-        broker_runtime_inner: &BrokerRuntimeInner<MS>,
+        broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -314,7 +314,7 @@ impl OffsetRequestHandler {
 
     pub async fn delete_expired_commitlog<MS: MessageStore>(
         &self,
-        broker_runtime_inner: &BrokerRuntimeInner<MS>,
+        broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -349,7 +349,7 @@ impl OffsetRequestHandler {
 
     pub async fn get_all_subscription_group_config<MS: MessageStore>(
         &self,
-        broker_runtime_inner: &BrokerRuntimeInner<MS>,
+        broker_runtime_inner: &BrokerAdminRuntime<MS>,
         channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -374,7 +374,7 @@ impl OffsetRequestHandler {
 
     async fn rewrite_get_earliest_request_for_static_topic<MS: MessageStore>(
         &self,
-        broker_runtime_inner: &BrokerRuntimeInner<MS>,
+        broker_runtime_inner: &BrokerAdminRuntime<MS>,
         mut request_header: GetEarliestMsgStoretimeRequestHeader,
         mapping_context: TopicQueueMappingContext,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -569,7 +569,7 @@ mod tests {
 
         let response = handler
             .get_earliest_msg_store_time(
-                inner.as_ref(),
+                &runtime.admin_runtime_for_test(),
                 channel,
                 ctx,
                 RequestCode::GetEarliestMsgStoreTime,
@@ -593,8 +593,7 @@ mod tests {
 
     #[tokio::test]
     async fn clean_expired_consumequeue_returns_success() {
-        let mut runtime = new_test_runtime("clean-expired-cq").await;
-        let inner = runtime.inner_for_test().clone();
+        let runtime = new_test_runtime("clean-expired-cq").await;
         let handler = OffsetRequestHandler::new();
         let mut request =
             RemotingCommand::create_request_command(RequestCode::CleanExpiredConsumequeue, EmptyHeader {});
@@ -603,7 +602,7 @@ mod tests {
 
         let response = handler
             .clean_expired_consumequeue(
-                inner.as_ref(),
+                &runtime.admin_runtime_for_test(),
                 channel,
                 ctx,
                 RequestCode::CleanExpiredConsumequeue,

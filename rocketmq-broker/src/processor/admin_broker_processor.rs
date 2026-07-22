@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::auth::auth_admin_service::AuthAdminService;
-use crate::broker::broker_admin_runtime_handle::BrokerAdminRuntimeHandle;
+use crate::broker::broker_admin_runtime::BrokerAdminRuntime;
 use crate::processor::admin_broker_processor::batch_mq_handler::BatchMqHandler;
 use crate::processor::admin_broker_processor::broker_config_request_handler::BrokerConfigRequestHandler;
 use crate::processor::admin_broker_processor::broker_epoch_cache_handler::BrokerEpochCacheHandler;
@@ -129,7 +129,7 @@ where
 }
 
 impl<MS: MessageStore> AdminBrokerProcessor<MS> {
-    pub fn new(broker_runtime_inner: BrokerAdminRuntimeHandle<MS>, auth_admin_service: Arc<AuthAdminService>) -> Self {
+    pub fn new(broker_runtime_inner: BrokerAdminRuntime<MS>, auth_admin_service: Arc<AuthAdminService>) -> Self {
         let topic_request_handler = TopicRequestHandler::new();
         let broker_config_request_handler = BrokerConfigRequestHandler::new(broker_runtime_inner.clone());
         let consumer_request_handler = ConsumerRequestHandler::new();

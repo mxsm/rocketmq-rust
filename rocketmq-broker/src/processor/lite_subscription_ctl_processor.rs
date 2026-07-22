@@ -507,7 +507,7 @@ mod tests {
             .map(Arc::downgrade)
             .unwrap_or_default();
         LiteSubscriptionCtlProcessor::new(LiteSubscriptionCtlContext::new(
-            LiteSubscriptionCtlPolicy::from_config(inner.broker_config()),
+            LiteSubscriptionCtlPolicy::from_config(&inner.broker_config()),
             inner.lite_subscription_registry().clone(),
             inner.lite_event_dispatcher().clone(),
             inner.subscription_group_manager().clone(),

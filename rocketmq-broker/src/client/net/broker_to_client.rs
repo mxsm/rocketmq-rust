@@ -36,7 +36,7 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
-use crate::broker_runtime::BrokerRuntimeInner;
+use crate::broker::broker_admin_runtime::BrokerAdminRuntime;
 
 /// Minimum client version required for reset offset and get consumer status operations.
 /// Java uses V3_0_7_SNAPSHOT.ordinal()
@@ -160,7 +160,7 @@ impl Broker2Client {
     /// Response command with result
     pub async fn reset_offset<MS: MessageStore>(
         &self,
-        broker_inner: &mut BrokerRuntimeInner<MS>,
+        broker_inner: &mut BrokerAdminRuntime<MS>,
         topic: &CheetahString,
         group: &CheetahString,
         timestamp: i64,
@@ -183,7 +183,7 @@ impl Broker2Client {
     /// Response command with result
     pub async fn reset_offset_for_c<MS: MessageStore>(
         &self,
-        broker_inner: &mut BrokerRuntimeInner<MS>,
+        broker_inner: &mut BrokerAdminRuntime<MS>,
         topic: &CheetahString,
         group: &CheetahString,
         timestamp: i64,
@@ -196,7 +196,7 @@ impl Broker2Client {
     /// Internal reset offset implementation.
     async fn reset_offset_inner<MS: MessageStore>(
         &self,
-        broker_inner: &mut BrokerRuntimeInner<MS>,
+        broker_inner: &mut BrokerAdminRuntime<MS>,
         topic: &CheetahString,
         group: &CheetahString,
         timestamp: i64,
@@ -380,7 +380,7 @@ impl Broker2Client {
     /// Response command with consumer status
     pub async fn get_consume_status<MS: MessageStore>(
         &self,
-        broker_inner: &BrokerRuntimeInner<MS>,
+        broker_inner: &BrokerAdminRuntime<MS>,
         topic: &CheetahString,
         group: &CheetahString,
         origin_client_id: Option<&CheetahString>,

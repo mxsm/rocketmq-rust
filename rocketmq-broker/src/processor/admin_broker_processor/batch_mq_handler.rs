@@ -30,7 +30,7 @@ use rocketmq_store::base::message_store::MessageStore;
 use tokio::time::timeout;
 use tracing::warn;
 
-use crate::broker_runtime::BrokerRuntimeInner;
+use crate::broker::broker_admin_runtime::BrokerAdminRuntime;
 
 pub(super) struct BatchMqHandler;
 
@@ -41,7 +41,7 @@ impl BatchMqHandler {
 
     pub async fn lock_natch_mq<MS: MessageStore>(
         &self,
-        broker_runtime_inner: &BrokerRuntimeInner<MS>,
+        broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -119,7 +119,7 @@ impl BatchMqHandler {
 
     pub async fn unlock_batch_mq<MS: MessageStore>(
         &self,
-        broker_runtime_inner: &BrokerRuntimeInner<MS>,
+        broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,

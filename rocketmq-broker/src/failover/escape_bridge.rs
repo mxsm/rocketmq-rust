@@ -134,6 +134,10 @@ impl<MS: MessageStore> EscapeBridge<MS> {
         self.message_store.bind(owner);
     }
 
+    pub(crate) fn store_capability(&self) -> EscapeBridgeStoreCapability<MS> {
+        self.message_store.clone()
+    }
+
     pub fn start(&self) {
         let policy = self.policy_state.snapshot();
         if policy.enable_slave_acting_master && policy.enable_remote_escape {

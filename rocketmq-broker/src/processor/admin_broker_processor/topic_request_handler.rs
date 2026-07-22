@@ -46,7 +46,7 @@ use rocketmq_store::base::message_store::MessageStore;
 use std::collections::HashMap;
 use tracing::info;
 
-use crate::broker_runtime::BrokerRuntimeInner;
+use crate::broker::broker_admin_runtime::BrokerAdminRuntime;
 use crate::processor::admin_broker_processor::broker_config_request_handler::BrokerConfigRequestHandler;
 
 fn decode_topic_queue_mapping_detail(body: &[u8]) -> Result<TopicQueueMappingDetail, String> {
@@ -395,7 +395,7 @@ impl TopicRequestHandler {
 
     pub async fn delete_topic<MS: MessageStore>(
         &self,
-        broker_runtime_inner: &mut BrokerRuntimeInner<MS>,
+        broker_runtime_inner: &mut BrokerAdminRuntime<MS>,
         channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -462,7 +462,7 @@ impl TopicRequestHandler {
 
     pub async fn get_all_topic_config<MS: MessageStore>(
         &self,
-        broker_runtime_inner: &BrokerRuntimeInner<MS>,
+        broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -517,7 +517,7 @@ impl TopicRequestHandler {
 
     pub async fn get_topic_stats_info<MS: MessageStore>(
         &self,
-        broker_runtime_inner: &BrokerRuntimeInner<MS>,
+        broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -579,7 +579,7 @@ impl TopicRequestHandler {
 
     pub async fn get_topic_config<MS: MessageStore>(
         &self,
-        broker_runtime_inner: &BrokerRuntimeInner<MS>,
+        broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -616,7 +616,7 @@ impl TopicRequestHandler {
 
     pub async fn query_topic_consume_by_who<MS: MessageStore>(
         &self,
-        broker_runtime_inner: &BrokerRuntimeInner<MS>,
+        broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -639,7 +639,7 @@ impl TopicRequestHandler {
 
     pub async fn query_topics_by_consumer<MS: MessageStore>(
         &self,
-        broker_runtime_inner: &BrokerRuntimeInner<MS>,
+        broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -667,7 +667,7 @@ impl TopicRequestHandler {
 
     pub async fn clean_unused_topic<MS: MessageStore>(
         &self,
-        broker_runtime_inner: &BrokerRuntimeInner<MS>,
+        broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -690,7 +690,7 @@ impl TopicRequestHandler {
 
     fn delete_topic_in_broker<MS: MessageStore>(
         &self,
-        broker_runtime_inner: &mut BrokerRuntimeInner<MS>,
+        broker_runtime_inner: &mut BrokerAdminRuntime<MS>,
         topic: &CheetahString,
     ) {
         broker_runtime_inner
@@ -811,7 +811,7 @@ mod tests {
         let mut runtime = new_test_runtime("static-topic").await;
         let inner = runtime.inner_for_test().clone();
         let handler = TopicRequestHandler::new();
-        let broker_config_request_handler = BrokerConfigRequestHandler::new(runtime.admin_runtime_handle_for_test());
+        let broker_config_request_handler = BrokerConfigRequestHandler::new(runtime.admin_runtime_for_test());
 
         let detail = TopicQueueMappingDetail {
             topic_queue_mapping_info:

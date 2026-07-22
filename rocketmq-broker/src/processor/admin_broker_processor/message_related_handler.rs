@@ -42,7 +42,7 @@ use rocketmq_store::filter::MessageFilter;
 use serde::Serialize;
 use std::time::Duration;
 
-use crate::broker_runtime::BrokerRuntimeInner;
+use crate::broker::broker_admin_runtime::BrokerAdminRuntime;
 use crate::filter::expression_message_filter::ExpressionMessageFilter;
 use crate::transaction::queue::transactional_message_util::TransactionalMessageUtil;
 
@@ -55,7 +55,7 @@ impl MessageRelatedHandler {
 
     pub async fn search_offset_by_timestamp<MS: MessageStore>(
         &self,
-        broker_runtime_inner: &BrokerRuntimeInner<MS>,
+        broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -107,7 +107,7 @@ impl MessageRelatedHandler {
 
     pub async fn resume_check_half_message<MS: MessageStore>(
         &self,
-        broker_runtime_inner: &mut BrokerRuntimeInner<MS>,
+        broker_runtime_inner: &mut BrokerAdminRuntime<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -173,7 +173,7 @@ impl MessageRelatedHandler {
 
     pub async fn query_consume_queue<MS: MessageStore>(
         &self,
-        broker_runtime_inner: &BrokerRuntimeInner<MS>,
+        broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -287,7 +287,7 @@ impl MessageRelatedHandler {
 
     pub async fn pop_rollback<MS: MessageStore>(
         &self,
-        broker_runtime_inner: &BrokerRuntimeInner<MS>,
+        broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -317,7 +317,7 @@ impl MessageRelatedHandler {
 
     async fn rewrite_request_for_static_topic<MS: MessageStore>(
         &self,
-        broker_runtime_inner: &BrokerRuntimeInner<MS>,
+        broker_runtime_inner: &BrokerAdminRuntime<MS>,
         request_header: &SearchOffsetRequestHeader,
         mapping_context: TopicQueueMappingContext,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -620,7 +620,7 @@ mod tests {
 
         let response = handler
             .resume_check_half_message(
-                inner.as_mut(),
+                &mut runtime.admin_runtime_for_test(),
                 channel,
                 ctx,
                 RequestCode::ResumeCheckHalfMessage,
@@ -705,7 +705,7 @@ mod tests {
 
         let mut response = handler
             .query_consume_queue(
-                inner.as_ref(),
+                &runtime.admin_runtime_for_test(),
                 channel,
                 ctx,
                 RequestCode::QueryConsumeQueue,
@@ -767,7 +767,13 @@ mod tests {
         request.make_custom_header_to_net();
 
         let response = handler
-            .pop_rollback(inner.as_ref(), channel, ctx, RequestCode::PopRollback, &mut request)
+            .pop_rollback(
+                &runtime.admin_runtime_for_test(),
+                channel,
+                ctx,
+                RequestCode::PopRollback,
+                &mut request,
+            )
             .await
             .expect("pop rollback should succeed")
             .expect("pop rollback should return response");

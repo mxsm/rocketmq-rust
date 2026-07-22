@@ -259,7 +259,7 @@ impl<MS: MessageStore> BrokerSpecialServiceCapability<MS> {
         }
     }
 
-    async fn change_status(&self, should_start: bool) -> RocketMQResult<()> {
+    pub(crate) async fn change_status(&self, should_start: bool) -> RocketMQResult<()> {
         if self.shutdown.load(Ordering::Acquire) {
             return Err(pre_online_unavailable("broker lifecycle"));
         }
@@ -357,7 +357,7 @@ impl BrokerRegistrationCapability {
         }
     }
 
-    async fn register(&self) -> RocketMQResult<()> {
+    pub(crate) async fn register(&self) -> RocketMQResult<()> {
         if self.shutdown.load(Ordering::Acquire) {
             return Err(pre_online_unavailable("broker lifecycle"));
         }

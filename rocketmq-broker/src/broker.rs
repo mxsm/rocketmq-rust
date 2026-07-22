@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub(crate) mod broker_admin_runtime_handle;
+pub(crate) mod broker_admin_runtime;
+pub(crate) mod broker_control_plane;
 pub mod broker_hook;
 pub(crate) mod broker_pre_online_capability;
 pub mod broker_pre_online_service;
+pub(crate) mod broker_runtime_config_state;

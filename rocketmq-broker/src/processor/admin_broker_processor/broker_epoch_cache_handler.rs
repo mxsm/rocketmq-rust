@@ -21,7 +21,7 @@ use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_store::base::message_store::MessageStore;
 
-use crate::broker_runtime::BrokerRuntimeInner;
+use crate::broker::broker_admin_runtime::BrokerAdminRuntime;
 
 pub struct BrokerEpochCacheHandler;
 
@@ -32,7 +32,7 @@ impl BrokerEpochCacheHandler {
 
     pub async fn get_broker_epoch_cache<MS: MessageStore>(
         &self,
-        broker_runtime_inner: &BrokerRuntimeInner<MS>,
+        broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,

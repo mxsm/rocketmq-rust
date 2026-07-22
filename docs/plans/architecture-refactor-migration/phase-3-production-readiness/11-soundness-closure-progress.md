@@ -3651,13 +3651,47 @@ Broker POP capability 随 Issue #8531 完成以下收口：
 | runtime / architecture guards | enforcing runtime audit、134/134 guard tests、dependency fixtures/baseline/target、release、8-profile/11-variant performance 与 AGENTS routing 通过；目标 compatibility 35/35、test edge 3/3、release topology 32/32、66 comparisons/0 failures。error architecture guard 仍仅发现未改动文件中的既有 4 条 finding：Client retry token 2 条、Schedule source stringification 2 条 |
 | root workspace final gates | `cargo fmt --all -- --check` 与 workspace all-target/all-feature strict Clippy 通过；Windows linker stdout 与既有 future-incompatibility note 不受 `-D warnings` 管辖；`git diff --check` 在提交前复核 |
 
+## M11-12bc60 实现
+
+Broker Admin/control-plane root capability 随 Issue #8533 完成以下收口：
+
+- 删除 `BrokerAdminRuntimeHandle` 及其完整 `ArcMut<BrokerRuntimeInner>` owner；Admin dispatcher、
+  `Broker2Client` 与所有 leaf 改持显式 `BrokerAdminRuntime`，不再保活或解引用完整 runtime root。
+- broker/store 配置归并到单一 `BrokerRuntimeConfigState`，通过 `ArcSwap` 原子发布同一代际；Admin 配置更新与
+  controller role transition 使用 RCU 更新，避免并发更新用旧副本覆盖另一侧配置。
+- controller、membership、minimum-broker、role transition 与 Store HA 操作改由
+  `BrokerControllerRuntime`、`BrokerControllerState`、`BrokerMembershipState` 和窄 Store capability 组合；
+  请求级 Tokio operation gate 保留原串行语义，普通状态快照只使用短 parking lock/原子发布。
+- Admin 的 Topic/Subscription/Offset/HA/Consumer/Message 路径继续观察同一 live manager；增量 Topic 注册在发送前
+  重新采样已提交 metadata generation。`ProducerManager` 的 broker config 改为共享 `ArcSwapOption`，clone 后仍能
+  观察后续 Admin 配置代际。
+- Store 兼容边界仍由既有 `LegacyEscapeStoreOwner` 承载；本切片没有用新 wrapper 隐藏 Store 债务，该 owner 仍计入
+  R01/R09，必须由后续 Broker composition-root/Store facade 切片删除。
+- reviewed baseline 从 221 identities / 714 occurrences 净降至 220 / 713；production 从 91/270 降至
+  90/269，test 保持 116/404，compatibility 保持 14/40。Broker production 从 9/36 降至 8/35，Store 保持
+  82/234；净删除 1 个 production identity/1 occurrence。16 个保留 occurrence 经临时 ADR-013 一对一指纹审核，
+  无新增 identity 或提交态临时 approval。
+- R01 仍未完成；31 项最小审查清单仍为已完成 7 项、剩余 24 项，正式进度仍为 75/82。下一切片
+  M11-12bc61 继续 Broker 启动、注册、后台任务或 Local/Rocks 组合根 owner。
+
+## M11-12bc60 验证
+
+| 命令 | 结果 |
+|---|---|
+| Broker check / focused / strict Clippy | default/all-target/all-feature check 通过；Admin 54/54、配置代际 3/3、control-plane 2/2、Producer live config 1/1、未绑定 Store role no-op 1/1、Store 角色切换 2/2 通过；Broker default 与 all-feature strict Clippy 通过 |
+| Broker broad lib suite | 串行 default suite 未通过：645 passed、23 failed、1 ignored；失败全部属于已登记的 lifecycle/Lite 状态基线，少于此前登记集合；bc60 的 Admin/config/controller/Store 聚焦项全部通过，无新增目标路径失败 |
+| reviewed baseline / fixtures | 正式 baseline 从 221/714 净降至 220/713；`python scripts/arc_mut_guard.py`、reviewed candidate compare、24/24 fixtures 与 67/67 guard tests 通过；16 个保留 occurrence 完成临时 ADR-013 一对一指纹审核，无新增 identity 或提交态临时 approval |
+| runtime / architecture guards | enforcing runtime audit、dependency fixtures/baseline/target、release、8-profile/11-variant performance、60/60 architecture tests 与 AGENTS routing 通过；目标 compatibility 35/35、test edge 3/3、release topology 32/32、66 comparisons/0 failures |
+| typed-error guard | 初次扫描发现本切片新增的 HA error stringification 后已改为 typed `HAResult` 传播；复扫仅剩未改动文件中的既有 4 条 finding：Client retry token 2 条、Schedule source stringification 2 条，新增 finding 为 0 |
+| root workspace final gates | `cargo fmt --all -- --check`、workspace all-target/all-feature strict Clippy 与 `git diff --check` 通过；Windows linker stdout 与既有 future-incompatibility note 不受 `-D warnings` 管辖 |
+
 ## 剩余切片与 Gate
 
 2026-07-22 盘点将执行工作固化为 31 个最小可审查单元：16 个 production owner、2 个
 test/compatibility、7 个 M10/Phase 3 动态验收与签署、6 个 M12；R02、R03、R04、R05、R06、R07、R08 已完成，当前剩余 24 个，正式进度仍为 75/82。
 完整逐项 checklist 见 `docs/plans/architecture-refactor-migration/REMAINING-TASKS.md`。
 
-1. Broker 仅剩 BrokerRuntimeInner 组合根 capability carrier（9/36）；Ack、完整 POP processor/buffer/revive、send/reply、pull、offset/failover、pre-online 与其他 admin/processor/service leaf 的完整 runtime owner 已拆除。POP 使用热更新 policy、显式 capability、弱 Store 与父 TaskGroup，请求聚合使用独占 `GetMessageResult` 借用。
+1. Broker 仅剩 BrokerRuntimeInner 启动、注册、后台任务与 Local/Rocks 组合根 capability carrier（8/35）；Admin dispatcher 已改持显式 Admin/control-plane context，不再保活或解引用 runtime root；Ack、完整 POP processor/buffer/revive、send/reply、pull、offset/failover、pre-online 与其他 admin/processor/service leaf 的完整 runtime owner 已拆除。POP 使用热更新 policy、显式 capability、弱 Store 与父 TaskGroup，请求聚合使用独占 `GetMessageResult` 借用。
 2. Store MappedFileQueue/其余 ConsumeQueue、CommitLog/Flush、StoreHandle/Rocks/Timer 与其余 HA service/actor（82/234）；BrokerStats observer、ConsumeQueueExt 显式锁 owner、HA replication-state callback、未共享 HA child direct ownership、commit-to-flush 窄唤醒能力、HA confirm/epoch 原子发布、HA connection runtime handle、CommitLog shared disk-flush、auto-switch client construction 与 single delegate Store owner 已完成。
 3. Production `WeakArcMut` 已清零；继续迁移 test/compatibility 中受控使用并移除其余 nightly feature。公开 `arc_mut.rs`/re-export 的 destructive 删除受 next-major 两轮弃用与 Release Manager/HUMAN Gate 约束，不能静默重置 public API baseline。
 4. 对同一候选快照执行 stable feature matrix、Miri/Loom 可用切片、soak/SLO fault、dashboard/runbook、动态

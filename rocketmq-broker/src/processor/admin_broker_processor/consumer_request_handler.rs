@@ -52,7 +52,7 @@ use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerCon
 use rocketmq_store::base::message_store::MessageStore;
 use tracing::warn;
 
-use crate::broker_runtime::BrokerRuntimeInner;
+use crate::broker::broker_admin_runtime::BrokerAdminRuntime;
 use crate::client::net::broker_to_client::Broker2Client;
 
 #[derive(Clone)]
@@ -67,7 +67,7 @@ impl ConsumerRequestHandler {
 impl ConsumerRequestHandler {
     pub async fn get_consumer_connection_list<MS: MessageStore>(
         &mut self,
-        broker_runtime_inner: &BrokerRuntimeInner<MS>,
+        broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -110,7 +110,7 @@ impl ConsumerRequestHandler {
 
     pub async fn get_consume_stats<MS: MessageStore>(
         &mut self,
-        broker_runtime_inner: &BrokerRuntimeInner<MS>,
+        broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -226,7 +226,7 @@ impl ConsumerRequestHandler {
 
     pub async fn get_broker_consume_stats<MS: MessageStore>(
         &mut self,
-        broker_runtime_inner: &BrokerRuntimeInner<MS>,
+        broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -284,7 +284,7 @@ impl ConsumerRequestHandler {
 
     pub async fn query_correction_offset<MS: MessageStore>(
         &mut self,
-        broker_runtime_inner: &BrokerRuntimeInner<MS>,
+        broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -321,7 +321,7 @@ impl ConsumerRequestHandler {
 
     pub async fn consume_message_directly<MS: MessageStore>(
         &mut self,
-        broker_runtime_inner: &BrokerRuntimeInner<MS>,
+        broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -408,7 +408,7 @@ impl ConsumerRequestHandler {
 
     fn build_broker_topic_consume_stats<MS: MessageStore>(
         &self,
-        broker_runtime_inner: &BrokerRuntimeInner<MS>,
+        broker_runtime_inner: &BrokerAdminRuntime<MS>,
         group: &cheetah_string::CheetahString,
         topic: &cheetah_string::CheetahString,
         is_order: bool,
@@ -490,7 +490,7 @@ impl ConsumerRequestHandler {
 
     pub async fn get_all_consumer_offset<MS: MessageStore>(
         &mut self,
-        broker_runtime_inner: &BrokerRuntimeInner<MS>,
+        broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -512,7 +512,7 @@ impl ConsumerRequestHandler {
 
     pub async fn get_all_message_request_mode<MS: MessageStore>(
         &mut self,
-        broker_runtime_inner: &BrokerRuntimeInner<MS>,
+        broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -547,7 +547,7 @@ impl ConsumerRequestHandler {
 
     pub async fn invoke_broker_to_reset_offset<MS: MessageStore>(
         &mut self,
-        broker_runtime_inner: &mut BrokerRuntimeInner<MS>,
+        broker_runtime_inner: &mut BrokerAdminRuntime<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -595,7 +595,7 @@ impl ConsumerRequestHandler {
 
     pub async fn invoke_broker_to_get_consumer_status<MS: MessageStore>(
         &mut self,
-        broker_runtime_inner: &BrokerRuntimeInner<MS>,
+        broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -617,7 +617,7 @@ impl ConsumerRequestHandler {
 
     pub async fn query_subscription_by_consumer<MS: MessageStore>(
         &mut self,
-        broker_runtime_inner: &BrokerRuntimeInner<MS>,
+        broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -641,7 +641,7 @@ impl ConsumerRequestHandler {
 
     pub async fn query_consume_time_span<MS: MessageStore>(
         &mut self,
-        broker_runtime_inner: &BrokerRuntimeInner<MS>,
+        broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -717,7 +717,7 @@ impl ConsumerRequestHandler {
 
     pub async fn clone_group_offset<MS: MessageStore>(
         &mut self,
-        broker_runtime_inner: &BrokerRuntimeInner<MS>,
+        broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -775,7 +775,7 @@ impl ConsumerRequestHandler {
 
     pub async fn get_consumer_running_info<MS: MessageStore>(
         &mut self,
-        broker_runtime_inner: &BrokerRuntimeInner<MS>,
+        broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -802,7 +802,7 @@ impl ConsumerRequestHandler {
 
     async fn call_consumer<MS: MessageStore>(
         &mut self,
-        broker_runtime_inner: &BrokerRuntimeInner<MS>,
+        broker_runtime_inner: &BrokerAdminRuntime<MS>,
         request: RemotingCommand,
         consumer_group: &str,
         client_id: &str,
@@ -858,7 +858,7 @@ impl ConsumerRequestHandler {
 
     async fn reset_offset_inner<MS: MessageStore>(
         &mut self,
-        broker_runtime_inner: &BrokerRuntimeInner<MS>,
+        broker_runtime_inner: &BrokerAdminRuntime<MS>,
         topic: &cheetah_string::CheetahString,
         group: &cheetah_string::CheetahString,
         queue_id: i32,
@@ -946,7 +946,7 @@ impl ConsumerRequestHandler {
 
     async fn resolve_reset_offset<MS: MessageStore>(
         &self,
-        broker_runtime_inner: &BrokerRuntimeInner<MS>,
+        broker_runtime_inner: &BrokerAdminRuntime<MS>,
         topic: &cheetah_string::CheetahString,
         queue_id: i32,
         timestamp: i64,
@@ -1128,7 +1128,7 @@ mod tests {
             RemotingCommand::create_request_command(RequestCode::GetAllMessageRequestMode, EmptyHeader {});
         let mut response = handler
             .get_all_message_request_mode(
-                inner.as_ref(),
+                &runtime.admin_runtime_for_test(),
                 channel,
                 ctx,
                 RequestCode::GetAllMessageRequestMode,
@@ -1188,7 +1188,7 @@ mod tests {
 
         let mut response = handler
             .get_broker_consume_stats(
-                inner.as_ref(),
+                &runtime.admin_runtime_for_test(),
                 channel,
                 ctx,
                 RequestCode::GetBrokerConsumeStats,
@@ -1255,7 +1255,7 @@ mod tests {
 
         let mut response = handler
             .query_correction_offset(
-                inner.as_ref(),
+                &runtime.admin_runtime_for_test(),
                 channel,
                 ctx,
                 RequestCode::QueryCorrectionOffset,
@@ -1314,7 +1314,7 @@ mod tests {
 
         let response = handler
             .consume_message_directly(
-                inner.as_ref(),
+                &runtime.admin_runtime_for_test(),
                 channel,
                 ctx,
                 RequestCode::ConsumeMessageDirectly,
@@ -1367,7 +1367,7 @@ mod tests {
 
         let mut response = handler
             .invoke_broker_to_reset_offset(
-                inner.as_mut(),
+                &mut runtime.admin_runtime_for_test(),
                 channel,
                 ctx,
                 RequestCode::InvokeBrokerToResetOffset,
@@ -1395,8 +1395,7 @@ mod tests {
 
     #[tokio::test]
     async fn invoke_broker_to_get_consumer_status_returns_offline_group_error() {
-        let mut runtime = new_test_runtime("consumer-status").await;
-        let inner = runtime.inner_for_test().clone();
+        let runtime = new_test_runtime("consumer-status").await;
         let mut handler = ConsumerRequestHandler::new();
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
@@ -1411,7 +1410,7 @@ mod tests {
 
         let response = handler
             .invoke_broker_to_get_consumer_status(
-                inner.as_ref(),
+                &runtime.admin_runtime_for_test(),
                 channel,
                 ctx,
                 RequestCode::InvokeBrokerToGetConsumerStatus,
@@ -1470,7 +1469,7 @@ mod tests {
 
         let mut response = handler
             .query_subscription_by_consumer(
-                inner.as_ref(),
+                &runtime.admin_runtime_for_test(),
                 channel,
                 ctx,
                 RequestCode::QuerySubscriptionByConsumer,
@@ -1523,7 +1522,7 @@ mod tests {
 
         let mut response = handler
             .query_consume_time_span(
-                inner.as_ref(),
+                &runtime.admin_runtime_for_test(),
                 channel,
                 ctx,
                 RequestCode::QueryConsumeTimeSpan,
@@ -1586,7 +1585,7 @@ mod tests {
 
         let response = handler
             .clone_group_offset(
-                inner.as_ref(),
+                &runtime.admin_runtime_for_test(),
                 channel,
                 ctx,
                 RequestCode::CloneGroupOffset,

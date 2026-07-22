@@ -1,0 +1,575 @@
+// Copyright 2023 The RocketMQ Rust Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use std::collections::HashMap;
+use std::collections::HashSet;
+use std::net::SocketAddr;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+
+use cheetah_string::CheetahString;
+use rocketmq_common::common::broker::broker_config::BrokerConfig;
+use rocketmq_common::common::config::TopicConfig;
+use rocketmq_common::common::constant::PermName;
+use rocketmq_common::common::server::config::ServerConfig;
+use rocketmq_remoting::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
+use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
+use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigSerializeWrapper;
+use rocketmq_remoting::protocol::namesrv::RegisterBrokerResult;
+use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
+use rocketmq_remoting::protocol::DataVersion;
+use rocketmq_store::base::message_store::MessageStore;
+use rocketmq_store::config::message_store_config::MessageStoreConfig;
+use rocketmq_store::stats::broker_stats::BrokerStats;
+use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
+use rocketmq_store::timer::timer_message_store::TimerMessageStore;
+use tracing::warn;
+
+use crate::broker::broker_control_plane::BrokerControllerRuntime;
+use crate::broker::broker_control_plane::BrokerMembershipState;
+use crate::broker::broker_pre_online_capability::BrokerOnlineRoleState;
+use crate::broker::broker_pre_online_capability::BrokerSpecialServiceCapability;
+use crate::broker::broker_runtime_config_state::BrokerRuntimeConfigState;
+use crate::client::manager::consumer_manager::ConsumerManager;
+use crate::client::manager::producer_manager::ProducerManager;
+use crate::client::rebalance::rebalance_lock_manager::RebalanceLockManager;
+use crate::coldctr::cold_data_cg_ctr_service::ColdDataCgCtrService;
+use crate::controller::replicas_manager::ReplicasManager;
+use crate::failover::escape_bridge_capability::EscapeBridgePolicyState;
+use crate::failover::escape_bridge_capability::LegacyEscapeStoreOwner;
+use crate::filter::manager::consumer_filter_manager::ConsumerFilterManager;
+use crate::long_polling::long_polling_service::pull_request_hold_service::PullRequestHoldService;
+use crate::offset::manager::consumer_offset_manager::ConsumerOffsetManager;
+use crate::out_api::broker_outer_api::BrokerOuterAPI;
+use crate::processor::pop_inflight_message_counter::PopInflightMessageCounter;
+use crate::processor::pop_message_processor::capability::PopPolicyState;
+use crate::processor::pop_message_processor::PopMessageProcessor;
+use crate::processor::pull_message_processor::capability::PullMessagePolicyState;
+use crate::processor::query_assignment_processor::QueryAssignmentProcessor;
+use crate::processor::send_message_processor::capability::SendMessagePolicyState;
+use crate::schedule::schedule_message_service::ScheduleMessageService;
+use crate::slave::slave_synchronize::SlaveSynchronize;
+use crate::subscription::manager::subscription_group_manager::SubscriptionGroupManager;
+use crate::topic::manager::topic_config_coordinator::TopicConfigCoordinator;
+use crate::topic::manager::topic_config_manager::TopicConfigManager;
+use crate::topic::manager::topic_queue_mapping_manager::TopicQueueMappingManager;
+
+/// Explicit capability carrier for the serialized Admin request surface.
+///
+/// The carrier shares only independently synchronized managers and narrow
+/// control-plane capabilities. It never owns or dereferences the complete
+/// broker runtime composition root.
+pub(crate) struct BrokerAdminRuntime<MS: MessageStore> {
+    config: BrokerRuntimeConfigState,
+    store_host: SocketAddr,
+    broker_addr: CheetahString,
+    message_store: Option<LegacyEscapeStoreOwner<MS>>,
+    topic_config_manager: Arc<TopicConfigManager>,
+    topic_config_coordinator: Arc<TopicConfigCoordinator>,
+    topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
+    consumer_offset_manager: Arc<ConsumerOffsetManager<MS>>,
+    subscription_group_manager: SubscriptionGroupManager,
+    consumer_filter_manager: ConsumerFilterManager,
+    broker_stats: Option<Arc<BrokerStats<MS>>>,
+    schedule_message_service: Arc<ScheduleMessageService<MS>>,
+    timer_message_store: Option<Arc<TimerMessageStore>>,
+    broker_outer_api: BrokerOuterAPI,
+    producer_manager: ProducerManager,
+    consumer_manager: ConsumerManager,
+    broker_stats_manager: Arc<BrokerStatsManager>,
+    role_state: Arc<BrokerOnlineRoleState>,
+    pull_request_hold_service: Option<Arc<PullRequestHoldService<MS>>>,
+    rebalance_lock_manager: RebalanceLockManager,
+    membership: BrokerMembershipState,
+    controller: Arc<BrokerControllerRuntime<MS>>,
+    special_services: BrokerSpecialServiceCapability<MS>,
+    pop_message_processor: Option<Arc<PopMessageProcessor<MS>>>,
+    pop_inflight_message_counter: PopInflightMessageCounter,
+    query_assignment_processor: Option<Arc<QueryAssignmentProcessor>>,
+    slave_synchronize: Option<Arc<SlaveSynchronize<MS>>>,
+    cold_data_cg_ctr_service: Option<Arc<ColdDataCgCtrService>>,
+    update_master_haserver_addr_periodically: bool,
+    shutdown: Arc<AtomicBool>,
+    send_policy: SendMessagePolicyState,
+    pull_policy: PullMessagePolicyState,
+    pop_policy: PopPolicyState,
+    escape_policy: EscapeBridgePolicyState,
+}
+
+impl<MS: MessageStore> Clone for BrokerAdminRuntime<MS> {
+    fn clone(&self) -> Self {
+        Self {
+            config: self.config.clone(),
+            store_host: self.store_host,
+            broker_addr: self.broker_addr.clone(),
+            message_store: self.message_store.clone(),
+            topic_config_manager: Arc::clone(&self.topic_config_manager),
+            topic_config_coordinator: Arc::clone(&self.topic_config_coordinator),
+            topic_queue_mapping_manager: Arc::clone(&self.topic_queue_mapping_manager),
+            consumer_offset_manager: Arc::clone(&self.consumer_offset_manager),
+            subscription_group_manager: self.subscription_group_manager.clone(),
+            consumer_filter_manager: self.consumer_filter_manager.clone(),
+            broker_stats: self.broker_stats.clone(),
+            schedule_message_service: Arc::clone(&self.schedule_message_service),
+            timer_message_store: self.timer_message_store.clone(),
+            broker_outer_api: self.broker_outer_api.clone(),
+            producer_manager: self.producer_manager.clone_shared_state(),
+            consumer_manager: self.consumer_manager.clone_shared_state(),
+            broker_stats_manager: Arc::clone(&self.broker_stats_manager),
+            role_state: Arc::clone(&self.role_state),
+            pull_request_hold_service: self.pull_request_hold_service.clone(),
+            rebalance_lock_manager: self.rebalance_lock_manager.clone(),
+            membership: self.membership.clone(),
+            controller: Arc::clone(&self.controller),
+            special_services: self.special_services.clone(),
+            pop_message_processor: self.pop_message_processor.clone(),
+            pop_inflight_message_counter: self.pop_inflight_message_counter.clone(),
+            query_assignment_processor: self.query_assignment_processor.clone(),
+            slave_synchronize: self.slave_synchronize.clone(),
+            cold_data_cg_ctr_service: self.cold_data_cg_ctr_service.clone(),
+            update_master_haserver_addr_periodically: self.update_master_haserver_addr_periodically,
+            shutdown: Arc::clone(&self.shutdown),
+            send_policy: self.send_policy.clone(),
+            pull_policy: self.pull_policy.clone(),
+            pop_policy: self.pop_policy.clone(),
+            escape_policy: self.escape_policy.clone(),
+        }
+    }
+}
+
+impl<MS: MessageStore> BrokerAdminRuntime<MS> {
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the broker composition root enumerates the complete Admin boundary"
+    )]
+    pub(crate) fn new(
+        config: BrokerRuntimeConfigState,
+        store_host: SocketAddr,
+        broker_addr: CheetahString,
+        message_store: Option<LegacyEscapeStoreOwner<MS>>,
+        topic_config_manager: Arc<TopicConfigManager>,
+        topic_config_coordinator: Arc<TopicConfigCoordinator>,
+        topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
+        consumer_offset_manager: Arc<ConsumerOffsetManager<MS>>,
+        subscription_group_manager: SubscriptionGroupManager,
+        consumer_filter_manager: ConsumerFilterManager,
+        broker_stats: Option<Arc<BrokerStats<MS>>>,
+        schedule_message_service: Arc<ScheduleMessageService<MS>>,
+        timer_message_store: Option<Arc<TimerMessageStore>>,
+        broker_outer_api: BrokerOuterAPI,
+        producer_manager: ProducerManager,
+        consumer_manager: ConsumerManager,
+        broker_stats_manager: Arc<BrokerStatsManager>,
+        role_state: Arc<BrokerOnlineRoleState>,
+        pull_request_hold_service: Option<Arc<PullRequestHoldService<MS>>>,
+        rebalance_lock_manager: RebalanceLockManager,
+        membership: BrokerMembershipState,
+        controller: Arc<BrokerControllerRuntime<MS>>,
+        special_services: BrokerSpecialServiceCapability<MS>,
+        pop_message_processor: Option<Arc<PopMessageProcessor<MS>>>,
+        pop_inflight_message_counter: PopInflightMessageCounter,
+        query_assignment_processor: Option<Arc<QueryAssignmentProcessor>>,
+        slave_synchronize: Option<Arc<SlaveSynchronize<MS>>>,
+        cold_data_cg_ctr_service: Option<Arc<ColdDataCgCtrService>>,
+        update_master_haserver_addr_periodically: bool,
+        shutdown: Arc<AtomicBool>,
+        send_policy: SendMessagePolicyState,
+        pull_policy: PullMessagePolicyState,
+        pop_policy: PopPolicyState,
+        escape_policy: EscapeBridgePolicyState,
+    ) -> Self {
+        Self {
+            config,
+            store_host,
+            broker_addr,
+            message_store,
+            topic_config_manager,
+            topic_config_coordinator,
+            topic_queue_mapping_manager,
+            consumer_offset_manager,
+            subscription_group_manager,
+            consumer_filter_manager,
+            broker_stats,
+            schedule_message_service,
+            timer_message_store,
+            broker_outer_api,
+            producer_manager,
+            consumer_manager,
+            broker_stats_manager,
+            role_state,
+            pull_request_hold_service,
+            rebalance_lock_manager,
+            membership,
+            controller,
+            special_services,
+            pop_message_processor,
+            pop_inflight_message_counter,
+            query_assignment_processor,
+            slave_synchronize,
+            cold_data_cg_ctr_service,
+            update_master_haserver_addr_periodically,
+            shutdown,
+            send_policy,
+            pull_policy,
+            pop_policy,
+            escape_policy,
+        }
+    }
+
+    pub(crate) fn broker_config(&self) -> Arc<BrokerConfig> {
+        self.config.broker_snapshot()
+    }
+
+    pub(crate) fn message_store_config(&self) -> Arc<MessageStoreConfig> {
+        self.config.store_snapshot()
+    }
+
+    pub(crate) fn server_config(&self) -> ServerConfig {
+        self.broker_config().broker_server_config.clone()
+    }
+
+    pub(crate) fn message_store(&self) -> Option<&LegacyEscapeStoreOwner<MS>> {
+        self.message_store.as_ref()
+    }
+
+    pub(crate) fn message_store_mut(&mut self) -> &mut Option<LegacyEscapeStoreOwner<MS>> {
+        &mut self.message_store
+    }
+
+    pub(crate) fn topic_config_manager(&self) -> &TopicConfigManager {
+        &self.topic_config_manager
+    }
+
+    pub(crate) fn topic_config_coordinator(&self) -> &TopicConfigCoordinator {
+        &self.topic_config_coordinator
+    }
+
+    pub(crate) fn topic_queue_mapping_manager(&self) -> &TopicQueueMappingManager {
+        &self.topic_queue_mapping_manager
+    }
+
+    pub(crate) fn consumer_offset_manager(&self) -> &ConsumerOffsetManager<MS> {
+        &self.consumer_offset_manager
+    }
+
+    pub(crate) fn subscription_group_manager(&self) -> &SubscriptionGroupManager {
+        &self.subscription_group_manager
+    }
+
+    pub(crate) fn subscription_group_manager_mut(&mut self) -> &mut SubscriptionGroupManager {
+        &mut self.subscription_group_manager
+    }
+
+    pub(crate) fn consumer_filter_manager(&self) -> &ConsumerFilterManager {
+        &self.consumer_filter_manager
+    }
+
+    pub(crate) fn broker_stats(&self) -> Option<&BrokerStats<MS>> {
+        self.broker_stats.as_deref()
+    }
+
+    pub(crate) fn schedule_message_service(&self) -> &Arc<ScheduleMessageService<MS>> {
+        &self.schedule_message_service
+    }
+
+    pub(crate) fn timer_message_store(&self) -> Option<&Arc<TimerMessageStore>> {
+        self.timer_message_store.as_ref().or_else(|| {
+            self.message_store
+                .as_ref()
+                .and_then(|message_store| message_store.get_timer_message_store())
+        })
+    }
+
+    pub(crate) fn broker_outer_api(&self) -> &BrokerOuterAPI {
+        &self.broker_outer_api
+    }
+
+    pub(crate) fn producer_manager(&self) -> &ProducerManager {
+        &self.producer_manager
+    }
+
+    pub(crate) fn consumer_manager(&self) -> &ConsumerManager {
+        &self.consumer_manager
+    }
+
+    pub(crate) fn broker_stats_manager(&self) -> &BrokerStatsManager {
+        &self.broker_stats_manager
+    }
+
+    pub(crate) fn broker_stats_manager_handle(&self) -> Arc<BrokerStatsManager> {
+        Arc::clone(&self.broker_stats_manager)
+    }
+
+    pub(crate) fn pull_request_hold_service(&self) -> Option<&PullRequestHoldService<MS>> {
+        self.pull_request_hold_service.as_deref()
+    }
+
+    pub(crate) fn rebalance_lock_manager(&self) -> &RebalanceLockManager {
+        &self.rebalance_lock_manager
+    }
+
+    pub(crate) fn broker_member_group(&self) -> BrokerMemberGroup {
+        self.membership.snapshot()
+    }
+
+    pub(crate) fn replicas_manager(&self) -> Option<ReplicasManager> {
+        self.controller.replicas_snapshot()
+    }
+
+    pub(crate) fn pop_message_processor(&self) -> Option<&Arc<PopMessageProcessor<MS>>> {
+        self.pop_message_processor.as_ref()
+    }
+
+    pub(crate) fn pop_inflight_message_counter(&self) -> &PopInflightMessageCounter {
+        &self.pop_inflight_message_counter
+    }
+
+    pub(crate) fn query_assignment_processor(&self) -> Option<&Arc<QueryAssignmentProcessor>> {
+        self.query_assignment_processor.as_ref()
+    }
+
+    pub(crate) fn slave_synchronize(&self) -> Option<&SlaveSynchronize<MS>> {
+        self.slave_synchronize.as_deref()
+    }
+
+    pub(crate) fn cold_data_cg_ctr_service(&self) -> Option<&ColdDataCgCtrService> {
+        self.cold_data_cg_ctr_service.as_deref()
+    }
+
+    pub(crate) fn cold_data_cg_ctr_service_handle(&self) -> Option<Arc<ColdDataCgCtrService>> {
+        self.cold_data_cg_ctr_service.clone()
+    }
+
+    pub(crate) fn get_broker_addr(&self) -> &CheetahString {
+        &self.broker_addr
+    }
+
+    pub(crate) fn get_ha_server_addr(&self) -> CheetahString {
+        const LOCALHOST: &str = "127.0.0.1";
+        let broker = self.broker_config();
+        let store = self.message_store_config();
+        format!(
+            "{}:{}",
+            broker
+                .broker_ip2
+                .as_ref()
+                .unwrap_or(&CheetahString::from_static_str(LOCALHOST)),
+            store.ha_listen_port
+        )
+        .into()
+    }
+
+    pub(crate) fn store_host(&self) -> SocketAddr {
+        self.store_host
+    }
+
+    pub(crate) fn topic_config_state_machine_version(&self) -> i64 {
+        self.message_store
+            .as_ref()
+            .map(|message_store| message_store.get_state_machine_version())
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn get_min_broker_id_in_group(&self) -> u64 {
+        self.role_state.min_broker_id()
+    }
+
+    pub(crate) fn update_slave_master_addr(&self, master_addr: Option<CheetahString>) {
+        if let Some(slave) = self.slave_synchronize.as_ref() {
+            slave.set_master_addr(master_addr.as_ref());
+        }
+    }
+
+    pub(crate) async fn change_special_service_status(&self, should_start: bool) {
+        if let Err(error) = self.special_services.change_status(should_start).await {
+            warn!(?error, should_start, "failed to change role-sensitive Admin services");
+        }
+    }
+
+    pub(crate) async fn apply_controller_role_change(
+        &self,
+        controller_leader_address: Option<CheetahString>,
+        new_master_broker_id: Option<u64>,
+        new_master_address: Option<CheetahString>,
+        new_master_epoch: Option<i32>,
+        sync_state_set_epoch: Option<i32>,
+        sync_state_set: HashSet<i64>,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        self.controller
+            .apply_controller_role_change(
+                controller_leader_address,
+                new_master_broker_id,
+                new_master_address,
+                new_master_epoch,
+                sync_state_set_epoch,
+                sync_state_set,
+            )
+            .await
+    }
+
+    pub(crate) fn set_broker_config(&mut self, broker_config: BrokerConfig) {
+        let generation = self.config.update_broker(broker_config);
+        self.role_state
+            .set_local_broker_id(generation.broker().broker_identity.broker_id);
+        self.send_policy.update_broker_config(generation.broker());
+        self.pull_policy.update_broker_config(generation.broker());
+        self.pop_policy.update_broker_config(generation.broker());
+        self.escape_policy.update_broker_config(generation.broker());
+        self.producer_manager.set_broker_config(Arc::clone(generation.broker()));
+    }
+
+    pub(crate) async fn register_increment_broker_data(
+        &self,
+        topic_config_list: Vec<Arc<TopicConfig>>,
+        data_version: DataVersion,
+    ) {
+        let topic_names = topic_config_list
+            .iter()
+            .filter_map(|topic_config| topic_config.topic_name.clone())
+            .collect::<Vec<_>>();
+        let (topic_config_list, current_data_version) =
+            self.topic_config_manager.topic_registration_snapshot(&topic_names);
+        if current_data_version != data_version {
+            tracing::debug!(
+                requested = ?data_version,
+                current = ?current_data_version,
+                "resample incremental topic registration after a newer metadata commit"
+            );
+        }
+        let mut serialize_wrapper = TopicConfigAndMappingSerializeWrapper {
+            topic_config_serialize_wrapper: TopicConfigSerializeWrapper {
+                data_version: current_data_version,
+                topic_config_table: Default::default(),
+            },
+            ..Default::default()
+        };
+        serialize_wrapper.topic_config_serialize_wrapper.topic_config_table = topic_config_list
+            .iter()
+            .map(|topic_config| {
+                let topic_config = self.topic_config_for_registration(topic_config);
+                (topic_config.topic_name.clone().unwrap_or_default(), topic_config)
+            })
+            .collect::<HashMap<_, _>>();
+        serialize_wrapper.topic_queue_mapping_info_map = topic_config_list
+            .into_iter()
+            .filter_map(|topic_config| {
+                let topic_name = topic_config.topic_name.as_ref()?;
+                self.topic_queue_mapping_manager
+                    .get_topic_queue_mapping(topic_name.as_str())
+                    .map(|detail| {
+                        (
+                            topic_name.clone(),
+                            TopicQueueMappingDetail::clone_as_mapping_info(detail.as_ref()),
+                        )
+                    })
+            })
+            .collect();
+        self.register_wrapper(serialize_wrapper, true, false).await;
+    }
+
+    pub(crate) async fn register_single_topic_all(&self, topic_config: Arc<TopicConfig>) {
+        let Some(topic_name) = topic_config.topic_name.clone() else {
+            warn!("skip single-topic registration for config without topic name");
+            return;
+        };
+        let (mut current_configs, _) = self
+            .topic_config_manager
+            .topic_registration_snapshot(std::slice::from_ref(&topic_name));
+        let Some(current) = current_configs.pop() else {
+            tracing::info!(topic = %topic_name, "skip stale single-topic registration after topic removal");
+            return;
+        };
+        let config = self.broker_config();
+        self.broker_outer_api
+            .register_single_topic_all(
+                config.broker_identity.broker_name.clone(),
+                self.topic_config_for_registration(current.as_ref()),
+                3_000,
+            )
+            .await;
+    }
+
+    fn topic_config_for_registration(&self, topic_config: &TopicConfig) -> TopicConfig {
+        let mut topic_config = topic_config.clone();
+        let config = self.broker_config();
+        if !PermName::is_writeable(config.broker_permission) || !PermName::is_readable(config.broker_permission) {
+            topic_config.perm &= config.broker_permission;
+        }
+        topic_config
+    }
+
+    async fn register_wrapper(
+        &self,
+        wrapper: TopicConfigAndMappingSerializeWrapper,
+        check_order_config: bool,
+        oneway: bool,
+    ) {
+        if self.shutdown.load(Ordering::Acquire) {
+            tracing::info!("broker has shut down; skip Admin registration");
+            return;
+        }
+        let config = self.broker_config();
+        let broker_addr = CheetahString::from_string(format!(
+            "{}:{}",
+            config.broker_ip1, config.broker_server_config.listen_port
+        ));
+        let results = self
+            .broker_outer_api
+            .register_broker_all(
+                config.broker_identity.broker_cluster_name.clone(),
+                broker_addr.clone(),
+                config.broker_identity.broker_name.clone(),
+                config.broker_identity.broker_id,
+                broker_addr,
+                wrapper,
+                vec![],
+                oneway,
+                config.register_broker_timeout_mills as u64,
+                config.enable_slave_acting_master,
+                config.compressed_register,
+                config
+                    .enable_slave_acting_master
+                    .then_some(config.broker_not_active_timeout_millis),
+                Default::default(),
+            )
+            .await;
+        self.handle_register_broker_result(results, check_order_config).await;
+    }
+
+    async fn handle_register_broker_result(
+        &self,
+        register_broker_result: Vec<RegisterBrokerResult>,
+        check_order_config: bool,
+    ) {
+        let Some(result) = register_broker_result.into_iter().next() else {
+            return;
+        };
+        if self.update_master_haserver_addr_periodically {
+            if let Some(message_store) = self.message_store.as_ref() {
+                message_store
+                    .update_ha_master_address(result.master_addr.as_str())
+                    .await;
+                message_store.update_master_address(&result.master_addr);
+            }
+        }
+        if let Some(slave_synchronize) = self.slave_synchronize.as_ref() {
+            slave_synchronize.set_master_addr(Some(&result.master_addr));
+        }
+        if check_order_config {
+            self.topic_config_manager
+                .update_order_topic_config(&result.kv_table, self.topic_config_state_machine_version());
+        }
+    }
+}
