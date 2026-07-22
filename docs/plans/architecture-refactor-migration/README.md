@@ -1080,6 +1080,13 @@ test 57/284、compatibility 14/40、Broker production 4/8、Store production 52/
 1 个 production identity/3 occurrences，无 relocation、新增 identity 或临时 approval。R10 从 6/14 降至 5/11，
 仍未完成；31 项执行清单仍为完成 8 项、剩余 23 项，总进度仍为 75/82。
 
+Local CommitLog owner 随 Issue #8561 完成独占化：LocalFileMessageStore 直接持有其组合构造的 `CommitLog`，不再以
+`ArcMut<CommitLog>` 保存完整 facade；Reput、后台索引、自检、compaction、tiered、cleanup 与 flush 仍只持已提取的窄
+handle。recovery/start/shutdown 与 `MessageStore::get_commit_log_mut` 保留 Local 根独占可变借用语义。reviewed 快照为
+127 identities/442 occurrences（production 56/118、test 57/284、compatibility 14/40、Broker production 4/8、
+Store production 52/110）；相对 bc72 净删除 2 个 production occurrences，无 relocation、新增 identity 或临时
+approval。R10 从 5/11 降至 5/9，仍未完成；31 项执行清单仍为完成 8 项、剩余 23 项，总进度仍为 75/82。
+
 ### 9.3 证据目录
 
 - 运行期生成物：`target/architecture-refactor/Mxx/<run-id>/`，不提交 Git。

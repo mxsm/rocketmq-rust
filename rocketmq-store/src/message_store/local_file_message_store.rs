@@ -349,7 +349,7 @@ pub struct LocalFileMessageStore {
     broker_config: Arc<BrokerConfig>,
     put_message_hook_list: HookRegistry<dyn PutMessageHook + Send + Sync>,
     topic_config_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>>,
-    commit_log: ArcMut<CommitLog>,
+    commit_log: CommitLog,
 
     store_checkpoint: Option<Arc<StoreCheckpoint>>,
     master_flushed_offset: Arc<AtomicI64>,
@@ -561,7 +561,6 @@ impl LocalFileMessageStore {
         commit_log.set_store_health_recorder(store_health_recorder.clone());
         let commit_log_read = commit_log.read_handle();
         let commit_log_cleanup = commit_log.cleanup_handle();
-        let commit_log = ArcMut::new(commit_log);
         let compaction_store = Arc::new(CompactionStore::with_root(
             PathBuf::from(message_store_config.store_path_root_dir.as_str()).join("compaction"),
         ));
@@ -605,7 +604,7 @@ impl LocalFileMessageStore {
             put_message_hook_list: HookRegistry::new(),
             topic_config_table,
             // message_store_runtime: Some(RocketMQRuntime::new_multi(10, "message-store-thread")),
-            commit_log: commit_log.clone(),
+            commit_log,
             compaction_service,
             store_checkpoint: Some(store_checkpoint.clone()),
             master_flushed_offset: Arc::new(AtomicI64::new(-1)),
@@ -3545,11 +3544,11 @@ impl MessageStore for LocalFileMessageStore {
     }
 
     fn get_commit_log(&self) -> &CommitLog {
-        self.commit_log.as_ref()
+        &self.commit_log
     }
 
     fn get_commit_log_mut(&mut self) -> &mut CommitLog {
-        self.commit_log.as_mut()
+        &mut self.commit_log
     }
 
     fn set_commitlog_read_mode(&mut self, read_ahead_mode: i32) -> Result<(), StoreError> {
@@ -6081,7 +6080,8 @@ mod tests {
             .split_once("#[cfg(test)]\nmod tests")
             .map(|(source, _)| source)
             .expect("LocalFileMessageStore production section");
-        assert_eq!(local_production.matches("ArcMut<CommitLog>").count(), 1);
+        assert_eq!(local_production.matches("ArcMut<CommitLog>").count(), 0);
+        assert!(local_production.contains("commit_log: CommitLog,"));
         assert!(local_production.contains("commit_log: CommitLogReadHandle"));
         assert!(local_production.contains("self.commit_log.read_handle()"));
         assert!(!local_production.contains("self_check_commit_log = self.commit_log.clone()"));
@@ -6121,6 +6121,22 @@ mod tests {
         assert!(queue_source.contains("pub fn truncate_dirty_files(&self, offset: i64)"));
         assert!(queue_source.contains("pub fn try_create_mapped_file(&self, create_offset: u64)"));
         assert!(queue_source.matches("self.runtime_state.commit_lock().lock()").count() >= 3);
+    }
+
+    #[test]
+    fn commit_log_owner_remains_exclusive_to_the_local_store() {
+        let source = include_str!("local_file_message_store.rs").replace("\r\n", "\n");
+        let production = source
+            .split_once("#[cfg(test)]\nmod tests")
+            .map(|(source, _)| source)
+            .expect("LocalFileMessageStore production section");
+
+        assert!(production.contains("commit_log: CommitLog,"));
+        assert!(!production.contains("commit_log: ArcMut<CommitLog>"));
+        assert!(!production.contains("ArcMut::new(commit_log)"));
+        assert!(production.contains("let commit_log_read = commit_log.read_handle();"));
+        assert!(production.contains("let commit_log_cleanup = commit_log.cleanup_handle();"));
+        assert!(production.contains("commit_log,"));
     }
 
     #[tokio::test]
