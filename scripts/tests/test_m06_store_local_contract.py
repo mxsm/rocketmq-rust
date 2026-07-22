@@ -12907,6 +12907,30 @@ def commit_log_recovery_route_contract_violations(
     violations: list[str] = []
     production = source_without_cfg_test_items(local)
     active = active_rust_source(production)
+    store_production = source_without_cfg_test_items(store)
+    store_compact = compact_rust(store_production)
+
+    local_store_fields = dict(active_struct_fields(store_production, "LocalFileMessageStore"))
+    if local_store_fields.get("commit_log") != "CommitLog":
+        violations.append("LocalFileMessageStore must exclusively own CommitLog")
+    for forbidden in (
+        "commit_log:ArcMut<CommitLog>",
+        "ArcMut::new(commit_log)",
+        "commit_log:commit_log.clone()",
+    ):
+        if forbidden in store_compact:
+            violations.append(f"LocalFileMessageStore regained a shared CommitLog owner: {forbidden}")
+    for required in (
+        "letcommit_log_read=commit_log.read_handle()",
+        "letcommit_log_cleanup=commit_log.cleanup_handle()",
+        "commit_log,compaction_service",
+    ):
+        if store_compact.count(required) != 1:
+            violations.append(f"LocalFileMessageStore CommitLog composition changed: {required}")
+    if compact_rust(named_function_body(store_production, "get_commit_log") or "") != "&self.commit_log":
+        violations.append("LocalFileMessageStore CommitLog shared facade changed")
+    if compact_rust(named_function_body(store_production, "get_commit_log_mut") or "") != "&mutself.commit_log":
+        violations.append("LocalFileMessageStore CommitLog exclusive mutable facade changed")
 
     if len(re.findall(r"\bpub\s+enum\s+CommitLogRecoveryStep\b", active)) != 1 or compact_rust(
         active_item_body(production, "enum", "CommitLogRecoveryStep") or ""
@@ -15577,6 +15601,31 @@ class StoreLocalContractTests(unittest.TestCase):
                 local,
                 module,
                 store.replace(".recover_normally_optimized(", ".recover_normally(", 1),
+                local_tests,
+            ),
+            (
+                "Local CommitLog shared owner restored",
+                local,
+                module,
+                store.replace("commit_log: CommitLog,", "commit_log: ArcMut<CommitLog>,", 1),
+                local_tests,
+            ),
+            (
+                "Local CommitLog wrapper construction restored",
+                local,
+                module,
+                store.replace(
+                    "            commit_log,\n            compaction_service,",
+                    "            commit_log: ArcMut::new(commit_log),\n            compaction_service,",
+                    1,
+                ),
+                local_tests,
+            ),
+            (
+                "Local CommitLog mutable facade indirected",
+                local,
+                module,
+                store.replace("&mut self.commit_log", "self.commit_log.as_mut()", 1),
                 local_tests,
             ),
             (
