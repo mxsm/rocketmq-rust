@@ -2345,25 +2345,6 @@
       "adr": "ADR-013"
     },
     {
-      "identity": "478a4b1a5845ae9ee9c34370",
-      "path": "rocketmq-store/src/message_store/local_file_shared_owner.rs",
-      "symbol": "ArcMut",
-      "kind": "constructor",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "cd6995fc8b7557d6c4d39eca",
-          "fingerprint": "808a0a176453466512abf582",
-          "item": "impl DerefMut",
-          "line": 38
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
       "identity": "0463c42820325fd7d7f79917",
       "path": "rocketmq-store/src/message_store/rocksdb_message_store.rs",
       "symbol": "ArcMut",

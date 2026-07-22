@@ -101,7 +101,7 @@ pub mod bench_support {
     use crate::ha::transfer_engine::TransferStats;
     use crate::kv::compaction_service::CompactionService;
     use crate::kv::compaction_store::CompactionStore;
-    use crate::message_store::local_file_shared_owner::new_legacy_shared_owner;
+    use crate::message_store::local_file_message_store::LocalFileMessageStore;
     #[cfg(feature = "rocksdb_store")]
     use crate::rocksdb::config::RocksDbConfig;
     #[cfg(feature = "rocksdb_store")]
@@ -1169,15 +1169,23 @@ pub mod bench_support {
         let config = MessageStoreConfig {
             store_path_root_dir: CheetahString::from_string(root.path().to_string_lossy().into_owned()),
             clean_resource_interval: 1,
+            duplication_enable: true,
+            timer_wheel_enable: false,
             ..MessageStoreConfig::default()
         };
-        let mut store = new_legacy_shared_owner(
+        let mut store = LocalFileMessageStore::new(
             Arc::new(config),
-            Arc::new(BrokerConfig::default()),
+            Arc::new(BrokerConfig {
+                duplication_enable: true,
+                ..BrokerConfig::default()
+            }),
             Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
             None,
             false,
         );
+        store
+            .wire_owned_root_dependencies()
+            .expect("local file store benchmark should wire owned dependencies");
         store.init().await.expect("local file store benchmark should init");
         store.start().await.expect("local file store benchmark should start");
 
@@ -1422,7 +1430,7 @@ mod bench_support_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn store_local_file_scheduled_lifecycle_probe_reports_clean_shutdown() {
+    async fn owned_root_wiring_scheduled_lifecycle_probe_reports_clean_shutdown() {
         let probe = super::bench_support::run_store_local_file_scheduled_lifecycle_probe().await;
 
         assert!(probe.healthy, "{probe:?}");

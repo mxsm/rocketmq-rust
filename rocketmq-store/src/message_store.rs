@@ -13,7 +13,6 @@
 // limitations under the License.
 
 pub mod local_file_message_store;
-pub(crate) mod local_file_shared_owner;
 pub mod recovery;
 
 #[cfg(feature = "rocksdb_store")]
