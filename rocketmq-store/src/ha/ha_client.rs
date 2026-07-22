@@ -19,7 +19,7 @@ pub trait RocketmqHAClient: Sync {
     /// Start the HA client
     ///
     /// This initializes the client and begins connection attempts to the master.
-    async fn start(&mut self);
+    async fn start(&self);
 
     /// Shutdown the HA client
     ///

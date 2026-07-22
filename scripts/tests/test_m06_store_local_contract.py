@@ -12940,13 +12940,13 @@ def commit_log_recovery_route_contract_violations(
         violations.append("LocalFileMessageStore regained complete-root recovery")
     wiring_compact = compact_rust(named_function_body(store_production, "set_message_store_arc") or "")
     for required in (
-        "self.consume_queue_store.set_message_store(message_store_arc.clone())",
+        "self.consume_queue_store.set_context(self.consume_queue_context())",
         "TimerMessageStore::new(Some(message_store_arc.clone()))",
         "self.root_dependencies_wired=true",
     ):
         if wiring_compact.count(required) != 1:
             violations.append(f"Local root one-shot wiring changed: {required}")
-    if wiring_compact.count("DefaultHAService::new(message_store_arc") != 2:
+    if wiring_compact.count("DefaultHAService::new(replica_store") != 2:
         violations.append("Local root HA construction must remain in one-shot wiring")
     init_compact = compact_rust(named_function_body(store_production, "init") or "")
     for forbidden_init in ("message_store_arc_or_error", "DefaultHAService::new"):
@@ -12955,8 +12955,8 @@ def commit_log_recovery_route_contract_violations(
     for required_init in (
         "self.ensure_root_dependencies_wired()?",
         "self.pending_ha_service.take()",
-        "GeneralHAService::DefaultHAService(ArcMut::new(*service))",
-        "GeneralHAService::AutoSwitchHAService(ArcMut::new(service))",
+        "GeneralHAService::new_with_default_ha_service(*service)",
+        "GeneralHAService::new_with_auto_switch_ha_service(service)",
         "let_=ha_service.init()",
         "self.ha_service=Some(ha_service)",
     ):

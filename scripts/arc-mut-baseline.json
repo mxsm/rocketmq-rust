@@ -1351,220 +1351,17 @@
       "adr": "ADR-013"
     },
     {
-      "identity": "d06b74fe8f3cf3ef93411ff0",
-      "path": "rocketmq-store/src/ha/auto_switch/auto_switch_ha_service.rs",
-      "symbol": "*",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "47011730ad79c705d8903ce2",
-          "fingerprint": "7f94a09de52ab2cdb03ea075",
-          "item": "mod tests",
-          "line": 389
-        }
-      ],
-      "owner": "store",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "ffc7c708bbf850eb44783816",
-      "path": "rocketmq-store/src/ha/auto_switch/auto_switch_ha_service.rs",
+      "identity": "903ee178ddedefbc62cdf1c3",
+      "path": "rocketmq-store/src/ha.rs",
       "symbol": "ArcMut",
       "kind": "constructor",
       "category": "test",
       "occurrences": [
         {
-          "id": "d11835cce7db7af9a114a028",
-          "fingerprint": "b7e974ad46492709a2538750",
-          "item": "fn new_test_message_store",
-          "line": 412
-        },
-        {
-          "id": "3ee7c10ce7550a0d0fcf6b52",
-          "fingerprint": "ce0e3c7ebd2da936836cb4f6",
-          "item": "fn auto_switch_service_initializes_client_and_tracks_sync_state_set_size",
-          "line": 477
-        },
-        {
-          "id": "578ee205b6d056bbfe8af475",
-          "fingerprint": "0cdbde542f7e86cfcf1018db",
-          "item": "fn sync_controller_sync_state_set_updates_local_membership",
-          "line": 507
-        },
-        {
-          "id": "d75454d82a536845556fe836",
-          "fingerprint": "0cdbde542f7e86cfcf1018db",
-          "item": "fn maybe_expand_in_sync_state_set_marks_remote_membership",
-          "line": 550
-        },
-        {
-          "id": "4d4f33f3cb4dc26bd389f4d9",
-          "fingerprint": "0cdbde542f7e86cfcf1018db",
-          "item": "fn maybe_expand_in_sync_state_set_does_not_reenter_sync_state_lock",
-          "line": 580
-        },
-        {
-          "id": "86840e07e439918a0d5bcdf4",
-          "fingerprint": "0cdbde542f7e86cfcf1018db",
-          "item": "fn maybe_shrink_sync_state_set_removes_stale_members",
-          "line": 609
-        },
-        {
-          "id": "71ab617ec0c52b03ba4625cc",
-          "fingerprint": "0cdbde542f7e86cfcf1018db",
-          "item": "fn sync_controller_sync_state_set_clears_pending_remote_membership",
-          "line": 635
-        },
-        {
-          "id": "4bc2dd671cdcdc663e7f2685",
-          "fingerprint": "0cdbde542f7e86cfcf1018db",
-          "item": "fn change_to_slave_clears_pending_remote_membership_and_updates_reported_broker_id",
-          "line": 665
-        },
-        {
-          "id": "e989f87adc973c8b7edd1d2d",
-          "fingerprint": "07cbfd5a333bbfe8ecdfb5c9",
-          "item": "fn change_to_master_records_epoch_boundary_and_refreshes_confirm_offset",
-          "line": 706
-        },
-        {
-          "id": "1516818b8bdc7bbc7c186350",
-          "fingerprint": "0cdbde542f7e86cfcf1018db",
-          "item": "fn follower_rejects_stale_epoch",
-          "line": 728
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "ed3849c98ef36f35acfea0a2",
-      "path": "rocketmq-store/src/ha/auto_switch/auto_switch_ha_service.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "1e23e797e2203f8c0ff4ecb2",
-          "fingerprint": "b4e7c3939ce87dce66f72a60",
-          "item": "<module>",
-          "line": 26
-        }
-      ],
-      "owner": "store",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "a49057417fe3197037f1a07a",
-      "path": "rocketmq-store/src/ha/auto_switch/auto_switch_ha_service.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "8f393d2be828df6737236dec",
-          "fingerprint": "dfb2a9895f17d2fdcae2fd78",
-          "item": "fn new_test_message_store",
-          "line": 396
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "c6c8fe712d690c1250b7dc5f",
-      "path": "rocketmq-store/src/ha/default_ha_service.rs",
-      "symbol": "*",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "c400cc39cb0db21bb2f34f89",
-          "fingerprint": "c7fe0a6136272523a4df44f0",
-          "item": "mod tests",
-          "line": 906
-        }
-      ],
-      "owner": "store",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "e41b67ab9b2b0bed9ab35a7a",
-      "path": "rocketmq-store/src/ha/default_ha_service.rs",
-      "symbol": "ArcMut",
-      "kind": "constructor",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "1112e350e7951da968729314",
+          "id": "ed72d03d8eee55d1d1fdd9b8",
           "fingerprint": "88a50625f8b4ef1eb68814de",
           "item": "fn new_test_message_store",
-          "line": 963
-        },
-        {
-          "id": "2ef24573d33f28cc5e843f22",
-          "fingerprint": "6303d8849c8556fd1dad57a9",
-          "item": "fn new_auto_switch_services",
-          "line": 981
-        },
-        {
-          "id": "1f7e7ce2934e4807267bedce",
-          "fingerprint": "008a0330479ae77e26e83b70",
-          "item": "fn new_auto_switch_services",
-          "line": 982
-        },
-        {
-          "id": "4167cada56d52dda38673538",
-          "fingerprint": "59d868113f729d868de28ee2",
-          "item": "fn notify_transfer_some_counts_repeated_same_offset_acks",
-          "line": 1037
-        },
-        {
-          "id": "ef74c10351e6032bfac5db7b",
-          "fingerprint": "25f8289521a497122903db3c",
-          "item": "fn accept_socket_service_shutdown_joins_worker",
-          "line": 1054
-        },
-        {
-          "id": "ca4fabbcef63d2c90d17a9fd",
-          "fingerprint": "008a0330479ae77e26e83b70",
-          "item": "fn accept_socket_service_shutdown_joins_worker",
-          "line": 1055
-        },
-        {
-          "id": "0654332d9eb7efc704ad5e38",
-          "fingerprint": "25f8289521a497122903db3c",
-          "item": "fn init_uses_auto_switch_accept_socket_service_for_auto_switch_mode",
-          "line": 1082
-        },
-        {
-          "id": "fa0bceb226d1631d75930d9c",
-          "fingerprint": "008a0330479ae77e26e83b70",
-          "item": "fn init_uses_auto_switch_accept_socket_service_for_auto_switch_mode",
-          "line": 1083
-        },
-        {
-          "id": "158203b8ee1cf98823a897ea",
-          "fingerprint": "54d2d90a19b910255bc9ebd4",
-          "item": "fn build_connection_wraps_auto_switch_connections_when_enabled",
-          "line": 1106
-        },
-        {
-          "id": "bcc8053acb7ecd0e4e31c3ac",
-          "fingerprint": "db07b4312a267e7c8f62b169",
-          "item": "fn in_sync_replicas_count_requires_slave_ack_to_reach_master_offset",
-          "line": 1246
+          "line": 62
         }
       ],
       "owner": "store",
@@ -1573,17 +1370,17 @@
       "adr": "ADR-013"
     },
     {
-      "identity": "9b5fb5b7d60152702790910f",
-      "path": "rocketmq-store/src/ha/default_ha_service.rs",
+      "identity": "2bae004f63d6983d5c2d8c82",
+      "path": "rocketmq-store/src/ha.rs",
       "symbol": "ArcMut",
       "kind": "import",
-      "category": "production",
+      "category": "test",
       "occurrences": [
         {
-          "id": "349d561c4d7d713b007af5e3",
-          "fingerprint": "0b684aa5cd664e6cae68967b",
-          "item": "<module>",
-          "line": 31
+          "id": "e5c18832942efa85c0fad54a",
+          "fingerprint": "d238b199b672bbd4770e861f",
+          "item": "mod test_support",
+          "line": 43
         }
       ],
       "owner": "store",
@@ -1592,133 +1389,21 @@
       "adr": "ADR-013"
     },
     {
-      "identity": "134121352cc5cfb36ad54872",
-      "path": "rocketmq-store/src/ha/default_ha_service.rs",
+      "identity": "86c472ff95b899f2a623801e",
+      "path": "rocketmq-store/src/ha.rs",
       "symbol": "ArcMut",
       "kind": "type_reference",
       "category": "test",
       "occurrences": [
         {
-          "id": "4b3ec32d6e2df55e36120c8f",
+          "id": "8b3120aa6863c4b4062ec673",
           "fingerprint": "5ddf728cdf3d55063f4f1c2c",
           "item": "fn new_test_message_store",
-          "line": 947
-        },
-        {
-          "id": "d7c45c9bba11bf5d3051d1f1",
-          "fingerprint": "55981f4df96a157ced52dd3f",
-          "item": "fn new_auto_switch_services",
-          "line": 979
-        },
-        {
-          "id": "1854378156fe4c51ab3ef9b1",
-          "fingerprint": "f98b7587a9c6e1f612ddfd49",
-          "item": "fn new_auto_switch_services",
-          "line": 979
+          "line": 48
         }
       ],
       "owner": "store",
       "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "1ad87a43258cbb034b9ad9b1",
-      "path": "rocketmq-store/src/ha/general_ha_service.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "3bb3cfa7f6c5a6aaa77e0aa8",
-          "fingerprint": "6784617bda8d6b0632f93ca3",
-          "item": "<module>",
-          "line": 19
-        }
-      ],
-      "owner": "store",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "3603c737172aa2d41fcd594b",
-      "path": "rocketmq-store/src/ha/general_ha_service.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "b13c2521c299a03c870928f7",
-          "fingerprint": "025308dec0c73d1025c9a450",
-          "item": "enum GeneralHAService",
-          "line": 35
-        },
-        {
-          "id": "2488cccf6771e4b08e84755f",
-          "fingerprint": "e1a7e7e42a31d812ea3ff3a4",
-          "item": "enum GeneralHAService",
-          "line": 36
-        },
-        {
-          "id": "d1c8c1e942f0c7bc0e82bdae",
-          "fingerprint": "586ac94722d027b5ccd17b4a",
-          "item": "fn new_with_default_ha_service",
-          "line": 40
-        },
-        {
-          "id": "694a6b1a28b41f5b0a399f0c",
-          "fingerprint": "67703ecd1e21d01bcd854952",
-          "item": "fn new_with_auto_switch_ha_service",
-          "line": 44
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "7dc86efc47540af01bc35a7e",
-      "path": "rocketmq-store/src/ha/group_transfer_service.rs",
-      "symbol": "ArcMut",
-      "kind": "constructor",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "392dc826b8e453e29f428267",
-          "fingerprint": "39188f24237030b06c2d316d",
-          "item": "fn new_test_ha_service",
-          "line": 269
-        },
-        {
-          "id": "0b358a2ea98a93627467fd1d",
-          "fingerprint": "2aab6591671673121818c80c",
-          "item": "fn new_test_ha_service",
-          "line": 281
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "ec65f9836336aef54d6f958a",
-      "path": "rocketmq-store/src/ha/group_transfer_service.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "83b0cba0e2453502c6d51dcc",
-          "fingerprint": "ad5961450f73f8e1d136149d",
-          "item": "mod tests",
-          "line": 260
-        }
-      ],
-      "owner": "store",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
       "remove_by": "M11",
       "adr": "ADR-013"
     },
@@ -1734,31 +1419,6 @@
           "fingerprint": "0cb3cac407c24757337e4aa7",
           "item": "fn new_test_message_store_with_config",
           "line": 3213
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "2195951d60e6e7239b36b1cc",
-      "path": "rocketmq-store/src/message_store/local_file_message_store.rs",
-      "symbol": "ArcMut",
-      "kind": "constructor",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "d3ca10f38121a3d2f549c4fb",
-          "fingerprint": "21e493d2cac1f0ed7932c5d9",
-          "item": "fn init",
-          "line": 2218
-        },
-        {
-          "id": "56da0345ee42653b22ac2775",
-          "fingerprint": "38a7b58c9cddc11111b95327",
-          "item": "fn init",
-          "line": 2219
         }
       ],
       "owner": "store",
@@ -1789,43 +1449,43 @@
           "id": "ea80384d3d04734ae9e31340",
           "fingerprint": "bc019fd36449638f708552dc",
           "item": "fn set_message_store_arc_initializes_timer_message_store_when_timer_wheel_enabled",
-          "line": 6781
+          "line": 6783
         },
         {
           "id": "6eca838ea25456a66bfe1e87",
           "fingerprint": "c5e5f216d6f09ac7bc48c9e3",
           "item": "fn sync_broker_role_in_controller_mode_refreshes_confirm_offset_for_master",
-          "line": 8089
+          "line": 8091
         },
         {
           "id": "7ad9c617a9ab2369224ba894",
           "fingerprint": "c5e5f216d6f09ac7bc48c9e3",
           "item": "fn flush_consume_queue_service_start_persists_logic_checkpoint_to_disk",
-          "line": 8434
+          "line": 8436
         },
         {
           "id": "a90459da038304a8d37b178a",
           "fingerprint": "c5e5f216d6f09ac7bc48c9e3",
           "item": "fn do_recheck_reput_offset_from_dispatchers_rewinds_to_dispatched_commitlog_offset",
-          "line": 9013
+          "line": 9015
         },
         {
           "id": "4bf08ba5d315432b007618ef",
           "fingerprint": "c5e5f216d6f09ac7bc48c9e3",
           "item": "fn do_recheck_reput_offset_from_dispatchers_uses_minimum_progress_across_cq_and_index",
-          "line": 9063
+          "line": 9065
         },
         {
           "id": "6d4ec8cb2eb76b205899a719",
           "fingerprint": "c5e5f216d6f09ac7bc48c9e3",
           "item": "fn get_dispatch_recovery_offset_respects_controller_epoch_start_offset",
-          "line": 9124
+          "line": 9126
         },
         {
           "id": "f55a020f1bb78baf0d9c9841",
           "fingerprint": "c5e5f216d6f09ac7bc48c9e3",
           "item": "fn do_recheck_reput_offset_from_dispatchers_respects_controller_epoch_start_offset_floor",
-          "line": 9149
+          "line": 9151
         }
       ],
       "owner": "store",
@@ -1925,19 +1585,19 @@
           "id": "2bc785020cffc531f67851d5",
           "fingerprint": "65fc444d08793f252677b512",
           "item": "fn new_async_flush_test_store",
-          "line": 6660
+          "line": 6662
         },
         {
           "id": "d3c97c8726298454fce74c15",
           "fingerprint": "7666f2a4683b6bb72bf1c3ee",
           "item": "fn append_encoded_test_message",
-          "line": 6711
+          "line": 6713
         },
         {
           "id": "f82cfea3d0ea6119b10efdb0",
           "fingerprint": "09110b2e53b7eb82a0456a37",
           "item": "fn append_encoded_test_message_with_key",
-          "line": 6721
+          "line": 6723
         }
       ],
       "owner": "store",

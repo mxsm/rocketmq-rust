@@ -32,3 +32,44 @@ pub mod transfer_metrics;
 pub(crate) mod wait_notify_object;
 
 pub use rocketmq_store_local::ha::error::HAConnectionError;
+
+#[cfg(test)]
+pub(crate) mod test_support {
+    use std::path::Path;
+    use std::sync::Arc;
+
+    use cheetah_string::CheetahString;
+    use dashmap::DashMap;
+    use rocketmq_common::common::broker::broker_config::BrokerConfig;
+    use rocketmq_common::common::config::TopicConfig;
+    use rocketmq_rust::ArcMut;
+
+    use crate::config::message_store_config::MessageStoreConfig;
+    use crate::message_store::local_file_message_store::LocalFileMessageStore;
+
+    pub(crate) fn new_test_message_store(root: &Path, enable_controller_mode: bool) -> ArcMut<LocalFileMessageStore> {
+        std::fs::create_dir_all(root).expect("create temp root dir");
+        let broker_config = BrokerConfig {
+            enable_controller_mode,
+            ..BrokerConfig::default()
+        };
+        let message_store_config = MessageStoreConfig {
+            enable_controller_mode,
+            ha_max_time_slave_not_catchup: 1000,
+            ha_listen_port: 0,
+            store_path_root_dir: root.to_string_lossy().into_owned().into(),
+            ..MessageStoreConfig::default()
+        };
+        let topic_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>> = Arc::new(DashMap::new());
+        let mut store = ArcMut::new(LocalFileMessageStore::new(
+            Arc::new(message_store_config),
+            Arc::new(broker_config),
+            topic_table,
+            None,
+            false,
+        ));
+        let store_clone = store.clone();
+        store.set_message_store_arc(store_clone);
+        store
+    }
+}

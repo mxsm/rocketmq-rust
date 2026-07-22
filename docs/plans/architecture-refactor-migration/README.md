@@ -8,7 +8,7 @@
 > PR-M12-01～06 未开始，合计剩余 7 个
 
 剩余任务数量、M11-12 内部执行批次与 M12 六个工作包见 [`REMAINING-TASKS.md`](REMAINING-TASKS.md)：正式口径
-剩余 7 个工作包；31 个最小可审查单元已完成 9 个，当前剩余 22 个。
+剩余 7 个工作包；31 个最小可审查单元已完成 11 个，当前剩余 20 个。
 
 ## 1. 使用方式
 
@@ -1177,6 +1177,15 @@ identities/4 occurrences；2 个保留 import occurrence 经临时 ADR-013 同 i
 `target/`，无新增 identity 或提交态 approval。R15 从 2/2 降至 1/1、R16 从 5/9
 降至 3/6，剩余 import-only debt 与 General HA 外层组合根一起收口；31 项执行清单保持完成 9 项、剩余 22 项，
 正式进度仍为 75/82。
+
+General HA composition root 随 Issue #8591 完成收口：`GeneralHAService` 的 Default/AutoSwitch variant 改用标准
+`Arc`，一次性初始化仅在唯一 owner 下通过 `Arc::get_mut` 完成；group-transfer 与 state-notification child 只持
+晚绑定标准 `Weak` 回指，根释放后不会由 child 恢复或反向保活。Default/AutoSwitch/Group 的重复测试 Store 夹具
+同步集中到单一 cfg(test) owner。reviewed 快照为 71 identities/312 occurrences（production 13/24、test
+44/248、compatibility 14/40、Broker production 4/8、Store production 9/16）；相对 bc86 净删除 10
+identities/35 occurrences（production 5/9、test 5/26）。3 个 test identity relocation 仅使用忽略的临时
+ADR-013 approval，无新增 governed debt 或提交态 approval。R15、R16 均降至 0/0 并完成；31 项执行清单现为
+完成 11 项、剩余 20 项，正式进度仍为 75/82。
 
 Default HA client runtime ownership 随 Issue #8567 完成收窄：`DefaultHAClient` 以标准 `Arc<Inner>` 共享只读组合根，
 `Inner` 仅保留原子、锁、Notify、flow monitor 与现有 LocalStore 兼容句柄；从未安装连接的 stream 字段和重复 buffer/

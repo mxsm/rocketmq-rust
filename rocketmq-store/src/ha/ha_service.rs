@@ -30,7 +30,7 @@ pub trait RocketHAService: Sync {
     ///
     /// # Returns
     /// Result indicating success or failure
-    async fn start(&mut self) -> HAResult<()>;
+    async fn start(&self) -> HAResult<()>;
 
     /// Shutdown the HA service
     async fn shutdown(&self);
@@ -145,15 +145,6 @@ pub trait RocketHAService: Sync {
     /// # Returns
     /// A reference to an `Option<GeneralHAClient>` instance.
     fn get_ha_client(&self) -> Option<&GeneralHAClient>;
-
-    /// Get a mutable reference to the HA client instance.
-    ///
-    /// This function provides a mutable reference to the `GeneralHAClient` instance,
-    /// allowing modifications to the high availability client used for operations.
-    ///
-    /// # Returns
-    /// A mutable reference to an `Option<GeneralHAClient>` instance.
-    fn get_ha_client_mut(&mut self) -> Option<&mut GeneralHAClient>;
 
     /// Get the maximum offset across all slaves
     ///
