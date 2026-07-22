@@ -141,6 +141,7 @@ use crate::kv::compaction_service::CompactionService;
 use crate::kv::compaction_store::CompactionStore;
 use crate::log_file::commit_log;
 use crate::log_file::commit_log::CommitLog;
+use crate::log_file::commit_log::CommitLogCleanupHandle;
 use crate::log_file::mapped_file::MappedFile;
 use crate::log_file::MAX_PULL_MSG_SIZE;
 use crate::message_store::recovery::ConsumeQueueRecoveryConcurrency;
@@ -545,6 +546,7 @@ impl LocalFileMessageStore {
         );
         commit_log.set_store_health_recorder(store_health_recorder.clone());
         let commit_log = ArcMut::new(commit_log);
+        let commit_log_cleanup = commit_log.cleanup_handle();
         let compaction_store = Arc::new(CompactionStore::with_root(
             PathBuf::from(message_store_config.store_path_root_dir.as_str()).join("compaction"),
         ));
@@ -621,17 +623,17 @@ impl LocalFileMessageStore {
             background_index_rebuild_service: BackgroundIndexRebuildService::new(),
             clean_commit_log_service: Arc::new(CleanCommitLogService::new(
                 message_store_config.clone(),
-                commit_log.clone(),
+                commit_log_cleanup.clone(),
                 running_flags.clone(),
                 cleanup_policy,
                 minimum_pinned_wal_segment,
             )),
             correct_logic_offset_service: Arc::new(CorrectLogicOffsetService::new(
-                commit_log.clone(),
+                commit_log_cleanup.clone(),
                 consume_queue_store.clone(),
             )),
             clean_consume_queue_service: Arc::new(CleanConsumeQueueService::new(
-                commit_log.clone(),
+                commit_log_cleanup,
                 consume_queue_store.clone(),
                 index_service.clone(),
             )),
@@ -5111,7 +5113,7 @@ type CommitLogWalPin = dyn Fn() -> Option<u64> + Send + Sync;
 
 struct CleanCommitLogService {
     message_store_config: Arc<MessageStoreConfig>,
-    commit_log: ArcMut<CommitLog>,
+    commit_log: CommitLogCleanupHandle,
     running_flags: Arc<RunningFlags>,
     cleanup_policy: LocalCleanupPolicy,
     manual_delete_tracker: ManualDeleteTracker,
@@ -5125,7 +5127,7 @@ impl CleanCommitLogService {
 
     fn new(
         message_store_config: Arc<MessageStoreConfig>,
-        commit_log: ArcMut<CommitLog>,
+        commit_log: CommitLogCleanupHandle,
         running_flags: Arc<RunningFlags>,
         cleanup_policy: LocalCleanupPolicy,
         minimum_pinned_wal_segment: Option<Arc<CommitLogWalPin>>,
@@ -5156,7 +5158,7 @@ impl CleanCommitLogService {
             .as_ref()
             .and_then(|minimum_pinned_wal_segment| minimum_pinned_wal_segment());
         let delete_count = if is_time_up || disk_decision.should_delete || is_manual_delete {
-            self.commit_log.mut_from_ref().delete_expired_files_by_time_before(
+            self.commit_log.delete_expired_files_by_time_before(
                 expired_time,
                 self.message_store_config.delete_commit_log_files_interval as i32,
                 self.message_store_config.destroy_mapped_file_interval_forcibly as i64,
@@ -5182,7 +5184,6 @@ impl CleanCommitLogService {
         if first_file_is_before_pin {
             let _ = self
                 .commit_log
-                .mut_from_ref()
                 .retry_delete_first_file(self.message_store_config.redelete_hanged_file_interval as i64);
         }
     }
@@ -5330,13 +5331,17 @@ impl CleanCommitLogService {
 }
 
 struct CleanConsumeQueueService {
-    commit_log: ArcMut<CommitLog>,
+    commit_log: CommitLogCleanupHandle,
     consume_queue_store: ConsumeQueueStore,
     index_service: IndexService,
 }
 
 impl CleanConsumeQueueService {
-    fn new(commit_log: ArcMut<CommitLog>, consume_queue_store: ConsumeQueueStore, index_service: IndexService) -> Self {
+    fn new(
+        commit_log: CommitLogCleanupHandle,
+        consume_queue_store: ConsumeQueueStore,
+        index_service: IndexService,
+    ) -> Self {
         Self {
             commit_log,
             consume_queue_store,
@@ -5370,12 +5375,12 @@ impl CleanConsumeQueueService {
 }
 
 struct CorrectLogicOffsetService {
-    commit_log: ArcMut<CommitLog>,
+    commit_log: CommitLogCleanupHandle,
     consume_queue_store: ConsumeQueueStore,
 }
 
 impl CorrectLogicOffsetService {
-    fn new(commit_log: ArcMut<CommitLog>, consume_queue_store: ConsumeQueueStore) -> Self {
+    fn new(commit_log: CommitLogCleanupHandle, consume_queue_store: ConsumeQueueStore) -> Self {
         Self {
             commit_log,
             consume_queue_store,
@@ -5884,6 +5889,38 @@ mod tests {
             .map(|(source, _)| source)
             .expect("scheduled task production section");
         assert!(!scheduled.contains("message_store.clone()"));
+    }
+
+    #[test]
+    fn clean_commit_log_source_contract_uses_narrow_cleanup_capability() {
+        let source = include_str!("local_file_message_store.rs");
+        let cleanup = source
+            .split_once("impl CleanCommitLogService {")
+            .and_then(|(_, source)| source.split_once("struct CleanConsumeQueueService"))
+            .map(|(source, _)| source)
+            .expect("CleanCommitLogService production section");
+        assert!(!cleanup.contains("mut_from_ref"));
+        assert!(cleanup.contains("commit_log: CommitLogCleanupHandle"));
+        assert!(!cleanup.contains("ArcMut<CommitLog>"));
+
+        let commit_log_source = include_str!("../log_file/commit_log.rs");
+        assert!(commit_log_source.contains("pub(crate) struct CommitLogCleanupHandle"));
+        assert!(commit_log_source.contains("pub(crate) fn cleanup_handle(&self) -> CommitLogCleanupHandle"));
+        assert!(commit_log_source.contains("pub fn delete_expired_files_by_time_before(\n        &mut self,"));
+        assert!(commit_log_source.contains("pub fn retry_delete_first_file(&mut self,"));
+        assert!(!commit_log_source.contains("get_mapped_files().store"));
+
+        let mapped_file_queue_source = include_str!("../consume_queue/mapped_file_queue.rs");
+        let production = mapped_file_queue_source
+            .split_once("#[cfg(test)]\nmod tests")
+            .map(|(source, _)| source)
+            .expect("MappedFileQueue production section");
+        assert!(production.contains("pub(crate) struct MappedFileQueueCleanupHandle"));
+        assert!(production.contains("pub fn delete_expired_file_by_time_before(\n        &self,"));
+        assert!(production.contains("pub fn retry_delete_first_file(&self,"));
+        assert!(production.contains("self.mapped_files.rcu(|current| update(current.as_slice()))"));
+        assert!(production.contains("pub(crate) fn replace_mapped_files_exclusive(&mut self,"));
+        assert_eq!(production.matches(".store(").count(), 1);
     }
 
     #[tokio::test]
@@ -8832,7 +8869,7 @@ mod tests {
             super::LocalCleanupPolicy::new(store.message_store_config.normalized_local_backend_config().cleanup);
         store.clean_commit_log_service = Arc::new(CleanCommitLogService::new(
             store.message_store_config.clone(),
-            store.commit_log.clone(),
+            store.commit_log.cleanup_handle(),
             store.running_flags.clone(),
             cleanup_policy,
             Some(Arc::new(|| Some(32))),
@@ -8941,7 +8978,7 @@ mod tests {
             super::LocalCleanupPolicy::new(message_store_config.normalized_local_backend_config().cleanup);
         let service = CleanCommitLogService::new(
             message_store_config,
-            store.commit_log.clone(),
+            store.commit_log.cleanup_handle(),
             store.running_flags.clone(),
             cleanup_policy,
             None,

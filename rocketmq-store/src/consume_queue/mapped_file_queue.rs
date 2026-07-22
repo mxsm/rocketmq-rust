@@ -71,8 +71,102 @@ use crate::log_file::mapped_file::MappedFile;
 use crate::log_file::mapped_file::MappedFileResult;
 use crate::queue::single_consume_queue::CQ_STORE_UNIT_SIZE;
 
+type MappedFileGeneration = Arc<ArcSwap<Vec<Arc<DefaultMappedFile>>>>;
+
+/// Narrow, cloneable capability used by background commit-log cleanup.
+///
+/// The capability owns only the atomically published mapped-file generation.
+/// It deliberately excludes the queue's allocation and runtime state so a
+/// scheduled cleanup task never needs shared access to the `ArcMut`-owned
+/// `MappedFileQueue` facade.
+#[derive(Clone)]
+pub(crate) struct MappedFileQueueCleanupHandle {
+    mapped_files: MappedFileGeneration,
+    mapped_file_size: u64,
+}
+
+impl MappedFileQueueCleanupHandle {
+    #[inline]
+    fn update_generation<F>(&self, mut update: F)
+    where
+        F: FnMut(&[Arc<DefaultMappedFile>]) -> Vec<Arc<DefaultMappedFile>>,
+    {
+        self.mapped_files.rcu(|current| update(current.as_slice()));
+    }
+
+    #[inline]
+    fn remove_files(&self, files: Vec<Arc<DefaultMappedFile>>) {
+        if !files.is_empty() {
+            self.update_generation(|current| mapped_files_after_removal(current, &files));
+        }
+    }
+
+    fn check_self(&self) {
+        let mapped_files = self.mapped_files.load();
+        for_each_discontinuous_pair(
+            mapped_files.as_slice(),
+            self.mapped_file_size,
+            |file| file.get_file_from_offset(),
+            |previous, current| {
+                error!(
+                    "[BUG] The mappedFile queue's data is damaged, the adjacent mappedFile's offset don't match. pre \
+                     file {}, cur file {}",
+                    mapped_files[previous].get_file_name(),
+                    mapped_files[current].get_file_name()
+                );
+            },
+        );
+    }
+
+    pub(crate) fn get_min_offset(&self) -> i64 {
+        match self.mapped_files.load().first() {
+            None => -1,
+            Some(mapped_file) if mapped_file.is_available() => mapped_file.get_file_from_offset() as i64,
+            Some(mapped_file) => {
+                let offset = mapped_file.get_file_from_offset() as i64;
+                let mapped_file_size = self.mapped_file_size as i64;
+                offset + mapped_file_size - (offset % mapped_file_size)
+            }
+        }
+    }
+
+    pub(crate) fn delete_expired_files_by_time_before(
+        &self,
+        expired_time: i64,
+        delete_files_interval: i32,
+        interval_forcibly: i64,
+        clean_immediately: bool,
+        delete_file_batch_max: i32,
+        pinned_file_offset: Option<u64>,
+    ) -> i32 {
+        let files = (**self.mapped_files.load()).clone();
+        self.check_self();
+        let deletion = delete_expired_mapped_files_by_time_before(
+            &files,
+            expired_time,
+            delete_files_interval,
+            interval_forcibly,
+            clean_immediately,
+            delete_file_batch_max,
+            pinned_file_offset,
+            || current_millis() as i64,
+        );
+        let delete_count = deletion.deleted_count();
+        self.remove_files(deletion.into_mapped_files());
+        delete_count
+    }
+
+    pub(crate) fn retry_delete_first_file(&self, interval_forcibly: i64) -> bool {
+        let first = self.mapped_files.load().first().cloned();
+        let deletion = retry_delete_first_mapped_file(first.as_ref(), interval_forcibly);
+        let deleted = deletion.deleted_count() > 0;
+        self.remove_files(deletion.into_mapped_files());
+        deleted
+    }
+}
+
 pub struct MappedFileQueue {
-    storage: MappedFileQueueStorage<ArcSwap<Vec<Arc<DefaultMappedFile>>>>,
+    storage: MappedFileQueueStorage<MappedFileGeneration>,
 
     pub(crate) allocate_mapped_file_service: Option<AllocateMappedFileService>,
 
@@ -84,7 +178,7 @@ pub use rocketmq_store_local::flush::FlushProgress;
 impl Default for MappedFileQueue {
     fn default() -> Self {
         Self {
-            storage: MappedFileQueueStorage::new(String::new(), 0, ArcSwap::from_pointee(Vec::new())),
+            storage: MappedFileQueueStorage::new(String::new(), 0, Arc::new(ArcSwap::from_pointee(Vec::new()))),
             allocate_mapped_file_service: None,
             runtime_state: MappedFileQueueRuntimeState::default(),
         }
@@ -99,7 +193,11 @@ impl MappedFileQueue {
         allocate_mapped_file_service: Option<AllocateMappedFileService>,
     ) -> MappedFileQueue {
         MappedFileQueue {
-            storage: MappedFileQueueStorage::new(store_path, mapped_file_size, ArcSwap::from_pointee(Vec::new())),
+            storage: MappedFileQueueStorage::new(
+                store_path,
+                mapped_file_size,
+                Arc::new(ArcSwap::from_pointee(Vec::new())),
+            ),
             allocate_mapped_file_service,
             runtime_state: MappedFileQueueRuntimeState::default(),
         }
@@ -169,9 +267,11 @@ impl MappedFileQueue {
         let success = outcome.is_success();
         let loaded_files = outcome.into_mapped_files();
         if !loaded_files.is_empty() {
-            let mut files = (**self.storage.mapped_files().load()).clone();
-            files.extend(loaded_files);
-            self.storage.mapped_files().store(Arc::new(files));
+            self.update_mapped_file_generation(|current| {
+                let mut files = current.to_vec();
+                files.extend(loaded_files.iter().cloned());
+                files
+            });
         }
         success
     }
@@ -262,17 +362,49 @@ impl MappedFileQueue {
             is_first,
         )?;
 
-        // Write: copy-on-write update
-        let mut files = (**self.storage.mapped_files().load()).clone();
-        files.push(arc_file.clone());
-        self.storage.mapped_files().store(Arc::new(files));
+        self.update_mapped_file_generation(|current| {
+            let mut files = current.to_vec();
+            files.push(arc_file.clone());
+            files
+        });
 
         Some(arc_file)
+    }
+
+    /// Applies a collection update against the latest mapped-file generation.
+    ///
+    /// ArcSwap may invoke `update` more than once when another publisher wins the
+    /// compare-and-swap race. Callers must therefore keep the closure free of I/O
+    /// and other externally visible side effects.
+    #[inline]
+    fn update_mapped_file_generation<F>(&self, mut update: F)
+    where
+        F: FnMut(&[Arc<DefaultMappedFile>]) -> Vec<Arc<DefaultMappedFile>>,
+    {
+        self.storage.mapped_files().rcu(|current| update(current.as_slice()));
+    }
+
+    /// Replaces the complete mapped-file generation during load/recovery.
+    ///
+    /// The caller must have exclusive lifecycle ownership: append and cleanup
+    /// publishers must not be running while this authoritative generation is
+    /// installed.
+    #[inline]
+    pub(crate) fn replace_mapped_files_exclusive(&mut self, mapped_files: Vec<Arc<DefaultMappedFile>>) {
+        self.storage.mapped_files().store(Arc::new(mapped_files));
     }
 
     #[inline]
     pub fn get_mapped_files(&self) -> &ArcSwap<Vec<Arc<DefaultMappedFile>>> {
         self.storage.mapped_files()
+    }
+
+    #[inline]
+    pub(crate) fn cleanup_handle(&self) -> MappedFileQueueCleanupHandle {
+        MappedFileQueueCleanupHandle {
+            mapped_files: Arc::clone(self.storage.mapped_files()),
+            mapped_file_size: self.storage.mapped_file_size(),
+        }
     }
 
     #[inline]
@@ -347,10 +479,8 @@ impl MappedFileQueue {
 
     #[inline]
     pub(crate) fn delete_expired_file(&self, files: Vec<Arc<DefaultMappedFile>>) {
-        let current_files = self.storage.mapped_files().load();
         if !files.is_empty() {
-            let new_files = mapped_files_after_removal(current_files.as_slice(), &files);
-            self.storage.mapped_files().store(Arc::new(new_files));
+            self.update_mapped_file_generation(|current| mapped_files_after_removal(current, &files));
         }
     }
 
@@ -368,7 +498,7 @@ impl MappedFileQueue {
     /// # Returns
     /// Number of files deleted
     pub fn delete_expired_file_by_time(
-        &mut self,
+        &self,
         expired_time: i64,
         delete_files_interval: i32,
         interval_forcibly: i64,
@@ -386,7 +516,7 @@ impl MappedFileQueue {
     }
 
     pub fn delete_expired_file_by_time_before(
-        &mut self,
+        &self,
         expired_time: i64,
         delete_files_interval: i32,
         interval_forcibly: i64,
@@ -394,22 +524,14 @@ impl MappedFileQueue {
         delete_file_batch_max: i32,
         pinned_file_offset: Option<u64>,
     ) -> i32 {
-        let mfs = (**self.storage.mapped_files().load()).clone();
-        // Check before deleting
-        self.check_self();
-        let deletion = delete_expired_mapped_files_by_time_before(
-            &mfs,
+        self.cleanup_handle().delete_expired_files_by_time_before(
             expired_time,
             delete_files_interval,
             interval_forcibly,
             clean_immediately,
             delete_file_batch_max,
             pinned_file_offset,
-            || current_millis() as i64,
-        );
-        let delete_count = deletion.deleted_count();
-        self.delete_expired_file(deletion.into_mapped_files());
-        delete_count
+        )
     }
 
     /// Delete expired files by offset
@@ -463,13 +585,17 @@ impl MappedFileQueue {
             mapped_file.set_committed_position(position);
         }
 
-        // Remove files beyond the offset (copy-on-write update)
+        // Remove files beyond the offset from the latest generation. Cleanup may
+        // publish a concurrent generation, so retain identity-based candidates
+        // instead of applying stale indices to a newer vector.
         if !plan.remove_indices().is_empty() {
-            let mut new_files = (**current_files).clone();
-            for &idx in plan.remove_indices().iter().rev() {
-                new_files.remove(idx);
-            }
-            self.storage.mapped_files().store(Arc::new(new_files));
+            let removal_candidates = plan
+                .remove_indices()
+                .iter()
+                .map(|&index| current_files[index].clone())
+                .collect();
+            drop(current_files);
+            self.delete_expired_file(removal_candidates);
         }
 
         true
@@ -666,12 +792,8 @@ impl MappedFileQueue {
     ///
     /// # Returns
     /// true if deletion succeeded, false otherwise
-    pub fn retry_delete_first_file(&mut self, interval_forcibly: i64) -> bool {
-        let first = self.get_first_mapped_file();
-        let deletion = retry_delete_first_mapped_file(first.as_ref(), interval_forcibly);
-        let deleted = deletion.deleted_count() > 0;
-        self.delete_expired_file(deletion.into_mapped_files());
-        deleted
+    pub fn retry_delete_first_file(&self, interval_forcibly: i64) -> bool {
+        self.cleanup_handle().retry_delete_first_file(interval_forcibly)
     }
 
     /// Swap mapped byte buffers to reduce memory pressure
@@ -784,7 +906,8 @@ impl MappedFileQueue {
     pub fn destroy(&mut self) {
         let files = self.storage.mapped_files().load();
         destroy_mapped_file_queue(files.as_slice(), self.storage.store_path());
-        self.storage.mapped_files().store(Arc::new(Vec::new()));
+        drop(files);
+        self.replace_mapped_files_exclusive(Vec::new());
         self.set_flushed_where(0);
     }
 
@@ -983,6 +1106,11 @@ impl MappedFileQueue {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+    use std::sync::Barrier;
+    use std::thread;
 
     use cheetah_string::CheetahString;
 
@@ -1094,7 +1222,7 @@ mod tests {
             storage: MappedFileQueueStorage::new(
                 String::new(),
                 1024,
-                ArcSwap::from_pointee(vec![first_file, second_file]),
+                Arc::new(ArcSwap::from_pointee(vec![first_file, second_file])),
             ),
             ..MappedFileQueue::default()
         };
@@ -1138,6 +1266,68 @@ mod tests {
         assert!(next_file_path.exists());
 
         service.shutdown().await;
+    }
+
+    #[test]
+    fn mapped_file_generation_update_retries_without_losing_concurrent_publication() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let mapped_file_size = 1024;
+        let mut queue = MappedFileQueue::new(temp_dir.path().to_string_lossy().into_owned(), mapped_file_size, None);
+        let first = queue.try_create_mapped_file(0).expect("first mapped file");
+        let second = queue
+            .try_create_mapped_file(mapped_file_size)
+            .expect("second mapped file");
+        let tail_path = temp_dir.path().join(offset_to_file_name(mapped_file_size * 2));
+        let tail = Arc::new(
+            DefaultMappedFile::try_new(
+                CheetahString::from_string(tail_path.to_string_lossy().into_owned()),
+                mapped_file_size,
+            )
+            .expect("tail mapped file"),
+        );
+
+        let queue = Arc::new(queue);
+        let first_snapshot_captured = Arc::new(Barrier::new(2));
+        let concurrent_publication_complete = Arc::new(Barrier::new(2));
+        let block_first_attempt = Arc::new(AtomicBool::new(true));
+        let update_attempts = Arc::new(AtomicUsize::new(0));
+
+        let cleanup_queue = Arc::clone(&queue);
+        let cleanup_first = Arc::clone(&first);
+        let cleanup_snapshot_captured = Arc::clone(&first_snapshot_captured);
+        let cleanup_publication_complete = Arc::clone(&concurrent_publication_complete);
+        let cleanup_block_first_attempt = Arc::clone(&block_first_attempt);
+        let cleanup_update_attempts = Arc::clone(&update_attempts);
+        let cleanup = thread::spawn(move || {
+            cleanup_queue.update_mapped_file_generation(|current| {
+                cleanup_update_attempts.fetch_add(1, Ordering::SeqCst);
+                if cleanup_block_first_attempt.swap(false, Ordering::SeqCst) {
+                    cleanup_snapshot_captured.wait();
+                    cleanup_publication_complete.wait();
+                }
+                mapped_files_after_removal(current, std::slice::from_ref(&cleanup_first))
+            });
+        });
+
+        first_snapshot_captured.wait();
+        queue.update_mapped_file_generation(|current| {
+            let mut files = current.to_vec();
+            files.push(Arc::clone(&tail));
+            files
+        });
+        concurrent_publication_complete.wait();
+        cleanup.join().expect("cleanup generation update completes");
+
+        let files = queue.snapshot();
+        assert_eq!(files.len(), 2);
+        assert!(Arc::ptr_eq(&files[0], &second));
+        assert!(Arc::ptr_eq(&files[1], &tail));
+        assert!(update_attempts.load(Ordering::SeqCst) >= 2);
+        drop(files);
+
+        first.destroy(1000);
+        let mut queue = Arc::try_unwrap(queue).unwrap_or_else(|_| panic!("release shared queue handles"));
+        queue.destroy();
     }
 
     #[test]
