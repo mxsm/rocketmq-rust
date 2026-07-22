@@ -218,6 +218,70 @@ class ArcMutScannerTests(unittest.TestCase):
         findings = self.scan("#[cfg(test)] mod tests { fn f(x: ArcMut<X>){} }")
         self.assertEqual({"test"}, {f.category for f in findings})
 
+    def test_cfg_test_field_does_not_reclassify_following_impl(self):
+        findings = self.scan(
+            "struct Service { owner: ArcMut<u8>, #[cfg(test)] override_value: bool } "
+            "impl Service { "
+            "fn new(owner: ArcMut<u8>) -> Self { Self { owner, #[cfg(test)] override_value: false } } "
+            "fn run(&self) { self.owner.mut_from_ref(); } "
+            "}"
+        )
+        self.assertTrue(findings)
+        self.assertEqual({"production"}, {finding.category for finding in findings})
+        self.assertTrue(any(finding.kind == "mut_from_ref_call" for finding in findings))
+
+    def test_cfg_test_field_hazard_stays_test_without_polluting_sibling(self):
+        findings = self.scan(
+            "struct Service { #[cfg(test)] test_owner: ArcMut<u8>, production_owner: WeakArcMut<u8> }"
+        )
+        categories_by_symbol = {
+            symbol: {finding.category for finding in findings if finding.symbol == symbol}
+            for symbol in ("ArcMut", "WeakArcMut")
+        }
+        self.assertEqual({"test"}, categories_by_symbol["ArcMut"])
+        self.assertEqual({"production"}, categories_by_symbol["WeakArcMut"])
+
+    def test_cfg_test_comparison_does_not_swallow_following_production_item(self):
+        findings = self.scan(
+            "#[cfg(test)] const TEST: Option<ArcMut<u8>> = "
+            "if 1 < 2 { None } else { None }; "
+            "fn production(value: WeakArcMut<u8>) {}"
+        )
+        categories_by_symbol = {
+            symbol: {finding.category for finding in findings if finding.symbol == symbol}
+            for symbol in ("ArcMut", "WeakArcMut")
+        }
+        self.assertEqual({"test"}, categories_by_symbol["ArcMut"])
+        self.assertEqual({"production"}, categories_by_symbol["WeakArcMut"])
+
+    def test_cfg_test_function_does_not_pollute_following_sibling(self):
+        findings = self.scan(
+            "#[cfg(test)] fn test_only(value: ArcMut<u8>) {} "
+            "fn production(value: WeakArcMut<u8>) {}"
+        )
+        categories_by_symbol = {
+            symbol: {finding.category for finding in findings if finding.symbol == symbol}
+            for symbol in ("ArcMut", "WeakArcMut")
+        }
+        self.assertEqual({"test"}, categories_by_symbol["ArcMut"])
+        self.assertEqual({"production"}, categories_by_symbol["WeakArcMut"])
+
+    def test_cfg_test_semicolon_target_and_stacked_attribute_are_bounded(self):
+        findings = self.scan(
+            "#[allow(dead_code)] #[cfg(test)] type TestOwner = ArcMut<u8>; "
+            "type ProductionOwner = WeakArcMut<u8>;"
+        )
+        categories_by_symbol = {
+            symbol: {finding.category for finding in findings if finding.symbol == symbol}
+            for symbol in ("ArcMut", "WeakArcMut")
+        }
+        self.assertEqual({"test"}, categories_by_symbol["ArcMut"])
+        self.assertEqual({"production"}, categories_by_symbol["WeakArcMut"])
+
+    def test_cfg_any_test_and_feature_remains_production(self):
+        findings = self.scan("#[cfg(any(test, feature = \"compat\"))] fn f(value: ArcMut<u8>) {}")
+        self.assertEqual({"production"}, {finding.category for finding in findings})
+
     def test_benches_and_examples_are_test_but_example_project_src_is_not(self):
         self.assertEqual({"test"}, {f.category for f in self.scan("fn f(x: ArcMut<X>){}", "tests/root.rs")})
         self.assertEqual({"test"}, {f.category for f in self.scan("fn f(x: ArcMut<X>){}", "crate/benches/a.rs")})
@@ -648,6 +712,170 @@ class ArcMutBaselineTests(unittest.TestCase):
         promoted = guard.promote_findings(replacement, old, "M03", approvals)
 
         self.assertEqual("replacement", promoted["entries"][0]["occurrences"][0]["id"])
+
+    def test_promote_allows_reviewed_cross_identity_occurrence_merge(self):
+        guard = load_guard()
+        source = self.entry("source", "M04")
+        source["category"] = "test"
+        source["occurrences"] = [
+            {"id": "source-move", "fingerprint": "old", "item": "fn moved", "line": 10},
+            {"id": "source-keep", "fingerprint": "keep", "item": "fn kept", "line": 20},
+        ]
+        target = self.entry("target", "M04")
+        target["occurrences"] = [
+            {"id": "target-keep", "fingerprint": "keep", "item": "fn target", "line": 30}
+        ]
+        findings = [
+            guard.Finding(
+                "source",
+                "a/src/lib.rs",
+                "ArcMut",
+                "type_reference",
+                "test",
+                ({"id": "source-keep", "fingerprint": "keep", "item": "fn kept", "line": 20},),
+            ),
+            guard.Finding(
+                "target",
+                "a/src/lib.rs",
+                "ArcMut",
+                "type_reference",
+                "production",
+                (
+                    {"id": "target-keep", "fingerprint": "keep", "item": "fn target", "line": 30},
+                    {"id": "target-move", "fingerprint": "new", "item": "fn moved", "line": 40},
+                ),
+            ),
+        ]
+        approvals = {
+            ("target", "target-move"): {
+                "from": "source-move",
+                "from_identity": "source",
+                "reason": "The scanner correction moves the same occurrence into its production category",
+                "adr": "ADR-013",
+            }
+        }
+
+        promoted = guard.promote_findings(findings, self.baseline([source, target]), "M03", approvals)
+        reduced = guard.apply_reviewed_reductions(findings, self.baseline([source, target]), approvals)
+
+        self.assertEqual([], guard.compare_baselines(self.baseline([source, target]), promoted, approvals))
+        self.assertEqual([], guard.compare_baselines(self.baseline([source, target]), reduced, approvals))
+        self.assertEqual(
+            {"target-keep", "target-move"},
+            {
+                occurrence["id"]
+                for entry in promoted["entries"]
+                if entry["identity"] == "target"
+                for occurrence in entry["occurrences"]
+            },
+        )
+
+    def test_cross_identity_occurrence_relocation_rejects_missing_or_retained_source(self):
+        guard = load_guard()
+        source = self.entry("source", "M04")
+        source["category"] = "test"
+        target = self.entry("target", "M04")
+        target["occurrences"].append(
+            {"id": "target-move", "fingerprint": "new", "item": "fn f", "line": 40}
+        )
+        approval = {
+            ("target", "target-move"): {
+                "from": "source-occ",
+                "from_identity": "source",
+                "reason": "The scanner correction moves the same occurrence into its production category",
+                "adr": "ADR-013",
+            }
+        }
+
+        retained_issues = guard.compare_baselines(
+            self.baseline([source, self.entry("target", "M04")]),
+            self.baseline([source, target]),
+            approval,
+        )
+        self.assertIn("RELOCATION_NOT_MOVE", {issue.code for issue in retained_issues})
+
+        missing_issues = guard.compare_baselines(
+            self.baseline([self.entry("target", "M04")]),
+            self.baseline([target]),
+            approval,
+        )
+        self.assertIn("RELOCATION_SOURCE_IDENTITY_MISSING", {issue.code for issue in missing_issues})
+
+    def test_cross_identity_occurrence_relocation_rejects_reused_source(self):
+        guard = load_guard()
+        source = self.entry("source", "M04")
+        source["category"] = "test"
+        old_target = self.entry("target", "M04")
+        target = self.entry("target", "M04")
+        target["occurrences"] = [
+            {"id": "target-one", "fingerprint": "one", "item": "fn f", "line": 30},
+            {"id": "target-two", "fingerprint": "two", "item": "fn f", "line": 40},
+        ]
+        approvals = {
+            ("target", occurrence_id): {
+                "from": "source-occ",
+                "from_identity": "source",
+                "reason": "The scanner correction must consume each source occurrence only once",
+                "adr": "ADR-013",
+            }
+            for occurrence_id in ("target-one", "target-two")
+        }
+
+        issues = guard.compare_baselines(
+            self.baseline([source, old_target]),
+            self.baseline([target]),
+            approvals,
+        )
+
+        self.assertIn("RELOCATION_SOURCE_REUSED", {issue.code for issue in issues})
+
+    def test_cross_identity_occurrence_relocation_cannot_extend_remove_by(self):
+        guard = load_guard()
+        source = self.entry("source", "M03")
+        old_target = self.entry("target", "M11")
+        target = self.entry("target", "M11")
+        target["occurrences"].append(
+            {"id": "target-move", "fingerprint": "new", "item": "fn f", "line": 40}
+        )
+        approvals = {
+            ("target", "target-move"): {
+                "from": "source-occ",
+                "from_identity": "source",
+                "reason": "A scanner correction cannot defer the source cleanup deadline",
+                "adr": "ADR-013",
+            }
+        }
+
+        issues = guard.compare_baselines(
+            self.baseline([source, old_target]),
+            self.baseline([target]),
+            approvals,
+        )
+
+        self.assertIn("RELOCATION_SOURCE_CHANGED", {issue.code for issue in issues})
+
+    def test_relocation_loader_preserves_from_identity(self):
+        guard = load_guard()
+        payload = {
+            "schema_version": 1,
+            "adr": "ADR-013",
+            "relocations": [
+                {
+                    "identity": "target",
+                    "from_identity": "source",
+                    "from": "source-occ",
+                    "to": "target-occ",
+                    "reason": "The same governed occurrence moved across scanner identities",
+                }
+            ],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "relocations.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            approvals, identity_relocations = guard._load_relocation_approvals(path)
+
+        self.assertEqual("source", approvals[("target", "target-occ")]["from_identity"])
+        self.assertEqual({}, identity_relocations)
 
     def test_promote_rejects_same_occurrence_fingerprint_change_without_approval(self):
         guard = load_guard()

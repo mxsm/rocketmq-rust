@@ -120,6 +120,22 @@ fn offset_deletion_stops_when_the_selected_file_cannot_finish_destroy() {
 }
 
 #[test]
+fn retry_deletion_succeeds_after_the_last_reader_releases_the_first_file() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let first = mapped_file(&temp_dir, 0, 16);
+
+    assert!(first.hold());
+    assert!(!first.destroy(1000));
+    assert!(!first.is_available());
+
+    first.release();
+    let deletion = retry_delete_first_mapped_file(Some(&first), 0);
+
+    assert_eq!(deletion.deleted_count(), 1);
+    assert!(Arc::ptr_eq(&deletion.into_mapped_files()[0], &first));
+}
+
+#[test]
 fn swap_reserves_three_newest_files_and_shutdown_releases_every_file() {
     let temp_dir = tempfile::tempdir().expect("temp dir");
     let files: Vec<_> = (0..5).map(|index| mapped_file(&temp_dir, index * 16, 16)).collect();

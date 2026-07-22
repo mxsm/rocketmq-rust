@@ -240,21 +240,137 @@ def _file_category(path: str) -> str:
 
 
 def _cfg_test_ranges(values: list[str]) -> list[tuple[int, int]]:
+    def skip_attributes(index: int) -> int:
+        while index + 1 < len(values) and values[index:index + 2] == ["#", "["]:
+            depth = 0
+            closing = None
+            for position in range(index + 1, len(values)):
+                if values[position] == "[":
+                    depth += 1
+                elif values[position] == "]":
+                    depth -= 1
+                    if depth == 0:
+                        closing = position
+                        break
+            if closing is None:
+                return len(values)
+            index = closing + 1
+        return index
+
+    def statement_end(index: int) -> int | None:
+        paren_depth = 0
+        bracket_depth = 0
+        brace_depth = 0
+        for position in range(index, len(values)):
+            value = values[position]
+            if value == "(":
+                paren_depth += 1
+            elif value == ")":
+                paren_depth = max(0, paren_depth - 1)
+            elif value == "[":
+                bracket_depth += 1
+            elif value == "]":
+                bracket_depth = max(0, bracket_depth - 1)
+            elif value == "{":
+                brace_depth += 1
+            elif value == "}":
+                if brace_depth == 0:
+                    return max(index, position - 1)
+                brace_depth -= 1
+            elif value == ";" and paren_depth == bracket_depth == brace_depth == 0:
+                return position
+        return None
+
+    def braced_item_end(index: int) -> int | None:
+        paren_depth = 0
+        bracket_depth = 0
+        for position in range(index, len(values)):
+            value = values[position]
+            if value == "(":
+                paren_depth += 1
+            elif value == ")":
+                paren_depth = max(0, paren_depth - 1)
+            elif value == "[":
+                bracket_depth += 1
+            elif value == "]":
+                bracket_depth = max(0, bracket_depth - 1)
+            elif paren_depth == bracket_depth == 0:
+                if value == "{":
+                    return _matching_brace(values, position)
+                if value == ";":
+                    return position
+        return None
+
+    def field_or_variant_end(index: int) -> int | None:
+        paren_depth = 0
+        bracket_depth = 0
+        brace_depth = 0
+        angle_depth = 0
+        type_context = True
+        for position in range(index, len(values)):
+            value = values[position]
+            if value == "(":
+                paren_depth += 1
+            elif value == ")":
+                paren_depth = max(0, paren_depth - 1)
+            elif value == "[":
+                bracket_depth += 1
+            elif value == "]":
+                bracket_depth = max(0, bracket_depth - 1)
+            elif value == "{":
+                brace_depth += 1
+            elif value == "}":
+                if paren_depth == bracket_depth == brace_depth == angle_depth == 0:
+                    return max(index, position - 1)
+                brace_depth = max(0, brace_depth - 1)
+            elif value == "=" and paren_depth == bracket_depth == brace_depth == 0:
+                # Field defaults and const expressions use `<` and `>` as
+                # comparison operators. Only the type portion needs generic
+                # angle tracking; a semicolon is always authoritative below.
+                type_context = False
+                angle_depth = 0
+            elif type_context and value == "<":
+                angle_depth += 1
+            elif type_context and value == ">":
+                angle_depth = max(0, angle_depth - 1)
+            elif value == ";" and paren_depth == bracket_depth == brace_depth == 0:
+                return position
+            elif value == "," and paren_depth == bracket_depth == brace_depth == angle_depth == 0:
+                return position
+        return None
+
     ranges: list[tuple[int, int]] = []
-    for i in range(len(values) - 5):
-        if values[i:i + 6] != ["#", "[", "cfg", "(", "test", ")"]:
+    for i in range(len(values) - 6):
+        if values[i:i + 7] != ["#", "[", "cfg", "(", "test", ")", "]"]:
             continue
-        try:
-            opening = values.index("{", i + 6)
-        except ValueError:
+        target = skip_attributes(i + 7)
+        if target >= len(values):
             continue
-        depth = 0
-        for end in range(opening, len(values)):
-            if values[end] == "{": depth += 1
-            elif values[end] == "}":
-                depth -= 1
-                if depth == 0:
-                    ranges.append((i, end)); break
+        if values[target] == "pub":
+            target += 1
+            if target < len(values) and values[target] == "(":
+                depth = 0
+                for position in range(target, len(values)):
+                    if values[position] == "(":
+                        depth += 1
+                    elif values[position] == ")":
+                        depth -= 1
+                        if depth == 0:
+                            target = position + 1
+                            break
+        while target < len(values) and values[target] in {"async", "unsafe", "default", "auto"}:
+            target += 1
+        if target >= len(values):
+            continue
+        keyword = values[target]
+        if keyword in {"fn", "struct", "enum", "union", "impl", "trait", "mod", "extern", "macro_rules"}:
+            target_end = braced_item_end(target)
+        elif keyword in {"type", "use", "const", "static", "let"}:
+            target_end = statement_end(target)
+        else:
+            target_end = field_or_variant_end(target)
+        if target_end is not None:
+            ranges.append((i, target_end))
     return ranges
 
 
@@ -945,7 +1061,7 @@ def validate_relocation_approvals(approvals: dict | None) -> dict:
     for key, approval in approvals.items():
         if not isinstance(key, tuple) or len(key) != 2 or not all(isinstance(value, str) for value in key):
             raise BaselineError("relocation approval keys must be (identity, replacement occurrence id)")
-        if set(approval) != {"from", "reason", "adr"}:
+        if set(approval) not in ({"from", "reason", "adr"}, {"from", "from_identity", "reason", "adr"}):
             raise BaselineError(f"relocation approval {key} has invalid fields")
         if not all(isinstance(approval[field], str) and approval[field].strip() for field in approval):
             raise BaselineError(f"relocation approval {key} fields must be non-empty strings")
@@ -987,7 +1103,12 @@ def compare_baselines(
     new_entries = {e["identity"]: e for e in new["entries"]}
     issues: list[Issue] = []
     consumed_relocations: set[tuple[str, str]] = set()
+    consumed_relocation_sources: set[tuple[str, str]] = set()
     consumed_identity_relocations: set[str] = set()
+    new_occurrence_ids_by_identity = {
+        entry["identity"]: {occurrence["id"] for occurrence in entry["occurrences"]}
+        for entry in new["entries"]
+    }
     for entry in new["entries"]:
         previous = old_entries.get(entry["identity"])
         if previous is None:
@@ -1012,15 +1133,32 @@ def compare_baselines(
             if occurrence["id"] not in old_occurrences:
                 relocation_key = (entry["identity"], occurrence["id"])
                 approval = relocation_approvals.get(relocation_key)
-                source = old_occurrences.get(approval["from"]) if approval else None
-                if source is None:
+                source_identity = approval.get("from_identity", entry["identity"]) if approval else entry["identity"]
+                source_entry = old_entries.get(source_identity)
+                source_occurrences = {
+                    source_occurrence["id"]: source_occurrence
+                    for source_occurrence in source_entry["occurrences"]
+                } if source_entry else {}
+                source = source_occurrences.get(approval["from"]) if approval else None
+                source_key = (source_identity, approval["from"]) if approval else None
+                if approval is not None and source_entry is None:
+                    issues.append(Issue("RELOCATION_SOURCE_IDENTITY_MISSING", source_identity))
+                elif source is None:
                     issues.append(Issue("EXPANDED", f"{entry['identity']} occurrence={occurrence['id']}"))
-                elif approval["from"] in new_occurrence_ids:
+                elif source_key in consumed_relocation_sources:
+                    issues.append(Issue("RELOCATION_SOURCE_REUSED", f"{source_identity} occurrence={approval['from']}"))
+                elif approval["from"] in new_occurrence_ids_by_identity.get(source_identity, set()):
                     issues.append(Issue("RELOCATION_NOT_MOVE", f"{entry['identity']} occurrence={occurrence['id']}"))
+                elif any(
+                    source_entry[field] != entry[field]
+                    for field in ("path", "symbol", "kind", "owner", "reason", "remove_by", "adr")
+                ):
+                    issues.append(Issue("RELOCATION_SOURCE_CHANGED", f"{entry['identity']} occurrence={occurrence['id']}"))
                 elif source["item"] != occurrence["item"]:
                     issues.append(Issue("RELOCATION_ITEM_CHANGED", f"{entry['identity']} occurrence={occurrence['id']}"))
                 else:
                     consumed_relocations.add(relocation_key)
+                    consumed_relocation_sources.add(source_key)
             elif any(occurrence[k] != old_occurrences[occurrence["id"]][k] for k in ("fingerprint", "item")):
                 relocation_key = (entry["identity"], occurrence["id"])
                 approval = relocation_approvals.get(relocation_key)
@@ -1147,6 +1285,11 @@ def apply_reviewed_reductions(
     validate_baseline(baseline)
     approvals = validate_relocation_approvals(relocation_approvals)
     observed = {finding.identity: finding for finding in findings}
+    baseline_entries = {entry["identity"]: entry for entry in baseline["entries"]}
+    observed_occurrences = {
+        identity: {occurrence["id"]: occurrence for occurrence in finding.occurrences}
+        for identity, finding in observed.items()
+    }
     entries = []
 
     for entry in baseline["entries"]:
@@ -1174,10 +1317,19 @@ def apply_reviewed_reductions(
                     consumed_old_ids.add(previous["id"])
                 continue
 
-            source = old_occurrences.get(approval["from"]) if approval else None
+            source_identity = approval.get("from_identity", entry["identity"]) if approval else entry["identity"]
+            source_entry = baseline_entries.get(source_identity)
+            source = next(
+                (
+                    source_occurrence
+                    for source_occurrence in source_entry["occurrences"]
+                    if source_occurrence["id"] == approval["from"]
+                ),
+                None,
+            ) if approval and source_entry else None
             if (
                 source is not None
-                and approval["from"] not in current_occurrences
+                and approval["from"] not in observed_occurrences.get(source_identity, {})
                 and source["item"] == occurrence["item"]
             ):
                 next_occurrences.append(occurrence)
@@ -1267,7 +1419,32 @@ def run_fixtures() -> int:
             found = bool(scan_file(path, root))
             if found != expected:
                 print(f"FIXTURE_FAILED {name} expected={expected} actual={found}"); return 1
-    print(f"FIXTURES_OK cases={len(cases)}")
+        category_cases = {
+            "cfg_test_field_then_prod_impl": (
+                "struct S { #[cfg(test)] marker: bool } impl S { fn run(&self) { x.mut_from_ref(); } }",
+                {"production"},
+            ),
+            "cfg_test_field_hazard_plus_prod_impl": (
+                "struct S { #[cfg(test)] value: ArcMut<u8> } impl S { fn run(&self, value: ArcMut<u8>) {} }",
+                {"production", "test"},
+            ),
+            "cfg_test_inline_mod": (
+                "#[cfg(test)] mod tests { fn use_owner(value: ArcMut<u8>) {} }",
+                {"test"},
+            ),
+        }
+        for name, (source, expected_categories) in category_cases.items():
+            path = root / name / "src" / "case.rs"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(source, encoding="utf-8")
+            actual_categories = {finding.category for finding in scan_file(path, root)}
+            if actual_categories != expected_categories:
+                print(
+                    f"FIXTURE_FAILED {name} expected={sorted(expected_categories)} "
+                    f"actual={sorted(actual_categories)}"
+                )
+                return 1
+    print(f"FIXTURES_OK cases={len(cases) + len(category_cases)}")
     return 0
 
 
@@ -1296,16 +1473,22 @@ def _load_relocation_approvals(path: Path | None) -> tuple[dict, dict]:
         raise BaselineError("relocations must be a list")
     approvals = {}
     for number, relocation in enumerate(data["relocations"], start=1):
-        if set(relocation) != {"identity", "from", "to", "reason"}:
+        if set(relocation) not in (
+            {"identity", "from", "to", "reason"},
+            {"identity", "from", "from_identity", "to", "reason"},
+        ):
             raise BaselineError(f"relocation {number} has invalid fields")
         key = (relocation["identity"], relocation["to"])
         if key in approvals:
             raise BaselineError(f"duplicate relocation approval {key}")
-        approvals[key] = {
+        approval = {
             "from": relocation["from"],
             "reason": relocation["reason"],
             "adr": data["adr"],
         }
+        if "from_identity" in relocation:
+            approval["from_identity"] = relocation["from_identity"]
+        approvals[key] = approval
     identity_relocations = {}
     raw_identity_relocations = data.get("identity_relocations", [])
     if not isinstance(raw_identity_relocations, list):

@@ -78,6 +78,7 @@ use crate::config::message_store_config::LinuxMemoryLockMode;
 use crate::config::message_store_config::LinuxRecoveryFadviseMode;
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::consume_queue::mapped_file_queue::MappedFileQueue;
+use crate::consume_queue::mapped_file_queue::MappedFileQueueCleanupHandle;
 use crate::consume_queue::mapped_file_queue::MappedFileWarmupStats;
 use crate::ha::ha_service::HAService;
 use crate::log_file::cold_data_check_service::ColdDataCheckService;
@@ -323,6 +324,46 @@ pub struct CommitLog {
     root: CommitLogRoot<CommitLogAdapter>,
 }
 
+/// Safe, narrow capability for scheduled commit-log retention work.
+///
+/// It owns only the atomically published mapped-file generation and therefore
+/// does not dereference the `ArcMut<CommitLog>` facade used by legacy writers.
+#[derive(Clone)]
+pub(crate) struct CommitLogCleanupHandle {
+    mapped_file_queue: MappedFileQueueCleanupHandle,
+}
+
+impl CommitLogCleanupHandle {
+    #[inline]
+    pub(crate) fn get_min_offset(&self) -> i64 {
+        self.mapped_file_queue.get_min_offset()
+    }
+
+    pub(crate) fn delete_expired_files_by_time_before(
+        &self,
+        expired_time: i64,
+        delete_files_interval: i32,
+        interval_forcibly: i64,
+        clean_immediately: bool,
+        delete_file_batch_max: i32,
+        pinned_file_offset: Option<u64>,
+    ) -> i32 {
+        self.mapped_file_queue.delete_expired_files_by_time_before(
+            expired_time,
+            delete_files_interval,
+            interval_forcibly,
+            clean_immediately,
+            delete_file_batch_max,
+            pinned_file_offset,
+        )
+    }
+
+    #[inline]
+    pub(crate) fn retry_delete_first_file(&self, interval_forcibly: i64) -> bool {
+        self.mapped_file_queue.retry_delete_first_file(interval_forcibly)
+    }
+}
+
 mod adapter {
     /// Store-owned composition dependencies used by the legacy CommitLog facade.
     #[doc(hidden)]
@@ -411,6 +452,13 @@ impl CommitLog {
                 )),
                 cold_data_check_service: Arc::new(Default::default()),
             }),
+        }
+    }
+
+    #[inline]
+    pub(crate) fn cleanup_handle(&self) -> CommitLogCleanupHandle {
+        CommitLogCleanupHandle {
+            mapped_file_queue: self.mapped_file_queue.cleanup_handle(),
         }
     }
 
@@ -650,14 +698,7 @@ impl CommitLog {
         match loader.load_optimized() {
             Ok((mapped_files, stats)) => {
                 self.runtime_state.set_load_statistics(stats.clone());
-                // Replace the mapped_files vec in mapped_file_queue
-                // This is safe because we're in &mut self
-                {
-                    // Copy-on-write update
-                    let mut new_files = Vec::new();
-                    new_files.extend(mapped_files);
-                    self.mapped_file_queue.get_mapped_files().store(Arc::new(new_files));
-                }
+                self.mapped_file_queue.replace_mapped_files_exclusive(mapped_files);
 
                 // Log detailed statistics
                 info!(

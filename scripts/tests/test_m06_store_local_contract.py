@@ -7346,28 +7346,30 @@ def mapped_file_queue_storage_contract_violations(
         violations.append("Store copied mapped-file queue storage owner")
 
     store_fields = dict(active_struct_fields(store_source, "MappedFileQueue"))
-    if store_fields.get("storage") != "MappedFileQueueStorage<ArcSwap<Vec<Arc<DefaultMappedFile>>>>":
+    if store_fields.get("storage") != "MappedFileQueueStorage<MappedFileGeneration>":
         violations.append("Store MappedFileQueue must hold one canonical Local storage owner")
+    if "typeMappedFileGeneration=Arc<ArcSwap<Vec<Arc<DefaultMappedFile>>>>;" not in compact_rust(store_active):
+        violations.append("Store mapped-file generation ownership changed")
     for legacy_field in ("store_path", "mapped_file_size", "mapped_files"):
         if legacy_field in store_fields:
             violations.append(f"Store retained legacy MappedFileQueue storage field: {legacy_field}")
     store_compact = compact_rust(store_active)
     expected_constructors = (
-        "storage:MappedFileQueueStorage::new(String::new(),0,ArcSwap::from_pointee(Vec::new()))",
-        "storage:MappedFileQueueStorage::new(store_path,mapped_file_size,ArcSwap::from_pointee(Vec::new()))",
+        "storage:MappedFileQueueStorage::new(String::new(),0,Arc::new(ArcSwap::from_pointee(Vec::new())))",
+        "storage:MappedFileQueueStorage::new(store_path,mapped_file_size,Arc::new(ArcSwap::from_pointee(Vec::new())),)",
     )
     for constructor in expected_constructors:
         if store_compact.count(constructor) != 1:
             violations.append(f"Store mapped-file queue storage constructor changed: {constructor}")
     expected_accessor_counts = {
-        "self.storage.mapped_files()": 34,
-        "self.storage.mapped_file_size()": 16,
+        "self.storage.mapped_files()": 28,
+        "self.storage.mapped_file_size()": 17,
         "self.storage.store_path()": 6,
     }
     for accessor, expected_count in expected_accessor_counts.items():
         if store_compact.count(accessor) != expected_count:
             violations.append(f"Store mapped-file queue storage adapter count changed: {accessor}")
-    for legacy_access in ("self.mapped_files", "self.mapped_file_size", "self.store_path"):
+    for legacy_access in ("self.store_path",):
         if legacy_access in store_compact:
             violations.append(f"Store bypassed Local mapped-file queue storage: {legacy_access}")
 
@@ -8093,6 +8095,7 @@ def mapped_file_queue_lifecycle_contract_violations(
         "destroy_last_mapped_file",
         "mapped_files_after_removal",
         "delete_expired_mapped_files_by_time",
+        "delete_expired_mapped_files_by_time_before",
         "delete_expired_mapped_files_by_offset",
         "retry_delete_first_mapped_file",
         "swap_mapped_file_queue",
@@ -8120,8 +8123,13 @@ def mapped_file_queue_lifecycle_contract_violations(
             ".cloned().collect()",
         ),
         "delete_expired_mapped_files_by_time": (
+            "delete_expired_mapped_files_by_time_before(",
+            "delete_file_batch_max,None,now_millis",
+        ),
+        "delete_expired_mapped_files_by_time_before": (
             "letcandidate_count=files.len().saturating_sub(1)",
             "files.iter().enumerate().take(candidate_count)",
+            "pinned_file_offset.is_some_and(|pinned|mapped_file.get_file_from_offset()>=pinned)",
             "now_millis()>=live_max_timestamp||clean_immediately",
             "mapped_file.destroy(interval_forciblyasu64)",
             "deleted_files.len()>=delete_file_batch_maxasusize",
@@ -8189,6 +8197,7 @@ def mapped_file_queue_lifecycle_contract_violations(
     expected_imports = {
         f"use rocketmq_store_local::mapped_file::queue_lifecycle::{function_name}"
         for function_name in function_names
+        if function_name != "delete_expired_mapped_files_by_time"
     }
     actual_imports = {
         statement
@@ -8199,6 +8208,16 @@ def mapped_file_queue_lifecycle_contract_violations(
         violations.append("Store mapped-file queue lifecycle imports must be direct and exact")
 
     store_production = source_without_cfg_test_items(store_source)
+    cleanup_impl = active_impl_body(store_production, "MappedFileQueueCleanupHandle") or ""
+    cleanup_bodies = {
+        function_name: compact_rust(named_function_body(cleanup_impl, function_name) or "")
+        for function_name in (
+            "update_generation",
+            "remove_files",
+            "delete_expired_files_by_time_before",
+            "retry_delete_first_file",
+        )
+    }
     store_bodies = {
         function_name: compact_rust(named_function_body(store_production, function_name) or "")
         for function_name in (
@@ -8215,19 +8234,15 @@ def mapped_file_queue_lifecycle_contract_violations(
     }
     store_expected = {
         "delete_last_mapped_file": ("destroy_last_mapped_file(files.as_slice())", "self.delete_expired_file"),
-        "delete_expired_file": ("mapped_files_after_removal(current_files.as_slice(),&files)", ".store(Arc::new(new_files))"),
+        "delete_expired_file": (
+            "self.update_mapped_file_generation(|current|mapped_files_after_removal(current,&files))",
+        ),
         "delete_expired_file_by_time": (
-            "self.check_self()",
-            "delete_expired_mapped_files_by_time(",
-            "||current_millis()asi64",
-            "self.delete_expired_file(deletion.into_mapped_files())",
+            "self.delete_expired_file_by_time_before(",
+            "delete_file_batch_max,None",
         ),
         "delete_expired_file_by_offset": (
             "delete_expired_mapped_files_by_offset(&mfs,self.storage.mapped_file_size(),offset,unit_size)",
-            "self.delete_expired_file(deletion.into_mapped_files())",
-        ),
-        "retry_delete_first_file": (
-            "retry_delete_first_mapped_file(first.as_ref(),interval_forcibly)",
             "self.delete_expired_file(deletion.into_mapped_files())",
         ),
         "swap_map": ("swap_mapped_file_queue(", "||current_millis()asi64"),
@@ -8235,7 +8250,7 @@ def mapped_file_queue_lifecycle_contract_violations(
         "shutdown": ("shutdown_mapped_file_queue(files.as_slice(),interval_forcibly)",),
         "destroy": (
             "destroy_mapped_file_queue(files.as_slice(),self.storage.store_path())",
-            "self.storage.mapped_files().store(Arc::new(Vec::new()))",
+            "self.replace_mapped_files_exclusive(Vec::new())",
             "self.set_flushed_where(0)",
         ),
     }
@@ -8243,6 +8258,40 @@ def mapped_file_queue_lifecycle_contract_violations(
         for fragment in fragments:
             if fragment not in store_bodies[function_name]:
                 violations.append(f"Store mapped-file queue lifecycle adapter changed: {function_name}: {fragment}")
+
+    if active_struct_fields(store_production, "MappedFileQueueCleanupHandle") != [
+        ("mapped_files", "MappedFileGeneration"),
+        ("mapped_file_size", "u64"),
+    ]:
+        violations.append("Store mapped-file cleanup capability fields changed")
+    cleanup_expected = {
+        "update_generation": ("self.mapped_files.rcu(|current|update(current.as_slice()))",),
+        "remove_files": ("mapped_files_after_removal(current,&files)",),
+        "delete_expired_files_by_time_before": (
+            "letfiles=(**self.mapped_files.load()).clone()",
+            "self.check_self()",
+            "delete_expired_mapped_files_by_time_before(",
+            "pinned_file_offset,||current_millis()asi64",
+            "self.remove_files(deletion.into_mapped_files())",
+        ),
+        "retry_delete_first_file": (
+            "letfirst=self.mapped_files.load().first().cloned()",
+            "retry_delete_first_mapped_file(first.as_ref(),interval_forcibly)",
+            "self.remove_files(deletion.into_mapped_files())",
+        ),
+    }
+    for function_name, fragments in cleanup_expected.items():
+        for fragment in fragments:
+            if fragment not in cleanup_bodies[function_name]:
+                violations.append(f"Store mapped-file cleanup capability changed: {function_name}: {fragment}")
+
+    store_compact = compact_rust(active_rust_source(store_production))
+    for delegate in (
+        "self.cleanup_handle().delete_expired_files_by_time_before(",
+        "self.cleanup_handle().retry_delete_first_file(interval_forcibly)",
+    ):
+        if store_compact.count(delegate) != 1:
+            violations.append(f"Store mapped-file queue cleanup delegate changed: {delegate}")
     for function_name, forbidden_fragments in {
         "delete_expired_file_by_time": (".destroy(", "thread::sleep", "live_max_timestamp"),
         "delete_expired_file_by_offset": ("select_mapped_buffer", "max_offset_in_logic_queue", ".destroy("),
@@ -8260,7 +8309,9 @@ def mapped_file_queue_lifecycle_contract_violations(
         "removal_filters_only_candidates_present_in_the_current_snapshot",
         "destroy_last_returns_the_destroyed_newest_file",
         "time_deletion_keeps_the_newest_file_and_honors_the_batch_limit",
+        "time_deletion_stops_before_the_pinned_wal_segment",
         "offset_deletion_stops_when_the_selected_file_cannot_finish_destroy",
+        "retry_deletion_succeeds_after_the_last_reader_releases_the_first_file",
         "swap_reserves_three_newest_files_and_shutdown_releases_every_file",
         "destroy_removes_every_file_and_the_queue_directory",
     ):
@@ -14319,7 +14370,7 @@ class StoreLocalContractTests(unittest.TestCase):
                 local,
                 module,
                 store.replace(
-                    "let deletion = delete_expired_mapped_files_by_time(",
+                    "let deletion = delete_expired_mapped_files_by_time_before(",
                     "let deletion = store_owned_time_deletion(",
                     1,
                 ),
@@ -14761,9 +14812,9 @@ class StoreLocalContractTests(unittest.TestCase):
                 local,
                 module,
                 store.replace(
-                    "    storage: MappedFileQueueStorage<ArcSwap<Vec<Arc<DefaultMappedFile>>>>,",
+                    "    storage: MappedFileQueueStorage<MappedFileGeneration>,\n",
                     "    mapped_files: ArcSwap<Vec<Arc<DefaultMappedFile>>>,\n"
-                    "    storage: MappedFileQueueStorage<ArcSwap<Vec<Arc<DefaultMappedFile>>>>,",
+                    "    storage: MappedFileQueueStorage<MappedFileGeneration>,\n",
                     1,
                 ),
                 local_tests,

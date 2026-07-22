@@ -1027,6 +1027,16 @@ production 4/8、Store production 58/156），净删除 4 个 production occurre
 CommitLog/dispatcher occurrence 经临时 ADR-013 一对一指纹审核，无新增 identity 或提交态 approval。R10 由 6/38
 降至 6/34，但 Local root、CommitLog/CQ、Timer、HA 与 recovery 回指仍待后续切片，不能提前标记完成。
 
+CommitLog cleanup shared-reference boundary 随 Issue #8547 收口：CleanCommitLogService、CleanConsumeQueueService 与
+CorrectLogicOffsetService 不再持有 `ArcMut<CommitLog>`，改持只包含标准 Arc mapped-file generation 的
+`CommitLogCleanupHandle`；后台任务不再从共享 CommitLog facade 产生 `&CommitLog`/`&mut CommitLog` 重叠。增量
+segment create/delete 使用 ArcSwap RCU/CAS 在最新代际合并，load/recovery/shutdown 的 authoritative replacement
+保持独占 lifecycle，并在 API/contract 中明确 writer-quiesced 前提。scanner 修复 field-level `#[cfg(test)]` 和比较
+表达式对后续 production item 的误分类，跨 identity relocation 同时受 `remove_by` 截止期约束。reviewed 快照为
+137 identities/493 occurrences（production 62/159、test 61/294、compatibility 14/40、Broker production 4/8、
+Store production 58/151）；相对 bc66 净删除 1 个 identity/8 occurrences。R10、R13 与其余 Store owner 仍未完成，
+31 项执行清单仍为完成 7 项、剩余 24 项。
+
 ### 9.3 证据目录
 
 - 运行期生成物：`target/architecture-refactor/Mxx/<run-id>/`，不提交 Git。
