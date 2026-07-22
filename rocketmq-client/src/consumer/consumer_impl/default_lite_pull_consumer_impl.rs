@@ -3099,8 +3099,6 @@ mod tests {
     use std::sync::Barrier;
     use std::sync::Mutex as StdMutex;
 
-    use rocketmq_rust::ArcMut;
-
     use super::*;
     use crate::base::access_channel::AccessChannel;
 
@@ -3259,8 +3257,8 @@ mod tests {
     #[tokio::test]
     async fn shutdown_in_create_just_keeps_state_like_java_noop() {
         let impl_ = DefaultLitePullConsumerImpl::new(
-            ArcMut::new(ClientConfig::default()),
-            ArcMut::new(LitePullConsumerConfig {
+            Arc::new(ClientConfig::default()),
+            Arc::new(LitePullConsumerConfig {
                 consumer_group: CheetahString::from_static_str("lite_pull_shutdown_create_group"),
                 ..Default::default()
             }),
@@ -3274,8 +3272,8 @@ mod tests {
     #[tokio::test]
     async fn shutdown_in_start_failed_keeps_state_like_java_default_case() {
         let impl_ = DefaultLitePullConsumerImpl::new(
-            ArcMut::new(ClientConfig::default()),
-            ArcMut::new(LitePullConsumerConfig {
+            Arc::new(ClientConfig::default()),
+            Arc::new(LitePullConsumerConfig {
                 consumer_group: CheetahString::from_static_str("lite_pull_shutdown_failed_group"),
                 ..Default::default()
             }),
@@ -3329,8 +3327,8 @@ mod tests {
     #[tokio::test]
     async fn start_without_self_reference_returns_error_without_panic() {
         let impl_ = DefaultLitePullConsumerImpl::new(
-            ArcMut::new(ClientConfig::default()),
-            ArcMut::new(LitePullConsumerConfig {
+            Arc::new(ClientConfig::default()),
+            Arc::new(LitePullConsumerConfig {
                 consumer_group: CheetahString::from_static_str("lite_pull_missing_self_ref_group"),
                 ..Default::default()
             }),
@@ -3350,8 +3348,8 @@ mod tests {
     #[allow(deprecated)]
     fn check_config_rejects_unsupported_consume_from_where_like_java_lite_pull() {
         let impl_ = DefaultLitePullConsumerImpl::new(
-            ArcMut::new(ClientConfig::default()),
-            ArcMut::new(LitePullConsumerConfig {
+            Arc::new(ClientConfig::default()),
+            Arc::new(LitePullConsumerConfig {
                 consumer_group: CheetahString::from_static_str("lite_pull_invalid_consume_from_where_group"),
                 consume_from_where: ConsumeFromWhere::ConsumeFromMaxOffset,
                 ..Default::default()
@@ -3368,8 +3366,8 @@ mod tests {
     #[test]
     fn check_config_rejects_default_consumer_group_like_java_lite_pull() {
         let impl_ = DefaultLitePullConsumerImpl::new(
-            ArcMut::new(ClientConfig::default()),
-            ArcMut::new(LitePullConsumerConfig {
+            Arc::new(ClientConfig::default()),
+            Arc::new(LitePullConsumerConfig {
                 consumer_group: CheetahString::from_static_str(mix_all::DEFAULT_CONSUMER_GROUP),
                 ..Default::default()
             }),
@@ -3387,8 +3385,8 @@ mod tests {
     #[test]
     fn check_config_rejects_consumer_suspend_timeout_below_broker_suspend_like_java() {
         let impl_ = DefaultLitePullConsumerImpl::new(
-            ArcMut::new(ClientConfig::default()),
-            ArcMut::new(LitePullConsumerConfig {
+            Arc::new(ClientConfig::default()),
+            Arc::new(LitePullConsumerConfig {
                 consumer_group: CheetahString::from_static_str("lite_pull_invalid_suspend_timeout_group"),
                 broker_suspend_max_time_millis: 30_000,
                 consumer_timeout_millis_when_suspend: 20_000,
@@ -3409,8 +3407,8 @@ mod tests {
     #[test]
     fn set_consumer_group_updates_rebalance_before_start_and_rejects_running_mutation() {
         let impl_ = DefaultLitePullConsumerImpl::new(
-            ArcMut::new(ClientConfig::default()),
-            ArcMut::new(LitePullConsumerConfig {
+            Arc::new(ClientConfig::default()),
+            Arc::new(LitePullConsumerConfig {
                 consumer_group: CheetahString::from_static_str("lite_pull_initial_group"),
                 ..Default::default()
             }),
@@ -3490,8 +3488,8 @@ mod tests {
     #[test]
     fn set_offset_store_updates_rebalance_before_start_and_rejects_running_mutation() {
         let impl_ = DefaultLitePullConsumerImpl::new(
-            ArcMut::new(ClientConfig::default()),
-            ArcMut::new(LitePullConsumerConfig {
+            Arc::new(ClientConfig::default()),
+            Arc::new(LitePullConsumerConfig {
                 consumer_group: CheetahString::from_static_str("lite_pull_offset_store_group"),
                 ..Default::default()
             }),
@@ -3526,8 +3524,8 @@ mod tests {
     #[tokio::test]
     async fn set_unit_mode_updates_pull_api_wrapper_for_filter_hooks_like_java() {
         let impl_ = DefaultLitePullConsumerImpl::new(
-            ArcMut::new(ClientConfig::default()),
-            ArcMut::new(LitePullConsumerConfig {
+            Arc::new(ClientConfig::default()),
+            Arc::new(LitePullConsumerConfig {
                 consumer_group: CheetahString::from_static_str("lite_pull_unit_mode_group"),
                 ..Default::default()
             }),
@@ -3576,8 +3574,8 @@ mod tests {
     #[tokio::test]
     async fn operate_after_running_starts_preassigned_pull_tasks() {
         let impl_ = Arc::new(DefaultLitePullConsumerImpl::new(
-            ArcMut::new(ClientConfig::default()),
-            ArcMut::new(LitePullConsumerConfig {
+            Arc::new(ClientConfig::default()),
+            Arc::new(LitePullConsumerConfig {
                 consumer_group: CheetahString::from_static_str("lite_pull_preassigned_group"),
                 ..Default::default()
             }),
@@ -3625,8 +3623,8 @@ mod tests {
         }
 
         let impl_ = DefaultLitePullConsumerImpl::new(
-            ArcMut::new(ClientConfig::default()),
-            ArcMut::new(LitePullConsumerConfig {
+            Arc::new(ClientConfig::default()),
+            Arc::new(LitePullConsumerConfig {
                 consumer_group: CheetahString::from_static_str("lite_pull_assign_abort_group"),
                 ..Default::default()
             }),
@@ -3675,8 +3673,8 @@ mod tests {
     #[tokio::test]
     async fn consumer_running_info_includes_assigned_process_queues() {
         let impl_ = DefaultLitePullConsumerImpl::new(
-            ArcMut::new(ClientConfig::default()),
-            ArcMut::new(LitePullConsumerConfig {
+            Arc::new(ClientConfig::default()),
+            Arc::new(LitePullConsumerConfig {
                 consumer_group: CheetahString::from_static_str("lite_pull_running_info_group"),
                 ..Default::default()
             }),
@@ -3697,8 +3695,8 @@ mod tests {
     #[tokio::test]
     async fn update_name_server_address_updates_client_api_like_java() {
         let impl_ = DefaultLitePullConsumerImpl::new(
-            ArcMut::new(ClientConfig::default()),
-            ArcMut::new(LitePullConsumerConfig {
+            Arc::new(ClientConfig::default()),
+            Arc::new(LitePullConsumerConfig {
                 consumer_group: CheetahString::from_static_str("lite_pull_update_namesrv_group"),
                 ..Default::default()
             }),
@@ -3739,8 +3737,8 @@ mod tests {
     #[tokio::test]
     async fn subscribe_with_sql_selector_preserves_expression_type_like_java() {
         let impl_ = DefaultLitePullConsumerImpl::new(
-            ArcMut::new(ClientConfig::default()),
-            ArcMut::new(LitePullConsumerConfig {
+            Arc::new(ClientConfig::default()),
+            Arc::new(LitePullConsumerConfig {
                 consumer_group: CheetahString::from_static_str("lite_pull_sql_selector_group"),
                 ..Default::default()
             }),
@@ -3783,8 +3781,8 @@ mod tests {
     #[tokio::test]
     async fn set_sub_expression_for_assign_matches_java_validation_and_state() {
         let impl_ = DefaultLitePullConsumerImpl::new(
-            ArcMut::new(ClientConfig::default()),
-            ArcMut::new(LitePullConsumerConfig {
+            Arc::new(ClientConfig::default()),
+            Arc::new(LitePullConsumerConfig {
                 consumer_group: CheetahString::from_static_str("lite_pull_assign_filter_group"),
                 ..Default::default()
             }),
@@ -3813,8 +3811,8 @@ mod tests {
         drop(map);
 
         let running_impl = DefaultLitePullConsumerImpl::new(
-            ArcMut::new(ClientConfig::default()),
-            ArcMut::new(LitePullConsumerConfig {
+            Arc::new(ClientConfig::default()),
+            Arc::new(LitePullConsumerConfig {
                 consumer_group: CheetahString::from_static_str("lite_pull_assign_filter_running_group"),
                 ..Default::default()
             }),
@@ -3833,8 +3831,8 @@ mod tests {
     #[tokio::test]
     async fn next_pull_offset_applies_seek_to_consume_offset_like_java() {
         let impl_ = DefaultLitePullConsumerImpl::new(
-            ArcMut::new(ClientConfig::default()),
-            ArcMut::new(LitePullConsumerConfig {
+            Arc::new(ClientConfig::default()),
+            Arc::new(LitePullConsumerConfig {
                 consumer_group: CheetahString::from_static_str("lite_pull_seek_offset_group"),
                 ..Default::default()
             }),
@@ -3857,8 +3855,8 @@ mod tests {
     #[tokio::test]
     async fn seek_rejects_unassigned_queue_before_broker_offset_lookup_like_java() {
         let impl_ = DefaultLitePullConsumerImpl::new(
-            ArcMut::new(ClientConfig::default()),
-            ArcMut::new(LitePullConsumerConfig {
+            Arc::new(ClientConfig::default()),
+            Arc::new(LitePullConsumerConfig {
                 consumer_group: CheetahString::from_static_str("lite_pull_seek_unassigned_group"),
                 ..Default::default()
             }),
@@ -3880,8 +3878,8 @@ mod tests {
     async fn commit_all_updates_offsets_without_persisting_like_java() {
         let group = CheetahString::from_static_str("lite_pull_commit_all_group");
         let impl_ = DefaultLitePullConsumerImpl::new(
-            ArcMut::new(ClientConfig::default()),
-            ArcMut::new(LitePullConsumerConfig {
+            Arc::new(ClientConfig::default()),
+            Arc::new(LitePullConsumerConfig {
                 consumer_group: group,
                 ..Default::default()
             }),
@@ -3906,8 +3904,8 @@ mod tests {
     async fn commit_message_queues_uses_assigned_consume_offset_like_java() {
         let group = CheetahString::from_static_str("lite_pull_commit_set_group");
         let impl_ = DefaultLitePullConsumerImpl::new(
-            ArcMut::new(ClientConfig::default()),
-            ArcMut::new(LitePullConsumerConfig {
+            Arc::new(ClientConfig::default()),
+            Arc::new(LitePullConsumerConfig {
                 consumer_group: group,
                 ..Default::default()
             }),
@@ -3936,8 +3934,8 @@ mod tests {
     async fn commit_message_queues_with_persist_calls_persist_all_like_java() {
         let group = CheetahString::from_static_str("lite_pull_commit_set_persist_group");
         let impl_ = DefaultLitePullConsumerImpl::new(
-            ArcMut::new(ClientConfig::default()),
-            ArcMut::new(LitePullConsumerConfig {
+            Arc::new(ClientConfig::default()),
+            Arc::new(LitePullConsumerConfig {
                 consumer_group: group,
                 ..Default::default()
             }),
@@ -3963,8 +3961,8 @@ mod tests {
     #[tokio::test]
     async fn poll_zero_timeout_returns_cached_message_like_java() {
         let impl_ = DefaultLitePullConsumerImpl::new(
-            ArcMut::new(ClientConfig::default()),
-            ArcMut::new(LitePullConsumerConfig {
+            Arc::new(ClientConfig::default()),
+            Arc::new(LitePullConsumerConfig {
                 consumer_group: CheetahString::from_static_str("lite_pull_zero_timeout_group"),
                 auto_commit: false,
                 ..Default::default()
@@ -4003,8 +4001,8 @@ mod tests {
     #[tokio::test]
     async fn clear_message_queue_in_cache_removes_pending_consume_requests_like_java() {
         let impl_ = DefaultLitePullConsumerImpl::new(
-            ArcMut::new(ClientConfig::default()),
-            ArcMut::new(LitePullConsumerConfig {
+            Arc::new(ClientConfig::default()),
+            Arc::new(LitePullConsumerConfig {
                 consumer_group: CheetahString::from_static_str("lite_pull_clear_cache_group"),
                 auto_commit: false,
                 ..Default::default()
@@ -4076,8 +4074,8 @@ mod tests {
             ..Default::default()
         };
         let impl_ = DefaultLitePullConsumerImpl::new(
-            ArcMut::new(client_config),
-            ArcMut::new(LitePullConsumerConfig {
+            Arc::new(client_config),
+            Arc::new(LitePullConsumerConfig {
                 consumer_group: CheetahString::from_static_str("lite_pull_hook_access_channel_group"),
                 auto_commit: false,
                 ..Default::default()
@@ -4133,8 +4131,8 @@ mod tests {
     #[tokio::test]
     async fn poll_refreshes_last_consume_timestamp_after_hooks_like_java() {
         let impl_ = DefaultLitePullConsumerImpl::new(
-            ArcMut::new(ClientConfig::default()),
-            ArcMut::new(LitePullConsumerConfig {
+            Arc::new(ClientConfig::default()),
+            Arc::new(LitePullConsumerConfig {
                 consumer_group: CheetahString::from_static_str("lite_pull_timestamp_after_hook_group"),
                 auto_commit: false,
                 ..Default::default()
@@ -4178,8 +4176,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn concurrent_poll_calls_are_serialized_like_java_synchronized_poll() {
         let impl_ = Arc::new(DefaultLitePullConsumerImpl::new(
-            ArcMut::new(ClientConfig::default()),
-            ArcMut::new(LitePullConsumerConfig {
+            Arc::new(ClientConfig::default()),
+            Arc::new(LitePullConsumerConfig {
                 consumer_group: CheetahString::from_static_str("lite_pull_serialized_poll_group"),
                 auto_commit: false,
                 ..Default::default()
@@ -4273,8 +4271,8 @@ mod tests {
     #[tokio::test]
     async fn pull_inner_refreshes_last_pull_timestamp_before_flow_control_like_java() {
         let impl_ = DefaultLitePullConsumerImpl::new(
-            ArcMut::new(ClientConfig::default()),
-            ArcMut::new(LitePullConsumerConfig {
+            Arc::new(ClientConfig::default()),
+            Arc::new(LitePullConsumerConfig {
                 consumer_group: CheetahString::from_static_str("lite_pull_last_pull_timestamp_group"),
                 pull_threshold_for_queue: 0,
                 pull_time_delay_millis_when_cache_flow_control: 123,
@@ -4303,8 +4301,8 @@ mod tests {
     #[tokio::test]
     async fn pull_result_does_not_overwrite_pending_seek_offset_like_java() {
         let impl_ = DefaultLitePullConsumerImpl::new(
-            ArcMut::new(ClientConfig::default()),
-            ArcMut::new(LitePullConsumerConfig {
+            Arc::new(ClientConfig::default()),
+            Arc::new(LitePullConsumerConfig {
                 consumer_group: CheetahString::from_static_str("lite_pull_pending_seek_group"),
                 ..Default::default()
             }),
@@ -4334,8 +4332,8 @@ mod tests {
     #[tokio::test]
     async fn offset_illegal_corrects_pull_offset_without_dropping_queue_like_java_lite_pull() {
         let impl_ = DefaultLitePullConsumerImpl::new(
-            ArcMut::new(ClientConfig::default()),
-            ArcMut::new(LitePullConsumerConfig {
+            Arc::new(ClientConfig::default()),
+            Arc::new(LitePullConsumerConfig {
                 consumer_group: CheetahString::from_static_str("lite_pull_offset_illegal_group"),
                 pull_time_delay_millis_when_exception: 321,
                 ..Default::default()
@@ -4359,8 +4357,8 @@ mod tests {
     #[tokio::test]
     async fn rebalance_update_assigns_divided_queues_and_starts_pull_tasks() {
         let impl_ = Arc::new(DefaultLitePullConsumerImpl::new(
-            ArcMut::new(ClientConfig::default()),
-            ArcMut::new(LitePullConsumerConfig {
+            Arc::new(ClientConfig::default()),
+            Arc::new(LitePullConsumerConfig {
                 consumer_group: CheetahString::from_static_str("lite_pull_rebalance_update_group"),
                 message_model: MessageModel::Clustering,
                 ..Default::default()
@@ -4418,8 +4416,8 @@ mod tests {
     #[tokio::test]
     async fn lite_pull_rebalance_listener_invokes_user_listener() {
         let impl_ = Arc::new(DefaultLitePullConsumerImpl::new(
-            ArcMut::new(ClientConfig::default()),
-            ArcMut::new(LitePullConsumerConfig {
+            Arc::new(ClientConfig::default()),
+            Arc::new(LitePullConsumerConfig {
                 consumer_group: CheetahString::from_static_str("lite_pull_user_listener_group"),
                 ..Default::default()
             }),
@@ -4478,8 +4476,8 @@ mod tests {
     #[tokio::test]
     async fn lite_pull_rebalance_listener_ignores_changes_after_shutdown_token_cancelled() {
         let impl_ = Arc::new(DefaultLitePullConsumerImpl::new(
-            ArcMut::new(ClientConfig::default()),
-            ArcMut::new(LitePullConsumerConfig {
+            Arc::new(ClientConfig::default()),
+            Arc::new(LitePullConsumerConfig {
                 consumer_group: CheetahString::from_static_str("lite_pull_cancelled_listener_group"),
                 ..Default::default()
             }),
@@ -4518,8 +4516,8 @@ mod tests {
     #[tokio::test]
     async fn subscribe_with_listener_installs_user_listener_with_subscription_like_java() {
         let impl_ = DefaultLitePullConsumerImpl::new(
-            ArcMut::new(ClientConfig::default()),
-            ArcMut::new(LitePullConsumerConfig {
+            Arc::new(ClientConfig::default()),
+            Arc::new(LitePullConsumerConfig {
                 consumer_group: CheetahString::from_static_str("lite_pull_subscribe_listener_group"),
                 ..Default::default()
             }),
@@ -4564,8 +4562,8 @@ mod tests {
     #[tokio::test]
     async fn topic_message_queue_change_listener_fires_only_when_snapshot_changes() {
         let impl_ = DefaultLitePullConsumerImpl::new(
-            ArcMut::new(ClientConfig::default()),
-            ArcMut::new(LitePullConsumerConfig {
+            Arc::new(ClientConfig::default()),
+            Arc::new(LitePullConsumerConfig {
                 consumer_group: CheetahString::from_static_str("lite_pull_topic_metadata_group"),
                 ..Default::default()
             }),
