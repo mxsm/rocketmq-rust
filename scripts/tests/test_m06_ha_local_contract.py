@@ -43,6 +43,9 @@ class M06HALocalContractTests(unittest.TestCase):
         store_state = source("rocketmq-store/src/ha/ha_connection_state.rs")
         store_metrics = source("rocketmq-store/src/ha/transfer_metrics.rs")
         store_connection = source("rocketmq-store/src/ha/default_ha_connection.rs")
+        store_connection_production = store_connection.split(
+            "#[cfg(test)]", maxsplit=1
+        )[0]
         store_client = source("rocketmq-store/src/ha/default_ha_client.rs")
         store_client_production = store_client.split("#[cfg(test)]", maxsplit=1)[0]
         store_local = source(
@@ -159,6 +162,24 @@ class M06HALocalContractTests(unittest.TestCase):
         self.assertNotIn(
             "ArcMut<LocalFileMessageStore>", store_default_service_production
         )
+        self.assertIn(
+            "connection_context: DefaultHAConnectionContext",
+            store_default_service_production,
+        )
+        self.assertIn(
+            "connections: Weak<Mutex<HashMap<HAConnectionId, GeneralHAConnection>>>",
+            store_default_service_production,
+        )
+        self.assertIn(
+            "group_transfer_service: OnceLock<Weak<GroupTransferService>>",
+            store_default_service_production,
+        )
+        self.assertIn(
+            "state_notification_service: OnceLock<Weak<HAConnectionStateNotificationService>>",
+            store_default_service_production,
+        )
+        self.assertNotIn("ArcMut", store_connection_production)
+        self.assertNotIn("DefaultHAService", store_connection_production)
         self.assertIn("pub(crate) struct HAReplicaStoreHandle", store_local)
         self.assertIn("commit_log: CommitLogReplicaHandle", store_local)
         for capability in (

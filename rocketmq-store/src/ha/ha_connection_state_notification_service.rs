@@ -208,7 +208,7 @@ impl HAConnectionStateNotificationService {
         let _ = self.service_manager.shutdown().await;
     }
 
-    pub async fn start(&mut self) -> HAResult<()> {
+    pub async fn start(&self) -> HAResult<()> {
         match self.service_manager.start().await {
             Ok(_) => Ok(()),
             Err(e) => {

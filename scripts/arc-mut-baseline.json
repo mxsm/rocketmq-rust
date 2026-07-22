@@ -1525,118 +1525,6 @@
       "adr": "ADR-013"
     },
     {
-      "identity": "d5bea7610998eabb9d519b8f",
-      "path": "rocketmq-store/src/ha/default_ha_connection.rs",
-      "symbol": "*",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "76e2afae606de9686ac9f0a6",
-          "fingerprint": "2f3a2037ae7031728b63a25f",
-          "item": "mod tests",
-          "line": 904
-        }
-      ],
-      "owner": "store",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "8d7e413e9fbfd2b7d0cc7029",
-      "path": "rocketmq-store/src/ha/default_ha_connection.rs",
-      "symbol": "ArcMut",
-      "kind": "constructor",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "5e6a3fc89f9dd906637ef74b",
-          "fingerprint": "53180d1076b73dc0e343a421",
-          "item": "fn start",
-          "line": 254
-        },
-        {
-          "id": "4073d08255be7d438d916707",
-          "fingerprint": "2895aa598a791635bc5c9527",
-          "item": "fn start",
-          "line": 266
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "0c052494e6083e4095e6cae6",
-      "path": "rocketmq-store/src/ha/default_ha_connection.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "4bb465fa30fc7847a30325a7",
-          "fingerprint": "3421a905628600e83d64d0d1",
-          "item": "<module>",
-          "line": 27
-        }
-      ],
-      "owner": "store",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "9dec34f8e8fcbd86a27df716",
-      "path": "rocketmq-store/src/ha/default_ha_connection.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "c74ed7423ea389a4a3364a24",
-          "fingerprint": "a49c0c178a88ffb0aa61e15f",
-          "item": "struct DefaultHAConnection",
-          "line": 133
-        },
-        {
-          "id": "a59252ff78f9733576bfd51e",
-          "fingerprint": "3dbca4aeaf68af2562e1928d",
-          "item": "fn new",
-          "line": 152
-        },
-        {
-          "id": "1b93a6b97df55d22cc0949d5",
-          "fingerprint": "02862b04fd3ee3251694f284",
-          "item": "struct ReadSocketService",
-          "line": 383
-        },
-        {
-          "id": "f0e34076d6ecf664b522441d",
-          "fingerprint": "02862b04fd3ee3251694f284",
-          "item": "fn new",
-          "line": 398
-        },
-        {
-          "id": "d9bcbf7f9fb2c7f0be243123",
-          "fingerprint": "49f2bd8c5f9b6b9b17546dbb",
-          "item": "struct WriteSocketService",
-          "line": 566
-        },
-        {
-          "id": "ae465fecfb2c110e4462c01b",
-          "fingerprint": "bda2e86dd7ae4f9b02c6a261",
-          "item": "fn new",
-          "line": 583
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
       "identity": "c6c8fe712d690c1250b7dc5f",
       "path": "rocketmq-store/src/ha/default_ha_service.rs",
       "symbol": "*",
@@ -1647,7 +1535,7 @@
           "id": "c400cc39cb0db21bb2f34f89",
           "fingerprint": "c7fe0a6136272523a4df44f0",
           "item": "mod tests",
-          "line": 745
+          "line": 906
         }
       ],
       "owner": "store",
@@ -1666,61 +1554,61 @@
           "id": "1112e350e7951da968729314",
           "fingerprint": "88a50625f8b4ef1eb68814de",
           "item": "fn new_test_message_store",
-          "line": 777
+          "line": 963
         },
         {
           "id": "2ef24573d33f28cc5e843f22",
           "fingerprint": "6303d8849c8556fd1dad57a9",
           "item": "fn new_auto_switch_services",
-          "line": 795
+          "line": 981
         },
         {
           "id": "1f7e7ce2934e4807267bedce",
           "fingerprint": "008a0330479ae77e26e83b70",
           "item": "fn new_auto_switch_services",
-          "line": 796
+          "line": 982
         },
         {
           "id": "4167cada56d52dda38673538",
           "fingerprint": "59d868113f729d868de28ee2",
           "item": "fn notify_transfer_some_counts_repeated_same_offset_acks",
-          "line": 851
+          "line": 1037
         },
         {
           "id": "ef74c10351e6032bfac5db7b",
           "fingerprint": "25f8289521a497122903db3c",
           "item": "fn accept_socket_service_shutdown_joins_worker",
-          "line": 868
+          "line": 1054
         },
         {
           "id": "ca4fabbcef63d2c90d17a9fd",
           "fingerprint": "008a0330479ae77e26e83b70",
           "item": "fn accept_socket_service_shutdown_joins_worker",
-          "line": 869
+          "line": 1055
         },
         {
           "id": "0654332d9eb7efc704ad5e38",
           "fingerprint": "25f8289521a497122903db3c",
           "item": "fn init_uses_auto_switch_accept_socket_service_for_auto_switch_mode",
-          "line": 896
+          "line": 1082
         },
         {
           "id": "fa0bceb226d1631d75930d9c",
           "fingerprint": "008a0330479ae77e26e83b70",
           "item": "fn init_uses_auto_switch_accept_socket_service_for_auto_switch_mode",
-          "line": 897
+          "line": 1083
         },
         {
           "id": "158203b8ee1cf98823a897ea",
           "fingerprint": "54d2d90a19b910255bc9ebd4",
           "item": "fn build_connection_wraps_auto_switch_connections_when_enabled",
-          "line": 920
+          "line": 1106
         },
         {
           "id": "bcc8053acb7ecd0e4e31c3ac",
           "fingerprint": "db07b4312a267e7c8f62b169",
           "item": "fn in_sync_replicas_count_requires_slave_ack_to_reach_master_offset",
-          "line": 1060
+          "line": 1246
         }
       ],
       "owner": "store",
@@ -1739,7 +1627,7 @@
           "id": "186ca8348e96fba01206a620",
           "fingerprint": "945de8863a09ceb6a69a827b",
           "item": "<module>",
-          "line": 25
+          "line": 27
         }
       ],
       "owner": "store",
@@ -1758,25 +1646,7 @@
           "id": "e718591089641e44d89339b7",
           "fingerprint": "3212bd4ed39261093870b3a3",
           "item": "fn init",
-          "line": 156
-        },
-        {
-          "id": "a27f2e1ea40458c8feff6fa9",
-          "fingerprint": "342b6abf6b39338dc5502d58",
-          "item": "struct AcceptSocketService",
-          "line": 611
-        },
-        {
-          "id": "56ab32d2732aa8f20fd678cf",
-          "fingerprint": "203eb27394db4611eefee16e",
-          "item": "fn new",
-          "line": 618
-        },
-        {
-          "id": "5ea743f99f8611411abce9d6",
-          "fingerprint": "c7b2e2e9d34ccb79b32a8240",
-          "item": "fn build_connection",
-          "line": 634
+          "line": 470
         }
       ],
       "owner": "store",
@@ -1795,19 +1665,19 @@
           "id": "4b3ec32d6e2df55e36120c8f",
           "fingerprint": "5ddf728cdf3d55063f4f1c2c",
           "item": "fn new_test_message_store",
-          "line": 761
+          "line": 947
         },
         {
           "id": "d7c45c9bba11bf5d3051d1f1",
           "fingerprint": "55981f4df96a157ced52dd3f",
           "item": "fn new_auto_switch_services",
-          "line": 793
+          "line": 979
         },
         {
           "id": "1854378156fe4c51ab3ef9b1",
           "fingerprint": "f98b7587a9c6e1f612ddfd49",
           "item": "fn new_auto_switch_services",
-          "line": 793
+          "line": 979
         }
       ],
       "owner": "store",
