@@ -13,9 +13,12 @@
 // limitations under the License.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use cheetah_string::CheetahString;
-use rocketmq_rust::ArcMut;
+use parking_lot::RwLock;
+use parking_lot::RwLockReadGuard;
+use parking_lot::RwLockWriteGuard;
 
 use crate::consume_queue::cq_ext_unit::CqExtUnit;
 use crate::queue::consume_queue::ConsumeQueueTrait;
@@ -32,7 +35,33 @@ pub mod local_file_consume_queue_store;
 mod queue_offset_operator;
 pub mod single_consume_queue;
 
-pub type ArcConsumeQueue = ArcMut<Box<dyn ConsumeQueueTrait>>;
+/// Shared consume-queue handle with synchronization scoped to one queue.
+///
+/// Callers must choose shared or exclusive access explicitly. Keeping the lock
+/// inside the handle avoids propagating unchecked shared mutable ownership
+/// through the message-store API while allowing independent queues to proceed
+/// concurrently.
+#[derive(Clone)]
+pub struct ArcConsumeQueue {
+    inner: Arc<RwLock<Box<dyn ConsumeQueueTrait>>>,
+}
+
+impl ArcConsumeQueue {
+    pub fn new(consume_queue: Box<dyn ConsumeQueueTrait>) -> Self {
+        Self {
+            inner: Arc::new(RwLock::new(consume_queue)),
+        }
+    }
+
+    pub fn read(&self) -> RwLockReadGuard<'_, Box<dyn ConsumeQueueTrait>> {
+        self.inner.read()
+    }
+
+    pub fn write(&self) -> RwLockWriteGuard<'_, Box<dyn ConsumeQueueTrait>> {
+        self.inner.write()
+    }
+}
+
 pub type ConsumeQueueTable = parking_lot::Mutex<HashMap<CheetahString, HashMap<i32, ArcConsumeQueue>>>;
 
 pub struct CqUnit {

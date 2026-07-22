@@ -196,6 +196,7 @@ impl MessageRelatedHandler {
             ))));
         };
 
+        let consume_queue = consume_queue.read();
         let mut body = QueryConsumeQueueResponseBody {
             max_queue_index: consume_queue.get_max_offset_in_queue(),
             min_queue_index: consume_queue.get_min_offset_in_queue(),
@@ -671,21 +672,23 @@ mod tests {
             false,
         );
 
-        let mut consume_queue = admin
+        let consume_queue = admin
             .message_store()
             .unwrap()
             .find_consume_queue(&CheetahString::from_static_str("topic-a"), 0)
             .expect("consume queue should exist");
-        consume_queue.put_message_position_info_wrapper(&DispatchRequest {
-            topic: CheetahString::from_static_str("topic-a"),
-            queue_id: 0,
-            commit_log_offset: 128,
-            msg_size: Bytes::from_static(b"message-a").len() as i32,
-            store_timestamp: 1,
-            consume_queue_offset: 0,
-            success: true,
-            ..Default::default()
-        });
+        consume_queue
+            .write()
+            .put_message_position_info_wrapper(&DispatchRequest {
+                topic: CheetahString::from_static_str("topic-a"),
+                queue_id: 0,
+                commit_log_offset: 128,
+                msg_size: Bytes::from_static(b"message-a").len() as i32,
+                store_timestamp: 1,
+                consume_queue_offset: 0,
+                success: true,
+                ..Default::default()
+            });
 
         let handler = MessageRelatedHandler::new();
         let channel = create_test_channel().await;

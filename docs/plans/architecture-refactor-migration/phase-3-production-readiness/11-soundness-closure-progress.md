@@ -4200,14 +4200,45 @@ ConsumeQueueStore root ownership 随 Issue #8569 完成以下收窄：
 | root final gates | `cargo fmt --all -- --check` 与 workspace all-target/all-feature strict Clippy 通过；Windows linker stdout 与既有 future-incompatibility note 不受 `-D warnings` 管辖 |
 | reduced validation scope | 未单独重复 Store strict Clippy（最终 workspace Clippy 已覆盖）；未运行 runtime audit（未修改 TaskGroup/runtime/lifecycle 边界）、RocksDB 六项专项（未修改 backend/feature 行为）、Store 全量 lib、dependency/release/performance/telemetry 矩阵、Rustdoc 或 AGENTS routing |
 
+## M11-12bc77 实现
+
+ConsumeQueue trait-object ownership 随 Issue #8571 完成以下收窄：
+
+- `ArcConsumeQueue` 从 `ArcMut<Box<dyn ConsumeQueueTrait>>` alias 改为标准 `Arc` 包装的每队列
+  `parking_lot::RwLock<Box<dyn ConsumeQueueTrait>>` handle；clone 只共享同步句柄，不再产生 unchecked mutable
+  trait-object escape，也不引入 Store 全局锁。
+- Store queue root、LocalFileMessageStore、Timer 与 Broker admin/schedule 调用方显式选择 read/write guard；mutable
+  dispatch/recovery/load/truncate/destroy 使用 write，查询/迭代/flush 使用 read。传入现有 queue 借用的只读 lifecycle
+  facade 直接调用对象，避免持 read guard 后再次查表取得同队列锁。
+- 借用型 CQ iterator 始终受 read guard 生命周期保护；Broker delayed-message schedule 改为逐条获取下一条 unit，
+  在 delivery await 前释放 guard，保持 offset/min/max 修正与逐条投递语义。
+- M06 source contract 固定每队列 RwLock newtype、显式读写入口、无旧 alias，以及 schedule guard 不跨 await；
+  queue recovery、Timer、LMQ multi-dispatch 与 Broker admin query 定向行为回归覆盖读写路径。
+- reviewed baseline 从 126/435 降至 103/391：production 从 55/111 降至 34/71，test 从 57/284
+  降至 55/280，compatibility 保持 14/40；Broker production 保持 4/8，Store production 从 51/103
+  降至 30/63。相对 bc76 净删除 23 identities/44 occurrences（production 21/40、test 2/4），无
+  relocation、新增 identity 或临时 approval。
+- R09 从 8/13 降至 4/7、R10 从 5/7 降至 3/4、R11 从 5/7 降至 3/4、R12 从 17/34
+  降至 4/6，均仍未完成；31 项执行清单仍为完成 8 项、剩余 23 项，正式进度仍为 75/82。
+
+## M11-12bc77 验证
+
+| 命令 | 结果 |
+|---|---|
+| affected compile / behavior / source | Store 与 Broker all-target/all-feature check 通过；ConsumeQueueStore 10/10、Timer `process_once` 15/15、LMQ multi-dispatch 3/3、Broker consume-queue query 1/1、M06 contract 2/2 通过。M06 首轮因格式化后的换行导致精确字符串断言失败，改为受限正则后重跑通过；先前非零结果未计作通过 |
+| RocksDB specialized gate | Store/Broker `rocksdb_store` all-target strict Clippy 通过；foundation 82/82、semantics 9/9、Broker RocksDB 21/21、POP consumer 4/4 通过。Broker Clippy 首轮发现 schedule match condition block，提取首条 unit 绑定后重跑通过；先前非零结果未计作通过 |
+| reviewed baseline / fixtures | 正式 baseline 与 reviewed candidate 的 semantic set 均为 103/391；直接 guard、candidate compare、27/27 fixtures 与 78/78 guard tests 通过；净删除 23 identities/44 occurrences，无 relocation、新增 identity 或临时 approval |
+| runtime / root final gates | enforcing runtime audit、`cargo fmt --all -- --check`、workspace all-target/all-feature strict Clippy 与 `git diff --check` 通过；Windows linker stdout 与既有 future-incompatibility note 不受 `-D warnings` 管辖 |
+| reduced validation scope | 未重复 Store/Broker 全量 lib、dependency/release/performance/telemetry 矩阵、Rustdoc 或 AGENTS routing；这些边界未修改，受影响行为由定向回归、RocksDB 专项、runtime audit 和最终 workspace strict Clippy 覆盖 |
+
 ## 剩余切片与 Gate
 
-2026-07-22 盘点将执行工作固化为 31 个最小可审查单元：16 个 production owner、2 个
+2026-07-23 盘点将执行工作固化为 31 个最小可审查单元：16 个 production owner、2 个
 test/compatibility、7 个 M10/Phase 3 动态验收与签署、6 个 M12；R02、R03、R04、R05、R06、R07、R08、R13 已完成，当前剩余 23 个，正式进度仍为 75/82。
 完整逐项 checklist 见 `docs/plans/architecture-refactor-migration/REMAINING-TASKS.md`。
 
 1. Broker runtime root 已改为独占 `Box<BrokerRuntimeInner>`，production/test 完整 root clone 均已清零；bc65 删除 Local/Rocks concrete unsafe-wrapper 传播后，仅剩显式 `ArcMut` Store 组合根 capability carrier（4/8），随 R09～R16 Store owner 安全化删除。
-2. Store 其余 ConsumeQueue、StoreHandle/Timer 与其余 HA service/actor（51/103）；BrokerStats observer、ConsumeQueueExt 显式锁 owner、ConsumeQueueStore 标准 Arc root/短锁 wiring、HA replication-state callback、未共享 HA child direct ownership、Default HA client 标准 Arc runtime/task-local buffer、commit-to-flush 窄唤醒能力、HA confirm/epoch 原子发布、HA connection runtime handle、CommitLog shared disk-flush/recovery、标准 Arc cleanup/mapped-file flush/dispatcher/store-context/read capability、auto-switch client construction、single delegate Store owner、LocalStore back-reference、Local 完整 self retention、共享引用可变 CommitLog maintenance、完整 CommitLog owner 与 Local Reput/index/self-check/compaction/tiered 完整 CommitLog owner 已退出。
+2. Store 其余 queue LocalStore carrier、StoreHandle/Timer 与 HA service/actor（30/63）；BrokerStats observer、ConsumeQueueExt 显式锁 owner、ConsumeQueueStore 标准 Arc root/短锁 wiring、ConsumeQueue trait-object 每队列 RwLock handle、HA replication-state callback、未共享 HA child direct ownership、Default HA client 标准 Arc runtime/task-local buffer、commit-to-flush 窄唤醒能力、HA confirm/epoch 原子发布、HA connection runtime handle、CommitLog shared disk-flush/recovery、标准 Arc cleanup/mapped-file flush/dispatcher/store-context/read capability、auto-switch client construction、single delegate Store owner、LocalStore back-reference、Local 完整 self retention、共享引用可变 CommitLog maintenance、完整 CommitLog owner 与 Local Reput/index/self-check/compaction/tiered 完整 CommitLog owner 已退出。
 3. Production `WeakArcMut` 已清零；继续迁移 test/compatibility 中受控使用并移除其余 nightly feature。公开 `arc_mut.rs`/re-export 的 destructive 删除受 next-major 两轮弃用与 Release Manager/HUMAN Gate 约束，不能静默重置 public API baseline。
 4. 对同一候选快照执行 stable feature matrix、Miri/Loom 可用切片、soak/SLO fault、dashboard/runbook、动态
    Kind/K3d/container、M10 固定硬件和 Human Gate。

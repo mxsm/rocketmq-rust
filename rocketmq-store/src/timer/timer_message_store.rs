@@ -245,7 +245,7 @@ impl TimerMessageStore {
             message_store.find_consume_queue(&CheetahString::from_static_str(TIMER_TOPIC), 0)
         });
         let max_offset_in_queue = match consume_queue {
-            Some(queue) => queue.get_max_offset_in_queue(),
+            Some(queue) => queue.read().get_max_offset_in_queue(),
             None => 0,
         };
         max_offset_in_queue - temp_queue_offset
@@ -620,10 +620,10 @@ impl TimerMessageStore {
             return;
         };
 
-        let max_offset = consume_queue.get_max_offset_in_queue();
+        let max_offset = consume_queue.read().get_max_offset_in_queue();
         let mut queue_offset = self.curr_queue_offset.load(Ordering::Relaxed);
         while queue_offset < max_offset {
-            let Some(cq_unit) = consume_queue.get(queue_offset) else {
+            let Some(cq_unit) = consume_queue.read().get(queue_offset) else {
                 break;
             };
             let Some(message) = message_store.look_message_by_offset_with_size(cq_unit.pos, cq_unit.size) else {
@@ -732,6 +732,7 @@ impl TimerMessageStore {
         let Some(consume_queue) = consume_queue else {
             return clamp_queue_offset(checkpoint_queue_offset, None, None);
         };
+        let consume_queue = consume_queue.read();
         let min_offset = consume_queue.get_min_offset_in_queue();
         let max_offset = consume_queue.get_max_offset_in_queue();
         let recovered_offset = clamp_queue_offset(checkpoint_queue_offset, Some(min_offset), Some(max_offset));
@@ -813,12 +814,12 @@ impl TimerMessageStore {
         let now_ms = self.floor_time_ms(current_millis() as i64);
         let dequeue_cursor = self.ensure_dequeue_cursor(now_ms);
         let enqueue_reference_time_ms = dequeue_cursor.max(now_ms);
-        let max_offset = consume_queue.get_max_offset_in_queue();
+        let max_offset = consume_queue.read().get_max_offset_in_queue();
         let mut queue_offset = self.curr_queue_offset.load(Ordering::Relaxed);
         let mut indexed = 0usize;
 
         while queue_offset < max_offset && indexed < limit {
-            let Some(cq_unit) = consume_queue.get(queue_offset) else {
+            let Some(cq_unit) = consume_queue.read().get(queue_offset) else {
                 break;
             };
             let Some(message) = message_store.look_message_by_offset_with_size(cq_unit.pos, cq_unit.size) else {
@@ -1719,7 +1720,7 @@ mod tests {
         assert_eq!(processed, 2);
         assert_eq!(store.get_max_offset_in_queue(&real_topic, 0), 1);
         let queue = store.find_consume_queue(&real_topic, 0).unwrap();
-        let queue_unit = queue.get(0).unwrap();
+        let queue_unit = queue.read().get(0).unwrap();
         let delivered = store
             .look_message_by_offset_with_size(queue_unit.pos, queue_unit.size)
             .unwrap();
@@ -1782,7 +1783,7 @@ mod tests {
         assert_eq!(store.get_max_offset_in_queue(&real_topic, 0), 0);
         assert_eq!(store.get_max_offset_in_queue(&real_topic, 3), 1);
         let queue = store.find_consume_queue(&real_topic, 3).unwrap();
-        let queue_unit = queue.get(0).unwrap();
+        let queue_unit = queue.read().get(0).unwrap();
         let delivered = store
             .look_message_by_offset_with_size(queue_unit.pos, queue_unit.size)
             .unwrap();
@@ -2280,7 +2281,7 @@ mod tests {
         let timer_queue = store
             .find_consume_queue(&CheetahString::from_static_str(TIMER_TOPIC), 0)
             .unwrap();
-        let rolled_queue_unit = timer_queue.get(1).unwrap();
+        let rolled_queue_unit = timer_queue.read().get(1).unwrap();
         let rolled_message = store
             .look_message_by_offset_with_size(rolled_queue_unit.pos, rolled_queue_unit.size)
             .unwrap();

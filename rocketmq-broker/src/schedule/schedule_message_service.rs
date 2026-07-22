@@ -829,6 +829,7 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
             });
 
             if let Some(current_delay_offset) = self.offset_state.offset(delay_level) {
+                let cq = cq.read();
                 let mut correct_delay_offset = current_delay_offset;
                 let cq_min_offset = cq.get_min_offset_in_queue();
                 let cq_max_offset = cq.get_max_offset_in_queue();
@@ -1240,10 +1241,15 @@ impl<MS: MessageStore> DeliverDelayedMessageTimerTask<MS> {
             return Ok(());
         }
         let cq = cq.unwrap();
-        // Get an iterator to the consume queue starting at the current offset
-        let mut buffer_cq = match cq.iterate_from(self.offset) {
-            Some(iter) => iter,
+        // Read one unit at a time so the queue guard is never held across delivery awaits.
+        let first_cq_unit = {
+            let cq = cq.read();
+            cq.iterate_from(self.offset).and_then(|mut iter| iter.next())
+        };
+        let mut next_cq_unit = match first_cq_unit {
+            Some(unit) => Some(unit),
             None => {
+                let cq = cq.read();
                 let reset_offset = if cq.get_min_offset_in_queue() > self.offset {
                     error!(
                         "schedule CQ offset invalid. offset={}, cqMinOffset={}, queueId={}",
@@ -1275,9 +1281,7 @@ impl<MS: MessageStore> DeliverDelayedMessageTimerTask<MS> {
         while schedule_service.is_generation_active(self.run_context.generation)
             && !self.run_context.cancellation.is_cancelled()
         {
-            let cq_unit = if let Some(unit) = buffer_cq.next() {
-                unit
-            } else {
+            let Some(cq_unit) = next_cq_unit.take() else {
                 break;
             };
             let physical_offset = cq_unit.pos;
@@ -1307,6 +1311,10 @@ impl<MS: MessageStore> DeliverDelayedMessageTimerTask<MS> {
             let curr_offset = cq_unit.queue_offset;
             assert_eq!(cq_unit.batch_num, 1);
             next_offset = curr_offset + cq_unit.batch_num as i64;
+            next_cq_unit = {
+                let cq = cq.read();
+                cq.iterate_from(next_offset).and_then(|mut iter| iter.next())
+            };
 
             // Detect clock skew/backwards
             if deliver_timestamp < tags_code - (24 * 3600 * 1000) {

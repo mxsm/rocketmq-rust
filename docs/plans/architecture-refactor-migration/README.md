@@ -1118,6 +1118,16 @@ production 4/8、Store production 51/103）；相对 bc75 净删除 2 个 produc
 经临时 ADR-013 一对一 relocation 审核，无新增 identity 或提交态 approval。R12 从 17/36 降至 17/34，仍未完成；
 31 项执行清单仍为完成 8 项、剩余 23 项，总进度仍为 75/82。
 
+ConsumeQueue trait-object ownership 随 Issue #8571 完成收窄：`ArcConsumeQueue` 不再是
+`ArcMut<Box<dyn ConsumeQueueTrait>>` alias，改为标准 `Arc` 包装的每队列
+`RwLock<Box<dyn ConsumeQueueTrait>>` handle；Store、Timer 与 Broker 调用方显式选择 read/write guard。迭代器使用期
+保持 read guard，schedule delivery 改为逐条读取，任何 queue guard 都不跨 delivery await；不同队列之间不共享全局锁。
+reviewed 快照为 103 identities/391 occurrences（production 34/71、test 55/280、compatibility 14/40、Broker
+production 4/8、Store production 30/63）；相对 bc76 净删除 23 identities/44 occurrences（production
+21/40、test 2/4），无 relocation、新增 identity 或临时 approval。R09 从 8/13 降至 4/7、R10 从 5/7 降至
+3/4、R11 从 5/7 降至 3/4、R12 从 17/34 降至 4/6；四项仍未完成。31 项执行清单仍为完成 8 项、剩余
+23 项，总进度仍为 75/82。
+
 ### 9.3 证据目录
 
 - 运行期生成物：`target/architecture-refactor/Mxx/<run-id>/`，不提交 Git。

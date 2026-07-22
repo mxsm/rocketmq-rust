@@ -189,9 +189,14 @@ impl ConsumeQueueStore {
     }
 
     async fn recover_one_consume_queue(consume_queue: ArcConsumeQueue) -> ConsumeQueueRecoveryResult {
-        let topic = consume_queue.get_topic().clone();
-        let queue_id = consume_queue.get_queue_id();
-        let cq_type = consume_queue.get_cq_type();
+        let (topic, queue_id, cq_type) = {
+            let consume_queue = consume_queue.read();
+            (
+                consume_queue.get_topic().clone(),
+                consume_queue.get_queue_id(),
+                consume_queue.get_cq_type(),
+            )
+        };
         match crate::runtime::spawn_io("local-file-cq-recover", move || {
             Self::recover_one_consume_queue_blocking(consume_queue)
         })
@@ -217,7 +222,8 @@ impl ConsumeQueueStore {
         }
     }
 
-    fn recover_one_consume_queue_blocking(mut consume_queue: ArcConsumeQueue) -> ConsumeQueueRecoveryResult {
+    fn recover_one_consume_queue_blocking(consume_queue: ArcConsumeQueue) -> ConsumeQueueRecoveryResult {
+        let mut consume_queue = consume_queue.write();
         let topic = consume_queue.get_topic().clone();
         let queue_id = consume_queue.get_queue_id();
         let cq_type = consume_queue.get_cq_type();
@@ -282,9 +288,14 @@ impl ConsumeQueueStore {
         let futures = queues.into_iter().map(|consume_queue| {
             let semaphore = semaphore.clone();
             async move {
-                let topic = consume_queue.get_topic().clone();
-                let queue_id = consume_queue.get_queue_id();
-                let cq_type = consume_queue.get_cq_type();
+                let (topic, queue_id, cq_type) = {
+                    let consume_queue = consume_queue.read();
+                    (
+                        consume_queue.get_topic().clone(),
+                        consume_queue.get_queue_id(),
+                        consume_queue.get_cq_type(),
+                    )
+                };
                 match semaphore.acquire_owned().await {
                     Ok(_permit) => Self::recover_one_consume_queue(consume_queue).await,
                     Err(error) => ConsumeQueueRecoveryResult {
@@ -393,6 +404,7 @@ impl ConsumeQueueStore {
 
                     for queue_id in queue_ids {
                         if let Some(consume_queue) = queue_table.get(&queue_id) {
+                            let consume_queue = consume_queue.read();
                             let max_cl_offset_in_queue = consume_queue.get_max_physic_offset();
                             let message_total_in_queue = consume_queue.get_message_total_in_queue();
                             let queue_trimmed_to_empty =
@@ -446,9 +458,9 @@ impl ConsumeQueueStore {
         }
 
         // Now destroy queues and remove from offset table (outside the lock)
-        for (topic, queue_id, mut consume_queue) in queues_to_destroy {
+        for (topic, queue_id, consume_queue) in queues_to_destroy {
             self.inner.queue_offset_operator.remove(&topic, queue_id);
-            consume_queue.destroy();
+            consume_queue.write().destroy();
         }
     }
 
@@ -487,8 +499,7 @@ impl ConsumeQueueStore {
     }
 
     pub fn check_self(&self, consume_queue: &dyn ConsumeQueueTrait) {
-        let life_cycle = self.get_life_cycle(consume_queue.get_topic(), consume_queue.get_queue_id());
-        life_cycle.check_self();
+        consume_queue.check_self();
     }
 }
 
@@ -514,13 +525,10 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
     }
 
     async fn recover(&self) {
-        let mut mutex = self.inner.consume_queue_table.lock().clone();
-        for consume_queue_table in mutex.values_mut() {
+        let mutex = self.inner.consume_queue_table.lock().clone();
+        for consume_queue_table in mutex.values() {
             for consume_queue in consume_queue_table.values() {
-                let queue_id = consume_queue.get_queue_id();
-                let topic = consume_queue.get_topic();
-                let mut file_queue_life_cycle = self.get_life_cycle(topic, queue_id);
-                file_queue_life_cycle.recover();
+                consume_queue.write().recover();
             }
         }
     }
@@ -546,22 +554,18 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
         let mutex = self.inner.consume_queue_table.lock().clone();
         for consume_queue_table in mutex.values() {
             for consume_queue in consume_queue_table.values() {
-                let queue_id = consume_queue.get_queue_id();
-                let topic = consume_queue.get_topic();
-                let mut file_queue_life_cycle = self.get_life_cycle(topic, queue_id);
-                file_queue_life_cycle.destroy();
+                consume_queue.write().destroy();
             }
         }
     }
 
     fn destroy_queue(&self, consume_queue: &dyn ConsumeQueueTrait) {
-        let mut file_queue_life_cycle = self.get_life_cycle(consume_queue.get_topic(), consume_queue.get_queue_id());
-        file_queue_life_cycle.destroy();
+        let file_queue_life_cycle = self.get_life_cycle(consume_queue.get_topic(), consume_queue.get_queue_id());
+        file_queue_life_cycle.write().destroy();
     }
 
     fn flush(&self, consume_queue: &dyn ConsumeQueueTrait, flush_least_pages: i32) -> bool {
-        let file_queue_life_cycle = self.get_life_cycle(consume_queue.get_topic(), consume_queue.get_queue_id());
-        file_queue_life_cycle.flush(flush_least_pages)
+        consume_queue.flush(flush_least_pages)
     }
 
     async fn clean_expired(&self, min_commit_log_offset: i64) {
@@ -572,36 +576,33 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
         let consume_queue_table = self.inner.consume_queue_table.lock().clone();
         for consume_queue_table in consume_queue_table.values() {
             for consume_queue in consume_queue_table.values() {
-                let consume_queue = &**consume_queue.as_ref();
-                ConsumeQueueStore::check_self(self, consume_queue);
+                let consume_queue = consume_queue.read();
+                ConsumeQueueStore::check_self(self, consume_queue.as_ref());
             }
         }
     }
 
     fn delete_expired_file(&self, consume_queue: &dyn ConsumeQueueTrait, min_commit_log_pos: i64) -> i32 {
-        let file_queue_life_cycle = self.get_life_cycle(consume_queue.get_topic(), consume_queue.get_queue_id());
-        file_queue_life_cycle.delete_expired_file(min_commit_log_pos)
+        consume_queue.delete_expired_file(min_commit_log_pos)
     }
 
     fn is_first_file_available(&self, consume_queue: &dyn ConsumeQueueTrait) -> bool {
-        let file_queue_life_cycle = self.get_life_cycle(consume_queue.get_topic(), consume_queue.get_queue_id());
-        file_queue_life_cycle.is_first_file_available()
+        consume_queue.is_first_file_available()
     }
 
     fn is_first_file_exist(&self, consume_queue: &dyn ConsumeQueueTrait) -> bool {
-        let file_queue_life_cycle = self.get_life_cycle(consume_queue.get_topic(), consume_queue.get_queue_id());
-        file_queue_life_cycle.is_first_file_exist()
+        consume_queue.is_first_file_exist()
     }
 
     fn roll_next_file(&self, consume_queue: &dyn ConsumeQueueTrait, offset: i64) -> i64 {
-        let file_queue_life_cycle = self.get_life_cycle(consume_queue.get_topic(), consume_queue.get_queue_id());
-        file_queue_life_cycle.roll_next_file(offset)
+        consume_queue.roll_next_file(offset)
     }
 
     fn truncate_dirty(&self, offset_to_truncate: i64) {
         let cloned = self.inner.consume_queue_table.lock().clone();
         for consume_queue_table in cloned.values() {
             for logic in consume_queue_table.values() {
+                let logic = logic.read();
                 let topic = logic.get_topic();
                 let queue_id = logic.get_queue_id();
                 self.truncate_dirty_logic_files(topic, queue_id, offset_to_truncate);
@@ -618,14 +619,15 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
     }
 
     fn put_message_position_info_wrapper(&self, request: &DispatchRequest) {
-        let mut cq = self.find_or_create_consume_queue(request.topic.as_ref(), request.queue_id);
-        self.put_message_position_info_wrapper_with_cq(cq.as_mut().as_mut(), request);
+        let cq = self.find_or_create_consume_queue(request.topic.as_ref(), request.queue_id);
+        self.put_message_position_info_wrapper_with_cq(cq.write().as_mut(), request);
     }
 
     async fn range_query(&self, topic: &CheetahString, queue_id: i32, start_index: i64, num: i32) -> Vec<Bytes> {
         let Some(consume_queue) = self.find_consume_queue(topic, queue_id) else {
             return Vec::new();
         };
+        let consume_queue = consume_queue.read();
         let Some(iter) = consume_queue.iterate_from_with_count(start_index, num) else {
             return Vec::new();
         };
@@ -637,7 +639,7 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
 
     async fn get(&self, topic: &CheetahString, queue_id: i32, start_index: i64) -> Bytes {
         self.find_consume_queue(topic, queue_id)
-            .and_then(|consume_queue| consume_queue.get(start_index))
+            .and_then(|consume_queue| consume_queue.read().get(start_index))
             .map(|cq_unit| Self::encode_cq_unit(&cq_unit))
             .unwrap_or_default()
     }
@@ -648,12 +650,16 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
 
     fn assign_queue_offset(&self, msg: &mut MessageExtBrokerInner) {
         let consume_queue = self.find_or_create_consume_queue(msg.get_topic(), msg.queue_id());
-        consume_queue.assign_queue_offset(&self.inner.queue_offset_operator, msg);
+        consume_queue
+            .read()
+            .assign_queue_offset(&self.inner.queue_offset_operator, msg);
     }
 
     fn increase_queue_offset(&self, msg: &MessageExtBrokerInner, message_num: i16) {
         let consume_queue = self.find_or_create_consume_queue(msg.get_topic(), msg.queue_id());
-        consume_queue.increase_queue_offset(&self.inner.queue_offset_operator, msg, message_num);
+        consume_queue
+            .read()
+            .increase_queue_offset(&self.inner.queue_offset_operator, msg, message_num);
     }
 
     fn increase_lmq_offset(&self, queue_key: &str, message_num: i16) {
@@ -689,6 +695,7 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
         let mut bcq_offset_table = HashMap::with_capacity(1024);
         for (topic, consume_queue_table) in self.inner.consume_queue_table.lock().iter_mut() {
             for (queue_id, consume_queue) in consume_queue_table.iter() {
+                let consume_queue = consume_queue.read();
                 let key = CheetahString::from_string(format!(
                     "{}-{}",
                     consume_queue.get_topic(),
@@ -700,7 +707,7 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
                 } else {
                     bcq_offset_table.insert(key, max_offset_in_queue);
                 }
-                self.correct_min_offset(&***consume_queue, min_phy_offset)
+                self.correct_min_offset(consume_queue.as_ref(), min_phy_offset)
             }
         }
         if self.inner.message_store_config.duplication_enable || self.inner.broker_config.enable_controller_mode {
@@ -735,7 +742,7 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
         let mut max_physic_offset = -1i64;
         for (topic, consume_queue_table) in self.inner.consume_queue_table.lock().iter() {
             for (queue_id, consume_queue) in consume_queue_table.iter() {
-                let max_physic_offset_in_consume_queue = consume_queue.get_max_physic_offset();
+                let max_physic_offset_in_consume_queue = consume_queue.read().get_max_physic_offset();
                 if max_physic_offset_in_consume_queue > max_physic_offset {
                     max_physic_offset = max_physic_offset_in_consume_queue;
                 }
@@ -756,7 +763,7 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
         let mut max_physic_offset = -1i64;
         for (topic, consume_queue_table) in self.inner.consume_queue_table.lock().iter() {
             for (queue_id, consume_queue) in consume_queue_table.iter() {
-                let max_physic_offset_in_consume_queue = consume_queue.get_max_physic_offset();
+                let max_physic_offset_in_consume_queue = consume_queue.read().get_max_physic_offset();
                 if max_physic_offset_in_consume_queue > max_physic_offset {
                     max_physic_offset = max_physic_offset_in_consume_queue;
                 }
@@ -767,11 +774,13 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
 
     fn get_min_offset_in_queue(&self, topic: &CheetahString, queue_id: i32) -> i64 {
         let queue = self.find_or_create_consume_queue(topic, queue_id);
+        let queue = queue.read();
         queue.get_min_offset_in_queue()
     }
 
     fn get_max_offset_in_queue(&self, topic: &CheetahString, queue_id: i32) -> i64 {
         let queue = self.find_or_create_consume_queue(topic, queue_id);
+        let queue = queue.read();
         queue.get_max_offset_in_queue()
     }
 
@@ -783,6 +792,7 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
         boundary_type: BoundaryType,
     ) -> i64 {
         let logic = self.find_or_create_consume_queue(topic, queue_id);
+        let logic = logic.read();
         let result_offset = logic.get_offset_in_queue_by_time_with_boundary(timestamp, boundary_type);
         clamp_consume_queue_offset(
             result_offset,
@@ -820,7 +830,7 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
                             self.inner.message_store_config.get_mapped_file_size_consume_queue(),
                             message_store,
                         );
-                        ArcMut::new(Box::new(consume_queue))
+                        ArcConsumeQueue::new(Box::new(consume_queue))
                     }
                     CQType::BatchCQ => {
                         let consume_queue = BatchConsumeQueue::new(
@@ -833,7 +843,7 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
                             None,
                             self.inner.message_store_config.clone(),
                         );
-                        ArcMut::new(Box::new(consume_queue))
+                        ArcConsumeQueue::new(Box::new(consume_queue))
                     }
                 };
                 new_queue
@@ -859,7 +869,7 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
         let mut total_size = 0;
         for consume_queue_table in self.inner.consume_queue_table.lock().values() {
             for consume_queue in consume_queue_table.values() {
-                total_size += consume_queue.get_total_size();
+                total_size += consume_queue.read().get_total_size();
             }
         }
         total_size
@@ -993,17 +1003,13 @@ impl ConsumeQueueStore {
 
     #[inline]
     fn load_logic(&mut self, topic: &CheetahString, queue_id: i32) -> bool {
-        let mut file_queue_life_cycle = self.get_life_cycle(topic, queue_id);
+        let file_queue_life_cycle = self.get_life_cycle(topic, queue_id);
+        let mut file_queue_life_cycle = file_queue_life_cycle.write();
         file_queue_life_cycle.load()
     }
 
     #[inline]
-    fn put_consume_queue(
-        &self,
-        topic: CheetahString,
-        queue_id: i32,
-        consume_queue: ArcMut<Box<dyn ConsumeQueueTrait>>,
-    ) {
+    fn put_consume_queue(&self, topic: CheetahString, queue_id: i32, consume_queue: ArcConsumeQueue) {
         let mut consume_queue_table = self.inner.consume_queue_table.lock();
         let topic_table = consume_queue_table.entry(topic).or_default();
         topic_table.insert(queue_id, consume_queue);
@@ -1039,8 +1045,8 @@ impl ConsumeQueueStore {
 
     #[inline]
     fn truncate_dirty_logic_files(&self, topic: &CheetahString, queue_id: i32, phy_offset: i64) {
-        let mut file_queue_life_cycle = self.get_life_cycle(topic, queue_id);
-        file_queue_life_cycle.truncate_dirty_logic_files(phy_offset);
+        let file_queue_life_cycle = self.get_life_cycle(topic, queue_id);
+        file_queue_life_cycle.write().truncate_dirty_logic_files(phy_offset);
     }
     #[inline]
     fn create_consume_queue_by_type(
@@ -1049,7 +1055,7 @@ impl ConsumeQueueStore {
         queue_id: i32,
         cq_type: CQType,
         store_path: CheetahString,
-    ) -> ArcMut<Box<dyn ConsumeQueueTrait>> {
+    ) -> ArcConsumeQueue {
         let message_store = self
             .inner
             .message_store
@@ -1065,7 +1071,7 @@ impl ConsumeQueueStore {
                     self.inner.message_store_config.get_mapped_file_size_consume_queue(),
                     message_store,
                 );
-                ArcMut::new(Box::new(consume_queue))
+                ArcConsumeQueue::new(Box::new(consume_queue))
             }
             CQType::BatchCQ => {
                 let consume_queue = BatchConsumeQueue::new(
@@ -1076,7 +1082,7 @@ impl ConsumeQueueStore {
                     None,
                     self.inner.message_store_config.clone(),
                 );
-                ArcMut::new(Box::new(consume_queue))
+                ArcConsumeQueue::new(Box::new(consume_queue))
             }
         }
     }
@@ -1385,7 +1391,7 @@ mod tests {
             ));
             let queue: Box<dyn ConsumeQueueTrait> =
                 Box::new(TrackingConsumeQueue::new(topic.clone(), queue_id, state.clone()));
-            store.put_consume_queue(topic, queue_id, ArcMut::new(queue));
+            store.put_consume_queue(topic, queue_id, ArcConsumeQueue::new(queue));
             states.push(state);
         }
         (store, states)
@@ -1399,6 +1405,7 @@ mod tests {
             .iter()
             .flat_map(|(topic, queues)| {
                 queues.values().map(|queue| {
+                    let queue = queue.read();
                     (
                         topic.to_string(),
                         queue.get_queue_id(),
@@ -1555,7 +1562,7 @@ mod tests {
         let queue = store
             .find_consume_queue(&topic, 0)
             .expect("rocksdb compatibility queue should load");
-        assert_eq!(queue.get_cq_type(), CQType::SimpleCQ);
+        assert_eq!(queue.read().get_cq_type(), CQType::SimpleCQ);
     }
 
     #[test]
@@ -1588,7 +1595,7 @@ mod tests {
             CheetahString::from_string(root.path().join("compat-cq").to_string_lossy().to_string()),
         );
 
-        assert_eq!(queue.get_cq_type(), CQType::SimpleCQ);
+        assert_eq!(queue.read().get_cq_type(), CQType::SimpleCQ);
     }
 
     #[test]
@@ -1628,7 +1635,7 @@ mod tests {
             .lock()
             .entry(topic.clone())
             .or_default()
-            .insert(queue_id, ArcMut::new(Box::new(batch_queue)));
+            .insert(queue_id, ArcConsumeQueue::new(Box::new(batch_queue)));
 
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
