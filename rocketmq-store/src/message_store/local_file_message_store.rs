@@ -930,23 +930,33 @@ impl LocalFileMessageStore {
 
     /// Completes root wiring when this store has exclusive ownership.
     ///
-    /// This narrow path is intended for lifecycle probes that do not exercise Timer or HA.
-    /// It fails closed unless both configurations select duplication mode and the timer wheel
-    /// is disabled, because those services require a shared store owner.
+    /// ConsumeQueue and HA use independently owned capability handles, so they do not require
+    /// the full Store root to be shared. Timer still holds the legacy root facade and therefore
+    /// remains excluded from this path.
     pub(crate) fn wire_owned_root_dependencies(&mut self) -> Result<(), StoreError> {
         if self.message_store_config.is_timer_wheel_enable() {
             return Err(StoreError::InvalidState(
                 "owned message store wiring requires the timer wheel to be disabled".to_string(),
             ));
         }
-        if !self.message_store_config.duplication_enable || !self.broker_config.duplication_enable {
-            return Err(StoreError::InvalidState(
-                "owned message store wiring requires duplication mode in both message store and broker configuration"
-                    .to_string(),
-            ));
-        }
 
         self.consume_queue_store.set_context(self.consume_queue_context());
+        if !Self::is_dledger_commit_log_enabled_config(self.message_store_config.as_ref())
+            && !self.message_store_config.duplication_enable
+        {
+            let replica_store = self.ha_replica_store_handle();
+            self.pending_ha_service = Some(if self.message_store_config.enable_controller_mode {
+                PendingHAService::AutoSwitch(
+                    crate::ha::auto_switch::auto_switch_ha_service::AutoSwitchHAService::new(
+                        crate::ha::default_ha_service::DefaultHAService::new(replica_store),
+                    ),
+                )
+            } else {
+                PendingHAService::Default(Box::new(crate::ha::default_ha_service::DefaultHAService::new(
+                    replica_store,
+                )))
+            });
+        }
         self.root_dependencies_wired = true;
         Ok(())
     }
@@ -6055,27 +6065,23 @@ mod tests {
     }
 
     #[test]
-    fn owned_root_wiring_requires_consistent_duplication_mode() {
+    fn owned_root_wiring_constructs_ha_from_replica_capability() {
         let temp_dir = tempdir().unwrap();
         let mut store = new_owned_wiring_test_store(
             &temp_dir,
             MessageStoreConfig {
-                duplication_enable: true,
                 timer_wheel_enable: false,
                 ..MessageStoreConfig::default()
             },
             BrokerConfig::default(),
         );
 
-        let error = store
+        store
             .wire_owned_root_dependencies()
-            .expect_err("broker and store duplication modes must agree");
+            .expect("HA can use an independently owned replica capability");
 
-        assert!(matches!(
-            error,
-            StoreError::InvalidState(message) if message.contains("duplication mode")
-        ));
-        assert!(!store.root_dependencies_wired);
+        assert!(store.root_dependencies_wired);
+        assert!(store.pending_ha_service.is_some());
     }
 
     #[test]

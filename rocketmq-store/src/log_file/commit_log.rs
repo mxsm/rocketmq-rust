@@ -3184,7 +3184,7 @@ mod tests {
         root: &Path,
         broker_role: BrokerRole,
         all_ack_in_sync_state_set: bool,
-    ) -> Box<dyn DerefMut<Target = LocalFileMessageStore>> {
+    ) -> LocalFileMessageStore {
         new_test_message_store_with_config(
             root,
             MessageStoreConfig::default(),
@@ -3198,7 +3198,7 @@ mod tests {
         mut message_store_config: MessageStoreConfig,
         broker_role: BrokerRole,
         all_ack_in_sync_state_set: bool,
-    ) -> Box<dyn DerefMut<Target = LocalFileMessageStore>> {
+    ) -> LocalFileMessageStore {
         std::fs::create_dir_all(root).expect("create temp store dir");
         let broker_config = Arc::new(BrokerConfig {
             enable_controller_mode: true,
@@ -3207,19 +3207,15 @@ mod tests {
         message_store_config.enable_controller_mode = true;
         message_store_config.broker_role = broker_role;
         message_store_config.all_ack_in_sync_state_set = all_ack_in_sync_state_set;
+        message_store_config.timer_wheel_enable = false;
         message_store_config.store_path_root_dir = root.to_string_lossy().into_owned().into();
         let message_store_config = Arc::new(message_store_config);
         let topic_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>> = Arc::new(DashMap::new());
-        let mut store = rocketmq_rust::ArcMut::new(LocalFileMessageStore::new(
-            message_store_config,
-            broker_config,
-            topic_table,
-            None,
-            false,
-        ));
-        let store_clone = store.clone();
-        store.set_message_store_arc(store_clone);
-        Box::new(store)
+        let mut store = LocalFileMessageStore::new(message_store_config, broker_config, topic_table, None, false);
+        store
+            .wire_owned_root_dependencies()
+            .expect("commit-log tests should wire owned Store capabilities");
+        store
     }
 
     fn new_test_mapped_file(root: &Path, offset: u64, file_size: u64) -> DefaultMappedFile {
