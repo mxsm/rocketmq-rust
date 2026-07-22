@@ -241,7 +241,11 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
             }
         }
         if let Some(runtime) = self.consume_runtime.take() {
-            runtime.shutdown_timeout(Duration::from_millis(await_terminate_millis));
+            let timeout = Duration::from_millis(await_terminate_millis);
+            // Tokio forbids dropping a Runtime from another runtime's async
+            // context. Move the private consume runtime to a plain thread so
+            // its bounded shutdown cannot panic the public consumer teardown.
+            let _ = std::thread::spawn(move || runtime.shutdown_timeout(timeout)).join();
         }
     }
 
@@ -474,5 +478,41 @@ impl ConsumeRequest {
                 .process_consume_result(this, status.unwrap(), &context, self)
                 .await;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::consumer::listener::message_listener_concurrently::MessageListenerConcurrently;
+
+    struct NoopListener;
+
+    impl MessageListenerConcurrently for NoopListener {
+        fn consume_message(
+            &self,
+            _msgs: &[&MessageExt],
+            _context: &ConsumeConcurrentlyContext,
+        ) -> rocketmq_error::RocketMQResult<ConsumeConcurrentlyStatus> {
+            Ok(ConsumeConcurrentlyStatus::ConsumeSuccess)
+        }
+    }
+
+    #[tokio::test]
+    async fn shutdown_stops_accepting_and_takes_the_private_runtime() {
+        let listener: ArcBoxMessageListenerConcurrently = Arc::new(Box::new(NoopListener));
+        let mut service = ConsumeMessageConcurrentlyService::new(
+            ArcMut::new(ClientConfig::default()),
+            ArcMut::new(ConsumerConfig::default()),
+            CheetahString::from_static_str("shutdown-test"),
+            listener,
+            None,
+        );
+
+        service.shutdown(1).await;
+        assert!(!service.accepting.load(Ordering::Acquire));
+        assert!(service.consume_runtime.is_none());
+        service.shutdown(1).await;
+        assert!(service.consume_runtime.is_none());
     }
 }
