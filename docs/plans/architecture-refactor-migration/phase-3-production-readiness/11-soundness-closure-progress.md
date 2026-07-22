@@ -3970,14 +3970,47 @@ CommitLog 子服务所有权随 Issue #8551 完成以下收窄：
 | runtime / architecture guards | enforcing runtime audit、dependency fixtures/baseline/target、release、8-profile/11-variant performance policy、60/60 architecture tests、7/7 telemetry tests 与 AGENTS routing 通过；目标 compatibility 35/35、test edge 3/3、release topology 32/32、66 comparisons/0 failures |
 | root workspace final gates | `cargo fmt --all -- --check`、workspace all-target/all-feature strict Clippy、Store all-feature `cargo doc --no-deps` 与 `git diff --check` 通过；Windows linker stdout、既有 future-incompatibility note 和 4 条既有 Store Rustdoc HTML warning 不受 `-D warnings` 管辖 |
 
+## M11-12bc70 实现
+
+CommitLog LocalStore back-reference 随 Issue #8553 完成以下收口：
+
+- `CommitLogStoreContext` 只持标准 Arc running flags、replica atomic、StoreStats、不可变 delay metadata 与
+  `ArcSwapOption<GeneralHAService>`；LocalFileMessageStore 完成 HA init 后原子发布 snapshot，CommitLog 读路径不再需要
+  `ArcMut<LocalFileMessageStore>`。
+- controller confirm、HA ack、put stats 与 async group transfer 只读取窄 context；async HA path 在 await 前通过
+  `load_full` 取得稳定 service generation，不持同步锁跨 await。warm mapped-file unlock 直接使用 MappedFile 能力。
+- 四条 normal/abnormal、standard/optimized recovery 入口删除完整 Store root 参数；empty/truncate/controller-clamp
+  completion 通过 CommitLog 已拥有的 ConsumeQueueStore 与 WAL offsets 完成，保持原 recovery 顺序和水位语义。
+- Local delay table 从 `ArcMut<BTreeMap<_, _>>` 改为不可变 Arc；CommitLog tests 删除 production glob 传播的 ArcMut
+  import 与两个 helper 返回类型 occurrence，保留 constructor 通过全限定路径构造并由 trait-object test harness 隐藏。
+- source contract 与 M06 exact composition contract 禁止恢复 LocalStore back-reference、ArcMut delay table 或旧 adapter 字段；
+  18 条适用 recovery integration、controller/HA 与全部 Store lib 回归覆盖窄 context 行为。
+- reviewed baseline 从 132/466 降至 128/453：production 从 59/139 降至 57/129，test 从 59/287 降至
+  57/284，compatibility 保持 14/40；Broker production 保持 4/8，Store production 从 55/131 降至 53/121，
+  Store test 从 47/200 降至 45/197。相对 bc69 净删除 4 identities/13 occurrences。
+- 唯一保留 test constructor 因改用全限定路径而改变 occurrence id，经 ADR-013 临时一对一 relocation 审核；approval
+  仅位于忽略的 `target/`，不提交正式仓库。R10 从 6/23 降至 6/20；R13 从 2/7 降至 0/0 并完成。
+  31 项清单现为完成 8 项、剩余 23 项，正式进度仍为 75/82。
+
+## M11-12bc70 验证
+
+| 命令 | 结果 |
+|---|---|
+| Store check / source / M06 / lib | all-target/all-feature check 通过；CommitLog store-context source contract 与 M06 CommitLog root 正负合同通过；default lib 515/515、all-feature lib 521/521 通过 |
+| CommitLog recovery | 适用 recovery integration 18/18 通过；`file_store_vs_rocksdb_behavior_parity_after_restart` 在本分支与未含 bc70 的基线 `c2c707808` 均以相同 RocksDB compatibility CQ 空快照失败，明确记录为既有非零项，不计作通过 |
+| RocksDB specialized gate | Store/Broker `rocksdb_store` all-target strict Clippy 通过；foundation 82/82、semantics 9/9、Broker RocksDB 21/21、POP consumer 4/4 通过 |
+| reviewed baseline / fixtures | 正式 baseline 与 reviewed candidate 均为 128/453；`python scripts/arc_mut_guard.py`、candidate compare、27/27 fixtures 与 78/78 guard tests 通过；净删除 4 identities/13 occurrences，1 个同 identity test constructor occurrence relocation 仅使用忽略的临时 approval |
+| runtime / architecture guards | enforcing runtime audit、dependency fixtures/baseline/target、release、8-profile/11-variant performance policy、43/43 dependency tests、6/6 release tests、11/11 performance tests、7/7 telemetry tests与 AGENTS routing 通过；目标 compatibility 35/35、test edge 3/3、release topology 32/32、66 comparisons/0 failures |
+| root workspace final gates | `cargo fmt --all -- --check`、workspace all-target/all-feature strict Clippy、Store all-target/all-feature strict Clippy 与 all-feature `cargo doc --no-deps` 通过；Windows linker stdout、既有 future-incompatibility note 和 4 条既有 Store Rustdoc HTML warning 不受 `-D warnings` 管辖 |
+
 ## 剩余切片与 Gate
 
 2026-07-22 盘点将执行工作固化为 31 个最小可审查单元：16 个 production owner、2 个
-test/compatibility、7 个 M10/Phase 3 动态验收与签署、6 个 M12；R02、R03、R04、R05、R06、R07、R08 已完成，当前剩余 24 个，正式进度仍为 75/82。
+test/compatibility、7 个 M10/Phase 3 动态验收与签署、6 个 M12；R02、R03、R04、R05、R06、R07、R08、R13 已完成，当前剩余 23 个，正式进度仍为 75/82。
 完整逐项 checklist 见 `docs/plans/architecture-refactor-migration/REMAINING-TASKS.md`。
 
 1. Broker runtime root 已改为独占 `Box<BrokerRuntimeInner>`，production/test 完整 root clone 均已清零；bc65 删除 Local/Rocks concrete unsafe-wrapper 传播后，仅剩显式 `ArcMut` Store 组合根 capability carrier（4/8），随 R09～R16 Store owner 安全化删除。
-2. Store 其余 ConsumeQueue、CommitLog recovery/LocalStore、StoreHandle/Timer 与其余 HA service/actor（55/131）；BrokerStats observer、ConsumeQueueExt 显式锁 owner、HA replication-state callback、未共享 HA child direct ownership、commit-to-flush 窄唤醒能力、HA confirm/epoch 原子发布、HA connection runtime handle、CommitLog shared disk-flush、标准 Arc cleanup/mapped-file flush/dispatcher snapshot capability、auto-switch client construction、single delegate Store owner、共享引用可变 CommitLog facade 与 Local Reput/scheduled self-check 直接 root owner 已完成。
+2. Store 其余 ConsumeQueue、StoreHandle/Timer 与其余 HA service/actor（53/121）；BrokerStats observer、ConsumeQueueExt 显式锁 owner、HA replication-state callback、未共享 HA child direct ownership、commit-to-flush 窄唤醒能力、HA confirm/epoch 原子发布、HA connection runtime handle、CommitLog shared disk-flush/recovery、标准 Arc cleanup/mapped-file flush/dispatcher/store-context capability、auto-switch client construction、single delegate Store owner、共享引用可变 CommitLog facade、LocalStore back-reference 与 Local Reput/scheduled self-check 直接 root owner 已完成。
 3. Production `WeakArcMut` 已清零；继续迁移 test/compatibility 中受控使用并移除其余 nightly feature。公开 `arc_mut.rs`/re-export 的 destructive 删除受 next-major 两轮弃用与 Release Manager/HUMAN Gate 约束，不能静默重置 public API baseline。
 4. 对同一候选快照执行 stable feature matrix、Miri/Loom 可用切片、soak/SLO fault、dashboard/runbook、动态
    Kind/K3d/container、M10 固定硬件和 Human Gate。

@@ -257,18 +257,17 @@ async fn run_normal_recovery_with_max_cq(
     assert!(restarted.get_commit_log_mut().load(), "load fixture commitlog");
     let initial_confirm = u64::try_from(restarted.get_commit_log().get_confirm_offset())
         .expect("normal recovery initial confirm must be non-negative");
-    let message_store = restarted.clone();
     match route {
         NormalRecoveryRoute::Standard => {
             restarted
                 .get_commit_log_mut()
-                .recover_normally(max_phy_offset_of_consume_queue, message_store)
+                .recover_normally(max_phy_offset_of_consume_queue)
                 .await;
         }
         NormalRecoveryRoute::Optimized => {
             restarted
                 .get_commit_log_mut()
-                .recover_normally_optimized(max_phy_offset_of_consume_queue, message_store)
+                .recover_normally_optimized(max_phy_offset_of_consume_queue)
                 .await;
         }
     }
@@ -294,18 +293,17 @@ async fn run_abnormal_recovery_with_max_cq(
     let mut restarted = new_test_store(&fixture.temp_dir, config);
     restarted.init().await.expect("init abnormal recovery fixture reader");
     assert!(restarted.get_commit_log_mut().load(), "load abnormal fixture commitlog");
-    let message_store = restarted.clone();
     match route {
         NormalRecoveryRoute::Standard => {
             restarted
                 .get_commit_log_mut()
-                .recover_abnormally(max_phy_offset_of_consume_queue, message_store)
+                .recover_abnormally(max_phy_offset_of_consume_queue)
                 .await;
         }
         NormalRecoveryRoute::Optimized => {
             restarted
                 .get_commit_log_mut()
-                .recover_abnormally_optimized(max_phy_offset_of_consume_queue, message_store)
+                .recover_abnormally_optimized(max_phy_offset_of_consume_queue)
                 .await;
         }
     }
@@ -349,19 +347,12 @@ async fn run_gated_abnormal_recovery(
         AbnormalRecoveryGateMode::Controller => fixture.first_end + 1,
     };
     restarted.get_commit_log_mut().set_confirm_offset(gate_limit);
-    let message_store = restarted.clone();
     match route {
         NormalRecoveryRoute::Standard => {
-            restarted
-                .get_commit_log_mut()
-                .recover_abnormally(0, message_store)
-                .await;
+            restarted.get_commit_log_mut().recover_abnormally(0).await;
         }
         NormalRecoveryRoute::Optimized => {
-            restarted
-                .get_commit_log_mut()
-                .recover_abnormally_optimized(0, message_store)
-                .await;
+            restarted.get_commit_log_mut().recover_abnormally_optimized(0).await;
         }
     }
     NormalRecoverySnapshot {
