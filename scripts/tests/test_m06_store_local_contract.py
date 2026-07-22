@@ -9109,7 +9109,7 @@ def commit_log_root_contract_violations(
         ("broker_config", "super::Arc<super::BrokerConfig>"),
         ("enabled_append_prop_crc", "bool"),
         ("local_file_message_store", "Option<super::ArcMut<super::LocalFileMessageStore>>"),
-        ("dispatcher", "super::ArcMut<super::CommitLogDispatcherDefault>"),
+        ("dispatcher", "super::CommitLogDispatchHandle"),
         ("runtime_state", "super::CommitLogRuntimeState"),
         ("store_checkpoint", "super::Arc<super::StoreCheckpoint>"),
         ("append_message_callback", "super::Arc<super::DefaultAppendMessageCallback>"),
@@ -9120,7 +9120,7 @@ def commit_log_root_contract_violations(
             "super::Arc<super::DashMap<super::CheetahString, super::Arc<super::TopicConfig>>>",
         ),
         ("consume_queue_store", "super::ConsumeQueueStore"),
-        ("flush_manager", "super::ArcMut<super::DefaultFlushManager>"),
+        ("flush_manager", "super::DefaultFlushManager"),
         ("cold_data_check_service", "super::Arc<super::ColdDataCheckService>"),
     ]
     if store_commit_log_adapter_fields(store) != expected_adapter_fields:
