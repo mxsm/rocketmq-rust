@@ -27,6 +27,7 @@ use bytes::Bytes;
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
 use futures_util::future::join_all;
+use parking_lot::RwLock;
 use rocketmq_common::common::attribute::cq_type::CQType;
 use rocketmq_common::common::boundary_type::BoundaryType;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
@@ -59,7 +60,7 @@ use crate::store_path_config_helper::get_store_path_consume_queue;
 
 #[derive(Clone)]
 pub struct ConsumeQueueStore {
-    inner: ConsumeQueueStoreRoot<ArcMut<Inner>>,
+    inner: ConsumeQueueStoreRoot<Arc<Inner>>,
 }
 
 struct ConsumeQueueRecoveryResult {
@@ -149,7 +150,7 @@ impl ConsumeQueueRecoverySummary {
 }
 
 struct Inner {
-    pub(crate) message_store: Option<ArcMut<LocalFileMessageStore>>,
+    pub(crate) message_store: RwLock<Option<ArcMut<LocalFileMessageStore>>>,
     pub(crate) message_store_config: Arc<MessageStoreConfig>,
     pub(crate) broker_config: Arc<BrokerConfig>,
     pub(crate) queue_offset_operator: QueueOffsetOperator,
@@ -471,8 +472,8 @@ impl ConsumeQueueStore {
     #[inline]
     pub fn new(message_store_config: Arc<MessageStoreConfig>, broker_config: Arc<BrokerConfig>) -> Self {
         Self {
-            inner: ConsumeQueueStoreRoot::new(ArcMut::new(Inner {
-                message_store: None,
+            inner: ConsumeQueueStoreRoot::new(Arc::new(Inner {
+                message_store: RwLock::new(None),
                 message_store_config,
                 broker_config,
                 queue_offset_operator: Default::default(),
@@ -482,7 +483,7 @@ impl ConsumeQueueStore {
     }
 
     pub fn set_message_store(&mut self, message_store: ArcMut<LocalFileMessageStore>) {
-        self.inner.message_store = Some(message_store);
+        *self.inner.message_store.write() = Some(message_store);
     }
 
     pub fn check_self(&self, consume_queue: &dyn ConsumeQueueTrait) {
@@ -803,7 +804,8 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
                 let message_store = self
                     .inner
                     .message_store
-                    .as_ref()
+                    .read()
+                    .clone()
                     .expect("MessageStore must be set before creating consume queues");
                 let topic_config = message_store.get_topic_config(topic);
                 let cq_type = QueueTypeUtils::get_cq_type_arc_mut(topic_config.as_ref());
@@ -816,7 +818,7 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
                                 self.inner.message_store_config.store_path_root_dir.as_str(),
                             )),
                             self.inner.message_store_config.get_mapped_file_size_consume_queue(),
-                            self.inner.message_store.clone().unwrap(),
+                            message_store,
                         );
                         ArcMut::new(Box::new(consume_queue))
                     }
@@ -864,7 +866,8 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
     }
 
     fn get_store_time(&self, cq_unit: &CqUnit) -> i64 {
-        match self.inner.message_store.as_ref() {
+        let message_store = self.inner.message_store.read().clone();
+        match message_store.as_ref() {
             Some(ms) => ms.get_commit_log().pickup_store_timestamp(cq_unit.pos, cq_unit.size),
             None => {
                 error!("Message store is not set in ConsumeQueueStore");
@@ -1008,7 +1011,8 @@ impl ConsumeQueueStore {
 
     #[inline]
     fn queue_type_should_be(&self, topic: &CheetahString, cq_type: CQType) -> bool {
-        let Some(message_store) = self.inner.message_store.as_ref() else {
+        let message_store = self.inner.message_store.read().clone();
+        let Some(message_store) = message_store.as_ref() else {
             error!("MessageStore must be set before loading consume queues for topic {topic}");
             return false;
         };
@@ -1046,6 +1050,12 @@ impl ConsumeQueueStore {
         cq_type: CQType,
         store_path: CheetahString,
     ) -> ArcMut<Box<dyn ConsumeQueueTrait>> {
+        let message_store = self
+            .inner
+            .message_store
+            .read()
+            .clone()
+            .expect("MessageStore must be set before creating consume queues");
         match cq_type {
             CQType::SimpleCQ | CQType::RocksDBCQ => {
                 let consume_queue = ConsumeQueue::new(
@@ -1053,7 +1063,7 @@ impl ConsumeQueueStore {
                     queue_id,
                     store_path,
                     self.inner.message_store_config.get_mapped_file_size_consume_queue(),
-                    self.inner.message_store.clone().unwrap(),
+                    message_store,
                 );
                 ArcMut::new(Box::new(consume_queue))
             }
@@ -1100,6 +1110,23 @@ mod tests {
     use crate::filter::MessageFilter;
     use crate::queue::batch_consume_queue;
     use crate::queue::FileQueueLifeCycle;
+
+    #[test]
+    fn consume_queue_store_root_uses_standard_arc_and_locked_wiring() {
+        let source = include_str!("local_file_consume_queue_store.rs").replace("\r\n", "\n");
+        let production = source
+            .split_once("#[cfg(test)]\nmod tests")
+            .map(|(source, _)| source)
+            .expect("ConsumeQueueStore production section");
+
+        assert!(production.contains("inner: ConsumeQueueStoreRoot<Arc<Inner>>"));
+        assert!(!production.contains("inner: ConsumeQueueStoreRoot<ArcMut<Inner>>"));
+        assert!(production.contains("inner: ConsumeQueueStoreRoot::new(Arc::new(Inner {"));
+        assert!(!production.contains("ConsumeQueueStoreRoot::new(ArcMut::new(Inner {"));
+        assert!(production.contains("message_store: RwLock<Option<ArcMut<LocalFileMessageStore>>>"));
+        assert!(production.contains("*self.inner.message_store.write() = Some(message_store);"));
+        assert!(production.contains("let message_store = self.inner.message_store.read().clone();"));
+    }
 
     struct TrackingQueueState {
         recover_count: AtomicUsize,

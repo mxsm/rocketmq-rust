@@ -2770,7 +2770,7 @@
           "id": "7562966d68e2ceae9f926b42",
           "fingerprint": "c89ef1cc793aba67bb18b8a6",
           "item": "mod tests",
-          "line": 1097
+          "line": 1107
         }
       ],
       "owner": "store",
@@ -2789,7 +2789,7 @@
           "id": "61334e13e89da6a478f59e17",
           "fingerprint": "8d6cd5300298a6bd9e112683",
           "item": "<module>",
-          "line": 54
+          "line": 55
         }
       ],
       "owner": "store",
@@ -2808,49 +2808,49 @@
           "id": "245ed505123e8e3fdf662db6",
           "fingerprint": "bd4e787107a84d1fe81f319c",
           "item": "fn snapshot_consume_queues",
-          "line": 181
+          "line": 182
         },
         {
           "id": "fea8d23497ae9079ebe2628d",
           "fingerprint": "d7577bc61119ccc6569f6fcc",
           "item": "fn recover_one_consume_queue",
-          "line": 190
+          "line": 191
         },
         {
           "id": "5c91ee7f76bb0c07ba0f32ae",
           "fingerprint": "3720eff5f8f41606d621866e",
           "item": "fn recover_one_consume_queue_blocking",
-          "line": 219
+          "line": 220
         },
         {
           "id": "ad7d7cb6c14e60d1ed435562",
           "fingerprint": "f9ed6cfc4858f28f0ca66924",
           "item": "fn find_consume_queue",
-          "line": 454
+          "line": 455
         },
         {
           "id": "38fa048d17fb4053c86e67b7",
           "fingerprint": "5d42d106c8e615927c5ca344",
           "item": "fn find_or_create_consume_queue",
-          "line": 793
+          "line": 794
         },
         {
           "id": "bae16841f8af50b7f90ae3e5",
           "fingerprint": "0d30dd1d653bb5f582e39317",
           "item": "fn find_or_create_consume_queue",
-          "line": 810
+          "line": 812
         },
         {
           "id": "997169033fcedec1889c84dc",
           "fingerprint": "4889f07a0ed82cbe07a979ab",
           "item": "fn find_consume_queue_map",
-          "line": 852
+          "line": 854
         },
         {
           "id": "2265ae49a67adef63c70b4c9",
           "fingerprint": "a1ee1b420a681fb807cdcbd5",
           "item": "fn get_life_cycle",
-          "line": 1075
+          "line": 1085
         }
       ],
       "owner": "store",
@@ -2866,34 +2866,28 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "2af6db1897196eb7f3f911f1",
-          "fingerprint": "8f74345b83a2fd135413f786",
-          "item": "fn new",
-          "line": 474
-        },
-        {
-          "id": "e6d15974ae299044036bfb66",
-          "fingerprint": "49fa9925539dd0558d318ae3",
+          "id": "4386ea807bc976dc196c3bd4",
+          "fingerprint": "23517b346cf9979129bc6992",
           "item": "fn find_or_create_consume_queue",
-          "line": 821
+          "line": 823
         },
         {
           "id": "645f4b66305628599dcf3d57",
           "fingerprint": "0835ba8512030c9011eafb66",
           "item": "fn find_or_create_consume_queue",
-          "line": 834
+          "line": 836
         },
         {
-          "id": "1397dc953cb76e8676682df8",
-          "fingerprint": "49fa9925539dd0558d318ae3",
+          "id": "d83dd04c70fa8fc177567e65",
+          "fingerprint": "23517b346cf9979129bc6992",
           "item": "fn create_consume_queue_by_type",
-          "line": 1058
+          "line": 1068
         },
         {
           "id": "4d861739fb626257493ffdbf",
           "fingerprint": "0835ba8512030c9011eafb66",
           "item": "fn create_consume_queue_by_type",
-          "line": 1069
+          "line": 1079
         }
       ],
       "owner": "store",
@@ -2912,31 +2906,31 @@
           "id": "d853ab649e8ad0862bfc390b",
           "fingerprint": "0f7cf4c91aafeb5dc2fb0553",
           "item": "fn tracking_store",
-          "line": 1361
+          "line": 1388
         },
         {
           "id": "c8a63e7757c60e0fc0c38b58",
           "fingerprint": "988e66eed233a78a700f1cc9",
           "item": "fn load_consume_queues_returns_false_when_topic_queue_type_mismatches_directory",
-          "line": 1475
+          "line": 1502
         },
         {
           "id": "cc2a4417f4944073557fdfa0",
           "fingerprint": "c67f57a50612666727d09683",
           "item": "fn rocksdb_cq_loads_from_simple_cq_path_in_compat_mode",
-          "line": 1511
+          "line": 1538
         },
         {
           "id": "31286610bda117db9efff731",
           "fingerprint": "adc49585257436eeeef6e682",
           "item": "fn create_consume_queue_by_type_maps_rocksdb_cq_to_simple_cq",
-          "line": 1545
+          "line": 1572
         },
         {
           "id": "d55f973e145b8d22a761b188",
           "fingerprint": "05a8b6ee34c263ed7d0f1ffe",
           "item": "fn batch_consume_queue_store_get_returns_full_batch_unit",
-          "line": 1604
+          "line": 1631
         }
       ],
       "owner": "store",
@@ -2955,7 +2949,7 @@
           "id": "b12555ea6d596f93db1ea125",
           "fingerprint": "74881ecba33321ec90272712",
           "item": "<module>",
-          "line": 36
+          "line": 37
         }
       ],
       "owner": "store",
@@ -2974,7 +2968,7 @@
           "id": "38e5d096b6cb32868b800767",
           "fingerprint": "a28f0d3718fa0ebc4b21f4c7",
           "item": "mod tests",
-          "line": 1094
+          "line": 1104
         }
       ],
       "owner": "store",
@@ -2990,34 +2984,28 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "dc9a5d26c0ba593d39e51e29",
-          "fingerprint": "950d1b98c1217a5123d0724b",
-          "item": "struct ConsumeQueueStore",
-          "line": 62
-        },
-        {
-          "id": "ee912fe2c15c5cfbe7296abd",
-          "fingerprint": "35c1d897869b92c595bab50d",
+          "id": "5097c2b16f00e1e25adee0b8",
+          "fingerprint": "124b45197e9d6fe65d7b9eb8",
           "item": "struct Inner",
-          "line": 152
+          "line": 153
         },
         {
-          "id": "bdf5db9b694a4e895e22759a",
-          "fingerprint": "80691df28dc4c371ab49d86b",
+          "id": "d68361ef6c6d54906fba387a",
+          "fingerprint": "558302d0319cde2502a8cdd2",
           "item": "fn set_message_store",
-          "line": 484
+          "line": 485
         },
         {
           "id": "830e723cc2bd5cd994fe4433",
           "fingerprint": "1ca5b807f4d641c9f5e12532",
           "item": "fn put_consume_queue",
-          "line": 1002
+          "line": 1005
         },
         {
-          "id": "ed3e473a31b05b21addbb314",
-          "fingerprint": "5e3d4c1cd95a856d63cc1723",
+          "id": "45dc7ab226605abe2f55ebfb",
+          "fingerprint": "0ffad470e6979307af74021c",
           "item": "fn create_consume_queue_by_type",
-          "line": 1048
+          "line": 1052
         }
       ],
       "owner": "store",
@@ -3036,7 +3024,7 @@
           "id": "baf3501c67ef3cdd8c65f0ab",
           "fingerprint": "6e9973025fc9989408e24bc9",
           "item": "<module>",
-          "line": 55
+          "line": 56
         }
       ],
       "owner": "store",
@@ -3055,13 +3043,13 @@
           "id": "35962a1023630e65a6cba787",
           "fingerprint": "65eb44cedb7336e0da7c9241",
           "item": "struct Inner",
-          "line": 156
+          "line": 157
         },
         {
           "id": "1a56a2e0a1a42a1c83e3ab10",
           "fingerprint": "c4d79fef2b9adfd3342064f3",
           "item": "fn get_consume_queue_table",
-          "line": 644
+          "line": 645
         }
       ],
       "owner": "store",
