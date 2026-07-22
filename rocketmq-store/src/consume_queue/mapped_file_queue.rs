@@ -168,6 +168,41 @@ impl MappedFileQueueReadHandle {
         }
         result
     }
+
+    pub(crate) fn get_bulk_data(&self, offset: i64, size: i32) -> Option<Vec<SelectMappedBufferResult>> {
+        if size <= 0 {
+            return Some(Vec::new());
+        }
+
+        let mapped_file_size = self.mapped_file_size as i64;
+        let mut current_offset = offset;
+        let mut remaining = size as usize;
+        let mut results = Vec::new();
+
+        while remaining > 0 {
+            let mapped_file = self.find_mapped_file_by_offset(current_offset, current_offset == offset)?;
+            let pos = (current_offset % mapped_file_size) as i32;
+            let mut result = mapped_file.select_mapped_buffer_with_position(pos)?;
+            result.mapped_file = Some(mapped_file);
+
+            let readable = result.size.max(0) as usize;
+            if readable == 0 {
+                return None;
+            }
+
+            let take = readable.min(remaining);
+            if take < readable {
+                result.bytes = result.bytes.as_ref().map(|bytes| bytes.slice(..take));
+                result.size = take as i32;
+            }
+
+            results.push(result);
+            current_offset += take as i64;
+            remaining -= take;
+        }
+
+        Some(results)
+    }
 }
 
 /// Narrow, cloneable capability used by replica appenders.

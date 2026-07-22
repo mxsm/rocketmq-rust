@@ -1150,6 +1150,15 @@ production 4/8、Store production 20/43）；相对 bc82 净删除 1 个 product
 relocation、新增 identity 或临时 approval。R15 从 6/21 降至 5/16；31 项执行清单保持完成 9 项、剩余
 22 项，正式进度仍为 75/82。
 
+Default HA Store carrier 随 Issue #8585 收窄为 replica capability：`DefaultHAService` 不再持完整
+`ArcMut<LocalFileMessageStore>`，Default/AutoSwitch service 与 connection 只通过同一个
+`HAReplicaStoreHandle` 完成 segment transfer、confirm、master flush、alive replica、state-machine version 与
+controller epoch 读写。CommitLog/MappedFileQueue facade 与 capability 共用原 transfer 算法，避免语义分叉。
+reviewed 快照为 88 identities/364 occurrences（production 24/49、test 50/275、compatibility 14/40、Broker
+production 4/8、Store production 20/41）；相对 bc83 净删除 2 个 production occurrences，22 个保留 test
+occurrence 经临时 ADR-013 同 item 一对一 relocation 审核，无新增 identity 或提交态 approval。R15 从 5/16
+降至 5/14；31 项执行清单保持完成 9 项、剩余 22 项，正式进度仍为 75/82。
+
 Default HA client runtime ownership 随 Issue #8567 完成收窄：`DefaultHAClient` 以标准 `Arc<Inner>` 共享只读组合根，
 `Inner` 仅保留原子、锁、Notify、flow monitor 与现有 LocalStore 兼容句柄；从未安装连接的 stream 字段和重复 buffer/
 dispatch/report 状态已删除，实际 reader/writer buffer 继续由每个 connection task 独占。reviewed 快照为 126 identities/
