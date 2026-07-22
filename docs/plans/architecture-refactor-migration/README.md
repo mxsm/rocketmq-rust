@@ -1237,6 +1237,14 @@ test 从 30/162 降至 29/161，compatibility 保持 14/40；净删除 1 test id
 新 identity 或临时 approval。Store test/bench caller 从 22/146 降至 21/145，R17 总上界降至 29/161；
 执行清单保持完成 11 项、剩余 20 项，正式进度仍为 75/82。
 
+LocalFile unit tests 随 Issue #8607 继续收窄 Store root：普通 fixture 直接返回 concrete
+`LocalFileMessageStore`，Timer-disabled 路径复用 owned-root wiring；仅三个验证 Timer 组合关系的测试继续通过
+具名 legacy helper 显式持有 `ArcMut`，不以 opaque return 隐藏未完成债务。reviewed 快照从 56/225 降至
+55/210：production 保持 13/24，test 从 29/161 降至 28/146，compatibility 保持 14/40；净删除 1 test
+identity/15 occurrences，两个保留 occurrence 仅使用忽略的临时 ADR-013 同 item relocation approval，无新增
+identity 或提交态 approval。Store test/bench caller 从 21/145 降至 20/130，R17 总上界降至 28/146；
+执行清单保持完成 11 项、剩余 20 项，正式进度仍为 75/82。
+
 Default HA client runtime ownership 随 Issue #8567 完成收窄：`DefaultHAClient` 以标准 `Arc<Inner>` 共享只读组合根，
 `Inner` 仅保留原子、锁、Notify、flow monitor 与现有 LocalStore 兼容句柄；从未安装连接的 stream 字段和重复 buffer/
 dispatch/report 状态已删除，实际 reader/writer buffer 继续由每个 connection task 独占。reviewed 快照为 126 identities/
