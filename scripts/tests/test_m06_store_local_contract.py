@@ -9108,7 +9108,7 @@ def commit_log_root_contract_violations(
         ("message_store_config", "super::Arc<super::MessageStoreConfig>"),
         ("broker_config", "super::Arc<super::BrokerConfig>"),
         ("enabled_append_prop_crc", "bool"),
-        ("local_file_message_store", "Option<super::ArcMut<super::LocalFileMessageStore>>"),
+        ("store_context", "super::CommitLogStoreContext"),
         ("dispatcher", "super::CommitLogDispatchHandle"),
         ("runtime_state", "super::CommitLogRuntimeState"),
         ("store_checkpoint", "super::Arc<super::StoreCheckpoint>"),

@@ -8,7 +8,7 @@
 > PR-M12-01～06 未开始，合计剩余 7 个
 
 剩余任务数量、M11-12 内部执行批次与 M12 六个工作包见 [`REMAINING-TASKS.md`](REMAINING-TASKS.md)：正式口径
-剩余 7 个工作包；31 个最小可审查单元已完成 7 个，当前剩余 24 个。
+剩余 7 个工作包；31 个最小可审查单元已完成 8 个，当前剩余 23 个。
 
 ## 1. 使用方式
 
@@ -1054,6 +1054,15 @@ occurrences（production 59/139、test 59/287、compatibility 14/40、Broker pro
 55/131）；相对 bc68 净删除 1 identity/10 occurrences。3 个保留 Reput CommitLog occurrence 经临时 ADR-013
 一对一指纹审核，approval 未提交。R10 从 6/29 降至 6/23，R13 从 3/11 降至 2/7；31 项执行清单仍为
 完成 7 项、剩余 24 项，总进度仍为 75/82。
+
+CommitLog LocalStore back-reference 随 Issue #8553 完成收口：`CommitLogStoreContext` 只共享 running flags、
+replica count、StoreStats、不可变 delay metadata 与通过 ArcSwapOption 发布的 HA service snapshot；CommitLog 不再保存
+`ArcMut<LocalFileMessageStore>`，四条 recovery 路径不再接收完整 Store root，并用已拥有的 ConsumeQueueStore 执行
+completion。LocalFileMessageStore 的 delay table 同步改为标准不可变 Arc，CommitLog tests 不再通过 glob/返回类型传播
+ArcMut。reviewed 快照为 128 identities/453 occurrences（production 57/129、test 57/284、compatibility 14/40、
+Broker production 4/8、Store production 53/121）；相对 bc69 净删除 4 identities/13 occurrences。唯一保留 test
+constructor relocation 经临时 ADR-013 一对一审核，approval 未提交。R10 从 6/23 降至 6/20，R13 从 2/7 降至
+0/0 并完成；31 项执行清单现为完成 8 项、剩余 23 项，总进度仍为 75/82。
 
 ### 9.3 证据目录
 

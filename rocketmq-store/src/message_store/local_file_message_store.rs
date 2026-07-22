@@ -143,6 +143,7 @@ use crate::kv::compaction_store::CompactionStore;
 use crate::log_file::commit_log;
 use crate::log_file::commit_log::CommitLog;
 use crate::log_file::commit_log::CommitLogCleanupHandle;
+use crate::log_file::commit_log::CommitLogStoreContext;
 use crate::log_file::mapped_file::MappedFile;
 use crate::log_file::MAX_PULL_MSG_SIZE;
 use crate::message_store::recovery::ConsumeQueueRecoveryConcurrency;
@@ -390,7 +391,7 @@ pub struct LocalFileMessageStore {
     scheduled_task_group: Option<rocketmq_runtime::TaskGroup>,
     scheduled_tasks: Option<ScheduledTaskGroup>,
     ha_update_master_group: Arc<StdMutex<Option<rocketmq_runtime::TaskGroup>>>,
-    delay_level_table: ArcMut<BTreeMap<i32 /* level */, i64 /* delay timeMillis */>>,
+    delay_level_table: Arc<BTreeMap<i32 /* level */, i64 /* delay timeMillis */>>,
     max_delay_level: i32,
     last_recovery_report: Option<RecoveryReport>,
 }
@@ -486,8 +487,11 @@ impl LocalFileMessageStore {
         let local_backend_config = message_store_config.normalized_local_backend_config();
         let cleanup_policy = LocalCleanupPolicy::new(local_backend_config.cleanup);
         let (delay_level_table, max_delay_level) = parse_delay_level(message_store_config.message_delay_level.as_str());
+        let delay_level_table = Arc::new(delay_level_table);
         let running_flags = Arc::new(RunningFlags::new());
         let store_health_recorder = StoreHealthRecorder::new(running_flags.clone());
+        let alive_replica_num_in_group = Arc::new(AtomicI32::new(1));
+        let store_stats_service = Arc::new(StoreStatsService::new(Some(broker_config.broker_identity.clone())));
         let store_checkpoint = Arc::new(
             StoreCheckpoint::new(get_store_checkpoint(message_store_config.store_path_root_dir.as_str())).map_err(
                 |error| {
@@ -536,9 +540,17 @@ impl LocalFileMessageStore {
             message_store_config.as_ref(),
         ));
 
+        let store_context = CommitLogStoreContext::new(
+            running_flags.clone(),
+            alive_replica_num_in_group.clone(),
+            store_stats_service.clone(),
+            max_delay_level,
+            delay_level_table.clone(),
+        );
         let mut commit_log = CommitLog::new(
             message_store_config.clone(),
             broker_config.clone(),
+            store_context,
             dispatcher.handle(),
             store_checkpoint.clone(),
             topic_config_table.clone(),
@@ -578,7 +590,6 @@ impl LocalFileMessageStore {
         ensure_dir_ok(Self::get_store_path_physic(&message_store_config).as_str());
         ensure_dir_ok(Self::get_store_path_logic(&message_store_config).as_str());
 
-        let identity = broker_config.broker_identity.clone();
         let compaction_service = message_store_config.enable_compaction.then(|| {
             CompactionService::new(
                 compaction_store.clone(),
@@ -596,7 +607,7 @@ impl LocalFileMessageStore {
             compaction_service,
             store_checkpoint: Some(store_checkpoint.clone()),
             master_flushed_offset: Arc::new(AtomicI64::new(-1)),
-            alive_replica_num_in_group: Arc::new(AtomicI32::new(1)),
+            alive_replica_num_in_group,
             index_service: index_service.clone(),
             allocate_mapped_file_service,
             consume_queue_store: consume_queue_store.clone(),
@@ -641,7 +652,7 @@ impl LocalFileMessageStore {
             broker_stats_manager,
             message_arrival: MessageArrivalCapability::default(),
             notify_message_arrive_in_batch,
-            store_stats_service: Arc::new(StoreStatsService::new(Some(identity))),
+            store_stats_service,
             compaction_store,
             timer_message_store: None,
             transient_store_pool,
@@ -658,7 +669,7 @@ impl LocalFileMessageStore {
             scheduled_task_group: None,
             scheduled_tasks: None,
             ha_update_master_group: Arc::new(StdMutex::new(None)),
-            delay_level_table: ArcMut::new(delay_level_table),
+            delay_level_table,
             max_delay_level,
             last_recovery_report: None,
         })
@@ -738,7 +749,6 @@ impl LocalFileMessageStore {
 
     pub fn set_message_store_arc(&mut self, message_store_arc: ArcMut<LocalFileMessageStore>) {
         self.message_store_arc = Some(message_store_arc.clone());
-        self.commit_log.set_local_file_message_store(message_store_arc.clone());
         self.consume_queue_store.set_message_store(message_store_arc);
         if self.message_store_config.is_timer_wheel_enable() && self.timer_message_store.is_none() {
             let timer_message_store = Arc::new(TimerMessageStore::new(self.message_store_arc.clone()));
@@ -747,7 +757,7 @@ impl LocalFileMessageStore {
     }
 
     #[inline]
-    pub fn delay_level_table(&self) -> &ArcMut<BTreeMap<i32, i64>> {
+    pub fn delay_level_table(&self) -> &Arc<BTreeMap<i32, i64>> {
         &self.delay_level_table
     }
 
@@ -1210,25 +1220,16 @@ impl LocalFileMessageStore {
     pub async fn recover_normally(&mut self, max_phy_offset_of_consume_queue: i64) {
         let optimized_recovery_value = std::env::var("ROCKETMQ_USE_OPTIMIZED_RECOVERY").ok();
         let use_optimized = optimized_recovery_requested(optimized_recovery_value.as_deref());
-        let message_store = match self.message_store_arc_or_error("normal recovery") {
-            Ok(message_store) => message_store,
-            Err(error) => {
-                error!("skip normal recovery: {error}");
-                return;
-            }
-        };
 
         drive_commit_log_recovery(use_optimized, |step| async move {
             match step {
                 CommitLogRecoveryStep::Optimized => {
                     self.commit_log
-                        .recover_normally_optimized(max_phy_offset_of_consume_queue, message_store)
+                        .recover_normally_optimized(max_phy_offset_of_consume_queue)
                         .await;
                 }
                 CommitLogRecoveryStep::Standard => {
-                    self.commit_log
-                        .recover_normally(max_phy_offset_of_consume_queue, message_store)
-                        .await;
+                    self.commit_log.recover_normally(max_phy_offset_of_consume_queue).await;
                 }
             }
         })
@@ -1238,24 +1239,17 @@ impl LocalFileMessageStore {
     pub async fn recover_abnormally(&mut self, max_phy_offset_of_consume_queue: i64) {
         let optimized_recovery_value = std::env::var("ROCKETMQ_USE_OPTIMIZED_RECOVERY").ok();
         let use_optimized = optimized_recovery_requested(optimized_recovery_value.as_deref());
-        let message_store = match self.message_store_arc_or_error("abnormal recovery") {
-            Ok(message_store) => message_store,
-            Err(error) => {
-                error!("skip abnormal recovery: {error}");
-                return;
-            }
-        };
 
         drive_commit_log_recovery(use_optimized, |step| async move {
             match step {
                 CommitLogRecoveryStep::Optimized => {
                     self.commit_log
-                        .recover_abnormally_optimized(max_phy_offset_of_consume_queue, message_store)
+                        .recover_abnormally_optimized(max_phy_offset_of_consume_queue)
                         .await;
                 }
                 CommitLogRecoveryStep::Standard => {
                     self.commit_log
-                        .recover_abnormally(max_phy_offset_of_consume_queue, message_store)
+                        .recover_abnormally(max_phy_offset_of_consume_queue)
                         .await;
                 }
             }
@@ -1946,6 +1940,9 @@ impl MessageStore for LocalFileMessageStore {
                 let _ = default_ha_service.init();
                 self.ha_service = Some(default_ha_service);
             }
+        }
+        if let Some(ha_service) = self.ha_service.as_ref() {
+            self.commit_log.publish_ha_service(ha_service.clone());
         }
 
         let storage_capability = crate::platform::current_store_platform_capability();
@@ -6048,6 +6045,31 @@ mod tests {
         assert!(!commit_log_source.contains("ArcMut<super::CommitLogDispatcherDefault>"));
         assert!(!commit_log_source.contains("ArcMut<super::DefaultFlushManager>"));
         assert!(!commit_log_source.contains("ArcMut::new(DefaultFlushManager::new"));
+    }
+
+    #[test]
+    fn commit_log_store_context_source_contract_removes_local_root_back_reference() {
+        let local_source = include_str!("local_file_message_store.rs").replace("\r\n", "\n");
+        let local_production = local_source
+            .split_once("#[cfg(test)]\nmod tests")
+            .map(|(source, _)| source)
+            .expect("LocalFileMessageStore production section");
+        assert!(local_production.contains("delay_level_table: Arc<BTreeMap<i32"));
+        assert!(!local_production.contains("delay_level_table: ArcMut<BTreeMap<i32"));
+        assert!(!local_production.contains("set_local_file_message_store"));
+
+        let commit_log_source = include_str!("../log_file/commit_log.rs").replace("\r\n", "\n");
+        let commit_log_production = commit_log_source
+            .split_once("#[cfg(test)]\nmod tests")
+            .map(|(source, _)| source)
+            .expect("CommitLog production section");
+        assert!(commit_log_production.contains("pub(crate) struct CommitLogStoreContext"));
+        assert!(commit_log_production.contains("ha_service: Arc<ArcSwapOption<GeneralHAService>>"));
+        assert!(commit_log_production.contains("store_context: super::CommitLogStoreContext"));
+        assert!(commit_log_production.contains("$commit_log.consume_queue_store.truncate_dirty(process_offset)"));
+        assert!(!commit_log_production.contains("use rocketmq_rust::ArcMut;"));
+        assert!(!commit_log_production.contains("pub(super) local_file_message_store:"));
+        assert!(!commit_log_production.contains("message_store: ArcMut<LocalFileMessageStore>"));
     }
 
     #[tokio::test]
