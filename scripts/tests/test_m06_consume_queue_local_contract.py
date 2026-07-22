@@ -26,6 +26,36 @@ def source(relative: str) -> str:
 
 
 class M06ConsumeQueueLocalContractTests(unittest.TestCase):
+    def test_consume_queue_store_uses_narrow_standard_arc_context(self) -> None:
+        local_store = source(
+            "rocketmq-store/src/queue/local_file_consume_queue_store.rs"
+        ).split("#[cfg(test)]", maxsplit=1)[0]
+        single_queue = source("rocketmq-store/src/queue/single_consume_queue.rs").split(
+            "#[cfg(test)]", maxsplit=1
+        )[0]
+        mapped_queue = source(
+            "rocketmq-store/src/consume_queue/mapped_file_queue.rs"
+        )
+        commit_log = source("rocketmq-store/src/log_file/commit_log.rs")
+
+        self.assertIn(
+            "context: RwLock<Option<ConsumeQueueStoreContext>>", local_store
+        )
+        self.assertIn("inner: Weak<Inner>", local_store)
+        self.assertNotIn("ArcMut<LocalFileMessageStore>", local_store)
+        self.assertIn("context: ConsumeQueueStoreContext", single_queue)
+        self.assertIn("queue_lookup: ConsumeQueueLookupHandle", single_queue)
+        self.assertIn(".find_or_create_consume_queue(", single_queue)
+        self.assertNotIn("ArcMut<MS>", single_queue)
+        self.assertNotIn("impl<MS: MessageStore>", single_queue)
+        self.assertIn(
+            "commit_log: &CommitLogReadHandle", mapped_queue
+        )
+        self.assertIn(
+            "pub(crate) fn pickup_store_timestamp(&self, offset: i64, size: i32) -> i64",
+            commit_log,
+        )
+
     def test_consume_queue_handle_uses_explicit_per_queue_synchronization(self) -> None:
         queue_facade = source("rocketmq-store/src/queue.rs")
         local_store = source(
@@ -282,13 +312,14 @@ class M06ConsumeQueueLocalContractTests(unittest.TestCase):
             store_root_production,
         )
         self.assertIn(
-            "message_store: RwLock<Option<ArcMut<LocalFileMessageStore>>>",
+            "context: RwLock<Option<ConsumeQueueStoreContext>>",
             store_root_production,
         )
         self.assertIn(
-            "*self.inner.message_store.write() = Some(message_store);",
+            "*self.inner.context.write() = Some(context);",
             store_root_production,
         )
+        self.assertNotIn("ArcMut<LocalFileMessageStore>", store_root_production)
         self.assertIn("drive_find_or_create_consume_queue(", store_root)
         self.assertIn("clamp_consume_queue_offset(", store_root)
         self.assertIn(

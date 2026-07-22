@@ -157,7 +157,9 @@ use crate::message_store::recovery::RecoveryPlan;
 use crate::message_store::recovery::RecoveryReport;
 use crate::queue::build_consume_queue::CommitLogDispatcherBuildConsumeQueue;
 use crate::queue::consume_queue_store::ConsumeQueueStoreTrait;
+use crate::queue::local_file_consume_queue_store::ConsumeQueueLookupHandle;
 use crate::queue::local_file_consume_queue_store::ConsumeQueueStore;
+use crate::queue::local_file_consume_queue_store::ConsumeQueueStoreContext;
 use crate::queue::ArcConsumeQueue;
 use crate::stats::broker_stats_manager::BrokerStatsManager;
 use crate::store::running_flags::RunningFlags;
@@ -739,6 +741,22 @@ impl LocalFileMessageStore {
         self.message_store_config.clone()
     }
 
+    pub(crate) fn consume_queue_context(&self) -> ConsumeQueueStoreContext {
+        ConsumeQueueStoreContext::new(
+            Arc::clone(&self.message_store_config),
+            Arc::clone(&self.topic_config_table),
+            self.commit_log.read_handle(),
+            Arc::clone(&self.running_flags),
+            self.store_checkpoint
+                .clone()
+                .expect("store checkpoint is initialized with LocalFileMessageStore"),
+        )
+    }
+
+    pub(crate) fn consume_queue_lookup_handle(&self) -> ConsumeQueueLookupHandle {
+        self.consume_queue_store.lookup_handle()
+    }
+
     #[cfg(feature = "tieredstore")]
     pub fn tiered_store_metrics(
         &self,
@@ -757,7 +775,7 @@ impl LocalFileMessageStore {
     }
 
     pub fn set_message_store_arc(&mut self, message_store_arc: ArcMut<LocalFileMessageStore>) {
-        self.consume_queue_store.set_message_store(message_store_arc.clone());
+        self.consume_queue_store.set_context(self.consume_queue_context());
         if self.message_store_config.is_timer_wheel_enable() && self.timer_message_store.is_none() {
             let timer_message_store = Arc::new(TimerMessageStore::new(Some(message_store_arc.clone())));
             self.set_timer_message_store(timer_message_store);

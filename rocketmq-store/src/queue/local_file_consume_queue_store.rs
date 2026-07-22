@@ -20,21 +20,23 @@ use std::fs;
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::sync::Weak;
 use std::time::Instant;
 
 use bytes::BufMut;
 use bytes::Bytes;
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
+use dashmap::DashMap;
 use futures_util::future::join_all;
 use parking_lot::RwLock;
 use rocketmq_common::common::attribute::cq_type::CQType;
 use rocketmq_common::common::boundary_type::BoundaryType;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
+use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_common::utils::queue_type_utils::QueueTypeUtils;
-use rocketmq_rust::ArcMut;
 use rocketmq_store_local::consume_queue::root::clamp_consume_queue_offset;
 use rocketmq_store_local::consume_queue::root::find_or_create_consume_queue as drive_find_or_create_consume_queue;
 use rocketmq_store_local::consume_queue::root::ConsumeQueueStoreRoot;
@@ -43,9 +45,9 @@ use tracing::error;
 use tracing::info;
 
 use crate::base::dispatch_request::DispatchRequest;
-use crate::base::message_store::MessageStore;
+use crate::base::store_checkpoint::StoreCheckpoint;
 use crate::config::message_store_config::MessageStoreConfig;
-use crate::message_store::local_file_message_store::LocalFileMessageStore;
+use crate::log_file::commit_log::CommitLogReadHandle;
 use crate::queue::batch_consume_queue::BatchConsumeQueue;
 use crate::queue::consume_queue::ConsumeQueueTrait;
 use crate::queue::consume_queue_store::ConsumeQueueStoreTrait;
@@ -55,6 +57,7 @@ use crate::queue::single_consume_queue::CQ_STORE_UNIT_SIZE;
 use crate::queue::ArcConsumeQueue;
 use crate::queue::ConsumeQueueTable;
 use crate::queue::CqUnit;
+use crate::store::running_flags::RunningFlags;
 use crate::store_path_config_helper::get_store_path_batch_consume_queue;
 use crate::store_path_config_helper::get_store_path_consume_queue;
 
@@ -150,11 +153,75 @@ impl ConsumeQueueRecoverySummary {
 }
 
 struct Inner {
-    pub(crate) message_store: RwLock<Option<ArcMut<LocalFileMessageStore>>>,
+    pub(crate) context: RwLock<Option<ConsumeQueueStoreContext>>,
     pub(crate) message_store_config: Arc<MessageStoreConfig>,
     pub(crate) broker_config: Arc<BrokerConfig>,
     pub(crate) queue_offset_operator: QueueOffsetOperator,
     pub(crate) consume_queue_table: Arc<ConsumeQueueTable>,
+}
+
+#[derive(Clone)]
+pub(crate) struct ConsumeQueueStoreContext {
+    message_store_config: Arc<MessageStoreConfig>,
+    topic_config_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>>,
+    commit_log: CommitLogReadHandle,
+    running_flags: Arc<RunningFlags>,
+    store_checkpoint: Arc<StoreCheckpoint>,
+}
+
+impl ConsumeQueueStoreContext {
+    pub(crate) fn new(
+        message_store_config: Arc<MessageStoreConfig>,
+        topic_config_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>>,
+        commit_log: CommitLogReadHandle,
+        running_flags: Arc<RunningFlags>,
+        store_checkpoint: Arc<StoreCheckpoint>,
+    ) -> Self {
+        Self {
+            message_store_config,
+            topic_config_table,
+            commit_log,
+            running_flags,
+            store_checkpoint,
+        }
+    }
+
+    pub(crate) fn message_store_config(&self) -> &MessageStoreConfig {
+        self.message_store_config.as_ref()
+    }
+
+    pub(crate) fn get_topic_config(&self, topic: &CheetahString) -> Option<Arc<TopicConfig>> {
+        self.topic_config_table.get(topic).as_deref().cloned()
+    }
+
+    pub(crate) fn commit_log(&self) -> &CommitLogReadHandle {
+        &self.commit_log
+    }
+
+    pub(crate) fn running_flags(&self) -> &RunningFlags {
+        self.running_flags.as_ref()
+    }
+
+    pub(crate) fn store_checkpoint(&self) -> &StoreCheckpoint {
+        self.store_checkpoint.as_ref()
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct ConsumeQueueLookupHandle {
+    inner: Weak<Inner>,
+}
+
+impl ConsumeQueueLookupHandle {
+    pub(crate) fn find_or_create_consume_queue(&self, topic: &CheetahString, queue_id: i32) -> Option<ArcConsumeQueue> {
+        let inner = self.inner.upgrade()?;
+        let store = ConsumeQueueStore {
+            inner: ConsumeQueueStoreRoot::new(inner),
+        };
+        Some(ConsumeQueueStoreTrait::find_or_create_consume_queue(
+            &store, topic, queue_id,
+        ))
+    }
 }
 
 impl Inner {
@@ -186,6 +253,12 @@ impl ConsumeQueueStore {
             .values()
             .flat_map(|queues| queues.values().cloned())
             .collect()
+    }
+
+    pub(crate) fn lookup_handle(&self) -> ConsumeQueueLookupHandle {
+        ConsumeQueueLookupHandle {
+            inner: Arc::downgrade(self.inner.adapter()),
+        }
     }
 
     async fn recover_one_consume_queue(consume_queue: ArcConsumeQueue) -> ConsumeQueueRecoveryResult {
@@ -485,7 +558,7 @@ impl ConsumeQueueStore {
     pub fn new(message_store_config: Arc<MessageStoreConfig>, broker_config: Arc<BrokerConfig>) -> Self {
         Self {
             inner: ConsumeQueueStoreRoot::new(Arc::new(Inner {
-                message_store: RwLock::new(None),
+                context: RwLock::new(None),
                 message_store_config,
                 broker_config,
                 queue_offset_operator: Default::default(),
@@ -494,8 +567,8 @@ impl ConsumeQueueStore {
         }
     }
 
-    pub fn set_message_store(&mut self, message_store: ArcMut<LocalFileMessageStore>) {
-        *self.inner.message_store.write() = Some(message_store);
+    pub(crate) fn set_context(&self, context: ConsumeQueueStoreContext) {
+        *self.inner.context.write() = Some(context);
     }
 
     pub fn check_self(&self, consume_queue: &dyn ConsumeQueueTrait) {
@@ -811,13 +884,13 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
                     .and_then(|topic_map| topic_map.get(&queue_id).cloned())
             },
             || {
-                let message_store = self
+                let context = self
                     .inner
-                    .message_store
+                    .context
                     .read()
                     .clone()
-                    .expect("MessageStore must be set before creating consume queues");
-                let topic_config = message_store.get_topic_config(topic);
+                    .expect("consume queue context must be set before creating consume queues");
+                let topic_config = context.get_topic_config(topic);
                 let cq_type = QueueTypeUtils::get_cq_type_arc_mut(topic_config.as_ref());
                 let new_queue: ArcConsumeQueue = match cq_type {
                     CQType::SimpleCQ | CQType::RocksDBCQ => {
@@ -828,7 +901,8 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
                                 self.inner.message_store_config.store_path_root_dir.as_str(),
                             )),
                             self.inner.message_store_config.get_mapped_file_size_consume_queue(),
-                            message_store,
+                            context,
+                            self.lookup_handle(),
                         );
                         ArcConsumeQueue::new(Box::new(consume_queue))
                     }
@@ -876,11 +950,11 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
     }
 
     fn get_store_time(&self, cq_unit: &CqUnit) -> i64 {
-        let message_store = self.inner.message_store.read().clone();
-        match message_store.as_ref() {
-            Some(ms) => ms.get_commit_log().pickup_store_timestamp(cq_unit.pos, cq_unit.size),
+        let context = self.inner.context.read().clone();
+        match context.as_ref() {
+            Some(context) => context.commit_log().pickup_store_timestamp(cq_unit.pos, cq_unit.size),
             None => {
-                error!("Message store is not set in ConsumeQueueStore");
+                error!("Consume queue context is not set in ConsumeQueueStore");
                 -1
             }
         }
@@ -1017,13 +1091,13 @@ impl ConsumeQueueStore {
 
     #[inline]
     fn queue_type_should_be(&self, topic: &CheetahString, cq_type: CQType) -> bool {
-        let message_store = self.inner.message_store.read().clone();
-        let Some(message_store) = message_store.as_ref() else {
-            error!("MessageStore must be set before loading consume queues for topic {topic}");
+        let context = self.inner.context.read().clone();
+        let Some(context) = context.as_ref() else {
+            error!("Consume queue context must be set before loading consume queues for topic {topic}");
             return false;
         };
 
-        let topic_config = message_store.get_topic_config(topic);
+        let topic_config = context.get_topic_config(topic);
         let act = QueueTypeUtils::get_cq_type_arc_mut(topic_config.as_ref());
         if self.is_rocksdb_cq_compat(act, cq_type) {
             return true;
@@ -1056,12 +1130,12 @@ impl ConsumeQueueStore {
         cq_type: CQType,
         store_path: CheetahString,
     ) -> ArcConsumeQueue {
-        let message_store = self
+        let context = self
             .inner
-            .message_store
+            .context
             .read()
             .clone()
-            .expect("MessageStore must be set before creating consume queues");
+            .expect("consume queue context must be set before creating consume queues");
         match cq_type {
             CQType::SimpleCQ | CQType::RocksDBCQ => {
                 let consume_queue = ConsumeQueue::new(
@@ -1069,7 +1143,8 @@ impl ConsumeQueueStore {
                     queue_id,
                     store_path,
                     self.inner.message_store_config.get_mapped_file_size_consume_queue(),
-                    message_store,
+                    context,
+                    self.lookup_handle(),
                 );
                 ArcConsumeQueue::new(Box::new(consume_queue))
             }
@@ -1114,11 +1189,12 @@ mod tests {
     use crate::base::store_enum::StoreType;
     use crate::base::swappable::Swappable;
     use crate::filter::MessageFilter;
+    use crate::message_store::local_file_message_store::LocalFileMessageStore;
     use crate::queue::batch_consume_queue;
     use crate::queue::FileQueueLifeCycle;
 
     #[test]
-    fn consume_queue_store_root_uses_standard_arc_and_locked_wiring() {
+    fn consume_queue_store_root_uses_standard_arc_and_narrow_context() {
         let source = include_str!("local_file_consume_queue_store.rs").replace("\r\n", "\n");
         let production = source
             .split_once("#[cfg(test)]\nmod tests")
@@ -1129,9 +1205,10 @@ mod tests {
         assert!(!production.contains("inner: ConsumeQueueStoreRoot<ArcMut<Inner>>"));
         assert!(production.contains("inner: ConsumeQueueStoreRoot::new(Arc::new(Inner {"));
         assert!(!production.contains("ConsumeQueueStoreRoot::new(ArcMut::new(Inner {"));
-        assert!(production.contains("message_store: RwLock<Option<ArcMut<LocalFileMessageStore>>>"));
-        assert!(production.contains("*self.inner.message_store.write() = Some(message_store);"));
-        assert!(production.contains("let message_store = self.inner.message_store.read().clone();"));
+        assert!(production.contains("context: RwLock<Option<ConsumeQueueStoreContext>>"));
+        assert!(production.contains("inner: Weak<Inner>"));
+        assert!(production.contains("*self.inner.context.write() = Some(context);"));
+        assert!(!production.contains("ArcMut<LocalFileMessageStore>"));
     }
 
     struct TrackingQueueState {
@@ -1520,7 +1597,7 @@ mod tests {
         fs::create_dir_all(Path::new(&batch_store_path).join(topic.as_str()).join("0"))
             .expect("batch consume queue directory");
         let mut store = ConsumeQueueStore::new(message_store_config, broker_config);
-        store.set_message_store(message_store);
+        store.set_context(message_store.consume_queue_context());
 
         assert!(!store.load_consume_queues(&batch_store_path, CQType::BatchCQ));
     }
@@ -1556,7 +1633,7 @@ mod tests {
         fs::create_dir_all(Path::new(&simple_store_path).join(topic.as_str()).join("0"))
             .expect("simple consume queue directory");
         let mut store = ConsumeQueueStore::new(message_store_config, broker_config);
-        store.set_message_store(message_store);
+        store.set_context(message_store.consume_queue_context());
 
         assert!(store.load_consume_queues(&simple_store_path, CQType::SimpleCQ));
         let queue = store
@@ -1585,8 +1662,8 @@ mod tests {
         ));
         let message_store_clone = message_store.clone();
         message_store.set_message_store_arc(message_store_clone);
-        let mut store = ConsumeQueueStore::new(message_store_config, broker_config);
-        store.set_message_store(message_store);
+        let store = ConsumeQueueStore::new(message_store_config, broker_config);
+        store.set_context(message_store.consume_queue_context());
 
         let queue = store.create_consume_queue_by_type(
             &topic,
