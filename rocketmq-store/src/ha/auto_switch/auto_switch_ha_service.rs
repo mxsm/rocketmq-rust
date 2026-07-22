@@ -430,13 +430,19 @@ mod tests {
     fn constructor_does_not_retain_message_store_root() {
         let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-auto-switch-owner-{}", current_millis()));
         let store = new_test_message_store(&temp_root, true);
-        let strong_count_before = store.strong_count();
+        let expected_store_path = store.message_store_config().store_path_root_dir.clone();
 
-        let service = AutoSwitchHAService::new(new_default_ha_service(store.as_ref()));
+        let service = AutoSwitchHAService::new(new_default_ha_service(&store));
+        drop(store);
 
-        assert_eq!(store.strong_count(), strong_count_before);
-        drop(service);
-        assert_eq!(store.strong_count(), strong_count_before);
+        assert_eq!(
+            service
+                .default_delegate()
+                .replica_store()
+                .message_store_config()
+                .store_path_root_dir,
+            expected_store_path
+        );
 
         let _ = std::fs::remove_dir_all(temp_root);
     }
@@ -460,7 +466,7 @@ mod tests {
         let store = new_test_message_store(&temp_root, true);
         store.set_alive_replica_num_in_group(3);
 
-        let general_service = new_initialized_auto_switch_service(store.as_ref());
+        let general_service = new_initialized_auto_switch_service(&store);
         let service = general_service.auto_switch_service().expect("auto switch service");
 
         assert!(service.get_ha_client().is_some());
@@ -489,7 +495,7 @@ mod tests {
         let mut store = new_test_message_store(&temp_root, true);
         store.init().await.expect("init message store");
 
-        let general_service = new_initialized_auto_switch_service(store.as_ref());
+        let general_service = new_initialized_auto_switch_service(&store);
         let service = general_service.auto_switch_service().expect("auto switch service");
 
         service.sync_controller_sync_state_set(7, &HashSet::from([7_i64, 9_i64]));
@@ -531,7 +537,7 @@ mod tests {
             .await
             .expect("append data");
 
-        let general_service = new_initialized_auto_switch_service(store.as_ref());
+        let general_service = new_initialized_auto_switch_service(&store);
         let service = general_service.auto_switch_service().expect("auto switch service");
         service.sync_controller_sync_state_set(7, &HashSet::from([7_i64]));
 
@@ -560,7 +566,7 @@ mod tests {
             .await
             .expect("append data");
 
-        let general_service = new_initialized_auto_switch_service(store.as_ref());
+        let general_service = new_initialized_auto_switch_service(&store);
         let service = general_service.auto_switch_service().expect("auto switch service");
         service.sync_controller_sync_state_set(7, &HashSet::from([7_i64]));
 
@@ -591,7 +597,7 @@ mod tests {
         let mut store = new_test_message_store(&temp_root, true);
         store.init().await.expect("init message store");
 
-        let general_service = new_initialized_auto_switch_service(store.as_ref());
+        let general_service = new_initialized_auto_switch_service(&store);
         let service = general_service.auto_switch_service().expect("auto switch service");
         service.sync_controller_sync_state_set(7, &HashSet::from([7_i64, 9_i64, 10_i64]));
         service.update_connection_last_caught_up_time(9, current_millis());
@@ -616,7 +622,7 @@ mod tests {
             .await
             .expect("append data");
 
-        let general_service = new_initialized_auto_switch_service(store.as_ref());
+        let general_service = new_initialized_auto_switch_service(&store);
         let service = general_service.auto_switch_service().expect("auto switch service");
         service.sync_controller_sync_state_set(7, &HashSet::from([7_i64]));
         service
@@ -645,7 +651,7 @@ mod tests {
             .await
             .expect("append data");
 
-        let general_service = new_initialized_auto_switch_service(store.as_ref());
+        let general_service = new_initialized_auto_switch_service(&store);
         let service = general_service.auto_switch_service().expect("auto switch service");
         service.sync_controller_sync_state_set(7, &HashSet::from([7_i64]));
         service
@@ -685,7 +691,7 @@ mod tests {
             .expect("append data");
         store.set_confirm_offset(0);
 
-        let general_service = new_initialized_auto_switch_service(store.as_ref());
+        let general_service = new_initialized_auto_switch_service(&store);
         let service = general_service.auto_switch_service().expect("auto switch service");
 
         let switched = service.change_to_master(5).await.expect("change to master");
@@ -706,7 +712,7 @@ mod tests {
         let mut store = new_test_message_store(&temp_root, true);
         store.init().await.expect("init message store");
 
-        let general_service = new_initialized_auto_switch_service(store.as_ref());
+        let general_service = new_initialized_auto_switch_service(&store);
         let service = general_service.auto_switch_service().expect("auto switch service");
 
         assert!(service.change_to_master(6).await.expect("change to master"));

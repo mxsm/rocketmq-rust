@@ -4568,6 +4568,31 @@ RocksDB semantics test root 随 Issue #8597 完成以下收口：
 | final gates | `cargo fmt --all -- --check`、workspace all-target/all-feature strict Clippy 与 `git diff --check` 通过 |
 | reduced validation scope | 本切片只改变 RocksDB integration-test owner，不修改 RocksDB production behavior、feature 定义、runtime lifecycle 或公开 API；仅运行一个覆盖变更路径的 round-trip test，并由最终 workspace all-target/all-feature Clippy 编译/lint 全部测试 target，不重复 Store/Broker 全包测试、六条 RocksDB behavior matrix、额外 `cargo check`、runtime audit、M06、telemetry、release 或 Rustdoc |
 
+## M11-12bc91 实现
+
+共享 HA test root 随 Issue #8599 完成以下收口：
+
+- `ha::test_support::new_test_message_store` 不再导入、构造或返回 `ArcMut<LocalFileMessageStore>`；专用配置显式
+  关闭 Timer wheel，并在 MessageStore/Broker 两侧开启 duplication mode，复用既有 `wire_owned_root_dependencies`
+  返回独占 LocalFile root。
+- Default HA 与 AutoSwitch HA 测试直接借用 owned Store，group-transfer 仅提取 `HAReplicaStoreHandle`；被测
+  service 不获得完整 Store owner。
+- AutoSwitch owner 回归先构造 service 再释放 LocalFile root，并通过 replica capability 读取原配置，替代旧 wrapper
+  strong-count 断言。
+- reviewed baseline 从 65/237 降至 62/234：production 保持 13/24，test 从 38/173 降至 35/170，
+  compatibility 保持 14/40；净删除 3 test identities/3 occurrences，无 relocation、新 identity 或临时 approval。
+- Store test/bench caller 从 30/157 降至 27/154；R17 当前上界降至 35/170（Broker 6/8、Client 0/0、
+  runtime-foundation 2/8），执行清单保持完成 11 项、剩余 20 项，正式进度仍为 75/82。
+
+## M11-12bc91 验证
+
+| 命令 | 结果 |
+|---|---|
+| affected behavior | 初次 Default HA 模块测试在 fixture 前置条件处 1/13 通过、12/13 因默认 Timer wheel 未关闭而失败；显式设为 `timer_wheel_enable=false` 后，Default HA 13/13、AutoSwitch HA 13/13、group-transfer 6/6 通过（合计 32/32） |
+| reviewed baseline / fixtures | 正式 baseline 与 reviewed candidate 的 semantic set 均为 62/234；直接 guard、candidate compare、27/27 fixtures 与 78/78 guard tests 通过；净删除 3 test identities/3 occurrences，无 relocation、新 identity 或临时 approval |
+| final gates | `cargo fmt --all -- --check`、workspace all-target/all-feature strict Clippy 与 `git diff --check` 通过 |
+| reduced validation scope | 本切片只改变 cfg(test) HA Store fixture 与断言，不修改 production lifecycle/runtime；运行共享 fixture 的三个直接消费模块，并由最终 workspace Clippy 编译/lint 全部 target，不重复 Store/Broker 全包测试、runtime audit、M06、RocksDB、telemetry、release、Rustdoc 或额外 package Clippy/check |
+
 ## 剩余切片与 Gate
 
 2026-07-23 盘点将执行工作固化为 31 个最小可审查单元：16 个 production owner、2 个

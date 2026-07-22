@@ -873,63 +873,6 @@
       "adr": "ADR-013"
     },
     {
-      "identity": "903ee178ddedefbc62cdf1c3",
-      "path": "rocketmq-store/src/ha.rs",
-      "symbol": "ArcMut",
-      "kind": "constructor",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "ed72d03d8eee55d1d1fdd9b8",
-          "fingerprint": "88a50625f8b4ef1eb68814de",
-          "item": "fn new_test_message_store",
-          "line": 64
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "2bae004f63d6983d5c2d8c82",
-      "path": "rocketmq-store/src/ha.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "e5c18832942efa85c0fad54a",
-          "fingerprint": "d238b199b672bbd4770e861f",
-          "item": "mod test_support",
-          "line": 45
-        }
-      ],
-      "owner": "store",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "86c472ff95b899f2a623801e",
-      "path": "rocketmq-store/src/ha.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "8b3120aa6863c4b4062ec673",
-          "fingerprint": "5ddf728cdf3d55063f4f1c2c",
-          "item": "fn new_test_message_store",
-          "line": 50
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
       "identity": "5e5713691514ee5af81a7804",
       "path": "rocketmq-store/src/log_file/commit_log.rs",
       "symbol": "ArcMut",

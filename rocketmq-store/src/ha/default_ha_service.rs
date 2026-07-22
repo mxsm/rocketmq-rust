@@ -914,7 +914,7 @@ mod tests {
         let temp_root =
             std::env::temp_dir().join(format!("rocketmq-rust-default-ha-runtime-context-{}", current_millis()));
         let store = new_test_message_store(&temp_root, false);
-        let service = new_default_ha_service(store.as_ref());
+        let service = new_default_ha_service(&store);
         let context = service.connection_context();
 
         assert!(context.inner.connections.upgrade().is_some());
@@ -930,9 +930,8 @@ mod tests {
 
     fn new_auto_switch_service(root: &Path) -> GeneralHAService {
         let store = new_test_message_store(root, true);
-        let mut service = GeneralHAService::new_with_auto_switch_ha_service(AutoSwitchHAService::new(
-            new_default_ha_service(store.as_ref()),
-        ));
+        let mut service =
+            GeneralHAService::new_with_auto_switch_ha_service(AutoSwitchHAService::new(new_default_ha_service(&store)));
         service.init().expect("init auto switch ha service");
         service
     }
@@ -951,7 +950,7 @@ mod tests {
     async fn start_without_init_returns_error() {
         let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-default-ha-no-init-{}", current_millis()));
         let store = new_test_message_store(&temp_root, false);
-        let service = new_default_ha_service(store.as_ref());
+        let service = new_default_ha_service(&store);
 
         let error = service.start().await.expect_err("start should fail before init");
 
@@ -963,7 +962,7 @@ mod tests {
     fn default_ha_service_exposes_shared_transfer_metrics() {
         let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-default-ha-metrics-{}", current_millis()));
         let store = new_test_message_store(&temp_root, false);
-        let service = new_default_ha_service(store.as_ref());
+        let service = new_default_ha_service(&store);
         let metrics = service.ha_transfer_metrics();
 
         metrics.record_fallback(
@@ -981,7 +980,7 @@ mod tests {
         let temp_root =
             std::env::temp_dir().join(format!("rocketmq-rust-default-ha-repeated-ack-{}", current_millis()));
         let store = new_test_message_store(&temp_root, false);
-        let mut general_service = GeneralHAService::new_with_default_ha_service(new_default_ha_service(store.as_ref()));
+        let mut general_service = GeneralHAService::new_with_default_ha_service(new_default_ha_service(&store));
         general_service.init().expect("init default ha service");
         let service = general_service.default_service().expect("default ha service");
 
@@ -998,9 +997,8 @@ mod tests {
     async fn accept_socket_service_shutdown_joins_worker() {
         let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-default-ha-shutdown-{}", current_millis()));
         let store = new_test_message_store(&temp_root, true);
-        let mut general_service = GeneralHAService::new_with_auto_switch_ha_service(AutoSwitchHAService::new(
-            new_default_ha_service(store.as_ref()),
-        ));
+        let mut general_service =
+            GeneralHAService::new_with_auto_switch_ha_service(AutoSwitchHAService::new(new_default_ha_service(&store)));
         general_service.init().expect("init auto switch ha service");
         let service = general_service
             .auto_switch_service()
@@ -1025,9 +1023,8 @@ mod tests {
     fn init_uses_auto_switch_accept_socket_service_for_auto_switch_mode() {
         let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-default-ha-init-{}", current_millis()));
         let store = new_test_message_store(&temp_root, true);
-        let mut general_service = GeneralHAService::new_with_auto_switch_ha_service(AutoSwitchHAService::new(
-            new_default_ha_service(store.as_ref()),
-        ));
+        let mut general_service =
+            GeneralHAService::new_with_auto_switch_ha_service(AutoSwitchHAService::new(new_default_ha_service(&store)));
         general_service.init().expect("init auto switch ha service");
         let service = general_service
             .auto_switch_service()
@@ -1049,7 +1046,7 @@ mod tests {
     async fn build_connection_wraps_auto_switch_connections_when_enabled() {
         let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-default-ha-build-{}", current_millis()));
         let store = new_test_message_store(&temp_root, true);
-        let service = new_default_ha_service(store.as_ref());
+        let service = new_default_ha_service(&store);
         let (server_stream, remote_addr, _client) = new_server_stream().await;
 
         let mut connection = AcceptSocketService::build_connection(
@@ -1196,7 +1193,7 @@ mod tests {
             current_millis()
         ));
         let store = new_test_message_store(&temp_root, false);
-        let service = new_default_ha_service(store.as_ref());
+        let service = new_default_ha_service(&store);
         let (server_stream, remote_addr, mut client) = new_server_stream().await;
         let mut connection = AcceptSocketService::build_connection(
             service.connection_context(),
