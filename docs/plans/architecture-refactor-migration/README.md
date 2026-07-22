@@ -1037,6 +1037,15 @@ segment create/delete 使用 ArcSwap RCU/CAS 在最新代际合并，load/recove
 Store production 58/151）；相对 bc66 净删除 1 个 identity/8 occurrences。R10、R13 与其余 Store owner 仍未完成，
 31 项执行清单仍为完成 7 项、剩余 24 项。
 
+Mapped-file flush shared-reference boundary 随 Issue #8549 收口：CommitLog 直接拥有 `MappedFileQueue`，
+`DefaultFlushManager` 与四个 flush/commit worker 仅持 `MappedFileQueueFlushHandle`，不再克隆完整 queue owner。
+handle 共享标准 Arc mapped-file generation 与 runtime state；runtime-state clone 仍观察同一 flush/commit 水位和串行锁。
+`DefaultFlushManager::new` 收窄为 crate 内构造入口，防止完整 queue owner 从公共构造边界重新进入。reviewed 快照为
+133 identities/476 occurrences（production 60/149、test 59/287、compatibility 14/40、Broker production 4/8、
+Store production 56/141）；相对 bc67 净删除 4 identities/17 occurrences（production 2/10、test 2/7），无
+relocation、新增 identity 或临时 approval。R13 从 5/21 降至 3/11，剩余 CommitLog/dispatcher/flush-manager owner
+仍待后续收口；31 项执行清单仍为完成 7 项、剩余 24 项，总进度仍为 75/82。
+
 ### 9.3 证据目录
 
 - 运行期生成物：`target/architecture-refactor/Mxx/<run-id>/`，不提交 Git。
