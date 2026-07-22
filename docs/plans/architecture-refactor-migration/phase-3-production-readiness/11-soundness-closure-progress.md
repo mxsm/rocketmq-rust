@@ -4593,6 +4593,28 @@ RocksDB semantics test root 随 Issue #8597 完成以下收口：
 | final gates | `cargo fmt --all -- --check`、workspace all-target/all-feature strict Clippy 与 `git diff --check` 通过 |
 | reduced validation scope | 本切片只改变 cfg(test) HA Store fixture 与断言，不修改 production lifecycle/runtime；运行共享 fixture 的三个直接消费模块，并由最终 workspace Clippy 编译/lint 全部 target，不重复 Store/Broker 全包测试、runtime audit、M06、RocksDB、telemetry、release、Rustdoc 或额外 package Clippy/check |
 
+## M11-12bc92 实现
+
+LocalFile ConsumeQueue compatibility tests 随 Issue #8601 完成以下收口：
+
+- queue type mismatch、RocksDB compatibility load 与 RocksDB CQ mapping 三个测试直接构造独占
+  `LocalFileMessageStore`，只提取 `ConsumeQueueStoreContext` 注入被测 Store。
+- 删除 test-only `ArcMut` import、三个 wrapper constructor、clone 与 `set_message_store_arc`；测试不再启动或
+  保活与断言无关的 Timer/HA/self-wiring 组合。
+- reviewed baseline 从 62/234 降至 60/230：production 保持 13/24，test 从 35/170 降至 33/166，
+  compatibility 保持 14/40；净删除 2 test identities/4 occurrences，无 relocation、新 identity 或临时 approval。
+- Store test/bench caller 从 27/154 降至 25/150；R17 当前上界降至 33/166（Broker 6/8、Client 0/0、
+  runtime-foundation 2/8），执行清单保持完成 11 项、剩余 20 项，正式进度仍为 75/82。
+
+## M11-12bc92 验证
+
+| 命令 | 结果 |
+|---|---|
+| affected behavior | 三个 exact tests 各 1/1 通过：queue type mismatch fail-closed、RocksDB CQ 从 SimpleCQ path 兼容加载、RocksDBCQ 创建映射为 SimpleCQ；每次其余 535 项均过滤 |
+| reviewed baseline / fixtures | 正式 baseline 与 reviewed candidate 的 semantic set 均为 60/230；直接 guard、candidate compare、27/27 fixtures 与 78/78 guard tests 通过；净删除 2 test identities/4 occurrences，无 relocation、新 identity 或临时 approval |
+| final gates | `cargo fmt --all -- --check`、workspace all-target/all-feature strict Clippy 与 `git diff --check` 通过 |
+| reduced validation scope | 本切片只改变三个 cfg(test) queue fixture，不修改 production queue behavior、runtime 或 feature；运行三个 exact tests，并由最终 workspace Clippy 编译/lint 全部 target，不重复整个 queue module、Store/Broker 全包测试、runtime audit、M06、RocksDB matrix、telemetry、release、Rustdoc 或额外 package Clippy/check |
+
 ## 剩余切片与 Gate
 
 2026-07-23 盘点将执行工作固化为 31 个最小可审查单元：16 个 production owner、2 个
