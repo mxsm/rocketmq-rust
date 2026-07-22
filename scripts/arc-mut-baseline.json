@@ -1656,25 +1656,6 @@
       "adr": "ADR-013"
     },
     {
-      "identity": "da2b5d2334176b516428c25d",
-      "path": "rocketmq-store/src/ha/default_ha_service.rs",
-      "symbol": "ArcMut",
-      "kind": "constructor",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "0a83d032db7072c2f97a2afb",
-          "fingerprint": "327da55696eba2e537937365",
-          "item": "fn build_connection",
-          "line": 678
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
       "identity": "e41b67ab9b2b0bed9ab35a7a",
       "path": "rocketmq-store/src/ha/default_ha_service.rs",
       "symbol": "ArcMut",
@@ -1774,12 +1755,6 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "bda988674e92ecd29bc86402",
-          "fingerprint": "08686d018c08f95abb7c5656",
-          "item": "struct DefaultHAService",
-          "line": 80
-        },
-        {
           "id": "cfbb908afb1111e0e6eb2aea",
           "fingerprint": "e38ccfabd53dda3e8fbd4baf",
           "item": "struct DefaultHAService",
@@ -1798,18 +1773,6 @@
           "line": 157
         },
         {
-          "id": "2bb4e6a6c5022de18e2fd532",
-          "fingerprint": "27e43d4edf3a7be253ad97bc",
-          "item": "fn add_connection",
-          "line": 186
-        },
-        {
-          "id": "9885ecaff77fd11c780e5ace",
-          "fingerprint": "f7228a7a3b59ce57b8cdfa91",
-          "item": "fn remove_connection",
-          "line": 195
-        },
-        {
           "id": "a27f2e1ea40458c8feff6fa9",
           "fingerprint": "342b6abf6b39338dc5502d58",
           "item": "struct AcceptSocketService",
@@ -1826,12 +1789,6 @@
           "fingerprint": "c7b2e2e9d34ccb79b32a8240",
           "item": "fn build_connection",
           "line": 665
-        },
-        {
-          "id": "7d49720f55232786ef84e3cc",
-          "fingerprint": "0972c8a1b60394a7c84c4bf5",
-          "item": "fn build_connection",
-          "line": 670
         }
       ],
       "owner": "store",

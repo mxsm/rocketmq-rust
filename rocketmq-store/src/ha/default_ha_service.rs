@@ -77,7 +77,7 @@ pub(crate) struct HAConnectionRuntimeSnapshot {
 
 pub struct DefaultHAService {
     connection_count: Arc<AtomicU32>,
-    connections: Arc<Mutex<HashMap<HAConnectionId, ArcMut<GeneralHAConnection>>>>,
+    connections: Arc<Mutex<HashMap<HAConnectionId, GeneralHAConnection>>>,
     accept_socket_service: Option<AcceptSocketService>,
     default_message_store: ArcMut<LocalFileMessageStore>,
     wait_notify_object: Arc<Notify>,
@@ -183,28 +183,17 @@ impl DefaultHAService {
         Ok(())
     }
 
-    pub async fn add_connection(&self, connection: ArcMut<GeneralHAConnection>) {
-        // Add a new connection to the service
+    pub async fn add_connection(&self, connection: GeneralHAConnection) {
+        let slave_broker_id = Self::auto_switch_slave_broker_id(&connection);
+        let slave_ack_offset = connection.get_slave_ack_offset();
+
         let mut connections = self.connections.lock().await;
-        connections.insert(connection.get_ha_connection_id().clone(), connection.clone());
+        connections.insert(connection.get_ha_connection_id().clone(), connection);
         drop(connections);
 
-        self.handle_connection_added(connection.as_ref());
-    }
-
-    pub async fn remove_connection(&self, connection: ArcMut<GeneralHAConnection>) {
-        self.handle_connection_removed(connection.as_ref());
-
-        if let Some(ha_connection_state_notification_service) = &self.ha_connection_state_notification_service {
-            let remote_addr = connection.remote_address();
-            let connection_state = connection.get_current_state().await;
-            let _ = ha_connection_state_notification_service
-                .check_connection_state_and_notify(&remote_addr, connection_state)
-                .await;
+        if let Some(replication) = self.auto_switch_replication.as_deref() {
+            self.handle_auto_switch_connection_added(replication, slave_broker_id, slave_ack_offset);
         }
-
-        let mut connections = self.connections.lock().await;
-        connections.remove(connection.get_ha_connection_id());
     }
 
     pub(crate) async fn remove_runtime_connection(&self, connection: &HAConnectionRuntimeHandle) {
@@ -257,16 +246,6 @@ impl DefaultHAService {
                     .collect()
             })
             .unwrap_or_default()
-    }
-
-    pub(crate) fn handle_connection_added(&self, connection: &GeneralHAConnection) {
-        if let Some(replication) = self.auto_switch_replication.as_deref() {
-            self.handle_auto_switch_connection_added(
-                replication,
-                Self::auto_switch_slave_broker_id(connection),
-                connection.get_slave_ack_offset(),
-            );
-        }
     }
 
     pub(crate) fn handle_connection_ack(&self, connection: &GeneralHAConnection, slave_ack_offset: i64) {
@@ -547,15 +526,15 @@ impl HAService for DefaultHAService {
     }
 
     async fn connection_state(&self, remote_addr: &str) -> Option<HAConnectionState> {
-        let connection = {
+        let connection_runtime = {
             let connections = self.connections.lock().await;
             connections
                 .values()
                 .find(|connection| connection.remote_address() == remote_addr)
-                .cloned()
+                .and_then(GeneralHAConnection::runtime_handle)
         };
-        match connection {
-            Some(connection) => Some(connection.get_current_state().await),
+        match connection_runtime {
+            Some(connection) => Some(connection.current_state().await),
             None => None,
         }
     }
@@ -667,7 +646,7 @@ impl AcceptSocketService {
         stream: TcpStream,
         addr: SocketAddr,
         is_auto_switch: bool,
-    ) -> Result<ArcMut<GeneralHAConnection>, crate::ha::HAConnectionError> {
+    ) -> Result<GeneralHAConnection, crate::ha::HAConnectionError> {
         let default_connection =
             DefaultHAConnection::new(default_ha_service, stream, message_store_config, addr).await?;
         let general_connection = if is_auto_switch {
@@ -675,7 +654,7 @@ impl AcceptSocketService {
         } else {
             GeneralHAConnection::new_with_default_ha_connection(default_connection)
         };
-        Ok(ArcMut::new(general_connection))
+        Ok(general_connection)
     }
 
     pub async fn start(&mut self) -> HAResult<()> {
@@ -775,6 +754,18 @@ mod tests {
 
     use super::*;
     use crate::ha::auto_switch::auto_switch_ha_service::AutoSwitchHAService;
+
+    #[test]
+    fn connection_registry_source_contract_uses_unique_owners() {
+        let production = include_str!("default_ha_service.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production source");
+
+        assert!(production.contains("HashMap<HAConnectionId, GeneralHAConnection>"));
+        assert!(!production.contains("ArcMut<GeneralHAConnection>"));
+        assert!(!production.contains("ArcMut::new(general_connection)"));
+    }
 
     fn new_test_message_store(root: &Path, enable_controller_mode: bool) -> ArcMut<LocalFileMessageStore> {
         std::fs::create_dir_all(root).expect("create temp root dir");
@@ -1000,7 +991,7 @@ mod tests {
         .expect("build auto-switch connection");
         connection.set_slave_broker_id(Some(9));
 
-        service.handle_connection_ack(connection.as_ref(), 4);
+        service.handle_connection_ack(&connection, 4);
 
         assert_eq!(auto_switch_service.get_sync_state_set(), HashSet::from([7_i64, 9_i64]));
         assert!(auto_switch_service.is_synchronizing_sync_state_set());
@@ -1027,7 +1018,7 @@ mod tests {
         .expect("build auto-switch connection");
         connection.set_slave_broker_id(Some(9));
 
-        service.handle_connection_caught_up(connection.as_ref());
+        service.handle_connection_caught_up(&connection);
         sleep(Duration::from_millis(2)).await;
 
         let shrunk = auto_switch_service.maybe_shrink_sync_state_set();
@@ -1056,8 +1047,7 @@ mod tests {
         .expect("build auto-switch connection");
         connection.set_slave_broker_id(Some(9));
 
-        service.add_connection(connection.clone()).await;
-        service.remove_connection(connection.clone()).await;
+        service.handle_connection_removed(&connection);
 
         assert_eq!(auto_switch_service.get_local_sync_state_set(), HashSet::from([7_i64]));
 
@@ -1084,7 +1074,7 @@ mod tests {
         .await
         .expect("build default connection");
         connection.start().await.expect("start connection");
-        service.add_connection(connection.clone()).await;
+        service.add_connection(connection).await;
 
         client
             .write_all(&64_i64.to_be_bytes())
@@ -1092,7 +1082,12 @@ mod tests {
             .expect("write slave ack offset");
         tokio::time::timeout(Duration::from_secs(2), async {
             loop {
-                if connection.get_slave_ack_offset() == 64 {
+                if service
+                    .snapshot_acked_replicas()
+                    .await
+                    .first()
+                    .is_some_and(|replica| replica.slave_ack_offset == 64)
+                {
                     break;
                 }
                 tokio::time::sleep(Duration::from_millis(10)).await;
@@ -1113,7 +1108,7 @@ mod tests {
         assert_eq!(service.in_sync_replicas_nums(64), 2);
         assert_eq!(service.in_sync_replicas_nums(65), 1);
 
-        connection.shutdown().await;
+        service.destroy_connections().await;
         let _ = std::fs::remove_dir_all(temp_root);
     }
 }
