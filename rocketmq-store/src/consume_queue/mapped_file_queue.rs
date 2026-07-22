@@ -65,7 +65,7 @@ use tracing::error;
 
 use crate::base::allocate_mapped_file_service::AllocateMappedFileService;
 use crate::base::select_result::SelectMappedBufferResult;
-use crate::log_file::commit_log::CommitLog;
+use crate::log_file::commit_log::CommitLogReadHandle;
 use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use crate::log_file::mapped_file::default_mapped_file_impl::LazyMmapStats;
 use crate::log_file::mapped_file::MappedFile;
@@ -1217,10 +1217,10 @@ impl MappedFileQueue {
     /// # Returns
     ///
     /// The mapped file that matches the criteria, or None if not found
-    pub fn get_consume_queue_mapped_file_by_time(
+    pub(crate) fn get_consume_queue_mapped_file_by_time(
         &self,
         timestamp: i64,
-        commit_log: &CommitLog,
+        commit_log: &CommitLogReadHandle,
         boundary_type: BoundaryType,
     ) -> Option<Arc<DefaultMappedFile>> {
         let mapped_files = self.storage.mapped_files().load();

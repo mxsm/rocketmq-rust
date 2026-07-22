@@ -26,7 +26,6 @@ use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::mix_all::is_lmq;
 use rocketmq_common::common::mix_all::LMQ_QUEUE_ID;
 use rocketmq_common::common::mix_all::MULTI_DISPATCH_QUEUE_SPLITTER;
-use rocketmq_rust::ArcMut;
 use rocketmq_store_local::consume_queue::record::ConsumeQueueRecord;
 pub use rocketmq_store_local::consume_queue::record::CQ_STORE_UNIT_SIZE;
 pub use rocketmq_store_local::consume_queue::record::MSG_TAG_OFFSET_INDEX;
@@ -45,7 +44,6 @@ use tracing::info;
 use tracing::warn;
 
 use crate::base::dispatch_request::DispatchRequest;
-use crate::base::message_store::MessageStore;
 use crate::base::select_result::SelectMappedBufferResult;
 use crate::base::swappable::Swappable;
 use crate::consume_queue::cq_ext_unit::CqExtUnit;
@@ -55,8 +53,8 @@ use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use crate::log_file::mapped_file::MappedFile;
 use crate::queue::consume_queue::ConsumeQueueTrait;
 use crate::queue::consume_queue_ext::ConsumeQueueExt;
-use crate::queue::consume_queue_store::ConsumeQueueStoreTrait;
-use crate::queue::local_file_consume_queue_store::ConsumeQueueStore;
+use crate::queue::local_file_consume_queue_store::ConsumeQueueLookupHandle;
+use crate::queue::local_file_consume_queue_store::ConsumeQueueStoreContext;
 use crate::queue::multi_dispatch_utils::check_multi_dispatch_queue;
 use crate::queue::queue_offset_operator::QueueOffsetOperator;
 use crate::queue::CqUnit;
@@ -75,8 +73,9 @@ use crate::store_path_config_helper::get_store_path_consume_queue_ext;
 /// </pre>
 /// ConsumeQueue's store unit. Size: CommitLog Physical Offset(8) + Body Size(4) + Tag HashCode(8) =
 /// 20 Bytes
-pub struct ConsumeQueue<MS> {
-    message_store: ArcMut<MS>,
+pub struct ConsumeQueue {
+    context: ConsumeQueueStoreContext,
+    queue_lookup: ConsumeQueueLookupHandle,
     mapped_file_queue: MappedFileQueue,
     topic: CheetahString,
     queue_id: i32,
@@ -87,16 +86,17 @@ pub struct ConsumeQueue<MS> {
     consume_queue_ext: Option<ConsumeQueueExt>,
 }
 
-impl<MS: MessageStore> ConsumeQueue<MS> {
+impl ConsumeQueue {
     #[inline]
-    pub fn new(
+    pub(crate) fn new(
         topic: CheetahString,
         queue_id: i32,
         store_path: CheetahString,
         mapped_file_size: i32,
-        message_store: ArcMut<MS>,
+        context: ConsumeQueueStoreContext,
+        queue_lookup: ConsumeQueueLookupHandle,
     ) -> Self {
-        let message_store_config = message_store.get_message_store_config();
+        let message_store_config = context.message_store_config();
         let queue_dir = PathBuf::from(store_path.as_str())
             .join(topic.as_str())
             .join(queue_id.to_string());
@@ -116,7 +116,8 @@ impl<MS: MessageStore> ConsumeQueue<MS> {
             None
         };
         Self {
-            message_store,
+            context,
+            queue_lookup,
             mapped_file_queue,
             topic,
             queue_id,
@@ -129,7 +130,7 @@ impl<MS: MessageStore> ConsumeQueue<MS> {
     }
 }
 
-impl<MS: MessageStore> ConsumeQueue<MS> {
+impl ConsumeQueue {
     #[inline]
     pub fn set_max_physic_offset(&self, max_physic_offset: i64) {
         self.max_physic_offset
@@ -206,7 +207,7 @@ impl<MS: MessageStore> ConsumeQueue<MS> {
 
     #[inline]
     pub fn is_ext_write_enable(&self) -> bool {
-        self.consume_queue_ext.is_some() && self.message_store.get_message_store_config().enable_consume_queue_ext
+        self.consume_queue_ext.is_some() && self.context.message_store_config().enable_consume_queue_ext
     }
 
     pub fn put_message_position_info(&mut self, offset: i64, size: i32, tags_code: i64, cq_offset: i64) -> bool {
@@ -335,15 +336,15 @@ impl<MS: MessageStore> ConsumeQueue<MS> {
                 continue;
             };
 
-            let queue_id = if self.message_store.get_message_store_config().enable_lmq && is_lmq(Some(queue_name)) {
+            let queue_id = if self.context.message_store_config().enable_lmq && is_lmq(Some(queue_name)) {
                 LMQ_QUEUE_ID as i32
             } else {
                 request.queue_id
             };
 
             let Some(consume_queue) = self
-                .message_store
-                .find_consume_queue(&CheetahString::from(queue_name), queue_id)
+                .queue_lookup
+                .find_or_create_consume_queue(&CheetahString::from(queue_name), queue_id)
             else {
                 warn!(
                     "Skip multi-dispatch queue because consume queue lookup failed, topic={}, queueName={}, queueId={}",
@@ -381,8 +382,8 @@ impl<MS: MessageStore> ConsumeQueue<MS> {
         timestamp: i64,
         boundary_type: BoundaryType,
     ) -> i64 {
-        let commit_log = self.message_store.get_commit_log();
-        let min_physic_offset = self.message_store.get_min_phy_offset();
+        let commit_log = self.context.commit_log();
+        let min_physic_offset = commit_log.get_min_offset();
         let min_logic_offset = self.min_logic_offset.load(Ordering::Relaxed);
 
         // Calculate the range to search
@@ -426,7 +427,7 @@ impl<MS: MessageStore> ConsumeQueue<MS> {
     }
 }
 
-impl<MS: MessageStore> FileQueueLifeCycle for ConsumeQueue<MS> {
+impl FileQueueLifeCycle for ConsumeQueue {
     #[inline]
     fn load(&mut self) -> bool {
         let mut result = self.mapped_file_queue.load();
@@ -465,7 +466,7 @@ impl<MS: MessageStore> FileQueueLifeCycle for ConsumeQueue<MS> {
                         .get_bytes(relative_offset as usize, CQ_STORE_UNIT_SIZE as usize)
                         .and_then(|bytes| ConsumeQueueRecord::decode(bytes.as_ref()))
                 },
-                ConsumeQueue::<MS>::is_ext_addr,
+                ConsumeQueue::is_ext_addr,
             );
             let mapped_file_offset = i64::from(scan.valid_bytes);
             if let Some(max_physical_offset) = scan.max_physical_offset {
@@ -575,7 +576,7 @@ impl<MS: MessageStore> FileQueueLifeCycle for ConsumeQueue<MS> {
     }
 }
 
-impl<MS: MessageStore> Swappable for ConsumeQueue<MS> {
+impl Swappable for ConsumeQueue {
     #[inline]
     fn swap_map(&self, reserve_num: i32, force_swap_interval_ms: i64, normal_swap_interval_ms: i64) {
         self.mapped_file_queue
@@ -589,7 +590,7 @@ impl<MS: MessageStore> Swappable for ConsumeQueue<MS> {
 }
 
 #[allow(unused_variables)]
-impl<MS: MessageStore> ConsumeQueueTrait for ConsumeQueue<MS> {
+impl ConsumeQueueTrait for ConsumeQueue {
     #[inline]
     fn get_topic(&self) -> &CheetahString {
         &self.topic
@@ -609,10 +610,9 @@ impl<MS: MessageStore> ConsumeQueueTrait for ConsumeQueue<MS> {
     fn get_cq_unit_and_store_time(&self, index: i64) -> Option<(CqUnit, i64)> {
         let cq_unit = self.get(index)?;
         let i = self
-            .message_store
-            .get_queue_store()
-            .downcast_ref::<ConsumeQueueStore>()?
-            .get_store_time(&cq_unit);
+            .context
+            .commit_log()
+            .pickup_store_timestamp(cq_unit.pos, cq_unit.size);
         Some((cq_unit, i))
     }
 
@@ -773,7 +773,7 @@ impl<MS: MessageStore> ConsumeQueueTrait for ConsumeQueue<MS> {
                 mapped_file.get_file_from_offset() as i64 + i64::from(selected.relative_offset),
                 Ordering::SeqCst,
             );
-            if ConsumeQueue::<MS>::is_ext_addr(selected.record.tags_code) {
+            if ConsumeQueue::is_ext_addr(selected.record.tags_code) {
                 min_ext_addr = selected.record.tags_code;
             }
             if self.is_ext_read_enable() {
@@ -796,7 +796,7 @@ impl<MS: MessageStore> ConsumeQueueTrait for ConsumeQueue<MS> {
     #[inline]
     fn put_message_position_info_wrapper(&mut self, request: &DispatchRequest) {
         const MAX_RETRIES: usize = 30;
-        let can_write = self.message_store.get_running_flags().is_cq_writeable();
+        let can_write = self.context.running_flags().is_cq_writeable();
         let outcome = drive_consume_queue_dispatch(
             ConsumeQueueDispatchMode::Single,
             ConsumeQueueDispatchMetadata {
@@ -814,7 +814,7 @@ impl<MS: MessageStore> ConsumeQueueTrait for ConsumeQueue<MS> {
                         request.bit_map.clone(),
                     ));
 
-                    if ConsumeQueue::<MS>::is_ext_addr(ext_addr) {
+                    if ConsumeQueue::is_ext_addr(ext_addr) {
                         tags_code = ext_addr;
                     } else {
                         warn!(
@@ -840,8 +840,8 @@ impl<MS: MessageStore> ConsumeQueueTrait for ConsumeQueue<MS> {
             },
         );
         if matches!(outcome, ConsumeQueueDispatchOutcome::Appended { .. }) {
-            let message_store_config = self.message_store.get_message_store_config();
-            let store_checkpoint = self.message_store.get_store_checkpoint();
+            let message_store_config = self.context.message_store_config();
+            let store_checkpoint = self.context.store_checkpoint();
             if message_store_config.broker_role == BrokerRole::Slave || message_store_config.enable_dledger_commit_log {
                 store_checkpoint.set_physic_msg_timestamp(request.store_timestamp as u64);
             }
@@ -853,7 +853,7 @@ impl<MS: MessageStore> ConsumeQueueTrait for ConsumeQueue<MS> {
             return;
         }
         error!("[BUG]consume queue can not write, {} {}", self.topic, self.queue_id);
-        self.message_store.get_running_flags().make_logics_queue_error();
+        self.context.running_flags().make_logics_queue_error();
     }
 
     #[inline]
@@ -898,8 +898,8 @@ impl<MS: MessageStore> ConsumeQueueTrait for ConsumeQueue<MS> {
             }
 
             let matched_commit_log = self
-                .message_store
-                .get_commit_log()
+                .context
+                .commit_log()
                 .get_message(cq_unit.pos, cq_unit.size)
                 .map(|buffer| filter.is_matched_by_commit_log(Some(buffer.get_buffer()), None))
                 .unwrap_or_else(|| filter.is_matched_by_commit_log(None, None));
@@ -939,7 +939,7 @@ impl<MS: MessageStore> ConsumeQueueTrait for ConsumeQueue<MS> {
     }
 
     fn get_offset_in_queue_by_time_with_boundary(&self, timestamp: i64, boundary_type: BoundaryType) -> i64 {
-        let commit_log = self.message_store.get_commit_log();
+        let commit_log = self.context.commit_log();
         let mapped_file =
             self.mapped_file_queue
                 .get_consume_queue_mapped_file_by_time(timestamp, commit_log, boundary_type);
@@ -1064,16 +1064,19 @@ mod tests {
         temp_dir: &tempfile::TempDir,
         topic: &CheetahString,
         mapped_file_size_consume_queue: usize,
-    ) -> ConsumeQueue<LocalFileMessageStore> {
+    ) -> ConsumeQueue {
         let store = new_test_store(temp_dir, mapped_file_size_consume_queue);
+        let context = store.consume_queue_context();
+        let queue_lookup = store.consume_queue_lookup_handle();
         ConsumeQueue::new(
             topic.clone(),
             0,
             CheetahString::from_string(get_store_path_consume_queue(
-                store.get_message_store_config().store_path_root_dir.as_str(),
+                store.message_store_config_ref().store_path_root_dir.as_str(),
             )),
             mapped_file_size_consume_queue as i32,
-            store,
+            context,
+            queue_lookup,
         )
     }
 
@@ -1081,17 +1084,20 @@ mod tests {
         temp_dir: &tempfile::TempDir,
         topic: &CheetahString,
         config: MessageStoreConfig,
-    ) -> ConsumeQueue<LocalFileMessageStore> {
+    ) -> ConsumeQueue {
         let mapped_file_size_consume_queue = config.mapped_file_size_consume_queue;
         let store = new_configured_test_store(temp_dir, config);
+        let context = store.consume_queue_context();
+        let queue_lookup = store.consume_queue_lookup_handle();
         ConsumeQueue::new(
             topic.clone(),
             0,
             CheetahString::from_string(get_store_path_consume_queue(
-                store.get_message_store_config().store_path_root_dir.as_str(),
+                store.message_store_config_ref().store_path_root_dir.as_str(),
             )),
             mapped_file_size_consume_queue as i32,
-            store,
+            context,
+            queue_lookup,
         )
     }
 

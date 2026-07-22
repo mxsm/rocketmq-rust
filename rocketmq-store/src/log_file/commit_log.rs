@@ -439,6 +439,15 @@ impl CommitLogReadHandle {
         self.mapped_file_queue.get_min_offset()
     }
 
+    pub(crate) fn pickup_store_timestamp(&self, offset: i64, size: i32) -> i64 {
+        if offset < self.get_min_offset() || offset + size as i64 > self.get_max_offset() {
+            return -1;
+        }
+        self.get_message(offset, size)
+            .map(|result| rocketmq_store_local::commit_log::header::store_timestamp_from_frame(result.get_buffer()))
+            .unwrap_or(-1)
+    }
+
     pub(crate) fn check_self(&self) {
         self.mapped_file_queue.check_self();
     }
