@@ -983,6 +983,15 @@ Store production 82/234），净删除 10 个 production occurrences，无 reloc
 R01 仍未完成，31 项执行清单仍剩余 24 项；总进度仍为 75/82，下一子切片 M11-12bc62 继续 Broker 注册、
 state getter 或 Local/Rocks 组合根 owner。
 
+Broker registration/state observation capability 随 Issue #8537 继续收窄：NameServer 周期全量注册和 Admin
+增量/单 Topic 注册统一迁入显式 `BrokerRegistrationRuntime`，只持 live config、Topic manager、outer API、窄 Store、
+slave synchronization 与 shutdown capability；注册结果继续更新 HA/master 地址和 order-topic generation。
+Producer/Consumer 统计 state observer 只持共享 Topic/Client manager，不再保活完整 `BrokerRuntimeInner`。reviewed
+ArcMut 快照从 220/703 降至 220 identities/697 occurrences（production 90/253、test 116/404、
+compatibility 14/40、Broker production 8/19、Store production 82/234），净删除 6 个 production occurrences，
+无 relocation、新增 identity 或临时 approval。R01 仍未完成，31 项执行清单仍剩余 24 项；总进度仍为 75/82，
+下一子切片 M11-12bc63 继续 BrokerRuntime 与 Local/Rocks/Store accessor 组合根 owner。
+
 ### 9.3 证据目录
 
 - 运行期生成物：`target/architecture-refactor/Mxx/<run-id>/`，不提交 Git。
