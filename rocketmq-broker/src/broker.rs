@@ -17,4 +17,6 @@ pub(crate) mod broker_control_plane;
 pub mod broker_hook;
 pub(crate) mod broker_pre_online_capability;
 pub mod broker_pre_online_service;
+pub(crate) mod broker_registration_runtime;
 pub(crate) mod broker_runtime_config_state;
+pub(crate) mod broker_state_observer;

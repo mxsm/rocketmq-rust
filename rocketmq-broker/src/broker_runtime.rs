@@ -41,23 +41,15 @@ use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::broker::broker_role::BrokerRole;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::config_manager::ConfigManager;
-use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::common::mix_all::MASTER_ID;
 use rocketmq_common::common::server::config::ServerConfig;
-use rocketmq_common::common::statistics::state_getter::StateGetter;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_common::UtilAll::compute_next_morning_time_millis;
 use rocketmq_remoting::base::channel_event_listener::ChannelEventListener;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
-use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
-use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigSerializeWrapper;
-use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
-use rocketmq_remoting::protocol::namesrv::RegisterBrokerResult;
-use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
 use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
-use rocketmq_remoting::protocol::DataVersion;
 use rocketmq_remoting::remoting_server::rocketmq_tokio_server::RocketMQServer;
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
 use rocketmq_runtime::schedule::simple_scheduler::ScheduledTaskManager;
@@ -82,7 +74,6 @@ use rocketmq_store::store_error::StoreError;
 use rocketmq_store::timer::timer_message_store::TimerMessageStore;
 use tokio::sync::oneshot;
 use tokio::sync::Mutex;
-use tracing::debug;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -101,7 +92,10 @@ use crate::broker::broker_pre_online_capability::BrokerPreOnlineStoreCapability;
 use crate::broker::broker_pre_online_capability::BrokerRegistrationCapability;
 use crate::broker::broker_pre_online_capability::BrokerSpecialServiceCapability;
 use crate::broker::broker_pre_online_service::BrokerPreOnlineService;
+use crate::broker::broker_registration_runtime::BrokerRegistrationRuntime;
 use crate::broker::broker_runtime_config_state::BrokerRuntimeConfigState;
+use crate::broker::broker_state_observer::ConsumerStateGetter;
+use crate::broker::broker_state_observer::ProducerStateGetter;
 use crate::client::client_housekeeping_service::ClientHousekeepingService;
 use crate::client::consumer_ids_change_listener::ConsumerIdsChangeListener;
 use crate::client::default_consumer_ids_change_listener::DefaultConsumerIdsChangeListener;
@@ -1216,13 +1210,6 @@ impl BrokerRuntime {
             Arc::clone(&broker_config_snapshot),
             Some(Arc::new(scheduled_task_manager.clone())),
         );
-        stats_manager.set_producer_state_getter(Arc::new(ProducerStateGetter {
-            broker_runtime_inner: inner.clone(),
-        }));
-        stats_manager.set_consumer_state_getter(Arc::new(ConsumerStateGetter {
-            broker_runtime_inner: inner.clone(),
-        }));
-        let stats_manager = Arc::new(stats_manager);
         #[cfg(feature = "rocksdb_store")]
         {
             inner.topic_config_manager = Some(Arc::new(match rocksdb_config_managers.as_ref() {
@@ -1247,6 +1234,15 @@ impl BrokerRuntime {
                 true,
             )));
         }
+        stats_manager.set_producer_state_getter(Arc::new(ProducerStateGetter::new(
+            inner.topic_config_manager_handle(),
+            inner.producer_manager.clone_shared_state(),
+        )));
+        stats_manager.set_consumer_state_getter(Arc::new(ConsumerStateGetter::new(
+            inner.topic_config_manager_handle(),
+            inner.consumer_manager.clone_shared_state(),
+        )));
+        let stats_manager = Arc::new(stats_manager);
         inner.topic_config_coordinator = Some(Arc::new(TopicConfigCoordinator::new(
             inner.topic_config_manager_handle(),
             inner.service_context.clone(),
@@ -3486,31 +3482,33 @@ impl BrokerRuntime {
         }
 
         //start register broker to name server scheduled task
-        let broker_runtime_inner = self.inner.clone();
-        let period = Duration::from_millis(
-            10000.max(60000.min(broker_runtime_inner.broker_config().register_name_server_period)),
-        );
+        let registration_runtime = self.inner.build_registration_runtime();
+        let registration_config = self.inner.config_state.clone();
+        let registration_shutdown = Arc::clone(&self.inner.shutdown);
+        let registration_should_start_time = Arc::clone(&self.inner.should_start_time);
+        let registration_role_state = Arc::clone(&self.inner.online_role_state);
+        let period =
+            Duration::from_millis(10000.max(60000.min(self.inner.broker_config().register_name_server_period)));
         let initial_delay = Duration::from_secs(10);
         Self::log_scheduled_task_start(
             "register_broker_to_namesrv",
             self.scheduled_task_manager
                 .add_fixed_rate_task_async(initial_delay, period, async move |_ctx| {
-                    if broker_runtime_inner.shutdown.load(Ordering::Acquire) {
+                    if registration_shutdown.load(Ordering::Acquire) {
                         return Ok(());
                     }
-                    let start_time = broker_runtime_inner.should_start_time.load(Ordering::Relaxed);
+                    let start_time = registration_should_start_time.load(Ordering::Relaxed);
                     if current_millis() < start_time {
                         info!("Register to namesrv after {}", start_time);
                         return Ok(());
                     }
-                    if broker_runtime_inner.online_role_state.is_isolated() {
+                    if registration_role_state.is_isolated() {
                         info!("Skip register for broker is isolated");
                         return Ok(());
                     }
-                    let this = broker_runtime_inner.clone();
-                    let force_register = broker_runtime_inner.broker_config().force_register;
-                    broker_runtime_inner
-                        .register_broker_all_inner(this, true, false, force_register)
+                    let force_register = registration_config.broker_snapshot().force_register;
+                    registration_runtime
+                        .register_broker_all(true, false, force_register)
                         .await;
                     Ok(())
                 }),
@@ -3639,43 +3637,8 @@ impl BrokerRuntime {
     /// Register broker to name remoting_server
     pub(crate) async fn register_broker_all(&mut self, check_order_config: bool, oneway: bool, force_register: bool) {
         self.inner
-            .register_broker_all_inner(self.inner.clone(), check_order_config, oneway, force_register)
-            .await;
-    }
-
-    async fn do_register_broker_all(
-        &mut self,
-        _check_order_config: bool,
-        oneway: bool,
-        topic_config_wrapper: TopicConfigAndMappingSerializeWrapper,
-    ) {
-        let broker_config = self.inner.broker_config();
-        let cluster_name = broker_config.broker_identity.broker_cluster_name.clone();
-        let broker_name = broker_config.broker_identity.broker_name.clone();
-        let broker_addr = CheetahString::from_string(format!(
-            "{}:{}",
-            broker_config.broker_ip1, broker_config.broker_server_config.listen_port
-        ));
-        let broker_id = broker_config.broker_identity.broker_id;
-        //  let weak = Arc::downgrade(&self.inner.broker_outer_api);
-
-        self.inner
-            .broker_outer_api
-            .register_broker_all(
-                cluster_name,
-                broker_addr.clone(),
-                broker_name,
-                broker_id,
-                broker_addr,
-                topic_config_wrapper,
-                vec![],
-                oneway,
-                10000,
-                false,
-                false,
-                None,
-                Default::default(),
-            )
+            .build_registration_runtime()
+            .register_broker_all(check_order_config, oneway, force_register)
             .await;
     }
 
@@ -3754,6 +3717,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             Arc::clone(self.schedule_message_service()),
             self.timer_message_store().cloned(),
             self.broker_outer_api.clone(),
+            self.build_registration_runtime(),
             self.producer_manager.clone_shared_state(),
             self.consumer_manager.clone_shared_state(),
             self.broker_stats_manager_handle(),
@@ -3768,7 +3732,6 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             self.query_assignment_processor.clone(),
             self.slave_synchronize.clone(),
             self.cold_data_cg_ctr_service.clone(),
-            self.update_master_haserver_addr_periodically,
             Arc::clone(&self.shutdown),
             self.send_message_policy_state.clone(),
             self.pull_message_policy_state.clone(),
@@ -3777,206 +3740,18 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         )
     }
 
-    pub(crate) fn topic_config_state_machine_version(&self) -> i64 {
-        self.message_store()
-            .map(|message_store| message_store.get_state_machine_version())
-            .unwrap_or_default()
-    }
-
-    fn topic_config_for_registration(&self, topic_config: &TopicConfig) -> TopicConfig {
-        let mut topic_config = topic_config.clone();
-        let broker_config = self.broker_config();
-        if !PermName::is_writeable(broker_config.broker_permission)
-            || !PermName::is_readable(broker_config.broker_permission)
-        {
-            topic_config.perm &= broker_config.broker_permission;
-        }
-        topic_config
-    }
-
-    pub async fn register_single_topic_all(&self, topic_config: Arc<TopicConfig>) {
-        let Some(topic_name) = topic_config.topic_name.clone() else {
-            warn!("Skip single-topic registration for config without topic name");
-            return;
-        };
-        let topic_config_manager = self.topic_config_manager();
-        let (mut current_configs, _) =
-            topic_config_manager.topic_registration_snapshot(std::slice::from_ref(&topic_name));
-        let Some(current) = current_configs.pop() else {
-            info!(topic = %topic_name, "Skip stale single-topic registration after topic removal");
-            return;
-        };
-        let topic_config = self.topic_config_for_registration(current.as_ref());
-        let broker_config = self.broker_config();
-        self.broker_outer_api
-            .register_single_topic_all(broker_config.broker_identity.broker_name.clone(), topic_config, 3000)
-            .await;
-    }
-
-    pub async fn register_increment_broker_data(
-        this: ArcMut<BrokerRuntimeInner<MS>>,
-        topic_config_list: Vec<Arc<TopicConfig>>,
-        data_version: DataVersion,
-    ) {
-        let topic_names = topic_config_list
-            .iter()
-            .filter_map(|topic_config| topic_config.topic_name.clone())
-            .collect::<Vec<_>>();
-        let registration_owner = this.clone();
-        let topic_config_manager = registration_owner.topic_config_manager();
-        let (topic_config_list, current_data_version) = topic_config_manager.topic_registration_snapshot(&topic_names);
-        if current_data_version != data_version {
-            debug!(
-                requested = ?data_version,
-                current = ?current_data_version,
-                "resample incremental topic registration after a newer metadata commit"
-            );
-        }
-        let mut serialize_wrapper = TopicConfigAndMappingSerializeWrapper {
-            topic_config_serialize_wrapper: TopicConfigSerializeWrapper {
-                data_version: current_data_version,
-                topic_config_table: Default::default(),
-            },
-            ..Default::default()
-        };
-
-        let mut topic_config_table = HashMap::new();
-        for topic_config in topic_config_list.iter() {
-            let register_topic_config = this.topic_config_for_registration(topic_config.as_ref());
-            topic_config_table.insert(
-                register_topic_config.topic_name.as_ref().unwrap().clone(),
-                register_topic_config,
-            );
-        }
-        serialize_wrapper.topic_config_serialize_wrapper.topic_config_table = topic_config_table;
-        let mut topic_queue_mapping_info_map = HashMap::new();
-        for topic_config in topic_config_list {
-            if let Some(ref value) = this
-                .topic_queue_mapping_manager
-                .get_topic_queue_mapping(topic_config.topic_name.as_ref().unwrap().as_str())
-            {
-                topic_queue_mapping_info_map.insert(
-                    topic_config.topic_name.as_ref().unwrap().clone(),
-                    TopicQueueMappingDetail::clone_as_mapping_info(value.as_ref()),
-                );
-            }
-        }
-        serialize_wrapper.topic_queue_mapping_info_map = topic_queue_mapping_info_map;
-        Self::do_register_broker_all(this, true, false, serialize_wrapper).await;
-    }
-
-    async fn do_register_broker_all(
-        mut this: ArcMut<BrokerRuntimeInner<MS>>,
-        check_order_config: bool,
-        oneway: bool,
-        topic_config_wrapper: TopicConfigAndMappingSerializeWrapper,
-    ) {
-        if this.shutdown.load(Ordering::Acquire) {
-            info!("BrokerRuntimeInner#do_register_broker_all: broker has shutdown, no need to register any more.");
-            return;
-        }
-
-        let broker_config = this.broker_config();
-        let cluster_name = broker_config.broker_identity.broker_cluster_name.clone();
-        let broker_name = broker_config.broker_identity.broker_name.clone();
-        let broker_addr = CheetahString::from_string(format!(
-            "{}:{}",
-            broker_config.broker_ip1, broker_config.broker_server_config.listen_port
-        ));
-        let broker_id = broker_config.broker_identity.broker_id;
-        let result = this
-            .broker_outer_api
-            .register_broker_all(
-                cluster_name,
-                broker_addr.clone(),
-                broker_name,
-                broker_id,
-                broker_addr,
-                topic_config_wrapper,
-                vec![],
-                oneway,
-                broker_config.register_broker_timeout_mills as u64,
-                broker_config.enable_slave_acting_master,
-                broker_config.compressed_register,
-                broker_config
-                    .enable_slave_acting_master
-                    .then_some(broker_config.broker_not_active_timeout_millis),
-                Default::default(), //optimize
-            )
-            .await;
-        this.handle_register_broker_result(result, check_order_config).await;
-    }
-
-    pub(self) async fn handle_register_broker_result(
-        &mut self,
-        register_broker_result: Vec<RegisterBrokerResult>,
-        check_order_config: bool,
-    ) {
-        if let Some(result) = register_broker_result.into_iter().next() {
-            if self.update_master_haserver_addr_periodically {
-                if let Some(message_store) = &self.message_store {
-                    message_store
-                        .update_ha_master_address(result.master_addr.as_str())
-                        .await;
-                    message_store.update_master_address(&result.master_addr);
-                }
-            }
-            if let Some(slave_synchronize) = &mut self.slave_synchronize {
-                slave_synchronize.set_master_addr(Some(&result.master_addr));
-            }
-            if check_order_config {
-                let state_machine_version = self.topic_config_state_machine_version();
-                if let Some(topic_config_manager) = &self.topic_config_manager {
-                    topic_config_manager.update_order_topic_config(&result.kv_table, state_machine_version);
-                }
-            }
-        }
-    }
-}
-
-struct ProducerStateGetter<MS: MessageStore> {
-    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
-}
-impl<MS: MessageStore> StateGetter for ProducerStateGetter<MS> {
-    fn online(&self, instance_id: &CheetahString, group: &CheetahString, topic: &CheetahString) -> bool {
-        if self
-            .broker_runtime_inner
-            .topic_config_manager()
-            .topic_config_table()
-            .contains_key(NamespaceUtil::wrap_namespace(instance_id, topic).as_str())
-        {
-            self.broker_runtime_inner
-                .producer_manager
-                .group_online(&NamespaceUtil::wrap_namespace(instance_id, group))
-        } else {
-            self.broker_runtime_inner.producer_manager.group_online(group)
-        }
-    }
-}
-
-struct ConsumerStateGetter<MS: MessageStore> {
-    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
-}
-
-impl<MS: MessageStore> StateGetter for ConsumerStateGetter<MS> {
-    fn online(&self, instance_id: &CheetahString, group: &CheetahString, topic: &CheetahString) -> bool {
-        if self
-            .broker_runtime_inner
-            .topic_config_manager()
-            .topic_config_table()
-            .contains_key(topic)
-        {
-            let topic_full_name = NamespaceUtil::wrap_namespace(instance_id, topic);
-            self.broker_runtime_inner
-                .consumer_manager
-                .find_subscription_data(&NamespaceUtil::wrap_namespace(instance_id, group), &topic_full_name)
-                .is_some()
-        } else {
-            self.broker_runtime_inner
-                .consumer_manager
-                .find_subscription_data(group, topic)
-                .is_some()
-        }
+    fn build_registration_runtime(&self) -> BrokerRegistrationRuntime<MS> {
+        BrokerRegistrationRuntime::new(
+            self.config_state.clone(),
+            self.escape_bridge().store_capability(),
+            self.topic_config_manager_handle(),
+            self.topic_config_coordinator_handle(),
+            self.topic_queue_mapping_manager_handle(),
+            self.broker_outer_api.clone(),
+            self.slave_synchronize.clone(),
+            self.update_master_haserver_addr_periodically,
+            Arc::clone(&self.shutdown),
+        )
     }
 }
 
@@ -4918,141 +4693,6 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         warn!("print_master_and_slave_diff not implemented");
     }
 
-    /// Register broker to name remoting_server
-    pub(crate) async fn register_broker_all_inner(
-        &self,
-        this: ArcMut<BrokerRuntimeInner<MS>>,
-        check_order_config: bool,
-        oneway: bool,
-        force_register: bool,
-    ) {
-        if self.shutdown.load(Ordering::Acquire) {
-            info!("BrokerRuntimeInner#register_broker_all_inner: broker has shutdown, skip broker registration.");
-            return;
-        }
-        let coordinator = self.topic_config_coordinator_handle();
-        let registration: TopicRegistrationAction = Box::new(move || {
-            Box::pin(async move {
-                let topic_config_manager = this.topic_config_manager();
-                let broker_config = this.broker_config();
-                let (raw_topic_config_table, split_data_version, final_data_version) = topic_config_manager
-                    .full_registration_snapshot(
-                        broker_config.enable_split_registration,
-                        broker_config.split_registration_size,
-                    );
-                let mut topic_config_table = raw_topic_config_table
-                    .into_values()
-                    .map(|topic_config| {
-                        let topic_config = this.topic_config_for_registration(&topic_config);
-                        (
-                            topic_config
-                                .topic_name
-                                .clone()
-                                .expect("registered topic config requires topic_name"),
-                            topic_config,
-                        )
-                    })
-                    .collect::<HashMap<_, _>>();
-
-                if let Some(split_data_version) = split_data_version {
-                    let topic_config_wrapper = this
-                        .topic_config_manager()
-                        .build_serialize_wrapper(topic_config_table.clone(), split_data_version);
-                    BrokerRuntimeInner::<MS>::do_register_broker_all(
-                        this.clone(),
-                        check_order_config,
-                        oneway,
-                        topic_config_wrapper,
-                    )
-                    .await;
-                    topic_config_table.clear();
-                }
-
-                let topic_queue_mapping_info_map = this
-                    .topic_queue_mapping_manager
-                    .topic_queue_mapping_table
-                    .clone()
-                    .iter()
-                    .map(|kv| {
-                        (
-                            kv.key().clone(),
-                            TopicQueueMappingDetail::clone_as_mapping_info(kv.value().as_ref()),
-                        )
-                    })
-                    .collect();
-                let topic_config_wrapper = this
-                    .topic_config_manager()
-                    .build_serialize_wrapper_with_topic_queue_map(
-                        topic_config_table,
-                        topic_queue_mapping_info_map,
-                        final_data_version,
-                    );
-                let should_register = broker_config.enable_split_registration
-                    || force_register
-                    || need_register(
-                        &this
-                            .broker_outer_api
-                            .need_register(
-                                broker_config.broker_identity.broker_cluster_name.clone(),
-                                this.get_broker_addr().clone(),
-                                broker_config.broker_identity.broker_name.clone(),
-                                broker_config.broker_identity.broker_id,
-                                &topic_config_wrapper,
-                                broker_config.register_broker_timeout_mills as u64,
-                                broker_config.is_in_broker_container,
-                            )
-                            .await,
-                    );
-                if should_register {
-                    BrokerRuntimeInner::<MS>::do_register_broker_all(
-                        this,
-                        check_order_config,
-                        oneway,
-                        topic_config_wrapper,
-                    )
-                    .await;
-                }
-                Ok(())
-            })
-        });
-        if let Err(error) = coordinator.persist_and_register_wait(registration).await {
-            warn!(?error, "failed to coordinate full broker registration");
-        }
-    }
-
-    async fn do_register_broker_all_inner(
-        this: ArcMut<BrokerRuntimeInner<MS>>,
-        _check_order_config: bool,
-        oneway: bool,
-        topic_config_wrapper: TopicConfigAndMappingSerializeWrapper,
-    ) {
-        let broker_config = this.broker_config();
-        let cluster_name = broker_config.broker_identity.broker_cluster_name.clone();
-        let broker_name = broker_config.broker_identity.broker_name.clone();
-        let broker_addr = CheetahString::from_string(format!(
-            "{}:{}",
-            broker_config.broker_ip1, broker_config.broker_server_config.listen_port
-        ));
-        let broker_id = broker_config.broker_identity.broker_id;
-        this.broker_outer_api
-            .register_broker_all(
-                cluster_name,
-                broker_addr.clone(),
-                broker_name,
-                broker_id,
-                broker_addr,
-                topic_config_wrapper,
-                vec![],
-                oneway,
-                10000,
-                false,
-                false,
-                None,
-                Default::default(),
-            )
-            .await;
-    }
-
     #[inline]
     pub fn get_broker_addr(&self) -> &CheetahString {
         &self.broker_addr
@@ -5168,10 +4808,6 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 }
 
-fn need_register(change_list: &[bool]) -> bool {
-    change_list.iter().copied().any(|changed| changed)
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -5200,6 +4836,7 @@ mod tests {
     use rocketmq_common::common::boundary_type::BoundaryType;
     use rocketmq_common::common::config::TopicConfig;
     use rocketmq_common::common::constant::file_readahead_mode::READ_AHEAD_MODE;
+    use rocketmq_common::common::constant::PermName;
     use rocketmq_common::common::entity::ClientGroup;
     use rocketmq_common::common::lite::to_lmq_name;
     use rocketmq_common::common::message::message_decoder;
@@ -6306,7 +5943,7 @@ accounts:
             store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
             ..MessageStoreConfig::default()
         });
-        let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
+        let runtime = BrokerRuntime::new(broker_config, message_store_config);
         let stored = Arc::new(TopicConfig::with_perm(
             "PermissionTopic",
             1,
@@ -6314,7 +5951,10 @@ accounts:
             PermName::PERM_READ | PermName::PERM_WRITE,
         ));
 
-        let masked = runtime.inner_for_test().topic_config_for_registration(stored.as_ref());
+        let masked = runtime
+            .inner
+            .build_registration_runtime()
+            .topic_config_for_registration(stored.as_ref());
 
         assert_eq!(stored.perm, PermName::PERM_READ | PermName::PERM_WRITE);
         assert_eq!(masked.perm, PermName::PERM_READ);
@@ -9870,16 +9510,6 @@ accounts:
         assert_eq!(store.message_store_config_ref().broker_role, BrokerRole::Slave);
 
         let _ = std::fs::remove_dir_all(temp_root);
-    }
-
-    #[test]
-    fn need_register_returns_true_when_any_namesrv_requests_reregister() {
-        assert!(super::need_register(&[false, true, false]));
-    }
-
-    #[test]
-    fn need_register_returns_false_when_all_namesrvs_are_in_sync() {
-        assert!(!super::need_register(&[false, false, false]));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
