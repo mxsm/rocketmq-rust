@@ -570,10 +570,6 @@ impl MessageStore for GenericMessageStore {
         delegate_store!(self, get_commit_log())
     }
 
-    fn get_commit_log_mut_from_ref(&self) -> &mut CommitLog {
-        delegate_store!(self, get_commit_log_mut_from_ref())
-    }
-
     fn get_commit_log_mut(&mut self) -> &mut CommitLog {
         delegate_store!(self, get_commit_log_mut())
     }

@@ -1006,10 +1006,6 @@ impl MessageStore for RocksDBMessageStore {
         self.local_file_store.get_commit_log()
     }
 
-    fn get_commit_log_mut_from_ref(&self) -> &mut CommitLog {
-        self.local_file_store.get_commit_log_mut_from_ref()
-    }
-
     fn get_commit_log_mut(&mut self) -> &mut CommitLog {
         self.local_file_store.get_commit_log_mut()
     }

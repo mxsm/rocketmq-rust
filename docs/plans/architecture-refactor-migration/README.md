@@ -1010,6 +1010,14 @@ production 8/12、Store production 82/234），净删除 3 个 production occurr
 临时 approval。R01 仍未完成，剩余 Broker occurrence 均为 Local/Rocks/Store owner carrier；31 项执行清单仍剩余
 24 项，总进度仍为 75/82，下一子切片进入 R09～R16 Store owner 收口。
 
+Store mutable CommitLog facade 随 Issue #8543 删除：全仓零真实调用方的
+`MessageStore::get_commit_log_mut_from_ref` 及 Generic/Local/Rocks forwarding 全部退出，独占
+`get_commit_log_mut(&mut self)` 保持；源码合同阻止共享引用可变逃逸恢复。该 facade 是 LocalFile/RocksDB
+shared-wrapper 传播根，删除后 reviewed ArcMut 快照从 220/690 降至 138 identities/506 occurrences
+（production 62/168、test 62/298、compatibility 14/40、Broker production 4/8、Store production 58/160），
+净删除 82 identities/184 occurrences，无 relocation、新增 identity 或临时 approval。1.0.0 next-major 兼容决策
+已写入 Store facade ledger；R01、R09～R16 仍未完成，31 项执行清单仍剩余 24 项，总进度仍为 75/82。
+
 ### 9.3 证据目录
 
 - 运行期生成物：`target/architecture-refactor/Mxx/<run-id>/`，不提交 Git。

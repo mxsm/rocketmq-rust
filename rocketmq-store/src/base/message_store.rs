@@ -649,10 +649,6 @@ pub trait MessageStoreInner: Sync + 'static {
     /// Get the commit log
     fn get_commit_log(&self) -> &CommitLog;
 
-    /// Get mutable commit log
-    #[allow(clippy::mut_from_ref)]
-    fn get_commit_log_mut_from_ref(&self) -> &mut CommitLog;
-
     fn get_commit_log_mut(&mut self) -> &mut CommitLog;
 
     /// Update commitlog read mode and synchronize any cached store config snapshots.
@@ -900,5 +896,21 @@ mod tests {
         assert_eq!(view.get(), 3);
         state_machine_version.store(7, Ordering::Release);
         assert_eq!(view.get(), 7);
+    }
+
+    #[test]
+    fn immutable_commit_log_mutation_facade_is_absent() {
+        let sources = [
+            include_str!("message_store.rs"),
+            include_str!("../message_store.rs"),
+            include_str!("../message_store/local_file_message_store.rs"),
+            include_str!("../message_store/rocksdb_message_store.rs"),
+        ];
+        let forbidden = ["get_commit_log_mut", "_from_ref"].concat();
+
+        assert!(sources.iter().all(|source| !source.contains(&forbidden)));
+        assert!(sources
+            .iter()
+            .all(|source| source.contains("fn get_commit_log_mut(&mut self)")));
     }
 }

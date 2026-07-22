@@ -27,6 +27,7 @@
 | Tiered read/query/dispatch | Tiered provider/fetcher/dispatcher；Store composition | fallback gate、Store DTO/status/result 映射、CommitLog body resolver | Local miss 才 fallback；过滤、大小上限、metrics、offset/timestamp 与 query 结果不变 | M10 新 Tiered contract 有独立兼容方案和回归 corpus |
 | `GenericMessageStore::LocalFileStore` | Store facade | enum variant、constructor、126 方法 legacy forwarding | no-default 仍保 Local 变体；`local_file_store=[]` 是 R0 compatibility alias | 下一 major 删除 legacy trait/path 后再评估 Local optional 化 |
 | legacy config/trait/re-export | Store facade | `MessageStoreConfig`、`MessageStore`、Local/Rocks 深路径 | Serde/default/alias、公开签名和路径不变 | consumer 清单清零并跨越兼容窗口 |
+| `MessageStore::get_commit_log_mut_from_ref` | Store facade | 1.0.0 不再保留从共享引用导出可变 `CommitLog` 的 unsafe accessor | v0.9.0 consumer 审计为零；1.0.0 next-major 删除，独占调用方改用 `get_commit_log_mut(&mut self)`，其他调用方使用既有窄命令 | 不得恢复 `&self -> &mut CommitLog`；外部 consumer 必须迁移到独占借用或窄 capability |
 
 ## 精确 Feature Matrix
 
@@ -50,6 +51,7 @@
 - 完整 M06 contract 最终 195/195 通过（603.261s）。前两轮各 194/195，分别暴露精确 import 未登记新 owner 函数和 canonical scanner 未识别 `pub const fn`；补充正/负向契约后全绿。
 - Architecture dependency baseline、35 项单测、6 个违规 fixtures、runtime enforcing audit 与 AGENTS routing 通过。
 - ArcMut 7 条同 identity 一对一 fingerprint relocation 经 ADR-013 approval、promotion、compare 与 final guard；台账保持 1,170 identities/3,232 occurrences，63 项单测和 24 fixtures 通过，零新增债务。
+- M11-12bc65 对 `get_commit_log_mut_from_ref` 的仓内 consumer 审计为零；1.0.0 候选删除 trait、Generic、Local 与 RocksDB 的五个 Rustdoc associated items，默认公共 path fingerprint 与 `main` 同为 384 / `eead0cefaf841d19e5635b32a502e9517870f88ec222fb396a0cba8707caaa25`。冻结的全 workspace API snapshot 相对当前 `main` 已有 23 个待审差异，因此本切片不重置 snapshot baseline，并把该 next-major 删除单独记录为兼容决策。
 - Error architecture guard 仅复现 main 既有 11 项：Broker source stringification 1、MCP anyhow 8、缺失治理文档 2；本工作包无新增 finding，不将该门禁记为通过。
 - Local all-feature lib 185/185、Tiered all-feature lib 55/55、Store all-feature lib 484/484、workspace exact fmt、workspace all-target/all-feature strict Clippy 与 `git diff --check` 通过。
 
