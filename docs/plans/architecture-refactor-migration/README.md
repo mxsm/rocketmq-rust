@@ -1207,6 +1207,14 @@ reviewed 快照从 67/241 降至 65/237：production 保持 13/24，test 从 40/
 审核，无新增 identity 或提交态 approval。Store test/bench caller 从 32/161 降至 30/157，R17 总上界降至
 38/173；执行清单保持完成 11 项、剩余 20 项，正式进度仍为 75/82。
 
+共享 HA test root 随 Issue #8599 改为独占 owner：专用 fixture 显式关闭 Timer wheel，并在 Store/Broker 两侧开启
+duplication mode 后复用既有 owned-root wiring；Default HA、AutoSwitch HA 与 group-transfer 测试直接借用根或提取
+replica capability，不再构造/返回/导入 `ArcMut<LocalFileMessageStore>`。原 wrapper strong-count 断言改为释放
+LocalFile root 后验证 replica capability 仍可用。reviewed 快照从 65/237 降至 62/234：production 保持
+13/24，test 从 38/173 降至 35/170，compatibility 保持 14/40；净删除 3 test identities/3 occurrences，
+无 relocation、新 identity 或临时 approval。Store test/bench caller 从 30/157 降至 27/154，R17 总上界降至
+35/170；执行清单保持完成 11 项、剩余 20 项，正式进度仍为 75/82。
+
 Default HA client runtime ownership 随 Issue #8567 完成收窄：`DefaultHAClient` 以标准 `Arc<Inner>` 共享只读组合根，
 `Inner` 仅保留原子、锁、Notify、flow monitor 与现有 LocalStore 兼容句柄；从未安装连接的 stream 字段和重复 buffer/
 dispatch/report 状态已删除，实际 reader/writer buffer 继续由每个 connection task 独占。reviewed 快照为 126 identities/
