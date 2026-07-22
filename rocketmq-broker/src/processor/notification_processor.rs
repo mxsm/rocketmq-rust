@@ -520,8 +520,8 @@ mod tests {
 
     fn notification_processor_for_test(runtime: &mut BrokerRuntime) -> Arc<NotificationProcessor<GenericMessageStore>> {
         let inner = runtime.inner_for_test();
-        let policy = NotificationPolicy::from_config(inner.broker_config());
-        let long_polling_policy = PopLongPollingPolicy::from_config(inner.broker_config());
+        let policy = NotificationPolicy::from_config(&inner.broker_config());
+        let long_polling_policy = PopLongPollingPolicy::from_config(&inner.broker_config());
         let topic_config_manager = inner.topic_config_manager_handle();
         let subscription_group_lookup = inner.subscription_group_manager().config_lookup();
         let long_polling = PopLongPollingServiceContext::new(

@@ -23,7 +23,7 @@ use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerCon
 use rocketmq_store::base::message_store::MessageStore;
 use tracing::info;
 
-use crate::broker_runtime::BrokerRuntimeInner;
+use crate::broker::broker_admin_runtime::BrokerAdminRuntime;
 
 pub struct UpdateBrokerHaHandler;
 
@@ -34,7 +34,7 @@ impl UpdateBrokerHaHandler {
 
     pub async fn update_broker_ha_info<MS: MessageStore>(
         &self,
-        broker_runtime_inner: &BrokerRuntimeInner<MS>,
+        broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,

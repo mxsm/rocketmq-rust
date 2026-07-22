@@ -965,6 +965,15 @@ test 116/404、compatibility 14/40、Broker production 9/36、Store production 8
 R06、R07、R08 已完成，31 项执行清单剩余 24 项；总进度仍为 75/82，下一子切片 M11-12bc60 继续唯一
 Broker aggregate root 或 Store owner。
 
+Broker Admin/control-plane root capability 随 Issue #8533 继续收窄：删除 `BrokerAdminRuntimeHandle` 及其完整
+`ArcMut<BrokerRuntimeInner>` owner，Admin dispatcher 与 leaf 改持显式 `BrokerAdminRuntime`；broker/store 配置由单一
+`ArcSwap` 代际原子发布，controller、membership、role transition 与 Store HA 操作改由显式状态和 capability 组合。
+Admin 上下文不再保活或解引用 runtime root，producer 共享视图可观察后续配置代际。reviewed ArcMut 快照净降至
+220 identities/713 occurrences（production 90/269、test 116/404、compatibility 14/40、Broker production 8/35、
+Store production 82/234），净删除 1 个 production identity/1 occurrence；16 个保留 occurrence 经临时 ADR-013
+一对一指纹审核，无新增 identity 或提交态 approval。R01 仍未完成，31 项执行清单仍剩余 24 项；总进度仍为
+75/82，下一子切片 M11-12bc61 继续 Broker 启动、注册、后台任务或 Local/Rocks 组合根 owner。
+
 ### 9.3 证据目录
 
 - 运行期生成物：`target/architecture-refactor/Mxx/<run-id>/`，不提交 Git。

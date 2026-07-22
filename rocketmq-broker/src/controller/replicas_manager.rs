@@ -132,6 +132,11 @@ struct TempBrokerMetadataRecord {
     register_check_code: String,
 }
 
+/// Controller replica state.
+///
+/// Clones are detached, point-in-time read snapshots. Live mutations remain
+/// serialized by the broker controller owner.
+#[derive(Clone)]
 pub struct ReplicasManager {
     broker_controller_id: u64,
     broker_address: CheetahString,

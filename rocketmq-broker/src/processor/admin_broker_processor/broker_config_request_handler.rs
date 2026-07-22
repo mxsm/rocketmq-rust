@@ -39,24 +39,24 @@ use rocketmq_store::utils::ffi::MADV_NORMAL;
 use rocketmq_store::utils::ffi::MADV_RANDOM;
 use sysinfo::Disks;
 
-use crate::broker::broker_admin_runtime_handle::BrokerAdminRuntimeHandle;
+use crate::broker::broker_admin_runtime::BrokerAdminRuntime;
 use crate::topic::manager::topic_config_coordinator::TopicRegistrationAction;
 
 #[derive(Clone)]
 pub(super) struct BrokerConfigRequestHandler<MS: MessageStore> {
-    broker_runtime_inner: BrokerAdminRuntimeHandle<MS>,
+    broker_runtime_inner: BrokerAdminRuntime<MS>,
 }
 
 impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
-    pub fn new(broker_runtime_inner: BrokerAdminRuntimeHandle<MS>) -> Self {
+    pub fn new(broker_runtime_inner: BrokerAdminRuntime<MS>) -> Self {
         BrokerConfigRequestHandler { broker_runtime_inner }
     }
 
-    pub(super) fn broker_runtime_inner(&self) -> &BrokerAdminRuntimeHandle<MS> {
+    pub(super) fn broker_runtime_inner(&self) -> &BrokerAdminRuntime<MS> {
         &self.broker_runtime_inner
     }
 
-    pub(super) fn broker_runtime_inner_mut(&mut self) -> &mut BrokerAdminRuntimeHandle<MS> {
+    pub(super) fn broker_runtime_inner_mut(&mut self) -> &mut BrokerAdminRuntime<MS> {
         &mut self.broker_runtime_inner
     }
 
@@ -142,7 +142,7 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
             ));
         }
 
-        let mut updated_config = self.broker_runtime_inner.broker_config().clone();
+        let mut updated_config = self.broker_runtime_inner.broker_config().as_ref().clone();
         let unsupported_keys = match Self::apply_supported_broker_config_properties(&mut updated_config, &properties) {
             Ok(unsupported_keys) => unsupported_keys,
             Err(remark) => {
@@ -157,10 +157,7 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
             )));
         }
 
-        let inner = self.broker_runtime_inner.runtime_mut();
-        inner.set_broker_config(updated_config);
-        let broker_config_arc = inner.broker_config_arc();
-        inner.producer_manager_mut().set_broker_config(broker_config_arc);
+        self.broker_runtime_inner.set_broker_config(updated_config);
 
         Ok(Some(
             response
@@ -179,7 +176,7 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
         let mut response = RemotingCommand::create_response_command();
         // broker config => broker config
         // default message store config => message store config
-        let broker_config = self.broker_runtime_inner.broker_config().clone();
+        let broker_config = self.broker_runtime_inner.broker_config();
         let message_store_config = self
             .broker_runtime_inner
             .message_store()
@@ -258,7 +255,6 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
 
         match self
             .broker_runtime_inner
-            .runtime_mut()
             .message_store_mut()
             .as_mut()
             .expect("message store should exist")
@@ -891,7 +887,7 @@ mod tests {
             .add_timing_count(&CheetahString::from_static_str("TimerTopicA"), 2);
         runtime.inner_for_test().set_timer_message_store(timer_message_store);
 
-        let handler = BrokerConfigRequestHandler::new(runtime.admin_runtime_handle_for_test());
+        let handler = BrokerConfigRequestHandler::new(runtime.admin_runtime_for_test());
         let response = handler.build_timer_metrics_response();
 
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
@@ -916,7 +912,7 @@ mod tests {
         assert!(timer_message_store.load());
         runtime.inner_for_test().set_timer_message_store(timer_message_store);
 
-        let handler = BrokerConfigRequestHandler::new(runtime.admin_runtime_handle_for_test());
+        let handler = BrokerConfigRequestHandler::new(runtime.admin_runtime_for_test());
         let response = handler.build_timer_checkpoint_response();
 
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
@@ -931,7 +927,7 @@ mod tests {
     async fn set_commitlog_read_mode_updates_store_config() {
         let mut runtime = new_test_runtime("commitlog-read-mode", false).await;
         let inner = runtime.inner_for_test().clone();
-        let mut handler = BrokerConfigRequestHandler::new(runtime.admin_runtime_handle_for_test());
+        let mut handler = BrokerConfigRequestHandler::new(runtime.admin_runtime_for_test());
 
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
@@ -982,7 +978,7 @@ mod tests {
     async fn update_broker_config_applies_supported_runtime_properties() {
         let mut runtime = new_test_runtime("update-broker-config", false).await;
         let inner = runtime.inner_for_test().clone();
-        let mut handler = BrokerConfigRequestHandler::new(runtime.admin_runtime_handle_for_test());
+        let mut handler = BrokerConfigRequestHandler::new(runtime.admin_runtime_for_test());
 
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
@@ -1012,7 +1008,7 @@ mod tests {
     async fn update_broker_config_rejects_unsupported_or_invalid_keys() {
         let mut runtime = new_test_runtime("update-broker-config-invalid", false).await;
         let inner = runtime.inner_for_test().clone();
-        let mut handler = BrokerConfigRequestHandler::new(runtime.admin_runtime_handle_for_test());
+        let mut handler = BrokerConfigRequestHandler::new(runtime.admin_runtime_for_test());
 
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
@@ -1079,7 +1075,7 @@ mod tests {
     #[tokio::test]
     async fn export_rocksdb_config_without_rocksdb_returns_not_supported() {
         let runtime = new_test_runtime("export-config", false).await;
-        let mut handler = BrokerConfigRequestHandler::new(runtime.admin_runtime_handle_for_test());
+        let mut handler = BrokerConfigRequestHandler::new(runtime.admin_runtime_for_test());
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request = RemotingCommand::create_request_command(
@@ -1139,7 +1135,7 @@ mod tests {
                 .update_subscription_group_config(&mut group_config);
         }
 
-        let mut handler = BrokerConfigRequestHandler::new(runtime.admin_runtime_handle_for_test());
+        let mut handler = BrokerConfigRequestHandler::new(runtime.admin_runtime_for_test());
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request = RemotingCommand::create_request_command(
@@ -1180,7 +1176,7 @@ mod tests {
     async fn switch_timer_engine_accepts_file_time_wheel_and_rejects_rocksdb() {
         let mut runtime = new_test_runtime("switch-timer-engine", true).await;
         let inner = runtime.inner_for_test().clone();
-        let mut handler = BrokerConfigRequestHandler::new(runtime.admin_runtime_handle_for_test());
+        let mut handler = BrokerConfigRequestHandler::new(runtime.admin_runtime_for_test());
 
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));

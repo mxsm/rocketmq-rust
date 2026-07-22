@@ -31,7 +31,7 @@ use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerCon
 use rocketmq_store::base::message_store::MessageStore;
 use tracing::info;
 
-use crate::broker_runtime::BrokerRuntimeInner;
+use crate::broker::broker_admin_runtime::BrokerAdminRuntime;
 use crate::subscription::manager::subscription_group_manager::CHARACTER_MAX_LENGTH;
 
 pub(super) struct SubscriptionGroupHandler;
@@ -43,7 +43,7 @@ impl SubscriptionGroupHandler {
 
     pub async fn update_and_create_subscription_group<MS: MessageStore>(
         &self,
-        broker_runtime_inner: &mut BrokerRuntimeInner<MS>,
+        broker_runtime_inner: &mut BrokerAdminRuntime<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -86,7 +86,7 @@ impl SubscriptionGroupHandler {
 
     pub async fn get_subscription_group_config<MS: MessageStore>(
         &self,
-        broker_runtime_inner: &BrokerRuntimeInner<MS>,
+        broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -114,7 +114,7 @@ impl SubscriptionGroupHandler {
 
     pub async fn update_and_create_subscription_group_list<MS: MessageStore>(
         &self,
-        broker_runtime_inner: &mut BrokerRuntimeInner<MS>,
+        broker_runtime_inner: &mut BrokerAdminRuntime<MS>,
         channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -151,7 +151,7 @@ impl SubscriptionGroupHandler {
 
     pub async fn delete_subscription_group<MS: MessageStore>(
         &self,
-        broker_runtime_inner: &mut BrokerRuntimeInner<MS>,
+        broker_runtime_inner: &mut BrokerAdminRuntime<MS>,
         channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -190,7 +190,7 @@ impl SubscriptionGroupHandler {
 
     pub async fn update_and_get_group_forbidden<MS: MessageStore>(
         &self,
-        broker_runtime_inner: &mut BrokerRuntimeInner<MS>,
+        broker_runtime_inner: &mut BrokerAdminRuntime<MS>,
         channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -261,7 +261,6 @@ mod tests {
     use std::time::SystemTime;
 
     use cheetah_string::CheetahString;
-    use rocketmq_common::common::attribute::subscription_group_attributes::LITE_BIND_TOPIC_ATTRIBUTE_NAME;
     use rocketmq_common::common::broker::broker_config::BrokerConfig;
     use rocketmq_remoting::base::response_future::ResponseFuture;
     use rocketmq_remoting::code::request_code::RequestCode;
@@ -321,7 +320,7 @@ mod tests {
     #[tokio::test]
     async fn update_and_create_subscription_group_list_persists_multiple_groups() {
         let mut runtime = new_test_runtime("update-list").await;
-        let mut inner = runtime.inner_for_test().clone();
+        let inner = runtime.inner_for_test().clone();
         let handler = SubscriptionGroupHandler::new();
 
         let body = SubscriptionGroupList {
@@ -338,7 +337,7 @@ mod tests {
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let response = handler
             .update_and_create_subscription_group_list(
-                inner.as_mut(),
+                &mut runtime.admin_runtime_for_test(),
                 channel,
                 ctx,
                 RequestCode::UpdateAndCreateSubscriptionGroupList,
@@ -364,15 +363,13 @@ mod tests {
     #[tokio::test]
     async fn delete_subscription_group_cleans_offsets_for_lite_group_even_without_flag() {
         let mut runtime = new_test_runtime("delete-group").await;
-        let mut inner = runtime.inner_for_test().clone();
+        let inner = runtime.inner_for_test().clone();
         let mut config = SubscriptionGroupConfig::new(CheetahString::from_static_str("group-a"));
-        config.set_attributes(HashMap::from([(
-            CheetahString::from_string(format!("+{LITE_BIND_TOPIC_ATTRIBUTE_NAME}")),
-            CheetahString::from_static_str("parent-topic"),
-        )]));
+        config.set_lite_bind_topic(Some(CheetahString::from_static_str("parent-topic")));
         inner
-            .subscription_group_manager_mut()
-            .update_subscription_group_config(&mut config);
+            .subscription_group_manager()
+            .subscription_group_table()
+            .insert(CheetahString::from_static_str("group-a"), Arc::new(config));
         inner.consumer_offset_manager().commit_offset(
             CheetahString::from_static_str("127.0.0.1"),
             &CheetahString::from_static_str("group-a"),
@@ -386,6 +383,12 @@ mod tests {
             0,
             8,
         );
+
+        let mut admin_runtime = runtime.admin_runtime_for_test();
+        assert!(std::ptr::eq(
+            inner.consumer_offset_manager(),
+            admin_runtime.consumer_offset_manager()
+        ));
 
         let handler = SubscriptionGroupHandler::new();
         let mut request = RemotingCommand::create_request_command(
@@ -402,7 +405,7 @@ mod tests {
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let response = handler
             .delete_subscription_group(
-                inner.as_mut(),
+                &mut admin_runtime,
                 channel,
                 ctx,
                 RequestCode::DeleteSubscriptionGroup,
@@ -434,7 +437,7 @@ mod tests {
     #[tokio::test]
     async fn update_and_get_group_forbidden_updates_readable_flag() {
         let mut runtime = new_test_runtime("group-forbidden").await;
-        let mut inner = runtime.inner_for_test().clone();
+        let inner = runtime.inner_for_test().clone();
         let handler = SubscriptionGroupHandler::new();
         let mut request = RemotingCommand::create_request_command(
             RequestCode::UpdateAndGetGroupForbidden,
@@ -451,7 +454,7 @@ mod tests {
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut response = handler
             .update_and_get_group_forbidden(
-                inner.as_mut(),
+                &mut runtime.admin_runtime_for_test(),
                 channel,
                 ctx,
                 RequestCode::UpdateAndGetGroupForbidden,

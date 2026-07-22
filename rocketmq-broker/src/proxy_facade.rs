@@ -121,7 +121,7 @@ impl ProxyBrokerFacade {
         self.runtime.shutdown().await;
     }
 
-    pub fn broker_config(&self) -> &BrokerConfig {
+    pub fn broker_config(&self) -> Arc<BrokerConfig> {
         self.runtime.broker_config()
     }
 
@@ -134,7 +134,7 @@ impl ProxyBrokerFacade {
                     topic: topic.to_owned(),
                 })?;
 
-        Ok(build_topic_route(self.runtime.broker_config(), topic_config.as_ref()))
+        Ok(build_topic_route(&self.runtime.broker_config(), topic_config.as_ref()))
     }
 
     pub fn query_topic_message_type(&self, topic: &str) -> rocketmq_error::RocketMQResult<TopicMessageType> {

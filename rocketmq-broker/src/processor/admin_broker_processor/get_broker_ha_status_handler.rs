@@ -19,7 +19,7 @@ use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_store::base::message_store::MessageStore;
 
-use crate::broker_runtime::BrokerRuntimeInner;
+use crate::broker::broker_admin_runtime::BrokerAdminRuntime;
 
 pub struct GetBrokerHaStatusHandler;
 
@@ -30,7 +30,7 @@ impl GetBrokerHaStatusHandler {
 
     pub async fn get_broker_ha_status<MS: MessageStore>(
         &self,
-        broker_runtime_inner: &BrokerRuntimeInner<MS>,
+        broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -137,7 +137,6 @@ mod tests {
         let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
         assert!(runtime.initialize().await);
 
-        let inner = runtime.inner_for_test();
         let handler = GetBrokerHaStatusHandler::new();
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
@@ -145,7 +144,7 @@ mod tests {
 
         let response = handler
             .get_broker_ha_status(
-                inner.as_ref(),
+                &runtime.admin_runtime_for_test(),
                 channel,
                 ctx,
                 RequestCode::GetBrokerHaStatus,
@@ -167,8 +166,7 @@ mod tests {
     async fn get_broker_ha_status_returns_error_when_store_is_missing() {
         let broker_config = Arc::new(BrokerConfig::default());
         let message_store_config = Arc::new(MessageStoreConfig::default());
-        let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
-        let inner = runtime.inner_for_test();
+        let runtime = BrokerRuntime::new(broker_config, message_store_config);
         let handler = GetBrokerHaStatusHandler::new();
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
@@ -176,7 +174,7 @@ mod tests {
 
         let response = handler
             .get_broker_ha_status(
-                inner.as_ref(),
+                &runtime.admin_runtime_for_test(),
                 channel,
                 ctx,
                 RequestCode::GetBrokerHaStatus,

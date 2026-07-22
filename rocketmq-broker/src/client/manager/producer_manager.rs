@@ -18,6 +18,7 @@ use std::sync::atomic::AtomicI32;
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
+use arc_swap::ArcSwapOption;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
@@ -62,7 +63,7 @@ pub struct ProducerManager {
     /// Optional broker statistics manager (set once during initialization)
     broker_stats_manager: Option<Arc<BrokerStatsManager>>,
     /// Broker configuration for feature toggles
-    broker_config: Option<Arc<BrokerConfig>>,
+    broker_config: Arc<ArcSwapOption<BrokerConfig>>,
 }
 
 /// Shared producer-connection mutation capability for Broker housekeeping.
@@ -227,7 +228,7 @@ impl ProducerManager {
         }
     }
 
-    fn clone_shared_state(&self) -> Self {
+    pub(crate) fn clone_shared_state(&self) -> Self {
         Self {
             group_channel_table: Arc::clone(&self.group_channel_table),
             client_channel_table: Arc::clone(&self.client_channel_table),
@@ -235,7 +236,7 @@ impl ProducerManager {
             positive_atomic_counter: Arc::clone(&self.positive_atomic_counter),
             producer_change_listener_vec: Arc::clone(&self.producer_change_listener_vec),
             broker_stats_manager: self.broker_stats_manager.clone(),
-            broker_config: self.broker_config.clone(),
+            broker_config: Arc::clone(&self.broker_config),
         }
     }
 
@@ -261,7 +262,7 @@ impl ProducerManager {
             positive_atomic_counter: Arc::new(AtomicI32::new(0)),
             producer_change_listener_vec: Arc::new(ArcSwap::from_pointee(Vec::new())),
             broker_stats_manager: None,
-            broker_config: None,
+            broker_config: Arc::new(ArcSwapOption::empty()),
         }
     }
 
@@ -276,10 +277,9 @@ impl ProducerManager {
     /// Assigns the broker configuration.
     ///
     /// The configuration controls conditional registration and fast path optimizations.
-    /// This method should be called during initialization before the manager is shared
-    /// across threads.
-    pub fn set_broker_config(&mut self, broker_config: Arc<BrokerConfig>) {
-        self.broker_config = Some(broker_config);
+    /// Shared manager views observe subsequent configuration generations.
+    pub fn set_broker_config(&self, broker_config: Arc<BrokerConfig>) {
+        self.broker_config.store(Some(broker_config));
     }
 
     /// Registers a listener for producer registration and unregistration events.
@@ -423,7 +423,7 @@ impl ProducerManager {
     #[allow(clippy::mutable_key_type)]
     pub fn register_producer(&self, group: &ProducerGroupName, client_channel_info: &ClientChannelInfo) {
         // Conditional registration check (capacity protection mechanism)
-        if let Some(config) = &self.broker_config {
+        if let Some(config) = self.broker_config.load_full() {
             if !config.enable_register_producer && config.reject_transaction_message {
                 // Check if this is an existing producer (only allow heartbeat updates)
                 let channel_table = self.group_channel_table.get(group);
@@ -790,6 +790,7 @@ impl ProducerManager {
     /// `true` if fast channel event processing is enabled in broker config, `false` otherwise
     fn is_fast_channel_event_enabled(&self) -> bool {
         self.broker_config
+            .load_full()
             .as_ref()
             .map(|config| config.enable_fast_channel_event_process)
             .unwrap_or(false)
@@ -872,6 +873,20 @@ mod tests {
         manager.register_producer(&group, &client);
 
         assert_eq!(registry.find_channel("reply-client-id"), Some(channel));
+    }
+
+    #[test]
+    fn shared_manager_observes_later_broker_config_generations() {
+        let manager = ProducerManager::new();
+        let shared = manager.clone_shared_state();
+        assert!(!shared.is_fast_channel_event_enabled());
+
+        manager.set_broker_config(Arc::new(BrokerConfig {
+            enable_fast_channel_event_process: true,
+            ..BrokerConfig::default()
+        }));
+
+        assert!(shared.is_fast_channel_event_enabled());
     }
 
     #[test]
