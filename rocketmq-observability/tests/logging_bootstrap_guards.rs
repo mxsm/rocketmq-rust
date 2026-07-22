@@ -24,7 +24,14 @@ static TEMP_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[test]
 fn install_global_supports_console_only_logging() {
-    assert_bootstrap_case("console_only");
+    let output = assert_bootstrap_case("console_only");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stdout.contains("console-stderr-marker"),
+        "console logs must not use stdout"
+    );
+    assert!(stderr.contains("console-stderr-marker"), "console logs must use stderr");
 }
 
 #[test]
@@ -68,6 +75,11 @@ fn install_global_required_policy_fails_when_subscriber_is_blocked() {
 }
 
 #[test]
+fn install_global_exposes_atomic_reload_and_keeps_last_known_good_filter() {
+    assert_bootstrap_case("reload_filter");
+}
+
+#[test]
 #[ignore]
 fn install_global_bootstrap_child() {
     let case = std::env::var("ROCKETMQ_OBSERVABILITY_BOOTSTRAP_CASE")
@@ -85,6 +97,7 @@ fn install_global_bootstrap_child() {
         #[cfg(feature = "otel-logs")]
         "logs_enabled" => bootstrap_logs_enabled(),
         "required_conflict" => bootstrap_required_conflict(),
+        "reload_filter" => bootstrap_reload_filter(),
         other => panic!("unknown bootstrap child case: {other}"),
     }
 }
@@ -184,6 +197,7 @@ fn bootstrap_console_only() {
         }
     );
     assert_eq!(guard.logging_guard().file_sink_count(), 0);
+    tracing::info!("console-stderr-marker");
 
     let report = guard.shutdown();
     assert!(report.is_healthy());
@@ -275,6 +289,8 @@ fn bootstrap_metrics_best_effort_conflict() {
 #[cfg(feature = "otel-traces")]
 fn bootstrap_traces_enabled() {
     let mut config = rocketmq_observability::TelemetryBootstrapConfig::default();
+    config.logging.enabled = false;
+    config.logging.reload.enabled = true;
     config.observability.enabled = true;
     config.observability.traces.enabled = true;
     config.observability.traces.exporter = rocketmq_observability::config::TraceExporter::Disable;
@@ -282,6 +298,10 @@ fn bootstrap_traces_enabled() {
     let guard = rocketmq_observability::install_global(&config).expect("trace bootstrap should install");
 
     assert!(guard.telemetry_guard().tracer_provider().is_some());
+    assert!(
+        guard.log_filter_handle().is_some(),
+        "trace-only subscriber layers must retain the shared filter"
+    );
     assert_eq!(
         guard.subscriber_install_status(),
         rocketmq_observability::SubscriberInstallStatus {
@@ -299,6 +319,8 @@ fn bootstrap_traces_enabled() {
 #[cfg(feature = "otel-logs")]
 fn bootstrap_logs_enabled() {
     let mut config = rocketmq_observability::TelemetryBootstrapConfig::default();
+    config.logging.enabled = false;
+    config.logging.reload.enabled = true;
     config.observability.enabled = true;
     config.observability.logs.enabled = true;
     config.observability.logs.exporter = rocketmq_observability::config::LogsExporter::Disable;
@@ -306,6 +328,10 @@ fn bootstrap_logs_enabled() {
     let guard = rocketmq_observability::install_global(&config).expect("logs bootstrap should install");
 
     assert!(guard.telemetry_guard().logger_provider().is_some());
+    assert!(
+        guard.log_filter_handle().is_some(),
+        "OTLP-log-only subscriber layers must retain the shared filter"
+    );
     assert_eq!(
         guard.subscriber_install_status(),
         rocketmq_observability::SubscriberInstallStatus {
@@ -338,6 +364,72 @@ fn bootstrap_required_conflict() {
             installed: false
         }
     ));
+}
+
+fn bootstrap_reload_filter() {
+    let directory = unique_temp_log_dir("install-global-reload-filter");
+    let mut config = rocketmq_observability::TelemetryBootstrapConfig::default();
+    config.logging.console.enabled = false;
+    config.logging.file.enabled = true;
+    config.logging.file.directory = directory.to_string_lossy().into_owned();
+    config.logging.file.file_name_prefix = "reload.log".to_string();
+    config.logging.file.rotation = rocketmq_observability::LogRotation::Never;
+    config.logging.reload.enabled = true;
+    let resolved =
+        rocketmq_observability::LogFilterResolver::resolve(Default::default()).expect("default filter should resolve");
+
+    let guard = rocketmq_observability::install_global_with_filter(&config, resolved)
+        .expect("reloadable bootstrap should install");
+    let handle = guard
+        .log_filter_handle()
+        .expect("reload enabled should expose a handle");
+    assert_eq!(handle.current().filter(), "info");
+    assert_eq!(
+        handle.current().source(),
+        rocketmq_observability::LogFilterSource::Default
+    );
+
+    tracing::debug!(target: "rocketmq_reload_probe", "before reload");
+    handle
+        .reload(rocketmq_observability::LogFilterReloadRequest::new(
+            "info,rocketmq_reload_probe=debug",
+        ))
+        .expect("valid target reload should succeed");
+    tracing::debug!(target: "rocketmq_reload_probe", "after reload");
+
+    let error = handle
+        .reload(rocketmq_observability::LogFilterReloadRequest::new(
+            "rocketmq_reload_probe==trace",
+        ))
+        .expect_err("invalid reload should fail");
+    assert!(matches!(
+        error,
+        rocketmq_observability::ObservabilityError::InvalidLogFilter { .. }
+    ));
+    assert_eq!(handle.current().filter(), "info,rocketmq_reload_probe=debug");
+    assert_eq!(
+        handle.current().source(),
+        rocketmq_observability::LogFilterSource::Runtime
+    );
+
+    handle
+        .reload(rocketmq_observability::LogFilterReloadRequest::new("info"))
+        .expect("restoring info should succeed");
+    tracing::debug!(target: "rocketmq_reload_probe", "after restore");
+    tracing::info!(target: "rocketmq_reload_probe", "info remains visible");
+
+    guard
+        .shutdown()
+        .into_result()
+        .expect("reloadable logging shutdown should succeed");
+
+    let contents =
+        std::fs::read_to_string(directory.join("reload.log")).expect("reload file should be readable after shutdown");
+    assert!(!contents.contains("before reload"));
+    assert!(contents.contains("after reload"));
+    assert!(!contents.contains("after restore"));
+    assert!(contents.contains("info remains visible"));
+    cleanup_temp_log_dir(directory);
 }
 
 fn install_stderr_blocking_subscriber() {

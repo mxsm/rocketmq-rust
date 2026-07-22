@@ -16,13 +16,32 @@ use rocketmq_dashboard_web_backend::run;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "rocketmq_dashboard_web_backend=info,tower_http=info".into()),
-        )
-        .init();
-
     let config = AppConfig::load()?;
-    run(config).await
+    let environment_filter = rocketmq_observability::read_rust_log()?;
+    let resolved_filter =
+        rocketmq_observability::LogFilterResolver::resolve(rocketmq_observability::LogFilterInputs {
+            environment: environment_filter.as_deref(),
+            ..rocketmq_observability::LogFilterInputs::default()
+        })?;
+    let mut bootstrap = rocketmq_observability::TelemetryBootstrapConfig::default();
+    bootstrap.observability.service_name = "rocketmq-dashboard-web-backend".to_string();
+    bootstrap.observability.service_namespace = "rocketmq".to_string();
+    bootstrap.observability.node_type = "dashboard".to_string();
+    bootstrap.observability.node_id = "web-backend".to_string();
+    bootstrap.observability.subscriber_install_policy = rocketmq_observability::SubscriberInstallPolicy::Required;
+    let telemetry_guard = rocketmq_observability::install_global_with_filter(&bootstrap, resolved_filter.clone())?;
+    tracing::info!(
+        service = "rocketmq-dashboard-web-backend",
+        effective_filter = resolved_filter.filter(),
+        filter_source = %resolved_filter.source(),
+        subscriber_installed = telemetry_guard.subscriber_install_status().installed,
+        reload_enabled = bootstrap.logging.reload.enabled,
+        "Dashboard Web telemetry bootstrap initialized"
+    );
+
+    let run_result = run(config).await;
+    let shutdown_result = telemetry_guard.shutdown().into_result();
+    run_result?;
+    shutdown_result?;
+    Ok(())
 }

@@ -2,7 +2,9 @@
 name = "rocketmq-mcp"
 version = "1.0.0"
 transport = "stdio"
-log_level = "info"
+
+[logging]
+filter = "info"
 
 [server.stdio]
 log_to_stderr = true

@@ -21,6 +21,7 @@ pub mod controller;
 pub mod controller_constants;
 pub mod instruments;
 pub mod labels;
+pub mod log_filter;
 pub mod namesrv;
 pub mod noop_instruments;
 #[cfg(feature = "otel-metrics")]

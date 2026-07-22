@@ -247,7 +247,7 @@ impl Default for LoggingConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            filter: "info".to_string(),
+            filter: crate::log_filter::DEFAULT_LOG_FILTER.to_string(),
             console: ConsoleLogConfig::default(),
             file: FileLogConfig::default(),
             reload: ReloadConfig::default(),

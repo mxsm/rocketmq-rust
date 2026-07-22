@@ -39,17 +39,34 @@ use rocketmq_store::utils::ffi::MADV_NORMAL;
 use rocketmq_store::utils::ffi::MADV_RANDOM;
 use sysinfo::Disks;
 
+use crate::auth::auth_admin_service::AuthAdminService;
 use crate::broker::broker_admin_runtime::BrokerAdminRuntime;
+use crate::broker::log_filter_control::BrokerLogFilterRequest;
+use crate::broker::log_filter_control::LOG_FILTER_KEYS;
 use crate::topic::manager::topic_config_coordinator::TopicRegistrationAction;
 
 #[derive(Clone)]
 pub(super) struct BrokerConfigRequestHandler<MS: MessageStore> {
     broker_runtime_inner: BrokerAdminRuntime<MS>,
+    auth_admin_service: Option<Arc<AuthAdminService>>,
 }
 
 impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
     pub fn new(broker_runtime_inner: BrokerAdminRuntime<MS>) -> Self {
-        BrokerConfigRequestHandler { broker_runtime_inner }
+        BrokerConfigRequestHandler {
+            broker_runtime_inner,
+            auth_admin_service: None,
+        }
+    }
+
+    pub fn new_with_auth(
+        broker_runtime_inner: BrokerAdminRuntime<MS>,
+        auth_admin_service: Arc<AuthAdminService>,
+    ) -> Self {
+        BrokerConfigRequestHandler {
+            broker_runtime_inner,
+            auth_admin_service: Some(auth_admin_service),
+        }
     }
 
     pub(super) fn broker_runtime_inner(&self) -> &BrokerAdminRuntime<MS> {
@@ -112,7 +129,7 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
 impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
     pub async fn update_broker_config(
         &mut self,
-        _channel: Channel,
+        channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
@@ -142,6 +159,10 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
             ));
         }
 
+        if properties.keys().any(|key| LOG_FILTER_KEYS.contains(&key.as_str())) {
+            return self.update_log_filter(channel, request, response, &properties).await;
+        }
+
         let mut updated_config = self.broker_runtime_inner.broker_config().as_ref().clone();
         let unsupported_keys = match Self::apply_supported_broker_config_properties(&mut updated_config, &properties) {
             Ok(unsupported_keys) => unsupported_keys,
@@ -164,6 +185,92 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
                 .set_code(ResponseCode::Success)
                 .set_remark("update broker config success"),
         ))
+    }
+
+    async fn update_log_filter(
+        &self,
+        channel: Channel,
+        request: &RemotingCommand,
+        response: RemotingCommand,
+        properties: &HashMap<CheetahString, CheetahString>,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let broker_config = self.broker_runtime_inner.broker_config();
+        if !broker_config.authentication_enabled || !broker_config.authorization_enabled {
+            return Ok(Some(response.set_code(ResponseCode::NoPermission).set_remark(
+                "remote log filter reload requires authentication and authorization",
+            )));
+        }
+        let Some(control) = self.broker_runtime_inner.log_filter_control() else {
+            return Ok(Some(
+                response
+                    .set_code(ResponseCode::NoPermission)
+                    .set_remark("remote log filter reload is disabled or unavailable"),
+            ));
+        };
+        let source_ip = channel.remote_address().ip().to_string();
+        let operator = request
+            .get_ext_fields()
+            .and_then(|fields| fields.get(&CheetahString::from_static_str("AccessKey")))
+            .map(CheetahString::as_str)
+            .unwrap_or_default();
+        if operator.trim().is_empty() {
+            control
+                .audit_rejection(properties, operator, &source_ip, false, "missing_access_key")
+                .await;
+            return Ok(Some(
+                response
+                    .set_code(ResponseCode::NoPermission)
+                    .set_remark("remote log filter reload requires an authenticated AccessKey"),
+            ));
+        }
+        let Some(auth_admin_service) = self.auth_admin_service.as_ref() else {
+            control
+                .audit_rejection(properties, operator, &source_ip, false, "authorization_unavailable")
+                .await;
+            return Ok(Some(
+                response
+                    .set_code(ResponseCode::NoPermission)
+                    .set_remark("remote log filter authorization service is unavailable"),
+            ));
+        };
+        let super_user = match auth_admin_service.is_super_user(operator).await {
+            Ok(super_user) => super_user,
+            Err(error) => {
+                tracing::warn!(error = %error, "failed to resolve remote log filter operator role");
+                control
+                    .audit_rejection(properties, operator, &source_ip, false, "authorization_failure")
+                    .await;
+                return Ok(Some(
+                    response
+                        .set_code(ResponseCode::NoPermission)
+                        .set_remark("remote log filter operator could not be authorized"),
+                ));
+            }
+        };
+        let request = match BrokerLogFilterRequest::parse(properties, operator, source_ip.as_str(), super_user) {
+            Ok(request) => request,
+            Err(remark) => {
+                control
+                    .audit_rejection(properties, operator, &source_ip, super_user, "validation_failure")
+                    .await;
+                return Ok(Some(
+                    response.set_code(ResponseCode::InvalidParameter).set_remark(remark),
+                ));
+            }
+        };
+        match control.apply(request).await {
+            Ok(resolved) => Ok(Some(response.set_code(ResponseCode::Success).set_remark(format!(
+                "log filter update success: effectiveFilter={}, baselineFilter={}",
+                resolved.filter(),
+                control.baseline().filter()
+            )))),
+            Err(error) => {
+                tracing::error!(error = %error, "broker remote log filter update failed");
+                Ok(Some(response.set_code(ResponseCode::SystemError).set_remark(
+                    "remote log filter update failed; startup baseline is preserved",
+                )))
+            }
+        }
     }
 
     pub async fn get_broker_config(
@@ -1001,6 +1108,32 @@ mod tests {
         assert_eq!(admin.broker_config().max_client_event_count, 7);
         assert_eq!(admin.broker_config().lite_event_full_dispatch_delay_time, 1234);
 
+        let _ = fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn update_log_filter_requires_broker_authentication_and_authorization() {
+        let runtime = new_test_runtime("update-log-filter-auth-disabled", false).await;
+        let admin = runtime.admin_runtime_for_test();
+        let mut handler = BrokerConfigRequestHandler::new(admin);
+        let channel = create_test_channel().await;
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let mut request = RemotingCommand::create_remoting_command(RequestCode::UpdateBrokerConfig).set_body(concat!(
+            "logFilter=info,rocketmq_broker=debug\n",
+            "logFilterReason=incident investigation\n",
+            "logFilterRequestId=INC-42",
+        ));
+
+        let response = handler
+            .update_broker_config(channel, ctx, RequestCode::UpdateBrokerConfig, &mut request)
+            .await
+            .expect("log filter update should return broker response")
+            .expect("log filter update should return a response");
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::NoPermission);
+        assert!(response
+            .remark()
+            .is_some_and(|remark| remark.contains("authentication and authorization")));
         let _ = fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }
 

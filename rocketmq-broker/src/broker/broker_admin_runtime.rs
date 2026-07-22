@@ -36,6 +36,7 @@ use crate::broker::broker_pre_online_capability::BrokerOnlineRoleState;
 use crate::broker::broker_pre_online_capability::BrokerSpecialServiceCapability;
 use crate::broker::broker_registration_runtime::BrokerRegistrationRuntime;
 use crate::broker::broker_runtime_config_state::BrokerRuntimeConfigState;
+use crate::broker::log_filter_control::BrokerLogFilterControl;
 use crate::client::manager::consumer_manager::ConsumerManager;
 use crate::client::manager::producer_manager::ProducerManager;
 use crate::client::rebalance::rebalance_lock_manager::RebalanceLockManager;
@@ -100,6 +101,7 @@ pub(crate) struct BrokerAdminRuntime<MS: MessageStore> {
     pull_policy: PullMessagePolicyState,
     pop_policy: PopPolicyState,
     escape_policy: EscapeBridgePolicyState,
+    log_filter_control: Option<Arc<BrokerLogFilterControl>>,
 }
 
 impl<MS: MessageStore> Clone for BrokerAdminRuntime<MS> {
@@ -139,6 +141,7 @@ impl<MS: MessageStore> Clone for BrokerAdminRuntime<MS> {
             pull_policy: self.pull_policy.clone(),
             pop_policy: self.pop_policy.clone(),
             escape_policy: self.escape_policy.clone(),
+            log_filter_control: self.log_filter_control.clone(),
         }
     }
 }
@@ -183,6 +186,7 @@ impl<MS: MessageStore> BrokerAdminRuntime<MS> {
         pull_policy: PullMessagePolicyState,
         pop_policy: PopPolicyState,
         escape_policy: EscapeBridgePolicyState,
+        log_filter_control: Option<Arc<BrokerLogFilterControl>>,
     ) -> Self {
         Self {
             config,
@@ -219,6 +223,7 @@ impl<MS: MessageStore> BrokerAdminRuntime<MS> {
             pull_policy,
             pop_policy,
             escape_policy,
+            log_filter_control,
         }
     }
 
@@ -228,6 +233,10 @@ impl<MS: MessageStore> BrokerAdminRuntime<MS> {
 
     pub(crate) fn message_store_config(&self) -> Arc<MessageStoreConfig> {
         self.config.store_snapshot()
+    }
+
+    pub(crate) fn log_filter_control(&self) -> Option<&Arc<BrokerLogFilterControl>> {
+        self.log_filter_control.as_ref()
     }
 
     pub(crate) fn server_config(&self) -> ServerConfig {

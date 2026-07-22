@@ -132,6 +132,13 @@ pub mod metrics {
     pub const PROXY_FORWARD_LATENCY: &str = "rocketmq_proxy_forward_latency";
     pub const PROXY_ACTIVE_CONNECTIONS: &str = "rocketmq_proxy_active_connections";
     pub const PROXY_UP: &str = "rocketmq_proxy_up";
+    pub const LOG_FILTER_RELOAD_TOTAL: &str = "rocketmq_observability_log_filter_reload_total";
+    pub const LOG_FILTER_ACTIVE: &str = "rocketmq_observability_log_filter_active";
+    pub const LOG_FILTER_EXPIRY_TIMESTAMP_SECONDS: &str = "rocketmq_observability_log_filter_expiry_timestamp_seconds";
+    pub const LOG_FILTER_AUDIT_FAILURE_TOTAL: &str = "rocketmq_observability_log_filter_audit_failure_total";
+    pub const LOG_FILTER_AUTO_RESTORE_FAILURE_TOTAL: &str =
+        "rocketmq_observability_log_filter_auto_restore_failure_total";
+    pub const LOG_FILTER_ROLLBACK_FAILURE_TOTAL: &str = "rocketmq_observability_log_filter_rollback_failure_total";
 }
 
 pub mod labels {
@@ -182,6 +189,8 @@ pub mod labels {
     pub const DLEDGER_OPERATION_STATUS: &str = "dLedger_operation_status";
     pub const ELECTION_RESULT: &str = "election_result";
     pub const LABEL_KEY: &str = "label_key";
+    pub const SERVICE: &str = "service";
+    pub const SOURCE: &str = "source";
 }
 
 /// Stable event identifiers consumed by structured-log exporters and guards.

@@ -39,6 +39,8 @@ pub struct Args {
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct McpConfig {
     pub server: ServerConfig,
+    #[serde(default)]
+    pub logging: rocketmq_observability::LoggingOverrideConfig,
     pub clusters: Vec<ClusterConfig>,
     pub security: SecurityConfig,
     pub audit: AuditConfig,
@@ -86,8 +88,13 @@ impl McpConfig {
     pub fn validate(&self) -> Result<(), McpError> {
         validate_non_empty("server.name", &self.server.name)?;
         validate_non_empty("server.version", &self.server.version)?;
-        validate_non_empty("server.log_level", &self.server.log_level)?;
         validate_non_empty("server.http.bind", &self.server.http.bind)?;
+        rocketmq_observability::LogFilterResolver::resolve(rocketmq_observability::LogFilterInputs {
+            config: self.logging.filter.as_deref(),
+            legacy_config: self.server.log_level.as_deref(),
+            ..rocketmq_observability::LogFilterInputs::default()
+        })
+        .map_err(|error| McpError::InvalidConfig(error.to_string()))?;
 
         if !self.server.http.endpoint.starts_with('/') {
             return Err(McpError::InvalidConfig(
@@ -254,7 +261,8 @@ pub struct ServerConfig {
     pub name: String,
     pub version: String,
     pub transport: TransportKind,
-    pub log_level: String,
+    #[serde(default)]
+    pub log_level: Option<String>,
     pub stdio: StdioConfig,
     pub http: HttpConfig,
 }
@@ -561,6 +569,26 @@ mod tests {
         assert_eq!(config.diagnosis.consumer_lag_threshold, 1_000);
         assert_eq!(config.audit.max_record_bytes, 16 * 1024);
         assert_eq!(config.audit.queue_max_bytes, 1024 * 1024);
+        assert_eq!(config.logging.filter.as_deref(), Some("info"));
+        assert!(config.server.log_level.is_none());
+    }
+
+    #[test]
+    fn logging_filter_accepts_legacy_alias_but_rejects_conflicts() {
+        let mut config = McpConfig::load(example_config_path()).unwrap();
+        config.server.log_level = Some("info".to_string());
+        config
+            .validate()
+            .expect("equal modern and legacy values should be accepted");
+
+        config.server.log_level = Some("debug".to_string());
+        let error = config.validate().unwrap_err();
+        assert!(error.to_string().contains("conflicts"));
+
+        config.logging.filter = None;
+        config
+            .validate()
+            .expect("legacy-only configuration should remain compatible");
     }
 
     #[test]

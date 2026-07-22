@@ -1,0 +1,54 @@
+groups:
+  - name: rocketmq-log-filter-governance
+    rules:
+      - alert: RocketMQLogFilterReloadFailureRateHigh
+        expr: |
+          sum by (service) (rate(rocketmq_observability_log_filter_reload_total{result="failure"}[5m]))
+          /
+          clamp_min(sum by (service) (rate(rocketmq_observability_log_filter_reload_total[5m])), 0.000001)
+          > 0.01
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: RocketMQ log filter reload failure rate exceeds 1%
+          description: Inspect the service startup filter and Broker log-filter audit before retrying.
+
+      - alert: RocketMQLogFilterAuditFailure
+        expr: increase(rocketmq_observability_log_filter_audit_failure_total[5m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: RocketMQ log filter audit failed
+          description: Remote elevation is fail-closed; verify audit path permissions and disk health.
+
+      - alert: RocketMQLogFilterTtlRestoreOverdue
+        expr: |
+          rocketmq_observability_log_filter_expiry_timestamp_seconds > 0
+          and on(service)
+          (time() - rocketmq_observability_log_filter_expiry_timestamp_seconds) > 300
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: RocketMQ temporary log filter was not restored within five minutes
+          description: Use logFilterRestore=true or restart with the startup INFO baseline.
+
+      - alert: RocketMQLogFilterRuntimeOverrideSustained
+        expr: rocketmq_observability_log_filter_active{source="runtime"} == 1
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: RocketMQ runtime log filter override remains active
+          description: Confirm that the diagnostic window and TTL are still justified.
+
+      - alert: RocketMQLogFilterAutomaticRestoreFailure
+        expr: increase(rocketmq_observability_log_filter_auto_restore_failure_total[5m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: RocketMQ automatic log filter restore failed
+          description: Perform an explicit restore and verify the current effective filter immediately.

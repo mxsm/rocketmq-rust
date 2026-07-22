@@ -211,6 +211,128 @@
       ],
       "title": "Consumer Backlog",
       "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 24
+      },
+      "id": 7,
+      "targets": [
+        {
+          "expr": "sum by (service) (rate(rocketmq_observability_log_filter_reload_total{result=\"success\"}[$__rate_interval])) / clamp_min(sum by (service) (rate(rocketmq_observability_log_filter_reload_total[$__rate_interval])), 0.000001)",
+          "legendFormat": "{{service}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Log Filter Reload Success Rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 24
+      },
+      "id": 8,
+      "targets": [
+        {
+          "expr": "sum by (service, source) (rocketmq_observability_log_filter_active)",
+          "legendFormat": "{{service}} / {{source}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Active Log Filter Source",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 32
+      },
+      "id": 9,
+      "targets": [
+        {
+          "expr": "clamp_min(time() - rocketmq_observability_log_filter_expiry_timestamp_seconds, 0) and on(service) (rocketmq_observability_log_filter_expiry_timestamp_seconds > 0)",
+          "legendFormat": "{{service}} overdue",
+          "refId": "A"
+        }
+      ],
+      "title": "Log Filter TTL Overdue",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 32
+      },
+      "id": 10,
+      "targets": [
+        {
+          "expr": "sum by (service) (rate(rocketmq_observability_log_filter_audit_failure_total[$__rate_interval]))",
+          "legendFormat": "audit / {{service}}",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (service) (rate(rocketmq_observability_log_filter_auto_restore_failure_total[$__rate_interval]))",
+          "legendFormat": "restore / {{service}}",
+          "refId": "B"
+        },
+        {
+          "expr": "sum by (service) (rate(rocketmq_observability_log_filter_rollback_failure_total[$__rate_interval]))",
+          "legendFormat": "rollback / {{service}}",
+          "refId": "C"
+        }
+      ],
+      "title": "Log Filter Governance Failures",
+      "type": "timeseries"
     }
   ],
   "refresh": "10s",

@@ -21,6 +21,7 @@ use anyhow::Context;
 use anyhow::Result;
 use rocketmq_common::common::mq_version::CURRENT_VERSION;
 use rocketmq_common::EnvUtils::EnvUtils;
+use rocketmq_common::ParseConfigFile;
 use rocketmq_controller::parse_command_line;
 use rocketmq_controller::typ::Node;
 use rocketmq_controller::ControllerCli;
@@ -129,14 +130,34 @@ async fn run(service_context: ServiceContext, lifecycle: ServiceLifecycle) -> Re
         bail!("Please set the ROCKETMQ_HOME environment variable. Example: export ROCKETMQ_HOME=/opt/rocketmq");
     }
 
-    lifecycle.start(&service_context).await.map_err(|error| {
-        ControllerError::ConfigError(format!("failed to start Controller lifecycle boundary: {error}"))
-    })?;
+    let logging_overrides = load_logging_overrides(cli.config_file.as_deref())?;
+    let environment_filter = rocketmq_observability::read_rust_log().context("failed to read RUST_LOG")?;
+    let resolved_filter = resolve_startup_log_filter(&cli, &logging_overrides, environment_filter.as_deref())
+        .context("failed to resolve controller log filter")?;
+    let mut bootstrap_config = build_controller_telemetry_bootstrap_config(&config);
+    bootstrap_config.logging.reload = logging_overrides.logging.reload;
+    let telemetry_guard =
+        rocketmq_observability::install_global_with_filter(&bootstrap_config, resolved_filter.clone())
+            .context("failed to initialize controller telemetry bootstrap")?;
+    log_telemetry_bootstrap(
+        &bootstrap_config,
+        &resolved_filter,
+        telemetry_guard.subscriber_install_status(),
+    );
 
-    let bootstrap_config = build_controller_telemetry_bootstrap_config(&config);
-    let telemetry_guard = rocketmq_observability::logging::install_global(&bootstrap_config)
-        .context("failed to initialize controller telemetry bootstrap")?;
-    log_telemetry_bootstrap(&bootstrap_config, telemetry_guard.subscriber_install_status());
+    if let Err(error) = lifecycle.start(&service_context).await {
+        lifecycle.mark_failed();
+        let request = lifecycle.request_shutdown(ShutdownReason::Internal);
+        if let Err(shutdown_error) = telemetry_guard
+            .shutdown_with_timeout(request.deadline.remaining())
+            .into_result()
+        {
+            tracing::warn!(error = %shutdown_error, "controller telemetry cleanup after lifecycle startup failure was unhealthy");
+        }
+        return Err(
+            ControllerError::ConfigError(format!("failed to start Controller lifecycle boundary: {error}")).into(),
+        );
+    }
 
     println!("{}", LOGO);
 
@@ -270,16 +291,43 @@ fn controller_log_directory(controller_config: &ControllerConfig) -> String {
 
 fn log_telemetry_bootstrap(
     config: &rocketmq_observability::TelemetryBootstrapConfig,
+    resolved_filter: &rocketmq_observability::ResolvedLogFilter,
     subscriber_install_status: rocketmq_observability::SubscriberInstallStatus,
 ) {
     info!(
+        service = "rocketmq-controller",
+        effective_filter = resolved_filter.filter(),
+        filter_source = %resolved_filter.source(),
         metrics_exporter = ?config.observability.metrics.exporter,
         trace_exporter = ?config.observability.traces.exporter,
         log_exporter = ?config.observability.logs.exporter,
         subscriber_installed = subscriber_install_status.installed,
+        reload_enabled = config.logging.reload.enabled,
         file_log_enabled = config.logging.file.enabled,
         "controller telemetry bootstrap initialized"
     );
+}
+
+fn load_logging_overrides(config_file: Option<&std::path::Path>) -> Result<rocketmq_observability::LoggingOverrides> {
+    match config_file {
+        Some(path) => ParseConfigFile::parse_config_file(path.to_path_buf())
+            .with_context(|| format!("failed to parse logging configuration from {}", path.display())),
+        None => Ok(rocketmq_observability::LoggingOverrides::default()),
+    }
+}
+
+fn resolve_startup_log_filter(
+    cli: &ControllerCli,
+    overrides: &rocketmq_observability::LoggingOverrides,
+    environment_filter: Option<&str>,
+) -> Result<rocketmq_observability::ResolvedLogFilter, rocketmq_observability::ObservabilityError> {
+    rocketmq_observability::LogFilterResolver::resolve(rocketmq_observability::LogFilterInputs {
+        runtime: None,
+        cli: cli.log_filter.as_deref(),
+        environment: environment_filter,
+        config: overrides.logging.filter.as_deref(),
+        legacy_config: overrides.log_filter.as_deref(),
+    })
 }
 
 async fn initialize_cluster_if_configured(controller_manager: &Arc<ControllerManager>) -> Result<()> {

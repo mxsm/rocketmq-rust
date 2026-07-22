@@ -22,10 +22,15 @@ use crate::config::TransportKind;
 use crate::guard::audit::AuditDrainReport;
 use crate::guard::Guard;
 
+static LEGACY_TELEMETRY_GUARD: std::sync::OnceLock<
+    std::sync::Mutex<Option<rocketmq_observability::TelemetryRuntimeGuard>>,
+> = std::sync::OnceLock::new();
+
 #[derive(Debug, Clone)]
 pub struct McpShutdownReport {
     pub audit: AuditDrainReport,
     pub runtime: Option<rocketmq_runtime::ShutdownReport>,
+    pub telemetry: Option<rocketmq_observability::TelemetryShutdownReport>,
 }
 
 impl McpShutdownReport {
@@ -35,6 +40,10 @@ impl McpShutdownReport {
                 .runtime
                 .as_ref()
                 .is_none_or(rocketmq_runtime::ShutdownReport::is_healthy)
+            && self
+                .telemetry
+                .as_ref()
+                .is_none_or(rocketmq_observability::TelemetryShutdownReport::is_healthy)
     }
 
     pub fn log_if_unhealthy(&self) {
@@ -42,15 +51,41 @@ impl McpShutdownReport {
         if let Some(runtime) = &self.runtime {
             runtime.log_if_unhealthy();
         }
+        if let Some(telemetry) = &self.telemetry {
+            if !telemetry.is_healthy() {
+                tracing::error!(report = %telemetry.to_json(), "MCP telemetry shutdown was unhealthy");
+            }
+        }
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct McpApp {
     config: McpConfig,
     guard: Guard,
     query: Arc<QueryFacade<AdminCoreSessionFactory>>,
     runtime_context: Option<rocketmq_runtime::RuntimeContext>,
+    telemetry: Arc<std::sync::Mutex<Option<rocketmq_observability::TelemetryRuntimeGuard>>>,
+}
+
+impl std::fmt::Debug for McpApp {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("McpApp")
+            .field("config", &self.config)
+            .field("guard", &self.guard)
+            .field("query", &self.query)
+            .field("runtime_context", &self.runtime_context)
+            .field(
+                "telemetry_installed",
+                &self
+                    .telemetry
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .is_some(),
+            )
+            .finish()
+    }
 }
 
 impl McpApp {
@@ -63,13 +98,15 @@ impl McpApp {
             guard,
             query,
             runtime_context: None,
+            telemetry: Arc::new(std::sync::Mutex::new(None)),
         })
     }
 
     pub async fn bootstrap_typed(args: Args) -> Result<Self, crate::error::McpError> {
         let config = McpConfig::load_with_overrides(&args)?;
-        init_tracing_typed(&config)?;
+        let telemetry = init_tracing_typed(&config)?;
         let mut app = Self::new(config)?;
+        *app.telemetry.lock().unwrap_or_else(|error| error.into_inner()) = Some(telemetry);
         app.start_background_services()?;
         Ok(app)
     }
@@ -185,7 +222,17 @@ impl McpApp {
         } else {
             None
         };
-        McpShutdownReport { audit, runtime }
+        let telemetry = self
+            .telemetry
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
+            .map(|guard| guard.shutdown_with_timeout(deadline.remaining()));
+        McpShutdownReport {
+            audit,
+            runtime,
+            telemetry,
+        }
     }
 
     fn start_background_services(&mut self) -> Result<(), crate::error::McpError> {
@@ -202,22 +249,47 @@ impl McpApp {
     }
 }
 
-pub fn init_tracing_typed(config: &McpConfig) -> Result<(), crate::error::McpError> {
-    use tracing_subscriber::EnvFilter;
-
-    let env_filter = EnvFilter::try_new(&config.server.log_level)
-        .map_err(|source| crate::error::McpError::infrastructure("parse MCP tracing filter", source))?;
-    let subscriber = tracing_subscriber::fmt()
-        .with_env_filter(env_filter)
-        .with_writer(std::io::stderr)
-        .finish();
-
-    let _ = tracing::subscriber::set_global_default(subscriber);
-
-    Ok(())
+pub fn init_tracing_typed(
+    config: &McpConfig,
+) -> Result<rocketmq_observability::TelemetryRuntimeGuard, crate::error::McpError> {
+    let environment_filter = rocketmq_observability::read_rust_log()
+        .map_err(|source| crate::error::McpError::infrastructure("read MCP RUST_LOG", source))?;
+    let resolved_filter = rocketmq_observability::LogFilterResolver::resolve(rocketmq_observability::LogFilterInputs {
+        environment: environment_filter.as_deref(),
+        config: config.logging.filter.as_deref(),
+        legacy_config: config.server.log_level.as_deref(),
+        ..rocketmq_observability::LogFilterInputs::default()
+    })
+    .map_err(|source| crate::error::McpError::infrastructure("resolve MCP tracing filter", source))?;
+    let mut bootstrap = rocketmq_observability::TelemetryBootstrapConfig::default();
+    bootstrap.observability.service_name = "rocketmq-mcp".to_string();
+    bootstrap.observability.service_namespace = "rocketmq".to_string();
+    bootstrap.observability.node_type = "mcp".to_string();
+    bootstrap.observability.node_id = config.server.name.clone();
+    bootstrap.observability.subscriber_install_policy = rocketmq_observability::SubscriberInstallPolicy::Required;
+    bootstrap.logging.reload = config.logging.reload;
+    let guard = rocketmq_observability::install_global_with_filter(&bootstrap, resolved_filter.clone())
+        .map_err(|source| crate::error::McpError::infrastructure("install MCP telemetry", source))?;
+    tracing::info!(
+        service = "rocketmq-mcp",
+        effective_filter = resolved_filter.filter(),
+        filter_source = %resolved_filter.source(),
+        subscriber_installed = guard.subscriber_install_status().installed,
+        reload_enabled = bootstrap.logging.reload.enabled,
+        "MCP telemetry bootstrap initialized"
+    );
+    if config.logging.filter.is_none() && config.server.log_level.is_some() {
+        tracing::warn!("server.log_level is deprecated; use logging.filter instead");
+    }
+    Ok(guard)
 }
 
 #[deprecated(since = "1.0.0", note = "use init_tracing_typed")]
 pub fn init_tracing(config: &McpConfig) -> anyhow::Result<()> {
-    init_tracing_typed(config).map_err(anyhow::Error::new)
+    let guard = init_tracing_typed(config).map_err(anyhow::Error::new)?;
+    *LEGACY_TELEMETRY_GUARD
+        .get_or_init(|| std::sync::Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) = Some(guard);
+    Ok(())
 }
