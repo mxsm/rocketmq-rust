@@ -3803,14 +3803,48 @@ Broker exclusive composition root 随 Issue #8541 完成以下收窄：
 | typed-error guard | 复扫仅剩未改动文件中的既有 4 条 finding：Client retry token 2 条、Schedule source stringification 2 条；本切片新增 finding 为 0 |
 | root workspace final gates | `cargo fmt --all -- --check` 与 workspace all-target/all-feature strict Clippy 通过；Windows linker stdout 与既有 future-incompatibility note 不受 `-D warnings` 管辖；`git diff --check` 在提交前复核 |
 
+## M11-12bc65 实现
+
+Store mutable CommitLog facade 随 Issue #8543 完成以下收窄：
+
+- 删除全仓零真实调用方的 `MessageStore::get_commit_log_mut_from_ref`，以及 `GenericMessageStore`、
+  `LocalFileMessageStore`、`RocksDBMessageStore` 的 forwarding/实现；共享只读 `get_commit_log` 与独占
+  `get_commit_log_mut(&mut self)` 行为保持不变。
+- `base/message_store.rs` 增加 source contract，同时覆盖 trait、Generic、Local 与 Rocks 四个边界文件，禁止重新引入
+  `&self -> &mut CommitLog` facade，并确认四层仍保留独占可变入口。
+- 该接口是包含 `ArcMut` 字段的 LocalFile/RocksDB aggregate 被 guard 判定为 shared unsafe wrapper 的唯一共享引用
+  可变逃逸。删除后 Local/Rocks concrete type、constructor、import、alias、DerefMut wrapper 与 downstream test 使用的
+  传递债务真实退出；保留的显式 `ArcMut`、`ArcConsumeQueue` 与其他 `mut_from_ref` 仍继续计入 R01/R09～R16。
+- reviewed baseline 从 220 identities / 690 occurrences 降至 138 / 506；production 从 90/246 降至
+  62/168，test 从 116/404 降至 62/298，compatibility 保持 14/40。Broker production 从 8/12 降至
+  4/8，Store 从 82/234 降至 58/160；净删除 82 identities/184 occurrences，无 relocation、新增 identity
+  或临时 approval。
+- 1.0.0 next-major 兼容台账记录零 consumer、迁移到 `get_commit_log_mut(&mut self)`/窄 capability 和禁止恢复
+  unsafe facade 的决策。`main` 与候选 Store Rustdoc 公共 path 均为 384 且 fingerprint 相同；该方法的五个
+  associated items 从 5 降为 0。冻结的全 workspace API snapshot 相对当前 `main` 已有 23 个待审差异，本切片
+  没有重置 snapshot baseline。
+- R01、R09～R16 均仍未完成；31 项最小审查清单仍为已完成 7 项、剩余 24 项，正式进度仍为 75/82。
+
+## M11-12bc65 验证
+
+| 命令 | 结果 |
+|---|---|
+| Store check / focused / lib / strict Clippy | default/all-target 与 all-feature/all-target check 通过；新增 source contract 1/1、Store default lib 504/504、all-feature legacy adapter 9/9 通过；Store all-target/all-feature strict Clippy 通过 |
+| RocksDB specialized gate | Store/Broker `rocksdb_store` all-target strict Clippy 通过；foundation 82/82、semantics 9/9、Broker RocksDB 21/21、POP consumer 4/4 通过 |
+| reviewed baseline / fixtures | `--apply-reviewed-reductions` 候选从 220/690 精确降至 138/506；正式 baseline 后 `python scripts/arc_mut_guard.py`、candidate compare、24/24 fixtures 与 67/67 guard tests 通过；82 个 removed identity 全部属于 Local/Rocks shared-wrapper 传递闭包，保留 identity 仅有 Local `mut_from_ref` 从 4 降至 3，无新增 identity、relocation、指纹替换或临时 approval |
+| public API / Rustdoc | `main` 与候选 `rocketmq-store` 公共 path 均为 384，fingerprint 均为 `eead0cefaf841d19e5635b32a502e9517870f88ec222fb396a0cba8707caaa25`；目标 associated items 5→0；Store Rustdoc 通过。全 workspace frozen snapshot 如实为 review-required：相对旧 baseline 共 23 个既有包级差异、8 个 public-path 差异，本切片不重置 baseline |
+| runtime / architecture guards | enforcing runtime audit、dependency fixtures/baseline/target、release、8-profile/11-variant performance、60/60 architecture tests 与 AGENTS routing 通过；目标 compatibility 35/35、test edge 3/3、release topology 32/32、66 comparisons/0 failures |
+| typed-error guard | 仅剩未改动文件中的既有 4 条 finding：Client retry token 2 条、Schedule source stringification 2 条；本切片新增 finding 为 0 |
+| root workspace final gates | `cargo fmt --all -- --check`、workspace all-target/all-feature strict Clippy、Store `cargo doc --no-deps` 与 `git diff --check` 通过；Windows linker stdout、既有 future-incompatibility note 和 4 条既有 Store Rustdoc HTML warning 不受 `-D warnings` 管辖 |
+
 ## 剩余切片与 Gate
 
 2026-07-22 盘点将执行工作固化为 31 个最小可审查单元：16 个 production owner、2 个
 test/compatibility、7 个 M10/Phase 3 动态验收与签署、6 个 M12；R02、R03、R04、R05、R06、R07、R08 已完成，当前剩余 24 个，正式进度仍为 75/82。
 完整逐项 checklist 见 `docs/plans/architecture-refactor-migration/REMAINING-TASKS.md`。
 
-1. Broker runtime root 已改为独占 `Box<BrokerRuntimeInner>`，production/test 完整 root clone 均已清零；仅剩 Local/Rocks/Store 组合根 capability carrier（8/12），随 R09～R16 Store owner 安全化删除。
-2. Store MappedFileQueue/其余 ConsumeQueue、CommitLog/Flush、StoreHandle/Rocks/Timer 与其余 HA service/actor（82/234）；BrokerStats observer、ConsumeQueueExt 显式锁 owner、HA replication-state callback、未共享 HA child direct ownership、commit-to-flush 窄唤醒能力、HA confirm/epoch 原子发布、HA connection runtime handle、CommitLog shared disk-flush、auto-switch client construction 与 single delegate Store owner 已完成。
+1. Broker runtime root 已改为独占 `Box<BrokerRuntimeInner>`，production/test 完整 root clone 均已清零；bc65 删除 Local/Rocks concrete unsafe-wrapper 传播后，仅剩显式 `ArcMut` Store 组合根 capability carrier（4/8），随 R09～R16 Store owner 安全化删除。
+2. Store MappedFileQueue/其余 ConsumeQueue、CommitLog/Flush、StoreHandle/Timer 与其余 HA service/actor（58/160）；BrokerStats observer、ConsumeQueueExt 显式锁 owner、HA replication-state callback、未共享 HA child direct ownership、commit-to-flush 窄唤醒能力、HA confirm/epoch 原子发布、HA connection runtime handle、CommitLog shared disk-flush、auto-switch client construction、single delegate Store owner 与共享引用可变 CommitLog facade 已完成。
 3. Production `WeakArcMut` 已清零；继续迁移 test/compatibility 中受控使用并移除其余 nightly feature。公开 `arc_mut.rs`/re-export 的 destructive 删除受 next-major 两轮弃用与 Release Manager/HUMAN Gate 约束，不能静默重置 public API baseline。
 4. 对同一候选快照执行 stable feature matrix、Miri/Loom 可用切片、soak/SLO fault、dashboard/runbook、动态
    Kind/K3d/container、M10 固定硬件和 Human Gate。

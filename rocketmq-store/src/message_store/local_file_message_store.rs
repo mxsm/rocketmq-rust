@@ -3463,10 +3463,6 @@ impl MessageStore for LocalFileMessageStore {
         self.commit_log.as_ref()
     }
 
-    fn get_commit_log_mut_from_ref(&self) -> &mut CommitLog {
-        self.commit_log.mut_from_ref()
-    }
-
     fn get_commit_log_mut(&mut self) -> &mut CommitLog {
         self.commit_log.as_mut()
     }

@@ -509,7 +509,7 @@
           "id": "d8463129a439bda73b3b705d",
           "fingerprint": "fa1cf46ad3c0fd49f66412d9",
           "item": "mod tests",
-          "line": 4948
+          "line": 4947
         }
       ],
       "owner": "broker",
@@ -528,31 +528,31 @@
           "id": "96382769b35a09684edebc18",
           "fingerprint": "7ae7f0d42cc7cf877f3c5180",
           "item": "fn initialize_message_store",
-          "line": 2140
+          "line": 2139
         },
         {
           "id": "74cc17d48db931fb59acef21",
           "fingerprint": "3de04c81a6ce8750c01dbb1e",
           "item": "fn initialize_message_store",
-          "line": 2149
+          "line": 2148
         },
         {
           "id": "7bfbb94e72a0c7018d7617e3",
           "fingerprint": "dcb507a9b34627030b03097c",
           "item": "fn initialize_message_store",
-          "line": 2188
+          "line": 2187
         },
         {
           "id": "052080cc76db61122b9aa40e",
           "fingerprint": "b268404c9afc32876ee95cbc",
           "item": "fn initialize_message_store",
-          "line": 2190
+          "line": 2189
         },
         {
           "id": "5b7b3163d443a001a0b3e66d",
           "fingerprint": "fdf98a153c51f661eda8815f",
           "item": "fn set_message_store",
-          "line": 4569
+          "line": 4574
         }
       ],
       "owner": "broker",
@@ -571,19 +571,19 @@
           "id": "5689243529837bbe350032c7",
           "fingerprint": "c7fde3d9b289d1ecd7941a05",
           "item": "fn new_controller_mode_message_store",
-          "line": 5722
+          "line": 5742
         },
         {
           "id": "f72688e47cde080ec1a67b1a",
           "fingerprint": "e2bcd65edaf037b0dc6b3bd0",
           "item": "fn apply_message_store_role_change_promotes_store_to_master",
-          "line": 9450
+          "line": 9455
         },
         {
           "id": "f0732135c9eb11e39a83a7e0",
           "fingerprint": "e2bcd65edaf037b0dc6b3bd0",
           "item": "fn apply_message_store_role_change_demotes_store_to_slave",
-          "line": 9488
+          "line": 9493
         }
       ],
       "owner": "broker",
@@ -621,7 +621,7 @@
           "id": "6accef9ad22e851ef1dc1890",
           "fingerprint": "993e032cc43bf3fde8bb9b8c",
           "item": "struct BrokerRuntimeInner",
-          "line": 3775
+          "line": 3786
         }
       ],
       "owner": "broker",
@@ -640,140 +640,7 @@
           "id": "2b6ee8edd4a6435a6b3007b2",
           "fingerprint": "6503d57af85359294b26eef5",
           "item": "fn new_controller_mode_message_store",
-          "line": 5719
-        }
-      ],
-      "owner": "broker",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "296568b9eacb37265f0e04d6",
-      "path": "rocketmq-broker/src/broker_runtime.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "constructor",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "8895e852d36c6c4ae6c94696",
-          "fingerprint": "a236422f00598205b2ff717d",
-          "item": "fn new_controller_mode_message_store",
-          "line": 5722
-        }
-      ],
-      "owner": "broker",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "a3d38366632b8ffa39cc99e6",
-      "path": "rocketmq-broker/src/broker_runtime.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "cc79b671bcb99154509b7761",
-          "fingerprint": "c688f6779802939865f33541",
-          "item": "<module>",
-          "line": 67
-        }
-      ],
-      "owner": "broker",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "c384a500b22506f3cd74c19f",
-      "path": "rocketmq-broker/src/broker_runtime.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "de1991090253afbface838af",
-          "fingerprint": "f21992d0af39356a2524bcc2",
-          "item": "mod tests",
-          "line": 4939
-        }
-      ],
-      "owner": "broker",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "bb9814f3bcd71ebea5cfa7d1",
-      "path": "rocketmq-broker/src/broker_runtime.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "d5266934542451997a97442d",
-          "fingerprint": "94d709832903dd2e2d6ae043",
-          "item": "fn initialize_message_store",
-          "line": 2133
-        }
-      ],
-      "owner": "broker",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "acdee8c839b7aa91af335bed",
-      "path": "rocketmq-broker/src/broker_runtime.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "type_reference",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "76c8a751ce4984912169a2f1",
-          "fingerprint": "7fc8adc251a6107872dc0c3c",
-          "item": "fn new_controller_mode_message_store",
-          "line": 5719
-        }
-      ],
-      "owner": "broker",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "702bf1fb62098d069e20aaeb",
-      "path": "rocketmq-broker/src/broker_runtime.rs",
-      "symbol": "RocksDBMessageStore",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "c7fbe50f664532f300ad7661",
-          "fingerprint": "dac538dc0005acf0eca987e2",
-          "item": "<module>",
-          "line": 69
-        }
-      ],
-      "owner": "broker",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "395b37e73a3054f5df3f170f",
-      "path": "rocketmq-broker/src/broker_runtime.rs",
-      "symbol": "RocksDBMessageStore",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "3b59c58af6220f827f8993aa",
-          "fingerprint": "4bd3861b9edcf5ad65fe9b59",
-          "item": "fn initialize_message_store",
-          "line": 2175
+          "line": 5739
         }
       ],
       "owner": "broker",
@@ -850,257 +717,6 @@
           "fingerprint": "0d8ae5eea5822ff98d0324a1",
           "item": "fn new_store",
           "line": 222
-        }
-      ],
-      "owner": "broker",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "08e2deea1b1a1337f267add3",
-      "path": "rocketmq-broker/src/filter/expression_message_filter.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "constructor",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "1097a0b31289d74c84e1ac5c",
-          "fingerprint": "a9e1fc3eaca8836826849960",
-          "item": "fn new_store",
-          "line": 226
-        }
-      ],
-      "owner": "broker",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "7c03eeb8f3d4bf6bc92de189",
-      "path": "rocketmq-broker/src/filter/expression_message_filter.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "5aca83744f262493fdbd8cf4",
-          "fingerprint": "5e28060955a8dcd7f27001ae",
-          "item": "mod tests",
-          "line": 191
-        }
-      ],
-      "owner": "broker",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "3686401bdca4a959efee7b79",
-      "path": "rocketmq-broker/src/filter/expression_message_filter.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "type_reference",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "f0f9b9e70441eef8b059726c",
-          "fingerprint": "2862891aa50fb92941e077e0",
-          "item": "fn new_store",
-          "line": 222
-        }
-      ],
-      "owner": "broker",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "71e8ed21bc9d78d95b5eab71",
-      "path": "rocketmq-broker/src/offset/manager/consumer_offset_manager.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "70a0dc47a65ed1ef366bf92f",
-          "fingerprint": "600ea6ef3e0e04c93cb77f99",
-          "item": "mod tests",
-          "line": 1004
-        }
-      ],
-      "owner": "broker",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "a4d33eeb07520c07d9df36ee",
-      "path": "rocketmq-broker/src/offset/manager/consumer_offset_manager.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "type_reference",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "722ec2b6282ec420ff76a949",
-          "fingerprint": "a84b5e711b250c7639696af4",
-          "item": "fn new_manager",
-          "line": 1011
-        },
-        {
-          "id": "59e369b48baebac73a4a99ef",
-          "fingerprint": "0c90022bdbadcfdd3e0abfa1",
-          "item": "fn consumer_offset_manager_persists_offsets_to_rocksdb_and_loads_after_restart",
-          "line": 1373
-        },
-        {
-          "id": "9c904132dd9a542001b883c6",
-          "fingerprint": "507b9f9640d80f2d0ae706be",
-          "item": "fn consumer_offset_manager_persists_offsets_to_rocksdb_and_loads_after_restart",
-          "line": 1397
-        },
-        {
-          "id": "d45cec3ce8e736180dc98060",
-          "fingerprint": "0c90022bdbadcfdd3e0abfa1",
-          "item": "fn consumer_offset_manager_clean_group_deletes_offsets_from_rocksdb",
-          "line": 1425
-        },
-        {
-          "id": "aebd27c96949c1eb443fee47",
-          "fingerprint": "507b9f9640d80f2d0ae706be",
-          "item": "fn consumer_offset_manager_clean_group_deletes_offsets_from_rocksdb",
-          "line": 1449
-        }
-      ],
-      "owner": "broker",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "c6089a24f5715ed607f28dc0",
-      "path": "rocketmq-broker/src/processor/pop_message_processor.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "837dd009014eae224bf33bcf",
-          "fingerprint": "02781f1bbf9343ee9adf2d71",
-          "item": "mod tests",
-          "line": 1690
-        }
-      ],
-      "owner": "broker",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "92f1e99258d63cc1d76d11a7",
-      "path": "rocketmq-broker/src/processor/pop_message_processor.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "type_reference",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "46f8e863629d37e0e96362bb",
-          "fingerprint": "3bab5bd0bf2c30841a60f6cf",
-          "item": "fn gen_ack_unique_id_formats_correctly",
-          "line": 1762
-        },
-        {
-          "id": "1eed520b932967556b6ef449",
-          "fingerprint": "c6c6353593ec4d9949db5a40",
-          "item": "fn gen_batch_ack_unique_id_formats_correctly",
-          "line": 1782
-        },
-        {
-          "id": "1e1baf0a2a3c758246b21dc5",
-          "fingerprint": "c372489f9efbcd5785a8a55d",
-          "item": "fn gen_ck_unique_id_formats_correctly",
-          "line": 1803
-        }
-      ],
-      "owner": "broker",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "3f4a19cda64ea4c0daa83d5d",
-      "path": "rocketmq-broker/src/processor.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "alias",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "38578698b9f53be6aeaddc91",
-          "fingerprint": "6cd0852295b2ee79530a06ac",
-          "item": "mod tests",
-          "line": 615
-        },
-        {
-          "id": "1e4b5039359356647d6ae7ed",
-          "fingerprint": "a02251ceb74dfdfc7ab4f0e0",
-          "item": "mod tests",
-          "line": 615
-        }
-      ],
-      "owner": "broker",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "6e687d15215e576a0db5a610",
-      "path": "rocketmq-broker/src/processor.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "4de038fcb969e538245d70f4",
-          "fingerprint": "3a31790f0967b557f8ae7eca",
-          "item": "mod tests",
-          "line": 610
-        }
-      ],
-      "owner": "broker",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "6380ac4b2f605ebdf5bfef95",
-      "path": "rocketmq-broker/src/processor.rs",
-      "symbol": "TestBrokerRequestProcessor",
-      "kind": "alias",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "b956fcf58e209995cfb4ad11",
-          "fingerprint": "a5df1a1b279066d0717fce9c",
-          "item": "mod tests",
-          "line": 614
-        }
-      ],
-      "owner": "broker",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "1186ca5ae5a0a40443bf88a9",
-      "path": "rocketmq-broker/src/processor.rs",
-      "symbol": "TestBrokerRequestProcessor",
-      "kind": "constructor",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "a7a09c8ceb4050087e7f73d6",
-          "fingerprint": "fe886b006e847741118aa5de",
-          "item": "fn broker_request_processor_checks_auth_before_dispatch",
-          "line": 763
         }
       ],
       "owner": "broker",
@@ -1644,63 +1260,6 @@
       "adr": "ADR-013"
     },
     {
-      "identity": "cfaddcbdaa5beca773ad36ad",
-      "path": "rocketmq-store/benches/commit_log_performance.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "constructor",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "65a7ab69240a62d60d80b4a0",
-          "fingerprint": "d13c18624240ab4bd3116aa3",
-          "item": "fn new_bench_store",
-          "line": 167
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "37559503bcab1490603158f8",
-      "path": "rocketmq-store/benches/commit_log_performance.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "a6239d1658e19250ddec3ec9",
-          "fingerprint": "9cf80969a42effec2e11adbe",
-          "item": "<module>",
-          "line": 48
-        }
-      ],
-      "owner": "store",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "3924a5fc7912ebd468036101",
-      "path": "rocketmq-store/benches/commit_log_performance.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "type_reference",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "e7f055e1f87eed53697c39cf",
-          "fingerprint": "6880f5fd8244e867632ebb0f",
-          "item": "struct BenchStore",
-          "line": 53
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
       "identity": "02c5cd2a1c5bce03a9946486",
       "path": "rocketmq-store/benches/commit_log_performance.rs",
       "symbol": "mut_from_ref",
@@ -1836,25 +1395,6 @@
       "adr": "ADR-013"
     },
     {
-      "identity": "105c1f1dd7f975aa72157c02",
-      "path": "rocketmq-store/src/base/message_store.rs",
-      "symbol": "mut_from_ref",
-      "kind": "mut_from_ref_call",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "4f6a504cb12612bad052bcbd",
-          "fingerprint": "ea16aa6470cfe185deecdcef",
-          "item": "fn get_commit_log",
-          "line": 653
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy safe mutable-reference escape pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
       "identity": "7135277e44e4f197f7a2d6a5",
       "path": "rocketmq-store/src/ha/auto_switch/auto_switch_ha_client.rs",
       "symbol": "ArcMut",
@@ -1883,44 +1423,6 @@
         {
           "id": "9198d84435b19788ff1b9d02",
           "fingerprint": "7da4bb855d1cc884f6a7030f",
-          "item": "fn new_test_message_store",
-          "line": 160
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "30052075ae7ca1e8a90e8472",
-      "path": "rocketmq-store/src/ha/auto_switch/auto_switch_ha_client.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "constructor",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "a97b2b99dfb75c5bead0ddce",
-          "fingerprint": "073cd55648937ca9b1d7ed90",
-          "item": "fn new_test_message_store",
-          "line": 176
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "28acbcfaf847b258a0a6d25f",
-      "path": "rocketmq-store/src/ha/auto_switch/auto_switch_ha_client.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "type_reference",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "1150183f03714cf0743bedf3",
-          "fingerprint": "9ac093fd41632358f495915c",
           "item": "fn new_test_message_store",
           "line": 160
         }
@@ -2105,44 +1607,6 @@
       "adr": "ADR-013"
     },
     {
-      "identity": "d73356cb75690024804b5685",
-      "path": "rocketmq-store/src/ha/auto_switch/auto_switch_ha_service.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "constructor",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "6220444dbebc66a4168c73f2",
-          "fingerprint": "106a9b07de76edf8b1283f11",
-          "item": "fn new_test_message_store",
-          "line": 428
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "f7245af5fcef17ce413a6590",
-      "path": "rocketmq-store/src/ha/auto_switch/auto_switch_ha_service.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "type_reference",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "8dfdf5c9deec5c91bfbcdf55",
-          "fingerprint": "9bc32c83a1ca7c7e128befd7",
-          "item": "fn new_test_message_store",
-          "line": 411
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
       "identity": "df14a93c88f4b62845b3ddbe",
       "path": "rocketmq-store/src/ha/default_ha_client.rs",
       "symbol": "*",
@@ -2277,119 +1741,6 @@
         {
           "id": "7323fc7e3f26e3b431120ea1",
           "fingerprint": "69b570f4ea1b729ba30d60c3",
-          "item": "fn new_test_message_store",
-          "line": 815
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "abf9fa837fbdeb392a00e399",
-      "path": "rocketmq-store/src/ha/default_ha_client.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "constructor",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "67cb95480f7cbbf003693a50",
-          "fingerprint": "92cd79aafb87511baa6f4a3f",
-          "item": "fn new_test_message_store",
-          "line": 830
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "b733e341e71c9690fce4e1f1",
-      "path": "rocketmq-store/src/ha/default_ha_client.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "54fa2144bc8c403b960c8a25",
-          "fingerprint": "3fffdd10081f696196fa8102",
-          "item": "<module>",
-          "line": 46
-        }
-      ],
-      "owner": "store",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "ce94e255495f762a7dc1070c",
-      "path": "rocketmq-store/src/ha/default_ha_client.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "6a37fce28e859a599208c3a8",
-          "fingerprint": "4117325bd1aabd412a53973a",
-          "item": "mod tests",
-          "line": 812
-        }
-      ],
-      "owner": "store",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "59cd37ec638e6e7d3effb860",
-      "path": "rocketmq-store/src/ha/default_ha_client.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "d7f710132df7d27a5dd59c05",
-          "fingerprint": "bf694d5ecccb62b474e7369c",
-          "item": "struct Inner",
-          "line": 108
-        },
-        {
-          "id": "717267d2c3f7472106e2d97b",
-          "fingerprint": "025d9ff3f6349aed1b339bd6",
-          "item": "fn new",
-          "line": 210
-        },
-        {
-          "id": "26f98f7c4a493aeb8a983fa9",
-          "fingerprint": "27eee06808fbe84d3989c0d6",
-          "item": "struct ReaderTask",
-          "line": 610
-        },
-        {
-          "id": "40faf9c0c394327264710a11",
-          "fingerprint": "5eab6714a66dd952073960b4",
-          "item": "fn apply_master_confirm_offset",
-          "line": 680
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "8a957c0df972c4a342a4bdd7",
-      "path": "rocketmq-store/src/ha/default_ha_client.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "type_reference",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "9521713966fe6f29f72d01f7",
-          "fingerprint": "d7425232be170cd9e4ba9687",
           "item": "fn new_test_message_store",
           "line": 815
         }
@@ -2746,94 +2097,6 @@
       "adr": "ADR-013"
     },
     {
-      "identity": "81d15a7ae90d50dbcb4b5ebc",
-      "path": "rocketmq-store/src/ha/default_ha_service.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "constructor",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "82e6f974c0caac1b25cee9e5",
-          "fingerprint": "92cd79aafb87511baa6f4a3f",
-          "item": "fn new_test_message_store",
-          "line": 795
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "9023771dba2f9533b3a07468",
-      "path": "rocketmq-store/src/ha/default_ha_service.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "7dfa83830b3bb5760342c16f",
-          "fingerprint": "d823c22092a33e9f0f83c723",
-          "item": "<module>",
-          "line": 61
-        }
-      ],
-      "owner": "store",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "7cd3149aac39e3af8fc86d45",
-      "path": "rocketmq-store/src/ha/default_ha_service.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "e566573a107c0f26a85cbfe6",
-          "fingerprint": "392a52a4b90b54db547d7a23",
-          "item": "struct DefaultHAService",
-          "line": 82
-        },
-        {
-          "id": "dcabb798dc6b87fe29f7b97d",
-          "fingerprint": "d972a7c3852af94eaee09aa9",
-          "item": "fn new",
-          "line": 93
-        },
-        {
-          "id": "8c3740fe9e00b6937789da91",
-          "fingerprint": "e9c3e7ce4265e3b34423d849",
-          "item": "fn get_default_message_store",
-          "line": 109
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "63167e5cc00a10ea50a231ef",
-      "path": "rocketmq-store/src/ha/default_ha_service.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "type_reference",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "a4c38ada3c1a42f0645b5be6",
-          "fingerprint": "929539ec6ab7778d1c57be7a",
-          "item": "fn new_test_message_store",
-          "line": 779
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
       "identity": "1ad87a43258cbb034b9ad9b1",
       "path": "rocketmq-store/src/ha/general_ha_service.rs",
       "symbol": "ArcMut",
@@ -2934,44 +2197,6 @@
       "adr": "ADR-013"
     },
     {
-      "identity": "bcd6d045a623373243a77a57",
-      "path": "rocketmq-store/src/ha/group_transfer_service.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "constructor",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "12a79c6afc851d2738259cad",
-          "fingerprint": "d93142cef34ad7eb1f8c7672",
-          "item": "fn new_test_ha_service",
-          "line": 269
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "18380fbd0f0dcb002438fba6",
-      "path": "rocketmq-store/src/ha/group_transfer_service.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "e22de9eba0eb3de6ae444612",
-          "fingerprint": "45b1844f3c9471bcf6575fac",
-          "item": "mod tests",
-          "line": 265
-        }
-      ],
-      "owner": "store",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
       "identity": "c59e2bd2c10e873fa33998d4",
       "path": "rocketmq-store/src/lib.rs",
       "symbol": "ArcMut",
@@ -3002,44 +2227,6 @@
           "fingerprint": "1e252acb0c5593b57e0095a1",
           "item": "mod bench_support",
           "line": 87
-        }
-      ],
-      "owner": "store",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "cf1f9dc54e01bb64c164fd46",
-      "path": "rocketmq-store/src/lib.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "constructor",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "f348cf8c3d1bbc140f438bb6",
-          "fingerprint": "e059b52786cec435681ca0e9",
-          "item": "fn run_store_local_file_scheduled_lifecycle_probe",
-          "line": 1175
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "db9d3990d4c72b57ade23485",
-      "path": "rocketmq-store/src/lib.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "ff5cb8579b356fbd4d66fab8",
-          "fingerprint": "1f5ae028a080b73b6ea8f67b",
-          "item": "mod bench_support",
-          "line": 105
         }
       ],
       "owner": "store",
@@ -3218,137 +2405,6 @@
         {
           "id": "f12d31cdccaebfaa4cc42cd6",
           "fingerprint": "453a5926ef6a46236add2f7a",
-          "item": "fn new_test_message_store_with_config",
-          "line": 3027
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "9d5e944d0fa12a3d18bb4f93",
-      "path": "rocketmq-store/src/log_file/commit_log.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "constructor",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "0c7f006a8cf1bf0f03fbaa4f",
-          "fingerprint": "a236422f00598205b2ff717d",
-          "item": "fn new_test_message_store_with_config",
-          "line": 3039
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "a7f91ea367debff572302d1a",
-      "path": "rocketmq-store/src/log_file/commit_log.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "0f201f153cfdaf659cfda9b0",
-          "fingerprint": "3d4e3c8bac3421cfc040fea2",
-          "item": "<module>",
-          "line": 97
-        }
-      ],
-      "owner": "store",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "4a68a618b17fc5aedb8b196f",
-      "path": "rocketmq-store/src/log_file/commit_log.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "b8bade14a233134bdbf671f0",
-          "fingerprint": "95f1bf9079030c415e36ad1d",
-          "item": "mod tests",
-          "line": 2981
-        }
-      ],
-      "owner": "store",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "250761360f210e16dd1bc14b",
-      "path": "rocketmq-store/src/log_file/commit_log.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "0810b733f105ac040a2584ba",
-          "fingerprint": "7b9b90a51a795b6d55f9591b",
-          "item": "struct CommitLog",
-          "line": 334
-        },
-        {
-          "id": "fde52991bf09aa51502c8f70",
-          "fingerprint": "b9fe18a5a299b687ce7f3671",
-          "item": "fn recover_normally_optimized",
-          "line": 1491
-        },
-        {
-          "id": "85271da87f85af7475f2c407",
-          "fingerprint": "76e45d641ea50a65238712fb",
-          "item": "fn recover_normally",
-          "line": 1660
-        },
-        {
-          "id": "69c184b985e091d2e06ac0f1",
-          "fingerprint": "77f45017ae7f0992bf21f871",
-          "item": "fn recover_abnormally_optimized",
-          "line": 1883
-        },
-        {
-          "id": "9095333fb50d77c1032f394c",
-          "fingerprint": "77f45017ae7f0992bf21f871",
-          "item": "fn recover_abnormally",
-          "line": 2097
-        },
-        {
-          "id": "98382aa3b1702f6fe382573d",
-          "fingerprint": "76ad9de840a1761bb227056d",
-          "item": "fn set_local_file_message_store",
-          "line": 2639
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "e2836054e24972940b5e2a06",
-      "path": "rocketmq-store/src/log_file/commit_log.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "type_reference",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "6fb1f9cbc0eb0c4c291900bb",
-          "fingerprint": "08f62297165ccb9ba5b90f31",
-          "item": "fn new_test_message_store",
-          "line": 3013
-        },
-        {
-          "id": "9886a9ac3ad22da55b510088",
-          "fingerprint": "c9876221ef5ecc4c67a7b873",
           "item": "fn new_test_message_store_with_config",
           "line": 3027
         }
@@ -3598,55 +2654,55 @@
           "id": "fe6ed215f742b0b7382f046f",
           "fingerprint": "3228e710dd3b2f82289ce6e0",
           "item": "fn new_configured_test_store_with_broker",
-          "line": 5627
+          "line": 5623
         },
         {
           "id": "a784257a9eea3ca2888a65d6",
           "fingerprint": "730edc6c382a5095a5566f80",
           "item": "fn new_unwired_test_store",
-          "line": 5665
+          "line": 5661
         },
         {
           "id": "ea80384d3d04734ae9e31340",
           "fingerprint": "bc019fd36449638f708552dc",
           "item": "fn set_message_store_arc_initializes_timer_message_store_when_timer_wheel_enabled",
-          "line": 5945
+          "line": 5941
         },
         {
           "id": "6eca838ea25456a66bfe1e87",
           "fingerprint": "c5e5f216d6f09ac7bc48c9e3",
           "item": "fn sync_broker_role_in_controller_mode_refreshes_confirm_offset_for_master",
-          "line": 7250
+          "line": 7246
         },
         {
           "id": "7ad9c617a9ab2369224ba894",
           "fingerprint": "c5e5f216d6f09ac7bc48c9e3",
           "item": "fn flush_consume_queue_service_start_persists_logic_checkpoint_to_disk",
-          "line": 7595
+          "line": 7591
         },
         {
           "id": "a90459da038304a8d37b178a",
           "fingerprint": "c5e5f216d6f09ac7bc48c9e3",
           "item": "fn do_recheck_reput_offset_from_dispatchers_rewinds_to_dispatched_commitlog_offset",
-          "line": 8147
+          "line": 8143
         },
         {
           "id": "4bf08ba5d315432b007618ef",
           "fingerprint": "c5e5f216d6f09ac7bc48c9e3",
           "item": "fn do_recheck_reput_offset_from_dispatchers_uses_minimum_progress_across_cq_and_index",
-          "line": 8197
+          "line": 8193
         },
         {
           "id": "6d4ec8cb2eb76b205899a719",
           "fingerprint": "c5e5f216d6f09ac7bc48c9e3",
           "item": "fn get_dispatch_recovery_offset_respects_controller_epoch_start_offset",
-          "line": 8258
+          "line": 8254
         },
         {
           "id": "f55a020f1bb78baf0d9c9841",
           "fingerprint": "c5e5f216d6f09ac7bc48c9e3",
           "item": "fn do_recheck_reput_offset_from_dispatchers_respects_controller_epoch_start_offset_floor",
-          "line": 8283
+          "line": 8279
         }
       ],
       "owner": "store",
@@ -3684,7 +2740,7 @@
           "id": "73d704c7294a4ad3c853d582",
           "fingerprint": "2140089977a37314c7c94030",
           "item": "mod tests",
-          "line": 5526
+          "line": 5522
         }
       ],
       "owner": "store",
@@ -3751,109 +2807,109 @@
           "id": "fe18a5aea3534e4ebfc6a76c",
           "fingerprint": "69a8d585bf49df024e8d71a4",
           "item": "fn start",
-          "line": 4090
+          "line": 4086
         },
         {
           "id": "0e882c172d4250fa64b76ab0",
           "fingerprint": "e040ac0df878d7a0f9be8577",
           "item": "struct BackgroundIndexRebuildWorker",
-          "line": 4184
+          "line": 4180
         },
         {
           "id": "4582701031e93158c6d3eff9",
           "fingerprint": "1c93f8e3f0ced7d79afddcc8",
           "item": "fn start",
-          "line": 4420
+          "line": 4416
         },
         {
           "id": "3041a4b81382e6207f108fdf",
           "fingerprint": "e3fa09bd49504f076da1a918",
           "item": "fn start",
-          "line": 4423
+          "line": 4419
         },
         {
           "id": "f7fa186b77201d41b312b3ac",
           "fingerprint": "25308b92853a7656193b065e",
           "item": "fn start",
-          "line": 4425
+          "line": 4421
         },
         {
           "id": "66b95ed4a446ae74aa052cc7",
           "fingerprint": "96c1f62b398174e21a5554b8",
           "item": "fn run_once",
-          "line": 4594
+          "line": 4590
         },
         {
           "id": "d3d641e8d0b6ae2a13fbe2ad",
           "fingerprint": "e3fa09bd49504f076da1a918",
           "item": "fn run_once",
-          "line": 4597
+          "line": 4593
         },
         {
           "id": "fab45978fcb0c29d61780058",
           "fingerprint": "5c304b2651587cadb336e9a6",
           "item": "fn run_once",
-          "line": 4599
+          "line": 4595
         },
         {
           "id": "b34a21bf98770e31f4a165b4",
           "fingerprint": "6456002e767075c2a111a438",
           "item": "struct ReputMessageServiceInner",
-          "line": 4675
+          "line": 4671
         },
         {
           "id": "e0683262788f978bff01a307",
           "fingerprint": "e3fa09bd49504f076da1a918",
           "item": "struct ReputMessageServiceInner",
-          "line": 4678
+          "line": 4674
         },
         {
           "id": "5225e46ff563c824304d8ab6",
           "fingerprint": "384947f17b5bac7593610153",
           "item": "struct ReputMessageServiceInner",
-          "line": 4680
+          "line": 4676
         },
         {
           "id": "f8587bafc2ac2f561ea493bb",
           "fingerprint": "f5b90ca5c266723a95147fa1",
           "item": "fn dispatch_reput_batch",
-          "line": 4684
+          "line": 4680
         },
         {
           "id": "59b6f3a63c8c6592eeac6514",
           "fingerprint": "05a30ded732ed2c1c89ad3f3",
           "item": "fn dispatch_reput_batch",
-          "line": 4685
+          "line": 4681
         },
         {
           "id": "d8037a2bd068cdcd2c5f00db",
           "fingerprint": "545c9b46ab33535af90503fe",
           "item": "struct CleanCommitLogService",
-          "line": 5042
+          "line": 5038
         },
         {
           "id": "d583a5819be1a1a66fc207ab",
           "fingerprint": "eb5c006d884d32a8e0b5e9b8",
           "item": "struct CleanConsumeQueueService",
-          "line": 5261
+          "line": 5257
         },
         {
           "id": "95946ce5d0633d5bb0eb512b",
           "fingerprint": "2d17eb4b45a953b52bfc11a9",
           "item": "fn new",
-          "line": 5267
+          "line": 5263
         },
         {
           "id": "61cc2f3dbf65ad4e6a3025ec",
           "fingerprint": "2ff84019b2e3a42a1d431022",
           "item": "struct CorrectLogicOffsetService",
-          "line": 5301
+          "line": 5297
         },
         {
           "id": "b5b3d3b4a047150fa61686c4",
           "fingerprint": "ac08876c41b7c0d7270e69a9",
           "item": "fn new",
-          "line": 5306
+          "line": 5302
         }
       ],
       "owner": "store",
@@ -3872,360 +2928,55 @@
           "id": "0272eb6f065fcadde2433cc9",
           "fingerprint": "07f48c3f324369a987bcd9ed",
           "item": "fn new",
-          "line": 5056
+          "line": 5052
         },
         {
           "id": "818e23254f48bf96c011502d",
           "fingerprint": "06808e60c57a588d963a39d1",
           "item": "fn new_test_store",
-          "line": 5583
+          "line": 5579
         },
         {
           "id": "bd75d2fc21441146137a1fa7",
           "fingerprint": "2c50adbb8bb3601aa9696f99",
           "item": "fn new_configured_test_store",
-          "line": 5617
+          "line": 5613
         },
         {
           "id": "a4565850138c33457cb4503f",
           "fingerprint": "ddaaf51b7e9e8a6d5a7fa862",
           "item": "fn new_configured_test_store_with_broker",
-          "line": 5625
+          "line": 5621
         },
         {
           "id": "e300821df2b0dcc5a7ec4518",
           "fingerprint": "1240b98bd3ace44c67fb31a5",
           "item": "fn new_unwired_test_store",
-          "line": 5660
+          "line": 5656
         },
         {
           "id": "f405d52da628e924dba63dd5",
           "fingerprint": "9594ea63f3c6dfc2a4f8dadb",
           "item": "fn reput_inner_for_store",
-          "line": 5726
+          "line": 5722
         },
         {
           "id": "2bc785020cffc531f67851d5",
           "fingerprint": "65fc444d08793f252677b512",
           "item": "fn new_async_flush_test_store",
-          "line": 5824
+          "line": 5820
         },
         {
           "id": "d3c97c8726298454fce74c15",
           "fingerprint": "7666f2a4683b6bb72bf1c3ee",
           "item": "fn append_encoded_test_message",
-          "line": 5875
+          "line": 5871
         },
         {
           "id": "f82cfea3d0ea6119b10efdb0",
           "fingerprint": "09110b2e53b7eb82a0456a37",
           "item": "fn append_encoded_test_message_with_key",
-          "line": 5885
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "1ea0aeaff7b16dd0133cdf6a",
-      "path": "rocketmq-store/src/message_store/local_file_message_store.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "constructor",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "72afb08dd84823802eddf156",
-          "fingerprint": "7322e8445966d188ee7fd92d",
-          "item": "fn new_configured_test_store_with_broker",
-          "line": 5627
-        },
-        {
-          "id": "a4fff833b2fce8cc031cd4c0",
-          "fingerprint": "338645fde00ddca9b9407106",
-          "item": "fn new_unwired_test_store",
-          "line": 5665
-        },
-        {
-          "id": "0fb3aca56be2c7b8686d0093",
-          "fingerprint": "98775f57bdf0972c76ba7d6d",
-          "item": "fn set_message_store_arc_initializes_timer_message_store_when_timer_wheel_enabled",
-          "line": 5945
-        },
-        {
-          "id": "7c7647aaebb9f5e60713f098",
-          "fingerprint": "c11a0ed2016e5f22d0681b8d",
-          "item": "fn sync_broker_role_in_controller_mode_refreshes_confirm_offset_for_master",
-          "line": 7250
-        },
-        {
-          "id": "532385187ca9a0a1d26b5ad9",
-          "fingerprint": "3592b529ab80ca668d418994",
-          "item": "fn master_store_in_process_round_trips_concrete_store_reference",
-          "line": 7289
-        },
-        {
-          "id": "c6b0b2d54151b046598a4eac",
-          "fingerprint": "c11a0ed2016e5f22d0681b8d",
-          "item": "fn flush_consume_queue_service_start_persists_logic_checkpoint_to_disk",
-          "line": 7595
-        },
-        {
-          "id": "0ef117a8762354e66adc13ba",
-          "fingerprint": "c11a0ed2016e5f22d0681b8d",
-          "item": "fn do_recheck_reput_offset_from_dispatchers_rewinds_to_dispatched_commitlog_offset",
-          "line": 8147
-        },
-        {
-          "id": "ef577de87e7470e8528bf219",
-          "fingerprint": "c11a0ed2016e5f22d0681b8d",
-          "item": "fn do_recheck_reput_offset_from_dispatchers_uses_minimum_progress_across_cq_and_index",
-          "line": 8197
-        },
-        {
-          "id": "2e2dbf0ae36fa13c563d8440",
-          "fingerprint": "c11a0ed2016e5f22d0681b8d",
-          "item": "fn get_dispatch_recovery_offset_respects_controller_epoch_start_offset",
-          "line": 8258
-        },
-        {
-          "id": "fea9d18dd6124ff2f461ca3f",
-          "fingerprint": "c11a0ed2016e5f22d0681b8d",
-          "item": "fn do_recheck_reput_offset_from_dispatchers_respects_controller_epoch_start_offset_floor",
-          "line": 8283
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "9dc34315cbd3df19758e442f",
-      "path": "rocketmq-store/src/message_store/local_file_message_store.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "3dd2d02171a16f9cda183c72",
-          "fingerprint": "0d4bb512c707f673d304374f",
-          "item": "mod tests",
-          "line": 5549
-        }
-      ],
-      "owner": "store",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "829ee7c4a57a6808f54c907c",
-      "path": "rocketmq-store/src/message_store/local_file_message_store.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "shared_unsafe_cell_wrapper",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "13d3086891612680d1512e25",
-          "fingerprint": "b7b8f3917ccd075aa8343f50",
-          "item": "fn drop",
-          "line": 279
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared UnsafeCell wrapper pending sound replacement",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "d73ee824202523f10a8371cb",
-      "path": "rocketmq-store/src/message_store/local_file_message_store.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "8a24b37e7d1a474fd2ca4d4d",
-          "fingerprint": "a3513f09e6c14e819402cc39",
-          "item": "struct LocalFileMessageStore",
-          "line": 279
-        },
-        {
-          "id": "526e8642bbbc08a831c3b6f4",
-          "fingerprint": "b63abb90c9ebbbf93fec3d77",
-          "item": "struct LocalFileMessageStore",
-          "line": 319
-        },
-        {
-          "id": "916265f6e7ec148c0546b598",
-          "fingerprint": "17b851a7b8b68ea945f20437",
-          "item": "impl LocalFileMessageStore",
-          "line": 392
-        },
-        {
-          "id": "1755447c34eba58228ab63ab",
-          "fingerprint": "d6c800e84bf0268d938070ca",
-          "item": "fn set_message_store_arc",
-          "line": 673
-        },
-        {
-          "id": "430536820fef8d2029e0813f",
-          "fingerprint": "a82bed77f348e97f3fc18d4a",
-          "item": "fn message_store_arc_or_error",
-          "line": 772
-        },
-        {
-          "id": "fe864a8e7bb01fdf4839a1ec",
-          "fingerprint": "b1e5ab656549d1ea194d5bd3",
-          "item": "impl Drop",
-          "line": 859
-        },
-        {
-          "id": "9ba3e5e75793e333cc4f7e58",
-          "fingerprint": "28b9f90e9d6de0e1c04f40b0",
-          "item": "impl LocalFileMessageStore",
-          "line": 868
-        },
-        {
-          "id": "7de71a3330daeebfe3e4fcdb",
-          "fingerprint": "bc54d1e953e8dc9c4d8b1704",
-          "item": "impl MessageStore",
-          "line": 1649
-        },
-        {
-          "id": "dd7d2ca979e7321a0531cad8",
-          "fingerprint": "0716072c66ac8246e6711921",
-          "item": "fn start",
-          "line": 4425
-        },
-        {
-          "id": "cd8634aab722ed70fbbb60d4",
-          "fingerprint": "2ae53147e701a16cb0e446b7",
-          "item": "fn run_once",
-          "line": 4599
-        },
-        {
-          "id": "0dd1883d3024e576e97c64a6",
-          "fingerprint": "b675292f3c2244dccaa81c69",
-          "item": "struct ReputMessageServiceInner",
-          "line": 4680
-        },
-        {
-          "id": "0084947673da00b358eda490",
-          "fingerprint": "90fec4925e7650a4d7a58a5d",
-          "item": "fn dispatch_reput_batch",
-          "line": 4685
-        },
-        {
-          "id": "17a40d2b55a9ccc512c7286c",
-          "fingerprint": "468eb0a73148a232b93b9dbd",
-          "item": "fn do_reput",
-          "line": 4819
-        },
-        {
-          "id": "c22cad79c43f8dc4b5793c0c",
-          "fingerprint": "ec470e270ac9362bd7c04ed3",
-          "item": "fn read_and_parse_batch",
-          "line": 4977
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "36b5807f24c40eea34ef1b20",
-      "path": "rocketmq-store/src/message_store/local_file_message_store.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "type_reference",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "b51abb9cdd4277835643fb3a",
-          "fingerprint": "613631996c689785a0c6b2cf",
-          "item": "fn is_space_to_delete",
-          "line": 5183
-        },
-        {
-          "id": "6a112e4551e45cd0ec64422b",
-          "fingerprint": "e80b3e9ee2dffe26e070244d",
-          "item": "fn min_physic_disk_ratio",
-          "line": 5223
-        },
-        {
-          "id": "4170a65b94468400f103d66a",
-          "fingerprint": "80a2a65128a715e4690f9234",
-          "item": "fn new_test_store",
-          "line": 5583
-        },
-        {
-          "id": "ecef5dc452b331aa59ee2e0c",
-          "fingerprint": "65d2f136242a67e39970048c",
-          "item": "fn new_configured_test_store",
-          "line": 5617
-        },
-        {
-          "id": "f4167e9cdb317f920eee8481",
-          "fingerprint": "09828229447f9c27eca62b69",
-          "item": "fn new_configured_test_store_with_broker",
-          "line": 5625
-        },
-        {
-          "id": "e0aa33305e95db168c92764e",
-          "fingerprint": "a83fce1e061e676764384245",
-          "item": "fn new_unwired_test_store",
-          "line": 5660
-        },
-        {
-          "id": "a5b4a4beeff33840a0fc01c7",
-          "fingerprint": "cbc997c17eb8e6ca0bfde016",
-          "item": "fn install_recording_arriving_listener",
-          "line": 5716
-        },
-        {
-          "id": "740811ee3ad741abaa452675",
-          "fingerprint": "1173b84cce36bf29492ae20f",
-          "item": "fn reput_inner_for_store",
-          "line": 5726
-        },
-        {
-          "id": "952561de7f9c1082ab5972bd",
-          "fingerprint": "f05584a3e8f30f1765f4faa7",
-          "item": "fn new_async_flush_test_store",
-          "line": 5824
-        },
-        {
-          "id": "b6d69ce623a4436bf9946d9b",
-          "fingerprint": "1096c9bed13b8b6a0e6add8c",
-          "item": "fn encode_tiered_test_message",
-          "line": 5852
-        },
-        {
-          "id": "ebc61622bb5d0eed7de2b3c5",
-          "fingerprint": "2be67fb1f1aa0fd31c8d50cb",
-          "item": "fn append_encoded_test_message",
-          "line": 5875
-        },
-        {
-          "id": "9a402b7ec18071dc55b33a0b",
-          "fingerprint": "b1b766dcf50e538cdd500bc1",
-          "item": "fn append_encoded_test_message_with_key",
-          "line": 5885
-        },
-        {
-          "id": "0dab0a2327068f084dad3638",
-          "fingerprint": "f705056c61af1cd82f726a9c",
-          "item": "fn master_store_in_process_round_trips_concrete_store_reference",
-          "line": 7308
-        },
-        {
-          "id": "57088fa6a3447b30555d062b",
-          "fingerprint": "5602f91428927b4c07a845d2",
-          "item": "fn clean_commit_log_service_run_deletes_when_disk_usage_is_unavailable",
-          "line": 8802
+          "line": 5881
         }
       ],
       "owner": "store",
@@ -4247,22 +2998,16 @@
           "line": 3327
         },
         {
-          "id": "2732429f59b892a7989c9385",
-          "fingerprint": "1536b864d3d6678585c2bd31",
-          "item": "fn get_commit_log_mut_from_ref",
-          "line": 3467
-        },
-        {
           "id": "eea893960dd7e04dd261bdd0",
           "fingerprint": "f5378b1857786f892cf9849d",
           "item": "fn truncate_files",
-          "line": 3683
+          "line": 3679
         },
         {
           "id": "3459e3572b6f2b66ed8b8e65",
           "fingerprint": "470c1a7982c2bfa430ed8b87",
           "item": "fn get_last_mapped_file",
-          "line": 3734
+          "line": 3730
         }
       ],
       "owner": "store",
@@ -4281,13 +3026,13 @@
           "id": "0d94c53f509642321269d6a1",
           "fingerprint": "47dde9b29fa10781ebc41bb0",
           "item": "fn run",
-          "line": 5087
+          "line": 5083
         },
         {
           "id": "63278d5eba087cd7f1369da9",
           "fingerprint": "a465cc592854aa5addc3bd2c",
           "item": "fn run",
-          "line": 5113
+          "line": 5109
         }
       ],
       "owner": "store",
@@ -4403,259 +3148,6 @@
       "adr": "ADR-013"
     },
     {
-      "identity": "d967c7064e64488b6fd2afca",
-      "path": "rocketmq-store/src/message_store/rocksdb_message_store.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "alias",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "7bef1843976e8f658af8a090",
-          "fingerprint": "bb93570d08c29093989183cd",
-          "item": "impl Deref",
-          "line": 1235
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "58d47c1a2b904ca2e306ad0c",
-      "path": "rocketmq-store/src/message_store/rocksdb_message_store.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "fd7b0a2a01125ad96972e609",
-          "fingerprint": "5495ebde721b34630d5048d9",
-          "item": "<module>",
-          "line": 74
-        }
-      ],
-      "owner": "store",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "ddc89dfb256d0e55fc89c305",
-      "path": "rocketmq-store/src/message_store/rocksdb_message_store.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "d7778296ef81fa5710955ef8",
-          "fingerprint": "1b5fe677b77fbc85bd4a10e0",
-          "item": "struct RocksDBMessageStore",
-          "line": 101
-        },
-        {
-          "id": "c87d53335c3f33da58ea4ae7",
-          "fingerprint": "1124fc2f41cc04b78f96b159",
-          "item": "fn try_new",
-          "line": 166
-        },
-        {
-          "id": "469fca8acbcdffb24d78089f",
-          "fingerprint": "37ede515cdd7fbcb15a42af0",
-          "item": "fn local_file_store",
-          "line": 203
-        },
-        {
-          "id": "8d9c505195072d24f5a3f125",
-          "fingerprint": "b4c75ab297414c4ca769ddac",
-          "item": "fn local_file_store_mut",
-          "line": 207
-        },
-        {
-          "id": "c46762e268005ebf4890fc46",
-          "fingerprint": "ab1f5d5d2cee113717e52571",
-          "item": "fn local_file_store_arc",
-          "line": 211
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "8d7d0db4994dfd14721571d9",
-      "path": "rocketmq-store/src/message_store/rocksdb_message_store.rs",
-      "symbol": "RocksDBMessageStore",
-      "kind": "dangerous_deref_mut_impl",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "69b1705a53fbdb8b3ae8432e",
-          "fingerprint": "aa060262753b708eaf1fb3ea",
-          "item": "impl DerefMut",
-          "line": 1242
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy clone-safe mutable trait escape pending removal",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "6eeaeadc640036c97325f4c3",
-      "path": "rocketmq-store/src/message_store/rocksdb_message_store.rs",
-      "symbol": "RocksDBMessageStore",
-      "kind": "shared_unsafe_cell_wrapper",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "35c5d503f8b36fc49ec70861",
-          "fingerprint": "2320295b01c9b700dc97e602",
-          "item": "<module>",
-          "line": 100
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared UnsafeCell wrapper pending sound replacement",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "87f95d97d097fb6a91e66904",
-      "path": "rocketmq-store/src/message_store/rocksdb_message_store.rs",
-      "symbol": "RocksDBMessageStore",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "543d913b3a6e9eb308b2bbe4",
-          "fingerprint": "fbda364caa7a8ce8568e0f3d",
-          "item": "struct RocksDBMessageStore",
-          "line": 100
-        },
-        {
-          "id": "ae5724dfc8f328477d71af16",
-          "fingerprint": "649b55e661a16313116e2a8d",
-          "item": "impl fmt",
-          "line": 134
-        },
-        {
-          "id": "591e5c14393284cd5ad89ece",
-          "fingerprint": "4c44c06d9ebf377cdfcc9fe6",
-          "item": "impl RocksDBMessageStore",
-          "line": 143
-        },
-        {
-          "id": "06d8af4802b3a5f1aa74aaaa",
-          "fingerprint": "4d3b576bd7f831338a1dcfcd",
-          "item": "impl MessageStore",
-          "line": 517
-        },
-        {
-          "id": "341382aaa28e8ab34ce695dd",
-          "fingerprint": "15fa94bef5a2be9b1808bcf0",
-          "item": "fn get_message",
-          "line": 577
-        },
-        {
-          "id": "b72219087b9a064ec529cbcc",
-          "fingerprint": "2d0c8b645ce597a518588749",
-          "item": "fn get_message_with_size_limit",
-          "line": 590
-        },
-        {
-          "id": "7fd785044ec0012b6960824b",
-          "fingerprint": "71753bacbeb8ad38d702ea4e",
-          "item": "fn get_max_offset_in_queue",
-          "line": 604
-        },
-        {
-          "id": "67eda185e5931bb6a85db1f1",
-          "fingerprint": "eaf5d321c270438220a67e1b",
-          "item": "fn get_max_offset_in_queue_committed",
-          "line": 608
-        },
-        {
-          "id": "3003f4a32e7b171bdff1fa5b",
-          "fingerprint": "8cd68b2ddcc517549474aa47",
-          "item": "fn get_min_offset_in_queue",
-          "line": 612
-        },
-        {
-          "id": "04d4c3e324c78b7d65397cca",
-          "fingerprint": "e983f0f9fd96ddda84420762",
-          "item": "fn get_commit_log_offset_in_queue",
-          "line": 624
-        },
-        {
-          "id": "7c7c8acd7155775bf29d342b",
-          "fingerprint": "f6f23864612f0cd428ae9187",
-          "item": "fn get_earliest_message_time",
-          "line": 737
-        },
-        {
-          "id": "1ea30781ee403724853ccf56",
-          "fingerprint": "cd1f2e1067691d73fad2693e",
-          "item": "fn get_earliest_message_time",
-          "line": 738
-        },
-        {
-          "id": "c0a03b64806898d779b5c53e",
-          "fingerprint": "553c65d211b3def88d226876",
-          "item": "fn get_earliest_message_time",
-          "line": 739
-        },
-        {
-          "id": "8ad78d57f8c99cd7311121b8",
-          "fingerprint": "773b1789ee8babce6959eb1a",
-          "item": "fn get_message_store_timestamp",
-          "line": 749
-        },
-        {
-          "id": "eeee5add2a583e896f3fde88",
-          "fingerprint": "5c12ea324978913b2484fa10",
-          "item": "fn get_message_total_in_queue",
-          "line": 762
-        },
-        {
-          "id": "e56d1f8b55e6d09638b234bf",
-          "fingerprint": "d7811092bbbbd3f6286792dc",
-          "item": "fn get_message_total_in_queue",
-          "line": 763
-        },
-        {
-          "id": "62a675c79e66aa8d4bb16b53",
-          "fingerprint": "34ed4a646e3d9c4201891164",
-          "item": "impl Deref",
-          "line": 1234
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "40493167c115a3e161e6730a",
-      "path": "rocketmq-store/src/message_store/rocksdb_message_store.rs",
-      "symbol": "Target",
-      "kind": "alias",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "640bc6a479c3b023192e6067",
-          "fingerprint": "72ef16fe761cae91c1c3ebc0",
-          "item": "impl Deref",
-          "line": 1235
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
       "identity": "c5884b5391a1594ce6e95510",
       "path": "rocketmq-store/src/message_store.rs",
       "symbol": "ArcConsumeQueue",
@@ -4746,56 +3238,6 @@
         {
           "id": "3c5132015f64c8e2b0630601",
           "fingerprint": "f19745ebb78552b6636b9aca",
-          "item": "fn rocksdb",
-          "line": 84
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "b3122aae99a277a2853beb27",
-      "path": "rocketmq-store/src/message_store.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "d7b58566f7b807cb9440287c",
-          "fingerprint": "7da7de9d0445dba6ec52eb29",
-          "item": "enum GenericMessageStore",
-          "line": 72
-        },
-        {
-          "id": "27256aaa4c589a1fe086bd0b",
-          "fingerprint": "19a79be7a6bb7e72f8c545c6",
-          "item": "fn local_file",
-          "line": 79
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "018022cfeb7f1b25a1f61560",
-      "path": "rocketmq-store/src/message_store.rs",
-      "symbol": "RocksDBMessageStore",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "1bfa5988a9b02ab0afb0a94d",
-          "fingerprint": "79a43eb1e4f28b295b853c24",
-          "item": "enum GenericMessageStore",
-          "line": 75
-        },
-        {
-          "id": "84949ea9fe2d30b79e40652b",
-          "fingerprint": "57d7c9a0397f136cc3bed325",
           "item": "fn rocksdb",
           "line": 84
         }
@@ -5198,81 +3640,6 @@
       "adr": "ADR-013"
     },
     {
-      "identity": "081f21fef8fe3d0d52738ecd",
-      "path": "rocketmq-store/src/queue/local_file_consume_queue_store.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "constructor",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "86d0eec01f62f246f728897b",
-          "fingerprint": "eb7a9b374e8c30346be06b94",
-          "item": "fn load_consume_queues_returns_false_when_topic_queue_type_mismatches_directory",
-          "line": 1475
-        },
-        {
-          "id": "f85c6c6ee0490b5a5745758e",
-          "fingerprint": "3ba3894fb5ff4e7d04e028d5",
-          "item": "fn rocksdb_cq_loads_from_simple_cq_path_in_compat_mode",
-          "line": 1511
-        },
-        {
-          "id": "99778e658c173a5a7c393c56",
-          "fingerprint": "2ea2d94e6e4ab59f876682fa",
-          "item": "fn create_consume_queue_by_type_maps_rocksdb_cq_to_simple_cq",
-          "line": 1545
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "89c9939f51e173db0cee598f",
-      "path": "rocketmq-store/src/queue/local_file_consume_queue_store.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "a866b2e60414e5fd1ef0ef9c",
-          "fingerprint": "1d0eb25c110a3f0b264bb81a",
-          "item": "<module>",
-          "line": 47
-        }
-      ],
-      "owner": "store",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "334c45eac7462125432d9901",
-      "path": "rocketmq-store/src/queue/local_file_consume_queue_store.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "949334c6ef7caeaaf9cbe006",
-          "fingerprint": "bd49c322ce71656e803eb1b7",
-          "item": "struct Inner",
-          "line": 152
-        },
-        {
-          "id": "2e071a78a61158fc37ea63a5",
-          "fingerprint": "9f36b8b7ce1d33934da1fa6b",
-          "item": "fn set_message_store",
-          "line": 484
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
       "identity": "1910197e83a98f7b2aa747ad",
       "path": "rocketmq-store/src/queue/single_consume_queue.rs",
       "symbol": "ArcMut",
@@ -5372,81 +3739,6 @@
           "fingerprint": "944459752d615c7b8def8330",
           "item": "fn new_configured_test_store",
           "line": 1047
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "3300ab8af328494bcb613b61",
-      "path": "rocketmq-store/src/queue/single_consume_queue.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "constructor",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "145af9647bc44e52cb6de2bf",
-          "fingerprint": "5b7c7626609baabda1c4c8fe",
-          "item": "fn new_configured_test_store",
-          "line": 1049
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "3c6d23740f28338cf66e1017",
-      "path": "rocketmq-store/src/queue/single_consume_queue.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "600fab6771f8509cbd698121",
-          "fingerprint": "117aa1e982b7efb9e22bd674",
-          "item": "mod tests",
-          "line": 1027
-        }
-      ],
-      "owner": "store",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "7a6e2eb17242c9686c9a406e",
-      "path": "rocketmq-store/src/queue/single_consume_queue.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "type_reference",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "ab1d13ee688ed95a6d6e2908",
-          "fingerprint": "1205c4bda7cf9a0283f6e1cb",
-          "item": "fn new_test_store",
-          "line": 1034
-        },
-        {
-          "id": "4c1a1af8c0a2151d25f80eee",
-          "fingerprint": "05366a86ed16017d11544a2d",
-          "item": "fn new_configured_test_store",
-          "line": 1047
-        },
-        {
-          "id": "958e00d1a66be8ac723efedf",
-          "fingerprint": "51c76c8c9a204046921e1e6b",
-          "item": "fn new_test_consume_queue",
-          "line": 1065
-        },
-        {
-          "id": "7eaffce78acc9682c23a8883",
-          "fingerprint": "74fbc936e4cf96ed2d78cb3a",
-          "item": "fn new_configured_test_consume_queue",
-          "line": 1082
         }
       ],
       "owner": "store",
@@ -5665,125 +3957,6 @@
         {
           "id": "3f96cb2673c6f64e71bbff8a",
           "fingerprint": "54d93f79b82617c89f133ff5",
-          "item": "fn build_store_with_timer_and_config",
-          "line": 1380
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "4053533634974172db40c4ed",
-      "path": "rocketmq-store/src/timer/timer_message_store.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "constructor",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "b23658345aa8dc14bee57616",
-          "fingerprint": "d6e3c40ed40314234bc6e963",
-          "item": "fn build_store_with_timer_and_config",
-          "line": 1390
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "9bf859e4dd070231d25cf94a",
-      "path": "rocketmq-store/src/timer/timer_message_store.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "ea0f0214e2c1c2a0257eba7e",
-          "fingerprint": "7b89fd0539e6902b04ecd7e1",
-          "item": "<module>",
-          "line": 54
-        }
-      ],
-      "owner": "store",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "e24bbd90766974b110be709d",
-      "path": "rocketmq-store/src/timer/timer_message_store.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "7bb395959cd869311fd3e087",
-          "fingerprint": "4a6e943bedb1ed4e324ef946",
-          "item": "mod tests",
-          "line": 1321
-        }
-      ],
-      "owner": "store",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "b4570d84d0a3d50a149432bb",
-      "path": "rocketmq-store/src/timer/timer_message_store.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "54e740e7e75b671e7f48c6c7",
-          "fingerprint": "851c04c63e2f3a3e62482ac7",
-          "item": "struct TimerMessageStore",
-          "line": 109
-        },
-        {
-          "id": "b8eb6cb2198a114923d0858e",
-          "fingerprint": "8b55e1e16cb4b4237a9cc324",
-          "item": "fn new",
-          "line": 320
-        },
-        {
-          "id": "8f1228293c1dc822e2717360",
-          "fingerprint": "88214196ab0c6d9ed673be76",
-          "item": "fn new_with_config",
-          "line": 329
-        },
-        {
-          "id": "1f01d23b3945560d3514b961",
-          "fingerprint": "ffbc0b7da021021c5f81212e",
-          "item": "fn set_default_message_store",
-          "line": 358
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "f5d70fd540d7dea3480693e8",
-      "path": "rocketmq-store/src/timer/timer_message_store.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "type_reference",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "4833f2dffe560673f5117d8a",
-          "fingerprint": "9d208ffebfb87bc03febc28f",
-          "item": "fn build_store_with_timer",
-          "line": 1374
-        },
-        {
-          "id": "94d2d55f85da3e94ea5cb196",
-          "fingerprint": "2120df3a5b37e5e7c7b40dc5",
           "item": "fn build_store_with_timer_and_config",
           "line": 1380
         }
@@ -6471,63 +4644,6 @@
       "adr": "ADR-013"
     },
     {
-      "identity": "9f634bbbc25297f73fcf4b9d",
-      "path": "rocketmq-store/tests/commitlog_recovery_tests.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "constructor",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "6705191d9b920e6235353bb2",
-          "fingerprint": "d360ef617f9d5e06570a6dfb",
-          "item": "fn new_test_store",
-          "line": 63
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "7a1cb495ff5ea71ba45fb6c4",
-      "path": "rocketmq-store/tests/commitlog_recovery_tests.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "edb892ec4aeed8107987fb0e",
-          "fingerprint": "03d9ab0b81b0c1a76a699852",
-          "item": "<module>",
-          "line": 49
-        }
-      ],
-      "owner": "store",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "552e0bc65abcb41a04b1e437",
-      "path": "rocketmq-store/tests/commitlog_recovery_tests.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "type_reference",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "e6ab93730bfaf5c54396fc9e",
-          "fingerprint": "7b353d6cc11167ad5a3e4089",
-          "item": "fn new_test_store",
-          "line": 58
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
       "identity": "27e37a439c0c1876a391d9d0",
       "path": "rocketmq-store/tests/ha_semantics_tests.rs",
       "symbol": "ArcMut",
@@ -6583,179 +4699,6 @@
           "fingerprint": "d28b755f9b60ef3ffbf43562",
           "item": "fn new_test_store_with_broker_config",
           "line": 44
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "f3aef072ff19e6f4d7f9f26d",
-      "path": "rocketmq-store/tests/ha_semantics_tests.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "constructor",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "a73af2165c730396396bfde5",
-          "fingerprint": "92cd79aafb87511baa6f4a3f",
-          "item": "fn new_test_store_with_broker_config",
-          "line": 47
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "b1af3cfab9ffc28c22e348a2",
-      "path": "rocketmq-store/tests/ha_semantics_tests.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "35e83a6ba77497a846e4b02e",
-          "fingerprint": "f098087f088fd71863ac0d0f",
-          "item": "<module>",
-          "line": 34
-        }
-      ],
-      "owner": "store",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "5a3544c32396d01b4960de9d",
-      "path": "rocketmq-store/tests/ha_semantics_tests.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "type_reference",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "14245e7933c449fcec843d60",
-          "fingerprint": "f22d681314527386796e60eb",
-          "item": "fn new_test_store",
-          "line": 37
-        },
-        {
-          "id": "6bd9df79072741e04a96cd20",
-          "fingerprint": "23d1f76ac2a4ccc42ee3edb4",
-          "item": "fn new_test_store_with_broker_config",
-          "line": 44
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "1ed94e5e17b4b0f19791c74c",
-      "path": "rocketmq-store/tests/rocksdb_foundation_tests.rs",
-      "symbol": "RocksDBMessageStore",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "3fed8ec41a3d98d80377b9f8",
-          "fingerprint": "fe4e11bbda3d0792a1334cc0",
-          "item": "<module>",
-          "line": 28
-        }
-      ],
-      "owner": "store",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "ac2d196358c74774cce9ad0a",
-      "path": "rocketmq-store/tests/rocksdb_foundation_tests.rs",
-      "symbol": "RocksDBMessageStore",
-      "kind": "type_reference",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "3df949774ce9fb86a9ab28e8",
-          "fingerprint": "3bd706e8557f21b3048a3f4a",
-          "item": "fn rocksdb_message_store_try_new_opens_real_rocksdb_consume_queue_backend",
-          "line": 385
-        },
-        {
-          "id": "b8fb2f0b84d862733dd44546",
-          "fingerprint": "aec5ee1ecd5b336908794122",
-          "item": "fn rocksdb_message_store_try_new_rejects_conflicting_consume_queue_path",
-          "line": 449
-        },
-        {
-          "id": "c07167565fe16e870d6beb2c",
-          "fingerprint": "3bd706e8557f21b3048a3f4a",
-          "item": "fn rocksdb_message_store_close_closes_consume_queue_and_message_rocksdb",
-          "line": 471
-        },
-        {
-          "id": "bb9469fd5ad475e38ad02542",
-          "fingerprint": "aec5ee1ecd5b336908794122",
-          "item": "fn rocksdb_message_store_try_new_rejects_non_rocksdb_store_type",
-          "line": 512
-        },
-        {
-          "id": "786c79fd815454ddf9ceff8f",
-          "fingerprint": "cc9465ead7308f1b0352a49b",
-          "item": "fn assert_message_store",
-          "line": 528
-        },
-        {
-          "id": "79e94ab57f96914f5c3bff84",
-          "fingerprint": "88e2a164a1575ea0e8052e06",
-          "item": "fn rocksdb_message_store_dispatcher_dual_writes_commitlog_dispatch_to_rocksdb_cq",
-          "line": 2967
-        },
-        {
-          "id": "336592262ef564217d8373c4",
-          "fingerprint": "3bd706e8557f21b3048a3f4a",
-          "item": "fn rocksdb_message_store_registers_trans_dispatcher_when_enabled",
-          "line": 3046
-        },
-        {
-          "id": "9dae001e5543b9ebebe3d3f6",
-          "fingerprint": "3bd706e8557f21b3048a3f4a",
-          "item": "fn rocksdb_message_store_keeps_trans_service_disabled_by_default",
-          "line": 3088
-        },
-        {
-          "id": "952e6a0e7f187a17042ff195",
-          "fingerprint": "3bd706e8557f21b3048a3f4a",
-          "item": "fn rocksdb_message_store_registers_timer_dispatcher_when_enabled",
-          "line": 3110
-        },
-        {
-          "id": "2b70e0018614e44f6481c3b4",
-          "fingerprint": "3bd706e8557f21b3048a3f4a",
-          "item": "fn rocksdb_message_store_keeps_timer_service_disabled_by_default",
-          "line": 3151
-        },
-        {
-          "id": "e4235dd61bcddcd10ef8a262",
-          "fingerprint": "88e2a164a1575ea0e8052e06",
-          "item": "fn rocksdb_message_store_delete_topics_removes_rocksdb_consume_queue_state",
-          "line": 3174
-        },
-        {
-          "id": "7e40997fb5f1adfab5fc114b",
-          "fingerprint": "88e2a164a1575ea0e8052e06",
-          "item": "fn rocksdb_message_store_truncate_dirty_logic_files_corrects_rocksdb_consume_queue_offsets",
-          "line": 3202
-        },
-        {
-          "id": "86a488911395528f4bc911e0",
-          "fingerprint": "88e2a164a1575ea0e8052e06",
-          "item": "fn rocksdb_message_store_clean_expired_consumer_queue_triggers_background_rocksdb_compaction",
-          "line": 3235
         }
       ],
       "owner": "store",
@@ -6833,62 +4776,6 @@
       "adr": "ADR-013"
     },
     {
-      "identity": "3285b544c13b1e6571022f88",
-      "path": "rocketmq-store/tests/rocksdb_store_semantics_tests.rs",
-      "symbol": "RocksDBMessageStore",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "91d68eabb397d4feb1a19a09",
-          "fingerprint": "925fdcb3e9addb9d2631c017",
-          "item": "<module>",
-          "line": 41
-        }
-      ],
-      "owner": "store",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "3b8ea94182d5b8fb38ede6a8",
-      "path": "rocketmq-store/tests/rocksdb_store_semantics_tests.rs",
-      "symbol": "RocksDBMessageStore",
-      "kind": "type_reference",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "4c8c2e44cc5b5b08a4e29a56",
-          "fingerprint": "31b328728c17c0bf8bf721bc",
-          "item": "fn new_test_store",
-          "line": 65
-        },
-        {
-          "id": "aae5d2cb74c8e5e1a811b9ea",
-          "fingerprint": "c1d7526d871aa0ba3600c51a",
-          "item": "fn new_test_store",
-          "line": 70
-        },
-        {
-          "id": "fc9dd1b88d2b678f9c557360",
-          "fingerprint": "f619e798ea2615e7d4a67672",
-          "item": "fn new_test_store_with_config",
-          "line": 81
-        },
-        {
-          "id": "18808849eb32a69f4269d848",
-          "fingerprint": "03760d56dabf1172a547c391",
-          "item": "fn new_test_store_with_config",
-          "line": 86
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
       "identity": "15497c1f78c5f045f18d2fed",
       "path": "rocketmq-store/tests/timer_recovery_integration_tests.rs",
       "symbol": "ArcMut",
@@ -6936,63 +4823,6 @@
         {
           "id": "cbe79e0f3111670f3a4ea355",
           "fingerprint": "11c2d9976bbc11342dcd0b01",
-          "item": "fn new_test_store",
-          "line": 56
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "21760b44a676453fb73d3a8e",
-      "path": "rocketmq-store/tests/timer_recovery_integration_tests.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "constructor",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "83a55b18f91e605659af377b",
-          "fingerprint": "f0d99b135542eca37e97059a",
-          "item": "fn new_test_store",
-          "line": 66
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "d22fc5cbb7c12a4d4aacc72b",
-      "path": "rocketmq-store/tests/timer_recovery_integration_tests.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "21797767de3495145871d931",
-          "fingerprint": "cac3d4bbb7240fdf241eaae7",
-          "item": "<module>",
-          "line": 37
-        }
-      ],
-      "owner": "store",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "256bfaa401eddb291ea6a8bd",
-      "path": "rocketmq-store/tests/timer_recovery_integration_tests.rs",
-      "symbol": "LocalFileMessageStore",
-      "kind": "type_reference",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "27c7dc80c9bb758b5d41238c",
-          "fingerprint": "98fc6da001f4abb360987f6d",
           "item": "fn new_test_store",
           "line": 56
         }
