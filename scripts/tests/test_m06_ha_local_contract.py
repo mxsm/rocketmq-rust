@@ -58,6 +58,9 @@ class M06HALocalContractTests(unittest.TestCase):
         store_auto_switch = source(
             "rocketmq-store/src/ha/auto_switch/auto_switch_ha_service.rs"
         )
+        store_auto_switch_production = store_auto_switch.split(
+            "#[cfg(test)]", maxsplit=1
+        )[0]
         store_ha_service = source("rocketmq-store/src/ha/ha_service.rs")
         store_general = source("rocketmq-store/src/ha/general_ha_service.rs")
         store_group = source("rocketmq-store/src/ha/group_transfer_service.rs")
@@ -180,6 +183,15 @@ class M06HALocalContractTests(unittest.TestCase):
         )
         self.assertNotIn("ArcMut", store_connection_production)
         self.assertNotIn("DefaultHAService", store_connection_production)
+        self.assertIn("fn init(this: &mut Self", store_default_service_production)
+        self.assertNotIn(
+            "fn init(this: &mut ArcMut<Self>", store_default_service_production
+        )
+        self.assertIn("delegate: Box<DefaultHAService>", store_auto_switch_production)
+        self.assertNotIn(
+            "delegate: ArcMut<DefaultHAService>", store_auto_switch_production
+        )
+        self.assertNotIn("ArcMut::new(delegate)", store_auto_switch_production)
         self.assertIn("pub(crate) struct HAReplicaStoreHandle", store_local)
         self.assertIn("commit_log: CommitLogReplicaHandle", store_local)
         for capability in (

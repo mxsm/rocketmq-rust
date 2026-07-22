@@ -19,6 +19,10 @@ use std::sync::Arc;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::protocol::body::ha_connection_runtime_info::HAConnectionRuntimeInfo;
 use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
+#[allow(
+    unused_imports,
+    reason = "ArcMut remains used by compatibility tests until the General HA root migrates"
+)]
 use rocketmq_rust::ArcMut;
 use tokio::sync::Notify;
 
@@ -39,7 +43,7 @@ use rocketmq_store_local::ha::replication::HAReplicaRuntimeSnapshot;
 use rocketmq_store_local::ha::replication::ReplicationStateRoot;
 
 pub struct AutoSwitchHAService {
-    delegate: ArcMut<DefaultHAService>,
+    delegate: Box<DefaultHAService>,
     replication: Arc<ReplicationStateRoot>,
 }
 
@@ -48,7 +52,7 @@ impl AutoSwitchHAService {
         let is_master = delegate.replica_store().message_store_config_ref().broker_role
             != rocketmq_common::common::broker::broker_role::BrokerRole::Slave;
         Self {
-            delegate: ArcMut::new(delegate),
+            delegate: Box::new(delegate),
             replication: Arc::new(ReplicationStateRoot::new(is_master)),
         }
     }
@@ -57,14 +61,15 @@ impl AutoSwitchHAService {
         self.delegate.group_transfer_runtime_info()
     }
 
-    pub(crate) fn init(this: &mut ArcMut<Self>, general_ha_service: GeneralHAService) -> HAResult<()> {
-        let mut delegate = this.delegate.clone();
-        DefaultHAService::init(&mut delegate, general_ha_service)?;
-        let client = delegate
+    pub(crate) fn init(this: &mut Self, general_ha_service: GeneralHAService) -> HAResult<()> {
+        DefaultHAService::init(this.delegate.as_mut(), general_ha_service)?;
+        let client = this
+            .delegate
             .create_default_ha_client()
             .map_err(|error| crate::store_error::HAError::Service(error.to_string()))?;
         let client = AutoSwitchHAClient::from_delegate(client, None);
-        delegate.set_general_ha_client(GeneralHAClient::new_with_auto_switch_ha_client(client));
+        this.delegate
+            .set_general_ha_client(GeneralHAClient::new_with_auto_switch_ha_client(client));
         Ok(())
     }
 
@@ -239,7 +244,7 @@ impl AutoSwitchHAService {
 
 impl HAService for AutoSwitchHAService {
     async fn start(&mut self) -> HAResult<()> {
-        self.delegate.as_mut().start().await
+        self.delegate.start().await
     }
 
     async fn shutdown(&self) {
@@ -330,7 +335,7 @@ impl HAService for AutoSwitchHAService {
     }
 
     fn get_ha_client_mut(&mut self) -> Option<&mut GeneralHAClient> {
-        self.delegate.as_mut().get_ha_client_mut()
+        self.delegate.get_ha_client_mut()
     }
 
     fn get_push_to_slave_max_offset(&self) -> i64 {
@@ -466,6 +471,19 @@ mod tests {
         assert_eq!(store.strong_count(), strong_count_before);
 
         let _ = std::fs::remove_dir_all(temp_root);
+    }
+
+    #[test]
+    fn production_service_directly_owns_default_delegate() {
+        let production = include_str!("auto_switch_ha_service.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production source");
+
+        assert!(production.contains("delegate: Box<DefaultHAService>"));
+        assert!(!production.contains("delegate: ArcMut<DefaultHAService>"));
+        assert!(!production.contains("ArcMut::new(delegate)"));
+        assert!(production.contains("fn init(this: &mut Self"));
     }
 
     #[tokio::test]

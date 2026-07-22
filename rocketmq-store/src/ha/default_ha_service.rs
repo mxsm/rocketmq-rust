@@ -24,6 +24,10 @@ use rocketmq_common::common::broker::broker_role::BrokerRole;
 use rocketmq_remoting::protocol::body::ha_client_runtime_info::HAClientRuntimeInfo;
 use rocketmq_remoting::protocol::body::ha_connection_runtime_info::HAConnectionRuntimeInfo;
 use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
+#[allow(
+    unused_imports,
+    reason = "ArcMut remains used by compatibility tests until the General HA root migrates"
+)]
 use rocketmq_rust::ArcMut;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
@@ -450,7 +454,7 @@ impl DefaultHAService {
         self.connection_context.notify_transfer_some(offset).await;
     }
 
-    pub(crate) fn init(this: &mut ArcMut<Self>, general_ha_service: GeneralHAService) -> HAResult<()> {
+    pub(crate) fn init(this: &mut Self, general_ha_service: GeneralHAService) -> HAResult<()> {
         // Initialize the DefaultHAService with the provided message store.
         let config = this.replica_store.message_store_config();
         let is_auto_switch = general_ha_service.is_auto_switch_enabled();
