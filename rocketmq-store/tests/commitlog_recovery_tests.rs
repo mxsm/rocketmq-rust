@@ -37,7 +37,6 @@ use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::message::MessageTrait;
-use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_status_enum::GetMessageStatus;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
@@ -55,20 +54,16 @@ use tempfile::TempDir;
 const RECOVERY_SEGMENT_SIZE: usize = 512;
 static FIRST_RECOVERY_BODY: [u8; 120] = [0x41; 120];
 
-fn new_test_store(temp_dir: &TempDir, mut message_store_config: MessageStoreConfig) -> ArcMut<LocalFileMessageStore> {
+fn new_test_store(temp_dir: &TempDir, mut message_store_config: MessageStoreConfig) -> LocalFileMessageStore {
     message_store_config.store_path_root_dir = temp_dir.path().to_string_lossy().to_string().into();
+    message_store_config.timer_wheel_enable = false;
     let broker_config = Arc::new(BrokerConfig::default());
     let topic_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>> = Arc::new(DashMap::new());
 
-    let mut store = ArcMut::new(LocalFileMessageStore::new(
-        Arc::new(message_store_config),
-        broker_config,
-        topic_table,
-        None,
-        false,
-    ));
-    let store_clone = store.clone();
-    store.set_message_store_arc(store_clone);
+    let mut store = LocalFileMessageStore::new(Arc::new(message_store_config), broker_config, topic_table, None, false);
+    store
+        .wire_owned_root_dependencies()
+        .expect("CommitLog recovery tests should wire owned Store capabilities");
     store
 }
 

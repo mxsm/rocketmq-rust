@@ -933,7 +933,12 @@ impl LocalFileMessageStore {
     /// ConsumeQueue and HA use independently owned capability handles, so they do not require
     /// the full Store root to be shared. Timer still holds the legacy root facade and therefore
     /// remains excluded from this path.
-    pub(crate) fn wire_owned_root_dependencies(&mut self) -> Result<(), StoreError> {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::InvalidState`] when the timer wheel is enabled because Timer still
+    /// requires the legacy shared Store facade.
+    pub fn wire_owned_root_dependencies(&mut self) -> Result<(), StoreError> {
         if self.message_store_config.is_timer_wheel_enable() {
             return Err(StoreError::InvalidState(
                 "owned message store wiring requires the timer wheel to be disabled".to_string(),

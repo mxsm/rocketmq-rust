@@ -1245,6 +1245,14 @@ identity/15 occurrences，两个保留 occurrence 仅使用忽略的临时 ADR-0
 identity 或提交态 approval。Store test/bench caller 从 21/145 降至 20/130，R17 总上界降至 28/146；
 执行清单保持完成 11 项、剩余 20 项，正式进度仍为 75/82。
 
+跨 crate LocalFile test roots 随 Issue #8609 批量收窄：已有 owned-root wiring 现在是带 `# Errors` 契约的
+additive public composition API，Timer enabled 继续 fail-closed；CommitLog recovery、HA semantics 与 Broker
+expression-filter fixture 直接拥有 concrete root，BrokerRuntime role tests 复用 production 初始化入口而不再手工
+构造 LocalFile/Generic ArcMut 链。reviewed 快照从 55/210 降至 44/196：production 保持 13/24，test 从
+28/146 降至 17/132，compatibility 保持 14/40；净删除 11 test identities/14 occurrences，无 relocation、
+新增 identity 或临时 approval。Store test/bench caller 从 20/130 降至 14/123，Broker test caller 从 6/8
+降至 1/1，R17 总上界降至 17/132；执行清单保持完成 11 项、剩余 20 项，正式进度仍为 75/82。
+
 Default HA client runtime ownership 随 Issue #8567 完成收窄：`DefaultHAClient` 以标准 `Arc<Inner>` 共享只读组合根，
 `Inner` 仅保留原子、锁、Notify、flow monitor 与现有 LocalStore 兼容句柄；从未安装连接的 stream 字段和重复 buffer/
 dispatch/report 状态已删除，实际 reader/writer buffer 继续由每个 connection task 独占。reviewed 快照为 126 identities/

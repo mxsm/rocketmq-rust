@@ -4847,7 +4847,6 @@ mod tests {
     use crate::controller::replicas_manager::RegisterState;
     use bytes::Bytes;
     use cheetah_string::CheetahString;
-    use dashmap::DashMap;
     use rocketmq_common::common::attribute::subscription_group_attributes::LITE_BIND_TOPIC_ATTRIBUTE_NAME;
     use rocketmq_common::common::attribute::Attribute;
     use rocketmq_common::common::boundary_type::BoundaryType;
@@ -4952,7 +4951,6 @@ mod tests {
     use rocketmq_store::config::flush_disk_type::FlushDiskType;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
     use rocketmq_store::ha::ha_service::HAService;
-    use rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore;
     use rocketmq_store::queue::consume_queue_store::ConsumeQueueStoreTrait;
     use rocketmq_store::timer::timer_checkpoint::TimerCheckpointSnapshot;
     use rocketmq_store::timer::timer_message_store::TimerMessageStore;
@@ -5747,25 +5745,6 @@ accounts:
                 }
             }
         }
-    }
-
-    fn new_controller_mode_message_store(
-        root: &Path,
-        broker_config: Arc<BrokerConfig>,
-        message_store_config: Arc<MessageStoreConfig>,
-    ) -> ArcMut<LocalFileMessageStore> {
-        std::fs::create_dir_all(root).expect("create temp store dir");
-        let topic_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>> = Arc::new(DashMap::new());
-        let mut store = ArcMut::new(LocalFileMessageStore::new(
-            message_store_config,
-            broker_config,
-            topic_table,
-            None,
-            false,
-        ));
-        let store_clone = store.clone();
-        store.set_message_store_arc(store_clone);
-        store
     }
 
     fn controller_addr_list(peers: &[RaftPeer]) -> CheetahString {
@@ -9464,16 +9443,11 @@ accounts:
             enable_controller_mode: true,
             broker_role: BrokerRole::Slave,
             store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+            timer_wheel_enable: false,
             ..MessageStoreConfig::default()
         });
-        let mut runtime = BrokerRuntime::new(broker_config.clone(), message_store_config.clone());
-        let mut store = new_controller_mode_message_store(&temp_root, broker_config, message_store_config);
-        store.init().await.expect("init message store");
-        let message_store = ArcMut::new(GenericMessageStore::local_file(store.clone()));
-        runtime.inner.message_store = Some(message_store.clone());
-        runtime
-            .escape_bridge_owner
-            .bind_message_store(LegacyEscapeStoreOwner(message_store));
+        let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
+        assert!(runtime.initialize_message_store().await, "initialize message store");
 
         runtime
             .escape_bridge_owner
@@ -9482,11 +9456,12 @@ accounts:
             .await
             .expect("promote store to master");
 
+        let store = runtime.inner.message_store().expect("message store should exist");
         let ha_service = store.get_ha_service().expect("ha service should exist");
         let runtime_info = ha_service.get_runtime_info(0);
         assert!(runtime_info.master);
         assert_eq!(runtime_info.ha_client_runtime_info.master_addr, "");
-        assert_eq!(store.message_store_config_ref().broker_role, BrokerRole::SyncMaster);
+        assert_eq!(store.get_message_store_config().broker_role, BrokerRole::SyncMaster);
 
         let _ = std::fs::remove_dir_all(temp_root);
     }
@@ -9502,16 +9477,11 @@ accounts:
             enable_controller_mode: true,
             broker_role: BrokerRole::SyncMaster,
             store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+            timer_wheel_enable: false,
             ..MessageStoreConfig::default()
         });
-        let mut runtime = BrokerRuntime::new(broker_config.clone(), message_store_config.clone());
-        let mut store = new_controller_mode_message_store(&temp_root, broker_config, message_store_config);
-        store.init().await.expect("init message store");
-        let message_store = ArcMut::new(GenericMessageStore::local_file(store.clone()));
-        runtime.inner.message_store = Some(message_store.clone());
-        runtime
-            .escape_bridge_owner
-            .bind_message_store(LegacyEscapeStoreOwner(message_store));
+        let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
+        assert!(runtime.initialize_message_store().await, "initialize message store");
 
         runtime
             .escape_bridge_owner
@@ -9526,11 +9496,12 @@ accounts:
             .await
             .expect("demote store to slave");
 
+        let store = runtime.inner.message_store().expect("message store should exist");
         let ha_service = store.get_ha_service().expect("ha service should exist");
         let runtime_info = ha_service.get_runtime_info(0);
         assert!(!runtime_info.master);
         assert_eq!(runtime_info.ha_client_runtime_info.master_addr, "127.0.0.1:10911");
-        assert_eq!(store.message_store_config_ref().broker_role, BrokerRole::Slave);
+        assert_eq!(store.get_message_store_config().broker_role, BrokerRole::Slave);
 
         let _ = std::fs::remove_dir_all(temp_root);
     }
