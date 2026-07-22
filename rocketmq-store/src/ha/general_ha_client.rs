@@ -65,7 +65,7 @@ impl GeneralHAClient {
 }
 
 impl HAClient for GeneralHAClient {
-    async fn start(&mut self) {
+    async fn start(&self) {
         match self {
             GeneralHAClient::DefaultHaClient(client) => {
                 client.start().await;

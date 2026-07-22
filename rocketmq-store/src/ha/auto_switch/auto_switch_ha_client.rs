@@ -72,7 +72,7 @@ impl AutoSwitchHAClient {
 }
 
 impl HAClient for AutoSwitchHAClient {
-    async fn start(&mut self) {
+    async fn start(&self) {
         self.delegate.start().await;
     }
 

@@ -19,17 +19,12 @@ use std::sync::Arc;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::protocol::body::ha_connection_runtime_info::HAConnectionRuntimeInfo;
 use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
-#[allow(
-    unused_imports,
-    reason = "ArcMut remains used by compatibility tests until the General HA root migrates"
-)]
-use rocketmq_rust::ArcMut;
 use tokio::sync::Notify;
 
 use crate::ha::auto_switch::auto_switch_ha_client::AutoSwitchHAClient;
 use crate::ha::default_ha_service::DefaultHAService;
 use crate::ha::general_ha_client::GeneralHAClient;
-use crate::ha::general_ha_service::GeneralHAService;
+use crate::ha::general_ha_service::GeneralHAServiceReference;
 use crate::ha::group_transfer_service::GroupTransferRuntimeInfo;
 use crate::ha::ha_client::HAClient;
 use crate::ha::ha_connection_state::HAConnectionState;
@@ -61,14 +56,19 @@ impl AutoSwitchHAService {
         self.delegate.group_transfer_runtime_info()
     }
 
-    pub(crate) fn init(this: &mut Self, general_ha_service: GeneralHAService) -> HAResult<()> {
-        DefaultHAService::init(this.delegate.as_mut(), general_ha_service)?;
-        let client = this
+    pub(crate) fn default_delegate(&self) -> &DefaultHAService {
+        &self.delegate
+    }
+
+    pub(crate) fn init(&mut self, service_reference: GeneralHAServiceReference) -> HAResult<()> {
+        let replication = self.replication_state();
+        self.delegate.init(service_reference, Some(replication))?;
+        let client = self
             .delegate
             .create_default_ha_client()
             .map_err(|error| crate::store_error::HAError::Service(error.to_string()))?;
         let client = AutoSwitchHAClient::from_delegate(client, None);
-        this.delegate
+        self.delegate
             .set_general_ha_client(GeneralHAClient::new_with_auto_switch_ha_client(client));
         Ok(())
     }
@@ -243,7 +243,7 @@ impl AutoSwitchHAService {
 }
 
 impl HAService for AutoSwitchHAService {
-    async fn start(&mut self) -> HAResult<()> {
+    async fn start(&self) -> HAResult<()> {
         self.delegate.start().await
     }
 
@@ -334,10 +334,6 @@ impl HAService for AutoSwitchHAService {
         self.delegate.get_ha_client()
     }
 
-    fn get_ha_client_mut(&mut self) -> Option<&mut GeneralHAClient> {
-        self.delegate.get_ha_client_mut()
-    }
-
     fn get_push_to_slave_max_offset(&self) -> i64 {
         self.delegate.get_push_to_slave_max_offset()
     }
@@ -379,59 +375,31 @@ impl HAService for AutoSwitchHAService {
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
-    use std::path::Path;
-    use std::sync::Arc;
     use std::time::Duration;
 
-    use cheetah_string::CheetahString;
-    use dashmap::DashMap;
-    use rocketmq_common::common::broker::broker_config::BrokerConfig;
-    use rocketmq_common::common::config::TopicConfig;
     use rocketmq_common::TimeUtils::current_millis;
     use rocketmq_remoting::protocol::body::ha_client_runtime_info::HAClientRuntimeInfo;
     use rocketmq_remoting::protocol::body::ha_connection_runtime_info::HAConnectionRuntimeInfo;
 
     use super::*;
     use crate::base::message_store::MessageStore;
-    use crate::config::message_store_config::MessageStoreConfig;
+    use crate::ha::general_ha_service::GeneralHAService;
     use crate::ha::ha_client::HAClient;
-
-    fn new_test_message_store(
-        root: &Path,
-    ) -> ArcMut<crate::message_store::local_file_message_store::LocalFileMessageStore> {
-        std::fs::create_dir_all(root).expect("create temp root dir");
-
-        let broker_config = BrokerConfig {
-            enable_controller_mode: true,
-            ..BrokerConfig::default()
-        };
-
-        let message_store_config = MessageStoreConfig {
-            enable_controller_mode: true,
-            ha_max_time_slave_not_catchup: 1000,
-            store_path_root_dir: root.to_string_lossy().into_owned().into(),
-            ..MessageStoreConfig::default()
-        };
-
-        let topic_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>> = Arc::new(DashMap::new());
-        let mut store = ArcMut::new(
-            crate::message_store::local_file_message_store::LocalFileMessageStore::new(
-                Arc::new(message_store_config),
-                Arc::new(broker_config),
-                topic_table,
-                None,
-                false,
-            ),
-        );
-        let store_clone = store.clone();
-        store.set_message_store_arc(store_clone);
-        store
-    }
+    use crate::ha::test_support::new_test_message_store;
 
     fn new_default_ha_service(
         store: &crate::message_store::local_file_message_store::LocalFileMessageStore,
     ) -> DefaultHAService {
         DefaultHAService::new(store.ha_replica_store_handle())
+    }
+
+    fn new_initialized_auto_switch_service(
+        store: &crate::message_store::local_file_message_store::LocalFileMessageStore,
+    ) -> GeneralHAService {
+        let mut service =
+            GeneralHAService::new_with_auto_switch_ha_service(AutoSwitchHAService::new(new_default_ha_service(store)));
+        service.init().expect("init auto switch ha service");
+        service
     }
 
     fn new_runtime_info(in_sync_slave_nums: i32, connections: &[(u64, bool)]) -> HARuntimeInfo {
@@ -461,7 +429,7 @@ mod tests {
     #[test]
     fn constructor_does_not_retain_message_store_root() {
         let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-auto-switch-owner-{}", current_millis()));
-        let store = new_test_message_store(&temp_root);
+        let store = new_test_message_store(&temp_root, true);
         let strong_count_before = store.strong_count();
 
         let service = AutoSwitchHAService::new(new_default_ha_service(store.as_ref()));
@@ -483,18 +451,17 @@ mod tests {
         assert!(production.contains("delegate: Box<DefaultHAService>"));
         assert!(!production.contains("delegate: ArcMut<DefaultHAService>"));
         assert!(!production.contains("ArcMut::new(delegate)"));
-        assert!(production.contains("fn init(this: &mut Self"));
+        assert!(production.contains("fn init(&mut self"));
     }
 
     #[tokio::test]
     async fn auto_switch_service_initializes_client_and_tracks_sync_state_set_size() {
         let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-auto-switch-ha-service-{}", current_millis()));
-        let store = new_test_message_store(&temp_root);
+        let store = new_test_message_store(&temp_root, true);
         store.set_alive_replica_num_in_group(3);
 
-        let mut service = ArcMut::new(AutoSwitchHAService::new(new_default_ha_service(store.as_ref())));
-        let general_service = GeneralHAService::new_with_auto_switch_ha_service(service.clone());
-        AutoSwitchHAService::init(&mut service, general_service).expect("init auto switch ha service");
+        let general_service = new_initialized_auto_switch_service(store.as_ref());
+        let service = general_service.auto_switch_service().expect("auto switch service");
 
         assert!(service.get_ha_client().is_some());
         assert_eq!(service.in_sync_replicas_nums(0), 3);
@@ -519,12 +486,11 @@ mod tests {
     async fn sync_controller_sync_state_set_updates_local_membership() {
         let temp_root =
             std::env::temp_dir().join(format!("rocketmq-rust-auto-switch-sync-state-set-{}", current_millis()));
-        let mut store = new_test_message_store(&temp_root);
+        let mut store = new_test_message_store(&temp_root, true);
         store.init().await.expect("init message store");
 
-        let mut service = ArcMut::new(AutoSwitchHAService::new(new_default_ha_service(store.as_ref())));
-        let general_service = GeneralHAService::new_with_auto_switch_ha_service(service.clone());
-        AutoSwitchHAService::init(&mut service, general_service).expect("init auto switch ha service");
+        let general_service = new_initialized_auto_switch_service(store.as_ref());
+        let service = general_service.auto_switch_service().expect("auto switch service");
 
         service.sync_controller_sync_state_set(7, &HashSet::from([7_i64, 9_i64]));
 
@@ -557,7 +523,7 @@ mod tests {
     async fn maybe_expand_in_sync_state_set_marks_remote_membership() {
         let temp_root =
             std::env::temp_dir().join(format!("rocketmq-rust-auto-switch-expand-sync-{}", current_millis()));
-        let mut store = new_test_message_store(&temp_root);
+        let mut store = new_test_message_store(&temp_root, true);
         store.init().await.expect("init message store");
         store
             .get_commit_log_mut()
@@ -565,9 +531,8 @@ mod tests {
             .await
             .expect("append data");
 
-        let mut service = ArcMut::new(AutoSwitchHAService::new(new_default_ha_service(store.as_ref())));
-        let general_service = GeneralHAService::new_with_auto_switch_ha_service(service.clone());
-        AutoSwitchHAService::init(&mut service, general_service).expect("init auto switch ha service");
+        let general_service = new_initialized_auto_switch_service(store.as_ref());
+        let service = general_service.auto_switch_service().expect("auto switch service");
         service.sync_controller_sync_state_set(7, &HashSet::from([7_i64]));
 
         let expanded = service
@@ -587,7 +552,7 @@ mod tests {
             "rocketmq-rust-auto-switch-expand-no-deadlock-{}",
             current_millis()
         ));
-        let mut store = new_test_message_store(&temp_root);
+        let mut store = new_test_message_store(&temp_root, true);
         store.init().await.expect("init message store");
         store
             .get_commit_log_mut()
@@ -595,15 +560,17 @@ mod tests {
             .await
             .expect("append data");
 
-        let mut service = ArcMut::new(AutoSwitchHAService::new(new_default_ha_service(store.as_ref())));
-        let general_service = GeneralHAService::new_with_auto_switch_ha_service(service.clone());
-        AutoSwitchHAService::init(&mut service, general_service).expect("init auto switch ha service");
+        let general_service = new_initialized_auto_switch_service(store.as_ref());
+        let service = general_service.auto_switch_service().expect("auto switch service");
         service.sync_controller_sync_state_set(7, &HashSet::from([7_i64]));
 
-        let service_for_thread = service.clone();
+        let service_for_thread = general_service.clone();
         let (tx, rx) = std::sync::mpsc::channel();
         let handle = std::thread::spawn(move || {
-            let expanded = service_for_thread.maybe_expand_in_sync_state_set(9, 4);
+            let expanded = service_for_thread
+                .auto_switch_service()
+                .expect("auto switch service")
+                .maybe_expand_in_sync_state_set(9, 4);
             let _ = tx.send(expanded);
         });
 
@@ -621,12 +588,11 @@ mod tests {
     async fn maybe_shrink_sync_state_set_removes_stale_members() {
         let temp_root =
             std::env::temp_dir().join(format!("rocketmq-rust-auto-switch-shrink-sync-{}", current_millis()));
-        let mut store = new_test_message_store(&temp_root);
+        let mut store = new_test_message_store(&temp_root, true);
         store.init().await.expect("init message store");
 
-        let mut service = ArcMut::new(AutoSwitchHAService::new(new_default_ha_service(store.as_ref())));
-        let general_service = GeneralHAService::new_with_auto_switch_ha_service(service.clone());
-        AutoSwitchHAService::init(&mut service, general_service).expect("init auto switch ha service");
+        let general_service = new_initialized_auto_switch_service(store.as_ref());
+        let service = general_service.auto_switch_service().expect("auto switch service");
         service.sync_controller_sync_state_set(7, &HashSet::from([7_i64, 9_i64, 10_i64]));
         service.update_connection_last_caught_up_time(9, current_millis());
 
@@ -642,7 +608,7 @@ mod tests {
     #[tokio::test]
     async fn sync_controller_sync_state_set_clears_pending_remote_membership() {
         let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-auto-switch-sync-clear-{}", current_millis()));
-        let mut store = new_test_message_store(&temp_root);
+        let mut store = new_test_message_store(&temp_root, true);
         store.init().await.expect("init message store");
         store
             .get_commit_log_mut()
@@ -650,9 +616,8 @@ mod tests {
             .await
             .expect("append data");
 
-        let mut service = ArcMut::new(AutoSwitchHAService::new(new_default_ha_service(store.as_ref())));
-        let general_service = GeneralHAService::new_with_auto_switch_ha_service(service.clone());
-        AutoSwitchHAService::init(&mut service, general_service).expect("init auto switch ha service");
+        let general_service = new_initialized_auto_switch_service(store.as_ref());
+        let service = general_service.auto_switch_service().expect("auto switch service");
         service.sync_controller_sync_state_set(7, &HashSet::from([7_i64]));
         service
             .maybe_expand_in_sync_state_set(9, 4)
@@ -672,7 +637,7 @@ mod tests {
     async fn change_to_slave_clears_pending_remote_membership_and_updates_reported_broker_id() {
         let temp_root =
             std::env::temp_dir().join(format!("rocketmq-rust-auto-switch-change-slave-{}", current_millis()));
-        let mut store = new_test_message_store(&temp_root);
+        let mut store = new_test_message_store(&temp_root, true);
         store.init().await.expect("init message store");
         store
             .get_commit_log_mut()
@@ -680,9 +645,8 @@ mod tests {
             .await
             .expect("append data");
 
-        let mut service = ArcMut::new(AutoSwitchHAService::new(new_default_ha_service(store.as_ref())));
-        let general_service = GeneralHAService::new_with_auto_switch_ha_service(service.clone());
-        AutoSwitchHAService::init(&mut service, general_service).expect("init auto switch ha service");
+        let general_service = new_initialized_auto_switch_service(store.as_ref());
+        let service = general_service.auto_switch_service().expect("auto switch service");
         service.sync_controller_sync_state_set(7, &HashSet::from([7_i64]));
         service
             .maybe_expand_in_sync_state_set(9, 4)
@@ -712,7 +676,7 @@ mod tests {
     async fn change_to_master_records_epoch_boundary_and_refreshes_confirm_offset() {
         let temp_root =
             std::env::temp_dir().join(format!("rocketmq-rust-auto-switch-change-master-{}", current_millis()));
-        let mut store = new_test_message_store(&temp_root);
+        let mut store = new_test_message_store(&temp_root, true);
         store.init().await.expect("init message store");
         store
             .get_commit_log_mut()
@@ -721,9 +685,8 @@ mod tests {
             .expect("append data");
         store.set_confirm_offset(0);
 
-        let mut service = ArcMut::new(AutoSwitchHAService::new(new_default_ha_service(store.as_ref())));
-        let general_service = GeneralHAService::new_with_auto_switch_ha_service(service.clone());
-        AutoSwitchHAService::init(&mut service, general_service).expect("init auto switch ha service");
+        let general_service = new_initialized_auto_switch_service(store.as_ref());
+        let service = general_service.auto_switch_service().expect("auto switch service");
 
         let switched = service.change_to_master(5).await.expect("change to master");
 
@@ -740,12 +703,11 @@ mod tests {
     async fn follower_rejects_stale_epoch() {
         let temp_root =
             std::env::temp_dir().join(format!("rocketmq-rust-auto-switch-stale-epoch-{}", current_millis()));
-        let mut store = new_test_message_store(&temp_root);
+        let mut store = new_test_message_store(&temp_root, true);
         store.init().await.expect("init message store");
 
-        let mut service = ArcMut::new(AutoSwitchHAService::new(new_default_ha_service(store.as_ref())));
-        let general_service = GeneralHAService::new_with_auto_switch_ha_service(service.clone());
-        AutoSwitchHAService::init(&mut service, general_service).expect("init auto switch ha service");
+        let general_service = new_initialized_auto_switch_service(store.as_ref());
+        let service = general_service.auto_switch_service().expect("auto switch service");
 
         assert!(service.change_to_master(6).await.expect("change to master"));
         let stale = service

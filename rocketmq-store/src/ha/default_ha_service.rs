@@ -24,11 +24,6 @@ use rocketmq_common::common::broker::broker_role::BrokerRole;
 use rocketmq_remoting::protocol::body::ha_client_runtime_info::HAClientRuntimeInfo;
 use rocketmq_remoting::protocol::body::ha_connection_runtime_info::HAConnectionRuntimeInfo;
 use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
-#[allow(
-    unused_imports,
-    reason = "ArcMut remains used by compatibility tests until the General HA root migrates"
-)]
-use rocketmq_rust::ArcMut;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::select;
@@ -50,7 +45,7 @@ use crate::ha::default_ha_connection::DefaultHAConnection;
 use crate::ha::default_ha_connection::HAConnectionRuntimeHandle;
 use crate::ha::general_ha_client::GeneralHAClient;
 use crate::ha::general_ha_connection::GeneralHAConnection;
-use crate::ha::general_ha_service::GeneralHAService;
+use crate::ha::general_ha_service::GeneralHAServiceReference;
 use crate::ha::group_transfer_service::GroupTransferRuntimeInfo;
 use crate::ha::group_transfer_service::GroupTransferService;
 use crate::ha::ha_client::HAClient;
@@ -454,35 +449,38 @@ impl DefaultHAService {
         self.connection_context.notify_transfer_some(offset).await;
     }
 
-    pub(crate) fn init(this: &mut Self, general_ha_service: GeneralHAService) -> HAResult<()> {
+    pub(crate) fn init(
+        &mut self,
+        service_reference: GeneralHAServiceReference,
+        auto_switch_replication: Option<Arc<AutoSwitchReplicationState>>,
+    ) -> HAResult<()> {
         // Initialize the DefaultHAService with the provided message store.
-        let config = this.replica_store.message_store_config();
-        let is_auto_switch = general_ha_service.is_auto_switch_enabled();
-        if let GeneralHAService::AutoSwitchHAService(auto_switch_service) = &general_ha_service {
-            this.connection_context
-                .install_auto_switch_replication(auto_switch_service.replication_state())?;
+        let config = self.replica_store.message_store_config();
+        let is_auto_switch = auto_switch_replication.is_some();
+        if let Some(replication) = auto_switch_replication {
+            self.connection_context.install_auto_switch_replication(replication)?;
         }
 
-        let group_transfer_service = Arc::new(GroupTransferService::new(general_ha_service.clone()));
-        this.connection_context
+        let group_transfer_service = Arc::new(GroupTransferService::new(service_reference.clone()));
+        self.connection_context
             .install_group_transfer_service(&group_transfer_service)?;
-        this.group_transfer_service = Some(group_transfer_service);
+        self.group_transfer_service = Some(group_transfer_service);
 
         if config.broker_role == BrokerRole::Slave && !is_auto_switch {
-            this.ensure_ha_client()?;
+            self.ensure_ha_client()?;
         }
 
         let state_notification_service = Arc::new(HAConnectionStateNotificationService::new(
-            general_ha_service,
+            service_reference,
             Arc::clone(&config),
         ));
-        this.connection_context
+        self.connection_context
             .install_state_notification_service(&state_notification_service)?;
-        this.ha_connection_state_notification_service = Some(state_notification_service);
+        self.ha_connection_state_notification_service = Some(state_notification_service);
 
-        this.accept_socket_service = Some(AcceptSocketService::new(
-            this.replica_store.message_store_config(),
-            this.connection_context.clone(),
+        self.accept_socket_service = Some(AcceptSocketService::new(
+            self.replica_store.message_store_config(),
+            self.connection_context.clone(),
             is_auto_switch,
         ));
         Ok(())
@@ -540,9 +538,9 @@ impl DefaultHAService {
 }
 
 impl HAService for DefaultHAService {
-    async fn start(&mut self) -> HAResult<()> {
+    async fn start(&self) -> HAResult<()> {
         self.accept_socket_service
-            .as_mut()
+            .as_ref()
             .ok_or_else(|| HAError::Service("AcceptSocketService not initialized".to_string()))?
             .start()
             .await?;
@@ -556,7 +554,7 @@ impl HAService for DefaultHAService {
             .ok_or_else(|| HAError::Service("HAConnectionStateNotificationService not initialized".to_string()))?
             .start()
             .await?;
-        if let Some(ref mut ha_client) = self.ha_client {
+        if let Some(ref ha_client) = self.ha_client {
             ha_client.start().await;
         }
         Ok(())
@@ -706,10 +704,6 @@ impl HAService for DefaultHAService {
         self.ha_client.as_ref()
     }
 
-    fn get_ha_client_mut(&mut self) -> Option<&mut GeneralHAClient> {
-        self.ha_client.as_mut()
-    }
-
     fn get_push_to_slave_max_offset(&self) -> i64 {
         self.replication_progress.max_ack_offset()
     }
@@ -755,7 +749,7 @@ struct AcceptSocketService {
     socket_address_listen: SocketAddr,
     message_store_config: Arc<MessageStoreConfig>,
     is_auto_switch: bool,
-    shutdown_token: CancellationToken,
+    shutdown_token: Mutex<CancellationToken>,
     connection_context: DefaultHAConnectionContext,
     worker_group: Arc<Mutex<Option<rocketmq_runtime::TaskGroup>>>,
 }
@@ -772,7 +766,7 @@ impl AcceptSocketService {
             socket_address_listen,
             message_store_config,
             is_auto_switch,
-            shutdown_token: CancellationToken::new(),
+            shutdown_token: Mutex::new(CancellationToken::new()),
             connection_context,
             worker_group: Arc::new(Mutex::new(None)),
         }
@@ -795,7 +789,7 @@ impl AcceptSocketService {
         Ok(general_connection)
     }
 
-    pub async fn start(&mut self) -> HAResult<()> {
+    pub async fn start(&self) -> HAResult<()> {
         let mut worker_group_guard = self.worker_group.lock().await;
         if worker_group_guard.is_some() {
             warn!("AcceptSocketService is already started");
@@ -805,8 +799,8 @@ impl AcceptSocketService {
         let listener = TcpListener::bind(self.socket_address_listen)
             .await
             .map_err(HAError::Io)?;
-        self.shutdown_token = CancellationToken::new();
-        let shutdown_token = self.shutdown_token.clone();
+        let shutdown_token = CancellationToken::new();
+        *self.shutdown_token.lock().await = shutdown_token.clone();
         let is_auto_switch = self.is_auto_switch;
         let message_store_config = self.message_store_config.clone();
         let connection_context = self.connection_context.clone();
@@ -866,7 +860,7 @@ impl AcceptSocketService {
 
     pub async fn shutdown(&self) {
         info!("Shutting down AcceptSocketService");
-        self.shutdown_token.cancel();
+        self.shutdown_token.lock().await.cancel();
         let worker_group = self.worker_group.lock().await.take();
         if let Some(worker_group) = worker_group {
             let report = worker_group.shutdown(Duration::from_secs(3)).await;
@@ -883,15 +877,13 @@ mod tests {
     use std::path::Path;
     use std::sync::atomic::Ordering;
 
-    use cheetah_string::CheetahString;
-    use dashmap::DashMap;
-    use rocketmq_common::common::broker::broker_config::BrokerConfig;
-    use rocketmq_common::common::config::TopicConfig;
     use rocketmq_common::TimeUtils::current_millis;
     use tokio::io::AsyncWriteExt;
 
     use super::*;
     use crate::ha::auto_switch::auto_switch_ha_service::AutoSwitchHAService;
+    use crate::ha::general_ha_service::GeneralHAService;
+    use crate::ha::test_support::new_test_message_store;
     use crate::message_store::local_file_message_store::LocalFileMessageStore;
 
     #[test]
@@ -932,50 +924,17 @@ mod tests {
         let _ = std::fs::remove_dir_all(temp_root);
     }
 
-    fn new_test_message_store(root: &Path, enable_controller_mode: bool) -> ArcMut<LocalFileMessageStore> {
-        std::fs::create_dir_all(root).expect("create temp root dir");
-
-        let broker_config = BrokerConfig {
-            enable_controller_mode,
-            ..BrokerConfig::default()
-        };
-
-        let message_store_config = MessageStoreConfig {
-            enable_controller_mode,
-            ha_max_time_slave_not_catchup: 1000,
-            store_path_root_dir: root.to_string_lossy().into_owned().into(),
-            ..MessageStoreConfig::default()
-        };
-
-        let topic_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>> = Arc::new(DashMap::new());
-        let mut store = ArcMut::new(LocalFileMessageStore::new(
-            Arc::new(message_store_config),
-            Arc::new(broker_config),
-            topic_table,
-            None,
-            false,
-        ));
-        let store_clone = store.clone();
-        store.set_message_store_arc(store_clone);
-        store
-    }
-
     fn new_default_ha_service(store: &LocalFileMessageStore) -> DefaultHAService {
         DefaultHAService::new(store.ha_replica_store_handle())
     }
 
-    fn new_auto_switch_services(root: &Path) -> (ArcMut<DefaultHAService>, ArcMut<AutoSwitchHAService>) {
+    fn new_auto_switch_service(root: &Path) -> GeneralHAService {
         let store = new_test_message_store(root, true);
-        let mut default_service = ArcMut::new(new_default_ha_service(store.as_ref()));
-        let auto_switch_service = ArcMut::new(AutoSwitchHAService::new(new_default_ha_service(store.as_ref())));
-
-        DefaultHAService::init(
-            &mut default_service,
-            GeneralHAService::new_with_auto_switch_ha_service(auto_switch_service.clone()),
-        )
-        .expect("init default ha service");
-
-        (default_service, auto_switch_service)
+        let mut service = GeneralHAService::new_with_auto_switch_ha_service(AutoSwitchHAService::new(
+            new_default_ha_service(store.as_ref()),
+        ));
+        service.init().expect("init auto switch ha service");
+        service
     }
 
     async fn new_server_stream() -> (TcpStream, SocketAddr, TcpStream) {
@@ -992,7 +951,7 @@ mod tests {
     async fn start_without_init_returns_error() {
         let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-default-ha-no-init-{}", current_millis()));
         let store = new_test_message_store(&temp_root, false);
-        let mut service = new_default_ha_service(store.as_ref());
+        let service = new_default_ha_service(store.as_ref());
 
         let error = service.start().await.expect_err("start should fail before init");
 
@@ -1022,9 +981,9 @@ mod tests {
         let temp_root =
             std::env::temp_dir().join(format!("rocketmq-rust-default-ha-repeated-ack-{}", current_millis()));
         let store = new_test_message_store(&temp_root, false);
-        let mut service = ArcMut::new(new_default_ha_service(store.as_ref()));
-        let general_service = GeneralHAService::new_with_default_ha_service(service.clone());
-        DefaultHAService::init(&mut service, general_service).expect("init default ha service");
+        let mut general_service = GeneralHAService::new_with_default_ha_service(new_default_ha_service(store.as_ref()));
+        general_service.init().expect("init default ha service");
+        let service = general_service.default_service().expect("default ha service");
 
         service.notify_transfer_some(128).await;
         service.notify_transfer_some(128).await;
@@ -1039,20 +998,19 @@ mod tests {
     async fn accept_socket_service_shutdown_joins_worker() {
         let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-default-ha-shutdown-{}", current_millis()));
         let store = new_test_message_store(&temp_root, true);
-        let mut service = ArcMut::new(new_default_ha_service(store.as_ref()));
-        let auto_switch_service = ArcMut::new(AutoSwitchHAService::new(new_default_ha_service(store.as_ref())));
-
-        DefaultHAService::init(
-            &mut service,
-            GeneralHAService::new_with_auto_switch_ha_service(auto_switch_service),
-        )
-        .expect("init default ha service");
+        let mut general_service = GeneralHAService::new_with_auto_switch_ha_service(AutoSwitchHAService::new(
+            new_default_ha_service(store.as_ref()),
+        ));
+        general_service.init().expect("init auto switch ha service");
+        let service = general_service
+            .auto_switch_service()
+            .expect("auto switch service")
+            .default_delegate();
 
         let accept_service = service
             .accept_socket_service
-            .as_mut()
+            .as_ref()
             .expect("accept socket service should be initialized");
-        accept_service.socket_address_listen = SocketAddr::from(([127u8, 0u8, 0u8, 1u8], 0));
 
         accept_service.start().await.expect("start accept socket service");
         assert!(accept_service.worker_group.lock().await.is_some());
@@ -1067,14 +1025,14 @@ mod tests {
     fn init_uses_auto_switch_accept_socket_service_for_auto_switch_mode() {
         let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-default-ha-init-{}", current_millis()));
         let store = new_test_message_store(&temp_root, true);
-        let mut service = ArcMut::new(new_default_ha_service(store.as_ref()));
-        let auto_switch_service = ArcMut::new(AutoSwitchHAService::new(new_default_ha_service(store.as_ref())));
-
-        DefaultHAService::init(
-            &mut service,
-            GeneralHAService::new_with_auto_switch_ha_service(auto_switch_service),
-        )
-        .expect("init default ha service");
+        let mut general_service = GeneralHAService::new_with_auto_switch_ha_service(AutoSwitchHAService::new(
+            new_default_ha_service(store.as_ref()),
+        ));
+        general_service.init().expect("init auto switch ha service");
+        let service = general_service
+            .auto_switch_service()
+            .expect("auto switch service")
+            .default_delegate();
 
         assert!(
             service
@@ -1091,7 +1049,7 @@ mod tests {
     async fn build_connection_wraps_auto_switch_connections_when_enabled() {
         let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-default-ha-build-{}", current_millis()));
         let store = new_test_message_store(&temp_root, true);
-        let service = ArcMut::new(new_default_ha_service(store.as_ref()));
+        let service = new_default_ha_service(store.as_ref());
         let (server_stream, remote_addr, _client) = new_server_stream().await;
 
         let mut connection = AcceptSocketService::build_connection(
@@ -1117,7 +1075,9 @@ mod tests {
     #[tokio::test]
     async fn destroy_connections_does_not_hold_connection_table_lock_during_connection_shutdown() {
         let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-default-ha-destroy-{}", current_millis()));
-        let (service, auto_switch_service) = new_auto_switch_services(&temp_root);
+        let general_service = new_auto_switch_service(&temp_root);
+        let auto_switch_service = general_service.auto_switch_service().expect("auto switch service");
+        let service = auto_switch_service.default_delegate();
         auto_switch_service.sync_controller_sync_state_set(7, &HashSet::from([7_i64]));
         let (server_stream, remote_addr, _client) = new_server_stream().await;
         let mut connection = AcceptSocketService::build_connection(
@@ -1144,8 +1104,9 @@ mod tests {
     async fn connection_ack_callback_expands_auto_switch_sync_state_set() {
         let temp_root =
             std::env::temp_dir().join(format!("rocketmq-rust-default-ha-ack-callback-{}", current_millis()));
-        let (service, auto_switch_service) = new_auto_switch_services(&temp_root);
-        assert_eq!(auto_switch_service.weak_count(), 0);
+        let general_service = new_auto_switch_service(&temp_root);
+        let auto_switch_service = general_service.auto_switch_service().expect("auto switch service");
+        let service = auto_switch_service.default_delegate();
         auto_switch_service.sync_controller_sync_state_set(7, &HashSet::from([7_i64]));
 
         let (server_stream, remote_addr, _client) = new_server_stream().await;
@@ -1172,7 +1133,9 @@ mod tests {
     #[tokio::test]
     async fn connection_caught_up_callback_keeps_sync_state_member_alive() {
         let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-default-ha-caught-up-{}", current_millis()));
-        let (service, auto_switch_service) = new_auto_switch_services(&temp_root);
+        let general_service = new_auto_switch_service(&temp_root);
+        let auto_switch_service = general_service.auto_switch_service().expect("auto switch service");
+        let service = auto_switch_service.default_delegate();
         auto_switch_service.sync_controller_sync_state_set(7, &HashSet::from([7_i64, 9_i64]));
 
         let (server_stream, remote_addr, _client) = new_server_stream().await;
@@ -1201,7 +1164,9 @@ mod tests {
     async fn remove_connection_callback_prunes_auto_switch_sync_state_set() {
         let temp_root =
             std::env::temp_dir().join(format!("rocketmq-rust-default-ha-remove-callback-{}", current_millis()));
-        let (service, auto_switch_service) = new_auto_switch_services(&temp_root);
+        let general_service = new_auto_switch_service(&temp_root);
+        let auto_switch_service = general_service.auto_switch_service().expect("auto switch service");
+        let service = auto_switch_service.default_delegate();
         auto_switch_service.sync_controller_sync_state_set(7, &HashSet::from([7_i64, 9_i64]));
 
         let (server_stream, remote_addr, _client) = new_server_stream().await;
@@ -1231,7 +1196,7 @@ mod tests {
             current_millis()
         ));
         let store = new_test_message_store(&temp_root, false);
-        let service = ArcMut::new(new_default_ha_service(store.as_ref()));
+        let service = new_default_ha_service(store.as_ref());
         let (server_stream, remote_addr, mut client) = new_server_stream().await;
         let mut connection = AcceptSocketService::build_connection(
             service.connection_context(),

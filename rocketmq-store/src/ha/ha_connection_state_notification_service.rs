@@ -25,7 +25,7 @@ use tokio::sync::Mutex;
 use tracing::error;
 
 use crate::config::message_store_config::MessageStoreConfig;
-use crate::ha::general_ha_service::GeneralHAService;
+use crate::ha::general_ha_service::GeneralHAServiceReference;
 use crate::ha::ha_client::HAClient;
 use crate::ha::ha_connection_state::HAConnectionState;
 use crate::ha::ha_connection_state_notification_request::HAConnectionStateNotificationRequest;
@@ -41,7 +41,7 @@ pub struct HAConnectionStateNotificationService {
 }
 
 struct Inner {
-    ha_service: GeneralHAService,
+    ha_service: GeneralHAServiceReference,
     message_store_config: Arc<MessageStoreConfig>,
     request: Mutex<Option<HAConnectionStateNotificationRequest>>,
     last_check_time_stamp: AtomicU64,
@@ -61,8 +61,13 @@ impl Inner {
             request.remote_addr().to_string()
         };
 
+        let Some(ha_service) = self.ha_service.upgrade() else {
+            self.complete_timed_out_request(&remote_addr).await;
+            return;
+        };
+
         if uses_slave_connection_path(&self.message_store_config) {
-            let Some(ha_client) = self.ha_service.get_ha_client() else {
+            let Some(ha_client) = ha_service.get_ha_client() else {
                 self.complete_timed_out_request(&remote_addr).await;
                 return;
             };
@@ -81,7 +86,7 @@ impl Inner {
                 ConnectionNotificationMatch::Missing | ConnectionNotificationMatch::Completed => {}
             }
         } else {
-            match self.ha_service.connection_state(&remote_addr).await {
+            match ha_service.connection_state(&remote_addr).await {
                 Some(connection_state) => {
                     let connection_match = self
                         .check_connection_state_and_notify(&remote_addr, connection_state)
@@ -191,7 +196,7 @@ impl ServiceTask for Inner {
 }
 
 impl HAConnectionStateNotificationService {
-    pub fn new(ha_service: GeneralHAService, message_store_config: Arc<MessageStoreConfig>) -> Self {
+    pub fn new(ha_service: GeneralHAServiceReference, message_store_config: Arc<MessageStoreConfig>) -> Self {
         let inner = Arc::new(Inner {
             ha_service,
             message_store_config,

@@ -63,7 +63,15 @@ class M06HALocalContractTests(unittest.TestCase):
         )[0]
         store_ha_service = source("rocketmq-store/src/ha/ha_service.rs")
         store_general = source("rocketmq-store/src/ha/general_ha_service.rs")
+        store_general_production = store_general.split("#[cfg(test)]", maxsplit=1)[0]
         store_group = source("rocketmq-store/src/ha/group_transfer_service.rs")
+        store_group_production = store_group.split("#[cfg(test)]", maxsplit=1)[0]
+        store_state_notification = source(
+            "rocketmq-store/src/ha/ha_connection_state_notification_service.rs"
+        )
+        store_state_notification_production = store_state_notification.split(
+            "#[cfg(test)]", maxsplit=1
+        )[0]
         store_default_service = source("rocketmq-store/src/ha/default_ha_service.rs")
         store_default_service_production = store_default_service.split(
             "#[cfg(test)]", maxsplit=1
@@ -183,7 +191,7 @@ class M06HALocalContractTests(unittest.TestCase):
         )
         self.assertNotIn("ArcMut", store_connection_production)
         self.assertNotIn("DefaultHAService", store_connection_production)
-        self.assertIn("fn init(this: &mut Self", store_default_service_production)
+        self.assertIn("fn init(\n        &mut self", store_default_service_production)
         self.assertNotIn(
             "fn init(this: &mut ArcMut<Self>", store_default_service_production
         )
@@ -192,6 +200,16 @@ class M06HALocalContractTests(unittest.TestCase):
             "delegate: ArcMut<DefaultHAService>", store_auto_switch_production
         )
         self.assertNotIn("ArcMut::new(delegate)", store_auto_switch_production)
+        self.assertIn("DefaultHAService(Arc<DefaultHAService>)", store_general_production)
+        self.assertIn("AutoSwitchHAService(Arc<AutoSwitchHAService>)", store_general_production)
+        self.assertIn("Default(Weak<DefaultHAService>)", store_general_production)
+        self.assertIn("AutoSwitch(Weak<AutoSwitchHAService>)", store_general_production)
+        self.assertNotIn("ArcMut", store_general_production)
+        self.assertIn("ha_service: GeneralHAServiceReference", store_group_production)
+        self.assertIn(
+            "ha_service: GeneralHAServiceReference",
+            store_state_notification_production,
+        )
         self.assertIn("pub(crate) struct HAReplicaStoreHandle", store_local)
         self.assertIn("commit_log: CommitLogReplicaHandle", store_local)
         for capability in (

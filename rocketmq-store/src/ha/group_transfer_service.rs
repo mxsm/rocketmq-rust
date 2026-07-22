@@ -31,6 +31,7 @@ use tracing::warn;
 
 use crate::base::message_status_enum::PutMessageStatus;
 use crate::ha::general_ha_service::GeneralHAService;
+use crate::ha::general_ha_service::GeneralHAServiceReference;
 use crate::ha::ha_service::HAAckedReplicaSnapshot;
 use crate::ha::ha_service::HAService;
 use crate::log_file::group_commit_request::GroupCommitRequest;
@@ -46,7 +47,7 @@ pub struct GroupTransferService {
 }
 
 impl GroupTransferService {
-    pub fn new(ha_service: GeneralHAService) -> Self {
+    pub fn new(ha_service: GeneralHAServiceReference) -> Self {
         let inner = Arc::new(GroupTransferServiceInner::new(ha_service));
         GroupTransferService {
             inner: inner.clone(),
@@ -94,7 +95,7 @@ impl GroupTransferService {
 }
 
 struct GroupTransferServiceInner {
-    ha_service: GeneralHAService,
+    ha_service: GeneralHAServiceReference,
     notified: (Arc<Notify>, AtomicBool),
     ack_notify_count: AtomicU64,
     requests_write: Arc<Mutex<LinkedList<GroupCommitRequest>>>,
@@ -102,7 +103,7 @@ struct GroupTransferServiceInner {
 }
 
 impl GroupTransferServiceInner {
-    fn new(ha_service: GeneralHAService) -> Self {
+    fn new(ha_service: GeneralHAServiceReference) -> Self {
         GroupTransferServiceInner {
             ha_service,
             notified: (Arc::new(Notify::new()), AtomicBool::new(false)),
@@ -142,8 +143,8 @@ impl GroupTransferServiceInner {
         std::mem::swap(&mut *read_requests, &mut *write_requests);
     }
 
-    async fn load_acked_replicas(&self) -> Vec<HAAckedReplicaSnapshot> {
-        self.ha_service.snapshot_acked_replicas().await
+    async fn load_acked_replicas(ha_service: &GeneralHAService) -> Vec<HAAckedReplicaSnapshot> {
+        ha_service.snapshot_acked_replicas().await
     }
 
     async fn do_wait_transfer(&self) {
@@ -158,6 +159,7 @@ impl GroupTransferServiceInner {
         if read_requests.is_empty() {
             return;
         }
+        let ha_service = self.ha_service.upgrade();
 
         for request in read_requests.iter_mut() {
             let mut transfer_ok = false;
@@ -178,14 +180,17 @@ impl GroupTransferServiceInner {
                     );
                 }
                 index += 1;
+                let Some(ha_service) = ha_service.as_ref() else {
+                    break;
+                };
                 //handle only one slave ack, ackNums <= 2 means master + 1 slave
                 if !all_ack_in_sync_state_set && request.get_ack_nums() <= 2 {
-                    transfer_ok = self.ha_service.get_push_to_slave_max_offset() >= request.get_next_offset();
+                    transfer_ok = ha_service.get_push_to_slave_max_offset() >= request.get_next_offset();
                     continue;
                 }
-                if all_ack_in_sync_state_set && self.ha_service.is_auto_switch_enabled() {
-                    if let Some(sync_state_set) = self.ha_service.sync_state_set() {
-                        let acked_replicas = self.load_acked_replicas().await;
+                if all_ack_in_sync_state_set && ha_service.is_auto_switch_enabled() {
+                    if let Some(sync_state_set) = ha_service.sync_state_set() {
+                        let acked_replicas = Self::load_acked_replicas(ha_service).await;
                         transfer_ok = has_required_sync_state_set_acks(
                             &sync_state_set,
                             &acked_replicas,
@@ -193,10 +198,9 @@ impl GroupTransferServiceInner {
                         );
                         continue;
                     }
-                    transfer_ok =
-                        self.ha_service.in_sync_replicas_nums(request.get_next_offset()) >= request.get_ack_nums();
+                    transfer_ok = ha_service.in_sync_replicas_nums(request.get_next_offset()) >= request.get_ack_nums();
                 } else {
-                    let acked_replicas = self.load_acked_replicas().await;
+                    let acked_replicas = Self::load_acked_replicas(ha_service).await;
                     transfer_ok = has_required_acks(request.get_ack_nums(), &acked_replicas, request.get_next_offset());
                 }
             }
@@ -250,37 +254,18 @@ impl ServiceTask for GroupTransferServiceInner {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
-    use std::sync::Arc;
-
-    use cheetah_string::CheetahString;
-    use dashmap::DashMap;
-    use rocketmq_common::common::broker::broker_config::BrokerConfig;
-    use rocketmq_common::common::config::TopicConfig;
-    use rocketmq_rust::ArcMut;
-
     use super::*;
-    use crate::config::message_store_config::MessageStoreConfig;
     use crate::ha::default_ha_service::DefaultHAService;
-    use crate::message_store::local_file_message_store::LocalFileMessageStore;
+    use crate::ha::test_support::new_test_message_store;
+    use std::collections::HashSet;
 
     fn new_test_ha_service() -> GeneralHAService {
         let temp_root = tempfile::tempdir().expect("create temp root dir");
-        let mut store = ArcMut::new(LocalFileMessageStore::new(
-            Arc::new(MessageStoreConfig {
-                store_path_root_dir: temp_root.path().to_string_lossy().into_owned().into(),
-                ..MessageStoreConfig::default()
-            }),
-            Arc::new(BrokerConfig::default()),
-            Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
-            None,
-            false,
-        ));
-        let store_clone = store.clone();
-        store.set_message_store_arc(store_clone);
-        GeneralHAService::new_with_default_ha_service(ArcMut::new(DefaultHAService::new(
-            store.ha_replica_store_handle(),
-        )))
+        let store = new_test_message_store(temp_root.path(), false);
+        let mut service =
+            GeneralHAService::new_with_default_ha_service(DefaultHAService::new(store.ha_replica_store_handle()));
+        service.init().expect("init default ha service");
+        service
     }
 
     #[test]
@@ -326,7 +311,10 @@ mod tests {
 
     #[tokio::test]
     async fn runtime_info_reports_pending_requests_and_ack_notifications() {
-        let service = GroupTransferService::new(new_test_ha_service());
+        let ha_service = new_test_ha_service();
+        let reference = GeneralHAServiceReference::new();
+        reference.bind(&ha_service).expect("bind general ha service");
+        let service = GroupTransferService::new(reference);
         let (request, _response) = GroupCommitRequest::with_ack_nums(128, 5_000, 2);
 
         service.put_request(request).await;
@@ -337,6 +325,17 @@ mod tests {
         assert_eq!(runtime_info.pending_request_count, 1);
         assert!(runtime_info.pending_request_oldest_wait_millis < 5_000);
         assert_eq!(runtime_info.ack_notify_count, 2);
+    }
+
+    #[test]
+    fn general_service_reference_does_not_retain_root() {
+        let ha_service = new_test_ha_service();
+        let reference = GeneralHAServiceReference::new();
+        reference.bind(&ha_service).expect("bind general ha service");
+
+        assert!(reference.upgrade().is_some());
+        drop(ha_service);
+        assert!(reference.upgrade().is_none());
     }
 
     #[test]

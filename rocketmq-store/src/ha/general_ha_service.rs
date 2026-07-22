@@ -14,9 +14,11 @@
 
 use std::collections::HashSet;
 use std::sync::atomic::AtomicU32;
+use std::sync::Arc;
+use std::sync::OnceLock;
+use std::sync::Weak;
 
 use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
-use rocketmq_rust::ArcMut;
 use tokio::sync::Notify;
 
 use crate::ha::auto_switch::auto_switch_ha_service::AutoSwitchHAService;
@@ -28,28 +30,81 @@ use crate::ha::ha_connection_state_notification_request::HAConnectionStateNotifi
 use crate::ha::ha_service::HAAckedReplicaSnapshot;
 use crate::ha::ha_service::HAService;
 use crate::log_file::group_commit_request::GroupCommitRequest;
+use crate::store_error::HAError;
 use crate::store_error::HAResult;
+
+#[derive(Clone, Default)]
+pub(crate) struct GeneralHAServiceReference {
+    target: Arc<OnceLock<GeneralHAServiceWeak>>,
+}
+
+enum GeneralHAServiceWeak {
+    Default(Weak<DefaultHAService>),
+    AutoSwitch(Weak<AutoSwitchHAService>),
+}
+
+impl GeneralHAServiceReference {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    pub(crate) fn bind(&self, service: &GeneralHAService) -> HAResult<()> {
+        let target = match service {
+            GeneralHAService::DefaultHAService(service) => GeneralHAServiceWeak::Default(Arc::downgrade(service)),
+            GeneralHAService::AutoSwitchHAService(service) => GeneralHAServiceWeak::AutoSwitch(Arc::downgrade(service)),
+        };
+        self.target
+            .set(target)
+            .map_err(|_| HAError::Service("General HA service reference already bound".to_string()))
+    }
+
+    pub(crate) fn upgrade(&self) -> Option<GeneralHAService> {
+        match self.target.get()? {
+            GeneralHAServiceWeak::Default(service) => service.upgrade().map(GeneralHAService::DefaultHAService),
+            GeneralHAServiceWeak::AutoSwitch(service) => service.upgrade().map(GeneralHAService::AutoSwitchHAService),
+        }
+    }
+}
 
 #[derive(Clone)]
 pub enum GeneralHAService {
-    DefaultHAService(ArcMut<DefaultHAService>),
-    AutoSwitchHAService(ArcMut<AutoSwitchHAService>),
+    DefaultHAService(Arc<DefaultHAService>),
+    AutoSwitchHAService(Arc<AutoSwitchHAService>),
 }
 
 impl GeneralHAService {
-    pub fn new_with_default_ha_service(default_ha_service: ArcMut<DefaultHAService>) -> Self {
-        GeneralHAService::DefaultHAService(default_ha_service)
+    pub fn new_with_default_ha_service(default_ha_service: DefaultHAService) -> Self {
+        GeneralHAService::DefaultHAService(Arc::new(default_ha_service))
     }
 
-    pub fn new_with_auto_switch_ha_service(auto_switch_ha_service: ArcMut<AutoSwitchHAService>) -> Self {
-        GeneralHAService::AutoSwitchHAService(auto_switch_ha_service)
+    pub fn new_with_auto_switch_ha_service(auto_switch_ha_service: AutoSwitchHAService) -> Self {
+        GeneralHAService::AutoSwitchHAService(Arc::new(auto_switch_ha_service))
     }
 
     pub(crate) fn init(&mut self) -> HAResult<()> {
-        let ha_service = self.clone();
+        let reference = GeneralHAServiceReference::new();
         match self {
-            GeneralHAService::DefaultHAService(service) => DefaultHAService::init(service, ha_service),
-            GeneralHAService::AutoSwitchHAService(service) => AutoSwitchHAService::init(service, ha_service),
+            GeneralHAService::DefaultHAService(service) => Arc::get_mut(service)
+                .ok_or_else(|| HAError::Service("Default HA root was shared before initialization".to_string()))?
+                .init(reference.clone(), None)?,
+            GeneralHAService::AutoSwitchHAService(service) => Arc::get_mut(service)
+                .ok_or_else(|| HAError::Service("AutoSwitch HA root was shared before initialization".to_string()))?
+                .init(reference.clone())?,
+        }
+        reference.bind(self)
+    }
+
+    pub(crate) fn default_service(&self) -> Option<&DefaultHAService> {
+        match self {
+            GeneralHAService::DefaultHAService(service) => Some(service),
+            GeneralHAService::AutoSwitchHAService(_) => None,
+        }
+    }
+
+    pub(crate) fn auto_switch_service(&self) -> Option<&AutoSwitchHAService> {
+        match self {
+            GeneralHAService::DefaultHAService(_) => None,
+            GeneralHAService::AutoSwitchHAService(service) => Some(service),
         }
     }
 
@@ -98,7 +153,7 @@ impl GeneralHAService {
 }
 
 impl HAService for GeneralHAService {
-    async fn start(&mut self) -> HAResult<()> {
+    async fn start(&self) -> HAResult<()> {
         match self {
             GeneralHAService::DefaultHAService(service) => service.start().await,
             GeneralHAService::AutoSwitchHAService(service) => service.start().await,
@@ -229,13 +284,6 @@ impl HAService for GeneralHAService {
         match self {
             GeneralHAService::DefaultHAService(service) => service.get_ha_client(),
             GeneralHAService::AutoSwitchHAService(service) => service.get_ha_client(),
-        }
-    }
-
-    fn get_ha_client_mut(&mut self) -> Option<&mut GeneralHAClient> {
-        match self {
-            GeneralHAService::DefaultHAService(service) => service.get_ha_client_mut(),
-            GeneralHAService::AutoSwitchHAService(service) => service.get_ha_client_mut(),
         }
     }
 

@@ -2215,8 +2215,8 @@ impl MessageStore for LocalFileMessageStore {
                 StoreError::InvalidState("HA service was not constructed while wiring root dependencies".to_string())
             })?;
             let mut ha_service = match pending_ha_service {
-                PendingHAService::Default(service) => GeneralHAService::DefaultHAService(ArcMut::new(*service)),
-                PendingHAService::AutoSwitch(service) => GeneralHAService::AutoSwitchHAService(ArcMut::new(service)),
+                PendingHAService::Default(service) => GeneralHAService::new_with_default_ha_service(*service),
+                PendingHAService::AutoSwitch(service) => GeneralHAService::new_with_auto_switch_ha_service(service),
             };
             let _ = ha_service.init();
             self.ha_service = Some(ha_service);
@@ -6529,8 +6529,10 @@ mod tests {
         assert!(wiring.contains("PendingHAService::Default(Box::new("));
         assert!(wiring.contains("self.root_dependencies_wired = true;"));
         assert!(!init.contains("DefaultHAService::new"));
-        assert_eq!(init.matches("ArcMut::new(service)").count(), 1);
-        assert_eq!(init.matches("ArcMut::new(*service)").count(), 1);
+        assert_eq!(init.matches("ArcMut::new(service)").count(), 0);
+        assert_eq!(init.matches("ArcMut::new(*service)").count(), 0);
+        assert!(init.contains("GeneralHAService::new_with_default_ha_service(*service)"));
+        assert!(init.contains("GeneralHAService::new_with_auto_switch_ha_service(service)"));
         assert!(init.contains("self.ensure_root_dependencies_wired(\"init\")?;"));
         assert!(init.contains("self.pending_ha_service.take()"));
         assert!(init.contains("let _ = ha_service.init();"));

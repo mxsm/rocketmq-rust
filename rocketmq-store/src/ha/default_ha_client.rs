@@ -258,7 +258,7 @@ impl DefaultHAClient {
 }
 
 impl HAClient for DefaultHAClient {
-    async fn start(&mut self) {
+    async fn start(&self) {
         // Idempotent start: if a service group already exists, do nothing
         if self.service_group.read().await.is_some() {
             warn!("HAClient service is already running");
