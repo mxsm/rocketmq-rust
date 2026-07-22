@@ -1079,7 +1079,7 @@ mod tests {
     }
 
     async fn put_test_message<MS: MessageStore>(
-        inner: &mut crate::broker_runtime::BrokerRuntimeInner<MS>,
+        admin: &mut crate::broker::broker_admin_runtime::BrokerAdminRuntime<MS>,
         topic: &str,
     ) -> String {
         let mut message = MessageExtBrokerInner::default();
@@ -1089,7 +1089,7 @@ mod tests {
         message.message_ext_inner.born_host = "127.0.0.1:10000".parse::<SocketAddr>().expect("parse born host");
         message.message_ext_inner.store_host = "127.0.0.1:10911".parse::<SocketAddr>().expect("parse store host");
 
-        let put_result = inner
+        let put_result = admin
             .message_store_mut()
             .as_mut()
             .expect("message store should exist")
@@ -1106,8 +1106,8 @@ mod tests {
     async fn get_all_message_request_mode_returns_configured_modes() {
         let mut runtime = new_test_runtime("message-mode").await;
         runtime.init_processor_for_test();
-        let inner = runtime.inner_for_test().clone();
-        inner
+        let admin = runtime.admin_runtime_for_test();
+        admin
             .query_assignment_processor()
             .expect("query assignment processor should be initialized")
             .message_request_mode_manager()
@@ -1128,7 +1128,7 @@ mod tests {
             RemotingCommand::create_request_command(RequestCode::GetAllMessageRequestMode, EmptyHeader {});
         let mut response = handler
             .get_all_message_request_mode(
-                &runtime.admin_runtime_for_test(),
+                &admin,
                 channel,
                 ctx,
                 RequestCode::GetAllMessageRequestMode,
@@ -1157,19 +1157,19 @@ mod tests {
 
     #[tokio::test]
     async fn get_broker_consume_stats_returns_grouped_offsets() {
-        let mut runtime = new_test_runtime("broker-consume-stats").await;
-        let mut inner = runtime.inner_for_test().clone();
-        let _ = inner
+        let runtime = new_test_runtime("broker-consume-stats").await;
+        let mut admin = runtime.admin_runtime_for_test();
+        let _ = admin
             .topic_config_manager()
             .update_topic_config(TopicConfig::with_queues("topic-a", 1, 1), 0);
         let mut group_config =
             rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig::new(
                 CheetahString::from_static_str("group-a"),
             );
-        inner
+        admin
             .subscription_group_manager_mut()
             .update_subscription_group_config(&mut group_config);
-        inner.consumer_offset_manager().commit_offset(
+        admin.consumer_offset_manager().commit_offset(
             CheetahString::from_static_str("127.0.0.1"),
             &CheetahString::from_static_str("group-a"),
             &CheetahString::from_static_str("topic-a"),
@@ -1187,13 +1187,7 @@ mod tests {
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
 
         let mut response = handler
-            .get_broker_consume_stats(
-                &runtime.admin_runtime_for_test(),
-                channel,
-                ctx,
-                RequestCode::GetBrokerConsumeStats,
-                &mut request,
-            )
+            .get_broker_consume_stats(&admin, channel, ctx, RequestCode::GetBrokerConsumeStats, &mut request)
             .await
             .expect("get broker consume stats should succeed")
             .expect("get broker consume stats should return response");
@@ -1219,19 +1213,19 @@ mod tests {
 
     #[tokio::test]
     async fn query_correction_offset_marks_queue_as_max_when_compare_group_is_ahead() {
-        let mut runtime = new_test_runtime("query-correction").await;
-        let inner = runtime.inner_for_test().clone();
-        let _ = inner
+        let runtime = new_test_runtime("query-correction").await;
+        let admin = runtime.admin_runtime_for_test();
+        let _ = admin
             .topic_config_manager()
             .update_topic_config(TopicConfig::with_queues("topic-a", 1, 1), 0);
-        inner.consumer_offset_manager().commit_offset(
+        admin.consumer_offset_manager().commit_offset(
             CheetahString::from_static_str("127.0.0.1"),
             &CheetahString::from_static_str("group-a"),
             &CheetahString::from_static_str("topic-a"),
             0,
             12,
         );
-        inner.consumer_offset_manager().commit_offset(
+        admin.consumer_offset_manager().commit_offset(
             CheetahString::from_static_str("127.0.0.1"),
             &CheetahString::from_static_str("group-b"),
             &CheetahString::from_static_str("topic-a"),
@@ -1254,13 +1248,7 @@ mod tests {
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
 
         let mut response = handler
-            .query_correction_offset(
-                &runtime.admin_runtime_for_test(),
-                channel,
-                ctx,
-                RequestCode::QueryCorrectionOffset,
-                &mut request,
-            )
+            .query_correction_offset(&admin, channel, ctx, RequestCode::QueryCorrectionOffset, &mut request)
             .await
             .expect("query correction offset should succeed")
             .expect("query correction offset should return response");
@@ -1280,19 +1268,19 @@ mod tests {
 
     #[tokio::test]
     async fn consume_message_directly_returns_offline_error_for_known_message() {
-        let mut runtime = new_test_runtime("consume-message-directly").await;
-        let mut inner = runtime.inner_for_test().clone();
-        let _ = inner
+        let runtime = new_test_runtime("consume-message-directly").await;
+        let mut admin = runtime.admin_runtime_for_test();
+        let _ = admin
             .topic_config_manager()
             .update_topic_config(TopicConfig::with_queues("topic-a", 1, 1), 0);
         let mut group_config =
             rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig::new(
                 CheetahString::from_static_str("group-a"),
             );
-        inner
+        admin
             .subscription_group_manager_mut()
             .update_subscription_group_config(&mut group_config);
-        let msg_id = put_test_message(inner.as_mut(), "topic-a").await;
+        let msg_id = put_test_message(&mut admin, "topic-a").await;
 
         let mut handler = ConsumerRequestHandler::new();
         let mut request = RemotingCommand::create_request_command(
@@ -1313,13 +1301,7 @@ mod tests {
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
 
         let response = handler
-            .consume_message_directly(
-                &runtime.admin_runtime_for_test(),
-                channel,
-                ctx,
-                RequestCode::ConsumeMessageDirectly,
-                &mut request,
-            )
+            .consume_message_directly(&admin, channel, ctx, RequestCode::ConsumeMessageDirectly, &mut request)
             .await
             .expect("consume message directly should succeed")
             .expect("consume message directly should return response");
@@ -1335,16 +1317,16 @@ mod tests {
 
     #[tokio::test]
     async fn invoke_broker_to_reset_offset_assigns_server_side_offset() {
-        let mut runtime = new_test_runtime("reset-offset").await;
-        let mut inner = runtime.inner_for_test().clone();
-        let _ = inner
+        let runtime = new_test_runtime("reset-offset").await;
+        let mut admin = runtime.admin_runtime_for_test();
+        let _ = admin
             .topic_config_manager()
             .update_topic_config(TopicConfig::with_queues("topic-a", 1, 1), 0);
         let mut group_config =
             rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig::new(
                 CheetahString::from_static_str("group-a"),
             );
-        inner
+        admin
             .subscription_group_manager_mut()
             .update_subscription_group_config(&mut group_config);
 
@@ -1367,7 +1349,7 @@ mod tests {
 
         let mut response = handler
             .invoke_broker_to_reset_offset(
-                &mut runtime.admin_runtime_for_test(),
+                &mut admin,
                 channel,
                 ctx,
                 RequestCode::InvokeBrokerToResetOffset,
@@ -1378,7 +1360,7 @@ mod tests {
             .expect("invoke broker to reset offset should return response");
 
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
-        assert!(inner
+        assert!(admin
             .consumer_offset_manager()
             .has_offset_reset("group-a", "topic-a", 0));
         let body = ResetOffsetBody::decode(
@@ -1431,8 +1413,8 @@ mod tests {
 
     #[tokio::test]
     async fn query_subscription_by_consumer_returns_subscription_body() {
-        let mut runtime = new_test_runtime("query-subscription").await;
-        let inner = runtime.inner_for_test().clone();
+        let runtime = new_test_runtime("query-subscription").await;
+        let admin = runtime.admin_runtime_for_test();
         let register_channel = create_test_channel().await;
         let client_channel_info = ClientChannelInfo::new(
             register_channel.clone(),
@@ -1440,7 +1422,7 @@ mod tests {
             LanguageCode::RUST,
             100,
         );
-        inner.consumer_manager().register_consumer(
+        admin.consumer_manager().register_consumer(
             &CheetahString::from_static_str("group-a"),
             client_channel_info,
             ConsumeType::ConsumePassively,
@@ -1469,7 +1451,7 @@ mod tests {
 
         let mut response = handler
             .query_subscription_by_consumer(
-                &runtime.admin_runtime_for_test(),
+                &admin,
                 channel,
                 ctx,
                 RequestCode::QuerySubscriptionByConsumer,
@@ -1501,9 +1483,9 @@ mod tests {
 
     #[tokio::test]
     async fn query_consume_time_span_returns_queue_metadata() {
-        let mut runtime = new_test_runtime("consume-time-span").await;
-        let inner = runtime.inner_for_test().clone();
-        let _ = inner
+        let runtime = new_test_runtime("consume-time-span").await;
+        let admin = runtime.admin_runtime_for_test();
+        let _ = admin
             .topic_config_manager()
             .update_topic_config(TopicConfig::with_queues("topic-a", 1, 1), 0);
 
@@ -1521,13 +1503,7 @@ mod tests {
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
 
         let mut response = handler
-            .query_consume_time_span(
-                &runtime.admin_runtime_for_test(),
-                channel,
-                ctx,
-                RequestCode::QueryConsumeTimeSpan,
-                &mut request,
-            )
+            .query_consume_time_span(&admin, channel, ctx, RequestCode::QueryConsumeTimeSpan, &mut request)
             .await
             .expect("query consume time span should succeed")
             .expect("query consume time span should return response");
@@ -1555,12 +1531,12 @@ mod tests {
 
     #[tokio::test]
     async fn clone_group_offset_copies_offsets_from_source_group() {
-        let mut runtime = new_test_runtime("clone-offset").await;
-        let inner = runtime.inner_for_test().clone();
-        let _ = inner
+        let runtime = new_test_runtime("clone-offset").await;
+        let admin = runtime.admin_runtime_for_test();
+        let _ = admin
             .topic_config_manager()
             .update_topic_config(TopicConfig::with_queues("topic-a", 1, 1), 0);
-        inner.consumer_offset_manager().commit_offset(
+        admin.consumer_offset_manager().commit_offset(
             CheetahString::from_static_str("127.0.0.1"),
             &CheetahString::from_static_str("group-src"),
             &CheetahString::from_static_str("topic-a"),
@@ -1584,20 +1560,14 @@ mod tests {
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
 
         let response = handler
-            .clone_group_offset(
-                &runtime.admin_runtime_for_test(),
-                channel,
-                ctx,
-                RequestCode::CloneGroupOffset,
-                &mut request,
-            )
+            .clone_group_offset(&admin, channel, ctx, RequestCode::CloneGroupOffset, &mut request)
             .await
             .expect("clone group offset should succeed")
             .expect("clone group offset should return response");
 
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
         assert_eq!(
-            inner.consumer_offset_manager().query_offset(
+            admin.consumer_offset_manager().query_offset(
                 &CheetahString::from_static_str("group-dest"),
                 &CheetahString::from_static_str("topic-a"),
                 0,

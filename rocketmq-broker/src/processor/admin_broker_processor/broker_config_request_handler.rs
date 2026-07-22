@@ -925,9 +925,9 @@ mod tests {
 
     #[tokio::test]
     async fn set_commitlog_read_mode_updates_store_config() {
-        let mut runtime = new_test_runtime("commitlog-read-mode", false).await;
-        let inner = runtime.inner_for_test().clone();
-        let mut handler = BrokerConfigRequestHandler::new(runtime.admin_runtime_for_test());
+        let runtime = new_test_runtime("commitlog-read-mode", false).await;
+        let admin = runtime.admin_runtime_for_test();
+        let mut handler = BrokerConfigRequestHandler::new(admin.clone());
 
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
@@ -943,7 +943,7 @@ mod tests {
 
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
         assert!(
-            inner
+            admin
                 .message_store()
                 .expect("message store should exist")
                 .get_message_store_config()
@@ -964,7 +964,7 @@ mod tests {
 
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
         assert!(
-            !inner
+            !admin
                 .message_store()
                 .expect("message store should exist")
                 .get_message_store_config()
@@ -976,9 +976,9 @@ mod tests {
 
     #[tokio::test]
     async fn update_broker_config_applies_supported_runtime_properties() {
-        let mut runtime = new_test_runtime("update-broker-config", false).await;
-        let inner = runtime.inner_for_test().clone();
-        let mut handler = BrokerConfigRequestHandler::new(runtime.admin_runtime_for_test());
+        let runtime = new_test_runtime("update-broker-config", false).await;
+        let admin = runtime.admin_runtime_for_test();
+        let mut handler = BrokerConfigRequestHandler::new(admin.clone());
 
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
@@ -996,19 +996,19 @@ mod tests {
             .expect("update broker config should return a response");
 
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
-        assert!(!inner.broker_config().enable_lite_event_mode);
-        assert_eq!(inner.broker_config().max_lite_subscription_count, 5);
-        assert_eq!(inner.broker_config().max_client_event_count, 7);
-        assert_eq!(inner.broker_config().lite_event_full_dispatch_delay_time, 1234);
+        assert!(!admin.broker_config().enable_lite_event_mode);
+        assert_eq!(admin.broker_config().max_lite_subscription_count, 5);
+        assert_eq!(admin.broker_config().max_client_event_count, 7);
+        assert_eq!(admin.broker_config().lite_event_full_dispatch_delay_time, 1234);
 
         let _ = fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }
 
     #[tokio::test]
     async fn update_broker_config_rejects_unsupported_or_invalid_keys() {
-        let mut runtime = new_test_runtime("update-broker-config-invalid", false).await;
-        let inner = runtime.inner_for_test().clone();
-        let mut handler = BrokerConfigRequestHandler::new(runtime.admin_runtime_for_test());
+        let runtime = new_test_runtime("update-broker-config-invalid", false).await;
+        let admin = runtime.admin_runtime_for_test();
+        let mut handler = BrokerConfigRequestHandler::new(admin.clone());
 
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
@@ -1025,7 +1025,7 @@ mod tests {
         assert!(response
             .remark()
             .is_some_and(|remark| remark.contains("maxClientEventCount")));
-        assert_eq!(inner.broker_config().max_client_event_count, 100);
+        assert_eq!(admin.broker_config().max_client_event_count, 100);
 
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
@@ -1174,9 +1174,9 @@ mod tests {
 
     #[tokio::test]
     async fn switch_timer_engine_accepts_file_time_wheel_and_rejects_rocksdb() {
-        let mut runtime = new_test_runtime("switch-timer-engine", true).await;
-        let inner = runtime.inner_for_test().clone();
-        let mut handler = BrokerConfigRequestHandler::new(runtime.admin_runtime_for_test());
+        let runtime = new_test_runtime("switch-timer-engine", true).await;
+        let admin = runtime.admin_runtime_for_test();
+        let mut handler = BrokerConfigRequestHandler::new(admin.clone());
 
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
@@ -1194,7 +1194,7 @@ mod tests {
             .expect("switch timer engine should return response");
 
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
-        assert!(inner
+        assert!(admin
             .timer_message_store()
             .expect("timer message store should exist")
             .is_should_running_dequeue());

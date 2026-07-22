@@ -580,8 +580,8 @@ mod tests {
 
     #[tokio::test]
     async fn resume_check_half_message_requeues_half_message() {
-        let mut runtime = new_test_runtime("resume-half").await;
-        let mut inner = runtime.inner_for_test().clone();
+        let runtime = new_test_runtime("resume-half").await;
+        let mut admin = runtime.admin_runtime_for_test();
         let mut half_message = MessageExtBrokerInner::default();
         half_message.set_topic(CheetahString::from_static_str(
             TransactionalMessageUtil::build_half_topic(),
@@ -593,14 +593,14 @@ mod tests {
             CheetahString::from_static_str("real-topic"),
         );
 
-        let put_message_result = inner
+        let put_message_result = admin
             .message_store_mut()
             .as_mut()
             .unwrap()
             .put_message(half_message)
             .await;
         assert!(put_message_result.is_ok());
-        let max_phy_offset_before_resume = inner.message_store().unwrap().get_max_phy_offset();
+        let max_phy_offset_before_resume = admin.message_store().unwrap().get_max_phy_offset();
         let msg_id = put_message_result
             .append_message_result()
             .and_then(|result| result.get_message_id())
@@ -620,7 +620,7 @@ mod tests {
 
         let response = handler
             .resume_check_half_message(
-                &mut runtime.admin_runtime_for_test(),
+                &mut admin,
                 channel,
                 ctx,
                 RequestCode::ResumeCheckHalfMessage,
@@ -631,19 +631,19 @@ mod tests {
             .expect("resume check half message should return response");
 
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
-        assert!(inner.message_store().unwrap().get_max_phy_offset() > max_phy_offset_before_resume);
+        assert!(admin.message_store().unwrap().get_max_phy_offset() > max_phy_offset_before_resume);
 
         let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }
 
     #[tokio::test]
     async fn query_consume_queue_returns_queue_data_and_online_subscription() {
-        let mut runtime = new_test_runtime("query-consume-queue").await;
-        let mut inner = runtime.inner_for_test().clone();
-        let _ = inner
+        let runtime = new_test_runtime("query-consume-queue").await;
+        let mut admin = runtime.admin_runtime_for_test();
+        let _ = admin
             .topic_config_manager()
             .update_topic_config(TopicConfig::with_queues("topic-a", 1, 1), 0);
-        inner
+        admin
             .message_store_mut()
             .as_mut()
             .unwrap()
@@ -657,7 +657,7 @@ mod tests {
             LanguageCode::RUST,
             100,
         );
-        inner.consumer_manager().register_consumer(
+        admin.consumer_manager().register_consumer(
             &CheetahString::from_static_str("group-a"),
             client_channel_info,
             ConsumeType::ConsumePassively,
@@ -671,7 +671,7 @@ mod tests {
             false,
         );
 
-        let mut consume_queue = inner
+        let mut consume_queue = admin
             .message_store()
             .unwrap()
             .find_consume_queue(&CheetahString::from_static_str("topic-a"), 0)
@@ -704,13 +704,7 @@ mod tests {
         request.make_custom_header_to_net();
 
         let mut response = handler
-            .query_consume_queue(
-                &runtime.admin_runtime_for_test(),
-                channel,
-                ctx,
-                RequestCode::QueryConsumeQueue,
-                &mut request,
-            )
+            .query_consume_queue(&admin, channel, ctx, RequestCode::QueryConsumeQueue, &mut request)
             .await
             .expect("query consume queue should succeed")
             .expect("query consume queue should return response");
@@ -736,8 +730,8 @@ mod tests {
     async fn pop_rollback_drains_pop_buffer_and_restarts_service() {
         let mut runtime = new_test_runtime("pop-rollback").await;
         runtime.init_processor_for_test();
-        let inner = runtime.inner_for_test().clone();
-        let pop_message_processor = inner
+        let admin = runtime.admin_runtime_for_test();
+        let pop_message_processor = admin
             .pop_message_processor()
             .cloned()
             .expect("pop message processor should exist");
@@ -755,7 +749,7 @@ mod tests {
                 rocketmq_common::TimeUtils::current_millis() as u64,
                 0,
                 1,
-                inner.broker_config().broker_name().clone(),
+                admin.broker_config().broker_name().clone(),
             )
             .await;
         assert!(service.get_offset_total_size().await > 0);
@@ -767,13 +761,7 @@ mod tests {
         request.make_custom_header_to_net();
 
         let response = handler
-            .pop_rollback(
-                &runtime.admin_runtime_for_test(),
-                channel,
-                ctx,
-                RequestCode::PopRollback,
-                &mut request,
-            )
+            .pop_rollback(&admin, channel, ctx, RequestCode::PopRollback, &mut request)
             .await
             .expect("pop rollback should succeed")
             .expect("pop rollback should return response");

@@ -525,12 +525,6 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "e026ebf822973d5e51a9c025",
-          "fingerprint": "74b8a89bf15dab9d62967cf8",
-          "item": "fn new_with_optional_service_context",
-          "line": 1138
-        },
-        {
           "id": "96382769b35a09684edebc18",
           "fingerprint": "7ae7f0d42cc7cf877f3c5180",
           "item": "fn initialize_message_store",
@@ -623,18 +617,6 @@
       "kind": "type_reference",
       "category": "production",
       "occurrences": [
-        {
-          "id": "84d3d6a4b112b10fef1c3911",
-          "fingerprint": "e762bcff4ffbf49ef47e7453",
-          "item": "struct BrokerRuntime",
-          "line": 657
-        },
-        {
-          "id": "02566b4b48b63ce794f9f705",
-          "fingerprint": "f4ac9d4d3ea79d037e394d47",
-          "item": "fn inner_for_test",
-          "line": 1355
-        },
         {
           "id": "6accef9ad22e851ef1dc1890",
           "fingerprint": "993e032cc43bf3fde8bb9b8c",

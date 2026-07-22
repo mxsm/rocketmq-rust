@@ -129,16 +129,13 @@ mod tests {
 
     #[tokio::test]
     async fn uninitialized_controller_returns_success_without_retaining_runtime_owner() {
-        let mut runtime = BrokerRuntime::new(
+        let runtime = BrokerRuntime::new(
             Arc::new(BrokerConfig::default()),
             Arc::new(MessageStoreConfig::default()),
         );
-        let inner = runtime.inner_for_test().clone();
-        let broker_config_request_handler = BrokerConfigRequestHandler::new(runtime.admin_runtime_for_test());
-        let strong_count_before = inner.strong_count();
+        let admin = runtime.admin_runtime_for_test();
+        let broker_config_request_handler = BrokerConfigRequestHandler::new(admin);
         let handler = NotifyBrokerRoleChangeHandler::new();
-
-        assert_eq!(inner.strong_count(), strong_count_before);
 
         let channel = create_test_channel().await;
         let ctx = Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
@@ -167,6 +164,5 @@ mod tests {
             .expect("notification should return a response");
 
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
-        assert_eq!(inner.strong_count(), strong_count_before);
     }
 }

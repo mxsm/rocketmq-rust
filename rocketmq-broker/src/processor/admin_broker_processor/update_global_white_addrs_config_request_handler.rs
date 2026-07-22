@@ -158,10 +158,10 @@ mod tests {
 
     #[tokio::test]
     async fn update_global_white_addrs_config_updates_runtime_snapshot() {
-        let mut runtime = new_test_runtime("update").await;
-        let inner = runtime.inner_for_test().clone();
+        let runtime = new_test_runtime("update").await;
+        let broker_config = runtime.broker_config();
         let provider_registry = ProviderRegistry::local(&AuthConfig {
-            auth_config_path: inner.broker_config().auth_config_path.clone(),
+            auth_config_path: broker_config.auth_config_path.clone(),
             ..AuthConfig::default()
         })
         .expect("create provider registry");

@@ -654,7 +654,7 @@ fn prepare_rocksdb_config_path_for_json_migration(path: &Path) -> bool {
 
 pub(crate) struct BrokerRuntime {
     #[cfg(feature = "local_file_store")]
-    inner: ArcMut<BrokerRuntimeInner<GenericMessageStore>>,
+    inner: Box<BrokerRuntimeInner<GenericMessageStore>>,
     shutdown_hook: Option<BrokerShutdownHook>,
     proxy_request_processor: Option<DefaultServerProcessor>,
     consumer_ids_change_listener: Arc<dyn ConsumerIdsChangeListener + Send + Sync + 'static>,
@@ -1135,7 +1135,7 @@ impl BrokerRuntime {
         let escape_bridge_policy_state = EscapeBridgePolicyState::from_configs(&broker_config, &message_store_config);
         let config_state = BrokerRuntimeConfigState::new(broker_config.clone(), message_store_config.clone());
 
-        let mut inner = ArcMut::new(BrokerRuntimeInner::<GenericMessageStore> {
+        let mut inner = Box::new(BrokerRuntimeInner::<GenericMessageStore> {
             shutdown: Arc::new(AtomicBool::new(false)),
             store_host,
             broker_addr: CheetahString::from(broker_address),
@@ -1351,8 +1351,8 @@ impl BrokerRuntime {
         &self.scheduled_task_manager
     }
 
-    pub(crate) fn inner_for_test(&mut self) -> &mut ArcMut<BrokerRuntimeInner<GenericMessageStore>> {
-        &mut self.inner
+    pub(crate) fn inner_for_test(&mut self) -> &mut BrokerRuntimeInner<GenericMessageStore> {
+        self.inner.as_mut()
     }
 
     #[cfg(test)]
@@ -4965,6 +4965,14 @@ mod tests {
             !production_source.contains("self.inner.clone()"),
             "background work must not retain the complete BrokerRuntimeInner root"
         );
+        assert!(
+            !production_source.contains("inner: ArcMut<BrokerRuntimeInner"),
+            "BrokerRuntime must exclusively own its composition root"
+        );
+        assert!(
+            production_source.contains("inner: Box<BrokerRuntimeInner"),
+            "BrokerRuntime must keep an explicit exclusive composition root"
+        );
     }
 
     fn next_controller_test_temp_id() -> u64 {
@@ -6014,7 +6022,6 @@ accounts:
     #[tokio::test]
     async fn registering_message_store_hooks_does_not_retain_runtime_root() {
         let mut runtime = new_phase3_test_runtime("schedule-hook-ownership").await;
-        let strong_count_before = runtime.inner.strong_count();
         let store_strong_count_before = runtime
             .inner
             .message_store
@@ -6024,7 +6031,6 @@ accounts:
 
         runtime.register_message_store_hook();
 
-        assert_eq!(runtime.inner.strong_count(), strong_count_before);
         assert_eq!(
             runtime
                 .inner
@@ -6037,20 +6043,15 @@ accounts:
         let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }
 
-    #[tokio::test]
-    async fn message_arriving_listener_does_not_retain_runtime_root() {
-        let mut runtime = new_phase3_test_runtime("message-arriving-listener-ownership").await;
-        let strong_count_before = runtime.inner.strong_count();
+    #[test]
+    fn message_arriving_listener_does_not_retain_runtime_root() {
+        let production_source = include_str!("long_polling/notify_message_arriving_listener.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("message-arriving listener production source should precede its tests");
 
-        runtime
-            .inner
-            .message_store
-            .as_mut()
-            .expect("message store should be initialized")
-            .set_message_arriving_listener(None);
-
-        assert_eq!(runtime.inner.strong_count(), strong_count_before);
-        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+        assert!(!production_source.contains(concat!("Broker", "RuntimeInner")));
+        assert!(!production_source.contains(concat!("Arc", "Mut")));
     }
 
     #[cfg(feature = "tieredstore")]

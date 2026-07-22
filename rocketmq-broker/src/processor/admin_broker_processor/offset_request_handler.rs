@@ -543,13 +543,13 @@ mod tests {
 
     #[tokio::test]
     async fn get_earliest_msg_store_time_returns_store_timestamp() {
-        let mut runtime = new_test_runtime("earliest-time").await;
-        let inner = runtime.inner_for_test().clone();
-        let _ = inner
+        let runtime = new_test_runtime("earliest-time").await;
+        let admin = runtime.admin_runtime_for_test();
+        let _ = admin
             .topic_config_manager()
             .update_topic_config(TopicConfig::with_queues("topic-a", 1, 1), 0);
 
-        let expected_timestamp = inner
+        let expected_timestamp = admin
             .message_store()
             .expect("message store should exist")
             .get_earliest_message_time(&CheetahString::from_static_str("topic-a"), 0);
@@ -568,13 +568,7 @@ mod tests {
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
 
         let response = handler
-            .get_earliest_msg_store_time(
-                &runtime.admin_runtime_for_test(),
-                channel,
-                ctx,
-                RequestCode::GetEarliestMsgStoreTime,
-                &mut request,
-            )
+            .get_earliest_msg_store_time(&admin, channel, ctx, RequestCode::GetEarliestMsgStoreTime, &mut request)
             .await
             .expect("get earliest msg store time should succeed")
             .expect("get earliest msg store time should return response");

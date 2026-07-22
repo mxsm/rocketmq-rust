@@ -520,8 +520,7 @@ mod tests {
     #[tokio::test]
     async fn check_client_config_rejects_property_filter_when_disabled() {
         let mut runtime = new_test_runtime("check-client-filter-disabled", false).await;
-        let inner = runtime.inner_for_test().clone();
-        let processor = inner.build_client_manage_processor();
+        let processor = runtime.inner_for_test().build_client_manage_processor();
         let mut request = check_request(SubscriptionData {
             topic: "topic-a".into(),
             sub_string: "a > 1".into(),
@@ -548,8 +547,7 @@ mod tests {
     #[tokio::test]
     async fn check_client_config_accepts_valid_property_filter_when_enabled() {
         let mut runtime = new_test_runtime("check-client-filter-enabled-valid", true).await;
-        let inner = runtime.inner_for_test().clone();
-        let processor = inner.build_client_manage_processor();
+        let processor = runtime.inner_for_test().build_client_manage_processor();
         let mut request = check_request(SubscriptionData {
             topic: "topic-a".into(),
             sub_string: "region IN ('hz', 'sh') AND name CONTAINS 'rocket' AND score BETWEEN 0 AND 100".into(),
@@ -572,8 +570,7 @@ mod tests {
     #[tokio::test]
     async fn check_client_config_rejects_invalid_property_filter_when_enabled() {
         let mut runtime = new_test_runtime("check-client-filter-enabled-invalid", true).await;
-        let inner = runtime.inner_for_test().clone();
-        let processor = inner.build_client_manage_processor();
+        let processor = runtime.inner_for_test().build_client_manage_processor();
         let mut request = check_request(SubscriptionData {
             topic: "topic-a".into(),
             sub_string: "a >".into(),
@@ -596,11 +593,16 @@ mod tests {
     #[tokio::test]
     async fn heart_beat_v2_without_sub_registers_consumer_and_marks_sub_change() {
         let mut runtime = new_test_runtime("heartbeat-v2-without-sub", false).await;
-        let inner = runtime.inner_for_test().clone();
+        let (consumer_manager, mut processor) = {
+            let inner = runtime.inner_for_test();
+            (
+                inner.consumer_manager().clone_shared_state(),
+                inner.build_client_manage_processor(),
+            )
+        };
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let client_channel_info = ClientChannelInfo::new(channel.clone(), "client-id".into(), Default::default(), 0);
-        let mut processor = inner.build_client_manage_processor();
         processor
             .consumer_group_heartbeat_table
             .write()
@@ -638,8 +640,7 @@ mod tests {
             Some("true")
         );
 
-        let consumer_group_info = inner
-            .consumer_manager()
+        let consumer_group_info = consumer_manager
             .get_consumer_group_info(&CheetahString::from_static_str("group-a"))
             .expect("consumer should be registered");
         assert!(consumer_group_info.get_subscription_table().is_empty());
@@ -649,7 +650,14 @@ mod tests {
     #[tokio::test]
     async fn heart_beat_v1_and_unregister_share_live_client_registries() {
         let mut runtime = new_test_runtime("heartbeat-v1-unregister", false).await;
-        let inner = runtime.inner_for_test().clone();
+        let (producer_manager, consumer_manager, mut processor) = {
+            let inner = runtime.inner_for_test();
+            (
+                inner.producer_manager().clone_shared_state(),
+                inner.consumer_manager().clone_shared_state(),
+                inner.build_client_manage_processor(),
+            )
+        };
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let producer_group = CheetahString::from_static_str("producer-group");
@@ -674,8 +682,6 @@ mod tests {
             .set_body(Bytes::from(
                 serde_json::to_vec(&heartbeat_data).expect("serialize heartbeat"),
             ));
-        let mut processor = inner.build_client_manage_processor();
-
         let heartbeat_response = processor
             .heart_beat(channel.clone(), ctx.clone(), &mut heartbeat_request)
             .await
@@ -686,11 +692,8 @@ mod tests {
             RemotingResponseCode::from(heartbeat_response.code()),
             RemotingResponseCode::Success
         );
-        assert!(inner.producer_manager().group_online(producer_group.as_str()));
-        assert!(inner
-            .consumer_manager()
-            .get_consumer_group_info(&consumer_group)
-            .is_some());
+        assert!(producer_manager.group_online(producer_group.as_str()));
+        assert!(consumer_manager.get_consumer_group_info(&consumer_group).is_some());
 
         let mut unregister_request = RemotingCommand::create_request_command(
             RequestCode::UnregisterClient,
@@ -711,19 +714,22 @@ mod tests {
             RemotingResponseCode::from(unregister_response.code()),
             RemotingResponseCode::Success
         );
-        assert!(!inner.producer_manager().group_online(producer_group.as_str()));
-        assert!(inner
-            .consumer_manager()
-            .get_consumer_group_info(&consumer_group)
-            .is_none());
+        assert!(!producer_manager.group_online(producer_group.as_str()));
+        assert!(consumer_manager.get_consumer_group_info(&consumer_group).is_none());
         let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }
 
     #[tokio::test]
     async fn explicit_client_capabilities_share_live_state_and_preserve_retry_topic_options() {
         let mut runtime = new_test_runtime("explicit-client-capabilities", false).await;
-        let inner = runtime.inner_for_test().clone();
-        let processor = inner.build_client_manage_processor();
+        let (producer_manager, topic_config_manager, processor) = {
+            let inner = runtime.inner_for_test();
+            (
+                inner.producer_manager().clone_shared_state(),
+                inner.topic_config_manager_handle(),
+                inner.build_client_manage_processor(),
+            )
+        };
         let channel = create_test_channel().await;
         let client_channel_info = ClientChannelInfo::new(channel, "client-id".into(), Default::default(), 0);
         let producer_group = CheetahString::from_static_str("producer-group");
@@ -731,7 +737,7 @@ mod tests {
         processor
             .producer_registration
             .register_producer(&producer_group, &client_channel_info);
-        assert!(inner.producer_manager().group_online(producer_group.as_str()));
+        assert!(producer_manager.group_online(producer_group.as_str()));
 
         let retry_topic = CheetahString::from_static_str("%RETRY%explicit-client-capabilities");
         let topic_sys_flag = topic_sys_flag::build_sys_flag(false, true);
@@ -746,8 +752,7 @@ mod tests {
         assert_eq!(topic_config.topic_sys_flag, topic_sys_flag);
         assert!(topic_config.order);
         assert_eq!(
-            inner
-                .topic_config_manager()
+            topic_config_manager
                 .select_topic_config(&retry_topic)
                 .expect("live topic manager should contain retry topic")
                 .as_ref(),

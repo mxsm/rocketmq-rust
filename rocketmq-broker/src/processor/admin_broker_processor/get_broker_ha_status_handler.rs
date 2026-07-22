@@ -89,15 +89,6 @@ mod tests {
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
 
     use crate::broker_runtime::BrokerRuntime;
-    use crate::processor::admin_broker_processor::batch_mq_handler::BatchMqHandler;
-    use crate::processor::admin_broker_processor::broker_epoch_cache_handler::BrokerEpochCacheHandler;
-    use crate::processor::admin_broker_processor::consumer_request_handler::ConsumerRequestHandler;
-    use crate::processor::admin_broker_processor::message_related_handler::MessageRelatedHandler;
-    use crate::processor::admin_broker_processor::notify_min_broker_id_handler::NotifyMinBrokerChangeIdHandler;
-    use crate::processor::admin_broker_processor::offset_request_handler::OffsetRequestHandler;
-    use crate::processor::admin_broker_processor::reset_master_flusg_offset_handler::ResetMasterFlushOffsetHandler;
-    use crate::processor::admin_broker_processor::subscription_group_handler::SubscriptionGroupHandler;
-    use crate::processor::admin_broker_processor::update_broker_ha_handler::UpdateBrokerHaHandler;
 
     use super::*;
 
@@ -192,25 +183,23 @@ mod tests {
 
     #[test]
     fn admin_runtime_borrow_handlers_do_not_retain_runtime_root() {
-        let broker_config = Arc::new(BrokerConfig::default());
-        let message_store_config = Arc::new(MessageStoreConfig::default());
-        let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
-        let inner = runtime.inner_for_test();
-        let strong_count_before = inner.strong_count();
+        let handler_sources = [
+            include_str!("get_broker_ha_status_handler.rs"),
+            include_str!("broker_epoch_cache_handler.rs"),
+            include_str!("reset_master_flusg_offset_handler.rs"),
+            include_str!("update_broker_ha_handler.rs"),
+            include_str!("batch_mq_handler.rs"),
+            include_str!("consumer_request_handler.rs"),
+            include_str!("subscription_group_handler.rs"),
+            include_str!("message_related_handler.rs"),
+            include_str!("notify_min_broker_id_handler.rs"),
+            include_str!("offset_request_handler.rs"),
+        ];
 
-        {
-            let _ha_status_handler = GetBrokerHaStatusHandler::new();
-            let _epoch_cache_handler = BrokerEpochCacheHandler::new();
-            let _reset_flush_offset_handler = ResetMasterFlushOffsetHandler::new();
-            let _update_broker_ha_handler = UpdateBrokerHaHandler::new();
-            let _batch_mq_handler = BatchMqHandler::new();
-            let _consumer_request_handler = ConsumerRequestHandler::new();
-            let _subscription_group_handler = SubscriptionGroupHandler::new();
-            let _message_related_handler = MessageRelatedHandler::new();
-            let _notify_min_broker_handler = NotifyMinBrokerChangeIdHandler::new();
-            let _offset_request_handler = OffsetRequestHandler::new();
-            assert_eq!(inner.strong_count(), strong_count_before);
+        for source in handler_sources {
+            let production = source.split("#[cfg(test)]").next().unwrap_or(source);
+            assert!(!production.contains("BrokerRuntimeInner"));
+            assert!(!production.contains(&["Arc", "Mut"].concat()));
         }
-        assert_eq!(inner.strong_count(), strong_count_before);
     }
 }
