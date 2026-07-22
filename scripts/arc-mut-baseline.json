@@ -2734,31 +2734,6 @@
       "adr": "ADR-013"
     },
     {
-      "identity": "0574df339f50bd2dcb576f25",
-      "path": "rocketmq-store/src/timer/timer_message_store.rs",
-      "symbol": "mut_from_ref",
-      "kind": "mut_from_ref_call",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "3361d80b451043c9c7f82a02",
-          "fingerprint": "ccf8e5b8ee96f01e21db68ca",
-          "item": "fn deliver_slot",
-          "line": 981
-        },
-        {
-          "id": "42b9caba638beae4e5c1ddab",
-          "fingerprint": "63b6d6b2064b4d583d5c57dc",
-          "item": "fn deliver_slot",
-          "line": 1022
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy safe mutable-reference escape pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
       "identity": "1768f5680fffbe0abcaf3b94",
       "path": "rocketmq-store/src/timer/timer_message_store.rs",
       "symbol": "mut_from_ref",

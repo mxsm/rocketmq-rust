@@ -1033,7 +1033,7 @@ impl CommitLog {
             messaging.rocketmq.message.keys = tracing::field::Empty,
         )
     )]
-    pub async fn put_messages(&mut self, mut msg_batch: MessageExtBatch) -> PutMessageResult {
+    pub async fn put_messages(&self, mut msg_batch: MessageExtBatch) -> PutMessageResult {
         #[cfg(any(feature = "observability", feature = "observability-traces"))]
         rocketmq_observability::trace::record_current_message_properties(
             msg_batch.message_ext_broker_inner.get_properties(),
@@ -1102,8 +1102,8 @@ impl CommitLog {
         msg_batch.message_ext_broker_inner.message_ext_inner.store_timestamp = time_utils::current_millis() as i64;
 
         let append_attempt = {
-            let adapter = self.root.adapter_mut();
-            let mapped_file_queue = &mut adapter.mapped_file_queue;
+            let adapter = self.root.adapter();
+            let mapped_file_queue = &adapter.mapped_file_queue;
             let message_store_config = adapter.message_store_config.as_ref();
             let (active_memory_lock, active_memory_lock_present) = adapter.runtime_state.active_memory_lock_parts();
             let append_message_callback = adapter.append_message_callback.as_ref();
@@ -1238,7 +1238,7 @@ impl CommitLog {
             messaging.rocketmq.message.keys = tracing::field::Empty,
         )
     )]
-    pub async fn put_message(&mut self, mut msg: MessageExtBrokerInner) -> PutMessageResult {
+    pub async fn put_message(&self, mut msg: MessageExtBrokerInner) -> PutMessageResult {
         #[cfg(any(feature = "observability", feature = "observability-traces"))]
         rocketmq_observability::trace::record_current_message_properties(
             msg.get_properties(),
@@ -1319,8 +1319,8 @@ impl CommitLog {
         }
 
         let append_attempt = {
-            let adapter = self.root.adapter_mut();
-            let mapped_file_queue = &mut adapter.mapped_file_queue;
+            let adapter = self.root.adapter();
+            let mapped_file_queue = &adapter.mapped_file_queue;
             let message_store_config = adapter.message_store_config.as_ref();
             let (active_memory_lock, active_memory_lock_present) = adapter.runtime_state.active_memory_lock_parts();
             let append_message_callback = adapter.append_message_callback.as_ref();

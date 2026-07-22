@@ -1110,6 +1110,13 @@ read handle 提供，LMQ 首次建队与已有 offset 路径保持原语义。re
 相对 bc77 净删除 4 个 production identities/6 occurrences，无 relocation、新增 identity 或临时 approval。
 R12 从 4/6 降至 0/0 并完成，31 项执行清单现为完成 9 项、剩余 22 项；正式进度仍为 75/82。
 
+Timer delivery 的共享可变逃逸随 Issue #8575 删除：CommitLog 单条/批量追加在既有 topic-queue lock 与
+put-message lock 下改为接受共享引用，LocalFileMessageStore 保留 `MessageStore` 兼容签名并委托给共享实现；
+rolled/due Timer 消息不再通过完整 Store 的 `mut_from_ref` 追加。reviewed 快照为 98 identities/383 occurrences
+（production 29/63、test 55/280、compatibility 14/40、Broker production 4/8、Store production 25/55）；
+相对 bc78 净删除 1 个 production identity/2 occurrences，无 relocation、新增 identity 或临时 approval。
+R14 从 3/7 降至 2/5，仍未完成；31 项执行清单保持完成 9 项、剩余 22 项，正式进度仍为 75/82。
+
 Default HA client runtime ownership 随 Issue #8567 完成收窄：`DefaultHAClient` 以标准 `Arc<Inner>` 共享只读组合根，
 `Inner` 仅保留原子、锁、Notify、flow monitor 与现有 LocalStore 兼容句柄；从未安装连接的 stream 字段和重复 buffer/
 dispatch/report 状态已删除，实际 reader/writer buffer 继续由每个 connection task 独占。reviewed 快照为 126 identities/
