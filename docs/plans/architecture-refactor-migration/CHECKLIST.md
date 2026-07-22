@@ -855,7 +855,8 @@ M09-04 再删除 MCP 未使用的 Auth/Error direct edges，并把承担 owned t
   - [x] Issue #8529 后实际快照降至 232 identities/734 occurrences：production 99/287、test 119/407、compatibility 14/40、Broker production 17/53；offset/failover 的 4 个 production identities/8 occurrences 与 1/1 test glob 删除，其中 failover Store owner 经临时 ADR-013 从 2 occurrences 压缩并一对一迁移为 R01 的 1/1 组合根兼容 owner，production 净减少 3/7、test 净减少 1/1，无扩大的 governed debt 或提交态临时 approval
   - [x] Issue #8531 后实际快照降至 221 identities/714 occurrences：production 91/270、test 116/404、compatibility 14/40、Broker production 9/36；POP processor/buffer/revive 的 8 个 production identities/17 occurrences 与 3 个 test identities/3 occurrences 全部删除，改持热更新 policy、显式 capability、弱 Store 和父 TaskGroup，请求聚合改为独占借用；无 relocation、新增 identity 或临时 approval
   - [x] Issue #8533 / M11-12bc60 后实际快照降至 220 identities/713 occurrences：production 90/269、test 116/404、compatibility 14/40、Broker production 8/35；删除 `BrokerAdminRuntimeHandle` 的 1/1 root owner，Admin dispatcher 改持显式 Admin/control-plane context 与原子配置代际；16 个保留 occurrence 经临时 ADR-013 一对一指纹审核，无新增 identity 或提交态 approval
-  - [ ] M11-12bc61 及后续：Broker 启动/注册/后台任务/Local-Rocks aggregate、Store WAL/其余 queue/timer/HA、compatibility 删除、stable/Miri/Loom/soak/SLO 与同一候选快照 Gate 仍待完成
+  - [x] Issue #8535 / M11-12bc61 后实际快照降至 220 identities/703 occurrences：production 90/259、test 116/404、compatibility 14/40、Broker production 8/25；controller bootstrap、leader discovery、broker ID、heartbeat、replica 与 membership 周期迁入显式 `BrokerControllerRuntime`，计划任务不再捕获完整 runtime root；净删除 10 个 production occurrences，无 relocation、新增 identity 或临时 approval
+  - [ ] M11-12bc62 及后续：Broker 注册/state getter/Local-Rocks aggregate、Store WAL/其余 queue/timer/HA、compatibility 删除、stable/Miri/Loom/soak/SLO 与同一候选快照 Gate 仍待完成
   - [ ] 总进度仍为 75/82；本子切片不提前计作完成工作包，M10/Kind-K3d/container dynamic/HUMAN Gate 保持开放
 - [ ] 对应任务文档的 Exit Checklist 全部通过
 

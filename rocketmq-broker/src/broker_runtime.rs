@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::collections::HashMap;
+#[cfg(feature = "rocksdb_store")]
 use std::collections::HashSet;
 use std::future::Future;
 use std::net::SocketAddr;
@@ -116,10 +117,6 @@ use crate::config::rocksdb_manager::RocksDbBrokerConfigManager;
 use crate::config::rocksdb_manager::RocksDbBrokerConfigManagerConfig;
 #[cfg(feature = "rocksdb_store")]
 use crate::config::rocksdb_manager::RocksDbBrokerConfigStorageLayout;
-use crate::controller::replicas_manager::ControllerBrokerIdAction;
-use crate::controller::replicas_manager::ControllerRegisterFollowup;
-use crate::controller::replicas_manager::ControllerReplicaInfoFollowup;
-use crate::controller::replicas_manager::ControllerReplicaSyncFollowup;
 use crate::controller::replicas_manager::ReplicasManager;
 use crate::failover::escape_bridge::EscapeBridge;
 use crate::failover::escape_bridge_capability::EscapeBridgePolicyState;
@@ -3474,7 +3471,7 @@ impl BrokerRuntime {
         self.start_basic_service().await;
 
         if broker_config.enable_controller_mode {
-            BrokerRuntimeInner::bootstrap_controller_mode(self.inner.clone()).await;
+            self.inner.build_controller_runtime().bootstrap_controller_mode().await;
         }
 
         let live_broker_config = self.inner.broker_config();
@@ -3522,17 +3519,17 @@ impl BrokerRuntime {
         if broker_config.enable_slave_acting_master {
             self.schedule_send_heartbeat();
             let sync_broker_member_group_period = broker_config.sync_broker_member_group_period;
-            let inner_ = self.inner.clone();
+            let controller_runtime = self.inner.build_controller_runtime();
             Self::log_scheduled_task_start(
                 "sync_broker_member_group",
                 self.scheduled_task_manager.add_fixed_rate_task_async(
                     Duration::from_millis(1000),
                     Duration::from_millis(sync_broker_member_group_period),
                     async move |ctx| {
-                        if ctx.is_cancelled() || inner_.shutdown.load(Ordering::Acquire) {
+                        if ctx.is_cancelled() {
                             return Ok(());
                         }
-                        BrokerRuntimeInner::sync_broker_member_group(&inner_).await;
+                        controller_runtime.sync_broker_member_group().await;
                         Ok(())
                     },
                 ),
@@ -3571,27 +3568,17 @@ impl BrokerRuntime {
 
     pub(crate) fn schedule_send_heartbeat(&mut self) {
         let broker_heartbeat_interval = self.inner.broker_config().broker_heartbeat_interval;
-        let inner_ = self.inner.clone();
+        let controller_runtime = self.inner.build_controller_runtime();
         Self::log_scheduled_task_start(
             "send_heartbeat",
             self.scheduled_task_manager.add_fixed_rate_no_overlap_task_async(
                 Duration::from_millis(1000),
                 Duration::from_millis(broker_heartbeat_interval),
                 async move |ctx| {
-                    if ctx.is_cancelled() || inner_.shutdown.load(Ordering::Acquire) {
+                    if ctx.is_cancelled() {
                         return Ok(());
                     }
-                    if inner_.online_role_state.is_isolated() {
-                        if inner_.broker_config().enable_controller_mode {
-                            BrokerRuntimeInner::bootstrap_controller_mode(inner_.clone()).await;
-                        }
-                        info!("Skip send heartbeat for broker is isolated");
-                        return Ok(());
-                    }
-                    if inner_.broker_config().enable_controller_mode {
-                        BrokerRuntimeInner::refresh_controller_leader(inner_.clone()).await;
-                    }
-                    inner_.send_heartbeat().await;
+                    controller_runtime.run_heartbeat_cycle().await;
                     Ok(())
                 },
             ),
@@ -3600,17 +3587,17 @@ impl BrokerRuntime {
 
     pub(crate) fn schedule_sync_controller_metadata(&mut self) {
         let period = self.inner.broker_config().sync_controller_metadata_period;
-        let inner_ = self.inner.clone();
+        let controller_runtime = self.inner.build_controller_runtime();
         Self::log_scheduled_task_start(
             "sync_controller_metadata",
             self.scheduled_task_manager.add_fixed_rate_no_overlap_task_async(
                 Duration::from_millis(1000),
                 Duration::from_millis(period),
                 async move |ctx| {
-                    if ctx.is_cancelled() || inner_.shutdown.load(Ordering::Acquire) {
+                    if ctx.is_cancelled() {
                         return Ok(());
                     }
-                    BrokerRuntimeInner::refresh_controller_leader(inner_.clone()).await;
+                    controller_runtime.refresh_controller_leader().await;
                     Ok(())
                 },
             ),
@@ -3619,17 +3606,17 @@ impl BrokerRuntime {
 
     pub(crate) fn schedule_sync_controller_replica_info(&mut self) {
         let period = self.inner.broker_config().sync_broker_metadata_period;
-        let inner_ = self.inner.clone();
+        let controller_runtime = self.inner.build_controller_runtime();
         Self::log_scheduled_task_start(
             "sync_controller_replica_info",
             self.scheduled_task_manager.add_fixed_rate_no_overlap_task_async(
                 Duration::from_millis(3000),
                 Duration::from_millis(period),
                 async move |ctx| {
-                    if ctx.is_cancelled() || inner_.shutdown.load(Ordering::Acquire) {
+                    if ctx.is_cancelled() {
                         return Ok(());
                     }
-                    BrokerRuntimeInner::sync_controller_replica_info(inner_.clone()).await;
+                    controller_runtime.sync_controller_replica_info().await;
                     Ok(())
                 },
             ),
@@ -3736,8 +3723,10 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             self.escape_bridge().store_capability(),
             special_services,
             registration,
+            self.get_broker_addr().clone(),
             self.slave_synchronize_unchecked().master_addr_handle(),
             self.broker_outer_api().clone(),
+            Arc::clone(&self.shutdown),
             self.pull_request_hold_service.as_ref(),
             &self.topic_config_manager_handle(),
             self.send_message_policy_state.clone(),
@@ -5098,470 +5087,6 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         self.online_role_state.set_isolated(true);
     }
 
-    pub async fn bootstrap_controller_mode(this: ArcMut<Self>) {
-        let Some(controller_leader) = BrokerRuntimeInner::discover_controller_leader(&this).await else {
-            warn!(
-                "Skip controller mode bootstrap because controller leader is unavailable, broker={}",
-                this.broker_config().broker_identity.get_canonical_name()
-            );
-            return;
-        };
-
-        let broker_config = this.broker_config();
-        if let Some(Err(error)) = this.controller_state.with_replicas_mut(|replicas_manager| {
-            replicas_manager.set_controller_leader_address(controller_leader.clone());
-            replicas_manager.validate_registration_state(&broker_config)
-        }) {
-            warn!("Controller mode registration state is invalid: {}", error);
-            return;
-        }
-
-        let controller_broker_id =
-            match BrokerRuntimeInner::ensure_controller_broker_id(this.clone(), &controller_leader).await {
-                Ok(controller_broker_id) => controller_broker_id,
-                Err(error) => {
-                    warn!("Ensure controller broker id failed: {}", error);
-                    return;
-                }
-            };
-
-        if this.replicas_manager().is_none() {
-            warn!("ReplicasManager is not initialized for controller mode bootstrap");
-            return;
-        }
-
-        let cluster_name = broker_config.broker_identity.broker_cluster_name.clone();
-        let broker_name = broker_config.broker_identity.broker_name.clone();
-        let broker_addr = this.get_broker_addr().clone();
-        match this
-            .broker_outer_api
-            .register_broker_to_controller(
-                cluster_name.clone(),
-                broker_name.clone(),
-                controller_broker_id as i64,
-                broker_addr,
-                &controller_leader,
-            )
-            .await
-        {
-            Ok((register_header, sync_state_set)) => {
-                this.controller_state
-                    .with_replicas_mut(ReplicasManager::mark_registered);
-                let sync_state_set = sync_state_set.unwrap_or_default();
-                let register_followup = this
-                    .replicas_manager()
-                    .map(|replicas_manager| {
-                        replicas_manager.register_followup(
-                            register_header.master_broker_id.and_then(|id| u64::try_from(id).ok()),
-                            register_header.master_epoch,
-                        )
-                    })
-                    .unwrap_or(ControllerRegisterFollowup::HeartbeatThenQueryReplicaInfo);
-                if register_followup == ControllerRegisterFollowup::ApplyRoleChange {
-                    if let Err(error) = BrokerRuntimeInner::apply_controller_role_change(
-                        this.clone(),
-                        Some(controller_leader.clone()),
-                        register_header.master_broker_id.and_then(|id| u64::try_from(id).ok()),
-                        register_header.master_address,
-                        register_header.master_epoch,
-                        register_header.sync_state_set_epoch,
-                        sync_state_set,
-                    )
-                    .await
-                    {
-                        warn!("Apply controller register result failed: {}", error);
-                    }
-                    return;
-                }
-            }
-            Err(error) => {
-                warn!("Register broker to controller failed: {}", error);
-                return;
-            }
-        }
-
-        if let Err(error) = this.send_heartbeat_to_controller_leader(&controller_leader).await {
-            warn!("Send bootstrap heartbeat to controller failed: {}", error);
-        }
-        tokio::time::sleep(Duration::from_millis(200)).await;
-
-        if let Ok((replica_info_header, sync_state_set)) = this
-            .broker_outer_api
-            .get_replica_info(&controller_leader, broker_name.clone())
-            .await
-        {
-            let replica_followup = this
-                .replicas_manager()
-                .map(|replicas_manager| {
-                    replicas_manager.replica_info_followup(
-                        replica_info_header
-                            .master_broker_id
-                            .and_then(|id| u64::try_from(id).ok()),
-                        replica_info_header.master_epoch,
-                    )
-                })
-                .unwrap_or(ControllerReplicaInfoFollowup::ElectMaster);
-            if replica_followup == ControllerReplicaInfoFollowup::ApplyRoleChange
-                && BrokerRuntimeInner::apply_controller_replica_info(
-                    this.clone(),
-                    controller_leader.clone(),
-                    replica_info_header
-                        .master_broker_id
-                        .and_then(|id| u64::try_from(id).ok()),
-                    replica_info_header.master_address.map(CheetahString::from_string),
-                    replica_info_header.master_epoch,
-                    Some(sync_state_set.get_sync_state_set_epoch()),
-                    sync_state_set.get_sync_state_set().cloned().unwrap_or_default(),
-                )
-                .await
-            {
-                return;
-            }
-        }
-
-        match this
-            .broker_outer_api
-            .broker_elect(
-                &controller_leader,
-                cluster_name,
-                broker_name.clone(),
-                controller_broker_id as i64,
-            )
-            .await
-        {
-            Ok((elect_header, sync_state_set)) => {
-                if let Err(error) = BrokerRuntimeInner::apply_controller_role_change(
-                    this,
-                    Some(controller_leader),
-                    elect_header.master_broker_id.and_then(|id| u64::try_from(id).ok()),
-                    elect_header.master_address,
-                    elect_header.master_epoch,
-                    elect_header.sync_state_set_epoch,
-                    sync_state_set,
-                )
-                .await
-                {
-                    warn!("Apply controller elect-master result failed: {}", error);
-                }
-            }
-            Err(error) => {
-                if let Ok((replica_info_header, sync_state_set)) = this
-                    .broker_outer_api
-                    .get_replica_info(&controller_leader, broker_name.clone())
-                    .await
-                {
-                    if BrokerRuntimeInner::apply_controller_replica_info(
-                        this,
-                        controller_leader,
-                        replica_info_header
-                            .master_broker_id
-                            .and_then(|id| u64::try_from(id).ok()),
-                        replica_info_header.master_address.map(CheetahString::from_string),
-                        replica_info_header.master_epoch,
-                        Some(sync_state_set.get_sync_state_set_epoch()),
-                        sync_state_set.get_sync_state_set().cloned().unwrap_or_default(),
-                    )
-                    .await
-                    {
-                        return;
-                    }
-                }
-                warn!("Elect master during controller mode bootstrap failed: {}", error);
-            }
-        }
-    }
-
-    async fn apply_controller_replica_info(
-        this: ArcMut<Self>,
-        controller_leader: CheetahString,
-        master_broker_id: Option<u64>,
-        master_address: Option<CheetahString>,
-        master_epoch: Option<i32>,
-        sync_state_set_epoch: Option<i32>,
-        sync_state_set: HashSet<i64>,
-    ) -> bool {
-        if master_broker_id.is_none() || master_epoch.is_none() {
-            return false;
-        }
-
-        if let Err(error) = BrokerRuntimeInner::apply_controller_role_change(
-            this,
-            Some(controller_leader),
-            master_broker_id,
-            master_address,
-            master_epoch,
-            sync_state_set_epoch,
-            sync_state_set,
-        )
-        .await
-        {
-            warn!("Apply controller replica info failed: {}", error);
-            return false;
-        }
-
-        true
-    }
-
-    async fn ensure_controller_broker_id(
-        this: ArcMut<Self>,
-        controller_leader: &CheetahString,
-    ) -> rocketmq_error::RocketMQResult<u64> {
-        let broker_config = this.broker_config();
-        let cluster_name = broker_config.broker_identity.broker_cluster_name.clone();
-        let broker_name = broker_config.broker_identity.broker_name.clone();
-        let next_broker_id = if this
-            .replicas_manager()
-            .is_some_and(|replicas_manager| replicas_manager.needs_broker_id_application())
-            && this
-                .replicas_manager()
-                .is_some_and(|replicas_manager| replicas_manager.pending_registration().is_none())
-        {
-            let next_broker_id_response = this
-                .broker_outer_api
-                .get_next_broker_id(cluster_name.clone(), broker_name.clone(), controller_leader)
-                .await?;
-            Some(next_broker_id_response.next_broker_id.ok_or_else(|| {
-                rocketmq_error::RocketMQError::illegal_argument(
-                    "controller get_next_broker_id returned empty next_broker_id",
-                )
-            })?)
-        } else {
-            None
-        };
-        let action = this
-            .controller_state
-            .with_replicas_mut(|replicas_manager| {
-                replicas_manager.prepare_controller_broker_id_action(&broker_config, next_broker_id)
-            })
-            .ok_or_else(|| {
-                rocketmq_error::RocketMQError::illegal_argument(
-                    "replicas manager missing while preparing controller broker id",
-                )
-            })??;
-
-        let (broker_id, register_check_code) = match action {
-            ControllerBrokerIdAction::UseCurrent(broker_id) => return Ok(broker_id),
-            ControllerBrokerIdAction::ApplyBrokerId {
-                broker_id,
-                register_check_code,
-            } => (broker_id, register_check_code),
-        };
-
-        if let Err(error) = this
-            .broker_outer_api
-            .apply_broker_id(
-                cluster_name,
-                broker_name,
-                broker_id as i64,
-                register_check_code,
-                controller_leader,
-            )
-            .await
-        {
-            this.controller_state
-                .with_replicas_mut(|replicas_manager| replicas_manager.clear_temp_metadata());
-            return Err(error);
-        }
-
-        this.controller_state
-            .with_replicas_mut(|replicas_manager| {
-                replicas_manager.complete_controller_broker_id_application(&broker_config)
-            })
-            .ok_or_else(|| {
-                rocketmq_error::RocketMQError::illegal_argument(
-                    "replicas manager missing while committing controller broker id",
-                )
-            })?
-    }
-
-    async fn discover_controller_leader(this: &ArcMut<Self>) -> Option<CheetahString> {
-        let targets = this
-            .replicas_manager()
-            .map(|replicas_manager| replicas_manager.heartbeat_targets())
-            .unwrap_or_default();
-        let mut first_reachable = None;
-        for address in targets {
-            match this.broker_outer_api.get_controller_metadata(&address).await {
-                Ok(metadata) => {
-                    if let Some(controller_leader_address) = metadata.controller_leader_address {
-                        return Some(controller_leader_address);
-                    }
-                    if metadata.is_leader == Some(true) {
-                        return Some(address);
-                    }
-                    first_reachable.get_or_insert(address);
-                }
-                Err(error) => {
-                    warn!("Discover controller leader failed via {}: {}", address, error);
-                }
-            }
-        }
-        first_reachable
-    }
-
-    async fn refresh_controller_leader(this: ArcMut<Self>) -> Option<CheetahString> {
-        let controller_leader = BrokerRuntimeInner::discover_controller_leader(&this).await?;
-        this.controller_state.with_replicas_mut(|replicas_manager| {
-            replicas_manager.set_controller_leader_address(controller_leader.clone());
-        });
-        Some(controller_leader)
-    }
-
-    async fn sync_controller_replica_info(this: ArcMut<Self>) {
-        let broker_config = this.broker_config();
-        if !broker_config.enable_controller_mode || this.online_role_state.is_isolated() {
-            return;
-        }
-
-        let controller_leader = if let Some(controller_leader) = this
-            .replicas_manager()
-            .and_then(|replicas_manager| replicas_manager.controller_leader_address().cloned())
-        {
-            controller_leader
-        } else if let Some(controller_leader) = BrokerRuntimeInner::refresh_controller_leader(this.clone()).await {
-            controller_leader
-        } else {
-            return;
-        };
-
-        let broker_name = broker_config.broker_identity.broker_name.clone();
-        match BrokerRuntimeInner::fetch_controller_replica_info(this.clone(), &controller_leader, broker_name.clone())
-            .await
-        {
-            Ok((leader, response_header, sync_state_set_body)) => {
-                let sync_state_set_epoch = sync_state_set_body.get_sync_state_set_epoch();
-                let sync_state_set = sync_state_set_body.get_sync_state_set().cloned().unwrap_or_default();
-                let sync_followup = this
-                    .replicas_manager()
-                    .map(|replicas_manager| {
-                        replicas_manager.replica_sync_followup(
-                            response_header.master_broker_id.and_then(|id| u64::try_from(id).ok()),
-                            response_header.master_epoch,
-                        )
-                    })
-                    .unwrap_or(ControllerReplicaSyncFollowup::Bootstrap);
-                if sync_followup == ControllerReplicaSyncFollowup::ApplyRoleChange {
-                    if let Err(error) = BrokerRuntimeInner::apply_controller_role_change(
-                        this,
-                        Some(leader),
-                        response_header.master_broker_id.and_then(|id| u64::try_from(id).ok()),
-                        response_header.master_address.map(CheetahString::from),
-                        response_header.master_epoch,
-                        Some(sync_state_set_epoch),
-                        sync_state_set,
-                    )
-                    .await
-                    {
-                        warn!("Apply controller replica info failed: {}", error);
-                    }
-                } else {
-                    BrokerRuntimeInner::bootstrap_controller_mode(this).await;
-                }
-            }
-            Err(rocketmq_error::RocketMQError::BrokerOperationFailed { code, .. })
-                if this
-                    .replicas_manager()
-                    .map(|replicas_manager| {
-                        replicas_manager.replica_sync_error_followup(Some(code))
-                            == ControllerReplicaSyncFollowup::Bootstrap
-                    })
-                    .unwrap_or(true) =>
-            {
-                BrokerRuntimeInner::bootstrap_controller_mode(this).await;
-            }
-            Err(error) => {
-                warn!("Sync controller replica info failed: {}", error);
-            }
-        }
-    }
-
-    async fn fetch_controller_replica_info(
-        this: ArcMut<Self>,
-        controller_leader: &CheetahString,
-        broker_name: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<(
-        CheetahString,
-        rocketmq_remoting::protocol::header::controller::get_replica_info_response_header::GetReplicaInfoResponseHeader,
-        rocketmq_remoting::protocol::body::sync_state_set_body::SyncStateSet,
-    )> {
-        match this
-            .broker_outer_api
-            .get_replica_info(controller_leader, broker_name.clone())
-            .await
-        {
-            Ok(result) => Ok((controller_leader.clone(), result.0, result.1)),
-            Err(error) => {
-                let Some(refreshed_controller_leader) =
-                    BrokerRuntimeInner::refresh_controller_leader(this.clone()).await
-                else {
-                    return Err(error);
-                };
-
-                if refreshed_controller_leader == *controller_leader {
-                    return Err(error);
-                }
-
-                this.broker_outer_api
-                    .get_replica_info(&refreshed_controller_leader, broker_name)
-                    .await
-                    .map(|(response_header, sync_state_set)| {
-                        (refreshed_controller_leader, response_header, sync_state_set)
-                    })
-            }
-        }
-    }
-
-    async fn sync_broker_member_group(this: &ArcMut<Self>) {
-        let broker_config = this.broker_config();
-        let broker_cluster_name = &broker_config.broker_identity.broker_cluster_name;
-        let broker_name = &broker_config.broker_identity.broker_name;
-        let compatible_with_old_name_srv = broker_config.compatible_with_old_name_srv;
-        let broker_member_group = this
-            .broker_outer_api
-            .sync_broker_member_group(broker_cluster_name, broker_name, compatible_with_old_name_srv)
-            .await;
-
-        if let Err(ref e) = broker_member_group {
-            error!("syncBrokerMemberGroup from namesrv failed, error={}", e);
-            return;
-        }
-        let broker_member_group = broker_member_group.unwrap();
-        if broker_member_group.is_none() || broker_member_group.as_ref().unwrap().broker_addrs.is_empty() {
-            warn!(
-                "Couldn't find any broker member from namesrv in {}/{}",
-                broker_cluster_name, broker_name
-            );
-            return;
-        }
-        fn calc_alive_broker_num_in_group(
-            broker_addr_table: &HashMap<u64 /* brokerId */, CheetahString /* broker address */>,
-            broker_id: u64,
-        ) -> usize {
-            if broker_addr_table.contains_key(&broker_id) {
-                broker_addr_table.len()
-            } else {
-                broker_addr_table.len() + 1
-            }
-        }
-        let broker_member_group = broker_member_group.unwrap();
-        this.message_store_unchecked()
-            .set_alive_replica_num_in_group(calc_alive_broker_num_in_group(
-                &broker_member_group.broker_addrs,
-                broker_config.broker_identity.broker_id,
-            ) as i32);
-        if !this.online_role_state.is_isolated() {
-            let min_broker_id = broker_member_group.minimum_broker_id();
-            let min_broker_addr = broker_member_group.broker_addrs.get(&min_broker_id).cloned();
-            BrokerRuntimeInner::update_min_broker(this, min_broker_id, min_broker_addr).await;
-        }
-    }
-
-    pub async fn update_min_broker(this: &ArcMut<Self>, min_broker_id: u64, min_broker_addr: Option<CheetahString>) {
-        this.build_controller_runtime()
-            .update_min_broker(min_broker_id, min_broker_addr)
-            .await;
-    }
-
     pub fn pop_message_processor(&self) -> Option<&Arc<PopMessageProcessor<MS>>> {
         self.pop_message_processor.as_ref()
     }
@@ -5640,135 +5165,6 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             self.is_transaction_check_service_start
                 .store(should_start, Ordering::Release);
         }
-    }
-
-    pub async fn apply_controller_role_change(
-        this: ArcMut<BrokerRuntimeInner<MS>>,
-        controller_leader_address: Option<CheetahString>,
-        new_master_broker_id: Option<u64>,
-        new_master_address: Option<CheetahString>,
-        new_master_epoch: Option<i32>,
-        sync_state_set_epoch: Option<i32>,
-        sync_state_set: HashSet<i64>,
-    ) -> rocketmq_error::RocketMQResult<()> {
-        let controller_runtime = this.build_controller_runtime();
-        controller_runtime
-            .apply_controller_role_change(
-                controller_leader_address,
-                new_master_broker_id,
-                new_master_address,
-                new_master_epoch,
-                sync_state_set_epoch,
-                sync_state_set,
-            )
-            .await
-    }
-
-    async fn send_heartbeat(&self) {
-        if self.shutdown.load(Ordering::Acquire) {
-            return;
-        }
-
-        let Some(replicas_manager) = self.replicas_manager() else {
-            return;
-        };
-        let heartbeat_state = replicas_manager.controller_heartbeat_state();
-        let broker_config = self.broker_config();
-        let controller_targets = heartbeat_state.controller_targets;
-        if controller_targets.is_empty() {
-            warn!(
-                "Skip controller heartbeat because no controller address is configured, broker={}",
-                broker_config.broker_identity.get_canonical_name()
-            );
-            return;
-        }
-
-        if self.shutdown.load(Ordering::Acquire) {
-            return;
-        }
-
-        let cluster_name = broker_config.broker_identity.broker_cluster_name.clone();
-        let broker_addr = self.get_broker_addr().clone();
-        let broker_name = broker_config.broker_identity.broker_name.clone();
-        let send_heartbeat_timeout_millis = broker_config.send_heartbeat_timeout_millis;
-        let controller_heartbeat_timeout_millis = broker_config.controller_heartbeat_timeout_mills;
-        let broker_election_priority = broker_config.broker_election_priority;
-        let broker_id = heartbeat_state.broker_id;
-        let epoch = heartbeat_state.epoch;
-        let max_offset = self
-            .message_store
-            .as_ref()
-            .map(|message_store| message_store.get_max_phy_offset());
-        let confirm_offset = self
-            .message_store
-            .as_ref()
-            .map(|message_store| message_store.get_confirm_offset());
-
-        let futures = controller_targets.into_iter().map(|controller_address| {
-            let cluster_name = cluster_name.clone();
-            let broker_addr = broker_addr.clone();
-            let broker_name = broker_name.clone();
-            async move {
-                if self.shutdown.load(Ordering::Acquire) {
-                    return;
-                }
-                self.broker_outer_api
-                    .send_heartbeat_to_controller(
-                        controller_address,
-                        cluster_name,
-                        broker_addr,
-                        broker_name,
-                        broker_id,
-                        send_heartbeat_timeout_millis,
-                        epoch,
-                        max_offset,
-                        confirm_offset,
-                        Some(controller_heartbeat_timeout_millis),
-                        Some(broker_election_priority),
-                    )
-                    .await;
-            }
-        });
-        futures::future::join_all(futures).await;
-    }
-
-    async fn send_heartbeat_to_controller_leader(
-        &self,
-        controller_leader: &CheetahString,
-    ) -> rocketmq_error::RocketMQResult<()> {
-        let heartbeat_state = self
-            .replicas_manager()
-            .map(|replicas_manager| replicas_manager.controller_heartbeat_state())
-            .ok_or_else(|| {
-                rocketmq_error::RocketMQError::illegal_argument(
-                    "replicas manager missing while sending controller leader heartbeat",
-                )
-            })?;
-        let broker_config = self.broker_config();
-        let max_offset = self
-            .message_store
-            .as_ref()
-            .map(|message_store| message_store.get_max_phy_offset());
-        let confirm_offset = self
-            .message_store
-            .as_ref()
-            .map(|message_store| message_store.get_confirm_offset());
-
-        self.broker_outer_api
-            .send_heartbeat_to_controller_sync(
-                controller_leader,
-                broker_config.broker_identity.broker_cluster_name.clone(),
-                self.get_broker_addr().clone(),
-                broker_config.broker_identity.broker_name.clone(),
-                heartbeat_state.broker_id,
-                broker_config.send_heartbeat_timeout_millis,
-                heartbeat_state.epoch,
-                max_offset,
-                confirm_offset,
-                Some(broker_config.controller_heartbeat_timeout_mills),
-                Some(broker_config.broker_election_priority),
-            )
-            .await
     }
 }
 
@@ -7675,7 +7071,9 @@ accounts:
         runtime: &mut BrokerRuntime,
         controller_leader_manager: &Arc<TestControllerManager>,
     ) {
-        let controller_leader = BrokerRuntimeInner::discover_controller_leader(&runtime.inner)
+        let controller_runtime = runtime.inner.build_controller_runtime();
+        let controller_leader = controller_runtime
+            .discover_controller_leader()
             .await
             .expect("discover controller leader");
         let cluster_name = runtime
@@ -7686,10 +7084,10 @@ accounts:
             .clone();
         let broker_name = runtime.inner.broker_config().broker_identity.broker_name.clone();
         let broker_addr = runtime.inner.get_broker_addr().clone();
-        let controller_broker_id =
-            BrokerRuntimeInner::ensure_controller_broker_id(runtime.inner.clone(), &controller_leader)
-                .await
-                .expect("ensure controller broker id");
+        let controller_broker_id = controller_runtime
+            .ensure_controller_broker_id(&controller_leader)
+            .await
+            .expect("ensure controller broker id");
 
         let (register_header, sync_state_set) = runtime
             .inner
@@ -7710,22 +7108,21 @@ accounts:
 
         let sync_state_set = sync_state_set.unwrap_or_default();
         if register_header.master_broker_id.is_some() && register_header.master_epoch.is_some() {
-            BrokerRuntimeInner::apply_controller_role_change(
-                runtime.inner.clone(),
-                Some(controller_leader),
-                register_header.master_broker_id.and_then(|id| u64::try_from(id).ok()),
-                register_header.master_address,
-                register_header.master_epoch,
-                register_header.sync_state_set_epoch,
-                sync_state_set,
-            )
-            .await
-            .expect("apply controller register result");
+            controller_runtime
+                .apply_controller_role_change(
+                    Some(controller_leader),
+                    register_header.master_broker_id.and_then(|id| u64::try_from(id).ok()),
+                    register_header.master_address,
+                    register_header.master_epoch,
+                    register_header.sync_state_set_epoch,
+                    sync_state_set,
+                )
+                .await
+                .expect("apply controller register result");
             return;
         }
 
-        runtime
-            .inner
+        controller_runtime
             .send_heartbeat_to_controller_leader(&controller_leader)
             .await
             .expect("send bootstrap heartbeat to controller");
@@ -7747,16 +7144,16 @@ accounts:
                 master_broker_id,
             )
         }) {
-            let applied = BrokerRuntimeInner::apply_controller_replica_info(
-                runtime.inner.clone(),
-                controller_leader,
-                pre_elect_header.master_broker_id.and_then(|id| u64::try_from(id).ok()),
-                pre_elect_header.master_address.map(CheetahString::from_string),
-                pre_elect_header.master_epoch,
-                Some(pre_elect_body.get_sync_state_set_epoch()),
-                pre_elect_body.get_sync_state_set().cloned().unwrap_or_default(),
-            )
-            .await;
+            let applied = controller_runtime
+                .apply_controller_replica_info(
+                    controller_leader,
+                    pre_elect_header.master_broker_id.and_then(|id| u64::try_from(id).ok()),
+                    pre_elect_header.master_address.map(CheetahString::from_string),
+                    pre_elect_header.master_epoch,
+                    Some(pre_elect_body.get_sync_state_set_epoch()),
+                    pre_elect_body.get_sync_state_set().cloned().unwrap_or_default(),
+                )
+                .await;
             assert!(applied, "apply controller replica info before elect should succeed");
             return;
         }
@@ -7794,17 +7191,17 @@ accounts:
                     pre_elect_master_id
                 )
             });
-        BrokerRuntimeInner::apply_controller_role_change(
-            runtime.inner.clone(),
-            Some(controller_leader),
-            elect_header.master_broker_id.and_then(|id| u64::try_from(id).ok()),
-            elect_header.master_address,
-            elect_header.master_epoch,
-            elect_header.sync_state_set_epoch,
-            sync_state_set,
-        )
-        .await
-        .expect("apply controller elect result");
+        controller_runtime
+            .apply_controller_role_change(
+                Some(controller_leader),
+                elect_header.master_broker_id.and_then(|id| u64::try_from(id).ok()),
+                elect_header.master_address,
+                elect_header.master_epoch,
+                elect_header.sync_state_set_epoch,
+                sync_state_set,
+            )
+            .await
+            .expect("apply controller elect result");
     }
 
     async fn shutdown_controller_cluster(controllers: &[Arc<TestControllerManager>]) {
@@ -10518,7 +9915,7 @@ accounts:
         broker_a.start().await;
         broker_b.start().await;
         bootstrap_broker_against_controller(&mut broker_a, &controller_leader_manager).await;
-        broker_a.inner.send_heartbeat().await;
+        broker_a.inner.build_controller_runtime().send_heartbeat().await;
         let broker_a_controller_id = broker_a
             .inner
             .replicas_manager()
@@ -10701,7 +10098,7 @@ accounts:
         broker_a.start().await;
         broker_b.start().await;
         bootstrap_broker_against_controller(&mut broker_a, &controller_leader_manager).await;
-        broker_a.inner.send_heartbeat().await;
+        broker_a.inner.build_controller_runtime().send_heartbeat().await;
         let broker_a_controller_id = broker_a
             .inner
             .replicas_manager()
@@ -10769,10 +10166,10 @@ accounts:
 
         if broker_a_is_master {
             broker_a.shutdown().await;
-            broker_b.inner.send_heartbeat().await;
+            broker_b.inner.build_controller_runtime().send_heartbeat().await;
         } else {
             broker_b.shutdown().await;
-            broker_a.inner.send_heartbeat().await;
+            broker_a.inner.build_controller_runtime().send_heartbeat().await;
         }
 
         wait_until(
@@ -10790,11 +10187,17 @@ accounts:
         .await;
 
         let current_controller_leader = if broker_a_is_master {
-            BrokerRuntimeInner::discover_controller_leader(&broker_b.inner)
+            broker_b
+                .inner
+                .build_controller_runtime()
+                .discover_controller_leader()
                 .await
                 .expect("discover controller leader from surviving broker")
         } else {
-            BrokerRuntimeInner::discover_controller_leader(&broker_a.inner)
+            broker_a
+                .inner
+                .build_controller_runtime()
+                .discover_controller_leader()
                 .await
                 .expect("discover controller leader from surviving broker")
         };
@@ -10854,7 +10257,7 @@ accounts:
             .expect("controller cluster should keep a leader")
             .clone();
         bootstrap_broker_against_controller(&mut rejoining_broker, &current_leader_manager).await;
-        rejoining_broker.inner.send_heartbeat().await;
+        rejoining_broker.inner.build_controller_runtime().send_heartbeat().await;
 
         wait_until(
             Duration::from_secs(15),
@@ -10949,7 +10352,7 @@ accounts:
         broker_a.start().await;
         broker_b.start().await;
         bootstrap_broker_against_controller(&mut broker_a, &controller_leader_manager).await;
-        broker_a.inner.send_heartbeat().await;
+        broker_a.inner.build_controller_runtime().send_heartbeat().await;
         let broker_a_controller_id = broker_a
             .inner
             .replicas_manager()
@@ -11054,10 +10457,10 @@ accounts:
 
         if broker_a_is_master {
             broker_a.shutdown().await;
-            broker_b.inner.send_heartbeat().await;
+            broker_b.inner.build_controller_runtime().send_heartbeat().await;
         } else {
             broker_b.shutdown().await;
-            broker_a.inner.send_heartbeat().await;
+            broker_a.inner.build_controller_runtime().send_heartbeat().await;
         }
 
         let surviving_broker = if broker_a_is_master { &broker_b } else { &broker_a };
@@ -11132,7 +10535,7 @@ accounts:
             .expect("controller cluster should keep a leader")
             .clone();
         bootstrap_broker_against_controller(&mut rejoining_broker, &current_leader_manager).await;
-        rejoining_broker.inner.send_heartbeat().await;
+        rejoining_broker.inner.build_controller_runtime().send_heartbeat().await;
 
         let rejoining_store = rejoining_broker
             .inner
@@ -11248,7 +10651,7 @@ accounts:
         broker_a.start().await;
         broker_b.start().await;
         bootstrap_broker_against_controller(&mut broker_a, &controller_leader_manager).await;
-        broker_a.inner.send_heartbeat().await;
+        broker_a.inner.build_controller_runtime().send_heartbeat().await;
         bootstrap_broker_against_controller(&mut broker_b, &controller_leader_manager).await;
 
         wait_until(
@@ -11322,8 +10725,8 @@ accounts:
         )
         .await;
 
-        broker_a.inner.send_heartbeat().await;
-        broker_b.inner.send_heartbeat().await;
+        broker_a.inner.build_controller_runtime().send_heartbeat().await;
+        broker_b.inner.build_controller_runtime().send_heartbeat().await;
 
         let refreshed_controller_leader = controllers
             .iter()

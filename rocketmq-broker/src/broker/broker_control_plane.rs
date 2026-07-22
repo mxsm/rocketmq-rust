@@ -42,6 +42,8 @@ use crate::processor::send_message_processor::capability::SendMessagePolicyState
 use crate::slave::slave_synchronize::SlaveMasterAddress;
 use crate::topic::manager::topic_config_manager::TopicConfigManager;
 
+mod bootstrap;
+
 /// Shared controller state with a separate asynchronous operation gate.
 ///
 /// The parking-lot mutex protects only short, synchronous ReplicasManager
@@ -120,8 +122,10 @@ pub(crate) struct BrokerControllerRuntime<MS: MessageStore> {
     store: EscapeBridgeStoreCapability<MS>,
     special_services: BrokerSpecialServiceCapability<MS>,
     registration: BrokerRegistrationCapability,
+    broker_addr: CheetahString,
     slave_master_addr: Arc<SlaveMasterAddress>,
     broker_outer_api: BrokerOuterAPI,
+    shutdown: Arc<std::sync::atomic::AtomicBool>,
     pull_request_hold_service: Option<Weak<PullRequestHoldService<MS>>>,
     topic_config_manager: Weak<TopicConfigManager>,
     send_policy: SendMessagePolicyState,
@@ -143,8 +147,10 @@ impl<MS: MessageStore> BrokerControllerRuntime<MS> {
         store: EscapeBridgeStoreCapability<MS>,
         special_services: BrokerSpecialServiceCapability<MS>,
         registration: BrokerRegistrationCapability,
+        broker_addr: CheetahString,
         slave_master_addr: Arc<SlaveMasterAddress>,
         broker_outer_api: BrokerOuterAPI,
+        shutdown: Arc<std::sync::atomic::AtomicBool>,
         pull_request_hold_service: Option<&Arc<PullRequestHoldService<MS>>>,
         topic_config_manager: &Arc<TopicConfigManager>,
         send_policy: SendMessagePolicyState,
@@ -160,8 +166,10 @@ impl<MS: MessageStore> BrokerControllerRuntime<MS> {
             store,
             special_services,
             registration,
+            broker_addr,
             slave_master_addr,
             broker_outer_api,
+            shutdown,
             pull_request_hold_service: pull_request_hold_service.map(Arc::downgrade),
             topic_config_manager: Arc::downgrade(topic_config_manager),
             send_policy,

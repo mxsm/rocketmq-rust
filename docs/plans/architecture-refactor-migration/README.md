@@ -974,6 +974,15 @@ Store production 82/234），净删除 1 个 production identity/1 occurrence；
 一对一指纹审核，无新增 identity 或提交态 approval。R01 仍未完成，31 项执行清单仍剩余 24 项；总进度仍为
 75/82，下一子切片 M11-12bc61 继续 Broker 启动、注册、后台任务或 Local/Rocks 组合根 owner。
 
+Broker controller bootstrap capability 随 Issue #8535 继续收窄：controller bootstrap、leader discovery、broker ID
+申请/注册、heartbeat、replica metadata 与 membership synchronization 已迁入显式 `BrokerControllerRuntime`；初始
+bootstrap 和周期任务只捕获 controller runtime，不再保活或解引用完整 `BrokerRuntimeInner`。Store 交互收窄为
+heartbeat offset 与 alive-replica capability，未绑定 Store 时 fail closed。reviewed ArcMut 快照从 220/713 降至
+220 identities/703 occurrences（production 90/259、test 116/404、compatibility 14/40、Broker production 8/25、
+Store production 82/234），净删除 10 个 production occurrences，无 relocation、新增 identity 或临时 approval。
+R01 仍未完成，31 项执行清单仍剩余 24 项；总进度仍为 75/82，下一子切片 M11-12bc62 继续 Broker 注册、
+state getter 或 Local/Rocks 组合根 owner。
+
 ### 9.3 证据目录
 
 - 运行期生成物：`target/architecture-refactor/Mxx/<run-id>/`，不提交 Git。

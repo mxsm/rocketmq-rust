@@ -223,6 +223,16 @@ impl<MS: MessageStore> EscapeBridgeStoreCapability<MS> {
         self.with_store(|store| (store.get_max_phy_offset(), store.get_flushed_where()))
     }
 
+    pub(crate) fn controller_heartbeat_offsets(&self) -> (Option<i64>, Option<i64>) {
+        self.with_store(|store| (store.get_max_phy_offset(), store.get_confirm_offset()))
+            .map(|(max_offset, confirm_offset)| (Some(max_offset), Some(confirm_offset)))
+            .unwrap_or((None, None))
+    }
+
+    pub(crate) fn set_alive_replica_num_in_group(&self, alive_replica_num: i32) -> Result<(), MessageStoreUnavailable> {
+        self.with_store(|store| store.set_alive_replica_num_in_group(alive_replica_num))
+    }
+
     pub(crate) fn set_master_flushed_offset(&self, offset: i64) -> Result<(), MessageStoreUnavailable> {
         self.with_store(|store| store.set_master_flushed_offset(offset))
     }
@@ -502,5 +512,13 @@ mod tests {
             .apply_controller_role(BrokerRole::Slave, BrokerReplicaRole::Master, 0, None, 1)
             .await
             .is_ok());
+    }
+
+    #[test]
+    fn controller_observations_fail_closed_before_store_binding() {
+        let store = EscapeBridgeStoreCapability::<GenericMessageStore>::default();
+
+        assert_eq!(store.controller_heartbeat_offsets(), (None, None));
+        assert!(store.set_alive_replica_num_in_group(1).is_err());
     }
 }
