@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -32,9 +33,11 @@ use rocketmq_runtime::RocketMQRuntime;
 use rocketmq_rust::ArcMut;
 use tracing::info;
 use tracing::warn;
+use tokio::task::JoinHandle;
 
 use crate::base::client_config::ClientConfig;
 use crate::consumer::consumer_impl::consume_message_service::ConsumeMessageServiceTrait;
+use crate::consumer::consumer_impl::consume_message_service::ShutdownReport;
 use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
 use crate::consumer::consumer_impl::pop_process_queue::PopProcessQueue;
 use crate::consumer::consumer_impl::process_queue::ProcessQueue;
@@ -53,6 +56,8 @@ pub struct ConsumeMessageConcurrentlyService {
     pub(crate) message_listener: ArcBoxMessageListenerConcurrently,
     pub(crate) consume_runtime: Option<RocketMQRuntime>,
     accepting: AtomicBool,
+    cleaner_task: Mutex<Option<JoinHandle<()>>>,
+    consume_tasks: Mutex<Vec<JoinHandle<()>>>,
 }
 
 impl ConsumeMessageConcurrentlyService {
@@ -76,21 +81,37 @@ impl ConsumeMessageConcurrentlyService {
                 consumer_group_tag.as_str(),
             )),
             accepting: AtomicBool::new(true),
+            cleaner_task: Mutex::new(None),
+            consume_tasks: Mutex::new(Vec::new()),
         }
     }
 }
 
 impl ConsumeMessageConcurrentlyService {
+    fn track_consume_task(&self, task: JoinHandle<()>) {
+        let mut tasks = self.consume_tasks.lock().expect("consume task registry poisoned");
+        tasks.retain(|existing| !existing.is_finished());
+        tasks.push(task);
+    }
+
+    fn reject_request(&self, process_queue: &ProcessQueue) {
+        process_queue.set_dropped(true);
+        warn!("rejecting consume request because consumer shutdown has started");
+    }
+
     async fn clean_expire_msg(&mut self) {
         let default_mqpush_consumer_impl = self.default_mqpush_consumer_impl.clone().unwrap();
 
-        let process_queue_table = default_mqpush_consumer_impl
-            .rebalance_impl
-            .rebalance_impl_inner
-            .process_queue_table
-            .read()
-            .await;
-        for (_, process_queue) in process_queue_table.iter() {
+        let process_queues = {
+            let process_queue_table = default_mqpush_consumer_impl
+                .rebalance_impl
+                .rebalance_impl_inner
+                .process_queue_table
+                .read()
+                .await;
+            process_queue_table.values().cloned().collect::<Vec<_>>()
+        };
+        for process_queue in process_queues {
             process_queue
                 .clean_expired_msg(self.default_mqpush_consumer_impl.clone())
                 .await;
@@ -180,14 +201,19 @@ impl ConsumeMessageConcurrentlyService {
         process_queue: Arc<ProcessQueue>,
         message_queue: MessageQueue,
     ) {
+        if !self.accepting.load(Ordering::Acquire) {
+            self.reject_request(process_queue.as_ref());
+            return;
+        }
         if let Some(runtime) = self.consume_runtime.as_ref() {
-            runtime.get_handle().spawn(async move {
+            let task = runtime.get_handle().spawn(async move {
                 tokio::time::sleep(Duration::from_secs(5)).await;
                 let this_ = this.clone();
 
                 this.submit_consume_request(this_, msgs, process_queue, message_queue, true)
                     .await;
             });
+            self.track_consume_task(task);
         }
     }
 
@@ -212,8 +238,11 @@ impl ConsumeMessageConcurrentlyService {
 
 impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
     fn start(&mut self, mut this: ArcMut<Self>) {
+        if !self.accepting.load(Ordering::Acquire) {
+            return;
+        }
         if let Some(runtime) = self.consume_runtime.as_ref() {
-            runtime.get_handle().spawn(async move {
+            let task = runtime.get_handle().spawn(async move {
                 let timeout = this.consumer_config.consume_timeout;
                 let mut interval = tokio::time::interval(Duration::from_secs(timeout * 60));
                 interval.tick().await;
@@ -222,31 +251,53 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
                     this.clean_expire_msg().await;
                 }
             });
+            *self.cleaner_task.lock().expect("cleaner task registry poisoned") = Some(task);
         }
     }
 
-    async fn shutdown(&mut self, await_terminate_millis: u64) {
+    async fn shutdown(&mut self, await_terminate_millis: u64) -> ShutdownReport {
+        let started = Instant::now();
+        let mut report = ShutdownReport::default();
         if !self.accepting.swap(false, Ordering::AcqRel) {
-            return;
+            return report;
+        }
+        if let Some(cleaner) = self.cleaner_task.lock().expect("cleaner task registry poisoned").take() {
+            cleaner.abort();
         }
         if let Some(consumer) = self.default_mqpush_consumer_impl.as_ref() {
-            let queues = consumer
-                .rebalance_impl
-                .rebalance_impl_inner
-                .process_queue_table
-                .read()
-                .await;
-            for queue in queues.values() {
+            let queues = {
+                let table = consumer
+                    .rebalance_impl
+                    .rebalance_impl_inner
+                    .process_queue_table
+                    .read()
+                    .await;
+                table.values().cloned().collect::<Vec<_>>()
+            };
+            for queue in queues {
                 queue.set_dropped(true);
             }
         }
+        let mut tasks = std::mem::take(&mut *self.consume_tasks.lock().expect("consume task registry poisoned"));
+        let budget = Duration::from_millis(await_terminate_millis);
+        for mut task in tasks.drain(..) {
+            let remaining = budget.saturating_sub(started.elapsed());
+            if remaining.is_zero() || tokio::time::timeout(remaining, &mut task).await.is_err() {
+                task.abort();
+                report.consume_tasks_aborted += 1;
+            } else {
+                report.consume_tasks_drained += 1;
+            }
+        }
         if let Some(runtime) = self.consume_runtime.take() {
-            let timeout = Duration::from_millis(await_terminate_millis);
+            let timeout = budget.saturating_sub(started.elapsed());
             // Tokio forbids dropping a Runtime from another runtime's async
             // context. Move the private consume runtime to a plain thread so
             // its bounded shutdown cannot panic the public consumer teardown.
             let _ = std::thread::spawn(move || runtime.shutdown_timeout(timeout)).join();
         }
+        report.elapsed = started.elapsed();
+        report
     }
 
     async fn consume_message_directly(
@@ -302,6 +353,10 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
         dispatch_to_consume: bool,
     ) {
         let consume_batch_size = self.consumer_config.consume_message_batch_max_size;
+        if !self.accepting.load(Ordering::Acquire) {
+            self.reject_request(process_queue.as_ref());
+            return;
+        }
         if msgs.len() <= consume_batch_size as usize {
             let mut consume_request = ConsumeRequest {
                 msgs,
@@ -313,13 +368,11 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
                 default_mqpush_consumer_impl: self.default_mqpush_consumer_impl.clone(),
             };
 
-            if !self.accepting.load(Ordering::Acquire) {
-                return;
-            }
             if let Some(runtime) = self.consume_runtime.as_ref() {
-                runtime
+                let task = runtime
                     .get_handle()
                     .spawn(async move { consume_request.run(this).await });
+                self.track_consume_task(task);
             }
         } else {
             msgs.chunks(consume_batch_size as usize)
@@ -337,9 +390,10 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
                     let consume_message_concurrently_service = this.clone();
                     if self.accepting.load(Ordering::Acquire) {
                         if let Some(runtime) = self.consume_runtime.as_ref() {
-                            runtime
+                            let task = runtime
                                 .get_handle()
                                 .spawn(async move { consume_request.run(consume_message_concurrently_service).await });
+                            self.track_consume_task(task);
                         }
                     }
                 });
@@ -514,5 +568,31 @@ mod tests {
         assert!(service.consume_runtime.is_none());
         service.shutdown(1).await;
         assert!(service.consume_runtime.is_none());
+    }
+
+    #[tokio::test]
+    async fn shutdown_aborts_tracked_tasks_at_its_deadline() {
+        let listener: ArcBoxMessageListenerConcurrently = Arc::new(Box::new(NoopListener));
+        let mut service = ConsumeMessageConcurrentlyService::new(
+            ArcMut::new(ClientConfig::default()),
+            ArcMut::new(ConsumerConfig::default()),
+            CheetahString::from_static_str("shutdown-deadline-test"),
+            listener,
+            None,
+        );
+        let task = service
+            .consume_runtime
+            .as_ref()
+            .unwrap()
+            .get_handle()
+            .spawn(std::future::pending());
+        service.track_consume_task(task);
+
+        let report = service.shutdown(10).await;
+
+        assert_eq!(report.consume_tasks_drained, 0);
+        assert_eq!(report.consume_tasks_aborted, 1);
+        assert!(service.consume_runtime.is_none());
+        assert!(report.elapsed < Duration::from_secs(1));
     }
 }

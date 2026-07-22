@@ -33,6 +33,7 @@ use crate::base::mq_admin::MQAdmin;
 use crate::base::query_result::QueryResult;
 use crate::consumer::allocate_message_queue_strategy::AllocateMessageQueueStrategy;
 use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
+use crate::consumer::consumer_impl::consume_message_service::ShutdownReport;
 use crate::consumer::default_mq_push_consumer_builder::DefaultMQPushConsumerBuilder;
 use crate::consumer::listener::consume_concurrently_context::ConsumeConcurrentlyContext;
 use crate::consumer::listener::consume_concurrently_status::ConsumeConcurrentlyStatus;
@@ -513,12 +514,7 @@ impl MQPushConsumer for DefaultMQPushConsumer {
     }
 
     async fn shutdown(&mut self) {
-        let await_termination_millis = self.consumer_config.await_termination_millis_when_shutdown;
-        self.default_mqpush_consumer_impl
-            .as_mut()
-            .expect("default_mqpush_consumer_impl is None")
-            .shutdown(await_termination_millis)
-            .await;
+        let _ = self.shutdown_with_report().await;
     }
 
     fn register_message_listener_concurrently_fn<MLCFN>(&mut self, message_listener: MLCFN)
@@ -616,6 +612,18 @@ impl MQPushConsumer for DefaultMQPushConsumer {
 impl DefaultMQPushConsumer {
     pub fn builder() -> DefaultMQPushConsumerBuilder {
         DefaultMQPushConsumerBuilder::default()
+    }
+
+    /// Stops this consumer and returns the local teardown outcome. A caller
+    /// should only create a same-group replacement after local unregistration
+    /// succeeded and no callback tasks were left running.
+    pub async fn shutdown_with_report(&mut self) -> ShutdownReport {
+        let await_termination_millis = self.consumer_config.await_termination_millis_when_shutdown;
+        self.default_mqpush_consumer_impl
+            .as_mut()
+            .expect("default_mqpush_consumer_impl is None")
+            .shutdown(await_termination_millis)
+            .await
     }
 
     #[inline]

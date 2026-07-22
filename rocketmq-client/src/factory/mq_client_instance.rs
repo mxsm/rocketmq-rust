@@ -333,7 +333,7 @@ impl MQClientInstance {
             }
             ServiceState::Running => {}
             ServiceState::ShutdownAlready => {}
-            ServiceState::Starting => {
+            ServiceState::Starting | ServiceState::Stopping => {
                 return Err(mq_client_err!(format!(
                     "The Factory object[{}] is already starting.",
                     self.client_id
