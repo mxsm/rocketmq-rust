@@ -1190,69 +1190,6 @@
       "adr": "ADR-013"
     },
     {
-      "identity": "1910197e83a98f7b2aa747ad",
-      "path": "rocketmq-store/src/queue/single_consume_queue.rs",
-      "symbol": "ArcMut",
-      "kind": "constructor",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "4b9e90dd8bc6e42dd9cb53e6",
-          "fingerprint": "c7fea6c6e4b67ae3a13fd45b",
-          "item": "fn new_configured_test_store",
-          "line": 1051
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "9fbc5afa965f7077f79499f9",
-      "path": "rocketmq-store/src/queue/single_consume_queue.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "8b955667e5eeaf85721cca1a",
-          "fingerprint": "392812b135cb91d518125ce6",
-          "item": "mod tests",
-          "line": 1023
-        }
-      ],
-      "owner": "store",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "1fcb56f06256f67a698589d1",
-      "path": "rocketmq-store/src/queue/single_consume_queue.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "13cc2ebf1d4f8de73a0b5795",
-          "fingerprint": "969bec7cef9b5744b6ab4fe0",
-          "item": "fn new_test_store",
-          "line": 1036
-        },
-        {
-          "id": "99f05e2e748906d9bbaefd14",
-          "fingerprint": "944459752d615c7b8def8330",
-          "item": "fn new_configured_test_store",
-          "line": 1049
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
       "identity": "f0aca93b256469c87a879a4b",
       "path": "rocketmq-store/src/timer/timer_message_store.rs",
       "symbol": "*",

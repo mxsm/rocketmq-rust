@@ -4615,6 +4615,28 @@ LocalFile ConsumeQueue compatibility tests 随 Issue #8601 完成以下收口：
 | final gates | `cargo fmt --all -- --check`、workspace all-target/all-feature strict Clippy 与 `git diff --check` 通过 |
 | reduced validation scope | 本切片只改变三个 cfg(test) queue fixture，不修改 production queue behavior、runtime 或 feature；运行三个 exact tests，并由最终 workspace Clippy 编译/lint 全部 target，不重复整个 queue module、Store/Broker 全包测试、runtime audit、M06、RocksDB matrix、telemetry、release、Rustdoc 或额外 package Clippy/check |
 
+## M11-12bc93 实现
+
+Single consume queue tests 随 Issue #8603 完成以下收口：
+
+- test LocalFile roots 仅在 fixture 构造期独占存在，不再构造/返回 `ArcMut<LocalFileMessageStore>` 或执行完整
+  Store self-wiring。
+- `TestConsumeQueue` 直接拥有被测 `ConsumeQueue`，并只保留 cloneable 标准 Arc `ConsumeQueueStore` root；queue
+  的 `ConsumeQueueLookupHandle` 继续通过 Weak 查找，但不再依赖完整 Store 的 ArcMut self-cycle 保活。
+- reviewed baseline 从 60/230 降至 57/226：production 保持 13/24，test 从 33/166 降至 30/162，
+  compatibility 保持 14/40；净删除 3 test identities/4 occurrences，无 relocation、新 identity 或临时 approval。
+- Store test/bench caller 从 25/150 降至 22/146；R17 当前上界降至 30/162（Broker 6/8、Client 0/0、
+  runtime-foundation 2/8），执行清单保持完成 11 项、剩余 20 项，正式进度仍为 75/82。
+
+## M11-12bc93 验证
+
+| 命令 | 结果 |
+|---|---|
+| affected behavior | `cargo test -p rocketmq-store --lib queue::single_consume_queue::tests` 7/7 通过（529 项过滤），覆盖过期文件、truncate/correct offset、borrowed iterator、CQExt round-trip/flush/size 与 swap delegation |
+| reviewed baseline / fixtures | 正式 baseline 与 reviewed candidate 的 semantic set 均为 57/226；直接 guard、candidate compare、27/27 fixtures 与 78/78 guard tests 通过；净删除 3 test identities/4 occurrences，无 relocation、新 identity 或临时 approval |
+| final gates | `cargo fmt --all -- --check`、workspace all-target/all-feature strict Clippy 与 `git diff --check` 通过 |
+| reduced validation scope | 本切片只改变 cfg(test) single queue owner，不修改 production queue behavior、runtime 或 feature；运行一个直接消费 fixture 的模块，并由最终 workspace Clippy 编译/lint 全部 target，不重复 Store/Broker 全包测试、runtime audit、M06、RocksDB matrix、telemetry、release、Rustdoc 或额外 package Clippy/check |
+
 ## 剩余切片与 Gate
 
 2026-07-23 盘点将执行工作固化为 31 个最小可审查单元：16 个 production owner、2 个
