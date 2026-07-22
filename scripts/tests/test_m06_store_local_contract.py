@@ -7362,8 +7362,8 @@ def mapped_file_queue_storage_contract_violations(
         if store_compact.count(constructor) != 1:
             violations.append(f"Store mapped-file queue storage constructor changed: {constructor}")
     expected_accessor_counts = {
-        "self.storage.mapped_files()": 28,
-        "self.storage.mapped_file_size()": 17,
+        "self.storage.mapped_files()": 29,
+        "self.storage.mapped_file_size()": 18,
         "self.storage.store_path()": 6,
     }
     for accessor, expected_count in expected_accessor_counts.items():
@@ -8700,6 +8700,8 @@ def mapped_file_queue_runtime_state_contract_violations(
     ]
     if active_struct_fields(production, "MappedFileQueueRuntimeState") != expected_fields:
         violations.append("Local mapped-file queue runtime-state fields changed")
+    if "#[derive(Clone,Debug)]" not in compact_rust(production):
+        violations.append("Local mapped-file queue runtime state must remain safely cloneable")
 
     expected_default = (
         "fndefault()->Self{Self{flushed_where:Arc::new(AtomicU64::new(0)),committed_where:Arc::new("
@@ -8793,13 +8795,44 @@ def mapped_file_queue_runtime_state_contract_violations(
     for function_name, expected_body in expected_adapters.items():
         if compact_rust(named_function_body(store_source, function_name) or "") != expected_body:
             violations.append(f"Store mapped-file queue state adapter changed: {function_name}")
-    commit_body = compact_rust(named_function_body(store_source, "commit") or "")
-    if commit_body.count("let_lock=self.runtime_state.commit_lock().lock();") != 1:
-        violations.append("Store mapped-file queue commit lock adapter changed")
+    if active_struct_fields(store_source, "MappedFileQueueFlushHandle") != [
+        ("mapped_files", "MappedFileGeneration"),
+        ("mapped_file_size", "u64"),
+        ("runtime_state", "MappedFileQueueRuntimeState"),
+    ]:
+        violations.append("Store mapped-file flush capability fields changed")
+    flush_impl = active_impl_body(store_source, "MappedFileQueueFlushHandle") or ""
+    flush_expected = {
+        "commit": (
+            "let_lock=self.runtime_state.commit_lock().lock()",
+            "self.runtime_state.committed_where()",
+            "commit_mapped_file_queue(",
+            "self.runtime_state.set_committed_where(progress.committed())",
+        ),
+        "try_flush": (
+            "try_flush_mapped_file_queue(",
+            "self.runtime_state.set_flushed_where(progress.durable)",
+            "self.runtime_state.set_store_timestamp(progress.store_timestamp)",
+        ),
+    }
+    for function_name, fragments in flush_expected.items():
+        body = compact_rust(named_function_body(flush_impl, function_name) or "")
+        for fragment in fragments:
+            if fragment not in body:
+                violations.append(f"Store mapped-file flush capability changed: {function_name}: {fragment}")
+    store_compact = compact_rust(store_active)
+    for delegate in (
+        "self.flush_handle().commit(commit_least_pages)",
+        "self.flush_handle().try_flush(flush_least_pages)",
+        "runtime_state:self.runtime_state.clone()",
+    ):
+        if store_compact.count(delegate) != 1:
+            violations.append(f"Store mapped-file flush capability delegate changed: {delegate}")
 
     for test_name in (
         "queue_runtime_state_preserves_initial_values_and_signed_offset_round_trips",
         "queue_runtime_state_commit_lock_serializes_access",
+        "queue_runtime_state_clones_share_progress_and_serialization",
     ):
         if named_function_body(local_test_source, test_name) is None:
             violations.append(f"Local mapped-file queue runtime-state regression changed: {test_name}")
@@ -9071,7 +9104,7 @@ def commit_log_root_contract_violations(
     ]:
         violations.append("Store CommitLog facade must own only the Local root")
     expected_adapter_fields = [
-        ("mapped_file_queue", "super::ArcMut<super::MappedFileQueue>"),
+        ("mapped_file_queue", "super::MappedFileQueue"),
         ("message_store_config", "super::Arc<super::MessageStoreConfig>"),
         ("broker_config", "super::Arc<super::BrokerConfig>"),
         ("enabled_append_prop_crc", "bool"),
@@ -9084,7 +9117,7 @@ def commit_log_root_contract_violations(
         ("topic_queue_lock", "super::Arc<super::TopicQueueLock>"),
         (
             "topic_config_table",
-            "super::Arc<super::DashMap<super::CheetahString, super::ArcMut<super::TopicConfig>>>",
+            "super::Arc<super::DashMap<super::CheetahString, super::Arc<super::TopicConfig>>>",
         ),
         ("consume_queue_store", "super::ConsumeQueueStore"),
         ("flush_manager", "super::ArcMut<super::DefaultFlushManager>"),
@@ -14893,6 +14926,13 @@ class StoreLocalContractTests(unittest.TestCase):
 
         mutations = (
             (
+                "Local clone contract removed",
+                local.replace("#[derive(Clone, Debug)]", "#[derive(Debug)]", 1),
+                module,
+                store,
+                local_tests,
+            ),
+            (
                 "Local field ordering changed",
                 local.replace(
                     "    flushed_where: Arc<AtomicU64>,\n    committed_where: Arc<AtomicU64>,",
@@ -14947,6 +14987,17 @@ class StoreLocalContractTests(unittest.TestCase):
                 local_tests,
             ),
             (
+                "flush capability detached runtime state",
+                local,
+                module,
+                store.replace(
+                    "runtime_state: self.runtime_state.clone(),",
+                    "runtime_state: MappedFileQueueRuntimeState::default(),",
+                    1,
+                ),
+                local_tests,
+            ),
+            (
                 "Store import aliased",
                 local,
                 module,
@@ -14965,6 +15016,17 @@ class StoreLocalContractTests(unittest.TestCase):
                 local_tests.replace(
                     "fn queue_runtime_state_commit_lock_serializes_access()",
                     "fn queue_runtime_state_commit_lock_regression_removed()",
+                    1,
+                ),
+            ),
+            (
+                "clone regression renamed",
+                local,
+                module,
+                store,
+                local_tests.replace(
+                    "fn queue_runtime_state_clones_share_progress_and_serialization()",
+                    "fn queue_runtime_state_clone_regression_removed()",
                     1,
                 ),
             ),

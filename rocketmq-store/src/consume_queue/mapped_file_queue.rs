@@ -165,6 +165,103 @@ impl MappedFileQueueCleanupHandle {
     }
 }
 
+/// Narrow, cloneable capability used by commit-log flush workers.
+///
+/// The handle shares only the atomically published mapped-file generation and
+/// queue progress state. Allocation, recovery, authoritative replacement, and
+/// destruction remain exclusively owned by `MappedFileQueue`.
+#[derive(Clone)]
+pub(crate) struct MappedFileQueueFlushHandle {
+    mapped_files: MappedFileGeneration,
+    mapped_file_size: u64,
+    runtime_state: MappedFileQueueRuntimeState,
+}
+
+impl MappedFileQueueFlushHandle {
+    fn find_mapped_file_by_offset(
+        &self,
+        offset: i64,
+        return_first_on_not_found: bool,
+    ) -> Option<Arc<DefaultMappedFile>> {
+        let files = self.mapped_files.load();
+        let first = files.first()?.clone();
+        let last = files.last()?.clone();
+        match file_index_by_offset(
+            files.as_slice(),
+            self.mapped_file_size,
+            offset,
+            return_first_on_not_found,
+            first.get_file_from_offset(),
+            last.get_file_from_offset(),
+            |file| file.get_file_from_offset(),
+        ) {
+            Some(MappedFileQueueIndex::First) => Some(first),
+            Some(MappedFileQueueIndex::Indexed(index)) => Some(files[index].clone()),
+            None => None,
+        }
+    }
+
+    #[inline]
+    fn get_max_offset(&self) -> i64 {
+        let files = self.mapped_files.load();
+        mapped_file_queue_max_offset(files.last())
+    }
+
+    pub(crate) fn commit(&self, commit_least_pages: i32) -> bool {
+        let _lock = self.runtime_state.commit_lock().lock();
+        let progress = commit_mapped_file_queue(
+            self.runtime_state.committed_where(),
+            |offset, return_first_on_not_found| {
+                self.find_mapped_file_by_offset(offset, return_first_on_not_found)
+                    .map(|mapped_file| {
+                        SegmentCommitProgress::new(
+                            mapped_file.get_file_from_offset(),
+                            mapped_file.commit(commit_least_pages),
+                        )
+                    })
+            },
+        );
+        self.runtime_state.set_committed_where(progress.committed());
+        progress.legacy_commit_result()
+    }
+
+    #[inline]
+    pub(crate) fn get_flushed_where(&self) -> i64 {
+        self.runtime_state.flushed_where()
+    }
+
+    #[inline]
+    pub(crate) fn get_store_timestamp(&self) -> u64 {
+        self.runtime_state.store_timestamp()
+    }
+
+    pub(crate) fn try_flush(&self, flush_least_pages: i32) -> MappedFileResult<FlushProgress> {
+        let durable_before = self.runtime_state.flushed_where();
+        let progress = try_flush_mapped_file_queue(
+            self.get_max_offset(),
+            durable_before,
+            self.runtime_state.store_timestamp(),
+            flush_least_pages,
+            |offset, return_first_on_not_found| {
+                self.find_mapped_file_by_offset(offset, return_first_on_not_found)
+                    .map(|mapped_file| {
+                        mapped_file.try_flush(flush_least_pages).map(|flushed_position| {
+                            SegmentFlushProgress::new(
+                                mapped_file.get_file_from_offset(),
+                                flushed_position,
+                                mapped_file.get_store_timestamp(),
+                            )
+                        })
+                    })
+                    .transpose()
+            },
+        )?;
+        self.runtime_state.set_flushed_where(progress.durable);
+        self.runtime_state.set_store_timestamp(progress.store_timestamp);
+        Ok(progress)
+    }
+}
+
 pub struct MappedFileQueue {
     storage: MappedFileQueueStorage<MappedFileGeneration>,
 
@@ -221,19 +318,7 @@ impl MappedFileQueue {
     /// Returns true if commit succeeded
     #[inline]
     pub fn commit(&self, commit_least_pages: i32) -> bool {
-        let _lock = self.runtime_state.commit_lock().lock();
-        let committed_where = self.get_committed_where();
-        let progress = commit_mapped_file_queue(committed_where, |offset, return_first_on_not_found| {
-            self.find_mapped_file_by_offset(offset, return_first_on_not_found)
-                .map(|mapped_file| {
-                    SegmentCommitProgress::new(
-                        mapped_file.get_file_from_offset(),
-                        mapped_file.commit(commit_least_pages),
-                    )
-                })
-        });
-        self.set_committed_where(progress.committed());
-        progress.legacy_commit_result()
+        self.flush_handle().commit(commit_least_pages)
     }
 
     #[inline]
@@ -404,6 +489,15 @@ impl MappedFileQueue {
         MappedFileQueueCleanupHandle {
             mapped_files: Arc::clone(self.storage.mapped_files()),
             mapped_file_size: self.storage.mapped_file_size(),
+        }
+    }
+
+    #[inline]
+    pub(crate) fn flush_handle(&self) -> MappedFileQueueFlushHandle {
+        MappedFileQueueFlushHandle {
+            mapped_files: Arc::clone(self.storage.mapped_files()),
+            mapped_file_size: self.storage.mapped_file_size(),
+            runtime_state: self.runtime_state.clone(),
         }
     }
 
@@ -972,30 +1066,7 @@ impl MappedFileQueue {
     }
 
     pub fn try_flush(&self, flush_least_pages: i32) -> MappedFileResult<FlushProgress> {
-        let durable_before = self.get_flushed_where();
-        let appended = self.get_max_offset();
-        let progress = try_flush_mapped_file_queue(
-            appended,
-            durable_before,
-            self.get_store_timestamp(),
-            flush_least_pages,
-            |offset, return_first_on_not_found| {
-                self.find_mapped_file_by_offset(offset, return_first_on_not_found)
-                    .map(|mapped_file| {
-                        mapped_file.try_flush(flush_least_pages).map(|flushed_position| {
-                            SegmentFlushProgress::new(
-                                mapped_file.get_file_from_offset(),
-                                flushed_position,
-                                mapped_file.get_store_timestamp(),
-                            )
-                        })
-                    })
-                    .transpose()
-            },
-        )?;
-        self.set_flushed_where(progress.durable);
-        self.set_store_timestamp(progress.store_timestamp);
-        Ok(progress)
+        self.flush_handle().try_flush(flush_least_pages)
     }
 
     #[inline]
@@ -1327,6 +1398,25 @@ mod tests {
 
         first.destroy(1000);
         let mut queue = Arc::try_unwrap(queue).unwrap_or_else(|_| panic!("release shared queue handles"));
+        queue.destroy();
+    }
+
+    #[test]
+    fn flush_handle_observes_queue_generation_and_shared_progress() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let mut queue = MappedFileQueue::new(temp_dir.path().to_string_lossy().into_owned(), 1024, None);
+        let flush_handle = queue.flush_handle();
+
+        queue.set_flushed_where(17);
+        queue.set_store_timestamp(23);
+        assert_eq!(flush_handle.get_flushed_where(), 17);
+        assert_eq!(flush_handle.get_store_timestamp(), 23);
+
+        let mapped_file = queue.try_create_mapped_file(0).expect("create mapped file");
+        assert!(mapped_file.append_message_bytes(b"flush-handle"));
+        assert_eq!(flush_handle.get_max_offset(), 12);
+
+        drop(flush_handle);
         queue.destroy();
     }
 

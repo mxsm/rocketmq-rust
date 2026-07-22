@@ -19,7 +19,6 @@ use std::time::Duration;
 
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_runtime::TaskGroup;
-use rocketmq_rust::ArcMut;
 use rocketmq_store_local::flush::group_commit::run_group_commit_worker;
 use rocketmq_store_local::flush::group_commit::GroupCommitStatus;
 use rocketmq_store_local::flush::group_commit::GroupCommitWorkerConfig;
@@ -50,7 +49,7 @@ use crate::base::store_checkpoint::StoreCheckpoint;
 use crate::config::flush_disk_type::FlushDiskType;
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::consume_queue::mapped_file_queue::FlushProgress;
-use crate::consume_queue::mapped_file_queue::MappedFileQueue;
+use crate::consume_queue::mapped_file_queue::MappedFileQueueFlushHandle;
 use crate::log_file::flush_manager_impl::group_commit_request::GroupCommitRequest;
 use crate::store_error::StoreError;
 
@@ -66,7 +65,7 @@ mod adapter {
         pub(super) flush_real_time_service: Option<super::FlushRealTimeService>,
         pub(super) commit_real_time_service: Option<super::CommitRealTimeService>,
         pub(super) message_store_config: super::Arc<super::MessageStoreConfig>,
-        pub(super) mapped_file_queue: Option<super::ArcMut<super::MappedFileQueue>>,
+        pub(super) mapped_file_queue: Option<super::MappedFileQueueFlushHandle>,
         pub(super) sync_flush_stats: super::SyncFlushStats,
         pub(super) store_health_recorder: super::StoreHealthRecorder,
     }
@@ -90,9 +89,9 @@ impl DerefMut for DefaultFlushManager {
 }
 
 impl DefaultFlushManager {
-    pub fn new(
+    pub(crate) fn new(
         message_store_config: Arc<MessageStoreConfig>,
-        mapped_file_queue: ArcMut<MappedFileQueue>,
+        mapped_file_queue: MappedFileQueueFlushHandle,
         store_checkpoint: Arc<StoreCheckpoint>,
     ) -> Self {
         let store_health_recorder =
@@ -367,7 +366,7 @@ impl GroupCommitService {
         }
     }
 
-    fn start(&mut self, mapped_file_queue: ArcMut<MappedFileQueue>) {
+    fn start(&mut self, mapped_file_queue: MappedFileQueueFlushHandle) {
         if self.worker_group.is_some() {
             return;
         }
@@ -445,7 +444,7 @@ struct FlushRealTimeService {
 }
 
 impl FlushRealTimeService {
-    fn start(&mut self, mapped_file_queue: ArcMut<MappedFileQueue>) {
+    fn start(&mut self, mapped_file_queue: MappedFileQueueFlushHandle) {
         if self.worker_group.is_some() {
             return;
         }
@@ -546,7 +545,7 @@ impl CommitRealTimeService {
         self.notified.notify_one();
     }
 
-    fn start(&mut self, mapped_file_queue: ArcMut<MappedFileQueue>) {
+    fn start(&mut self, mapped_file_queue: MappedFileQueueFlushHandle) {
         if self.worker_group.is_some() {
             return;
         }
@@ -613,7 +612,7 @@ async fn shutdown_worker_gracefully(service_name: &'static str, worker_group: &m
 }
 
 pub(crate) async fn flush_mapped_file_queue(
-    mapped_file_queue: ArcMut<MappedFileQueue>,
+    mapped_file_queue: MappedFileQueueFlushHandle,
     flush_least_pages: i32,
 ) -> Result<FlushProgress, Arc<StoreError>> {
     match crate::runtime::spawn_io("commitlog-flush", move || {
@@ -630,7 +629,7 @@ pub(crate) async fn flush_mapped_file_queue(
 }
 
 async fn commit_mapped_file_queue(
-    mapped_file_queue: ArcMut<MappedFileQueue>,
+    mapped_file_queue: MappedFileQueueFlushHandle,
     commit_least_pages: i32,
 ) -> Option<CommitWorkerProgress> {
     match crate::runtime::spawn_io("commitlog-commit", move || {
@@ -658,6 +657,8 @@ mod tests {
     use rocketmq_store_local::flush::group_commit::complete_group_commit_batch;
     use rocketmq_store_local::flush::group_commit::complete_group_commit_batch_error;
     use tempfile::tempdir;
+
+    use crate::consume_queue::mapped_file_queue::MappedFileQueue;
 
     use crate::log_file::mapped_file::MappedFileError;
     use crate::store::running_flags::RunningFlags;
@@ -769,9 +770,37 @@ mod tests {
         assert!(runtime_info.oldest_wait_millis <= current_millis().saturating_sub(request.enqueue_time_millis()));
     }
 
+    #[test]
+    fn flush_manager_source_contract_uses_narrow_queue_capability() {
+        let source = include_str!("default_flush_manager.rs");
+        let production = source
+            .split_once("#[cfg(test)]")
+            .map(|(source, _)| source)
+            .expect("DefaultFlushManager production section");
+        assert!(!production.contains("ArcMut"));
+        assert!(production.contains("mapped_file_queue: Option<super::MappedFileQueueFlushHandle>"));
+        assert!(production.contains("mapped_file_queue: MappedFileQueueFlushHandle"));
+
+        let commit_log_source = include_str!("../commit_log.rs");
+        assert!(commit_log_source.contains("mapped_file_queue: super::MappedFileQueue"));
+        assert!(commit_log_source.contains("let mapped_file_flush = mapped_file_queue.flush_handle();"));
+        assert!(!commit_log_source.contains("ArcMut::new(MappedFileQueue::new"));
+
+        let mapped_file_queue_source = include_str!("../../consume_queue/mapped_file_queue.rs");
+        assert!(mapped_file_queue_source.contains("pub(crate) struct MappedFileQueueFlushHandle"));
+        assert!(mapped_file_queue_source.contains("runtime_state: MappedFileQueueRuntimeState"));
+        assert!(mapped_file_queue_source.contains("runtime_state: self.runtime_state.clone()"));
+
+        let runtime_state_source = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../rocketmq-store-local/src/mapped_file/queue_state.rs"
+        ));
+        assert!(runtime_state_source.contains("#[derive(Clone, Debug)]"));
+    }
+
     #[tokio::test]
     async fn flush_and_commit_helpers_run_empty_queue_on_blocking_pool() {
-        let mapped_file_queue = ArcMut::new(MappedFileQueue::default());
+        let mapped_file_queue = MappedFileQueue::default().flush_handle();
 
         assert!(matches!(
             flush_mapped_file_queue(mapped_file_queue.clone(), 0).await,
@@ -792,7 +821,7 @@ mod tests {
     fn start_without_mapped_file_queue_returns_without_panicking() {
         let temp_dir = tempdir().unwrap();
         let store_checkpoint = Arc::new(StoreCheckpoint::new(temp_dir.path().join("checkpoint")).unwrap());
-        let mapped_file_queue = ArcMut::new(MappedFileQueue::default());
+        let mapped_file_queue = MappedFileQueue::default().flush_handle();
         let mut manager = DefaultFlushManager::new(
             Arc::new(MessageStoreConfig::default()),
             mapped_file_queue,
@@ -807,7 +836,7 @@ mod tests {
     async fn handle_disk_flush_returns_timeout_when_sync_service_missing() {
         let temp_dir = tempdir().unwrap();
         let store_checkpoint = Arc::new(StoreCheckpoint::new(temp_dir.path().join("checkpoint")).unwrap());
-        let mapped_file_queue = ArcMut::new(MappedFileQueue::default());
+        let mapped_file_queue = MappedFileQueue::default().flush_handle();
         let mut manager = DefaultFlushManager::new(
             Arc::new(MessageStoreConfig {
                 flush_disk_type: FlushDiskType::SyncFlush,
@@ -838,7 +867,7 @@ mod tests {
     async fn handle_disk_flush_returns_timeout_when_async_service_missing() {
         let temp_dir = tempdir().unwrap();
         let store_checkpoint = Arc::new(StoreCheckpoint::new(temp_dir.path().join("checkpoint")).unwrap());
-        let mapped_file_queue = ArcMut::new(MappedFileQueue::default());
+        let mapped_file_queue = MappedFileQueue::default().flush_handle();
         let mut manager = DefaultFlushManager::new(
             Arc::new(MessageStoreConfig {
                 flush_disk_type: FlushDiskType::AsyncFlush,
@@ -860,7 +889,7 @@ mod tests {
     async fn group_commit_shutdown_completes_pending_request() {
         let temp_dir = tempdir().unwrap();
         let store_checkpoint = Arc::new(StoreCheckpoint::new(temp_dir.path().join("checkpoint")).unwrap());
-        let mapped_file_queue = ArcMut::new(MappedFileQueue::default());
+        let mapped_file_queue = MappedFileQueue::default().flush_handle();
         let mut service = GroupCommitService {
             store_checkpoint,
             notified: Arc::new(Notify::new()),
@@ -907,7 +936,7 @@ mod tests {
     async fn flush_real_time_shutdown_gracefully_waits_for_worker() {
         let temp_dir = tempdir().unwrap();
         let store_checkpoint = Arc::new(StoreCheckpoint::new(temp_dir.path().join("checkpoint")).unwrap());
-        let mapped_file_queue = ArcMut::new(MappedFileQueue::default());
+        let mapped_file_queue = MappedFileQueue::default().flush_handle();
         let mut service = FlushRealTimeService {
             message_store_config: Arc::new(MessageStoreConfig {
                 flush_interval_commit_log: 60_000,

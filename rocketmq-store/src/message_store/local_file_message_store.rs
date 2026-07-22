@@ -5910,9 +5910,9 @@ mod tests {
         assert!(commit_log_source.contains("pub fn retry_delete_first_file(&mut self,"));
         assert!(!commit_log_source.contains("get_mapped_files().store"));
 
-        let mapped_file_queue_source = include_str!("../consume_queue/mapped_file_queue.rs");
+        let mapped_file_queue_source = include_str!("../consume_queue/mapped_file_queue.rs").replace("\r\n", "\n");
         let production = mapped_file_queue_source
-            .split_once("#[cfg(test)]\nmod tests")
+            .rsplit_once("#[cfg(test)]")
             .map(|(source, _)| source)
             .expect("MappedFileQueue production section");
         assert!(production.contains("pub(crate) struct MappedFileQueueCleanupHandle"));

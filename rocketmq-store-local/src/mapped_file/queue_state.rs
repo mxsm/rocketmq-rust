@@ -22,7 +22,7 @@ use parking_lot::Mutex;
 
 /// Canonical progress and commit-serialization state for a mapped-file queue.
 #[doc(hidden)]
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct MappedFileQueueRuntimeState {
     flushed_where: Arc<AtomicU64>,
     committed_where: Arc<AtomicU64>,

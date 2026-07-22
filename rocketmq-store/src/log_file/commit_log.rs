@@ -368,7 +368,7 @@ mod adapter {
     /// Store-owned composition dependencies used by the legacy CommitLog facade.
     #[doc(hidden)]
     pub struct CommitLog {
-        pub(super) mapped_file_queue: super::ArcMut<super::MappedFileQueue>,
+        pub(super) mapped_file_queue: super::MappedFileQueue,
         pub(super) message_store_config: super::Arc<super::MessageStoreConfig>,
         pub(super) broker_config: super::Arc<super::BrokerConfig>,
         pub(super) enabled_append_prop_crc: bool,
@@ -419,14 +419,12 @@ impl CommitLog {
         let memory_lock_budget_bytes = message_store_config.effective_linux_memory_lock_budget_bytes(
             crate::platform::current_store_platform_capability().memory_lock_limit_bytes,
         );
-        let mapped_file_queue = ArcMut::new(MappedFileQueue::new(
-            store_path,
-            mapped_file_size as u64,
-            Some(allocate_mapped_file_service),
-        ));
+        let mapped_file_queue =
+            MappedFileQueue::new(store_path, mapped_file_size as u64, Some(allocate_mapped_file_service));
+        let mapped_file_flush = mapped_file_queue.flush_handle();
         Self {
             root: CommitLogRoot::new(CommitLogAdapter {
-                mapped_file_queue: mapped_file_queue.clone(),
+                mapped_file_queue,
                 message_store_config: message_store_config.clone(),
                 broker_config,
                 enabled_append_prop_crc,
@@ -447,7 +445,7 @@ impl CommitLog {
                 consume_queue_store,
                 flush_manager: ArcMut::new(DefaultFlushManager::new(
                     message_store_config.clone(),
-                    mapped_file_queue,
+                    mapped_file_flush,
                     store_checkpoint,
                 )),
                 cold_data_check_service: Arc::new(Default::default()),
