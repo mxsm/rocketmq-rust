@@ -1215,6 +1215,13 @@ LocalFile root 后验证 replica capability 仍可用。reviewed 快照从 65/23
 无 relocation、新 identity 或临时 approval。Store test/bench caller 从 30/157 降至 27/154，R17 总上界降至
 35/170；执行清单保持完成 11 项、剩余 20 项，正式进度仍为 75/82。
 
+LocalFile ConsumeQueue compatibility tests 随 Issue #8601 改为独占 Store root：三个测试只从本地 root 提取
+`ConsumeQueueStoreContext` 并显式注入被测 queue store，不再用 `ArcMut` 建立未使用的 Timer/HA/self-wiring
+组合。reviewed 快照从 62/234 降至 60/230：production 保持 13/24，test 从 35/170 降至 33/166，
+compatibility 保持 14/40；净删除 2 test identities/4 occurrences，无 relocation、新 identity 或临时 approval。
+Store test/bench caller 从 27/154 降至 25/150，R17 总上界降至 33/166；执行清单保持完成 11 项、剩余
+20 项，正式进度仍为 75/82。
+
 Default HA client runtime ownership 随 Issue #8567 完成收窄：`DefaultHAClient` 以标准 `Arc<Inner>` 共享只读组合根，
 `Inner` 仅保留原子、锁、Notify、flow monitor 与现有 LocalStore 兼容句柄；从未安装连接的 stream 字段和重复 buffer/
 dispatch/report 状态已删除，实际 reader/writer buffer 继续由每个 connection task 独占。reviewed 快照为 126 identities/

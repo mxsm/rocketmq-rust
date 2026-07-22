@@ -1182,7 +1182,6 @@ mod tests {
     use rocketmq_common::common::broker::broker_config::BrokerConfig;
     use rocketmq_common::common::config::TopicConfig;
     use rocketmq_common::TopicAttributes::TopicAttributes;
-    use rocketmq_rust::ArcMut;
     use tempfile::tempdir;
 
     use super::*;
@@ -1583,15 +1582,13 @@ mod tests {
         let broker_config = Arc::new(BrokerConfig::default());
         let topic_config_table = Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new());
         topic_config_table.insert(topic.clone(), Arc::new(TopicConfig::new(topic.clone())));
-        let mut message_store = ArcMut::new(LocalFileMessageStore::new(
+        let message_store = LocalFileMessageStore::new(
             message_store_config.clone(),
             broker_config.clone(),
             topic_config_table,
             None,
             false,
-        ));
-        let message_store_clone = message_store.clone();
-        message_store.set_message_store_arc(message_store_clone);
+        );
 
         let batch_store_path = get_store_path_batch_consume_queue(message_store_config.store_path_root_dir.as_str());
         fs::create_dir_all(Path::new(&batch_store_path).join(topic.as_str()).join("0"))
@@ -1619,15 +1616,13 @@ mod tests {
             CQType::RocksDBCQ.to_string().into(),
         );
         topic_config_table.insert(topic.clone(), Arc::new(topic_config));
-        let mut message_store = ArcMut::new(LocalFileMessageStore::new(
+        let message_store = LocalFileMessageStore::new(
             message_store_config.clone(),
             broker_config.clone(),
             topic_config_table,
             None,
             false,
-        ));
-        let message_store_clone = message_store.clone();
-        message_store.set_message_store_arc(message_store_clone);
+        );
 
         let simple_store_path = get_store_path_consume_queue(message_store_config.store_path_root_dir.as_str());
         fs::create_dir_all(Path::new(&simple_store_path).join(topic.as_str()).join("0"))
@@ -1653,15 +1648,13 @@ mod tests {
         });
         let broker_config = Arc::new(BrokerConfig::default());
         let topic_config_table = Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new());
-        let mut message_store = ArcMut::new(LocalFileMessageStore::new(
+        let message_store = LocalFileMessageStore::new(
             message_store_config.clone(),
             broker_config.clone(),
             topic_config_table,
             None,
             false,
-        ));
-        let message_store_clone = message_store.clone();
-        message_store.set_message_store_arc(message_store_clone);
+        );
         let store = ConsumeQueueStore::new(message_store_config, broker_config);
         store.set_context(message_store.consume_queue_context());
 

@@ -1190,56 +1190,6 @@
       "adr": "ADR-013"
     },
     {
-      "identity": "02af3aaf5d56a8cb9245d5fb",
-      "path": "rocketmq-store/src/queue/local_file_consume_queue_store.rs",
-      "symbol": "ArcMut",
-      "kind": "constructor",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "c8a63e7757c60e0fc0c38b58",
-          "fingerprint": "988e66eed233a78a700f1cc9",
-          "item": "fn load_consume_queues_returns_false_when_topic_queue_type_mismatches_directory",
-          "line": 1586
-        },
-        {
-          "id": "cc2a4417f4944073557fdfa0",
-          "fingerprint": "c67f57a50612666727d09683",
-          "item": "fn rocksdb_cq_loads_from_simple_cq_path_in_compat_mode",
-          "line": 1622
-        },
-        {
-          "id": "31286610bda117db9efff731",
-          "fingerprint": "adc49585257436eeeef6e682",
-          "item": "fn create_consume_queue_by_type_maps_rocksdb_cq_to_simple_cq",
-          "line": 1656
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "cf8eee312b13d2cbecbc6a04",
-      "path": "rocketmq-store/src/queue/local_file_consume_queue_store.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "38e5d096b6cb32868b800767",
-          "fingerprint": "a28f0d3718fa0ebc4b21f4c7",
-          "item": "mod tests",
-          "line": 1185
-        }
-      ],
-      "owner": "store",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
       "identity": "1910197e83a98f7b2aa747ad",
       "path": "rocketmq-store/src/queue/single_consume_queue.rs",
       "symbol": "ArcMut",
