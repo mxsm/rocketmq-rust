@@ -1695,6 +1695,14 @@ function Get-SchedulerDisposition {
         }
     }
 
+    if ($path -eq "rocketmq-broker/src/broker/broker_control_plane/bootstrap.rs") {
+        return [pscustomobject]@{
+            Disposition = "broker-controller-bootstrap-delay"
+            ActionRequired = $false
+            Reason = "Allowed bounded controller bootstrap observation delay; periodic controller work remains rooted in the broker ScheduledTaskManager lifecycle."
+        }
+    }
+
     if ($path -match "^rocketmq-broker/src/(schedule|transaction|long_polling|processor|topic)/") {
         return [pscustomobject]@{
             Disposition = "broker-protocol-timer"
