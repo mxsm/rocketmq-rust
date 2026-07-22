@@ -51,7 +51,6 @@ use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::route::route_data_view::QueueData;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_remoting::runtime::RPCHook;
-use rocketmq_rust::ArcMut;
 
 fn build_acl_request(body_size: usize) -> RemotingCommand {
     let mut request = RemotingCommand::create_remoting_command(10).set_body(Bytes::from(vec![b'a'; body_size]));
@@ -285,7 +284,7 @@ fn build_message_ext_batch(batch_size: usize, body_size: usize) -> Vec<MessageEx
 
 fn bench_lite_pull_batch_clone(c: &mut Criterion) {
     let owned_messages = build_message_ext_batch(256, 1024);
-    let zero_copy_messages = owned_messages.iter().cloned().map(ArcMut::new).collect::<Vec<_>>();
+    let shared_messages = owned_messages.iter().cloned().map(Arc::new).collect::<Vec<_>>();
 
     let mut group = c.benchmark_group("lite_pull_batch_clone");
     group.throughput(Throughput::Elements(owned_messages.len() as u64));
@@ -293,8 +292,8 @@ fn bench_lite_pull_batch_clone(c: &mut Criterion) {
     group.bench_function("owned_message_ext_clone", |b| {
         b.iter(|| black_box(owned_messages.clone()))
     });
-    group.bench_function("zero_copy_arcmut_clone", |b| {
-        b.iter(|| black_box(zero_copy_messages.clone()))
+    group.bench_function("shared_arc_message_ext_clone", |b| {
+        b.iter(|| black_box(shared_messages.clone()))
     });
 
     group.finish();

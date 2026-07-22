@@ -725,44 +725,6 @@
       "adr": "ADR-002"
     },
     {
-      "identity": "3186279d41c31c592473790d",
-      "path": "rocketmq-client/benches/client_hot_path_benchmark.rs",
-      "symbol": "ArcMut",
-      "kind": "constructor",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "4fc30746d63d173c219a3ebd",
-          "fingerprint": "a6a0cf203312050b81241276",
-          "item": "fn bench_lite_pull_batch_clone",
-          "line": 288
-        }
-      ],
-      "owner": "client",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "943a0689f42cbacb906716c4",
-      "path": "rocketmq-client/benches/client_hot_path_benchmark.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "dcf56b73566502a1eb20c962",
-          "fingerprint": "873a406be053928f07d03584",
-          "item": "<module>",
-          "line": 54
-        }
-      ],
-      "owner": "client",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
       "identity": "c8ea74fe7e1e8bfaa415a469",
       "path": "rocketmq-store/benches/commit_log_performance.rs",
       "symbol": "ArcMut",
