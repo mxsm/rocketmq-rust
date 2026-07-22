@@ -1018,6 +1018,15 @@ shared-wrapper 传播根，删除后 reviewed ArcMut 快照从 220/690 降至 13
 净删除 82 identities/184 occurrences，无 relocation、新增 identity 或临时 approval。1.0.0 next-major 兼容决策
 已写入 Store facade ledger；R01、R09～R16 仍未完成，31 项执行清单仍剩余 24 项，总进度仍为 75/82。
 
+Local background root ownership 随 Issue #8545 继续收窄：Reput reader、dispatcher、one-shot 路径与缓存 inner
+不再接收或保存完整 `ArcMut<LocalFileMessageStore>`，只持 CommitLog、dispatcher、不可变延迟配置快照、统计与
+live message-arrival capability；listener 通过标准 `RwLock` 发布且在回调前释放读锁。scheduled self-check 只捕获
+CommitLog 与 ConsumeQueueStore 窄 child handle，Reput shutdown join 后清空 inner。reviewed ArcMut 快照从
+138/506 降至 138 identities/501 occurrences（production 62/164、test 62/297、compatibility 14/40、Broker
+production 4/8、Store production 58/156），净删除 4 个 production occurrences 和 1 个 test occurrence；7 个保留的
+CommitLog/dispatcher occurrence 经临时 ADR-013 一对一指纹审核，无新增 identity 或提交态 approval。R10 由 6/38
+降至 6/34，但 Local root、CommitLog/CQ、Timer、HA 与 recovery 回指仍待后续切片，不能提前标记完成。
+
 ### 9.3 证据目录
 
 - 运行期生成物：`target/architecture-refactor/Mxx/<run-id>/`，不提交 Git。
