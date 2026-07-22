@@ -14,6 +14,7 @@
 
 use std::ptr::NonNull;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
 use rocketmq_error::RocketMQResult;
 use rocketmq_store_local::base::memory_lock_manager::MemoryLockCategory;
@@ -96,7 +97,7 @@ fn active_file_requires_exact_region_and_take_clear_removes_identity() -> Rocket
 
 #[test]
 fn composite_runtime_state_preserves_initial_values_and_updates() {
-    let mut state = CommitLogRuntimeState::new(true, 1024);
+    let state = CommitLogRuntimeState::new(true, 1024);
     assert_eq!(state.confirm_offset(), -1);
     assert_eq!(state.put_message_lock_runtime_info().acquire_total, 0);
     assert_eq!(state.begin_time_in_lock().load(Ordering::Acquire), 0);
@@ -122,4 +123,16 @@ fn composite_runtime_state_preserves_initial_values_and_updates() {
 
     state.clear_begin_time_in_lock();
     assert_eq!(state.begin_time_in_lock().load(Ordering::Acquire), 0);
+}
+
+#[test]
+fn shared_runtime_state_arc_observes_confirm_offset_publication() {
+    let owner = Arc::new(CommitLogRuntimeState::new(true, 1024));
+    let reader = Arc::clone(&owner);
+
+    owner.publish_confirm_offset(128);
+    assert_eq!(reader.confirm_offset(), 128);
+
+    reader.publish_confirm_offset(64);
+    assert_eq!(owner.confirm_offset(), 64);
 }

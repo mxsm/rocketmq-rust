@@ -80,6 +80,7 @@ use crate::config::message_store_config::LinuxRecoveryFadviseMode;
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::consume_queue::mapped_file_queue::MappedFileQueue;
 use crate::consume_queue::mapped_file_queue::MappedFileQueueCleanupHandle;
+use crate::consume_queue::mapped_file_queue::MappedFileQueueReadHandle;
 use crate::consume_queue::mapped_file_queue::MappedFileWarmupStats;
 use crate::ha::general_ha_service::GeneralHAService;
 use crate::ha::ha_service::HAService;
@@ -408,6 +409,91 @@ impl CommitLogCleanupHandle {
     }
 }
 
+/// Safe, cloneable capability for long-lived commit-log readers.
+///
+/// The handle observes the current mapped-file generation, flush progress, and
+/// confirm-offset policy without retaining the mutable `CommitLog` facade.
+#[derive(Clone)]
+pub(crate) struct CommitLogReadHandle {
+    mapped_file_queue: MappedFileQueueReadHandle,
+    message_store_config: Arc<MessageStoreConfig>,
+    broker_config: Arc<BrokerConfig>,
+    store_context: CommitLogStoreContext,
+    runtime_state: Arc<CommitLogRuntimeState>,
+}
+
+impl CommitLogReadHandle {
+    pub(crate) fn get_message(&self, offset: i64, size: i32) -> Option<SelectMappedBufferResult> {
+        self.mapped_file_queue.get_message(offset, size)
+    }
+
+    pub(crate) fn get_data(&self, offset: i64) -> Option<SelectMappedBufferResult> {
+        self.mapped_file_queue.get_data(offset)
+    }
+
+    pub(crate) fn get_max_offset(&self) -> i64 {
+        self.mapped_file_queue.get_max_offset()
+    }
+
+    pub(crate) fn get_min_offset(&self) -> i64 {
+        self.mapped_file_queue.get_min_offset()
+    }
+
+    pub(crate) fn check_self(&self) {
+        self.mapped_file_queue.check_self();
+    }
+
+    pub(crate) fn roll_next_file(&self, offset: i64) -> i64 {
+        self.mapped_file_queue.roll_next_file(offset)
+    }
+
+    pub(crate) fn get_confirm_offset(&self) -> i64 {
+        resolve_commit_log_confirm_offset(
+            self.message_store_config.as_ref(),
+            self.broker_config.as_ref(),
+            &self.store_context,
+            self.runtime_state.confirm_offset(),
+            self.mapped_file_queue.get_max_offset(),
+            self.mapped_file_queue.get_flushed_where(),
+        )
+    }
+}
+
+fn resolve_commit_log_confirm_offset(
+    message_store_config: &MessageStoreConfig,
+    broker_config: &BrokerConfig,
+    store_context: &CommitLogStoreContext,
+    stored_confirm_offset: i64,
+    max_phy_offset: i64,
+    flushed_where: i64,
+) -> i64 {
+    if broker_config.enable_controller_mode {
+        if message_store_config.broker_role == BrokerRole::Slave || store_context.running_flags.is_fenced() {
+            return stored_confirm_offset;
+        }
+
+        let Some(ha_service) = store_context.ha_service() else {
+            return stored_confirm_offset;
+        };
+        if ha_service.local_sync_state_set_size(max_phy_offset) <= 1 || !message_store_config.all_ack_in_sync_state_set
+        {
+            return max_phy_offset;
+        }
+        if stored_confirm_offset >= 0 {
+            return stored_confirm_offset;
+        }
+        return ha_service.compute_confirm_offset(stored_confirm_offset, max_phy_offset);
+    }
+
+    if broker_config.duplication_enable {
+        stored_confirm_offset
+    } else if message_store_config.flush_disk_type == FlushDiskType::SyncFlush {
+        flushed_where
+    } else {
+        max_phy_offset
+    }
+}
+
 mod adapter {
     /// Store-owned composition dependencies used by the legacy CommitLog facade.
     #[doc(hidden)]
@@ -418,7 +504,7 @@ mod adapter {
         pub(super) enabled_append_prop_crc: bool,
         pub(super) store_context: super::CommitLogStoreContext,
         pub(super) dispatcher: super::CommitLogDispatchHandle,
-        pub(super) runtime_state: super::CommitLogRuntimeState,
+        pub(super) runtime_state: super::Arc<super::CommitLogRuntimeState>,
         pub(super) store_checkpoint: super::Arc<super::StoreCheckpoint>,
         pub(super) append_message_callback: super::Arc<super::DefaultAppendMessageCallback>,
         pub(super) put_message_lock: super::Arc<tokio::sync::Mutex<()>>,
@@ -475,10 +561,10 @@ impl CommitLog {
                 enabled_append_prop_crc,
                 store_context,
                 dispatcher,
-                runtime_state: CommitLogRuntimeState::new(
+                runtime_state: Arc::new(CommitLogRuntimeState::new(
                     message_store_config.linux_memory_lock_warn_only,
                     memory_lock_budget_bytes,
-                ),
+                )),
                 store_checkpoint: store_checkpoint.clone(),
                 append_message_callback: Arc::new(DefaultAppendMessageCallback::new(
                     message_store_config.clone(),
@@ -502,6 +588,17 @@ impl CommitLog {
     pub(crate) fn cleanup_handle(&self) -> CommitLogCleanupHandle {
         CommitLogCleanupHandle {
             mapped_file_queue: self.mapped_file_queue.cleanup_handle(),
+        }
+    }
+
+    #[inline]
+    pub(crate) fn read_handle(&self) -> CommitLogReadHandle {
+        CommitLogReadHandle {
+            mapped_file_queue: self.mapped_file_queue.read_handle(),
+            message_store_config: self.message_store_config.clone(),
+            broker_config: self.broker_config.clone(),
+            store_context: self.store_context.clone(),
+            runtime_state: self.runtime_state.clone(),
         }
     }
 
@@ -843,29 +940,6 @@ impl CommitLog {
     pub(crate) fn publish_confirm_offset(&self, phy_offset: i64) {
         self.runtime_state.publish_confirm_offset(phy_offset);
         self.store_checkpoint.set_confirm_phy_offset(phy_offset as u64);
-    }
-
-    fn compute_controller_confirm_offset(&self) -> i64 {
-        if self.message_store_config.broker_role == BrokerRole::Slave || self.store_context.running_flags.is_fenced() {
-            return self.runtime_state.confirm_offset();
-        }
-
-        let max_phy_offset = self.get_max_offset();
-        let Some(ha_service) = self.store_context.ha_service() else {
-            return self.runtime_state.confirm_offset();
-        };
-
-        if ha_service.local_sync_state_set_size(max_phy_offset) <= 1
-            || !self.message_store_config.all_ack_in_sync_state_set
-        {
-            return max_phy_offset;
-        }
-
-        if self.runtime_state.confirm_offset() >= 0 {
-            return self.runtime_state.confirm_offset();
-        }
-
-        ha_service.compute_confirm_offset(self.runtime_state.confirm_offset(), max_phy_offset)
     }
 
     fn clamp_controller_recover_confirm_offset(&mut self, min_phy_offset: i64, upper_bound: i64) {
@@ -1879,16 +1953,14 @@ impl CommitLog {
 
     //Fetch and compute the newest confirmOffset.
     pub fn get_confirm_offset(&self) -> i64 {
-        if self.broker_config.enable_controller_mode {
-            return self.compute_controller_confirm_offset();
-        } else if self.broker_config.duplication_enable {
-            return self.runtime_state.confirm_offset();
-        }
-        if self.message_store_config.flush_disk_type == FlushDiskType::SyncFlush {
-            self.get_flushed_where()
-        } else {
-            self.get_max_offset()
-        }
+        resolve_commit_log_confirm_offset(
+            self.message_store_config.as_ref(),
+            self.broker_config.as_ref(),
+            &self.store_context,
+            self.runtime_state.confirm_offset(),
+            self.get_max_offset(),
+            self.get_flushed_where(),
+        )
     }
 
     pub fn get_confirm_offset_directly(&self) -> i64 {
@@ -3134,6 +3206,7 @@ mod tests {
             std::env::temp_dir().join(format!("rocketmq-rust-commitlog-confirm-offset-{}", current_millis()));
         let mut store = new_test_message_store(&temp_root, BrokerRole::SyncMaster, false);
         store.init().await.expect("init message store");
+        let read_handle = store.get_commit_log().read_handle();
 
         store
             .get_commit_log_mut()
@@ -3143,6 +3216,7 @@ mod tests {
         store.set_confirm_offset(1);
 
         assert_eq!(store.get_confirm_offset(), 4);
+        assert_eq!(read_handle.get_confirm_offset(), 4);
 
         let _ = std::fs::remove_dir_all(temp_root);
     }
@@ -3155,6 +3229,7 @@ mod tests {
         ));
         let mut store = new_test_message_store(&temp_root, BrokerRole::SyncMaster, true);
         store.init().await.expect("init message store");
+        let read_handle = store.get_commit_log().read_handle();
         store.set_alive_replica_num_in_group(3);
 
         store
@@ -3165,6 +3240,7 @@ mod tests {
         store.get_commit_log_mut().runtime_state.set_confirm_offset(-1);
 
         assert_eq!(store.get_confirm_offset(), -1);
+        assert_eq!(read_handle.get_confirm_offset(), -1);
 
         let _ = std::fs::remove_dir_all(temp_root);
     }

@@ -1064,6 +1064,14 @@ Broker production 4/8、Store production 53/121）；相对 bc69 净删除 4 ide
 constructor relocation 经临时 ADR-013 一对一审核，approval 未提交。R10 从 6/23 降至 6/20，R13 从 2/7 降至
 0/0 并完成；31 项执行清单现为完成 8 项、剩余 23 项，总进度仍为 75/82。
 
+CommitLog long-lived read capability 随 Issue #8555 完成收窄：`MappedFileQueueReadHandle` 通过 ArcSwap 观察当前
+mapped-file generation 与共享 flush progress，`CommitLogReadHandle` 组合只读 WAL、配置、store context 与原子 confirm
+state。Reput、后台索引重建、scheduled self-check、compaction payload 和 tiered dispatch resolver 不再持完整
+`ArcMut<CommitLog>`。reviewed 快照为 128 identities/447 occurrences（production 57/123、test 57/284、
+compatibility 14/40、Broker production 4/8、Store production 53/115）；相对 bc70 净删除 6 个 production
+occurrences、无新增 identity。唯一保留的 Local composition-root constructor occurrence 经临时 ADR-013 一对一审核，
+approval 未提交。R10 从 6/20 降至 6/14，仍未完成；31 项执行清单仍为完成 8 项、剩余 23 项，总进度仍为 75/82。
+
 ### 9.3 证据目录
 
 - 运行期生成物：`target/architecture-refactor/Mxx/<run-id>/`，不提交 Git。
