@@ -4092,6 +4092,31 @@ Local CommitLog owner 随 Issue #8561 完成以下收窄：
 | runtime / architecture guards | enforcing runtime audit、dependency fixtures/baseline/target、release、8-profile/11-variant performance policy、43/43 dependency tests、6/6 release tests、11/11 performance tests 与 AGENTS routing 通过；目标 compatibility 35/35、test edge 3/3、release topology 32/32、66 comparisons/0 failures。telemetry semantic guard 未通过且其测试在 setup 阶段 0 项运行：PR #8559 新增的 `LOG_FILTER_ACTIVE`、`LOG_FILTER_AUDIT_FAILURE_TOTAL`、`LOG_FILTER_AUTO_RESTORE_FAILURE_TOTAL`、`LOG_FILTER_EXPIRY_TIMESTAMP_SECONDS`、`LOG_FILTER_RELOAD_TOTAL`、`LOG_FILTER_ROLLBACK_FAILURE_TOTAL` 未登记；在干净 main `147047780` 与本分支复现相同结果，bc73 未改 observability/registry，该非零项未计为通过 |
 | root workspace final gates | `cargo fmt --all -- --check`、workspace all-target/all-feature strict Clippy 与 `git diff --check` 通过；Windows linker stdout 与既有 future-incompatibility note 不受 `-D warnings` 管辖 |
 
+## M11-12g1 telemetry registry gate repair 实现
+
+Issue #8563 将 bc73 验证暴露的当前 main telemetry 基线回归独立收敛：
+
+- `LOG_FILTER_RELOAD_TOTAL`、`LOG_FILTER_ACTIVE`、`LOG_FILTER_EXPIRY_TIMESTAMP_SECONDS`、
+  `LOG_FILTER_AUDIT_FAILURE_TOTAL`、`LOG_FILTER_AUTO_RESTORE_FAILURE_TOTAL` 与
+  `LOG_FILTER_ROLLBACK_FAILURE_TOTAL` 补入 Rust metric catalog，使用精确 counter/gauge kind、unit、
+  `MetricSource::Observability` 与空 label set。
+- generator 从源码 inventory 重建 canonical registry 与 violation fixture；signal 总量从 130 更新为 136，metric
+  总量从 119 更新为 125，并纳入 PR #8559 同时新增的 `service`、`source` 两项 attribute，总量从 66 更新为 68。
+- Python source contract 固定 125/4/7 inventory 与 136/68 registry，并逐项验证 6 个 log-filter signal 的 stable、
+  operational privacy、零 attribute、cardinality budget 1 与 aggregate sampling 元数据。
+- 该切片只同步 catalog/registry 治理元数据，不修改指标名称、label、exporter、log-filter runtime 或 ArcMut owner；
+  reviewed baseline 保持 127/442，R10 保持 5/9，31 项执行清单仍为完成 8 项、剩余 23 项，正式进度仍为 75/82。
+
+## M11-12g1 telemetry registry gate repair 验证
+
+| 命令 | 结果 |
+|---|---|
+| generator / semantic guard | generator 生成 125 metrics/136 signals/68 attributes；`python scripts/telemetry_semantic_guard.py` 通过 |
+| telemetry contracts | Python 8/8 通过；Rust catalog 5/5 通过，含 6 个 log-filter metric exact contract |
+| observability all-feature tests | lib 131/131、architecture guard 11/11、error compatibility 2/2、log-filter resolution 4/4、logging bootstrap 10/10 通过；2 项既有显式 ignored 保持 |
+| validation scope | 变更仅涉及 always-on catalog/registry 元数据，使用 all-features superset 覆盖；已启动的 21 命令逐 feature workspace 矩阵按用户要求停止且未计为通过，未重复运行 6 个中间 feature 组合 |
+| root workspace final gates | `cargo fmt --all -- --check`、workspace all-target/all-feature strict Clippy 与 `git diff --check` 通过 |
+
 ## 剩余切片与 Gate
 
 2026-07-22 盘点将执行工作固化为 31 个最小可审查单元：16 个 production owner、2 个

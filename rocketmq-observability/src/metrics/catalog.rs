@@ -18,6 +18,7 @@ use crate::semantic::metrics;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MetricKind {
     Counter,
+    Gauge,
     Histogram,
     ObservableGauge,
     UpDownCounter,
@@ -36,6 +37,7 @@ pub enum MetricSource {
     TieredStore,
     Proxy,
     Controller,
+    Observability,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -996,6 +998,48 @@ pub const RUST_METRICS: &[MetricDescriptor] = &[
         labels: &[],
         source: MetricSource::Proxy,
     },
+    MetricDescriptor {
+        name: metrics::LOG_FILTER_RELOAD_TOTAL,
+        kind: MetricKind::Counter,
+        unit: "{reload}",
+        labels: &[],
+        source: MetricSource::Observability,
+    },
+    MetricDescriptor {
+        name: metrics::LOG_FILTER_ACTIVE,
+        kind: MetricKind::Gauge,
+        unit: "1",
+        labels: &[],
+        source: MetricSource::Observability,
+    },
+    MetricDescriptor {
+        name: metrics::LOG_FILTER_EXPIRY_TIMESTAMP_SECONDS,
+        kind: MetricKind::Gauge,
+        unit: "s",
+        labels: &[],
+        source: MetricSource::Observability,
+    },
+    MetricDescriptor {
+        name: metrics::LOG_FILTER_AUDIT_FAILURE_TOTAL,
+        kind: MetricKind::Counter,
+        unit: "{failure}",
+        labels: &[],
+        source: MetricSource::Observability,
+    },
+    MetricDescriptor {
+        name: metrics::LOG_FILTER_AUTO_RESTORE_FAILURE_TOTAL,
+        kind: MetricKind::Counter,
+        unit: "{failure}",
+        labels: &[],
+        source: MetricSource::Observability,
+    },
+    MetricDescriptor {
+        name: metrics::LOG_FILTER_ROLLBACK_FAILURE_TOTAL,
+        kind: MetricKind::Counter,
+        unit: "{failure}",
+        labels: &[],
+        source: MetricSource::Observability,
+    },
 ];
 
 pub const fn java_metrics() -> &'static [MetricDescriptor] {
@@ -1129,8 +1173,8 @@ mod tests {
             .collect::<HashSet<_>>();
 
         assert_eq!(JAVA_METRICS.len(), 93);
-        assert_eq!(RUST_METRICS.len(), 26);
-        assert_eq!(combined.len(), 119, "duplicate metric names across catalogs");
+        assert_eq!(RUST_METRICS.len(), 32);
+        assert_eq!(combined.len(), 125, "duplicate metric names across catalogs");
     }
 
     #[test]
@@ -1147,6 +1191,42 @@ mod tests {
         assert!(sources.contains(&MetricSource::Store));
         assert!(sources.contains(&MetricSource::Proxy));
         assert!(sources.contains(&MetricSource::Controller));
+        assert!(sources.contains(&MetricSource::Observability));
+    }
+
+    #[test]
+    fn log_filter_metrics_have_exact_catalog_contracts() {
+        let expected = [
+            (metrics::LOG_FILTER_RELOAD_TOTAL, MetricKind::Counter, "{reload}"),
+            (metrics::LOG_FILTER_ACTIVE, MetricKind::Gauge, "1"),
+            (metrics::LOG_FILTER_EXPIRY_TIMESTAMP_SECONDS, MetricKind::Gauge, "s"),
+            (
+                metrics::LOG_FILTER_AUDIT_FAILURE_TOTAL,
+                MetricKind::Counter,
+                "{failure}",
+            ),
+            (
+                metrics::LOG_FILTER_AUTO_RESTORE_FAILURE_TOTAL,
+                MetricKind::Counter,
+                "{failure}",
+            ),
+            (
+                metrics::LOG_FILTER_ROLLBACK_FAILURE_TOTAL,
+                MetricKind::Counter,
+                "{failure}",
+            ),
+        ];
+
+        for (name, kind, unit) in expected {
+            let descriptor = RUST_METRICS
+                .iter()
+                .find(|descriptor| descriptor.name == name)
+                .expect("log filter metric descriptor");
+            assert_eq!(descriptor.kind, kind);
+            assert_eq!(descriptor.unit, unit);
+            assert_eq!(descriptor.source, MetricSource::Observability);
+            assert!(descriptor.labels.is_empty());
+        }
     }
 
     #[test]
