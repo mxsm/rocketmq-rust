@@ -58,6 +58,7 @@ class M06ConsumeQueueLocalContractTests(unittest.TestCase):
         store_root = source(
             "rocketmq-store/src/queue/local_file_consume_queue_store.rs"
         )
+        store_root_production = store_root.split("#[cfg(test)]", maxsplit=1)[0]
         store_dispatcher = source(
             "rocketmq-store/src/queue/build_consume_queue.rs"
         )
@@ -237,8 +238,20 @@ class M06ConsumeQueueLocalContractTests(unittest.TestCase):
         ):
             self.assertIn(owner, local_cq_root)
         self.assertIn(
+            "inner: ConsumeQueueStoreRoot<Arc<Inner>>",
+            store_root_production,
+        )
+        self.assertNotIn(
             "inner: ConsumeQueueStoreRoot<ArcMut<Inner>>",
-            store_root,
+            store_root_production,
+        )
+        self.assertIn(
+            "message_store: RwLock<Option<ArcMut<LocalFileMessageStore>>>",
+            store_root_production,
+        )
+        self.assertIn(
+            "*self.inner.message_store.write() = Some(message_store);",
+            store_root_production,
         )
         self.assertIn("drive_find_or_create_consume_queue(", store_root)
         self.assertIn("clamp_consume_queue_offset(", store_root)

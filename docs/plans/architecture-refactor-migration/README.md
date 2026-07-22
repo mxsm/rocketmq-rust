@@ -1110,6 +1110,14 @@ dispatch/report 状态已删除，实际 reader/writer buffer 继续由每个 co
 occurrence 经临时 ADR-013 一对一 relocation 审核，无新增 identity 或提交态 approval。R15 从 9/29 降至 8/26，
 仍未完成；31 项执行清单仍为完成 8 项、剩余 23 项，总进度仍为 75/82。
 
+ConsumeQueueStore root ownership 随 Issue #8569 完成收窄：cloneable Store adapter 从
+`ConsumeQueueStoreRoot<ArcMut<Inner>>` 改为标准 `Arc<Inner>`；唯一晚绑定的 LocalFileMessageStore 兼容句柄由
+短 `RwLock<Option<_>>` 保护，queue lookup/type check/constructor 先 clone 快照再继续，锁 guard 不跨文件访问或异步边界。
+reviewed 快照为 126 identities/435 occurrences（production 55/111、test 57/284、compatibility 14/40、Broker
+production 4/8、Store production 51/103）；相对 bc75 净删除 2 个 production occurrences，5 个保留 occurrence
+经临时 ADR-013 一对一 relocation 审核，无新增 identity 或提交态 approval。R12 从 17/36 降至 17/34，仍未完成；
+31 项执行清单仍为完成 8 项、剩余 23 项，总进度仍为 75/82。
+
 ### 9.3 证据目录
 
 - 运行期生成物：`target/architecture-refactor/Mxx/<run-id>/`，不提交 Git。
