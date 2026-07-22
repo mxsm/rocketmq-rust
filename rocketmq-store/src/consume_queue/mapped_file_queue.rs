@@ -470,7 +470,7 @@ impl MappedFileQueue {
 
     #[inline]
     pub fn get_last_mapped_file_mut_start_offset(
-        &mut self,
+        &self,
         start_offset: u64,
         need_create: bool,
     ) -> Option<Arc<DefaultMappedFile>> {
@@ -512,12 +512,12 @@ impl MappedFileQueue {
     }
 
     #[inline]
-    pub fn try_create_mapped_file(&mut self, create_offset: u64) -> Option<Arc<DefaultMappedFile>> {
+    pub fn try_create_mapped_file(&self, create_offset: u64) -> Option<Arc<DefaultMappedFile>> {
         let next_file_path =
             PathBuf::from(self.storage.store_path().to_owned()).join(offset_to_file_name(create_offset));
         let next_next_file_path = PathBuf::from(self.storage.store_path().to_owned())
             .join(offset_to_file_name(create_offset + self.storage.mapped_file_size()));
-        self.do_create_mapped_file(next_file_path, next_next_file_path)
+        self.do_create_mapped_file(create_offset, next_file_path, next_next_file_path)
     }
 
     /// Create mapped file with refactored logic to avoid deadlock
@@ -530,11 +530,21 @@ impl MappedFileQueue {
     /// The created mapped file wrapped in Arc
     #[inline]
     fn do_create_mapped_file(
-        &mut self,
+        &self,
+        create_offset: u64,
         next_file_path: PathBuf,
         next_next_file_path: PathBuf,
     ) -> Option<Arc<DefaultMappedFile>> {
-        let is_first = self.storage.mapped_files().load().is_empty();
+        let _maintenance_guard = self.runtime_state.commit_lock().lock();
+        let mapped_files = self.storage.mapped_files().load();
+        if let Some(existing) = mapped_files
+            .iter()
+            .find(|mapped_file| mapped_file.get_file_from_offset() == create_offset)
+        {
+            return Some(Arc::clone(existing));
+        }
+        let is_first = mapped_files.is_empty();
+        drop(mapped_files);
 
         let arc_file = create_mapped_file_for_queue(
             self.allocate_mapped_file_service.as_ref(),
@@ -637,7 +647,8 @@ impl MappedFileQueue {
     /// # Arguments
     /// * `offset` - The offset beyond which files are considered dirty
     #[inline]
-    pub fn truncate_dirty_files(&mut self, offset: i64) {
+    pub fn truncate_dirty_files(&self, offset: i64) {
+        let _maintenance_guard = self.runtime_state.commit_lock().lock();
         let mut will_remove_files = Vec::new();
 
         for mapped_file in self.storage.mapped_files().load().iter() {
@@ -761,7 +772,8 @@ impl MappedFileQueue {
     ///
     /// # Returns
     /// true if reset succeeded, false if offset is too far back
-    pub fn reset_offset(&mut self, offset: i64) -> bool {
+    pub fn reset_offset(&self, offset: i64) -> bool {
+        let _maintenance_guard = self.runtime_state.commit_lock().lock();
         let last_file = self.get_last_mapped_file().map(|mapped_file| {
             MappedFileQueueResetLastFile::new(mapped_file.get_file_from_offset(), mapped_file.get_wrote_position())
         });
@@ -1428,7 +1440,7 @@ mod tests {
 
         let service = AllocateMappedFileService::new();
         service.start();
-        let mut queue = MappedFileQueue::new(
+        let queue = MappedFileQueue::new(
             temp_dir.path().to_string_lossy().to_string(),
             mapped_file_size,
             Some(service.clone()),
@@ -1449,7 +1461,7 @@ mod tests {
     fn mapped_file_generation_update_retries_without_losing_concurrent_publication() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let mapped_file_size = 1024;
-        let mut queue = MappedFileQueue::new(temp_dir.path().to_string_lossy().into_owned(), mapped_file_size, None);
+        let queue = MappedFileQueue::new(temp_dir.path().to_string_lossy().into_owned(), mapped_file_size, None);
         let first = queue.try_create_mapped_file(0).expect("first mapped file");
         let second = queue
             .try_create_mapped_file(mapped_file_size)
@@ -1504,6 +1516,46 @@ mod tests {
 
         first.destroy(1000);
         let mut queue = Arc::try_unwrap(queue).unwrap_or_else(|_| panic!("release shared queue handles"));
+        queue.destroy();
+    }
+
+    #[test]
+    fn concurrent_mapped_file_creation_reuses_published_file() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let queue = Arc::new(MappedFileQueue::new(
+            temp_dir.path().to_string_lossy().into_owned(),
+            1024,
+            None,
+        ));
+        let start = Arc::new(Barrier::new(3));
+
+        let first_queue = Arc::clone(&queue);
+        let first_start = Arc::clone(&start);
+        let first = thread::spawn(move || {
+            first_start.wait();
+            first_queue.try_create_mapped_file(0).expect("first mapped file")
+        });
+
+        let second_queue = Arc::clone(&queue);
+        let second_start = Arc::clone(&start);
+        let second = thread::spawn(move || {
+            second_start.wait();
+            second_queue.try_create_mapped_file(0).expect("second mapped file")
+        });
+
+        start.wait();
+        let first = first.join().expect("first creator completes");
+        let second = second.join().expect("second creator completes");
+
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(queue.get_mapped_file_count(), 1);
+
+        drop(first);
+        drop(second);
+        let mut queue = match Arc::try_unwrap(queue) {
+            Ok(queue) => queue,
+            Err(_) => panic!("creator threads released the queue"),
+        };
         queue.destroy();
     }
 
@@ -1573,7 +1625,8 @@ mod tests {
             file.set_flushed_position(1024);
         }
 
-        queue.truncate_dirty_files(1536);
+        let shared_queue = &queue;
+        shared_queue.truncate_dirty_files(1536);
 
         assert_eq!(queue.get_mapped_file_count(), 2);
         assert_eq!(first.get_wrote_position(), 1024);
@@ -1592,7 +1645,8 @@ mod tests {
         let target = queue.try_create_mapped_file(1024).expect("target mapped file");
         let removed = queue.try_create_mapped_file(2048).expect("removed mapped file");
 
-        assert!(queue.reset_offset(1536));
+        let shared_queue = &queue;
+        assert!(shared_queue.reset_offset(1536));
 
         assert_eq!(queue.get_mapped_file_count(), 2);
         assert!(Arc::ptr_eq(

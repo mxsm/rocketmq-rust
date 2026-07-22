@@ -33,7 +33,7 @@ fn frame(size: usize, magic: i32) -> Bytes {
 
 fn with_iterator(bytes: &[u8], check: impl FnOnce(&mut BatchMessageIterator<'_>)) {
     let temp_dir = TempDir::new().expect("create temp directory");
-    let mut queue = MappedFileQueue::new(temp_dir.path().to_string_lossy().to_string(), bytes.len() as u64, None);
+    let queue = MappedFileQueue::new(temp_dir.path().to_string_lossy().to_string(), bytes.len() as u64, None);
     let mapped_file = queue
         .get_last_mapped_file_mut_start_offset(0, true)
         .expect("create mapped file");
