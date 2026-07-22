@@ -12932,6 +12932,37 @@ def commit_log_recovery_route_contract_violations(
     if compact_rust(named_function_body(store_production, "get_commit_log_mut") or "") != "&mutself.commit_log":
         violations.append("LocalFileMessageStore CommitLog exclusive mutable facade changed")
 
+    if local_store_fields.get("root_dependencies_wired") != "bool":
+        violations.append("LocalFileMessageStore root dependency wiring state changed")
+    if "message_store_arc" in local_store_fields:
+        violations.append("LocalFileMessageStore regained a retained complete-root handle")
+    if "message_store_arc_or_error" in store_production or "self.message_store_arc" in store_production:
+        violations.append("LocalFileMessageStore regained complete-root recovery")
+    wiring_compact = compact_rust(named_function_body(store_production, "set_message_store_arc") or "")
+    for required in (
+        "self.consume_queue_store.set_message_store(message_store_arc.clone())",
+        "TimerMessageStore::new(Some(message_store_arc.clone()))",
+        "self.root_dependencies_wired=true",
+    ):
+        if wiring_compact.count(required) != 1:
+            violations.append(f"Local root one-shot wiring changed: {required}")
+    if wiring_compact.count("DefaultHAService::new(message_store_arc") != 2:
+        violations.append("Local root HA construction must remain in one-shot wiring")
+    init_compact = compact_rust(named_function_body(store_production, "init") or "")
+    for forbidden_init in ("message_store_arc_or_error", "DefaultHAService::new"):
+        if forbidden_init in init_compact:
+            violations.append(f"Local init regained complete-root construction: {forbidden_init}")
+    for required_init in (
+        "self.ensure_root_dependencies_wired()?",
+        "self.pending_ha_service.take()",
+        "GeneralHAService::DefaultHAService(ArcMut::new(*service))",
+        "GeneralHAService::AutoSwitchHAService(ArcMut::new(service))",
+        "let_=ha_service.init()",
+        "self.ha_service=Some(ha_service)",
+    ):
+        if init_compact.count(required_init) != 1:
+            violations.append(f"Local init root dependency lifecycle changed: {required_init}")
+
     if len(re.findall(r"\bpub\s+enum\s+CommitLogRecoveryStep\b", active)) != 1 or compact_rust(
         active_item_body(production, "enum", "CommitLogRecoveryStep") or ""
     ) != "Optimized,Standard,":
@@ -15626,6 +15657,46 @@ class StoreLocalContractTests(unittest.TestCase):
                 local,
                 module,
                 store.replace("&mut self.commit_log", "self.commit_log.as_mut()", 1),
+                local_tests,
+            ),
+            (
+                "Local complete-root field restored",
+                local,
+                module,
+                store.replace(
+                    "root_dependencies_wired: bool,",
+                    "message_store_arc: Option<ArcMut<LocalFileMessageStore>> ,",
+                    1,
+                ),
+                local_tests,
+            ),
+            (
+                "Local complete-root recovery restored",
+                local,
+                module,
+                store.replace(
+                    "    fn ensure_root_dependencies_wired",
+                    "    fn message_store_arc_or_error(&self) {}\n\n    fn ensure_root_dependencies_wired",
+                    1,
+                ),
+                local_tests,
+            ),
+            (
+                "Local pending HA handoff removed",
+                local,
+                module,
+                store.replace(
+                    "self.pending_ha_service.take()",
+                    "self.ha_service.take()",
+                    1,
+                ),
+                local_tests,
+            ),
+            (
+                "Local root wiring completion removed",
+                local,
+                module,
+                store.replace("        self.root_dependencies_wired = true;", "", 1),
                 local_tests,
             ),
             (

@@ -1094,6 +1094,14 @@ fixtures 由当前源码 inventory 重新生成，当前合同为 125 metrics、
 log-filter runtime 行为，也不改变 reviewed ArcMut baseline、31 项执行清单与 75/82 正式进度；下一 owner 切片仍为
 M11-12bc74。
 
+Local store self-retention 随 Issue #8565 完成收窄：LocalFileMessageStore 不再保存完整自身 `ArcMut` 或提供恢复
+helper，`set_message_store_arc` 只执行一次性子依赖 wiring；ConsumeQueue/Timer 继续接收现有兼容根句柄，Default/
+AutoSwitch HA 先形成 pending child，再由 `init` 在原生命周期边界包装、初始化并发布。reviewed 快照为 127 identities/
+440 occurrences（production 56/116、test 57/284、compatibility 14/40、Broker production 4/8、Store production
+52/108）；相对 bc73 净删除 2 个 production occurrences，3 个保留 occurrence 经临时 ADR-013 一对一 relocation
+审核，无新增 identity 或提交态 approval。R10 从 5/9 降至 5/7，仍未完成；31 项执行清单仍为完成 8 项、剩余
+23 项，总进度仍为 75/82。
+
 ### 9.3 证据目录
 
 - 运行期生成物：`target/architecture-refactor/Mxx/<run-id>/`，不提交 Git。
