@@ -156,7 +156,7 @@ impl ConsumeQueueExt {
     }
 
     pub fn recover(&mut self) {
-        let mut mapped_file_queue = self.mapped_file_queue.lock();
+        let mapped_file_queue = self.mapped_file_queue.lock();
         let mapped_files = mapped_file_queue.get_mapped_files().load().clone();
         if mapped_files.is_empty() {
             return;
@@ -197,7 +197,7 @@ impl ConsumeQueueExt {
         }
 
         for _ in 0..RETRY_TIMES {
-            let mut queue = self.mapped_file_queue.lock();
+            let queue = self.mapped_file_queue.lock();
             let max_offset = queue.get_max_offset();
             if !cq_ext_capacity_available(max_offset, size) {
                 warn!("Capacity of ext is maximum!{}, {}", max_offset, size);

@@ -7856,6 +7856,14 @@ def mapped_file_queue_allocation_contract_violations(
         )
         or ""
     )
+    store_compact = compact_rust(source_without_cfg_test_items(store_source))
+    if (
+        store_compact.count(
+            "pubfnget_last_mapped_file_mut_start_offset(&self,start_offset:u64,need_create:bool,)->Option<Arc<DefaultMappedFile>>"
+        )
+        != 1
+    ):
+        violations.append("Store mapped-file queue allocation facade must use shared-reference access")
     for required in (
         "MappedFileQueueLastFile::new(",
         "plan_mapped_file_queue_preallocation(",
@@ -8002,6 +8010,13 @@ def mapped_file_queue_io_contract_violations(
 
     store_production = source_without_cfg_test_items(store_source)
     store_active = active_rust_source(store_production)
+    store_compact = compact_rust(store_production)
+    for signature in (
+        "pubfntry_create_mapped_file(&self,create_offset:u64)->Option<Arc<DefaultMappedFile>>",
+        "fndo_create_mapped_file(&self,create_offset:u64,next_file_path:PathBuf,next_next_file_path:PathBuf,)->Option<Arc<DefaultMappedFile>>",
+    ):
+        if store_compact.count(signature) != 1:
+            violations.append(f"Store mapped-file queue creation signature changed: {signature}")
     store_bodies = {
         function_name: compact_rust(named_function_body(store_production, function_name) or "")
         for function_name in ("load", "do_load", "apply_load_outcome", "do_create_mapped_file")
@@ -8024,7 +8039,12 @@ def mapped_file_queue_io_contract_violations(
             "success",
         ),
         "do_create_mapped_file": (
-            "letis_first=self.storage.mapped_files().load().is_empty()",
+            "let_maintenance_guard=self.runtime_state.commit_lock().lock()",
+            "letmapped_files=self.storage.mapped_files().load()",
+            "mapped_file.get_file_from_offset()==create_offset",
+            "returnSome(Arc::clone(existing))",
+            "letis_first=mapped_files.is_empty()",
+            "drop(mapped_files)",
             "create_mapped_file_for_queue(",
             "self.allocate_mapped_file_service.as_ref()",
             "self.update_mapped_file_generation(|current|",
@@ -8061,6 +8081,7 @@ def mapped_file_queue_io_contract_violations(
         "do_load_applies_files_loaded_before_failure",
         "test_load_with_correct_file",
         "trigger_pre_allocation_submits_background_request",
+        "concurrent_mapped_file_creation_reuses_published_file",
     ):
         if named_function_body(store_source, test_name) is None:
             violations.append(f"Store mapped-file queue I/O adapter regression changed: {test_name}")
@@ -8569,6 +8590,22 @@ def mapped_file_queue_maintenance_contract_violations(
         violations.append("Store mapped-file queue maintenance imports must be direct and exact")
     store_production = source_without_cfg_test_items(store_source)
     store_compact = compact_rust(active_rust_source(store_production))
+    for signature in (
+        "pubfntruncate_dirty_files(&self,offset:i64)",
+        "pubfnreset_offset(&self,offset:i64)->bool",
+    ):
+        if store_compact.count(signature) != 1:
+            violations.append(f"Store mapped-file queue maintenance signature changed: {signature}")
+    for function_name in ("truncate_dirty_files", "reset_offset"):
+        function_body = compact_rust(
+            named_function_body(store_production, function_name) or ""
+        )
+        if function_body.count(
+            "let_maintenance_guard=self.runtime_state.commit_lock().lock()"
+        ) != 1:
+            violations.append(
+                f"Store mapped-file queue maintenance lock changed: {function_name}"
+            )
     for fragment in (
         "matchmapped_file_queue_truncate_action(offset,self.storage.mapped_file_size(),mapped_file.get_file_from_offset(),)",
         "MappedFileQueueTruncateAction::Truncate(position)=>{mapped_file.set_wrote_position(position);mapped_file.set_committed_position(position);mapped_file.set_flushed_position(position);}",
@@ -9137,6 +9174,13 @@ def commit_log_root_contract_violations(
     if store_commit_log_adapter_fields(store) != expected_adapter_fields:
         violations.append("Store CommitLog composition adapter field set changed")
     store_compact = compact_rust(source_without_cfg_test_items(store))
+    for signature in (
+        "pubfnget_last_mapped_file(&self,start_offset:i64)->bool",
+        "pubfnreset_offset(&self,offset:i64)->bool",
+        "pubfntruncate_dirty_files(&self,offset_to_truncate:i64)",
+    ):
+        if store_compact.count(signature) != 1:
+            violations.append(f"Store CommitLog maintenance facade changed: {signature}")
     for flow in (
         "pubuseadapter::CommitLogasCommitLogAdapter;",
         "root:CommitLogRoot::new(CommitLogAdapter{",
@@ -14145,6 +14189,17 @@ class StoreLocalContractTests(unittest.TestCase):
                 local_tests,
             ),
             (
+                "Store allocation facade regained mutable-reference access",
+                local,
+                module,
+                store.replace(
+                    "pub fn get_last_mapped_file_mut_start_offset(\n        &self,",
+                    "pub fn get_last_mapped_file_mut_start_offset(\n        &mut self,",
+                    1,
+                ),
+                local_tests,
+            ),
+            (
                 "regression renamed",
                 local,
                 module,
@@ -14271,6 +14326,28 @@ class StoreLocalContractTests(unittest.TestCase):
                 store.replace(
                     "load_mapped_file_queue_path(self.storage.store_path()",
                     "store_owned_queue_load(self.storage.store_path()",
+                    1,
+                ),
+                local_tests,
+            ),
+            (
+                "Store creation facade regained mutable-reference access",
+                local,
+                module,
+                store.replace(
+                    "pub fn try_create_mapped_file(&self, create_offset: u64)",
+                    "pub fn try_create_mapped_file(&mut self, create_offset: u64)",
+                    1,
+                ),
+                local_tests,
+            ),
+            (
+                "Store creation lost duplicate-publication guard",
+                local,
+                module,
+                store.replace(
+                    "return Some(Arc::clone(existing));",
+                    "continue;",
                     1,
                 ),
                 local_tests,
@@ -14648,6 +14725,28 @@ class StoreLocalContractTests(unittest.TestCase):
                 store.replace(
                     "match mapped_file_queue_truncate_action(",
                     "match MappedFileQueueTruncateAction::Retain /* mapped_file_queue_truncate_action( */ {",
+                    1,
+                ),
+                local_tests,
+            ),
+            (
+                "Store maintenance regained mutable-reference access",
+                local,
+                module,
+                store.replace(
+                    "pub fn truncate_dirty_files(&self, offset: i64)",
+                    "pub fn truncate_dirty_files(&mut self, offset: i64)",
+                    1,
+                ),
+                local_tests,
+            ),
+            (
+                "Store reset lost maintenance serialization",
+                local,
+                module,
+                store.replace(
+                    "pub fn reset_offset(&self, offset: i64) -> bool {\n        let _maintenance_guard = self.runtime_state.commit_lock().lock();",
+                    "pub fn reset_offset(&self, offset: i64) -> bool {",
                     1,
                 ),
                 local_tests,
@@ -15206,6 +15305,7 @@ class StoreLocalContractTests(unittest.TestCase):
             ("module removed", local, module.replace("pub mod root;", "", 1), store, local_tests),
             ("Store retained field", local, module, store.replace("    root: CommitLogRoot<CommitLogAdapter>,", "    root: CommitLogRoot<CommitLogAdapter>,\n    copied_offset: i64,", 1), local_tests),
             ("Store adapter field removed", local, module, store.replace("        pub(super) broker_config: super::Arc<super::BrokerConfig>,", "", 1), local_tests),
+            ("Store CommitLog maintenance regained mutable-reference access", local, module, store.replace("pub fn reset_offset(&self, offset: i64)", "pub fn reset_offset(&mut self, offset: i64)", 1), local_tests),
             ("regression renamed", local, module, store, local_tests.replace("fn commit_log_root_exposes_one_mutable_adapter_owner()", "fn commit_log_root_mutation_regression_removed()", 1)),
         )
         for label, local_source, module_source, store_source, test_source in mutations:

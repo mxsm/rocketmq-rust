@@ -2497,13 +2497,13 @@ impl CommitLog {
             .unwrap_or(-1)
     }
 
-    pub fn get_last_mapped_file(&mut self, start_offset: i64) -> bool {
+    pub fn get_last_mapped_file(&self, start_offset: i64) -> bool {
         self.mapped_file_queue
             .get_last_mapped_file_mut_start_offset(start_offset as u64, true)
             .is_some()
     }
 
-    pub fn reset_offset(&mut self, offset: i64) -> bool {
+    pub fn reset_offset(&self, offset: i64) -> bool {
         self.mapped_file_queue.reset_offset(offset)
     }
 
@@ -2516,7 +2516,7 @@ impl CommitLog {
         self.mapped_file_queue.is_mapped_files_empty()
     }
 
-    pub fn truncate_dirty_files(&mut self, offset_to_truncate: i64) {
+    pub fn truncate_dirty_files(&self, offset_to_truncate: i64) {
         self.mapped_file_queue.truncate_dirty_files(offset_to_truncate);
     }
 

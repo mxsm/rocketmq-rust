@@ -2351,43 +2351,43 @@
           "id": "ea80384d3d04734ae9e31340",
           "fingerprint": "bc019fd36449638f708552dc",
           "item": "fn set_message_store_arc_initializes_timer_message_store_when_timer_wheel_enabled",
-          "line": 6327
+          "line": 6351
         },
         {
           "id": "6eca838ea25456a66bfe1e87",
           "fingerprint": "c5e5f216d6f09ac7bc48c9e3",
           "item": "fn sync_broker_role_in_controller_mode_refreshes_confirm_offset_for_master",
-          "line": 7632
+          "line": 7656
         },
         {
           "id": "7ad9c617a9ab2369224ba894",
           "fingerprint": "c5e5f216d6f09ac7bc48c9e3",
           "item": "fn flush_consume_queue_service_start_persists_logic_checkpoint_to_disk",
-          "line": 7977
+          "line": 8001
         },
         {
           "id": "a90459da038304a8d37b178a",
           "fingerprint": "c5e5f216d6f09ac7bc48c9e3",
           "item": "fn do_recheck_reput_offset_from_dispatchers_rewinds_to_dispatched_commitlog_offset",
-          "line": 8529
+          "line": 8553
         },
         {
           "id": "4bf08ba5d315432b007618ef",
           "fingerprint": "c5e5f216d6f09ac7bc48c9e3",
           "item": "fn do_recheck_reput_offset_from_dispatchers_uses_minimum_progress_across_cq_and_index",
-          "line": 8579
+          "line": 8603
         },
         {
           "id": "6d4ec8cb2eb76b205899a719",
           "fingerprint": "c5e5f216d6f09ac7bc48c9e3",
           "item": "fn get_dispatch_recovery_offset_respects_controller_epoch_start_offset",
-          "line": 8640
+          "line": 8664
         },
         {
           "id": "f55a020f1bb78baf0d9c9841",
           "fingerprint": "c5e5f216d6f09ac7bc48c9e3",
           "item": "fn do_recheck_reput_offset_from_dispatchers_respects_controller_epoch_start_offset_floor",
-          "line": 8665
+          "line": 8689
         }
       ],
       "owner": "store",
@@ -2505,54 +2505,23 @@
           "id": "2bc785020cffc531f67851d5",
           "fingerprint": "65fc444d08793f252677b512",
           "item": "fn new_async_flush_test_store",
-          "line": 6206
+          "line": 6230
         },
         {
           "id": "d3c97c8726298454fce74c15",
           "fingerprint": "7666f2a4683b6bb72bf1c3ee",
           "item": "fn append_encoded_test_message",
-          "line": 6257
+          "line": 6281
         },
         {
           "id": "f82cfea3d0ea6119b10efdb0",
           "fingerprint": "09110b2e53b7eb82a0456a37",
           "item": "fn append_encoded_test_message_with_key",
-          "line": 6267
+          "line": 6291
         }
       ],
       "owner": "store",
       "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "e641da6195be950011adfc38",
-      "path": "rocketmq-store/src/message_store/local_file_message_store.rs",
-      "symbol": "mut_from_ref",
-      "kind": "mut_from_ref_call",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "47767c8e5ca840205a963aeb",
-          "fingerprint": "0db97432516266903a225050",
-          "item": "fn reset_write_offset",
-          "line": 3412
-        },
-        {
-          "id": "eea893960dd7e04dd261bdd0",
-          "fingerprint": "f5378b1857786f892cf9849d",
-          "item": "fn truncate_files",
-          "line": 3764
-        },
-        {
-          "id": "3459e3572b6f2b66ed8b8e65",
-          "fingerprint": "470c1a7982c2bfa430ed8b87",
-          "item": "fn get_last_mapped_file",
-          "line": 3815
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy safe mutable-reference escape pending ownership migration",
       "remove_by": "M11",
       "adr": "ADR-013"
     },

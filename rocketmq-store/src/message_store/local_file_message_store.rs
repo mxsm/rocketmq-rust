@@ -3409,7 +3409,7 @@ impl MessageStore for LocalFileMessageStore {
     }
 
     fn reset_write_offset(&self, phy_offset: i64) -> bool {
-        self.commit_log.mut_from_ref().reset_offset(phy_offset)
+        self.commit_log.reset_offset(phy_offset)
     }
 
     fn get_confirm_offset(&self) -> i64 {
@@ -3761,7 +3761,7 @@ impl MessageStore for LocalFileMessageStore {
         }
 
         self.consume_queue_store.truncate_dirty(offset_to_truncate);
-        self.commit_log.mut_from_ref().truncate_dirty_files(offset_to_truncate);
+        self.commit_log.truncate_dirty_files(offset_to_truncate);
         let mut consume_queue_store = self.consume_queue_store.clone();
         consume_queue_store.recover_offset_table(self.commit_log.get_min_offset());
         Ok(true)
@@ -3812,7 +3812,7 @@ impl MessageStore for LocalFileMessageStore {
     }
 
     fn get_last_mapped_file(&self, start_offset: i64) -> bool {
-        self.commit_log.mut_from_ref().get_last_mapped_file(start_offset)
+        self.commit_log.get_last_mapped_file(start_offset)
     }
 
     fn set_physical_offset(&self, phy_offset: i64) {
@@ -6097,6 +6097,30 @@ mod tests {
 
         let mapped_file_queue_source = include_str!("../consume_queue/mapped_file_queue.rs").replace("\r\n", "\n");
         assert!(mapped_file_queue_source.contains("pub(crate) struct MappedFileQueueReadHandle"));
+    }
+
+    #[test]
+    fn commit_log_maintenance_avoids_shared_reference_mutation() {
+        let local_source = include_str!("local_file_message_store.rs").replace("\r\n", "\n");
+        let local_production = local_source
+            .split_once("#[cfg(test)]\nmod tests")
+            .map(|(source, _)| source)
+            .expect("LocalFileMessageStore production section");
+        assert!(!local_production.contains(".mut_from_ref()"));
+        assert!(local_production.contains("self.commit_log.reset_offset(phy_offset)"));
+        assert!(local_production.contains("self.commit_log.truncate_dirty_files(offset_to_truncate)"));
+        assert!(local_production.contains("self.commit_log.get_last_mapped_file(start_offset)"));
+
+        let commit_log_source = include_str!("../log_file/commit_log.rs").replace("\r\n", "\n");
+        assert!(commit_log_source.contains("pub fn reset_offset(&self, offset: i64)"));
+        assert!(commit_log_source.contains("pub fn truncate_dirty_files(&self, offset_to_truncate: i64)"));
+        assert!(commit_log_source.contains("pub fn get_last_mapped_file(&self, start_offset: i64)"));
+
+        let queue_source = include_str!("../consume_queue/mapped_file_queue.rs").replace("\r\n", "\n");
+        assert!(queue_source.contains("pub fn reset_offset(&self, offset: i64)"));
+        assert!(queue_source.contains("pub fn truncate_dirty_files(&self, offset: i64)"));
+        assert!(queue_source.contains("pub fn try_create_mapped_file(&self, create_offset: u64)"));
+        assert!(queue_source.matches("self.runtime_state.commit_lock().lock()").count() >= 3);
     }
 
     #[tokio::test]

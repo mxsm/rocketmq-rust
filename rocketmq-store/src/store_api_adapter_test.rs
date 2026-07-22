@@ -360,7 +360,7 @@ fn leased_bytes_into_bytes_releases_the_guard_before_returning() {
 #[test]
 fn mapped_file_lease_releases_hold_before_shutdown_cleanup() {
     let temp_dir = TempDir::new().expect("temp directory");
-    let mut queue = MappedFileQueue::new(temp_dir.path().to_string_lossy().into_owned(), 4096, None);
+    let queue = MappedFileQueue::new(temp_dir.path().to_string_lossy().into_owned(), 4096, None);
     let mapped_file = queue.try_create_mapped_file(0).expect("mapped file");
     assert_eq!(1, ReferenceResource::get_ref_count(mapped_file.as_ref()));
     assert!(MappedFile::hold(mapped_file.as_ref()));
