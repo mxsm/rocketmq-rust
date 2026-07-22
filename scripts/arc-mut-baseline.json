@@ -1370,25 +1370,6 @@
       "adr": "ADR-013"
     },
     {
-      "identity": "65ec6e2533f2c4628feb0f86",
-      "path": "rocketmq-store/src/ha/auto_switch/auto_switch_ha_service.rs",
-      "symbol": "ArcMut",
-      "kind": "constructor",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "497024e2b7c80c2559435eb5",
-          "fingerprint": "0f3644b4cbcd1896ebf325af",
-          "item": "fn new",
-          "line": 51
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
       "identity": "ffc7c708bbf850eb44783816",
       "path": "rocketmq-store/src/ha/auto_switch/auto_switch_ha_service.rs",
       "symbol": "ArcMut",
@@ -1469,39 +1450,14 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "90875c1165c4ec821d4963e4",
-          "fingerprint": "6784617bda8d6b0632f93ca3",
+          "id": "1e23e797e2203f8c0ff4ecb2",
+          "fingerprint": "b4e7c3939ce87dce66f72a60",
           "item": "<module>",
-          "line": 22
+          "line": 26
         }
       ],
       "owner": "store",
       "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "0c6d085976904eb0c0658a73",
-      "path": "rocketmq-store/src/ha/auto_switch/auto_switch_ha_service.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "09f6d735e5ec5b6817035ec8",
-          "fingerprint": "e52b7e6a148822b41278a1e7",
-          "item": "struct AutoSwitchHAService",
-          "line": 42
-        },
-        {
-          "id": "2207f2ab20ff84fad9a70823",
-          "fingerprint": "3212bd4ed39261093870b3a3",
-          "item": "fn init",
-          "line": 60
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
       "remove_by": "M11",
       "adr": "ADR-013"
     },
@@ -1624,33 +1580,14 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "186ca8348e96fba01206a620",
-          "fingerprint": "945de8863a09ceb6a69a827b",
+          "id": "349d561c4d7d713b007af5e3",
+          "fingerprint": "0b684aa5cd664e6cae68967b",
           "item": "<module>",
-          "line": 27
+          "line": 31
         }
       ],
       "owner": "store",
       "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "df1bbff1a0b81040b3fbf768",
-      "path": "rocketmq-store/src/ha/default_ha_service.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "e718591089641e44d89339b7",
-          "fingerprint": "3212bd4ed39261093870b3a3",
-          "item": "fn init",
-          "line": 470
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
       "remove_by": "M11",
       "adr": "ADR-013"
     },

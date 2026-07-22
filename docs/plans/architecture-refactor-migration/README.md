@@ -1168,6 +1168,16 @@ Store production 17/29）；相对 bc84 净删除 4 identities/13 occurrences（
 relocation、新增 identity 或临时 approval。R15 从 5/14 降至 2/2，剩余仅 Default HA 组合根初始化 carrier；
 31 项执行清单保持完成 9 项、剩余 22 项，正式进度仍为 75/82。
 
+Default/AutoSwitch HA delegate ownership 随 Issue #8589 继续收窄：`DefaultHAService::init` 改为独占
+`&mut Self`，`AutoSwitchHAService` 直接拥有 `DefaultHAService` delegate，不再创建重复的内部
+`ArcMut<DefaultHAService>`。client construction、role transition、replication callbacks、runtime info 与 shutdown
+继续委托同一 owned delegate。reviewed 快照为 81 identities/347 occurrences（production 18/33、test 49/274、
+compatibility 14/40、Broker production 4/8、Store production 14/25）；相对 bc85 净删除 3 个 production
+identities/4 occurrences；2 个保留 import occurrence 经临时 ADR-013 同 item 指纹审核，approval 仅位于忽略的
+`target/`，无新增 identity 或提交态 approval。R15 从 2/2 降至 1/1、R16 从 5/9
+降至 3/6，剩余 import-only debt 与 General HA 外层组合根一起收口；31 项执行清单保持完成 9 项、剩余 22 项，
+正式进度仍为 75/82。
+
 Default HA client runtime ownership 随 Issue #8567 完成收窄：`DefaultHAClient` 以标准 `Arc<Inner>` 共享只读组合根，
 `Inner` 仅保留原子、锁、Notify、flow monitor 与现有 LocalStore 兼容句柄；从未安装连接的 stream 字段和重复 buffer/
 dispatch/report 状态已删除，实际 reader/writer buffer 继续由每个 connection task 独占。reviewed 快照为 126 identities/
