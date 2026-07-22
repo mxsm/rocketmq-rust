@@ -1222,6 +1222,13 @@ compatibility 保持 14/40；净删除 2 test identities/4 occurrences，无 rel
 Store test/bench caller 从 27/154 降至 25/150，R17 总上界降至 33/166；执行清单保持完成 11 项、剩余
 20 项，正式进度仍为 75/82。
 
+Single consume queue tests 随 Issue #8603 改为窄 owner：fixture 以独占 LocalFile root 构造 queue，随后只在
+`TestConsumeQueue` 中保留标准 Arc `ConsumeQueueStore`，使 queue 的 Weak lookup 在测试期间有效，不再通过
+ArcMut self-cycle 保活完整 Store。reviewed 快照从 60/230 降至 57/226：production 保持 13/24，test 从
+33/166 降至 30/162，compatibility 保持 14/40；净删除 3 test identities/4 occurrences，无 relocation、新
+identity 或临时 approval。Store test/bench caller 从 25/150 降至 22/146，R17 总上界降至 30/162；执行
+清单保持完成 11 项、剩余 20 项，正式进度仍为 75/82。
+
 Default HA client runtime ownership 随 Issue #8567 完成收窄：`DefaultHAClient` 以标准 `Arc<Inner>` 共享只读组合根，
 `Inner` 仅保留原子、锁、Notify、flow monitor 与现有 LocalStore 兼容句柄；从未安装连接的 stream 字段和重复 buffer/
 dispatch/report 状态已删除，实际 reader/writer buffer 继续由每个 connection task 独占。reviewed 快照为 126 identities/

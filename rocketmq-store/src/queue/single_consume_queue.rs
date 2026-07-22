@@ -1014,13 +1014,14 @@ impl Iterator for ConsumeQueueIterator {
 
 #[cfg(test)]
 mod tests {
+    use std::ops::Deref;
+    use std::ops::DerefMut;
     use std::sync::Arc;
 
     use cheetah_string::CheetahString;
     use dashmap::DashMap;
     use rocketmq_common::common::broker::broker_config::BrokerConfig;
     use rocketmq_common::common::config::TopicConfig;
-    use rocketmq_rust::ArcMut;
     use tempfile::tempdir;
 
     use super::*;
@@ -1028,12 +1029,29 @@ mod tests {
     use crate::config::message_store_config::MessageStoreConfig;
     use crate::message_store::local_file_message_store::LocalFileMessageStore;
     use crate::queue::file_queue_life_cycle::FileQueueLifeCycle;
+    use crate::queue::local_file_consume_queue_store::ConsumeQueueStore;
     use crate::store_path_config_helper::get_store_path_consume_queue;
 
-    fn new_test_store(
-        temp_dir: &tempfile::TempDir,
-        mapped_file_size_consume_queue: usize,
-    ) -> ArcMut<LocalFileMessageStore> {
+    struct TestConsumeQueue {
+        queue: ConsumeQueue,
+        _queue_store: ConsumeQueueStore,
+    }
+
+    impl Deref for TestConsumeQueue {
+        type Target = ConsumeQueue;
+
+        fn deref(&self) -> &Self::Target {
+            &self.queue
+        }
+    }
+
+    impl DerefMut for TestConsumeQueue {
+        fn deref_mut(&mut self) -> &mut Self::Target {
+            &mut self.queue
+        }
+    }
+
+    fn new_test_store(temp_dir: &tempfile::TempDir, mapped_file_size_consume_queue: usize) -> LocalFileMessageStore {
         new_configured_test_store(
             temp_dir,
             MessageStoreConfig {
@@ -1046,29 +1064,28 @@ mod tests {
     fn new_configured_test_store(
         temp_dir: &tempfile::TempDir,
         mut config: MessageStoreConfig,
-    ) -> ArcMut<LocalFileMessageStore> {
+    ) -> LocalFileMessageStore {
         config.store_path_root_dir = temp_dir.path().to_string_lossy().to_string().into();
-        let mut store = ArcMut::new(LocalFileMessageStore::new(
+        LocalFileMessageStore::new(
             Arc::new(config),
             Arc::new(BrokerConfig::default()),
             Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
             None,
             false,
-        ));
-        let store_clone = store.clone();
-        store.set_message_store_arc(store_clone);
-        store
+        )
     }
 
     fn new_test_consume_queue(
         temp_dir: &tempfile::TempDir,
         topic: &CheetahString,
         mapped_file_size_consume_queue: usize,
-    ) -> ConsumeQueue {
-        let store = new_test_store(temp_dir, mapped_file_size_consume_queue);
+    ) -> TestConsumeQueue {
+        let mut store = new_test_store(temp_dir, mapped_file_size_consume_queue);
         let context = store.consume_queue_context();
         let queue_lookup = store.consume_queue_lookup_handle();
-        ConsumeQueue::new(
+        let queue_store = store.consume_queue_store_mut().clone();
+        queue_store.set_context(context.clone());
+        let queue = ConsumeQueue::new(
             topic.clone(),
             0,
             CheetahString::from_string(get_store_path_consume_queue(
@@ -1077,19 +1094,25 @@ mod tests {
             mapped_file_size_consume_queue as i32,
             context,
             queue_lookup,
-        )
+        );
+        TestConsumeQueue {
+            queue,
+            _queue_store: queue_store,
+        }
     }
 
     fn new_configured_test_consume_queue(
         temp_dir: &tempfile::TempDir,
         topic: &CheetahString,
         config: MessageStoreConfig,
-    ) -> ConsumeQueue {
+    ) -> TestConsumeQueue {
         let mapped_file_size_consume_queue = config.mapped_file_size_consume_queue;
-        let store = new_configured_test_store(temp_dir, config);
+        let mut store = new_configured_test_store(temp_dir, config);
         let context = store.consume_queue_context();
         let queue_lookup = store.consume_queue_lookup_handle();
-        ConsumeQueue::new(
+        let queue_store = store.consume_queue_store_mut().clone();
+        queue_store.set_context(context.clone());
+        let queue = ConsumeQueue::new(
             topic.clone(),
             0,
             CheetahString::from_string(get_store_path_consume_queue(
@@ -1098,7 +1121,11 @@ mod tests {
             mapped_file_size_consume_queue as i32,
             context,
             queue_lookup,
-        )
+        );
+        TestConsumeQueue {
+            queue,
+            _queue_store: queue_store,
+        }
     }
 
     #[test]
