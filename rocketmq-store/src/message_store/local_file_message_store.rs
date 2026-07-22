@@ -342,6 +342,11 @@ impl Drop for StoreLockGuard {
     }
 }
 
+enum PendingHAService {
+    Default(Box<crate::ha::default_ha_service::DefaultHAService>),
+    AutoSwitch(crate::ha::auto_switch::auto_switch_ha_service::AutoSwitchHAService),
+}
+
 ///Using local files to store message data, which is also the default method.
 pub struct LocalFileMessageStore {
     message_store_config: Arc<MessageStoreConfig>,
@@ -383,9 +388,10 @@ pub struct LocalFileMessageStore {
 
     timer_message_store: Option<Arc<TimerMessageStore>>,
     transient_store_pool: TransientStorePool,
-    message_store_arc: Option<ArcMut<LocalFileMessageStore>>,
+    root_dependencies_wired: bool,
     master_store_in_process: StdRwLock<Option<Arc<dyn Any + Send + Sync>>>,
     send_message_back_hook: StdRwLock<Option<Arc<dyn SendMessageBackHook>>>,
+    pending_ha_service: Option<PendingHAService>,
     ha_service: Option<GeneralHAService>,
     flush_consume_queue_service: FlushConsumeQueueService,
     scheduled_task_shutdown: CancellationToken,
@@ -657,9 +663,10 @@ impl LocalFileMessageStore {
             compaction_store,
             timer_message_store: None,
             transient_store_pool,
-            message_store_arc: None,
+            root_dependencies_wired: false,
             master_store_in_process: StdRwLock::new(None),
             send_message_back_hook: StdRwLock::new(None),
+            pending_ha_service: None,
             ha_service: None,
             flush_consume_queue_service: FlushConsumeQueueService::new(
                 message_store_config.clone(),
@@ -749,12 +756,27 @@ impl LocalFileMessageStore {
     }
 
     pub fn set_message_store_arc(&mut self, message_store_arc: ArcMut<LocalFileMessageStore>) {
-        self.message_store_arc = Some(message_store_arc.clone());
-        self.consume_queue_store.set_message_store(message_store_arc);
+        self.consume_queue_store.set_message_store(message_store_arc.clone());
         if self.message_store_config.is_timer_wheel_enable() && self.timer_message_store.is_none() {
-            let timer_message_store = Arc::new(TimerMessageStore::new(self.message_store_arc.clone()));
+            let timer_message_store = Arc::new(TimerMessageStore::new(Some(message_store_arc.clone())));
             self.set_timer_message_store(timer_message_store);
         }
+        if !Self::is_dledger_commit_log_enabled_config(self.message_store_config.as_ref())
+            && !self.message_store_config.duplication_enable
+        {
+            self.pending_ha_service = Some(if self.message_store_config.enable_controller_mode {
+                PendingHAService::AutoSwitch(
+                    crate::ha::auto_switch::auto_switch_ha_service::AutoSwitchHAService::new(
+                        crate::ha::default_ha_service::DefaultHAService::new(message_store_arc),
+                    ),
+                )
+            } else {
+                PendingHAService::Default(Box::new(crate::ha::default_ha_service::DefaultHAService::new(
+                    message_store_arc,
+                )))
+            });
+        }
+        self.root_dependencies_wired = true;
     }
 
     #[inline]
@@ -846,16 +868,8 @@ impl LocalFileMessageStore {
             .is_available_for_io(self.shutdown.load(Ordering::Acquire))
     }
 
-    fn message_store_arc_or_error(&self, operation: &str) -> Result<ArcMut<LocalFileMessageStore>, StoreError> {
-        self.message_store_arc.clone().ok_or_else(|| {
-            StoreError::InvalidState(format!(
-                "message store arc is not set; call set_message_store_arc before {operation}"
-            ))
-        })
-    }
-
-    fn ensure_message_store_arc(&self, operation: &str) -> Result<(), StoreError> {
-        if self.message_store_arc.is_some() {
+    fn ensure_root_dependencies_wired(&self, operation: &str) -> Result<(), StoreError> {
+        if self.root_dependencies_wired {
             return Ok(());
         }
         Err(StoreError::InvalidState(format!(
@@ -1341,7 +1355,7 @@ impl LocalFileMessageStore {
             return;
         }
 
-        if let Err(error) = self.ensure_message_store_arc("starting scheduled tasks") {
+        if let Err(error) = self.ensure_root_dependencies_wired("starting scheduled tasks") {
             error!("scheduled store tasks not started: {error}");
             return;
         }
@@ -1662,7 +1676,7 @@ impl LocalFileMessageStore {
             let start_offset = self.get_dispatch_recovery_offset().max(0);
             self.reput_message_service.set_reput_from_offset(start_offset);
         }
-        if self.message_store_arc.is_none() {
+        if !self.root_dependencies_wired {
             return;
         }
         let runtime_context = self.reput_runtime_context();
@@ -1839,7 +1853,7 @@ impl MessageStore for LocalFileMessageStore {
 
             self.reput_message_service
                 .set_reput_from_offset(self.commit_log.get_confirm_offset());
-            self.ensure_message_store_arc("start")?;
+            self.ensure_root_dependencies_wired("start")?;
             let reput_runtime_context = self.reput_runtime_context();
             self.reput_message_service.start(
                 self.commit_log.read_handle(),
@@ -1925,22 +1939,16 @@ impl MessageStore for LocalFileMessageStore {
         if !Self::is_dledger_commit_log_enabled_config(self.message_store_config.as_ref())
             && !self.message_store_config.duplication_enable
         {
-            let message_store_arc = self.message_store_arc_or_error("init")?;
-            if self.message_store_config.enable_controller_mode {
-                let mut auto_switch_ha_service = GeneralHAService::AutoSwitchHAService(ArcMut::new(
-                    crate::ha::auto_switch::auto_switch_ha_service::AutoSwitchHAService::new(
-                        crate::ha::default_ha_service::DefaultHAService::new(message_store_arc),
-                    ),
-                ));
-                let _ = auto_switch_ha_service.init();
-                self.ha_service = Some(auto_switch_ha_service);
-            } else {
-                let mut default_ha_service = GeneralHAService::DefaultHAService(ArcMut::new(
-                    crate::ha::default_ha_service::DefaultHAService::new(message_store_arc),
-                ));
-                let _ = default_ha_service.init();
-                self.ha_service = Some(default_ha_service);
-            }
+            self.ensure_root_dependencies_wired("init")?;
+            let pending_ha_service = self.pending_ha_service.take().ok_or_else(|| {
+                StoreError::InvalidState("HA service was not constructed while wiring root dependencies".to_string())
+            })?;
+            let mut ha_service = match pending_ha_service {
+                PendingHAService::Default(service) => GeneralHAService::DefaultHAService(ArcMut::new(*service)),
+                PendingHAService::AutoSwitch(service) => GeneralHAService::AutoSwitchHAService(ArcMut::new(service)),
+            };
+            let _ = ha_service.init();
+            self.ha_service = Some(ha_service);
         }
         if let Some(ha_service) = self.ha_service.as_ref() {
             self.commit_log.publish_ha_service(ha_service.clone());
@@ -5832,6 +5840,20 @@ mod tests {
         store.recover_abnormally(0).await;
     }
 
+    #[tokio::test]
+    async fn init_without_root_dependency_wiring_fails_closed() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_unwired_test_store(&temp_dir);
+
+        let error = store.init().await.expect_err("unwired Local store must not initialize");
+
+        assert!(matches!(
+            error,
+            StoreError::InvalidState(message)
+                if message == "message store arc is not set; call set_message_store_arc before init"
+        ));
+    }
+
     #[derive(Clone, Debug, PartialEq, Eq)]
     struct RecordedArrival {
         topic: CheetahString,
@@ -6139,6 +6161,44 @@ mod tests {
         assert!(production.contains("commit_log,"));
     }
 
+    #[test]
+    fn local_store_does_not_retain_its_complete_root_handle() {
+        let source = include_str!("local_file_message_store.rs").replace("\r\n", "\n");
+        let production = source
+            .split_once("#[cfg(test)]\nmod tests")
+            .map(|(source, _)| source)
+            .expect("LocalFileMessageStore production section");
+        let wiring = production
+            .split_once("pub fn set_message_store_arc")
+            .and_then(|(_, source)| source.split_once("pub fn delay_level_table"))
+            .map(|(source, _)| source)
+            .expect("Local root wiring function");
+        let init = production
+            .split_once("async fn init(&mut self)")
+            .and_then(|(_, source)| source.split_once("async fn shutdown_gracefully(&mut self)"))
+            .map(|(source, _)| source)
+            .expect("Local init function");
+
+        assert!(production.contains("root_dependencies_wired: bool,"));
+        assert!(!production.contains("message_store_arc: Option<ArcMut<LocalFileMessageStore>>"));
+        assert!(!production.contains("fn message_store_arc_or_error"));
+        assert!(!production.contains("self.message_store_arc"));
+        assert!(wiring.contains("self.consume_queue_store.set_message_store(message_store_arc.clone())"));
+        assert!(wiring.contains("TimerMessageStore::new(Some(message_store_arc.clone()))"));
+        assert!(wiring.contains("DefaultHAService::new(message_store_arc)"));
+        assert!(wiring.contains("PendingHAService::AutoSwitch"));
+        assert!(wiring.contains("PendingHAService::Default"));
+        assert!(wiring.contains("PendingHAService::Default(Box::new("));
+        assert!(wiring.contains("self.root_dependencies_wired = true;"));
+        assert!(!init.contains("DefaultHAService::new"));
+        assert_eq!(init.matches("ArcMut::new(service)").count(), 1);
+        assert_eq!(init.matches("ArcMut::new(*service)").count(), 1);
+        assert!(init.contains("self.ensure_root_dependencies_wired(\"init\")?;"));
+        assert!(init.contains("self.pending_ha_service.take()"));
+        assert!(init.contains("let _ = ha_service.init();"));
+        assert!(init.contains("self.ha_service = Some(ha_service);"));
+    }
+
     #[tokio::test]
     async fn reput_shutdown_wait_uses_dispatch_progress_notification() {
         let temp_dir = tempdir().unwrap();
@@ -6377,7 +6437,10 @@ mod tests {
         let store_clone = store.clone();
         store.set_message_store_arc(store_clone);
 
+        assert!(store.root_dependencies_wired);
         assert!(store.get_timer_message_store().is_some());
+        assert!(store.pending_ha_service.is_some());
+        assert!(store.get_ha_service().is_none());
     }
 
     #[tokio::test]
