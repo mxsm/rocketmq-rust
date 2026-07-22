@@ -44,9 +44,11 @@ class M06HALocalContractTests(unittest.TestCase):
         store_metrics = source("rocketmq-store/src/ha/transfer_metrics.rs")
         store_connection = source("rocketmq-store/src/ha/default_ha_connection.rs")
         store_client = source("rocketmq-store/src/ha/default_ha_client.rs")
+        store_client_production = store_client.split("#[cfg(test)]", maxsplit=1)[0]
         store_auto_switch = source(
             "rocketmq-store/src/ha/auto_switch/auto_switch_ha_service.rs"
         )
+        store_ha_service = source("rocketmq-store/src/ha/ha_service.rs")
         store_general = source("rocketmq-store/src/ha/general_ha_service.rs")
         store_group = source("rocketmq-store/src/ha/group_transfer_service.rs")
         store_default_service = source("rocketmq-store/src/ha/default_ha_service.rs")
@@ -117,6 +119,21 @@ class M06HALocalContractTests(unittest.TestCase):
         self.assertNotIn("pub(crate) struct TransferHeader", store_connection)
         self.assertNotIn("pub(in crate::ha) struct OffsetDecoder", store_connection)
 
+        self.assertIn("inner: Arc<Inner>", store_client_production)
+        self.assertNotIn("inner: ArcMut<Inner>", store_client_production)
+        self.assertIn("let client = Arc::clone(&self.inner);", store_client_production)
+        self.assertNotIn("ArcMut::clone(&self.inner)", store_client_production)
+        for unused_runtime_field in (
+            "write_stream:",
+            "read_stream:",
+            "dispatch_position:",
+            "byte_buffer_read:",
+            "byte_buffer_backup:",
+        ):
+            self.assertNotIn(unused_runtime_field, store_client_production)
+        self.assertIn("buf: BytesMut", store_client_production)
+        self.assertIn("report_offset: BytesMut", store_client_production)
+
         for owner in (
             "pub struct ReplicationStateRoot",
             "pub struct ReplicationProgress",
@@ -125,13 +142,15 @@ class M06HALocalContractTests(unittest.TestCase):
             "pub fn compute_confirm_offset(",
         ):
             self.assertIn(owner, local_replication)
-        self.assertIn("replication: ReplicationStateRoot", store_auto_switch)
+        self.assertIn("replication: Arc<ReplicationStateRoot>", store_auto_switch)
+        self.assertIn("replication: Arc::new(ReplicationStateRoot::new(is_master))", store_auto_switch)
         self.assertNotIn("struct SyncStateTracker", store_auto_switch)
         self.assertNotIn("fn has_required_acks(", store_group)
         self.assertIn(
             "pub(crate) use rocketmq_store_local::ha::replication::HAAckedReplicaSnapshot;",
-            store_general,
+            store_ha_service,
         )
+        self.assertIn("use crate::ha::ha_service::HAAckedReplicaSnapshot;", store_general)
         self.assertIn("ReplicationProgress", store_default_service)
         self.assertNotIn("push2_slave_max_offset", store_default_service)
 

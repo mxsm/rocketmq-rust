@@ -1617,36 +1617,11 @@
           "id": "124c766a51e3d51213131322",
           "fingerprint": "6afa7186d9160075f4314223",
           "item": "mod tests",
-          "line": 808
+          "line": 767
         }
       ],
       "owner": "store",
       "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "d13789dcae7018aa3a46601a",
-      "path": "rocketmq-store/src/ha/default_ha_client.rs",
-      "symbol": "ArcMut",
-      "kind": "constructor",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "e34f18e22faaf8d6af4c90f1",
-          "fingerprint": "2c49f6e95c9c062a9d630426",
-          "item": "fn new",
-          "line": 216
-        },
-        {
-          "id": "76a0fd1e72d827ec1fa7793c",
-          "fingerprint": "aa4016ae21b5ee46519f2eff",
-          "item": "fn start",
-          "line": 317
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
       "remove_by": "M11",
       "adr": "ADR-013"
     },
@@ -1661,7 +1636,7 @@
           "id": "2cb2de467978e1394723646f",
           "fingerprint": "88a50625f8b4ef1eb68814de",
           "item": "fn new_test_message_store",
-          "line": 830
+          "line": 789
         }
       ],
       "owner": "store",
@@ -1680,7 +1655,7 @@
           "id": "d7b9029a8903473c00267678",
           "fingerprint": "04c8349d21c7a9829af73bee",
           "item": "<module>",
-          "line": 26
+          "line": 25
         }
       ],
       "owner": "store",
@@ -1696,34 +1671,28 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "aeafdbe0a83bf60e7dac206f",
-          "fingerprint": "9651db4b3be390ad22881ae5",
-          "item": "struct DefaultHAClient",
-          "line": 67
-        },
-        {
-          "id": "ad0a50ef161079f89946274d",
-          "fingerprint": "46d95c45edf25592fa7af657",
+          "id": "763a94adacac476f5c204ed8",
+          "fingerprint": "d456c7458c92072dbfd4aeda",
           "item": "struct Inner",
-          "line": 108
+          "line": 89
         },
         {
           "id": "6e00c6e4da7b1763b29557c0",
           "fingerprint": "790e84f93bc19372e04fb014",
           "item": "fn new",
-          "line": 210
+          "line": 177
         },
         {
           "id": "e53694d2ef79fa6202546a8b",
           "fingerprint": "e8e08cff6f5865a6dadc3bf5",
           "item": "struct ReaderTask",
-          "line": 610
+          "line": 569
         },
         {
           "id": "f6460b067459fd436dec9761",
           "fingerprint": "6d4b02f57e1175550db604f5",
           "item": "fn apply_master_confirm_offset",
-          "line": 680
+          "line": 639
         }
       ],
       "owner": "store",
@@ -1742,7 +1711,7 @@
           "id": "7323fc7e3f26e3b431120ea1",
           "fingerprint": "69b570f4ea1b729ba30d60c3",
           "item": "fn new_test_message_store",
-          "line": 815
+          "line": 774
         }
       ],
       "owner": "store",
