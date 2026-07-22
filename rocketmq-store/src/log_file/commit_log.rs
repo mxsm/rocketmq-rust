@@ -428,6 +428,10 @@ impl CommitLogReadHandle {
         self.mapped_file_queue.get_message(offset, size)
     }
 
+    pub(crate) fn get_bulk_data(&self, offset: i64, size: i32) -> Option<Vec<SelectMappedBufferResult>> {
+        self.mapped_file_queue.get_bulk_data(offset, size)
+    }
+
     pub(crate) fn get_data(&self, offset: i64) -> Option<SelectMappedBufferResult> {
         self.mapped_file_queue.get_data(offset)
     }
@@ -467,6 +471,63 @@ impl CommitLogReadHandle {
             self.mapped_file_queue.get_flushed_where(),
         )
     }
+
+    pub(crate) fn get_confirm_offset_directly(&self) -> i64 {
+        if self.broker_config.enable_controller_mode {
+            if self.message_store_config.broker_role != BrokerRole::Slave
+                && !self.store_context.running_flags.is_fenced()
+            {
+                let max_phy_offset = self.get_max_offset();
+                if let Some(ha_service) = self.store_context.ha_service() {
+                    if ha_service.local_sync_state_set_size(max_phy_offset) <= 1 {
+                        return max_phy_offset;
+                    }
+                }
+            }
+
+            self.runtime_state.confirm_offset()
+        } else if self.broker_config.duplication_enable {
+            self.runtime_state.confirm_offset()
+        } else {
+            self.get_max_offset()
+        }
+    }
+
+    pub(crate) fn select_segments(
+        &self,
+        offset: i64,
+        max_bytes: usize,
+        allow_cross_file: bool,
+    ) -> TransferResult<Vec<SegmentLease>> {
+        if offset < 0 {
+            return Err(TransferError::InvalidInput(format!(
+                "offset must be non-negative: {offset}"
+            )));
+        }
+        if max_bytes == 0 {
+            return Ok(Vec::new());
+        }
+        let mapped_file_size = self.message_store_config.mapped_file_size_commit_log;
+        if mapped_file_size == 0 {
+            return Err(TransferError::InvalidInput(
+                "mapped_file_size_commit_log must be greater than zero".to_string(),
+            ));
+        }
+
+        let mut max_bytes = max_bytes.min(i32::MAX as usize);
+        if !allow_cross_file {
+            let position_in_file = offset.rem_euclid(mapped_file_size as i64) as usize;
+            max_bytes = max_bytes.min(mapped_file_size.saturating_sub(position_in_file));
+        }
+
+        let Some(results) = self.get_bulk_data(offset, max_bytes as i32) else {
+            return Ok(Vec::new());
+        };
+        Ok(results
+            .into_iter()
+            .filter_map(|result| SegmentLease::from_select_result(result.start_offset as i64, result))
+            .collect())
+    }
 }
 
 /// Safe, cloneable capability used by HA replica readers.
@@ -492,6 +553,25 @@ impl CommitLogReplicaHandle {
     #[inline]
     pub(crate) fn get_min_offset(&self) -> i64 {
         self.read.get_min_offset()
+    }
+
+    #[inline]
+    pub(crate) fn get_confirm_offset(&self) -> i64 {
+        self.read.get_confirm_offset()
+    }
+
+    #[inline]
+    pub(crate) fn get_confirm_offset_directly(&self) -> i64 {
+        self.read.get_confirm_offset_directly()
+    }
+
+    pub(crate) fn select_segments(
+        &self,
+        offset: i64,
+        max_bytes: usize,
+        allow_cross_file: bool,
+    ) -> TransferResult<Vec<SegmentLease>> {
+        self.read.select_segments(offset, max_bytes, allow_cross_file)
     }
 
     pub(crate) async fn append_data(
@@ -2641,40 +2721,7 @@ impl CommitLog {
     }
 
     pub fn get_bulk_data(&self, offset: i64, size: i32) -> Option<Vec<SelectMappedBufferResult>> {
-        if size <= 0 {
-            return Some(Vec::new());
-        }
-
-        let mapped_file_size = self.message_store_config.mapped_file_size_commit_log as i64;
-        let mut current_offset = offset;
-        let mut remaining = size as usize;
-        let mut results = Vec::new();
-
-        while remaining > 0 {
-            let mapped_file = self
-                .mapped_file_queue
-                .find_mapped_file_by_offset(current_offset, current_offset == offset)?;
-            let pos = (current_offset % mapped_file_size) as i32;
-            let mut result = mapped_file.select_mapped_buffer_with_position(pos)?;
-            result.mapped_file = Some(mapped_file);
-
-            let readable = result.size.max(0) as usize;
-            if readable == 0 {
-                return None;
-            }
-
-            let take = readable.min(remaining);
-            if take < readable {
-                result.bytes = result.bytes.as_ref().map(|bytes| bytes.slice(..take));
-                result.size = take as i32;
-            }
-
-            results.push(result);
-            current_offset += take as i64;
-            remaining -= take;
-        }
-
-        Some(results)
+        self.read_handle().get_bulk_data(offset, size)
     }
 
     pub fn select_segments(
@@ -2683,34 +2730,7 @@ impl CommitLog {
         max_bytes: usize,
         allow_cross_file: bool,
     ) -> TransferResult<Vec<SegmentLease>> {
-        if offset < 0 {
-            return Err(TransferError::InvalidInput(format!(
-                "offset must be non-negative: {offset}"
-            )));
-        }
-        if max_bytes == 0 {
-            return Ok(Vec::new());
-        }
-        let mapped_file_size = self.message_store_config.mapped_file_size_commit_log;
-        if mapped_file_size == 0 {
-            return Err(TransferError::InvalidInput(
-                "mapped_file_size_commit_log must be greater than zero".to_string(),
-            ));
-        }
-
-        let mut max_bytes = max_bytes.min(i32::MAX as usize);
-        if !allow_cross_file {
-            let position_in_file = offset.rem_euclid(mapped_file_size as i64) as usize;
-            max_bytes = max_bytes.min(mapped_file_size.saturating_sub(position_in_file));
-        }
-
-        let Some(results) = self.get_bulk_data(offset, max_bytes as i32) else {
-            return Ok(Vec::new());
-        };
-        Ok(results
-            .into_iter()
-            .filter_map(|result| SegmentLease::from_select_result(result.start_offset as i64, result))
-            .collect())
+        self.read_handle().select_segments(offset, max_bytes, allow_cross_file)
     }
 
     pub fn get_data_with_option(

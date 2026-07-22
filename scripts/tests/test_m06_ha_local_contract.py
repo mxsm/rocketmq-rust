@@ -59,6 +59,9 @@ class M06HALocalContractTests(unittest.TestCase):
         store_general = source("rocketmq-store/src/ha/general_ha_service.rs")
         store_group = source("rocketmq-store/src/ha/group_transfer_service.rs")
         store_default_service = source("rocketmq-store/src/ha/default_ha_service.rs")
+        store_default_service_production = store_default_service.split(
+            "#[cfg(test)]", maxsplit=1
+        )[0]
 
         self.assertIn("pub mod transfer;", local_root)
         self.assertIn("pub mod ha;", local_root)
@@ -149,9 +152,24 @@ class M06HALocalContractTests(unittest.TestCase):
             ),
             2,
         )
-        self.assertIn("ha_replica_store_handle()", store_default_service)
+        self.assertIn(
+            "replica_store: HAReplicaStoreHandle",
+            store_default_service_production,
+        )
+        self.assertNotIn(
+            "ArcMut<LocalFileMessageStore>", store_default_service_production
+        )
         self.assertIn("pub(crate) struct HAReplicaStoreHandle", store_local)
         self.assertIn("commit_log: CommitLogReplicaHandle", store_local)
+        for capability in (
+            "master_flushed_offset: Arc<AtomicI64>",
+            "alive_replica_num_in_group: Arc<AtomicI32>",
+            "state_machine_version: Arc<AtomicI64>",
+            "controller_epoch_start_offset: Arc<AtomicI64>",
+            "pub(crate) fn select_segments(",
+            "pub(crate) fn get_confirm_offset_directly(&self)",
+        ):
+            self.assertIn(capability, store_local)
         self.assertIn("pub(crate) struct CommitLogReplicaHandle", store_commit_log)
         for capability in (
             "append: MappedFileQueueAppendHandle",

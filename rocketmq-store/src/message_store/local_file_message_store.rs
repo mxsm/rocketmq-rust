@@ -174,6 +174,8 @@ use crate::tieredstore::resolve_tiered_dispatch_body_with_reader;
 #[cfg(feature = "tieredstore")]
 use crate::tieredstore::TieredStoreDecorator;
 use crate::timer::timer_message_store::TimerMessageStore;
+use crate::transfer::error::TransferResult;
+use crate::transfer::segment::SegmentLease;
 use crate::utils::ffi::MADV_NORMAL;
 use crate::utils::store_util::TOTAL_PHYSICAL_MEMORY_SIZE;
 
@@ -353,12 +355,16 @@ enum PendingHAService {
 /// Narrow Local Store capability used by HA replica readers.
 ///
 /// The handle deliberately excludes queue, index, dispatcher, and lifecycle
-/// mutation APIs while retaining the exact raw-append and confirm publication
-/// state shared by the owning Store.
+/// mutation APIs while retaining replica append/read, confirm publication, and
+/// replication progress state shared by the owning Store.
 #[derive(Clone)]
 pub(crate) struct HAReplicaStoreHandle {
     message_store_config: Arc<MessageStoreConfig>,
     shutdown: Arc<AtomicBool>,
+    master_flushed_offset: Arc<AtomicI64>,
+    alive_replica_num_in_group: Arc<AtomicI32>,
+    state_machine_version: Arc<AtomicI64>,
+    controller_epoch_start_offset: Arc<AtomicI64>,
     commit_log: CommitLogReplicaHandle,
 }
 
@@ -381,6 +387,52 @@ impl HAReplicaStoreHandle {
     #[inline]
     pub(crate) fn get_min_phy_offset(&self) -> i64 {
         self.commit_log.get_min_offset()
+    }
+
+    #[inline]
+    pub(crate) fn get_confirm_offset(&self) -> i64 {
+        self.commit_log.get_confirm_offset()
+    }
+
+    #[inline]
+    pub(crate) fn get_confirm_offset_directly(&self) -> i64 {
+        self.commit_log.get_confirm_offset_directly()
+    }
+
+    pub(crate) fn select_segments(
+        &self,
+        offset: i64,
+        max_bytes: usize,
+        allow_cross_file: bool,
+    ) -> TransferResult<Vec<SegmentLease>> {
+        self.commit_log.select_segments(offset, max_bytes, allow_cross_file)
+    }
+
+    #[inline]
+    pub(crate) fn get_master_flushed_offset(&self) -> i64 {
+        self.master_flushed_offset.load(Ordering::SeqCst)
+    }
+
+    #[inline]
+    pub(crate) fn get_alive_replica_num_in_group(&self) -> i32 {
+        self.alive_replica_num_in_group.load(Ordering::SeqCst)
+    }
+
+    #[inline]
+    pub(crate) fn is_shutdown(&self) -> bool {
+        self.shutdown.load(Ordering::SeqCst)
+    }
+
+    #[inline]
+    pub(crate) fn publish_state_machine_version(&self, state_machine_version: i64) {
+        self.state_machine_version
+            .store(state_machine_version, Ordering::SeqCst);
+    }
+
+    #[inline]
+    pub(crate) fn publish_controller_epoch_start_offset(&self, epoch_start_offset: i64) {
+        self.controller_epoch_start_offset
+            .store(epoch_start_offset, Ordering::SeqCst);
     }
 
     pub(crate) async fn append_replica_data(
@@ -810,6 +862,10 @@ impl LocalFileMessageStore {
         HAReplicaStoreHandle {
             message_store_config: self.message_store_config.clone(),
             shutdown: self.shutdown.clone(),
+            master_flushed_offset: self.master_flushed_offset.clone(),
+            alive_replica_num_in_group: self.alive_replica_num_in_group.clone(),
+            state_machine_version: self.state_machine_version.clone(),
+            controller_epoch_start_offset: self.controller_epoch_start_offset.clone(),
             commit_log: self.commit_log.replica_handle(),
         }
     }
@@ -856,15 +912,16 @@ impl LocalFileMessageStore {
         if !Self::is_dledger_commit_log_enabled_config(self.message_store_config.as_ref())
             && !self.message_store_config.duplication_enable
         {
+            let replica_store = self.ha_replica_store_handle();
             self.pending_ha_service = Some(if self.message_store_config.enable_controller_mode {
                 PendingHAService::AutoSwitch(
                     crate::ha::auto_switch::auto_switch_ha_service::AutoSwitchHAService::new(
-                        crate::ha::default_ha_service::DefaultHAService::new(message_store_arc),
+                        crate::ha::default_ha_service::DefaultHAService::new(replica_store),
                     ),
                 )
             } else {
                 PendingHAService::Default(Box::new(crate::ha::default_ha_service::DefaultHAService::new(
-                    message_store_arc,
+                    replica_store,
                 )))
             });
         }
@@ -6098,6 +6155,43 @@ mod tests {
         assert_eq!(handle.get_max_phy_offset(), 0);
     }
 
+    #[tokio::test]
+    async fn ha_replica_handle_shares_transfer_and_replication_progress() {
+        let temp_dir = tempdir().unwrap();
+        let store = new_owned_wiring_test_store(
+            &temp_dir,
+            MessageStoreConfig {
+                duplication_enable: true,
+                timer_wheel_enable: false,
+                ..MessageStoreConfig::default()
+            },
+            BrokerConfig {
+                duplication_enable: true,
+                ..BrokerConfig::default()
+            },
+        );
+        let handle = store.ha_replica_store_handle();
+
+        assert!(handle
+            .append_replica_data(0, &[1, 2, 3, 4], 0, 4)
+            .await
+            .expect("append replica data"));
+        handle.publish_confirm_offset(4);
+        store.master_flushed_offset.store(3, Ordering::SeqCst);
+        store.alive_replica_num_in_group.store(2, Ordering::SeqCst);
+
+        let segments = handle
+            .select_segments(0, 4, false)
+            .expect("select replica transfer segment");
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].segment().global_offset, 0);
+        assert_eq!(handle.get_confirm_offset(), 4);
+        assert_eq!(handle.get_confirm_offset_directly(), 4);
+        assert_eq!(handle.get_master_flushed_offset(), 3);
+        assert_eq!(handle.get_alive_replica_num_in_group(), 2);
+        assert!(!handle.is_shutdown());
+    }
+
     #[derive(Clone, Debug, PartialEq, Eq)]
     struct RecordedArrival {
         topic: CheetahString,
@@ -6429,7 +6523,7 @@ mod tests {
         assert!(!production.contains("self.message_store_arc"));
         assert!(wiring.contains("self.consume_queue_store.set_context(self.consume_queue_context());"));
         assert!(wiring.contains("TimerMessageStore::new(Some(message_store_arc.clone()))"));
-        assert!(wiring.contains("DefaultHAService::new(message_store_arc)"));
+        assert!(wiring.contains("DefaultHAService::new(replica_store)"));
         assert!(wiring.contains("PendingHAService::AutoSwitch"));
         assert!(wiring.contains("PendingHAService::Default"));
         assert!(wiring.contains("PendingHAService::Default(Box::new("));

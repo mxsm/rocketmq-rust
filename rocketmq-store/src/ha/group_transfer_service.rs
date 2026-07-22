@@ -278,7 +278,9 @@ mod tests {
         ));
         let store_clone = store.clone();
         store.set_message_store_arc(store_clone);
-        GeneralHAService::new_with_default_ha_service(ArcMut::new(DefaultHAService::new(store)))
+        GeneralHAService::new_with_default_ha_service(ArcMut::new(DefaultHAService::new(
+            store.ha_replica_store_handle(),
+        )))
     }
 
     #[test]

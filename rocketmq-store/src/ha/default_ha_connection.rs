@@ -40,7 +40,6 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
-use crate::base::message_store::MessageStore;
 use crate::config::message_store_config::LinuxTransferEngine;
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::ha::default_ha_client::CONTROLLER_REPORT_HEADER_SIZE;
@@ -689,11 +688,7 @@ impl WriteSocketService {
         if self.next_transfer_from_where.load(Ordering::Relaxed) == -1 {
             // If next_transfer_from_where is -1, we need to set it to the master offset
             let next_offset = if slave_request_offset == 0 {
-                let mut master_offset = self
-                    .ha_service
-                    .get_default_message_store()
-                    .get_commit_log()
-                    .get_max_offset();
+                let mut master_offset = self.ha_service.replica_store().get_max_phy_offset();
                 let mapped_file_size = self.message_store_config.mapped_file_size_commit_log;
                 master_offset = master_offset - (master_offset % mapped_file_size as i64);
                 if master_offset < 0 {
@@ -742,11 +737,7 @@ impl WriteSocketService {
         }
 
         let next_offset = self.next_transfer_from_where.load(Ordering::Relaxed);
-        let max_commit_log_offset = self
-            .ha_service
-            .get_default_message_store()
-            .get_commit_log()
-            .get_max_offset();
+        let max_commit_log_offset = self.ha_service.replica_store().get_max_phy_offset();
         if next_offset >= max_commit_log_offset {
             self.ha_service
                 .handle_runtime_connection_caught_up(&self.connection_runtime);
@@ -776,8 +767,7 @@ impl WriteSocketService {
             },
             |offset, max_bytes, allow_cross_file| {
                 self.ha_service
-                    .get_default_message_store()
-                    .get_commit_log()
+                    .replica_store()
                     .select_segments(offset, max_bytes, allow_cross_file)
             },
         )?;
@@ -818,7 +808,7 @@ impl WriteSocketService {
 
     async fn send_heartbeat(&mut self) -> HAConnectionResult<()> {
         let next_offset = self.next_transfer_from_where.load(Ordering::Relaxed);
-        let confirm_offset = self.ha_service.get_default_message_store().get_confirm_offset();
+        let confirm_offset = self.ha_service.replica_store().get_confirm_offset();
         let frame_header = encode_transfer_header(
             &mut self.byte_buffer_header,
             next_offset,
@@ -845,7 +835,7 @@ impl WriteSocketService {
     }
 
     async fn send_data(&mut self, mut batch: TransferBatch) -> HAConnectionResult<()> {
-        let confirm_offset = self.ha_service.get_default_message_store().get_confirm_offset();
+        let confirm_offset = self.ha_service.replica_store().get_confirm_offset();
         let header_bytes = encode_transfer_header(
             &mut self.byte_buffer_header,
             batch.start_offset,
