@@ -341,7 +341,7 @@ impl<MS: MessageStore> ConsumeQueue<MS> {
                 request.queue_id
             };
 
-            let Some(mut consume_queue) = self
+            let Some(consume_queue) = self
                 .message_store
                 .find_consume_queue(&CheetahString::from(queue_name), queue_id)
             else {
@@ -358,7 +358,9 @@ impl<MS: MessageStore> ConsumeQueue<MS> {
             lmq_dispatch_request.consume_queue_offset = queue_offset;
             lmq_dispatch_request.properties_map = None;
 
-            consume_queue.put_message_position_info_wrapper(&lmq_dispatch_request);
+            consume_queue
+                .write()
+                .put_message_position_info_wrapper(&lmq_dispatch_request);
         }
     }
 

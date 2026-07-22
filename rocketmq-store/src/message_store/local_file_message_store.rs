@@ -717,6 +717,7 @@ impl LocalFileMessageStore {
         let Some(logic_queue) = self.get_consume_queue(topic, queue_id) else {
             return true;
         };
+        let logic_queue = logic_queue.read();
         if logic_queue.get_message_total_in_queue() <= 0 {
             return true;
         }
@@ -986,7 +987,7 @@ impl LocalFileMessageStore {
                 continue;
             };
             for (queue_id, consume_queue) in queue_table {
-                consume_queue_store.destroy_queue(consume_queue.as_ref().deref());
+                consume_queue.write().destroy();
                 consume_queue_store.remove_topic_queue_table(topic, queue_id);
             }
             let consume_queue_table = consume_queue_store.get_consume_queue_table();
@@ -2249,6 +2250,7 @@ impl MessageStore for LocalFileMessageStore {
         let max_offset_py = self.commit_log.get_max_offset();
         let consume_queue = self.find_consume_queue(topic, queue_id);
         if let Some(consume_queue) = consume_queue {
+            let consume_queue = consume_queue.read();
             min_offset = consume_queue.get_min_offset_in_queue();
             max_offset = consume_queue.get_max_offset_in_queue();
             if max_offset == 0 {
@@ -2291,7 +2293,7 @@ impl MessageStore for LocalFileMessageStore {
                         next_begin_offset = self.next_offset_correction(
                             next_begin_offset,
                             self.consume_queue_store
-                                .roll_next_file(&**consume_queue, next_begin_offset),
+                                .roll_next_file(consume_queue.as_ref(), next_begin_offset),
                         );
                         warn!(
                             "consumer request topic: {}, offset: {}, minOffset: {}, maxOffset: {}, but access logic \
@@ -2472,7 +2474,7 @@ impl MessageStore for LocalFileMessageStore {
     fn get_max_offset_in_queue_committed(&self, topic: &CheetahString, queue_id: i32, committed: bool) -> i64 {
         if committed {
             let queue = self.consume_queue_store.find_or_create_consume_queue(topic, queue_id);
-
+            let queue = queue.read();
             queue.get_max_offset_in_queue()
         } else {
             self.consume_queue_store
@@ -2498,7 +2500,12 @@ impl MessageStore for LocalFileMessageStore {
 
     fn get_commit_log_offset_in_queue(&self, topic: &CheetahString, queue_id: i32, consume_queue_offset: i64) -> i64 {
         self.get_consume_queue(topic, queue_id)
-            .and_then(|consume_queue| consume_queue.get(consume_queue_offset).map(|cq_unit| cq_unit.pos))
+            .and_then(|consume_queue| {
+                consume_queue
+                    .read()
+                    .get(consume_queue_offset)
+                    .map(|cq_unit| cq_unit.pos)
+            })
             .unwrap_or_default()
     }
 
@@ -3073,7 +3080,7 @@ impl MessageStore for LocalFileMessageStore {
 
     fn get_earliest_message_time(&self, topic: &CheetahString, queue_id: i32) -> i64 {
         if let Some(logic_queue) = self.get_consume_queue(topic, queue_id) {
-            if let Some(cq) = logic_queue.get_earliest_unit_and_store_time() {
+            if let Some(cq) = logic_queue.read().get_earliest_unit_and_store_time() {
                 return cq.1;
             }
         }
@@ -3111,7 +3118,7 @@ impl MessageStore for LocalFileMessageStore {
 
     fn get_message_store_timestamp(&self, topic: &CheetahString, queue_id: i32, consume_queue_offset: i64) -> i64 {
         if let Some(logic_queue) = self.get_consume_queue(topic, queue_id) {
-            if let Some(cq) = logic_queue.get_cq_unit_and_store_time(consume_queue_offset) {
+            if let Some(cq) = logic_queue.read().get_cq_unit_and_store_time(consume_queue_offset) {
                 return cq.1;
             }
         }
@@ -3125,7 +3132,7 @@ impl MessageStore for LocalFileMessageStore {
         consume_queue_offset: i64,
     ) -> Result<i64, StoreError> {
         if let Some(logic_queue) = self.get_consume_queue(topic, queue_id) {
-            if let Some(cq) = logic_queue.get_cq_unit_and_store_time(consume_queue_offset) {
+            if let Some(cq) = logic_queue.read().get_cq_unit_and_store_time(consume_queue_offset) {
                 return Ok(cq.1);
             }
         }
@@ -3140,7 +3147,7 @@ impl MessageStore for LocalFileMessageStore {
 
     fn get_message_total_in_queue(&self, topic: &CheetahString, queue_id: i32) -> i64 {
         if let Some(logic_queue) = self.get_consume_queue(topic, queue_id) {
-            return logic_queue.get_message_total_in_queue();
+            return logic_queue.read().get_message_total_in_queue();
         }
         0
     }
@@ -3365,6 +3372,7 @@ impl MessageStore for LocalFileMessageStore {
         batch_size: i32,
     ) -> bool {
         let consume_queue = self.consume_queue_store.find_or_create_consume_queue(topic, queue_id);
+        let consume_queue = consume_queue.read();
         let first_cqitem = consume_queue.get(consume_offset);
         let Some(cq) = first_cqitem.as_ref() else {
             return false;
@@ -3886,7 +3894,7 @@ impl MessageStore for LocalFileMessageStore {
         filter: &dyn MessageFilter,
     ) -> i64 {
         self.get_consume_queue(topic, queue_id)
-            .map(|logic_queue| logic_queue.estimate_message_count(from, to, filter))
+            .map(|logic_queue| logic_queue.read().estimate_message_count(from, to, filter))
             .unwrap_or(0)
     }
 
@@ -5438,12 +5446,12 @@ impl CleanConsumeQueueService {
         let consume_queue_table = self.consume_queue_store.get_consume_queue_table().lock().clone();
         for queue_table in consume_queue_table.values() {
             for consume_queue in queue_table.values() {
-                let consume_queue = &***consume_queue;
+                let consume_queue = consume_queue.read();
                 let _ = self
                     .consume_queue_store
-                    .delete_expired_file(consume_queue, min_commit_log_offset);
+                    .delete_expired_file(consume_queue.as_ref(), min_commit_log_offset);
                 self.consume_queue_store
-                    .correct_min_offset(consume_queue, min_commit_log_offset);
+                    .correct_min_offset(consume_queue.as_ref(), min_commit_log_offset);
             }
         }
 
@@ -5476,8 +5484,9 @@ impl CorrectLogicOffsetService {
         let consume_queue_table = self.consume_queue_store.get_consume_queue_table().lock().clone();
         for queue_table in consume_queue_table.values() {
             for consume_queue in queue_table.values() {
+                let consume_queue = consume_queue.read();
                 self.consume_queue_store
-                    .correct_min_offset(&***consume_queue, min_commit_log_offset);
+                    .correct_min_offset(consume_queue.as_ref(), min_commit_log_offset);
             }
         }
     }
@@ -5515,7 +5524,8 @@ impl FlushConsumeQueueService {
         let consume_queue_table = consume_queue_store.get_consume_queue_table().lock().clone();
         for consume_queue_table in consume_queue_table.values() {
             for consume_queue in consume_queue_table.values() {
-                let _ = consume_queue_store.flush(&***consume_queue, flush_least_pages);
+                let consume_queue = consume_queue.read();
+                let _ = consume_queue_store.flush(consume_queue.as_ref(), flush_least_pages);
             }
         }
 
@@ -6878,7 +6888,7 @@ mod tests {
         let queue = store
             .get_consume_queue(&topic, 0)
             .expect("compat queue should be present");
-        assert_eq!(queue.get_cq_type(), CQType::SimpleCQ);
+        assert_eq!(queue.read().get_cq_type(), CQType::SimpleCQ);
 
         let result = store
             .get_message(&group, &topic, 0, 0, 32, None)
@@ -8061,15 +8071,15 @@ mod tests {
 
         let consume_queue = store.consume_queue_store.find_or_create_consume_queue(&topic, 1);
         let expected_roll = store.message_store_config_ref().get_mapped_file_size_consume_queue() as i64
-            / consume_queue.get_unit_size() as i64;
+            / consume_queue.read().get_unit_size() as i64;
 
-        assert_eq!(consume_queue.get_message_total_in_queue(), 1);
-        assert_eq!(consume_queue.get_last_offset(), 155);
-        assert_eq!(consume_queue.roll_next_file(1), expected_roll);
-        assert!(consume_queue.is_first_file_exist());
-        assert!(consume_queue.is_first_file_available());
+        assert_eq!(consume_queue.read().get_message_total_in_queue(), 1);
+        assert_eq!(consume_queue.read().get_last_offset(), 155);
+        assert_eq!(consume_queue.read().roll_next_file(1), expected_roll);
+        assert!(consume_queue.read().is_first_file_exist());
+        assert!(consume_queue.read().is_first_file_available());
         assert_eq!(
-            consume_queue.get_total_size(),
+            consume_queue.read().get_total_size(),
             store.message_store_config_ref().get_mapped_file_size_consume_queue() as i64
         );
     }
@@ -8187,12 +8197,12 @@ mod tests {
 
         let consume_queue = store.consume_queue_store.find_or_create_consume_queue(&topic, 0);
         assert_eq!(
-            consume_queue.get_offset_in_queue_by_time(second_store_time),
+            consume_queue.read().get_offset_in_queue_by_time(second_store_time),
             if second_store_time == first_store_time { 0 } else { 1 }
         );
         assert_eq!(store.estimate_message_count(&topic, 0, 0, 1, &MatchAllFilter), 2);
 
-        let latest = consume_queue.get_latest_unit().expect("latest cq unit");
+        let latest = consume_queue.read().get_latest_unit().expect("latest cq unit");
         assert_eq!(latest.queue_offset, 1);
     }
 
@@ -8228,19 +8238,27 @@ mod tests {
         let consume_queue = store.consume_queue_store.find_or_create_consume_queue(&topic, 0);
 
         assert_eq!(
-            consume_queue.get_offset_in_queue_by_time_with_boundary(1_000, BoundaryType::Lower),
+            consume_queue
+                .read()
+                .get_offset_in_queue_by_time_with_boundary(1_000, BoundaryType::Lower),
             0
         );
         assert_eq!(
-            consume_queue.get_offset_in_queue_by_time_with_boundary(1_000, BoundaryType::Upper),
+            consume_queue
+                .read()
+                .get_offset_in_queue_by_time_with_boundary(1_000, BoundaryType::Upper),
             1
         );
         assert_eq!(
-            consume_queue.get_offset_in_queue_by_time_with_boundary(1_500, BoundaryType::Lower),
+            consume_queue
+                .read()
+                .get_offset_in_queue_by_time_with_boundary(1_500, BoundaryType::Lower),
             2
         );
         assert_eq!(
-            consume_queue.get_offset_in_queue_by_time_with_boundary(1_500, BoundaryType::Upper),
+            consume_queue
+                .read()
+                .get_offset_in_queue_by_time_with_boundary(1_500, BoundaryType::Upper),
             1
         );
     }
@@ -8928,8 +8946,8 @@ mod tests {
         let alpha_queue = store.consume_queue_store.find_or_create_consume_queue(&lmq_alpha, 0);
         let beta_queue = store.consume_queue_store.find_or_create_consume_queue(&lmq_beta, 0);
 
-        assert_eq!(alpha_queue.get_message_total_in_queue(), 1);
-        assert_eq!(beta_queue.get_message_total_in_queue(), 1);
+        assert_eq!(alpha_queue.read().get_message_total_in_queue(), 1);
+        assert_eq!(beta_queue.read().get_message_total_in_queue(), 1);
         assert_eq!(store.consume_queue_store.get_lmq_queue_offset("%LMQ%alpha-0"), 1);
         assert_eq!(store.consume_queue_store.get_lmq_queue_offset("%LMQ%beta-0"), 1);
     }
@@ -9351,7 +9369,7 @@ mod tests {
         }
 
         let consume_queue = store.consume_queue_store.find_or_create_consume_queue(&topic, 0);
-        assert_eq!(consume_queue.get_min_offset_in_queue(), 0);
+        assert_eq!(consume_queue.read().get_min_offset_in_queue(), 0);
 
         store.clean_commit_log_service.execute_delete_files_manually();
         store.clean_commit_log_service.run();
@@ -9360,8 +9378,8 @@ mod tests {
         store.correct_logic_offset_service.run();
 
         let consume_queue = store.consume_queue_store.find_or_create_consume_queue(&topic, 0);
-        assert_eq!(consume_queue.get_min_offset_in_queue(), 2);
-        assert_eq!(consume_queue.get_message_total_in_queue(), 1);
+        assert_eq!(consume_queue.read().get_min_offset_in_queue(), 2);
+        assert_eq!(consume_queue.read().get_message_total_in_queue(), 1);
     }
 
     #[tokio::test]
@@ -9427,8 +9445,8 @@ mod tests {
         store.clean_consume_queue_service.run();
 
         let active_consume_queue = store.consume_queue_store.find_or_create_consume_queue(&active_topic, 0);
-        assert_eq!(active_consume_queue.get_min_offset_in_queue(), 2);
-        assert_eq!(active_consume_queue.get_message_total_in_queue(), 1);
+        assert_eq!(active_consume_queue.read().get_min_offset_in_queue(), 2);
+        assert_eq!(active_consume_queue.read().get_message_total_in_queue(), 1);
         assert!(store
             .consume_queue_store
             .find_consume_queue_map(&expired_topic)
@@ -9484,8 +9502,8 @@ mod tests {
         let expired_consume_queue = store
             .consume_queue_store
             .find_or_create_consume_queue(&expired_topic, 0);
-        assert_eq!(expired_consume_queue.get_min_offset_in_queue(), 1);
-        assert_eq!(expired_consume_queue.get_message_total_in_queue(), 0);
+        assert_eq!(expired_consume_queue.read().get_min_offset_in_queue(), 1);
+        assert_eq!(expired_consume_queue.read().get_message_total_in_queue(), 0);
 
         store.consume_queue_store.clean_expired(64).await;
 

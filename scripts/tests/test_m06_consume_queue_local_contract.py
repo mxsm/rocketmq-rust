@@ -26,6 +26,42 @@ def source(relative: str) -> str:
 
 
 class M06ConsumeQueueLocalContractTests(unittest.TestCase):
+    def test_consume_queue_handle_uses_explicit_per_queue_synchronization(self) -> None:
+        queue_facade = source("rocketmq-store/src/queue.rs")
+        local_store = source(
+            "rocketmq-store/src/queue/local_file_consume_queue_store.rs"
+        ).split("#[cfg(test)]", maxsplit=1)[0]
+        single_queue = source("rocketmq-store/src/queue/single_consume_queue.rs")
+        schedule = source(
+            "rocketmq-broker/src/schedule/schedule_message_service.rs"
+        )
+
+        self.assertIn("pub struct ArcConsumeQueue", queue_facade)
+        self.assertIn(
+            "inner: Arc<RwLock<Box<dyn ConsumeQueueTrait>>>", queue_facade
+        )
+        self.assertIn(
+            "pub fn read(&self) -> RwLockReadGuard<'_, Box<dyn ConsumeQueueTrait>>",
+            queue_facade,
+        )
+        self.assertIn(
+            "pub fn write(&self) -> RwLockWriteGuard<'_, Box<dyn ConsumeQueueTrait>>",
+            queue_facade,
+        )
+        self.assertNotIn("pub type ArcConsumeQueue", queue_facade)
+        self.assertNotIn("ArcMut<Box<dyn ConsumeQueueTrait>>", queue_facade + local_store)
+        self.assertIn("ArcConsumeQueue::new(Box::new(consume_queue))", local_store)
+        self.assertIn("cq.write().as_mut()", local_store)
+        self.assertRegex(
+            single_queue,
+            r"consume_queue\s*\.write\(\)\s*\.put_message_position_info_wrapper",
+        )
+        self.assertIn(
+            "Read one unit at a time so the queue guard is never held across delivery awaits.",
+            schedule,
+        )
+        self.assertNotIn("let mut buffer_cq = match cq.iterate_from", schedule)
+
     def test_canonical_20_byte_record_owner_and_store_adapter_are_unique(self) -> None:
         local_root = source("rocketmq-store-local/src/lib.rs")
         local_module = source("rocketmq-store-local/src/consume_queue/mod.rs")
