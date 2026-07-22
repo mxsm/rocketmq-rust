@@ -4525,6 +4525,26 @@ LitePull test caller debt 随 Issue #8593 完成以下收口：
 | final gates | `cargo fmt --all -- --check`、workspace all-target/all-feature strict Clippy 与 `git diff --check` 通过；Windows linker stdout 与既有 future-incompatibility note 不受 `-D warnings` 管辖 |
 | reduced validation scope | 本切片仅替换 test-only config wrapper，不修改 production lifecycle/runtime、协议、Store、feature 或公开 API，因此不运行 runtime audit、M06、RocksDB、dependency/release/performance/telemetry 矩阵、Rustdoc 或 AGENTS routing；D 盘剩余 55.66 GiB，空间充足，保留 Cargo cache且未执行 `cargo clean` |
 
+## M11-12bc89 实现
+
+Client hot-path benchmark caller debt 随 Issue #8595 完成以下收口：
+
+- LitePull batch clone benchmark 从 `ArcMut<MessageExt>` 改为标准 immutable `Arc<MessageExt>` snapshot，变量与
+  Criterion label 同步改为 `shared_arc_message_ext_clone`，避免把不需要共享可变性的路径标为 zero-copy ArcMut。
+- reviewed baseline 从 69/243 降至 67/241：production 保持 13/24，test 从 42/179 降至 40/177，
+  compatibility 保持 14/40；净删除 2 identities/2 occurrences，无 relocation、新 identity 或临时 approval。
+- Client test/bench caller 从 2/2 降至 0/0；R17 当前上界降至 40/177（Store 32/161、Broker 6/8、
+  runtime-foundation 2/8），仍等待其他域余量；执行清单保持完成 11 项、剩余 20 项，正式进度仍为 75/82。
+
+## M11-12bc89 验证
+
+| 命令 | 结果 |
+|---|---|
+| affected target | workspace all-target/all-feature strict Clippy 成功编译并 lint `client_hot_path_benchmark`；未运行 Criterion 测量，因为本切片只替换 benchmark owner primitive，不产生或比较性能候选数据 |
+| reviewed baseline / fixtures | 正式 baseline 与 reviewed candidate 的 semantic set 均为 67/241；直接 guard、candidate compare、27/27 fixtures 与 78/78 guard tests 通过；净删除 2 test identities/2 occurrences，无 relocation、新 identity 或临时 approval |
+| final gates | `cargo fmt --all -- --check`、workspace all-target/all-feature strict Clippy 与 `git diff --check` 通过；Windows linker stdout 与既有 future-incompatibility note 不受 `-D warnings` 管辖 |
+| reduced validation scope | 本切片仅修改 benchmark 的 immutable sharing primitive，不修改 production、公开 API、runtime lifecycle、协议或 Store，因此不运行 benchmark measurements、额外 `cargo check`、runtime audit、M06、RocksDB、dependency/release/performance/telemetry 矩阵、Rustdoc 或 AGENTS routing；最终 workspace Clippy 同时承担 benchmark target 编译与 lint |
+
 ## 剩余切片与 Gate
 
 2026-07-23 盘点将执行工作固化为 31 个最小可审查单元：16 个 production owner、2 个

@@ -1194,6 +1194,12 @@ import，不改变 production consumer 或公开 API。reviewed 快照从 71/312
 relocation、新 identity 或临时 approval。R17 当前上界降至 42/179，执行清单保持完成 11 项、剩余 20 项，
 正式进度仍为 75/82。
 
+Client benchmark caller debt 随 Issue #8595 清零：hot-path benchmark 不再把 `ArcMut<MessageExt>` clone 标记为
+zero-copy 路径，而是显式测量标准 `Arc<MessageExt>` immutable snapshot clone。reviewed 快照从 69/243 降至
+67/241：production 保持 13/24，test 从 42/179 降至 40/177，compatibility 保持 14/40；净删除最后
+2 个 Client test identities/2 occurrences，无 relocation、新 identity 或临时 approval。R17 总上界降至 40/177，
+执行清单保持完成 11 项、剩余 20 项，正式进度仍为 75/82。
+
 Default HA client runtime ownership 随 Issue #8567 完成收窄：`DefaultHAClient` 以标准 `Arc<Inner>` 共享只读组合根，
 `Inner` 仅保留原子、锁、Notify、flow monitor 与现有 LocalStore 兼容句柄；从未安装连接的 stream 字段和重复 buffer/
 dispatch/report 状态已删除，实际 reader/writer buffer 继续由每个 connection task 独占。reviewed 快照为 126 identities/
