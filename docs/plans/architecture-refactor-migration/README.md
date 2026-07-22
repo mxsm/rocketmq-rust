@@ -1200,6 +1200,13 @@ zero-copy 路径，而是显式测量标准 `Arc<MessageExt>` immutable snapshot
 2 个 Client test identities/2 occurrences，无 relocation、新 identity 或临时 approval。R17 总上界降至 40/177，
 执行清单保持完成 11 项、剩余 20 项，正式进度仍为 75/82。
 
+RocksDB semantics test root 随 Issue #8597 收窄：fixture 默认直接返回独占 `RocksDBMessageStore`，不再让九项
+语义测试共享可变 Store root；只有验证 `GenericMessageStore` legacy adapter 的 helper 保留一个显式 wrapper。
+reviewed 快照从 67/241 降至 65/237：production 保持 13/24，test 从 40/177 降至 38/173，compatibility
+保持 14/40；净删除 2 test identities/4 occurrences，保留 constructor 经忽略的临时 ADR-013 同 item relocation
+审核，无新增 identity 或提交态 approval。Store test/bench caller 从 32/161 降至 30/157，R17 总上界降至
+38/173；执行清单保持完成 11 项、剩余 20 项，正式进度仍为 75/82。
+
 Default HA client runtime ownership 随 Issue #8567 完成收窄：`DefaultHAClient` 以标准 `Arc<Inner>` 共享只读组合根，
 `Inner` 仅保留原子、锁、Notify、flow monitor 与现有 LocalStore 兼容句柄；从未安装连接的 stream 字段和重复 buffer/
 dispatch/report 状态已删除，实际 reader/writer buffer 继续由每个 connection task 独占。reviewed 快照为 126 identities/

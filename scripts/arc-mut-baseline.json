@@ -2201,60 +2201,10 @@
       "category": "test",
       "occurrences": [
         {
-          "id": "af2e58364e7d3bcf2fe00ac5",
-          "fingerprint": "8d34f47c28af9d01b95d9c0d",
+          "id": "0de3d0f67921797ff7adcde6",
+          "fingerprint": "f3290e4af60a07fb607f1ade",
           "item": "fn new_test_store",
-          "line": 69
-        },
-        {
-          "id": "99da9e7a7d0e2725962fb8d4",
-          "fingerprint": "b555a68680784490f231fbb5",
-          "item": "fn new_test_store_with_config",
-          "line": 85
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "f61ce7cc6df8296078f33a3a",
-      "path": "rocketmq-store/tests/rocksdb_store_semantics_tests.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "cea13d3ba4f5e0a6d153c14e",
-          "fingerprint": "33579f33ac388474cd5d6923",
-          "item": "<module>",
-          "line": 33
-        }
-      ],
-      "owner": "store",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "42cafe0ac7962e7370767901",
-      "path": "rocketmq-store/tests/rocksdb_store_semantics_tests.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "609b83d43f5414a251eb9e08",
-          "fingerprint": "194a70e104bea18f9859cecc",
-          "item": "fn new_test_store",
-          "line": 65
-        },
-        {
-          "id": "c964903997ceff9737d2b8a0",
-          "fingerprint": "073f64c0b098e3db224f6cfa",
-          "item": "fn new_test_store_with_config",
-          "line": 81
+          "line": 87
         }
       ],
       "owner": "store",
