@@ -808,10 +808,10 @@ mod tests {
 
     #[tokio::test]
     async fn update_and_create_static_topic_persists_mapping_detail() {
-        let mut runtime = new_test_runtime("static-topic").await;
-        let inner = runtime.inner_for_test().clone();
+        let runtime = new_test_runtime("static-topic").await;
+        let admin = runtime.admin_runtime_for_test();
         let handler = TopicRequestHandler::new();
-        let broker_config_request_handler = BrokerConfigRequestHandler::new(runtime.admin_runtime_for_test());
+        let broker_config_request_handler = BrokerConfigRequestHandler::new(admin.clone());
 
         let detail = TopicQueueMappingDetail {
             topic_queue_mapping_info:
@@ -819,7 +819,7 @@ mod tests {
                     topic: Some(CheetahString::from_static_str("static-topic")),
                     scope: Some(CheetahString::from_static_str(METADATA_SCOPE_GLOBAL)),
                     total_queues: 1,
-                    bname: Some(inner.broker_config().broker_name().clone()),
+                    bname: Some(admin.broker_config().broker_name().clone()),
                     epoch: 1,
                     dirty: false,
                     curr_id_map: None,
@@ -866,11 +866,11 @@ mod tests {
             "remark={:?}",
             response.remark()
         );
-        assert!(inner
+        assert!(admin
             .topic_config_manager()
             .select_topic_config(&CheetahString::from_static_str("static-topic"))
             .is_some());
-        let mapping = inner
+        let mapping = admin
             .topic_queue_mapping_manager()
             .get_topic_queue_mapping("static-topic")
             .expect("mapping detail should be persisted");

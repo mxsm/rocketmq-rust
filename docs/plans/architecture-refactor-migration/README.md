@@ -1001,6 +1001,15 @@ Store、RocksDB 与 tiered-store 指标复用既有晚绑定 capability，没有
 approval。R01 仍未完成，31 项执行清单仍剩余 24 项；总进度仍为 75/82，下一子切片 M11-12bc64 迁移 test caller
 并将 `BrokerRuntime.inner` 改为独占值。
 
+Broker exclusive composition root 随 Issue #8541 继续收窄：`BrokerRuntime.inner` 从共享
+`ArcMut<BrokerRuntimeInner>` 改为独占 `Box<BrokerRuntimeInner>`；43 处 test root clone 迁移为短借用、owned
+`BrokerAdminRuntime`、共享 Producer/Consumer manager、Topic manager、Lite registry 与 ConsumerOffset handle。
+root 生命周期合同由 production source contract 证明，Store 自身必要的强引用合同保持。reviewed ArcMut 快照从
+220/693 降至 220 identities/690 occurrences（production 90/246、test 116/404、compatibility 14/40、Broker
+production 8/12、Store production 82/234），净删除 3 个 production occurrences，无 relocation、新增 identity 或
+临时 approval。R01 仍未完成，剩余 Broker occurrence 均为 Local/Rocks/Store owner carrier；31 项执行清单仍剩余
+24 项，总进度仍为 75/82，下一子切片进入 R09～R16 Store owner 收口。
+
 ### 9.3 证据目录
 
 - 运行期生成物：`target/architecture-refactor/Mxx/<run-id>/`，不提交 Git。

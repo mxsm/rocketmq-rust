@@ -176,11 +176,11 @@ mod tests {
 
     #[tokio::test]
     async fn auth_acl_handlers_round_trip() {
-        let mut runtime = new_test_runtime("round-trip").await;
-        let inner = runtime.inner_for_test().clone();
+        let runtime = new_test_runtime("round-trip").await;
+        let broker_config = runtime.broker_config();
         let auth_admin_service = Arc::new(
             AuthAdminService::new(AuthConfig {
-                auth_config_path: inner.broker_config().auth_config_path.clone(),
+                auth_config_path: broker_config.auth_config_path.clone(),
                 ..AuthConfig::default()
             })
             .expect("create auth admin service"),
@@ -284,11 +284,11 @@ mod tests {
 
     #[tokio::test]
     async fn auth_admin_handlers_return_invalid_parameter_for_malformed_body() {
-        let mut runtime = new_test_runtime("malformed-body").await;
-        let inner = runtime.inner_for_test().clone();
+        let runtime = new_test_runtime("malformed-body").await;
+        let broker_config = runtime.broker_config();
         let auth_admin_service = Arc::new(
             AuthAdminService::new(AuthConfig {
-                auth_config_path: inner.broker_config().auth_config_path.clone(),
+                auth_config_path: broker_config.auth_config_path.clone(),
                 ..AuthConfig::default()
             })
             .expect("create auth admin service"),
@@ -397,11 +397,11 @@ mod tests {
 
     #[tokio::test]
     async fn auth_admin_empty_list_responses_match_java_without_body() {
-        let mut runtime = new_test_runtime("empty-list").await;
-        let inner = runtime.inner_for_test().clone();
+        let runtime = new_test_runtime("empty-list").await;
+        let broker_config = runtime.broker_config();
         let auth_admin_service = Arc::new(
             AuthAdminService::new(AuthConfig {
-                auth_config_path: inner.broker_config().auth_config_path.clone(),
+                auth_config_path: broker_config.auth_config_path.clone(),
                 ..AuthConfig::default()
             })
             .expect("create auth admin service"),
@@ -457,11 +457,11 @@ mod tests {
 
     #[tokio::test]
     async fn auth_update_user_rejects_non_super_updating_existing_super_user() {
-        let mut runtime = new_test_runtime("protect-super-user").await;
-        let inner = runtime.inner_for_test().clone();
+        let runtime = new_test_runtime("protect-super-user").await;
+        let broker_config = runtime.broker_config();
         let auth_admin_service = Arc::new(
             AuthAdminService::new(AuthConfig {
-                auth_config_path: inner.broker_config().auth_config_path.clone(),
+                auth_config_path: broker_config.auth_config_path.clone(),
                 ..AuthConfig::default()
             })
             .expect("create auth admin service"),
@@ -516,11 +516,11 @@ mod tests {
 
     #[tokio::test]
     async fn auth_create_and_update_super_user_direct_checks_match_java_system_error() {
-        let mut runtime = new_test_runtime("direct-super-check").await;
-        let inner = runtime.inner_for_test().clone();
+        let runtime = new_test_runtime("direct-super-check").await;
+        let broker_config = runtime.broker_config();
         let auth_admin_service = Arc::new(
             AuthAdminService::new(AuthConfig {
-                auth_config_path: inner.broker_config().auth_config_path.clone(),
+                auth_config_path: broker_config.auth_config_path.clone(),
                 ..AuthConfig::default()
             })
             .expect("create auth admin service"),
@@ -604,11 +604,11 @@ mod tests {
 
     #[tokio::test]
     async fn auth_delete_acl_honors_policy_type_like_java() {
-        let mut runtime = new_test_runtime("delete-acl-policy-type").await;
-        let inner = runtime.inner_for_test().clone();
+        let runtime = new_test_runtime("delete-acl-policy-type").await;
+        let broker_config = runtime.broker_config();
         let auth_admin_service = Arc::new(
             AuthAdminService::new(AuthConfig {
-                auth_config_path: inner.broker_config().auth_config_path.clone(),
+                auth_config_path: broker_config.auth_config_path.clone(),
                 ..AuthConfig::default()
             })
             .expect("create auth admin service"),

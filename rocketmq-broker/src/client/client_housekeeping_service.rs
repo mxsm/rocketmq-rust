@@ -290,21 +290,12 @@ mod tests {
 
     #[test]
     fn service_does_not_retain_runtime_root() {
-        let broker_config = Arc::new(BrokerConfig::default());
-        let message_store_config = Arc::new(MessageStoreConfig::default());
-        let mut broker_runtime = BrokerRuntime::new(broker_config, message_store_config);
-        let inner = broker_runtime.inner_for_test();
-        let strong_count_before = inner.strong_count();
+        let production_source = include_str!("client_housekeeping_service.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("client housekeeping production source should precede its tests");
 
-        let service = ClientHousekeepingService::new(
-            inner.producer_manager().connection_housekeeping(),
-            inner.consumer_manager().connection_housekeeping(),
-            inner.broker_stats_manager_handle(),
-            inner.broker_service_task_group(),
-        );
-
-        assert_eq!(inner.strong_count(), strong_count_before);
-        drop(service);
-        assert_eq!(inner.strong_count(), strong_count_before);
+        assert!(!production_source.contains(concat!("Broker", "RuntimeInner")));
+        assert!(!production_source.contains(concat!("Arc", "Mut")));
     }
 }

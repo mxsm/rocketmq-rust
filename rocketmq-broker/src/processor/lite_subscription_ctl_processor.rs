@@ -589,7 +589,7 @@ mod tests {
     #[tokio::test]
     async fn complete_add_updates_registry_with_lmq_names() {
         let mut runtime = new_test_runtime("processor-success").await;
-        let inner = runtime.inner_for_test().clone();
+        let lite_registry = runtime.inner_for_test().lite_subscription_registry().clone();
         seed_group_config(
             &mut runtime,
             "lite-group",
@@ -620,8 +620,7 @@ mod tests {
             .expect("processor should return a response");
 
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
-        let subscription = inner
-            .lite_subscription_registry()
+        let subscription = lite_registry
             .lite_subscription(
                 &CheetahString::from_static_str("client-id"),
                 &CheetahString::from_static_str("lite-group"),
@@ -638,7 +637,7 @@ mod tests {
     #[tokio::test]
     async fn complete_add_ignores_stale_version_snapshot() {
         let mut runtime = new_test_runtime("processor-stale-version").await;
-        let inner = runtime.inner_for_test().clone();
+        let lite_registry = runtime.inner_for_test().lite_subscription_registry().clone();
         seed_group_config(
             &mut runtime,
             "lite-group",
@@ -693,8 +692,7 @@ mod tests {
             .expect("processor should return a response");
 
         assert_eq!(ResponseCode::from(stale_response.code()), ResponseCode::Success);
-        let subscription = inner
-            .lite_subscription_registry()
+        let subscription = lite_registry
             .lite_subscription(
                 &CheetahString::from_static_str("client-id"),
                 &CheetahString::from_static_str("lite-group"),
@@ -716,7 +714,7 @@ mod tests {
     #[tokio::test]
     async fn partial_add_returns_quota_exceeded_when_global_limit_is_hit() {
         let mut runtime = new_test_runtime_with_max_subscription_count("quota-exceeded", 1).await;
-        let inner = runtime.inner_for_test().clone();
+        let lite_registry = runtime.inner_for_test().lite_subscription_registry().clone();
         seed_group_config(
             &mut runtime,
             "lite-group",
@@ -725,7 +723,7 @@ mod tests {
                 CheetahString::from_static_str("parent-topic"),
             )]),
         );
-        inner.lite_subscription_registry().add_partial_subscription(
+        lite_registry.add_partial_subscription(
             &CheetahString::from_static_str("client-1"),
             &CheetahString::from_static_str("lite-group"),
             &CheetahString::from_static_str("parent-topic"),
@@ -765,7 +763,7 @@ mod tests {
     #[tokio::test]
     async fn partial_add_with_offset_option_assigns_reset_offset() {
         let mut runtime = new_test_runtime("offset-option").await;
-        let inner = runtime.inner_for_test().clone();
+        let consumer_offset_manager = runtime.inner_for_test().consumer_offset_manager_handle();
         seed_group_config(
             &mut runtime,
             "lite-group",
@@ -797,7 +795,7 @@ mod tests {
             .expect("processor should return a response");
 
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
-        let reset_offset = inner.consumer_offset_manager().query_then_erase_reset_offset(
+        let reset_offset = consumer_offset_manager.query_then_erase_reset_offset(
             &CheetahString::from_string(to_lmq_name("parent-topic", "child-a").expect("convert lite topic")),
             &CheetahString::from_static_str("lite-group"),
             0,
@@ -810,7 +808,8 @@ mod tests {
     #[tokio::test]
     async fn partial_remove_with_reset_offset_on_unsubscribe_assigns_min_offset() {
         let mut runtime = new_test_runtime("reset-on-unsubscribe").await;
-        let inner = runtime.inner_for_test().clone();
+        let lite_registry = runtime.inner_for_test().lite_subscription_registry().clone();
+        let consumer_offset_manager = runtime.inner_for_test().consumer_offset_manager_handle();
         seed_group_config(
             &mut runtime,
             "lite-group",
@@ -825,7 +824,7 @@ mod tests {
                 ),
             ]),
         );
-        inner.lite_subscription_registry().add_partial_subscription(
+        lite_registry.add_partial_subscription(
             &CheetahString::from_static_str("client-id"),
             &CheetahString::from_static_str("lite-group"),
             &CheetahString::from_static_str("parent-topic"),
@@ -855,7 +854,7 @@ mod tests {
             .expect("processor should return a response");
 
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
-        let reset_offset = inner.consumer_offset_manager().query_then_erase_reset_offset(
+        let reset_offset = consumer_offset_manager.query_then_erase_reset_offset(
             &CheetahString::from_string(to_lmq_name("parent-topic", "child-a").expect("convert lite topic")),
             &CheetahString::from_static_str("lite-group"),
             0,
@@ -868,7 +867,8 @@ mod tests {
     #[tokio::test]
     async fn partial_add_in_exclusive_mode_excludes_previous_client_subscription() {
         let mut runtime = new_test_runtime("exclusive-model").await;
-        let inner = runtime.inner_for_test().clone();
+        let lite_registry = runtime.inner_for_test().lite_subscription_registry().clone();
+        let consumer_offset_manager = runtime.inner_for_test().consumer_offset_manager_handle();
         seed_group_config(
             &mut runtime,
             "lite-group",
@@ -887,7 +887,7 @@ mod tests {
                 ),
             ]),
         );
-        inner.lite_subscription_registry().add_partial_subscription(
+        lite_registry.add_partial_subscription(
             &CheetahString::from_static_str("client-1"),
             &CheetahString::from_static_str("lite-group"),
             &CheetahString::from_static_str("parent-topic"),
@@ -917,16 +917,14 @@ mod tests {
             .expect("processor should return a response");
 
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
-        assert!(inner
-            .lite_subscription_registry()
+        assert!(lite_registry
             .lite_subscription(
                 &CheetahString::from_static_str("client-1"),
                 &CheetahString::from_static_str("lite-group"),
                 &CheetahString::from_static_str("parent-topic"),
             )
             .is_none());
-        let subscription = inner
-            .lite_subscription_registry()
+        let subscription = lite_registry
             .lite_subscription(
                 &CheetahString::from_static_str("client-2"),
                 &CheetahString::from_static_str("lite-group"),
@@ -936,7 +934,7 @@ mod tests {
         assert!(subscription.lite_topic_set().contains(&CheetahString::from_string(
             to_lmq_name("parent-topic", "child-a").expect("convert lite topic")
         )));
-        let reset_offset = inner.consumer_offset_manager().query_then_erase_reset_offset(
+        let reset_offset = consumer_offset_manager.query_then_erase_reset_offset(
             &CheetahString::from_string(to_lmq_name("parent-topic", "child-a").expect("convert lite topic")),
             &CheetahString::from_static_str("lite-group"),
             0,

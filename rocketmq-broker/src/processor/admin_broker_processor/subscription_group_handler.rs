@@ -319,8 +319,8 @@ mod tests {
 
     #[tokio::test]
     async fn update_and_create_subscription_group_list_persists_multiple_groups() {
-        let mut runtime = new_test_runtime("update-list").await;
-        let inner = runtime.inner_for_test().clone();
+        let runtime = new_test_runtime("update-list").await;
+        let mut admin = runtime.admin_runtime_for_test();
         let handler = SubscriptionGroupHandler::new();
 
         let body = SubscriptionGroupList {
@@ -337,7 +337,7 @@ mod tests {
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let response = handler
             .update_and_create_subscription_group_list(
-                &mut runtime.admin_runtime_for_test(),
+                &mut admin,
                 channel,
                 ctx,
                 RequestCode::UpdateAndCreateSubscriptionGroupList,
@@ -348,11 +348,11 @@ mod tests {
             .expect("batch update request should return response");
 
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
-        assert!(inner
+        assert!(admin
             .subscription_group_manager()
             .find_subscription_group_config(&CheetahString::from_static_str("group-a"))
             .is_some());
-        assert!(inner
+        assert!(admin
             .subscription_group_manager()
             .find_subscription_group_config(&CheetahString::from_static_str("group-b"))
             .is_some());
@@ -362,33 +362,27 @@ mod tests {
 
     #[tokio::test]
     async fn delete_subscription_group_cleans_offsets_for_lite_group_even_without_flag() {
-        let mut runtime = new_test_runtime("delete-group").await;
-        let inner = runtime.inner_for_test().clone();
+        let runtime = new_test_runtime("delete-group").await;
+        let mut admin = runtime.admin_runtime_for_test();
         let mut config = SubscriptionGroupConfig::new(CheetahString::from_static_str("group-a"));
         config.set_lite_bind_topic(Some(CheetahString::from_static_str("parent-topic")));
-        inner
+        admin
             .subscription_group_manager()
             .subscription_group_table()
             .insert(CheetahString::from_static_str("group-a"), Arc::new(config));
-        inner.consumer_offset_manager().commit_offset(
+        admin.consumer_offset_manager().commit_offset(
             CheetahString::from_static_str("127.0.0.1"),
             &CheetahString::from_static_str("group-a"),
             &CheetahString::from_static_str("topic-a"),
             0,
             12,
         );
-        inner.consumer_offset_manager().assign_reset_offset(
+        admin.consumer_offset_manager().assign_reset_offset(
             &CheetahString::from_static_str("topic-a"),
             &CheetahString::from_static_str("group-a"),
             0,
             8,
         );
-
-        let mut admin_runtime = runtime.admin_runtime_for_test();
-        assert!(std::ptr::eq(
-            inner.consumer_offset_manager(),
-            admin_runtime.consumer_offset_manager()
-        ));
 
         let handler = SubscriptionGroupHandler::new();
         let mut request = RemotingCommand::create_request_command(
@@ -405,7 +399,7 @@ mod tests {
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let response = handler
             .delete_subscription_group(
-                &mut admin_runtime,
+                &mut admin,
                 channel,
                 ctx,
                 RequestCode::DeleteSubscriptionGroup,
@@ -416,18 +410,18 @@ mod tests {
             .expect("delete group request should return response");
 
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
-        assert!(!inner
+        assert!(!admin
             .subscription_group_manager()
             .contains_subscription_group(&CheetahString::from_static_str("group-a")));
         assert_eq!(
-            inner.consumer_offset_manager().query_offset(
+            admin.consumer_offset_manager().query_offset(
                 &CheetahString::from_static_str("group-a"),
                 &CheetahString::from_static_str("topic-a"),
                 0,
             ),
             -1
         );
-        assert!(!inner
+        assert!(!admin
             .consumer_offset_manager()
             .has_offset_reset("group-a", "topic-a", 0));
 
@@ -436,8 +430,8 @@ mod tests {
 
     #[tokio::test]
     async fn update_and_get_group_forbidden_updates_readable_flag() {
-        let mut runtime = new_test_runtime("group-forbidden").await;
-        let inner = runtime.inner_for_test().clone();
+        let runtime = new_test_runtime("group-forbidden").await;
+        let mut admin = runtime.admin_runtime_for_test();
         let handler = SubscriptionGroupHandler::new();
         let mut request = RemotingCommand::create_request_command(
             RequestCode::UpdateAndGetGroupForbidden,
@@ -454,7 +448,7 @@ mod tests {
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut response = handler
             .update_and_get_group_forbidden(
-                &mut runtime.admin_runtime_for_test(),
+                &mut admin,
                 channel,
                 ctx,
                 RequestCode::UpdateAndGetGroupForbidden,
@@ -475,7 +469,7 @@ mod tests {
         assert_eq!(body.group(), &CheetahString::from_static_str("group-a"));
         assert_eq!(body.topic(), &CheetahString::from_static_str("topic-a"));
         assert_eq!(body.readable(), Some(false));
-        assert!(inner.subscription_group_manager().get_forbidden(
+        assert!(admin.subscription_group_manager().get_forbidden(
             &CheetahString::from_static_str("group-a"),
             &CheetahString::from_static_str("topic-a"),
             PermName::INDEX_PERM_READ as i32,
