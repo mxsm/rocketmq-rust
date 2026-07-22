@@ -1180,6 +1180,7 @@ impl BrokerRuntime {
             pop_inflight_message_counter,
             controller_state: BrokerControllerState::default(),
             broker_fast_failure,
+            log_filter_control: None,
             observability_guard: None,
             #[cfg(feature = "otel-metrics")]
             observability_metrics_initialized: false,
@@ -1336,6 +1337,20 @@ impl BrokerRuntime {
     }
 
     pub(crate) fn set_telemetry_runtime_guard(&mut self, guard: rocketmq_observability::TelemetryRuntimeGuard) {
+        self.inner.log_filter_control = guard.log_filter_handle().and_then(|handle| {
+            let service_context = self.inner.service_context.as_ref()?;
+            match crate::broker::log_filter_control::BrokerLogFilterControl::start(
+                handle,
+                service_context,
+                self.inner.broker_config().store_path_root_dir.as_str(),
+            ) {
+                Ok(control) => Some(control),
+                Err(error) => {
+                    tracing::error!(error = %error, "broker remote log filter reload disabled because TTL control initialization failed");
+                    None
+                }
+            }
+        });
         self.inner.observability_guard = Some(guard);
     }
 
@@ -3749,6 +3764,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             self.pull_message_policy_state.clone(),
             self.pop_policy_state.clone(),
             self.escape_bridge_policy_state.clone(),
+            self.log_filter_control.clone(),
         )
     }
 
@@ -3810,6 +3826,7 @@ pub(crate) struct BrokerRuntimeInner<MS: MessageStore> {
     pop_inflight_message_counter: PopInflightMessageCounter,
     controller_state: BrokerControllerState,
     broker_fast_failure: BrokerFastFailure,
+    log_filter_control: Option<Arc<crate::broker::log_filter_control::BrokerLogFilterControl>>,
     observability_guard: Option<rocketmq_observability::TelemetryRuntimeGuard>,
     #[cfg(feature = "otel-metrics")]
     observability_metrics_initialized: bool,

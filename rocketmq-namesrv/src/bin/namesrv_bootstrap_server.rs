@@ -104,7 +104,7 @@ async fn run(service_context: ServiceContext, lifecycle: ServiceLifecycle) -> Re
     );
 
     // Parse and merge configurations
-    let (namesrv_config, server_config, controller_config) =
+    let (namesrv_config, server_config, controller_config, logging_overrides) =
         parse_and_merge_config(&args).context("failed to parse namesrv configuration")?;
 
     // Handle print config item mode
@@ -121,15 +121,31 @@ async fn run(service_context: ServiceContext, lifecycle: ServiceLifecycle) -> Re
         );
     }
 
-    lifecycle
-        .start(&service_context)
-        .await
-        .context("failed to start NameServer lifecycle boundary")?;
+    let environment_filter = rocketmq_observability::read_rust_log().context("failed to read RUST_LOG")?;
+    let resolved_filter = resolve_startup_log_filter(&args, &logging_overrides, environment_filter.as_deref())
+        .context("failed to resolve namesrv log filter")?;
+    let mut bootstrap_config = build_namesrv_telemetry_bootstrap_config(&namesrv_config);
+    bootstrap_config.logging.reload = logging_overrides.logging.reload;
+    let telemetry_guard =
+        rocketmq_observability::install_global_with_filter(&bootstrap_config, resolved_filter.clone())
+            .context("failed to initialize namesrv telemetry bootstrap")?;
+    log_telemetry_bootstrap(
+        &bootstrap_config,
+        &resolved_filter,
+        telemetry_guard.subscriber_install_status(),
+    );
 
-    let bootstrap_config = build_namesrv_telemetry_bootstrap_config(&namesrv_config);
-    let telemetry_guard = rocketmq_observability::logging::install_global(&bootstrap_config)
-        .context("failed to initialize namesrv telemetry bootstrap")?;
-    log_telemetry_bootstrap(&bootstrap_config, telemetry_guard.subscriber_install_status());
+    if let Err(error) = lifecycle.start(&service_context).await {
+        lifecycle.mark_failed();
+        let request = lifecycle.request_shutdown(ShutdownReason::Internal);
+        if let Err(shutdown_error) = telemetry_guard
+            .shutdown_with_timeout(request.deadline.remaining())
+            .into_result()
+        {
+            tracing::warn!(error = %shutdown_error, "namesrv telemetry cleanup after lifecycle startup failure was unhealthy");
+        }
+        return Err(error).context("failed to start NameServer lifecycle boundary");
+    }
 
     println!("{}", LOGO);
 
@@ -206,13 +222,18 @@ fn service_log_directory(rocketmq_home: &str) -> String {
 
 fn log_telemetry_bootstrap(
     config: &rocketmq_observability::TelemetryBootstrapConfig,
+    resolved_filter: &rocketmq_observability::ResolvedLogFilter,
     subscriber_install_status: rocketmq_observability::SubscriberInstallStatus,
 ) {
     info!(
+        service = "rocketmq-namesrv",
+        effective_filter = resolved_filter.filter(),
+        filter_source = %resolved_filter.source(),
         metrics_exporter = ?config.observability.metrics.exporter,
         trace_exporter = ?config.observability.traces.exporter,
         log_exporter = ?config.observability.logs.exporter,
         subscriber_installed = subscriber_install_status.installed,
+        reload_enabled = config.logging.reload.enabled,
         file_log_enabled = config.logging.file.enabled,
         "namesrv telemetry bootstrap initialized"
     );
@@ -220,7 +241,14 @@ fn log_telemetry_bootstrap(
 
 /// Parse configuration file and merge with command line arguments
 /// Command line arguments take precedence over config file settings
-fn parse_and_merge_config(args: &Args) -> Result<(NamesrvConfig, ServerConfig, Option<ControllerConfig>)> {
+fn parse_and_merge_config(
+    args: &Args,
+) -> Result<(
+    NamesrvConfig,
+    ServerConfig,
+    Option<ControllerConfig>,
+    rocketmq_observability::LoggingOverrides,
+)> {
     let home = EnvUtils::get_rocketmq_home();
     info!("RocketMQ Home: {}", home);
 
@@ -259,7 +287,29 @@ fn parse_and_merge_config(args: &Args) -> Result<(NamesrvConfig, ServerConfig, O
         None
     };
 
-    Ok((namesrv_config, server_config, controller_config))
+    let logging_overrides = match args.config_file.clone() {
+        Some(config_file) => {
+            ParseConfigFile::parse_config_file::<rocketmq_observability::LoggingOverrides>(config_file)
+                .context("failed to parse namesrv logging configuration")?
+        }
+        None => rocketmq_observability::LoggingOverrides::default(),
+    };
+
+    Ok((namesrv_config, server_config, controller_config, logging_overrides))
+}
+
+fn resolve_startup_log_filter(
+    args: &Args,
+    overrides: &rocketmq_observability::LoggingOverrides,
+    environment_filter: Option<&str>,
+) -> Result<rocketmq_observability::ResolvedLogFilter, rocketmq_observability::ObservabilityError> {
+    rocketmq_observability::LogFilterResolver::resolve(rocketmq_observability::LogFilterInputs {
+        runtime: None,
+        cli: args.log_filter.as_deref(),
+        environment: environment_filter,
+        config: overrides.logging.filter.as_deref(),
+        legacy_config: overrides.log_filter.as_deref(),
+    })
 }
 
 fn apply_tls_properties_from_file(server_config: &mut ServerConfig, config_file: PathBuf) -> Result<()> {
@@ -575,11 +625,23 @@ struct Args {
     /// Command line override for kvConfigPath
     #[arg(long = "kvConfigPath", value_name = "PATH", help = "KV config file path")]
     kv_config_path: Option<PathBuf>,
+
+    /// Override the process log filter for this startup.
+    #[arg(long = "log-filter", value_name = "DIRECTIVE")]
+    log_filter: Option<String>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn namesrv_cli_parses_log_filter_override() {
+        let args = Args::try_parse_from(["mqnamesrv", "--log-filter", "info,rocketmq_namesrv=debug"])
+            .expect("log filter should parse");
+
+        assert_eq!(args.log_filter.as_deref(), Some("info,rocketmq_namesrv=debug"));
+    }
 
     #[test]
     fn namesrv_telemetry_bootstrap_uses_required_logging_defaults() {

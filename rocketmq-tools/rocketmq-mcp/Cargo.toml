@@ -32,7 +32,7 @@ default         = ["read-only", "diagnose", "stdio"]
 read-only       = []
 diagnose        = ["read-only"]
 stdio           = ["rmcp/transport-io"]
-observability   = ["dep:rocketmq-observability"]
+observability   = ["rocketmq-observability/observability"]
 auth            = []
 streamable-http = [
     "rmcp/transport-streamable-http-server",
@@ -48,7 +48,7 @@ change-planning = []
 
 [dependencies]
 rocketmq-admin-core   = { version = "1.0.0", path = "../rocketmq-admin/rocketmq-admin-core", default-features = false, features = ["client-adapter"] }
-rocketmq-observability = { workspace = true, optional = true }
+rocketmq-observability = { workspace = true }
 rocketmq-runtime      = { workspace = true }
 rocketmq-transport    = { workspace = true, features = ["tls"], optional = true }
 
@@ -77,7 +77,6 @@ tokio-rustls       = { version = "0.26", optional = true }
 tokio-util         = { workspace = true }
 tower-http         = { version = "0.7", features = ["cors", "limit", "timeout", "trace"], optional = true }
 tracing            = { workspace = true }
-tracing-subscriber = { workspace = true, features = ["env-filter", "fmt", "std"] }
 validator          = { version = "0.20", features = ["derive"] }
 url                = "2.5"
 

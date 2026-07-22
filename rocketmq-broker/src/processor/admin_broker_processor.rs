@@ -131,7 +131,8 @@ where
 impl<MS: MessageStore> AdminBrokerProcessor<MS> {
     pub fn new(broker_runtime_inner: BrokerAdminRuntime<MS>, auth_admin_service: Arc<AuthAdminService>) -> Self {
         let topic_request_handler = TopicRequestHandler::new();
-        let broker_config_request_handler = BrokerConfigRequestHandler::new(broker_runtime_inner.clone());
+        let broker_config_request_handler =
+            BrokerConfigRequestHandler::new_with_auth(broker_runtime_inner.clone(), auth_admin_service.clone());
         let consumer_request_handler = ConsumerRequestHandler::new();
         let offset_request_handler = OffsetRequestHandler::new();
         let batch_mq_handler = BatchMqHandler::new();

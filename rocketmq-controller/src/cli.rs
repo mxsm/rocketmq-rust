@@ -82,6 +82,10 @@ pub struct ControllerCli {
     /// When enabled, uses test-mode configurations for development purposes.
     #[arg(short = 'm', long = "print-important-config", help = "Print important config items")]
     pub print_important_config: bool,
+
+    /// Override the process log filter for this startup.
+    #[arg(long = "log-filter", value_name = "DIRECTIVE")]
+    pub log_filter: Option<String>,
 }
 
 impl ControllerCli {
@@ -255,6 +259,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_cli_parse_log_filter_override() {
+        let cli = ControllerCli::try_parse_from(["mqcontroller", "--log-filter", "info,rocketmq_controller=debug"])
+            .expect("log filter should parse");
+
+        assert_eq!(cli.log_filter.as_deref(), Some("info,rocketmq_controller=debug"));
+    }
+
+    #[test]
     fn test_cli_parse_no_args() {
         let cli = ControllerCli::parse_from(vec!["mqcontroller"]);
         assert!(cli.config_file.is_none());
@@ -281,6 +293,7 @@ mod tests {
             config_file: Some(PathBuf::from("/nonexistent/file.toml")),
             print_config_item: false,
             print_important_config: false,
+            log_filter: None,
         };
         assert!(cli.validate().is_err());
     }
@@ -291,6 +304,7 @@ mod tests {
             config_file: None,
             print_config_item: false,
             print_important_config: false,
+            log_filter: None,
         };
         assert!(cli.validate().is_ok());
     }
@@ -301,6 +315,7 @@ mod tests {
             config_file: None,
             print_config_item: false,
             print_important_config: false,
+            log_filter: None,
         };
         let default_config = ControllerConfig::default();
         let result = cli.load_config(default_config.clone());

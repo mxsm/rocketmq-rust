@@ -100,7 +100,7 @@ async fn run(service_context: ServiceContext, lifecycle: ServiceLifecycle) -> Re
     args.validate().context("invalid broker arguments")?;
 
     // Parse configuration from file and command line
-    let (mut broker_config, message_store_config) =
+    let (mut broker_config, message_store_config, logging_overrides) =
         parse_config_file(&args).context("failed to parse broker configuration")?;
 
     // Apply system properties (should be done before command line override)
@@ -113,10 +113,19 @@ async fn run(service_context: ServiceContext, lifecycle: ServiceLifecycle) -> Re
     // Validate broker configuration
     validate_broker_config(&broker_config, &message_store_config).context("invalid broker configuration")?;
 
-    let bootstrap_config = build_broker_telemetry_bootstrap_config(&broker_config);
-    let telemetry_guard = rocketmq_observability::logging::install_global(&bootstrap_config)
-        .context("failed to initialize broker telemetry bootstrap")?;
-    log_telemetry_bootstrap(&bootstrap_config, telemetry_guard.subscriber_install_status());
+    let environment_filter = rocketmq_observability::read_rust_log().context("failed to read RUST_LOG")?;
+    let resolved_filter = resolve_startup_log_filter(&args, &logging_overrides, environment_filter.as_deref())
+        .context("failed to resolve broker log filter")?;
+    let mut bootstrap_config = build_broker_telemetry_bootstrap_config(&broker_config);
+    bootstrap_config.logging.reload = logging_overrides.logging.reload;
+    let telemetry_guard =
+        rocketmq_observability::install_global_with_filter(&bootstrap_config, resolved_filter.clone())
+            .context("failed to initialize broker telemetry bootstrap")?;
+    log_telemetry_bootstrap(
+        &bootstrap_config,
+        &resolved_filter,
+        telemetry_guard.subscriber_install_status(),
+    );
 
     // Check ROCKETMQ_HOME environment variable
     if let Err(error) = verify_rocketmq_home() {
@@ -172,13 +181,18 @@ async fn run(service_context: ServiceContext, lifecycle: ServiceLifecycle) -> Re
 
 fn log_telemetry_bootstrap(
     config: &rocketmq_observability::TelemetryBootstrapConfig,
+    resolved_filter: &rocketmq_observability::ResolvedLogFilter,
     subscriber_install_status: rocketmq_observability::SubscriberInstallStatus,
 ) {
     info!(
+        service = "rocketmq-broker",
+        effective_filter = resolved_filter.filter(),
+        filter_source = %resolved_filter.source(),
         metrics_exporter = ?config.observability.metrics.exporter,
         trace_exporter = ?config.observability.traces.exporter,
         log_exporter = ?config.observability.logs.exporter,
         subscriber_installed = subscriber_install_status.installed,
+        reload_enabled = config.logging.reload.enabled,
         file_log_enabled = config.logging.file.enabled,
         "broker telemetry bootstrap initialized"
     );
@@ -208,7 +222,13 @@ fn verify_rocketmq_home() -> Result<()> {
 /// 1. Explicit config file from `-c` argument
 /// 2. $ROCKETMQ_HOME/conf/broker.toml
 /// 3. Default configuration
-fn parse_config_file(args: &Args) -> Result<(BrokerConfig, MessageStoreConfig)> {
+fn parse_config_file(
+    args: &Args,
+) -> Result<(
+    BrokerConfig,
+    MessageStoreConfig,
+    rocketmq_observability::LoggingOverrides,
+)> {
     if let Some(config_file) = args.get_config_file() {
         info!("Loading configuration from: {}", config_file.display());
 
@@ -218,12 +238,33 @@ fn parse_config_file(args: &Args) -> Result<(BrokerConfig, MessageStoreConfig)> 
 
         let message_store_config = ParseConfigFile::parse_config_file::<MessageStoreConfig>(config_file.clone())
             .with_context(|| format!("Failed to parse MessageStoreConfig from {:?}", config_file))?;
+        let logging_overrides =
+            ParseConfigFile::parse_config_file::<rocketmq_observability::LoggingOverrides>(config_file.clone())
+                .with_context(|| format!("Failed to parse logging configuration from {:?}", config_file))?;
 
-        Ok((broker_config, message_store_config))
+        Ok((broker_config, message_store_config, logging_overrides))
     } else {
         info!("Using default configuration (no config file specified)");
-        Ok((BrokerConfig::default(), MessageStoreConfig::default()))
+        Ok((
+            BrokerConfig::default(),
+            MessageStoreConfig::default(),
+            rocketmq_observability::LoggingOverrides::default(),
+        ))
     }
+}
+
+fn resolve_startup_log_filter(
+    args: &Args,
+    overrides: &rocketmq_observability::LoggingOverrides,
+    environment_filter: Option<&str>,
+) -> Result<rocketmq_observability::ResolvedLogFilter, rocketmq_observability::ObservabilityError> {
+    rocketmq_observability::LogFilterResolver::resolve(rocketmq_observability::LogFilterInputs {
+        runtime: None,
+        cli: args.log_filter.as_deref(),
+        environment: environment_filter,
+        config: overrides.logging.filter.as_deref(),
+        legacy_config: overrides.log_filter.as_deref(),
+    })
 }
 
 fn apply_tls_properties_from_file(broker_config: &mut BrokerConfig, config_file: PathBuf) -> Result<()> {
@@ -611,9 +652,11 @@ brokerId = 0
             print_config_item: false,
             print_important_config: false,
             namesrv_addr: None,
+            log_filter: None,
         };
 
-        let (broker_config, message_store_config) = parse_config_file(&args).expect("parse broker config");
+        let (broker_config, message_store_config, _logging_overrides) =
+            parse_config_file(&args).expect("parse broker config");
 
         assert_eq!(broker_config.broker_identity.broker_name.as_str(), "rust-local-broker");
         assert_eq!(broker_config.listen_port, 11911);

@@ -48,9 +48,28 @@ impl Render for RocketmqDashboard {
 }
 
 /// Main entry point for the RocketMQ Dashboard application
-fn main() {
-    // Initialize logging
-    tracing_subscriber::fmt().with_max_level(tracing::Level::INFO).init();
+fn main() -> anyhow::Result<()> {
+    let environment_filter = rocketmq_observability::read_rust_log()?;
+    let resolved_filter =
+        rocketmq_observability::LogFilterResolver::resolve(rocketmq_observability::LogFilterInputs {
+            environment: environment_filter.as_deref(),
+            ..rocketmq_observability::LogFilterInputs::default()
+        })?;
+    let mut bootstrap = rocketmq_observability::TelemetryBootstrapConfig::default();
+    bootstrap.observability.service_name = "rocketmq-dashboard-gpui".to_string();
+    bootstrap.observability.service_namespace = "rocketmq".to_string();
+    bootstrap.observability.node_type = "dashboard".to_string();
+    bootstrap.observability.node_id = "gpui".to_string();
+    bootstrap.observability.subscriber_install_policy = rocketmq_observability::SubscriberInstallPolicy::Required;
+    let telemetry_guard = rocketmq_observability::install_global_with_filter(&bootstrap, resolved_filter.clone())?;
+    info!(
+        service = "rocketmq-dashboard-gpui",
+        effective_filter = resolved_filter.filter(),
+        filter_source = %resolved_filter.source(),
+        subscriber_installed = telemetry_guard.subscriber_install_status().installed,
+        reload_enabled = bootstrap.logging.reload.enabled,
+        "GPUI telemetry bootstrap initialized"
+    );
 
     info!("Starting RocketMQ Dashboard");
 
@@ -89,4 +108,6 @@ fn main() {
         })
         .detach();
     });
+    telemetry_guard.shutdown().into_result()?;
+    Ok(())
 }

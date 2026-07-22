@@ -19,6 +19,7 @@ use tracing_appender::rolling::RollingFileAppender;
 use tracing_appender::rolling::Rotation;
 use tracing_subscriber::filter::EnvFilter;
 use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::reload;
 use tracing_subscriber::Layer;
 use tracing_subscriber::Registry;
 
@@ -34,6 +35,10 @@ use crate::config::TelemetryBootstrapConfig;
 use crate::error::ObservabilityError;
 use crate::init::TelemetryGuard;
 use crate::init::TelemetryProviderShutdownReport;
+use crate::LogFilterHandle;
+use crate::LogFilterInputs;
+use crate::LogFilterResolver;
+use crate::ResolvedLogFilter;
 
 pub type BoxedRegistryLayer = Box<dyn Layer<Registry> + Send + Sync + 'static>;
 
@@ -113,18 +118,36 @@ pub fn build_console_layer(config: &ConsoleLogConfig) -> Option<BoxedRegistryLay
 }
 
 pub fn install_global(config: &TelemetryBootstrapConfig) -> Result<TelemetryRuntimeGuard, ObservabilityError> {
+    let resolved_filter = LogFilterResolver::resolve(LogFilterInputs {
+        config: Some(config.logging.filter.as_str()),
+        ..LogFilterInputs::default()
+    })?;
+    install_global_with_filter(config, resolved_filter)
+}
+
+pub fn install_global_with_filter(
+    config: &TelemetryBootstrapConfig,
+    resolved_filter: ResolvedLogFilter,
+) -> Result<TelemetryRuntimeGuard, ObservabilityError> {
     init_log_tracer();
 
     let mut telemetry_guard = crate::init::init_telemetry_providers(&config.observability)?;
-    let (layers, logging_guard) = match build_subscriber_layers(config, &telemetry_guard) {
-        Ok(layers) => layers,
-        Err(error) => {
-            let _ = telemetry_guard.shutdown();
-            return Err(error);
-        }
-    };
+    let (layers, filter, logging_guard) =
+        match build_subscriber_layers(config, resolved_filter.filter(), &telemetry_guard) {
+            Ok(layers) => layers,
+            Err(error) => {
+                let _ = telemetry_guard.shutdown();
+                return Err(error);
+            }
+        };
 
-    let subscriber_install_status = install_subscriber_layers(layers);
+    let (subscriber_install_status, log_filter_handle) = install_subscriber_layers(
+        layers,
+        filter,
+        resolved_filter.clone(),
+        config.logging.reload.enabled,
+        config.observability.service_name.as_str(),
+    );
     telemetry_guard.set_subscriber_install_status(subscriber_install_status);
 
     if let Err(error) = enforce_bootstrap_subscriber_policy(config, subscriber_install_status) {
@@ -133,7 +156,19 @@ pub fn install_global(config: &TelemetryBootstrapConfig) -> Result<TelemetryRunt
         return Err(error);
     }
 
-    Ok(TelemetryRuntimeGuard::new(telemetry_guard, logging_guard))
+    if subscriber_install_status.installed {
+        crate::metrics::log_filter::set_active(
+            config.observability.service_name.as_str(),
+            None,
+            resolved_filter.source(),
+        );
+    }
+
+    Ok(TelemetryRuntimeGuard::new_with_log_filter_handle(
+        telemetry_guard,
+        logging_guard,
+        log_filter_handle,
+    ))
 }
 
 fn init_log_tracer() {
@@ -148,14 +183,13 @@ fn init_log_tracer() {
 
 fn build_subscriber_layers(
     config: &TelemetryBootstrapConfig,
+    resolved_filter: &str,
     _telemetry_guard: &TelemetryGuard,
-) -> Result<(Vec<BoxedRegistryLayer>, LoggingGuard), ObservabilityError> {
+) -> Result<(Vec<BoxedRegistryLayer>, Option<EnvFilter>, LoggingGuard), ObservabilityError> {
     let mut layers = Vec::new();
     let mut logging_guard = LoggingGuard::noop();
 
     if config.logging.enabled {
-        layers.push(Box::new(build_env_filter(config.logging.filter.as_str())?) as BoxedRegistryLayer);
-
         if let Some(console_layer) = build_console_layer(&config.logging.console) {
             layers.push(console_layer);
         }
@@ -180,16 +214,51 @@ fn build_subscriber_layers(
         layers.push(Box::new(crate::logs::bridge::build_logs_layer(logger_provider)));
     }
 
-    Ok((layers, logging_guard))
+    let filter = if layers.is_empty() {
+        None
+    } else {
+        Some(build_env_filter(resolved_filter)?)
+    };
+    Ok((layers, filter, logging_guard))
 }
 
-fn install_subscriber_layers(layers: Vec<BoxedRegistryLayer>) -> SubscriberInstallStatus {
-    if layers.is_empty() {
-        return SubscriberInstallStatus::default();
+fn compose_subscriber_layers(
+    layers: Vec<BoxedRegistryLayer>,
+    filter: Option<EnvFilter>,
+) -> impl tracing::Subscriber + Send + Sync + 'static {
+    tracing_subscriber::registry().with(layers).with(filter)
+}
+
+fn install_subscriber_layers(
+    layers: Vec<BoxedRegistryLayer>,
+    filter: Option<EnvFilter>,
+    resolved_filter: ResolvedLogFilter,
+    reload_enabled: bool,
+    service_name: &str,
+) -> (SubscriberInstallStatus, Option<LogFilterHandle>) {
+    if layers.is_empty() && filter.is_none() {
+        return (SubscriberInstallStatus::default(), None);
     }
 
-    let result = tracing::subscriber::set_global_default(tracing_subscriber::registry().with(layers));
-    SubscriberInstallStatus::attempted(result.is_ok())
+    if reload_enabled {
+        if let Some(filter) = filter {
+            let (filter_layer, reload_handle) = reload::Layer::new(filter);
+            let result =
+                tracing::subscriber::set_global_default(tracing_subscriber::registry().with(layers).with(filter_layer));
+            let status = SubscriberInstallStatus::attempted(result.is_ok());
+            let handle = status.installed.then(|| {
+                LogFilterHandle::new(service_name.to_owned(), resolved_filter, move |filter| {
+                    reload_handle
+                        .reload(filter)
+                        .map_err(|error| ObservabilityError::logging_init(format!("log filter reload failed: {error}")))
+                })
+            });
+            return (status, handle);
+        }
+    }
+
+    let result = tracing::subscriber::set_global_default(compose_subscriber_layers(layers, filter));
+    (SubscriberInstallStatus::attempted(result.is_ok()), None)
 }
 
 fn enforce_bootstrap_subscriber_policy(
@@ -278,6 +347,7 @@ fn to_tracing_rotation(rotation: LogRotation) -> Rotation {
 pub struct TelemetryRuntimeGuard {
     telemetry_guard: TelemetryGuard,
     logging_guard: LoggingGuard,
+    log_filter_handle: Option<LogFilterHandle>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -340,6 +410,19 @@ impl TelemetryRuntimeGuard {
         Self {
             telemetry_guard,
             logging_guard,
+            log_filter_handle: None,
+        }
+    }
+
+    fn new_with_log_filter_handle(
+        telemetry_guard: TelemetryGuard,
+        logging_guard: LoggingGuard,
+        log_filter_handle: Option<LogFilterHandle>,
+    ) -> Self {
+        Self {
+            telemetry_guard,
+            logging_guard,
+            log_filter_handle,
         }
     }
 
@@ -353,6 +436,10 @@ impl TelemetryRuntimeGuard {
 
     pub fn logging_guard(&self) -> &LoggingGuard {
         &self.logging_guard
+    }
+
+    pub fn log_filter_handle(&self) -> Option<LogFilterHandle> {
+        self.log_filter_handle.clone()
     }
 
     pub fn subscriber_install_status(&self) -> SubscriberInstallStatus {
@@ -374,6 +461,7 @@ impl TelemetryRuntimeGuard {
         let Self {
             telemetry_guard,
             logging_guard,
+            log_filter_handle: _,
         } = self;
 
         let subscriber_install_status = telemetry_guard.subscriber_install_status();
@@ -414,10 +502,26 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::atomic::AtomicU64;
     use std::sync::atomic::Ordering;
+    use std::sync::Arc;
+    use std::sync::Mutex;
     use std::time::SystemTime;
     use std::time::UNIX_EPOCH;
 
     static TEMP_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    #[derive(Clone)]
+    struct RecordingLayer {
+        levels: Arc<Mutex<Vec<tracing::Level>>>,
+    }
+
+    impl Layer<Registry> for RecordingLayer {
+        fn on_event(&self, event: &tracing::Event<'_>, _context: tracing_subscriber::layer::Context<'_, Registry>) {
+            self.levels
+                .lock()
+                .expect("recorded levels lock should remain available")
+                .push(*event.metadata().level());
+        }
+    }
 
     #[test]
     fn noop_logging_guard_reports_zero_dropped_lines() {
@@ -443,6 +547,28 @@ mod tests {
             build_env_filter("rocketmq_store=debug,rocketmq_remoting=warn").expect("target directives should parse");
 
         assert!(filter.to_string().contains("rocketmq_store=debug"));
+    }
+
+    #[test]
+    fn global_info_filter_suppresses_debug_events_inside_info_spans() {
+        let levels = Arc::new(Mutex::new(Vec::new()));
+        let layers = vec![Box::new(RecordingLayer {
+            levels: Arc::clone(&levels),
+        }) as BoxedRegistryLayer];
+        let filter = Some(build_env_filter("info").expect("info filter should parse"));
+        let subscriber = compose_subscriber_layers(layers, filter);
+
+        tracing::subscriber::with_default(subscriber, || {
+            let span = tracing::info_span!("info_filter_regression");
+            let _guard = span.enter();
+            tracing::debug!("debug event should be filtered");
+            tracing::info!("info event should be recorded");
+        });
+
+        assert_eq!(
+            *levels.lock().expect("recorded levels lock should remain available"),
+            vec![tracing::Level::INFO]
+        );
     }
 
     #[test]

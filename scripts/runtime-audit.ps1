@@ -1695,6 +1695,14 @@ function Get-SchedulerDisposition {
         }
     }
 
+    if ($path -eq "rocketmq-broker/src/broker/log_filter_control.rs") {
+        return [pscustomobject]@{
+            Disposition = "broker-log-filter-ttl"
+            ActionRequired = $false
+            Reason = "Allowed cancellable log-filter TTL wait; the controller task is spawned and awaited by the broker lifecycle TaskGroup."
+        }
+    }
+
     if ($path -eq "rocketmq-broker/src/broker/broker_control_plane/bootstrap.rs") {
         return [pscustomobject]@{
             Disposition = "broker-controller-bootstrap-delay"

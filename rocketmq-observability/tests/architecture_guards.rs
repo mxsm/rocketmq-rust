@@ -38,6 +38,26 @@ const WORKSPACE_CRATE_DIRS: &[&str] = &[
     "rocketmq-tools/rocketmq-admin/rocketmq-admin-core",
     "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui",
     "rocketmq-tools/rocketmq-store-inspect",
+    "rocketmq-tools/rocketmq-mcp",
+    "rocketmq-dashboard/rocketmq-dashboard-gpui",
+    "rocketmq-dashboard/rocketmq-dashboard-web/backend",
+];
+
+const GOVERNED_ENTRYPOINTS: &[&str] = &[
+    "rocketmq-broker/src/bin/broker_bootstrap_server.rs",
+    "rocketmq-controller/src/bin/controller_bootstrap.rs",
+    "rocketmq-namesrv/src/bin/namesrv_bootstrap_server.rs",
+    "rocketmq-proxy/src/bin/rocketmq-proxy-rust.rs",
+    "rocketmq-tools/rocketmq-mcp/src/app.rs",
+    "rocketmq-dashboard/rocketmq-dashboard-gpui/src/main.rs",
+    "rocketmq-dashboard/rocketmq-dashboard-web/backend/src/main.rs",
+];
+
+const CORE_SERVICE_ENTRYPOINTS: &[&str] = &[
+    "rocketmq-broker/src/bin/broker_bootstrap_server.rs",
+    "rocketmq-controller/src/bin/controller_bootstrap.rs",
+    "rocketmq-namesrv/src/bin/namesrv_bootstrap_server.rs",
+    "rocketmq-proxy/src/bin/rocketmq-proxy-rust.rs",
 ];
 
 const DIRECT_OTEL_PATTERNS: &[&str] = &[
@@ -226,6 +246,99 @@ fn subscriber_installation_detector_ignores_unrelated_init_methods() {
     "#;
 
     assert!(!has_subscriber_installation(source));
+}
+
+#[test]
+fn governed_entrypoints_do_not_bypass_the_shared_log_filter_resolver() {
+    let workspace_root = workspace_root();
+    let forbidden = [
+        "std::env::var(\"RUST_LOG\")",
+        "env::var(\"RUST_LOG\")",
+        "EnvFilter::try_from_default_env",
+        "with_max_level(tracing::Level::",
+    ];
+    let mut violations = BTreeSet::new();
+    for relative_path in GOVERNED_ENTRYPOINTS {
+        let path = workspace_root.join(relative_path);
+        let source =
+            fs::read_to_string(&path).unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
+        if forbidden.iter().any(|pattern| source.contains(pattern)) {
+            violations.insert((*relative_path).to_string());
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "governed entrypoints must use rocketmq-observability for RUST_LOG/default handling:\n{}",
+        format_paths(&violations)
+    );
+}
+
+#[test]
+fn core_services_install_telemetry_before_business_lifecycle() {
+    let workspace_root = workspace_root();
+    for relative_path in CORE_SERVICE_ENTRYPOINTS {
+        let path = workspace_root.join(relative_path);
+        let source =
+            fs::read_to_string(&path).unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
+        let install = source
+            .find("install_global_with_filter")
+            .unwrap_or_else(|| panic!("{relative_path} must install the shared telemetry subscriber"));
+        let lifecycle = source
+            .find("lifecycle.start")
+            .unwrap_or_else(|| panic!("{relative_path} must start an owned business lifecycle"));
+        assert!(
+            install < lifecycle,
+            "{relative_path} must install telemetry before starting the business lifecycle"
+        );
+        for field in [
+            "service =",
+            "effective_filter =",
+            "filter_source =",
+            "subscriber_installed =",
+            "reload_enabled =",
+        ] {
+            assert!(
+                source.contains(field),
+                "{relative_path} startup event is missing `{field}`"
+            );
+        }
+    }
+}
+
+#[test]
+fn build_scripts_do_not_inject_log_filter_defaults() {
+    let workspace_root = workspace_root();
+    let mut violations = BTreeSet::new();
+    for crate_dir in WORKSPACE_CRATE_DIRS {
+        let build_script = workspace_root.join(crate_dir).join("build.rs");
+        if !build_script.exists() {
+            continue;
+        }
+        let source = fs::read_to_string(&build_script)
+            .unwrap_or_else(|error| panic!("failed to read {}: {error}", build_script.display()));
+        let normalized = source.to_ascii_uppercase();
+        if normalized.contains("CARGO:RUSTC-ENV=RUST_LOG")
+            || (normalized.contains("CARGO:RUSTC-ENV=")
+                && (normalized.contains("LOG_FILTER") || normalized.contains("LOG_LEVEL")))
+        {
+            violations.insert(relative_slash_path(&workspace_root, &build_script));
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "build.rs must not inject process log filter defaults:\n{}",
+        format_paths(&violations)
+    );
+}
+
+#[test]
+fn build_time_log_filter_detector_catches_known_patterns() {
+    let source = r#"println!("cargo:rustc-env=RUST_LOG=debug");"#;
+    let normalized = source.to_ascii_uppercase();
+
+    assert!(normalized.contains("CARGO:RUSTC-ENV=RUST_LOG"));
 }
 
 #[test]

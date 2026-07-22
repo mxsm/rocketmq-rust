@@ -109,6 +109,10 @@ pub struct Args {
     /// Can also be set via NAMESRV_ADDR environment variable
     #[arg(short = 'n', long = "namesrvAddr", value_name = "ADDR")]
     pub namesrv_addr: Option<String>,
+
+    /// Override the process log filter for this startup.
+    #[arg(long = "log-filter", value_name = "DIRECTIVE")]
+    pub log_filter: Option<String>,
 }
 
 impl Args {
@@ -297,12 +301,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn log_filter_cli_override_is_parsed() {
+        let args = Args::try_parse_from(["rocketmq-broker-rust", "--log-filter", "info,rocketmq_broker=debug"])
+            .expect("log filter should parse");
+
+        assert_eq!(args.log_filter.as_deref(), Some("info,rocketmq_broker=debug"));
+    }
+
+    #[test]
     fn test_validate_namesrv_addr_single() {
         let args = Args {
             config_file: None,
             print_config_item: false,
             print_important_config: false,
             namesrv_addr: Some("127.0.0.1:9876".to_string()),
+            log_filter: None,
         };
 
         assert!(args.validate_namesrv_addr("127.0.0.1:9876").is_ok());
@@ -315,6 +328,7 @@ mod tests {
             print_config_item: false,
             print_important_config: false,
             namesrv_addr: Some("192.168.0.1:9876;192.168.0.2:9876".to_string()),
+            log_filter: None,
         };
 
         assert!(args.validate_namesrv_addr("192.168.0.1:9876;192.168.0.2:9876").is_ok());
@@ -327,6 +341,7 @@ mod tests {
             print_config_item: false,
             print_important_config: false,
             namesrv_addr: Some("invalid".to_string()),
+            log_filter: None,
         };
 
         assert!(args.validate_namesrv_addr("invalid").is_err());
@@ -339,6 +354,7 @@ mod tests {
             print_config_item: true,
             print_important_config: false,
             namesrv_addr: None,
+            log_filter: None,
         };
         assert!(args_print.should_exit_after_print());
 
@@ -347,6 +363,7 @@ mod tests {
             print_config_item: false,
             print_important_config: true,
             namesrv_addr: None,
+            log_filter: None,
         };
         assert!(args_important.should_exit_after_print());
 
@@ -355,6 +372,7 @@ mod tests {
             print_config_item: false,
             print_important_config: false,
             namesrv_addr: None,
+            log_filter: None,
         };
         assert!(!args_none.should_exit_after_print());
     }
@@ -366,6 +384,7 @@ mod tests {
             print_config_item: false,
             print_important_config: false,
             namesrv_addr: None,
+            log_filter: None,
         };
 
         // Should return default if no env var set
@@ -379,6 +398,7 @@ mod tests {
             print_config_item: false,
             print_important_config: false,
             namesrv_addr: Some("192.168.1.1:9876".to_string()),
+            log_filter: None,
         };
 
         assert_eq!(args.get_namesrv_addr(), "192.168.1.1:9876");
@@ -391,6 +411,7 @@ mod tests {
             print_config_item: false,
             print_important_config: false,
             namesrv_addr: None,
+            log_filter: None,
         };
 
         assert!(args.is_valid_host_port("localhost:9876"));

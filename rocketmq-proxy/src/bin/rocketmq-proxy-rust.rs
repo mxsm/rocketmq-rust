@@ -88,6 +88,7 @@ async fn run(service_context: ServiceContext, lifecycle: ServiceLifecycle) -> Pr
         Some(ref path) => ProxyConfig::load_from_file(path)?,
         None => ProxyConfig::default(),
     };
+    let logging_overrides = load_logging_overrides(args.config_file.as_deref())?;
     apply_overrides(&mut config, &args)?;
 
     if args.print_config {
@@ -95,19 +96,40 @@ async fn run(service_context: ServiceContext, lifecycle: ServiceLifecycle) -> Pr
         return Ok(());
     }
 
-    lifecycle
-        .start(&service_context)
-        .await
+    let environment_filter = rocketmq_observability::read_rust_log().map_err(|error| ProxyError::Transport {
+        message: format!("failed to read RUST_LOG: {error}"),
+    })?;
+    let resolved_filter = resolve_startup_log_filter(&args, &logging_overrides, environment_filter.as_deref())
         .map_err(|error| ProxyError::Transport {
-            message: format!("failed to start Proxy lifecycle boundary: {error}"),
+            message: format!("failed to resolve proxy log filter: {error}"),
         })?;
-
-    let bootstrap_config = build_proxy_telemetry_bootstrap_config(&config);
+    let mut bootstrap_config = build_proxy_telemetry_bootstrap_config(&config);
+    bootstrap_config.logging.reload = logging_overrides.logging.reload;
     let telemetry_guard =
-        rocketmq_observability::logging::install_global(&bootstrap_config).map_err(|error| ProxyError::Transport {
-            message: format!("failed to initialize proxy telemetry bootstrap: {error}"),
-        })?;
-    log_telemetry_bootstrap(&bootstrap_config, telemetry_guard.subscriber_install_status());
+        rocketmq_observability::install_global_with_filter(&bootstrap_config, resolved_filter.clone()).map_err(
+            |error| ProxyError::Transport {
+                message: format!("failed to initialize proxy telemetry bootstrap: {error}"),
+            },
+        )?;
+    log_telemetry_bootstrap(
+        &bootstrap_config,
+        &resolved_filter,
+        telemetry_guard.subscriber_install_status(),
+    );
+
+    if let Err(error) = lifecycle.start(&service_context).await {
+        lifecycle.mark_failed();
+        let request = lifecycle.request_shutdown(ShutdownReason::Internal);
+        if let Err(shutdown_error) = telemetry_guard
+            .shutdown_with_timeout(request.deadline.remaining())
+            .into_result()
+        {
+            tracing::warn!(error = %shutdown_error, "proxy telemetry cleanup after lifecycle startup failure was unhealthy");
+        }
+        return Err(ProxyError::Transport {
+            message: format!("failed to start Proxy lifecycle boundary: {error}"),
+        });
+    }
 
     info!(
         "Starting RocketMQ proxy: mode={:?}, grpc={}, remotingEnabled={}, remoting={}",
@@ -161,16 +183,59 @@ fn build_proxy_telemetry_bootstrap_config(_config: &ProxyConfig) -> rocketmq_obs
 
 fn log_telemetry_bootstrap(
     config: &rocketmq_observability::TelemetryBootstrapConfig,
+    resolved_filter: &rocketmq_observability::ResolvedLogFilter,
     subscriber_install_status: rocketmq_observability::SubscriberInstallStatus,
 ) {
     info!(
+        service = "rocketmq-proxy",
+        effective_filter = resolved_filter.filter(),
+        filter_source = %resolved_filter.source(),
         metrics_exporter = ?config.observability.metrics.exporter,
         trace_exporter = ?config.observability.traces.exporter,
         log_exporter = ?config.observability.logs.exporter,
         subscriber_installed = subscriber_install_status.installed,
+        reload_enabled = config.logging.reload.enabled,
         file_log_enabled = config.logging.file.enabled,
         "proxy telemetry bootstrap initialized"
     );
+}
+
+fn load_logging_overrides(path: Option<&std::path::Path>) -> ProxyResult<rocketmq_observability::LoggingOverrides> {
+    let Some(path) = path else {
+        return Ok(rocketmq_observability::LoggingOverrides::default());
+    };
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("proxy config");
+    let config = config::Config::builder()
+        .add_source(config::File::from(path))
+        .build()
+        .map_err(|error| RocketMQError::ConfigParseFailed {
+            key: "proxy.logging",
+            reason: format!("failed to build logging config {file_name}: {error}"),
+        })?;
+    config.try_deserialize().map_err(|error| {
+        RocketMQError::ConfigParseFailed {
+            key: "proxy.logging",
+            reason: format!("failed to deserialize logging config {file_name}: {error}"),
+        }
+        .into()
+    })
+}
+
+fn resolve_startup_log_filter(
+    args: &Args,
+    overrides: &rocketmq_observability::LoggingOverrides,
+    environment_filter: Option<&str>,
+) -> Result<rocketmq_observability::ResolvedLogFilter, rocketmq_observability::ObservabilityError> {
+    rocketmq_observability::LogFilterResolver::resolve(rocketmq_observability::LogFilterInputs {
+        runtime: None,
+        cli: args.log_filter.as_deref(),
+        environment: environment_filter,
+        config: overrides.logging.filter.as_deref(),
+        legacy_config: overrides.log_filter.as_deref(),
+    })
 }
 
 struct Args {
@@ -181,11 +246,20 @@ struct Args {
     enable_remoting: bool,
     namesrv_addr: Option<String>,
     print_config: bool,
+    log_filter: Option<String>,
 }
 
 impl Args {
     fn parse() -> ProxyResult<Self> {
-        let mut args = env::args().skip(1);
+        Self::parse_from(env::args())
+    }
+
+    fn parse_from<I, S>(args: I) -> ProxyResult<Self>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let mut args = args.into_iter().map(Into::into).skip(1);
         let mut parsed = Args {
             config_file: None,
             mode: None,
@@ -194,6 +268,7 @@ impl Args {
             enable_remoting: false,
             namesrv_addr: None,
             print_config: false,
+            log_filter: None,
         };
 
         while let Some(arg) = args.next() {
@@ -205,6 +280,7 @@ impl Args {
                 "--enableRemoting" => parsed.enable_remoting = true,
                 "--namesrvAddr" | "-n" => parsed.namesrv_addr = Some(next_value(&mut args, arg.as_str())?),
                 "--printConfig" => parsed.print_config = true,
+                "--log-filter" => parsed.log_filter = Some(next_value(&mut args, arg.as_str())?),
                 "--help" | "-h" => {
                     print_usage();
                     std::process::exit(0);
@@ -264,7 +340,8 @@ fn apply_overrides(config: &mut ProxyConfig, args: &Args) -> ProxyResult<()> {
 fn print_usage() {
     println!(
         "rocketmq-proxy-rust [-c <proxy.toml>] [--mode cluster|local] [--grpcListenAddr <host:port>] \
-         [--enableRemoting] [--remotingListenAddr <host:port>] [--namesrvAddr <host:port>] [--printConfig]"
+         [--enableRemoting] [--remotingListenAddr <host:port>] [--namesrvAddr <host:port>] [--log-filter <directive>] \
+         [--printConfig]"
     );
 }
 
@@ -279,6 +356,14 @@ fn print_config(config: &ProxyConfig) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn proxy_cli_parses_log_filter_override() {
+        let args = Args::parse_from(["rocketmq-proxy-rust", "--log-filter", "info,rocketmq_proxy=debug"])
+            .expect("log filter should parse");
+
+        assert_eq!(args.log_filter.as_deref(), Some("info,rocketmq_proxy=debug"));
+    }
 
     #[test]
     fn proxy_telemetry_bootstrap_uses_required_logging_defaults() {

@@ -2555,6 +2555,7 @@ dependencies = [
  "rocketmq-admin-core",
  "rocketmq-dashboard-common",
  "rocketmq-error",
+ "rocketmq-observability",
  "rusqlite",
  "serde",
  "serde_json",
@@ -2563,7 +2564,6 @@ dependencies = [
  "tokio",
  "tower-http",
  "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
