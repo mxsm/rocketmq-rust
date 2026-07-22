@@ -155,34 +155,34 @@ mod tests {
     use super::*;
     use crate::config::message_store_config::MessageStoreConfig;
 
-    fn new_test_message_store(
-        root: &Path,
-    ) -> rocketmq_rust::ArcMut<crate::message_store::local_file_message_store::LocalFileMessageStore> {
+    fn new_test_message_store(root: &Path) -> crate::message_store::local_file_message_store::LocalFileMessageStore {
         std::fs::create_dir_all(root).expect("create temp root dir");
 
         let broker_config = BrokerConfig {
+            duplication_enable: true,
             enable_controller_mode: true,
             ..BrokerConfig::default()
         };
 
         let message_store_config = MessageStoreConfig {
+            duplication_enable: true,
             enable_controller_mode: true,
             store_path_root_dir: root.to_string_lossy().into_owned().into(),
+            timer_wheel_enable: false,
             ..MessageStoreConfig::default()
         };
 
         let topic_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>> = Arc::new(DashMap::new());
-        let mut store = rocketmq_rust::ArcMut::new(
-            crate::message_store::local_file_message_store::LocalFileMessageStore::new(
-                Arc::new(message_store_config),
-                Arc::new(broker_config),
-                topic_table,
-                None,
-                false,
-            ),
+        let mut store = crate::message_store::local_file_message_store::LocalFileMessageStore::new(
+            Arc::new(message_store_config),
+            Arc::new(broker_config),
+            topic_table,
+            None,
+            false,
         );
-        let store_clone = store.clone();
-        store.set_message_store_arc(store_clone);
+        store
+            .wire_owned_root_dependencies()
+            .expect("wire owned test store dependencies");
         store
     }
 
@@ -191,7 +191,7 @@ mod tests {
         let temp_root =
             std::env::temp_dir().join(format!("rocketmq-rust-auto-switch-client-target-{}", current_millis()));
         let store = new_test_message_store(&temp_root);
-        let delegate = DefaultHAClient::new(store).expect("create default HA client");
+        let delegate = DefaultHAClient::new(store.ha_replica_store_handle()).expect("create default HA client");
         let client = AutoSwitchHAClient::from_delegate(delegate, Some(9));
 
         assert_eq!(client.reported_broker_id(), Some(9));
@@ -209,7 +209,7 @@ mod tests {
         let temp_root =
             std::env::temp_dir().join(format!("rocketmq-rust-auto-switch-client-clear-{}", current_millis()));
         let store = new_test_message_store(&temp_root);
-        let delegate = DefaultHAClient::new(store).expect("create default HA client");
+        let delegate = DefaultHAClient::new(store.ha_replica_store_handle()).expect("create default HA client");
         let client = AutoSwitchHAClient::from_delegate(delegate, Some(11));
 
         client.sync_controller_master_target("127.0.0.1:10912").await;

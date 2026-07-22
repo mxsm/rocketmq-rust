@@ -79,6 +79,7 @@ use crate::config::message_store_config::LinuxMemoryLockMode;
 use crate::config::message_store_config::LinuxRecoveryFadviseMode;
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::consume_queue::mapped_file_queue::MappedFileQueue;
+use crate::consume_queue::mapped_file_queue::MappedFileQueueAppendHandle;
 use crate::consume_queue::mapped_file_queue::MappedFileQueueCleanupHandle;
 use crate::consume_queue::mapped_file_queue::MappedFileQueueReadHandle;
 use crate::consume_queue::mapped_file_queue::MappedFileWarmupStats;
@@ -468,6 +469,65 @@ impl CommitLogReadHandle {
     }
 }
 
+/// Safe, cloneable capability used by HA replica readers.
+///
+/// It shares only raw replica append synchronization, physical-offset reads,
+/// and confirm-offset publication state. Normal message append, recovery, and
+/// mapped-file lifecycle operations remain on the owning `CommitLog`.
+#[derive(Clone)]
+pub(crate) struct CommitLogReplicaHandle {
+    read: CommitLogReadHandle,
+    append: MappedFileQueueAppendHandle,
+    put_message_lock: Arc<tokio::sync::Mutex<()>>,
+    runtime_state: Arc<CommitLogRuntimeState>,
+    store_checkpoint: Arc<StoreCheckpoint>,
+}
+
+impl CommitLogReplicaHandle {
+    #[inline]
+    pub(crate) fn get_max_offset(&self) -> i64 {
+        self.read.get_max_offset()
+    }
+
+    #[inline]
+    pub(crate) fn get_min_offset(&self) -> i64 {
+        self.read.get_min_offset()
+    }
+
+    pub(crate) async fn append_data(
+        &self,
+        start_offset: i64,
+        data: &[u8],
+        data_start: i32,
+        data_length: i32,
+    ) -> Result<bool, StoreError> {
+        let lock = self.put_message_lock.lock().await;
+        let mapped_file = self.append.get_last_mapped_file(start_offset as u64, true);
+        if mapped_file.is_none() {
+            drop(lock);
+            return Err(StoreError::MappedFileNotFound);
+        }
+        let Some(mapped_file) = self.append.get_last_mapped_file(start_offset as u64, true) else {
+            drop(lock);
+            return Err(StoreError::MappedFileNotFound);
+        };
+        let appended = mapped_file.append_message_offset_length(data, data_start as usize, data_length as usize);
+        drop(lock);
+        Ok(appended)
+    }
+
+    #[inline]
+    pub(crate) fn publish_confirm_offset(&self, phy_offset: i64) {
+        publish_confirm_offset(&self.runtime_state, &self.store_checkpoint, phy_offset);
+    }
+}
+
+#[inline]
+fn publish_confirm_offset(runtime_state: &CommitLogRuntimeState, store_checkpoint: &StoreCheckpoint, phy_offset: i64) {
+    runtime_state.publish_confirm_offset(phy_offset);
+    store_checkpoint.set_confirm_phy_offset(phy_offset as u64);
+}
+
 fn resolve_commit_log_confirm_offset(
     message_store_config: &MessageStoreConfig,
     broker_config: &BrokerConfig,
@@ -608,6 +668,17 @@ impl CommitLog {
             broker_config: self.broker_config.clone(),
             store_context: self.store_context.clone(),
             runtime_state: self.runtime_state.clone(),
+        }
+    }
+
+    #[inline]
+    pub(crate) fn replica_handle(&self) -> CommitLogReplicaHandle {
+        CommitLogReplicaHandle {
+            read: self.read_handle(),
+            append: self.mapped_file_queue.append_handle(),
+            put_message_lock: self.put_message_lock.clone(),
+            runtime_state: self.runtime_state.clone(),
+            store_checkpoint: self.store_checkpoint.clone(),
         }
     }
 
@@ -947,8 +1018,7 @@ impl CommitLog {
     }
 
     pub(crate) fn publish_confirm_offset(&self, phy_offset: i64) {
-        self.runtime_state.publish_confirm_offset(phy_offset);
-        self.store_checkpoint.set_confirm_phy_offset(phy_offset as u64);
+        publish_confirm_offset(&self.runtime_state, &self.store_checkpoint, phy_offset);
     }
 
     fn clamp_controller_recover_confirm_offset(&mut self, min_phy_offset: i64, upper_bound: i64) {
@@ -2719,25 +2789,9 @@ impl CommitLog {
         data_start: i32,
         data_length: i32,
     ) -> Result<bool, StoreError> {
-        let put_message_lock = self.put_message_lock.clone();
-        let lock = put_message_lock.lock().await;
-        let mapped_file = self
-            .mapped_file_queue
-            .get_last_mapped_file_mut_start_offset(start_offset as u64, true);
-        if mapped_file.is_none() {
-            drop(lock);
-            return Err(StoreError::MappedFileNotFound);
-        }
-        let Some(mapped_file) = self
-            .mapped_file_queue
-            .get_last_mapped_file_mut_start_offset(start_offset as u64, true)
-        else {
-            drop(lock);
-            return Err(StoreError::MappedFileNotFound);
-        };
-        let flag = mapped_file.append_message_offset_length(data, data_start as usize, data_length as usize);
-        drop(lock);
-        Ok(flag)
+        self.replica_handle()
+            .append_data(start_offset, data, data_start, data_length)
+            .await
     }
 
     pub fn sync_broker_role(&mut self, broker_role: BrokerRole) {
@@ -3274,6 +3328,36 @@ mod tests {
 
         assert_eq!(store.get_commit_log().runtime_state.confirm_offset(), 6);
         assert_eq!(store.get_confirm_offset(), 6);
+
+        let _ = std::fs::remove_dir_all(temp_root);
+    }
+
+    #[tokio::test]
+    async fn replica_handle_shares_append_lock_generation_and_confirm_checkpoint() {
+        let temp_root =
+            std::env::temp_dir().join(format!("rocketmq-rust-commitlog-replica-handle-{}", current_millis()));
+        let mut store = new_test_message_store(&temp_root, BrokerRole::Slave, false);
+        store.init().await.expect("init message store");
+        let handle = store.get_commit_log().replica_handle();
+        assert!(Arc::ptr_eq(
+            &handle.put_message_lock,
+            &store.get_commit_log().put_message_lock
+        ));
+
+        let first = handle.clone();
+        let second = handle.clone();
+        let (first_result, second_result) = tokio::join!(
+            first.append_data(0, &[1, 2, 3, 4], 0, 4),
+            second.append_data(4, &[5, 6, 7, 8], 0, 4),
+        );
+        assert!(first_result.expect("first replica append"));
+        assert!(second_result.expect("second replica append"));
+        assert_eq!(handle.get_max_offset(), 8);
+        assert_eq!(store.get_commit_log().mapped_file_queue.get_mapped_files_size(), 1);
+
+        handle.publish_confirm_offset(6);
+        assert_eq!(store.get_commit_log().runtime_state.confirm_offset(), 6);
+        assert_eq!(store.get_store_checkpoint().confirm_phy_offset(), 6);
 
         let _ = std::fs::remove_dir_all(temp_root);
     }

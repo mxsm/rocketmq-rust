@@ -133,7 +133,7 @@ impl DefaultHAService {
     }
 
     pub(crate) fn create_default_ha_client(&self) -> Result<DefaultHAClient, HAClientError> {
-        DefaultHAClient::new(self.default_message_store.clone())
+        DefaultHAClient::new(self.default_message_store.ha_replica_store_handle())
     }
 
     pub(crate) fn set_ha_client_reported_broker_id(&self, broker_id: Option<i64>) {

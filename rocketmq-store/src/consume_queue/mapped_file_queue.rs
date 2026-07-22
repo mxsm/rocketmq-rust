@@ -170,6 +170,121 @@ impl MappedFileQueueReadHandle {
     }
 }
 
+/// Narrow, cloneable capability used by replica appenders.
+///
+/// The handle shares the authoritative mapped-file generation, allocator, and
+/// maintenance lock without exposing recovery, truncation, or destruction.
+#[derive(Clone)]
+pub(crate) struct MappedFileQueueAppendHandle {
+    mapped_files: MappedFileGeneration,
+    store_path: String,
+    mapped_file_size: u64,
+    allocate_mapped_file_service: Option<AllocateMappedFileService>,
+    runtime_state: MappedFileQueueRuntimeState,
+}
+
+impl MappedFileQueueAppendHandle {
+    pub(crate) fn get_last_mapped_file(&self, start_offset: u64, need_create: bool) -> Option<Arc<DefaultMappedFile>> {
+        get_last_mapped_file_for_append(
+            &self.mapped_files,
+            &self.store_path,
+            self.mapped_file_size,
+            self.allocate_mapped_file_service.as_ref(),
+            &self.runtime_state,
+            start_offset,
+            need_create,
+        )
+    }
+}
+
+fn get_last_mapped_file_for_append(
+    mapped_files: &MappedFileGeneration,
+    store_path: &str,
+    mapped_file_size: u64,
+    allocate_mapped_file_service: Option<&AllocateMappedFileService>,
+    runtime_state: &MappedFileQueueRuntimeState,
+    start_offset: u64,
+    need_create: bool,
+) -> Option<Arc<DefaultMappedFile>> {
+    let mapped_file_last = mapped_files.load().last().cloned();
+    if let Some(file) = mapped_file_last.as_ref() {
+        let last_file =
+            MappedFileQueueLastFile::new(file.get_file_from_offset(), file.get_wrote_position(), file.is_full());
+        if let Some(next_offset) = plan_mapped_file_queue_preallocation(mapped_file_size, last_file) {
+            trigger_mapped_file_preallocation(store_path, mapped_file_size, allocate_mapped_file_service, next_offset);
+        }
+    }
+    let roll_file = mapped_file_last
+        .as_ref()
+        .map(|file| MappedFileQueueRollFile::new(file.get_file_from_offset(), file.is_full()));
+    if let Some(create_offset) = plan_mapped_file_queue_creation(start_offset, mapped_file_size, roll_file, need_create)
+    {
+        return create_and_publish_mapped_file(
+            mapped_files,
+            store_path,
+            mapped_file_size,
+            allocate_mapped_file_service,
+            runtime_state,
+            create_offset,
+        );
+    }
+    mapped_file_last
+}
+
+fn trigger_mapped_file_preallocation(
+    store_path: &str,
+    mapped_file_size: u64,
+    allocate_mapped_file_service: Option<&AllocateMappedFileService>,
+    next_offset: u64,
+) {
+    let Some(service) = allocate_mapped_file_service else {
+        return;
+    };
+    if !service.is_started() {
+        return;
+    }
+
+    let next_file_path = PathBuf::from(store_path).join(offset_to_file_name(next_offset));
+    service.submit_request_in_background(next_file_path.to_string_lossy().to_string(), mapped_file_size);
+}
+
+fn create_and_publish_mapped_file(
+    mapped_files: &MappedFileGeneration,
+    store_path: &str,
+    mapped_file_size: u64,
+    allocate_mapped_file_service: Option<&AllocateMappedFileService>,
+    runtime_state: &MappedFileQueueRuntimeState,
+    create_offset: u64,
+) -> Option<Arc<DefaultMappedFile>> {
+    let _maintenance_guard = runtime_state.commit_lock().lock();
+    let current_files = mapped_files.load();
+    if let Some(existing) = current_files
+        .iter()
+        .find(|mapped_file| mapped_file.get_file_from_offset() == create_offset)
+    {
+        return Some(Arc::clone(existing));
+    }
+    let is_first = current_files.is_empty();
+    drop(current_files);
+
+    let next_file_path = PathBuf::from(store_path).join(offset_to_file_name(create_offset));
+    let next_next_file_path = PathBuf::from(store_path).join(offset_to_file_name(create_offset + mapped_file_size));
+    let mapped_file = create_mapped_file_for_queue(
+        allocate_mapped_file_service,
+        &next_file_path,
+        &next_next_file_path,
+        mapped_file_size,
+        is_first,
+    )?;
+
+    mapped_files.rcu(|current| {
+        let mut files = current.as_slice().to_vec();
+        files.push(mapped_file.clone());
+        files
+    });
+    Some(mapped_file)
+}
+
 /// Narrow, cloneable capability used by background commit-log cleanup.
 ///
 /// The capability owns only the atomically published mapped-file generation.
@@ -474,93 +589,27 @@ impl MappedFileQueue {
         start_offset: u64,
         need_create: bool,
     ) -> Option<Arc<DefaultMappedFile>> {
-        let mapped_file_last = self.get_last_mapped_file();
-        if let Some(file) = mapped_file_last.as_ref() {
-            let last_file =
-                MappedFileQueueLastFile::new(file.get_file_from_offset(), file.get_wrote_position(), file.is_full());
-            if let Some(next_offset) = plan_mapped_file_queue_preallocation(self.storage.mapped_file_size(), last_file)
-            {
-                self.trigger_pre_allocation(next_offset);
-            }
-        }
-        let roll_file = mapped_file_last
-            .as_ref()
-            .map(|file| MappedFileQueueRollFile::new(file.get_file_from_offset(), file.is_full()));
-        if let Some(create_offset) =
-            plan_mapped_file_queue_creation(start_offset, self.storage.mapped_file_size(), roll_file, need_create)
-        {
-            return self.try_create_mapped_file(create_offset);
-        }
-        mapped_file_last
-    }
-
-    #[inline]
-    fn trigger_pre_allocation(&self, next_offset: u64) {
-        if let Some(ref service) = self.allocate_mapped_file_service {
-            if !service.is_started() {
-                return;
-            }
-
-            let next_file_path =
-                PathBuf::from(self.storage.store_path().to_owned()).join(offset_to_file_name(next_offset));
-
-            service.submit_request_in_background(
-                next_file_path.to_string_lossy().to_string(),
-                self.storage.mapped_file_size(),
-            );
-        }
+        get_last_mapped_file_for_append(
+            self.storage.mapped_files(),
+            self.storage.store_path(),
+            self.storage.mapped_file_size(),
+            self.allocate_mapped_file_service.as_ref(),
+            &self.runtime_state,
+            start_offset,
+            need_create,
+        )
     }
 
     #[inline]
     pub fn try_create_mapped_file(&self, create_offset: u64) -> Option<Arc<DefaultMappedFile>> {
-        let next_file_path =
-            PathBuf::from(self.storage.store_path().to_owned()).join(offset_to_file_name(create_offset));
-        let next_next_file_path = PathBuf::from(self.storage.store_path().to_owned())
-            .join(offset_to_file_name(create_offset + self.storage.mapped_file_size()));
-        self.do_create_mapped_file(create_offset, next_file_path, next_next_file_path)
-    }
-
-    /// Create mapped file with refactored logic to avoid deadlock
-    ///
-    /// # Arguments
-    /// * `next_file_path` - Path for the file to create
-    /// * `next_next_file_path` - Path for pre-allocation (N+2 file)
-    ///
-    /// # Returns
-    /// The created mapped file wrapped in Arc
-    #[inline]
-    fn do_create_mapped_file(
-        &self,
-        create_offset: u64,
-        next_file_path: PathBuf,
-        next_next_file_path: PathBuf,
-    ) -> Option<Arc<DefaultMappedFile>> {
-        let _maintenance_guard = self.runtime_state.commit_lock().lock();
-        let mapped_files = self.storage.mapped_files().load();
-        if let Some(existing) = mapped_files
-            .iter()
-            .find(|mapped_file| mapped_file.get_file_from_offset() == create_offset)
-        {
-            return Some(Arc::clone(existing));
-        }
-        let is_first = mapped_files.is_empty();
-        drop(mapped_files);
-
-        let arc_file = create_mapped_file_for_queue(
-            self.allocate_mapped_file_service.as_ref(),
-            &next_file_path,
-            &next_next_file_path,
+        create_and_publish_mapped_file(
+            self.storage.mapped_files(),
+            self.storage.store_path(),
             self.storage.mapped_file_size(),
-            is_first,
-        )?;
-
-        self.update_mapped_file_generation(|current| {
-            let mut files = current.to_vec();
-            files.push(arc_file.clone());
-            files
-        });
-
-        Some(arc_file)
+            self.allocate_mapped_file_service.as_ref(),
+            &self.runtime_state,
+            create_offset,
+        )
     }
 
     /// Applies a collection update against the latest mapped-file generation.
@@ -596,6 +645,17 @@ impl MappedFileQueue {
         MappedFileQueueReadHandle {
             mapped_files: Arc::clone(self.storage.mapped_files()),
             mapped_file_size: self.storage.mapped_file_size(),
+            runtime_state: self.runtime_state.clone(),
+        }
+    }
+
+    #[inline]
+    pub(crate) fn append_handle(&self) -> MappedFileQueueAppendHandle {
+        MappedFileQueueAppendHandle {
+            mapped_files: Arc::clone(self.storage.mapped_files()),
+            store_path: self.storage.store_path().to_owned(),
+            mapped_file_size: self.storage.mapped_file_size(),
+            allocate_mapped_file_service: self.allocate_mapped_file_service.clone(),
             runtime_state: self.runtime_state.clone(),
         }
     }

@@ -1133,6 +1133,15 @@ Broker production 4/8、Store production 23/53）；相对 bc80 净删除 1 个 
 无 relocation、新增 identity 或临时 approval。R10 从 4/5 降至 3/4；31 项执行清单保持完成 9 项、剩余
 22 项，正式进度仍为 75/82。
 
+DefaultHAClient 的完整 LocalStore carrier 随 Issue #8581 收窄为 replica-store capability：mapped-file append
+handle 共享既有 generation、allocator 与 maintenance state，CommitLog replica handle 继续使用同一个
+put-message lock、runtime state 与 checkpoint，HA handle 只补充 Store config 和 shutdown 边界；ReaderTask 的
+raw append、physical offset 与 confirm clamp/publication 不再获得 queue/index/dispatcher 等无关能力。reviewed
+快照为 89 identities/371 occurrences（production 25/56、test 50/275、compatibility 14/40、Broker production
+4/8、Store production 21/48）；相对 bc81 净删除 7 identities/10 occurrences（production 2/5、test 5/5），
+无 relocation、新增 identity 或临时 approval。R15 从 8/26 降至 6/21；31 项执行清单保持完成 9 项、剩余
+22 项，正式进度仍为 75/82。
+
 Default HA client runtime ownership 随 Issue #8567 完成收窄：`DefaultHAClient` 以标准 `Arc<Inner>` 共享只读组合根，
 `Inner` 仅保留原子、锁、Notify、flow monitor 与现有 LocalStore 兼容句柄；从未安装连接的 stream 字段和重复 buffer/
 dispatch/report 状态已删除，实际 reader/writer buffer 继续由每个 connection task 独占。reviewed 快照为 126 identities/
