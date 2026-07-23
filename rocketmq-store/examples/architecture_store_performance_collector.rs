@@ -12,16 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Target-hardware collector for the M10 local append performance profiles.
+//! Target-hardware collector for the M10 store performance profiles.
 //!
 //! Run a variant from the workspace root with:
 //!
 //! ```text
 //! cargo run --release --quiet -p rocketmq-store \
-//!   --example architecture_local_append_collector -- local-append producers-1
+//!   --example architecture_store_performance_collector -- local-append producers-1
 //!
 //! cargo run --release --quiet -p rocketmq-store \
-//!   --example architecture_local_append_collector -- sync-flush concurrency-64
+//!   --example architecture_store_performance_collector -- sync-flush concurrency-64
+//!
+//! cargo run --release --quiet -p rocketmq-store \
+//!   --example architecture_store_performance_collector -- local-pull batch-32
 //! ```
 //!
 //! The command writes one sidecar-compatible JSON object to stdout. Each raw
@@ -54,23 +57,32 @@ use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_common::common::message::message_single::Message;
+use rocketmq_store::base::get_message_result::GetMessageResult;
+use rocketmq_store::base::message_status_enum::GetMessageStatus;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::config::flush_disk_type::FlushDiskType;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore;
+use rocketmq_store_local::mapped_file::SelectMappedBufferCacheState;
+use rocketmq_store_local::mapped_file::SelectMappedBufferSourceKind;
 use serde::Deserialize;
 use serde::Serialize;
 use tempfile::TempDir;
 use tokio::runtime::Builder;
 
 const LOCAL_APPEND_PROFILE: &str = "local-append";
+const LOCAL_PULL_PROFILE: &str = "local-pull";
 const SYNC_FLUSH_PROFILE: &str = "sync-flush";
 const MESSAGE_SIZE_BYTES: usize = 1024;
 const SAMPLE_COUNT: usize = 5;
 const PRIMING_SAMPLE_COUNT: usize = 2;
 const LOCAL_APPEND_OPERATIONS_PER_SAMPLE: usize = 131_072;
 const LOCAL_APPEND_WARMUP_OPERATIONS: usize = 32_768;
+const LOCAL_PULL_BATCH_MESSAGES: usize = 32;
+const LOCAL_PULL_OPERATIONS_PER_SAMPLE: usize = 4096;
+const LOCAL_PULL_WARMUP_OPERATIONS: usize = 512;
+const CQ_ALLOCATION_PROBE_REPETITIONS: usize = 128;
 const SYNC_FLUSH_OPERATIONS_PER_SAMPLE: usize = 8192;
 const SYNC_FLUSH_WARMUP_OPERATIONS: usize = 1024;
 
@@ -114,9 +126,16 @@ unsafe impl GlobalAlloc for CountingAllocator {
 static GLOBAL_ALLOCATOR: CountingAllocator = CountingAllocator;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+enum WorkloadKind {
+    Append,
+    LocalPull,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct Scenario {
     profile: &'static str,
     variant: &'static str,
+    workload_kind: WorkloadKind,
     producers: usize,
     flush_disk_type: FlushDiskType,
     operations_per_sample: usize,
@@ -129,6 +148,7 @@ impl Scenario {
             (LOCAL_APPEND_PROFILE, "producers-1") => Ok(Self {
                 profile: LOCAL_APPEND_PROFILE,
                 variant: "producers-1",
+                workload_kind: WorkloadKind::Append,
                 producers: 1,
                 flush_disk_type: FlushDiskType::AsyncFlush,
                 operations_per_sample: LOCAL_APPEND_OPERATIONS_PER_SAMPLE,
@@ -137,6 +157,7 @@ impl Scenario {
             (LOCAL_APPEND_PROFILE, "producers-8") => Ok(Self {
                 profile: LOCAL_APPEND_PROFILE,
                 variant: "producers-8",
+                workload_kind: WorkloadKind::Append,
                 producers: 8,
                 flush_disk_type: FlushDiskType::AsyncFlush,
                 operations_per_sample: LOCAL_APPEND_OPERATIONS_PER_SAMPLE,
@@ -145,6 +166,7 @@ impl Scenario {
             (LOCAL_APPEND_PROFILE, "producers-32") => Ok(Self {
                 profile: LOCAL_APPEND_PROFILE,
                 variant: "producers-32",
+                workload_kind: WorkloadKind::Append,
                 producers: 32,
                 flush_disk_type: FlushDiskType::AsyncFlush,
                 operations_per_sample: LOCAL_APPEND_OPERATIONS_PER_SAMPLE,
@@ -153,10 +175,20 @@ impl Scenario {
             (SYNC_FLUSH_PROFILE, "concurrency-64") => Ok(Self {
                 profile: SYNC_FLUSH_PROFILE,
                 variant: "concurrency-64",
+                workload_kind: WorkloadKind::Append,
                 producers: 64,
                 flush_disk_type: FlushDiskType::SyncFlush,
                 operations_per_sample: SYNC_FLUSH_OPERATIONS_PER_SAMPLE,
                 warmup_operations: SYNC_FLUSH_WARMUP_OPERATIONS,
+            }),
+            (LOCAL_PULL_PROFILE, "batch-32") => Ok(Self {
+                profile: LOCAL_PULL_PROFILE,
+                variant: "batch-32",
+                workload_kind: WorkloadKind::LocalPull,
+                producers: 1,
+                flush_disk_type: FlushDiskType::AsyncFlush,
+                operations_per_sample: LOCAL_PULL_OPERATIONS_PER_SAMPLE,
+                warmup_operations: LOCAL_PULL_WARMUP_OPERATIONS,
             }),
             _ => bail!("unsupported performance profile/variant: {profile}/{variant}"),
         }
@@ -168,6 +200,18 @@ impl Scenario {
 
     fn includes_fsync_per_ack(self) -> bool {
         self.profile == SYNC_FLUSH_PROFILE
+    }
+
+    fn includes_local_pull_observations(self) -> bool {
+        self.workload_kind == WorkloadKind::LocalPull
+    }
+
+    fn payload_bytes_per_operation(self) -> usize {
+        if self.includes_local_pull_observations() {
+            LOCAL_PULL_BATCH_MESSAGES * MESSAGE_SIZE_BYTES
+        } else {
+            MESSAGE_SIZE_BYTES
+        }
     }
 }
 
@@ -184,8 +228,8 @@ fn parse_invocation(args: &[String]) -> Result<Invocation> {
             Ok(Invocation::Sample(Scenario::parse(profile, variant)?))
         }
         _ => bail!(
-            "usage: architecture_local_append_collector [--sample] <local-append|sync-flush> \
-             <producers-1|producers-8|producers-32|concurrency-64>"
+            "usage: architecture_store_performance_collector [--sample] <local-append|local-pull|sync-flush> \
+             <producers-1|producers-8|producers-32|batch-32|concurrency-64>"
         ),
     }
 }
@@ -199,6 +243,10 @@ struct SampleObservation {
     io_amplification_ratio: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     fsync_per_ack: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cq_unit_allocations_per_message: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    body_copies_per_message: Option<f64>,
 }
 
 impl SampleObservation {
@@ -227,6 +275,23 @@ impl SampleObservation {
                 "fsync_per_ack must be finite and non-negative, got {fsync_per_ack}"
             );
         }
+        for (metric, value) in [
+            ("cq_unit_allocations_per_message", self.cq_unit_allocations_per_message),
+            ("body_copies_per_message", self.body_copies_per_message),
+        ] {
+            ensure!(
+                value.is_some() == scenario.includes_local_pull_observations(),
+                "{}/{} {metric} presence does not match the metric contract",
+                scenario.profile,
+                scenario.variant
+            );
+            if let Some(value) = value {
+                ensure!(
+                    value.is_finite() && value >= 0.0,
+                    "{metric} must be finite and non-negative, got {value}"
+                );
+            }
+        }
         Ok(())
     }
 }
@@ -253,11 +318,25 @@ struct WorkloadObservation {
     elapsed: Duration,
     latencies: Vec<Duration>,
     encoded_bytes: u64,
+    body_copies: u64,
+    returned_messages: u64,
+}
+
+#[derive(Clone, Copy)]
+struct MessageLocation {
+    offset: i64,
+    size: i32,
+}
+
+struct LocalPullContext {
+    group: CheetahString,
+    topic: CheetahString,
+    message_locations: Vec<MessageLocation>,
 }
 
 fn main() {
     if let Err(error) = run() {
-        eprintln!("architecture local append collector failed: {error:#}");
+        eprintln!("architecture store performance collector failed: {error:#}");
         process::exit(2);
     }
 }
@@ -357,6 +436,31 @@ fn build_envelope(scenario: Scenario, observations: Vec<SampleObservation>) -> R
             .collect::<Result<Vec<_>>>()?;
         metrics.insert("fsync_per_ack", MetricSamples { samples });
     }
+    if scenario.includes_local_pull_observations() {
+        let cq_unit_allocations = observations
+            .iter()
+            .map(|sample| {
+                sample
+                    .cq_unit_allocations_per_message
+                    .ok_or_else(|| anyhow!("local-pull sample omitted cq_unit_allocations_per_message"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        metrics.insert(
+            "cq_unit_allocations_per_message",
+            MetricSamples {
+                samples: cq_unit_allocations,
+            },
+        );
+        let body_copies = observations
+            .iter()
+            .map(|sample| {
+                sample
+                    .body_copies_per_message
+                    .ok_or_else(|| anyhow!("local-pull sample omitted body_copies_per_message"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        metrics.insert("body_copies_per_message", MetricSamples { samples: body_copies });
+    }
 
     Ok(MeasurementEnvelope {
         schema_version: 1,
@@ -372,15 +476,45 @@ fn collect_one_sample(scenario: Scenario) -> Result<SampleObservation> {
         .build()
         .context("create sample runtime")?;
     let mut collector_store = new_collector_store(scenario)?;
+    let local_pull_context = if scenario.includes_local_pull_observations() {
+        Some(
+            runtime
+                .block_on(seed_local_pull_store(&mut collector_store))
+                .context("seed local-pull sample store")?,
+        )
+    } else {
+        None
+    };
     if scenario.requires_started_store() {
         runtime
             .block_on(start_collector_store(&mut collector_store))
             .context("start sync-flush sample store")?;
     }
 
-    runtime
-        .block_on(run_workload(&collector_store, scenario, scenario.warmup_operations, 0))
-        .context("run warm-up workload")?;
+    let warmup = match local_pull_context.as_ref() {
+        Some(context) => runtime.block_on(run_local_pull_workload(
+            &collector_store,
+            context,
+            scenario.warmup_operations,
+            false,
+        )),
+        None => runtime.block_on(run_append_workload(
+            &collector_store,
+            scenario,
+            scenario.warmup_operations,
+            0,
+        )),
+    };
+    warmup.context("run warm-up workload")?;
+
+    let cq_unit_allocations_per_message = match local_pull_context.as_ref() {
+        Some(context) => Some(
+            runtime
+                .block_on(measure_cq_unit_allocations_per_message(&collector_store, context))
+                .context("measure local-pull CQ-unit allocations")?,
+        ),
+        None => None,
+    };
 
     let flush_operations_before = collector_store
         .store
@@ -388,14 +522,21 @@ fn collect_one_sample(scenario: Scenario) -> Result<SampleObservation> {
         .mapped_file_io_stats()
         .flush_operations;
     let allocations_before = ALLOCATION_CALLS.load(Ordering::Relaxed);
-    let workload = runtime
-        .block_on(run_workload(
+    let workload = match local_pull_context.as_ref() {
+        Some(context) => runtime.block_on(run_local_pull_workload(
+            &collector_store,
+            context,
+            scenario.operations_per_sample,
+            true,
+        )),
+        None => runtime.block_on(run_append_workload(
             &collector_store,
             scenario,
             scenario.operations_per_sample,
             scenario.warmup_operations as u64,
-        ))
-        .context("run measured workload")?;
+        )),
+    }
+    .context("run measured workload")?;
     let flush_operations_after = collector_store
         .store
         .get_commit_log()
@@ -420,10 +561,14 @@ fn collect_one_sample(scenario: Scenario) -> Result<SampleObservation> {
         peak_rss_bytes: peak_rss_bytes()? as f64,
         allocations_per_operation: allocation_calls as f64 / scenario.operations_per_sample as f64,
         io_amplification_ratio: workload.encoded_bytes as f64
-            / (scenario.operations_per_sample * MESSAGE_SIZE_BYTES) as f64,
+            / (scenario.operations_per_sample * scenario.payload_bytes_per_operation()) as f64,
         fsync_per_ack: scenario
             .includes_fsync_per_ack()
             .then_some(measured_flush_operations as f64 / scenario.operations_per_sample as f64),
+        cq_unit_allocations_per_message,
+        body_copies_per_message: scenario
+            .includes_local_pull_observations()
+            .then(|| workload.body_copies as f64 / workload.returned_messages as f64),
     };
     observation.validate(scenario)?;
     if scenario.requires_started_store() {
@@ -435,14 +580,20 @@ fn collect_one_sample(scenario: Scenario) -> Result<SampleObservation> {
 }
 
 fn new_collector_store(scenario: Scenario) -> Result<CollectorStore> {
-    let temp_dir = TempDir::new().context("create local append sample directory")?;
+    let temp_dir = TempDir::new().context("create store performance sample directory")?;
     let mut message_store_config = MessageStoreConfig {
         store_path_root_dir: temp_dir.path().to_string_lossy().to_string().into(),
         flush_disk_type: scenario.flush_disk_type,
         ha_listen_port: 0,
+        timer_wheel_enable: false,
         ..MessageStoreConfig::default()
     };
-    message_store_config.mapped_file_size_commit_log = 256 * 1024 * 1024;
+    if scenario.includes_local_pull_observations() {
+        message_store_config.mapped_file_size_commit_log = 4 * 1024 * 1024;
+        message_store_config.mapped_file_size_consume_queue = 20 * 1024;
+    } else {
+        message_store_config.mapped_file_size_commit_log = 256 * 1024 * 1024;
+    }
 
     let mut store = LocalFileMessageStore::new(
         Arc::new(message_store_config),
@@ -453,7 +604,7 @@ fn new_collector_store(scenario: Scenario) -> Result<CollectorStore> {
     );
     store
         .wire_owned_root_dependencies()
-        .context("wire owned local append sample dependencies")?;
+        .context("wire owned store performance sample dependencies")?;
 
     Ok(CollectorStore {
         store,
@@ -467,12 +618,18 @@ async fn start_collector_store(collector_store: &mut CollectorStore) -> Result<(
     collector_store.store.start().await.context("launch sample store")
 }
 
-async fn run_workload(
+async fn run_append_workload(
     collector_store: &CollectorStore,
     scenario: Scenario,
     operation_count: usize,
     key_seed: u64,
 ) -> Result<WorkloadObservation> {
+    ensure!(
+        scenario.workload_kind == WorkloadKind::Append,
+        "append workload received non-append scenario {}/{}",
+        scenario.profile,
+        scenario.variant
+    );
     ensure!(
         operation_count.is_multiple_of(scenario.producers),
         "operation count {operation_count} must be divisible by producer count {}",
@@ -483,12 +640,13 @@ async fn run_workload(
     let mut latencies = Vec::with_capacity(operation_count);
     let mut encoded_bytes = 0_u64;
     let mut next_key = key_seed;
+    let topic = CheetahString::from_static_str("ArchitectureLocalAppend");
 
     for _ in 0..operation_count / scenario.producers {
         let commit_log = collector_store.store.get_commit_log();
         let mut puts = Vec::with_capacity(scenario.producers);
         for producer in 0..scenario.producers {
-            let message = create_message(producer as i32, next_key);
+            let message = create_message(&topic, producer as i32, next_key);
             next_key += 1;
             puts.push(async move {
                 let put_started = Instant::now();
@@ -519,12 +677,236 @@ async fn run_workload(
         elapsed: started.elapsed(),
         latencies,
         encoded_bytes,
+        body_copies: 0,
+        returned_messages: operation_count as u64,
     })
 }
 
-fn create_message(queue_id: i32, key_seed: u64) -> MessageExtBrokerInner {
+async fn seed_local_pull_store(collector_store: &mut CollectorStore) -> Result<LocalPullContext> {
+    let topic = CheetahString::from_static_str("ArchitectureLocalPull");
+    let group = CheetahString::from_static_str("ArchitectureGate");
+
+    for key_seed in 0..LOCAL_PULL_BATCH_MESSAGES as u64 {
+        let result = collector_store
+            .store
+            .put_message(create_message(&topic, 0, key_seed))
+            .await;
+        ensure!(
+            result.put_message_status() == PutMessageStatus::PutOk,
+            "local-pull seed append returned {:?}",
+            result.put_message_status()
+        );
+    }
+    collector_store.store.reput_once().await;
+
+    let result = pull_local_batch(collector_store, &group, &topic, LOCAL_PULL_BATCH_MESSAGES, false)
+        .await
+        .context("read seeded local-pull batch")?;
+    let message_locations = result
+        .message_mapped_list()
+        .iter()
+        .map(|selection| {
+            Ok(MessageLocation {
+                offset: i64::try_from(selection.start_offset).context("local-pull message offset exceeds i64")?,
+                size: selection.size,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok(LocalPullContext {
+        group,
+        topic,
+        message_locations,
+    })
+}
+
+async fn run_local_pull_workload(
+    collector_store: &CollectorStore,
+    context: &LocalPullContext,
+    operation_count: usize,
+    require_hot: bool,
+) -> Result<WorkloadObservation> {
+    let started = Instant::now();
+    let mut latencies = Vec::with_capacity(operation_count);
+    let mut encoded_bytes = 0_u64;
+    let mut body_copies = 0_u64;
+    let mut returned_messages = 0_u64;
+
+    for _ in 0..operation_count {
+        let pull_started = Instant::now();
+        let result = pull_local_batch(
+            collector_store,
+            &context.group,
+            &context.topic,
+            LOCAL_PULL_BATCH_MESSAGES,
+            require_hot,
+        )
+        .await?;
+        latencies.push(pull_started.elapsed());
+        encoded_bytes = encoded_bytes
+            .checked_add(u64::try_from(result.buffer_total_size()).context("pull returned negative encoded bytes")?)
+            .ok_or_else(|| anyhow!("local-pull encoded byte counter overflowed"))?;
+        body_copies = body_copies
+            .checked_add(
+                result
+                    .message_mapped_list()
+                    .iter()
+                    .filter(|selection| selection.source_kind != SelectMappedBufferSourceKind::MappedFile)
+                    .count() as u64,
+            )
+            .ok_or_else(|| anyhow!("local-pull body-copy counter overflowed"))?;
+        returned_messages = returned_messages
+            .checked_add(u64::try_from(result.message_count()).context("pull returned a negative message count")?)
+            .ok_or_else(|| anyhow!("local-pull message counter overflowed"))?;
+    }
+
+    ensure!(returned_messages > 0, "local-pull workload returned no messages");
+    Ok(WorkloadObservation {
+        elapsed: started.elapsed(),
+        latencies,
+        encoded_bytes,
+        body_copies,
+        returned_messages,
+    })
+}
+
+async fn pull_local_batch(
+    collector_store: &CollectorStore,
+    group: &CheetahString,
+    topic: &CheetahString,
+    batch_messages: usize,
+    require_hot: bool,
+) -> Result<GetMessageResult> {
+    let batch_messages_i32 = i32::try_from(batch_messages).context("local-pull batch size exceeds i32")?;
+    let result = collector_store
+        .store
+        .get_message(group, topic, 0, 0, batch_messages_i32, None)
+        .await
+        .ok_or_else(|| anyhow!("local-pull store omitted its GetMessageResult"))?;
+    ensure!(
+        result.status() == Some(GetMessageStatus::Found),
+        "local-pull returned status {:?}",
+        result.status()
+    );
+    ensure!(
+        result.message_count() == batch_messages_i32,
+        "local-pull returned {} messages, expected {batch_messages}",
+        result.message_count()
+    );
+    ensure!(
+        result.message_mapped_list().len() == batch_messages,
+        "local-pull returned {} buffers, expected {batch_messages}",
+        result.message_mapped_list().len()
+    );
+    if require_hot {
+        ensure!(
+            result
+                .message_mapped_list()
+                .iter()
+                .all(|selection| selection.cache_state == SelectMappedBufferCacheState::Hot),
+            "local-pull batch included a non-hot mapped buffer"
+        );
+    }
+    Ok(result)
+}
+
+async fn measure_cq_unit_allocations_per_message(
+    collector_store: &CollectorStore,
+    context: &LocalPullContext,
+) -> Result<f64> {
+    ensure!(
+        context.message_locations.len() == LOCAL_PULL_BATCH_MESSAGES,
+        "local-pull direct control expected {LOCAL_PULL_BATCH_MESSAGES} message locations, got {}",
+        context.message_locations.len()
+    );
+
+    let full_single = measure_full_pull_allocation_calls(collector_store, context, 1).await?;
+    let full_batch = measure_full_pull_allocation_calls(collector_store, context, LOCAL_PULL_BATCH_MESSAGES).await?;
+    let direct_single = measure_direct_commit_log_allocation_calls(collector_store, context, 1)?;
+    let direct_batch = measure_direct_commit_log_allocation_calls(collector_store, context, LOCAL_PULL_BATCH_MESSAGES)?;
+
+    matched_cq_allocation_rate(
+        full_single,
+        full_batch,
+        direct_single,
+        direct_batch,
+        CQ_ALLOCATION_PROBE_REPETITIONS,
+        LOCAL_PULL_BATCH_MESSAGES,
+    )
+}
+
+async fn measure_full_pull_allocation_calls(
+    collector_store: &CollectorStore,
+    context: &LocalPullContext,
+    batch_messages: usize,
+) -> Result<u64> {
+    let before = ALLOCATION_CALLS.load(Ordering::Relaxed);
+    for _ in 0..CQ_ALLOCATION_PROBE_REPETITIONS {
+        drop(pull_local_batch(collector_store, &context.group, &context.topic, batch_messages, true).await?);
+    }
+    allocation_delta(before, "full local-pull allocation probe")
+}
+
+fn measure_direct_commit_log_allocation_calls(
+    collector_store: &CollectorStore,
+    context: &LocalPullContext,
+    batch_messages: usize,
+) -> Result<u64> {
+    let before = ALLOCATION_CALLS.load(Ordering::Relaxed);
+    for _ in 0..CQ_ALLOCATION_PROBE_REPETITIONS {
+        for location in context.message_locations.iter().take(batch_messages) {
+            let selection = collector_store
+                .store
+                .get_commit_log()
+                .get_message(location.offset, location.size)
+                .ok_or_else(|| anyhow!("direct CommitLog control omitted a seeded message"))?;
+            ensure!(
+                selection.cache_state == SelectMappedBufferCacheState::Hot,
+                "direct CommitLog control included a non-hot mapped buffer"
+            );
+        }
+    }
+    allocation_delta(before, "direct CommitLog allocation probe")
+}
+
+fn allocation_delta(before: u64, probe: &str) -> Result<u64> {
+    ALLOCATION_CALLS
+        .load(Ordering::Relaxed)
+        .checked_sub(before)
+        .ok_or_else(|| anyhow!("{probe} counter moved backwards"))
+}
+
+fn matched_cq_allocation_rate(
+    full_single: u64,
+    full_batch: u64,
+    direct_single: u64,
+    direct_batch: u64,
+    repetitions: usize,
+    batch_messages: usize,
+) -> Result<f64> {
+    ensure!(repetitions > 0, "CQ allocation probe repetitions must be positive");
+    ensure!(
+        batch_messages > 1,
+        "CQ allocation probe batch must contain at least two messages"
+    );
+    let full_increment = full_batch
+        .checked_sub(full_single)
+        .ok_or_else(|| anyhow!("full local-pull allocation count decreased with the batch size"))?;
+    let direct_increment = direct_batch
+        .checked_sub(direct_single)
+        .ok_or_else(|| anyhow!("direct CommitLog allocation count decreased with the batch size"))?;
+    let cq_increment = full_increment.checked_sub(direct_increment).ok_or_else(|| {
+        anyhow!("matched direct CommitLog control exceeded the full local-pull incremental allocation count")
+    })?;
+    let denominator = repetitions
+        .checked_mul(batch_messages - 1)
+        .ok_or_else(|| anyhow!("CQ allocation probe denominator overflowed"))?;
+    Ok(cq_increment as f64 / denominator as f64)
+}
+
+fn create_message(topic: &CheetahString, queue_id: i32, key_seed: u64) -> MessageExtBrokerInner {
     let mut message = Message::builder()
-        .topic(CheetahString::from_static_str("ArchitectureLocalAppend"))
+        .topic(topic.clone())
         .body(vec![b'X'; MESSAGE_SIZE_BYTES])
         .build_unchecked();
     message.set_tags(CheetahString::from_static_str("ArchitectureGate"));
@@ -611,7 +993,12 @@ fn write_measurement(measurement: MeasurementEnvelope<'_>) -> Result<()> {
 mod tests {
     use super::*;
 
-    fn sample(value: f64, fsync_per_ack: Option<f64>) -> SampleObservation {
+    fn sample(
+        value: f64,
+        fsync_per_ack: Option<f64>,
+        cq_unit_allocations_per_message: Option<f64>,
+        body_copies_per_message: Option<f64>,
+    ) -> SampleObservation {
         SampleObservation {
             throughput_per_second: value,
             p99_latency_us: value + 1.0,
@@ -619,6 +1006,8 @@ mod tests {
             allocations_per_operation: value + 3.0,
             io_amplification_ratio: value + 4.0,
             fsync_per_ack,
+            cq_unit_allocations_per_message,
+            body_copies_per_message,
         }
     }
 
@@ -647,6 +1036,19 @@ mod tests {
         assert_eq!(sync_flush.variant, "concurrency-64");
         assert_eq!(sync_flush.producers, 64);
         assert_eq!(sync_flush.flush_disk_type, FlushDiskType::SyncFlush);
+
+        let Invocation::Collect(local_pull) = parse_invocation(&[LOCAL_PULL_PROFILE.to_owned(), "batch-32".to_owned()])
+            .expect("supported local pull variant")
+        else {
+            panic!("expected collection invocation");
+        };
+        assert_eq!(local_pull.profile, LOCAL_PULL_PROFILE);
+        assert_eq!(local_pull.variant, "batch-32");
+        assert_eq!(local_pull.workload_kind, WorkloadKind::LocalPull);
+        assert_eq!(
+            local_pull.payload_bytes_per_operation(),
+            LOCAL_PULL_BATCH_MESSAGES * MESSAGE_SIZE_BYTES
+        );
     }
 
     #[test]
@@ -655,6 +1057,8 @@ mod tests {
         assert!(parse_invocation(&[LOCAL_APPEND_PROFILE.to_owned(), "producers-2".to_owned()]).is_err());
         assert!(parse_invocation(&[LOCAL_APPEND_PROFILE.to_owned(), "concurrency-64".to_owned()]).is_err());
         assert!(parse_invocation(&[SYNC_FLUSH_PROFILE.to_owned(), "producers-32".to_owned()]).is_err());
+        assert!(parse_invocation(&[LOCAL_PULL_PROFILE.to_owned(), "producers-32".to_owned()]).is_err());
+        assert!(parse_invocation(&[LOCAL_APPEND_PROFILE.to_owned(), "batch-32".to_owned()]).is_err());
         assert!(parse_invocation(&[LOCAL_APPEND_PROFILE.to_owned()]).is_err());
         assert!(parse_invocation(&[
             "--sample".to_owned(),
@@ -667,7 +1071,9 @@ mod tests {
 
     #[test]
     fn builds_exact_sidecar_metric_inventory_with_five_samples() {
-        let observations = (0..SAMPLE_COUNT).map(|index| sample(index as f64, None)).collect();
+        let observations = (0..SAMPLE_COUNT)
+            .map(|index| sample(index as f64, None, None, None))
+            .collect();
         let scenario = Scenario::parse(LOCAL_APPEND_PROFILE, "producers-8").expect("local append scenario");
         let envelope = build_envelope(scenario, observations).expect("build measurement");
         let value = serde_json::to_value(envelope).expect("serialize measurement");
@@ -694,7 +1100,7 @@ mod tests {
     #[test]
     fn sync_flush_inventory_includes_fsync_per_ack() {
         let observations = (0..SAMPLE_COUNT)
-            .map(|index| sample(index as f64, Some(1.0 / 64.0)))
+            .map(|index| sample(index as f64, Some(1.0 / 64.0), None, None))
             .collect();
         let scenario = Scenario::parse(SYNC_FLUSH_PROFILE, "concurrency-64").expect("sync flush scenario");
         let value = serde_json::to_value(build_envelope(scenario, observations).expect("build measurement"))
@@ -721,21 +1127,63 @@ mod tests {
     }
 
     #[test]
+    fn local_pull_inventory_includes_exact_profile_observations() {
+        let observations = (0..SAMPLE_COUNT)
+            .map(|index| sample(index as f64, None, Some(0.0), Some(0.0)))
+            .collect();
+        let scenario = Scenario::parse(LOCAL_PULL_PROFILE, "batch-32").expect("local pull scenario");
+        let value = serde_json::to_value(build_envelope(scenario, observations).expect("build measurement"))
+            .expect("serialize measurement");
+
+        assert_eq!(value["profile"], LOCAL_PULL_PROFILE);
+        assert_eq!(value["variant"], "batch-32");
+        assert_eq!(
+            value["metrics"]
+                .as_object()
+                .expect("metrics object")
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            vec![
+                "allocations_per_operation",
+                "body_copies_per_message",
+                "cq_unit_allocations_per_message",
+                "io_amplification_ratio",
+                "p99_latency_us",
+                "peak_rss_bytes",
+                "throughput_per_second",
+            ]
+        );
+    }
+
+    #[test]
     fn rejects_partial_and_non_finite_samples() {
         let local_append = Scenario::parse(LOCAL_APPEND_PROFILE, "producers-1").expect("local append scenario");
-        let partial = vec![sample(1.0, None), sample(2.0, None)];
+        let partial = vec![sample(1.0, None, None, None), sample(2.0, None, None, None)];
         assert!(build_envelope(local_append, partial).is_err());
 
         let invalid = SampleObservation {
             throughput_per_second: f64::NAN,
-            ..sample(1.0, None)
+            ..sample(1.0, None, None, None)
         };
         assert!(invalid.validate(local_append).is_err());
 
         let sync_flush = Scenario::parse(SYNC_FLUSH_PROFILE, "concurrency-64").expect("sync flush scenario");
-        assert!(sample(1.0, None).validate(sync_flush).is_err());
-        assert!(sample(1.0, Some(f64::INFINITY)).validate(sync_flush).is_err());
-        assert!(sample(1.0, Some(1.0 / 64.0)).validate(local_append).is_err());
+        assert!(sample(1.0, None, None, None).validate(sync_flush).is_err());
+        assert!(sample(1.0, Some(f64::INFINITY), None, None)
+            .validate(sync_flush)
+            .is_err());
+        assert!(sample(1.0, Some(1.0 / 64.0), None, None)
+            .validate(local_append)
+            .is_err());
+
+        let local_pull = Scenario::parse(LOCAL_PULL_PROFILE, "batch-32").expect("local pull scenario");
+        assert!(sample(1.0, None, None, None).validate(local_pull).is_err());
+        assert!(sample(1.0, None, Some(0.0), None).validate(local_pull).is_err());
+        assert!(sample(1.0, None, Some(f64::INFINITY), Some(0.0))
+            .validate(local_pull)
+            .is_err());
+        assert!(sample(1.0, None, Some(0.0), Some(0.0)).validate(local_append).is_err());
     }
 
     #[test]
@@ -746,5 +1194,21 @@ mod tests {
             Duration::from_micros(99)
         );
         assert!(percentile_99(&[]).is_err());
+    }
+
+    #[test]
+    fn computes_matched_cq_allocation_rate_and_rejects_invalid_controls() {
+        assert_eq!(
+            matched_cq_allocation_rate(100, 348, 50, 298, 8, 32).expect("matched zero-allocation control"),
+            0.0
+        );
+        assert_eq!(
+            matched_cq_allocation_rate(100, 596, 50, 298, 8, 32).expect("matched one-allocation control"),
+            1.0
+        );
+        assert!(matched_cq_allocation_rate(200, 100, 50, 60, 8, 32).is_err());
+        assert!(matched_cq_allocation_rate(100, 200, 50, 300, 8, 32).is_err());
+        assert!(matched_cq_allocation_rate(100, 200, 50, 100, 0, 32).is_err());
+        assert!(matched_cq_allocation_rate(100, 200, 50, 100, 8, 1).is_err());
     }
 }
