@@ -476,13 +476,18 @@ def _crate_layout(root: Path) -> tuple[dict[Path, tuple[str, ...]], dict[str, tu
 
 def _module_info(path: Path, root: Path, manifests: dict[Path, tuple[str, ...]]) -> ModuleInfo:
     resolved = path.resolve()
+    resolved_root = root.resolve()
     candidates = [(directory, crate_root) for directory, crate_root in manifests.items() if resolved.is_relative_to(directory)]
-    directory, crate_root = max(candidates, key=lambda item: len(item[0].parts)) if candidates else (root, ("@crate", "."))
-    relative = path.relative_to(directory)
+    directory, crate_root = (
+        max(candidates, key=lambda item: len(item[0].parts))
+        if candidates
+        else (resolved_root, ("@crate", "."))
+    )
+    relative = resolved.relative_to(directory)
     parts = list(relative.parts)
     if "src" in parts:
         src_index = parts.index("src")
-        if src_index > 0 and directory == root:
+        if src_index > 0 and directory == resolved_root:
             crate_root = ("@crate", Path(*parts[:src_index]).as_posix())
         parts = parts[src_index + 1:]
     stem = Path(parts[-1]).stem if parts else "lib"
