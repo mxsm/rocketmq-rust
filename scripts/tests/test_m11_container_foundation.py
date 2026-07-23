@@ -178,6 +178,25 @@ class ContainerFoundationTests(unittest.TestCase):
             )
         )
 
+        missing_protobuf_definitions = self.dockerfile.replace("    libprotobuf-dev \\\n", "", 1)
+        self.assertTrue(
+            any(
+                "libprotobuf-dev" in finding
+                for finding in self.audit(dockerfile=missing_protobuf_definitions)
+            )
+        )
+        missing_protobuf_preflight = self.dockerfile.replace(
+            "test -f /usr/include/google/protobuf/duration.proto",
+            "true",
+            1,
+        )
+        self.assertTrue(
+            any(
+                "duration.proto" in finding
+                for finding in self.audit(dockerfile=missing_protobuf_preflight)
+            )
+        )
+
         no_https_handoff = self.dockerfile.replace(
             "sed -i 's#URIs: http://#URIs: https://#'",
             "sed -i 's#URIs: http://#URIs: http://#'",

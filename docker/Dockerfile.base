@@ -68,12 +68,16 @@ apt-get install -y --no-install-recommends \
     cmake \
     git \
     libclang-dev \
+    libprotobuf-dev \
     libssl-dev \
     llvm \
     make \
     ninja-build \
     pkg-config \
     protobuf-compiler
+test -f /usr/include/google/protobuf/duration.proto
+test -f /usr/include/google/protobuf/timestamp.proto
+protoc --version
 rm -rf /var/lib/apt/lists/*
 rustup toolchain install "${ROCKETMQ_RUST_TOOLCHAIN}" \
     --profile minimal \
