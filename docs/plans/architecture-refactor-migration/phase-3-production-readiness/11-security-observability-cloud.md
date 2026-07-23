@@ -134,23 +134,24 @@ runtime shutdown；超时、取消、drop、sink/flush failure 与 pending count
 
 - [ ] 入口：`[ARCH]` runtime基础镜像、用户/文件系统、供应链和产物命名规则已冻结。
 - [x] `[DEV]` 建统一多阶段构建、最小runtime、非root、read-only rootfs、SBOM、签名和漏洞扫描模板。
-- [ ] `[TEST]` focused test：image build、non-root/read-only启动、SBOM生成、签名验证和critical vulnerability policy。
+- [x] `[TEST]` focused test：image build、non-root/read-only启动、SBOM生成、签名验证和critical vulnerability policy。
 - [x] `[REV]` 静态复核 runtime stage 不依赖 builder、不复制源码/secret/debug，manifest/toolchain/package snapshot/action/tool 均有 immutable 输入。
 - [x] 回滚点：使用上一签名基础镜像digest；不回滚安全用户/文件系统约束。
 
 完成证据：[`11-container-foundation-evidence.md`](11-container-foundation-evidence.md)。新增 foundation 与现有组合镜像
 隔离；builder/runtime manifest digest、Rust nightly 日期和 Debian snapshot 固定，runtime 使用数字非 root 身份与
 声明式 read-only/data/tmpfs contract。guard、负向测试、Actionlint、Hadolint 和 routing gate 均通过；Ubuntu
-workflow 将执行真实 build/smoke/SBOM/Trivy/Cosign/provenance。当前 Windows 与 WSL 无 Docker/Podman/Syft/
-Trivy/Cosign，且按交付约定不等待远端 CI，因此动态 `[TEST]` 保持未签署，必须在 M11-08 消费成功 artifact 后
-才能使用该 foundation 发布服务镜像。71/82 工作包完成，剩余 M11 5 个、M12 6 个，下一工作包为 PR-M11-08；
-M10 真实性能、M11 入口 `[ARCH]`/安全默认 `[HUMAN]`、M11 与 Phase 3 Gate 均未完成。
+workflow 已由后续 R20 run [`30011167537`](https://github.com/mxsm/rocketmq-rust/actions/runs/30011167537)
+在 main commit `13d50e2d33ddfc1142bba63431b339d07704a4f7` 上完成真实
+build/smoke/SBOM/Trivy/Cosign/provenance，artifact archive digest 为
+`sha256:bc8172178a0527a049a79d7c6be0d0811501067acb7336df94f50b5447d32a7f`。71/82 是该工作包结束时的
+历史进度；M10 真实性能、M11 入口 `[ARCH]`/安全默认 `[HUMAN]`、R21/R25、M11 与 Phase 3 Gate 均未完成。
 
 ### PR-M11-08：五个服务镜像入口
 
-- [ ] 入口：`[TEST]` 镜像基础模板通过；五服务启动/配置/信号合同已记录，但 M11-07 远端 build 暴露 slim runtime 缺 CA bundle，M11-08 已修复且尚未观察重跑成功，未签署动态 Gate。
+- [x] 入口：`[TEST]` 镜像基础模板通过；五服务启动/配置/信号合同已记录，R20 run `30011167537` 已验证修复后的 foundation 与五服务套件。
 - [x] `[DEV]` 为五个服务分别建立entrypoint、config mount、data path、port和signal接线，不把服务打进单一镜像。
-- [ ] `[TEST]` focused test：每个镜像独立启动、配置错误退出、SIGTERM、只读rootfs和必要volume权限。
+- [x] `[TEST]` focused test：每个镜像独立启动、配置错误退出、SIGTERM、只读rootfs和必要volume权限。
 - [x] `[REV]` 检查镜像边界与crate/binary owner一致，无secret命令行参数。
 - [x] 回滚点：单个服务独立回到上一签名镜像，不回滚其他服务或共享持久数据。
 
@@ -158,9 +159,10 @@ M10 真实性能、M11 入口 `[ARCH]`/安全默认 `[HUMAN]`、M11 与 Phase 3 
 Broker/NameServer/Controller/Proxy/MCP 由五个显式 target 分别生成且 runtime 只含 owner binary；config/data/port/
 non-root/read-only/SIGTERM 合同进入 versioned policy。Controller、Proxy 与 MCP 补齐统一 SIGINT/SIGTERM 接线，五份
 smoke config 经真实二进制解析，静态 guard/9 组负向测试通过；M11-07 动态失败定位为 slim image 缺 CA bundle，
-本包以 Debian 签名 Release/package hash 引导 CA 后切回 HTTPS。workflow 已实现但本机无容器工具且不等待远端
-CI，故镜像 `[TEST]` 保持未签署。72/82 工作包完成，剩余 M11 4 个、M12 6 个，下一工作包为 PR-M11-09；
-M10 真实性能、M11 入口 `[ARCH]`/安全默认 `[HUMAN]`、M11 与 Phase 3 Gate 均未完成。
+后续 runtime foundation 改为 pinned Ubuntu Noble 并复制固定 snapshot stage 的 CA bundle。R20 run
+`30011167537` 已验证五服务 build、配置失败、non-root/read-only、SIGTERM、CycloneDX、零 CRITICAL 与
+Cosign bundle，镜像 `[TEST]` 已签署。72/82 是该工作包结束时的历史进度；M10 真实性能、M11 入口
+`[ARCH]`/安全默认 `[HUMAN]`、R21/R25、M11 与 Phase 3 Gate 均未完成。
 
 ### PR-M11-09：Helm 与 Kustomize 资产
 
@@ -177,8 +179,8 @@ fail closed，测试 digest 与 Controller ClusterIP 明确不可发布。Contro
 三份 ordinal config 使用稳定 ClusterIP，显式多成员 bootstrap 仅由最小 node ID 执行；真实 quorum/fault 留给
 M11-11。Helm/Kustomize/Kubeconform 工具 archive hash 固定，双 render 37/37 schema、确定性 parity、真实配置解析
 及 8 组正负测试通过。production 签名 digest 和目标集群 Service IP 未冻结，因此入口 `[ARCH]` 保持开放。
-73/82 工作包完成，剩余 M11 3 个、M12 6 个，下一工作包为 PR-M11-10；M10 真实性能、容器动态 `[TEST]`、
-M11/Phase 3/HUMAN/ARCH 与集群 fault Gate 均未完成。
+73/82 工作包完成，剩余 M11 3 个、M12 6 个，下一工作包为 PR-M11-10；该段是历史状态，容器动态 `[TEST]`
+已由后续 R20 关闭，M10、M11/Phase 3/HUMAN/ARCH 与集群 fault Gate 仍未完成。
 
 ### PR-M11-10：Probe、PreStop 与统一 Drain
 
@@ -193,8 +195,8 @@ M11/Phase 3/HUMAN/ARCH 与集群 fault Gate 均未完成。
 45 秒绝对 deadline，Pod grace 为 60 秒，服务 shutdown、telemetry 与 RuntimeOwner 只消费剩余预算。Helm/Kustomize
 双 render 37/37 schema、12 组 Kubernetes 正负测试、9 组容器 guard、五服务 focused Rust test、MCP required
 profile 与根 workspace strict Clippy 通过。该段是 PR-M11-10 的历史完成记录；其后的 PR-M11-11 已交付真实执行器和
-证据门禁，当前总进度由下节记录为 75/82。M10 真实性能、容器动态套件、Kind/K3d fault/已确认消息恢复、
-M11/Phase 3/HUMAN Gate 保持开放。
+证据门禁，当前总进度由下节记录为 75/82。容器动态套件已由后续 R20 关闭；M10 真实性能、Kind/K3d
+fault/已确认消息恢复、M11/Phase 3/HUMAN Gate 保持开放。
 
 ### PR-M11-11：Kind/K3d Fault Matrix Gate
 

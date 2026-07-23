@@ -9,8 +9,9 @@ PR-M11-09 交付五服务 canonical Helm chart、由该 chart 确定性生成的
 
 工作包完成后总进度为 **73/82**，剩余 9 个工作包：M11 3 个、M12 6 个；下一工作包为 PR-M11-10。
 这里的“工作包完成”表示部署资产、focused test、schema/策略门禁与可回滚边界已交付，不表示生产 image digest、
-目标集群 Service CIDR、真实 Controller quorum、probe/drain 或 Kind/K3d fault matrix 已验收。M11 入口 `[ARCH]`、
-M10 真实固定硬件/HUMAN、容器动态 `[TEST]`、M11、Phase 3 与最终目标态 Gate 均保持开放。
+目标集群 Service CIDR、真实 Controller quorum、probe/drain 或 Kind/K3d fault matrix 已验收。该段是历史状态；
+容器动态 `[TEST]` 已由后续 R20 关闭，M11 入口 `[ARCH]`、M10 真实固定硬件/HUMAN、R21、R25、M11、
+Phase 3 与最终目标态 Gate 仍保持开放。
 
 | 项目 | 值 |
 |---|---|

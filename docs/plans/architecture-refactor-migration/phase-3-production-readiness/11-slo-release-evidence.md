@@ -1,6 +1,6 @@
 # M11-12 R24 Soak/SLO 发布证据合同
 
-> Status: engineering package PASS; dynamic candidate evidence and Phase 3 signatures remain open
+> Status: engineering package PASS；R20 container dynamic PASS；R21 cluster/SLO dynamic 与 Phase 3 signatures 保持开放
 
 ## 1. 结论与边界
 
@@ -9,10 +9,11 @@ Grafana dashboard、Prometheus alerts、英文 runbook、rollback 断言和 SHA-
 versioned policy 驱动。production evidence 必须是当前 checkout 的完整 Git SHA、五服务 digest、M11-11
 动态 fault run、至少 361 个一分钟采样点、全部目标通过、无 unresolved alert/fault 且完整回滚。
 
-本机没有 Docker、Kind、K3d、Kubectl、Helm、签名镜像、Secret 或生产 Prometheus endpoint，因此没有执行
-六小时动态 workflow，也没有提交 production `run.json`。正向 fixture 明确记录
+本切片完成时本机没有 Docker、Kind、K3d、Kubectl、Helm、签名镜像、Secret 或生产 Prometheus endpoint，因此
+没有执行六小时动态 workflow，也没有提交 production `run.json`。正向 fixture 明确记录
 `fixture=true`、`dynamic_execution=false`，只有显式 `--allow-fixture` 才能用于 parser 测试，不能批准
-R20、R21、R25、M11 或 Phase 3 Gate。
+R21、R25、M11 或 Phase 3 Gate。R20 容器动态已由后续
+[run `30011167537`](https://github.com/mxsm/rocketmq-rust/actions/runs/30011167537) 独立关闭。
 
 | 项目 | 状态 |
 |---|---|
@@ -20,11 +21,12 @@ R20、R21、R25、M11 或 Phase 3 Gate。
 | dashboard/alerts/runbook | 完成并由 guard 与 semantic registry 对齐 |
 | fixture 与 deliberate violations | 9/9 通过 |
 | 六小时 dynamic soak | 待具备真实集群、镜像、Secret 与 Prometheus endpoint 后执行 |
-| R20/R21 动态容器与 fault Gate | 保持开放 |
+| R20 容器动态 Gate | 已关闭；run `30011167537`，完整证据见 [`11-container-dynamic-evidence.md`](11-container-dynamic-evidence.md) |
+| R21 fault/rolling/SLO Gate | 保持开放 |
 | R25 四方签署 | 保持开放 |
 
-R24 作为工程执行单元关闭后，31 项最小执行清单为 **19 项完成、12 项剩余**；PR-M11-12 父工作包与正式
-进度仍为 **75/82**。
+R24 作为工程执行单元关闭时，31 项最小执行清单为 **19 项完成、12 项剩余**；R20 后续关闭后为
+**20 项完成、11 项剩余**。PR-M11-12 父工作包与正式进度仍为 **75/82**。
 
 ## 2. 固化的发布合同
 
@@ -89,5 +91,6 @@ collector 和 Controller quorum。
 | `.\scripts\check-agents-routing.ps1` | PASS |
 | `git diff --check` | PASS |
 
-动态 workflow 未运行的原因不是测试失败，而是当前主机缺少已记录的集群、镜像、Secret 与监控入口。R20、R21
-和 R25 继续承担真实动态执行与四方签署，不能用本文件或 fixture 替代。
+六小时动态 workflow 未运行的原因不是测试失败，而是当前主机缺少已记录的集群、production 签名镜像、
+Secret 与监控入口。R20 容器动态已由独立 run 关闭；R21 和 R25 继续承担真实集群/SLO 动态执行与四方签署，
+不能用本文件或 fixture 替代。
