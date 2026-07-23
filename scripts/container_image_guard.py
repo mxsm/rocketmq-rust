@@ -124,6 +124,7 @@ def audit_foundation(
         "Acquire::Check-Valid-Until=false",
         "apt-get install -y --no-install-recommends ca-certificates",
         "sed -i 's#URIs: http://#URIs: https://#' /etc/apt/sources.list.d/rocketmq-snapshot.sources",
+        "COPY --from=ca-bundle /etc/ssl/certs/ /etc/ssl/certs/",
         f"USER {policy['runtime']['uid']}:{policy['runtime']['gid']}",
         'CMD ["/bin/true"]',
         "STOPSIGNAL SIGTERM",
@@ -131,9 +132,27 @@ def audit_foundation(
     for fragment in required_dockerfile_fragments:
         if fragment not in dockerfile:
             findings.append(f"foundation Dockerfile missing: {fragment}")
-    for package in policy["build"]["builder_packages"] + policy["build"]["runtime_packages"]:
-        if not re.search(rf"(?m)^\s*{re.escape(package)}(?:\s|\\|$)", dockerfile):
+    for package in policy["build"]["builder_packages"]:
+        package_line = re.search(rf"(?m)^\s*{re.escape(package)}(?:\s|\\|$)", dockerfile)
+        inline_install = re.search(
+            rf"(?m)^\s*apt-get install [^\n]*\b{re.escape(package)}\b",
+            dockerfile,
+        )
+        if package_line is None and inline_install is None:
             findings.append(f"foundation Dockerfile missing pinned-snapshot package: {package}")
+    expected_runtime_packages = {
+        "coreutils",
+        "dash",
+        "findutils",
+        "libc6",
+        "libgcc-s1",
+        "libssl3t64",
+        "passwd",
+    }
+    if policy["build"].get("runtime_dependency_source") != "pinned-base-image-with-snapshot-ca-bundle":
+        findings.append("runtime dependency source must remain the pinned base image plus snapshot CA bundle")
+    if set(policy["build"].get("runtime_base_packages", [])) != expected_runtime_packages:
+        findings.append("runtime pinned-base package contract drifted")
     foundation_only = dockerfile.split("FROM builder-base AS service-builder", maxsplit=1)[0]
     if re.search(r"(?im)^\s*ENTRYPOINT\b", foundation_only):
         findings.append("foundation Dockerfile must not define a shell or service entrypoint")
@@ -168,10 +187,15 @@ def audit_foundation(
         findings.append("container default target drifted")
     if policy.get("build", {}).get("snapshot_bootstrap_transport") != "http-with-signed-release-then-https":
         findings.append("signed snapshot trust-bootstrap transport drifted")
-    if dockerfile.count("URIs: http://snapshot.debian.org/") != 4:
-        findings.append("both foundation stages must bootstrap CA from the signed snapshot over HTTP")
-    if dockerfile.count("sed -i 's#URIs: http://#URIs: https://#'") != 2:
-        findings.append("both foundation stages must switch snapshot transport back to HTTPS")
+    if dockerfile.count("URIs: http://snapshot.debian.org/") != 2:
+        findings.append("builder stage must bootstrap CA from the signed snapshot over HTTP")
+    if dockerfile.count("sed -i 's#URIs: http://#URIs: https://#'") != 1:
+        findings.append("builder stage must switch snapshot transport back to HTTPS")
+    runtime_section = dockerfile.split("FROM ${RUNTIME_IMAGE} AS runtime-base", maxsplit=1)[1].split(
+        "FROM runtime-base AS runtime-base-smoke", maxsplit=1
+    )[0]
+    if re.search(r"(?m)^\s*(?:apt-get|apt)\s", runtime_section):
+        findings.append("runtime stage must not resolve mutable packages")
     for fragment in (
         "FROM builder-base AS service-builder",
         "FROM runtime-base AS service-runtime",
@@ -325,7 +349,7 @@ def audit_foundation(
         "cosign sign --yes $PublishedImageDigest",
         "cosign verify --certificate-identity-regexp",
         "$policy.supply_chain.signature.published_digest_pattern",
-        "FixedVersion",
+        'PSObject.Properties["FixedVersion"]',
     ]
     for fragment in script_fragments:
         if fragment not in supply_script:
@@ -341,6 +365,8 @@ def audit_foundation(
         findings.append("container supply-chain native runner must reserve -c for executable arguments")
     if "--ignore-unfixed" in supply_script:
         findings.append("critical vulnerability gate must not ignore unfixed findings")
+    if "$_.FixedVersion" in supply_script:
+        findings.append("container vulnerability summary must tolerate a missing FixedVersion property")
 
     service_script_fragments = [
         "docker buildx build",
@@ -357,7 +383,7 @@ def audit_foundation(
         "cosign sign-blob",
         "cosign verify-blob",
         "Remove-Item -LiteralPath $privateKey",
-        "FixedVersion",
+        'PSObject.Properties["FixedVersion"]',
     ]
     for fragment in service_script_fragments:
         if fragment not in service_script:
@@ -368,6 +394,8 @@ def audit_foundation(
         findings.append("service image native runners must reserve -c for executable arguments")
     if "--ignore-unfixed" in service_script:
         findings.append("service image CRITICAL vulnerability gate must not ignore unfixed findings")
+    if "$_.FixedVersion" in service_script:
+        findings.append("service vulnerability summary must tolerate a missing FixedVersion property")
     return findings
 
 

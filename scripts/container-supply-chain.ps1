@@ -39,6 +39,31 @@ function Invoke-Checked {
     }
 }
 
+function Format-CriticalVulnerabilitySummary {
+    param(
+        [object[]]$Vulnerabilities
+    )
+
+    $summaries = @(
+        $Vulnerabilities |
+            Select-Object -First 10 |
+            ForEach-Object {
+                $fixedVersionProperty = $_.PSObject.Properties["FixedVersion"]
+                $fixedVersion = if (
+                    $null -eq $fixedVersionProperty -or
+                    [string]::IsNullOrWhiteSpace([string]$fixedVersionProperty.Value)
+                ) {
+                    "unfixed"
+                }
+                else {
+                    [string]$fixedVersionProperty.Value
+                }
+                "$($_.VulnerabilityID) $($_.PkgName) $($_.InstalledVersion) -> $fixedVersion"
+            }
+    )
+    return $summaries -join "; "
+}
+
 foreach ($command in @("docker", "syft", "trivy", "cosign", "git")) {
     if (-not (Get-Command $command -ErrorAction SilentlyContinue)) {
         throw "required command is unavailable: $command"
@@ -115,14 +140,7 @@ $criticalVulnerabilities = @(
 )
 $criticalFindings = $criticalVulnerabilities.Count
 if ($criticalFindings -gt $policy.supply_chain.critical_vulnerability_policy.maximum_findings) {
-    $criticalSummary = @(
-        $criticalVulnerabilities |
-            Select-Object -First 10 |
-            ForEach-Object {
-                $fixedVersion = if ([string]::IsNullOrWhiteSpace($_.FixedVersion)) { "unfixed" } else { $_.FixedVersion }
-                "$($_.VulnerabilityID) $($_.PkgName) $($_.InstalledVersion) -> $fixedVersion"
-            }
-    ) -join "; "
+    $criticalSummary = Format-CriticalVulnerabilitySummary -Vulnerabilities $criticalVulnerabilities
     throw "critical vulnerability policy failed: $criticalFindings findings; $criticalSummary"
 }
 
