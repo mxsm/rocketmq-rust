@@ -14,6 +14,8 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use parking_lot::RwLock;
@@ -78,6 +80,7 @@ pub struct JsonMetadataStore {
     path: PathBuf,
     state: RwLock<MetadataState>,
     persist_lock: tokio::sync::Mutex<()>,
+    successful_persists: AtomicU64,
 }
 
 impl JsonMetadataStore {
@@ -89,7 +92,13 @@ impl JsonMetadataStore {
                 .join("tieredStoreMetadata.json"),
             state: RwLock::new(MetadataState::default()),
             persist_lock: tokio::sync::Mutex::new(()),
+            successful_persists: AtomicU64::new(0),
         }
+    }
+
+    /// Returns metadata snapshots this store instance successfully replaced on disk.
+    pub fn successful_persist_count(&self) -> u64 {
+        self.successful_persists.load(Ordering::Relaxed)
     }
 
     fn queue_key(topic: &str, queue_id: i32) -> String {
@@ -148,6 +157,7 @@ impl TieredMetadataStore for JsonMetadataStore {
             fs::rename(&tmp_path, &self.path)
                 .await
                 .map_err(|err| error::storage_write_failed(path_to_string(&self.path), err.to_string()))?;
+            self.successful_persists.fetch_add(1, Ordering::Relaxed);
         }
 
         Ok(())
@@ -343,15 +353,43 @@ mod tests {
             store_timestamp: 100,
         };
         metadata_store.upsert_index_entry(index_entry.clone()).await?;
+        assert_eq!(metadata_store.successful_persist_count(), 4);
 
         let reloaded_store = JsonMetadataStore::new(config);
         reloaded_store.load().await?;
+        assert_eq!(reloaded_store.successful_persist_count(), 0);
 
         assert_eq!(reloaded_store.get_topic("TopicA").await?, Some(topic_metadata));
         assert_eq!(reloaded_store.get_queue("TopicA", 0).await?, Some(queue_metadata));
         assert_eq!(reloaded_store.list_file_segments("TopicA", 0).await?.len(), 1);
         assert_eq!(reloaded_store.list_all_file_segments().await?, vec![segment]);
         assert_eq!(reloaded_store.list_index_entries().await?, vec![index_entry]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn failed_metadata_replace_does_not_advance_persist_counter() -> Result<(), RocketMQError> {
+        let temp_dir = tempfile::tempdir().map_err(|err| RocketMQError::Internal(err.to_string()))?;
+        let blocked_root = temp_dir.path().join("not-a-directory");
+        tokio::fs::write(&blocked_root, b"blocked")
+            .await
+            .map_err(|err| RocketMQError::Internal(err.to_string()))?;
+        let metadata_store = JsonMetadataStore::new(Arc::new(TieredStoreConfig {
+            store_path_root_dir: blocked_root,
+            ..TieredStoreConfig::default()
+        }));
+
+        assert!(metadata_store
+            .upsert_topic(TopicMetadata {
+                topic_id: 1,
+                topic: "TopicA".to_owned(),
+                reserve_time_millis: 10_000,
+                status: 0,
+                update_timestamp: 100,
+            })
+            .await
+            .is_err());
+        assert_eq!(metadata_store.successful_persist_count(), 0);
         Ok(())
     }
 
