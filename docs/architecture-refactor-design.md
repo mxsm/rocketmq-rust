@@ -1,9 +1,10 @@
 # RocketMQ Rust 下一代架构重构设计方案
 
-<!-- architecture-refactor-scope: phases=1-3; execution=R01-R20,R22-R25; follow-up=R21,R26-R31 -->
+<!-- architecture-refactor-scope: phases=1-3; execution=R01-R18,R20,R22-R25; follow-up=R19,R21,R26-R31 -->
 
-> 当前实施范围：本轮架构重构覆盖 Phase 1～3 的 R01～R20、R22～R25；R21 Docker/Kind/K3d
-> 动态证据与 Phase 4 AI Native（R26～R31）保留为独立后续提案，不计入本轮进度、剩余任务数或完成 Gate。
+> 当前实施范围：本轮架构重构覆盖 Phase 1～3 的 R01～R18、R20、R22～R25；R19 固定目标硬件性能验收、
+> R21 Docker/Kind/K3d 动态证据与 Phase 4 AI Native（R26～R31）保留为独立后续提案，不计入本轮进度、
+> 剩余任务数或完成 Gate。
 > 设计目标：在不牺牲协议、存储格式与运维兼容性的前提下，把架构成熟度提升到可验证的 **96/100** 目标态
 > 设计基线：架构审计提交 `f545d638`；本次 crate/源码迁移表已按 `main` 的 `6d152248` 重新复核，2026-07-11
 > 推荐策略：边界优先的渐进式 strangler migration，而非大爆炸重写

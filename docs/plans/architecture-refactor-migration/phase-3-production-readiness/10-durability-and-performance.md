@@ -5,12 +5,15 @@
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 3：性能、耐久引擎与云原生 |
-| 状态 | 待验收（PR-M10-05 工作包已完成；真实固定硬件采样与 HUMAN M10 Gate 待完成） |
+| 状态 | 当前范围已完成；R19 真实固定硬件采样与 HUMAN 性能验收转为独立后续项 |
 | 预计周期 | 5–8 周 |
 | 工作包 | WP14 `tiered-cursor`；延续 WP02、WP11–WP13 |
 | 前置条件 | 32-package Gate 通过；CommitLog/receipt/progress 和 Local/Rocks golden 稳定 |
 | 可并行项 | CQ/Rocks read、Tiered、Compaction、benchmark harness 可并行；持久 cursor/format 变更必须串行审核 |
-| 完成后解锁 | M12；与 M11 可部分并行 |
+| 完成后解锁 | R25 当前范围收口；R19 与 M12 均另行立项 |
+
+> 范围决策（2026-07-24）：仓库内 4 个 correctness runner 与 11 个 measurement runner 保持就绪，
+> 但固定目标硬件采样、比较和 HUMAN 性能签署作为 R19 follow-up，不计入本轮架构重构完成 Gate。
 
 ## 目标
 

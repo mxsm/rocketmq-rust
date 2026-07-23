@@ -14,7 +14,6 @@
 
 #![allow(dead_code)]
 
-mod arc_mut;
 mod blocking_queue;
 pub mod count_down_latch;
 pub mod rocketmq_tokio_lock;
@@ -24,30 +23,6 @@ pub mod task;
 
 pub mod schedule;
 
-#[allow(
-    deprecated,
-    reason = "retain the deprecated public re-export for the compatibility release window"
-)]
-#[deprecated(
-    since = "1.0.0",
-    note = "use std::sync::Arc with RwLock, Mutex, atomics, or an exclusive owner"
-)]
-pub use arc_mut::ArcMut;
-#[allow(
-    deprecated,
-    reason = "retain the deprecated public re-export for the compatibility release window"
-)]
-#[deprecated(since = "1.0.0", note = "use parking_lot::RwLock or an exclusive owner")]
-pub use arc_mut::SyncUnsafeCellWrapper;
-#[allow(
-    deprecated,
-    reason = "retain the deprecated public re-export for the compatibility release window"
-)]
-#[deprecated(
-    since = "1.0.0",
-    note = "use std::sync::Weak with an explicit lock or immutable state"
-)]
-pub use arc_mut::WeakArcMut;
 pub use blocking_queue::BlockingQueue as RocketMQBlockingQueue;
 pub use count_down_latch::CountDownLatch;
 /// Re-export rocketmq main.

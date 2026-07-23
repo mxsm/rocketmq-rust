@@ -6,9 +6,10 @@ M10-05 固化了八类性能/soak profile、目标硬件采集合同、报告 sc
 正确性前置门禁和限期例外流程，并把 profile 漂移检查接入 CI。该工作包完成后顶层工作包进度为
 **64/82**，剩余 18 个，下一工作包为 PR-M11-01。
 
-这里的“工作包完成”不等于“M10 性能 Gate 已通过”。本次没有可用的生产等价固定硬件
-baseline/candidate，也没有伪造 benchmark 数字；真实采样、原始 sidecar hash 和 `[HUMAN]` M10 Gate
-签署仍待完成。因此 M10 里程碑状态为 `待验收`，Phase 3 Gate 仍未通过。
+这里的“工作包完成”不等于固定目标硬件性能结论已产生。本次没有可用的生产等价固定硬件
+baseline/candidate，也没有伪造 benchmark 数字。2026-07-24 的范围决策将真实采样、原始 sidecar hash
+和 `[HUMAN]` 性能签署划为 R19 独立后续项，不计入本轮架构重构完成 Gate；已实现的 runner 和
+fail-closed 合同继续保留，后续执行时仍不得把 fixture 或局部数据写成真实性能结论。
 
 ## 可追溯性
 

@@ -25,7 +25,7 @@ The store is organized around a few stable boundaries:
 - **`MessageStore` trait**: the broker-facing API for lifecycle, message writes,
   reads, offset lookup, key query, commit-log access, HA metadata, cleanup, and
   runtime information.
-- **`GenericMessageStore`**: feature-gated enum wrapper that delegates to
+- **`OwnedMessageStore`**: feature-gated exclusive composition root that owns
   `LocalFileMessageStore` or `RocksDBMessageStore`.
 - **Local file store**: the default implementation built around CommitLog,
   mapped files, ConsumeQueue, index files, checkpoints, flush services, and
@@ -138,7 +138,7 @@ The default feature set is `["local_file_store", "fast-load"]`.
 
 | Area | Important Types |
 | --- | --- |
-| Store boundary | `MessageStore`, `GenericMessageStore`, `LocalFileMessageStore`, `RocksDBMessageStore` |
+| Store boundary | `MessageStore`, `OwnedMessageStore`, `LocalFileMessageStore`, `RocksDBMessageStore` |
 | Configuration | `MessageStoreConfig`, `FlushDiskType`, `StoreType`, store path helpers |
 | Write path | `CommitLog`, `DefaultAppendMessageCallback`, `PutMessageResult`, `AppendMessageResult` |
 | Read path | `GetMessageResult`, `SelectMappedBufferResult`, `QueryMessageResult` |

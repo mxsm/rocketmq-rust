@@ -26,11 +26,6 @@ use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::base::store_enum::StoreType;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use rocketmq_store::message_store::rocksdb_message_store::RocksDBMessageStore;
-#[allow(
-    deprecated,
-    reason = "this boundary test verifies the deprecated GenericMessageStore adapter until removal"
-)]
-use rocketmq_store::message_store::GenericMessageStore;
 use rocketmq_store::rocksdb::column_family::RocksDbColumnFamily;
 use rocketmq_store::rocksdb::config::RocksDbColumnFamilyConfig;
 use rocketmq_store::rocksdb::config::RocksDbCompactionStyle;
@@ -539,17 +534,6 @@ fn rocksdb_message_store_implements_message_store_trait_boundary() {
     fn assert_message_store<MS: MessageStore>() {}
 
     assert_message_store::<RocksDBMessageStore>();
-}
-
-#[test]
-#[allow(
-    deprecated,
-    reason = "this boundary test verifies the deprecated GenericMessageStore adapter until removal"
-)]
-fn generic_message_store_implements_message_store_trait_boundary() {
-    fn assert_message_store<MS: MessageStore>() {}
-
-    assert_message_store::<GenericMessageStore>();
 }
 
 #[test]

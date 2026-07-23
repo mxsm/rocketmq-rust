@@ -37,11 +37,6 @@ use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
 use rocketmq_runtime::ShutdownReport;
-#[allow(
-    deprecated,
-    reason = "TimerMessageStore preserves legacy full-Store signatures during the deprecation window"
-)]
-use rocketmq_rust::ArcMut;
 use rocketmq_store_local::timer::service::clamp_queue_offset;
 use rocketmq_store_local::timer::service::recover_timer_log_len as plan_recovered_timer_log_len;
 use rocketmq_store_local::timer::service::timer_slot_is_valid;
@@ -55,10 +50,8 @@ use tracing::warn;
 
 use crate::base::message_result::PutMessageResult;
 use crate::base::message_status_enum::PutMessageStatus;
-use crate::base::message_store::MessageStore;
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::log_file::commit_log::CommitLogReadHandle;
-use crate::message_store::local_file_message_store::LocalFileMessageStore;
 use crate::message_store::local_file_message_store::TimerMessageWriteHandle;
 use crate::queue::local_file_consume_queue_store::ConsumeQueueLookupHandle;
 use crate::queue::ArcConsumeQueue;
@@ -147,20 +140,11 @@ impl TimerStoreContext {
     }
 }
 
-#[allow(
-    deprecated,
-    reason = "the deprecated field preserves the legacy full-Store carrier until removal"
-)]
 pub struct TimerMessageStore {
     pub curr_read_time_ms: AtomicI64,
     pub curr_queue_offset: AtomicI64,
     pub last_enqueue_but_expired_time: u64,
     pub last_enqueue_but_expired_store_time: u64,
-    #[deprecated(
-        since = "1.0.0",
-        note = "use new_with_message_store_config or wire_owned_root_dependencies"
-    )]
-    pub default_message_store: Option<ArcMut<LocalFileMessageStore>>,
     pub timer_metrics: TimerMetrics,
     store_context: Option<TimerStoreContext>,
     message_store_config: Arc<MessageStoreConfig>,
@@ -370,48 +354,12 @@ impl TimerMessageStore {
         Ok(true)
     }
 
-    #[allow(
-        deprecated,
-        reason = "this constructor preserves the deprecated full-Store signature until removal"
-    )]
-    #[deprecated(
-        since = "1.0.0",
-        note = "use new_with_message_store_config or wire_owned_root_dependencies"
-    )]
-    pub fn new(default_message_store: Option<ArcMut<LocalFileMessageStore>>) -> Self {
-        let message_store_config = default_message_store
-            .as_ref()
-            .map(|message_store| message_store.message_store_config())
-            .unwrap_or_else(|| Arc::new(MessageStoreConfig::default()));
-        Self::new_with_config(default_message_store, message_store_config)
-    }
-
-    #[allow(
-        deprecated,
-        reason = "this constructor preserves the deprecated full-Store signature until removal"
-    )]
-    #[deprecated(
-        since = "1.0.0",
-        note = "use new_with_message_store_config or wire_owned_root_dependencies"
-    )]
-    pub fn new_with_config(
-        default_message_store: Option<ArcMut<LocalFileMessageStore>>,
-        message_store_config: Arc<MessageStoreConfig>,
-    ) -> Self {
-        let mut store = Self::new_with_message_store_config(message_store_config);
-        store.default_message_store = default_message_store;
-        store
-    }
-
     /// Creates a standalone Timer store from immutable configuration.
     ///
     /// Store-owned Timer instances should instead be created by
-    /// [`LocalFileMessageStore::wire_owned_root_dependencies`], which injects
+    /// [`crate::message_store::local_file_message_store::LocalFileMessageStore::wire_owned_root_dependencies`],
+    /// which injects
     /// narrow queue, CommitLog-read, and message-write capabilities.
-    #[allow(
-        deprecated,
-        reason = "initialize the retained legacy field to None for the canonical constructor"
-    )]
     pub fn new_with_message_store_config(message_store_config: Arc<MessageStoreConfig>) -> Self {
         let timer_metrics_path = get_timer_metrics_path(message_store_config.store_path_root_dir.as_str());
         Self {
@@ -419,7 +367,6 @@ impl TimerMessageStore {
             curr_queue_offset: AtomicI64::new(0),
             last_enqueue_but_expired_time: 0,
             last_enqueue_but_expired_store_time: 0,
-            default_message_store: None,
             timer_metrics: TimerMetrics::new(Some(timer_metrics_path)),
             store_context: None,
             message_store_config,
@@ -449,63 +396,23 @@ impl TimerMessageStore {
         Self::new_with_message_store_config(Arc::new(MessageStoreConfig::default()))
     }
 
-    #[allow(
-        deprecated,
-        reason = "this setter preserves the deprecated full-Store signature until removal"
-    )]
-    #[deprecated(
-        since = "1.0.0",
-        note = "use new_with_message_store_config or wire_owned_root_dependencies"
-    )]
-    pub fn set_default_message_store(&mut self, default_message_store: Option<ArcMut<LocalFileMessageStore>>) {
-        if let Some(message_store) = default_message_store.as_ref() {
-            self.message_store_config = message_store.message_store_config();
-            self.timer_metrics.set_config_path(Some(get_timer_metrics_path(
-                self.message_store_config.store_path_root_dir.as_str(),
-            )));
-        }
-        self.store_context = None;
-        self.default_message_store = default_message_store;
-    }
-
-    #[allow(
-        deprecated,
-        reason = "read the legacy full-Store fallback only for compatibility instances"
-    )]
     fn find_store_consume_queue(&self, topic: &CheetahString, queue_id: i32) -> Option<ArcConsumeQueue> {
-        if let Some(context) = self.store_context.as_ref() {
-            return context.find_consume_queue(topic, queue_id);
-        }
-        self.default_message_store
+        self.store_context
             .as_ref()
-            .and_then(|message_store| message_store.find_consume_queue(topic, queue_id))
+            .and_then(|context| context.find_consume_queue(topic, queue_id))
     }
 
-    #[allow(
-        deprecated,
-        reason = "read the legacy full-Store fallback only for compatibility instances"
-    )]
     fn look_store_message(&self, commit_log_offset: i64, size: i32) -> Option<MessageExt> {
-        if let Some(context) = self.store_context.as_ref() {
-            return context.look_message_by_offset_with_size(commit_log_offset, size);
-        }
-        self.default_message_store
+        self.store_context
             .as_ref()
-            .and_then(|message_store| message_store.look_message_by_offset_with_size(commit_log_offset, size))
+            .and_then(|context| context.look_message_by_offset_with_size(commit_log_offset, size))
     }
 
-    #[allow(
-        deprecated,
-        reason = "read the legacy full-Store fallback only for compatibility instances"
-    )]
     async fn put_store_message(&self, message: MessageExtBrokerInner) -> PutMessageResult {
-        if let Some(context) = self.store_context.as_ref() {
-            return context.put_message(message).await;
+        match self.store_context.as_ref() {
+            Some(context) => context.put_message(message).await,
+            None => PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable),
         }
-        if let Some(message_store) = self.default_message_store.as_ref() {
-            return message_store.put_message_shared(message).await;
-        }
-        PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable)
     }
 
     pub fn shutdown(&self) {
@@ -1446,6 +1353,7 @@ mod tests {
     use super::get_timer_log_path;
     use super::get_timer_wheel_path;
     use super::MessageStoreConfig;
+    use super::PutMessageStatus;
     use super::TimerCheckpoint;
     use super::TimerCheckpointSnapshot;
     use super::TimerLog;
@@ -1513,28 +1421,30 @@ mod tests {
     }
 
     #[test]
-    #[allow(
-        deprecated,
-        reason = "verify the deprecated config-only constructor remains equivalent during its release window"
-    )]
-    fn canonical_and_deprecated_config_constructors_preserve_standalone_state() {
+    fn canonical_config_constructor_preserves_standalone_state() {
         let root = tempfile::tempdir().expect("Timer constructor test root should be created");
         let config = config_with_root(root.path().to_string_lossy().as_ref());
         let canonical = TimerMessageStore::new_with_message_store_config(Arc::clone(&config));
-        let deprecated = TimerMessageStore::new_with_config(None, Arc::clone(&config));
 
-        assert!(canonical.default_message_store.is_none());
-        assert!(deprecated.default_message_store.is_none());
         assert!(canonical.store_context.is_none());
-        assert!(deprecated.store_context.is_none());
         assert_eq!(
             canonical.message_store_config.store_path_root_dir,
             config.store_path_root_dir
         );
-        assert_eq!(
-            deprecated.message_store_config.store_path_root_dir,
-            config.store_path_root_dir
-        );
+    }
+
+    #[tokio::test]
+    async fn standalone_config_constructor_fails_closed_without_store_context() {
+        let root = tempfile::tempdir().expect("Timer fail-closed test root should be created");
+        let config = config_with_root(root.path().to_string_lossy().as_ref());
+        let standalone = TimerMessageStore::new_with_message_store_config(config);
+
+        assert!(standalone
+            .find_store_consume_queue(&CheetahString::from_static_str(TIMER_TOPIC), 0)
+            .is_none());
+        assert!(standalone.look_store_message(0, 1).is_none());
+        let result = standalone.put_store_message(MessageExtBrokerInner::default()).await;
+        assert_eq!(result.put_message_status(), PutMessageStatus::ServiceNotAvailable);
     }
 
     fn build_store_with_timer(root_dir: &str) -> (LocalFileMessageStore, Arc<TimerMessageStore>, CheetahString) {

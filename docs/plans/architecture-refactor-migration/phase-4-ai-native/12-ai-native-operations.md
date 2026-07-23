@@ -1,6 +1,6 @@
 # M12：AI Native 证据驱动运维
 
-<!-- architecture-refactor-scope: phases=1-3; execution=R01-R20,R22-R25; follow-up=R21,R26-R31 -->
+<!-- architecture-refactor-scope: phases=1-3; execution=R01-R18,R20,R22-R25; follow-up=R19,R21,R26-R31 -->
 
 > 范围说明：本文件保留为独立后续提案。M12 / R26～R31 不属于当前 Phase 1～3 架构重构，
 > 不计入当前进度、剩余任务数或完成 Gate，后续需单独立项和批准。

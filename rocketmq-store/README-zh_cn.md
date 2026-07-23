@@ -19,7 +19,7 @@
 store 围绕几个稳定边界组织：
 
 - **`MessageStore` trait**：面向 broker 的生命周期、消息写入、读取、offset 查询、key 查询、CommitLog 访问、HA 元数据、清理和运行时信息 API。
-- **`GenericMessageStore`**：按 feature gate 委托到 `LocalFileMessageStore` 或 `RocksDBMessageStore` 的枚举包装。
+- **`OwnedMessageStore`**：按 feature gate 独占持有 `LocalFileMessageStore` 或 `RocksDBMessageStore` 的组合根。
 - **本地文件存储**：默认实现，围绕 CommitLog、mapped file、ConsumeQueue、索引文件、checkpoint、flush 服务和恢复流程构建。
 - **RocksDB 存储**：可选实现边界，继续复用本地文件 CommitLog 路径，同时通过 RocksDB 服务保存 consume queue、index、timer 和 transaction 元数据。
 - **分发流水线**：CommitLog append 产生 dispatch request，并构建 ConsumeQueue、key index、compaction metadata、RocksDB metadata 以及可选 tiered-store dispatch。
@@ -117,7 +117,7 @@ cargo build -p rocketmq-store --features rocksdb_store
 
 | 领域 | 重要类型 |
 | --- | --- |
-| Store 边界 | `MessageStore`, `GenericMessageStore`, `LocalFileMessageStore`, `RocksDBMessageStore` |
+| Store 边界 | `MessageStore`, `OwnedMessageStore`, `LocalFileMessageStore`, `RocksDBMessageStore` |
 | 配置 | `MessageStoreConfig`, `FlushDiskType`, `StoreType`, store path helpers |
 | 写入路径 | `CommitLog`, `DefaultAppendMessageCallback`, `PutMessageResult`, `AppendMessageResult` |
 | 读取路径 | `GetMessageResult`, `SelectMappedBufferResult`, `QueryMessageResult` |
