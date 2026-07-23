@@ -5,15 +5,15 @@
 > 当前实施范围：Phase 1～3 的 R01～R18、R20、R22～R25；R19 固定目标硬件性能验收、
 > R21 Docker/Kind/K3d 动态证据与 Phase 4 AI Native（R26～R31）保留为独立后续提案，
 > 不计入本轮进度、剩余任务数或完成 Gate。
-> 状态：实施中（Phase 3；R09/R18 已按 2026-07-24 HUMAN 提前移除授权完成，当前仅剩 R25 四方签署）
+> 状态：已完成（Phase 1～3 当前范围 76/76；R25 已对冻结候选完成四方签署）
 > 设计依据：[`docs/architecture-refactor-design.md`](../../architecture-refactor-design.md)
 > 架构审计基线：`f545d638`
 > crate 与源码迁移复核基线：`6d152248`
-> 当前复核状态：根 workspace 已达到目标 32 个 package；当前范围 75/76 工作包完成，
-> PR-M11-12 进行中，合计剩余 1 个
+> 当前复核状态：根 workspace 已达到目标 32 个 package；当前范围 76/76 工作包完成，
+> PR-M11-12 与 R25 均已关闭，合计剩余 0 个
 
 剩余任务数量、M11-12 内部执行批次与独立 Phase 4 后续提案见 [`REMAINING-TASKS.md`](REMAINING-TASKS.md)：
-当前正式口径剩余 1 个工作包；23 个最小可审查单元已完成 22 个，当前仅剩 R25。
+当前正式口径剩余 0 个工作包；23 个最小可审查单元已完成 23 个，当前范围无未完成项。
 R19 与 R21 已从本轮目标排除；R25 对重新划定的当前范围完成签署。Issue #8702 将
 reviewed ArcMut baseline 从 20 identities / 58 occurrences 单调降至 0/0，并删除 12 个公开兼容表面；
 三个 canonical replacement 保持可用。此前 Issue #8649 /
@@ -36,6 +36,8 @@ R20 五服务容器动态验收已由 Issue #8677 在 main commit
 独立后续项 R21 承担，R25 只签署重新划定后的当前范围。
 R09/R18 的授权、12 个删除表面、0/0 基线和正/负约束见
 [`R09/R18 共享可变兼容面移除证据`](phase-3-production-readiness/11-shared-mutation-removal-evidence.md)。
+R25 的冻结候选、适用验证和四方签署见
+[`R25 当前范围收口证据`](phase-3-production-readiness/11-current-scope-closeout-evidence.md)。
 
 ## 1. 使用方式
 

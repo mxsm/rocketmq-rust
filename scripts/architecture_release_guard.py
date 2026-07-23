@@ -144,19 +144,19 @@ SCOPE_DOCUMENTS = (
 )
 REQUIRED_SCOPE_SUMMARIES = {
     "docs/plans/architecture-refactor-migration/README.md": (
-        "当前范围 75/76 工作包完成",
-        "23 个最小可审查单元已完成 22 个",
-        "当前仅剩 R25",
+        "当前范围 76/76 工作包完成",
+        "23 个最小可审查单元已完成 23 个",
+        "当前范围无未完成项",
     ),
     "docs/plans/architecture-refactor-migration/CHECKLIST.md": (
         "当前范围只统计 Phase 1～3 的 76 个顶层",
         "执行层清单共 23 个最小可审查单元",
-        "当前仅剩 R25",
+        "当前范围无未完成项",
     ),
     "docs/plans/architecture-refactor-migration/REMAINING-TASKS.md": (
-        "当前范围的正式工作包已完成 75/76",
+        "当前范围的正式工作包已完成 76/76",
         "**23 个最小可审查单元**",
-        "当前仅剩 R25",
+        "当前范围无未完成项",
     ),
 }
 REQUIRED_OBJECTIVE_SCOPE = {
@@ -167,9 +167,9 @@ REQUIRED_OBJECTIVE_SCOPE = {
         "R20",
         *[f"R{index:02d}" for index in range(22, 26)],
     ],
-    "remaining_execution_items": ["R25"],
+    "remaining_execution_items": [],
     "immediate_execution_items": [],
-    "closeout_execution_items": ["R25"],
+    "closeout_execution_items": [],
     "excluded_platform_follow_up_items": ["R21"],
     "excluded_performance_follow_up_items": ["R19"],
     "excluded_follow_up_phase": "Phase 4 AI Native",
@@ -183,6 +183,21 @@ REQUIRED_OBJECTIVE_SCOPE = {
         "architecture-refactor progress, remaining-task counts, or completion "
         "gates."
     ),
+}
+REQUIRED_CURRENT_SCOPE_CLOSEOUT = {
+    "item": "R25",
+    "status": "completed",
+    "candidate_commit": "1571e73fd458a7c493172787e6c2d001bd0dcba6",
+    "candidate_subject": "[ISSUE #8702]♻️Remove shared-mutation compatibility APIs (#8703)",
+    "signed_on": "2026-07-24",
+    "signatures": {
+        "ARCH": "approved",
+        "REV": "approved",
+        "TEST": "approved",
+        "HUMAN": "approved",
+    },
+    "scope": "R01-R18,R20,R22-R25",
+    "follow_up": "R19,R21,R26-R31",
 }
 
 
@@ -447,6 +462,10 @@ def check_objective_scope(
             "architecture-refactor objective scope must exclude R19 target-hardware "
             "performance, R21 platform evidence, and Phase 4 R26-R31 as follow-up work"
         )
+    if plan.get("current_scope_closeout") != REQUIRED_CURRENT_SCOPE_CLOSEOUT:
+        findings.append(
+            "R25 closeout must bind all four approvals to the frozen current-scope candidate"
+        )
 
     contents: dict[str, str] = {}
     for relative_path in SCOPE_DOCUMENTS:
@@ -564,7 +583,8 @@ def main() -> int:
         "- objective scope: Phase 1-3/R01-R18,R20,R22-R25; "
         "R19/R21 and Phase 4 R26-R31 excluded as follow-up"
     )
-    print("- current remaining: R25 closeout")
+    print("- R25 closeout: four-party approved on candidate 1571e73fd")
+    print("- current remaining: none; current scope complete")
     return 0
 
 

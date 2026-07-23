@@ -25,7 +25,7 @@
 |---|---|---|---|---|---|---|
 | Phase 1 | M01–M03 | 已完成 | Codex 多代理执行组 | 6–8 周 | 2026-07-11 | [`PHASE-1-DELIVERY.md`](phase-1-safety-foundation/PHASE-1-DELIVERY.md) |
 | Phase 2 | M04–M09 | 已完成 | Codex 执行组 | 12–16 周 | 2026-07-18 | [`09-phase-2-gate-evidence.md`](phase-2-core-boundaries/09-phase-2-gate-evidence.md) |
-| Phase 3 | M10–M11 | 进行中 | Codex 执行组 | 8–12 周 | — | [`phase-3-production-readiness/`](phase-3-production-readiness/) |
+| Phase 3 | M10–M11 | 已完成 | Codex 执行组 | 8–12 周 | 2026-07-24 | [`11-current-scope-closeout-evidence.md`](phase-3-production-readiness/11-current-scope-closeout-evidence.md) |
 | Phase 4（独立后续提案） | M12 | 不计入本轮 | 待单独立项 | 8–12 周 | — | [`12-ai-native-operations.md`](phase-4-ai-native/12-ai-native-operations.md) |
 
 ### 2.1 剩余重构盘点（2026-07-23）
@@ -36,17 +36,16 @@
 
 | 指标 | 已完成 | 进行中 | 未开始/未完成 | 目标 |
 |---|---:|---:|---:|---:|
-| PR 级工作包 | 75 | 1（PR-M11-12） | 1 | 76 |
-| 里程碑 | 9（M01–M09） | 2（M10 待验收、M11 实施中） | 2 | 11 |
+| PR 级工作包 | 76 | 0 | 0 | 76 |
+| 里程碑 | 11（M01–M11） | 0 | 0 | 11 |
 | 新增边界 crate | 10 | 0 | 0 | 10 |
 | 根 workspace package | 32 | — | 0 | 32 |
-| Phase Gate | 2 | 1（Phase 3） | 1 | 3 |
+| Phase Gate | 3 | 0 | 0 | 3 |
 
-当前范围剩余 1 个顶层工作包：M10 为 0 个，M11 的 PR-M11-12 正在实施。
-PR-M10-05 已完成性能门禁实现；真实固定硬件 baseline/candidate 与 HUMAN M10 Gate 尚未完成，因此 M10 为
-`待验收`而非`已完成`。M11 为`实施中`，当前下一工作包为 PR-M11-12。
+当前范围无未完成项。R19 固定目标硬件性能验收保持独立 follow-up，不影响 M10 在重新划定范围内完成；
+M11 的 PR-M11-12 与 R25 四方签署均已关闭。
 
-执行层清单共 23 个最小可审查单元；R01～R18、R20、R22～R24 已完成，当前仅剩 R25。
+执行层清单共 23 个最小可审查单元；R01～R18、R20、R22～R25 已全部完成，当前范围无未完成项。
 R19 已转为固定目标硬件性能后续项，R21 已转为独立平台后续项。该数字不替代 76 个顶层工作包口径；逐项 checklist
 及每组精确 baseline 见 [`REMAINING-TASKS.md`](REMAINING-TASKS.md#执行层最小审查清单24-项)。
 
@@ -932,21 +931,21 @@ M09-04 再删除 MCP 未使用的 Auth/Error direct edges，并把承担 owned t
   - [x] Issue #8700 / R19 correctness：增加 SyncFlush durable-ack 后强杀恢复、派生状态删除后 CommitLog 无空洞重放、真实 Transport 受控过载和 Compaction Recovering 禁止 raw CommitLog fallback 四个 runner；sidecar manifest 的 4 个 correctness 与 11 个 measurement command 已全部具体化，R19 固定硬件/HUMAN Gate 仍保持开放
   - [x] Issue #8702 / M11-12bc115：按 2026-07-24 HUMAN 提前移除授权完成 R09/R18，删除 12 个共享可变兼容表面，ArcMut baseline 从 20/58 单调清零，三个 canonical replacement 保留
   - [FOLLOW-UP] R19 固定目标硬件/HUMAN 性能 Gate 已从本轮范围排除；4/4 correctness 与 11/11 measurement runner 保持就绪
-  - [ ] R25：冻结重新划定的候选快照并完成当前范围四方签署
+  - [x] Issue #8704 / R25：冻结候选 `1571e73fd`，完成当前范围四方签署并由 guard 固定 76/76、23/23 与 follow-up 边界
   - [FOLLOW-UP] R21 Kind/K3d 动态证据已从本轮目标排除，后续单独处理
-  - [ ] 当前范围正式进度为 75/76，执行清单完成 22/23；当前仅剩 R25
-- [ ] 对应任务文档的 Exit Checklist 全部通过
+  - [x] 当前范围正式进度为 76/76，执行清单完成 23/23；当前范围无未完成项
+- [x] 对应任务文档的 Exit Checklist 全部通过
 
 ### Phase 3 Gate
 
-- [ ] CommitLog 是唯一权威 WAL，派生引擎只持久 cursor/watermark
-- [ ] dirty-tail、flush、replay、generation rollback 与故障注入通过
+- [x] CommitLog 是唯一权威 WAL，派生引擎只持久 cursor/watermark
+- [x] dirty-tail、flush、replay、generation rollback 与故障注入通过
 - [FOLLOW-UP] R19 固定目标硬件下的性能、p99、RSS 和 I/O amplification 门槛另行验收
 - [x] production/public compatibility API 无不安全 ArcMut 逃逸
-- [ ] secure profile、secret reload、telemetry semantics 与 R20 镜像动态验证通过；R21 集群滚动升级为独立后续项
-- [ ] SLO、dashboard、runbook 和 rollback 步骤与代码同步
-- [ ] `[ARCH]`、`[REV]`、`[TEST]` 已签署
-- [ ] `[HUMAN]` 已批准关闭 Phase 3 与本轮架构重构
+- [x] secure profile、secret reload、telemetry semantics 与 R20 镜像动态验证通过；R21 集群滚动升级为独立后续项
+- [x] SLO、dashboard、runbook 和 rollback 步骤与代码同步
+- [x] `[ARCH]`、`[REV]`、`[TEST]` 已对候选 `1571e73fd` 签署
+- [x] `[HUMAN]` 已批准关闭 Phase 3 与本轮架构重构
 
 ## 6. 独立后续提案：Phase 4 AI Native 运维
 
