@@ -1,8 +1,12 @@
 # RocketMQ Rust 架构重构执行与完成 Checklist
 
+<!-- architecture-refactor-scope: phases=1-3; execution=R01-R20,R22-R25; follow-up=R21,R26-R31 -->
+
+> 当前实施范围：Phase 1～3 的 R01～R20、R22～R25；R21 Docker/Kind/K3d 动态证据与
+> Phase 4 AI Native（R26～R31）作为独立后续提案，不计入本轮进度、剩余任务数或完成 Gate。
 > 设计依据：[`docs/architecture-refactor-design.md`](../../architecture-refactor-design.md)
 > 实施手册：[`README.md`](README.md)
-> 用途：跟踪 4 个 Phase、12 个里程碑和每次 PR/交付的完成证据
+> 用途：跟踪当前 3 个 Phase、11 个里程碑和每次 PR/交付的完成证据；M12 仅保留后续提案索引
 > 规则：只有证据可复现、审查已签署且回滚路径有效时，才能把 `[ ]` 改为 `[x]`
 
 ## 1. 填写约定
@@ -21,30 +25,32 @@
 | Phase 1 | M01–M03 | 已完成 | Codex 多代理执行组 | 6–8 周 | 2026-07-11 | [`PHASE-1-DELIVERY.md`](phase-1-safety-foundation/PHASE-1-DELIVERY.md) |
 | Phase 2 | M04–M09 | 已完成 | Codex 执行组 | 12–16 周 | 2026-07-18 | [`09-phase-2-gate-evidence.md`](phase-2-core-boundaries/09-phase-2-gate-evidence.md) |
 | Phase 3 | M10–M11 | 进行中 | Codex 执行组 | 8–12 周 | — | [`phase-3-production-readiness/`](phase-3-production-readiness/) |
-| Phase 4 | M12 | 未开始 | 待分配 | 8–12 周 | — | — |
+| Phase 4（独立后续提案） | M12 | 不计入本轮 | 待单独立项 | 8–12 周 | — | [`12-ai-native-operations.md`](phase-4-ai-native/12-ai-native-operations.md) |
 
 ### 2.1 剩余重构盘点（2026-07-23）
 
-> 统计口径：只统计 82 个顶层 `PR-Mxx-yy` 工作包；M06-03a～ah 等内部迁移证据不重复计数。
-> 详细 owner 热点、M11-12 建议批次与 M12 清单见 [`REMAINING-TASKS.md`](REMAINING-TASKS.md)。
+> 统计口径：当前范围只统计 Phase 1～3 的 76 个顶层 `PR-Mxx-yy` 工作包；M06-03a～ah
+> 等内部迁移证据不重复计数，PR-M12-01～06 作为独立后续提案不计入。
+> 详细 owner 热点、M11-12 建议批次与后续提案索引见 [`REMAINING-TASKS.md`](REMAINING-TASKS.md)。
 
 | 指标 | 已完成 | 进行中 | 未开始/未完成 | 目标 |
 |---|---:|---:|---:|---:|
-| PR 级工作包 | 75 | 1（PR-M11-12） | 6（PR-M12-01～06）；合计 7 尚未完成 | 82 |
-| 里程碑 | 9（M01–M09） | 2（M10 待验收、M11 实施中） | 1（M12） | 12 |
+| PR 级工作包 | 75 | 1（PR-M11-12） | 1 | 76 |
+| 里程碑 | 9（M01–M09） | 2（M10 待验收、M11 实施中） | 2 | 11 |
 | 新增边界 crate | 10 | 0 | 0 | 10 |
 | 根 workspace package | 32 | — | 0 | 32 |
-| Phase Gate | 2 | 1（Phase 3） | 1（Phase 4） | 4 |
+| Phase Gate | 2 | 1（Phase 3） | 1 | 3 |
 
-剩余 7 个工作包分布：M10 为 0 个、M11 为 1 个且正在实施、M12 为 6 个且尚未开始。
+当前范围剩余 1 个顶层工作包：M10 为 0 个，M11 的 PR-M11-12 正在实施。
 PR-M10-05 已完成性能门禁实现；真实固定硬件 baseline/candidate 与 HUMAN M10 Gate 尚未完成，因此 M10 为
 `待验收`而非`已完成`。M11 为`实施中`，当前下一工作包为 PR-M11-12。
 
-执行层清单共 31 个最小可审查单元：16 个 production owner、2 个 test/compatibility、7 个
-M10/Phase 3 动态验收与签署、6 个 M12；R01～R08、R10～R17、R20、R22～R24 已完成，当前剩余 11 个。该数字不替代 82 个顶层工作包口径；逐项 checklist
-及每组精确 baseline 见 [`REMAINING-TASKS.md`](REMAINING-TASKS.md#执行层最小审查清单31-项)。
+执行层清单共 24 个最小可审查单元：16 个 production owner、2 个 test/compatibility、6 个
+M10/Phase 3 动态验收与签署；R01～R08、R10～R17、R20、R22～R24 已完成，当前剩余
+R09、R18、R19、R25 共 4 个。R21 已转为独立平台后续项。该数字不替代 76 个顶层工作包口径；逐项 checklist
+及每组精确 baseline 见 [`REMAINING-TASKS.md`](REMAINING-TASKS.md#执行层最小审查清单24-项)。
 
-PR-M11-12 的内部子切片不重复计入 82 个顶层工作包。Issue #8649 的 M11-12bc114 候选完成后，当前 ArcMut reviewed
+PR-M11-12 的内部子切片不重复计入 76 个顶层工作包。Issue #8649 的 M11-12bc114 候选完成后，当前 ArcMut reviewed
 baseline 为 20 identities / 58 occurrences，其中 production 为 6/12、test 为 1/7、compatibility
 为 13/39。production 剩余分布和完成目标如下：
 
@@ -58,8 +64,8 @@ R22 已在 bc112 的同一候选快照完成 stable default、all-target/all-fea
 R23 又以 Miri 证明 guarded backing 通过、clone-safe mutable alias 产生预期 UB，并以 Loom 2/2 固定安全替代模型；
 结论是 ArcMut facade 不得长期保留，R18 仍须等待兼容批准窗口。R24 已固化六小时 soak/SLO、dashboard、
 alerts、runbook、rollback 和 evidence index 工程合同；PR-M11-12 还须完成 R09/R18 与真实动态候选证据。
-M10 固定硬件性能、五镜像动态验证、
-Kind/K3d 七场景与 `[ARCH]`/`[REV]`/`[TEST]`/`[HUMAN]` 签署是验收 Gate，不额外增加顶层工作包数量。
+M10 固定硬件性能和当前范围的 `[ARCH]`/`[REV]`/`[TEST]`/`[HUMAN]` 签署是验收 Gate；
+Kind/K3d 七场景已随 R21 转为独立平台后续项。
 M11-12bc110～bc112 已将 nightly feature 属性从 8 个降至 0 个，并以
 `scripts/stable_surface_guard.py` 冻结精确 baseline；ArcMut 公开名称仍保留，但其兼容实现改用 stable
 `parking_lot::RwLock` backing，过时 benchmark 已删除。R18 的 facade 删除仍受 next-major/HUMAN 窗口约束。
@@ -639,7 +645,7 @@ M09-04 再删除 MCP 未使用的 Auth/Error direct edges，并把承担 owned t
   - [x] 断言覆盖 message ID、Queue/CommitLog offset、PVC UID、quorum、preStop、SLO、五镜像回滚和 fault cleanup，不以 Pod Ready 单独判定成功
   - [x] production evidence 强制 `dynamic_execution=true`/`fixture=false`，并校验 policy/chart/overlay/image/artifact SHA-256；fixture 必须显式 opt-in
   - [x] test-only fault-driver、管理 CLI 环境 ACL HMAC-SHA256、manual dynamic workflow 与 11 组正负证据测试落地
-  - [ ] 本机无 Docker/Kind/K3d/Kubectl/Helm、目标签名镜像和 Secret，七场景真实动态执行未运行，Kind/K3d Gate 保持待验收
+  - [FOLLOW-UP] 本机无 Docker/Kind/K3d/Kubectl/Helm、目标签名镜像和 Secret，七场景真实动态执行未运行；该动态验证现由独立 R21 后续项追踪
   - [x] [`M11-11 证据`](phase-3-production-readiness/11-kind-k3d-fault-matrix-evidence.md) 记录完成边界、验证结果、未签署动态 Gate 与不删除 PVC/WAL 的回滚策略
   - [x] 75/82 已完成、7 未完成，下一工作包 PR-M11-12；M10/M11/Phase 3/HUMAN 与真实 fault Gate 均未提前宣称完成
 - [ ] PR-M11-12：完成 ArcMut、stable 与 SLO Phase 3 收口
@@ -918,9 +924,11 @@ M09-04 再删除 MCP 未使用的 Auth/Error direct edges，并把承担 owned t
   - [x] Issue #8645 / M11-12bc112 候选将 ArcMut/WeakArcMut/SyncUnsafeCellWrapper 的 backing 改为 stable `parking_lot::RwLock`，删除两处 `sync_unsafe_cell` gate 与过时 benchmark；nightly feature 清零，stable default、all-target/all-feature workspace 矩阵和 target guard 全部通过，ArcMut baseline 降至 20/58，R22 完成，执行清单完成 17 项、剩余 14 项
   - [x] Issue #8647 / M11-12bc113 候选新增可重复 Miri 正负门禁和 Loom 安全替代模型：guarded backing 通过，clone-safe mutable alias 以预期 UB fail closed，Loom writer serialization/owner release 2/2 通过；技术审计拒绝长期保留 ArcMut，R23 完成，执行清单完成 18 项、剩余 13 项
   - [x] Issue #8649 / M11-12bc114 候选新增六小时 soak/SLO policy、七项目标、Grafana/Prometheus 资产、英文 runbook、动态 runner/workflow 与 fail-closed SHA-256 evidence guard；fixture 明确非动态，9 项正向/故意违规测试通过，R24 完成，执行清单完成 19 项、剩余 12 项
-  - [x] Issue #8677 / R20：Container Foundation run [`30011167537`](https://github.com/mxsm/rocketmq-rust/actions/runs/30011167537) 在 main commit `13d50e2d33ddfc1142bba63431b339d07704a4f7` 上完成 foundation 与 Broker、NameServer、Controller、Proxy、MCP 五服务动态验证；artifact `container-foundation`（ID `8565842850`）archive digest 为 `sha256:bc8172178a0527a049a79d7c6be0d0811501067acb7336df94f50b5447d32a7f`，执行清单完成 20 项、剩余 11 项
-  - [ ] M11-12bc115 及后续：完成 R09/R18 compatibility、R21 集群动态证据、R25 四方签署与同一候选快照 Gate
-  - [ ] 总进度仍为 75/82；R20 已关闭，但本子切片不提前计作完成工作包，M10/Kind-K3d/HUMAN Gate 保持开放
+  - [x] Issue #8677 / R20：Container Foundation run [`30011167537`](https://github.com/mxsm/rocketmq-rust/actions/runs/30011167537) 在 main commit `13d50e2d33ddfc1142bba63431b339d07704a4f7` 上完成 foundation 与 Broker、NameServer、Controller、Proxy、MCP 五服务动态验证；artifact `container-foundation`（ID `8565842850`）archive digest 为 `sha256:bc8172178a0527a049a79d7c6be0d0811501067acb7336df94f50b5447d32a7f`
+  - [ ] M11-12bc115 及后续立即实施：完成 R09/R18 compatibility 与 R19 固定硬件/HUMAN 性能 Gate
+  - [ ] R25：冻结重新划定的候选快照并完成当前范围四方签署
+  - [FOLLOW-UP] R21 Kind/K3d 动态证据已从本轮目标排除，后续单独处理
+  - [ ] 当前范围正式进度为 75/76，执行清单完成 20/24；R09、R18、R19、R25 保持开放
 - [ ] 对应任务文档的 Exit Checklist 全部通过
 
 ### Phase 3 Gate
@@ -929,36 +937,36 @@ M09-04 再删除 MCP 未使用的 Auth/Error direct edges，并把承担 owned t
 - [ ] dirty-tail、flush、replay、generation rollback 与故障注入通过
 - [ ] 固定 profile 下性能、p99、RSS 和 I/O amplification 达到门槛
 - [ ] production/public compatibility API 无不安全 ArcMut 逃逸
-- [ ] secure profile、secret reload、telemetry semantics、镜像与滚动升级 e2e 通过
+- [ ] secure profile、secret reload、telemetry semantics 与 R20 镜像动态验证通过；R21 集群滚动升级为独立后续项
 - [ ] SLO、dashboard、runbook 和 rollback 步骤与代码同步
 - [ ] `[ARCH]`、`[REV]`、`[TEST]` 已签署
-- [ ] `[HUMAN]` 已批准进入 Phase 4
+- [ ] `[HUMAN]` 已批准关闭 Phase 3 与本轮架构重构
 
-## 6. Phase 4：AI Native 运维
+## 6. 独立后续提案：Phase 4 AI Native 运维
 
 ### M12 AI Native 证据驱动运维
 
 任务文档：[`12-ai-native-operations.md`](phase-4-ai-native/12-ai-native-operations.md)
 
-- [ ] PR-M12-01：实现 Evidence normalization 与 Knowledge Graph
-- [ ] PR-M12-02：实现受控 RAG
-- [ ] PR-M12-03：实现多领域确定性诊断
-- [ ] PR-M12-04：冻结 Plan contract 并证明无副作用
-- [ ] `[HUMAN]` 已单独决定是否实施 Apply
-- [ ] PR-M12-05：实现独立 Apply 边界（仅在批准后）
-- [ ] PR-M12-06：完成 eval、red-team 与离线 fallback
-- [ ] 对应任务文档的 Exit Checklist 全部通过
+- [FOLLOW-UP] PR-M12-01：实现 Evidence normalization 与 Knowledge Graph
+- [FOLLOW-UP] PR-M12-02：实现受控 RAG
+- [FOLLOW-UP] PR-M12-03：实现多领域确定性诊断
+- [FOLLOW-UP] PR-M12-04：冻结 Plan contract 并证明无副作用
+- [FOLLOW-UP] `[HUMAN]` 单独决定是否实施 Apply
+- [FOLLOW-UP] PR-M12-05：实现独立 Apply 边界（仅在批准后）
+- [FOLLOW-UP] PR-M12-06：完成 eval、red-team 与离线 fallback
+- [FOLLOW-UP] 对应任务文档的 Exit Checklist 全部通过
 
-### Phase 4 Gate
+### 独立 Phase 4 Gate（不计入本轮）
 
-- [ ] AI/LLM 不在 Broker、Client、Store 数据路径
-- [ ] KG/RAG 满足 tenant、source、freshness、privacy 和有界资源要求
-- [ ] 确定性规则可重放并正确标记 partial/missing evidence
-- [ ] 现有 Plan Tool 无副作用合同全部通过
-- [ ] 若 Apply 存在，compile/runtime/RBAC/approval 门禁及 audit/verify/rollback 均 fail closed
-- [ ] LLM 离线不影响核心服务和人工 CLI/API
-- [ ] threat model/red-team 无未解决高风险
-- [ ] `[ARCH]`、`[REV]`、`[TEST]`、`[HUMAN]` 已签署最终目标态 Gate
+- AI/LLM 不在 Broker、Client、Store 数据路径。
+- KG/RAG 满足 tenant、source、freshness、privacy 和有界资源要求。
+- 确定性规则可重放并正确标记 partial/missing evidence。
+- 现有 Plan Tool 无副作用合同全部通过。
+- 若 Apply 存在，compile/runtime/RBAC/approval 门禁及 audit/verify/rollback 均 fail closed。
+- LLM 离线不影响核心服务和人工 CLI/API。
+- threat model/red-team 无未解决高风险。
+- `[ARCH]`、`[REV]`、`[TEST]`、`[HUMAN]` 已签署独立 Phase 4 Gate。
 
 ## 7. 每次交付完成记录模板
 
@@ -1044,6 +1052,6 @@ stop_reason: <仅 blocked 时填写>
 - [ ] durability、bounded lifecycle、兼容性和故障恢复均有自动化证据
 - [ ] 性能绝对目标附固定硬件 profile、资源预算和可重复报告
 - [ ] secure cloud deployment、SLO、dashboard、runbook 与回滚演练通过
-- [ ] AI 证据链、Plan/Apply 边界、离线 fallback 和 red-team 通过
+- Phase 4 的 AI 证据链、Plan/Apply 边界、离线 fallback 和 red-team 由独立后续提案单独验收。
 - [ ] 设计文档中 96/100 的每个评分维度均链接到可复现证据
 - [ ] 未达到的门槛未被计入代码现状分

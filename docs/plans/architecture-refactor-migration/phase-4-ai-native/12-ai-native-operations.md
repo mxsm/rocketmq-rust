@@ -1,13 +1,18 @@
 # M12：AI Native 证据驱动运维
 
+<!-- architecture-refactor-scope: phases=1-3; execution=R01-R20,R22-R25; follow-up=R21,R26-R31 -->
+
+> 范围说明：本文件保留为独立后续提案。M12 / R26～R31 不属于当前 Phase 1～3 架构重构，
+> 不计入当前进度、剩余任务数或完成 Gate，后续需单独立项和批准。
+
 ## 元数据
 
 | 字段 | 值 |
 |---|---|
 | 阶段 | Phase 4：AI Native 运维 |
-| 状态 | 已批准，等待 M10/M11 |
+| 状态 | 独立后续提案；不属于当前架构重构 |
 | 预计周期 | 8–12 周 |
-| 工作包 | Phase 4 新增；复用 WP14 的进度证据和 WP16 的安全合同 |
+| 工作包 | 独立 Phase 4 提案；复用 WP14 的进度证据和 WP16 的安全合同 |
 | 前置条件 | Telemetry semantic registry、AdminSession、QueryFacade、Evidence/Rules、RBAC/audit和SLO稳定 |
 | 可并行项 | KG/RAG/规则/eval可并行；Apply边界必须在Plan验证后单独串行批准 |
 | 完成后解锁 | 最终目标态评审 |
