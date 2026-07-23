@@ -844,10 +844,13 @@ impl MQClientInstance {
         if self.client_config.namesrv_addr.is_none() {
             if let Some(mq_client_api_impl) = self.mq_client_api_impl.load_full() {
                 self.scheduled_task_manager
-                    .add_fixed_rate_task_async(Duration::from_secs(10), Duration::from_secs(120), async move |_token| {
-                        info!("ScheduledTask: fetchNameServerAddr");
-                        mq_client_api_impl.fetch_name_server_addr().await;
-                        Ok(())
+                    .add_fixed_rate_task_async(Duration::from_secs(10), Duration::from_secs(120), move |_token| {
+                        let mq_client_api_impl = Arc::clone(&mq_client_api_impl);
+                        async move {
+                            info!("ScheduledTask: fetchNameServerAddr");
+                            mq_client_api_impl.fetch_name_server_addr().await;
+                            Ok(())
+                        }
                     })
                     .map_err(|error| client_scheduled_task_startup_failed("fetchNameServerAddr", error))?;
             } else {
@@ -864,11 +867,13 @@ impl MQClientInstance {
             .add_fixed_rate_task_async(
                 Duration::from_millis(10),
                 Duration::from_millis(poll_name_server_interval as u64),
-                async move |_token| {
-                    let instance = client_instance.clone();
-                    info!("ScheduledTask: update_topic_route_info_from_name_server");
-                    instance.update_topic_route_info_from_name_server().await;
-                    Ok(())
+                move |_token| {
+                    let instance = Arc::clone(&client_instance);
+                    async move {
+                        info!("ScheduledTask: update_topic_route_info_from_name_server");
+                        instance.update_topic_route_info_from_name_server().await;
+                        Ok(())
+                    }
                 },
             )
             .map_err(|error| client_scheduled_task_startup_failed("update_topic_route_info_from_name_server", error))?;
@@ -879,12 +884,14 @@ impl MQClientInstance {
             .add_fixed_rate_task_async(
                 Duration::from_secs(1),
                 Duration::from_millis(heartbeat_broker_interval as u64),
-                async move |_token| {
-                    let instance = client_instance.clone();
-                    info!("ScheduledTask: clean_offline_broker and send_heartbeat");
-                    instance.clean_offline_broker().await;
-                    instance.send_heartbeat_to_all_broker_with_lock().await;
-                    Ok(())
+                move |_token| {
+                    let instance = Arc::clone(&client_instance);
+                    async move {
+                        info!("ScheduledTask: clean_offline_broker and send_heartbeat");
+                        instance.clean_offline_broker().await;
+                        instance.send_heartbeat_to_all_broker_with_lock().await;
+                        Ok(())
+                    }
                 },
             )
             .map_err(|error| client_scheduled_task_startup_failed("clean_offline_broker_and_send_heartbeat", error))?;
@@ -895,11 +902,13 @@ impl MQClientInstance {
             .add_fixed_rate_task_async(
                 Duration::from_secs(10),
                 Duration::from_millis(persist_consumer_offset_interval),
-                async move |_token| {
-                    let instance = client_instance.clone();
-                    info!("ScheduledTask: persistAllConsumerOffset");
-                    instance.persist_all_consumer_offset().await;
-                    Ok(())
+                move |_token| {
+                    let instance = Arc::clone(&client_instance);
+                    async move {
+                        info!("ScheduledTask: persistAllConsumerOffset");
+                        instance.persist_all_consumer_offset().await;
+                        Ok(())
+                    }
                 },
             )
             .map_err(|error| client_scheduled_task_startup_failed("persistAllConsumerOffset", error))?;

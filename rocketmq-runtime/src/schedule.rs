@@ -634,23 +634,26 @@ pub mod simple_scheduler {
         /// * `initial_delay` - The delay before the first execution of the task.
         /// * `period` - The interval between task executions.
         /// * `task_fn` - A function that defines the task to be executed. It takes a
-        ///   `CancellationToken` as an argument and returns a `Result<()>`.
+        ///   `CancellationToken` and returns an owned future that resolves to `Result<()>`.
         ///
         /// # Returns
         /// A `TaskId` representing the unique identifier of the scheduled task.
         ///
         /// # Notes
-        /// - Tasks are executed at fixed intervals, even if previous executions overlap.
+        /// - Fixed-rate ticks may queue while a previous future is running, but task-function
+        ///   invocations remain serialized.
         /// - The task function is executed asynchronously.
-        pub fn add_fixed_rate_task_async<F>(
+        /// - Each returned future must own its per-invocation captures instead of borrowing them
+        ///   from the task function.
+        pub fn add_fixed_rate_task_async<F, Fut>(
             &self,
             initial_delay: Duration,
             period: Duration,
             task_fn: F,
         ) -> Result<TaskId>
         where
-            F: AsyncFnMut(CancellationToken) -> Result<()> + Send + Sync + 'static,
-            for<'a> <F as AsyncFnMut<(CancellationToken,)>>::CallRefFuture<'a>: Send,
+            F: FnMut(CancellationToken) -> Fut + Send + Sync + 'static,
+            Fut: Future<Output = Result<()>> + Send + 'static,
         {
             self.add_scheduled_task_async(ScheduleMode::FixedRate, initial_delay, period, task_fn)
         }
@@ -661,7 +664,7 @@ pub mod simple_scheduler {
         /// * `initial_delay` - The delay before the first execution of the task.
         /// * `period` - The interval between task executions.
         /// * `task_fn` - A function that defines the task to be executed. It takes a
-        ///   `CancellationToken` as an argument and returns a `Result<()>`.
+        ///   `CancellationToken` and returns an owned future that resolves to `Result<()>`.
         ///
         /// # Returns
         /// A `TaskId` representing the unique identifier of the scheduled task.
@@ -669,15 +672,17 @@ pub mod simple_scheduler {
         /// # Notes
         /// - Tasks are executed serially, with a delay after each task completes.
         /// - The task function is executed asynchronously.
-        pub fn add_fixed_delay_task_async<F>(
+        /// - Each returned future must own its per-invocation captures instead of borrowing them
+        ///   from the task function.
+        pub fn add_fixed_delay_task_async<F, Fut>(
             &self,
             initial_delay: Duration,
             period: Duration,
             task_fn: F,
         ) -> Result<TaskId>
         where
-            F: AsyncFnMut(CancellationToken) -> Result<()> + Send + Sync + 'static,
-            for<'a> <F as AsyncFnMut<(CancellationToken,)>>::CallRefFuture<'a>: Send,
+            F: FnMut(CancellationToken) -> Fut + Send + Sync + 'static,
+            Fut: Future<Output = Result<()>> + Send + 'static,
         {
             self.add_scheduled_task_async(ScheduleMode::FixedDelay, initial_delay, period, task_fn)
         }
@@ -688,7 +693,7 @@ pub mod simple_scheduler {
         /// * `initial_delay` - The delay before the first execution of the task.
         /// * `period` - The interval between task executions.
         /// * `task_fn` - A function that defines the task to be executed. It takes a
-        ///   `CancellationToken` as an argument and returns a `Result<()>`.
+        ///   `CancellationToken` and returns an owned future that resolves to `Result<()>`.
         ///
         /// # Returns
         /// A `TaskId` representing the unique identifier of the scheduled task.
@@ -696,15 +701,17 @@ pub mod simple_scheduler {
         /// # Notes
         /// - Tasks are executed at fixed intervals, but overlapping executions are skipped.
         /// - The task function is executed asynchronously.
-        pub fn add_fixed_rate_no_overlap_task_async<F>(
+        /// - Each returned future must own its per-invocation captures instead of borrowing them
+        ///   from the task function.
+        pub fn add_fixed_rate_no_overlap_task_async<F, Fut>(
             &self,
             initial_delay: Duration,
             period: Duration,
             task_fn: F,
         ) -> Result<TaskId>
         where
-            F: AsyncFnMut(CancellationToken) -> Result<()> + Send + Sync + 'static,
-            for<'a> <F as AsyncFnMut<(CancellationToken,)>>::CallRefFuture<'a>: Send,
+            F: FnMut(CancellationToken) -> Fut + Send + Sync + 'static,
+            Fut: Future<Output = Result<()>> + Send + 'static,
         {
             self.add_scheduled_task_async(ScheduleMode::FixedRateNoOverlap, initial_delay, period, task_fn)
         }
@@ -728,10 +735,12 @@ pub mod simple_scheduler {
         ///
         /// # Notes
         /// - The task function is executed asynchronously.
+        /// - Each returned future must own its per-invocation captures instead of borrowing them
+        ///   from the task function.
         /// - The `CancellationToken` can be used to gracefully cancel the task.
         /// - The task is added to the internal task manager and can be managed (e.g., canceled or
         ///   aborted) later.
-        pub fn add_scheduled_task_async<F>(
+        pub fn add_scheduled_task_async<F, Fut>(
             &self,
             mode: ScheduleMode,
             initial_delay: Duration,
@@ -739,147 +748,17 @@ pub mod simple_scheduler {
             task_fn: F,
         ) -> Result<TaskId>
         where
-            F: AsyncFnMut(CancellationToken) -> Result<()> + Send + Sync + 'static,
-            for<'a> <F as AsyncFnMut<(CancellationToken,)>>::CallRefFuture<'a>: Send,
+            F: FnMut(CancellationToken) -> Fut + Send + Sync + 'static,
+            Fut: Future<Output = Result<()>> + Send + 'static,
         {
-            let id = self.next_id();
-            let token = CancellationToken::new();
-            let token_child = token.clone();
-            let task_group = self.task_group("ScheduledTaskManager::add_scheduled_task_async")?;
-
             let task_fn = Arc::new(Mutex::new(task_fn));
-
-            let (done_tx, done) = oneshot::channel();
-            let driver_group = task_group.clone();
-            let run_group = task_group.clone();
-            let runtime_task_id = spawn_scheduled_task(
-                &driver_group,
-                "ScheduledTaskManager::add_scheduled_task_async",
-                format!("scheduled-task-manager.async-driver.{id}"),
-                {
-                    let task_fn = task_fn;
-                    async move {
-                        match mode {
-                            ScheduleMode::FixedRate => {
-                                let start = Instant::now() + initial_delay;
-                                let mut ticker = time::interval_at(start, period);
-
-                                loop {
-                                    tokio::select! {
-                                        _ = token_child.cancelled() => {
-                                            info!("Task {} cancelled gracefully", id);
-                                            break;
-                                        }
-                                        _ = ticker.tick() => {
-                                            // Allow concurrent execution: One subtask per tick
-                                            let task_fn = Arc::clone(&task_fn);
-                                            let child = token_child.clone();
-                                            if let Err(error) = run_group.spawn(
-                                                format!("scheduled-task-manager.async-run.{id}"),
-                                                TaskKind::ScheduledRun,
-                                                async move {
-                                                let mut task_fn = task_fn.lock().await;
-                                                if let Err(e) = task_fn(child).await {
-                                                    error!("FixedRate task {} failed: {:?}", id, e);
-                                                }
-                                            }) {
-                                                error!("FixedRate task {} failed to spawn async run: {:?}", id, error);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            ScheduleMode::FixedDelay => {
-                                if !initial_delay.is_zero() {
-                                    tokio::select! {
-                                        _ = token_child.cancelled() => {
-                                            info!("Task {} cancelled gracefully", id);
-                                            return;
-                                        }
-                                        _ = time::sleep(initial_delay) => {}
-                                    }
-                                }
-
-                                loop {
-                                    if token_child.is_cancelled() {
-                                        info!("Task {} cancelled gracefully", id);
-                                        break;
-                                    }
-
-                                    let mut task_fn = task_fn.lock().await;
-                                    if let Err(e) = task_fn(token_child.clone()).await {
-                                        error!("FixedDelay task {} failed: {:?}", id, e);
-                                    }
-                                    drop(task_fn);
-
-                                    tokio::select! {
-                                        _ = token_child.cancelled() => {
-                                            info!("Task {} cancelled gracefully", id);
-                                            break;
-                                        }
-                                        _ = time::sleep(period) => {}
-                                    }
-                                }
-                            }
-
-                            ScheduleMode::FixedRateNoOverlap => {
-                                let start = Instant::now() + initial_delay;
-                                let mut ticker = time::interval_at(start, period);
-
-                                // Permission=1, controls non-overlapping execution
-                                let gate = Arc::new(Semaphore::new(1));
-
-                                loop {
-                                    tokio::select! {
-                                        _ = token_child.cancelled() => {
-                                            info!("Task {} cancelled gracefully", id);
-                                            break;
-                                        }
-                                        _ = ticker.tick() => {
-                                            // Try to acquire permission. If unable to acquire, skip the current tick.
-                                            if let Ok(permit) = gate.clone().try_acquire_owned() {
-                                                let task_fn = Arc::clone(&task_fn);
-                                                let child = token_child.clone();
-                                                if let Err(error) = run_group.spawn(
-                                                    format!("scheduled-task-manager.async-no-overlap-run.{id}"),
-                                                    TaskKind::ScheduledRun,
-                                                    async move {
-                                                    let mut task_fn = task_fn.lock().await;
-                                                    if let Err(e) = task_fn(child).await {
-                                                        error!("FixedRateNoOverlap task {} failed: {:?}", id, e);
-                                                    }
-                                                    drop(permit); // Release the permit after completion
-                                                }) {
-                                                    error!(
-                                                        "FixedRateNoOverlap task {} failed to spawn async run: {:?}",
-                                                        id, error
-                                                    );
-                                                }
-                                            } else {
-                                                info!("Task {} skipped due to overlap", id);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        drop(done_tx);
-                    }
-                },
-            )?;
-
-            self.tasks.write().insert(
-                id,
-                TaskInfo {
-                    cancel_token: token,
-                    runtime_task_id,
-                    task_group,
-                    done,
-                },
-            );
-
-            Ok(id)
+            self.add_scheduled_task(mode, initial_delay, period, move |token| {
+                let task_fn = Arc::clone(&task_fn);
+                async move {
+                    let mut task_fn = task_fn.lock().await;
+                    (task_fn)(token).await
+                }
+            })
         }
     }
 }
@@ -1278,7 +1157,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn async_fn_mut_invocations_are_serialized() {
+    async fn owned_future_invocations_are_serialized() {
         let manager = ScheduledTaskManager::new_legacy_compatibility();
         let active = Arc::new(AtomicUsize::new(0));
         let maximum_active = Arc::new(AtomicUsize::new(0));
@@ -1290,12 +1169,16 @@ mod tests {
                 ScheduleMode::FixedRate,
                 Duration::ZERO,
                 Duration::from_millis(5),
-                async move |_token| {
-                    let current = active_for_task.fetch_add(1, Ordering::AcqRel) + 1;
-                    maximum_for_task.fetch_max(current, Ordering::AcqRel);
-                    time::sleep(Duration::from_millis(40)).await;
-                    active_for_task.fetch_sub(1, Ordering::AcqRel);
-                    Ok(())
+                move |_token| {
+                    let active_for_task = Arc::clone(&active_for_task);
+                    let maximum_for_task = Arc::clone(&maximum_for_task);
+                    async move {
+                        let current = active_for_task.fetch_add(1, Ordering::AcqRel) + 1;
+                        maximum_for_task.fetch_max(current, Ordering::AcqRel);
+                        time::sleep(Duration::from_millis(40)).await;
+                        active_for_task.fetch_sub(1, Ordering::AcqRel);
+                        Ok(())
+                    }
                 },
             )
             .expect("fixed-rate async task should start");
@@ -1307,7 +1190,7 @@ mod tests {
         assert_eq!(
             maximum_active.load(Ordering::Acquire),
             1,
-            "AsyncFnMut requires exclusive access while its borrowed future is running"
+            "scheduled task invocations must remain serialized while an owned future is running"
         );
     }
 
@@ -1322,14 +1205,13 @@ mod tests {
 
         let c = counter.clone();
         let task_id = mgr
-            .add_fixed_rate_task_async(
-                Duration::from_millis(50),
-                Duration::from_millis(100),
-                async move |_ctx| {
+            .add_fixed_rate_task_async(Duration::from_millis(50), Duration::from_millis(100), move |_ctx| {
+                let c = Arc::clone(&c);
+                async move {
                     c.fetch_add(1, Ordering::Relaxed);
                     Ok(())
-                },
-            )
+                }
+            })
             .expect("fixed-rate async task should start");
 
         time::sleep(Duration::from_millis(500)).await;
@@ -1348,14 +1230,13 @@ mod tests {
 
         let c = counter.clone();
         let task_id = mgr
-            .add_fixed_delay_task_async(
-                Duration::from_millis(10),
-                Duration::from_millis(50),
-                async move |_ctx| {
+            .add_fixed_delay_task_async(Duration::from_millis(10), Duration::from_millis(50), move |_ctx| {
+                let c = Arc::clone(&c);
+                async move {
                     c.fetch_add(1, Ordering::Relaxed);
                     Ok(())
-                },
-            )
+                }
+            })
             .expect("fixed-delay async task should start");
 
         time::sleep(Duration::from_millis(300)).await;
@@ -1374,15 +1255,14 @@ mod tests {
 
         let c = counter.clone();
         let task_id = mgr
-            .add_fixed_rate_no_overlap_task_async(
-                Duration::from_millis(10),
-                Duration::from_millis(50),
-                async move |_ctx| {
+            .add_fixed_rate_no_overlap_task_async(Duration::from_millis(10), Duration::from_millis(50), move |_ctx| {
+                let c = Arc::clone(&c);
+                async move {
                     time::sleep(Duration::from_millis(80)).await;
                     c.fetch_add(1, Ordering::Relaxed);
                     Ok(())
-                },
-            )
+                }
+            })
             .expect("fixed-rate-no-overlap async task should start");
 
         time::sleep(Duration::from_millis(400)).await;
