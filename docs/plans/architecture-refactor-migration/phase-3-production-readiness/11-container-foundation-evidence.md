@@ -8,9 +8,11 @@ data volume 与 tmpfs 可写，并提供 SBOM、零 CRITICAL 漏洞、Sigstore b
 signature 的执行模板与最小权限 workflow。
 
 工作包完成后总进度为 **71/82**，剩余 11 个工作包：M11 5 个、M12 6 个；下一工作包为 PR-M11-08。
-这里的“工作包完成”表示 foundation、policy、guard、动态验证 workflow 与回滚边界已实现，不表示远端容器
-workflow 已观察成功。当前动态 `[TEST]`、M11 入口 `[ARCH]`、安全默认迁移 `[HUMAN]`、M10 真实固定硬件
-baseline/candidate 与 `[HUMAN]` Gate 均未签署，也不等于 M11、Phase 3 或最终目标态 Gate 完成。
+这里的 71/82 是本工作包结束时的历史进度。其后 R20 已由
+[Container Foundation run `30011167537`](https://github.com/mxsm/rocketmq-rust/actions/runs/30011167537)
+在 main commit `13d50e2d33ddfc1142bba63431b339d07704a4f7` 上完成 foundation 与五服务动态验证；完整证据见
+[`11-container-dynamic-evidence.md`](11-container-dynamic-evidence.md)。该 run 关闭容器动态 `[TEST]`，但不等于
+M11 入口 `[ARCH]`、安全默认迁移 `[HUMAN]`、M10、R21、R25、Phase 3 或最终目标态 Gate 完成。
 
 | 项目 | 结果 |
 |---|---|
@@ -32,16 +34,16 @@ foundation 固定以下输入：
 | 输入 | 固定值 |
 |---|---|
 | Builder manifest | `rust:slim-bookworm@sha256:99e09cb2284e2ddbb73a995deee3e91783fd04d177602ccf6eab326d778ee777` |
-| Runtime manifest | `debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818` |
+| Runtime manifest | `docker.io/library/ubuntu:noble@sha256:4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebffbc7092d90` |
 | Rust toolchain | `nightly-2026-07-05`；官方 dist manifest 可用 |
 | Debian package snapshot | `20260717T000000Z`；Debian 与 security 的 bookworm Release 可用 |
 | Syft / Trivy / Cosign | `v1.48.0` / `v0.72.0` / `v3.1.2` |
 | GitHub Actions | checkout/buildx/tool installers/upload 均固定完整 40 位 commit SHA |
 
 Builder snapshot 安装 workspace native build 所需 clang/LLVM/CMake/Ninja/protobuf/OpenSSL 工具；runtime 从独立
-pinned Debian stage 开始，只安装同一 snapshot 的 CA 与 `libssl3`，不继承 builder layer，也不复制 repository
-source、编译器或调试产物。Hadolint 的 DL3008 只在两个使用 immutable snapshot 的 RUN 上窄化忽略，并在相邻
-注释记录理由。
+pinned Ubuntu Noble manifest 开始，只复制固定 Debian snapshot stage 生成的 CA bundle，不在 runtime stage
+执行 package resolution，也不继承 builder layer 或复制 repository source、编译器和调试产物。Hadolint 的
+DL3008 只在使用 immutable snapshot 的 builder RUN 上窄化忽略，并在相邻注释记录理由。
 
 ## 3. Runtime、命名与供应链合同
 
@@ -68,10 +70,11 @@ write 或 OIDC。workflow 在 Ubuntu 安装固定版本工具，然后执行：
 5. Cosign 生成临时 key、签名/验证 SBOM bundle、删除 private key；
 6. 输出 source/image/base/toolchain/snapshot 与三个 artifact SHA-256 的 provenance，并上传 14 天 artifact。
 
-当前 Windows host 与 Ubuntu WSL 均无 Docker/Podman/Buildah/Syft/Trivy/Cosign；没有通过安装系统级容器
-daemon 扩大本工作包权限。因此本地未生成 image ID、SBOM、Trivy report 或 signature bundle，远端 workflow
-也按用户约定不等待完成。M11-08 的入口必须读取同一 source commit 的成功 artifact，否则动态 `[TEST]` 仍未
-满足，不能发布五服务镜像。
+PR-M11-07 完成时 Windows host 与 Ubuntu WSL 均无 Docker/Podman/Buildah/Syft/Trivy/Cosign，因此当时没有
+生成动态 artifact。后续 R20 run `30011167537` 已在同一 source commit 上成功执行 foundation 与五服务套件，
+上传 artifact `container-foundation`（ID `8565842850`），archive digest 为
+`sha256:bc8172178a0527a049a79d7c6be0d0811501067acb7336df94f50b5447d32a7f`。该 artifact 已通过 source
+commit、五服务集合、15 个供应链文件 hash、CycloneDX 格式、零 CRITICAL 与 private-key absence 本地复核。
 
 ## 5. 本地验证矩阵
 
@@ -87,7 +90,7 @@ daemon 扩大本工作包权限。因此本地未生成 image ID、SBOM、Trivy 
 | AGENTS routing | `scripts/check-agents-routing.ps1` | 通过：standalone Cargo 4、Node 3、routes 8 |
 | Architecture | target/baseline dependency guard；release guard | 通过：target ledger 35、dev-only 3、release topology 32/32 |
 | Text | `git diff --check` | 通过 |
-| Dynamic image suite | Docker/Syft/Trivy/Cosign workflow | 已交付，当前未观察执行；保持 open `[TEST]` |
+| Dynamic image suite | Docker/Syft/Trivy/Cosign workflow | R20 run `30011167537` 成功；foundation + 5 services，artifact digest `sha256:bc8172178a0527a049a79d7c6be0d0811501067acb7336df94f50b5447d32a7f` |
 
 本工作包没有修改 Rust、Cargo manifest、公共 API、wire/storage 或运行时代码，因此不触发 Cargo、public API、
 runtime ownership、typed-error 或 RocksDB specialized gate。
@@ -98,7 +101,7 @@ runtime ownership、typed-error 或 RocksDB specialized gate。
 Dockerfile 在 M11-07 期间仍是兼容路径；若任何服务已在 M11-08 采用新 foundation，则只能回到上一签名
 image digest，不能恢复 root、可写 rootfs、mutable tag、无 SBOM/scan/signature 或把五服务重新合并。
 
-剩余 M11 目标为：PR-M11-08 五服务镜像入口、M11-09 Helm/Kustomize、M11-10 probe/preStop/drain、
-M11-11 Kind/K3d fault matrix、M11-12 ArcMut/stable/SLO 收口。M12 仍有 6 个 AI Native 工作包。此外，M10
-仍缺真实固定硬件 baseline/candidate、原始数据 hash 与 `[HUMAN]` Gate；M11 入口 `[ARCH]`、安全默认迁移
-`[HUMAN]`、容器动态 `[TEST]`、Phase 3 和最终目标态 Gate 均未签署。
+R20 容器动态 `[TEST]` 已关闭。当前仍需 R21 的 production 签名 digest、真实 Secret 与 Kind/K3d
+fault/rolling/durability 证据，R25 的同一冻结候选快照四方签署，以及 R19 固定硬件 baseline/candidate、
+原始数据 hash 与 `[HUMAN]` 性能验收；M11 入口 `[ARCH]`、安全默认迁移 `[HUMAN]`、Phase 3 和最终目标态
+Gate 均未签署。

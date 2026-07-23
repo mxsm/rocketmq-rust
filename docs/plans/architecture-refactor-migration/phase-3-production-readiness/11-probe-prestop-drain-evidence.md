@@ -10,7 +10,8 @@ SIGTERM 与内部失败汇合到第一次 shutdown request 冻结的绝对 deadl
 工作包完成后总进度为 **74/82**，剩余 8 个工作包：M11 2 个、M12 6 个；下一工作包为 PR-M11-11。
 这里的“完成”表示状态机、五服务接线、probe/preStop、deadline、静态/单元/集成门禁和回滚边界已交付；不表示
 容器动态套件、生产签名 digest、目标集群 Controller Service IP、Kind/K3d fault matrix、已确认消息的集群恢复、
-M10 真实硬件或任何 HUMAN/Phase Gate 已验收。
+M10 真实硬件或任何 HUMAN/Phase Gate 已验收。该段是历史状态；容器动态套件已由后续 R20 关闭，production
+签名 digest、R21 集群 fault/rolling 和 R25 签署仍未完成。
 
 | 项目 | 值 |
 |---|---|

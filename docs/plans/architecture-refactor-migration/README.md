@@ -8,7 +8,7 @@
 > PR-M12-01～06 未开始，合计剩余 7 个
 
 剩余任务数量、M11-12 内部执行批次与 M12 六个工作包见 [`REMAINING-TASKS.md`](REMAINING-TASKS.md)：正式口径
-剩余 7 个工作包；31 个最小可审查单元已完成 19 个，当前剩余 12 个。Issue #8649 / M11-12bc114 候选保持
+剩余 7 个工作包；31 个最小可审查单元已完成 20 个，当前剩余 11 个。Issue #8649 / M11-12bc114 候选保持
 reviewed ArcMut baseline 20 identities / 58 occurrences（production 6/12、test 1/7、
 compatibility 13/39）；Broker production ArcMut 已清零，Broker runtime 直接持有标准
 `Arc<OwnedMessageStore>`，EscapeBridge 与 Admin runtime 只保留标准弱 provider，请求只在单次操作期间取得
@@ -22,7 +22,9 @@ accessor 已删除；RocksDB semantics helper 和 16 个 Broker Store-capability
 Controller、Runtime 与 ArcMut compatibility 的 8 个过时 nightly feature gate 已全部删除，stable default 与
 workspace all-target/all-feature matrix 已通过；Miri/Loom 技术审计拒绝长期保留 ArcMut facade。R24 已交付
 六小时 soak/SLO policy、动态 runner、dashboard、alerts、runbook、rollback 和 fail-closed evidence index；
-真实动态证据仍由 R20/R21/R25 的环境与签署 Gate 承担。
+R20 五服务容器动态验收已由 Issue #8677 在 main commit
+`13d50e2d33ddfc1142bba63431b339d07704a4f7` 上关闭；真实集群 fault/rolling 证据与四方签署仍由
+R21/R25 的环境与签署 Gate 承担。
 
 ## 1. 使用方式
 
