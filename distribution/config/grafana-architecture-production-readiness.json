@@ -1,0 +1,228 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": false,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [
+    {
+      "title": "Production readiness runbook",
+      "type": "link",
+      "url": "https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-doc/en/architecture-production-readiness-runbook.md"
+    }
+  ],
+  "panels": [
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "max": 1,
+          "min": 0,
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "targets": [
+        {
+          "expr": "sum(rate(rocketmq_messages_out_total[$__rate_interval])) / clamp_min(sum(rate(rocketmq_messages_in_total[$__rate_interval])), 0.000001)",
+          "legendFormat": "delivery ratio",
+          "refId": "A"
+        }
+      ],
+      "title": "Message Delivery Ratio",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "id": 2,
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(rocketmq_send_message_latency_bucket[$__rate_interval])) by (le))",
+          "legendFormat": "p99",
+          "refId": "A"
+        }
+      ],
+      "title": "Send Message P99 Latency",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "id": 3,
+      "targets": [
+        {
+          "expr": "max(rocketmq_consumer_lag_messages)",
+          "legendFormat": "max lag",
+          "refId": "A"
+        }
+      ],
+      "title": "Consumer Lag",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "id": 4,
+      "targets": [
+        {
+          "expr": "max(rocketmq_storage_flush_behind_bytes)",
+          "legendFormat": "flush",
+          "refId": "A"
+        },
+        {
+          "expr": "max(rocketmq_storage_dispatch_behind_bytes)",
+          "legendFormat": "dispatch",
+          "refId": "B"
+        }
+      ],
+      "title": "Store Flush and Dispatch Lag",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 16
+      },
+      "id": 5,
+      "targets": [
+        {
+          "expr": "max(rocketmq_store_ha_replication_lag_bytes)",
+          "legendFormat": "replication lag",
+          "refId": "A"
+        }
+      ],
+      "title": "HA Replication Lag",
+      "type": "timeseries"
+    },
+    {
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 12,
+        "y": 16
+      },
+      "id": 6,
+      "options": {
+        "content": "The release evidence must include the M11-11 `collector_outage` scenario with a successful message round trip below 30 seconds. A dashboard cannot replace the signed fault artifact.",
+        "mode": "markdown"
+      },
+      "title": "Collector Outage Budget",
+      "type": "text"
+    },
+    {
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 18,
+        "y": 16
+      },
+      "id": 7,
+      "options": {
+        "content": "The release evidence must report zero `FailedPreStopHook` events and prove baseline image/chart restoration without deleting PVCs or WAL.",
+        "mode": "markdown"
+      },
+      "title": "Drain and Rollback Health",
+      "type": "text"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": [
+    "rocketmq",
+    "architecture",
+    "production-readiness",
+    "slo"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {},
+        "hide": 0,
+        "includeAll": false,
+        "label": "Prometheus",
+        "multi": false,
+        "name": "DS_PROMETHEUS",
+        "options": [],
+        "query": "prometheus",
+        "refresh": 1,
+        "regex": "",
+        "type": "datasource"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timezone": "utc",
+  "title": "RocketMQ Architecture Production Readiness",
+  "uid": "rocketmq-architecture-production-readiness",
+  "version": 1,
+  "weekStart": ""
+}

@@ -79,8 +79,10 @@ directories and compares feature attributes with `scripts/stable-surface-policy.
 1. Complete R18 after the required next-major and HUMAN/Release Manager approval, removing the
    remaining public ArcMut compatibility facade. The comparison benchmark is already retired.
 2. R23 Miri/Loom audit is complete in
-   [`11-arc-mut-soundness-evidence.md`](11-arc-mut-soundness-evidence.md); proceed to R24 soak/SLO
-   evidence. R22 itself remains complete.
+   [`11-arc-mut-soundness-evidence.md`](11-arc-mut-soundness-evidence.md). R24 has since delivered
+   the soak/SLO, dashboard/alerts/runbook, rollback, and evidence contract documented in
+   [`11-slo-release-evidence.md`](11-slo-release-evidence.md); real dynamic execution remains part
+   of the frozen candidate gate. R22 itself remains complete.
 
 This evidence marks R22 complete. The separate R23 evidence does not mark R18, M11, or Phase 3
 complete and does not substitute bounded Miri/Loom results for dynamic fault or HUMAN approval

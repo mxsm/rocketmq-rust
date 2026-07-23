@@ -1,0 +1,112 @@
+{
+  "schema_version": 1,
+  "milestone": "M11-12",
+  "execution_unit": "R24",
+  "minimum_soak_seconds": 21600,
+  "sample_interval_seconds": 60,
+  "maximum_missing_sample_ratio": 0.01,
+  "required_fault_scenarios": [
+    "rolling_upgrade",
+    "node_eviction",
+    "collector_outage",
+    "disk_pressure",
+    "controller_leader_failure",
+    "secret_rotation",
+    "acknowledged_message_recovery"
+  ],
+  "objectives": [
+    {
+      "id": "message_delivery_ratio",
+      "source": "rocketmq_messages_out_total",
+      "query": "sum(rate(rocketmq_messages_out_total[5m])) / clamp_min(sum(rate(rocketmq_messages_in_total[5m])), 0.000001)",
+      "operator": "gte",
+      "target": 0.999,
+      "unit": "ratio",
+      "dashboard_panel": "Message Delivery Ratio",
+      "alert": "RocketMQMessageDeliveryRatioBurn"
+    },
+    {
+      "id": "send_message_p99_millis",
+      "source": "rocketmq_send_message_latency",
+      "query": "histogram_quantile(0.99, sum(rate(rocketmq_send_message_latency_bucket[5m])) by (le))",
+      "operator": "lte",
+      "target": 1000,
+      "unit": "ms",
+      "dashboard_panel": "Send Message P99 Latency",
+      "alert": "RocketMQSendMessageP99High"
+    },
+    {
+      "id": "consumer_lag_messages",
+      "source": "rocketmq_consumer_lag_messages",
+      "query": "max(rocketmq_consumer_lag_messages)",
+      "operator": "lte",
+      "target": 10000,
+      "unit": "{message}",
+      "dashboard_panel": "Consumer Lag",
+      "alert": "RocketMQConsumerLagHigh"
+    },
+    {
+      "id": "flush_behind_bytes",
+      "source": "rocketmq_storage_flush_behind_bytes",
+      "query": "max(rocketmq_storage_flush_behind_bytes)",
+      "operator": "lte",
+      "target": 67108864,
+      "unit": "By",
+      "dashboard_panel": "Store Flush and Dispatch Lag",
+      "alert": "RocketMQStoreFlushBehindHigh"
+    },
+    {
+      "id": "ha_replication_lag_bytes",
+      "source": "rocketmq_store_ha_replication_lag_bytes",
+      "query": "max(rocketmq_store_ha_replication_lag_bytes)",
+      "operator": "lte",
+      "target": 67108864,
+      "unit": "By",
+      "dashboard_panel": "HA Replication Lag",
+      "alert": "RocketMQHaReplicationLagHigh"
+    },
+    {
+      "id": "collector_outage_roundtrip_seconds",
+      "source": "fault_evidence",
+      "query": null,
+      "operator": "lte",
+      "target": 30,
+      "unit": "s",
+      "dashboard_panel": "Collector Outage Budget",
+      "alert": null
+    },
+    {
+      "id": "drain_failed_prestop_events",
+      "source": "fault_evidence",
+      "query": null,
+      "operator": "lte",
+      "target": 0,
+      "unit": "{event}",
+      "dashboard_panel": "Drain and Rollback Health",
+      "alert": null
+    }
+  ],
+  "release_artifacts": {
+    "dashboard": "distribution/config/grafana-architecture-production-readiness.json",
+    "alerts": "distribution/config/prometheus-architecture-production-readiness-alerts.yaml",
+    "runbook": "rocketmq-doc/en/architecture-production-readiness-runbook.md",
+    "fault_policy": "distribution/kubernetes/fault-matrix-policy.json",
+    "telemetry_registry": "scripts/telemetry-semantic-registry.json"
+  },
+  "rollback_assertions": [
+    "baseline_images_restored",
+    "baseline_chart_restored",
+    "pvc_uid_set_preserved",
+    "wal_preserved",
+    "collector_restored",
+    "controller_quorum_restored",
+    "unresolved_faults_empty"
+  ],
+  "evidence": {
+    "schema_version": 1,
+    "production_requires_dynamic_execution": true,
+    "production_requires_current_commit": true,
+    "fixture_requires_explicit_opt_in": true,
+    "artifact_hash_algorithm": "sha256"
+  }
+}

@@ -8,9 +8,9 @@
 > PR-M12-01～06 未开始，合计剩余 7 个
 
 剩余任务数量、M11-12 内部执行批次与 M12 六个工作包见 [`REMAINING-TASKS.md`](REMAINING-TASKS.md)：正式口径
-剩余 7 个工作包；31 个最小可审查单元已完成 16 个，当前剩余 15 个。Issue #8641 / M11-12bc110 候选后
-reviewed ArcMut baseline 降至 22 identities / 60 occurrences（production 6/12、test 2/8、
-compatibility 14/40）；Broker production ArcMut 已清零，Broker runtime 直接持有标准
+剩余 7 个工作包；31 个最小可审查单元已完成 19 个，当前剩余 12 个。Issue #8649 / M11-12bc114 候选保持
+reviewed ArcMut baseline 20 identities / 58 occurrences（production 6/12、test 1/7、
+compatibility 13/39）；Broker production ArcMut 已清零，Broker runtime 直接持有标准
 `Arc<OwnedMessageStore>`，EscapeBridge 与 Admin runtime 只保留标准弱 provider，请求只在单次操作期间取得
 标准 Arc 读租约；普通单条、批量和 Admin append
 已通过私有强类型共享端口执行，controller role-change 不再跨 await 持完整 Store clone，read-mode/topic-delete
@@ -19,8 +19,10 @@ compatibility 14/40）；Broker production ArcMut 已清零，Broker runtime 直
 读租约退出；RocksDB Store 直接以 `Box<LocalFileMessageStore>` 独占 Local backend，零调用的完整 root clone
 accessor 已删除；RocksDB semantics helper 和 16 个 Broker Store-capability 测试模块也已迁到
 `OwnedMessageStore`，活跃 test/bench caller 清零，仅保留公开 facade 自身的兼容性夹具。Remoting 与
-Controller 的 4 个过时 nightly feature gate 已删除，仓库 feature 属性从 8 个降至 4 个；新增
-stable-surface baseline/target guard 后，未登记扩张、过期登记和未清零 target 均 fail closed。
+Controller、Runtime 与 ArcMut compatibility 的 8 个过时 nightly feature gate 已全部删除，stable default 与
+workspace all-target/all-feature matrix 已通过；Miri/Loom 技术审计拒绝长期保留 ArcMut facade。R24 已交付
+六小时 soak/SLO policy、动态 runner、dashboard、alerts、runbook、rollback 和 fail-closed evidence index；
+真实动态证据仍由 R20/R21/R25 的环境与签署 Gate 承担。
 
 ## 1. 使用方式
 
@@ -268,7 +270,9 @@ Gate 仍由 [`M11-12 进度证据`](phase-3-production-readiness/11-soundness-cl
 nightly feature 清零与 stable matrix 另见
 [`M11-12 stable surface 证据`](phase-3-production-readiness/11-stable-surface-evidence.md)；Miri expected-UB、
 Loom guarded replacement 与不得长期保留 ArcMut 的 R23 结论见
-[`M11-12 ArcMut soundness 证据`](phase-3-production-readiness/11-arc-mut-soundness-evidence.md)。
+[`M11-12 ArcMut soundness 证据`](phase-3-production-readiness/11-arc-mut-soundness-evidence.md)；R24 的
+六小时 soak、dashboard/alerts/runbook、rollback 和 evidence index 合同见
+[`M11-12 SLO 发布证据`](phase-3-production-readiness/11-slo-release-evidence.md)。
 Controller config owner 随 Issue #8295 改为不可变原子快照后，累计进一步降至 711 production/2,029 occurrence；
 `ArcMut<ControllerConfig>` 已清零，但 Controller 的其他 owner 仍有 31 条 production 债务，75/82 总进度不变。
 Controller manager/heartbeat owner 随 Issue #8297 改为安全 `Arc`/`Weak` 与内部同步生命周期后，实际快照进一步降至

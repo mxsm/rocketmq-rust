@@ -1,0 +1,113 @@
+{
+  "schema_version": 1,
+  "milestone": "M11-12",
+  "execution_unit": "R24",
+  "policy_sha256": "861dfd1228cf2ffdde988b1543daa93b3827240d3cb3ca0f8d6c1ab3b9ed96cc",
+  "candidate_commit": "0123456789abcdef0123456789abcdef01234567",
+  "candidate_images": {
+    "broker": "registry.example.invalid/rocketmq/broker@sha256:1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+    "namesrv": "registry.example.invalid/rocketmq/namesrv@sha256:234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1",
+    "controller": "registry.example.invalid/rocketmq/controller@sha256:34567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef12",
+    "proxy": "registry.example.invalid/rocketmq/proxy@sha256:4567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef123",
+    "mcp": "registry.example.invalid/rocketmq/mcp@sha256:567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234"
+  },
+  "run_id": "fixture-m11-12-r24",
+  "started_at": "2026-01-01T00:00:00Z",
+  "finished_at": "2026-01-01T06:00:00Z",
+  "sample_interval_seconds": 60,
+  "samples_expected": 361,
+  "samples_observed": 361,
+  "missing_sample_ratio": 0,
+  "dynamic_execution": false,
+  "fixture": true,
+  "fault_evidence": {
+    "path": "artifacts/fault-run.json",
+    "sha256": "a666b789c38bff72d8b73907062232c616657e9e1ae72ddce63366cb43d885b1"
+  },
+  "objectives": [
+    {
+      "id": "message_delivery_ratio",
+      "status": "passed",
+      "observed": 0.9995,
+      "target": 0.999,
+      "unit": "ratio",
+      "evidence": "artifacts/objectives.txt"
+    },
+    {
+      "id": "send_message_p99_millis",
+      "status": "passed",
+      "observed": 420,
+      "target": 1000,
+      "unit": "ms",
+      "evidence": "artifacts/objectives.txt"
+    },
+    {
+      "id": "consumer_lag_messages",
+      "status": "passed",
+      "observed": 240,
+      "target": 10000,
+      "unit": "{message}",
+      "evidence": "artifacts/objectives.txt"
+    },
+    {
+      "id": "flush_behind_bytes",
+      "status": "passed",
+      "observed": 1048576,
+      "target": 67108864,
+      "unit": "By",
+      "evidence": "artifacts/objectives.txt"
+    },
+    {
+      "id": "ha_replication_lag_bytes",
+      "status": "passed",
+      "observed": 2097152,
+      "target": 67108864,
+      "unit": "By",
+      "evidence": "artifacts/objectives.txt"
+    },
+    {
+      "id": "collector_outage_roundtrip_seconds",
+      "status": "passed",
+      "observed": 4.2,
+      "target": 30,
+      "unit": "s",
+      "evidence": "artifacts/objectives.txt"
+    },
+    {
+      "id": "drain_failed_prestop_events",
+      "status": "passed",
+      "observed": 0,
+      "target": 0,
+      "unit": "{event}",
+      "evidence": "artifacts/objectives.txt"
+    }
+  ],
+  "rollback_assertions": {
+    "baseline_images_restored": true,
+    "baseline_chart_restored": true,
+    "pvc_uid_set_preserved": true,
+    "wal_preserved": true,
+    "collector_restored": true,
+    "controller_quorum_restored": true,
+    "unresolved_faults_empty": true
+  },
+  "unresolved_alerts": [],
+  "unresolved_faults": [],
+  "release_artifacts": {
+    "distribution/config/grafana-architecture-production-readiness.json": "aedc9e704a145da81015c66be3530aa6f01d7831a733e02a6cc6edfa81b24287",
+    "distribution/config/prometheus-architecture-production-readiness-alerts.yaml": "53e35ad621710dd8c2cbac5eff6012a631ec7215e019d4e533ae35efb0cd1a1f",
+    "rocketmq-doc/en/architecture-production-readiness-runbook.md": "a3252fcc7243e92fa02ae9205f5450958cd9387db8ee73d315c0cd2606314eb1",
+    "distribution/kubernetes/fault-matrix-policy.json": "771b3abf35213a4b6fbb3626d7822e11e6a17d9609ae7587d309bcaf2a5cdd37",
+    "scripts/telemetry-semantic-registry.json": "798e6e381ea03ce896027b69423101124b0cec17c20c2068bda39c36021333b6"
+  },
+  "artifacts": [
+    {
+      "path": "artifacts/fault-run.json",
+      "sha256": "a666b789c38bff72d8b73907062232c616657e9e1ae72ddce63366cb43d885b1"
+    },
+    {
+      "path": "artifacts/objectives.txt",
+      "sha256": "f8edc496ef8e248585d63fb6b1fbbbd66d8ea02b55ce3d7eaba47342da4e2155"
+    }
+  ]
+}

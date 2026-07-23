@@ -1,0 +1,2 @@
+Fixture-only objective evidence for parser and fail-closed guard tests.
+This file is not dynamic production evidence and cannot approve a release.

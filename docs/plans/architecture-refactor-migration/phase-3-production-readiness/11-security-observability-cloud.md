@@ -215,9 +215,16 @@ M12 6 个，下一工作包为 PR-M11-12；真实 Kind/K3d、M10、M11/Phase 3/H
 - [ ] `[DEV]` 清除production/public compatibility API中的ArcMut、mut_from_ref和clone-safe AsMut/DerefMut。
 - [ ] `[REV]` 保留项必须是唯一性可证明的sound wrapper，有局部SAFETY、Miri/Loom证据和Human ADR。
 - [ ] `[TEST]` 执行stable default、feature matrix、Miri/Loom可用切片、soak和SLO fault suite。
-- [ ] `[DEV]` 发布dashboard/runbook、告警、回滚和证据索引。
+- [x] `[DEV]` 发布dashboard/runbook、告警、回滚和证据索引。Issue #8649 / M11-12bc114 以
+  versioned R24 policy、六小时动态 runner、fail-closed guard 和 SHA-256 artifact index 完成工程交付；
+  真实 dynamic run 与签署仍保持开放。
 - [ ] 回滚点：任一失败返回对应独立PR修复并冻结新快照，不扩大baseline或跳过Gate。
 - [ ] `[HUMAN]` 对同一冻结快照批准Phase 3 Gate。
+
+R24 工程证据见
+[`11-slo-release-evidence.md`](11-slo-release-evidence.md)。正向 fixture 仅验证 parser 且必须显式
+`--allow-fixture`；当前主机未具备集群、镜像、Secret 与 Prometheus endpoint，因此本更新不勾选 soak/fault
+`[TEST]` 或 `[HUMAN]` Gate。
 
 当前进展：M11-12a owned-value leaf 已解除 Common 只读 TopicConfig helper 的 ArcMut 具体类型依赖，移除
 `rocketmq-common` 自身未使用的 `sync_unsafe_cell` feature，并将 Remoting `RpcResponse` header 从共享可变 owner
