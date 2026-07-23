@@ -113,7 +113,6 @@ use crate::config::rocksdb_manager::RocksDbBrokerConfigStorageLayout;
 use crate::controller::replicas_manager::ReplicasManager;
 use crate::failover::escape_bridge::EscapeBridge;
 use crate::failover::escape_bridge_capability::EscapeBridgePolicyState;
-use crate::failover::escape_bridge_capability::LegacyEscapeStoreLifecycleLease;
 use crate::failover::escape_bridge_capability::LegacyEscapeStoreOwner;
 use crate::filter::commit_log_dispatcher_calc_bit_map::CommitLogDispatcherCalcBitMap;
 use crate::filter::manager::consumer_filter_manager::ConsumerFilterManager;
@@ -1413,11 +1412,33 @@ impl BrokerRuntime {
 
     #[cfg(test)]
     pub(crate) async fn start_message_store_for_test(&mut self) -> Result<(), StoreError> {
-        self.inner
-            .message_store_mut()
-            .ok_or(StoreError::NotStarted)?
-            .start()
-            .await
+        self.start_message_store().await
+    }
+
+    #[cfg(test)]
+    fn with_message_store_mut_for_test<R>(&mut self, operation: impl FnOnce(&mut BrokerMessageStore) -> R) -> R {
+        self.detach_message_store_provider();
+        let result = operation(self.inner.message_store_unchecked_mut());
+        self.bind_message_store_provider();
+        result
+    }
+
+    #[cfg(test)]
+    async fn load_message_store_for_test(&mut self) -> bool {
+        self.load_message_store().await
+    }
+
+    #[cfg(test)]
+    async fn reput_message_store_once_for_test(&mut self) {
+        self.detach_message_store_provider();
+        self.inner.message_store_unchecked_mut().reput_once().await;
+        self.bind_message_store_provider();
+    }
+
+    #[cfg(test)]
+    async fn shutdown_message_store_for_test(&mut self) {
+        self.detach_message_store_provider();
+        self.inner.message_store_unchecked_mut().shutdown().await;
     }
 
     pub(crate) fn auth_metrics_snapshot(&self) -> Option<AuthMetricsSnapshot> {
@@ -1427,6 +1448,33 @@ impl BrokerRuntime {
     #[cfg(test)]
     pub(crate) fn init_processor_for_test(&mut self) {
         let _ = self.init_processor();
+    }
+
+    fn detach_message_store_provider(&self) {
+        self.escape_bridge_owner.detach_message_store();
+    }
+
+    fn bind_message_store_provider(&self) {
+        if let Some(owner) = self.inner.message_store.as_ref() {
+            self.escape_bridge_owner.bind_message_store(owner);
+        }
+    }
+
+    async fn load_message_store(&mut self) -> bool {
+        self.detach_message_store_provider();
+        let loaded = self.inner.message_store_unchecked_mut().load().await;
+        self.bind_message_store_provider();
+        loaded
+    }
+
+    async fn start_message_store(&mut self) -> Result<(), StoreError> {
+        self.detach_message_store_provider();
+        let result = match self.inner.message_store_mut() {
+            Some(message_store) => message_store.start().await,
+            None => Err(StoreError::NotStarted),
+        };
+        self.bind_message_store_provider();
+        result
     }
 
     pub(crate) fn topic_config(&self, topic: &CheetahString) -> Option<Arc<TopicConfig>> {
@@ -1614,15 +1662,34 @@ impl BrokerRuntime {
         // reject/drain requests -> drain store-backed delivery -> flush/replicate the store ->
         // stop remaining background work -> telemetry.
         // Store durability therefore cannot be starved by a slow background component.
+        self.detach_message_store_provider();
+        while self
+            .inner
+            .message_store
+            .as_ref()
+            .is_some_and(|owner| Arc::strong_count(owner) > 1)
+            && !deadline.is_expired()
+        {
+            tokio::task::yield_now().await;
+        }
         let started = Instant::now();
-        let message_store_outcome = if let Some(mut message_store) = self.inner.message_store_mut() {
+        let store_owner_is_shared = self
+            .inner
+            .message_store
+            .as_ref()
+            .is_some_and(|owner| Arc::strong_count(owner) > 1);
+        let message_store_outcome = if self.inner.message_store.is_none() {
+            MessageStoreShutdownOutcome::Absent
+        } else if store_owner_is_shared {
+            MessageStoreShutdownOutcome::TimedOut
+        } else if let Some(message_store) = self.inner.message_store_mut() {
             match await_shutdown_deadline(deadline, message_store.shutdown_gracefully()).await {
                 Ok(Ok(report)) => MessageStoreShutdownOutcome::Completed(report),
                 Ok(Err(error)) => MessageStoreShutdownOutcome::Failed(error),
                 Err(_elapsed) => MessageStoreShutdownOutcome::TimedOut,
             }
         } else {
-            MessageStoreShutdownOutcome::Absent
+            MessageStoreShutdownOutcome::TimedOut
         };
         record_message_store_shutdown_outcome(
             &mut shutdown_report,
@@ -2180,13 +2247,12 @@ impl BrokerRuntime {
                 self.inner.broker_stats_manager.clone(),
             )));
             let put_message_preflight = message_store.store().put_message_preflight();
-            self.escape_bridge_owner.bind_message_store(&message_store);
             self.inner.message_store = Some(message_store);
             let page_cache_busy_timeout_millis = message_store_config.os_page_cache_busy_timeout_mills;
             self.inner.broker_fast_failure.set_page_cache_busy_checker(move || {
                 put_message_preflight.is_os_page_cache_busy(page_cache_busy_timeout_millis)
             });
-            if let Some(mut message_store) = self.inner.message_store_mut() {
+            if let Some(message_store) = self.inner.message_store_mut() {
                 match message_store.init().await {
                     Ok(_) => {
                         info!("Initialize message store success");
@@ -2222,13 +2288,12 @@ impl BrokerRuntime {
                     self.inner.broker_stats_manager.clone(),
                 )));
                 let put_message_preflight = message_store.store().put_message_preflight();
-                self.escape_bridge_owner.bind_message_store(&message_store);
                 self.inner.message_store = Some(message_store);
                 let page_cache_busy_timeout_millis = message_store_config.os_page_cache_busy_timeout_mills;
                 self.inner.broker_fast_failure.set_page_cache_busy_checker(move || {
                     put_message_preflight.is_os_page_cache_busy(page_cache_busy_timeout_millis)
                 });
-                if let Some(mut message_store) = self.inner.message_store_mut() {
+                if let Some(message_store) = self.inner.message_store_mut() {
                     match message_store.init().await {
                         Ok(_) => {
                             info!("Initialize RocksDB message store success");
@@ -2258,6 +2323,7 @@ impl BrokerRuntime {
             self.inner.consumer_filter_manager.clone().unwrap(),
         ));
         self.inner.message_store_unchecked_mut().add_first_dispatcher(filter);
+        self.bind_message_store_provider();
         flag
     }
 
@@ -2271,7 +2337,7 @@ impl BrokerRuntime {
         if self.inner.message_store.is_some() {
             self.register_message_store_hook();
             // load message store
-            result &= self.inner.message_store_unchecked_mut().load().await;
+            result &= self.load_message_store().await;
             if !result {
                 warn!("Load message store failed");
                 return false;
@@ -2319,7 +2385,8 @@ impl BrokerRuntime {
         let timer_message_store = self.inner.timer_message_store().cloned();
         let schedule_message_service = self.inner.schedule_message_service().clone();
         let put_message_preflight = self.inner.message_store().map(MessageStore::put_message_preflight);
-        if let Some(mut message_store) = self.inner.message_store_mut() {
+        self.detach_message_store_provider();
+        if let Some(message_store) = self.inner.message_store_mut() {
             if let Some(put_message_preflight) = put_message_preflight {
                 message_store.set_put_message_hook(Box::new(CheckBeforePutMessageHook::new(
                     put_message_preflight,
@@ -2333,6 +2400,7 @@ impl BrokerRuntime {
                 schedule_message_service,
             )))
         }
+        self.bind_message_store_provider();
     }
 
     fn initialize_remoting_server(&mut self) {
@@ -2575,6 +2643,13 @@ impl BrokerRuntime {
     }
 
     fn init_processor(&mut self) -> (DefaultServerProcessor, FasterServerProcessor) {
+        self.detach_message_store_provider();
+        let processors = self.init_processor_with_exclusive_store();
+        self.bind_message_store_provider();
+        processors
+    }
+
+    fn init_processor_with_exclusive_store(&mut self) -> (DefaultServerProcessor, FasterServerProcessor) {
         let send_message_topic_capability = Arc::new(SendMessageTopicCapability::new(
             self.inner.send_message_policy_state.clone(),
             self.inner.topic_config_manager_handle(),
@@ -3335,14 +3410,9 @@ impl BrokerRuntime {
     fn initial_request_pipeline(&mut self) {}
 
     async fn start_basic_service(&mut self) {
-        if let Some(mut message_store) = self.inner.message_store_mut() {
-            message_store
-                .start()
-                .await
-                .unwrap_or_else(|e| panic!("Failed to start message store: {e}"));
-        } else {
-            panic!("Message store is not initialized");
-        }
+        self.start_message_store()
+            .await
+            .unwrap_or_else(|e| panic!("Failed to start message store: {e}"));
 
         self.inner.controller_state.with_replicas_mut(ReplicasManager::start);
 
@@ -4124,10 +4194,11 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn message_store_mut(&mut self) -> Option<LegacyEscapeStoreLifecycleLease<MS>> {
+    pub fn message_store_mut(&mut self) -> Option<&mut MS> {
         self.message_store
-            .as_deref()
-            .map(LegacyEscapeStoreOwner::lifecycle_lease)
+            .as_mut()
+            .and_then(Arc::get_mut)
+            .map(LegacyEscapeStoreOwner::store_mut)
     }
 
     #[inline]
@@ -4346,11 +4417,14 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn message_store_unchecked_mut(&mut self) -> LegacyEscapeStoreLifecycleLease<MS> {
-        self.message_store
-            .as_deref()
-            .expect("message store should be initialized before mutable access")
-            .lifecycle_lease()
+    pub fn message_store_unchecked_mut(&mut self) -> &mut MS {
+        let owner = self
+            .message_store
+            .as_mut()
+            .expect("message store should be initialized before mutable access");
+        Arc::get_mut(owner)
+            .expect("message store lifecycle access requires the exclusive Broker owner")
+            .store_mut()
     }
 
     #[inline]
@@ -6217,17 +6291,16 @@ accounts:
     }
 
     fn seed_lmq_offsets(runtime: &mut BrokerRuntime, offsets: &[(&str, i64)]) {
-        let inner = runtime.inner_for_test();
         let mut topic_queue_table = HashMap::new();
         for (lite_topic, offset) in offsets {
             let lmq_name = to_lmq_name("parent-topic", lite_topic).expect("lmq name");
             topic_queue_table.insert(CheetahString::from_string(format!("{lmq_name}-0")), *offset);
         }
-        inner
-            .message_store_mut()
-            .expect("message store should be initialized")
-            .consume_queue_store_mut()
-            .set_topic_queue_table(topic_queue_table);
+        runtime.with_message_store_mut_for_test(|message_store| {
+            message_store
+                .consume_queue_store_mut()
+                .set_topic_queue_table(topic_queue_table);
+        });
     }
 
     fn set_parent_topic_message_type(runtime: &mut BrokerRuntime, message_type: &str) {
@@ -6310,7 +6383,6 @@ accounts:
     }
 
     async fn seed_lmq_message(runtime: &mut BrokerRuntime, lite_topic: &str, body: &'static [u8]) -> i64 {
-        let inner = runtime.inner_for_test();
         let lmq_name = CheetahString::from_string(to_lmq_name("parent-topic", lite_topic).expect("lmq name"));
         let mut message = MessageExtBrokerInner::default();
         message.set_topic(CheetahString::from_static_str("parent-topic"));
@@ -6321,21 +6393,19 @@ accounts:
             lmq_name,
         );
 
-        let put_result = inner
-            .message_store_mut()
-            .expect("message store should be initialized")
-            .put_message(message)
+        let append = runtime
+            .escape_bridge_owner
+            .store_capability()
+            .append_message(message)
             .await;
-        assert!(put_result.is_ok(), "seed lmq message should succeed");
-        let wrote_offset = put_result
+        let append = append.expect("seed lmq message should reach the Store");
+        assert!(append.result().is_ok(), "seed lmq message should succeed");
+        let wrote_offset = append
+            .result()
             .append_message_result()
             .expect("seed message should expose append result")
             .wrote_offset;
-        inner
-            .message_store_mut()
-            .expect("message store should be initialized")
-            .reput_once()
-            .await;
+        runtime.reput_message_store_once_for_test().await;
         wrote_offset
     }
 
@@ -6906,7 +6976,7 @@ accounts:
         runtime.inner.initialize_controller_mode();
         runtime.register_message_store_hook();
         assert!(
-            runtime.inner.message_store_unchecked_mut().load().await,
+            runtime.load_message_store_for_test().await,
             "{broker_label} message store load should succeed"
         );
         assert!(
@@ -7015,7 +7085,11 @@ accounts:
             .message_store
             .take()
             .expect("message store should remain initialized");
-        message_store.lifecycle_lease().shutdown().await;
+        let mut message_store = match Arc::try_unwrap(message_store) {
+            Ok(owner) => owner,
+            Err(_) => panic!("released provider must leave one exclusive Store owner"),
+        };
+        message_store.store_mut().shutdown().await;
         drop(message_store);
         assert!(
             capability.with_store(|_| ()).is_err(),
@@ -7027,6 +7101,46 @@ accounts:
             .is_err());
         assert!(capability.append_batch(MessageExtBatch::default()).await.is_err());
         assert!(capability.put_message(MessageExtBrokerInner::default()).await.is_err());
+        let _ = std::fs::remove_dir_all(temp_root);
+    }
+
+    #[tokio::test]
+    async fn broker_shutdown_waits_for_admitted_store_reads_before_lifecycle_access() {
+        let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-broker-store-exclusive-{}", current_millis()));
+        let broker_config = Arc::new(BrokerConfig::default());
+        let message_store_config = Arc::new(MessageStoreConfig {
+            store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+            ..MessageStoreConfig::default()
+        });
+        let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
+        assert!(runtime.initialize_metadata().await);
+        assert!(runtime.initialize_message_store().await);
+
+        let capability = runtime.escape_bridge_owner.store_capability();
+        let admitted_read = capability.read_lease().expect("read admitted before detach");
+        runtime.escape_bridge_owner.detach_message_store();
+
+        assert!(
+            capability.with_store(|_| ()).is_err(),
+            "detached provider must reject new Store operations"
+        );
+        assert!(
+            runtime.inner.message_store_mut().is_none(),
+            "an admitted request lease must prevent exclusive lifecycle access"
+        );
+
+        let release_read = tokio::spawn(async move {
+            tokio::task::yield_now().await;
+            drop(admitted_read);
+        });
+        let report = runtime
+            .shutdown_basic_service_until(ShutdownDeadline::after(Duration::from_secs(1)))
+            .await;
+        release_read.await.expect("release admitted Store read");
+        assert!(
+            !report.message_store.timed_out,
+            "Store shutdown should continue after admitted reads drain"
+        );
         let _ = std::fs::remove_dir_all(temp_root);
     }
 
@@ -7104,9 +7218,7 @@ accounts:
         assert_eq!(Arc::strong_count(message_store), 1);
         assert_eq!(message_store.legacy_strong_count(), 1);
 
-        if let Some(mut message_store) = runtime.inner.message_store_mut() {
-            message_store.shutdown().await;
-        }
+        runtime.shutdown_message_store_for_test().await;
         let _ = std::fs::remove_dir_all(temp_root);
     }
 
@@ -7172,7 +7284,11 @@ accounts:
             .message_store
             .take()
             .expect("message store should remain initialized");
-        message_store.lifecycle_lease().shutdown().await;
+        let mut message_store = match Arc::try_unwrap(message_store) {
+            Ok(owner) => owner,
+            Err(_) => panic!("released provider must leave one exclusive Store owner"),
+        };
+        message_store.store_mut().shutdown().await;
         drop(message_store);
 
         assert!(admin.message_store().is_none());
@@ -7241,12 +7357,7 @@ accounts:
             .expect("Rocks batch shared append")
             .result()
             .is_ok());
-        runtime
-            .inner
-            .message_store_mut()
-            .expect("message store should be initialized")
-            .reput_once()
-            .await;
+        runtime.reput_message_store_once_for_test().await;
         assert_eq!(
             runtime
                 .inner
@@ -7257,9 +7368,7 @@ accounts:
             "one single message and one ordinary batch must create two ConsumeQueue units"
         );
 
-        if let Some(mut message_store) = runtime.inner.message_store_mut() {
-            message_store.shutdown().await;
-        }
+        runtime.shutdown_message_store_for_test().await;
         let _ = std::fs::remove_dir_all(temp_root);
     }
 
@@ -7375,12 +7484,7 @@ accounts:
         assert_eq!(response_header.queue_id(), 0);
         assert_eq!(response_header.queue_offset(), 0);
 
-        runtime
-            .inner
-            .message_store_mut()
-            .expect("message store should be initialized")
-            .reput_once()
-            .await;
+        runtime.reput_message_store_once_for_test().await;
         assert_eq!(
             runtime
                 .inner
@@ -7407,10 +7511,7 @@ accounts:
             .subscription_group_manager_mut()
             .update_subscription_group_config(&mut SubscriptionGroupConfig::new(group.clone()));
         runtime
-            .inner
-            .message_store_mut()
-            .expect("message store should be initialized")
-            .start()
+            .start_message_store_for_test()
             .await
             .expect("message store should start");
 
@@ -7423,12 +7524,13 @@ accounts:
             CheetahString::from_static_str("RetryTag"),
         );
 
-        let put_result = runtime
-            .inner
-            .message_store_mut()
-            .expect("message store should be initialized")
-            .put_message(original)
+        let append = runtime
+            .escape_bridge_owner
+            .store_capability()
+            .append_message(original)
             .await;
+        let append = append.expect("seed message should reach the Store");
+        let put_result = append.result();
         assert!(put_result.is_ok(), "seed message should be stored");
         let commit_log_offset = put_result
             .append_message_result()
@@ -7482,12 +7584,7 @@ accounts:
             "send-back should create the retry topic for the consumer group"
         );
 
-        runtime
-            .inner
-            .message_store_mut()
-            .expect("message store should be initialized")
-            .shutdown()
-            .await;
+        runtime.shutdown_message_store_for_test().await;
         let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }
 
@@ -8038,12 +8135,7 @@ accounts:
         assert_eq!(send_response_header.queue_id(), 0);
         assert_eq!(send_response_header.queue_offset(), 0);
 
-        runtime
-            .inner
-            .message_store_mut()
-            .expect("message store should be initialized")
-            .reput_once()
-            .await;
+        runtime.reput_message_store_once_for_test().await;
 
         let max_header = GetMaxOffsetRequestHeader {
             topic: topic.clone(),
