@@ -47,10 +47,17 @@ pub async fn serve_typed_with_lifecycle(
     lifecycle: rocketmq_runtime::ServiceLifecycle,
 ) -> Result<(), McpError> {
     let server = RocketmqMcpServer::new(app);
-    let service = server
-        .serve(rmcp::transport::stdio())
-        .await
-        .map_err(|source| McpError::infrastructure("start MCP stdio service", source))?;
+    let startup = server.serve(rmcp::transport::stdio());
+    tokio::pin!(startup);
+    let service = tokio::select! {
+        result = &mut startup => {
+            result.map_err(|source| McpError::infrastructure("start MCP stdio service", source))?
+        }
+        result = lifecycle.wait_for_shutdown_signal() => {
+            result.map_err(|source| McpError::infrastructure("wait for MCP lifecycle shutdown", source))?;
+            return Ok(());
+        }
+    };
     let cancellation = service.cancellation_token();
     let waiting = service.waiting();
     tokio::pin!(waiting);
