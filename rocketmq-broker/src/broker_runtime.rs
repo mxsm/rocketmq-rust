@@ -8276,7 +8276,7 @@ accounts:
             timer_wheel_enable: true,
             ..MessageStoreConfig::default()
         });
-        let timer_message_store = TimerMessageStore::new_with_config(None, timer_config);
+        let timer_message_store = TimerMessageStore::new_with_message_store_config(timer_config);
         assert!(timer_message_store.load());
         runtime.inner_for_test().set_timer_message_store(timer_message_store);
 

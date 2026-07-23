@@ -910,6 +910,102 @@
       "from": "3868a2990574ade766ffcdc8",
       "to": "63278d5eba087cd7f1369da9",
       "reason": "M10-02 guarded the existing retry-delete mutation with the minimum derived WAL pin without adding a mut_from_ref occurrence"
+    },
+    {
+      "identity": "4d90f667e8966a75f78769f4",
+      "from": "65456a537c534b55102638ba",
+      "to": "2585a834504cb60408a7521a",
+      "reason": "Adding the compiler-visible ArcMut deprecation marker changed the existing type declaration fingerprint without adding an occurrence"
+    },
+    {
+      "identity": "0bd2a9cf20621cfa4ed1cf5e",
+      "from": "db04db873f2527b05f1da604",
+      "to": "34a3a1df2288b900841b1de7",
+      "reason": "Adding the compiler-visible SyncUnsafeCellWrapper deprecation marker changed the existing type declaration fingerprint without adding an occurrence"
+    },
+    {
+      "identity": "cd00e2a1556ea95f83450e28",
+      "from": "813243861ba77e53dcc4b02e",
+      "to": "56987f5bacacad808f3915fb",
+      "reason": "Adding the compiler-visible WeakArcMut deprecation marker changed the existing type declaration fingerprint without adding an occurrence"
+    },
+    {
+      "identity": "2093ebe6ec0c89a444eba617",
+      "from": "c4de3f11cf2c6814e89c1cc7",
+      "to": "603e5d7ed7671c2e2d6e56b3",
+      "reason": "Adding the ArcMut root re-export deprecation marker changed the existing re-export fingerprint without adding an occurrence"
+    },
+    {
+      "identity": "378773746445866290a41dea",
+      "from": "9712d81a72a0f2df77faf112",
+      "to": "8289b0607ff9ede4585eeadc",
+      "reason": "Adding the SyncUnsafeCellWrapper root re-export deprecation marker changed the existing re-export fingerprint without adding an occurrence"
+    },
+    {
+      "identity": "a5632591cff2155105bfd5ed",
+      "from": "04eed240a8b71eb693c91690",
+      "to": "3a0eef0133646b8a231a627b",
+      "reason": "Adding the WeakArcMut root re-export deprecation marker changed the existing re-export fingerprint without adding an occurrence"
+    },
+    {
+      "identity": "9df6be4b83a40eddcebc37be",
+      "from": "ef5ed7a2fb3cfd78bc28e148",
+      "to": "27af12865a298c62b16135b0",
+      "reason": "Adding the scoped deprecation allowance changed the existing LocalFile ArcMut import fingerprint without adding an occurrence"
+    },
+    {
+      "identity": "3642ffbf2d028a63f43d1340",
+      "from": "2fe46ccfd39fbe3e6291e485",
+      "to": "7479d3bee96c4b30cc5f9437",
+      "reason": "Adding the set_message_store_arc deprecation marker changed its existing ArcMut parameter fingerprint without adding an occurrence"
+    },
+    {
+      "identity": "54faa711f0305e782b819cb0",
+      "from": "746542483fffcc017c2b2e5b",
+      "to": "32f45d77d26aacb74f5a7de5",
+      "reason": "Adding the scoped deprecation allowance changed the existing GenericMessageStore ArcMut import fingerprint without adding an occurrence"
+    },
+    {
+      "identity": "ec0a1d513dcd0a4ad320e84f",
+      "from": "36361cc6ccd2b916d08d4dec",
+      "to": "e534ff3b3fe9f567ee47c649",
+      "reason": "Adding GenericMessageStore deprecation metadata changed the existing LocalFile variant fingerprint without adding an occurrence"
+    },
+    {
+      "identity": "ec0a1d513dcd0a4ad320e84f",
+      "from": "f6a3c6581db220e1627690d6",
+      "to": "0246721faa7251f8829bd6bc",
+      "reason": "Adding GenericMessageStore deprecation metadata changed the existing RocksDB variant fingerprint without adding an occurrence"
+    },
+    {
+      "identity": "ec0a1d513dcd0a4ad320e84f",
+      "from": "98f940f936e81a1ad86d929b",
+      "to": "cc38530a2199810daf1d5abe",
+      "reason": "Adding GenericMessageStore deprecation metadata changed the existing LocalFile constructor fingerprint without adding an occurrence"
+    },
+    {
+      "identity": "85875520c1f74ec05bf38d10",
+      "from": "59690fe43b7e20d5c5b0b4ce",
+      "to": "14bed5f0eb0004978a17e275",
+      "reason": "Adding the scoped deprecation allowance changed the existing Timer ArcMut import fingerprint without adding an occurrence"
+    },
+    {
+      "identity": "37153ae40c27a8e9b5acefa9",
+      "from": "af0fcd31eef971bc6f63e598",
+      "to": "e38c48cb2a1a487c9e0f5f68",
+      "reason": "Adding TimerMessageStore deprecation metadata changed the existing full-Store field fingerprint without adding an occurrence"
+    },
+    {
+      "identity": "37153ae40c27a8e9b5acefa9",
+      "from": "64375a083f99666818770b37",
+      "to": "e2d2720bc4bddd1beb0bf467",
+      "reason": "Adding TimerMessageStore deprecation metadata changed the existing full-Store constructor fingerprint without adding an occurrence"
+    },
+    {
+      "identity": "37153ae40c27a8e9b5acefa9",
+      "from": "747bcf58098dd1ea8ed4efe3",
+      "to": "c21ecee6b38b405535901d18",
+      "reason": "Adding TimerMessageStore deprecation metadata changed the existing config constructor fingerprint without adding an occurrence"
     }
   ]
 }

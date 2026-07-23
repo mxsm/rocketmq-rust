@@ -83,6 +83,10 @@ use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
+#[allow(
+    deprecated,
+    reason = "set_message_store_arc preserves its public ArcMut signature during the deprecation window"
+)]
 use rocketmq_rust::ArcMut;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
@@ -1073,6 +1077,11 @@ impl LocalFileMessageStore {
                 || self.store_runtime_state.broker_role() != BrokerRole::Slave)
     }
 
+    #[allow(
+        deprecated,
+        reason = "this method preserves the deprecated ArcMut wiring signature until removal"
+    )]
+    #[deprecated(since = "1.0.0", note = "use LocalFileMessageStore::wire_owned_root_dependencies")]
     pub fn set_message_store_arc(&mut self, message_store_arc: ArcMut<LocalFileMessageStore>) {
         drop(message_store_arc);
         self.consume_queue_store.set_context(self.consume_queue_context());

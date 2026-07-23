@@ -26,7 +26,6 @@ use crate::base::message_result::PutMessageResult;
 /// shared-mutation wrapper around the concrete backend. Shared consumers should
 /// receive narrow Store capabilities while the application lifecycle retains the
 /// only mutable root owner.
-#[doc(hidden)]
 #[non_exhaustive]
 pub enum OwnedMessageStore {
     LocalFileStore(Box<LocalFileMessageStore>),

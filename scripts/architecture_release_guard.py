@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 import tomllib
 from pathlib import Path
@@ -52,6 +53,82 @@ NEW_CRATES = {
     "rocketmq-proxy-local",
 }
 EDGE_FIELDS = ("caller", "target", "kind", "path", "alias")
+REQUIRED_ARC_MUT_DEPRECATIONS = {
+    "arc-mut-type": (
+        "rocketmq/src/arc_mut.rs",
+        "pub struct ArcMut",
+        "use std::sync::Arc with RwLock, Mutex, atomics, or an exclusive owner",
+    ),
+    "weak-arc-mut-type": (
+        "rocketmq/src/arc_mut.rs",
+        "pub struct WeakArcMut",
+        "use std::sync::Weak with an explicit lock or immutable state",
+    ),
+    "sync-unsafe-cell-wrapper-type": (
+        "rocketmq/src/arc_mut.rs",
+        "pub struct SyncUnsafeCellWrapper",
+        "use parking_lot::RwLock or an exclusive owner",
+    ),
+    "arc-mut-root-reexport": (
+        "rocketmq/src/lib.rs",
+        "pub use arc_mut::ArcMut;",
+        "use std::sync::Arc with RwLock, Mutex, atomics, or an exclusive owner",
+    ),
+    "weak-arc-mut-root-reexport": (
+        "rocketmq/src/lib.rs",
+        "pub use arc_mut::WeakArcMut;",
+        "use std::sync::Weak with an explicit lock or immutable state",
+    ),
+    "sync-unsafe-cell-wrapper-root-reexport": (
+        "rocketmq/src/lib.rs",
+        "pub use arc_mut::SyncUnsafeCellWrapper;",
+        "use parking_lot::RwLock or an exclusive owner",
+    ),
+    "generic-message-store": (
+        "rocketmq-store/src/message_store.rs",
+        "pub enum GenericMessageStore",
+        "use OwnedMessageStore and inject narrow Store capabilities into shared consumers",
+    ),
+    "local-file-shared-root-wiring": (
+        "rocketmq-store/src/message_store/local_file_message_store.rs",
+        "pub fn set_message_store_arc(",
+        "use LocalFileMessageStore::wire_owned_root_dependencies",
+    ),
+    "timer-full-store-field": (
+        "rocketmq-store/src/timer/timer_message_store.rs",
+        "pub default_message_store:",
+        "use new_with_message_store_config or wire_owned_root_dependencies",
+    ),
+    "timer-full-store-constructor": (
+        "rocketmq-store/src/timer/timer_message_store.rs",
+        "pub fn new(default_message_store:",
+        "use new_with_message_store_config or wire_owned_root_dependencies",
+    ),
+    "timer-full-store-config-constructor": (
+        "rocketmq-store/src/timer/timer_message_store.rs",
+        "pub fn new_with_config(",
+        "use new_with_message_store_config or wire_owned_root_dependencies",
+    ),
+    "timer-full-store-setter": (
+        "rocketmq-store/src/timer/timer_message_store.rs",
+        "pub fn set_default_message_store(",
+        "use new_with_message_store_config or wire_owned_root_dependencies",
+    ),
+}
+REQUIRED_ARC_MUT_REPLACEMENTS = {
+    "owned-message-store": (
+        "rocketmq-store/src/message_store/owned_message_store.rs",
+        "pub enum OwnedMessageStore",
+    ),
+    "owned-root-wiring": (
+        "rocketmq-store/src/message_store/local_file_message_store.rs",
+        "pub fn wire_owned_root_dependencies(",
+    ),
+    "timer-config-constructor": (
+        "rocketmq-store/src/timer/timer_message_store.rs",
+        "pub fn new_with_message_store_config(",
+    ),
+}
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -213,6 +290,108 @@ def check_usage_and_approval(plan: dict[str, Any], findings: list[str]) -> None:
         findings.append("external notification plan must contain at least four channels")
 
 
+def deprecation_attribute_pattern(since: str, note: str) -> re.Pattern[str]:
+    return re.compile(
+        r"#\[\s*deprecated\s*\(\s*since\s*=\s*"
+        + re.escape(f'"{since}"')
+        + r"\s*,\s*note\s*=\s*"
+        + re.escape(f'"{note}"')
+        + r"\s*,?\s*\)\s*\]"
+    )
+
+
+def check_arc_mut_deprecations(
+    plan: dict[str, Any],
+    findings: list[str],
+    source_overrides: dict[str, str] | None = None,
+) -> None:
+    policy = plan.get("arc_mut_deprecation", {})
+    if policy.get("since") != "1.0.0":
+        findings.append("ArcMut compatibility deprecation must start in 1.0.0")
+    if policy.get("minimum_deprecation_releases") != 2:
+        findings.append("ArcMut removal must retain two deprecation releases")
+    if policy.get("minimum_major_boundaries") != 1:
+        findings.append("ArcMut removal must retain one major-version boundary")
+    if policy.get("destructive_removal") != "pending-next-major-evidence-gate":
+        findings.append("ArcMut destructive removal must remain pending the evidence gate")
+
+    surfaces = policy.get("surfaces", [])
+    observed = {
+        surface.get("id"): (
+            surface.get("path"),
+            surface.get("declaration"),
+            surface.get("note"),
+        )
+        for surface in surfaces
+        if isinstance(surface, dict)
+    }
+    if observed != REQUIRED_ARC_MUT_DEPRECATIONS or len(surfaces) != len(observed):
+        findings.append("ArcMut deprecation inventory differs from the approved 12-surface contract")
+
+    replacements = policy.get("canonical_replacements", [])
+    observed_replacements = {
+        replacement.get("id"): (
+            replacement.get("path"),
+            replacement.get("declaration"),
+        )
+        for replacement in replacements
+        if isinstance(replacement, dict)
+    }
+    if (
+        observed_replacements != REQUIRED_ARC_MUT_REPLACEMENTS
+        or len(replacements) != len(observed_replacements)
+    ):
+        findings.append("ArcMut canonical replacement inventory differs from the approved contract")
+
+    since = str(policy.get("since", ""))
+    for surface_id, (relative_path, declaration, note) in REQUIRED_ARC_MUT_DEPRECATIONS.items():
+        path = ROOT / relative_path
+        if source_overrides is not None and relative_path in source_overrides:
+            content = source_overrides[relative_path]
+        elif path.is_file():
+            content = path.read_text(encoding="utf-8")
+        else:
+            findings.append(f"ArcMut deprecation source is missing: {relative_path}")
+            continue
+
+        if content.count(declaration) != 1:
+            findings.append(
+                f"ArcMut deprecation declaration must be unique: {surface_id}"
+            )
+            continue
+        declaration_index = content.index(declaration)
+        matches = list(
+            deprecation_attribute_pattern(since, note).finditer(
+                content[:declaration_index]
+            )
+        )
+        if not matches or content[matches[-1].end() : declaration_index].strip():
+            findings.append(
+                f"ArcMut deprecation marker is missing or detached: {surface_id}"
+            )
+
+    for replacement_id, (relative_path, declaration) in REQUIRED_ARC_MUT_REPLACEMENTS.items():
+        path = ROOT / relative_path
+        if source_overrides is not None and relative_path in source_overrides:
+            content = source_overrides[relative_path]
+        elif path.is_file():
+            content = path.read_text(encoding="utf-8")
+        else:
+            findings.append(f"ArcMut replacement source is missing: {relative_path}")
+            continue
+
+        if content.count(declaration) != 1:
+            findings.append(f"ArcMut replacement declaration must be unique: {replacement_id}")
+            continue
+        declaration_index = content.index(declaration)
+        prefix = content[:declaration_index]
+        attribute_block = prefix[prefix.rfind("\n\n") + 2 :]
+        if re.search(r"#\[\s*deprecated(?:\s*\(|\s*\])", attribute_block):
+            findings.append(f"ArcMut canonical replacement is deprecated: {replacement_id}")
+        if replacement_id == "owned-message-store" and "#[doc(hidden)]" in attribute_block:
+            findings.append("OwnedMessageStore canonical replacement is hidden from Rustdoc")
+
+
 def check_ci_and_documents(plan: dict[str, Any], findings: list[str]) -> None:
     workflow = CI_PATH.read_text(encoding="utf-8")
     for command in (
@@ -259,6 +438,7 @@ def validate() -> list[str]:
     check_release_windows(plan, baseline, findings)
     check_proxy_activation(plan, findings)
     check_usage_and_approval(plan, findings)
+    check_arc_mut_deprecations(plan, findings)
     check_ci_and_documents(plan, findings)
     return findings
 
@@ -276,6 +456,7 @@ def main() -> int:
     print("- compatibility windows: R1 29, next-major 4, long-term 2")
     print("- early removals/Proxy feature activation: 0")
     print("- external usage and notification gates: approved and enforced")
+    print("- ArcMut deprecation contract: 12/12 public surfaces, 3/3 canonical replacements")
     return 0
 
 

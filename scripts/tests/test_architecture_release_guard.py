@@ -48,6 +48,7 @@ class ArchitectureReleaseGuardTest(unittest.TestCase):
         )
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         self.assertIn("R1 29, next-major 4, long-term 2", result.stdout)
+        self.assertIn("12/12 public surfaces, 3/3 canonical replacements", result.stdout)
 
     def test_publish_order_covers_target_dag_and_respects_dependencies(self) -> None:
         findings: list[str] = []
@@ -101,6 +102,83 @@ class ArchitectureReleaseGuardTest(unittest.TestCase):
         self.assertEqual(
             "pending-next-major-evidence-gate",
             self.plan["human_approval"]["destructive_removal"],
+        )
+
+    def test_arc_mut_deprecation_inventory_and_markers_are_complete(self) -> None:
+        findings: list[str] = []
+        guard.check_arc_mut_deprecations(self.plan, findings)
+        self.assertEqual([], findings)
+        self.assertEqual(
+            guard.REQUIRED_ARC_MUT_DEPRECATIONS,
+            {
+                surface["id"]: (
+                    surface["path"],
+                    surface["declaration"],
+                    surface["note"],
+                )
+                for surface in self.plan["arc_mut_deprecation"]["surfaces"]
+            },
+        )
+        self.assertEqual(
+            guard.REQUIRED_ARC_MUT_REPLACEMENTS,
+            {
+                replacement["id"]: (
+                    replacement["path"],
+                    replacement["declaration"],
+                )
+                for replacement in self.plan["arc_mut_deprecation"]["canonical_replacements"]
+            },
+        )
+
+    def test_arc_mut_deprecation_contract_fails_closed(self) -> None:
+        invalid = copy.deepcopy(self.plan)
+        invalid["arc_mut_deprecation"]["surfaces"].pop()
+        findings: list[str] = []
+        guard.check_arc_mut_deprecations(invalid, findings)
+        self.assertIn(
+            "ArcMut deprecation inventory differs from the approved 12-surface contract",
+            findings,
+        )
+
+        surface_id = "arc-mut-type"
+        relative_path, declaration, note = guard.REQUIRED_ARC_MUT_DEPRECATIONS[surface_id]
+        source = (ROOT / relative_path).read_text(encoding="utf-8")
+        declaration_index = source.index(declaration)
+        marker = list(
+            guard.deprecation_attribute_pattern("1.0.0", note).finditer(
+                source[:declaration_index]
+            )
+        )[-1]
+        without_marker = source[: marker.start()] + source[marker.end() :]
+        findings = []
+        guard.check_arc_mut_deprecations(
+            self.plan,
+            findings,
+            source_overrides={relative_path: without_marker},
+        )
+        self.assertIn(
+            f"ArcMut deprecation marker is missing or detached: {surface_id}",
+            findings,
+        )
+
+        replacement_id = "timer-config-constructor"
+        replacement_path, replacement_declaration = guard.REQUIRED_ARC_MUT_REPLACEMENTS[replacement_id]
+        replacement_source = (ROOT / replacement_path).read_text(encoding="utf-8")
+        replacement_index = replacement_source.index(replacement_declaration)
+        deprecated_replacement = (
+            replacement_source[:replacement_index]
+            + '#[deprecated(since = "1.0.0", note = "invalid canonical replacement")]\n    '
+            + replacement_source[replacement_index:]
+        )
+        findings = []
+        guard.check_arc_mut_deprecations(
+            self.plan,
+            findings,
+            source_overrides={replacement_path: deprecated_replacement},
+        )
+        self.assertIn(
+            f"ArcMut canonical replacement is deprecated: {replacement_id}",
+            findings,
         )
 
 

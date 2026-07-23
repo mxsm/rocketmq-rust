@@ -1115,7 +1115,7 @@ pub mod bench_support {
             timer_precision_ms: 100,
             ..MessageStoreConfig::default()
         });
-        let timer_store = Arc::new(TimerMessageStore::new_with_config(None, config));
+        let timer_store = Arc::new(TimerMessageStore::new_with_message_store_config(config));
 
         assert!(timer_store.load(), "timer store should load for lifecycle probe");
         timer_store.start();
