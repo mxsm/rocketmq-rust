@@ -926,6 +926,7 @@ M09-04 再删除 MCP 未使用的 Auth/Error direct edges，并把承担 owned t
   - [x] Issue #8649 / M11-12bc114 候选新增六小时 soak/SLO policy、七项目标、Grafana/Prometheus 资产、英文 runbook、动态 runner/workflow 与 fail-closed SHA-256 evidence guard；fixture 明确非动态，9 项正向/故意违规测试通过，R24 完成，执行清单完成 19 项、剩余 12 项
   - [x] Issue #8677 / R20：Container Foundation run [`30011167537`](https://github.com/mxsm/rocketmq-rust/actions/runs/30011167537) 在 main commit `13d50e2d33ddfc1142bba63431b339d07704a4f7` 上完成 foundation 与 Broker、NameServer、Controller、Proxy、MCP 五服务动态验证；artifact `container-foundation`（ID `8565842850`）archive digest 为 `sha256:bc8172178a0527a049a79d7c6be0d0811501067acb7336df94f50b5447d32a7f`
   - [x] Issue #8692 / R19 runner：增加 `local-pull/batch-32` 的真实 append/reput/hot-read 采集、CQ-unit allocation 匹配控制与 body-copy 观察，并修复受限 batch 在 CQ iterator exhausted 后空转；真实性能 runner 就绪进度为 5/11，R19 固定硬件/HUMAN Gate 仍保持开放
+  - [x] Issue #8694 / R19 runner：增加 `rocks-pull/batch-32` 的真实 RocksDB CQ typed range read、Local WAL hot-read 采集与 native read-call 观察；真实性能 runner 就绪进度为 6/11，R19 固定硬件/HUMAN Gate 仍保持开放
   - [ ] M11-12bc115 及后续立即实施：完成 R09/R18 compatibility 与 R19 固定硬件/HUMAN 性能 Gate
   - [ ] R25：冻结重新划定的候选快照并完成当前范围四方签署
   - [FOLLOW-UP] R21 Kind/K3d 动态证据已从本轮目标排除，后续单独处理

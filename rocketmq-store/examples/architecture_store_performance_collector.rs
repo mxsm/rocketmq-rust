@@ -25,6 +25,9 @@
 //!
 //! cargo run --release --quiet -p rocketmq-store \
 //!   --example architecture_store_performance_collector -- local-pull batch-32
+//!
+//! cargo run --release --quiet -p rocketmq-store --features rocksdb_store \
+//!   --example architecture_store_performance_collector -- rocks-pull batch-32
 //! ```
 //!
 //! The command writes one sidecar-compatible JSON object to stdout. Each raw
@@ -58,12 +61,17 @@ use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_common::common::message::message_single::Message;
 use rocketmq_store::base::get_message_result::GetMessageResult;
+use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::base::message_status_enum::GetMessageStatus;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
+#[cfg(feature = "rocksdb_store")]
+use rocketmq_store::base::store_enum::StoreType;
 use rocketmq_store::config::flush_disk_type::FlushDiskType;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore;
+#[cfg(feature = "rocksdb_store")]
+use rocketmq_store::message_store::rocksdb_message_store::RocksDBMessageStore;
 use rocketmq_store_local::mapped_file::SelectMappedBufferCacheState;
 use rocketmq_store_local::mapped_file::SelectMappedBufferSourceKind;
 use serde::Deserialize;
@@ -73,6 +81,7 @@ use tokio::runtime::Builder;
 
 const LOCAL_APPEND_PROFILE: &str = "local-append";
 const LOCAL_PULL_PROFILE: &str = "local-pull";
+const ROCKS_PULL_PROFILE: &str = "rocks-pull";
 const SYNC_FLUSH_PROFILE: &str = "sync-flush";
 const MESSAGE_SIZE_BYTES: usize = 1024;
 const SAMPLE_COUNT: usize = 5;
@@ -129,6 +138,7 @@ static GLOBAL_ALLOCATOR: CountingAllocator = CountingAllocator;
 enum WorkloadKind {
     Append,
     LocalPull,
+    RocksPull,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -190,6 +200,24 @@ impl Scenario {
                 operations_per_sample: LOCAL_PULL_OPERATIONS_PER_SAMPLE,
                 warmup_operations: LOCAL_PULL_WARMUP_OPERATIONS,
             }),
+            (ROCKS_PULL_PROFILE, "batch-32") => {
+                #[cfg(feature = "rocksdb_store")]
+                {
+                    Ok(Self {
+                        profile: ROCKS_PULL_PROFILE,
+                        variant: "batch-32",
+                        workload_kind: WorkloadKind::RocksPull,
+                        producers: 1,
+                        flush_disk_type: FlushDiskType::AsyncFlush,
+                        operations_per_sample: LOCAL_PULL_OPERATIONS_PER_SAMPLE,
+                        warmup_operations: LOCAL_PULL_WARMUP_OPERATIONS,
+                    })
+                }
+                #[cfg(not(feature = "rocksdb_store"))]
+                {
+                    bail!("{ROCKS_PULL_PROFILE}/batch-32 requires the rocketmq-store rocksdb_store feature")
+                }
+            }
             _ => bail!("unsupported performance profile/variant: {profile}/{variant}"),
         }
     }
@@ -206,8 +234,16 @@ impl Scenario {
         self.workload_kind == WorkloadKind::LocalPull
     }
 
+    fn includes_rocks_pull_observations(self) -> bool {
+        self.workload_kind == WorkloadKind::RocksPull
+    }
+
+    fn is_pull(self) -> bool {
+        matches!(self.workload_kind, WorkloadKind::LocalPull | WorkloadKind::RocksPull)
+    }
+
     fn payload_bytes_per_operation(self) -> usize {
-        if self.includes_local_pull_observations() {
+        if self.is_pull() {
             LOCAL_PULL_BATCH_MESSAGES * MESSAGE_SIZE_BYTES
         } else {
             MESSAGE_SIZE_BYTES
@@ -228,7 +264,8 @@ fn parse_invocation(args: &[String]) -> Result<Invocation> {
             Ok(Invocation::Sample(Scenario::parse(profile, variant)?))
         }
         _ => bail!(
-            "usage: architecture_store_performance_collector [--sample] <local-append|local-pull|sync-flush> \
+            "usage: architecture_store_performance_collector [--sample] \
+             <local-append|local-pull|rocks-pull|sync-flush> \
              <producers-1|producers-8|producers-32|batch-32|concurrency-64>"
         ),
     }
@@ -247,6 +284,8 @@ struct SampleObservation {
     cq_unit_allocations_per_message: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     body_copies_per_message: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    native_read_calls_per_batch: Option<f64>,
 }
 
 impl SampleObservation {
@@ -292,6 +331,18 @@ impl SampleObservation {
                 );
             }
         }
+        ensure!(
+            self.native_read_calls_per_batch.is_some() == scenario.includes_rocks_pull_observations(),
+            "{}/{} native_read_calls_per_batch presence does not match the metric contract",
+            scenario.profile,
+            scenario.variant
+        );
+        if let Some(value) = self.native_read_calls_per_batch {
+            ensure!(
+                value.is_finite() && value >= 0.0,
+                "native_read_calls_per_batch must be finite and non-negative, got {value}"
+            );
+        }
         Ok(())
     }
 }
@@ -309,9 +360,83 @@ struct MeasurementEnvelope<'a> {
     metrics: BTreeMap<&'static str, MetricSamples>,
 }
 
+enum CollectorBackend {
+    Local(Box<LocalFileMessageStore>),
+    #[cfg(feature = "rocksdb_store")]
+    Rocks(Box<RocksDBMessageStore>),
+}
+
 struct CollectorStore {
-    store: LocalFileMessageStore,
+    backend: CollectorBackend,
     _temp_dir: TempDir,
+}
+
+impl CollectorStore {
+    fn local_file_store(&self) -> &LocalFileMessageStore {
+        match &self.backend {
+            CollectorBackend::Local(store) => store,
+            #[cfg(feature = "rocksdb_store")]
+            CollectorBackend::Rocks(store) => store.local_file_store(),
+        }
+    }
+
+    fn local_file_store_mut(&mut self) -> &mut LocalFileMessageStore {
+        match &mut self.backend {
+            CollectorBackend::Local(store) => store,
+            #[cfg(feature = "rocksdb_store")]
+            CollectorBackend::Rocks(store) => store.local_file_store_mut(),
+        }
+    }
+
+    async fn put_message(&mut self, message: MessageExtBrokerInner) -> PutMessageResult {
+        match &mut self.backend {
+            CollectorBackend::Local(store) => store.put_message(message).await,
+            #[cfg(feature = "rocksdb_store")]
+            CollectorBackend::Rocks(store) => store.put_message(message).await,
+        }
+    }
+
+    async fn reput_once(&mut self) {
+        self.local_file_store_mut().reput_once().await;
+    }
+
+    async fn get_message(
+        &self,
+        group: &CheetahString,
+        topic: &CheetahString,
+        batch_messages: i32,
+    ) -> Option<GetMessageResult> {
+        match &self.backend {
+            CollectorBackend::Local(store) => store.get_message(group, topic, 0, 0, batch_messages, None).await,
+            #[cfg(feature = "rocksdb_store")]
+            CollectorBackend::Rocks(store) => store.get_message(group, topic, 0, 0, batch_messages, None).await,
+        }
+    }
+
+    fn rocks_read_counters(&self) -> Option<RocksReadCounters> {
+        match &self.backend {
+            CollectorBackend::Local(_) => None,
+            #[cfg(feature = "rocksdb_store")]
+            CollectorBackend::Rocks(store) => {
+                let rocksdb = store.rocksdb_store();
+                let operations = rocksdb.metrics();
+                let ticker = rocksdb.ticker_metrics();
+                Some(RocksReadCounters {
+                    point_reads: operations.read_count,
+                    range_scans: operations.scan_count,
+                    bytes_read: ticker.bytes_read,
+                    block_cache_misses: ticker.block_cache_miss,
+                })
+            }
+        }
+    }
+
+    fn close_rocksdb(&self) {
+        #[cfg(feature = "rocksdb_store")]
+        if let CollectorBackend::Rocks(store) = &self.backend {
+            store.close_rocksdb();
+        }
+    }
 }
 
 struct WorkloadObservation {
@@ -328,10 +453,24 @@ struct MessageLocation {
     size: i32,
 }
 
-struct LocalPullContext {
+struct PullContext {
     group: CheetahString,
     topic: CheetahString,
     message_locations: Vec<MessageLocation>,
+}
+
+#[derive(Clone, Copy, Default)]
+struct RocksReadCounters {
+    point_reads: u64,
+    range_scans: u64,
+    bytes_read: u64,
+    block_cache_misses: u64,
+}
+
+#[derive(Clone, Copy)]
+struct RocksReadObservation {
+    native_read_calls_per_batch: f64,
+    bytes_read: u64,
 }
 
 fn main() {
@@ -461,6 +600,17 @@ fn build_envelope(scenario: Scenario, observations: Vec<SampleObservation>) -> R
             .collect::<Result<Vec<_>>>()?;
         metrics.insert("body_copies_per_message", MetricSamples { samples: body_copies });
     }
+    if scenario.includes_rocks_pull_observations() {
+        let samples = observations
+            .iter()
+            .map(|sample| {
+                sample
+                    .native_read_calls_per_batch
+                    .ok_or_else(|| anyhow!("rocks-pull sample omitted native_read_calls_per_batch"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        metrics.insert("native_read_calls_per_batch", MetricSamples { samples });
+    }
 
     Ok(MeasurementEnvelope {
         schema_version: 1,
@@ -476,11 +626,11 @@ fn collect_one_sample(scenario: Scenario) -> Result<SampleObservation> {
         .build()
         .context("create sample runtime")?;
     let mut collector_store = new_collector_store(scenario)?;
-    let local_pull_context = if scenario.includes_local_pull_observations() {
+    let pull_context = if scenario.is_pull() {
         Some(
             runtime
-                .block_on(seed_local_pull_store(&mut collector_store))
-                .context("seed local-pull sample store")?,
+                .block_on(seed_pull_store(&mut collector_store, scenario))
+                .with_context(|| format!("seed {}/{} sample store", scenario.profile, scenario.variant))?,
         )
     } else {
         None
@@ -491,10 +641,11 @@ fn collect_one_sample(scenario: Scenario) -> Result<SampleObservation> {
             .context("start sync-flush sample store")?;
     }
 
-    let warmup = match local_pull_context.as_ref() {
-        Some(context) => runtime.block_on(run_local_pull_workload(
+    let warmup = match pull_context.as_ref() {
+        Some(context) => runtime.block_on(run_pull_workload(
             &collector_store,
             context,
+            scenario,
             scenario.warmup_operations,
             false,
         )),
@@ -507,25 +658,34 @@ fn collect_one_sample(scenario: Scenario) -> Result<SampleObservation> {
     };
     warmup.context("run warm-up workload")?;
 
-    let cq_unit_allocations_per_message = match local_pull_context.as_ref() {
-        Some(context) => Some(
+    let cq_unit_allocations_per_message = match (scenario.includes_local_pull_observations(), pull_context.as_ref()) {
+        (true, Some(context)) => Some(
             runtime
                 .block_on(measure_cq_unit_allocations_per_message(&collector_store, context))
                 .context("measure local-pull CQ-unit allocations")?,
         ),
-        None => None,
+        (false, _) => None,
+        (true, None) => bail!("local-pull scenario omitted its seeded pull context"),
     };
 
     let flush_operations_before = collector_store
-        .store
+        .local_file_store()
         .get_commit_log()
         .mapped_file_io_stats()
         .flush_operations;
+    let rocks_reads_before = collector_store.rocks_read_counters();
+    ensure!(
+        rocks_reads_before.is_some() == scenario.includes_rocks_pull_observations(),
+        "{}/{} RocksDB counter presence does not match the workload",
+        scenario.profile,
+        scenario.variant
+    );
     let allocations_before = ALLOCATION_CALLS.load(Ordering::Relaxed);
-    let workload = match local_pull_context.as_ref() {
-        Some(context) => runtime.block_on(run_local_pull_workload(
+    let workload = match pull_context.as_ref() {
+        Some(context) => runtime.block_on(run_pull_workload(
             &collector_store,
             context,
+            scenario,
             scenario.operations_per_sample,
             true,
         )),
@@ -537,17 +697,23 @@ fn collect_one_sample(scenario: Scenario) -> Result<SampleObservation> {
         )),
     }
     .context("run measured workload")?;
+    let allocation_calls = ALLOCATION_CALLS
+        .load(Ordering::Relaxed)
+        .checked_sub(allocations_before)
+        .ok_or_else(|| anyhow!("allocation counter moved backwards"))?;
     let flush_operations_after = collector_store
-        .store
+        .local_file_store()
         .get_commit_log()
         .mapped_file_io_stats()
         .flush_operations;
     let measured_flush_operations = flush_operations_after
         .checked_sub(flush_operations_before)
         .ok_or_else(|| anyhow!("mapped-file flush counter moved backwards"))?;
-    let allocation_calls = ALLOCATION_CALLS
-        .load(Ordering::Relaxed)
-        .saturating_sub(allocations_before);
+    let rocks_read_observation = match (rocks_reads_before, collector_store.rocks_read_counters()) {
+        (Some(before), Some(after)) => Some(measured_rocks_reads(before, after, scenario.operations_per_sample)?),
+        (None, None) => None,
+        _ => bail!("RocksDB counter presence changed during the measured workload"),
+    };
     if scenario.includes_fsync_per_ack() {
         ensure!(
             measured_flush_operations > 0,
@@ -560,7 +726,10 @@ fn collect_one_sample(scenario: Scenario) -> Result<SampleObservation> {
         p99_latency_us: percentile_99(&workload.latencies)?.as_secs_f64() * 1_000_000.0,
         peak_rss_bytes: peak_rss_bytes()? as f64,
         allocations_per_operation: allocation_calls as f64 / scenario.operations_per_sample as f64,
-        io_amplification_ratio: workload.encoded_bytes as f64
+        io_amplification_ratio: workload
+            .encoded_bytes
+            .checked_add(rocks_read_observation.map_or(0, |observation| observation.bytes_read))
+            .ok_or_else(|| anyhow!("measured I/O byte counter overflowed"))? as f64
             / (scenario.operations_per_sample * scenario.payload_bytes_per_operation()) as f64,
         fsync_per_ack: scenario
             .includes_fsync_per_ack()
@@ -569,13 +738,15 @@ fn collect_one_sample(scenario: Scenario) -> Result<SampleObservation> {
         body_copies_per_message: scenario
             .includes_local_pull_observations()
             .then(|| workload.body_copies as f64 / workload.returned_messages as f64),
+        native_read_calls_per_batch: rocks_read_observation.map(|observation| observation.native_read_calls_per_batch),
     };
     observation.validate(scenario)?;
     if scenario.requires_started_store() {
         runtime
-            .block_on(collector_store.store.shutdown_gracefully())
+            .block_on(collector_store.local_file_store_mut().shutdown_gracefully())
             .context("shut down sync-flush sample store")?;
     }
+    collector_store.close_rocksdb();
     Ok(observation)
 }
 
@@ -588,11 +759,30 @@ fn new_collector_store(scenario: Scenario) -> Result<CollectorStore> {
         timer_wheel_enable: false,
         ..MessageStoreConfig::default()
     };
-    if scenario.includes_local_pull_observations() {
+    if scenario.is_pull() {
         message_store_config.mapped_file_size_commit_log = 4 * 1024 * 1024;
         message_store_config.mapped_file_size_consume_queue = 20 * 1024;
     } else {
         message_store_config.mapped_file_size_commit_log = 256 * 1024 * 1024;
+    }
+
+    #[cfg(feature = "rocksdb_store")]
+    if scenario.includes_rocks_pull_observations() {
+        message_store_config.store_type = StoreType::RocksDB;
+        message_store_config.timer_rocksdb_enable = false;
+        message_store_config.trans_rocksdb_enable = false;
+        let store = RocksDBMessageStore::try_new(
+            Arc::new(message_store_config),
+            Arc::new(BrokerConfig::default()),
+            Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
+            None,
+            false,
+        )
+        .context("create RocksDB store performance sample")?;
+        return Ok(CollectorStore {
+            backend: CollectorBackend::Rocks(Box::new(store)),
+            _temp_dir: temp_dir,
+        });
     }
 
     let mut store = LocalFileMessageStore::new(
@@ -607,15 +797,16 @@ fn new_collector_store(scenario: Scenario) -> Result<CollectorStore> {
         .context("wire owned store performance sample dependencies")?;
 
     Ok(CollectorStore {
-        store,
+        backend: CollectorBackend::Local(Box::new(store)),
         _temp_dir: temp_dir,
     })
 }
 
 async fn start_collector_store(collector_store: &mut CollectorStore) -> Result<()> {
-    collector_store.store.init().await.context("initialize sample store")?;
-    ensure!(collector_store.store.load().await, "load sample store");
-    collector_store.store.start().await.context("launch sample store")
+    let store = collector_store.local_file_store_mut();
+    store.init().await.context("initialize sample store")?;
+    ensure!(store.load().await, "load sample store");
+    store.start().await.context("launch sample store")
 }
 
 async fn run_append_workload(
@@ -643,7 +834,7 @@ async fn run_append_workload(
     let topic = CheetahString::from_static_str("ArchitectureLocalAppend");
 
     for _ in 0..operation_count / scenario.producers {
-        let commit_log = collector_store.store.get_commit_log();
+        let commit_log = collector_store.local_file_store().get_commit_log();
         let mut puts = Vec::with_capacity(scenario.producers);
         for producer in 0..scenario.producers {
             let message = create_message(&topic, producer as i32, next_key);
@@ -682,50 +873,63 @@ async fn run_append_workload(
     })
 }
 
-async fn seed_local_pull_store(collector_store: &mut CollectorStore) -> Result<LocalPullContext> {
-    let topic = CheetahString::from_static_str("ArchitectureLocalPull");
+async fn seed_pull_store(collector_store: &mut CollectorStore, scenario: Scenario) -> Result<PullContext> {
+    ensure!(scenario.is_pull(), "seed pull store received a non-pull scenario");
+    let topic = match scenario.workload_kind {
+        WorkloadKind::LocalPull => CheetahString::from_static_str("ArchitectureLocalPull"),
+        WorkloadKind::RocksPull => CheetahString::from_static_str("ArchitectureRocksPull"),
+        WorkloadKind::Append => bail!("append scenario cannot seed a pull store"),
+    };
     let group = CheetahString::from_static_str("ArchitectureGate");
 
     for key_seed in 0..LOCAL_PULL_BATCH_MESSAGES as u64 {
-        let result = collector_store
-            .store
-            .put_message(create_message(&topic, 0, key_seed))
-            .await;
+        let result = collector_store.put_message(create_message(&topic, 0, key_seed)).await;
         ensure!(
             result.put_message_status() == PutMessageStatus::PutOk,
-            "local-pull seed append returned {:?}",
+            "{}/{} seed append returned {:?}",
+            scenario.profile,
+            scenario.variant,
             result.put_message_status()
         );
     }
-    collector_store.store.reput_once().await;
+    collector_store.reput_once().await;
 
-    let result = pull_local_batch(collector_store, &group, &topic, LOCAL_PULL_BATCH_MESSAGES, false)
-        .await
-        .context("read seeded local-pull batch")?;
+    let result = pull_batch(
+        collector_store,
+        &group,
+        &topic,
+        scenario.profile,
+        LOCAL_PULL_BATCH_MESSAGES,
+        false,
+    )
+    .await
+    .with_context(|| format!("read seeded {}/{} batch", scenario.profile, scenario.variant))?;
     let message_locations = result
         .message_mapped_list()
         .iter()
         .map(|selection| {
             Ok(MessageLocation {
-                offset: i64::try_from(selection.start_offset).context("local-pull message offset exceeds i64")?,
+                offset: i64::try_from(selection.start_offset).context("pull message offset exceeds i64")?,
                 size: selection.size,
             })
         })
         .collect::<Result<Vec<_>>>()?;
 
-    Ok(LocalPullContext {
+    Ok(PullContext {
         group,
         topic,
         message_locations,
     })
 }
 
-async fn run_local_pull_workload(
+async fn run_pull_workload(
     collector_store: &CollectorStore,
-    context: &LocalPullContext,
+    context: &PullContext,
+    scenario: Scenario,
     operation_count: usize,
     require_hot: bool,
 ) -> Result<WorkloadObservation> {
+    ensure!(scenario.is_pull(), "pull workload received a non-pull scenario");
     let started = Instant::now();
     let mut latencies = Vec::with_capacity(operation_count);
     let mut encoded_bytes = 0_u64;
@@ -734,10 +938,11 @@ async fn run_local_pull_workload(
 
     for _ in 0..operation_count {
         let pull_started = Instant::now();
-        let result = pull_local_batch(
+        let result = pull_batch(
             collector_store,
             &context.group,
             &context.topic,
+            scenario.profile,
             LOCAL_PULL_BATCH_MESSAGES,
             require_hot,
         )
@@ -745,7 +950,7 @@ async fn run_local_pull_workload(
         latencies.push(pull_started.elapsed());
         encoded_bytes = encoded_bytes
             .checked_add(u64::try_from(result.buffer_total_size()).context("pull returned negative encoded bytes")?)
-            .ok_or_else(|| anyhow!("local-pull encoded byte counter overflowed"))?;
+            .ok_or_else(|| anyhow!("pull encoded byte counter overflowed"))?;
         body_copies = body_copies
             .checked_add(
                 result
@@ -754,13 +959,13 @@ async fn run_local_pull_workload(
                     .filter(|selection| selection.source_kind != SelectMappedBufferSourceKind::MappedFile)
                     .count() as u64,
             )
-            .ok_or_else(|| anyhow!("local-pull body-copy counter overflowed"))?;
+            .ok_or_else(|| anyhow!("pull body-copy counter overflowed"))?;
         returned_messages = returned_messages
             .checked_add(u64::try_from(result.message_count()).context("pull returned a negative message count")?)
-            .ok_or_else(|| anyhow!("local-pull message counter overflowed"))?;
+            .ok_or_else(|| anyhow!("pull message counter overflowed"))?;
     }
 
-    ensure!(returned_messages > 0, "local-pull workload returned no messages");
+    ensure!(returned_messages > 0, "pull workload returned no messages");
     Ok(WorkloadObservation {
         elapsed: started.elapsed(),
         latencies,
@@ -770,32 +975,32 @@ async fn run_local_pull_workload(
     })
 }
 
-async fn pull_local_batch(
+async fn pull_batch(
     collector_store: &CollectorStore,
     group: &CheetahString,
     topic: &CheetahString,
+    profile: &str,
     batch_messages: usize,
     require_hot: bool,
 ) -> Result<GetMessageResult> {
-    let batch_messages_i32 = i32::try_from(batch_messages).context("local-pull batch size exceeds i32")?;
+    let batch_messages_i32 = i32::try_from(batch_messages).context("pull batch size exceeds i32")?;
     let result = collector_store
-        .store
-        .get_message(group, topic, 0, 0, batch_messages_i32, None)
+        .get_message(group, topic, batch_messages_i32)
         .await
-        .ok_or_else(|| anyhow!("local-pull store omitted its GetMessageResult"))?;
+        .ok_or_else(|| anyhow!("{profile} store omitted its GetMessageResult"))?;
     ensure!(
         result.status() == Some(GetMessageStatus::Found),
-        "local-pull returned status {:?}",
+        "{profile} returned status {:?}",
         result.status()
     );
     ensure!(
         result.message_count() == batch_messages_i32,
-        "local-pull returned {} messages, expected {batch_messages}",
+        "{profile} returned {} messages, expected {batch_messages}",
         result.message_count()
     );
     ensure!(
         result.message_mapped_list().len() == batch_messages,
-        "local-pull returned {} buffers, expected {batch_messages}",
+        "{profile} returned {} buffers, expected {batch_messages}",
         result.message_mapped_list().len()
     );
     if require_hot {
@@ -804,7 +1009,7 @@ async fn pull_local_batch(
                 .message_mapped_list()
                 .iter()
                 .all(|selection| selection.cache_state == SelectMappedBufferCacheState::Hot),
-            "local-pull batch included a non-hot mapped buffer"
+            "{profile} batch included a non-hot mapped buffer"
         );
     }
     Ok(result)
@@ -812,7 +1017,7 @@ async fn pull_local_batch(
 
 async fn measure_cq_unit_allocations_per_message(
     collector_store: &CollectorStore,
-    context: &LocalPullContext,
+    context: &PullContext,
 ) -> Result<f64> {
     ensure!(
         context.message_locations.len() == LOCAL_PULL_BATCH_MESSAGES,
@@ -837,26 +1042,36 @@ async fn measure_cq_unit_allocations_per_message(
 
 async fn measure_full_pull_allocation_calls(
     collector_store: &CollectorStore,
-    context: &LocalPullContext,
+    context: &PullContext,
     batch_messages: usize,
 ) -> Result<u64> {
     let before = ALLOCATION_CALLS.load(Ordering::Relaxed);
     for _ in 0..CQ_ALLOCATION_PROBE_REPETITIONS {
-        drop(pull_local_batch(collector_store, &context.group, &context.topic, batch_messages, true).await?);
+        drop(
+            pull_batch(
+                collector_store,
+                &context.group,
+                &context.topic,
+                LOCAL_PULL_PROFILE,
+                batch_messages,
+                true,
+            )
+            .await?,
+        );
     }
     allocation_delta(before, "full local-pull allocation probe")
 }
 
 fn measure_direct_commit_log_allocation_calls(
     collector_store: &CollectorStore,
-    context: &LocalPullContext,
+    context: &PullContext,
     batch_messages: usize,
 ) -> Result<u64> {
     let before = ALLOCATION_CALLS.load(Ordering::Relaxed);
     for _ in 0..CQ_ALLOCATION_PROBE_REPETITIONS {
         for location in context.message_locations.iter().take(batch_messages) {
             let selection = collector_store
-                .store
+                .local_file_store()
                 .get_commit_log()
                 .get_message(location.offset, location.size)
                 .ok_or_else(|| anyhow!("direct CommitLog control omitted a seeded message"))?;
@@ -874,6 +1089,42 @@ fn allocation_delta(before: u64, probe: &str) -> Result<u64> {
         .load(Ordering::Relaxed)
         .checked_sub(before)
         .ok_or_else(|| anyhow!("{probe} counter moved backwards"))
+}
+
+fn measured_rocks_reads(
+    before: RocksReadCounters,
+    after: RocksReadCounters,
+    operation_count: usize,
+) -> Result<RocksReadObservation> {
+    ensure!(operation_count > 0, "RocksDB measured operation count must be positive");
+    let point_reads = after
+        .point_reads
+        .checked_sub(before.point_reads)
+        .ok_or_else(|| anyhow!("RocksDB point-read counter moved backwards"))?;
+    let range_scans = after
+        .range_scans
+        .checked_sub(before.range_scans)
+        .ok_or_else(|| anyhow!("RocksDB range-scan counter moved backwards"))?;
+    let bytes_read = after
+        .bytes_read
+        .checked_sub(before.bytes_read)
+        .ok_or_else(|| anyhow!("RocksDB byte-read counter moved backwards"))?;
+    let cache_misses = after
+        .block_cache_misses
+        .checked_sub(before.block_cache_misses)
+        .ok_or_else(|| anyhow!("RocksDB block-cache miss counter moved backwards"))?;
+    ensure!(
+        cache_misses == 0,
+        "hot RocksDB pull recorded {cache_misses} block-cache misses"
+    );
+    let native_read_calls = point_reads
+        .checked_add(range_scans)
+        .ok_or_else(|| anyhow!("RocksDB native read-call counter overflowed"))?;
+    ensure!(native_read_calls > 0, "RocksDB pull recorded no native read calls");
+    Ok(RocksReadObservation {
+        native_read_calls_per_batch: native_read_calls as f64 / operation_count as f64,
+        bytes_read,
+    })
 }
 
 fn matched_cq_allocation_rate(
@@ -1008,6 +1259,7 @@ mod tests {
             fsync_per_ack,
             cq_unit_allocations_per_message,
             body_copies_per_message,
+            native_read_calls_per_batch: None,
         }
     }
 
@@ -1049,6 +1301,23 @@ mod tests {
             local_pull.payload_bytes_per_operation(),
             LOCAL_PULL_BATCH_MESSAGES * MESSAGE_SIZE_BYTES
         );
+
+        #[cfg(feature = "rocksdb_store")]
+        {
+            let Invocation::Collect(rocks_pull) =
+                parse_invocation(&[ROCKS_PULL_PROFILE.to_owned(), "batch-32".to_owned()])
+                    .expect("supported RocksDB pull variant")
+            else {
+                panic!("expected collection invocation");
+            };
+            assert_eq!(rocks_pull.profile, ROCKS_PULL_PROFILE);
+            assert_eq!(rocks_pull.variant, "batch-32");
+            assert_eq!(rocks_pull.workload_kind, WorkloadKind::RocksPull);
+            assert!(rocks_pull.includes_rocks_pull_observations());
+        }
+
+        #[cfg(not(feature = "rocksdb_store"))]
+        assert!(parse_invocation(&[ROCKS_PULL_PROFILE.to_owned(), "batch-32".to_owned()]).is_err());
     }
 
     #[test]
@@ -1059,6 +1328,7 @@ mod tests {
         assert!(parse_invocation(&[SYNC_FLUSH_PROFILE.to_owned(), "producers-32".to_owned()]).is_err());
         assert!(parse_invocation(&[LOCAL_PULL_PROFILE.to_owned(), "producers-32".to_owned()]).is_err());
         assert!(parse_invocation(&[LOCAL_APPEND_PROFILE.to_owned(), "batch-32".to_owned()]).is_err());
+        assert!(parse_invocation(&[ROCKS_PULL_PROFILE.to_owned(), "producers-32".to_owned()]).is_err());
         assert!(parse_invocation(&[LOCAL_APPEND_PROFILE.to_owned()]).is_err());
         assert!(parse_invocation(&[
             "--sample".to_owned(),
@@ -1156,6 +1426,39 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "rocksdb_store")]
+    #[test]
+    fn rocks_pull_inventory_includes_native_read_calls() {
+        let observations = (0..SAMPLE_COUNT)
+            .map(|index| SampleObservation {
+                native_read_calls_per_batch: Some(3.0),
+                ..sample(index as f64, None, None, None)
+            })
+            .collect();
+        let scenario = Scenario::parse(ROCKS_PULL_PROFILE, "batch-32").expect("RocksDB pull scenario");
+        let value = serde_json::to_value(build_envelope(scenario, observations).expect("build measurement"))
+            .expect("serialize measurement");
+
+        assert_eq!(value["profile"], ROCKS_PULL_PROFILE);
+        assert_eq!(value["variant"], "batch-32");
+        assert_eq!(
+            value["metrics"]
+                .as_object()
+                .expect("metrics object")
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            vec![
+                "allocations_per_operation",
+                "io_amplification_ratio",
+                "native_read_calls_per_batch",
+                "p99_latency_us",
+                "peak_rss_bytes",
+                "throughput_per_second",
+            ]
+        );
+    }
+
     #[test]
     fn rejects_partial_and_non_finite_samples() {
         let local_append = Scenario::parse(LOCAL_APPEND_PROFILE, "producers-1").expect("local append scenario");
@@ -1184,6 +1487,24 @@ mod tests {
             .validate(local_pull)
             .is_err());
         assert!(sample(1.0, None, Some(0.0), Some(0.0)).validate(local_append).is_err());
+
+        #[cfg(feature = "rocksdb_store")]
+        {
+            let rocks_pull = Scenario::parse(ROCKS_PULL_PROFILE, "batch-32").expect("RocksDB pull scenario");
+            assert!(sample(1.0, None, None, None).validate(rocks_pull).is_err());
+            assert!(SampleObservation {
+                native_read_calls_per_batch: Some(f64::NAN),
+                ..sample(1.0, None, None, None)
+            }
+            .validate(rocks_pull)
+            .is_err());
+            assert!(SampleObservation {
+                native_read_calls_per_batch: Some(3.0),
+                ..sample(1.0, None, None, None)
+            }
+            .validate(local_append)
+            .is_err());
+        }
     }
 
     #[test]
@@ -1210,5 +1531,48 @@ mod tests {
         assert!(matched_cq_allocation_rate(100, 200, 50, 300, 8, 32).is_err());
         assert!(matched_cq_allocation_rate(100, 200, 50, 100, 0, 32).is_err());
         assert!(matched_cq_allocation_rate(100, 200, 50, 100, 8, 1).is_err());
+    }
+
+    #[test]
+    fn computes_rocks_read_observation_and_rejects_non_hot_or_regressed_counters() {
+        let before = RocksReadCounters {
+            point_reads: 10,
+            range_scans: 4,
+            bytes_read: 100,
+            block_cache_misses: 2,
+        };
+        let observation = measured_rocks_reads(
+            before,
+            RocksReadCounters {
+                point_reads: 74,
+                range_scans: 36,
+                bytes_read: 612,
+                block_cache_misses: 2,
+            },
+            32,
+        )
+        .expect("valid RocksDB read observation");
+        assert_eq!(observation.native_read_calls_per_batch, 3.0);
+        assert_eq!(observation.bytes_read, 512);
+
+        assert!(measured_rocks_reads(
+            before,
+            RocksReadCounters {
+                block_cache_misses: 3,
+                ..before
+            },
+            1
+        )
+        .is_err());
+        assert!(measured_rocks_reads(
+            before,
+            RocksReadCounters {
+                point_reads: 9,
+                ..before
+            },
+            1
+        )
+        .is_err());
+        assert!(measured_rocks_reads(before, before, 0).is_err());
     }
 }
