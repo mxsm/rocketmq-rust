@@ -28,7 +28,6 @@ metricsInDelta = false
 configBlackList = "configBlackList;configStorePath"
 nodeId = 1
 listenAddr = "0.0.0.0:60109"
-raftPeers = []
 controllerPeers = []
 electionTimeoutMs = 1000
 heartbeatIntervalMs = 300

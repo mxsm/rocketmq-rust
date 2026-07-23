@@ -51,6 +51,10 @@ class ContainerFoundationTests(unittest.TestCase):
         cls.supply_script = (ROOT / "scripts" / "container-supply-chain.ps1").read_text(encoding="utf-8")
         cls.service_script = (ROOT / cls.policy["service_contract_script"]).read_text(encoding="utf-8")
         cls.dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8")
+        cls.smoke_configs = {
+            path.name: path.read_text(encoding="utf-8")
+            for path in (ROOT / cls.policy["smoke_config_directory"]).glob("*.toml")
+        }
         cls.signal_sources = {
             name: (ROOT / path).read_text(encoding="utf-8")
             for name, path in cls.policy["signal_sources"].items()
@@ -68,6 +72,7 @@ class ContainerFoundationTests(unittest.TestCase):
         signal_sources=None,
         dockerfiles=None,
         dockerignore=None,
+        smoke_configs=None,
     ):
         return GUARD.audit_foundation(
             policy or self.policy,
@@ -78,6 +83,7 @@ class ContainerFoundationTests(unittest.TestCase):
             service_script if service_script is not None else self.service_script,
             signal_sources if signal_sources is not None else self.signal_sources,
             dockerignore if dockerignore is not None else self.dockerignore,
+            smoke_configs if smoke_configs is not None else self.smoke_configs,
         )
 
     def test_repository_foundation_contract_passes(self) -> None:
@@ -145,6 +151,25 @@ class ContainerFoundationTests(unittest.TestCase):
                 dockerignore = f"{self.dockerignore.rstrip()}\n{exclusion}\n"
                 findings = self.audit(dockerignore=dockerignore)
                 self.assertTrue(any("explicit Cargo test targets" in finding for finding in findings))
+
+    def test_smoke_configs_must_parse_and_retain_controller_peer(self) -> None:
+        duplicate_peer = dict(self.smoke_configs)
+        duplicate_peer["controller.toml"] = duplicate_peer["controller.toml"].replace(
+            "controllerPeers = []",
+            "raftPeers = []\ncontrollerPeers = []",
+            1,
+        )
+        findings = self.audit(smoke_configs=duplicate_peer)
+        self.assertTrue(any("invalid TOML" in finding for finding in findings))
+
+        missing_peer = dict(self.smoke_configs)
+        missing_peer["controller.toml"] = missing_peer["controller.toml"].replace(
+            '[[raftPeers]]\nid = 1\naddr = "127.0.0.1:60110"',
+            "raftPeers = []",
+            1,
+        )
+        findings = self.audit(smoke_configs=missing_peer)
+        self.assertTrue(any("single-node Raft peer" in finding for finding in findings))
 
     def test_missing_read_only_or_signature_verification_is_rejected(self) -> None:
         no_read_only = self.supply_script.replace("--read-only", "--read-write", 1)
