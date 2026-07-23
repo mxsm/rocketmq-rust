@@ -152,8 +152,21 @@ class ContainerFoundationTests(unittest.TestCase):
         policy["supply_chain"]["signature"]["published_digest_pattern"] = ".*"
         self.assertTrue(any("GHCR service digest" in finding for finding in self.audit(policy=policy)))
 
-        missing_package = self.dockerfile.replace("    libssl3", "    removed-libssl3", 1)
-        self.assertTrue(any("libssl3" in finding for finding in self.audit(dockerfile=missing_package)))
+        policy = copy.deepcopy(self.policy)
+        policy["build"]["runtime_base_packages"].remove("libssl3t64")
+        self.assertTrue(any("pinned-base package" in finding for finding in self.audit(policy=policy)))
+
+        mutable_runtime_install = self.dockerfile.replace(
+            "groupadd --gid 10001 rocketmq",
+            "apt-get install -y curl\ngroupadd --gid 10001 rocketmq",
+            1,
+        )
+        self.assertTrue(
+            any(
+                "must not resolve mutable packages" in finding
+                for finding in self.audit(dockerfile=mutable_runtime_install)
+            )
+        )
 
         no_https_handoff = self.dockerfile.replace(
             "sed -i 's#URIs: http://#URIs: https://#'",
@@ -293,6 +306,75 @@ else {
         service_script = self.service_script.replace("[string]$Executable", "[string]$Command", 1)
         findings = self.audit(service_script=service_script)
         self.assertTrue(any("reserve -c" in finding for finding in findings))
+
+    def test_unfixed_vulnerability_summary_handles_missing_fixed_version(self) -> None:
+        powershell = shutil.which("pwsh") or shutil.which("powershell")
+        self.assertIsNotNone(powershell, "PowerShell is required to validate container scripts")
+        harness = r"""
+param(
+    [string]$SourcePath
+)
+$ErrorActionPreference = "Stop"
+$tokens = $null
+$parseErrors = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile(
+    $SourcePath,
+    [ref]$tokens,
+    [ref]$parseErrors
+)
+if ($parseErrors.Count -ne 0) {
+    throw "failed to parse source helper: $($parseErrors[0].Message)"
+}
+$definition = $ast.Find({
+    param($node)
+    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+        $node.Name -eq "Format-CriticalVulnerabilitySummary"
+}, $true)
+if ($null -eq $definition) {
+    throw "missing vulnerability summary helper"
+}
+Invoke-Expression $definition.Extent.Text
+$vulnerability = [pscustomobject]@{
+    VulnerabilityID = "CVE-2099-0001"
+    PkgName = "example"
+    InstalledVersion = "1.0.0"
+    Severity = "CRITICAL"
+}
+Format-CriticalVulnerabilitySummary -Vulnerabilities @($vulnerability)
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            harness_path = Path(directory) / "vulnerability-summary-harness.ps1"
+            harness_path.write_text(harness, encoding="utf-8")
+            for source_name in ("container-supply-chain.ps1", "service-image-contract.ps1"):
+                with self.subTest(source=source_name):
+                    result = subprocess.run(
+                        [
+                            powershell,
+                            "-NoProfile",
+                            "-File",
+                            str(harness_path),
+                            str(ROOT / "scripts" / source_name),
+                        ],
+                        cwd=ROOT,
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    self.assertEqual(0, result.returncode, result.stderr)
+                    self.assertEqual(
+                        "CVE-2099-0001 example 1.0.0 -> unfixed",
+                        result.stdout.strip(),
+                    )
+
+    def test_direct_fixed_version_access_is_rejected(self) -> None:
+        safe_access = '$_.PSObject.Properties["FixedVersion"]'
+        supply_script = self.supply_script.replace(safe_access, "$_.FixedVersion", 1)
+        findings = self.audit(supply_script=supply_script)
+        self.assertTrue(any("missing FixedVersion" in finding for finding in findings))
+
+        service_script = self.service_script.replace(safe_access, "$_.FixedVersion", 1)
+        findings = self.audit(service_script=service_script)
+        self.assertTrue(any("missing FixedVersion" in finding for finding in findings))
 
     def test_root_owned_tmpfs_regression_is_rejected(self) -> None:
         ownership = ",uid=$($policy.runtime.uid),gid=$($policy.runtime.gid),mode=0700"

@@ -15,16 +15,17 @@
 # limitations under the License.
 
 ARG BUILDER_IMAGE=docker.io/library/rust:slim-bookworm@sha256:99e09cb2284e2ddbb73a995deee3e91783fd04d177602ccf6eab326d778ee777
-ARG RUNTIME_IMAGE=docker.io/library/debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818
+ARG RUNTIME_IMAGE=docker.io/library/ubuntu:noble@sha256:4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebffbc7092d90
 ARG DEBIAN_SNAPSHOT=20260717T000000Z
 ARG ROCKETMQ_RUST_TOOLCHAIN=nightly-2026-07-05
 
-FROM ${BUILDER_IMAGE} AS builder-base
+FROM ${BUILDER_IMAGE} AS ca-bundle
 
 ARG DEBIAN_SNAPSHOT
-ARG ROCKETMQ_RUST_TOOLCHAIN
 
-# The timestamped Debian snapshot makes package resolution immutable for this foundation revision.
+# Bootstrap the CA bundle from signed, immutable Debian snapshot metadata. The lightweight
+# stage is shared by the builder and runtime without making runtime smoke wait for the
+# Rust toolchain or native build dependencies.
 # hadolint ignore=DL3008
 RUN <<EOF
 set -eux
@@ -49,10 +50,20 @@ SOURCES
 apt-get -o Acquire::Check-Valid-Until=false update
 apt-get install -y --no-install-recommends ca-certificates
 sed -i 's#URIs: http://#URIs: https://#' /etc/apt/sources.list.d/rocketmq-snapshot.sources
+rm -rf /var/lib/apt/lists/*
+EOF
+
+FROM ca-bundle AS builder-base
+
+ARG ROCKETMQ_RUST_TOOLCHAIN
+
+# The timestamped Debian snapshot makes package resolution immutable for this foundation revision.
+# hadolint ignore=DL3008
+RUN <<EOF
+set -eux
 apt-get -o Acquire::Check-Valid-Until=false update
 apt-get install -y --no-install-recommends \
     build-essential \
-    ca-certificates \
     clang \
     cmake \
     git \
@@ -77,40 +88,16 @@ WORKDIR /workspace
 
 FROM ${RUNTIME_IMAGE} AS runtime-base
 
-ARG DEBIAN_SNAPSHOT
 ARG SOURCE_REVISION=unknown
 ARG SOURCE_VERSION=0.0.0-dev
 
-# The timestamped Debian snapshot makes package resolution immutable for this foundation revision.
-# hadolint ignore=DL3008
+# Ubuntu noble supplies the shell, runtime libraries, and user-management tools from the
+# pinned manifest. Copy the CA bundle from the lightweight Debian-snapshot stage instead
+# of resolving mutable packages in the runtime stage.
+COPY --from=ca-bundle /etc/ssl/certs/ /etc/ssl/certs/
+
 RUN <<EOF
 set -eux
-rm -f /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources
-cat > /etc/apt/sources.list.d/rocketmq-snapshot.sources <<SOURCES
-Types: deb
-URIs: http://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT}/
-Suites: bookworm bookworm-updates
-Components: main
-Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
-Check-Valid-Until: no
-
-Types: deb
-URIs: http://snapshot.debian.org/archive/debian-security/${DEBIAN_SNAPSHOT}/
-Suites: bookworm-security
-Components: main
-Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
-Check-Valid-Until: no
-SOURCES
-# The slim image has no CA bundle. The bootstrap fetch is still authenticated by the pinned
-# Debian Release signature and package hashes; all remaining packages switch back to HTTPS.
-apt-get -o Acquire::Check-Valid-Until=false update
-apt-get install -y --no-install-recommends ca-certificates
-sed -i 's#URIs: http://#URIs: https://#' /etc/apt/sources.list.d/rocketmq-snapshot.sources
-apt-get -o Acquire::Check-Valid-Until=false update
-apt-get install -y --no-install-recommends \
-    ca-certificates \
-    libssl3
-rm -rf /var/lib/apt/lists/*
 groupadd --gid 10001 rocketmq
 useradd --uid 10001 --gid 10001 --home-dir /home/rocketmq --create-home --shell /usr/sbin/nologin rocketmq
 install -d -o 10001 -g 10001 /opt/rocketmq /var/lib/rocketmq /tmp/rocketmq
