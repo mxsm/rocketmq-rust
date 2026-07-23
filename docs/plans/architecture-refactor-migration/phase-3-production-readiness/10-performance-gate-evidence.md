@@ -162,7 +162,30 @@ cargo run --release --quiet -p rocketmq-transport `
   profile/variant、样本缺失、非有限或负值均 fail closed。
 
 这 11 个变体只是 runner readiness。它们尚未在批准的固定硬件上对不同 clean baseline/candidate 执行，
-没有写入任何性能结论，也没有完成 R19 或 `[HUMAN]` M10 Gate。4 个 correctness runner 仍待实现。
+没有写入任何性能结论，也没有完成 R19 或 `[HUMAN]` M10 Gate。
+
+Issue [#8700](https://github.com/mxsm/rocketmq-rust/issues/8700) 补齐四个 correctness runner，并新增统一
+`scripts/architecture_target_runner.py`。sidecar 模板的 4 个 correctness 与 11 个 measurement command
+现在均为可直接执行的仓库命令，只有批准目标主机的 hardware/filesystem/toolchain 等环境元数据仍保留占位符。
+
+```powershell
+python scripts/architecture_target_runner.py correctness sync_flush_crash_recovery
+python scripts/architecture_target_runner.py correctness derived_replay_no_holes
+python scripts/architecture_target_runner.py correctness bounded_overload
+python scripts/architecture_target_runner.py correctness no_raw_commitlog_fallback
+```
+
+- `sync_flush_crash_recovery` 启动真实 SyncFlush Store 子进程，在每个 `PutOk` durable ack 后记录物理位置，
+  收齐 16 条 ack 后由父进程强杀，随后重启并逐条验证已确认消息、queue offset、编码大小与 CQ 最大 offset。
+- `derived_replay_no_holes` 写入 32 条 SyncFlush 消息后删除 ConsumeQueue、Index 与 checkpoint，写入 abnormal
+  marker 后重启，从权威 CommitLog 重放并逐 offset 验证 CQ 连续性、读取状态、next offset 与 payload。
+- `bounded_overload` 执行真实 Transport admission 的 data rejection/control reserve 生命周期回归，以及
+  缩放后的真实 TCP/TLS overload collector，要求 typed rejection、控制面成功和资源有界收敛同时成立。
+- `no_raw_commitlog_fallback` 固定 Compaction Recovering 状态 fail closed，不允许以 raw CommitLog
+  读取绕过派生状态 readiness。
+
+上述四个 runner 在开发机聚焦执行通过，只证明命令和正确性场景就绪；批准主机仍须在 baseline/candidate
+两次采集中重新先行执行它们，不能复用开发机结果代替目标硬件 Gate。
 
 ## 正确性优先与例外边界
 
@@ -180,9 +203,10 @@ cargo run --release --quiet -p rocketmq-transport `
 |---|---|
 | `python -m py_compile scripts/architecture_performance_guard.py scripts/tests/test_architecture_performance_guard.py` | 通过 |
 | `python -m unittest scripts.tests.test_architecture_performance_guard -v` | 11/11 通过；全部报告明确为 synthetic fixture、非 benchmark 证据 |
-| `python -m py_compile scripts/architecture_performance_sidecar.py scripts/tests/test_architecture_performance_sidecar.py` | 通过 |
-| `python -m unittest scripts.tests.test_architecture_performance_sidecar -v` | 8/8 通过；覆盖完整采集、正确性优先、timeout process-group 终止及运行期间 Git 漂移等反向拒绝 |
-| sidecar template 生成及未替换 placeholder 执行 | 模板生成通过；执行按预期失败且未产生 measurement report |
+| `python -m py_compile scripts/architecture_target_runner.py scripts/architecture_performance_sidecar.py scripts/tests/test_architecture_target_runner.py scripts/tests/test_architecture_performance_sidecar.py` | Issue #8700 通过 |
+| `python -m unittest scripts.tests.test_architecture_target_runner scripts.tests.test_architecture_performance_sidecar -v` | 13/13 通过；覆盖 4/11 frozen inventory、具体 argument vector、未知入口和首个失败 fail closed、完整采集、correctness-first、timeout process-group 终止及 Git 漂移 |
+| `python scripts/architecture_performance_sidecar.py --generate-manifest target/architecture-refactor/M10/runner-manifest-8700.json` | 通过；生成 4 个 correctness 与 11 个 measurement 具体 runner command，未保留 runner placeholder |
+| `python scripts/architecture_target_runner.py correctness <check-id>`（四项逐一执行） | Issue #8700 全部通过；SyncFlush 强杀恢复 1/1、派生状态删除重放 1/1、受控过载 2/2、禁止 raw CommitLog fallback 1/1 |
 | `python scripts/architecture_performance_guard.py --validate-profiles` | 通过；8 profiles、11 variants、50 metric contracts |
 | `python -m unittest discover -s scripts/tests -p "test_*guard.py"` | 125/125 通过 |
 | `cargo test -p rocketmq-store --example architecture_store_performance_collector` | Issue #8688/#8690/#8692/#8694 默认 feature 合同 9/9 通过；覆盖原五种 variant、精确 metric inventory 和反向拒绝，并验证无 RocksDB feature 时 fail closed |

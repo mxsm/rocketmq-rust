@@ -174,6 +174,18 @@ class ArchitecturePerformanceSidecarTest(unittest.TestCase):
         template = sidecar.manifest_template(self.policy)
         findings = sidecar.validate_manifest(template, self.policy)
         self.assertTrue(any("placeholder or fixture marker" in finding for finding in findings))
+        commands = [
+            item["command"]
+            for item in template["correctness_checks"]
+        ] + [
+            variant["command"]
+            for profile in template["profiles"]
+            for variant in profile["variants"]
+        ]
+        self.assertTrue(
+            all(command[:2] == ["python", "scripts/architecture_target_runner.py"] for command in commands)
+        )
+        self.assertFalse(any("REPLACE_WITH" in " ".join(command) for command in commands))
 
     def test_correctness_failure_stops_before_measurement(self) -> None:
         calls: list[list[str]] = []

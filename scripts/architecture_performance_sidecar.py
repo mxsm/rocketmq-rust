@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 import architecture_performance_guard as guard
+import architecture_target_runner as target_runner
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -328,11 +329,7 @@ def manifest_template(policy: dict[str, Any]) -> dict[str, Any]:
         "correctness_checks": [
             {
                 "id": check_id,
-                "command": [
-                    "REPLACE_WITH_TARGET_RUNNER",
-                    "correctness",
-                    check_id,
-                ],
+                "command": target_runner.manifest_command("correctness", check_id),
                 "timeout_seconds": 3_600,
             }
             for check_id in policy["required_correctness_checks"]
@@ -343,12 +340,11 @@ def manifest_template(policy: dict[str, Any]) -> dict[str, Any]:
                 "variants": [
                     {
                         "id": variant["id"],
-                        "command": [
-                            "REPLACE_WITH_TARGET_RUNNER",
+                        "command": target_runner.manifest_command(
                             "measurement",
                             profile["id"],
                             variant["id"],
-                        ],
+                        ),
                         "timeout_seconds": 7_200,
                     }
                     for variant in profile["variants"]
