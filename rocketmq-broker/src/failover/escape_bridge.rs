@@ -46,6 +46,8 @@ use tracing::warn;
 use crate::failover::escape_bridge_capability::EscapeBridgePolicyState;
 use crate::failover::escape_bridge_capability::EscapeBridgeStoreCapability;
 use crate::failover::escape_bridge_capability::LegacyEscapeStoreOwner;
+use crate::failover::escape_bridge_capability::LegacyEscapeStoreReadLease;
+use crate::failover::escape_bridge_capability::LegacyEscapeStoreWriteLease;
 use crate::out_api::broker_outer_api::BrokerOuterAPI;
 use crate::topic::manager::topic_route_info_manager::TopicRouteInfoManager;
 use crate::transaction::queue::transactional_message_util::TransactionalMessageUtil;
@@ -136,6 +138,14 @@ impl<MS: MessageStore> EscapeBridge<MS> {
 
     pub(crate) fn store_capability(&self) -> EscapeBridgeStoreCapability<MS> {
         self.message_store.clone()
+    }
+
+    pub(crate) fn lease_message_store(&self) -> Result<LegacyEscapeStoreReadLease<MS>, MessageStoreUnavailable> {
+        self.message_store.read_lease()
+    }
+
+    pub(crate) fn lease_message_store_mut(&self) -> Result<LegacyEscapeStoreWriteLease<MS>, MessageStoreUnavailable> {
+        self.message_store.write_lease()
     }
 
     pub fn start(&self) {

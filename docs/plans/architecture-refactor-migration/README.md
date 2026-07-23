@@ -8,10 +8,10 @@
 > PR-M12-01～06 未开始，合计剩余 7 个
 
 剩余任务数量、M11-12 内部执行批次与 M12 六个工作包见 [`REMAINING-TASKS.md`](REMAINING-TASKS.md)：正式口径
-剩余 7 个工作包；31 个最小可审查单元已完成 13 个，当前剩余 18 个。Issue #8621 / M11-12bc100 后
+剩余 7 个工作包；31 个最小可审查单元已完成 13 个，当前剩余 18 个。Issue #8623 / M11-12bc101 后
 reviewed ArcMut baseline 保持 31 identities / 71 occurrences（production 13/21、test 4/10、
-compatibility 14/40）；Broker fast-failure 已改持 `PutMessagePreflight`，初始化后的完整 Store 强 owner 从
-3 个降为 2 个。
+compatibility 14/40）；Broker fast-failure 已改持 `PutMessagePreflight`，Admin runtime 已改持
+`Weak<EscapeBridge>`，其构造与 clone 不再增加完整 Store 强 owner。
 
 ## 1. 使用方式
 
@@ -1286,6 +1286,13 @@ Broker fast-failure Store owner 随 Issue #8621 完成收窄：page-cache busy c
 `BrokerRuntimeInner` 与晚绑定 `EscapeBridge` 保留。scanner baseline 因没有移动或隐藏 ArcMut token 而保持
 31/71（production 13/21、test 4/10、compatibility 14/40）；R01 下一切片继续拆分 Admin owner，执行清单
 保持完成 13 项、剩余 18 项，正式进度仍为 75/82。
+
+Broker Admin Store owner 随 Issue #8623 完成收窄：`BrokerAdminRuntime` 不再克隆
+`LegacyEscapeStoreOwner`，只保存已有 `Weak<EscapeBridge>`；读操作使用不克隆底层 compatibility pointer 的请求期
+lease，可变 legacy 操作只在单次 Admin 请求期间取得 write lease。Admin runtime 构造、clone 与异步注册捕获均不再
+增加完整 Store root 强引用；Local/Rocks 查询、写入、read-ahead 配置与 Timer handle 行为保持不变。scanner
+baseline 保持 31/71（production 13/21、test 4/10、compatibility 14/40），没有移动或隐藏 identity；R01 下一切片
+继续拆分 EscapeBridge/lifecycle owner，执行清单保持完成 13 项、剩余 18 项，正式进度仍为 75/82。
 
 Default HA client runtime ownership 随 Issue #8567 完成收窄：`DefaultHAClient` 以标准 `Arc<Inner>` 共享只读组合根，
 `Inner` 仅保留原子、锁、Notify、flow monitor 与现有 LocalStore 兼容句柄；从未安装连接的 stream 字段和重复 buffer/

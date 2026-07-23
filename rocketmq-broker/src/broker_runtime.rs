@@ -3736,9 +3736,10 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             self.config_state.clone(),
             self.store_host,
             self.broker_addr.clone(),
-            self.message_store
+            self.escape_bridge
                 .as_ref()
-                .map(|message_store| LegacyEscapeStoreOwner(message_store.clone())),
+                .cloned()
+                .expect("EscapeBridge provider must be configured before Admin runtime construction"),
             self.topic_config_manager_handle(),
             self.topic_config_coordinator_handle(),
             self.topic_queue_mapping_manager_handle(),
@@ -6969,6 +6970,48 @@ accounts:
             "only BrokerRuntime and the late-bound EscapeBridge may retain the Store root"
         );
 
+        if let Some(message_store) = runtime.inner.message_store.as_mut() {
+            message_store.shutdown().await;
+        }
+        let _ = std::fs::remove_dir_all(temp_root);
+    }
+
+    #[tokio::test]
+    async fn admin_runtime_does_not_retain_message_store_root() {
+        let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-broker-admin-owner-{}", current_millis()));
+        let broker_config = Arc::new(BrokerConfig::default());
+        let message_store_config = Arc::new(MessageStoreConfig {
+            store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+            ..MessageStoreConfig::default()
+        });
+        let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
+        assert!(runtime.initialize_metadata().await);
+        assert!(runtime.initialize_message_store().await);
+
+        let store_owner_count = runtime
+            .inner
+            .message_store
+            .as_ref()
+            .expect("message store should be initialized")
+            .strong_count();
+        let admin = runtime.admin_runtime_for_test();
+        let admin_clone = admin.clone();
+
+        assert!(admin.message_store().is_some());
+        assert!(admin_clone.message_store().is_some());
+        assert_eq!(
+            runtime
+                .inner
+                .message_store
+                .as_ref()
+                .expect("message store should remain initialized")
+                .strong_count(),
+            store_owner_count,
+            "Admin runtime instances must retain only a weak Store provider"
+        );
+
+        drop(admin_clone);
+        drop(admin);
         if let Some(message_store) = runtime.inner.message_store.as_mut() {
             message_store.shutdown().await;
         }

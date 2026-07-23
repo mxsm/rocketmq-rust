@@ -532,7 +532,7 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
             ));
         }
 
-        let Some(timer_message_store) = self.broker_runtime_inner.timer_message_store().cloned() else {
+        let Some(timer_message_store) = self.broker_runtime_inner.timer_message_store() else {
             return Ok(Some(
                 response
                     .set_code(ResponseCode::SystemError)
