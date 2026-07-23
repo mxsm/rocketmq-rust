@@ -535,7 +535,7 @@ mod tests {
     use rocketmq_common::common::broker::broker_config::BrokerConfig;
     use rocketmq_common::common::broker::broker_role::BrokerRole;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
-    use rocketmq_store::message_store::GenericMessageStore;
+    use rocketmq_store::message_store::OwnedMessageStore;
 
     use super::EscapeBridgePolicyState;
     use super::EscapeBridgeStoreCapability;
@@ -567,7 +567,7 @@ mod tests {
 
     #[tokio::test]
     async fn controller_role_change_is_a_noop_before_store_binding() {
-        let store = EscapeBridgeStoreCapability::<GenericMessageStore>::default();
+        let store = EscapeBridgeStoreCapability::<OwnedMessageStore>::default();
 
         assert!(store
             .apply_controller_role(BrokerRole::Slave, BrokerReplicaRole::Master, 0, None, 1)
@@ -577,7 +577,7 @@ mod tests {
 
     #[test]
     fn controller_observations_fail_closed_before_store_binding() {
-        let store = EscapeBridgeStoreCapability::<GenericMessageStore>::default();
+        let store = EscapeBridgeStoreCapability::<OwnedMessageStore>::default();
 
         assert_eq!(store.controller_heartbeat_offsets(), (None, None));
         assert!(store.set_alive_replica_num_in_group(1).is_err());

@@ -581,7 +581,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rocketmq_store::message_store::GenericMessageStore;
+    use rocketmq_store::message_store::OwnedMessageStore;
 
     #[test]
     fn change_invisible_time_policy_captures_only_required_startup_values() {
@@ -602,10 +602,10 @@ mod tests {
 
     #[tokio::test]
     async fn change_invisible_time_weak_capabilities_fail_closed_after_provider_shutdown() {
-        let store = ChangeInvisibleTimeStoreCapability::<GenericMessageStore> {
+        let store = ChangeInvisibleTimeStoreCapability::<OwnedMessageStore> {
             escape_bridge: Weak::new(),
         };
-        let pop_buffer = ChangeInvisibleTimePopCapability::<GenericMessageStore> {
+        let pop_buffer = ChangeInvisibleTimePopCapability::<OwnedMessageStore> {
             merge_service: Weak::new(),
         };
         let order = ChangeInvisibleTimeOrderCapability { manager: Weak::new() };

@@ -8,8 +8,8 @@
 > PR-M12-01～06 未开始，合计剩余 7 个
 
 剩余任务数量、M11-12 内部执行批次与 M12 六个工作包见 [`REMAINING-TASKS.md`](REMAINING-TASKS.md)：正式口径
-剩余 7 个工作包；31 个最小可审查单元已完成 15 个，当前剩余 16 个。Issue #8637 / M11-12bc108 后
-reviewed ArcMut baseline 降至 23 identities / 61 occurrences（production 6/12、test 3/9、
+剩余 7 个工作包；31 个最小可审查单元已完成 16 个，当前剩余 15 个。Issue #8639 / M11-12bc109 后
+reviewed ArcMut baseline 降至 22 identities / 60 occurrences（production 6/12、test 2/8、
 compatibility 14/40）；Broker production ArcMut 已清零，Broker runtime 直接持有标准
 `Arc<OwnedMessageStore>`，EscapeBridge 与 Admin runtime 只保留标准弱 provider，请求只在单次操作期间取得
 标准 Arc 读租约；普通单条、批量和 Admin append
@@ -17,7 +17,8 @@ compatibility 14/40）；Broker production ArcMut 已清零，Broker runtime 直
 只调用线程安全具名操作；composition-root lifecycle lease 与私有 `LegacyEscapeStoreOwner<ArcMut<_>>` 均已删除，
 生命周期修改统一先解绑 provider，再通过 `Arc::get_mut` 取得独占 Store，shutdown 在共享 deadline 内等待已接纳
 读租约退出；RocksDB Store 直接以 `Box<LocalFileMessageStore>` 独占 Local backend，零调用的完整 root clone
-accessor 已删除。
+accessor 已删除；RocksDB semantics helper 和 16 个 Broker Store-capability 测试模块也已迁到
+`OwnedMessageStore`，活跃 test/bench caller 清零，仅保留公开 facade 自身的兼容性夹具。
 
 ## 1. 使用方式
 

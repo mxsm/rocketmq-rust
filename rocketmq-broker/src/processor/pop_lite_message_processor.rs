@@ -696,7 +696,7 @@ mod tests {
     use rocketmq_common::common::broker::broker_config::BrokerConfig;
     use rocketmq_runtime::RuntimeContext;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
-    use rocketmq_store::message_store::GenericMessageStore;
+    use rocketmq_store::message_store::OwnedMessageStore;
 
     use super::PopLiteMessagePolicy;
     use super::PopLiteMessageProcessor;
@@ -743,7 +743,7 @@ mod tests {
 
     #[test]
     fn transform_order_count_info_drops_queue_level_suffix_when_offset_entries_exist() {
-        let result = PopLiteMessageProcessor::<GenericMessageStore>::transform_order_count_info("0 qo0%100 1;0 0 1", 1);
+        let result = PopLiteMessageProcessor::<OwnedMessageStore>::transform_order_count_info("0 qo0%100 1;0 0 1", 1);
 
         assert_eq!(result, "0 qo0%100 1");
     }

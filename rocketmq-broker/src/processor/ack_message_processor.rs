@@ -810,7 +810,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rocketmq_store::message_store::GenericMessageStore;
+    use rocketmq_store::message_store::OwnedMessageStore;
 
     #[test]
     fn ack_message_policy_captures_only_required_startup_values() {
@@ -829,12 +829,12 @@ mod tests {
 
     #[tokio::test]
     async fn ack_message_weak_capabilities_fail_closed_after_provider_shutdown() {
-        let store = AckMessageStoreCapability::<GenericMessageStore> {
+        let store = AckMessageStoreCapability::<OwnedMessageStore> {
             escape_bridge: Weak::new(),
         };
         let order = AckMessageOrderCapability { manager: Weak::new() };
-        let offset = AckMessageOffsetCapability::<GenericMessageStore> { manager: Weak::new() };
-        let pop = AckMessagePopCapability::<GenericMessageStore> {
+        let offset = AckMessageOffsetCapability::<OwnedMessageStore> { manager: Weak::new() };
+        let pop = AckMessagePopCapability::<OwnedMessageStore> {
             merge_service: Weak::new(),
             notification_service: Weak::new(),
             queue_lock_manager: QueueLockManager::new(),

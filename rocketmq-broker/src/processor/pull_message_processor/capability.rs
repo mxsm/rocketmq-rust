@@ -411,7 +411,7 @@ mod tests {
     use rocketmq_common::common::broker::broker_config::BrokerConfig;
     use rocketmq_common::common::broker::broker_role::BrokerRole;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
-    use rocketmq_store::message_store::GenericMessageStore;
+    use rocketmq_store::message_store::OwnedMessageStore;
 
     use super::PullMessagePolicyState;
     use super::PullMessageStoreCapability;
@@ -447,7 +447,7 @@ mod tests {
 
     #[test]
     fn pull_store_capability_fails_closed_without_provider() {
-        let capability = PullMessageStoreCapability::<GenericMessageStore> { provider: Weak::new() };
+        let capability = PullMessageStoreCapability::<OwnedMessageStore> { provider: Weak::new() };
 
         assert!(capability
             .max_offset(&CheetahString::from_static_str("topic"), 0)

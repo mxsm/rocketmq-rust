@@ -403,7 +403,7 @@ mod tests {
     use std::time::Duration;
 
     use rocketmq_runtime::RuntimeHandle;
-    use rocketmq_store::message_store::GenericMessageStore;
+    use rocketmq_store::message_store::OwnedMessageStore;
 
     use super::*;
 
@@ -434,7 +434,7 @@ mod tests {
     #[tokio::test]
     async fn start_shutdown_and_restart_are_serialized() {
         let processor = Arc::new(TestPullProcessor);
-        let service = Arc::new(PullRequestHoldService::<GenericMessageStore, _>::new(Arc::downgrade(
+        let service = Arc::new(PullRequestHoldService::<OwnedMessageStore, _>::new(Arc::downgrade(
             &processor,
         )));
 
@@ -459,7 +459,7 @@ mod tests {
     fn service_uses_weak_processor_back_reference() {
         let processor = Arc::new(TestPullProcessor);
         let processor_weak = Arc::downgrade(&processor);
-        let service = Arc::new(PullRequestHoldService::<GenericMessageStore, _>::new(
+        let service = Arc::new(PullRequestHoldService::<OwnedMessageStore, _>::new(
             processor_weak.clone(),
         ));
 
@@ -472,7 +472,7 @@ mod tests {
     #[tokio::test]
     async fn active_scan_does_not_keep_service_owner_alive() {
         let processor = Arc::new(TestPullProcessor);
-        let service = Arc::new(PullRequestHoldService::<GenericMessageStore, _>::new(Arc::downgrade(
+        let service = Arc::new(PullRequestHoldService::<OwnedMessageStore, _>::new(Arc::downgrade(
             &processor,
         )));
         let service_weak = Arc::downgrade(&service);
@@ -496,7 +496,7 @@ mod tests {
     #[tokio::test]
     async fn start_rolls_back_when_task_group_is_closed() {
         let processor = Arc::new(TestPullProcessor);
-        let service = Arc::new(PullRequestHoldService::<GenericMessageStore, _>::new(Arc::downgrade(
+        let service = Arc::new(PullRequestHoldService::<OwnedMessageStore, _>::new(Arc::downgrade(
             &processor,
         )));
         let group = task_group("pull-request-hold-closed");

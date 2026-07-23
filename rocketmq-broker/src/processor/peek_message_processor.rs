@@ -640,7 +640,7 @@ impl<MS: MessageStore> PeekMessageProcessor<MS> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rocketmq_store::message_store::GenericMessageStore;
+    use rocketmq_store::message_store::OwnedMessageStore;
 
     #[test]
     fn peek_policy_captures_only_required_startup_values() {
@@ -664,7 +664,7 @@ mod tests {
 
     #[tokio::test]
     async fn peek_store_capability_fails_closed_after_provider_shutdown() {
-        let capability = PeekMessageStoreCapability::<GenericMessageStore> {
+        let capability = PeekMessageStoreCapability::<OwnedMessageStore> {
             escape_bridge: Weak::new(),
         };
         let topic = CheetahString::from_static_str("topic-a");
@@ -678,7 +678,7 @@ mod tests {
 
     #[tokio::test]
     async fn peek_pop_offset_capability_fails_closed_after_provider_shutdown() {
-        let capability = PeekPopOffsetCapability::<GenericMessageStore> {
+        let capability = PeekPopOffsetCapability::<OwnedMessageStore> {
             merge_service: Weak::new(),
         };
 

@@ -539,7 +539,7 @@ mod tests {
     use rocketmq_common::common::broker::broker_config::BrokerConfig;
     use rocketmq_common::common::broker::broker_role::BrokerRole;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
-    use rocketmq_store::message_store::GenericMessageStore;
+    use rocketmq_store::message_store::OwnedMessageStore;
 
     use super::PopPolicyState;
     use super::PopStoreCapability;
@@ -591,7 +591,7 @@ mod tests {
 
     #[test]
     fn pop_store_capability_fails_closed_without_provider() {
-        let capability = PopStoreCapability::<GenericMessageStore> { provider: Weak::new() };
+        let capability = PopStoreCapability::<OwnedMessageStore> { provider: Weak::new() };
 
         assert!(capability.max_offset(&"topic".into(), 0).is_err());
         assert!(capability.timer_lag().is_err());
