@@ -95,13 +95,13 @@ $privateKey = "$keyPrefix.key"
 $publicKey = "$keyPrefix.pub"
 
 Invoke-Checked syft scan "docker:$ImageRef" --scope all-layers --output "cyclonedx-json=$sbomPath"
-Invoke-Checked trivy image --scanners vuln --severity CRITICAL --exit-code 1 --format json --output $trivyPath $ImageRef
+Invoke-Checked trivy image --scanners vuln --severity CRITICAL --exit-code 0 --format json --output $trivyPath $ImageRef
 $sbom = Get-Content -Raw -LiteralPath $sbomPath | ConvertFrom-Json
 if ($sbom.bomFormat -ne "CycloneDX") {
     throw "Syft output is not a CycloneDX SBOM"
 }
 $trivyReport = Get-Content -Raw -LiteralPath $trivyPath | ConvertFrom-Json
-$criticalFindings = @(
+$criticalVulnerabilities = @(
     foreach ($result in @($trivyReport.Results)) {
         $vulnerabilities = $result.PSObject.Properties["Vulnerabilities"]
         if ($null -ne $vulnerabilities) {
@@ -112,9 +112,18 @@ $criticalFindings = @(
             }
         }
     }
-).Count
+)
+$criticalFindings = $criticalVulnerabilities.Count
 if ($criticalFindings -gt $policy.supply_chain.critical_vulnerability_policy.maximum_findings) {
-    throw "critical vulnerability policy failed: $criticalFindings findings"
+    $criticalSummary = @(
+        $criticalVulnerabilities |
+            Select-Object -First 10 |
+            ForEach-Object {
+                $fixedVersion = if ([string]::IsNullOrWhiteSpace($_.FixedVersion)) { "unfixed" } else { $_.FixedVersion }
+                "$($_.VulnerabilityID) $($_.PkgName) $($_.InstalledVersion) -> $fixedVersion"
+            }
+    ) -join "; "
+    throw "critical vulnerability policy failed: $criticalFindings findings; $criticalSummary"
 }
 
 $oldPassword = $env:COSIGN_PASSWORD

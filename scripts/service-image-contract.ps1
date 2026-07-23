@@ -177,7 +177,7 @@ try {
         $trivyPath = Join-Path $outputPath "$serviceName.trivy.json"
         $bundlePath = Join-Path $outputPath "$serviceName.sbom.sigstore.json"
         Invoke-Checked syft scan "docker:$imageRef" --scope all-layers --output "cyclonedx-json=$sbomPath"
-        Invoke-Checked trivy image --scanners vuln --severity CRITICAL --exit-code 1 --format json --output $trivyPath $imageRef
+        Invoke-Checked trivy image --scanners vuln --severity CRITICAL --exit-code 0 --format json --output $trivyPath $imageRef
         Invoke-Checked cosign sign-blob --yes --key $privateKey --bundle $bundlePath $sbomPath
         Invoke-Checked cosign verify-blob --key $publicKey --bundle $bundlePath $sbomPath
 
@@ -186,7 +186,7 @@ try {
             throw "$serviceName Syft output is not a CycloneDX SBOM"
         }
         $trivyReport = Get-Content -Raw -LiteralPath $trivyPath | ConvertFrom-Json
-        $criticalFindings = @(
+        $criticalVulnerabilities = @(
             foreach ($result in @($trivyReport.Results)) {
                 $vulnerabilities = $result.PSObject.Properties["Vulnerabilities"]
                 if ($null -ne $vulnerabilities) {
@@ -197,9 +197,18 @@ try {
                     }
                 }
             }
-        ).Count
+        )
+        $criticalFindings = $criticalVulnerabilities.Count
         if ($criticalFindings -gt $policy.supply_chain.critical_vulnerability_policy.maximum_findings) {
-            throw "$serviceName critical vulnerability policy failed: $criticalFindings findings"
+            $criticalSummary = @(
+                $criticalVulnerabilities |
+                    Select-Object -First 10 |
+                    ForEach-Object {
+                        $fixedVersion = if ([string]::IsNullOrWhiteSpace($_.FixedVersion)) { "unfixed" } else { $_.FixedVersion }
+                        "$($_.VulnerabilityID) $($_.PkgName) $($_.InstalledVersion) -> $fixedVersion"
+                    }
+            ) -join "; "
+            throw "$serviceName critical vulnerability policy failed: $criticalFindings findings; $criticalSummary"
         }
 
         $evidence.Add([ordered]@{
