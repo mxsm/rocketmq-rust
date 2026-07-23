@@ -129,6 +129,57 @@ REQUIRED_ARC_MUT_REPLACEMENTS = {
         "pub fn new_with_message_store_config(",
     ),
 }
+SCOPE_MARKER = (
+    "<!-- architecture-refactor-scope: "
+    "phases=1-3; execution=R01-R20,R22-R25; "
+    "follow-up=R21,R26-R31 -->"
+)
+SCOPE_DOCUMENTS = (
+    "docs/architecture-refactor-design.md",
+    "docs/plans/architecture-refactor-migration/README.md",
+    "docs/plans/architecture-refactor-migration/CHECKLIST.md",
+    "docs/plans/architecture-refactor-migration/REMAINING-TASKS.md",
+    "docs/plans/architecture-refactor-migration/phase-4-ai-native/12-ai-native-operations.md",
+)
+REQUIRED_SCOPE_SUMMARIES = {
+    "docs/plans/architecture-refactor-migration/README.md": (
+        "当前范围 75/76 工作包完成",
+        "24 个最小可审查单元已完成 20 个",
+        "R09、R18、R19、R25 共 4 个",
+    ),
+    "docs/plans/architecture-refactor-migration/CHECKLIST.md": (
+        "当前范围只统计 Phase 1～3 的 76 个顶层",
+        "执行层清单共 24 个最小可审查单元",
+        "R09、R18、R19、R25 共 4 个",
+    ),
+    "docs/plans/architecture-refactor-migration/REMAINING-TASKS.md": (
+        "当前范围的正式工作包已完成 75/76",
+        "**24 个最小可审查单元**",
+        "当前剩余 R09、R18、R19、R25 共 4 个",
+    ),
+}
+REQUIRED_OBJECTIVE_SCOPE = {
+    "architecture_refactor_phases": ["Phase 1", "Phase 2", "Phase 3"],
+    "architecture_refactor_work_packages": 76,
+    "architecture_refactor_execution_items": [
+        *[f"R{index:02d}" for index in range(1, 21)],
+        *[f"R{index:02d}" for index in range(22, 26)],
+    ],
+    "remaining_execution_items": ["R09", "R18", "R19", "R25"],
+    "immediate_execution_items": ["R09", "R18", "R19"],
+    "closeout_execution_items": ["R25"],
+    "excluded_platform_follow_up_items": ["R21"],
+    "excluded_follow_up_phase": "Phase 4 AI Native",
+    "excluded_follow_up_items": [
+        f"R{index:02d}" for index in range(26, 32)
+    ],
+    "constraint": (
+        "R21 platform evidence and the Phase 4 design remain available as "
+        "separate follow-up proposals, but R21 and R26-R31 do not contribute "
+        "to architecture-refactor progress, remaining-task counts, or "
+        "completion gates."
+    ),
+}
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -392,6 +443,62 @@ def check_arc_mut_deprecations(
             findings.append("OwnedMessageStore canonical replacement is hidden from Rustdoc")
 
 
+def check_objective_scope(
+    plan: dict[str, Any],
+    findings: list[str],
+    source_overrides: dict[str, str] | None = None,
+) -> None:
+    if plan.get("objective_scope") != REQUIRED_OBJECTIVE_SCOPE:
+        findings.append(
+            "architecture-refactor objective scope must exclude R21 platform "
+            "evidence and Phase 4 R26-R31 as follow-up work"
+        )
+
+    contents: dict[str, str] = {}
+    for relative_path in SCOPE_DOCUMENTS:
+        path = ROOT / relative_path
+        if source_overrides is not None and relative_path in source_overrides:
+            content = source_overrides[relative_path]
+        elif path.is_file():
+            content = path.read_text(encoding="utf-8")
+        else:
+            findings.append(f"architecture scope document is missing: {relative_path}")
+            continue
+        contents[relative_path] = content
+        if content.count(SCOPE_MARKER) != 1:
+            findings.append(
+                f"architecture scope marker must appear exactly once: {relative_path}"
+            )
+        for required_summary in REQUIRED_SCOPE_SUMMARIES.get(relative_path, ()):
+            if required_summary not in content:
+                findings.append(
+                    "architecture scope summary drifted: "
+                    f"{relative_path}: {required_summary}"
+                )
+
+    for relative_path in (
+        "docs/plans/architecture-refactor-migration/CHECKLIST.md",
+        "docs/plans/architecture-refactor-migration/REMAINING-TASKS.md",
+    ):
+        content = contents.get(relative_path, "")
+        if re.search(
+            r"^\s*-\s+\[[ xX]\]\s+R(?:21|2[6-9]|3[01])\b",
+            content,
+            re.MULTILINE,
+        ):
+            findings.append(
+                "excluded follow-up items must not be active refactor "
+                f"checkboxes: {relative_path}"
+            )
+        if relative_path.endswith("CHECKLIST.md") and re.search(
+            r"^\s*-\s+\[[ xX]\]\s+PR-M12-", content, re.MULTILINE
+        ):
+            findings.append(
+                "Phase 4 work packages must not be active refactor checkboxes: "
+                f"{relative_path}"
+            )
+
+
 def check_ci_and_documents(plan: dict[str, Any], findings: list[str]) -> None:
     workflow = CI_PATH.read_text(encoding="utf-8")
     for command in (
@@ -439,6 +546,7 @@ def validate() -> list[str]:
     check_proxy_activation(plan, findings)
     check_usage_and_approval(plan, findings)
     check_arc_mut_deprecations(plan, findings)
+    check_objective_scope(plan, findings)
     check_ci_and_documents(plan, findings)
     return findings
 
@@ -457,6 +565,11 @@ def main() -> int:
     print("- early removals/Proxy feature activation: 0")
     print("- external usage and notification gates: approved and enforced")
     print("- ArcMut deprecation contract: 12/12 public surfaces, 3/3 canonical replacements")
+    print(
+        "- objective scope: Phase 1-3/R01-R20,R22-R25; "
+        "R21 and Phase 4 R26-R31 excluded as follow-up"
+    )
+    print("- current remaining: R09/R18/R19 immediate; R25 closeout")
     return 0
 
 

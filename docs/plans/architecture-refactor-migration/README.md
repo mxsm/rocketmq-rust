@@ -1,14 +1,20 @@
 # RocketMQ Rust 架构重构迁移执行手册
 
+<!-- architecture-refactor-scope: phases=1-3; execution=R01-R20,R22-R25; follow-up=R21,R26-R31 -->
+
+> 当前实施范围：Phase 1～3 的 R01～R20、R22～R25；R21 Docker/Kind/K3d 动态证据与
+> Phase 4 AI Native（R26～R31）保留为独立后续提案，不计入本轮进度、剩余任务数或完成 Gate。
 > 状态：实施中（Phase 3；M10 真实性能/HUMAN Gate 待验收，M11 已完成安全 profile/bootstrap/rotation、MCP HTTPS/audit、五服务镜像、Helm/Kustomize、统一 probe/preStop/drain 与 Kind/K3d fault 执行/证据门禁，PR-M11-12 正在按 owner 子切片收口）
 > 设计依据：[`docs/architecture-refactor-design.md`](../../architecture-refactor-design.md)
 > 架构审计基线：`f545d638`
 > crate 与源码迁移复核基线：`6d152248`
-> 当前复核状态：根 workspace 已达到目标 32 个 package；75/82 工作包完成，PR-M11-12 进行中，
-> PR-M12-01～06 未开始，合计剩余 7 个
+> 当前复核状态：根 workspace 已达到目标 32 个 package；当前范围 75/76 工作包完成，
+> PR-M11-12 进行中，合计剩余 1 个
 
-剩余任务数量、M11-12 内部执行批次与 M12 六个工作包见 [`REMAINING-TASKS.md`](REMAINING-TASKS.md)：正式口径
-剩余 7 个工作包；31 个最小可审查单元已完成 20 个，当前剩余 11 个。Issue #8649 / M11-12bc114 候选保持
+剩余任务数量、M11-12 内部执行批次与独立 Phase 4 后续提案见 [`REMAINING-TASKS.md`](REMAINING-TASKS.md)：
+当前正式口径剩余 1 个工作包；24 个最小可审查单元已完成 20 个，当前剩余
+R09、R18、R19、R25 共 4 个。R21 已从本轮目标排除；R25 对重新划定的当前范围完成签署。Issue #8649 /
+M11-12bc114 候选保持
 reviewed ArcMut baseline 20 identities / 58 occurrences（production 6/12、test 1/7、
 compatibility 13/39）；Broker production ArcMut 已清零，Broker runtime 直接持有标准
 `Arc<OwnedMessageStore>`，EscapeBridge 与 Admin runtime 只保留标准弱 provider，请求只在单次操作期间取得
@@ -24,15 +30,16 @@ workspace all-target/all-feature matrix 已通过；Miri/Loom 技术审计拒绝
 六小时 soak/SLO policy、动态 runner、dashboard、alerts、runbook、rollback 和 fail-closed evidence index；
 R20 五服务容器动态验收已由 Issue #8677 在 main commit
 `13d50e2d33ddfc1142bba63431b339d07704a4f7` 上关闭；真实集群 fault/rolling 证据与四方签署仍由
-R21/R25 的环境与签署 Gate 承担。
+独立后续项 R21 承担，R25 只签署重新划定后的当前范围。
 
 ## 1. 使用方式
 
-本目录把总体设计转换为 12 个可独立审查、验证和回滚的里程碑。当前交付拓扑经用户批准为
+本目录把当前重构范围转换为 11 个可独立审查、验证和回滚的里程碑，并保留 M12 作为独立后续提案。
+当前交付拓扑经用户批准为
 “每个 PR-Mxx-yy 工作包一个 Issue、一个 branch、一个 ready PR”；任务文档中的 PR-Mxx-yy 是独立交付、
 验证、回滚和证据索引单位。
 
-- 里程碑实施细节以本页“里程碑导航”链接的 12 份任务文档为准。
+- 当前范围的里程碑实施细节以本页“里程碑导航”链接的 M01～M11 任务文档为准；M12 文档仅供后续单独立项。
 - 全局进度、每次 PR 完成记录与 Phase Gate 签署统一填写 [`CHECKLIST.md`](CHECKLIST.md)。
 
 1. Human Architect 先确认当前里程碑的入口条件和兼容决策。
@@ -106,7 +113,7 @@ M06-03a leaf foundation 加入 `rocketmq-store-local`，PR-M06-09 加入 `rocket
 | Phase 2 | [M09 Facade 与 32-package 收口](phase-2-core-boundaries/09-facade-and-package-closeout.md) | 1–2 周 | 32-package Gate、R0 发布证据 | M04–M08 |
 | Phase 3 | [M10 耐久性与性能](phase-3-production-readiness/10-durability-and-performance.md) | 5–8 周 | WAL outbox、Tiered cursor、Compaction generation、性能门禁 | M09 |
 | Phase 3 | [M11 安全、可观测性与云原生](phase-3-production-readiness/11-security-observability-cloud.md) | 4–6 周 | secure profile、semantic registry、镜像与部署演练 | M09；部分与 M10 并行 |
-| Phase 4 | [M12 AI Native 运维](phase-4-ai-native/12-ai-native-operations.md) | 8–12 周 | KG/RAG、确定性诊断、独立 Apply 安全边界 | M10、M11 |
+| 独立后续提案 | [M12 AI Native 运维](phase-4-ai-native/12-ai-native-operations.md) | 8–12 周 | KG/RAG、确定性诊断、独立 Apply 安全边界 | 需单独立项；可复用 M10、M11 证据 |
 
 ## 4. 关键路径、阶段工期和并行泳道
 
@@ -126,11 +133,11 @@ flowchart LR
     M08 --> M09["M09 32-package 收口"]
     M09 --> M10["M10 耐久与性能"]
     M09 --> M11["M11 安全/可观测/云原生"]
-    M10 --> M12["M12 AI Native"]
-    M11 --> M12
+    M10 -. "独立后续提案" .-> M12["M12 AI Native"]
+    M11 -. "独立后续提案" .-> M12
 ```
 
-- Mermaid 图表达依赖 Gate，不用于把里程碑局部窗口相加计算工期。
+- Mermaid 实线表达当前重构依赖 Gate，M12 虚线仅表示独立后续提案可复用的前置证据；图不用于把里程碑局部窗口相加计算工期。
 - 4–6 名核心工程师下，M02 与 M03 可并行；M04 与 M06 在合同冻结后可并行；M10 与 M11 可按存储和平台泳道并行。
 - 同一文件或同一兼容面不能由两个 Developer 并行修改；协调者按 writer lease 解决重叠。
 
@@ -141,10 +148,12 @@ flowchart LR
 | Phase 1 | 6–8 周 | 从治理基线开始，到 P0/foundation Gate 签署 |
 | Phase 2 | 12–16 周 | 从首个边界 crate 开始，到 32-package Gate 签署 |
 | Phase 3 | 8–12 周 | 从生产化实现开始，到 durability/security/cloud Gate 签署 |
-| Phase 4 | 8–12 周 | 从 KG/RAG 实现开始，到 AI Native Gate 签署 |
-| **四个 Phase 完全串行** | **34–48 周** | **四个阶段窗口的唯一可加总口径** |
+| 独立 Phase 4 后续提案 | 8–12 周 | 单独立项后，从 KG/RAG 实现开始，到 AI Native Gate 签署 |
+| **当前三个 Phase 完全串行** | **26–36 周** | **本轮架构重构阶段窗口的唯一可加总口径** |
 
-接口稳定后采用跨 lane 重叠时，端到端规划窗口为 **24–32 周**。该区间不是重新相加里程碑数字，而是让以下准备和实现重叠约 10–16 周：M03 合同冻结后，Protocol/Storage lane 可在 M02 剩余收口期间启动；Phase 2 候选接口稳定后，性能基线、安全/镜像资产准备可在正式 Gate 前并行；M11 的 telemetry/security contract 冻结后，Phase 4 的离线 KG/RAG schema 与 eval corpus 可在 M10/M11 收口期间准备。正式 Phase Gate 的批准顺序仍为 1→2→3→4，未满足前置 Gate 的代码不得发布或扩大流量。
+当前范围可在合同稳定后跨 lane 重叠：M03 合同冻结后，Protocol/Storage lane 可在 M02 剩余收口期间启动；
+Phase 2 候选接口稳定后，性能基线、安全与部署资产准备可在正式 Gate 前并行。当前 Phase Gate 的批准顺序为
+1→2→3；Phase 4 不再预排进本轮日历，只有单独立项后才建立自己的排期和 Gate。
 
 ## 5. Client 直接依赖白名单
 
@@ -1419,6 +1428,6 @@ production 4/8、Store production 30/63）；相对 bc76 净删除 23 identities
 | Phase 1 | P0 回归全绿；ArcMut 不增长且首批切片下降；observability 闭包无 facade/legacy；基线可重复 |
 | Phase 2 | workspace 精确 32 package；10 个新 crate 禁边为零；Client 收敛为 workspace 2 + standalone 1；兼容 fixture 全绿 |
 | Phase 3 | production/public compatibility API 不再暴露不安全 ArcMut 逃逸；durability/performance/fault/cloud Gate 通过 |
-| Phase 4 | Plan 无副作用；Apply 独立且 fail closed；AI 离线不影响核心服务和人工运维 |
+| Phase 4（独立后续提案） | 不计入本轮重构 Gate；单独立项后再验证 Plan/Apply、离线可用性与 AI 安全边界 |
 
 每个阶段 Gate 需要 `[ARCH]`、`[REV]`、`[TEST]` 和 `[HUMAN]` 四方签署；Developer 只能提供实现与证据，不能代签。

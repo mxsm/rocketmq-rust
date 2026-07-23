@@ -49,6 +49,57 @@ class ArchitectureReleaseGuardTest(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         self.assertIn("R1 29, next-major 4, long-term 2", result.stdout)
         self.assertIn("12/12 public surfaces, 3/3 canonical replacements", result.stdout)
+        self.assertIn(
+            "Phase 1-3/R01-R20,R22-R25; R21 and Phase 4 R26-R31 excluded",
+            result.stdout,
+        )
+        self.assertIn(
+            "R09/R18/R19 immediate; R25 closeout",
+            result.stdout,
+        )
+
+    def test_objective_scope_excludes_platform_and_phase4_follow_up(self) -> None:
+        findings: list[str] = []
+        guard.check_objective_scope(self.plan, findings)
+        self.assertEqual([], findings)
+        self.assertEqual(
+            guard.REQUIRED_OBJECTIVE_SCOPE,
+            self.plan["objective_scope"],
+        )
+
+        invalid = copy.deepcopy(self.plan)
+        invalid["objective_scope"]["architecture_refactor_execution_items"].insert(
+            20,
+            "R21",
+        )
+        findings = []
+        guard.check_objective_scope(invalid, findings)
+        self.assertTrue(
+            any("objective scope" in finding for finding in findings),
+            findings,
+        )
+
+        checklist_path = (
+            "docs/plans/architecture-refactor-migration/CHECKLIST.md"
+        )
+        checklist = (ROOT / checklist_path).read_text(encoding="utf-8")
+        findings = []
+        guard.check_objective_scope(
+            self.plan,
+            findings,
+            source_overrides={
+                checklist_path: checklist
+                + "\n- [ ] R21: incorrectly reactivated\n"
+            },
+        )
+        self.assertTrue(
+            any(
+                "excluded follow-up items must not be active refactor checkboxes"
+                in finding
+                for finding in findings
+            ),
+            findings,
+        )
 
     def test_publish_order_covers_target_dag_and_respects_dependencies(self) -> None:
         findings: list[str] = []

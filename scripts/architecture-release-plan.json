@@ -2,6 +2,67 @@
   "schema_version": 1,
   "milestone": "M09-05",
   "design_source": "docs/architecture-refactor-design.md#59-发布迁移与兼容策略",
+  "objective_scope": {
+    "architecture_refactor_phases": [
+      "Phase 1",
+      "Phase 2",
+      "Phase 3"
+    ],
+    "architecture_refactor_work_packages": 76,
+    "architecture_refactor_execution_items": [
+      "R01",
+      "R02",
+      "R03",
+      "R04",
+      "R05",
+      "R06",
+      "R07",
+      "R08",
+      "R09",
+      "R10",
+      "R11",
+      "R12",
+      "R13",
+      "R14",
+      "R15",
+      "R16",
+      "R17",
+      "R18",
+      "R19",
+      "R20",
+      "R22",
+      "R23",
+      "R24",
+      "R25"
+    ],
+    "remaining_execution_items": [
+      "R09",
+      "R18",
+      "R19",
+      "R25"
+    ],
+    "immediate_execution_items": [
+      "R09",
+      "R18",
+      "R19"
+    ],
+    "closeout_execution_items": [
+      "R25"
+    ],
+    "excluded_platform_follow_up_items": [
+      "R21"
+    ],
+    "excluded_follow_up_phase": "Phase 4 AI Native",
+    "excluded_follow_up_items": [
+      "R26",
+      "R27",
+      "R28",
+      "R29",
+      "R30",
+      "R31"
+    ],
+    "constraint": "R21 platform evidence and the Phase 4 design remain available as separate follow-up proposals, but R21 and R26-R31 do not contribute to architecture-refactor progress, remaining-task counts, or completion gates."
+  },
   "human_approval": {
     "scope": "R0, R1 and next-major relative release windows plus external notification plan",
     "status": "approved",
