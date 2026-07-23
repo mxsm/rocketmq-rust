@@ -16,6 +16,7 @@ use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use std::sync::Weak;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
@@ -42,8 +43,10 @@ use crate::client::manager::producer_manager::ProducerManager;
 use crate::client::rebalance::rebalance_lock_manager::RebalanceLockManager;
 use crate::coldctr::cold_data_cg_ctr_service::ColdDataCgCtrService;
 use crate::controller::replicas_manager::ReplicasManager;
+use crate::failover::escape_bridge::EscapeBridge;
 use crate::failover::escape_bridge_capability::EscapeBridgePolicyState;
-use crate::failover::escape_bridge_capability::LegacyEscapeStoreOwner;
+use crate::failover::escape_bridge_capability::LegacyEscapeStoreReadLease;
+use crate::failover::escape_bridge_capability::LegacyEscapeStoreWriteLease;
 use crate::filter::manager::consumer_filter_manager::ConsumerFilterManager;
 use crate::long_polling::long_polling_service::pull_request_hold_service::PullRequestHoldService;
 use crate::offset::manager::consumer_offset_manager::ConsumerOffsetManager;
@@ -70,7 +73,7 @@ pub(crate) struct BrokerAdminRuntime<MS: MessageStore> {
     config: BrokerRuntimeConfigState,
     store_host: SocketAddr,
     broker_addr: CheetahString,
-    message_store: Option<LegacyEscapeStoreOwner<MS>>,
+    message_store_provider: Weak<EscapeBridge<MS>>,
     topic_config_manager: Arc<TopicConfigManager>,
     topic_config_coordinator: Arc<TopicConfigCoordinator>,
     topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
@@ -110,7 +113,7 @@ impl<MS: MessageStore> Clone for BrokerAdminRuntime<MS> {
             config: self.config.clone(),
             store_host: self.store_host,
             broker_addr: self.broker_addr.clone(),
-            message_store: self.message_store.clone(),
+            message_store_provider: self.message_store_provider.clone(),
             topic_config_manager: Arc::clone(&self.topic_config_manager),
             topic_config_coordinator: Arc::clone(&self.topic_config_coordinator),
             topic_queue_mapping_manager: Arc::clone(&self.topic_queue_mapping_manager),
@@ -155,7 +158,7 @@ impl<MS: MessageStore> BrokerAdminRuntime<MS> {
         config: BrokerRuntimeConfigState,
         store_host: SocketAddr,
         broker_addr: CheetahString,
-        message_store: Option<LegacyEscapeStoreOwner<MS>>,
+        message_store_provider: Weak<EscapeBridge<MS>>,
         topic_config_manager: Arc<TopicConfigManager>,
         topic_config_coordinator: Arc<TopicConfigCoordinator>,
         topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
@@ -192,7 +195,7 @@ impl<MS: MessageStore> BrokerAdminRuntime<MS> {
             config,
             store_host,
             broker_addr,
-            message_store,
+            message_store_provider,
             topic_config_manager,
             topic_config_coordinator,
             topic_queue_mapping_manager,
@@ -243,12 +246,12 @@ impl<MS: MessageStore> BrokerAdminRuntime<MS> {
         self.broker_config().broker_server_config.clone()
     }
 
-    pub(crate) fn message_store(&self) -> Option<&LegacyEscapeStoreOwner<MS>> {
-        self.message_store.as_ref()
+    pub(crate) fn message_store(&self) -> Option<LegacyEscapeStoreReadLease<MS>> {
+        self.message_store_provider.upgrade()?.lease_message_store().ok()
     }
 
-    pub(crate) fn message_store_mut(&mut self) -> &mut Option<LegacyEscapeStoreOwner<MS>> {
-        &mut self.message_store
+    pub(crate) fn message_store_mut(&self) -> Option<LegacyEscapeStoreWriteLease<MS>> {
+        self.message_store_provider.upgrade()?.lease_message_store_mut().ok()
     }
 
     pub(crate) fn topic_config_manager(&self) -> &TopicConfigManager {
@@ -287,11 +290,10 @@ impl<MS: MessageStore> BrokerAdminRuntime<MS> {
         &self.schedule_message_service
     }
 
-    pub(crate) fn timer_message_store(&self) -> Option<&Arc<TimerMessageStore>> {
-        self.timer_message_store.as_ref().or_else(|| {
-            self.message_store
-                .as_ref()
-                .and_then(|message_store| message_store.get_timer_message_store())
+    pub(crate) fn timer_message_store(&self) -> Option<Arc<TimerMessageStore>> {
+        self.timer_message_store.clone().or_else(|| {
+            self.message_store()
+                .and_then(|message_store| message_store.get_timer_message_store().cloned())
         })
     }
 
@@ -379,8 +381,7 @@ impl<MS: MessageStore> BrokerAdminRuntime<MS> {
     }
 
     pub(crate) fn topic_config_state_machine_version(&self) -> i64 {
-        self.message_store
-            .as_ref()
+        self.message_store()
             .map(|message_store| message_store.get_state_machine_version())
             .unwrap_or_default()
     }

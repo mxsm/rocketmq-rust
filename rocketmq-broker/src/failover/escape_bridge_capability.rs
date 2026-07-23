@@ -159,6 +159,45 @@ impl<MS: MessageStore> DerefMut for LegacyEscapeStoreOwner<MS> {
     }
 }
 
+/// Request-scoped read access to the legacy Store boundary.
+///
+/// The lease shares the owner already retained by `EscapeBridge`; creating it does not clone the
+/// underlying compatibility pointer. Long-lived Broker capabilities must keep a weak provider
+/// instead of retaining this lease.
+pub(crate) struct LegacyEscapeStoreReadLease<MS: MessageStore> {
+    owner: Arc<LegacyEscapeStoreOwner<MS>>,
+}
+
+impl<MS: MessageStore> Deref for LegacyEscapeStoreReadLease<MS> {
+    type Target = MS;
+
+    fn deref(&self) -> &Self::Target {
+        self.owner.store()
+    }
+}
+
+/// Request-scoped mutable access to the legacy Store boundary.
+///
+/// Mutable compatibility operations temporarily clone the legacy owner for the duration of one
+/// Admin request. The lease must not be stored in a long-lived service or task.
+pub(crate) struct LegacyEscapeStoreWriteLease<MS: MessageStore> {
+    owner: LegacyEscapeStoreOwner<MS>,
+}
+
+impl<MS: MessageStore> Deref for LegacyEscapeStoreWriteLease<MS> {
+    type Target = MS;
+
+    fn deref(&self) -> &Self::Target {
+        self.owner.store()
+    }
+}
+
+impl<MS: MessageStore> DerefMut for LegacyEscapeStoreWriteLease<MS> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.owner.store_mut()
+    }
+}
+
 /// Late-bound Store operations required by failover and offset processing.
 pub(crate) struct EscapeBridgeStoreCapability<MS: MessageStore> {
     current: Arc<RwLock<Option<Arc<LegacyEscapeStoreOwner<MS>>>>>,
@@ -187,6 +226,16 @@ impl<MS: MessageStore> EscapeBridgeStoreCapability<MS> {
 
     fn owner(&self) -> Result<Arc<LegacyEscapeStoreOwner<MS>>, MessageStoreUnavailable> {
         self.current.read().clone().ok_or(MessageStoreUnavailable)
+    }
+
+    pub(crate) fn read_lease(&self) -> Result<LegacyEscapeStoreReadLease<MS>, MessageStoreUnavailable> {
+        Ok(LegacyEscapeStoreReadLease { owner: self.owner()? })
+    }
+
+    pub(crate) fn write_lease(&self) -> Result<LegacyEscapeStoreWriteLease<MS>, MessageStoreUnavailable> {
+        Ok(LegacyEscapeStoreWriteLease {
+            owner: self.owner()?.as_ref().clone(),
+        })
     }
 
     pub(crate) fn with_store<R>(&self, operation: impl FnOnce(&MS) -> R) -> Result<R, MessageStoreUnavailable> {

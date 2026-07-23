@@ -640,7 +640,7 @@ mod tests {
     #[tokio::test]
     async fn query_consume_queue_returns_queue_data_and_online_subscription() {
         let runtime = new_test_runtime("query-consume-queue").await;
-        let mut admin = runtime.admin_runtime_for_test();
+        let admin = runtime.admin_runtime_for_test();
         let _ = admin
             .topic_config_manager()
             .update_topic_config(TopicConfig::with_queues("topic-a", 1, 1), 0);
