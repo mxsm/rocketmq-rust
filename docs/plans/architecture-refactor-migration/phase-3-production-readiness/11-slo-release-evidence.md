@@ -1,6 +1,7 @@
 # M11-12 R24 Soak/SLO 发布证据合同
 
-> Status: engineering package PASS；R20 container dynamic PASS；R21 cluster/SLO dynamic 与 Phase 3 signatures 保持开放
+> Status: engineering package PASS；R20 container dynamic PASS；R21 cluster/SLO dynamic 已转 follow-up；
+> R25 当前范围签署已由 Issue #8704 关闭
 
 ## 1. 结论与边界
 
@@ -23,7 +24,7 @@ R21、R25、M11 或 Phase 3 Gate。R20 容器动态已由后续
 | 六小时 dynamic soak | 待具备真实集群、镜像、Secret 与 Prometheus endpoint 后执行 |
 | R20 容器动态 Gate | 已关闭；run `30011167537`，完整证据见 [`11-container-dynamic-evidence.md`](11-container-dynamic-evidence.md) |
 | R21 fault/rolling/SLO Gate | 保持开放 |
-| R25 四方签署 | 保持开放 |
+| R25 四方签署 | 已关闭；见 [`11-current-scope-closeout-evidence.md`](11-current-scope-closeout-evidence.md) |
 
 R24 作为工程执行单元关闭时，31 项最小执行清单为 **19 项完成、12 项剩余**；R20 后续关闭后为
 **20 项完成、11 项剩余**。PR-M11-12 父工作包与正式进度仍为 **75/82**。

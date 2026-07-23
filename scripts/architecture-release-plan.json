@@ -34,13 +34,9 @@
       "R24",
       "R25"
     ],
-    "remaining_execution_items": [
-      "R25"
-    ],
+    "remaining_execution_items": [],
     "immediate_execution_items": [],
-    "closeout_execution_items": [
-      "R25"
-    ],
+    "closeout_execution_items": [],
     "excluded_platform_follow_up_items": [
       "R21"
     ],
@@ -57,6 +53,21 @@
       "R31"
     ],
     "constraint": "R19 target-hardware performance acceptance, R21 platform evidence, and the Phase 4 design remain available as separate follow-up proposals, but R19, R21, and R26-R31 do not contribute to architecture-refactor progress, remaining-task counts, or completion gates."
+  },
+  "current_scope_closeout": {
+    "item": "R25",
+    "status": "completed",
+    "candidate_commit": "1571e73fd458a7c493172787e6c2d001bd0dcba6",
+    "candidate_subject": "[ISSUE #8702]♻️Remove shared-mutation compatibility APIs (#8703)",
+    "signed_on": "2026-07-24",
+    "signatures": {
+      "ARCH": "approved",
+      "REV": "approved",
+      "TEST": "approved",
+      "HUMAN": "approved"
+    },
+    "scope": "R01-R18,R20,R22-R25",
+    "follow_up": "R19,R21,R26-R31"
   },
   "human_approval": {
     "scope": "R0, R1 and next-major relative release windows, external notification plan, and early removal of the R09/R18 shared-mutation compatibility surfaces",

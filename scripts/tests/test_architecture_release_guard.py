@@ -54,7 +54,8 @@ class ArchitectureReleaseGuardTest(unittest.TestCase):
             "R19/R21 and Phase 4 R26-R31 excluded",
             result.stdout,
         )
-        self.assertIn("current remaining: R25 closeout", result.stdout)
+        self.assertIn("R25 closeout: four-party approved", result.stdout)
+        self.assertIn("current remaining: none; current scope complete", result.stdout)
 
     def test_objective_scope_excludes_performance_platform_and_phase4_follow_up(
         self,
@@ -65,6 +66,10 @@ class ArchitectureReleaseGuardTest(unittest.TestCase):
         self.assertEqual(
             guard.REQUIRED_OBJECTIVE_SCOPE,
             self.plan["objective_scope"],
+        )
+        self.assertEqual(
+            guard.REQUIRED_CURRENT_SCOPE_CLOSEOUT,
+            self.plan["current_scope_closeout"],
         )
 
         invalid = copy.deepcopy(self.plan)
@@ -98,6 +103,15 @@ class ArchitectureReleaseGuardTest(unittest.TestCase):
                 in finding
                 for finding in findings
             ),
+            findings,
+        )
+
+        invalid = copy.deepcopy(self.plan)
+        invalid["current_scope_closeout"]["signatures"]["REV"] = "pending"
+        findings = []
+        guard.check_objective_scope(invalid, findings)
+        self.assertIn(
+            "R25 closeout must bind all four approvals to the frozen current-scope candidate",
             findings,
         )
 
