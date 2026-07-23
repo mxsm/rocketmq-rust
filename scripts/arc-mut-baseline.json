@@ -499,44 +499,6 @@
       "adr": "ADR-013"
     },
     {
-      "identity": "5b0ce4895f6edc75d47a6de2",
-      "path": "rocketmq-broker/src/failover/escape_bridge_capability.rs",
-      "symbol": "ArcMut",
-      "kind": "constructor",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "699a02b5525bda62309d1072",
-          "fingerprint": "065faebc51f3b7f1f1ced9c2",
-          "item": "fn new",
-          "line": 131
-        }
-      ],
-      "owner": "broker",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "e460a18e6440058bc50fdca5",
-      "path": "rocketmq-broker/src/failover/escape_bridge_capability.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "8cf896d0e7854a3d1ad89efe",
-          "fingerprint": "2aecfa7cb469c22fd22208e2",
-          "item": "struct LegacyEscapeStoreOwner",
-          "line": 127
-        }
-      ],
-      "owner": "broker",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
       "identity": "9df6be4b83a40eddcebc37be",
       "path": "rocketmq-store/src/message_store/local_file_message_store.rs",
       "symbol": "ArcMut",
@@ -566,7 +528,7 @@
           "id": "2fe46ccfd39fbe3e6291e485",
           "fingerprint": "36bf179549bc6842180b8dfd",
           "item": "fn set_message_store_arc",
-          "line": 1070
+          "line": 1076
         }
       ],
       "owner": "store",
@@ -648,7 +610,7 @@
           "id": "746542483fffcc017c2b2e5b",
           "fingerprint": "f03c49a9cf69fb66e5e947be",
           "item": "mod rocksdb_message_store",
-          "line": 39
+          "line": 40
         }
       ],
       "owner": "store",
@@ -667,25 +629,25 @@
           "id": "36361cc6ccd2b916d08d4dec",
           "fingerprint": "f188643beba2ccecef5f9da0",
           "item": "enum GenericMessageStore",
-          "line": 75
+          "line": 76
         },
         {
           "id": "f6a3c6581db220e1627690d6",
           "fingerprint": "131520c4ce58aed471b5ee64",
           "item": "enum GenericMessageStore",
-          "line": 78
+          "line": 79
         },
         {
           "id": "98f940f936e81a1ad86d929b",
           "fingerprint": "ae926679a6245276015ae367",
           "item": "fn local_file",
-          "line": 82
+          "line": 83
         },
         {
           "id": "3c5132015f64c8e2b0630601",
           "fingerprint": "f19745ebb78552b6636b9aca",
           "item": "fn rocksdb",
-          "line": 87
+          "line": 88
         }
       ],
       "owner": "store",

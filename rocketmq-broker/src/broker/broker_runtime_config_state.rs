@@ -98,6 +98,18 @@ impl BrokerRuntimeConfigState {
         });
         self.snapshot()
     }
+
+    pub(crate) fn apply_data_read_ahead(&self, enabled: bool) -> Arc<BrokerRuntimeConfigGeneration> {
+        self.current.rcu(|current| {
+            let mut store = current.store().as_ref().clone();
+            store.data_read_ahead_enable = enabled;
+            Arc::new(BrokerRuntimeConfigGeneration {
+                broker: Arc::clone(current.broker()),
+                store: Arc::new(store),
+            })
+        });
+        self.snapshot()
+    }
 }
 
 #[cfg(test)]
@@ -151,6 +163,25 @@ mod tests {
         assert_eq!(generation.broker().broker_identity.broker_id, 7);
         assert_eq!(generation.broker().listen_port, 30912);
         assert_eq!(generation.store().broker_role, BrokerRole::Slave);
+        assert_eq!(generation.store().ha_listen_port, 30913);
+    }
+
+    #[test]
+    fn read_ahead_generation_preserves_unrelated_fields() {
+        let broker = BrokerConfig {
+            listen_port: 30912,
+            ..BrokerConfig::default()
+        };
+        let store = MessageStoreConfig {
+            ha_listen_port: 30913,
+            ..MessageStoreConfig::default()
+        };
+        let state = BrokerRuntimeConfigState::new(Arc::new(broker), Arc::new(store));
+
+        let generation = state.apply_data_read_ahead(true);
+
+        assert_eq!(generation.broker().listen_port, 30912);
+        assert!(generation.store().data_read_ahead_enable);
         assert_eq!(generation.store().ha_listen_port, 30913);
     }
 

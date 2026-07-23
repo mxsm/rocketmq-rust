@@ -4713,14 +4713,46 @@ Cross-crate LocalFile test roots 随 Issue #8609 完成以下批量收口：
 | final gates | `cargo fmt --all -- --check`、workspace all-target/all-feature strict Clippy 与 `git diff --check` 通过；最终 Clippy 复用增量缓存并在 22 秒内完成，Windows linker stdout 与既有 future-incompatibility note 不受 `-D warnings` 管辖 |
 | reduced validation scope | 只验证四个直接 consumer 的代表行为、ArcMut 治理和一次最终 workspace 门禁；不重复 CommitLog recovery 全套、Store/Broker 全包测试、额外 package check/Clippy、runtime audit、M06、RocksDB matrix、telemetry、release、Rustdoc 或 routing gate。public doc 没有链接、示例或 feature-gated item，因此不增加独立 Rustdoc build |
 
+## M11-12bc107 实现
+
+Broker Store 私有 legacy owner 随 Issue #8635 完成以下收口：
+
+- `BrokerRuntimeInner.message_store` 直接持有标准 `Arc<OwnedMessageStore>`，删除
+  `LegacyEscapeStoreOwner<ArcMut<_>>` 的 constructor、字段传播与内部 clone；Broker composition root 仍是唯一
+  长期强 owner。
+- `EscapeBridgeStoreCapability` 只保存 `Weak<MS>`，请求期 `EscapeStoreReadLease` 与 Local/Rocks 共享 append
+  port 只在一次操作期间升级标准 Arc；provider detach 后新请求 fail closed，已接纳 lease 继续阻止生命周期独占访问。
+- MessageStore 的 read-mode、topic-delete 与 role-sync 收窄为共享借用；新增 Store 私有原子运行态发布当前
+  broker role/read-ahead，CommitLog read/append、Timer dequeue、offset correction 与 Reput 使用同一动态状态，
+  不以同步大锁、unsafe 可变别名或替代 shared-mutation wrapper 承载控制。
+- Broker config RCU generation 同步发布 Admin read-ahead 与 controller role，外部配置查询继续观察 live snapshot；
+  Local/Rocks 的初始化、HA role transition、topic deletion、CommitLog read mode 与 shutdown deadline 语义保持。
+- reviewed baseline 从 28/67 单调降至 26/65：production 11/18→9/16，test 保持 3/9，compatibility
+  保持 14/40；Broker production 2/2→0/0，Store production 保持 9/16。净删除 2 个 production
+  identities/occurrences，无 relocation、新 governed debt 或临时 approval。
+- R01 完成；31 项最小审查清单现为完成 14 项、剩余 17 项，正式进度仍为 75/82。
+
+## M11-12bc107 验证
+
+| 命令 | 结果 |
+|---|---|
+| affected checks / behavior | Store all-target check、Broker all-target/all-feature check 通过；Store role/timer/controller 2/2，Broker provider owner、shutdown admitted-read、Admin owner/read-mode、config generation、shared append 与 controller role 8/8，standard Arc source contract 1/1 通过 |
+| Proxy recursion regression | `cargo check -p rocketmq-proxy-local --all-targets --all-features` 通过；crate 保留 `recursion_limit = "256"`，完整嵌套 Broker worker future 不再触发 query-depth overflow |
+| reviewed baseline / runtime | `python scripts/arc_mut_guard.py` 与 enforcing runtime audit 通过；reviewed baseline 只删除原私有 owner 的 2 个 production identity/occurrence，28/67→26/65，无 relocation、新 debt 或临时 approval |
+| RocksDB specialized gate | Store/Broker rocksdb feature strict Clippy 通过；foundation 82/82、semantics 9/9、Broker rocksdb 21/21、pop_consumer 4/4 通过 |
+| final gates | `cargo fmt --all -- --check`、workspace all-target/all-feature strict Clippy 与 `git diff --check` 通过；Windows linker stdout 和既有 future-incompatibility note 不受 `-D warnings` 管辖 |
+| reduced validation scope | 不运行 Store/Broker 全量 lib suite、M06 mutation、dependency/release/performance/telemetry、Rustdoc 或 AGENTS routing；聚焦回归覆盖本切片全部 owner/control/role/read-mode 语义，RocksDB 专项覆盖受影响 backend，最终 workspace Clippy 覆盖完整 workspace 编译/lint |
+
 ## 剩余切片与 Gate
 
 2026-07-23 盘点将执行工作固化为 31 个最小可审查单元：16 个 production owner、2 个
-test/compatibility、7 个 M10/Phase 3 动态验收与签署、6 个 M12；R02、R03、R04、R05、R06、R07、R08、R12、R13、R15、R16 已完成，当前剩余 20 个，正式进度仍为 75/82。
+test/compatibility、7 个 M10/Phase 3 动态验收与签署、6 个 M12；R01～R08、R10、R12～R16 已完成，当前剩余
+17 个，正式进度仍为 75/82。
 完整逐项 checklist 见 `docs/plans/architecture-refactor-migration/REMAINING-TASKS.md`。
 
-1. Broker runtime root 已改为独占 `Box<BrokerRuntimeInner>`，production/test 完整 root clone 均已清零；bc65 删除 Local/Rocks concrete unsafe-wrapper 传播后，仅剩显式 `ArcMut` Store 组合根 capability carrier（4/8），随 R09～R11/R14 Store owner 安全化删除。
-2. Store 其余 StoreHandle/Local-Rocks/Timer owner（9/16）；Default/General/AutoSwitch HA composition root、replication-state callback、未共享 child、client/service runtime、replica-store capability、owned connection registry、窄 context/Weak lookup、direct delegate/exclusive init、confirm/epoch 发布与 connection runtime handle 已退出 `ArcMut`。ConsumeQueue、WAL/flush、Local root maintenance/read capability 等已完成切片保持关闭，剩余仅按 R09～R11/R14 及 compatibility 窗口继续收口。
+1. Broker production ArcMut 已清零（0/0）：runtime root 独占 `Box<BrokerRuntimeInner>`，Store root 直接持有标准 Arc，
+   EscapeBridge/Admin 只保存 Weak provider，生命周期使用 detach + `Arc::get_mut` 保持独占。
+2. Store 其余 StoreHandle/Local-Rocks/Timer owner（9/16）；Default/General/AutoSwitch HA composition root、replication-state callback、未共享 child、client/service runtime、replica-store capability、owned connection registry、窄 context/Weak lookup、direct delegate/exclusive init、confirm/epoch 发布与 connection runtime handle 已退出 `ArcMut`。ConsumeQueue、WAL/flush、Local root maintenance/read capability 等已完成切片保持关闭，剩余仅按 R09/R11 与转入 R18 的 Local/Timer 兼容窗口继续收口。
 3. Production `WeakArcMut` 已清零；继续迁移 test/compatibility 中受控使用并移除其余 nightly feature。公开 `arc_mut.rs`/re-export 的 destructive 删除受 next-major 两轮弃用与 Release Manager/HUMAN Gate 约束，不能静默重置 public API baseline。
 4. 对同一候选快照执行 stable feature matrix、Miri/Loom 可用切片、soak/SLO fault、dashboard/runbook、动态
    Kind/K3d/container、M10 固定硬件和 Human Gate。

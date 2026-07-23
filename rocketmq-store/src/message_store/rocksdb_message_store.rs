@@ -823,7 +823,7 @@ impl MessageStore for RocksDBMessageStore {
         self.local_file_store.slave_fall_behind_much()
     }
 
-    fn delete_topics(&mut self, delete_topics: Vec<&CheetahString>) -> i32 {
+    fn delete_topics(&self, delete_topics: Vec<&CheetahString>) -> i32 {
         for topic in &delete_topics {
             if let Err(error) = self.root.derived().delete_topic(topic.as_str()) {
                 warn!(topic = %topic, error = %error, "failed to delete RocksDB consume queue topic state");
@@ -985,6 +985,14 @@ impl MessageStore for RocksDBMessageStore {
         self.local_file_store.message_store_config_ref()
     }
 
+    fn current_broker_role(&self) -> BrokerRole {
+        self.local_file_store.current_broker_role()
+    }
+
+    fn data_read_ahead_enabled(&self) -> bool {
+        self.local_file_store.data_read_ahead_enabled()
+    }
+
     fn get_store_stats_service(&self) -> Arc<StoreStatsService> {
         self.local_file_store.get_store_stats_service()
     }
@@ -1009,7 +1017,7 @@ impl MessageStore for RocksDBMessageStore {
         self.local_file_store.get_commit_log_mut()
     }
 
-    fn set_commitlog_read_mode(&mut self, read_ahead_mode: i32) -> Result<(), StoreError> {
+    fn set_commitlog_read_mode(&self, read_ahead_mode: i32) -> Result<(), StoreError> {
         self.local_file_store.set_commitlog_read_mode(read_ahead_mode)
     }
 
@@ -1113,7 +1121,7 @@ impl MessageStore for RocksDBMessageStore {
         self.local_file_store.set_broker_init_max_offset(broker_init_max_offset);
     }
 
-    fn sync_broker_role(&mut self, broker_role: BrokerRole) {
+    fn sync_broker_role(&self, broker_role: BrokerRole) {
         self.local_file_store.sync_broker_role(broker_role);
     }
 

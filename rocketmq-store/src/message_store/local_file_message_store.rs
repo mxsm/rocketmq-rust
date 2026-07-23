@@ -158,6 +158,7 @@ use crate::message_store::recovery::RecoveryIndexRepairPolicy;
 use crate::message_store::recovery::RecoveryPhase;
 use crate::message_store::recovery::RecoveryPlan;
 use crate::message_store::recovery::RecoveryReport;
+use crate::message_store::runtime_state::StoreRuntimeState;
 use crate::queue::build_consume_queue::CommitLogDispatcherBuildConsumeQueue;
 use crate::queue::consume_queue_store::ConsumeQueueStoreTrait;
 use crate::queue::local_file_consume_queue_store::ConsumeQueueLookupHandle;
@@ -202,6 +203,7 @@ impl MessageArrivalCapability {
 #[derive(Clone)]
 struct ReputRuntimeContext {
     message_store_config: Arc<MessageStoreConfig>,
+    store_runtime_state: Arc<StoreRuntimeState>,
     max_delay_level: i32,
     delay_level_table: Arc<BTreeMap<i32, i64>>,
     store_stats_service: Arc<StoreStatsService>,
@@ -611,6 +613,7 @@ impl TimerMessageWriteHandle {
 ///Using local files to store message data, which is also the default method.
 pub struct LocalFileMessageStore {
     message_store_config: Arc<MessageStoreConfig>,
+    store_runtime_state: Arc<StoreRuntimeState>,
     composition: LocalStoreComposition,
     broker_config: Arc<BrokerConfig>,
     put_message_hook_list: HookRegistry<dyn PutMessageHook + Send + Sync>,
@@ -815,8 +818,10 @@ impl LocalFileMessageStore {
             max_delay_level,
             delay_level_table.clone(),
         );
+        let store_runtime_state = Arc::new(StoreRuntimeState::new(message_store_config.as_ref()));
         let mut commit_log = CommitLog::new(
             message_store_config.clone(),
+            Arc::clone(&store_runtime_state),
             broker_config.clone(),
             store_context,
             dispatcher.handle(),
@@ -866,6 +871,7 @@ impl LocalFileMessageStore {
         });
         Ok(Self {
             message_store_config: message_store_config.clone(),
+            store_runtime_state,
             composition: LocalStoreComposition::new(local_backend_config),
             broker_config,
             put_message_hook_list: HookRegistry::new(),
@@ -1064,7 +1070,7 @@ impl LocalFileMessageStore {
     pub fn is_transient_store_pool_enable(&self) -> bool {
         self.message_store_config.transient_store_pool_enable
             && (self.broker_config.enable_controller_mode
-                || self.message_store_config().broker_role != BrokerRole::Slave)
+                || self.store_runtime_state.broker_role() != BrokerRole::Slave)
     }
 
     pub fn set_message_store_arc(&mut self, message_store_arc: ArcMut<LocalFileMessageStore>) {
@@ -1287,7 +1293,7 @@ impl LocalFileMessageStore {
     }
 
     fn should_run_timer_dequeue(&self) -> bool {
-        self.message_store_config.is_timer_wheel_enable() && self.message_store_config.broker_role != BrokerRole::Slave
+        self.message_store_config.is_timer_wheel_enable() && self.store_runtime_state.broker_role() != BrokerRole::Slave
     }
 
     fn sync_timer_message_store_role(&self) {
@@ -1296,18 +1302,18 @@ impl LocalFileMessageStore {
         }
     }
 
-    fn refresh_controller_confirm_offset_after_role_change(&mut self) {
+    fn refresh_controller_confirm_offset_after_role_change(&self) {
         if !self.broker_config.enable_controller_mode {
             return;
         }
 
         let min_phy_offset = self.get_min_phy_offset();
         let max_phy_offset = self.get_max_phy_offset().max(min_phy_offset);
-        let next_confirm_offset = match self.message_store_config.broker_role {
+        let next_confirm_offset = match self.store_runtime_state.broker_role() {
             BrokerRole::Slave => self.commit_log.get_confirm_offset_directly(),
             _ => self.commit_log.get_confirm_offset(),
         };
-        self.set_confirm_offset(next_confirm_offset.clamp(min_phy_offset, max_phy_offset));
+        self.publish_confirm_offset(next_confirm_offset.clamp(min_phy_offset, max_phy_offset));
     }
 }
 
@@ -1949,7 +1955,8 @@ impl LocalFileMessageStore {
 
     pub fn next_offset_correction(&self, old_offset: i64, new_offset: i64) -> i64 {
         let mut next_offset = old_offset;
-        if self.message_store_config.broker_role != BrokerRole::Slave || self.message_store_config.offset_check_in_slave
+        if self.store_runtime_state.broker_role() != BrokerRole::Slave
+            || self.message_store_config.offset_check_in_slave
         {
             next_offset = new_offset;
         }
@@ -1974,6 +1981,7 @@ impl LocalFileMessageStore {
     fn reput_runtime_context(&self) -> ReputRuntimeContext {
         ReputRuntimeContext {
             message_store_config: self.message_store_config.clone(),
+            store_runtime_state: Arc::clone(&self.store_runtime_state),
             max_delay_level: self.max_delay_level,
             delay_level_table: Arc::new(self.delay_level_table_ref().clone()),
             store_stats_service: self.store_stats_service.clone(),
@@ -3696,7 +3704,7 @@ impl MessageStore for LocalFileMessageStore {
         }
     }
 
-    fn delete_topics(&mut self, delete_topics: Vec<&CheetahString>) -> i32 {
+    fn delete_topics(&self, delete_topics: Vec<&CheetahString>) -> i32 {
         let delete_topics = delete_topics.into_iter().cloned().collect::<Vec<_>>();
         self.delete_topics_inner(&delete_topics)
     }
@@ -3901,6 +3909,14 @@ impl MessageStore for LocalFileMessageStore {
         self.message_store_config.as_ref()
     }
 
+    fn current_broker_role(&self) -> BrokerRole {
+        self.store_runtime_state.broker_role()
+    }
+
+    fn data_read_ahead_enabled(&self) -> bool {
+        self.store_runtime_state.data_read_ahead_enable()
+    }
+
     fn get_store_stats_service(&self) -> Arc<StoreStatsService> {
         self.store_stats_service.clone()
     }
@@ -3925,9 +3941,8 @@ impl MessageStore for LocalFileMessageStore {
         &mut self.commit_log
     }
 
-    fn set_commitlog_read_mode(&mut self, read_ahead_mode: i32) -> Result<(), StoreError> {
+    fn set_commitlog_read_mode(&self, read_ahead_mode: i32) -> Result<(), StoreError> {
         let data_read_ahead_enable = read_ahead_mode == MADV_NORMAL;
-        Arc::make_mut(&mut self.message_store_config).data_read_ahead_enable = data_read_ahead_enable;
         self.commit_log.set_data_read_ahead_enable(data_read_ahead_enable);
         self.commit_log.scan_file_and_set_read_mode(read_ahead_mode);
         Ok(())
@@ -3966,7 +3981,7 @@ impl MessageStore for LocalFileMessageStore {
     }
 
     fn is_sync_master(&self) -> bool {
-        self.message_store_config.broker_role == BrokerRole::SyncMaster
+        self.store_runtime_state.broker_role() == BrokerRole::SyncMaster
     }
 
     fn assign_offset(&self, msg: &mut MessageExtBrokerInner) -> Result<(), StoreError> {
@@ -4065,8 +4080,7 @@ impl MessageStore for LocalFileMessageStore {
             .store(broker_init_max_offset, Ordering::SeqCst);
     }
 
-    fn sync_broker_role(&mut self, broker_role: BrokerRole) {
-        Arc::make_mut(&mut self.message_store_config).broker_role = broker_role;
+    fn sync_broker_role(&self, broker_role: BrokerRole) {
         self.commit_log.sync_broker_role(broker_role);
         self.refresh_controller_confirm_offset_after_role_change();
         self.sync_timer_message_store_role();
@@ -5298,7 +5312,7 @@ impl ReputMessageServiceInner {
                         std::cmp::Ordering::Greater => {
                             // Update stats before moving dispatch_request
                             if !self.runtime_context.message_store_config.duplication_enable
-                                && self.runtime_context.message_store_config.broker_role == BrokerRole::Slave
+                                && self.runtime_context.store_runtime_state.broker_role() == BrokerRole::Slave
                             {
                                 self.runtime_context
                                     .store_stats_service
@@ -5472,7 +5486,7 @@ impl ReputMessageServiceInner {
                     std::cmp::Ordering::Greater => {
                         // Update stats before moving dispatch_request
                         if !self.runtime_context.message_store_config.duplication_enable
-                            && self.runtime_context.message_store_config.broker_role == BrokerRole::Slave
+                            && self.runtime_context.store_runtime_state.broker_role() == BrokerRole::Slave
                         {
                             self.runtime_context
                                 .store_stats_service
@@ -8265,7 +8279,7 @@ mod tests {
     #[test]
     fn sync_broker_role_updates_timer_dequeue_state() {
         let temp_dir = tempdir().unwrap();
-        let mut store = new_configured_test_store_with_broker(
+        let store = new_configured_test_store_with_broker(
             &temp_dir,
             MessageStoreConfig {
                 timer_wheel_enable: true,
@@ -8282,9 +8296,11 @@ mod tests {
         assert!(!timer_message_store.is_should_running_dequeue());
 
         store.sync_broker_role(BrokerRole::SyncMaster);
+        assert_eq!(store.current_broker_role(), BrokerRole::SyncMaster);
         assert!(timer_message_store.is_should_running_dequeue());
 
         store.sync_broker_role(BrokerRole::Slave);
+        assert_eq!(store.current_broker_role(), BrokerRole::Slave);
         assert!(!timer_message_store.is_should_running_dequeue());
 
         store.sync_broker_role(BrokerRole::AsyncMaster);

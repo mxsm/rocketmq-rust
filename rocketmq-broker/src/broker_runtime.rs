@@ -113,7 +113,6 @@ use crate::config::rocksdb_manager::RocksDbBrokerConfigStorageLayout;
 use crate::controller::replicas_manager::ReplicasManager;
 use crate::failover::escape_bridge::EscapeBridge;
 use crate::failover::escape_bridge_capability::EscapeBridgePolicyState;
-use crate::failover::escape_bridge_capability::LegacyEscapeStoreOwner;
 use crate::filter::commit_log_dispatcher_calc_bit_map::CommitLogDispatcherCalcBitMap;
 use crate::filter::manager::consumer_filter_manager::ConsumerFilterManager;
 use crate::hook::batch_check_before_put_message::BatchCheckBeforePutMessageHook;
@@ -2240,13 +2239,11 @@ impl BrokerRuntime {
                 return false;
             }
             self.inner.timer_message_store = local_file_store.get_timer_message_store().cloned();
-            let message_store = Arc::new(LegacyEscapeStoreOwner::new(BrokerMessageStore::local_file(
-                local_file_store,
-            )));
+            let message_store = Arc::new(BrokerMessageStore::local_file(local_file_store));
             self.inner.broker_stats = Some(Arc::new(BrokerStats::from_manager(
                 self.inner.broker_stats_manager.clone(),
             )));
-            let put_message_preflight = message_store.store().put_message_preflight();
+            let put_message_preflight = message_store.put_message_preflight();
             self.inner.message_store = Some(message_store);
             let page_cache_busy_timeout_millis = message_store_config.os_page_cache_busy_timeout_mills;
             self.inner.broker_fast_failure.set_page_cache_busy_checker(move || {
@@ -2281,13 +2278,11 @@ impl BrokerRuntime {
                     }
                 };
                 self.inner.timer_message_store = rocksdb_message_store.get_timer_message_store().cloned();
-                let message_store = Arc::new(LegacyEscapeStoreOwner::new(BrokerMessageStore::rocksdb(
-                    rocksdb_message_store,
-                )));
+                let message_store = Arc::new(BrokerMessageStore::rocksdb(rocksdb_message_store));
                 self.inner.broker_stats = Some(Arc::new(BrokerStats::from_manager(
                     self.inner.broker_stats_manager.clone(),
                 )));
-                let put_message_preflight = message_store.store().put_message_preflight();
+                let put_message_preflight = message_store.put_message_preflight();
                 self.inner.message_store = Some(message_store);
                 let page_cache_busy_timeout_millis = message_store_config.os_page_cache_busy_timeout_mills;
                 self.inner.broker_fast_failure.set_page_cache_busy_checker(move || {
@@ -3879,7 +3874,7 @@ pub(crate) struct BrokerRuntimeInner<MS: MessageStore> {
     subscription_group_manager: Option<SubscriptionGroupManager>,
     consumer_filter_manager: Option<ConsumerFilterManager>,
     consumer_order_info_manager: Option<Arc<ConsumerOrderInfoManager>>,
-    message_store: Option<Arc<LegacyEscapeStoreOwner<MS>>>,
+    message_store: Option<Arc<MS>>,
     broker_stats: Option<Arc<BrokerStats<MS>>>,
     schedule_message_service: Option<Arc<ScheduleMessageService<MS>>>,
     timer_message_store: Option<Arc<TimerMessageStore>>,
@@ -4195,10 +4190,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
 
     #[inline]
     pub fn message_store_mut(&mut self) -> Option<&mut MS> {
-        self.message_store
-            .as_mut()
-            .and_then(Arc::get_mut)
-            .map(LegacyEscapeStoreOwner::store_mut)
+        self.message_store.as_mut().and_then(Arc::get_mut)
     }
 
     #[inline]
@@ -4388,12 +4380,12 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
 
     #[inline]
     pub fn message_store(&self) -> Option<&MS> {
-        self.message_store.as_deref().map(LegacyEscapeStoreOwner::store)
+        self.message_store.as_deref()
     }
 
     #[inline]
     pub(crate) fn message_store_ref(&self) -> Option<&MS> {
-        self.message_store.as_deref().map(LegacyEscapeStoreOwner::store)
+        self.message_store.as_deref()
     }
 
     #[inline]
@@ -4422,9 +4414,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             .message_store
             .as_mut()
             .expect("message store should be initialized before mutable access");
-        Arc::get_mut(owner)
-            .expect("message store lifecycle access requires the exclusive Broker owner")
-            .store_mut()
+        Arc::get_mut(owner).expect("message store lifecycle access requires the exclusive Broker owner")
     }
 
     #[inline]
@@ -6128,22 +6118,24 @@ accounts:
     #[tokio::test]
     async fn registering_message_store_hooks_does_not_retain_runtime_root() {
         let mut runtime = new_phase3_test_runtime("schedule-hook-ownership").await;
-        let store_strong_count_before = runtime
-            .inner
-            .message_store
-            .as_ref()
-            .expect("message store should be initialized")
-            .legacy_strong_count();
-
-        runtime.register_message_store_hook();
-
-        assert_eq!(
+        let store_strong_count_before = Arc::strong_count(
             runtime
                 .inner
                 .message_store
                 .as_ref()
-                .expect("message store should remain initialized")
-                .legacy_strong_count(),
+                .expect("message store should be initialized"),
+        );
+
+        runtime.register_message_store_hook();
+
+        assert_eq!(
+            Arc::strong_count(
+                runtime
+                    .inner
+                    .message_store
+                    .as_ref()
+                    .expect("message store should remain initialized"),
+            ),
             store_strong_count_before
         );
         let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
@@ -7073,11 +7065,6 @@ accounts:
             1,
             "BrokerRuntime must be the only long-lived Store lifecycle owner"
         );
-        assert_eq!(
-            message_store.legacy_strong_count(),
-            1,
-            "the weak provider must not clone the legacy compatibility pointer"
-        );
         assert!(capability.with_store(|_| ()).is_ok());
 
         let message_store = runtime
@@ -7089,7 +7076,7 @@ accounts:
             Ok(owner) => owner,
             Err(_) => panic!("released provider must leave one exclusive Store owner"),
         };
-        message_store.store_mut().shutdown().await;
+        message_store.shutdown().await;
         drop(message_store);
         assert!(
             capability.with_store(|_| ()).is_err(),
@@ -7216,7 +7203,6 @@ accounts:
             .as_ref()
             .expect("message store should remain initialized");
         assert_eq!(Arc::strong_count(message_store), 1);
-        assert_eq!(message_store.legacy_strong_count(), 1);
 
         runtime.shutdown_message_store_for_test().await;
         let _ = std::fs::remove_dir_all(temp_root);
@@ -7240,7 +7226,6 @@ accounts:
             .as_ref()
             .expect("message store should be initialized");
         let store_owner_count = Arc::strong_count(store_owner);
-        let legacy_owner_count = store_owner.legacy_strong_count();
         let admin = runtime.admin_runtime_for_test();
         let admin_clone = admin.clone();
 
@@ -7256,16 +7241,6 @@ accounts:
             store_owner_count,
             "Admin runtime instances must retain only a weak Store provider"
         );
-        assert_eq!(
-            runtime
-                .inner
-                .message_store
-                .as_ref()
-                .expect("message store should remain initialized")
-                .legacy_strong_count(),
-            legacy_owner_count,
-            "Admin runtime instances must not clone the legacy compatibility pointer"
-        );
         assert!(admin.set_commitlog_read_mode(MADV_NORMAL).is_ok());
         assert_eq!(admin.delete_topics(Vec::new()).expect("empty topic deletion"), 0);
         assert_eq!(
@@ -7273,10 +7248,10 @@ accounts:
                 .inner
                 .message_store
                 .as_ref()
-                .expect("message store should remain initialized")
-                .legacy_strong_count(),
-            legacy_owner_count,
-            "named Admin controls must release their temporary compatibility wrapper"
+                .map(Arc::strong_count)
+                .expect("message store should remain initialized"),
+            store_owner_count,
+            "named Admin controls must release their temporary Store lease"
         );
 
         let message_store = runtime
@@ -7288,7 +7263,7 @@ accounts:
             Ok(owner) => owner,
             Err(_) => panic!("released provider must leave one exclusive Store owner"),
         };
-        message_store.store_mut().shutdown().await;
+        message_store.shutdown().await;
         drop(message_store);
 
         assert!(admin.message_store().is_none());
@@ -9835,7 +9810,7 @@ accounts:
         let runtime_info = ha_service.get_runtime_info(0);
         assert!(runtime_info.master);
         assert_eq!(runtime_info.ha_client_runtime_info.master_addr, "");
-        assert_eq!(store.get_message_store_config().broker_role, BrokerRole::SyncMaster);
+        assert_eq!(store.current_broker_role(), BrokerRole::SyncMaster);
 
         let _ = std::fs::remove_dir_all(temp_root);
     }
@@ -9875,7 +9850,7 @@ accounts:
         let runtime_info = ha_service.get_runtime_info(0);
         assert!(!runtime_info.master);
         assert_eq!(runtime_info.ha_client_runtime_info.master_addr, "127.0.0.1:10911");
-        assert_eq!(store.get_message_store_config().broker_role, BrokerRole::Slave);
+        assert_eq!(store.current_broker_role(), BrokerRole::Slave);
 
         let _ = std::fs::remove_dir_all(temp_root);
     }

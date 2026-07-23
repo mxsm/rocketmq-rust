@@ -15,6 +15,7 @@
 pub mod local_file_message_store;
 mod owned_message_store;
 pub mod recovery;
+pub(crate) mod runtime_state;
 
 #[cfg(feature = "rocksdb_store")]
 pub mod rocksdb_message_store;
@@ -425,7 +426,7 @@ macro_rules! message_store_methods {
         delegate_store!(self, slave_fall_behind_much())
     }
 
-    fn delete_topics(&mut self, delete_topics: Vec<&CheetahString>) -> i32 {
+    fn delete_topics(&self, delete_topics: Vec<&CheetahString>) -> i32 {
         delegate_store!(self, delete_topics(delete_topics))
     }
 
@@ -565,6 +566,14 @@ macro_rules! message_store_methods {
         }
     }
 
+    fn current_broker_role(&self) -> BrokerRole {
+        delegate_store!(self, current_broker_role())
+    }
+
+    fn data_read_ahead_enabled(&self) -> bool {
+        delegate_store!(self, data_read_ahead_enabled())
+    }
+
     fn get_store_stats_service(&self) -> Arc<StoreStatsService> {
         delegate_store!(self, get_store_stats_service())
     }
@@ -589,7 +598,7 @@ macro_rules! message_store_methods {
         delegate_store!(self, get_commit_log_mut())
     }
 
-    fn set_commitlog_read_mode(&mut self, read_ahead_mode: i32) -> Result<(), StoreError> {
+    fn set_commitlog_read_mode(&self, read_ahead_mode: i32) -> Result<(), StoreError> {
         delegate_store!(self, set_commitlog_read_mode(read_ahead_mode))
     }
 
@@ -689,7 +698,7 @@ macro_rules! message_store_methods {
         delegate_store!(self, set_broker_init_max_offset(broker_init_max_offset));
     }
 
-    fn sync_broker_role(&mut self, broker_role: BrokerRole) {
+    fn sync_broker_role(&self, broker_role: BrokerRole) {
         delegate_store!(self, sync_broker_role(broker_role));
     }
 

@@ -1,14 +1,14 @@
 # 架构重构剩余任务盘点
 
 > 盘点日期：2026-07-23
-> 代码基线：Issue #8633 / M11-12bc106 完成后
+> 代码基线：Issue #8635 / M11-12bc107 完成后
 > 统计规则：82 个顶层 `PR-Mxx-yy` 工作包与 M11-12 内部实施切片分开统计，禁止重复计数。
 
 ## 结论
 
 正式工作包已完成 75/82，尚余 7 个：正在实施的 PR-M11-12，以及尚未开始的 PR-M12-01～PR-M12-06。
-Phase 1、Phase 2 和 10 个目标边界 crate 已完成；当前主要工程量已不在 crate 拆分，而在 Broker/Store 共享可变
-owner 清零、compatibility 删除和同一候选快照验收。
+Phase 1、Phase 2 和 10 个目标边界 crate 已完成；Broker production ArcMut 已清零，当前主要工程量已不在 crate
+拆分，而在 Store 剩余 facade/root carrier、compatibility 删除和同一候选快照验收。
 
 | 口径 | 已完成 | 剩余 | 说明 |
 |---|---:|---:|---|
@@ -16,34 +16,35 @@ owner 清零、compatibility 删除和同一候选快照验收。
 | 里程碑 | 9 | 3 个未关闭 | M10 待验收、M11 实施中、M12 未开始 |
 | Phase Gate | 2 | 2 | Phase 3、Phase 4 |
 | 目标边界 crate | 10 | 0 | 根 workspace 已为目标 32 package |
-| 最小可审查执行单元 | 13 | 18 | 31 项清单中的 R02～R08、R10、R12～R16 已完成 |
+| 最小可审查执行单元 | 14 | 17 | 31 项清单中的 R01～R08、R10、R12～R16 已完成 |
 
 按当前代码热点、兼容窗口和候选快照 Gate 进一步拆分的清单共 **31 个最小可审查单元**：
 16 个 production owner 收口、2 个 test/compatibility 收口、7 个 M10/Phase 3 动态验收与签署、6 个 M12
-工作包；R02、R03、R04、R05、R06、R07、R08、R10、R12、R13、R14、R15、R16 已完成，当前剩余 18 个。31 是执行估算，不是新的正式工作包总数；相邻单元可以合并到同一 PR，遇到高风险
+工作包；R01、R02、R03、R04、R05、R06、R07、R08、R10、R12、R13、R14、R15、R16 已完成，当前剩余 17 个。31 是执行估算，不是新的正式工作包总数；相邻单元可以合并到同一 PR，遇到高风险
 owner 也可以继续拆分，但 7 个正式工作包的统计口径保持不变。
 
 ## PR-M11-12 剩余实现
 
-Issue #8633 / M11-12bc106 后 reviewed ArcMut baseline 保持 28 identities / 67 occurrences：production
-11/18、test 3/9、compatibility 14/40。bc100 让 fast-failure 改持 `PutMessagePreflight`，bc101 让
+Issue #8635 / M11-12bc107 后 reviewed ArcMut baseline 为 26 identities / 65 occurrences：production
+9/16、test 3/9、compatibility 14/40。bc100 让 fast-failure 改持 `PutMessagePreflight`，bc101 让
 `BrokerAdminRuntime` 只持 `Weak<EscapeBridge>`，bc102 进一步让 `BrokerRuntimeInner` 成为唯一 Store 生命周期强
 owner，EscapeBridge 只保存标准 `Weak` provider；bc103 删除 Admin/processor 完整 Store 可变租约，仅保留三个具名
 Admin Store 操作；bc104 又让普通单条、批量和 Admin append 通过私有强类型共享端口执行，不再克隆完整可变
 Store carrier；bc105 让 controller role-change 不再跨 await 持完整 Store clone，并把 read-mode/topic-delete
 收窄为 owner 具名同步操作；bc106 删除 composition-root lifecycle lease，init/hook/start/shutdown 统一先解绑弱
-provider，再通过 `Arc::get_mut` 取得独占 owner，shutdown 还会在绝对 deadline 内等待已接纳读租约退出。
-production 全部分布在 Broker 与 Store。
+provider，再通过 `Arc::get_mut` 取得独占 owner，shutdown 还会在绝对 deadline 内等待已接纳读租约退出；
+bc107 最终删除私有 `LegacyEscapeStoreOwner<ArcMut<_>>`，Broker 改为直接持有标准 Arc Store，动态 role/read-ahead
+通过 Store 原子运行态发布。production 现全部位于 Store。
 
 | owner | 剩余 identity / occurrence | 完成条件 |
 |---|---:|---|
-| Broker | 2 / 2 | `BrokerRuntime.inner` 已改为独占 `Box<BrokerRuntimeInner>`，production 完整 runtime root clone 与 test root clone 均已清零；bc65 删除 Store 的共享引用可变逃逸后，Local/Rocks concrete wrapper 传播同步退出；bc98 删除无调用方的 `BrokerRuntimeInner::set_message_store` wrapper；bc99 以 owned composition 直接拥有 concrete Local/Rocks backend，删除两个内层 wrapper；bc100 让 fast-failure 只持 `PutMessagePreflight` 与超时标量；bc101 让 Admin runtime 只持弱 provider；bc102 让 Broker runtime 成为唯一 Store lifecycle 强 owner，EscapeBridge 改持标准 `Weak`，并把兼容 pointer 构造收回私有 owner factory；bc103 删除 Admin/processor 完整可变 Store lease，改为 append/read-mode/topic-delete 具名操作，并使只读 size-limit 路径不再克隆 mutable carrier；bc104 将单条、批量和 Admin append 迁入私有强类型共享端口；bc105 让 controller role-change 不再跨 await 持完整 Store clone，read-mode/topic-delete 只调用具名同步操作；bc106 删除通用 lifecycle lease，所有组合根生命周期修改必须先解绑 provider，再由 `Arc::get_mut` 证明 owner 独占，shutdown 在 deadline 内等待已接纳读租约退出。剩余 2 个 scanner occurrence 仅为该私有 owner 的 constructor 与字段，随只读 capability 提取删除 |
+| Broker | 0 / 0 | bc107 删除私有 `LegacyEscapeStoreOwner<ArcMut<_>>`，Broker 直接持有标准 `Arc<OwnedMessageStore>`；EscapeBridge/Admin 只保留 Weak provider，请求期读 lease 和 append port 只升级标准 Arc。read-mode/topic-delete/role-sync 使用线程安全窄运行态，生命周期仍先解绑 provider 再由 `Arc::get_mut` 证明独占。Broker production ArcMut 已清零，R01 完成 |
 | Store | 9 / 16 | BrokerStats observer、ConsumeQueueExt owner、HA notification capability、未共享 HA child、commit-to-flush 窄唤醒能力、HA confirm/epoch 原子发布、HA connection runtime handle、CommitLog shared disk-flush、标准 Arc cleanup/mapped-file flush/dispatcher/store-context/read capability、auto-switch replication-state/client construction 与单一 delegate Store owner 已收窄；LocalFileMessageStore 直接独占 CommitLog 且不再保留完整自身 `ArcMut`，Default HA client runtime 与 ConsumeQueueStore root 使用标准 Arc，`ArcConsumeQueue` 使用标准 Arc + 每队列 RwLock 且 guard 不跨 await，simple queue 只持窄上下文与标准 Weak lookup，完整 LocalStore compatibility carrier 已删除；commit-log create/reset/truncate 与消息追加已通过现有同步边界退出 `mut_from_ref`，bench lifecycle probe 已直接独占 LocalFile root 且不再需要临时 shared-owner factory，Default/General/AutoSwitch HA 组合根已使用标准 Arc/Weak 且 child 回指不再保活根；其余 MessageStore、Local/Rocks 与 Timer carrier 改为独占 owner、标准 Arc/Weak 或显式 actor/锁边界 |
 | compatibility | 14 / 40 | production Store `WeakArcMut` 已清零；继续迁移测试/兼容调用方，公开 `ArcMut`/`WeakArcMut`/`SyncUnsafeCellWrapper` 删除必须满足 next-major 两轮弃用与独立 HUMAN/Release Manager 批准，不能通过重置 API baseline 提前关闭 |
 
 建议按以下最小可审查批次继续推进；它们是 PR-M11-12 的内部切片，不增加 82 个顶层工作包总数：
 
-1. Broker aggregate：`BrokerRuntime.inner` 已改为独占 `Box<BrokerRuntimeInner>`（Broker 当前为 2/2），production 与 test 均不能再克隆完整 runtime root；Admin dispatcher、controller 周期、NameServer 注册、producer/consumer state observer、observability 与后台维护任务均持显式 context/runtime/manager/capability，MessageStore accessor 仅返回普通借用；Local/Rocks backend 已由 owned composition 直接拥有，fast-failure 已改持 `PutMessagePreflight`，Admin 与 EscapeBridge 均只持弱 Store provider，Broker runtime 是唯一长期 Store lifecycle owner；普通单条、批量和 Admin append 已通过私有强类型共享端口执行，controller role-change 不再跨 await 持完整 Store clone，read-mode/topic-delete 只调用具名同步操作。剩余私有 legacy owner 需继续提取 read/lifecycle capability 后替代。
+1. Broker aggregate 已完成（0/0）：`BrokerRuntime.inner` 独占 `Box<BrokerRuntimeInner>`，production/test 完整 runtime root clone 均已清零；Broker 直接持有标准 Arc Store，Admin/EscapeBridge 只持 Weak provider，请求期读/append capability 只升级标准 Arc；生命周期由解绑 provider + `Arc::get_mut` 保持独占，read-mode/topic-delete/role-sync 由线程安全窄运行态承担。
 2. Broker leaf：完成其余 admin/processor/revive/offset leaf owner；transaction bridge 已由 M11-12bc4 收窄，Producer/ColdData admin handler 已由 M11-12bc5 改持 live registry/standard Arc capability，Schedule hook 已由 M11-12bc6 改持三项显式能力，Topic Admin 已由 M11-12bc31 改为无状态 leaf，slave metadata synchronization 已由 M11-12bc50 改持显式 policy/弱 provider/晚绑定 capability。
 3. Store WAL：commit worker 已只持 `Notify` 唤醒能力，CommitLog disk-flush 已通过共享 receiver enqueue，CommitLog 已独占 MappedFileQueue/DefaultFlushManager/ConsumeQueue recovery completion，dispatcher worker 只持不可变快照 capability，LocalStore back-reference 已由原子发布的窄 context 替代，transaction 的直接 Store 兼容 owner 已删除；R13 已完成。
 4. Store queue：ConsumeQueueExt 与 trait-object handle 已改用每实例显式锁 owner；local/single queue 只持窄标准 Arc 上下文与 Weak lookup，完整 LocalStore carrier 已删除，R12 已完成。
@@ -57,13 +58,13 @@ production 全部分布在 Broker 与 Store。
 
 ## 执行层最小审查清单（31 项）
 
-> 本清单给出当前可执行下界。`identity / occurrence` 来自 Issue #8633 / M11-12bc106 后通过
-> `python scripts/arc_mut_guard.py` 验证的 reviewed baseline；production 16 项精确合计 Broker 2/2、Store
+> 本清单给出当前可执行下界。`identity / occurrence` 来自 Issue #8635 / M11-12bc107 后通过
+> `python scripts/arc_mut_guard.py` 验证的 reviewed baseline；production 16 项精确合计 Broker 0/0、Store
 > 9/16。test 条目会随相邻 production 切片同步下降，因此 R17 只在 production 收口后处理真实余量。
 
 ### Production owner（16 项）
 
-- [ ] R01 Broker runtime aggregate：`broker_runtime.rs` 与 Store lifecycle/capability carrier（2/2；bc60～bc63 已删除 Admin/controller/registration/state/background root carrier；bc64 将 `BrokerRuntime.inner` 改为独占 `Box`，43 处 test root clone 改为 owned admin runtime 或窄 manager/registry handle；bc65 删除 Local/Rocks concrete unsafe-wrapper 传播；bc98 删除无调用方的 `set_message_store` wrapper；Issue #8617 / bc99 新增 non-exhaustive owned composition 并让 Broker 直接拥有 concrete Local/Rocks backend，删除两个内层 constructor occurrence，同时保持公开 Generic facade 不变；Issue #8621 / bc100 让 fast-failure 只克隆 `PutMessagePreflight` 与超时标量；Issue #8623 / bc101 让 Admin runtime 只持 `Weak<EscapeBridge>`；Issue #8625 / bc102 让 Broker runtime 成为唯一 Store lifecycle 强 owner，EscapeBridge 改持标准 `Weak`，生命周期/请求可变操作仅取得短期 write lease，并将兼容 pointer 构造集中到私有 `LegacyEscapeStoreOwner` factory；Issue #8627 / bc103 删除 Admin/processor 完整可变 Store lease，改为 append/read-mode/topic-delete 具名操作，测试启动回归 composition root，只读 size-limit 路径不再克隆 mutable carrier；Issue #8629 / bc104 将普通单条、批量和 Admin append 迁入私有强类型共享端口，不再克隆完整 mutable carrier；Issue #8631 / bc105 让 controller role-change 不再跨 await 持完整 Store clone，read-mode/topic-delete 只调用 owner 具名同步操作；Issue #8633 / bc106 删除 composition-root lifecycle lease，init/hook/start/shutdown 先解绑 provider，再通过 `Arc::get_mut` 取得独占 owner，shutdown 在 deadline 内等待已接纳读租约退出。剩余仅该私有 owner 的 constructor 与字段，需继续提取只读 capability 后收口）。
+- [x] R01 Broker runtime aggregate：Issue #8635 / bc107 删除最后的私有 `LegacyEscapeStoreOwner<ArcMut<_>>` constructor/type reference；Broker 直接持有标准 `Arc<OwnedMessageStore>`，EscapeBridge/Admin 只保存 Weak provider，请求期只读 lease 与共享 append port 只升级标准 Arc。read-mode/topic-delete/role-sync 使用 Store 原子运行态，生命周期继续通过解绑 provider + `Arc::get_mut` 保持独占；Broker production 从 2/2 降至 0/0。
 - [x] R02 Broker Ack 内部 capability：Issue #8519 已删除 `ack_message_processor.rs` 的完整 runtime/revive ArcMut owner（3/5），改持显式 policy/capability，PopRevive task receiver 同步改为标准 Arc。
 - [x] R03 Broker send/reply：Issue #8523 已删除 `send_message_processor.rs` 与 `reply_message_processor.rs` 的完整 runtime/ArcMut owner（6/13），改持标准 Arc、热更新 policy、弱 Store 与显式 Topic/订阅/重平衡/统计/reply-channel capability；测试 glob 同步删除 2/2。
 - [x] R04 Broker POP：Issue #8531 已删除 `pop_message_processor.rs`、`pop_buffer_merge_service.rs`、`pop_revive_service.rs` 的 8 个 production identities/17 occurrences 与 3 个 test identities/3 occurrences；改持热更新 policy、显式 capability、弱 Store 与父 TaskGroup，`GetMessageResult` 改为独占借用，无 relocation 或新增 identity。
@@ -820,6 +821,16 @@ hook、processor dispatch 与 owner 释放后的 fail-closed 语义保持。revi
 occurrences（production 11/18、test 3/9、compatibility 14/40、Broker production 2/2、Store production
 9/16），无 identity relocation、新增债务或 baseline 变更。R01 尚未完成，下一切片提取剩余只读 capability 并
 删除私有 legacy owner；执行清单保持完成 13 项、剩余 18 项，正式进度仍为 75/82。
+
+M11-12bc107 随 Issue #8635 删除 Broker 最后的私有 legacy Store owner：`BrokerRuntimeInner` 直接持有
+`Arc<OwnedMessageStore>`，EscapeBridge 与 Admin runtime 只保存 Weak provider，`EscapeStoreReadLease` 与共享
+append port 只在单次请求期间升级标准 Arc。Local/Rocks/Owned 的 read-mode、topic-delete、role-sync 改为共享
+借用，动态 broker role 与 read-ahead 通过 Store 原子运行态发布给 CommitLog、Timer、offset correction 与 Reput；
+未引入同步大锁、unsafe 可变别名或替代 wrapper。生命周期仍先解绑 provider，再通过 `Arc::get_mut` 取得独占 Store；
+Broker 配置代际继续同步发布动态 role/read-ahead。reviewed baseline 从 28/67 降至 26/65（production
+11/18→9/16、test 保持 3/9、compatibility 保持 14/40），Broker production 从 2/2 降至 0/0，Store production
+保持 9/16；净删除 2 个 production identities/occurrences，无 relocation、新债务或临时 approval。R01 完成，
+执行清单现为完成 14 项、剩余 17 项，正式进度仍为 75/82。
 
 ## PR-M12 剩余工作包
 
