@@ -120,46 +120,6 @@ impl EscapeBridgePolicyState {
     }
 }
 
-/// Temporary Store lifecycle owner used while the Store facade is migrated by R09-R16.
-///
-/// Broker runtime keeps the only long-lived strong owner. Other capabilities retain a weak
-/// provider and upgrade it only for the duration of one operation.
-pub(crate) struct LegacyEscapeStoreOwner<MS: MessageStore>(rocketmq_rust::ArcMut<MS>);
-
-impl<MS: MessageStore> LegacyEscapeStoreOwner<MS> {
-    pub(crate) fn new(store: MS) -> Self {
-        Self(rocketmq_rust::ArcMut::new(store))
-    }
-
-    pub(crate) fn store(&self) -> &MS {
-        self.0.as_ref()
-    }
-
-    pub(crate) fn store_mut(&mut self) -> &mut MS {
-        self.0.as_mut()
-    }
-
-    fn set_commitlog_read_mode(&self, read_ahead_mode: i32) -> Result<(), LegacyStoreError> {
-        let mut store = self.0.clone();
-        store.set_commitlog_read_mode(read_ahead_mode)
-    }
-
-    fn delete_topics(&self, delete_topics: Vec<&CheetahString>) -> i32 {
-        let mut store = self.0.clone();
-        store.delete_topics(delete_topics)
-    }
-
-    fn sync_broker_role(&self, broker_role: BrokerRole) {
-        let mut store = self.0.clone();
-        store.sync_broker_role(broker_role);
-    }
-
-    #[cfg(test)]
-    pub(crate) fn legacy_strong_count(&self) -> usize {
-        self.0.strong_count()
-    }
-}
-
 struct SharedAppendOutcome {
     result: PutMessageResult,
     appended_watermark: i64,
@@ -168,63 +128,63 @@ struct SharedAppendOutcome {
 
 #[derive(Clone)]
 struct SharedStoreAppendPort {
-    owner: Weak<LegacyEscapeStoreOwner<OwnedMessageStore>>,
+    store: Weak<OwnedMessageStore>,
 }
 
 impl SharedStoreAppendPort {
-    fn new(owner: &Arc<LegacyEscapeStoreOwner<OwnedMessageStore>>) -> Self {
+    fn new(store: &Arc<OwnedMessageStore>) -> Self {
         Self {
-            owner: Arc::downgrade(owner),
+            store: Arc::downgrade(store),
         }
     }
 
-    fn owner(&self) -> Result<Arc<LegacyEscapeStoreOwner<OwnedMessageStore>>, MessageStoreUnavailable> {
-        self.owner.upgrade().ok_or(MessageStoreUnavailable)
+    fn store(&self) -> Result<Arc<OwnedMessageStore>, MessageStoreUnavailable> {
+        self.store.upgrade().ok_or(MessageStoreUnavailable)
     }
 
     async fn put_message(
         &self,
         message: MessageExtBrokerInner,
     ) -> Result<SharedAppendOutcome, MessageStoreUnavailable> {
-        let owner = self.owner()?;
-        let result = owner.store().put_message_shared(message).await;
+        let store = self.store()?;
+        let result = store.put_message_shared(message).await;
         Ok(SharedAppendOutcome {
             result,
-            appended_watermark: owner.store().get_max_phy_offset(),
-            durable_watermark: owner.store().get_flushed_where(),
+            appended_watermark: store.get_max_phy_offset(),
+            durable_watermark: store.get_flushed_where(),
         })
     }
 
     async fn put_messages(&self, batch: MessageExtBatch) -> Result<SharedAppendOutcome, MessageStoreUnavailable> {
-        let owner = self.owner()?;
-        let result = owner.store().put_messages_shared(batch).await;
+        let store = self.store()?;
+        let result = store.put_messages_shared(batch).await;
         Ok(SharedAppendOutcome {
             result,
-            appended_watermark: owner.store().get_max_phy_offset(),
-            durable_watermark: owner.store().get_flushed_where(),
+            appended_watermark: store.get_max_phy_offset(),
+            durable_watermark: store.get_flushed_where(),
         })
     }
 }
 
-/// Request-scoped read access to the legacy Store boundary.
+/// Request-scoped read access to the Store boundary.
 ///
-/// The lease upgrades the weak provider for one operation without cloning the underlying
-/// compatibility pointer. Long-lived Broker capabilities must not retain this lease.
-pub(crate) struct LegacyEscapeStoreReadLease<MS: MessageStore> {
-    owner: Arc<LegacyEscapeStoreOwner<MS>>,
+/// The lease upgrades the weak provider for one operation. Long-lived Broker
+/// capabilities must retain only the weak provider, not this lease.
+pub(crate) struct EscapeStoreReadLease<MS: MessageStore> {
+    store: Arc<MS>,
 }
 
-impl<MS: MessageStore> Deref for LegacyEscapeStoreReadLease<MS> {
+impl<MS: MessageStore> Deref for EscapeStoreReadLease<MS> {
     type Target = MS;
 
     fn deref(&self) -> &Self::Target {
-        self.owner.store()
+        self.store.as_ref()
     }
 }
 
 /// Late-bound Store operations required by failover and offset processing.
 pub(crate) struct EscapeBridgeStoreCapability<MS: MessageStore> {
-    current: Arc<RwLock<Option<Weak<LegacyEscapeStoreOwner<MS>>>>>,
+    current: Arc<RwLock<Option<Weak<MS>>>>,
     shared_append: Arc<RwLock<Option<SharedStoreAppendPort>>>,
 }
 
@@ -247,8 +207,8 @@ impl<MS: MessageStore> Default for EscapeBridgeStoreCapability<MS> {
 }
 
 impl<MS: MessageStore> EscapeBridgeStoreCapability<MS> {
-    fn bind(&self, owner: &Arc<LegacyEscapeStoreOwner<MS>>) {
-        *self.current.write() = Some(Arc::downgrade(owner));
+    fn bind(&self, store: &Arc<MS>) {
+        *self.current.write() = Some(Arc::downgrade(store));
     }
 
     pub(crate) fn detach(&self) {
@@ -256,7 +216,7 @@ impl<MS: MessageStore> EscapeBridgeStoreCapability<MS> {
         *self.shared_append.write() = None;
     }
 
-    fn owner(&self) -> Result<Arc<LegacyEscapeStoreOwner<MS>>, MessageStoreUnavailable> {
+    fn store(&self) -> Result<Arc<MS>, MessageStoreUnavailable> {
         self.current
             .read()
             .as_ref()
@@ -268,13 +228,13 @@ impl<MS: MessageStore> EscapeBridgeStoreCapability<MS> {
         self.shared_append.read().clone().ok_or(MessageStoreUnavailable)
     }
 
-    pub(crate) fn read_lease(&self) -> Result<LegacyEscapeStoreReadLease<MS>, MessageStoreUnavailable> {
-        Ok(LegacyEscapeStoreReadLease { owner: self.owner()? })
+    pub(crate) fn read_lease(&self) -> Result<EscapeStoreReadLease<MS>, MessageStoreUnavailable> {
+        Ok(EscapeStoreReadLease { store: self.store()? })
     }
 
     pub(crate) fn with_store<R>(&self, operation: impl FnOnce(&MS) -> R) -> Result<R, MessageStoreUnavailable> {
-        let owner = self.owner()?;
-        Ok(operation(owner.store()))
+        let store = self.store()?;
+        Ok(operation(store.as_ref()))
     }
 
     pub(crate) fn health_snapshot(&self) -> Result<LegacyStoreHealthSnapshot, MessageStoreUnavailable> {
@@ -336,8 +296,8 @@ impl<MS: MessageStore> EscapeBridgeStoreCapability<MS> {
         &self,
         request: HAConnectionStateNotificationRequest,
     ) -> Result<bool, MessageStoreUnavailable> {
-        let owner = self.owner()?;
-        let Some(ha_service) = owner.store().get_ha_service() else {
+        let store = self.store()?;
+        let Some(ha_service) = store.get_ha_service() else {
             return Ok(false);
         };
         ha_service.put_group_connection_state_request(request).await;
@@ -349,8 +309,7 @@ impl<MS: MessageStore> EscapeBridgeStoreCapability<MS> {
         master_ha_address: &CheetahString,
         master_address: &CheetahString,
     ) -> Result<(), MessageStoreUnavailable> {
-        let owner = self.owner()?;
-        let store = owner.store();
+        let store = self.store()?;
         store.update_ha_master_address(master_ha_address.as_str()).await;
         store.update_master_address(master_address);
         Ok(())
@@ -372,11 +331,11 @@ impl<MS: MessageStore> EscapeBridgeStoreCapability<MS> {
         master_address: Option<&CheetahString>,
         master_epoch: i32,
     ) -> HAResult<()> {
-        let owner = match self.owner() {
-            Ok(owner) => owner,
+        let store = match self.store() {
+            Ok(store) => store,
             Err(_) => return Ok(()),
         };
-        let Some(ha_service) = owner.store().get_ha_service().cloned() else {
+        let Some(ha_service) = store.get_ha_service().cloned() else {
             return Ok(());
         };
         let result = match target_role {
@@ -404,7 +363,7 @@ impl<MS: MessageStore> EscapeBridgeStoreCapability<MS> {
             }
         };
         result?;
-        owner.sync_broker_role(match target_role {
+        store.sync_broker_role(match target_role {
             BrokerReplicaRole::Master => BrokerRole::SyncMaster,
             BrokerReplicaRole::Slave => BrokerRole::Slave,
         });
@@ -416,8 +375,8 @@ impl<MS: MessageStore> EscapeBridgeStoreCapability<MS> {
     }
 
     pub(crate) async fn update_ha_master_address(&self, address: &str) -> Result<(), MessageStoreUnavailable> {
-        let owner = self.owner()?;
-        owner.store().update_ha_master_address(address).await;
+        let store = self.store()?;
+        store.update_ha_master_address(address).await;
         Ok(())
     }
 
@@ -433,9 +392,8 @@ impl<MS: MessageStore> EscapeBridgeStoreCapability<MS> {
         begin_timestamp: i64,
         end_timestamp: i64,
     ) -> Result<Option<QueryMessageResult>, MessageStoreUnavailable> {
-        let owner = self.owner()?;
-        Ok(owner
-            .store()
+        let store = self.store()?;
+        Ok(store
             .query_message(topic, key, max_num, begin_timestamp, end_timestamp)
             .await)
     }
@@ -455,13 +413,13 @@ impl<MS: MessageStore> EscapeBridgeStoreCapability<MS> {
     }
 
     pub(crate) fn set_commitlog_read_mode(&self, read_ahead_mode: i32) -> Result<(), LegacyStoreError> {
-        let owner = self.owner().map_err(|_| LegacyStoreError::NotStarted)?;
-        owner.set_commitlog_read_mode(read_ahead_mode)
+        let store = self.store().map_err(|_| LegacyStoreError::NotStarted)?;
+        store.set_commitlog_read_mode(read_ahead_mode)
     }
 
     pub(crate) fn delete_topics(&self, delete_topics: Vec<&CheetahString>) -> Result<i32, MessageStoreUnavailable> {
-        let owner = self.owner()?;
-        Ok(owner.delete_topics(delete_topics))
+        let store = self.store()?;
+        Ok(store.delete_topics(delete_topics))
     }
 
     pub(crate) fn min_offset(&self, topic: &CheetahString, queue_id: i32) -> Result<i64, MessageStoreUnavailable> {
@@ -484,11 +442,8 @@ impl<MS: MessageStore> EscapeBridgeStoreCapability<MS> {
         offset: i64,
         nums: i32,
     ) -> Result<Option<GetMessageResult>, MessageStoreUnavailable> {
-        let owner = self.owner()?;
-        Ok(owner
-            .store()
-            .get_message(group, topic, queue_id, offset, nums, None)
-            .await)
+        let store = self.store()?;
+        Ok(store.get_message(group, topic, queue_id, offset, nums, None).await)
     }
 
     pub(crate) async fn get_message_with_filter(
@@ -500,9 +455,8 @@ impl<MS: MessageStore> EscapeBridgeStoreCapability<MS> {
         nums: i32,
         message_filter: Option<ArcMessageFilter>,
     ) -> Result<Option<GetMessageResult>, MessageStoreUnavailable> {
-        let owner = self.owner()?;
-        Ok(owner
-            .store()
+        let store = self.store()?;
+        Ok(store
             .get_message(group, topic, queue_id, offset, nums, message_filter)
             .await)
     }
@@ -518,8 +472,7 @@ impl<MS: MessageStore> EscapeBridgeStoreCapability<MS> {
         max_msg_bytes: i32,
         message_filter: ArcMessageFilter,
     ) -> Result<Option<GetMessageResult>, MessageStoreUnavailable> {
-        let owner = self.owner()?;
-        let store = owner.store();
+        let store = self.store()?;
         Ok(store
             .get_message_with_size_limit(
                 group,
@@ -545,8 +498,7 @@ impl<MS: MessageStore> EscapeBridgeStoreCapability<MS> {
         &self,
         master_addr: &CheetahString,
     ) -> Result<(), MessageStoreUnavailable> {
-        let owner = self.owner()?;
-        let store = owner.store();
+        let store = self.store()?;
         store.update_ha_master_address(master_addr.as_str()).await;
         store.update_master_address(master_addr);
         Ok(())
@@ -571,9 +523,9 @@ impl<MS: MessageStore> EscapeBridgeStoreCapability<MS> {
 }
 
 impl EscapeBridgeStoreCapability<OwnedMessageStore> {
-    pub(crate) fn bind_owned(&self, owner: &Arc<LegacyEscapeStoreOwner<OwnedMessageStore>>) {
-        self.bind(owner);
-        *self.shared_append.write() = Some(SharedStoreAppendPort::new(owner));
+    pub(crate) fn bind_owned(&self, store: &Arc<OwnedMessageStore>) {
+        self.bind(store);
+        *self.shared_append.write() = Some(SharedStoreAppendPort::new(store));
     }
 }
 

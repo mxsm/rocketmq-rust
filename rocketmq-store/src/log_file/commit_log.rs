@@ -100,6 +100,7 @@ use crate::log_file::mapped_file::default_mapped_file_impl::LazyMmapStats;
 use crate::log_file::mapped_file::MappedFile;
 use crate::log_file::mapped_file::MappedFileAppend;
 use crate::message_store::local_file_message_store::CommitLogDispatchHandle;
+use crate::message_store::runtime_state::StoreRuntimeState;
 use crate::queue::consume_queue_store::ConsumeQueueStoreTrait;
 use crate::queue::local_file_consume_queue_store::ConsumeQueueStore;
 use crate::store::running_flags::RunningFlags;
@@ -419,6 +420,7 @@ impl CommitLogCleanupHandle {
 pub(crate) struct CommitLogReadHandle {
     mapped_file_queue: MappedFileQueueReadHandle,
     message_store_config: Arc<MessageStoreConfig>,
+    store_runtime_state: Arc<StoreRuntimeState>,
     broker_config: Arc<BrokerConfig>,
     store_context: CommitLogStoreContext,
     runtime_state: Arc<CommitLogRuntimeState>,
@@ -465,6 +467,7 @@ impl CommitLogReadHandle {
     pub(crate) fn get_confirm_offset(&self) -> i64 {
         resolve_commit_log_confirm_offset(
             self.message_store_config.as_ref(),
+            self.store_runtime_state.broker_role(),
             self.broker_config.as_ref(),
             &self.store_context,
             self.runtime_state.confirm_offset(),
@@ -475,7 +478,7 @@ impl CommitLogReadHandle {
 
     pub(crate) fn get_confirm_offset_directly(&self) -> i64 {
         if self.broker_config.enable_controller_mode {
-            if self.message_store_config.broker_role != BrokerRole::Slave
+            if self.store_runtime_state.broker_role() != BrokerRole::Slave
                 && !self.store_context.running_flags.is_fenced()
             {
                 let max_phy_offset = self.get_max_offset();
@@ -540,6 +543,7 @@ impl CommitLogReadHandle {
 pub(crate) struct CommitLogInternalMessageWriteHandle {
     append: MappedFileQueueAppendHandle,
     message_store_config: Arc<MessageStoreConfig>,
+    store_runtime_state: Arc<StoreRuntimeState>,
     enabled_append_prop_crc: bool,
     store_context: CommitLogStoreContext,
     runtime_state: Arc<CommitLogRuntimeState>,
@@ -588,7 +592,7 @@ impl CommitLogInternalMessageWriteHandle {
         let topic_queue_key = generate_key(&msg);
         let mapped_file = self.append.get_last_mapped_file(0, false);
         let need_assign_offset = !(self.message_store_config.duplication_enable
-            && self.message_store_config.broker_role != BrokerRole::Slave);
+            && self.store_runtime_state.broker_role() != BrokerRole::Slave);
         let (put_message_result, encoded_buff) = encode_message_ext(&msg, &self.message_store_config);
         if let Some(result) = put_message_result {
             return result;
@@ -845,6 +849,7 @@ fn publish_confirm_offset(runtime_state: &CommitLogRuntimeState, store_checkpoin
 
 fn resolve_commit_log_confirm_offset(
     message_store_config: &MessageStoreConfig,
+    broker_role: BrokerRole,
     broker_config: &BrokerConfig,
     store_context: &CommitLogStoreContext,
     stored_confirm_offset: i64,
@@ -852,7 +857,7 @@ fn resolve_commit_log_confirm_offset(
     flushed_where: i64,
 ) -> i64 {
     if broker_config.enable_controller_mode {
-        if message_store_config.broker_role == BrokerRole::Slave || store_context.running_flags.is_fenced() {
+        if broker_role == BrokerRole::Slave || store_context.running_flags.is_fenced() {
             return stored_confirm_offset;
         }
 
@@ -884,6 +889,7 @@ mod adapter {
     pub struct CommitLog {
         pub(super) mapped_file_queue: super::MappedFileQueue,
         pub(super) message_store_config: super::Arc<super::MessageStoreConfig>,
+        pub(super) store_runtime_state: super::Arc<super::StoreRuntimeState>,
         pub(super) broker_config: super::Arc<super::BrokerConfig>,
         pub(super) enabled_append_prop_crc: bool,
         pub(super) store_context: super::CommitLogStoreContext,
@@ -920,6 +926,7 @@ impl DerefMut for CommitLog {
 impl CommitLog {
     pub(crate) fn new(
         message_store_config: Arc<MessageStoreConfig>,
+        store_runtime_state: Arc<StoreRuntimeState>,
         broker_config: Arc<BrokerConfig>,
         store_context: CommitLogStoreContext,
         dispatcher: CommitLogDispatchHandle,
@@ -941,6 +948,7 @@ impl CommitLog {
             root: CommitLogRoot::new(CommitLogAdapter {
                 mapped_file_queue,
                 message_store_config: message_store_config.clone(),
+                store_runtime_state,
                 broker_config,
                 enabled_append_prop_crc,
                 store_context,
@@ -980,6 +988,7 @@ impl CommitLog {
         CommitLogReadHandle {
             mapped_file_queue: self.mapped_file_queue.read_handle(),
             message_store_config: self.message_store_config.clone(),
+            store_runtime_state: Arc::clone(&self.store_runtime_state),
             broker_config: self.broker_config.clone(),
             store_context: self.store_context.clone(),
             runtime_state: self.runtime_state.clone(),
@@ -990,6 +999,7 @@ impl CommitLog {
         CommitLogInternalMessageWriteHandle {
             append: self.mapped_file_queue.append_handle(),
             message_store_config: Arc::clone(&self.message_store_config),
+            store_runtime_state: Arc::clone(&self.store_runtime_state),
             enabled_append_prop_crc: self.enabled_append_prop_crc,
             store_context: self.store_context.clone(),
             runtime_state: Arc::clone(&self.runtime_state),
@@ -1688,7 +1698,7 @@ impl CommitLog {
         };
 
         let need_assign_offset = !(self.message_store_config.duplication_enable
-            && self.message_store_config.broker_role != BrokerRole::Slave);
+            && self.store_runtime_state.broker_role() != BrokerRole::Slave);
 
         // Encode message BEFORE acquiring any locks
         let (put_message_result, encoded_buff) = encode_message_ext(&msg, &self.message_store_config);
@@ -1997,7 +2007,7 @@ impl CommitLog {
         if self.message_store_config.duplication_enable {
             return false;
         }
-        if BrokerRole::SyncMaster != self.message_store_config.broker_role {
+        if BrokerRole::SyncMaster != self.store_runtime_state.broker_role() {
             // No need to check ha in async or slave broker
             return false;
         }
@@ -2365,6 +2375,7 @@ impl CommitLog {
     pub fn get_confirm_offset(&self) -> i64 {
         resolve_commit_log_confirm_offset(
             self.message_store_config.as_ref(),
+            self.store_runtime_state.broker_role(),
             self.broker_config.as_ref(),
             &self.store_context,
             self.runtime_state.confirm_offset(),
@@ -2375,7 +2386,7 @@ impl CommitLog {
 
     pub fn get_confirm_offset_directly(&self) -> i64 {
         if self.broker_config.enable_controller_mode {
-            if self.message_store_config.broker_role != BrokerRole::Slave
+            if self.store_runtime_state.broker_role() != BrokerRole::Slave
                 && !self.store_context.running_flags.is_fenced()
             {
                 let max_phy_offset = self.get_max_offset();
@@ -3065,16 +3076,16 @@ impl CommitLog {
             .await
     }
 
-    pub fn sync_broker_role(&mut self, broker_role: BrokerRole) {
-        Arc::make_mut(&mut self.message_store_config).broker_role = broker_role;
+    pub fn sync_broker_role(&self, broker_role: BrokerRole) {
+        self.store_runtime_state.set_broker_role(broker_role);
     }
 
-    pub fn set_data_read_ahead_enable(&mut self, enabled: bool) {
-        Arc::make_mut(&mut self.message_store_config).data_read_ahead_enable = enabled;
+    pub fn set_data_read_ahead_enable(&self, enabled: bool) {
+        self.store_runtime_state.set_data_read_ahead_enable(enabled);
     }
 
     pub fn is_data_read_ahead_enable(&self) -> bool {
-        self.message_store_config.data_read_ahead_enable
+        self.store_runtime_state.data_read_ahead_enable()
     }
 
     pub fn scan_file_and_set_read_mode(&self, read_ahead_mode: i32) -> usize {

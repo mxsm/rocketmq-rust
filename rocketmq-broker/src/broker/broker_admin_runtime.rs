@@ -32,6 +32,7 @@ use rocketmq_store::stats::broker_stats::BrokerStats;
 use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
 use rocketmq_store::store_error::StoreError;
 use rocketmq_store::timer::timer_message_store::TimerMessageStore;
+use rocketmq_store::utils::ffi::MADV_NORMAL;
 use tracing::warn;
 
 use crate::broker::broker_control_plane::BrokerControllerRuntime;
@@ -49,7 +50,7 @@ use crate::controller::replicas_manager::ReplicasManager;
 use crate::failover::escape_bridge::EscapeBridge;
 use crate::failover::escape_bridge::MessageStoreUnavailable;
 use crate::failover::escape_bridge_capability::EscapeBridgePolicyState;
-use crate::failover::escape_bridge_capability::LegacyEscapeStoreReadLease;
+use crate::failover::escape_bridge_capability::EscapeStoreReadLease;
 use crate::filter::manager::consumer_filter_manager::ConsumerFilterManager;
 use crate::long_polling::long_polling_service::pull_request_hold_service::PullRequestHoldService;
 use crate::offset::manager::consumer_offset_manager::ConsumerOffsetManager;
@@ -249,7 +250,7 @@ impl<MS: MessageStore> BrokerAdminRuntime<MS> {
         self.broker_config().broker_server_config.clone()
     }
 
-    pub(crate) fn message_store(&self) -> Option<LegacyEscapeStoreReadLease<MS>> {
+    pub(crate) fn message_store(&self) -> Option<EscapeStoreReadLease<MS>> {
         self.message_store_provider.upgrade()?.lease_message_store().ok()
     }
 
@@ -265,7 +266,9 @@ impl<MS: MessageStore> BrokerAdminRuntime<MS> {
         self.message_store_provider
             .upgrade()
             .ok_or(StoreError::NotStarted)?
-            .set_commitlog_read_mode(read_ahead_mode)
+            .set_commitlog_read_mode(read_ahead_mode)?;
+        self.config.apply_data_read_ahead(read_ahead_mode == MADV_NORMAL);
+        Ok(())
     }
 
     pub(crate) fn delete_topics(&self, delete_topics: Vec<&CheetahString>) -> Result<i32, MessageStoreUnavailable> {

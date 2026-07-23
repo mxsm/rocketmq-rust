@@ -511,7 +511,7 @@ pub trait MessageStoreInner: Sync + 'static {
     }
 
     /// Delete topic's consume queue file and unused stats.
-    fn delete_topics(&mut self, delete_topics: Vec<&CheetahString>) -> i32;
+    fn delete_topics(&self, delete_topics: Vec<&CheetahString>) -> i32;
 
     /// Clean unused topics which not in retain topic name set.
     fn clean_unused_topic(&self, retain_topics: &HashSet<String>) -> i32;
@@ -635,6 +635,19 @@ pub trait MessageStoreInner: Sync + 'static {
     /// Get the message store config
     fn get_message_store_config(&self) -> &MessageStoreConfig;
 
+    /// Return the role currently used by shared Store operations.
+    ///
+    /// Backends that support online role changes override this method with
+    /// their thread-safe runtime state.
+    fn current_broker_role(&self) -> BrokerRole {
+        self.get_message_store_config().broker_role
+    }
+
+    /// Return whether CommitLog sequential read-ahead is currently enabled.
+    fn data_read_ahead_enabled(&self) -> bool {
+        self.get_message_store_config().data_read_ahead_enable
+    }
+
     /// Get the statistics service
     fn get_store_stats_service(&self) -> Arc<StoreStatsService>;
 
@@ -652,7 +665,7 @@ pub trait MessageStoreInner: Sync + 'static {
     fn get_commit_log_mut(&mut self) -> &mut CommitLog;
 
     /// Update commitlog read mode and synchronize any cached store config snapshots.
-    fn set_commitlog_read_mode(&mut self, read_ahead_mode: i32) -> Result<(), StoreError>;
+    fn set_commitlog_read_mode(&self, read_ahead_mode: i32) -> Result<(), StoreError>;
 
     /// Get running flags
     fn get_running_flags(&self) -> &RunningFlags;
@@ -731,7 +744,7 @@ pub trait MessageStoreInner: Sync + 'static {
     /// Controller mode changes broker role outside the store. Implementations
     /// that cache `MessageStoreConfig` snapshots should update those copies so
     /// HA and commitlog logic observe the latest role.
-    fn sync_broker_role(&mut self, broker_role: BrokerRole);
+    fn sync_broker_role(&self, broker_role: BrokerRole);
 
     /// Calculate the checksum of a certain range of data.
     fn calc_delta_checksum(&self, from: i64, to: i64) -> Vec<u8>;

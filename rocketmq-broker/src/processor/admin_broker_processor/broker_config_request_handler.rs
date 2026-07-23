@@ -284,12 +284,7 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
         // broker config => broker config
         // default message store config => message store config
         let broker_config = self.broker_runtime_inner.broker_config();
-        let message_store_config = self
-            .broker_runtime_inner
-            .message_store()
-            .unwrap()
-            .get_message_store_config()
-            .clone();
+        let message_store_config = self.broker_runtime_inner.message_store_config();
         let broker_config_properties = broker_config.get_properties();
         let message_store_config_properties = message_store_config.get_properties();
         let combine_map = broker_config_properties
@@ -1043,13 +1038,11 @@ mod tests {
             .expect("set commitlog read mode should return response");
 
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
-        assert!(
-            admin
-                .message_store()
-                .expect("message store should exist")
-                .get_message_store_config()
-                .data_read_ahead_enable
-        );
+        assert!(admin.message_store_config().data_read_ahead_enable);
+        assert!(admin
+            .message_store()
+            .expect("message store should exist")
+            .data_read_ahead_enabled());
 
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
@@ -1064,13 +1057,11 @@ mod tests {
             .expect("set commitlog read mode should return response");
 
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
-        assert!(
-            !admin
-                .message_store()
-                .expect("message store should exist")
-                .get_message_store_config()
-                .data_read_ahead_enable
-        );
+        assert!(!admin.message_store_config().data_read_ahead_enable);
+        assert!(!admin
+            .message_store()
+            .expect("message store should exist")
+            .data_read_ahead_enabled());
 
         let _ = fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }

@@ -49,8 +49,7 @@ use tracing::warn;
 
 use crate::failover::escape_bridge_capability::EscapeBridgePolicyState;
 use crate::failover::escape_bridge_capability::EscapeBridgeStoreCapability;
-use crate::failover::escape_bridge_capability::LegacyEscapeStoreOwner;
-use crate::failover::escape_bridge_capability::LegacyEscapeStoreReadLease;
+use crate::failover::escape_bridge_capability::EscapeStoreReadLease;
 use crate::out_api::broker_outer_api::BrokerOuterAPI;
 use crate::topic::manager::topic_route_info_manager::TopicRouteInfoManager;
 use crate::transaction::queue::transactional_message_util::TransactionalMessageUtil;
@@ -143,7 +142,7 @@ impl<MS: MessageStore> EscapeBridge<MS> {
         self.message_store.detach();
     }
 
-    pub(crate) fn lease_message_store(&self) -> Result<LegacyEscapeStoreReadLease<MS>, MessageStoreUnavailable> {
+    pub(crate) fn lease_message_store(&self) -> Result<EscapeStoreReadLease<MS>, MessageStoreUnavailable> {
         self.message_store.read_lease()
     }
 
@@ -380,8 +379,8 @@ impl<MS: MessageStore> EscapeBridge<MS> {
 }
 
 impl EscapeBridge<OwnedMessageStore> {
-    pub(crate) fn bind_message_store(&self, owner: &Arc<LegacyEscapeStoreOwner<OwnedMessageStore>>) {
-        self.message_store.bind_owned(owner);
+    pub(crate) fn bind_message_store(&self, store: &Arc<OwnedMessageStore>) {
+        self.message_store.bind_owned(store);
     }
 }
 
@@ -793,6 +792,9 @@ mod tests {
         let capability_source = include_str!("escape_bridge_capability.rs");
 
         assert!(!capability_source.contains("LegacyEscapeStoreLifecycleLease"));
+        assert!(!capability_source.contains("LegacyEscapeStoreOwner"));
+        assert!(!capability_source.contains("rocketmq_rust::ArcMut"));
+        assert!(capability_source.contains("current: Arc<RwLock<Option<Weak<MS>>>>"));
         assert!(runtime_source.contains(".and_then(Arc::get_mut)"));
         let shutdown_source = runtime_source
             .split_once("// Store durability therefore cannot be starved by a slow background component.")
