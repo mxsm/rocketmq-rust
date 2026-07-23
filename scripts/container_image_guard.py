@@ -300,6 +300,7 @@ def audit_foundation(
         "scripts/service-image-contract.ps1",
         "target/container-foundation",
         "target/service-images",
+        "if: always()",
     ):
         if fragment not in workflow:
             findings.append(f"container workflow missing: {fragment}")
@@ -315,7 +316,7 @@ def audit_foundation(
         "cyclonedx-json",
         "--severity",
         "CRITICAL",
-        "--exit-code",
+        "--exit-code 0",
         "cosign",
         "sign-blob",
         "verify-blob",
@@ -324,6 +325,7 @@ def audit_foundation(
         "cosign sign --yes $PublishedImageDigest",
         "cosign verify --certificate-identity-regexp",
         "$policy.supply_chain.signature.published_digest_pattern",
+        "FixedVersion",
     ]
     for fragment in script_fragments:
         if fragment not in supply_script:
@@ -351,9 +353,11 @@ def audit_foundation(
         "find /usr/local/bin",
         "cyclonedx-json",
         "--severity CRITICAL",
+        "--exit-code 0",
         "cosign sign-blob",
         "cosign verify-blob",
         "Remove-Item -LiteralPath $privateKey",
+        "FixedVersion",
     ]
     for fragment in service_script_fragments:
         if fragment not in service_script:

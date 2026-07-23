@@ -112,6 +112,14 @@ class ContainerFoundationTests(unittest.TestCase):
         weakened = self.supply_script.replace("--severity", "--ignore-unfixed --severity", 1)
         self.assertTrue(any("must not ignore unfixed" in finding for finding in self.audit(supply_script=weakened)))
 
+        premature_exit = self.supply_script.replace("--exit-code 0", "--exit-code 1", 1)
+        self.assertTrue(any("--exit-code 0" in finding for finding in self.audit(supply_script=premature_exit)))
+
+    def test_partial_scan_evidence_upload_is_required(self) -> None:
+        workflow = self.workflow.replace("if: always()", "if: success()", 1)
+        findings = self.audit(workflow=workflow)
+        self.assertTrue(any("if: always()" in finding for finding in findings))
+
     def test_unregistered_dockerfile_or_restored_legacy_exception_is_rejected(self) -> None:
         dockerfiles = set(self.dockerfiles)
         dockerfiles.add("docker/Dockerfile.unreviewed")
