@@ -3087,16 +3087,20 @@ impl BrokerRuntime {
             self.scheduled_task_manager.add_fixed_rate_task_async(
                 Duration::from_millis(initial_delay),
                 period,
-                async move |ctx| {
-                    if ctx.is_cancelled() || broker_stats_shutdown.load(Ordering::Acquire) {
-                        return Ok(());
+                move |ctx| {
+                    let broker_stats_shutdown = Arc::clone(&broker_stats_shutdown);
+                    let broker_stats = broker_stats.clone();
+                    async move {
+                        if ctx.is_cancelled() || broker_stats_shutdown.load(Ordering::Acquire) {
+                            return Ok(());
+                        }
+                        if let Some(broker_stats) = broker_stats.as_ref() {
+                            broker_stats.record();
+                        } else {
+                            warn!("BrokerStats is not initialized");
+                        }
+                        Ok(())
                     }
-                    if let Some(broker_stats) = broker_stats.as_ref() {
-                        broker_stats.record();
-                    } else {
-                        warn!("BrokerStats is not initialized");
-                    }
-                    Ok(())
                 },
             ),
         );
@@ -3110,12 +3114,16 @@ impl BrokerRuntime {
             self.scheduled_task_manager.add_fixed_rate_task_async(
                 Duration::from_secs(10),
                 Duration::from_millis(flush_consumer_offset_interval),
-                async move |ctx| {
-                    if ctx.is_cancelled() || consumer_offset_shutdown.load(Ordering::Acquire) {
-                        return Ok(());
+                move |ctx| {
+                    let consumer_offset_shutdown = Arc::clone(&consumer_offset_shutdown);
+                    let consumer_offset_manager = consumer_offset_manager.clone();
+                    async move {
+                        if ctx.is_cancelled() || consumer_offset_shutdown.load(Ordering::Acquire) {
+                            return Ok(());
+                        }
+                        consumer_offset_manager.persist();
+                        Ok(())
                     }
-                    consumer_offset_manager.persist();
-                    Ok(())
                 },
             ),
         );
@@ -3128,22 +3136,27 @@ impl BrokerRuntime {
             self.scheduled_task_manager.add_fixed_rate_task_async(
                 Duration::from_secs(10),
                 Duration::from_secs(10),
-                async move |ctx| {
-                    if ctx.is_cancelled() || persistence_shutdown.load(Ordering::Acquire) {
-                        return Ok(());
-                    }
-                    if let Some(consumer_filter_manager) = consumer_filter_manager.as_ref() {
-                        consumer_filter_manager.persist();
-                    } else {
-                        warn!("ConsumerFilterManager is not initialized");
-                    }
-                    if let Some(consumer_order_info_manager) = consumer_order_info_manager.as_ref() {
-                        consumer_order_info_manager.persist();
-                    } else {
-                        warn!("ConsumerOrderInfoManager is not initialized");
-                    }
+                move |ctx| {
+                    let persistence_shutdown = Arc::clone(&persistence_shutdown);
+                    let consumer_filter_manager = consumer_filter_manager.clone();
+                    let consumer_order_info_manager = consumer_order_info_manager.clone();
+                    async move {
+                        if ctx.is_cancelled() || persistence_shutdown.load(Ordering::Acquire) {
+                            return Ok(());
+                        }
+                        if let Some(consumer_filter_manager) = consumer_filter_manager.as_ref() {
+                            consumer_filter_manager.persist();
+                        } else {
+                            warn!("ConsumerFilterManager is not initialized");
+                        }
+                        if let Some(consumer_order_info_manager) = consumer_order_info_manager.as_ref() {
+                            consumer_order_info_manager.persist();
+                        } else {
+                            warn!("ConsumerOrderInfoManager is not initialized");
+                        }
 
-                    Ok(())
+                        Ok(())
+                    }
                 },
             ),
         );
@@ -3154,11 +3167,14 @@ impl BrokerRuntime {
             self.scheduled_task_manager.add_fixed_rate_task_async(
                 Duration::from_mins(3),
                 Duration::from_mins(3),
-                async move |ctx| {
-                    if ctx.is_cancelled() || protect_broker_shutdown.load(Ordering::Acquire) {
-                        return Ok(());
+                move |ctx| {
+                    let protect_broker_shutdown = Arc::clone(&protect_broker_shutdown);
+                    async move {
+                        if ctx.is_cancelled() || protect_broker_shutdown.load(Ordering::Acquire) {
+                            return Ok(());
+                        }
+                        Ok(())
                     }
-                    Ok(())
                 },
             ),
         );
@@ -3170,17 +3186,21 @@ impl BrokerRuntime {
             self.scheduled_task_manager.add_fixed_rate_task_async(
                 Duration::from_secs(10),
                 Duration::from_secs(60),
-                async move |ctx| {
-                    if ctx.is_cancelled() || dispatch_report_shutdown.load(Ordering::Acquire) {
-                        return Ok(());
+                move |ctx| {
+                    let dispatch_report_shutdown = Arc::clone(&dispatch_report_shutdown);
+                    let dispatch_report_store = dispatch_report_store.clone();
+                    async move {
+                        if ctx.is_cancelled() || dispatch_report_shutdown.load(Ordering::Acquire) {
+                            return Ok(());
+                        }
+                        if let Err(_unavailable) = dispatch_report_store.with_store(|message_store| {
+                            let behind = message_store.dispatch_behind_bytes();
+                            info!("Dispatch task fall behind commit log {behind}bytes");
+                        }) {
+                            warn!("MessageStore is not initialized");
+                        }
+                        Ok(())
                     }
-                    if let Err(_unavailable) = dispatch_report_store.with_store(|message_store| {
-                        let behind = message_store.dispatch_behind_bytes();
-                        info!("Dispatch task fall behind commit log {behind}bytes");
-                    }) {
-                        warn!("MessageStore is not initialized");
-                    }
-                    Ok(())
                 },
             ),
         );
@@ -3211,28 +3231,34 @@ impl BrokerRuntime {
                 let slave_sync_shutdown = Arc::clone(&self.inner.shutdown);
                 let slave_synchronize = self.inner.slave_synchronize.clone();
                 let config_state = self.inner.config_state.clone();
-                let last_sync_time_ms = AtomicU64::new(current_millis());
+                let last_sync_time_ms = Arc::new(AtomicU64::new(current_millis()));
                 Self::log_scheduled_task_start(
                     "slave_synchronize",
                     self.scheduled_task_manager.add_fixed_rate_task_async(
                         Duration::from_secs(10),
                         Duration::from_secs(3),
-                        async move |ctx| {
-                            if ctx.is_cancelled() || slave_sync_shutdown.load(Ordering::Acquire) {
-                                return Ok(());
-                            }
-                            if current_millis() - last_sync_time_ms.load(Ordering::Relaxed) > 10_000 {
-                                if let Some(slave_synchronize) = slave_synchronize.as_ref() {
-                                    slave_synchronize.sync_all().await;
+                        move |ctx| {
+                            let slave_sync_shutdown = Arc::clone(&slave_sync_shutdown);
+                            let slave_synchronize = slave_synchronize.clone();
+                            let config_state = config_state.clone();
+                            let last_sync_time_ms = Arc::clone(&last_sync_time_ms);
+                            async move {
+                                if ctx.is_cancelled() || slave_sync_shutdown.load(Ordering::Acquire) {
+                                    return Ok(());
                                 }
-                                last_sync_time_ms.store(current_millis(), Ordering::Relaxed);
-                            }
-                            if config_state.store_snapshot().timer_wheel_enable {
-                                if let Some(slave_synchronize) = slave_synchronize.as_ref() {
-                                    slave_synchronize.sync_timer_check_point().await
+                                if current_millis() - last_sync_time_ms.load(Ordering::Relaxed) > 10_000 {
+                                    if let Some(slave_synchronize) = slave_synchronize.as_ref() {
+                                        slave_synchronize.sync_all().await;
+                                    }
+                                    last_sync_time_ms.store(current_millis(), Ordering::Relaxed);
                                 }
+                                if config_state.store_snapshot().timer_wheel_enable {
+                                    if let Some(slave_synchronize) = slave_synchronize.as_ref() {
+                                        slave_synchronize.sync_timer_check_point().await
+                                    }
+                                }
+                                Ok(())
                             }
-                            Ok(())
                         },
                     ),
                 );
@@ -3243,12 +3269,15 @@ impl BrokerRuntime {
                     self.scheduled_task_manager.add_fixed_rate_task_async(
                         Duration::from_secs(10),
                         Duration::from_secs(60),
-                        async move |ctx| {
-                            if ctx.is_cancelled() || master_diff_shutdown.load(Ordering::Acquire) {
-                                return Ok(());
+                        move |ctx| {
+                            let master_diff_shutdown = Arc::clone(&master_diff_shutdown);
+                            async move {
+                                if ctx.is_cancelled() || master_diff_shutdown.load(Ordering::Acquire) {
+                                    return Ok(());
+                                }
+                                warn!("print_master_and_slave_diff not implemented");
+                                Ok(())
                             }
-                            warn!("print_master_and_slave_diff not implemented");
-                            Ok(())
                         },
                     ),
                 );
@@ -3270,23 +3299,28 @@ impl BrokerRuntime {
                 self.scheduled_task_manager.add_fixed_rate_no_overlap_task_async(
                     Duration::from_secs(10),
                     Duration::from_secs(60),
-                    async move |ctx| {
-                        if ctx.is_cancelled() || namesrv_shutdown.load(Ordering::Acquire) {
-                            return Ok(());
-                        }
-                        let broker_config = namesrv_config.broker_snapshot();
-                        if broker_config.fetch_name_srv_addr_by_dns_lookup {
-                            if let Some(namesrv_addr) = &broker_config.namesrv_addr {
+                    move |ctx| {
+                        let namesrv_shutdown = Arc::clone(&namesrv_shutdown);
+                        let namesrv_config = namesrv_config.clone();
+                        let broker_outer_api = broker_outer_api.clone();
+                        async move {
+                            if ctx.is_cancelled() || namesrv_shutdown.load(Ordering::Acquire) {
+                                return Ok(());
+                            }
+                            let broker_config = namesrv_config.broker_snapshot();
+                            if broker_config.fetch_name_srv_addr_by_dns_lookup {
+                                if let Some(namesrv_addr) = &broker_config.namesrv_addr {
+                                    broker_outer_api
+                                        .update_name_server_address_list_by_dns_lookup(namesrv_addr.clone())
+                                        .await;
+                                }
+                            } else if let Some(namesrv_addr) = &broker_config.namesrv_addr {
                                 broker_outer_api
-                                    .update_name_server_address_list_by_dns_lookup(namesrv_addr.clone())
+                                    .update_name_server_address_list(namesrv_addr.clone())
                                     .await;
                             }
-                        } else if let Some(namesrv_addr) = &broker_config.namesrv_addr {
-                            broker_outer_api
-                                .update_name_server_address_list(namesrv_addr.clone())
-                                .await;
+                            Ok(())
                         }
-                        Ok(())
                     },
                 ),
             );
@@ -3593,24 +3627,31 @@ impl BrokerRuntime {
         Self::log_scheduled_task_start(
             "register_broker_to_namesrv",
             self.scheduled_task_manager
-                .add_fixed_rate_task_async(initial_delay, period, async move |_ctx| {
-                    if registration_shutdown.load(Ordering::Acquire) {
-                        return Ok(());
+                .add_fixed_rate_task_async(initial_delay, period, move |_ctx| {
+                    let registration_runtime = registration_runtime.clone();
+                    let registration_config = registration_config.clone();
+                    let registration_shutdown = Arc::clone(&registration_shutdown);
+                    let registration_should_start_time = Arc::clone(&registration_should_start_time);
+                    let registration_role_state = Arc::clone(&registration_role_state);
+                    async move {
+                        if registration_shutdown.load(Ordering::Acquire) {
+                            return Ok(());
+                        }
+                        let start_time = registration_should_start_time.load(Ordering::Relaxed);
+                        if current_millis() < start_time {
+                            info!("Register to namesrv after {}", start_time);
+                            return Ok(());
+                        }
+                        if registration_role_state.is_isolated() {
+                            info!("Skip register for broker is isolated");
+                            return Ok(());
+                        }
+                        let force_register = registration_config.broker_snapshot().force_register;
+                        registration_runtime
+                            .register_broker_all(true, false, force_register)
+                            .await;
+                        Ok(())
                     }
-                    let start_time = registration_should_start_time.load(Ordering::Relaxed);
-                    if current_millis() < start_time {
-                        info!("Register to namesrv after {}", start_time);
-                        return Ok(());
-                    }
-                    if registration_role_state.is_isolated() {
-                        info!("Skip register for broker is isolated");
-                        return Ok(());
-                    }
-                    let force_register = registration_config.broker_snapshot().force_register;
-                    registration_runtime
-                        .register_broker_all(true, false, force_register)
-                        .await;
-                    Ok(())
                 }),
         );
 
@@ -3623,12 +3664,15 @@ impl BrokerRuntime {
                 self.scheduled_task_manager.add_fixed_rate_task_async(
                     Duration::from_millis(1000),
                     Duration::from_millis(sync_broker_member_group_period),
-                    async move |ctx| {
-                        if ctx.is_cancelled() {
-                            return Ok(());
+                    move |ctx| {
+                        let controller_runtime = controller_runtime.clone();
+                        async move {
+                            if ctx.is_cancelled() {
+                                return Ok(());
+                            }
+                            controller_runtime.sync_broker_member_group().await;
+                            Ok(())
                         }
-                        controller_runtime.sync_broker_member_group().await;
-                        Ok(())
                     },
                 ),
             );
@@ -3651,12 +3695,16 @@ impl BrokerRuntime {
         Self::log_scheduled_task_start(
             "refresh_broker_metadata",
             self.scheduled_task_manager
-                .add_fixed_rate_task_async(initial_delay, period, async move |_ctx| {
-                    if metadata_shutdown.load(Ordering::Acquire) {
-                        return Ok(());
+                .add_fixed_rate_task_async(initial_delay, period, move |_ctx| {
+                    let metadata_shutdown = Arc::clone(&metadata_shutdown);
+                    let broker_outer_api = broker_outer_api.clone();
+                    async move {
+                        if metadata_shutdown.load(Ordering::Acquire) {
+                            return Ok(());
+                        }
+                        broker_outer_api.refresh_metadata();
+                        Ok(())
                     }
-                    broker_outer_api.refresh_metadata();
-                    Ok(())
                 }),
         );
         info!(
@@ -3673,12 +3721,15 @@ impl BrokerRuntime {
             self.scheduled_task_manager.add_fixed_rate_no_overlap_task_async(
                 Duration::from_millis(1000),
                 Duration::from_millis(broker_heartbeat_interval),
-                async move |ctx| {
-                    if ctx.is_cancelled() {
-                        return Ok(());
+                move |ctx| {
+                    let controller_runtime = controller_runtime.clone();
+                    async move {
+                        if ctx.is_cancelled() {
+                            return Ok(());
+                        }
+                        controller_runtime.run_heartbeat_cycle().await;
+                        Ok(())
                     }
-                    controller_runtime.run_heartbeat_cycle().await;
-                    Ok(())
                 },
             ),
         );
@@ -3692,12 +3743,15 @@ impl BrokerRuntime {
             self.scheduled_task_manager.add_fixed_rate_no_overlap_task_async(
                 Duration::from_millis(1000),
                 Duration::from_millis(period),
-                async move |ctx| {
-                    if ctx.is_cancelled() {
-                        return Ok(());
+                move |ctx| {
+                    let controller_runtime = controller_runtime.clone();
+                    async move {
+                        if ctx.is_cancelled() {
+                            return Ok(());
+                        }
+                        controller_runtime.refresh_controller_leader().await;
+                        Ok(())
                     }
-                    controller_runtime.refresh_controller_leader().await;
-                    Ok(())
                 },
             ),
         );
@@ -3711,12 +3765,15 @@ impl BrokerRuntime {
             self.scheduled_task_manager.add_fixed_rate_no_overlap_task_async(
                 Duration::from_millis(3000),
                 Duration::from_millis(period),
-                async move |ctx| {
-                    if ctx.is_cancelled() {
-                        return Ok(());
+                move |ctx| {
+                    let controller_runtime = controller_runtime.clone();
+                    async move {
+                        if ctx.is_cancelled() {
+                            return Ok(());
+                        }
+                        controller_runtime.sync_controller_replica_info().await;
+                        Ok(())
                     }
-                    controller_runtime.sync_controller_replica_info().await;
-                    Ok(())
                 },
             ),
         );

@@ -12,9 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![feature(async_fn_traits)]
-#![feature(unboxed_closures)]
-
 //! Runtime substrate for the RocketMQ Rust unified thread model.
 //!
 //! This crate standardizes how components own or borrow a Tokio runtime, how

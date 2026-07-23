@@ -134,6 +134,16 @@ class RepositoryStableSurfaceContracts(unittest.TestCase):
         self.assertEqual(source.count("= Ready<RocketMQResult<Option<RemotingCommand>>>"), 3)
         self.assertNotIn("= impl Future<Output = RocketMQResult<Option<RemotingCommand>>>", source)
 
+    def test_runtime_scheduler_uses_owned_stable_futures(self) -> None:
+        crate_root = (REPO_ROOT / "rocketmq-runtime" / "src" / "lib.rs").read_text(encoding="utf-8")
+        scheduler = (REPO_ROOT / "rocketmq-runtime" / "src" / "schedule.rs").read_text(encoding="utf-8")
+        self.assertNotIn("#![feature(async_fn_traits)]", crate_root)
+        self.assertNotIn("#![feature(unboxed_closures)]", crate_root)
+        self.assertNotIn("AsyncFnMut", scheduler)
+        self.assertEqual(scheduler.count("Fut: Future<Output = Result<()>> + Send + 'static"), 8)
+        self.assertIn("let mut task_fn = task_fn.lock().await;", scheduler)
+        self.assertIn("(task_fn)(token).await", scheduler)
+
 
 if __name__ == "__main__":
     unittest.main()
