@@ -12,9 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![allow(incomplete_features)]
-#![feature(impl_trait_in_assoc_type)]
-
 //! Comprehensive Tests and Examples for Processor Registry V2
 //!
 //! This file demonstrates:
@@ -24,6 +21,7 @@
 //! 4. Performance characteristics of each layer
 
 use std::future::Future;
+use std::pin::Pin;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -42,10 +40,8 @@ use rocketmq_remoting::runtime::processor_v2::RequestProcessorV2;
 struct EchoProcessor;
 
 impl RequestProcessorV2 for EchoProcessor {
-    // Use `impl Future` syntax (RPIT - Return Position Impl Trait)
-    // This is equivalent to defining an opaque type
     type Fut<'a>
-        = impl Future<Output = RocketMQResult<Option<RemotingCommand>>> + Send + 'a
+        = Pin<Box<dyn Future<Output = RocketMQResult<Option<RemotingCommand>>> + Send + 'a>>
     where
         Self: 'a;
 
@@ -55,13 +51,13 @@ impl RequestProcessorV2 for EchoProcessor {
         _ctx: ConnectionHandlerContext,
         _request: &'a mut RemotingCommand,
     ) -> Self::Fut<'a> {
-        async move {
+        Box::pin(async move {
             // Simple echo: create response
             let response = RemotingCommand::create_response_command()
                 .set_code(100)
                 .set_remark("Echo from EchoProcessor");
             Ok(Some(response))
-        }
+        })
     }
 }
 
@@ -93,7 +89,7 @@ impl MetricsProcessor {
 
 impl RequestProcessorV2 for MetricsProcessor {
     type Fut<'a>
-        = impl Future<Output = RocketMQResult<Option<RemotingCommand>>> + Send + 'a
+        = Pin<Box<dyn Future<Output = RocketMQResult<Option<RemotingCommand>>> + Send + 'a>>
     where
         Self: 'a;
 
@@ -103,7 +99,7 @@ impl RequestProcessorV2 for MetricsProcessor {
         _ctx: ConnectionHandlerContext,
         request: &'a mut RemotingCommand,
     ) -> Self::Fut<'a> {
-        async move {
+        Box::pin(async move {
             // Update metrics
             self.request_count.fetch_add(1, Ordering::Relaxed);
 
@@ -118,7 +114,7 @@ impl RequestProcessorV2 for MetricsProcessor {
             ));
 
             Ok(Some(response))
-        }
+        })
     }
 }
 
@@ -210,7 +206,7 @@ impl MockDatabase {
 
 impl RequestProcessorV2 for AsyncIoProcessor {
     type Fut<'a>
-        = impl Future<Output = RocketMQResult<Option<RemotingCommand>>> + Send + 'a
+        = Pin<Box<dyn Future<Output = RocketMQResult<Option<RemotingCommand>>> + Send + 'a>>
     where
         Self: 'a;
 
@@ -220,7 +216,7 @@ impl RequestProcessorV2 for AsyncIoProcessor {
         _ctx: ConnectionHandlerContext,
         request: &'a mut RemotingCommand,
     ) -> Self::Fut<'a> {
-        async move {
+        Box::pin(async move {
             // Perform async I/O
             let key = request.remark().as_ref().map(|s| s.as_str()).unwrap_or("default");
             let value = self.db_client.query(key).await;
@@ -229,7 +225,7 @@ impl RequestProcessorV2 for AsyncIoProcessor {
             let response = RemotingCommand::create_response_command().set_remark(format!("DB result: {}", value));
 
             Ok(Some(response))
-        }
+        })
     }
 }
 

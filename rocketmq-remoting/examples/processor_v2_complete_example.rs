@@ -12,9 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![allow(incomplete_features)]
-#![feature(impl_trait_in_assoc_type)]
-
 //! Complete Working Example: Processor Registry V2
 //!
 //! This example demonstrates a fully functional processor registry
@@ -25,6 +22,7 @@
 //! The actual processor implementations and tests are fully functional.
 
 use std::future::Future;
+use std::pin::Pin;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -65,7 +63,7 @@ impl SendMessageProcessor {
 
 impl RequestProcessorV2 for SendMessageProcessor {
     type Fut<'a>
-        = impl Future<Output = RocketMQResult<Option<RemotingCommand>>> + Send + 'a
+        = Pin<Box<dyn Future<Output = RocketMQResult<Option<RemotingCommand>>> + Send + 'a>>
     where
         Self: 'a;
 
@@ -75,7 +73,7 @@ impl RequestProcessorV2 for SendMessageProcessor {
         _ctx: ConnectionHandlerContext,
         request: &'a mut RemotingCommand,
     ) -> Self::Fut<'a> {
-        async move {
+        Box::pin(async move {
             // Increment counter
             self.send_count.fetch_add(1, Ordering::Relaxed);
 
@@ -94,7 +92,7 @@ impl RequestProcessorV2 for SendMessageProcessor {
                 .set_remark(format!("Message sent to {}", topic));
 
             Ok(Some(response))
-        }
+        })
     }
 }
 
@@ -123,7 +121,7 @@ impl PullMessageProcessor {
 
 impl RequestProcessorV2 for PullMessageProcessor {
     type Fut<'a>
-        = impl Future<Output = RocketMQResult<Option<RemotingCommand>>> + Send + 'a
+        = Pin<Box<dyn Future<Output = RocketMQResult<Option<RemotingCommand>>> + Send + 'a>>
     where
         Self: 'a;
 
@@ -133,7 +131,7 @@ impl RequestProcessorV2 for PullMessageProcessor {
         _ctx: ConnectionHandlerContext,
         request: &'a mut RemotingCommand,
     ) -> Self::Fut<'a> {
-        async move {
+        Box::pin(async move {
             // Increment counter
             self.pull_count.fetch_add(1, Ordering::Relaxed);
 
@@ -153,7 +151,7 @@ impl RequestProcessorV2 for PullMessageProcessor {
                 .set_remark(format!("Pulled from queue {}", queue_id));
 
             Ok(Some(response))
-        }
+        })
     }
 }
 
@@ -183,7 +181,7 @@ impl AdminProcessor {
 
 impl RequestProcessorV2 for AdminProcessor {
     type Fut<'a>
-        = impl Future<Output = RocketMQResult<Option<RemotingCommand>>> + Send + 'a
+        = Pin<Box<dyn Future<Output = RocketMQResult<Option<RemotingCommand>>> + Send + 'a>>
     where
         Self: 'a;
 
@@ -193,7 +191,7 @@ impl RequestProcessorV2 for AdminProcessor {
         _ctx: ConnectionHandlerContext,
         request: &'a mut RemotingCommand,
     ) -> Self::Fut<'a> {
-        async move {
+        Box::pin(async move {
             // Increment counter
             self.admin_count.fetch_add(1, Ordering::Relaxed);
 
@@ -212,7 +210,7 @@ impl RequestProcessorV2 for AdminProcessor {
                 .set_remark(format!("Admin operation {} completed", operation));
 
             Ok(Some(response))
-        }
+        })
     }
 }
 
