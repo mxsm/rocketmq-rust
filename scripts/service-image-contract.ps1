@@ -61,6 +61,7 @@ foreach ($command in @("docker", "syft", "trivy", "cosign", "git")) {
 $root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $policyPath = Join-Path $root "docker/container-policy.json"
 $policy = Get-Content -Raw -LiteralPath $policyPath | ConvertFrom-Json
+$tmpfsOptions = "$($policy.runtime.tmpfs_path):rw,noexec,nosuid,size=16m,uid=$($policy.runtime.uid),gid=$($policy.runtime.gid),mode=0700"
 $dockerfilePath = (Resolve-Path (Join-Path $root $policy.foundation_dockerfile)).Path
 $smokeConfigPath = (Resolve-Path (Join-Path $root $policy.smoke_config_directory)).Path
 $outputPath = Join-Path $root $OutputDirectory
@@ -135,7 +136,7 @@ try {
             throw "$serviceName runtime image contains binaries outside its owner boundary: $($ownedBinaries -join ',')"
         }
 
-        & docker run --rm --network none --read-only --tmpfs "$($policy.runtime.tmpfs_path):rw,noexec,nosuid,size=16m" $imageRef *> $null
+        & docker run --rm --network none --read-only --tmpfs $tmpfsOptions $imageRef *> $null
         if ($LASTEXITCODE -eq 0) {
             throw "$serviceName must fail closed when its required config mount is absent"
         }
@@ -148,11 +149,11 @@ try {
             "touch $($service.data_path)/data-write",
             "touch $($policy.runtime.tmpfs_path)/tmp-write"
         ) -join "; "
-        Invoke-Checked docker run --rm --network none --read-only --mount "type=volume,destination=$($policy.runtime.writable_data_path)" --tmpfs "$($policy.runtime.tmpfs_path):rw,noexec,nosuid,size=16m" --entrypoint /bin/sh $imageRef -c $permissionSmoke
+        Invoke-Checked docker run --rm --network none --read-only --mount "type=volume,destination=$($policy.runtime.writable_data_path)" --tmpfs $tmpfsOptions --entrypoint /bin/sh $imageRef -c $permissionSmoke
 
         $containerId = ""
         try {
-            $containerId = (Invoke-Captured docker run --detach --interactive --network none --read-only --mount "type=volume,destination=$($policy.runtime.writable_data_path)" --mount "type=bind,source=$smokeConfigPath,target=/etc/rocketmq,readonly" --tmpfs "$($policy.runtime.tmpfs_path):rw,noexec,nosuid,size=16m" $imageRef).Trim()
+            $containerId = (Invoke-Captured docker run --detach --interactive --network none --read-only --mount "type=volume,destination=$($policy.runtime.writable_data_path)" --mount "type=bind,source=$smokeConfigPath,target=/etc/rocketmq,readonly" --tmpfs $tmpfsOptions $imageRef).Trim()
             Start-Sleep -Seconds 5
             $running = (Invoke-Captured docker inspect --format "{{.State.Running}}" $containerId).Trim()
             if ($running -ne "true") {

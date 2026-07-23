@@ -328,6 +328,13 @@ def audit_foundation(
     for fragment in script_fragments:
         if fragment not in supply_script:
             findings.append(f"container supply-chain script missing: {fragment}")
+    tmpfs_ownership = (
+        "uid=$($policy.runtime.uid)",
+        "gid=$($policy.runtime.gid)",
+        "mode=0700",
+    )
+    if any(fragment not in supply_script for fragment in tmpfs_ownership):
+        findings.append("container supply-chain tmpfs must be owned by the non-root runtime identity")
     if supply_script.count("[string]$Executable") < 1 or "[string]$Command" in supply_script:
         findings.append("container supply-chain native runner must reserve -c for executable arguments")
     if "--ignore-unfixed" in supply_script:
@@ -351,6 +358,8 @@ def audit_foundation(
     for fragment in service_script_fragments:
         if fragment not in service_script:
             findings.append(f"service image contract script missing: {fragment}")
+    if any(fragment not in service_script for fragment in tmpfs_ownership):
+        findings.append("service image tmpfs must be owned by the non-root runtime identity")
     if service_script.count("[string]$Executable") < 2 or "[string]$Command" in service_script:
         findings.append("service image native runners must reserve -c for executable arguments")
     if "--ignore-unfixed" in service_script:

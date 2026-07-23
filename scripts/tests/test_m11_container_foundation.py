@@ -286,6 +286,16 @@ else {
         findings = self.audit(service_script=service_script)
         self.assertTrue(any("reserve -c" in finding for finding in findings))
 
+    def test_root_owned_tmpfs_regression_is_rejected(self) -> None:
+        ownership = ",uid=$($policy.runtime.uid),gid=$($policy.runtime.gid),mode=0700"
+        supply_script = self.supply_script.replace(ownership, "", 1)
+        findings = self.audit(supply_script=supply_script)
+        self.assertTrue(any("tmpfs must be owned" in finding for finding in findings))
+
+        service_script = self.service_script.replace(ownership, "", 1)
+        findings = self.audit(service_script=service_script)
+        self.assertTrue(any("tmpfs must be owned" in finding for finding in findings))
+
 
 if __name__ == "__main__":
     unittest.main()
