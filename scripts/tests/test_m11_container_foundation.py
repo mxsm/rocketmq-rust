@@ -271,6 +271,15 @@ class ContainerFoundationTests(unittest.TestCase):
         findings = self.audit(signal_sources=signal_sources)
         self.assertTrue(any("Ctrl-C-only" in finding for finding in findings))
 
+        signal_sources = dict(self.signal_sources)
+        signal_sources["mcp_stdio"] = signal_sources["mcp_stdio"].replace(
+            "serve_typed_with_lifecycle",
+            "serve_typed",
+            1,
+        )
+        findings = self.audit(signal_sources=signal_sources)
+        self.assertTrue(any("mcp_stdio entrypoint" in finding for finding in findings))
+
         stop_contract = "docker stop --signal SIGTERM --timeout $($policy.runtime.stop_grace_period_seconds)"
         weakened = self.service_script.replace(stop_contract, "docker kill", 1)
         self.assertTrue(
