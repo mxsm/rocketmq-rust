@@ -35,14 +35,14 @@ use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use rocketmq_store::filter::ArcMessageFilter;
 use rocketmq_store::ha::ha_connection_state_notification_request::HAConnectionStateNotificationRequest;
 use rocketmq_store::ha::ha_service::HAService;
+use rocketmq_store::message_store::OwnedMessageStore;
+use rocketmq_store::store_api_adapter::legacy_append_receipt;
 use rocketmq_store::store_api_adapter::LegacyAppendReceipt;
-use rocketmq_store::store_api_adapter::LegacyMessageStoreAdapter;
 use rocketmq_store::store_api_adapter::LegacyMessageStoreHealthAdapter;
 use rocketmq_store::store_api_adapter::LegacyStoreHealthSnapshot;
 use rocketmq_store::store_error::HAError;
 use rocketmq_store::store_error::HAResult;
 use rocketmq_store::store_error::StoreError as LegacyStoreError;
-use rocketmq_store_api::MessageAppender;
 use rocketmq_store_api::StoreError;
 use rocketmq_store_api::StoreErrorKind;
 use rocketmq_store_api::StoreHealth;
@@ -152,6 +152,52 @@ impl<MS: MessageStore> LegacyEscapeStoreOwner<MS> {
     }
 }
 
+struct SharedAppendOutcome {
+    result: PutMessageResult,
+    appended_watermark: i64,
+    durable_watermark: i64,
+}
+
+#[derive(Clone)]
+struct SharedStoreAppendPort {
+    owner: Weak<LegacyEscapeStoreOwner<OwnedMessageStore>>,
+}
+
+impl SharedStoreAppendPort {
+    fn new(owner: &Arc<LegacyEscapeStoreOwner<OwnedMessageStore>>) -> Self {
+        Self {
+            owner: Arc::downgrade(owner),
+        }
+    }
+
+    fn owner(&self) -> Result<Arc<LegacyEscapeStoreOwner<OwnedMessageStore>>, MessageStoreUnavailable> {
+        self.owner.upgrade().ok_or(MessageStoreUnavailable)
+    }
+
+    async fn put_message(
+        &self,
+        message: MessageExtBrokerInner,
+    ) -> Result<SharedAppendOutcome, MessageStoreUnavailable> {
+        let owner = self.owner()?;
+        let result = owner.store().put_message_shared(message).await;
+        Ok(SharedAppendOutcome {
+            result,
+            appended_watermark: owner.store().get_max_phy_offset(),
+            durable_watermark: owner.store().get_flushed_where(),
+        })
+    }
+
+    async fn put_messages(&self, batch: MessageExtBatch) -> Result<SharedAppendOutcome, MessageStoreUnavailable> {
+        let owner = self.owner()?;
+        let result = owner.store().put_messages_shared(batch).await;
+        Ok(SharedAppendOutcome {
+            result,
+            appended_watermark: owner.store().get_max_phy_offset(),
+            durable_watermark: owner.store().get_flushed_where(),
+        })
+    }
+}
+
 /// Request-scoped read access to the legacy Store boundary.
 ///
 /// The lease upgrades the weak provider for one operation without cloning the underlying
@@ -193,12 +239,14 @@ impl<MS: MessageStore> DerefMut for LegacyEscapeStoreWriteLease<MS> {
 /// Late-bound Store operations required by failover and offset processing.
 pub(crate) struct EscapeBridgeStoreCapability<MS: MessageStore> {
     current: Arc<RwLock<Option<Weak<LegacyEscapeStoreOwner<MS>>>>>,
+    shared_append: Arc<RwLock<Option<SharedStoreAppendPort>>>,
 }
 
 impl<MS: MessageStore> Clone for EscapeBridgeStoreCapability<MS> {
     fn clone(&self) -> Self {
         Self {
             current: Arc::clone(&self.current),
+            shared_append: Arc::clone(&self.shared_append),
         }
     }
 }
@@ -207,12 +255,13 @@ impl<MS: MessageStore> Default for EscapeBridgeStoreCapability<MS> {
     fn default() -> Self {
         Self {
             current: Arc::new(RwLock::new(None)),
+            shared_append: Arc::new(RwLock::new(None)),
         }
     }
 }
 
 impl<MS: MessageStore> EscapeBridgeStoreCapability<MS> {
-    pub(crate) fn bind(&self, owner: &Arc<LegacyEscapeStoreOwner<MS>>) {
+    fn bind(&self, owner: &Arc<LegacyEscapeStoreOwner<MS>>) {
         *self.current.write() = Some(Arc::downgrade(owner));
     }
 
@@ -222,6 +271,10 @@ impl<MS: MessageStore> EscapeBridgeStoreCapability<MS> {
             .as_ref()
             .and_then(Weak::upgrade)
             .ok_or(MessageStoreUnavailable)
+    }
+
+    fn shared_append(&self) -> Result<SharedStoreAppendPort, MessageStoreUnavailable> {
+        self.shared_append.read().clone().ok_or(MessageStoreUnavailable)
     }
 
     pub(crate) fn read_lease(&self) -> Result<LegacyEscapeStoreReadLease<MS>, MessageStoreUnavailable> {
@@ -241,21 +294,33 @@ impl<MS: MessageStore> EscapeBridgeStoreCapability<MS> {
         &self,
         message: MessageExtBrokerInner,
     ) -> Result<LegacyAppendReceipt, StoreError> {
-        let owner = self
-            .owner()
+        let append = self
+            .shared_append()
             .map_err(|_| StoreError::new(StoreErrorKind::NotStarted, StoreOperation::Append))?;
-        let mut store = owner.cloned_store();
-        LegacyMessageStoreAdapter::new(&mut *store)
-            .append_message(message)
+        let outcome = append
+            .put_message(message)
             .await
+            .map_err(|_| StoreError::new(StoreErrorKind::NotStarted, StoreOperation::Append))?;
+        Ok(legacy_append_receipt(
+            outcome.result,
+            outcome.appended_watermark,
+            outcome.durable_watermark,
+        ))
     }
 
     pub(crate) async fn append_batch(&self, batch: MessageExtBatch) -> Result<LegacyAppendReceipt, StoreError> {
-        let owner = self
-            .owner()
+        let append = self
+            .shared_append()
             .map_err(|_| StoreError::new(StoreErrorKind::NotStarted, StoreOperation::Append))?;
-        let mut store = owner.cloned_store();
-        LegacyMessageStoreAdapter::new(&mut *store).append_message(batch).await
+        let outcome = append
+            .put_messages(batch)
+            .await
+            .map_err(|_| StoreError::new(StoreErrorKind::NotStarted, StoreOperation::Append))?;
+        Ok(legacy_append_receipt(
+            outcome.result,
+            outcome.appended_watermark,
+            outcome.durable_watermark,
+        ))
     }
 
     pub(crate) fn append_progress(&self) -> Result<(i64, i64), MessageStoreUnavailable> {
@@ -396,9 +461,7 @@ impl<MS: MessageStore> EscapeBridgeStoreCapability<MS> {
         &self,
         message: MessageExtBrokerInner,
     ) -> Result<PutMessageResult, MessageStoreUnavailable> {
-        let owner = self.owner()?;
-        let mut store = owner.cloned_store();
-        Ok(store.put_message(message).await)
+        Ok(self.shared_append()?.put_message(message).await?.result)
     }
 
     pub(crate) fn set_commitlog_read_mode(&self, read_ahead_mode: i32) -> Result<(), LegacyStoreError> {
@@ -514,6 +577,13 @@ impl<MS: MessageStore> EscapeBridgeStoreCapability<MS> {
                 .map(|timer_store| (timer_store.get_dequeue_behind(), timer_store.get_enqueue_behind()))
                 .unwrap_or((0, 0))
         })
+    }
+}
+
+impl EscapeBridgeStoreCapability<OwnedMessageStore> {
+    pub(crate) fn bind_owned(&self, owner: &Arc<LegacyEscapeStoreOwner<OwnedMessageStore>>) {
+        self.bind(owner);
+        *self.shared_append.write() = Some(SharedStoreAppendPort::new(owner));
     }
 }
 
