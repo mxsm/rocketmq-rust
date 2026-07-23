@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -86,6 +87,7 @@ def audit_foundation(
     service_script: str = "",
     signal_sources: dict[str, str] | None = None,
     dockerignore: str = "",
+    smoke_configs: dict[str, str] | None = None,
 ) -> list[str]:
     findings: list[str] = []
     if policy.get("schema_version") != 1:
@@ -106,6 +108,19 @@ def audit_foundation(
         findings.append(f"registered Dockerfile does not exist: {path}")
     if re.search(r"(?m)^\s*(?:tests/|\*\*/tests/)\s*$", dockerignore):
         findings.append("Docker build context must preserve explicit Cargo test targets")
+    parsed_smoke_configs: dict[str, dict[str, Any]] = {}
+    for name, source in (smoke_configs or {}).items():
+        try:
+            parsed_smoke_configs[name] = tomllib.loads(source)
+        except tomllib.TOMLDecodeError as error:
+            findings.append(f"service smoke config is invalid TOML: {name}: {error}")
+    controller_source = (smoke_configs or {}).get("controller.toml")
+    if controller_source is None:
+        findings.append("controller smoke config is missing")
+    elif "controller.toml" in parsed_smoke_configs:
+        expected_peer = [{"id": 1, "addr": "127.0.0.1:60110"}]
+        if parsed_smoke_configs["controller.toml"].get("raftPeers") != expected_peer:
+            findings.append("controller smoke config must retain its single-node Raft peer")
 
     builder_ref = policy["base_images"]["builder"]["reference"]
     runtime_ref = policy["base_images"]["runtime"]["reference"]
@@ -424,6 +439,10 @@ def main() -> int:
             name: (ROOT / path).read_text(encoding="utf-8") for name, path in policy["signal_sources"].items()
         }
         dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8")
+        smoke_config_directory = ROOT / policy["smoke_config_directory"]
+        smoke_configs = {
+            path.name: path.read_text(encoding="utf-8") for path in smoke_config_directory.glob("*.toml")
+        }
         findings = audit_foundation(
             policy,
             dockerfile,
@@ -433,6 +452,7 @@ def main() -> int:
             service_script,
             signal_sources,
             dockerignore,
+            smoke_configs,
         )
     except (OSError, KeyError, TypeError, json.JSONDecodeError) as error:
         print(f"CONTAINER_IMAGE_GUARD_FAILED {error}", file=sys.stderr)
