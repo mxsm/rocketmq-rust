@@ -16,8 +16,11 @@ from __future__ import annotations
 
 import copy
 import importlib.util
+import json
+import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -191,6 +194,97 @@ class ContainerFoundationTests(unittest.TestCase):
 
         weakened = self.service_script.replace("docker stop --signal SIGTERM --timeout 30", "docker kill", 1)
         self.assertTrue(any("docker stop --signal SIGTERM" in finding for finding in self.audit(service_script=weakened)))
+
+    def test_native_dash_c_arguments_are_preserved_by_real_script_helpers(self) -> None:
+        powershell = shutil.which("pwsh") or shutil.which("powershell")
+        self.assertIsNotNone(powershell, "PowerShell is required to validate container scripts")
+        payload = "set -eu; test native-argument-preserved = native-argument-preserved"
+        harness = r"""
+param(
+    [string]$SourcePath,
+    [string]$FunctionName,
+    [string]$PythonPath,
+    [string]$OutputPath,
+    [string]$Payload
+)
+$ErrorActionPreference = "Stop"
+$tokens = $null
+$parseErrors = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile(
+    $SourcePath,
+    [ref]$tokens,
+    [ref]$parseErrors
+)
+if ($parseErrors.Count -ne 0) {
+    throw "failed to parse source helper: $($parseErrors[0].Message)"
+}
+$definition = $ast.Find({
+    param($node)
+    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+        $node.Name -eq $FunctionName
+}, $true)
+if ($null -eq $definition) {
+    throw "missing helper: $FunctionName"
+}
+Invoke-Expression $definition.Extent.Text
+if ($FunctionName -eq "Invoke-Checked") {
+    Invoke-Checked $PythonPath -c `
+        'import json,pathlib,sys; pathlib.Path(sys.argv[2]).write_text(json.dumps(sys.argv[1:2]))' `
+        $Payload $OutputPath
+}
+elseif ($FunctionName -eq "Invoke-Captured") {
+    $captured = Invoke-Captured $PythonPath -c 'import sys; sys.stdout.write(sys.argv[1])' $Payload
+    [System.IO.File]::WriteAllText($OutputPath, $captured)
+}
+else {
+    throw "unsupported helper: $FunctionName"
+}
+"""
+        cases = (
+            ("container-supply-chain.ps1", "Invoke-Checked", [payload]),
+            ("service-image-contract.ps1", "Invoke-Checked", [payload]),
+            ("service-image-contract.ps1", "Invoke-Captured", payload),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            temporary = Path(directory)
+            harness_path = temporary / "native-argument-harness.ps1"
+            harness_path.write_text(harness, encoding="utf-8")
+            for index, (source_name, function_name, expected) in enumerate(cases):
+                with self.subTest(source=source_name, helper=function_name):
+                    output_path = temporary / f"result-{index}.json"
+                    result = subprocess.run(
+                        [
+                            powershell,
+                            "-NoProfile",
+                            "-File",
+                            str(harness_path),
+                            str(ROOT / "scripts" / source_name),
+                            function_name,
+                            sys.executable,
+                            str(output_path),
+                            payload,
+                        ],
+                        cwd=ROOT,
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    self.assertEqual(0, result.returncode, result.stderr)
+                    actual = (
+                        json.loads(output_path.read_text(encoding="utf-8"))
+                        if isinstance(expected, list)
+                        else output_path.read_text(encoding="utf-8")
+                    )
+                    self.assertEqual(expected, actual)
+
+    def test_native_runner_parameter_collision_is_rejected(self) -> None:
+        supply_script = self.supply_script.replace("[string]$Executable", "[string]$Command", 1)
+        findings = self.audit(supply_script=supply_script)
+        self.assertTrue(any("reserve -c" in finding for finding in findings))
+
+        service_script = self.service_script.replace("[string]$Executable", "[string]$Command", 1)
+        findings = self.audit(service_script=service_script)
+        self.assertTrue(any("reserve -c" in finding for finding in findings))
 
 
 if __name__ == "__main__":
