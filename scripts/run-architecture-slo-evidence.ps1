@@ -50,9 +50,18 @@ function Assert-True {
     }
 }
 
-function Get-Sha256 {
+function Get-CanonicalTextSha256 {
     param([Parameter(Mandatory)][string]$Path)
-    (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
+    $text = [IO.File]::ReadAllText($Path, [Text.UTF8Encoding]::new($false))
+    $normalized = $text.Replace("`r`n", "`n").Replace("`r", "`n")
+    $bytes = [Text.UTF8Encoding]::new($false).GetBytes($normalized)
+    $sha256 = [Security.Cryptography.SHA256]::Create()
+    try {
+        ([BitConverter]::ToString($sha256.ComputeHash($bytes))).Replace("-", "").ToLowerInvariant()
+    }
+    finally {
+        $sha256.Dispose()
+    }
 }
 
 function Write-Utf8 {
@@ -117,6 +126,7 @@ if ($Mode -eq "Validate") {
     Write-Output "Validate mode completed without dynamic execution or PASS evidence."
     exit 0
 }
+Invoke-Native python @($Guard, '--root', $Root, '--policy-only') | Out-Null
 
 Assert-True (-not [string]::IsNullOrWhiteSpace($CandidateCommit)) "CandidateCommit is required"
 Assert-True (-not [string]::IsNullOrWhiteSpace($CandidateImageMap)) "CandidateImageMap is required"
@@ -205,7 +215,7 @@ try {
     function Add-Artifact {
         param([Parameter(Mandatory)][string]$Path)
         $relative = [IO.Path]::GetRelativePath($RunDirectory, $Path).Replace('\', '/')
-        $ArtifactRecords.Add([ordered]@{ path = $relative; sha256 = Get-Sha256 $Path })
+        $ArtifactRecords.Add([ordered]@{ path = $relative; sha256 = Get-CanonicalTextSha256 $Path })
         $relative
     }
     Add-Artifact $SamplesPath | Out-Null
@@ -270,7 +280,7 @@ try {
     $ReleaseArtifacts = [ordered]@{}
     foreach ($property in $Policy.release_artifacts.PSObject.Properties) {
         $path = Join-Path $Root ([string]$property.Value)
-        $ReleaseArtifacts[[string]$property.Value] = Get-Sha256 $path
+        $ReleaseArtifacts[[string]$property.Value] = Get-CanonicalTextSha256 $path
     }
     $Rollback = [ordered]@{
         baseline_images_restored = [bool]$FaultRun.global_assertions.rollback_verified
@@ -302,7 +312,7 @@ try {
         missing_sample_ratio = $MissingSampleRatio
         dynamic_execution = $true
         fixture = $false
-        fault_evidence = [ordered]@{ path = $FaultRelative; sha256 = Get-Sha256 $FaultSnapshotPath }
+        fault_evidence = [ordered]@{ path = $FaultRelative; sha256 = Get-CanonicalTextSha256 $FaultSnapshotPath }
         objectives = @($ObjectiveRecords)
         rollback_assertions = $Rollback
         unresolved_alerts = @()

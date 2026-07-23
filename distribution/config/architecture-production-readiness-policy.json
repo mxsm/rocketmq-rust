@@ -107,6 +107,7 @@
     "production_requires_dynamic_execution": true,
     "production_requires_current_commit": true,
     "fixture_requires_explicit_opt_in": true,
-    "artifact_hash_algorithm": "sha256"
+    "artifact_hash_algorithm": "sha256",
+    "artifact_text_normalization": "lf"
   }
 }

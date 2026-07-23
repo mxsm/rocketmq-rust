@@ -144,6 +144,21 @@ class ArchitectureSloGuardTests(unittest.TestCase):
         )
         self.assertIn("artifact hash mismatch", result.stderr)
 
+    def test_text_hashes_are_stable_across_line_endings(self) -> None:
+        paths = (
+            self.root / "scripts" / "telemetry-semantic-registry.json",
+            self.root / FIXTURE / "artifacts" / "fault-run.json",
+            self.root / FIXTURE / "artifacts" / "objectives.txt",
+        )
+        for path in paths:
+            normalized = (
+                path.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+            )
+            path.write_bytes(normalized.replace(b"\n", b"\r\n"))
+        self.run_guard(
+            "--evidence", str(FIXTURE), "--allow-fixture", expect_success=True
+        )
+
     def test_unregistered_dashboard_metric_is_rejected(self) -> None:
         dashboard = (
             self.root
