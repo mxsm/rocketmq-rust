@@ -45,6 +45,28 @@ class ArcMutScannerTests(unittest.TestCase):
     def kinds(self, source: str):
         return {item.kind for item in self.scan(source)}
 
+    def test_module_info_uses_resolved_paths_for_relative_lookup(self):
+        guard = load_guard()
+
+        class AliasedPath:
+            def __init__(self, resolved: Path):
+                self.resolved = resolved
+
+            def resolve(self):
+                return self.resolved
+
+        with tempfile.TemporaryDirectory() as tmp:
+            resolved_root = Path(tmp).resolve()
+            resolved_path = resolved_root / "crate" / "src" / "lib.rs"
+            module_info = guard._module_info(
+                AliasedPath(resolved_path),
+                AliasedPath(resolved_root),
+                {resolved_root: ("@crate", ".")},
+            )
+
+        self.assertEqual(("@crate", "crate"), module_info.module)
+        self.assertEqual(("@crate", "crate"), module_info.crate_root)
+
     def test_ignores_comments_normal_and_raw_strings_and_chars(self):
         findings = self.scan(
             '// ArcMut::new(x)\n/* mut_from_ref */\nlet a="WeakArcMut";\n'
