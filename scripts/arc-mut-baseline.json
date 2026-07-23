@@ -537,69 +537,6 @@
       "adr": "ADR-013"
     },
     {
-      "identity": "0463c42820325fd7d7f79917",
-      "path": "rocketmq-store/src/message_store/rocksdb_message_store.rs",
-      "symbol": "ArcMut",
-      "kind": "constructor",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "81de4656756d99a5ed707f59",
-          "fingerprint": "bfecad03e5a1dacb9d9c0946",
-          "item": "fn try_new",
-          "line": 166
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "e805e4bbe6d16335af1f3d50",
-      "path": "rocketmq-store/src/message_store/rocksdb_message_store.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "05756ac594343e2aa5842ec6",
-          "fingerprint": "a2aa105c545a80916bef24e7",
-          "item": "<module>",
-          "line": 36
-        }
-      ],
-      "owner": "store",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "28a87f40c2e05f736c36d573",
-      "path": "rocketmq-store/src/message_store/rocksdb_message_store.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "88d3afe5ff8345c6b7776ca5",
-          "fingerprint": "7760ff90906c0a2ad8a6f1ed",
-          "item": "struct RocksDBMessageStore",
-          "line": 101
-        },
-        {
-          "id": "acf0a21effeac5aa09fe7574",
-          "fingerprint": "e4ab39f7884daf109dcbf1e9",
-          "item": "fn local_file_store_arc",
-          "line": 210
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
       "identity": "54faa711f0305e782b819cb0",
       "path": "rocketmq-store/src/message_store.rs",
       "symbol": "ArcMut",

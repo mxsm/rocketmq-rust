@@ -33,7 +33,6 @@ use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_common::common::system_clock::SystemClock;
 use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
-use rocketmq_rust::ArcMut;
 use rocketmq_store_api::GetStatus as ApiGetStatus;
 use rocketmq_store_local::commit_log::read::LocalWalPort;
 use rocketmq_store_rocksdb::message_store::RocksDbDerivedStore;
@@ -98,7 +97,7 @@ use crate::timer::timer_message_store::TimerMessageStore;
 /// wiring and commit-log dispatcher migration anchored to a concrete RocksDB
 /// owner.
 pub struct RocksDBMessageStore {
-    local_file_store: ArcMut<LocalFileMessageStore>,
+    local_file_store: Box<LocalFileMessageStore>,
     root: RocksDbMessageStoreRoot,
 }
 
@@ -163,7 +162,7 @@ impl RocksDBMessageStore {
         let rocksdb_index_service = derived.rocksdb_index_service();
         let rocksdb_timer_service = derived.rocksdb_timer_service();
         let rocksdb_trans_service = derived.rocksdb_trans_service();
-        let mut local_file_store = ArcMut::new(LocalFileMessageStore::try_new(
+        let mut local_file_store = Box::new(LocalFileMessageStore::try_new(
             Arc::clone(&message_store_config),
             broker_config,
             topic_config_table,
@@ -205,10 +204,6 @@ impl RocksDBMessageStore {
 
     pub fn local_file_store_mut(&mut self) -> &mut LocalFileMessageStore {
         self.local_file_store.as_mut()
-    }
-
-    pub fn local_file_store_arc(&self) -> ArcMut<LocalFileMessageStore> {
-        self.local_file_store.clone()
     }
 
     fn local_wal_adapter(&self) -> StoreLocalWalAdapter<'_> {

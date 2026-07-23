@@ -4743,16 +4743,46 @@ Broker Store 私有 legacy owner 随 Issue #8635 完成以下收口：
 | final gates | `cargo fmt --all -- --check`、workspace all-target/all-feature strict Clippy 与 `git diff --check` 通过；Windows linker stdout 和既有 future-incompatibility note 不受 `-D warnings` 管辖 |
 | reduced validation scope | 不运行 Store/Broker 全量 lib suite、M06 mutation、dependency/release/performance/telemetry、Rustdoc 或 AGENTS routing；聚焦回归覆盖本切片全部 owner/control/role/read-mode 语义，RocksDB 专项覆盖受影响 backend，最终 workspace Clippy 覆盖完整 workspace 编译/lint |
 
+## M11-12bc108 实现
+
+RocksDB Store 组合根随 Issue #8637 完成以下收口：
+
+- `RocksDBMessageStore.local_file_store` 从 `ArcMut<LocalFileMessageStore>` 改为独占
+  `Box<LocalFileMessageStore>`；RocksDB wrapper 继续通过普通共享/可变借用委托 LocalFile backend，不再传播
+  shared-mutation root owner。
+- 删除仓库内零调用的公开 `local_file_store_arc()`，保留 `local_file_store()`、
+  `local_file_store_mut()`、`Deref`/`DerefMut` 与既有 MessageStore trait dispatch；constructor、
+  recovery、load/start/shutdown 与 RocksDB consume-queue backend 语义保持。
+- reviewed baseline 从 26/65 单调降至 23/61：production 9/16→6/12，test 保持 3/9，
+  compatibility 保持 14/40；Store production 9/16→6/12。净删除 3 个 production identities/
+  4 occurrences，无 relocation、新 governed debt 或临时 approval。
+- R11 完成；31 项最小审查清单现为完成 15 项、剩余 16 项，正式进度仍为 75/82。
+
+## M11-12bc108 验证
+
+| 命令 | 结果 |
+|---|---|
+| affected check / behavior | `cargo check -p rocketmq-store --features rocksdb_store --all-targets` 通过；独占 root source contract 与真实 RocksDB consume-queue backend exact tests 2/2 通过 |
+| reviewed baseline | `python scripts/arc_mut_guard.py` 通过；reviewed baseline 只删除 RocksDB root 的 3 个 production identities/4 occurrences，26/65→23/61，无 relocation、新 debt 或临时 approval |
+| RocksDB specialized gate | Store/Broker rocksdb feature strict Clippy 通过；foundation 83/83、semantics 9/9、Broker rocksdb 21/21、pop_consumer 4/4 通过 |
+| final gates | `cargo fmt --all -- --check`、workspace all-target/all-feature strict Clippy 与 `git diff --check` 通过；最终 Clippy 复用增量缓存并在 48 秒内完成，Windows linker stdout 和既有 future-incompatibility note 不受 `-D warnings` 管辖 |
+| reduced validation scope | 不重复 Store/Broker 全量 lib suite、额外 package check、runtime audit、M06 mutation、dependency/release/performance/telemetry、Rustdoc 或 AGENTS routing；RocksDB 专项覆盖本切片 backend，最终 workspace Clippy 覆盖完整 workspace 编译/lint |
+
 ## 剩余切片与 Gate
 
 2026-07-23 盘点将执行工作固化为 31 个最小可审查单元：16 个 production owner、2 个
-test/compatibility、7 个 M10/Phase 3 动态验收与签署、6 个 M12；R01～R08、R10、R12～R16 已完成，当前剩余
-17 个，正式进度仍为 75/82。
+test/compatibility、7 个 M10/Phase 3 动态验收与签署、6 个 M12；R01～R08、R10～R16 已完成，当前剩余
+16 个，正式进度仍为 75/82。
 完整逐项 checklist 见 `docs/plans/architecture-refactor-migration/REMAINING-TASKS.md`。
 
 1. Broker production ArcMut 已清零（0/0）：runtime root 独占 `Box<BrokerRuntimeInner>`，Store root 直接持有标准 Arc，
    EscapeBridge/Admin 只保存 Weak provider，生命周期使用 detach + `Arc::get_mut` 保持独占。
-2. Store 其余 StoreHandle/Local-Rocks/Timer owner（9/16）；Default/General/AutoSwitch HA composition root、replication-state callback、未共享 child、client/service runtime、replica-store capability、owned connection registry、窄 context/Weak lookup、direct delegate/exclusive init、confirm/epoch 发布与 connection runtime handle 已退出 `ArcMut`。ConsumeQueue、WAL/flush、Local root maintenance/read capability 等已完成切片保持关闭，剩余仅按 R09/R11 与转入 R18 的 Local/Timer 兼容窗口继续收口。
+2. Store production 仅余 6 identities/12 occurrences：`GenericMessageStore`、LocalFile 旧 wiring 与 Timer
+   完整 Store carrier 均为公开兼容窗口；RocksDB composition root 已由 `Box` 独占。Default/General/
+   AutoSwitch HA composition root、replication-state callback、未共享 child、client/service runtime、
+   replica-store capability、owned connection registry、窄 context/Weak lookup、direct delegate/exclusive
+   init、confirm/epoch 发布与 connection runtime handle 已退出 `ArcMut`。ConsumeQueue、WAL/flush、Local
+   root maintenance/read capability 等已完成切片保持关闭，剩余按 R09 与转入 R18 的 Local/Timer 兼容窗口继续收口。
 3. Production `WeakArcMut` 已清零；继续迁移 test/compatibility 中受控使用并移除其余 nightly feature。公开 `arc_mut.rs`/re-export 的 destructive 删除受 next-major 两轮弃用与 Release Manager/HUMAN Gate 约束，不能静默重置 public API baseline。
 4. 对同一候选快照执行 stable feature matrix、Miri/Loom 可用切片、soak/SLO fault、dashboard/runbook、动态
    Kind/K3d/container、M10 固定硬件和 Human Gate。

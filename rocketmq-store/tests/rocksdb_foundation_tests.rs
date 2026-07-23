@@ -374,6 +374,15 @@ fn rocksdb_consume_queue_config_is_disabled_for_local_file_store_type() {
 }
 
 #[test]
+fn rocksdb_message_store_exclusively_owns_local_file_root() {
+    let source = include_str!("../src/message_store/rocksdb_message_store.rs");
+
+    assert!(source.contains("local_file_store: Box<LocalFileMessageStore>"));
+    assert!(!source.contains("use rocketmq_rust::ArcMut"));
+    assert!(!source.contains("fn local_file_store_arc"));
+}
+
+#[test]
 fn rocksdb_message_store_try_new_opens_real_rocksdb_consume_queue_backend() {
     let temp_dir = TempDir::new().expect("temp dir should be created");
     let message_store_config = Arc::new(MessageStoreConfig {

@@ -8,15 +8,16 @@
 > PR-M12-01～06 未开始，合计剩余 7 个
 
 剩余任务数量、M11-12 内部执行批次与 M12 六个工作包见 [`REMAINING-TASKS.md`](REMAINING-TASKS.md)：正式口径
-剩余 7 个工作包；31 个最小可审查单元已完成 14 个，当前剩余 17 个。Issue #8635 / M11-12bc107 后
-reviewed ArcMut baseline 降至 26 identities / 65 occurrences（production 9/16、test 3/9、
+剩余 7 个工作包；31 个最小可审查单元已完成 15 个，当前剩余 16 个。Issue #8637 / M11-12bc108 后
+reviewed ArcMut baseline 降至 23 identities / 61 occurrences（production 6/12、test 3/9、
 compatibility 14/40）；Broker production ArcMut 已清零，Broker runtime 直接持有标准
 `Arc<OwnedMessageStore>`，EscapeBridge 与 Admin runtime 只保留标准弱 provider，请求只在单次操作期间取得
 标准 Arc 读租约；普通单条、批量和 Admin append
 已通过私有强类型共享端口执行，controller role-change 不再跨 await 持完整 Store clone，read-mode/topic-delete
 只调用线程安全具名操作；composition-root lifecycle lease 与私有 `LegacyEscapeStoreOwner<ArcMut<_>>` 均已删除，
 生命周期修改统一先解绑 provider，再通过 `Arc::get_mut` 取得独占 Store，shutdown 在共享 deadline 内等待已接纳
-读租约退出。
+读租约退出；RocksDB Store 直接以 `Box<LocalFileMessageStore>` 独占 Local backend，零调用的完整 root clone
+accessor 已删除。
 
 ## 1. 使用方式
 
@@ -1355,6 +1356,15 @@ role/read-ahead 由 Store 内部原子运行态发布，CommitLog、Timer、offs
 identity/occurrence 均为原私有 owner 的 ArcMut constructor/type reference，无 relocation、新债务或临时
 approval。Broker production 从 2/2 降至 0/0，Store production 保持 9/16，R01 完成；31 项执行清单现为
 完成 14 项、剩余 17 项，正式进度仍为 75/82。
+
+RocksDB Store root 随 Issue #8637 完成独占化：`RocksDBMessageStore.local_file_store` 从
+`ArcMut<LocalFileMessageStore>` 改为 `Box<LocalFileMessageStore>`，构造期直接完成 owned root wiring，随后由
+RocksDB composition root 唯一拥有。既有 `local_file_store()`/`local_file_store_mut()` 借用、Deref/DerefMut 与
+Local/Rocks dispatch、recovery、lifecycle、role/read-mode/topic-delete 行为保持；仓库零调用且会克隆完整 mutable
+root 的 `local_file_store_arc()` 已删除。reviewed baseline 从 26/65 单调降至 23/61（production
+9/16→6/12、test 保持 3/9、compatibility 保持 14/40）；净删除 RocksDB 3 个 production identities/4
+occurrences，无 relocation、新债务或临时 approval。R11 从 3/4 降至 0/0 并完成；31 项执行清单现为完成
+15 项、剩余 16 项，正式进度仍为 75/82。
 
 Default HA client runtime ownership 随 Issue #8567 完成收窄：`DefaultHAClient` 以标准 `Arc<Inner>` 共享只读组合根，
 `Inner` 仅保留原子、锁、Notify、flow monitor 与现有 LocalStore 兼容句柄；从未安装连接的 stream 字段和重复 buffer/
