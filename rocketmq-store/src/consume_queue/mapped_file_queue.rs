@@ -51,6 +51,7 @@ use rocketmq_store_local::mapped_file::queue_maintenance::MappedFileQueueResetLa
 use rocketmq_store_local::mapped_file::queue_maintenance::MappedFileQueueTruncateAction;
 use rocketmq_store_local::mapped_file::queue_metrics::mapped_file_queue_available_memory_size;
 use rocketmq_store_local::mapped_file::queue_metrics::mapped_file_queue_fall_behind;
+use rocketmq_store_local::mapped_file::queue_metrics::mapped_file_queue_io_stats;
 use rocketmq_store_local::mapped_file::queue_metrics::mapped_file_queue_lazy_mmap_stats;
 use rocketmq_store_local::mapped_file::queue_metrics::mapped_file_queue_max_offset;
 use rocketmq_store_local::mapped_file::queue_metrics::mapped_file_queue_max_wrote_position;
@@ -58,6 +59,7 @@ use rocketmq_store_local::mapped_file::queue_metrics::mapped_file_queue_min_offs
 use rocketmq_store_local::mapped_file::queue_metrics::mapped_file_queue_should_roll;
 use rocketmq_store_local::mapped_file::queue_metrics::mapped_file_queue_total_size;
 use rocketmq_store_local::mapped_file::queue_metrics::mapped_file_queue_warmup_stats;
+pub use rocketmq_store_local::mapped_file::queue_metrics::MappedFileIoStats;
 pub use rocketmq_store_local::mapped_file::queue_metrics::MappedFileWarmupStats;
 use rocketmq_store_local::mapped_file::queue_state::MappedFileQueueRuntimeState;
 use rocketmq_store_local::mapped_file::queue_storage::MappedFileQueueStorage;
@@ -720,6 +722,12 @@ impl MappedFileQueue {
     pub fn warmup_stats(&self) -> MappedFileWarmupStats {
         let mapped_files = self.storage.mapped_files().load();
         mapped_file_queue_warmup_stats(mapped_files.as_slice())
+    }
+
+    /// Returns a read-only I/O counter aggregate for the current file generation.
+    pub fn io_stats(&self) -> MappedFileIoStats {
+        let mapped_files = self.storage.mapped_files().load();
+        mapped_file_queue_io_stats(mapped_files.as_slice())
     }
 
     pub fn lazy_mmap_stats(&self) -> LazyMmapStats {
@@ -1516,6 +1524,59 @@ mod tests {
         assert_eq!(stats.bytes, 3072);
         assert_eq!(stats.total_millis, 9);
         assert_eq!(stats.last_millis, 5);
+    }
+
+    #[test]
+    fn io_stats_aggregate_mapped_file_metrics() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let first_path = temp_dir.path().join(offset_to_file_name(0));
+        let second_path = temp_dir.path().join(offset_to_file_name(1024));
+        let first_file = Arc::new(
+            DefaultMappedFile::try_new(
+                CheetahString::from_string(first_path.to_string_lossy().to_string()),
+                1024,
+            )
+            .expect("first mapped file"),
+        );
+        let second_file = Arc::new(
+            DefaultMappedFile::try_new(
+                CheetahString::from_string(second_path.to_string_lossy().to_string()),
+                1024,
+            )
+            .expect("second mapped file"),
+        );
+        first_file.get_metrics().unwrap().record_write(128);
+        first_file.get_metrics().unwrap().record_read(64, true);
+        first_file
+            .get_metrics()
+            .unwrap()
+            .record_flush(std::time::Duration::from_micros(10));
+        second_file.get_metrics().unwrap().record_write(256);
+        second_file.get_metrics().unwrap().record_read(96, false);
+        second_file
+            .get_metrics()
+            .unwrap()
+            .record_flush(std::time::Duration::from_micros(20));
+
+        let queue = MappedFileQueue {
+            storage: MappedFileQueueStorage::new(
+                String::new(),
+                1024,
+                Arc::new(ArcSwap::from_pointee(vec![first_file, second_file])),
+            ),
+            ..MappedFileQueue::default()
+        };
+
+        assert_eq!(
+            queue.io_stats(),
+            MappedFileIoStats {
+                write_operations: 2,
+                bytes_written: 384,
+                flush_operations: 2,
+                read_operations: 2,
+                bytes_read: 160,
+            }
+        );
     }
 
     #[tokio::test]

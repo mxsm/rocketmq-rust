@@ -78,6 +78,7 @@ use crate::config::flush_disk_type::FlushDiskType;
 use crate::config::message_store_config::LinuxMemoryLockMode;
 use crate::config::message_store_config::LinuxRecoveryFadviseMode;
 use crate::config::message_store_config::MessageStoreConfig;
+use crate::consume_queue::mapped_file_queue::MappedFileIoStats;
 use crate::consume_queue::mapped_file_queue::MappedFileQueue;
 use crate::consume_queue::mapped_file_queue::MappedFileQueueAppendHandle;
 use crate::consume_queue::mapped_file_queue::MappedFileQueueCleanupHandle;
@@ -2828,6 +2829,11 @@ impl CommitLog {
     #[inline]
     pub fn mapped_file_warmup_stats(&self) -> MappedFileWarmupStats {
         self.mapped_file_queue.warmup_stats()
+    }
+
+    /// Returns a read-only aggregate of mapped-file I/O counters.
+    pub fn mapped_file_io_stats(&self) -> MappedFileIoStats {
+        self.mapped_file_queue.io_stats()
     }
 
     #[inline]

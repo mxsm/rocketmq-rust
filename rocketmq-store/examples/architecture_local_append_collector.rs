@@ -12,13 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Target-hardware collector for the M10 `local-append` performance profile.
+//! Target-hardware collector for the M10 local append performance profiles.
 //!
 //! Run a variant from the workspace root with:
 //!
 //! ```text
 //! cargo run --release --quiet -p rocketmq-store \
 //!   --example architecture_local_append_collector -- local-append producers-1
+//!
+//! cargo run --release --quiet -p rocketmq-store \
+//!   --example architecture_local_append_collector -- sync-flush concurrency-64
 //! ```
 //!
 //! The command writes one sidecar-compatible JSON object to stdout. Each raw
@@ -61,12 +64,15 @@ use serde::Serialize;
 use tempfile::TempDir;
 use tokio::runtime::Builder;
 
-const PROFILE: &str = "local-append";
+const LOCAL_APPEND_PROFILE: &str = "local-append";
+const SYNC_FLUSH_PROFILE: &str = "sync-flush";
 const MESSAGE_SIZE_BYTES: usize = 1024;
 const SAMPLE_COUNT: usize = 5;
 const PRIMING_SAMPLE_COUNT: usize = 2;
-const OPERATIONS_PER_SAMPLE: usize = 131_072;
-const WARMUP_OPERATIONS: usize = 32_768;
+const LOCAL_APPEND_OPERATIONS_PER_SAMPLE: usize = 131_072;
+const LOCAL_APPEND_WARMUP_OPERATIONS: usize = 32_768;
+const SYNC_FLUSH_OPERATIONS_PER_SAMPLE: usize = 8192;
+const SYNC_FLUSH_WARMUP_OPERATIONS: usize = 1024;
 
 static ALLOCATION_CALLS: AtomicU64 = AtomicU64::new(0);
 
@@ -107,34 +113,65 @@ unsafe impl GlobalAlloc for CountingAllocator {
 #[global_allocator]
 static GLOBAL_ALLOCATOR: CountingAllocator = CountingAllocator;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct Scenario {
+    profile: &'static str,
     variant: &'static str,
     producers: usize,
+    flush_disk_type: FlushDiskType,
+    operations_per_sample: usize,
+    warmup_operations: usize,
 }
 
 impl Scenario {
     fn parse(profile: &str, variant: &str) -> Result<Self> {
-        ensure!(profile == PROFILE, "unsupported performance profile: {profile}");
-        match variant {
-            "producers-1" => Ok(Self {
+        match (profile, variant) {
+            (LOCAL_APPEND_PROFILE, "producers-1") => Ok(Self {
+                profile: LOCAL_APPEND_PROFILE,
                 variant: "producers-1",
                 producers: 1,
+                flush_disk_type: FlushDiskType::AsyncFlush,
+                operations_per_sample: LOCAL_APPEND_OPERATIONS_PER_SAMPLE,
+                warmup_operations: LOCAL_APPEND_WARMUP_OPERATIONS,
             }),
-            "producers-8" => Ok(Self {
+            (LOCAL_APPEND_PROFILE, "producers-8") => Ok(Self {
+                profile: LOCAL_APPEND_PROFILE,
                 variant: "producers-8",
                 producers: 8,
+                flush_disk_type: FlushDiskType::AsyncFlush,
+                operations_per_sample: LOCAL_APPEND_OPERATIONS_PER_SAMPLE,
+                warmup_operations: LOCAL_APPEND_WARMUP_OPERATIONS,
             }),
-            "producers-32" => Ok(Self {
+            (LOCAL_APPEND_PROFILE, "producers-32") => Ok(Self {
+                profile: LOCAL_APPEND_PROFILE,
                 variant: "producers-32",
                 producers: 32,
+                flush_disk_type: FlushDiskType::AsyncFlush,
+                operations_per_sample: LOCAL_APPEND_OPERATIONS_PER_SAMPLE,
+                warmup_operations: LOCAL_APPEND_WARMUP_OPERATIONS,
             }),
-            _ => bail!("unsupported {PROFILE} variant: {variant}"),
+            (SYNC_FLUSH_PROFILE, "concurrency-64") => Ok(Self {
+                profile: SYNC_FLUSH_PROFILE,
+                variant: "concurrency-64",
+                producers: 64,
+                flush_disk_type: FlushDiskType::SyncFlush,
+                operations_per_sample: SYNC_FLUSH_OPERATIONS_PER_SAMPLE,
+                warmup_operations: SYNC_FLUSH_WARMUP_OPERATIONS,
+            }),
+            _ => bail!("unsupported performance profile/variant: {profile}/{variant}"),
         }
+    }
+
+    fn requires_started_store(self) -> bool {
+        self.flush_disk_type == FlushDiskType::SyncFlush
+    }
+
+    fn includes_fsync_per_ack(self) -> bool {
+        self.profile == SYNC_FLUSH_PROFILE
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum Invocation {
     Collect(Scenario),
     Sample(Scenario),
@@ -147,7 +184,8 @@ fn parse_invocation(args: &[String]) -> Result<Invocation> {
             Ok(Invocation::Sample(Scenario::parse(profile, variant)?))
         }
         _ => bail!(
-            "usage: architecture_local_append_collector [--sample] local-append <producers-1|producers-8|producers-32>"
+            "usage: architecture_local_append_collector [--sample] <local-append|sync-flush> \
+             <producers-1|producers-8|producers-32|concurrency-64>"
         ),
     }
 }
@@ -159,10 +197,12 @@ struct SampleObservation {
     peak_rss_bytes: f64,
     allocations_per_operation: f64,
     io_amplification_ratio: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fsync_per_ack: Option<f64>,
 }
 
 impl SampleObservation {
-    fn validate(&self) -> Result<()> {
+    fn validate(&self, scenario: Scenario) -> Result<()> {
         for (metric, value) in [
             ("throughput_per_second", self.throughput_per_second),
             ("p99_latency_us", self.p99_latency_us),
@@ -173,6 +213,18 @@ impl SampleObservation {
             ensure!(
                 value.is_finite() && value >= 0.0,
                 "{metric} must be finite and non-negative, got {value}"
+            );
+        }
+        ensure!(
+            self.fsync_per_ack.is_some() == scenario.includes_fsync_per_ack(),
+            "{}/{} fsync_per_ack presence does not match the metric contract",
+            scenario.profile,
+            scenario.variant
+        );
+        if let Some(fsync_per_ack) = self.fsync_per_ack {
+            ensure!(
+                fsync_per_ack.is_finite() && fsync_per_ack >= 0.0,
+                "fsync_per_ack must be finite and non-negative, got {fsync_per_ack}"
             );
         }
         Ok(())
@@ -225,7 +277,7 @@ fn collect_samples(scenario: Scenario) -> Result<MeasurementEnvelope<'static>> {
 
     for sample_index in 0..SAMPLE_COUNT + PRIMING_SAMPLE_COUNT {
         let output = Command::new(&executable)
-            .args(["--sample", PROFILE, scenario.variant])
+            .args(["--sample", scenario.profile, scenario.variant])
             .output()
             .with_context(|| format!("start isolated sample {sample_index}"))?;
         if !output.status.success() {
@@ -240,7 +292,7 @@ fn collect_samples(scenario: Scenario) -> Result<MeasurementEnvelope<'static>> {
         let observation: SampleObservation = serde_json::from_slice(&output.stdout)
             .with_context(|| format!("parse isolated sample {sample_index} JSON"))?;
         observation
-            .validate()
+            .validate(scenario)
             .with_context(|| format!("validate isolated sample {sample_index}"))?;
         if sample_index >= PRIMING_SAMPLE_COUNT {
             observations.push(observation);
@@ -294,10 +346,21 @@ fn build_envelope(scenario: Scenario, observations: Vec<SampleObservation>) -> R
                 .collect(),
         },
     );
+    if scenario.includes_fsync_per_ack() {
+        let samples = observations
+            .iter()
+            .map(|sample| {
+                sample
+                    .fsync_per_ack
+                    .ok_or_else(|| anyhow!("sync-flush sample omitted fsync_per_ack"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        metrics.insert("fsync_per_ack", MetricSamples { samples });
+    }
 
     Ok(MeasurementEnvelope {
         schema_version: 1,
-        profile: PROFILE,
+        profile: scenario.profile,
         variant: scenario.variant,
         metrics,
     })
@@ -308,41 +371,74 @@ fn collect_one_sample(scenario: Scenario) -> Result<SampleObservation> {
         .enable_all()
         .build()
         .context("create sample runtime")?;
-    let collector_store = new_collector_store()?;
+    let mut collector_store = new_collector_store(scenario)?;
+    if scenario.requires_started_store() {
+        runtime
+            .block_on(start_collector_store(&mut collector_store))
+            .context("start sync-flush sample store")?;
+    }
 
     runtime
-        .block_on(run_workload(&collector_store, scenario, WARMUP_OPERATIONS, 0))
+        .block_on(run_workload(&collector_store, scenario, scenario.warmup_operations, 0))
         .context("run warm-up workload")?;
 
+    let flush_operations_before = collector_store
+        .store
+        .get_commit_log()
+        .mapped_file_io_stats()
+        .flush_operations;
     let allocations_before = ALLOCATION_CALLS.load(Ordering::Relaxed);
     let workload = runtime
         .block_on(run_workload(
             &collector_store,
             scenario,
-            OPERATIONS_PER_SAMPLE,
-            WARMUP_OPERATIONS as u64,
+            scenario.operations_per_sample,
+            scenario.warmup_operations as u64,
         ))
         .context("run measured workload")?;
+    let flush_operations_after = collector_store
+        .store
+        .get_commit_log()
+        .mapped_file_io_stats()
+        .flush_operations;
+    let measured_flush_operations = flush_operations_after
+        .checked_sub(flush_operations_before)
+        .ok_or_else(|| anyhow!("mapped-file flush counter moved backwards"))?;
     let allocation_calls = ALLOCATION_CALLS
         .load(Ordering::Relaxed)
         .saturating_sub(allocations_before);
+    if scenario.includes_fsync_per_ack() {
+        ensure!(
+            measured_flush_operations > 0,
+            "sync-flush acknowledgements completed without a measured mapped-file flush"
+        );
+    }
 
     let observation = SampleObservation {
-        throughput_per_second: OPERATIONS_PER_SAMPLE as f64 / workload.elapsed.as_secs_f64(),
+        throughput_per_second: scenario.operations_per_sample as f64 / workload.elapsed.as_secs_f64(),
         p99_latency_us: percentile_99(&workload.latencies)?.as_secs_f64() * 1_000_000.0,
         peak_rss_bytes: peak_rss_bytes()? as f64,
-        allocations_per_operation: allocation_calls as f64 / OPERATIONS_PER_SAMPLE as f64,
-        io_amplification_ratio: workload.encoded_bytes as f64 / (OPERATIONS_PER_SAMPLE * MESSAGE_SIZE_BYTES) as f64,
+        allocations_per_operation: allocation_calls as f64 / scenario.operations_per_sample as f64,
+        io_amplification_ratio: workload.encoded_bytes as f64
+            / (scenario.operations_per_sample * MESSAGE_SIZE_BYTES) as f64,
+        fsync_per_ack: scenario
+            .includes_fsync_per_ack()
+            .then_some(measured_flush_operations as f64 / scenario.operations_per_sample as f64),
     };
-    observation.validate()?;
+    observation.validate(scenario)?;
+    if scenario.requires_started_store() {
+        runtime
+            .block_on(collector_store.store.shutdown_gracefully())
+            .context("shut down sync-flush sample store")?;
+    }
     Ok(observation)
 }
 
-fn new_collector_store() -> Result<CollectorStore> {
+fn new_collector_store(scenario: Scenario) -> Result<CollectorStore> {
     let temp_dir = TempDir::new().context("create local append sample directory")?;
     let mut message_store_config = MessageStoreConfig {
         store_path_root_dir: temp_dir.path().to_string_lossy().to_string().into(),
-        flush_disk_type: FlushDiskType::AsyncFlush,
+        flush_disk_type: scenario.flush_disk_type,
         ha_listen_port: 0,
         ..MessageStoreConfig::default()
     };
@@ -363,6 +459,12 @@ fn new_collector_store() -> Result<CollectorStore> {
         store,
         _temp_dir: temp_dir,
     })
+}
+
+async fn start_collector_store(collector_store: &mut CollectorStore) -> Result<()> {
+    collector_store.store.init().await.context("initialize sample store")?;
+    ensure!(collector_store.store.load().await, "load sample store");
+    collector_store.store.start().await.context("launch sample store")
 }
 
 async fn run_workload(
@@ -509,34 +611,54 @@ fn write_measurement(measurement: MeasurementEnvelope<'_>) -> Result<()> {
 mod tests {
     use super::*;
 
-    fn sample(value: f64) -> SampleObservation {
+    fn sample(value: f64, fsync_per_ack: Option<f64>) -> SampleObservation {
         SampleObservation {
             throughput_per_second: value,
             p99_latency_us: value + 1.0,
             peak_rss_bytes: value + 2.0,
             allocations_per_operation: value + 3.0,
             io_amplification_ratio: value + 4.0,
+            fsync_per_ack,
         }
     }
 
     #[test]
     fn parses_every_supported_variant() {
         for (variant, producers) in [("producers-1", 1), ("producers-8", 8), ("producers-32", 32)] {
-            assert_eq!(
-                parse_invocation(&[PROFILE.to_owned(), variant.to_owned()]).expect("supported variant"),
-                Invocation::Collect(Scenario { variant, producers })
-            );
+            let Invocation::Collect(scenario) =
+                parse_invocation(&[LOCAL_APPEND_PROFILE.to_owned(), variant.to_owned()])
+                    .expect("supported local append variant")
+            else {
+                panic!("expected collection invocation");
+            };
+            assert_eq!(scenario.profile, LOCAL_APPEND_PROFILE);
+            assert_eq!(scenario.variant, variant);
+            assert_eq!(scenario.producers, producers);
+            assert_eq!(scenario.flush_disk_type, FlushDiskType::AsyncFlush);
         }
+
+        let Invocation::Collect(sync_flush) =
+            parse_invocation(&[SYNC_FLUSH_PROFILE.to_owned(), "concurrency-64".to_owned()])
+                .expect("supported sync flush variant")
+        else {
+            panic!("expected collection invocation");
+        };
+        assert_eq!(sync_flush.profile, SYNC_FLUSH_PROFILE);
+        assert_eq!(sync_flush.variant, "concurrency-64");
+        assert_eq!(sync_flush.producers, 64);
+        assert_eq!(sync_flush.flush_disk_type, FlushDiskType::SyncFlush);
     }
 
     #[test]
     fn rejects_unknown_profile_variant_and_shape() {
         assert!(parse_invocation(&["other".to_owned(), "producers-1".to_owned()]).is_err());
-        assert!(parse_invocation(&[PROFILE.to_owned(), "producers-2".to_owned()]).is_err());
-        assert!(parse_invocation(&[PROFILE.to_owned()]).is_err());
+        assert!(parse_invocation(&[LOCAL_APPEND_PROFILE.to_owned(), "producers-2".to_owned()]).is_err());
+        assert!(parse_invocation(&[LOCAL_APPEND_PROFILE.to_owned(), "concurrency-64".to_owned()]).is_err());
+        assert!(parse_invocation(&[SYNC_FLUSH_PROFILE.to_owned(), "producers-32".to_owned()]).is_err());
+        assert!(parse_invocation(&[LOCAL_APPEND_PROFILE.to_owned()]).is_err());
         assert!(parse_invocation(&[
             "--sample".to_owned(),
-            PROFILE.to_owned(),
+            LOCAL_APPEND_PROFILE.to_owned(),
             "producers-8".to_owned(),
             "extra".to_owned(),
         ])
@@ -545,19 +667,13 @@ mod tests {
 
     #[test]
     fn builds_exact_sidecar_metric_inventory_with_five_samples() {
-        let observations = (0..SAMPLE_COUNT).map(|index| sample(index as f64)).collect();
-        let envelope = build_envelope(
-            Scenario {
-                variant: "producers-8",
-                producers: 8,
-            },
-            observations,
-        )
-        .expect("build measurement");
+        let observations = (0..SAMPLE_COUNT).map(|index| sample(index as f64, None)).collect();
+        let scenario = Scenario::parse(LOCAL_APPEND_PROFILE, "producers-8").expect("local append scenario");
+        let envelope = build_envelope(scenario, observations).expect("build measurement");
         let value = serde_json::to_value(envelope).expect("serialize measurement");
 
         assert_eq!(value["schema_version"], 1);
-        assert_eq!(value["profile"], PROFILE);
+        assert_eq!(value["profile"], LOCAL_APPEND_PROFILE);
         assert_eq!(value["variant"], "producers-8");
         let metrics = value["metrics"].as_object().expect("metrics object");
         assert_eq!(
@@ -576,22 +692,50 @@ mod tests {
     }
 
     #[test]
+    fn sync_flush_inventory_includes_fsync_per_ack() {
+        let observations = (0..SAMPLE_COUNT)
+            .map(|index| sample(index as f64, Some(1.0 / 64.0)))
+            .collect();
+        let scenario = Scenario::parse(SYNC_FLUSH_PROFILE, "concurrency-64").expect("sync flush scenario");
+        let value = serde_json::to_value(build_envelope(scenario, observations).expect("build measurement"))
+            .expect("serialize measurement");
+
+        assert_eq!(value["profile"], SYNC_FLUSH_PROFILE);
+        assert_eq!(value["variant"], "concurrency-64");
+        assert_eq!(
+            value["metrics"]
+                .as_object()
+                .expect("metrics object")
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            vec![
+                "allocations_per_operation",
+                "fsync_per_ack",
+                "io_amplification_ratio",
+                "p99_latency_us",
+                "peak_rss_bytes",
+                "throughput_per_second",
+            ]
+        );
+    }
+
+    #[test]
     fn rejects_partial_and_non_finite_samples() {
-        let partial = vec![sample(1.0), sample(2.0)];
-        assert!(build_envelope(
-            Scenario {
-                variant: "producers-1",
-                producers: 1,
-            },
-            partial,
-        )
-        .is_err());
+        let local_append = Scenario::parse(LOCAL_APPEND_PROFILE, "producers-1").expect("local append scenario");
+        let partial = vec![sample(1.0, None), sample(2.0, None)];
+        assert!(build_envelope(local_append, partial).is_err());
 
         let invalid = SampleObservation {
             throughput_per_second: f64::NAN,
-            ..sample(1.0)
+            ..sample(1.0, None)
         };
-        assert!(invalid.validate().is_err());
+        assert!(invalid.validate(local_append).is_err());
+
+        let sync_flush = Scenario::parse(SYNC_FLUSH_PROFILE, "concurrency-64").expect("sync flush scenario");
+        assert!(sample(1.0, None).validate(sync_flush).is_err());
+        assert!(sample(1.0, Some(f64::INFINITY)).validate(sync_flush).is_err());
+        assert!(sample(1.0, Some(1.0 / 64.0)).validate(local_append).is_err());
     }
 
     #[test]
