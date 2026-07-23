@@ -113,8 +113,8 @@ use crate::config::rocksdb_manager::RocksDbBrokerConfigStorageLayout;
 use crate::controller::replicas_manager::ReplicasManager;
 use crate::failover::escape_bridge::EscapeBridge;
 use crate::failover::escape_bridge_capability::EscapeBridgePolicyState;
+use crate::failover::escape_bridge_capability::LegacyEscapeStoreLifecycleLease;
 use crate::failover::escape_bridge_capability::LegacyEscapeStoreOwner;
-use crate::failover::escape_bridge_capability::LegacyEscapeStoreWriteLease;
 use crate::filter::commit_log_dispatcher_calc_bit_map::CommitLogDispatcherCalcBitMap;
 use crate::filter::manager::consumer_filter_manager::ConsumerFilterManager;
 use crate::hook::batch_check_before_put_message::BatchCheckBeforePutMessageHook;
@@ -4124,8 +4124,10 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn message_store_mut(&mut self) -> Option<LegacyEscapeStoreWriteLease<MS>> {
-        self.message_store.as_deref().map(LegacyEscapeStoreOwner::write_lease)
+    pub fn message_store_mut(&mut self) -> Option<LegacyEscapeStoreLifecycleLease<MS>> {
+        self.message_store
+            .as_deref()
+            .map(LegacyEscapeStoreOwner::lifecycle_lease)
     }
 
     #[inline]
@@ -4344,11 +4346,11 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn message_store_unchecked_mut(&mut self) -> LegacyEscapeStoreWriteLease<MS> {
+    pub fn message_store_unchecked_mut(&mut self) -> LegacyEscapeStoreLifecycleLease<MS> {
         self.message_store
             .as_deref()
             .expect("message store should be initialized before mutable access")
-            .write_lease()
+            .lifecycle_lease()
     }
 
     #[inline]
@@ -7013,7 +7015,7 @@ accounts:
             .message_store
             .take()
             .expect("message store should remain initialized");
-        message_store.write_lease().shutdown().await;
+        message_store.lifecycle_lease().shutdown().await;
         drop(message_store);
         assert!(
             capability.with_store(|_| ()).is_err(),
@@ -7152,13 +7154,25 @@ accounts:
             legacy_owner_count,
             "Admin runtime instances must not clone the legacy compatibility pointer"
         );
+        assert!(admin.set_commitlog_read_mode(MADV_NORMAL).is_ok());
+        assert_eq!(admin.delete_topics(Vec::new()).expect("empty topic deletion"), 0);
+        assert_eq!(
+            runtime
+                .inner
+                .message_store
+                .as_ref()
+                .expect("message store should remain initialized")
+                .legacy_strong_count(),
+            legacy_owner_count,
+            "named Admin controls must release their temporary compatibility wrapper"
+        );
 
         let message_store = runtime
             .inner
             .message_store
             .take()
             .expect("message store should remain initialized");
-        message_store.write_lease().shutdown().await;
+        message_store.lifecycle_lease().shutdown().await;
         drop(message_store);
 
         assert!(admin.message_store().is_none());

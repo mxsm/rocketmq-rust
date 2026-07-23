@@ -136,19 +136,30 @@ impl<MS: MessageStore> LegacyEscapeStoreOwner<MS> {
         self.0.as_ref()
     }
 
-    pub(crate) fn write_lease(&self) -> LegacyEscapeStoreWriteLease<MS> {
-        LegacyEscapeStoreWriteLease {
+    pub(crate) fn lifecycle_lease(&self) -> LegacyEscapeStoreLifecycleLease<MS> {
+        LegacyEscapeStoreLifecycleLease {
             owner: Self(self.0.clone()),
         }
+    }
+
+    fn set_commitlog_read_mode(&self, read_ahead_mode: i32) -> Result<(), LegacyStoreError> {
+        let mut store = self.0.clone();
+        store.set_commitlog_read_mode(read_ahead_mode)
+    }
+
+    fn delete_topics(&self, delete_topics: Vec<&CheetahString>) -> i32 {
+        let mut store = self.0.clone();
+        store.delete_topics(delete_topics)
+    }
+
+    fn sync_broker_role(&self, broker_role: BrokerRole) {
+        let mut store = self.0.clone();
+        store.sync_broker_role(broker_role);
     }
 
     #[cfg(test)]
     pub(crate) fn legacy_strong_count(&self) -> usize {
         self.0.strong_count()
-    }
-
-    fn cloned_store(&self) -> impl DerefMut<Target = MS> + Clone {
-        self.0.clone()
     }
 }
 
@@ -214,15 +225,15 @@ impl<MS: MessageStore> Deref for LegacyEscapeStoreReadLease<MS> {
     }
 }
 
-/// Request-scoped mutable access to the legacy Store boundary.
+/// Composition-root lifecycle access to the legacy Store boundary.
 ///
-/// Mutable compatibility operations temporarily clone the legacy owner for the duration of one
-/// Admin request. The lease must not be stored in a long-lived service or task.
-pub(crate) struct LegacyEscapeStoreWriteLease<MS: MessageStore> {
+/// Broker initialization, hook wiring, start, and shutdown temporarily clone the legacy owner.
+/// Request and control operations must use named capability methods instead of this lease.
+pub(crate) struct LegacyEscapeStoreLifecycleLease<MS: MessageStore> {
     owner: LegacyEscapeStoreOwner<MS>,
 }
 
-impl<MS: MessageStore> Deref for LegacyEscapeStoreWriteLease<MS> {
+impl<MS: MessageStore> Deref for LegacyEscapeStoreLifecycleLease<MS> {
     type Target = MS;
 
     fn deref(&self) -> &Self::Target {
@@ -230,7 +241,7 @@ impl<MS: MessageStore> Deref for LegacyEscapeStoreWriteLease<MS> {
     }
 }
 
-impl<MS: MessageStore> DerefMut for LegacyEscapeStoreWriteLease<MS> {
+impl<MS: MessageStore> DerefMut for LegacyEscapeStoreLifecycleLease<MS> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.owner.0.as_mut()
     }
@@ -385,8 +396,7 @@ impl<MS: MessageStore> EscapeBridgeStoreCapability<MS> {
             Ok(owner) => owner,
             Err(_) => return Ok(()),
         };
-        let mut store = owner.cloned_store();
-        let Some(ha_service) = store.get_ha_service() else {
+        let Some(ha_service) = owner.store().get_ha_service().cloned() else {
             return Ok(());
         };
         let result = match target_role {
@@ -414,7 +424,7 @@ impl<MS: MessageStore> EscapeBridgeStoreCapability<MS> {
             }
         };
         result?;
-        store.sync_broker_role(match target_role {
+        owner.sync_broker_role(match target_role {
             BrokerReplicaRole::Master => BrokerRole::SyncMaster,
             BrokerReplicaRole::Slave => BrokerRole::Slave,
         });
@@ -466,12 +476,12 @@ impl<MS: MessageStore> EscapeBridgeStoreCapability<MS> {
 
     pub(crate) fn set_commitlog_read_mode(&self, read_ahead_mode: i32) -> Result<(), LegacyStoreError> {
         let owner = self.owner().map_err(|_| LegacyStoreError::NotStarted)?;
-        owner.write_lease().set_commitlog_read_mode(read_ahead_mode)
+        owner.set_commitlog_read_mode(read_ahead_mode)
     }
 
     pub(crate) fn delete_topics(&self, delete_topics: Vec<&CheetahString>) -> Result<i32, MessageStoreUnavailable> {
         let owner = self.owner()?;
-        Ok(owner.write_lease().delete_topics(delete_topics))
+        Ok(owner.delete_topics(delete_topics))
     }
 
     pub(crate) fn min_offset(&self, topic: &CheetahString, queue_id: i32) -> Result<i64, MessageStoreUnavailable> {
