@@ -38,6 +38,7 @@ serde          = { workspace = true }
 [dev-dependencies]
 rocketmq-observability = { workspace = true }
 criterion              = { version = "0.8.2", features = ["async_tokio"] }
+loom                   = "=0.7.2"
 serde_json             = { workspace = true }
 tracing                = { workspace = true }
 
