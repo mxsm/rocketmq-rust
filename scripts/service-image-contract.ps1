@@ -185,7 +185,7 @@ try {
                 $logs = Invoke-Captured docker logs $containerId
                 throw "$serviceName exited before SIGTERM smoke: $logs"
             }
-            Invoke-Checked docker stop --signal SIGTERM --timeout 30 $containerId
+            Invoke-Checked docker stop --signal SIGTERM --timeout $($policy.runtime.stop_grace_period_seconds) $containerId
             $exitCode = [int](Invoke-Captured docker inspect --format "{{.State.ExitCode}}" $containerId).Trim()
             if ($exitCode -ne 0) {
                 $logs = Invoke-Captured docker logs $containerId
