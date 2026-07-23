@@ -13,8 +13,6 @@
 // limitations under the License.
 
 #![allow(dead_code)]
-#![allow(incomplete_features)]
-#![feature(impl_trait_in_assoc_type)]
 extern crate core;
 
 /// Canonical transport owner; retained here as a migration facade.

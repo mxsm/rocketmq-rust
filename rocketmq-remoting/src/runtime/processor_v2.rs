@@ -28,7 +28,9 @@
 //! 4. Preserves async/await ergonomics without sacrificing performance
 
 use std::collections::HashMap;
+use std::future::ready;
 use std::future::Future;
+use std::future::Ready;
 use std::pin::Pin;
 
 use rocketmq_error::RocketMQResult;
@@ -416,7 +418,7 @@ impl SendMessageProcessorExample {
         Self {}
     }
 
-    async fn process_internal(
+    fn process_internal(
         &mut self,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
@@ -429,7 +431,7 @@ impl SendMessageProcessorExample {
 
 impl RequestProcessorV2 for SendMessageProcessorExample {
     type Fut<'a>
-        = impl Future<Output = RocketMQResult<Option<RemotingCommand>>> + Send + 'a
+        = Ready<RocketMQResult<Option<RemotingCommand>>>
     where
         Self: 'a;
 
@@ -439,7 +441,7 @@ impl RequestProcessorV2 for SendMessageProcessorExample {
         ctx: ConnectionHandlerContext,
         request: &'a mut RemotingCommand,
     ) -> Self::Fut<'a> {
-        self.process_internal(channel, ctx, request)
+        ready(self.process_internal(channel, ctx, request))
     }
 }
 
@@ -459,7 +461,7 @@ impl PullMessageProcessorExample {
         Self {}
     }
 
-    async fn process_internal(
+    fn process_internal(
         &mut self,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
@@ -472,7 +474,7 @@ impl PullMessageProcessorExample {
 
 impl RequestProcessorV2 for PullMessageProcessorExample {
     type Fut<'a>
-        = impl Future<Output = RocketMQResult<Option<RemotingCommand>>> + Send + 'a
+        = Ready<RocketMQResult<Option<RemotingCommand>>>
     where
         Self: 'a;
 
@@ -482,7 +484,7 @@ impl RequestProcessorV2 for PullMessageProcessorExample {
         ctx: ConnectionHandlerContext,
         request: &'a mut RemotingCommand,
     ) -> Self::Fut<'a> {
-        self.process_internal(channel, ctx, request)
+        ready(self.process_internal(channel, ctx, request))
     }
 }
 
@@ -502,7 +504,7 @@ impl AdminProcessorExample {
         Self {}
     }
 
-    async fn process_internal(
+    fn process_internal(
         &mut self,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
@@ -515,7 +517,7 @@ impl AdminProcessorExample {
 
 impl RequestProcessorV2 for AdminProcessorExample {
     type Fut<'a>
-        = impl Future<Output = RocketMQResult<Option<RemotingCommand>>> + Send + 'a
+        = Ready<RocketMQResult<Option<RemotingCommand>>>
     where
         Self: 'a;
 
@@ -525,7 +527,7 @@ impl RequestProcessorV2 for AdminProcessorExample {
         ctx: ConnectionHandlerContext,
         request: &'a mut RemotingCommand,
     ) -> Self::Fut<'a> {
-        self.process_internal(channel, ctx, request)
+        ready(self.process_internal(channel, ctx, request))
     }
 }
 
