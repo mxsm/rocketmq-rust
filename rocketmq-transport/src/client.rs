@@ -156,16 +156,30 @@ impl TransportClient {
     pub async fn invoke(
         &self,
         address: SocketAddr,
+        request: RemotingCommand,
+        deadline: ShutdownDeadline,
+    ) -> RocketMQResult<RemotingCommand> {
+        let tls_config = TlsConfig::default();
+        self.invoke_with_config(address, request, &tls_config, deadline).await
+    }
+
+    /// Invokes one request through the canonical TCP/TLS connection boundary.
+    ///
+    /// The configured TLS mode applies to this invocation only. Pending-request
+    /// ownership, admission permits, response correlation, and connection
+    /// shutdown retain the same fail-closed behavior as [`Self::invoke`].
+    pub async fn invoke_with_config(
+        &self,
+        address: SocketAddr,
         mut request: RemotingCommand,
+        tls_config: &TlsConfig,
         deadline: ShutdownDeadline,
     ) -> RocketMQResult<RemotingCommand> {
         let timeout_at = tokio::time::Instant::from_std(deadline.instant());
-        let stream = tokio::time::timeout_at(timeout_at, tokio::net::TcpStream::connect(address))
-            .await
-            .map_err(|_| RocketMQError::network_timeout(address.to_string(), deadline.remaining()))??;
-        let local_ip = stream.local_addr()?.ip();
-        let scope = AdmissionScope::new(address.ip()).with_session(address.port() as u64);
-        let peer = PeerInfo::new(address, false);
+        let connected = connect_with_config(&address.to_string(), tls_config, FrameLimits::default(), deadline).await?;
+        let (mut connection, local_addr, remote_addr, negotiated_tls) = connected.into_parts_with_tls();
+        let scope = AdmissionScope::new(remote_addr.ip()).with_session(remote_addr.port() as u64);
+        let peer = PeerInfo::new(remote_addr, negotiated_tls);
         self.security
             .sign(&mut request, Some(&peer))
             .map_err(|error| RocketMQError::network_connection_failed(address.to_string(), error.to_string()))?;
@@ -178,13 +192,12 @@ impl TransportClient {
             .admission
             .try_acquire(
                 AdmissionResource::Inflight,
-                AdmissionScope::new(local_ip).with_session(address.port() as u64),
+                AdmissionScope::new(local_addr.ip()).with_session(remote_addr.port() as u64),
                 retained_bytes,
                 AdmissionClass::Data,
             )
             .map_err(|error| RocketMQError::network_connection_failed(address.to_string(), error.to_string()))?;
 
-        let mut connection = Connection::new(stream);
         let owner = self.pending.new_owner();
         let opaque = self.next_opaque.fetch_add(1, Ordering::Relaxed);
         request.set_opaque_mut(opaque);

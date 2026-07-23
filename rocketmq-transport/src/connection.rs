@@ -14,6 +14,8 @@
 
 use std::hash::Hash;
 use std::hash::Hasher;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 
 use bytes::BufMut;
 use bytes::Bytes;
@@ -93,6 +95,31 @@ pub type BoxedConnectionTransport = Box<dyn ConnectionTransport>;
 pub type ConnectionFramed = Framed<BoxedConnectionTransport, CompositeCodec>;
 type SessionConnectionFramed = Framed<BoxedConnectionTransport, SessionCodec>;
 
+static TRANSPORT_ENCODED_BYTES_WRITTEN: AtomicU64 = AtomicU64::new(0);
+
+/// Monotonic process-wide transport I/O diagnostics.
+///
+/// The counter advances only after a complete encoded RocketMQ frame write
+/// succeeds. It deliberately observes the transport framing boundary, before
+/// optional TLS record encoding, so baseline and candidate measurements remain
+/// comparable across plaintext and TLS variants.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TransportIoSnapshot {
+    pub encoded_bytes_written: u64,
+}
+
+/// Returns a read-only snapshot of successful encoded transport writes.
+#[must_use]
+pub fn transport_io_snapshot() -> TransportIoSnapshot {
+    TransportIoSnapshot {
+        encoded_bytes_written: TRANSPORT_ENCODED_BYTES_WRITTEN.load(Ordering::Relaxed),
+    }
+}
+
+fn record_transport_write(bytes: usize) {
+    TRANSPORT_ENCODED_BYTES_WRITTEN.fetch_add(bytes as u64, Ordering::Relaxed);
+}
+
 pub(crate) struct SessionConnection {
     outbound_sink: SplitSink<SessionConnectionFramed, Bytes>,
     inbound_stream: SplitStream<SessionConnectionFramed>,
@@ -120,7 +147,9 @@ impl SessionConnection {
         rocketmq_observability::metrics::remoting::record_network_bytes(len as u64);
         let bytes = self.encode_buffer.split_to(len).freeze();
         let result = self.outbound_sink.send(bytes).await;
-        if result.is_err() {
+        if result.is_ok() {
+            record_transport_write(len);
+        } else {
             let _ = self.state_tx.send(ConnectionState::Degraded);
         }
         result
@@ -467,6 +496,7 @@ impl Connection {
     }
 
     async fn send_encoded(&mut self, bytes: Bytes, class: AdmissionClass) -> rocketmq_error::RocketMQResult<()> {
+        let encoded_len = bytes.len();
         if let Some(queued) = self.queued.as_ref() {
             let _lifecycle_guard = queued.lifecycle.begin_send().await;
             if self.state() == ConnectionState::Closed {
@@ -504,12 +534,16 @@ impl Connection {
                         "writer queue closed",
                     )
                 })?;
-            return result.await.map_err(|_| {
+            let outcome = result.await.map_err(|_| {
                 rocketmq_error::RocketMQError::network_connection_failed(
                     "transport-session-writer",
                     "writer completion dropped",
                 )
             })?;
+            if outcome.is_ok() {
+                record_transport_write(encoded_len);
+            }
+            return outcome;
         }
         if self.state() == ConnectionState::Closed {
             return Err(rocketmq_error::RocketMQError::network_connection_failed(
@@ -518,7 +552,10 @@ impl Connection {
             ));
         }
         match self.outbound_sink.send(bytes).await {
-            Ok(()) => Ok(()),
+            Ok(()) => {
+                record_transport_write(encoded_len);
+                Ok(())
+            }
             Err(error) => {
                 self.mark_degraded();
                 Err(error)

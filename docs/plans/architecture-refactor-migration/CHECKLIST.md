@@ -928,6 +928,7 @@ M09-04 再删除 MCP 未使用的 Auth/Error direct edges，并把承担 owned t
   - [x] Issue #8692 / R19 runner：增加 `local-pull/batch-32` 的真实 append/reput/hot-read 采集、CQ-unit allocation 匹配控制与 body-copy 观察，并修复受限 batch 在 CQ iterator exhausted 后空转；真实性能 runner 就绪进度为 5/11，R19 固定硬件/HUMAN Gate 仍保持开放
   - [x] Issue #8694 / R19 runner：增加 `rocks-pull/batch-32` 的真实 RocksDB CQ typed range read、Local WAL hot-read 采集与 native read-call 观察；真实性能 runner 就绪进度为 6/11，R19 固定硬件/HUMAN Gate 仍保持开放
   - [x] Issue #8696 / R19 runner：增加 `tiered-append/batch-64` 与 `tiered-pull/cold-32`、`warm-32` 的真实 POSIX provider 采集，以 provider/metadata measured-window counter 和 read-ahead cache 证明真实 I/O；真实性能 runner 就绪进度为 9/11，R19 固定硬件/HUMAN Gate 仍保持开放
+  - [x] Issue #8698 / R19 runner：增加 `connection-soak/mixed-tls-churn` 与 `overload/bounded-rejection` 的真实 TCP/TLS 采集，以成功编码帧写入、pending/task 收敛、admission rejection 和控制面成功率固定真实性；真实性能 runner 就绪进度为 11/11，R19 固定硬件/HUMAN Gate 仍保持开放
   - [ ] M11-12bc115 及后续立即实施：完成 R09/R18 compatibility 与 R19 固定硬件/HUMAN 性能 Gate
   - [ ] R25：冻结重新划定的候选快照并完成当前范围四方签署
   - [FOLLOW-UP] R21 Kind/K3d 动态证据已从本轮目标排除，后续单独处理

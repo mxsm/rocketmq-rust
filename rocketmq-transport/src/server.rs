@@ -675,7 +675,7 @@ impl TransportServer {
                     continue;
                 };
                 let session = server.clone();
-                let session_context = server.service_context.child(format!("transport.session.{session_id}"));
+                let session_context = server.service_context.clone();
                 let session_task_context = session_context.clone();
                 if session_context
                     .spawn_service("transport.session", async move {
@@ -774,7 +774,7 @@ impl TransportServer {
             };
             let (sender, receiver) = tokio::sync::oneshot::channel();
             let processor = self.processor.clone();
-            let processor_context = session_context.child("transport.processor");
+            let processor_context = session_context.clone();
             let processor_task = match processor_context.spawn_service("transport.processor", async move {
                 let _ = sender.send(processor.process(request).await);
             }) {
@@ -820,6 +820,18 @@ impl TransportServer {
             _queued: queued,
             _processor: processor,
         })
+    }
+
+    /// Returns the number of currently owned accept, session, and processor tasks.
+    #[must_use]
+    pub fn live_task_count(&self) -> usize {
+        self.service_context.task_group().task_count()
+    }
+
+    /// Returns the number of child ownership groups retained by the server.
+    #[must_use]
+    pub fn owned_child_group_count(&self) -> usize {
+        self.service_context.task_group().child_count()
     }
 
     pub async fn shutdown_until(&self, deadline: ShutdownDeadline) -> ShutdownReport {

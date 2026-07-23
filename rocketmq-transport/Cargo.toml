@@ -55,6 +55,16 @@ rustls-pemfile = { version = "2.2", optional = true }
 tokio-rustls = { version = "0.26", optional = true }
 
 [dev-dependencies]
+anyhow.workspace = true
 serde_json.workspace = true
 tempfile = "3.27.0"
 tokio.workspace = true
+
+[target.'cfg(unix)'.dev-dependencies]
+libc = "0.2.186"
+
+[target.'cfg(windows)'.dev-dependencies]
+windows = { version = "0.62.2", features = [
+  "Win32_System_ProcessStatus",
+  "Win32_System_Threading",
+] }

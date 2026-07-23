@@ -42,7 +42,10 @@ use rocketmq_transport::admission::AdmissionResource;
 use rocketmq_transport::admission::AdmissionScope;
 use rocketmq_transport::admission::ResourceLimit;
 use rocketmq_transport::client::TransportClient;
+use rocketmq_transport::config::TlsClientConfig;
+use rocketmq_transport::config::TlsConfig;
 use rocketmq_transport::config::TlsMode;
+use rocketmq_transport::connection::transport_io_snapshot;
 use rocketmq_transport::connection::Connection;
 use rocketmq_transport::security::TransportSecurity;
 use rocketmq_transport::server::ConnectionHandler;
@@ -471,6 +474,69 @@ async fn transport_security_signs_outbound_and_fails_closed_without_a_principal(
     assert_eq!(response.code(), ResponseCode::Success.to_i32());
 
     let _ = open_server
+        .shutdown_until(ShutdownDeadline::after(Duration::from_secs(1)))
+        .await;
+    let _ = runtime.shutdown_tasks(Duration::from_secs(1)).await;
+}
+
+#[tokio::test]
+async fn tls_client_invocation_releases_pending_and_server_ownership() {
+    let runtime = RuntimeContext::from_current("transport-tls-client-convergence-test");
+    let mut server_config = TransportServerConfig::loopback();
+    server_config.tls.test_mode_enable = true;
+    server_config.tls.server.mode = TlsMode::Permissive;
+    let server = TransportServer::bind(
+        runtime.service_context("transport-server"),
+        server_config,
+        Arc::new(EchoProcessor),
+        Arc::new(AdmissionController::new(AdmissionLimits::default())),
+    )
+    .await
+    .unwrap();
+    let address = server.local_addr();
+    server.start().unwrap();
+    let baseline_tasks = server.live_task_count();
+    let baseline_children = server.owned_child_group_count();
+
+    let client = TransportClient::new(
+        runtime.service_context("transport-client"),
+        Arc::new(AdmissionController::new(AdmissionLimits::default())),
+    );
+    let client_tls = TlsConfig {
+        enable: true,
+        test_mode_enable: true,
+        client: TlsClientConfig {
+            auth_server: false,
+            ..TlsClientConfig::default()
+        },
+        ..TlsConfig::default()
+    };
+    let io_before = transport_io_snapshot();
+    let response = client
+        .invoke_with_config(
+            address,
+            RemotingCommand::create_remoting_command(RequestCode::HeartBeat).set_body(vec![7_u8; 1024]),
+            &client_tls,
+            ShutdownDeadline::after(Duration::from_secs(2)),
+        )
+        .await
+        .expect("TLS invocation");
+    assert_eq!(response.code(), ResponseCode::Success.to_i32());
+    assert_eq!(response.body().map(bytes::Bytes::len), Some(1024));
+    assert_eq!(client.pending_usage().count, 0);
+    assert_eq!(client.pending_usage().bytes, 0);
+
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while server.live_task_count() != baseline_tasks {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("server session and processor tasks should converge");
+    assert_eq!(server.owned_child_group_count(), baseline_children);
+    assert!(transport_io_snapshot().encoded_bytes_written > io_before.encoded_bytes_written);
+
+    let _ = server
         .shutdown_until(ShutdownDeadline::after(Duration::from_secs(1)))
         .await;
     let _ = runtime.shutdown_tasks(Duration::from_secs(1)).await;
