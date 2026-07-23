@@ -28,7 +28,7 @@ $artifactsRoot = Join-Path $repoRoot $ArtifactsDirectory
 $cacheRoot = Join-Path $toolsRoot "archives"
 New-Item -ItemType Directory -Force -Path $toolsRoot, $artifactsRoot, $cacheRoot | Out-Null
 
-$isWindows = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
+$hostIsWindows = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
     [System.Runtime.InteropServices.OSPlatform]::Windows
 )
 if (-not [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.Equals(
@@ -36,9 +36,9 @@ if (-not [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.Equ
     )) {
     throw "M11-09 validation supports only amd64 hosts"
 }
-$platform = if ($isWindows) { "windows_amd64" } else { "linux_amd64" }
-$archiveSuffix = if ($isWindows) { ".zip" } else { ".tar.gz" }
-$executableSuffix = if ($isWindows) { ".exe" } else { "" }
+$platform = if ($hostIsWindows) { "windows_amd64" } else { "linux_amd64" }
+$archiveSuffix = if ($hostIsWindows) { ".zip" } else { ".tar.gz" }
+$executableSuffix = if ($hostIsWindows) { ".exe" } else { "" }
 
 function Get-ToolSpec {
     param([Parameter(Mandatory)][string]$Name)
@@ -97,7 +97,7 @@ function Install-PinnedTool {
         Remove-Item -LiteralPath $extractRoot -Recurse -Force
     }
     New-Item -ItemType Directory -Force -Path $extractRoot | Out-Null
-    if ($isWindows) {
+    if ($hostIsWindows) {
         Expand-Archive -LiteralPath $archive -DestinationPath $extractRoot -Force
     } else {
         & tar -xzf $archive -C $extractRoot
@@ -112,7 +112,7 @@ function Install-PinnedTool {
         throw "$($Spec.Name) executable was not present in the verified archive"
     }
     Copy-Item -LiteralPath $candidate.FullName -Destination $destination -Force
-    if (-not $isWindows) {
+    if (-not $hostIsWindows) {
         & chmod 0755 $destination
         if ($LASTEXITCODE -ne 0) {
             throw "failed to mark $($Spec.Name) executable"
