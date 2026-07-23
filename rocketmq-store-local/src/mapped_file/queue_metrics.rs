@@ -29,6 +29,38 @@ pub struct MappedFileWarmupStats {
     pub last_millis: u64,
 }
 
+/// Aggregate I/O counters from one mapped-file queue generation.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MappedFileIoStats {
+    /// Successful append operations recorded by mapped files.
+    pub write_operations: u64,
+    /// Encoded bytes appended to mapped files.
+    pub bytes_written: u64,
+    /// Successful mapped-memory flush operations.
+    pub flush_operations: u64,
+    /// Read operations served by mapped files.
+    pub read_operations: u64,
+    /// Bytes returned by mapped-file reads.
+    pub bytes_read: u64,
+}
+
+/// Aggregates I/O metrics from the current mapped-file snapshot.
+#[doc(hidden)]
+pub fn mapped_file_queue_io_stats(files: &[Arc<DefaultMappedFile>]) -> MappedFileIoStats {
+    let mut stats = MappedFileIoStats::default();
+    for mapped_file in files {
+        let Some(metrics) = mapped_file.get_metrics() else {
+            continue;
+        };
+        stats.write_operations = stats.write_operations.saturating_add(metrics.total_writes());
+        stats.bytes_written = stats.bytes_written.saturating_add(metrics.total_bytes_written());
+        stats.flush_operations = stats.flush_operations.saturating_add(metrics.total_flushes());
+        stats.read_operations = stats.read_operations.saturating_add(metrics.total_reads());
+        stats.bytes_read = stats.bytes_read.saturating_add(metrics.total_bytes_read());
+    }
+    stats
+}
+
 /// Aggregates warm-up metrics from the current mapped-file snapshot.
 #[doc(hidden)]
 pub fn mapped_file_queue_warmup_stats(files: &[Arc<DefaultMappedFile>]) -> MappedFileWarmupStats {

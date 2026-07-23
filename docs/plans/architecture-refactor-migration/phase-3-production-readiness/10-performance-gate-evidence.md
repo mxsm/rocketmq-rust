@@ -89,12 +89,16 @@ python scripts/architecture_performance_sidecar.py `
 ## 真实采集器就绪进度
 
 Issue [#8688](https://github.com/mxsm/rocketmq-rust/issues/8688) 为 `local-append` 增加首个真实 profile
-采集器，覆盖 `producers-1`、`producers-8`、`producers-32`，因此当前真实性能 runner 就绪进度为
-**3/11 variants**：
+采集器，覆盖 `producers-1`、`producers-8`、`producers-32`；Issue
+[#8690](https://github.com/mxsm/rocketmq-rust/issues/8690) 又增加 `sync-flush/concurrency-64`，因此当前
+真实性能 runner 就绪进度为 **4/11 variants**：
 
 ```powershell
 cargo run --release --quiet -p rocketmq-store `
   --example architecture_local_append_collector -- local-append producers-1
+
+cargo run --release --quiet -p rocketmq-store `
+  --example architecture_local_append_collector -- sync-flush concurrency-64
 ```
 
 - 每个变体先执行两个同负载 priming 子进程，再固定采集五个不筛选、不改写的原始样本；父进程为每个
@@ -106,11 +110,14 @@ cargo run --release --quiet -p rocketmq-store `
   process peak working set 或 Unix `getrusage(RUSAGE_SELF)`；`allocations_per_operation` 由进程全局
   allocator 的 measured-window 调用差值产生；`io_amplification_ratio` 为 CommitLog 实际编码
   `wrote_bytes` 与 payload bytes 的比值。
+- `sync-flush` 会初始化并启动真实 LocalFile Store，以 64 个并发 producer 等待 GroupCommit 持久化确认；
+  `fsync_per_ack` 使用 measured window 内成功 mapped-file flush 计数增量除以全部 `PutOk` ack，不使用
+  固定常量或请求批次数推测。
 - stdout 只输出 sidecar 要求的单个 JSON object，并精确包含完整 core metric inventory；未知
   profile/variant、样本缺失、非有限或负值均 fail closed。
 
-这 3 个变体只是 runner readiness。它们尚未在批准的固定硬件上对不同 clean baseline/candidate 执行，
-没有写入任何性能结论，也没有完成 R19 或 `[HUMAN]` M10 Gate。其余 8 个性能变体和 4 个 correctness
+这 4 个变体只是 runner readiness。它们尚未在批准的固定硬件上对不同 clean baseline/candidate 执行，
+没有写入任何性能结论，也没有完成 R19 或 `[HUMAN]` M10 Gate。其余 7 个性能变体和 4 个 correctness
 runner 仍待实现。
 
 ## 正确性优先与例外边界
@@ -134,16 +141,18 @@ runner 仍待实现。
 | sidecar template 生成及未替换 placeholder 执行 | 模板生成通过；执行按预期失败且未产生 measurement report |
 | `python scripts/architecture_performance_guard.py --validate-profiles` | 通过；8 profiles、11 variants、50 metric contracts |
 | `python -m unittest discover -s scripts/tests -p "test_*guard.py"` | 125/125 通过 |
-| `cargo test -p rocketmq-store --example architecture_local_append_collector` | Issue #8688 采集器 5/5 通过；覆盖三种 variant、精确 metric inventory、P99，以及未知/缺失/非有限输入的反向拒绝 |
-| `cargo clippy -p rocketmq-store --example architecture_local_append_collector -- -D warnings` | 通过 |
+| `cargo test -p rocketmq-store --example architecture_local_append_collector` | Issue #8688/#8690 采集器 6/6 通过；覆盖四种 variant、精确 metric inventory、P99/fsync，以及未知组合、缺失/非有限输入的反向拒绝 |
+| `cargo test -p rocketmq-store --lib io_stats_aggregate_mapped_file_metrics` | Issue #8690 I/O 聚合正向测试 1/1 通过 |
+| `cargo clippy -p rocketmq-store-local --lib -- -D warnings` 和采集器 focused Clippy | 通过 |
 | 三个 `local-append` variant 的 release collector 本机烟测 | 均真实执行并输出五样本完整协议；开发机未获批准且部分 P99 样本超出噪声限制，明确不作为 baseline/candidate 或性能通过证据 |
+| `sync-flush/concurrency-64` release collector 本机烟测 | 真实 Store/GroupCommit 启停和五样本完整协议通过；观测到真实 `fsync_per_ack=0.03125`，仅为未批准开发机诊断值，不作为 Gate 结论 |
 | dependency target/baseline guards | 通过；target compatibility 35/35、dev-only 3/3，baseline 无增长 |
 | release guard | 通过；32/32 topology、10/10 R0 crates，无提前移除/Proxy feature 激活 |
 | ArcMut guard | 通过 |
 | `.\scripts\check-agents-routing.ps1` | 通过；4 standalone Cargo、3 Node、8 routes |
 | `git diff --check` | 通过 |
-| `cargo fmt --all -- --check` | Issue #8688 通过 |
-| `cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings` | Issue #8688 通过 |
+| `cargo fmt --all -- --check` | Issue #8688/#8690 通过 |
+| `cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings` | Issue #8688/#8690 通过 |
 
 测试覆盖稳定样本通过、双方向超过 5% 回归、MAD 与离群样本、环境漂移、缺失/NaN、正确性不可豁免、
 例外有效期与作用域、fixture 显式 opt-in、原始 hash/dirty measurement/未知例外，以及输出报告对
