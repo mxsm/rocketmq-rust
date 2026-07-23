@@ -2761,6 +2761,8 @@ impl MessageStore for LocalFileMessageStore {
                             );
                             status = GetMessageStatus::Found;
                             next_phy_file_start_offset = i64::MIN;
+                        } else {
+                            break;
                         }
                     }
                 }
@@ -8905,6 +8907,15 @@ mod tests {
         assert_eq!(result.max_offset(), 2);
         assert_eq!(result.message_mapped_list().len(), 2);
         assert_eq!(result.message_mapped_capacity(), 32);
+
+        let limited = tokio::time::timeout(Duration::from_secs(1), store.get_message(&group, &topic, 0, 0, 1, None))
+            .await
+            .expect("limited pull should not spin after exhausting its iterator")
+            .expect("limited get message result");
+        assert_eq!(limited.status(), Some(GetMessageStatus::Found));
+        assert_eq!(limited.message_count(), 1);
+        assert_eq!(limited.next_begin_offset(), 1);
+        assert_eq!(limited.message_mapped_list().len(), 1);
     }
 
     #[tokio::test]
