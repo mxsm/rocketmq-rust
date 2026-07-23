@@ -28,9 +28,8 @@ CHANGELOG.md
 LICENSE
 docs/
 
-# Testing
-tests/
-**/tests/
+# Cargo parses explicit [[test]] targets in workspace manifests during production builds,
+# so their source files must remain in the build context.
 # Cargo.lock
 
 # CI/CD
