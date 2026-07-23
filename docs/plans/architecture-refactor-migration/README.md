@@ -8,7 +8,7 @@
 > PR-M12-01～06 未开始，合计剩余 7 个
 
 剩余任务数量、M11-12 内部执行批次与 M12 六个工作包见 [`REMAINING-TASKS.md`](REMAINING-TASKS.md)：正式口径
-剩余 7 个工作包；31 个最小可审查单元已完成 11 个，当前剩余 20 个。
+剩余 7 个工作包；31 个最小可审查单元已完成 12 个，当前剩余 19 个。
 
 ## 1. 使用方式
 
@@ -1252,6 +1252,15 @@ expression-filter fixture 直接拥有 concrete root，BrokerRuntime role tests 
 28/146 降至 17/132，compatibility 保持 14/40；净删除 11 test identities/14 occurrences，无 relocation、
 新增 identity 或临时 approval。Store test/bench caller 从 20/130 降至 14/123，Broker test caller 从 6/8
 降至 1/1，R17 总上界降至 17/132；执行清单保持完成 11 项、剩余 20 项，正式进度仍为 75/82。
+
+Timer Store capability 随 Issue #8611 完成提取：活跃路径仅保留队列查询、CommitLog 读取和内部消息写入三项
+窄能力，owned-root wiring 在 Timer enabled 时不再要求完整 Store root；Timer 单测、恢复集成与 LocalFile Timer
+fixtures 均直接拥有 concrete Store。恢复回归同时修复 ConsumeQueue truncate 持同队列读锁再申请写锁的重入
+死锁。reviewed 快照从 44/196 降至 35/90：production 保持 13/24、test 从 17/132 降至 8/26、
+compatibility 保持 14/40；净删除 9 test identities/106 occurrences，两个保留公开兼容 occurrence 仅使用忽略的
+临时 ADR-013 同 item relocation approval，无新增 identity 或提交态 approval。Store test/bench caller 从 14/123
+降至 5/17，R14 活跃路径完成且公开 legacy 2/5 转由 R18；
+R17 总上界降至 8/26，执行清单现为完成 12 项、剩余 19 项，正式进度仍为 75/82。
 
 Default HA client runtime ownership 随 Issue #8567 完成收窄：`DefaultHAClient` 以标准 `Arc<Inner>` 共享只读组合根，
 `Inner` 仅保留原子、锁、Notify、flow monitor 与现有 LocalStore 兼容句柄；从未安装连接的 stream 字段和重复 buffer/

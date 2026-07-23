@@ -31,7 +31,6 @@ use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::MessageDecoder::message_properties_to_string;
 use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore;
@@ -53,7 +52,7 @@ fn timer_store_config(temp_dir: &TempDir) -> MessageStoreConfig {
     }
 }
 
-fn new_test_store(temp_dir: &TempDir) -> ArcMut<LocalFileMessageStore> {
+fn new_test_store(temp_dir: &TempDir) -> LocalFileMessageStore {
     let real_topic = CheetahString::from_static_str("phase6-timer-real-topic");
     let broker_config = Arc::new(BrokerConfig::default());
     let topic_config_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>> = Arc::new(DashMap::new());
@@ -63,15 +62,16 @@ fn new_test_store(temp_dir: &TempDir) -> ArcMut<LocalFileMessageStore> {
         Arc::new(TopicConfig::default()),
     );
 
-    let mut store = ArcMut::new(LocalFileMessageStore::new(
+    let mut store = LocalFileMessageStore::new(
         Arc::new(timer_store_config(temp_dir)),
         broker_config,
         topic_config_table,
         None,
         false,
-    ));
-    let store_clone = store.clone();
-    store.set_message_store_arc(store_clone);
+    );
+    store
+        .wire_owned_root_dependencies()
+        .expect("Timer recovery tests should wire owned Store capabilities");
     store
 }
 
@@ -120,6 +120,7 @@ async fn restart_with_auto_initialized_timer_store_redelivers_due_message() {
 
     writer.reput_once().await;
     assert_eq!(timer_message_store.process_once().await, 1);
+    drop(timer_message_store);
     writer.shutdown().await;
     drop(writer);
 

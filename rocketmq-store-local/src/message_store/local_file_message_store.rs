@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::Arc;
+
 use crate::config::backend::LocalBackendConfig;
 use crate::message_store::cleanup::CleanupPolicy;
 use crate::message_store::lifecycle::LocalStoreLifecycle;
@@ -24,7 +26,7 @@ use crate::message_store::reput::ReputPolicy;
 /// the facade crate. This root owns only local-store state and decisions.
 pub struct LocalStoreComposition {
     config: LocalBackendConfig,
-    lifecycle: LocalStoreLifecycle,
+    lifecycle: Arc<LocalStoreLifecycle>,
     query: QueryPolicy,
     reput: ReputPolicy,
     cleanup: CleanupPolicy,
@@ -37,7 +39,7 @@ impl LocalStoreComposition {
         let cleanup = CleanupPolicy::new(config.cleanup);
         Self {
             config,
-            lifecycle: LocalStoreLifecycle::new(),
+            lifecycle: Arc::new(LocalStoreLifecycle::new()),
             query,
             reput,
             cleanup,
@@ -49,7 +51,11 @@ impl LocalStoreComposition {
     }
 
     pub fn lifecycle(&self) -> &LocalStoreLifecycle {
-        &self.lifecycle
+        self.lifecycle.as_ref()
+    }
+
+    pub fn lifecycle_handle(&self) -> Arc<LocalStoreLifecycle> {
+        Arc::clone(&self.lifecycle)
     }
 
     pub const fn query(&self) -> QueryPolicy {

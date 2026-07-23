@@ -99,6 +99,7 @@ use rocketmq_store_local::message_store::cleanup::CleanupPolicy as LocalCleanupP
 use rocketmq_store_local::message_store::cleanup::DiskCleanDecision;
 use rocketmq_store_local::message_store::cleanup::DiskUsageState;
 use rocketmq_store_local::message_store::cleanup::ManualDeleteTracker;
+use rocketmq_store_local::message_store::lifecycle::LocalStoreLifecycle;
 use rocketmq_store_local::message_store::lifecycle::LocalStoreState;
 use rocketmq_store_local::message_store::reput::ReputPolicy;
 use rocketmq_store_local::message_store::LocalStoreComposition;
@@ -143,6 +144,7 @@ use crate::kv::compaction_store::CompactionStore;
 use crate::log_file::commit_log;
 use crate::log_file::commit_log::CommitLog;
 use crate::log_file::commit_log::CommitLogCleanupHandle;
+use crate::log_file::commit_log::CommitLogInternalMessageWriteHandle;
 use crate::log_file::commit_log::CommitLogReadHandle;
 use crate::log_file::commit_log::CommitLogReplicaHandle;
 use crate::log_file::commit_log::CommitLogStoreContext;
@@ -174,6 +176,7 @@ use crate::tieredstore::resolve_tiered_dispatch_body_with_reader;
 #[cfg(feature = "tieredstore")]
 use crate::tieredstore::TieredStoreDecorator;
 use crate::timer::timer_message_store::TimerMessageStore;
+use crate::timer::timer_message_store::TimerStoreContext;
 use crate::transfer::error::TransferResult;
 use crate::transfer::segment::SegmentLease;
 use crate::utils::ffi::MADV_NORMAL;
@@ -463,6 +466,145 @@ impl HAReplicaStoreHandle {
     #[inline]
     pub(crate) fn publish_confirm_offset(&self, phy_offset: i64) {
         self.commit_log.publish_confirm_offset(phy_offset);
+    }
+}
+
+/// Narrow Local Store write capability used by Timer redelivery.
+///
+/// The handle shares only lifecycle state, hook snapshots, queue-offset state, CommitLog's
+/// internal-message append port, statistics, and reput notification. It cannot recover, start,
+/// stop, or otherwise mutate the owning Store root.
+#[derive(Clone)]
+pub(crate) struct TimerMessageWriteHandle {
+    message_store_config: Arc<MessageStoreConfig>,
+    lifecycle: Arc<LocalStoreLifecycle>,
+    shutdown: Arc<AtomicBool>,
+    put_message_hooks: HookRegistry<dyn PutMessageHook + Send + Sync>,
+    topic_config_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>>,
+    commit_log: CommitLogInternalMessageWriteHandle,
+    consume_queue_store: ConsumeQueueStore,
+    store_stats_service: Arc<StoreStatsService>,
+    reput_notify: ReputNotifyHandle,
+}
+
+impl TimerMessageWriteHandle {
+    pub(crate) async fn put_message(&self, mut msg: MessageExtBrokerInner) -> PutMessageResult {
+        if !self
+            .lifecycle
+            .is_available_for_io(self.shutdown.load(Ordering::Acquire))
+        {
+            warn!("message store has shutdown, so Timer putMessage is forbidden");
+            return PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable);
+        }
+
+        for hook in self.put_message_hooks.snapshot() {
+            if let Some(result) = hook.execute_before_put_message(&mut msg) {
+                return result;
+            }
+        }
+        let lmq_dispatch_queue_keys = self.prepare_lmq_dispatch(&mut msg);
+        let lmq_dispatch_message_num = Self::lmq_dispatch_message_num(&msg);
+
+        if msg
+            .message_ext_inner
+            .properties()
+            .contains_key(MessageConst::PROPERTY_INNER_NUM)
+            && !MessageSysFlag::check(msg.sys_flag(), MessageSysFlag::INNER_BATCH_FLAG)
+        {
+            warn!(
+                "[BUG]The message had property {} but is not an inner batch",
+                MessageConst::PROPERTY_INNER_NUM
+            );
+            return PutMessageResult::new_default(PutMessageStatus::MessageIllegal);
+        }
+        if MessageSysFlag::check(msg.sys_flag(), MessageSysFlag::INNER_BATCH_FLAG) {
+            let topic_config = self.topic_config_table.get(msg.topic()).as_deref().cloned();
+            if !QueueTypeUtils::is_batch_cq_arc_mut(topic_config.as_ref()) {
+                error!("[BUG]The message is an inner batch but cq type is not batch cq");
+                return PutMessageResult::new_default(PutMessageStatus::MessageIllegal);
+            }
+        }
+
+        let begin_time = Instant::now();
+        let result = self.commit_log.put_message(msg).await;
+        let elapsed_time = begin_time.elapsed().as_millis();
+        if elapsed_time > 500 {
+            warn!("Timer putMessage: CommitLog put cost {}ms", elapsed_time);
+        }
+        self.store_stats_service
+            .set_put_message_entire_time_max(elapsed_time as u64);
+        if !result.is_ok() {
+            self.store_stats_service
+                .get_put_message_failed_times()
+                .fetch_add(1, Ordering::AcqRel);
+        } else {
+            for queue_key in &lmq_dispatch_queue_keys {
+                self.consume_queue_store
+                    .increase_lmq_offset(queue_key.as_str(), lmq_dispatch_message_num);
+            }
+            self.reput_notify.notify_new_message();
+        }
+        result
+    }
+
+    fn prepare_lmq_dispatch(&self, msg: &mut MessageExtBrokerInner) -> Vec<String> {
+        if !self.message_store_config.enable_multi_dispatch {
+            return Vec::new();
+        }
+        let Some(multi_dispatch_queue) = msg.property(MessageConst::PROPERTY_INNER_MULTI_DISPATCH) else {
+            return Vec::new();
+        };
+        if multi_dispatch_queue.is_empty() {
+            return Vec::new();
+        }
+
+        let mut queue_keys = Vec::new();
+        let mut saw_queue = false;
+        let mut is_all_lmq_dispatch = true;
+        for queue_name in multi_dispatch_queue.split(MULTI_DISPATCH_QUEUE_SPLITTER) {
+            if queue_name.is_empty() {
+                is_all_lmq_dispatch = false;
+                continue;
+            }
+            saw_queue = true;
+            if self.message_store_config.enable_lmq && is_lmq(Some(queue_name)) {
+                queue_keys.push(format!("{queue_name}-{LMQ_QUEUE_ID}"));
+            } else {
+                is_all_lmq_dispatch = false;
+            }
+        }
+        if msg
+            .property(MessageConst::PROPERTY_INNER_MULTI_QUEUE_OFFSET)
+            .is_some_and(|queue_offset| !queue_offset.is_empty())
+        {
+            return queue_keys;
+        }
+        if !(saw_queue && is_all_lmq_dispatch) {
+            return Vec::new();
+        }
+
+        let mut queue_offsets = String::new();
+        for (index, queue_key) in queue_keys.iter().enumerate() {
+            if index > 0 {
+                queue_offsets.push_str(MULTI_DISPATCH_QUEUE_SPLITTER);
+            }
+            let _ = write!(
+                &mut queue_offsets,
+                "{}",
+                self.consume_queue_store.get_lmq_queue_offset(queue_key.as_str())
+            );
+        }
+        msg.put_property(
+            CheetahString::from_static_str(MessageConst::PROPERTY_INNER_MULTI_QUEUE_OFFSET),
+            CheetahString::from_string(queue_offsets),
+        );
+        queue_keys
+    }
+
+    fn lmq_dispatch_message_num(msg: &MessageExtBrokerInner) -> i16 {
+        msg.property(MessageConst::PROPERTY_INNER_NUM)
+            .and_then(|message_num| message_num.parse::<i16>().ok())
+            .unwrap_or(1)
     }
 }
 
@@ -886,6 +1028,28 @@ impl LocalFileMessageStore {
         self.consume_queue_store.lookup_handle()
     }
 
+    fn timer_message_write_handle(&self) -> TimerMessageWriteHandle {
+        TimerMessageWriteHandle {
+            message_store_config: Arc::clone(&self.message_store_config),
+            lifecycle: self.composition.lifecycle_handle(),
+            shutdown: Arc::clone(&self.shutdown),
+            put_message_hooks: self.put_message_hook_list.clone(),
+            topic_config_table: Arc::clone(&self.topic_config_table),
+            commit_log: self.commit_log.internal_message_write_handle(),
+            consume_queue_store: self.consume_queue_store.clone(),
+            store_stats_service: Arc::clone(&self.store_stats_service),
+            reput_notify: self.reput_message_service.notify_handle(),
+        }
+    }
+
+    fn timer_store_context(&self) -> TimerStoreContext {
+        TimerStoreContext::new(
+            self.consume_queue_lookup_handle(),
+            self.commit_log.read_handle(),
+            self.timer_message_write_handle(),
+        )
+    }
+
     #[cfg(feature = "tieredstore")]
     pub fn tiered_store_metrics(
         &self,
@@ -904,9 +1068,13 @@ impl LocalFileMessageStore {
     }
 
     pub fn set_message_store_arc(&mut self, message_store_arc: ArcMut<LocalFileMessageStore>) {
+        drop(message_store_arc);
         self.consume_queue_store.set_context(self.consume_queue_context());
         if self.message_store_config.is_timer_wheel_enable() && self.timer_message_store.is_none() {
-            let timer_message_store = Arc::new(TimerMessageStore::new(Some(message_store_arc.clone())));
+            let timer_message_store = Arc::new(TimerMessageStore::new_with_store_context(
+                self.timer_store_context(),
+                Arc::clone(&self.message_store_config),
+            ));
             self.set_timer_message_store(timer_message_store);
         }
         if !Self::is_dledger_commit_log_enabled_config(self.message_store_config.as_ref())
@@ -930,22 +1098,22 @@ impl LocalFileMessageStore {
 
     /// Completes root wiring when this store has exclusive ownership.
     ///
-    /// ConsumeQueue and HA use independently owned capability handles, so they do not require
-    /// the full Store root to be shared. Timer still holds the legacy root facade and therefore
-    /// remains excluded from this path.
+    /// ConsumeQueue, Timer, and HA use independently owned capability handles, so they do not
+    /// require the full Store root to be shared.
     ///
     /// # Errors
     ///
-    /// Returns [`StoreError::InvalidState`] when the timer wheel is enabled because Timer still
-    /// requires the legacy shared Store facade.
+    /// This operation is currently infallible. The result is retained as an additive composition
+    /// contract so future owned-capability validation can fail without changing the public API.
     pub fn wire_owned_root_dependencies(&mut self) -> Result<(), StoreError> {
-        if self.message_store_config.is_timer_wheel_enable() {
-            return Err(StoreError::InvalidState(
-                "owned message store wiring requires the timer wheel to be disabled".to_string(),
-            ));
-        }
-
         self.consume_queue_store.set_context(self.consume_queue_context());
+        if self.message_store_config.is_timer_wheel_enable() && self.timer_message_store.is_none() {
+            let timer_message_store = Arc::new(TimerMessageStore::new_with_store_context(
+                self.timer_store_context(),
+                Arc::clone(&self.message_store_config),
+            ));
+            self.set_timer_message_store(timer_message_store);
+        }
         if !Self::is_dledger_commit_log_enabled_config(self.message_store_config.as_ref())
             && !self.message_store_config.duplication_enable
         {
@@ -1864,7 +2032,7 @@ impl LocalFileMessageStore {
             return PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable);
         }
 
-        for hook in self.put_message_hook_list.iter() {
+        for hook in self.put_message_hook_list.snapshot() {
             if let Some(result) = hook.execute_before_put_message(&mut msg) {
                 return result;
             }
@@ -1925,7 +2093,7 @@ impl LocalFileMessageStore {
             return PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable);
         }
 
-        for hook in self.put_message_hook_list.iter() {
+        for hook in self.put_message_hook_list.snapshot() {
             if let Some(result) = hook.execute_before_put_message(&mut message_ext_batch.message_ext_broker_inner) {
                 return result;
             }
@@ -4745,6 +4913,19 @@ impl BackgroundIndexRebuildWorker {
         }
     }
 }
+#[derive(Clone)]
+struct ReputNotifyHandle {
+    new_message_notify: Arc<Notify>,
+    pending_messages: Arc<AtomicI64>,
+}
+
+impl ReputNotifyHandle {
+    fn notify_new_message(&self) {
+        self.pending_messages.fetch_add(1, Ordering::Relaxed);
+        self.new_message_notify.notify_one();
+    }
+}
+
 struct ReputMessageService {
     shutdown_token: CancellationToken,
     new_message_notify: Arc<Notify>,
@@ -4757,6 +4938,13 @@ struct ReputMessageService {
 }
 
 impl ReputMessageService {
+    fn notify_handle(&self) -> ReputNotifyHandle {
+        ReputNotifyHandle {
+            new_message_notify: Arc::clone(&self.new_message_notify),
+            pending_messages: Arc::clone(&self.pending_messages),
+        }
+    }
+
     fn notify_message_arrive4multi_queue(&self, dispatch_request: &mut DispatchRequest) {
         if let Some(inner) = self.inner.as_ref() {
             inner
@@ -4771,9 +4959,7 @@ impl ReputMessageService {
 
     /// Notify that new messages have arrived and need to be reput
     pub fn notify_new_message(&self) {
-        // Increment pending counter to prevent notification loss
-        self.pending_messages.fetch_add(1, Ordering::Relaxed);
-        self.new_message_notify.notify_one();
+        self.notify_handle().notify_new_message();
     }
 
     pub fn start(
@@ -6001,18 +6187,19 @@ mod tests {
         temp_dir: &tempfile::TempDir,
         mut message_store_config: MessageStoreConfig,
         broker_config: BrokerConfig,
-    ) -> rocketmq_rust::ArcMut<LocalFileMessageStore> {
+    ) -> LocalFileMessageStore {
         message_store_config.store_path_root_dir = temp_dir.path().to_string_lossy().to_string().into();
-        let mut store = rocketmq_rust::ArcMut::new(LocalFileMessageStore::new(
+        let mut store = LocalFileMessageStore::new(
             Arc::new(message_store_config),
             Arc::new(broker_config),
             Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
             None,
             false,
-        ));
+        );
         assert!(store.get_timer_message_store().is_none());
-        let store_clone = store.clone();
-        store.set_message_store_arc(store_clone);
+        store
+            .wire_owned_root_dependencies()
+            .expect("LocalFile tests should wire owned Store capabilities");
         store
     }
 
@@ -6125,7 +6312,7 @@ mod tests {
     }
 
     #[test]
-    fn owned_root_wiring_rejects_timer_wheel() {
+    fn owned_root_wiring_constructs_timer_from_store_capabilities() {
         let temp_dir = tempdir().unwrap();
         let mut store = new_owned_wiring_test_store(
             &temp_dir,
@@ -6140,15 +6327,12 @@ mod tests {
             },
         );
 
-        let error = store
+        store
             .wire_owned_root_dependencies()
-            .expect_err("timer wiring requires a shared store owner");
+            .expect("Timer can use independently owned Store capabilities");
 
-        assert!(matches!(
-            error,
-            StoreError::InvalidState(message) if message.contains("timer wheel")
-        ));
-        assert!(!store.root_dependencies_wired);
+        assert!(store.root_dependencies_wired);
+        assert!(store.get_timer_message_store().is_some());
     }
 
     #[test]
@@ -6817,7 +7001,7 @@ mod tests {
     }
 
     #[test]
-    fn set_message_store_arc_initializes_timer_message_store_when_timer_wheel_enabled() {
+    fn owned_root_wiring_initializes_timer_message_store_when_timer_wheel_enabled() {
         let temp_dir = tempdir().unwrap();
         let store = new_configured_test_store_with_broker(
             &temp_dir,

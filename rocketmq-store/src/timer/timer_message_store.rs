@@ -49,9 +49,15 @@ use tokio::sync::Mutex as AsyncMutex;
 use tracing::error;
 use tracing::warn;
 
+use crate::base::message_result::PutMessageResult;
+use crate::base::message_status_enum::PutMessageStatus;
 use crate::base::message_store::MessageStore;
 use crate::config::message_store_config::MessageStoreConfig;
+use crate::log_file::commit_log::CommitLogReadHandle;
 use crate::message_store::local_file_message_store::LocalFileMessageStore;
+use crate::message_store::local_file_message_store::TimerMessageWriteHandle;
+use crate::queue::local_file_consume_queue_store::ConsumeQueueLookupHandle;
+use crate::queue::ArcConsumeQueue;
 use crate::queue::CqUnit;
 use crate::store_path_config_helper::get_timer_check_path;
 use crate::store_path_config_helper::get_timer_log_path;
@@ -101,6 +107,42 @@ struct RecoveredTimerState {
     queue_offset: i64,
 }
 
+/// Narrow Store capabilities used by Timer's active runtime path.
+#[derive(Clone)]
+pub(crate) struct TimerStoreContext {
+    consume_queues: ConsumeQueueLookupHandle,
+    commit_log: CommitLogReadHandle,
+    message_write: TimerMessageWriteHandle,
+}
+
+impl TimerStoreContext {
+    pub(crate) fn new(
+        consume_queues: ConsumeQueueLookupHandle,
+        commit_log: CommitLogReadHandle,
+        message_write: TimerMessageWriteHandle,
+    ) -> Self {
+        Self {
+            consume_queues,
+            commit_log,
+            message_write,
+        }
+    }
+
+    fn find_consume_queue(&self, topic: &CheetahString, queue_id: i32) -> Option<ArcConsumeQueue> {
+        self.consume_queues.find_or_create_consume_queue(topic, queue_id)
+    }
+
+    fn look_message_by_offset_with_size(&self, commit_log_offset: i64, size: i32) -> Option<MessageExt> {
+        let result = self.commit_log.get_message(commit_log_offset, size)?;
+        let mut bytes = result.get_bytes()?;
+        MessageDecoder::decode(&mut bytes, true, false, false, false, false)
+    }
+
+    async fn put_message(&self, message: MessageExtBrokerInner) -> crate::base::message_result::PutMessageResult {
+        self.message_write.put_message(message).await
+    }
+}
+
 pub struct TimerMessageStore {
     pub curr_read_time_ms: AtomicI64,
     pub curr_queue_offset: AtomicI64,
@@ -108,6 +150,7 @@ pub struct TimerMessageStore {
     pub last_enqueue_but_expired_store_time: u64,
     pub default_message_store: Option<ArcMut<LocalFileMessageStore>>,
     pub timer_metrics: TimerMetrics,
+    store_context: Option<TimerStoreContext>,
     message_store_config: Arc<MessageStoreConfig>,
     timer_checkpoint: Mutex<Option<TimerCheckpoint>>,
     timer_log: Mutex<Option<TimerLog>>,
@@ -241,9 +284,7 @@ impl TimerMessageStore {
 
     pub fn get_enqueue_behind_messages(&self) -> i64 {
         let temp_queue_offset = self.curr_queue_offset.load(Ordering::Relaxed);
-        let consume_queue = self.default_message_store.as_ref().and_then(|message_store| {
-            message_store.find_consume_queue(&CheetahString::from_static_str(TIMER_TOPIC), 0)
-        });
+        let consume_queue = self.find_store_consume_queue(&CheetahString::from_static_str(TIMER_TOPIC), 0);
         let max_offset_in_queue = match consume_queue {
             Some(queue) => queue.read().get_max_offset_in_queue(),
             None => 0,
@@ -337,6 +378,7 @@ impl TimerMessageStore {
             last_enqueue_but_expired_store_time: 0,
             default_message_store,
             timer_metrics: TimerMetrics::new(Some(timer_metrics_path)),
+            store_context: None,
             message_store_config,
             timer_checkpoint: Mutex::new(None),
             timer_log: Mutex::new(None),
@@ -351,6 +393,15 @@ impl TimerMessageStore {
         }
     }
 
+    pub(crate) fn new_with_store_context(
+        store_context: TimerStoreContext,
+        message_store_config: Arc<MessageStoreConfig>,
+    ) -> Self {
+        let mut store = Self::new_with_config(None, message_store_config);
+        store.store_context = Some(store_context);
+        store
+    }
+
     pub fn new_empty() -> Self {
         Self::new_with_config(None, Arc::new(MessageStoreConfig::default()))
     }
@@ -362,7 +413,36 @@ impl TimerMessageStore {
                 self.message_store_config.store_path_root_dir.as_str(),
             )));
         }
+        self.store_context = None;
         self.default_message_store = default_message_store;
+    }
+
+    fn find_store_consume_queue(&self, topic: &CheetahString, queue_id: i32) -> Option<ArcConsumeQueue> {
+        if let Some(context) = self.store_context.as_ref() {
+            return context.find_consume_queue(topic, queue_id);
+        }
+        self.default_message_store
+            .as_ref()
+            .and_then(|message_store| message_store.find_consume_queue(topic, queue_id))
+    }
+
+    fn look_store_message(&self, commit_log_offset: i64, size: i32) -> Option<MessageExt> {
+        if let Some(context) = self.store_context.as_ref() {
+            return context.look_message_by_offset_with_size(commit_log_offset, size);
+        }
+        self.default_message_store
+            .as_ref()
+            .and_then(|message_store| message_store.look_message_by_offset_with_size(commit_log_offset, size))
+    }
+
+    async fn put_store_message(&self, message: MessageExtBrokerInner) -> PutMessageResult {
+        if let Some(context) = self.store_context.as_ref() {
+            return context.put_message(message).await;
+        }
+        if let Some(message_store) = self.default_message_store.as_ref() {
+            return message_store.put_message_shared(message).await;
+        }
+        PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable)
     }
 
     pub fn shutdown(&self) {
@@ -612,11 +692,7 @@ impl TimerMessageStore {
     }
 
     fn collect_unindexed_timer_queue_backlog(&self, now_ms: i64, backlog_metrics: &mut TimerBacklogMetrics) {
-        let Some(message_store) = self.default_message_store.as_ref() else {
-            return;
-        };
-        let Some(consume_queue) = message_store.find_consume_queue(&CheetahString::from_static_str(TIMER_TOPIC), 0)
-        else {
+        let Some(consume_queue) = self.find_store_consume_queue(&CheetahString::from_static_str(TIMER_TOPIC), 0) else {
             return;
         };
 
@@ -626,7 +702,7 @@ impl TimerMessageStore {
             let Some(cq_unit) = consume_queue.read().get(queue_offset) else {
                 break;
             };
-            let Some(message) = message_store.look_message_by_offset_with_size(cq_unit.pos, cq_unit.size) else {
+            let Some(message) = self.look_store_message(cq_unit.pos, cq_unit.size) else {
                 warn!(
                     "skip backlog metrics for timer queue offset {} because commitlog message {}:{} is missing",
                     queue_offset, cq_unit.pos, cq_unit.size
@@ -640,9 +716,6 @@ impl TimerMessageStore {
     }
 
     fn collect_indexed_timer_wheel_backlog(&self, now_ms: i64, backlog_metrics: &mut TimerBacklogMetrics) {
-        let Some(message_store) = self.default_message_store.as_ref() else {
-            return;
-        };
         let read_cursor = self.curr_read_time_ms.load(Ordering::Relaxed);
         let slots = self
             .timer_wheel
@@ -667,9 +740,7 @@ impl TimerMessageStore {
             };
 
             for entry in entries {
-                let Some(message) =
-                    message_store.look_message_by_offset_with_size(entry.record.commit_log_offset, entry.record.size)
-                else {
+                let Some(message) = self.look_store_message(entry.record.commit_log_offset, entry.record.size) else {
                     warn!(
                         "skip backlog metrics for timer log position {} because commitlog message {}:{} is missing",
                         entry.position, entry.record.commit_log_offset, entry.record.size
@@ -725,10 +796,7 @@ impl TimerMessageStore {
     }
 
     fn recover_queue_offset(&self, checkpoint_queue_offset: i64) -> i64 {
-        let Some(message_store) = self.default_message_store.as_ref() else {
-            return clamp_queue_offset(checkpoint_queue_offset, None, None);
-        };
-        let consume_queue = message_store.find_consume_queue(&CheetahString::from_static_str(TIMER_TOPIC), 0);
+        let consume_queue = self.find_store_consume_queue(&CheetahString::from_static_str(TIMER_TOPIC), 0);
         let Some(consume_queue) = consume_queue else {
             return clamp_queue_offset(checkpoint_queue_offset, None, None);
         };
@@ -803,11 +871,8 @@ impl TimerMessageStore {
         if !self.should_running_enqueue() {
             return 0;
         }
-        let Some(message_store) = self.default_message_store.clone() else {
-            return 0;
-        };
         let timer_topic = CheetahString::from_static_str(TIMER_TOPIC);
-        let Some(consume_queue) = message_store.find_consume_queue(&timer_topic, 0) else {
+        let Some(consume_queue) = self.find_store_consume_queue(&timer_topic, 0) else {
             return 0;
         };
 
@@ -822,7 +887,7 @@ impl TimerMessageStore {
             let Some(cq_unit) = consume_queue.read().get(queue_offset) else {
                 break;
             };
-            let Some(message) = message_store.look_message_by_offset_with_size(cq_unit.pos, cq_unit.size) else {
+            let Some(message) = self.look_store_message(cq_unit.pos, cq_unit.size) else {
                 warn!(
                     "skip timer queue offset {} because commitlog message {}:{} is missing",
                     queue_offset, cq_unit.pos, cq_unit.size
@@ -938,9 +1003,6 @@ impl TimerMessageStore {
     }
 
     async fn deliver_slot(&self, slot_time_ms: i64, slot: Slot, limit: usize) -> usize {
-        let Some(message_store) = self.default_message_store.clone() else {
-            return 0;
-        };
         let entries = match self.load_slot_entries(slot) {
             Ok(entries) => entries,
             Err(err) => {
@@ -952,9 +1014,7 @@ impl TimerMessageStore {
         let mut delete_keys = HashSet::new();
 
         for entry in entries.iter().take(limit) {
-            let Some(message) =
-                message_store.look_message_by_offset_with_size(entry.record.commit_log_offset, entry.record.size)
-            else {
+            let Some(message) = self.look_store_message(entry.record.commit_log_offset, entry.record.size) else {
                 warn!(
                     "delay delivery blocked at timer log position {} because commitlog {}:{} is missing",
                     entry.position, entry.record.commit_log_offset, entry.record.size
@@ -978,7 +1038,7 @@ impl TimerMessageStore {
                         processed += 1;
                         continue;
                     };
-                    let put_result = message_store.put_message_shared(rolled_message).await;
+                    let put_result = self.put_store_message(rolled_message).await;
                     if !put_result.is_ok() {
                         warn!(
                             "roll timer message for slot {} failed with status {:?}",
@@ -1019,7 +1079,7 @@ impl TimerMessageStore {
                 continue;
             };
             let delivered_topic = deliver_message.get_topic().clone();
-            let put_result = message_store.put_message_shared(deliver_message).await;
+            let put_result = self.put_store_message(deliver_message).await;
             if !put_result.is_ok() {
                 warn!(
                     "delay delivery for slot {} failed with status {:?}",
@@ -1317,9 +1377,28 @@ mod tests {
     use rocketmq_remoting::protocol::data_version_facade::DataVersionExt;
     use tempfile::tempdir;
 
-    use super::*;
+    use super::build_delete_key;
+    use super::current_millis;
+    use super::get_timer_check_path;
+    use super::get_timer_log_path;
+    use super::get_timer_wheel_path;
+    use super::MessageStoreConfig;
+    use super::TimerCheckpoint;
+    use super::TimerCheckpointSnapshot;
+    use super::TimerLog;
+    use super::TimerLogRecord;
+    use super::TimerMessageStore;
+    use super::TimerWheel;
+    use super::DAY_SECS;
+    use super::EMPTY_TIMER_LOG_POS;
+    use super::MAGIC_DEFAULT;
+    use super::MAGIC_ROLL;
+    use super::TIMER_TOPIC;
+    use super::TIMER_WHEEL_TTL_DAY;
     use crate::base::message_store::MessageStore;
     use crate::message_store::local_file_message_store::LocalFileMessageStore;
+    use std::sync::atomic::Ordering;
+    use std::time::Duration;
 
     fn config_with_root(root_dir: &str) -> Arc<MessageStoreConfig> {
         Arc::new(MessageStoreConfig {
@@ -1370,15 +1449,13 @@ mod tests {
         })
     }
 
-    fn build_store_with_timer(
-        root_dir: &str,
-    ) -> (ArcMut<LocalFileMessageStore>, Arc<TimerMessageStore>, CheetahString) {
+    fn build_store_with_timer(root_dir: &str) -> (LocalFileMessageStore, Arc<TimerMessageStore>, CheetahString) {
         build_store_with_timer_and_config(config_with_root(root_dir))
     }
 
     fn build_store_with_timer_and_config(
         config: Arc<MessageStoreConfig>,
-    ) -> (ArcMut<LocalFileMessageStore>, Arc<TimerMessageStore>, CheetahString) {
+    ) -> (LocalFileMessageStore, Arc<TimerMessageStore>, CheetahString) {
         let broker_config = Arc::new(BrokerConfig::default());
         let real_topic = CheetahString::from_static_str("phase3_topic");
         let topic_config_table = Arc::new(DashMap::new());
@@ -1388,17 +1465,14 @@ mod tests {
             Arc::new(TopicConfig::default()),
         );
 
-        let mut store = ArcMut::new(LocalFileMessageStore::new(
-            config,
-            broker_config,
-            topic_config_table,
-            None,
-            false,
-        ));
-        let store_clone = store.clone();
-        store.set_message_store_arc(store_clone);
-        let timer_message_store = Arc::new(TimerMessageStore::new(Some(store.clone())));
-        store.set_timer_message_store(timer_message_store.clone());
+        let mut store = LocalFileMessageStore::new(Arc::clone(&config), broker_config, topic_config_table, None, false);
+        store
+            .wire_owned_root_dependencies()
+            .expect("Timer tests should wire owned Store capabilities");
+        let timer_message_store = store
+            .get_timer_message_store()
+            .cloned()
+            .expect("Timer should be enabled for Timer tests");
         (store, timer_message_store, real_topic)
     }
 
@@ -1637,9 +1711,9 @@ mod tests {
     async fn sync_checkpoint_from_master_does_not_rebucket_pending_timer_messages() {
         let temp_dir = tempdir().unwrap();
         let root_dir = temp_dir.path().to_string_lossy().to_string();
-        let (store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
+        let (mut store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
 
-        assert!(store.mut_from_ref().load().await);
+        assert!(store.load().await);
         let local_read_time = timer_message_store.curr_read_time_ms.load(Ordering::Relaxed);
         let deliver_time_ms = (local_read_time as u64).saturating_add(60_000);
         let master_read_time_ms = local_read_time + 120_000;
@@ -1650,11 +1724,10 @@ mod tests {
 
         assert!(timer_message_store.sync_checkpoint_from_master(&snapshot).unwrap());
         assert!(store
-            .mut_from_ref()
             .put_message(build_timer_message(&real_topic, deliver_time_ms))
             .await
             .is_ok());
-        store.mut_from_ref().reput_once().await;
+        store.reput_once().await;
 
         let indexed = timer_message_store.process_once().await;
         let expected_slot_time = timer_message_store.ceil_time_ms(deliver_time_ms as i64);
@@ -1678,16 +1751,13 @@ mod tests {
     async fn process_once_indexes_timer_topic_messages_without_delivery_when_dequeue_disabled() {
         let temp_dir = tempdir().unwrap();
         let root_dir = temp_dir.path().to_string_lossy().to_string();
-        let (store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
+        let (mut store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
 
-        assert!(store.mut_from_ref().load().await);
+        assert!(store.load().await);
         let deliver_ms = current_millis() + 60_000;
-        let put_result = store
-            .mut_from_ref()
-            .put_message(build_timer_message(&real_topic, deliver_ms))
-            .await;
+        let put_result = store.put_message(build_timer_message(&real_topic, deliver_ms)).await;
         assert!(put_result.is_ok());
-        store.mut_from_ref().reput_once().await;
+        store.reput_once().await;
 
         let indexed = timer_message_store.process_once().await;
         let slot_time_ms = timer_message_store.ceil_time_ms(deliver_ms as i64);
@@ -1702,20 +1772,17 @@ mod tests {
     async fn process_once_redelivers_due_timer_message_when_dequeue_enabled() {
         let temp_dir = tempdir().unwrap();
         let root_dir = temp_dir.path().to_string_lossy().to_string();
-        let (store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
+        let (mut store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
 
-        assert!(store.mut_from_ref().load().await);
+        assert!(store.load().await);
         timer_message_store.set_should_running_dequeue(true);
         let deliver_ms = current_millis().saturating_sub(2_000);
-        let put_result = store
-            .mut_from_ref()
-            .put_message(build_timer_message(&real_topic, deliver_ms))
-            .await;
+        let put_result = store.put_message(build_timer_message(&real_topic, deliver_ms)).await;
         assert!(put_result.is_ok());
-        store.mut_from_ref().reput_once().await;
+        store.reput_once().await;
 
         let processed = timer_message_store.process_once().await;
-        store.mut_from_ref().reput_once().await;
+        store.reput_once().await;
 
         assert_eq!(processed, 2);
         assert_eq!(store.get_max_offset_in_queue(&real_topic, 0), 1);
@@ -1741,17 +1808,14 @@ mod tests {
     async fn process_once_does_not_redeliver_future_timer_message_before_due_time() {
         let temp_dir = tempdir().unwrap();
         let root_dir = temp_dir.path().to_string_lossy().to_string();
-        let (store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
+        let (mut store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
 
-        assert!(store.mut_from_ref().load().await);
+        assert!(store.load().await);
         timer_message_store.set_should_running_dequeue(true);
         let deliver_ms = current_millis() + 60_000;
-        let put_result = store
-            .mut_from_ref()
-            .put_message(build_timer_message(&real_topic, deliver_ms))
-            .await;
+        let put_result = store.put_message(build_timer_message(&real_topic, deliver_ms)).await;
         assert!(put_result.is_ok());
-        store.mut_from_ref().reput_once().await;
+        store.reput_once().await;
 
         let processed = timer_message_store.process_once().await;
         let slot_time_ms = timer_message_store.ceil_time_ms(deliver_ms as i64);
@@ -1765,20 +1829,19 @@ mod tests {
     async fn process_once_restores_real_queue_and_removes_internal_routing_properties() {
         let temp_dir = tempdir().unwrap();
         let root_dir = temp_dir.path().to_string_lossy().to_string();
-        let (store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
+        let (mut store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
 
-        assert!(store.mut_from_ref().load().await);
+        assert!(store.load().await);
         timer_message_store.set_should_running_dequeue(true);
         let deliver_ms = current_millis().saturating_sub(2_000);
         let put_result = store
-            .mut_from_ref()
             .put_message(build_timer_message_with_queue_id(&real_topic, 3, deliver_ms))
             .await;
         assert!(put_result.is_ok());
-        store.mut_from_ref().reput_once().await;
+        store.reput_once().await;
 
         assert_eq!(timer_message_store.process_once().await, 2);
-        store.mut_from_ref().reput_once().await;
+        store.reput_once().await;
 
         assert_eq!(store.get_max_offset_in_queue(&real_topic, 0), 0);
         assert_eq!(store.get_max_offset_in_queue(&real_topic, 3), 1);
@@ -1810,27 +1873,25 @@ mod tests {
     async fn process_once_pauses_enqueue_after_role_change_when_master_progress_is_caught_up() {
         let temp_dir = tempdir().unwrap();
         let root_dir = temp_dir.path().to_string_lossy().to_string();
-        let (store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
+        let (mut store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
 
-        assert!(store.mut_from_ref().load().await);
+        assert!(store.load().await);
         timer_message_store.set_should_running_dequeue(true);
         let first_deliver_ms = current_millis() + 60_000;
         assert!(store
-            .mut_from_ref()
             .put_message(build_timer_message(&real_topic, first_deliver_ms))
             .await
             .is_ok());
-        store.mut_from_ref().reput_once().await;
+        store.reput_once().await;
         assert_eq!(timer_message_store.process_once().await, 1);
         timer_message_store.set_should_running_dequeue(false);
 
         let second_deliver_ms = current_millis() + 120_000;
         assert!(store
-            .mut_from_ref()
             .put_message(build_timer_message(&real_topic, second_deliver_ms))
             .await
             .is_ok());
-        store.mut_from_ref().reput_once().await;
+        store.reput_once().await;
 
         let paused = timer_message_store.process_once().await;
 
@@ -1849,35 +1910,33 @@ mod tests {
     async fn process_once_resume_after_role_change_processes_pending_due_messages() {
         let temp_dir = tempdir().unwrap();
         let root_dir = temp_dir.path().to_string_lossy().to_string();
-        let (store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
+        let (mut store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
 
-        assert!(store.mut_from_ref().load().await);
+        assert!(store.load().await);
         timer_message_store.set_should_running_dequeue(true);
         let first_deliver_ms = current_millis().saturating_sub(2_000);
         assert!(store
-            .mut_from_ref()
             .put_message(build_timer_message(&real_topic, first_deliver_ms))
             .await
             .is_ok());
-        store.mut_from_ref().reput_once().await;
+        store.reput_once().await;
         assert_eq!(timer_message_store.process_once().await, 2);
-        store.mut_from_ref().reput_once().await;
+        store.reput_once().await;
         assert_eq!(store.get_max_offset_in_queue(&real_topic, 0), 1);
 
         timer_message_store.set_should_running_dequeue(false);
         let second_deliver_ms = current_millis().saturating_sub(1_000);
         assert!(store
-            .mut_from_ref()
             .put_message(build_timer_message(&real_topic, second_deliver_ms))
             .await
             .is_ok());
-        store.mut_from_ref().reput_once().await;
+        store.reput_once().await;
         assert_eq!(timer_message_store.process_once().await, 0);
         assert_eq!(store.get_max_offset_in_queue(&real_topic, 0), 1);
 
         timer_message_store.set_should_running_dequeue(true);
         let resumed = timer_message_store.process_once().await;
-        store.mut_from_ref().reput_once().await;
+        store.reput_once().await;
 
         assert_eq!(resumed, 2);
         assert_eq!(timer_message_store.curr_queue_offset.load(Ordering::Relaxed), 2);
@@ -1913,9 +1972,9 @@ mod tests {
     async fn process_once_delete_tombstone_skips_matching_timer_message_delivery() {
         let temp_dir = tempdir().unwrap();
         let root_dir = temp_dir.path().to_string_lossy().to_string();
-        let (store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
+        let (mut store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
 
-        assert!(store.mut_from_ref().load().await);
+        assert!(store.load().await);
         timer_message_store.set_should_running_dequeue(true);
         let deliver_ms = current_millis().saturating_sub(2_000);
         let unique_key = "delete-me";
@@ -1925,16 +1984,15 @@ mod tests {
             CheetahString::from_static_str(unique_key),
         );
         timer_message.properties_string = message_properties_to_string(timer_message.get_properties());
-        assert!(store.mut_from_ref().put_message(timer_message).await.is_ok());
+        assert!(store.put_message(timer_message).await.is_ok());
         assert!(store
-            .mut_from_ref()
             .put_message(build_delete_timer_message(&real_topic, unique_key, deliver_ms))
             .await
             .is_ok());
-        store.mut_from_ref().reput_once().await;
+        store.reput_once().await;
 
         let processed = timer_message_store.process_once().await;
-        store.mut_from_ref().reput_once().await;
+        store.reput_once().await;
 
         assert_eq!(processed, 4);
         assert_eq!(store.get_max_offset_in_queue(&real_topic, 0), 0);
@@ -1948,9 +2006,9 @@ mod tests {
     async fn process_once_delete_tombstone_only_cancels_matching_unique_key() {
         let temp_dir = tempdir().unwrap();
         let root_dir = temp_dir.path().to_string_lossy().to_string();
-        let (store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
+        let (mut store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
 
-        assert!(store.mut_from_ref().load().await);
+        assert!(store.load().await);
         timer_message_store.set_should_running_dequeue(true);
         let deliver_ms = current_millis().saturating_sub(2_000);
         let mut deleted_message = build_timer_message(&real_topic, deliver_ms);
@@ -1959,7 +2017,7 @@ mod tests {
             CheetahString::from_static_str("deleted-key"),
         );
         deleted_message.properties_string = message_properties_to_string(deleted_message.get_properties());
-        assert!(store.mut_from_ref().put_message(deleted_message).await.is_ok());
+        assert!(store.put_message(deleted_message).await.is_ok());
 
         let mut survivor_message = build_timer_message(&real_topic, deliver_ms);
         survivor_message.put_property(
@@ -1967,17 +2025,16 @@ mod tests {
             CheetahString::from_static_str("survivor-key"),
         );
         survivor_message.properties_string = message_properties_to_string(survivor_message.get_properties());
-        assert!(store.mut_from_ref().put_message(survivor_message).await.is_ok());
+        assert!(store.put_message(survivor_message).await.is_ok());
 
         assert!(store
-            .mut_from_ref()
             .put_message(build_delete_timer_message(&real_topic, "deleted-key", deliver_ms))
             .await
             .is_ok());
-        store.mut_from_ref().reput_once().await;
+        store.reput_once().await;
 
         let processed = timer_message_store.process_once().await;
-        store.mut_from_ref().reput_once().await;
+        store.reput_once().await;
 
         assert_eq!(processed, 6);
         assert_eq!(store.get_max_offset_in_queue(&real_topic, 0), 1);
@@ -1987,28 +2044,28 @@ mod tests {
     async fn restart_recovers_indexed_due_timer_message_from_persisted_wheel() {
         let temp_dir = tempdir().unwrap();
         let root_dir = temp_dir.path().to_string_lossy().to_string();
-        let (store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
+        let (mut store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
 
-        assert!(store.mut_from_ref().load().await);
+        assert!(store.load().await);
         let deliver_ms = current_millis().saturating_sub(2_000);
-        let put_result = store
-            .mut_from_ref()
-            .put_message(build_timer_message(&real_topic, deliver_ms))
-            .await;
+        let put_result = store.put_message(build_timer_message(&real_topic, deliver_ms)).await;
         assert!(put_result.is_ok());
-        store.mut_from_ref().reput_once().await;
+        store.reput_once().await;
 
         assert_eq!(timer_message_store.process_once().await, 1);
         assert_eq!(store.get_max_offset_in_queue(&real_topic, 0), 0);
-        store.mut_from_ref().shutdown().await;
+        drop(timer_message_store);
+        store.shutdown().await;
+        drop(store);
 
-        let (reloaded_store, reloaded_timer_message_store, reloaded_topic) = build_store_with_timer(root_dir.as_str());
+        let (mut reloaded_store, reloaded_timer_message_store, reloaded_topic) =
+            build_store_with_timer(root_dir.as_str());
         assert_eq!(reloaded_topic, real_topic);
-        assert!(reloaded_store.mut_from_ref().load().await);
+        assert!(reloaded_store.load().await);
         reloaded_timer_message_store.set_should_running_dequeue(true);
 
         let delivered = reloaded_timer_message_store.process_once().await;
-        reloaded_store.mut_from_ref().reput_once().await;
+        reloaded_store.reput_once().await;
 
         assert_eq!(delivered, 1);
         assert_eq!(
@@ -2022,34 +2079,34 @@ mod tests {
     async fn restart_allows_duplicate_delivery_when_checkpoint_lags_after_delivery() {
         let temp_dir = tempdir().unwrap();
         let root_dir = temp_dir.path().to_string_lossy().to_string();
-        let (store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
+        let (mut store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
 
-        assert!(store.mut_from_ref().load().await);
+        assert!(store.load().await);
         timer_message_store.set_should_running_dequeue(true);
         let deliver_ms = current_millis().saturating_sub(2_000);
-        let put_result = store
-            .mut_from_ref()
-            .put_message(build_timer_message(&real_topic, deliver_ms))
-            .await;
+        let put_result = store.put_message(build_timer_message(&real_topic, deliver_ms)).await;
         assert!(put_result.is_ok());
-        store.mut_from_ref().reput_once().await;
+        store.reput_once().await;
         assert_eq!(timer_message_store.process_once().await, 2);
-        store.mut_from_ref().reput_once().await;
+        store.reput_once().await;
         assert_eq!(store.get_max_offset_in_queue(&real_topic, 0), 1);
-        store.mut_from_ref().shutdown().await;
+        drop(timer_message_store);
+        store.shutdown().await;
+        drop(store);
 
         let checkpoint = TimerCheckpoint::new(get_timer_check_path(root_dir.as_str())).unwrap();
         checkpoint.set_last_timer_queue_offset(0);
         checkpoint.set_master_timer_queue_offset(0);
         checkpoint.flush().unwrap();
 
-        let (reloaded_store, reloaded_timer_message_store, reloaded_topic) = build_store_with_timer(root_dir.as_str());
+        let (mut reloaded_store, reloaded_timer_message_store, reloaded_topic) =
+            build_store_with_timer(root_dir.as_str());
         assert_eq!(reloaded_topic, real_topic);
-        assert!(reloaded_store.mut_from_ref().load().await);
+        assert!(reloaded_store.load().await);
         reloaded_timer_message_store.set_should_running_dequeue(true);
 
         let reprocessed = reloaded_timer_message_store.process_once().await;
-        reloaded_store.mut_from_ref().reput_once().await;
+        reloaded_store.reput_once().await;
 
         assert_eq!(reprocessed, 2);
         assert_eq!(reloaded_store.get_max_offset_in_queue(&real_topic, 0), 2);
@@ -2059,26 +2116,25 @@ mod tests {
     async fn load_revises_checkpoint_queue_offset_to_timer_queue_max() {
         let temp_dir = tempdir().unwrap();
         let root_dir = temp_dir.path().to_string_lossy().to_string();
-        let (store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
+        let (mut store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
 
-        assert!(store.mut_from_ref().load().await);
+        assert!(store.load().await);
         let deliver_ms = current_millis() + 60_000;
-        let put_result = store
-            .mut_from_ref()
-            .put_message(build_timer_message(&real_topic, deliver_ms))
-            .await;
+        let put_result = store.put_message(build_timer_message(&real_topic, deliver_ms)).await;
         assert!(put_result.is_ok());
-        store.mut_from_ref().reput_once().await;
+        store.reput_once().await;
         assert_eq!(timer_message_store.process_once().await, 1);
-        store.mut_from_ref().shutdown().await;
+        drop(timer_message_store);
+        store.shutdown().await;
+        drop(store);
 
         let checkpoint = TimerCheckpoint::new(get_timer_check_path(root_dir.as_str())).unwrap();
         checkpoint.set_last_timer_queue_offset(99);
         checkpoint.set_master_timer_queue_offset(99);
         checkpoint.flush().unwrap();
 
-        let (reloaded_store, reloaded_timer_message_store, _) = build_store_with_timer(root_dir.as_str());
-        assert!(reloaded_store.mut_from_ref().load().await);
+        let (mut reloaded_store, reloaded_timer_message_store, _) = build_store_with_timer(root_dir.as_str());
+        assert!(reloaded_store.load().await);
         assert_eq!(
             reloaded_timer_message_store.curr_queue_offset.load(Ordering::Relaxed),
             1
@@ -2090,20 +2146,18 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let root_dir = temp_dir.path().to_string_lossy().to_string();
         let config = config_with_root_and_limits(root_dir.as_str(), 1, 1, 1);
-        let (store, timer_message_store, real_topic) = build_store_with_timer_and_config(config);
+        let (mut store, timer_message_store, real_topic) = build_store_with_timer_and_config(config);
 
-        assert!(store.mut_from_ref().load().await);
+        assert!(store.load().await);
         let first_put = store
-            .mut_from_ref()
             .put_message(build_timer_message(&real_topic, current_millis() + 60_000))
             .await;
         assert!(first_put.is_ok());
         let second_put = store
-            .mut_from_ref()
             .put_message(build_timer_message(&real_topic, current_millis() + 61_000))
             .await;
         assert!(second_put.is_ok());
-        store.mut_from_ref().reput_once().await;
+        store.reput_once().await;
 
         let first_tick = timer_message_store.process_once().await;
         let second_tick = timer_message_store.process_once().await;
@@ -2118,21 +2172,15 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let root_dir = temp_dir.path().to_string_lossy().to_string();
         let config = config_with_root_and_limits(root_dir.as_str(), 1, 1, 1);
-        let (store, timer_message_store, real_topic) = build_store_with_timer_and_config(config);
+        let (mut store, timer_message_store, real_topic) = build_store_with_timer_and_config(config);
 
-        assert!(store.mut_from_ref().load().await);
+        assert!(store.load().await);
         let deliver_ms = current_millis().saturating_sub(2_000);
-        let first_put = store
-            .mut_from_ref()
-            .put_message(build_timer_message(&real_topic, deliver_ms))
-            .await;
+        let first_put = store.put_message(build_timer_message(&real_topic, deliver_ms)).await;
         assert!(first_put.is_ok());
-        let second_put = store
-            .mut_from_ref()
-            .put_message(build_timer_message(&real_topic, deliver_ms))
-            .await;
+        let second_put = store.put_message(build_timer_message(&real_topic, deliver_ms)).await;
         assert!(second_put.is_ok());
-        store.mut_from_ref().reput_once().await;
+        store.reput_once().await;
 
         assert_eq!(timer_message_store.process_once().await, 1);
         assert_eq!(timer_message_store.process_once().await, 1);
@@ -2140,7 +2188,7 @@ mod tests {
         timer_message_store.set_should_running_dequeue(true);
 
         let first_delivery_tick = timer_message_store.process_once().await;
-        store.mut_from_ref().reput_once().await;
+        store.reput_once().await;
 
         assert_eq!(first_delivery_tick, 1);
         assert_eq!(store.get_max_offset_in_queue(&real_topic, 0), 1);
@@ -2156,7 +2204,7 @@ mod tests {
         assert_eq!(remaining_timer_messages, 1);
 
         let second_delivery_tick = timer_message_store.process_once().await;
-        store.mut_from_ref().reput_once().await;
+        store.reput_once().await;
 
         assert_eq!(second_delivery_tick, 1);
         assert_eq!(store.get_max_offset_in_queue(&real_topic, 0), 2);
@@ -2170,17 +2218,16 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let root_dir = temp_dir.path().to_string_lossy().to_string();
         let config = config_with_root_precision_and_roll_window(root_dir.as_str(), 1_000, 4);
-        let (store, timer_message_store, real_topic) = build_store_with_timer_and_config(config);
+        let (mut store, timer_message_store, real_topic) = build_store_with_timer_and_config(config);
 
-        assert!(store.mut_from_ref().load().await);
+        assert!(store.load().await);
         let now_floor = timer_message_store.floor_time_ms(current_millis() as i64);
         let deliver_ms = (now_floor + 20_000) as u64;
         assert!(store
-            .mut_from_ref()
             .put_message(build_timer_message(&real_topic, deliver_ms))
             .await
             .is_ok());
-        store.mut_from_ref().reput_once().await;
+        store.reput_once().await;
 
         assert_eq!(timer_message_store.process_once().await, 1);
 
@@ -2216,9 +2263,9 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let root_dir = temp_dir.path().to_string_lossy().to_string();
         let config = config_with_root_precision_and_roll_window(root_dir.as_str(), 1_000, 60);
-        let (store, timer_message_store, real_topic) = build_store_with_timer_and_config(config);
+        let (mut store, timer_message_store, real_topic) = build_store_with_timer_and_config(config);
 
-        assert!(store.mut_from_ref().load().await);
+        assert!(store.load().await);
         let now_floor = timer_message_store.floor_time_ms(current_millis() as i64);
         timer_message_store
             .curr_read_time_ms
@@ -2226,11 +2273,10 @@ mod tests {
 
         let deliver_ms = (now_floor + 2_000) as u64;
         assert!(store
-            .mut_from_ref()
             .put_message(build_timer_message(&real_topic, deliver_ms))
             .await
             .is_ok());
-        store.mut_from_ref().reput_once().await;
+        store.reput_once().await;
 
         assert_eq!(timer_message_store.process_once().await, 1);
 
@@ -2250,23 +2296,22 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let root_dir = temp_dir.path().to_string_lossy().to_string();
         let config = config_with_root_precision_and_roll_window(root_dir.as_str(), 50, 4);
-        let (store, timer_message_store, real_topic) = build_store_with_timer_and_config(config);
+        let (mut store, timer_message_store, real_topic) = build_store_with_timer_and_config(config);
 
-        assert!(store.mut_from_ref().load().await);
+        assert!(store.load().await);
         let deliver_ms = current_millis() + 3_000;
         assert!(store
-            .mut_from_ref()
             .put_message(build_timer_message(&real_topic, deliver_ms))
             .await
             .is_ok());
-        store.mut_from_ref().reput_once().await;
+        store.reput_once().await;
         assert_eq!(timer_message_store.process_once().await, 1);
 
         timer_message_store.set_should_running_dequeue(true);
         tokio::time::sleep(Duration::from_millis(250)).await;
 
         let processed = timer_message_store.process_once().await;
-        store.mut_from_ref().reput_once().await;
+        store.reput_once().await;
 
         assert_eq!(processed, 1);
         assert_eq!(store.get_max_offset_in_queue(&real_topic, 0), 0);
@@ -2305,15 +2350,14 @@ mod tests {
     async fn process_once_reports_enqueue_tps_after_indexing_timer_messages() {
         let temp_dir = tempdir().unwrap();
         let root_dir = temp_dir.path().to_string_lossy().to_string();
-        let (store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
+        let (mut store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
 
-        assert!(store.mut_from_ref().load().await);
+        assert!(store.load().await);
         assert!(store
-            .mut_from_ref()
             .put_message(build_timer_message(&real_topic, current_millis() + 60_000))
             .await
             .is_ok());
-        store.mut_from_ref().reput_once().await;
+        store.reput_once().await;
 
         assert_eq!(timer_message_store.process_once().await, 1);
         assert!(timer_message_store.get_enqueue_tps() > 0.0);
@@ -2323,16 +2367,15 @@ mod tests {
     async fn process_once_reports_dequeue_tps_after_redelivery() {
         let temp_dir = tempdir().unwrap();
         let root_dir = temp_dir.path().to_string_lossy().to_string();
-        let (store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
+        let (mut store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
 
-        assert!(store.mut_from_ref().load().await);
+        assert!(store.load().await);
         timer_message_store.set_should_running_dequeue(true);
         assert!(store
-            .mut_from_ref()
             .put_message(build_timer_message(&real_topic, current_millis().saturating_sub(2_000)))
             .await
             .is_ok());
-        store.mut_from_ref().reput_once().await;
+        store.reput_once().await;
 
         assert_eq!(timer_message_store.process_once().await, 2);
         assert!(timer_message_store.get_dequeue_tps() > 0.0);
@@ -2342,20 +2385,18 @@ mod tests {
     async fn get_runtime_info_reports_timer_topic_backlog_distribution() {
         let temp_dir = tempdir().unwrap();
         let root_dir = temp_dir.path().to_string_lossy().to_string();
-        let (store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
+        let (mut store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
 
-        assert!(store.mut_from_ref().load().await);
+        assert!(store.load().await);
         assert!(store
-            .mut_from_ref()
             .put_message(build_timer_message(&real_topic, current_millis() + 60_000))
             .await
             .is_ok());
         assert!(store
-            .mut_from_ref()
             .put_message(build_timer_message(&real_topic, current_millis() + 120_000))
             .await
             .is_ok());
-        store.mut_from_ref().reput_once().await;
+        store.reput_once().await;
         assert_eq!(timer_message_store.process_once().await, 2);
 
         let runtime_info = store.get_runtime_info();
@@ -2373,9 +2414,9 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let root_dir = temp_dir.path().to_string_lossy().to_string();
         let config = config_with_metrics_check(root_dir.as_str(), 10);
-        let (store, timer_message_store, real_topic) = build_store_with_timer_and_config(config.clone());
+        let (mut store, timer_message_store, real_topic) = build_store_with_timer_and_config(config.clone());
 
-        assert!(store.mut_from_ref().load().await);
+        assert!(store.load().await);
         let deliver_ms = current_millis() + 60_000;
         let unique_key = "revise-key";
         let mut timer_message = build_timer_message(&real_topic, deliver_ms);
@@ -2384,19 +2425,20 @@ mod tests {
             CheetahString::from_static_str(unique_key),
         );
         timer_message.properties_string = message_properties_to_string(timer_message.get_properties());
-        assert!(store.mut_from_ref().put_message(timer_message).await.is_ok());
+        assert!(store.put_message(timer_message).await.is_ok());
         assert!(store
-            .mut_from_ref()
             .put_message(build_delete_timer_message(&real_topic, unique_key, deliver_ms))
             .await
             .is_ok());
-        store.mut_from_ref().reput_once().await;
+        store.reput_once().await;
         assert_eq!(timer_message_store.process_once().await, 2);
         assert_eq!(timer_message_store.timer_metrics.get_timing_count(&real_topic), 1);
-        store.mut_from_ref().shutdown().await;
+        drop(timer_message_store);
+        store.shutdown().await;
+        drop(store);
 
-        let (reloaded_store, reloaded_timer_message_store, _) = build_store_with_timer_and_config(config);
-        assert!(reloaded_store.mut_from_ref().load().await);
+        let (mut reloaded_store, reloaded_timer_message_store, _) = build_store_with_timer_and_config(config);
+        assert!(reloaded_store.load().await);
 
         assert_eq!(
             reloaded_timer_message_store.timer_metrics.get_timing_count(&real_topic),
@@ -2408,18 +2450,18 @@ mod tests {
     async fn timer_processor_does_not_touch_non_timer_messages() {
         let temp_dir = tempdir().unwrap();
         let root_dir = temp_dir.path().to_string_lossy().to_string();
-        let (store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
+        let (mut store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
 
-        assert!(store.mut_from_ref().load().await);
+        assert!(store.load().await);
         timer_message_store.set_should_running_dequeue(true);
         let mut msg = MessageExtBrokerInner::default();
         msg.set_topic(real_topic.clone());
         msg.message_ext_inner.queue_id = 0;
         msg.set_body(Bytes::from_static(b"ordinary-body"));
 
-        let put_result = store.mut_from_ref().put_message(msg).await;
+        let put_result = store.put_message(msg).await;
         assert!(put_result.is_ok());
-        store.mut_from_ref().reput_once().await;
+        store.reput_once().await;
 
         assert_eq!(timer_message_store.process_once().await, 0);
         assert_eq!(store.get_max_offset_in_queue(&real_topic, 0), 1);

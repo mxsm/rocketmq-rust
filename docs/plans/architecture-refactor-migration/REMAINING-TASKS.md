@@ -1,7 +1,7 @@
 # 架构重构剩余任务盘点
 
 > 盘点日期：2026-07-23
-> 代码基线：Issue #8609 / M11-12bc96 完成后
+> 代码基线：Issue #8611 / M11-12bc97 完成后
 > 统计规则：82 个顶层 `PR-Mxx-yy` 工作包与 M11-12 内部实施切片分开统计，禁止重复计数。
 
 ## 结论
@@ -16,17 +16,17 @@ owner 清零、compatibility 删除和同一候选快照验收。
 | 里程碑 | 9 | 3 个未关闭 | M10 待验收、M11 实施中、M12 未开始 |
 | Phase Gate | 2 | 2 | Phase 3、Phase 4 |
 | 目标边界 crate | 10 | 0 | 根 workspace 已为目标 32 package |
-| 最小可审查执行单元 | 11 | 20 | 31 项清单中的 R02～R08、R12、R13、R15、R16 已完成 |
+| 最小可审查执行单元 | 12 | 19 | 31 项清单中的 R02～R08、R12～R16 已完成 |
 
 按当前代码热点、兼容窗口和候选快照 Gate 进一步拆分的清单共 **31 个最小可审查单元**：
 16 个 production owner 收口、2 个 test/compatibility 收口、7 个 M10/Phase 3 动态验收与签署、6 个 M12
-工作包；R02、R03、R04、R05、R06、R07、R08、R12、R13、R15、R16 已完成，当前剩余 20 个。31 是执行估算，不是新的正式工作包总数；相邻单元可以合并到同一 PR，遇到高风险
+工作包；R02、R03、R04、R05、R06、R07、R08、R12、R13、R14、R15、R16 已完成，当前剩余 19 个。31 是执行估算，不是新的正式工作包总数；相邻单元可以合并到同一 PR，遇到高风险
 owner 也可以继续拆分，但 7 个正式工作包的统计口径保持不变。
 
 ## PR-M11-12 剩余实现
 
-Issue #8609 后 reviewed ArcMut baseline 为 44 identities / 196 occurrences：production 13/24、test
-17/132、compatibility 14/40。production 全部分布在 Broker 与 Store。
+Issue #8611 后 reviewed ArcMut baseline 为 35 identities / 90 occurrences：production 13/24、test
+8/26、compatibility 14/40。production 全部分布在 Broker 与 Store。
 
 | owner | 剩余 identity / occurrence | 完成条件 |
 |---|---:|---|
@@ -40,7 +40,7 @@ Issue #8609 后 reviewed ArcMut baseline 为 44 identities / 196 occurrences：p
 2. Broker leaf：完成其余 admin/processor/revive/offset leaf owner；transaction bridge 已由 M11-12bc4 收窄，Producer/ColdData admin handler 已由 M11-12bc5 改持 live registry/standard Arc capability，Schedule hook 已由 M11-12bc6 改持三项显式能力，Topic Admin 已由 M11-12bc31 改为无状态 leaf，slave metadata synchronization 已由 M11-12bc50 改持显式 policy/弱 provider/晚绑定 capability。
 3. Store WAL：commit worker 已只持 `Notify` 唤醒能力，CommitLog disk-flush 已通过共享 receiver enqueue，CommitLog 已独占 MappedFileQueue/DefaultFlushManager/ConsumeQueue recovery completion，dispatcher worker 只持不可变快照 capability，LocalStore back-reference 已由原子发布的窄 context 替代，transaction 的直接 Store 兼容 owner 已删除；R13 已完成。
 4. Store queue：ConsumeQueueExt 与 trait-object handle 已改用每实例显式锁 owner；local/single queue 只持窄标准 Arc 上下文与 Weak lookup，完整 LocalStore carrier 已删除，R12 已完成。
-5. Store timer/HA：BrokerStats observer、HA notification service、connection registry 查询、未共享 client/connection child、HA connection worker 自引用、完整 auto-switch weak owner、client 构造 Store capability 与 wrapper 重复 Store owner 已退出多余 owner；Timer delivery 已使用共享追加边界并删除 `mut_from_ref`，继续收口其完整 LocalStore carrier、Default/General/AutoSwitch HA service 与其余 actor 回指。
+5. Store timer/HA：BrokerStats observer、HA notification service、connection registry 查询、未共享 client/connection child、HA connection worker 自引用、完整 auto-switch weak owner、client 构造 Store capability 与 wrapper 重复 Store owner 已退出多余 owner；Timer 活跃路径已改持队列查询、CommitLog 读、内部消息写三项窄 capability，owned wiring、单测与恢复集成夹具均不再共享完整 LocalStore root；公开 legacy carrier 仅由 R18 next-major/HUMAN 兼容窗口处理。Default/General/AutoSwitch HA service 与 actor 回指已完成。
 6. compatibility/stable：production Store `WeakArcMut` 已清零；迁移剩余测试/兼容调用方，按 next-major/HUMAN 窗口处理公开 facade，并替换 `sync_unsafe_cell`、`async_fn_traits`、`unboxed_closures` 等 nightly surface。
 7. 候选快照 Gate：冻结同一 commit，执行 stable feature matrix、Miri/Loom 可用切片、soak/SLO fault、动态
    Kind/K3d/container、dashboard/runbook/rollback，并完成 `[ARCH]`、`[REV]`、`[TEST]`、`[HUMAN]` 签署。
@@ -50,7 +50,7 @@ Issue #8609 后 reviewed ArcMut baseline 为 44 identities / 196 occurrences：p
 
 ## 执行层最小审查清单（31 项）
 
-> 本清单给出当前可执行下界。`identity / occurrence` 来自 Issue #8609 后通过
+> 本清单给出当前可执行下界。`identity / occurrence` 来自 Issue #8611 后通过
 > `python scripts/arc_mut_guard.py` 验证的 reviewed baseline；production 16 项精确合计 Broker 4/8、Store
 > 9/16。test 条目会随相邻 production 切片同步下降，因此 R17 只在 production 收口后处理真实余量。
 
@@ -69,13 +69,13 @@ Issue #8609 后 reviewed ArcMut baseline 为 44 identities / 196 occurrences：p
 - [ ] R11 Store RocksDB root：`rocksdb_message_store.rs` 的 Local/Rocks delegate 与 unsafe wrapper（3/4；bc77 删除 `ArcConsumeQueue` 的 unsafe alias 传播）。
 - [x] R12 Store queue：Issue #8573 已将 queue facade、consume-queue store、local queue store 与 single queue 的剩余 4 identities / 6 occurrences 清零；bc76 将 ConsumeQueueStore cloneable root 改为标准 Arc，bc77 将 trait-object handle 改为标准 Arc + 每队列 RwLock，bc78 以窄标准 Arc context、CommitLog read handle 与 Weak queue lookup 删除完整 LocalStore compatibility carrier。
 - [x] R13 Store WAL/flush：Issue #8553 已将 `commit_log.rs` 的 recovery/LocalStore owner 从 2/7 清零；bc68 使 CommitLog 独占 MappedFileQueue，bc69 使其直接拥有 DefaultFlushManager 与窄 dispatcher handle，bc70 以 `CommitLogStoreContext` 和自有 ConsumeQueue recovery completion 删除完整 LocalStore 回指。
-- [ ] R14 Store timer：`timer_message_store.rs` 的 LocalStore 回指与可变访问（2/5；bc79 使 CommitLog/LocalStore 消息追加在既有锁下接受共享引用，Timer rolled/due delivery 删除两处 `mut_from_ref`；其余 carrier 位于公开字段和 `new`/`new_with_config`/setter，删除受 R18 next-major/HUMAN 兼容窗口约束，单独增加内部 read handle 不计作减债完成）。
+- [x] R14 Store timer：Issue #8611 已让活跃 Timer 路径只持队列查询、CommitLog 读和内部消息写 capability，LocalFile owned wiring、Timer 单测与恢复集成测试不再构造、克隆或可变解引用完整 Store root；公开字段及 `new`/`new_with_config`/setter 的 2 identities / 5 occurrences 仅作为显式 legacy surface 保留，并转由 R18 next-major/HUMAN 兼容窗口关闭。恢复回归同时修复 ConsumeQueue truncate 持读锁再申请同队列写锁的重入死锁。
 - [x] R15 Store default HA：Issue #8591 已将 Default HA service/client/connection 的 service/actor ownership 清零；bc75～bc86 完成标准 Arc runtime、replica-store capability、owned connection registry、窄 context/Weak owner 与独占初始化，bc87 删除最后 1/1 import-only composition debt并把重复测试 Store 夹具收口为单一 cfg(test) owner。
 - [x] R16 Store general/auto-switch HA：Issue #8591 已将 General 与 AutoSwitch HA 的剩余 3 identities / 6 occurrences 清零；`GeneralHAService` variant 使用标准 `Arc`，group-transfer/state-notification 通过晚绑定标准 `Weak` 回指，AutoSwitch 继续唯一拥有 Default delegate，根释放后 child 无法恢复 owner。
 
 ### Caller 与 compatibility（2 项）
 
-- [ ] R17 Test/bench caller 迁移：在其余 production owner 收口后重新盘点并清理真实余量；当前上界为 17 identities / 132 occurrences（Store 14/123、Broker 1/1、Client 0/0、runtime-foundation 2/8）。Issue #8593 已将 LitePull 测试的 68 个配置 wrapper 改为标准 Arc，Issue #8595 以标准 `Arc<MessageExt>` 替代最后的 Client hot-path ArcMut benchmark，Issue #8597 将 RocksDB semantics fixture 默认改为独占 Store root 并只在 Generic Store 兼容 helper 保留 1/1，Issue #8599 将共享 HA fixture 改为独占 LocalFile root，Issue #8601 删除 ConsumeQueue compatibility tests 的多余 shared root，Issue #8603 使 single queue tests 仅保留标准 Arc queue-store owner，Issue #8605 使 CommitLog tests 直接拥有 LocalFile root 并复用窄 HA capability wiring，Issue #8607 使 LocalFile 普通单测 fixture 直接拥有 concrete root，并仅为三个 Timer 兼容测试保留显式 legacy helper，Issue #8609 公开有错误契约的 owned wiring 并批量迁移 CommitLog recovery、HA semantics、Broker expression-filter 夹具，同时让 BrokerRuntime role tests 复用 production 初始化入口；Client test/bench caller 已清零，R17 仍等待 Store/Broker/runtime-foundation 余量。
+- [ ] R17 Test/bench caller 迁移：在其余 production owner 收口后重新盘点并清理真实余量；当前上界为 8 identities / 26 occurrences（Store 5/17、Broker 1/1、Client 0/0、runtime-foundation 2/8）。Issue #8593 已将 LitePull 测试的 68 个配置 wrapper 改为标准 Arc，Issue #8595 以标准 `Arc<MessageExt>` 替代最后的 Client hot-path ArcMut benchmark，Issue #8597 将 RocksDB semantics fixture 默认改为独占 Store root 并只在 Generic Store 兼容 helper 保留 1/1，Issue #8599 将共享 HA fixture 改为独占 LocalFile root，Issue #8601 删除 ConsumeQueue compatibility tests 的多余 shared root，Issue #8603 使 single queue tests 仅保留标准 Arc queue-store owner，Issue #8605 使 CommitLog tests 直接拥有 LocalFile root 并复用窄 HA capability wiring，Issue #8607 使 LocalFile 普通单测 fixture 直接拥有 concrete root，并仅为三个 Timer 兼容测试保留显式 legacy helper，Issue #8609 批量迁移跨 crate LocalFile fixtures，Issue #8611 进一步清零 Timer 单测、恢复集成与 LocalFile Timer fixtures 的完整 Store wrapper；Client test/bench caller 已清零，R17 仍等待 Store/Broker/runtime-foundation 余量。
 - [ ] R18 Public compatibility 删除：在 next-major 两轮弃用和 Release Manager/HUMAN 批准后，删除 `rocketmq/src/arc_mut.rs` 与 `rocketmq/src/lib.rs` 的 14 identities / 40 occurrences；不得以重置 public API baseline 代替迁移。
 
 ### M10 / Phase 3 候选快照 Gate（7 项）
@@ -718,6 +718,16 @@ test 从 28/146 降至 17/132，compatibility 保持 14/40；Store test/bench ca
 14/123，Broker test caller 从 6/8 降至 1/1，净删除 11 test identities/14 occurrences，无 relocation、
 新增 identity 或临时 approval。R17 上界降至 17/132；执行清单仍为完成 11 项、剩余 20 项，正式进度仍为
 75/82。
+
+M11-12bc97 随 Issue #8611 提取 Timer Store capability：活跃路径只持队列查询、CommitLog 读取和内部消息
+写入句柄，LocalFile owned wiring 在 Timer enabled 时不再要求完整 Store root；共享 hook registry、生命周期状态、
+flush 唤醒与 reput 通知均通过窄句柄发布。Timer 单测、恢复集成测试和 LocalFile Timer fixture 直接拥有 concrete
+Store，删除全部 test `mut_from_ref` 与 wrapper；恢复回归还修复 ConsumeQueue truncate 持读锁再申请同队列写锁的
+重入死锁。reviewed baseline 从 44/196 降至 35/90：production 保持 13/24、test 从 17/132 降至 8/26、
+compatibility 保持 14/40；Store test/bench caller 从 14/123 降至 5/17，净删除 9 test identities/106
+occurrences；两个保留公开兼容 occurrence 仅使用忽略的临时 ADR-013 同 item relocation approval，无新增 identity
+或提交态 approval。R14 活跃路径完成，公开 legacy 2/5 转由 R18 兼容窗口；
+R17 上界降至 8/26，执行清单现为完成 12 项、剩余 19 项，正式进度仍为 75/82。
 
 ## PR-M12 剩余工作包
 
