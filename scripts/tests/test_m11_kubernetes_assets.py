@@ -135,6 +135,14 @@ class KubernetesAssetsGuardTests(unittest.TestCase):
         result = self.run_guard(expect_success=False)
         self.assertIn("stateless", result.stderr)
 
+    def test_reserved_powershell_platform_variable_is_rejected(self) -> None:
+        path = self.root / "scripts" / "kubernetes-assets-contract.ps1"
+        source = path.read_text(encoding="utf-8")
+        self.assertIn("$hostIsWindows", source)
+        path.write_text(source.replace("$hostIsWindows", "$isWindows"), encoding="utf-8")
+        result = self.run_guard(expect_success=False)
+        self.assertIn("reserved $IsWindows", result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

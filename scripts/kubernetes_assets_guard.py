@@ -348,6 +348,13 @@ def validate_source_assets(guard: Guard) -> None:
     for relative in required:
         guard.read(relative)
 
+    contract_script = guard.read("scripts/kubernetes-assets-contract.ps1")
+    guard.require("$hostIsWindows" in contract_script, "asset contract must use a script-owned host platform flag")
+    guard.require(
+        re.search(r"(?i)\$iswindows\b", contract_script) is None,
+        "asset contract must not assign or reference reserved $IsWindows",
+    )
+
     chart_sources = "\n".join(
         guard.read(f"distribution/helm/rocketmq-rust/templates/{name}")
         for name in (
