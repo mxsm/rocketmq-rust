@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import re
 import tomllib
 import unittest
 from pathlib import Path
@@ -83,6 +84,17 @@ class StoreFacadeTieredContractTests(unittest.TestCase):
             r"pub enum GenericMessageStore\s*\{\s*LocalFileStore\(",
         )
         self.assertIn("pub fn local_file(", source)
+
+    def test_owned_composition_keeps_concrete_backends_without_changing_legacy_variants(self) -> None:
+        source = read("rocketmq-store/src/message_store/owned_message_store.rs")
+        owned = re.search(r"pub enum OwnedMessageStore\s*\{(?P<body>.*?)\n\}", source, re.DOTALL)
+
+        self.assertIsNotNone(owned)
+        body = owned.group("body")
+        self.assertIn("LocalFileStore(Box<LocalFileMessageStore>)", body)
+        self.assertIn("RocksDBStore(Box<RocksDBMessageStore>)", body)
+        self.assertNotIn("ArcMut", body)
+        self.assertIn("#[non_exhaustive]", source)
 
     def test_local_owner_keeps_fast_safe_priority(self) -> None:
         owner = read("rocketmq-store-local/src/commit_log/load_orchestration.rs")

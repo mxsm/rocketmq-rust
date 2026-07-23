@@ -8,8 +8,8 @@
 > PR-M12-01～06 未开始，合计剩余 7 个
 
 剩余任务数量、M11-12 内部执行批次与 M12 六个工作包见 [`REMAINING-TASKS.md`](REMAINING-TASKS.md)：正式口径
-剩余 7 个工作包；31 个最小可审查单元已完成 13 个，当前剩余 18 个。Issue #8615 / M11-12bc98 后
-reviewed ArcMut baseline 为 31 identities / 73 occurrences（production 13/23、test 4/10、
+剩余 7 个工作包；31 个最小可审查单元已完成 13 个，当前剩余 18 个。Issue #8617 / M11-12bc99 后
+reviewed ArcMut baseline 为 31 identities / 71 occurrences（production 13/21、test 4/10、
 compatibility 14/40）。
 
 ## 1. 使用方式
@@ -1270,6 +1270,14 @@ Broker 无调用方的完整 Store wrapper 同步删除。reviewed 快照从 35/
 13/24 降至 13/23、test 从 8/26 降至 4/10、compatibility 保持 14/40；净删除 4 identities/17
 occurrences，无 relocation、新 identity 或临时 approval。R10 活跃 caller 完成且 legacy 2/2 转由 R18，
 R17 上界降至 4/10，执行清单现为完成 13 项、剩余 18 项，正式进度仍为 75/82。
+
+Broker owned Store composition 随 Issue #8617 完成：新增 non-exhaustive `OwnedMessageStore`，Local/Rocks
+variant 直接拥有 concrete backend，Broker 不再为 backend 单独增加内层 ArcMut；既有公开
+`GenericMessageStore` variant、constructor 与 forwarding 保持不变。reviewed 快照从 31/73 降至
+31/71：production 从 13/23 降至 13/21、test 保持 4/10、compatibility 保持 14/40；Broker production
+从 4/7 降至 4/5，净删除 2 production occurrences、无新增 identity。两个保留外层 constructor 仅使用
+忽略的临时 ADR-013 同 item relocation approval。R01 仍等待外层 Admin/EscapeBridge/fast-failure/lifecycle
+能力拆分；执行清单保持完成 13 项、剩余 18 项，正式进度仍为 75/82。
 
 Default HA client runtime ownership 随 Issue #8567 完成收窄：`DefaultHAClient` 以标准 `Arc<Inner>` 共享只读组合根，
 `Inner` 仅保留原子、锁、Notify、flow monitor 与现有 LocalStore 兼容句柄；从未安装连接的 stream 字段和重复 buffer/

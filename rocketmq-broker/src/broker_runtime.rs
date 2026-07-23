@@ -67,7 +67,7 @@ use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore;
 #[cfg(feature = "rocksdb_store")]
 use rocketmq_store::message_store::rocksdb_message_store::RocksDBMessageStore;
-use rocketmq_store::message_store::GenericMessageStore;
+use rocketmq_store::message_store::OwnedMessageStore;
 use rocketmq_store::stats::broker_stats::BrokerStats;
 use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
 use rocketmq_store::store_error::StoreError;
@@ -241,11 +241,13 @@ use crate::transaction::queue::transactional_message_bridge::TransactionalMessag
 use crate::transaction::transaction_metrics_flush_service::TransactionMetricsFlushService;
 use crate::transaction::transactional_message_check_service::TransactionalMessageCheckService;
 
+pub(crate) type BrokerMessageStore = OwnedMessageStore;
+
 type DefaultServerProcessor =
-    BrokerRequestProcessor<GenericMessageStore, DefaultTransactionalMessageService<GenericMessageStore>>;
+    BrokerRequestProcessor<BrokerMessageStore, DefaultTransactionalMessageService<BrokerMessageStore>>;
 
 type FasterServerProcessor =
-    BrokerRequestProcessor<GenericMessageStore, DefaultTransactionalMessageService<GenericMessageStore>>;
+    BrokerRequestProcessor<BrokerMessageStore, DefaultTransactionalMessageService<BrokerMessageStore>>;
 
 pub(crate) async fn complete_topic_config_creation<F, Fut>(
     coordinator: Arc<TopicConfigCoordinator>,
@@ -654,7 +656,7 @@ fn prepare_rocksdb_config_path_for_json_migration(path: &Path) -> bool {
 
 pub(crate) struct BrokerRuntime {
     #[cfg(feature = "local_file_store")]
-    inner: Box<BrokerRuntimeInner<GenericMessageStore>>,
+    inner: Box<BrokerRuntimeInner<BrokerMessageStore>>,
     shutdown_hook: Option<BrokerShutdownHook>,
     proxy_request_processor: Option<DefaultServerProcessor>,
     consumer_ids_change_listener: Arc<dyn ConsumerIdsChangeListener + Send + Sync + 'static>,
@@ -665,7 +667,7 @@ pub(crate) struct BrokerRuntime {
     #[cfg(feature = "rocksdb_store")]
     rocksdb_config_managers: Option<BrokerRocksDbConfigManagers>,
     #[cfg(feature = "local_file_store")]
-    escape_bridge_owner: Arc<EscapeBridge<GenericMessageStore>>,
+    escape_bridge_owner: Arc<EscapeBridge<BrokerMessageStore>>,
 }
 
 struct BrokerRemotingServerReportReceiver {
@@ -1135,7 +1137,7 @@ impl BrokerRuntime {
         let escape_bridge_policy_state = EscapeBridgePolicyState::from_configs(&broker_config, &message_store_config);
         let config_state = BrokerRuntimeConfigState::new(broker_config.clone(), message_store_config.clone());
 
-        let mut inner = Box::new(BrokerRuntimeInner::<GenericMessageStore> {
+        let mut inner = Box::new(BrokerRuntimeInner::<BrokerMessageStore> {
             shutdown: Arc::new(AtomicBool::new(false)),
             store_host,
             broker_addr: CheetahString::from(broker_address),
@@ -1366,17 +1368,17 @@ impl BrokerRuntime {
         &self.scheduled_task_manager
     }
 
-    pub(crate) fn inner_for_test(&mut self) -> &mut BrokerRuntimeInner<GenericMessageStore> {
+    pub(crate) fn inner_for_test(&mut self) -> &mut BrokerRuntimeInner<BrokerMessageStore> {
         self.inner.as_mut()
     }
 
     #[cfg(test)]
-    pub(crate) fn pull_message_context_for_test(&self) -> Arc<PullMessageProcessorContext<GenericMessageStore>> {
+    pub(crate) fn pull_message_context_for_test(&self) -> Arc<PullMessageProcessorContext<BrokerMessageStore>> {
         self.inner.build_pull_message_context()
     }
 
     #[cfg(test)]
-    pub(crate) fn pop_message_processor_for_test(&self) -> Arc<PopMessageProcessor<GenericMessageStore>> {
+    pub(crate) fn pop_message_processor_for_test(&self) -> Arc<PopMessageProcessor<BrokerMessageStore>> {
         self.inner.build_pop_message_processor()
     }
 
@@ -1400,12 +1402,12 @@ impl BrokerRuntime {
             .is_some()
     }
 
-    fn admin_runtime(&self) -> BrokerAdminRuntime<GenericMessageStore> {
+    fn admin_runtime(&self) -> BrokerAdminRuntime<BrokerMessageStore> {
         self.inner.build_admin_runtime()
     }
 
     #[cfg(test)]
-    pub(crate) fn admin_runtime_for_test(&self) -> BrokerAdminRuntime<GenericMessageStore> {
+    pub(crate) fn admin_runtime_for_test(&self) -> BrokerAdminRuntime<BrokerMessageStore> {
         self.admin_runtime()
     }
 
@@ -2151,7 +2153,7 @@ impl BrokerRuntime {
                 self.inner.broker_stats_manager.clone(),
                 false,
             ) {
-                Ok(message_store) => ArcMut::new(message_store),
+                Ok(message_store) => message_store,
                 Err(error) => {
                     error!("Initialize message store failed: {error}");
                     return false;
@@ -2162,7 +2164,7 @@ impl BrokerRuntime {
                 return false;
             }
             self.inner.timer_message_store = local_file_store.get_timer_message_store().cloned();
-            let message_store = ArcMut::new(GenericMessageStore::local_file(local_file_store));
+            let message_store = ArcMut::new(BrokerMessageStore::local_file(local_file_store));
             self.inner.broker_stats = Some(Arc::new(BrokerStats::from_manager(
                 self.inner.broker_stats_manager.clone(),
             )));
@@ -2201,9 +2203,8 @@ impl BrokerRuntime {
                         return false;
                     }
                 };
-                let rocksdb_message_store = ArcMut::new(rocksdb_message_store);
                 self.inner.timer_message_store = rocksdb_message_store.get_timer_message_store().cloned();
-                let message_store = ArcMut::new(GenericMessageStore::rocksdb(rocksdb_message_store));
+                let message_store = ArcMut::new(BrokerMessageStore::rocksdb(rocksdb_message_store));
                 self.inner.broker_stats = Some(Arc::new(BrokerStats::from_manager(
                     self.inner.broker_stats_manager.clone(),
                 )));
@@ -6963,8 +6964,8 @@ accounts:
             .inner
             .message_store()
             .expect("message store should be initialized");
-        let GenericMessageStore::RocksDBStore(rocksdb_owner) = message_store else {
-            panic!("RocksDB store type should initialize the broker main store as GenericMessageStore::RocksDBStore");
+        let BrokerMessageStore::RocksDBStore(rocksdb_owner) = message_store else {
+            panic!("RocksDB store type should initialize the broker main store as BrokerMessageStore::RocksDBStore");
         };
         assert!(rocksdb_owner.rocksdb_config().path.ends_with("consumequeue_rocksdb"));
 

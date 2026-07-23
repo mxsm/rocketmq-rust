@@ -509,7 +509,7 @@
           "id": "d8463129a439bda73b3b705d",
           "fingerprint": "fa1cf46ad3c0fd49f66412d9",
           "item": "mod tests",
-          "line": 4955
+          "line": 4956
         }
       ],
       "owner": "broker",
@@ -525,28 +525,16 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "96382769b35a09684edebc18",
-          "fingerprint": "7ae7f0d42cc7cf877f3c5180",
+          "id": "a7fd5aea70417dca5a9430eb",
+          "fingerprint": "4bd5206196565768a74ff0a6",
           "item": "fn initialize_message_store",
-          "line": 2154
+          "line": 2167
         },
         {
-          "id": "74cc17d48db931fb59acef21",
-          "fingerprint": "3de04c81a6ce8750c01dbb1e",
+          "id": "4cf7cc30ab77f47a2baa9ea5",
+          "fingerprint": "b5fa9f42dcbeddc3270cb3b1",
           "item": "fn initialize_message_store",
-          "line": 2165
-        },
-        {
-          "id": "7bfbb94e72a0c7018d7617e3",
-          "fingerprint": "dcb507a9b34627030b03097c",
-          "item": "fn initialize_message_store",
-          "line": 2204
-        },
-        {
-          "id": "052080cc76db61122b9aa40e",
-          "fingerprint": "b268404c9afc32876ee95cbc",
-          "item": "fn initialize_message_store",
-          "line": 2206
+          "line": 2207
         }
       ],
       "owner": "broker",
@@ -584,7 +572,7 @@
           "id": "6accef9ad22e851ef1dc1890",
           "fingerprint": "993e032cc43bf3fde8bb9b8c",
           "item": "struct BrokerRuntimeInner",
-          "line": 3804
+          "line": 3805
         }
       ],
       "owner": "broker",
@@ -723,7 +711,7 @@
           "id": "746542483fffcc017c2b2e5b",
           "fingerprint": "f03c49a9cf69fb66e5e947be",
           "item": "mod rocksdb_message_store",
-          "line": 36
+          "line": 39
         }
       ],
       "owner": "store",
@@ -742,25 +730,25 @@
           "id": "36361cc6ccd2b916d08d4dec",
           "fingerprint": "f188643beba2ccecef5f9da0",
           "item": "enum GenericMessageStore",
-          "line": 72
+          "line": 75
         },
         {
           "id": "f6a3c6581db220e1627690d6",
           "fingerprint": "131520c4ce58aed471b5ee64",
           "item": "enum GenericMessageStore",
-          "line": 75
+          "line": 78
         },
         {
           "id": "98f940f936e81a1ad86d929b",
           "fingerprint": "ae926679a6245276015ae367",
           "item": "fn local_file",
-          "line": 79
+          "line": 82
         },
         {
           "id": "3c5132015f64c8e2b0630601",
           "fingerprint": "f19745ebb78552b6636b9aca",
           "item": "fn rocksdb",
-          "line": 84
+          "line": 87
         }
       ],
       "owner": "store",

@@ -18,6 +18,7 @@ use rocketmq_store::base::message_status_enum::AppendMessageStatus;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::message_store::GenericMessageStore;
+use rocketmq_store::message_store::OwnedMessageStore;
 use rocketmq_store::store_api_adapter::legacy_append_receipt;
 use rocketmq_store::store_api_adapter::legacy_error_kind_to_api;
 use rocketmq_store::store_api_adapter::legacy_get_status_to_api;
@@ -281,4 +282,5 @@ where
 #[test]
 fn legacy_adapter_compile_fixture_is_monomorphized() {
     assert_adapter_contract::<GenericMessageStore>();
+    assert_adapter_contract::<OwnedMessageStore>();
 }

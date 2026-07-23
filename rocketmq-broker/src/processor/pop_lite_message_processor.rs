@@ -703,13 +703,14 @@ mod tests {
     use super::PopLiteMessageProcessorContext;
     use super::PopLiteMessageStoreCapability;
     use super::PopLiteOffsetCapability;
+    use crate::broker_runtime::BrokerMessageStore;
     use crate::broker_runtime::BrokerRuntime;
     use crate::long_polling::long_polling_service::pop_lite_long_polling_service::PopLiteLongPollingPolicy;
     use crate::long_polling::long_polling_service::pop_lite_long_polling_service::PopLiteLongPollingService;
     use crate::long_polling::long_polling_service::pop_lite_long_polling_service::PopLiteLongPollingServiceContext;
     use crate::processor::pop_message_processor::QueueLockManager;
 
-    fn pop_lite_processor_for_test(runtime: &mut BrokerRuntime) -> Arc<PopLiteMessageProcessor<GenericMessageStore>> {
+    fn pop_lite_processor_for_test(runtime: &mut BrokerRuntime) -> Arc<PopLiteMessageProcessor<BrokerMessageStore>> {
         let inner = runtime.inner_for_test();
         let topic_config_manager = inner.topic_config_manager_handle();
         let subscription_group_lookup = inner.subscription_group_manager().config_lookup();
