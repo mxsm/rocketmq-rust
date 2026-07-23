@@ -771,6 +771,10 @@ mod tests {
         assert!(!admin_source.contains("fn message_store_mut"));
         assert!(!bridge_source.contains(concat!("fn lease_message_store", "_mut")));
         assert!(!capability_source.contains(concat!("fn write_lease(&self)", " -> Result")));
+        assert!(
+            !capability_source.contains(".lifecycle_lease()"),
+            "request control paths must not obtain the composition-root lifecycle lease"
+        );
         for operation in ["put_message", "set_commitlog_read_mode", "delete_topics"] {
             assert!(
                 admin_source.contains(operation),
@@ -780,13 +784,17 @@ mod tests {
     }
 
     #[test]
-    fn request_append_paths_use_the_shared_port_instead_of_complete_store_clones() {
+    fn controller_transition_does_not_retain_a_complete_store_clone_across_await() {
         let capability_source = include_str!("escape_bridge_capability.rs");
 
         assert_eq!(
             capability_source.matches(concat!("owner.cloned_", "store()")).count(),
-            1,
-            "only the controller role transition may retain a legacy mutable Store clone"
+            0,
+            "controller transitions must not retain the complete mutable Store across HA awaits"
+        );
+        assert!(
+            capability_source.contains(".get_ha_service().cloned()"),
+            "controller transitions must snapshot the cloneable HA service boundary"
         );
         for operation in [
             concat!(".put_", "message(message)"),
