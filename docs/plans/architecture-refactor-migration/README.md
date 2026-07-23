@@ -1,10 +1,11 @@
 # RocketMQ Rust 架构重构迁移执行手册
 
-<!-- architecture-refactor-scope: phases=1-3; execution=R01-R20,R22-R25; follow-up=R21,R26-R31 -->
+<!-- architecture-refactor-scope: phases=1-3; execution=R01-R18,R20,R22-R25; follow-up=R19,R21,R26-R31 -->
 
-> 当前实施范围：Phase 1～3 的 R01～R20、R22～R25；R21 Docker/Kind/K3d 动态证据与
-> Phase 4 AI Native（R26～R31）保留为独立后续提案，不计入本轮进度、剩余任务数或完成 Gate。
-> 状态：实施中（Phase 3；M10 真实性能/HUMAN Gate 待验收，M11 已完成安全 profile/bootstrap/rotation、MCP HTTPS/audit、五服务镜像、Helm/Kustomize、统一 probe/preStop/drain 与 Kind/K3d fault 执行/证据门禁，PR-M11-12 正在按 owner 子切片收口）
+> 当前实施范围：Phase 1～3 的 R01～R18、R20、R22～R25；R19 固定目标硬件性能验收、
+> R21 Docker/Kind/K3d 动态证据与 Phase 4 AI Native（R26～R31）保留为独立后续提案，
+> 不计入本轮进度、剩余任务数或完成 Gate。
+> 状态：实施中（Phase 3；R09/R18 已按 2026-07-24 HUMAN 提前移除授权完成，当前仅剩 R25 四方签署）
 > 设计依据：[`docs/architecture-refactor-design.md`](../../architecture-refactor-design.md)
 > 架构审计基线：`f545d638`
 > crate 与源码迁移复核基线：`6d152248`
@@ -12,10 +13,12 @@
 > PR-M11-12 进行中，合计剩余 1 个
 
 剩余任务数量、M11-12 内部执行批次与独立 Phase 4 后续提案见 [`REMAINING-TASKS.md`](REMAINING-TASKS.md)：
-当前正式口径剩余 1 个工作包；24 个最小可审查单元已完成 20 个，当前剩余
-R09、R18、R19、R25 共 4 个。R21 已从本轮目标排除；R25 对重新划定的当前范围完成签署。Issue #8649 /
+当前正式口径剩余 1 个工作包；23 个最小可审查单元已完成 22 个，当前仅剩 R25。
+R19 与 R21 已从本轮目标排除；R25 对重新划定的当前范围完成签署。Issue #8702 将
+reviewed ArcMut baseline 从 20 identities / 58 occurrences 单调降至 0/0，并删除 12 个公开兼容表面；
+三个 canonical replacement 保持可用。此前 Issue #8649 /
 M11-12bc114 候选保持
-reviewed ArcMut baseline 20 identities / 58 occurrences（production 6/12、test 1/7、
+reviewed ArcMut baseline 为 20 identities / 58 occurrences（production 6/12、test 1/7、
 compatibility 13/39）；Broker production ArcMut 已清零，Broker runtime 直接持有标准
 `Arc<OwnedMessageStore>`，EscapeBridge 与 Admin runtime 只保留标准弱 provider，请求只在单次操作期间取得
 标准 Arc 读租约；普通单条、批量和 Admin append
@@ -31,6 +34,8 @@ workspace all-target/all-feature matrix 已通过；Miri/Loom 技术审计拒绝
 R20 五服务容器动态验收已由 Issue #8677 在 main commit
 `13d50e2d33ddfc1142bba63431b339d07704a4f7` 上关闭；真实集群 fault/rolling 证据与四方签署仍由
 独立后续项 R21 承担，R25 只签署重新划定后的当前范围。
+R09/R18 的授权、12 个删除表面、0/0 基线和正/负约束见
+[`R09/R18 共享可变兼容面移除证据`](phase-3-production-readiness/11-shared-mutation-removal-evidence.md)。
 
 ## 1. 使用方式
 

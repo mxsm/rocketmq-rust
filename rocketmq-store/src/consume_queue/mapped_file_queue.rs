@@ -326,7 +326,7 @@ fn create_and_publish_mapped_file(
 ///
 /// The capability owns only the atomically published mapped-file generation.
 /// It deliberately excludes the queue's allocation and runtime state so a
-/// scheduled cleanup task never needs shared access to the `ArcMut`-owned
+/// scheduled cleanup task never needs shared access to the composition-root-owned
 /// `MappedFileQueue` facade.
 #[derive(Clone)]
 pub(crate) struct MappedFileQueueCleanupHandle {

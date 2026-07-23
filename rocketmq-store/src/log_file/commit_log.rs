@@ -376,7 +376,7 @@ pub struct CommitLog {
 /// Safe, narrow capability for scheduled commit-log retention work.
 ///
 /// It owns only the atomically published mapped-file generation and therefore
-/// does not dereference the `ArcMut<CommitLog>` facade used by legacy writers.
+/// does not dereference the composition-root-owned `CommitLog`.
 #[derive(Clone)]
 pub(crate) struct CommitLogCleanupHandle {
     mapped_file_queue: MappedFileQueueCleanupHandle,

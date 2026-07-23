@@ -48,17 +48,17 @@ class ArchitectureReleaseGuardTest(unittest.TestCase):
         )
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         self.assertIn("R1 29, next-major 4, long-term 2", result.stdout)
-        self.assertIn("12/12 public surfaces, 3/3 canonical replacements", result.stdout)
+        self.assertIn("12/12 absent, 3/3 canonical replacements", result.stdout)
         self.assertIn(
-            "Phase 1-3/R01-R20,R22-R25; R21 and Phase 4 R26-R31 excluded",
+            "Phase 1-3/R01-R18,R20,R22-R25; "
+            "R19/R21 and Phase 4 R26-R31 excluded",
             result.stdout,
         )
-        self.assertIn(
-            "R09/R18/R19 immediate; R25 closeout",
-            result.stdout,
-        )
+        self.assertIn("current remaining: R25 closeout", result.stdout)
 
-    def test_objective_scope_excludes_platform_and_phase4_follow_up(self) -> None:
+    def test_objective_scope_excludes_performance_platform_and_phase4_follow_up(
+        self,
+    ) -> None:
         findings: list[str] = []
         guard.check_objective_scope(self.plan, findings)
         self.assertEqual([], findings)
@@ -69,8 +69,8 @@ class ArchitectureReleaseGuardTest(unittest.TestCase):
 
         invalid = copy.deepcopy(self.plan)
         invalid["objective_scope"]["architecture_refactor_execution_items"].insert(
-            20,
-            "R21",
+            18,
+            "R19",
         )
         findings = []
         guard.check_objective_scope(invalid, findings)
@@ -89,7 +89,7 @@ class ArchitectureReleaseGuardTest(unittest.TestCase):
             findings,
             source_overrides={
                 checklist_path: checklist
-                + "\n- [ ] R21: incorrectly reactivated\n"
+                + "\n- [ ] R19: incorrectly reactivated\n"
             },
         )
         self.assertTrue(
@@ -146,16 +146,16 @@ class ArchitectureReleaseGuardTest(unittest.TestCase):
         guard.check_proxy_activation(self.plan, findings)
         self.assertEqual([], findings)
 
-    def test_human_approval_does_not_approve_early_removal(self) -> None:
+    def test_human_approval_explicitly_approves_early_removal(self) -> None:
         findings: list[str] = []
         guard.check_usage_and_approval(self.plan, findings)
         self.assertEqual([], findings)
         self.assertEqual(
-            "pending-next-major-evidence-gate",
+            "approved-early-human-override",
             self.plan["human_approval"]["destructive_removal"],
         )
 
-    def test_arc_mut_deprecation_inventory_and_markers_are_complete(self) -> None:
+    def test_arc_mut_removal_inventory_and_replacements_are_complete(self) -> None:
         findings: list[str] = []
         guard.check_arc_mut_deprecations(self.plan, findings)
         self.assertEqual([], findings)
@@ -181,34 +181,26 @@ class ArchitectureReleaseGuardTest(unittest.TestCase):
             },
         )
 
-    def test_arc_mut_deprecation_contract_fails_closed(self) -> None:
+    def test_arc_mut_removal_contract_fails_closed(self) -> None:
         invalid = copy.deepcopy(self.plan)
         invalid["arc_mut_deprecation"]["surfaces"].pop()
         findings: list[str] = []
         guard.check_arc_mut_deprecations(invalid, findings)
         self.assertIn(
-            "ArcMut deprecation inventory differs from the approved 12-surface contract",
+            "ArcMut removal inventory differs from the approved 12-surface contract",
             findings,
         )
 
         surface_id = "arc-mut-type"
-        relative_path, declaration, note = guard.REQUIRED_ARC_MUT_DEPRECATIONS[surface_id]
-        source = (ROOT / relative_path).read_text(encoding="utf-8")
-        declaration_index = source.index(declaration)
-        marker = list(
-            guard.deprecation_attribute_pattern("1.0.0", note).finditer(
-                source[:declaration_index]
-            )
-        )[-1]
-        without_marker = source[: marker.start()] + source[marker.end() :]
+        relative_path, declaration, _note = guard.REQUIRED_ARC_MUT_DEPRECATIONS[surface_id]
         findings = []
         guard.check_arc_mut_deprecations(
             self.plan,
             findings,
-            source_overrides={relative_path: without_marker},
+            source_overrides={relative_path: f"{declaration} {{}}\n"},
         )
         self.assertIn(
-            f"ArcMut deprecation marker is missing or detached: {surface_id}",
+            f"ArcMut removed surface returned: {surface_id}",
             findings,
         )
 

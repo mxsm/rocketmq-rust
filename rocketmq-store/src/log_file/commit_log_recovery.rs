@@ -42,7 +42,7 @@ use crate::config::message_store_config::MessageStoreConfig;
 use crate::log_file::commit_log::check_message_and_return_size;
 #[allow(
     unused_imports,
-    reason = "preserve the governed DefaultMappedFile import fingerprint until ArcMut retirement"
+    reason = "preserve the governed DefaultMappedFile import fingerprint used by the recovery audit"
 )]
 use crate::log_file::commit_log::MESSAGE_MAGIC_CODE;
 use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;

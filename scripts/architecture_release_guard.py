@@ -29,6 +29,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PLAN_PATH = ROOT / "scripts" / "architecture-release-plan.json"
 POLICY_PATH = ROOT / "scripts" / "architecture-dependency-policy.json"
 BASELINE_PATH = ROOT / "scripts" / "architecture-dependency-baseline.json"
+ARC_MUT_BASELINE_PATH = ROOT / "scripts" / "arc-mut-baseline.json"
 CI_PATH = ROOT / ".github" / "workflows" / "rocketmq-rust-ci.yaml"
 PROXY_MANIFEST = ROOT / "rocketmq-proxy" / "Cargo.toml"
 
@@ -131,8 +132,8 @@ REQUIRED_ARC_MUT_REPLACEMENTS = {
 }
 SCOPE_MARKER = (
     "<!-- architecture-refactor-scope: "
-    "phases=1-3; execution=R01-R20,R22-R25; "
-    "follow-up=R21,R26-R31 -->"
+    "phases=1-3; execution=R01-R18,R20,R22-R25; "
+    "follow-up=R19,R21,R26-R31 -->"
 )
 SCOPE_DOCUMENTS = (
     "docs/architecture-refactor-design.md",
@@ -144,40 +145,43 @@ SCOPE_DOCUMENTS = (
 REQUIRED_SCOPE_SUMMARIES = {
     "docs/plans/architecture-refactor-migration/README.md": (
         "当前范围 75/76 工作包完成",
-        "24 个最小可审查单元已完成 20 个",
-        "R09、R18、R19、R25 共 4 个",
+        "23 个最小可审查单元已完成 22 个",
+        "当前仅剩 R25",
     ),
     "docs/plans/architecture-refactor-migration/CHECKLIST.md": (
         "当前范围只统计 Phase 1～3 的 76 个顶层",
-        "执行层清单共 24 个最小可审查单元",
-        "R09、R18、R19、R25 共 4 个",
+        "执行层清单共 23 个最小可审查单元",
+        "当前仅剩 R25",
     ),
     "docs/plans/architecture-refactor-migration/REMAINING-TASKS.md": (
         "当前范围的正式工作包已完成 75/76",
-        "**24 个最小可审查单元**",
-        "当前剩余 R09、R18、R19、R25 共 4 个",
+        "**23 个最小可审查单元**",
+        "当前仅剩 R25",
     ),
 }
 REQUIRED_OBJECTIVE_SCOPE = {
     "architecture_refactor_phases": ["Phase 1", "Phase 2", "Phase 3"],
     "architecture_refactor_work_packages": 76,
     "architecture_refactor_execution_items": [
-        *[f"R{index:02d}" for index in range(1, 21)],
+        *[f"R{index:02d}" for index in range(1, 19)],
+        "R20",
         *[f"R{index:02d}" for index in range(22, 26)],
     ],
-    "remaining_execution_items": ["R09", "R18", "R19", "R25"],
-    "immediate_execution_items": ["R09", "R18", "R19"],
+    "remaining_execution_items": ["R25"],
+    "immediate_execution_items": [],
     "closeout_execution_items": ["R25"],
     "excluded_platform_follow_up_items": ["R21"],
+    "excluded_performance_follow_up_items": ["R19"],
     "excluded_follow_up_phase": "Phase 4 AI Native",
     "excluded_follow_up_items": [
         f"R{index:02d}" for index in range(26, 32)
     ],
     "constraint": (
-        "R21 platform evidence and the Phase 4 design remain available as "
-        "separate follow-up proposals, but R21 and R26-R31 do not contribute "
-        "to architecture-refactor progress, remaining-task counts, or "
-        "completion gates."
+        "R19 target-hardware performance acceptance, R21 platform evidence, "
+        "and the Phase 4 design remain available as separate follow-up "
+        "proposals, but R19, R21, and R26-R31 do not contribute to "
+        "architecture-refactor progress, remaining-task counts, or completion "
+        "gates."
     ),
 }
 
@@ -320,8 +324,10 @@ def check_usage_and_approval(plan: dict[str, Any], findings: list[str]) -> None:
     approval = plan.get("human_approval", {})
     if approval.get("status") != "approved":
         findings.append("relative release windows and notification plan lack Human approval")
-    if approval.get("destructive_removal") != "pending-next-major-evidence-gate":
-        findings.append("destructive removal must remain pending the next-major evidence gate")
+    if approval.get("destructive_removal") != "approved-early-human-override":
+        findings.append("R09/R18 early removal lacks the explicit Human override")
+    if approval.get("recorded_on") != "2026-07-24":
+        findings.append("R09/R18 Human override date is missing or changed")
 
     external = plan.get("external_usage", {})
     if len(external.get("collection_sources", [])) < 4:
@@ -341,16 +347,6 @@ def check_usage_and_approval(plan: dict[str, Any], findings: list[str]) -> None:
         findings.append("external notification plan must contain at least four channels")
 
 
-def deprecation_attribute_pattern(since: str, note: str) -> re.Pattern[str]:
-    return re.compile(
-        r"#\[\s*deprecated\s*\(\s*since\s*=\s*"
-        + re.escape(f'"{since}"')
-        + r"\s*,\s*note\s*=\s*"
-        + re.escape(f'"{note}"')
-        + r"\s*,?\s*\)\s*\]"
-    )
-
-
 def check_arc_mut_deprecations(
     plan: dict[str, Any],
     findings: list[str],
@@ -362,9 +358,18 @@ def check_arc_mut_deprecations(
     if policy.get("minimum_deprecation_releases") != 2:
         findings.append("ArcMut removal must retain two deprecation releases")
     if policy.get("minimum_major_boundaries") != 1:
-        findings.append("ArcMut removal must retain one major-version boundary")
-    if policy.get("destructive_removal") != "pending-next-major-evidence-gate":
-        findings.append("ArcMut destructive removal must remain pending the evidence gate")
+        findings.append("ArcMut historical policy must retain one major-version boundary")
+    if policy.get("destructive_removal") != "completed-human-override":
+        findings.append("ArcMut destructive removal must record the completed Human override")
+    expected_override = {
+        "approved_on": "2026-07-24",
+        "approved_role": "HUMAN",
+        "decision": "remove-before-release-window",
+        "rollback_release": "v0.9.0",
+        "target_hardware_performance": "excluded-follow-up",
+    }
+    if policy.get("human_override") != expected_override:
+        findings.append("ArcMut Human override record differs from the approved decision")
 
     surfaces = policy.get("surfaces", [])
     observed = {
@@ -377,7 +382,7 @@ def check_arc_mut_deprecations(
         if isinstance(surface, dict)
     }
     if observed != REQUIRED_ARC_MUT_DEPRECATIONS or len(surfaces) != len(observed):
-        findings.append("ArcMut deprecation inventory differs from the approved 12-surface contract")
+        findings.append("ArcMut removal inventory differs from the approved 12-surface contract")
 
     replacements = policy.get("canonical_replacements", [])
     observed_replacements = {
@@ -394,32 +399,17 @@ def check_arc_mut_deprecations(
     ):
         findings.append("ArcMut canonical replacement inventory differs from the approved contract")
 
-    since = str(policy.get("since", ""))
-    for surface_id, (relative_path, declaration, note) in REQUIRED_ARC_MUT_DEPRECATIONS.items():
+    for surface_id, (relative_path, declaration, _note) in REQUIRED_ARC_MUT_DEPRECATIONS.items():
         path = ROOT / relative_path
         if source_overrides is not None and relative_path in source_overrides:
             content = source_overrides[relative_path]
         elif path.is_file():
             content = path.read_text(encoding="utf-8")
         else:
-            findings.append(f"ArcMut deprecation source is missing: {relative_path}")
-            continue
+            content = ""
 
-        if content.count(declaration) != 1:
-            findings.append(
-                f"ArcMut deprecation declaration must be unique: {surface_id}"
-            )
-            continue
-        declaration_index = content.index(declaration)
-        matches = list(
-            deprecation_attribute_pattern(since, note).finditer(
-                content[:declaration_index]
-            )
-        )
-        if not matches or content[matches[-1].end() : declaration_index].strip():
-            findings.append(
-                f"ArcMut deprecation marker is missing or detached: {surface_id}"
-            )
+        if declaration in content:
+            findings.append(f"ArcMut removed surface returned: {surface_id}")
 
     for replacement_id, (relative_path, declaration) in REQUIRED_ARC_MUT_REPLACEMENTS.items():
         path = ROOT / relative_path
@@ -442,6 +432,10 @@ def check_arc_mut_deprecations(
         if replacement_id == "owned-message-store" and "#[doc(hidden)]" in attribute_block:
             findings.append("OwnedMessageStore canonical replacement is hidden from Rustdoc")
 
+    arc_mut_baseline = load_json(ARC_MUT_BASELINE_PATH)
+    if arc_mut_baseline.get("entries") != []:
+        findings.append("ArcMut baseline must be empty after the approved removal")
+
 
 def check_objective_scope(
     plan: dict[str, Any],
@@ -450,8 +444,8 @@ def check_objective_scope(
 ) -> None:
     if plan.get("objective_scope") != REQUIRED_OBJECTIVE_SCOPE:
         findings.append(
-            "architecture-refactor objective scope must exclude R21 platform "
-            "evidence and Phase 4 R26-R31 as follow-up work"
+            "architecture-refactor objective scope must exclude R19 target-hardware "
+            "performance, R21 platform evidence, and Phase 4 R26-R31 as follow-up work"
         )
 
     contents: dict[str, str] = {}
@@ -482,7 +476,7 @@ def check_objective_scope(
     ):
         content = contents.get(relative_path, "")
         if re.search(
-            r"^\s*-\s+\[[ xX]\]\s+R(?:21|2[6-9]|3[01])\b",
+            r"^\s*-\s+\[[ xX]\]\s+R(?:19|21|2[6-9]|3[01])\b",
             content,
             re.MULTILINE,
         ):
@@ -562,14 +556,15 @@ def main() -> int:
     print("- release topology: 32/32 packages in dependency order")
     print("- R0 new crates: 10/10")
     print("- compatibility windows: R1 29, next-major 4, long-term 2")
-    print("- early removals/Proxy feature activation: 0")
+    print("- early removals: 12/12 Human-approved; Proxy feature activation: 0")
     print("- external usage and notification gates: approved and enforced")
-    print("- ArcMut deprecation contract: 12/12 public surfaces, 3/3 canonical replacements")
+    print("- ArcMut removal contract: 12/12 absent, 3/3 canonical replacements")
+    print("- Human compatibility override: approved 2026-07-24")
     print(
-        "- objective scope: Phase 1-3/R01-R20,R22-R25; "
-        "R21 and Phase 4 R26-R31 excluded as follow-up"
+        "- objective scope: Phase 1-3/R01-R18,R20,R22-R25; "
+        "R19/R21 and Phase 4 R26-R31 excluded as follow-up"
     )
-    print("- current remaining: R09/R18/R19 immediate; R25 closeout")
+    print("- current remaining: R25 closeout")
     return 0
 
 

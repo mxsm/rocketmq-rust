@@ -37,11 +37,6 @@ use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_common::common::system_clock::SystemClock;
 use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
-#[allow(
-    deprecated,
-    reason = "GenericMessageStore preserves the public ArcMut signature during its deprecation window"
-)]
-use rocketmq_rust::ArcMut;
 
 use crate::base::allocate_mapped_file_service::AllocateMappedFileService;
 use crate::base::commit_log_dispatcher::CommitLogDispatcher;
@@ -75,36 +70,6 @@ use crate::stats::broker_stats_manager::BrokerStatsManager;
 use crate::store::running_flags::RunningFlags;
 use crate::store_error::StoreError;
 use crate::timer::timer_message_store::TimerMessageStore;
-
-#[allow(
-    deprecated,
-    reason = "this enum is the deprecated GenericMessageStore compatibility surface"
-)]
-#[deprecated(
-    since = "1.0.0",
-    note = "use OwnedMessageStore and inject narrow Store capabilities into shared consumers"
-)]
-pub enum GenericMessageStore {
-    LocalFileStore(ArcMut<local_file_message_store::LocalFileMessageStore>),
-
-    #[cfg(feature = "rocksdb_store")]
-    RocksDBStore(ArcMut<rocksdb_message_store::RocksDBMessageStore>),
-}
-
-#[allow(
-    deprecated,
-    reason = "this impl preserves deprecated GenericMessageStore constructors until removal"
-)]
-impl GenericMessageStore {
-    pub fn local_file(store: ArcMut<local_file_message_store::LocalFileMessageStore>) -> Self {
-        Self::LocalFileStore(store)
-    }
-
-    #[cfg(feature = "rocksdb_store")]
-    pub fn rocksdb(store: ArcMut<rocksdb_message_store::RocksDBMessageStore>) -> Self {
-        Self::RocksDBStore(store)
-    }
-}
 
 macro_rules! store_composition_methods {
     () => {
@@ -156,14 +121,6 @@ macro_rules! store_composition_methods {
             }
         }
     };
-}
-
-#[allow(
-    deprecated,
-    reason = "this impl preserves the deprecated GenericMessageStore composition helpers"
-)]
-impl GenericMessageStore {
-    store_composition_methods!();
 }
 
 impl OwnedMessageStore {
@@ -831,14 +788,6 @@ macro_rules! message_store_methods {
         delegate_store!(self, get_ha_runtime_info())
     }
     };
-}
-
-#[allow(
-    deprecated,
-    reason = "this impl preserves the deprecated GenericMessageStore adapter contract"
-)]
-impl MessageStore for GenericMessageStore {
-    message_store_methods!();
 }
 
 impl MessageStore for OwnedMessageStore {

@@ -22,10 +22,9 @@ use crate::base::message_result::PutMessageResult;
 
 /// Application composition root that exclusively owns the selected Store backend.
 ///
-/// Unlike [`super::GenericMessageStore`], this type does not add an unsafe
-/// shared-mutation wrapper around the concrete backend. Shared consumers should
-/// receive narrow Store capabilities while the application lifecycle retains the
-/// only mutable root owner.
+/// This type does not add a shared-mutation wrapper around the concrete backend.
+/// Shared consumers should receive narrow Store capabilities while the application
+/// lifecycle retains the only mutable root owner.
 #[non_exhaustive]
 pub enum OwnedMessageStore {
     LocalFileStore(Box<LocalFileMessageStore>),

@@ -83,11 +83,6 @@ use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
-#[allow(
-    deprecated,
-    reason = "set_message_store_arc preserves its public ArcMut signature during the deprecation window"
-)]
-use rocketmq_rust::ArcMut;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -1077,40 +1072,6 @@ impl LocalFileMessageStore {
                 || self.store_runtime_state.broker_role() != BrokerRole::Slave)
     }
 
-    #[allow(
-        deprecated,
-        reason = "this method preserves the deprecated ArcMut wiring signature until removal"
-    )]
-    #[deprecated(since = "1.0.0", note = "use LocalFileMessageStore::wire_owned_root_dependencies")]
-    pub fn set_message_store_arc(&mut self, message_store_arc: ArcMut<LocalFileMessageStore>) {
-        drop(message_store_arc);
-        self.consume_queue_store.set_context(self.consume_queue_context());
-        if self.message_store_config.is_timer_wheel_enable() && self.timer_message_store.is_none() {
-            let timer_message_store = Arc::new(TimerMessageStore::new_with_store_context(
-                self.timer_store_context(),
-                Arc::clone(&self.message_store_config),
-            ));
-            self.set_timer_message_store(timer_message_store);
-        }
-        if !Self::is_dledger_commit_log_enabled_config(self.message_store_config.as_ref())
-            && !self.message_store_config.duplication_enable
-        {
-            let replica_store = self.ha_replica_store_handle();
-            self.pending_ha_service = Some(if self.message_store_config.enable_controller_mode {
-                PendingHAService::AutoSwitch(
-                    crate::ha::auto_switch::auto_switch_ha_service::AutoSwitchHAService::new(
-                        crate::ha::default_ha_service::DefaultHAService::new(replica_store),
-                    ),
-                )
-            } else {
-                PendingHAService::Default(Box::new(crate::ha::default_ha_service::DefaultHAService::new(
-                    replica_store,
-                )))
-            });
-        }
-        self.root_dependencies_wired = true;
-    }
-
     /// Completes root wiring when this store has exclusive ownership.
     ///
     /// ConsumeQueue, Timer, and HA use independently owned capability handles, so they do not
@@ -1243,7 +1204,7 @@ impl LocalFileMessageStore {
             return Ok(());
         }
         Err(StoreError::InvalidState(format!(
-            "message store arc is not set; call set_message_store_arc before {operation}"
+            "message store root dependencies are not wired; call wire_owned_root_dependencies before {operation}"
         )))
     }
 
@@ -6279,7 +6240,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn recovery_without_message_store_arc_returns_without_panicking() {
+    async fn recovery_without_owned_root_wiring_returns_without_panicking() {
         let temp_dir = tempdir().unwrap();
         let mut store = new_unwired_test_store(&temp_dir);
 
@@ -6297,7 +6258,8 @@ mod tests {
         assert!(matches!(
             error,
             StoreError::InvalidState(message)
-                if message == "message store arc is not set; call set_message_store_arc before init"
+                if message
+                    == "message store root dependencies are not wired; call wire_owned_root_dependencies before init"
         ));
     }
 
