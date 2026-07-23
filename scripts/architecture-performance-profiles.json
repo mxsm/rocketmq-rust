@@ -1,6 +1,12 @@
 {
   "schema_version": 1,
   "milestone": "M10-05",
+  "sidecar_protocol": {
+    "schema_version": 1,
+    "runner": "scripts/architecture_performance_sidecar.py",
+    "output_root": "target/architecture-refactor/M10",
+    "report_kind": "measurement"
+  },
   "default_max_regression_percent": 5.0,
   "minimum_samples": 5,
   "max_relative_mad_percent": 5.0,

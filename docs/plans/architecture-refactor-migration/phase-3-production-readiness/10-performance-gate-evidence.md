@@ -19,8 +19,8 @@ baseline/candidate，也没有伪造 benchmark 数字；真实采样、原始 si
 | 分支 | `mxsm/architecture-refactor-performance-gate` |
 | Main 基线 | `d77a820cf9dd7ac6740dcaeba977e070c5581c6b` |
 | 冻结代码候选 | `0fac2bfb85c0fc90f1a8cb42dfd4b39b4b077990` |
-| Profile 文件 SHA-256 | `1905cef6f78f10cd9ae8274502deb0fad8e6b899727f57a1770ce39eb8481c30` |
-| Profile canonical SHA-256 | `4c28b93447189b27a3769e13cc7d40476fd5f73b3a7cff2be3701253ea1b96e4` |
+| Profile 文件 SHA-256 | `10280364541942a27be90a083c61c10ce9e894acac8d9e8b3678c856462ff448` |
+| Profile canonical SHA-256 | `acfd0dd8710d978abb503a03df29c5807057aa506df9a57dfd5049d2563d225e` |
 | Exception 文件 SHA-256 | `81a515050e5d312ac4a453fa1bdaa999cfc11ad6a652659776bf5747c6b69168` |
 | 真实性能运行 | **未执行；不得记录为性能通过** |
 
@@ -39,6 +39,53 @@ baseline/candidate，也没有伪造 benchmark 数字；真实采样、原始 si
 - baseline/candidate 环境必须完全一致，候选时间不得早于基线；真实 measurement 必须来自 clean Git tree，
   且不能把同一提交同时当作 baseline 和 candidate。
 
+## 目标硬件 sidecar runner
+
+Issue [#8682](https://github.com/mxsm/rocketmq-rust/issues/8682) 增加了
+`scripts/architecture_performance_sidecar.py`，把上述采集合同从手工报告装配推进为可执行且 fail-closed 的
+目标机流程：
+
+- 只接受完整 manifest；四项 correctness 和 8 profiles/11 variants 必须与冻结 policy 精确一致；
+- 命令以 argument list 直接执行，不经 shell；每项必须声明 1–86400 秒的有限 timeout；
+- 拒绝 placeholder、fixture/synthetic/mock 标记、脏 Git tree、运行期间 commit/worktree 漂移、
+  非 release profile、重复 output directory，
+  以及 `target/architecture-refactor/M10` 之外的输出位置；
+- 四项 correctness 全部成功并保存 transcript SHA-256 后才开始任何性能命令；
+- 每个性能 runner 的 stdout 必须是单个 JSON object，精确包含 `schema_version`、`profile`、`variant`
+  和完整 `metrics.*.samples`；identity 或 metric inventory 不匹配即失败；
+- stdout、stderr、命令参数、timeout、开始/结束时间、耗时、exit code 与 timeout 状态统一写入原始
+  transcript，report 只引用仓库内忽略路径及其 SHA-256；
+- 最终 report 固定为 `report_kind=measurement`，不能生成 fixture，也没有 `allow-dirty`、
+  `allow-partial` 或跳过 correctness 的开关；写入前再次通过现有 `validate_report`。
+
+生成的模板故意不可直接运行，目标机 owner 必须先替换全部 placeholder：
+
+```powershell
+python scripts/architecture_performance_sidecar.py `
+  --generate-manifest target/architecture-refactor/M10/runner-manifest.json
+
+python scripts/architecture_performance_sidecar.py `
+  --manifest target/architecture-refactor/M10/runner-manifest.json `
+  --run-id baseline-<commit>-<host> `
+  --output-dir target/architecture-refactor/M10/baseline-<commit>-<host>
+```
+
+每个 measurement runner 必须向 stdout 输出：
+
+```json
+{
+  "schema_version": 1,
+  "profile": "local-append",
+  "variant": "producers-1",
+  "metrics": {
+    "throughput_per_second": { "samples": [1, 2, 3, 4, 5] }
+  }
+}
+```
+
+示例只展示协议形状；真实输出必须包含该 profile 的全部冻结指标及至少五个真实样本。sidecar runner
+解决采集一致性和可追溯性，不提供性能数字，也不替代固定硬件执行、原始数据保管或 `[HUMAN]` M10 签署。
+
 ## 正确性优先与例外边界
 
 - `sync_flush_crash_recovery`、`derived_replay_no_holes`、`bounded_overload` 和
@@ -55,6 +102,9 @@ baseline/candidate，也没有伪造 benchmark 数字；真实采样、原始 si
 |---|---|
 | `python -m py_compile scripts/architecture_performance_guard.py scripts/tests/test_architecture_performance_guard.py` | 通过 |
 | `python -m unittest scripts.tests.test_architecture_performance_guard -v` | 11/11 通过；全部报告明确为 synthetic fixture、非 benchmark 证据 |
+| `python -m py_compile scripts/architecture_performance_sidecar.py scripts/tests/test_architecture_performance_sidecar.py` | 通过 |
+| `python -m unittest scripts.tests.test_architecture_performance_sidecar -v` | 8/8 通过；覆盖完整采集、正确性优先、timeout process-group 终止及运行期间 Git 漂移等反向拒绝 |
+| sidecar template 生成及未替换 placeholder 执行 | 模板生成通过；执行按预期失败且未产生 measurement report |
 | `python scripts/architecture_performance_guard.py --validate-profiles` | 通过；8 profiles、11 variants、50 metric contracts |
 | `python -m unittest discover -s scripts/tests -p "test_*guard.py"` | 125/125 通过 |
 | dependency target/baseline guards | 通过；target compatibility 35/35、dev-only 3/3，baseline 无增长 |

@@ -104,6 +104,8 @@ reader lease、validated rollback 和五故障点恢复；Compaction generation 
 
 - [x] `[TEST]` 固定 Local append/SyncFlush/Local pull/Rocks pull/Tiered append/pull/connection soak/overload profile。
 - [x] `[DEV]` 实现计划中的 `architecture_performance_guard.py`，比较吞吐、p99、RSS、allocation、I/O amplification并保存元数据。
+- [x] `[DEV]` 实现 `architecture_performance_sidecar.py`，在目标机上正确性优先地顺序执行完整 profile，
+  保存原始命令 transcript/hash，并生成 guard 可直接消费的 measurement report。
 - [x] `[TEST]` 用明确标记为非 benchmark 证据的 deterministic fixture 验证重复采样、噪声和 5% 双方向门禁；真实固定硬件采样仍待执行。
 - [x] `[REV]` 报告 schema 强制记录硬件、内核、文件系统、profile、feature、message size、TLS/活跃度和原始数据 hash。
 - [ ] `[HUMAN]` 仅在正确性先通过后批准性能例外；例外有 owner/期限/回退配置。
@@ -147,11 +149,15 @@ cargo test -p rocketmq-store-rocksdb
 cargo test -p rocketmq-tieredstore tiered_cursor
 cargo test -p rocketmq-tieredstore retry_ledger
 python scripts/architecture_performance_guard.py --validate-profiles
+python -m unittest scripts.tests.test_architecture_performance_sidecar -v
+python scripts/architecture_performance_sidecar.py --generate-manifest target/architecture-refactor/M10/runner-manifest.json
+python scripts/architecture_performance_sidecar.py --manifest target/architecture-refactor/M10/runner-manifest.json --run-id <run-id> --output-dir target/architecture-refactor/M10/<run-id>
 python scripts/architecture_performance_guard.py --baseline <baseline.json> --candidate <candidate.json>
 python scripts/architecture_dependency_guard.py --mode target
 ```
 
-性能 profile guard 已落地并接入 CI；baseline/candidate 比较只能消费真实目标硬件报告。kind/cloud guard属于 M11。
+性能 profile guard 已落地并接入 CI；sidecar 生成的 manifest 故意包含 placeholder，必须在批准的固定目标机上
+补齐所有 runner 后才可执行。baseline/candidate 比较只能消费真实目标硬件报告。kind/cloud guard属于 M11。
 
 ## 回滚触发器
 
