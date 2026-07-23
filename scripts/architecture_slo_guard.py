@@ -118,12 +118,13 @@ class Guard:
         return path.read_text(encoding="utf-8")
 
 
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        for chunk in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+def canonical_text_sha256(path: Path) -> str | None:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
 def canonical_json_sha256(value: dict[str, Any]) -> str:
@@ -255,6 +256,14 @@ def validate_policy(
         evidence.get("fixture_requires_explicit_opt_in") is True,
         "fixture evidence must require explicit opt-in",
     )
+    guard.require(
+        evidence.get("artifact_hash_algorithm") == "sha256",
+        "artifact hash algorithm must remain sha256",
+    )
+    guard.require(
+        evidence.get("artifact_text_normalization") == "lf",
+        "artifact text normalization must remain lf",
+    )
 
 
 def validate_release_assets(
@@ -331,6 +340,7 @@ def validate_release_assets(
         "architecture_slo_guard.py",
         "dynamic_execution",
         "candidate_commit",
+        "Get-CanonicalTextSha256",
     ):
         guard.require(marker in runner, f"SLO runner contract marker missing: {marker}")
     guard.require(
@@ -542,7 +552,7 @@ def validate_evidence(
         )
         if path.is_file() and isinstance(expected_hash, str):
             guard.require(
-                sha256_file(path) == expected_hash,
+                canonical_text_sha256(path) == expected_hash,
                 f"artifact hash mismatch: {relative}",
             )
         indexed[relative] = str(expected_hash)
@@ -642,7 +652,7 @@ def validate_evidence(
             guard.require(
                 isinstance(expected_hash, str)
                 and path.is_file()
-                and sha256_file(path) == expected_hash,
+                and canonical_text_sha256(path) == expected_hash,
                 f"release artifact hash mismatch: {relative}",
             )
 
