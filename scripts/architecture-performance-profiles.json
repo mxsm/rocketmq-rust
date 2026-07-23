@@ -431,7 +431,7 @@
         "driver": "target-hardware-sidecar",
         "status": "requires-target-hardware-run",
         "reference_commands": [
-          "cargo bench -p rocketmq-remoting --bench remoting_connection_lifecycle_bench -- remoting_connection_lifecycle"
+          "cargo run --release --quiet -p rocketmq-transport --example architecture_network_performance_collector -- connection-soak mixed-tls-churn"
         ],
         "required_outputs": [
           "environment_metadata",
@@ -489,7 +489,9 @@
       "collection": {
         "driver": "target-hardware-sidecar",
         "status": "requires-target-hardware-run",
-        "reference_commands": [],
+        "reference_commands": [
+          "cargo run --release --quiet -p rocketmq-transport --example architecture_network_performance_collector -- overload bounded-rejection"
+        ],
         "required_outputs": [
           "environment_metadata",
           "correctness_evidence",

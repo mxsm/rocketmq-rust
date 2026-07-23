@@ -5183,11 +5183,13 @@ dependencies = [
 name = "rocketmq-transport"
 version = "1.0.0"
 dependencies = [
+ "anyhow",
  "arc-swap",
  "bytes",
  "cheetah-string",
  "dashmap",
  "futures-util",
+ "libc",
  "parking_lot",
  "rcgen",
  "rocketmq-error",
@@ -5205,6 +5207,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "uuid",
+ "windows",
 ]
 
 [[package]]

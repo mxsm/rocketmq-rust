@@ -93,8 +93,9 @@ Issue [#8688](https://github.com/mxsm/rocketmq-rust/issues/8688) 为 `local-appe
 [#8690](https://github.com/mxsm/rocketmq-rust/issues/8690) 又增加 `sync-flush/concurrency-64`；Issue
 [#8692](https://github.com/mxsm/rocketmq-rust/issues/8692) 增加 `local-pull/batch-32`；Issue
 [#8694](https://github.com/mxsm/rocketmq-rust/issues/8694) 增加 `rocks-pull/batch-32`；Issue
-[#8696](https://github.com/mxsm/rocketmq-rust/issues/8696) 又增加 Tiered append/pull 三个变体，因此当前
-真实性能 runner 就绪进度为 **9/11 variants**：
+[#8696](https://github.com/mxsm/rocketmq-rust/issues/8696) 增加 Tiered append/pull 三个变体；Issue
+[#8698](https://github.com/mxsm/rocketmq-rust/issues/8698) 最后增加 connection soak 与 bounded overload，
+因此当前真实性能 runner 就绪进度为 **11/11 variants**：
 
 ```powershell
 cargo run --release --quiet -p rocketmq-store `
@@ -117,6 +118,12 @@ cargo run --release --quiet -p rocketmq-store --features tieredstore `
 
 cargo run --release --quiet -p rocketmq-store --features tieredstore `
   --example architecture_store_performance_collector -- tiered-pull warm-32
+
+cargo run --release --quiet -p rocketmq-transport `
+  --example architecture_network_performance_collector -- connection-soak mixed-tls-churn
+
+cargo run --release --quiet -p rocketmq-transport `
+  --example architecture_network_performance_collector -- overload bounded-rejection
 ```
 
 - 每个变体先执行两个同负载 priming 子进程，再固定采集五个不筛选、不改写的原始样本；父进程为每个
@@ -144,12 +151,18 @@ cargo run --release --quiet -p rocketmq-store --features tieredstore `
   不把逻辑方法调用伪装为物理 I/O。
 - `tiered-pull` 以同一真实 POSIX fixture 写入 32 条 1 KiB 记录；每个 cold 样本使用全新进程和 cache，
   warm 样本先执行一次不计量的完整 pull，再从 provider read/byte delta 证明 read-ahead cache 命中。
+- `connection-soak` 在 900 秒内均匀执行 10,000 次真实请求连接，明文/TLS 各 50%，随后固定 cooldown
+  60 秒；client pending table、server-owned task 和 child ownership 必须回到测量前基线。
+- `overload` 使用真实 Transport admission processor budget，以 data capacity 的 2.0 倍并发持续 300 秒；
+  明文/TLS 各 50%，必须同时观测 typed `SystemBusy`、server rejection counter、资源有界收敛和
+  `control_plane_success_ratio=1.0`。
+- network core I/O 使用进程内真实 client/server 成功编码帧写入的单调 counter delta；计数位于
+  RocketMQ framing 与可选 TLS record 之间，不把逻辑请求数或固定常量伪装成 I/O bytes。
 - stdout 只输出 sidecar 要求的单个 JSON object，并精确包含完整 core metric inventory；未知
   profile/variant、样本缺失、非有限或负值均 fail closed。
 
-这 9 个变体只是 runner readiness。它们尚未在批准的固定硬件上对不同 clean baseline/candidate 执行，
-没有写入任何性能结论，也没有完成 R19 或 `[HUMAN]` M10 Gate。其余 2 个性能变体和 4 个 correctness
-runner 仍待实现。
+这 11 个变体只是 runner readiness。它们尚未在批准的固定硬件上对不同 clean baseline/candidate 执行，
+没有写入任何性能结论，也没有完成 R19 或 `[HUMAN]` M10 Gate。4 个 correctness runner 仍待实现。
 
 ## 正确性优先与例外边界
 
@@ -177,6 +190,8 @@ runner 仍待实现。
 | `cargo test -p rocketmq-tieredstore provider::posix_file_segment::tests --lib` | Issue #8696 provider I/O 计数 2/2 通过；覆盖成功读写、clone 共享累计值和失败读取只增加 call、不伪增 byte 的反向合同 |
 | `cargo test -p rocketmq-tieredstore metadata::metadata_store::tests --lib` | Issue #8696 metadata 3/3 通过；成功 replace 精确累计，失败 persist 不增加计数 |
 | `cargo test -p rocketmq-store --features tieredstore --example architecture_store_performance_collector` | 12/12 通过；覆盖三个 Tiered 变体、精确 metric inventory、counter 回退、缺失/非有限和错误 profile/variant 的反向拒绝 |
+| `cargo test -p rocketmq-transport --example architecture_network_performance_collector -- --test-threads=1` | Issue #8698 合同 7/7 通过；覆盖固定生产参数、精确 metric inventory、缺失/非有限/无 rejection/未收敛/counter 回退反向拒绝，以及缩放后的真实明文/TLS churn 与 bounded overload |
+| `cargo test -p rocketmq-transport --test client_server_lifecycle tls_client_invocation_releases_pending_and_server_ownership -- --exact` | Issue #8698 TLS client、pending 清理、成功编码写计数与 server task/child ownership 收敛 1/1 通过 |
 | `cargo test -p rocketmq-store get_message_returns_dispatched_messages_after_reput --lib` | Issue #8692 受限 batch 回归 1/1 通过；`max_msg_nums=1` 在 CQ 尚有后续消息时按期返回，不再因 iterator exhausted 空转 |
 | `cargo test -p rocketmq-store --lib io_stats_aggregate_mapped_file_metrics` | Issue #8690 I/O 聚合正向测试 1/1 通过 |
 | `cargo clippy -p rocketmq-store-local --lib -- -D warnings` 和采集器 focused Clippy | 通过 |
