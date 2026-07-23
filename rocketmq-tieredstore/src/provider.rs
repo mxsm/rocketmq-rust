@@ -26,6 +26,7 @@ use crate::file::TieredFileSegment;
 
 pub use memory_file_segment::MemoryProvider;
 pub use posix_file_segment::PosixProvider;
+pub use posix_file_segment::PosixProviderIoSnapshot;
 pub use provider_impl::ProviderKind;
 
 #[trait_variant::make(TieredStoreProvider: Send)]

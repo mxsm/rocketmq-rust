@@ -28,6 +28,12 @@
 //!
 //! cargo run --release --quiet -p rocketmq-store --features rocksdb_store \
 //!   --example architecture_store_performance_collector -- rocks-pull batch-32
+//!
+//! cargo run --release --quiet -p rocketmq-store --features tieredstore \
+//!   --example architecture_store_performance_collector -- tiered-append batch-64
+//!
+//! cargo run --release --quiet -p rocketmq-store --features tieredstore \
+//!   --example architecture_store_performance_collector -- tiered-pull cold-32
 //! ```
 //!
 //! The command writes one sidecar-compatible JSON object to stdout. Each raw
@@ -52,6 +58,8 @@ use anyhow::bail;
 use anyhow::ensure;
 use anyhow::Context;
 use anyhow::Result;
+#[cfg(feature = "tieredstore")]
+use bytes::Bytes;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use futures_util::future::join_all;
@@ -74,6 +82,24 @@ use rocketmq_store::message_store::local_file_message_store::LocalFileMessageSto
 use rocketmq_store::message_store::rocksdb_message_store::RocksDBMessageStore;
 use rocketmq_store_local::mapped_file::SelectMappedBufferCacheState;
 use rocketmq_store_local::mapped_file::SelectMappedBufferSourceKind;
+#[cfg(feature = "tieredstore")]
+use rocketmq_tieredstore::fetcher::TieredGetMessageStatus;
+#[cfg(feature = "tieredstore")]
+use rocketmq_tieredstore::file::ConsumeQueueUnit;
+#[cfg(feature = "tieredstore")]
+use rocketmq_tieredstore::DefaultTieredMessageFetcher;
+#[cfg(feature = "tieredstore")]
+use rocketmq_tieredstore::JsonMetadataStore;
+#[cfg(feature = "tieredstore")]
+use rocketmq_tieredstore::PosixProvider;
+#[cfg(feature = "tieredstore")]
+use rocketmq_tieredstore::PosixProviderIoSnapshot;
+#[cfg(feature = "tieredstore")]
+use rocketmq_tieredstore::TieredFlatFileStore;
+#[cfg(feature = "tieredstore")]
+use rocketmq_tieredstore::TieredMessageFetcher;
+#[cfg(feature = "tieredstore")]
+use rocketmq_tieredstore::TieredStoreConfig;
 use serde::Deserialize;
 use serde::Serialize;
 use tempfile::TempDir;
@@ -83,6 +109,8 @@ const LOCAL_APPEND_PROFILE: &str = "local-append";
 const LOCAL_PULL_PROFILE: &str = "local-pull";
 const ROCKS_PULL_PROFILE: &str = "rocks-pull";
 const SYNC_FLUSH_PROFILE: &str = "sync-flush";
+const TIERED_APPEND_PROFILE: &str = "tiered-append";
+const TIERED_PULL_PROFILE: &str = "tiered-pull";
 const MESSAGE_SIZE_BYTES: usize = 1024;
 const SAMPLE_COUNT: usize = 5;
 const PRIMING_SAMPLE_COUNT: usize = 2;
@@ -94,6 +122,13 @@ const LOCAL_PULL_WARMUP_OPERATIONS: usize = 512;
 const CQ_ALLOCATION_PROBE_REPETITIONS: usize = 128;
 const SYNC_FLUSH_OPERATIONS_PER_SAMPLE: usize = 8192;
 const SYNC_FLUSH_WARMUP_OPERATIONS: usize = 1024;
+const TIERED_APPEND_BATCH_MESSAGES: usize = 64;
+#[cfg(feature = "tieredstore")]
+const TIERED_APPEND_OPERATIONS_PER_SAMPLE: usize = 64;
+#[cfg(feature = "tieredstore")]
+const TIERED_APPEND_WARMUP_OPERATIONS: usize = 8;
+#[cfg(feature = "tieredstore")]
+const TIERED_PULL_OPERATIONS_PER_SAMPLE: usize = 4096;
 
 static ALLOCATION_CALLS: AtomicU64 = AtomicU64::new(0);
 
@@ -139,6 +174,10 @@ enum WorkloadKind {
     Append,
     LocalPull,
     RocksPull,
+    #[cfg(feature = "tieredstore")]
+    TieredAppend,
+    #[cfg(feature = "tieredstore")]
+    TieredPull,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -218,6 +257,47 @@ impl Scenario {
                     bail!("{ROCKS_PULL_PROFILE}/batch-32 requires the rocketmq-store rocksdb_store feature")
                 }
             }
+            (TIERED_APPEND_PROFILE, "batch-64") => {
+                #[cfg(feature = "tieredstore")]
+                {
+                    Ok(Self {
+                        profile: TIERED_APPEND_PROFILE,
+                        variant: "batch-64",
+                        workload_kind: WorkloadKind::TieredAppend,
+                        producers: 1,
+                        flush_disk_type: FlushDiskType::AsyncFlush,
+                        operations_per_sample: TIERED_APPEND_OPERATIONS_PER_SAMPLE,
+                        warmup_operations: TIERED_APPEND_WARMUP_OPERATIONS,
+                    })
+                }
+                #[cfg(not(feature = "tieredstore"))]
+                {
+                    bail!("{TIERED_APPEND_PROFILE}/batch-64 requires the rocketmq-store tieredstore feature")
+                }
+            }
+            (TIERED_PULL_PROFILE, variant @ ("cold-32" | "warm-32")) => {
+                #[cfg(feature = "tieredstore")]
+                {
+                    Ok(Self {
+                        profile: TIERED_PULL_PROFILE,
+                        variant: if variant == "cold-32" { "cold-32" } else { "warm-32" },
+                        workload_kind: WorkloadKind::TieredPull,
+                        producers: 1,
+                        flush_disk_type: FlushDiskType::AsyncFlush,
+                        operations_per_sample: if variant == "cold-32" {
+                            1
+                        } else {
+                            TIERED_PULL_OPERATIONS_PER_SAMPLE
+                        },
+                        warmup_operations: usize::from(variant == "warm-32"),
+                    })
+                }
+                #[cfg(not(feature = "tieredstore"))]
+                {
+                    let _ = variant;
+                    bail!("{TIERED_PULL_PROFILE}/cold-32 and warm-32 require the rocketmq-store tieredstore feature")
+                }
+            }
             _ => bail!("unsupported performance profile/variant: {profile}/{variant}"),
         }
     }
@@ -238,12 +318,41 @@ impl Scenario {
         self.workload_kind == WorkloadKind::RocksPull
     }
 
+    fn includes_tiered_append_observations(self) -> bool {
+        #[cfg(feature = "tieredstore")]
+        {
+            self.workload_kind == WorkloadKind::TieredAppend
+        }
+        #[cfg(not(feature = "tieredstore"))]
+        {
+            false
+        }
+    }
+
+    fn includes_tiered_pull_observations(self) -> bool {
+        #[cfg(feature = "tieredstore")]
+        {
+            self.workload_kind == WorkloadKind::TieredPull
+        }
+        #[cfg(not(feature = "tieredstore"))]
+        {
+            false
+        }
+    }
+
+    fn is_tiered(self) -> bool {
+        self.includes_tiered_append_observations() || self.includes_tiered_pull_observations()
+    }
+
     fn is_pull(self) -> bool {
         matches!(self.workload_kind, WorkloadKind::LocalPull | WorkloadKind::RocksPull)
+            || self.includes_tiered_pull_observations()
     }
 
     fn payload_bytes_per_operation(self) -> usize {
-        if self.is_pull() {
+        if self.includes_tiered_append_observations() {
+            TIERED_APPEND_BATCH_MESSAGES * MESSAGE_SIZE_BYTES
+        } else if self.is_pull() {
             LOCAL_PULL_BATCH_MESSAGES * MESSAGE_SIZE_BYTES
         } else {
             MESSAGE_SIZE_BYTES
@@ -265,8 +374,8 @@ fn parse_invocation(args: &[String]) -> Result<Invocation> {
         }
         _ => bail!(
             "usage: architecture_store_performance_collector [--sample] \
-             <local-append|local-pull|rocks-pull|sync-flush> \
-             <producers-1|producers-8|producers-32|batch-32|concurrency-64>"
+             <local-append|local-pull|rocks-pull|sync-flush|tiered-append|tiered-pull> \
+             <producers-1|producers-8|producers-32|batch-32|concurrency-64|batch-64|cold-32|warm-32>"
         ),
     }
 }
@@ -286,6 +395,12 @@ struct SampleObservation {
     body_copies_per_message: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     native_read_calls_per_batch: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provider_writes_per_batch: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    metadata_commits_per_batch: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provider_reads_per_batch: Option<f64>,
 }
 
 impl SampleObservation {
@@ -341,6 +456,35 @@ impl SampleObservation {
             ensure!(
                 value.is_finite() && value >= 0.0,
                 "native_read_calls_per_batch must be finite and non-negative, got {value}"
+            );
+        }
+        for (metric, value) in [
+            ("provider_writes_per_batch", self.provider_writes_per_batch),
+            ("metadata_commits_per_batch", self.metadata_commits_per_batch),
+        ] {
+            ensure!(
+                value.is_some() == scenario.includes_tiered_append_observations(),
+                "{}/{} {metric} presence does not match the metric contract",
+                scenario.profile,
+                scenario.variant
+            );
+            if let Some(value) = value {
+                ensure!(
+                    value.is_finite() && value >= 0.0,
+                    "{metric} must be finite and non-negative, got {value}"
+                );
+            }
+        }
+        ensure!(
+            self.provider_reads_per_batch.is_some() == scenario.includes_tiered_pull_observations(),
+            "{}/{} provider_reads_per_batch presence does not match the metric contract",
+            scenario.profile,
+            scenario.variant
+        );
+        if let Some(value) = self.provider_reads_per_batch {
+            ensure!(
+                value.is_finite() && value >= 0.0,
+                "provider_reads_per_batch must be finite and non-negative, got {value}"
             );
         }
         Ok(())
@@ -471,6 +615,30 @@ struct RocksReadCounters {
 struct RocksReadObservation {
     native_read_calls_per_batch: f64,
     bytes_read: u64,
+}
+
+#[cfg(feature = "tieredstore")]
+struct TieredCollector {
+    provider: PosixProvider,
+    metadata_store: Arc<JsonMetadataStore>,
+    flat_file_store: Arc<TieredFlatFileStore<PosixProvider>>,
+    fetcher: DefaultTieredMessageFetcher<PosixProvider>,
+    _temp_dir: TempDir,
+}
+
+#[cfg(feature = "tieredstore")]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct TieredIoDelta {
+    read_operations: u64,
+    write_operations: u64,
+    bytes_read: u64,
+    bytes_written: u64,
+}
+
+#[cfg(feature = "tieredstore")]
+struct TimedTieredWorkload {
+    elapsed: Duration,
+    latencies: Vec<Duration>,
 }
 
 fn main() {
@@ -611,6 +779,47 @@ fn build_envelope(scenario: Scenario, observations: Vec<SampleObservation>) -> R
             .collect::<Result<Vec<_>>>()?;
         metrics.insert("native_read_calls_per_batch", MetricSamples { samples });
     }
+    if scenario.includes_tiered_append_observations() {
+        let provider_writes = observations
+            .iter()
+            .map(|sample| {
+                sample
+                    .provider_writes_per_batch
+                    .ok_or_else(|| anyhow!("tiered-append sample omitted provider_writes_per_batch"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        metrics.insert(
+            "provider_writes_per_batch",
+            MetricSamples {
+                samples: provider_writes,
+            },
+        );
+        let metadata_commits = observations
+            .iter()
+            .map(|sample| {
+                sample
+                    .metadata_commits_per_batch
+                    .ok_or_else(|| anyhow!("tiered-append sample omitted metadata_commits_per_batch"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        metrics.insert(
+            "metadata_commits_per_batch",
+            MetricSamples {
+                samples: metadata_commits,
+            },
+        );
+    }
+    if scenario.includes_tiered_pull_observations() {
+        let samples = observations
+            .iter()
+            .map(|sample| {
+                sample
+                    .provider_reads_per_batch
+                    .ok_or_else(|| anyhow!("tiered-pull sample omitted provider_reads_per_batch"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        metrics.insert("provider_reads_per_batch", MetricSamples { samples });
+    }
 
     Ok(MeasurementEnvelope {
         schema_version: 1,
@@ -625,6 +834,16 @@ fn collect_one_sample(scenario: Scenario) -> Result<SampleObservation> {
         .enable_all()
         .build()
         .context("create sample runtime")?;
+    #[cfg(feature = "tieredstore")]
+    if scenario.is_tiered() {
+        return runtime
+            .block_on(collect_one_tiered_sample(scenario))
+            .with_context(|| format!("collect {}/{} TieredStore sample", scenario.profile, scenario.variant));
+    }
+    ensure!(
+        !scenario.is_tiered(),
+        "TieredStore scenario requires the tieredstore feature"
+    );
     let mut collector_store = new_collector_store(scenario)?;
     let pull_context = if scenario.is_pull() {
         Some(
@@ -739,6 +958,9 @@ fn collect_one_sample(scenario: Scenario) -> Result<SampleObservation> {
             .includes_local_pull_observations()
             .then(|| workload.body_copies as f64 / workload.returned_messages as f64),
         native_read_calls_per_batch: rocks_read_observation.map(|observation| observation.native_read_calls_per_batch),
+        provider_writes_per_batch: None,
+        metadata_commits_per_batch: None,
+        provider_reads_per_batch: None,
     };
     observation.validate(scenario)?;
     if scenario.requires_started_store() {
@@ -748,6 +970,307 @@ fn collect_one_sample(scenario: Scenario) -> Result<SampleObservation> {
     }
     collector_store.close_rocksdb();
     Ok(observation)
+}
+
+#[cfg(feature = "tieredstore")]
+async fn collect_one_tiered_sample(scenario: Scenario) -> Result<SampleObservation> {
+    let collector = new_tiered_collector()?;
+    match scenario.workload_kind {
+        WorkloadKind::TieredAppend => collect_one_tiered_append_sample(&collector, scenario).await,
+        WorkloadKind::TieredPull => collect_one_tiered_pull_sample(&collector, scenario).await,
+        _ => bail!(
+            "TieredStore sample received non-tiered scenario {}/{}",
+            scenario.profile,
+            scenario.variant
+        ),
+    }
+}
+
+#[cfg(feature = "tieredstore")]
+fn new_tiered_collector() -> Result<TieredCollector> {
+    let temp_dir = TempDir::new().context("create TieredStore performance sample directory")?;
+    let root = temp_dir.path().join("tieredstore");
+    let config = Arc::new(TieredStoreConfig {
+        store_path_root_dir: root.clone(),
+        backend_provider: "posix".to_owned(),
+        commit_log_segment_size: 16 * 1024 * 1024,
+        consume_queue_segment_size: 64 * 1024,
+        read_ahead_cache_enable: true,
+        read_ahead_cache_max_bytes: 4 * 1024 * 1024,
+        read_ahead_message_count: LOCAL_PULL_BATCH_MESSAGES,
+        read_ahead_message_size: LOCAL_PULL_BATCH_MESSAGES * MESSAGE_SIZE_BYTES,
+        ..TieredStoreConfig::default()
+    });
+    let provider = PosixProvider::new(root);
+    let metadata_store = Arc::new(JsonMetadataStore::new(config.clone()));
+    let flat_file_store = Arc::new(TieredFlatFileStore::new(
+        config.clone(),
+        metadata_store.clone(),
+        provider.clone(),
+    ));
+    let fetcher = DefaultTieredMessageFetcher::new(config, flat_file_store.clone());
+    Ok(TieredCollector {
+        provider,
+        metadata_store,
+        flat_file_store,
+        fetcher,
+        _temp_dir: temp_dir,
+    })
+}
+
+#[cfg(feature = "tieredstore")]
+async fn collect_one_tiered_append_sample(
+    collector: &TieredCollector,
+    scenario: Scenario,
+) -> Result<SampleObservation> {
+    let flat_file = collector
+        .flat_file_store
+        .get_or_create("ArchitectureTieredAppend".to_owned(), 0)
+        .context("create TieredStore append flat file")?;
+    let warmup_messages = scenario
+        .warmup_operations
+        .checked_mul(TIERED_APPEND_BATCH_MESSAGES)
+        .ok_or_else(|| anyhow!("TieredStore append warm-up message count overflowed"))?;
+    run_tiered_append_batches(&flat_file, scenario.warmup_operations, 0)
+        .await
+        .context("run TieredStore append warm-up")?;
+
+    let provider_before = collector.provider.io_snapshot();
+    let metadata_before = collector.metadata_store.successful_persist_count();
+    let allocations_before = ALLOCATION_CALLS.load(Ordering::Relaxed);
+    let workload = run_tiered_append_batches(
+        &flat_file,
+        scenario.operations_per_sample,
+        i64::try_from(warmup_messages).context("TieredStore warm-up queue offset exceeds i64")?,
+    )
+    .await
+    .context("run measured TieredStore append batches")?;
+    let allocation_calls = allocation_delta(allocations_before, "TieredStore append allocation")?;
+    let provider_delta = tiered_io_delta(provider_before, collector.provider.io_snapshot())?;
+    let metadata_commits = collector
+        .metadata_store
+        .successful_persist_count()
+        .checked_sub(metadata_before)
+        .ok_or_else(|| anyhow!("TieredStore metadata persist counter moved backwards"))?;
+    ensure!(
+        provider_delta.write_operations > 0 && provider_delta.bytes_written > 0,
+        "TieredStore append recorded no POSIX provider writes"
+    );
+    ensure!(metadata_commits > 0, "TieredStore append recorded no metadata persists");
+
+    let operation_count = scenario.operations_per_sample as f64;
+    let observation = SampleObservation {
+        throughput_per_second: operation_count / workload.elapsed.as_secs_f64(),
+        p99_latency_us: percentile_99(&workload.latencies)?.as_secs_f64() * 1_000_000.0,
+        peak_rss_bytes: peak_rss_bytes()? as f64,
+        allocations_per_operation: allocation_calls as f64 / operation_count,
+        io_amplification_ratio: provider_delta.bytes_written as f64
+            / (scenario.operations_per_sample * scenario.payload_bytes_per_operation()) as f64,
+        fsync_per_ack: None,
+        cq_unit_allocations_per_message: None,
+        body_copies_per_message: None,
+        native_read_calls_per_batch: None,
+        provider_writes_per_batch: Some(provider_delta.write_operations as f64 / operation_count),
+        metadata_commits_per_batch: Some(metadata_commits as f64 / operation_count),
+        provider_reads_per_batch: None,
+    };
+    observation.validate(scenario)?;
+    Ok(observation)
+}
+
+#[cfg(feature = "tieredstore")]
+async fn run_tiered_append_batches(
+    flat_file: &Arc<rocketmq_tieredstore::TieredFlatFile<PosixProvider>>,
+    batch_count: usize,
+    first_queue_offset: i64,
+) -> Result<TimedTieredWorkload> {
+    let started = Instant::now();
+    let mut latencies = Vec::with_capacity(batch_count);
+    for batch_index in 0..batch_count {
+        let batch_started = Instant::now();
+        let batch_base = batch_index
+            .checked_mul(TIERED_APPEND_BATCH_MESSAGES)
+            .ok_or_else(|| anyhow!("TieredStore append batch offset overflowed"))?;
+        for message_index in 0..TIERED_APPEND_BATCH_MESSAGES {
+            let relative_offset = batch_base
+                .checked_add(message_index)
+                .ok_or_else(|| anyhow!("TieredStore append message offset overflowed"))?;
+            let queue_offset = first_queue_offset
+                .checked_add(i64::try_from(relative_offset).context("TieredStore queue offset exceeds i64")?)
+                .ok_or_else(|| anyhow!("TieredStore queue offset overflowed"))?;
+            let body = Bytes::from(vec![(queue_offset & 0xff) as u8; MESSAGE_SIZE_BYTES]);
+            let commit_log_offset = flat_file
+                .append_commit_log(body.clone(), queue_offset)
+                .await
+                .context("append TieredStore CommitLog record")?;
+            flat_file
+                .append_consume_queue(
+                    queue_offset,
+                    ConsumeQueueUnit {
+                        commit_log_offset: i64::try_from(commit_log_offset)
+                            .context("TieredStore CommitLog offset exceeds i64")?,
+                        size: i32::try_from(body.len()).context("TieredStore message size exceeds i32")?,
+                        tags_code: queue_offset,
+                    },
+                    queue_offset,
+                )
+                .await
+                .context("append TieredStore ConsumeQueue unit")?;
+        }
+        flat_file.commit().await.context("commit TieredStore append batch")?;
+        latencies.push(batch_started.elapsed());
+    }
+    Ok(TimedTieredWorkload {
+        elapsed: started.elapsed(),
+        latencies,
+    })
+}
+
+#[cfg(feature = "tieredstore")]
+async fn collect_one_tiered_pull_sample(collector: &TieredCollector, scenario: Scenario) -> Result<SampleObservation> {
+    seed_tiered_pull(collector).await?;
+    if scenario.variant == "warm-32" {
+        let warmup = collector
+            .fetcher
+            .get_message(
+                "ArchitectureTieredPull".to_owned(),
+                0,
+                0,
+                LOCAL_PULL_BATCH_MESSAGES as i32,
+            )
+            .await
+            .context("warm TieredStore read-ahead cache")?;
+        ensure!(
+            warmup.status == TieredGetMessageStatus::Found && warmup.messages.len() == LOCAL_PULL_BATCH_MESSAGES,
+            "TieredStore warm-up pull returned an incomplete batch"
+        );
+    }
+
+    let provider_before = collector.provider.io_snapshot();
+    let allocations_before = ALLOCATION_CALLS.load(Ordering::Relaxed);
+    let workload = run_tiered_pull_batches(collector, scenario.operations_per_sample).await?;
+    let allocation_calls = allocation_delta(allocations_before, "TieredStore pull allocation")?;
+    let provider_delta = tiered_io_delta(provider_before, collector.provider.io_snapshot())?;
+    if scenario.variant == "cold-32" {
+        ensure!(
+            provider_delta.read_operations > 0 && provider_delta.bytes_read > 0,
+            "cold TieredStore pull recorded no POSIX provider reads"
+        );
+    } else {
+        ensure!(
+            provider_delta.read_operations == 0 && provider_delta.bytes_read == 0,
+            "warm TieredStore pull escaped the read-ahead cache"
+        );
+    }
+
+    let operation_count = scenario.operations_per_sample as f64;
+    let observation = SampleObservation {
+        throughput_per_second: operation_count / workload.elapsed.as_secs_f64(),
+        p99_latency_us: percentile_99(&workload.latencies)?.as_secs_f64() * 1_000_000.0,
+        peak_rss_bytes: peak_rss_bytes()? as f64,
+        allocations_per_operation: allocation_calls as f64 / operation_count,
+        io_amplification_ratio: provider_delta.bytes_read as f64
+            / (scenario.operations_per_sample * scenario.payload_bytes_per_operation()) as f64,
+        fsync_per_ack: None,
+        cq_unit_allocations_per_message: None,
+        body_copies_per_message: None,
+        native_read_calls_per_batch: None,
+        provider_writes_per_batch: None,
+        metadata_commits_per_batch: None,
+        provider_reads_per_batch: Some(provider_delta.read_operations as f64 / operation_count),
+    };
+    observation.validate(scenario)?;
+    Ok(observation)
+}
+
+#[cfg(feature = "tieredstore")]
+async fn seed_tiered_pull(collector: &TieredCollector) -> Result<()> {
+    let flat_file = collector
+        .flat_file_store
+        .get_or_create("ArchitectureTieredPull".to_owned(), 0)
+        .context("create TieredStore pull flat file")?;
+    for queue_offset in 0..LOCAL_PULL_BATCH_MESSAGES {
+        let queue_offset = i64::try_from(queue_offset).context("TieredStore seed queue offset exceeds i64")?;
+        let body = Bytes::from(vec![(queue_offset & 0xff) as u8; MESSAGE_SIZE_BYTES]);
+        let commit_log_offset = flat_file
+            .append_commit_log(body.clone(), queue_offset)
+            .await
+            .context("seed TieredStore CommitLog record")?;
+        flat_file
+            .append_consume_queue(
+                queue_offset,
+                ConsumeQueueUnit {
+                    commit_log_offset: i64::try_from(commit_log_offset)
+                        .context("TieredStore seed CommitLog offset exceeds i64")?,
+                    size: i32::try_from(body.len()).context("TieredStore seed message size exceeds i32")?,
+                    tags_code: queue_offset,
+                },
+                queue_offset,
+            )
+            .await
+            .context("seed TieredStore ConsumeQueue unit")?;
+    }
+    flat_file.commit().await.context("commit TieredStore pull seed")
+}
+
+#[cfg(feature = "tieredstore")]
+async fn run_tiered_pull_batches(collector: &TieredCollector, operation_count: usize) -> Result<TimedTieredWorkload> {
+    ensure!(operation_count > 0, "TieredStore pull operation count must be positive");
+    let started = Instant::now();
+    let mut latencies = Vec::with_capacity(operation_count);
+    for _ in 0..operation_count {
+        let operation_started = Instant::now();
+        let result = collector
+            .fetcher
+            .get_message(
+                "ArchitectureTieredPull".to_owned(),
+                0,
+                0,
+                LOCAL_PULL_BATCH_MESSAGES as i32,
+            )
+            .await
+            .context("pull TieredStore batch")?;
+        ensure!(
+            result.status == TieredGetMessageStatus::Found && result.messages.len() == LOCAL_PULL_BATCH_MESSAGES,
+            "TieredStore pull returned status {:?} with {} messages",
+            result.status,
+            result.messages.len()
+        );
+        ensure!(
+            result
+                .messages
+                .iter()
+                .all(|message| message.len() == MESSAGE_SIZE_BYTES),
+            "TieredStore pull returned a message with the wrong size"
+        );
+        latencies.push(operation_started.elapsed());
+    }
+    Ok(TimedTieredWorkload {
+        elapsed: started.elapsed(),
+        latencies,
+    })
+}
+
+#[cfg(feature = "tieredstore")]
+fn tiered_io_delta(before: PosixProviderIoSnapshot, after: PosixProviderIoSnapshot) -> Result<TieredIoDelta> {
+    Ok(TieredIoDelta {
+        read_operations: after
+            .read_operations
+            .checked_sub(before.read_operations)
+            .ok_or_else(|| anyhow!("TieredStore provider read-operation counter moved backwards"))?,
+        write_operations: after
+            .write_operations
+            .checked_sub(before.write_operations)
+            .ok_or_else(|| anyhow!("TieredStore provider write-operation counter moved backwards"))?,
+        bytes_read: after
+            .bytes_read
+            .checked_sub(before.bytes_read)
+            .ok_or_else(|| anyhow!("TieredStore provider byte-read counter moved backwards"))?,
+        bytes_written: after
+            .bytes_written
+            .checked_sub(before.bytes_written)
+            .ok_or_else(|| anyhow!("TieredStore provider byte-write counter moved backwards"))?,
+    })
 }
 
 fn new_collector_store(scenario: Scenario) -> Result<CollectorStore> {
@@ -879,6 +1402,10 @@ async fn seed_pull_store(collector_store: &mut CollectorStore, scenario: Scenari
         WorkloadKind::LocalPull => CheetahString::from_static_str("ArchitectureLocalPull"),
         WorkloadKind::RocksPull => CheetahString::from_static_str("ArchitectureRocksPull"),
         WorkloadKind::Append => bail!("append scenario cannot seed a pull store"),
+        #[cfg(feature = "tieredstore")]
+        WorkloadKind::TieredAppend | WorkloadKind::TieredPull => {
+            bail!("TieredStore scenarios use the dedicated POSIX fixture")
+        }
     };
     let group = CheetahString::from_static_str("ArchitectureGate");
 
@@ -1260,6 +1787,9 @@ mod tests {
             cq_unit_allocations_per_message,
             body_copies_per_message,
             native_read_calls_per_batch: None,
+            provider_writes_per_batch: None,
+            metadata_commits_per_batch: None,
+            provider_reads_per_batch: None,
         }
     }
 
@@ -1318,6 +1848,39 @@ mod tests {
 
         #[cfg(not(feature = "rocksdb_store"))]
         assert!(parse_invocation(&[ROCKS_PULL_PROFILE.to_owned(), "batch-32".to_owned()]).is_err());
+
+        #[cfg(feature = "tieredstore")]
+        {
+            let Invocation::Collect(tiered_append) =
+                parse_invocation(&[TIERED_APPEND_PROFILE.to_owned(), "batch-64".to_owned()])
+                    .expect("supported TieredStore append variant")
+            else {
+                panic!("expected collection invocation");
+            };
+            assert_eq!(tiered_append.workload_kind, WorkloadKind::TieredAppend);
+            assert_eq!(
+                tiered_append.payload_bytes_per_operation(),
+                TIERED_APPEND_BATCH_MESSAGES * MESSAGE_SIZE_BYTES
+            );
+
+            for variant in ["cold-32", "warm-32"] {
+                let Invocation::Collect(tiered_pull) =
+                    parse_invocation(&[TIERED_PULL_PROFILE.to_owned(), variant.to_owned()])
+                        .expect("supported TieredStore pull variant")
+                else {
+                    panic!("expected collection invocation");
+                };
+                assert_eq!(tiered_pull.workload_kind, WorkloadKind::TieredPull);
+                assert!(tiered_pull.includes_tiered_pull_observations());
+            }
+        }
+
+        #[cfg(not(feature = "tieredstore"))]
+        {
+            assert!(parse_invocation(&[TIERED_APPEND_PROFILE.to_owned(), "batch-64".to_owned()]).is_err());
+            assert!(parse_invocation(&[TIERED_PULL_PROFILE.to_owned(), "cold-32".to_owned()]).is_err());
+            assert!(parse_invocation(&[TIERED_PULL_PROFILE.to_owned(), "warm-32".to_owned()]).is_err());
+        }
     }
 
     #[test]
@@ -1329,6 +1892,8 @@ mod tests {
         assert!(parse_invocation(&[LOCAL_PULL_PROFILE.to_owned(), "producers-32".to_owned()]).is_err());
         assert!(parse_invocation(&[LOCAL_APPEND_PROFILE.to_owned(), "batch-32".to_owned()]).is_err());
         assert!(parse_invocation(&[ROCKS_PULL_PROFILE.to_owned(), "producers-32".to_owned()]).is_err());
+        assert!(parse_invocation(&[TIERED_APPEND_PROFILE.to_owned(), "cold-32".to_owned()]).is_err());
+        assert!(parse_invocation(&[TIERED_PULL_PROFILE.to_owned(), "batch-64".to_owned()]).is_err());
         assert!(parse_invocation(&[LOCAL_APPEND_PROFILE.to_owned()]).is_err());
         assert!(parse_invocation(&[
             "--sample".to_owned(),
@@ -1459,6 +2024,76 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "tieredstore")]
+    #[test]
+    fn tiered_append_inventory_includes_provider_and_metadata_calls() {
+        let observations = (0..SAMPLE_COUNT)
+            .map(|index| SampleObservation {
+                provider_writes_per_batch: Some(128.0),
+                metadata_commits_per_batch: Some(3.0),
+                ..sample(index as f64, None, None, None)
+            })
+            .collect();
+        let scenario = Scenario::parse(TIERED_APPEND_PROFILE, "batch-64").expect("TieredStore append scenario");
+        let value = serde_json::to_value(build_envelope(scenario, observations).expect("build measurement"))
+            .expect("serialize measurement");
+
+        assert_eq!(value["profile"], TIERED_APPEND_PROFILE);
+        assert_eq!(value["variant"], "batch-64");
+        assert_eq!(
+            value["metrics"]
+                .as_object()
+                .expect("metrics object")
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            vec![
+                "allocations_per_operation",
+                "io_amplification_ratio",
+                "metadata_commits_per_batch",
+                "p99_latency_us",
+                "peak_rss_bytes",
+                "provider_writes_per_batch",
+                "throughput_per_second",
+            ]
+        );
+    }
+
+    #[cfg(feature = "tieredstore")]
+    #[test]
+    fn tiered_pull_inventory_includes_provider_reads() {
+        for variant in ["cold-32", "warm-32"] {
+            let observations = (0..SAMPLE_COUNT)
+                .map(|index| SampleObservation {
+                    provider_reads_per_batch: Some(if variant == "cold-32" { 2.0 } else { 0.0 }),
+                    ..sample(index as f64, None, None, None)
+                })
+                .collect();
+            let scenario = Scenario::parse(TIERED_PULL_PROFILE, variant).expect("TieredStore pull scenario");
+            let value = serde_json::to_value(build_envelope(scenario, observations).expect("build measurement"))
+                .expect("serialize measurement");
+
+            assert_eq!(value["profile"], TIERED_PULL_PROFILE);
+            assert_eq!(value["variant"], variant);
+            assert_eq!(
+                value["metrics"]
+                    .as_object()
+                    .expect("metrics object")
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>(),
+                vec![
+                    "allocations_per_operation",
+                    "io_amplification_ratio",
+                    "p99_latency_us",
+                    "peak_rss_bytes",
+                    "provider_reads_per_batch",
+                    "throughput_per_second",
+                ]
+            );
+        }
+    }
+
     #[test]
     fn rejects_partial_and_non_finite_samples() {
         let local_append = Scenario::parse(LOCAL_APPEND_PROFILE, "producers-1").expect("local append scenario");
@@ -1500,6 +2135,35 @@ mod tests {
             .is_err());
             assert!(SampleObservation {
                 native_read_calls_per_batch: Some(3.0),
+                ..sample(1.0, None, None, None)
+            }
+            .validate(local_append)
+            .is_err());
+        }
+
+        #[cfg(feature = "tieredstore")]
+        {
+            let tiered_append =
+                Scenario::parse(TIERED_APPEND_PROFILE, "batch-64").expect("TieredStore append scenario");
+            assert!(sample(1.0, None, None, None).validate(tiered_append).is_err());
+            assert!(SampleObservation {
+                provider_writes_per_batch: Some(1.0),
+                metadata_commits_per_batch: Some(f64::NAN),
+                ..sample(1.0, None, None, None)
+            }
+            .validate(tiered_append)
+            .is_err());
+
+            let tiered_pull = Scenario::parse(TIERED_PULL_PROFILE, "cold-32").expect("TieredStore pull scenario");
+            assert!(sample(1.0, None, None, None).validate(tiered_pull).is_err());
+            assert!(SampleObservation {
+                provider_reads_per_batch: Some(f64::INFINITY),
+                ..sample(1.0, None, None, None)
+            }
+            .validate(tiered_pull)
+            .is_err());
+            assert!(SampleObservation {
+                provider_reads_per_batch: Some(2.0),
                 ..sample(1.0, None, None, None)
             }
             .validate(local_append)
@@ -1574,5 +2238,39 @@ mod tests {
         )
         .is_err());
         assert!(measured_rocks_reads(before, before, 0).is_err());
+    }
+
+    #[cfg(feature = "tieredstore")]
+    #[test]
+    fn computes_tiered_io_delta_and_rejects_regressed_counters() {
+        let before = PosixProviderIoSnapshot {
+            read_operations: 2,
+            write_operations: 4,
+            bytes_read: 128,
+            bytes_written: 256,
+        };
+        let after = PosixProviderIoSnapshot {
+            read_operations: 5,
+            write_operations: 10,
+            bytes_read: 512,
+            bytes_written: 1024,
+        };
+        assert_eq!(
+            tiered_io_delta(before, after).expect("monotonic TieredStore I/O counters"),
+            TieredIoDelta {
+                read_operations: 3,
+                write_operations: 6,
+                bytes_read: 384,
+                bytes_written: 768,
+            }
+        );
+        assert!(tiered_io_delta(
+            before,
+            PosixProviderIoSnapshot {
+                read_operations: 1,
+                ..after
+            }
+        )
+        .is_err());
     }
 }

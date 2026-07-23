@@ -15,6 +15,9 @@
 use std::io::SeekFrom;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
 #[cfg(windows)]
 use std::ffi::OsStr;
@@ -39,15 +42,50 @@ use crate::provider::TieredStoreProvider;
 #[derive(Debug, Clone)]
 pub struct PosixProvider {
     root: PathBuf,
+    io_counters: Arc<PosixProviderIoCounters>,
+}
+
+#[derive(Debug, Default)]
+struct PosixProviderIoCounters {
+    read_operations: AtomicU64,
+    write_operations: AtomicU64,
+    bytes_read: AtomicU64,
+    bytes_written: AtomicU64,
+}
+
+/// Read-only cumulative POSIX provider I/O counters.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PosixProviderIoSnapshot {
+    /// Provider read calls attempted by this provider and its clones.
+    pub read_operations: u64,
+    /// Provider write calls attempted by this provider and its clones.
+    pub write_operations: u64,
+    /// Bytes returned by successful provider reads.
+    pub bytes_read: u64,
+    /// Bytes accepted by successful provider writes.
+    pub bytes_written: u64,
 }
 
 impl PosixProvider {
     pub fn new(root: PathBuf) -> Self {
-        Self { root }
+        Self {
+            root,
+            io_counters: Arc::new(PosixProviderIoCounters::default()),
+        }
     }
 
     fn resolve(&self, path: &str) -> PathBuf {
         self.root.join(path)
+    }
+
+    /// Returns a clone-shared cumulative snapshot suitable for measured-window deltas.
+    pub fn io_snapshot(&self) -> PosixProviderIoSnapshot {
+        PosixProviderIoSnapshot {
+            read_operations: self.io_counters.read_operations.load(Ordering::Relaxed),
+            write_operations: self.io_counters.write_operations.load(Ordering::Relaxed),
+            bytes_read: self.io_counters.bytes_read.load(Ordering::Relaxed),
+            bytes_written: self.io_counters.bytes_written.load(Ordering::Relaxed),
+        }
     }
 }
 
@@ -82,6 +120,7 @@ impl TieredStoreProvider for PosixProvider {
     }
 
     async fn read(&self, path: String, position: u64, length: usize) -> Result<Bytes, RocketMQError> {
+        self.io_counters.read_operations.fetch_add(1, Ordering::Relaxed);
         let full_path = self.resolve(&path);
         let mut file = OpenOptions::new()
             .read(true)
@@ -104,10 +143,12 @@ impl TieredStoreProvider for PosixProvider {
             read += chunk;
         }
         buffer.truncate(read);
+        self.io_counters.bytes_read.fetch_add(read as u64, Ordering::Relaxed);
         Ok(Bytes::from(buffer))
     }
 
     async fn write(&self, path: String, position: u64, data: Bytes) -> Result<usize, RocketMQError> {
+        self.io_counters.write_operations.fetch_add(1, Ordering::Relaxed);
         let full_path = self.resolve(&path);
         if let Some(parent) = full_path.parent() {
             tokio::fs::create_dir_all(parent)
@@ -130,6 +171,9 @@ impl TieredStoreProvider for PosixProvider {
         file.flush()
             .await
             .map_err(|err| error::storage_write_failed(path_to_string(&full_path), err.to_string()))?;
+        self.io_counters
+            .bytes_written
+            .fetch_add(data.len() as u64, Ordering::Relaxed);
         Ok(data.len())
     }
 
@@ -394,9 +438,23 @@ mod tests {
             provider.read("topic/0/commitlog/000".to_owned(), 1, 4).await?,
             Bytes::from_static(b"bcde")
         );
+        assert_eq!(
+            provider.io_snapshot(),
+            super::PosixProviderIoSnapshot {
+                read_operations: 1,
+                write_operations: 2,
+                bytes_read: 4,
+                bytes_written: 6,
+            }
+        );
+        assert_eq!(provider.clone().io_snapshot(), provider.io_snapshot());
 
         provider.delete("topic/0/commitlog/000".to_owned()).await?;
         assert_eq!(provider.segment_size("topic/0/commitlog/000".to_owned()).await?, 0);
+        assert!(provider.read("topic/0/commitlog/000".to_owned(), 0, 1).await.is_err());
+        let after_failed_read = provider.io_snapshot();
+        assert_eq!(after_failed_read.read_operations, 2);
+        assert_eq!(after_failed_read.bytes_read, 4);
         Ok(())
     }
 

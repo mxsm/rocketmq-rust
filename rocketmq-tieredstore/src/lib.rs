@@ -51,6 +51,7 @@ pub use metadata::TopicMetadata;
 pub use metadata::TopicQueueMetadata;
 pub use provider::MemoryProvider;
 pub use provider::PosixProvider;
+pub use provider::PosixProviderIoSnapshot;
 pub use provider::ProviderKind;
 pub use provider::TieredStoreProvider;
 pub use service::CommitLogRecoverService;

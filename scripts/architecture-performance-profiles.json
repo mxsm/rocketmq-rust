@@ -298,7 +298,7 @@
         "driver": "target-hardware-sidecar",
         "status": "requires-target-hardware-run",
         "reference_commands": [
-          "cargo bench -p rocketmq-tieredstore --bench tieredstore_bench -- tieredstore_memory_flat_file_append_commit_1kb"
+          "cargo run --release --quiet -p rocketmq-store --features tieredstore --example architecture_store_performance_collector -- tiered-append batch-64"
         ],
         "required_outputs": [
           "environment_metadata",
@@ -355,7 +355,10 @@
       "collection": {
         "driver": "target-hardware-sidecar",
         "status": "requires-target-hardware-run",
-        "reference_commands": [],
+        "reference_commands": [
+          "cargo run --release --quiet -p rocketmq-store --features tieredstore --example architecture_store_performance_collector -- tiered-pull cold-32",
+          "cargo run --release --quiet -p rocketmq-store --features tieredstore --example architecture_store_performance_collector -- tiered-pull warm-32"
+        ],
         "required_outputs": [
           "environment_metadata",
           "correctness_evidence",

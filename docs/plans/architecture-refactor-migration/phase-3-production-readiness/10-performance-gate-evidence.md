@@ -92,8 +92,9 @@ Issue [#8688](https://github.com/mxsm/rocketmq-rust/issues/8688) 为 `local-appe
 采集器，覆盖 `producers-1`、`producers-8`、`producers-32`；Issue
 [#8690](https://github.com/mxsm/rocketmq-rust/issues/8690) 又增加 `sync-flush/concurrency-64`；Issue
 [#8692](https://github.com/mxsm/rocketmq-rust/issues/8692) 增加 `local-pull/batch-32`；Issue
-[#8694](https://github.com/mxsm/rocketmq-rust/issues/8694) 增加 `rocks-pull/batch-32`，因此当前真实性能
-runner 就绪进度为 **6/11 variants**：
+[#8694](https://github.com/mxsm/rocketmq-rust/issues/8694) 增加 `rocks-pull/batch-32`；Issue
+[#8696](https://github.com/mxsm/rocketmq-rust/issues/8696) 又增加 Tiered append/pull 三个变体，因此当前
+真实性能 runner 就绪进度为 **9/11 variants**：
 
 ```powershell
 cargo run --release --quiet -p rocketmq-store `
@@ -107,6 +108,15 @@ cargo run --release --quiet -p rocketmq-store `
 
 cargo run --release --quiet -p rocketmq-store --features rocksdb_store `
   --example architecture_store_performance_collector -- rocks-pull batch-32
+
+cargo run --release --quiet -p rocketmq-store --features tieredstore `
+  --example architecture_store_performance_collector -- tiered-append batch-64
+
+cargo run --release --quiet -p rocketmq-store --features tieredstore `
+  --example architecture_store_performance_collector -- tiered-pull cold-32
+
+cargo run --release --quiet -p rocketmq-store --features tieredstore `
+  --example architecture_store_performance_collector -- tiered-pull warm-32
 ```
 
 - 每个变体先执行两个同负载 priming 子进程，再固定采集五个不筛选、不改写的原始样本；父进程为每个
@@ -129,11 +139,16 @@ cargo run --release --quiet -p rocketmq-store --features rocksdb_store `
 - `rocks-pull` 使用真实 `RocksDBMessageStore` 和 typed CQ range scan；measured window 从 RocksDB
   operation counters 计算 point read + range scan 的 `native_read_calls_per_batch`，core I/O 同时计入
   CommitLog 编码字节与 RocksDB ticker read bytes，并拒绝 counter 回退和 hot window cache miss。
+- `tiered-append` 使用真实 POSIX provider 批量写入并提交 64 条 1 KiB CommitLog/CQ 记录；provider
+  write/byte 与 JSON metadata successful-persist 均以只读单调累计计数的 measured-window delta 计算，
+  不把逻辑方法调用伪装为物理 I/O。
+- `tiered-pull` 以同一真实 POSIX fixture 写入 32 条 1 KiB 记录；每个 cold 样本使用全新进程和 cache，
+  warm 样本先执行一次不计量的完整 pull，再从 provider read/byte delta 证明 read-ahead cache 命中。
 - stdout 只输出 sidecar 要求的单个 JSON object，并精确包含完整 core metric inventory；未知
   profile/variant、样本缺失、非有限或负值均 fail closed。
 
-这 6 个变体只是 runner readiness。它们尚未在批准的固定硬件上对不同 clean baseline/candidate 执行，
-没有写入任何性能结论，也没有完成 R19 或 `[HUMAN]` M10 Gate。其余 5 个性能变体和 4 个 correctness
+这 9 个变体只是 runner readiness。它们尚未在批准的固定硬件上对不同 clean baseline/candidate 执行，
+没有写入任何性能结论，也没有完成 R19 或 `[HUMAN]` M10 Gate。其余 2 个性能变体和 4 个 correctness
 runner 仍待实现。
 
 ## 正确性优先与例外边界
@@ -159,6 +174,9 @@ runner 仍待实现。
 | `python -m unittest discover -s scripts/tests -p "test_*guard.py"` | 125/125 通过 |
 | `cargo test -p rocketmq-store --example architecture_store_performance_collector` | Issue #8688/#8690/#8692/#8694 默认 feature 合同 9/9 通过；覆盖原五种 variant、精确 metric inventory 和反向拒绝，并验证无 RocksDB feature 时 fail closed |
 | `cargo test -p rocketmq-store --features rocksdb_store --example architecture_store_performance_collector` | 10/10 通过；增加 rocks-pull 精确 metric inventory、native counter 正向计算及 counter 回退、cache miss、缺失/非有限指标的反向拒绝 |
+| `cargo test -p rocketmq-tieredstore provider::posix_file_segment::tests --lib` | Issue #8696 provider I/O 计数 2/2 通过；覆盖成功读写、clone 共享累计值和失败读取只增加 call、不伪增 byte 的反向合同 |
+| `cargo test -p rocketmq-tieredstore metadata::metadata_store::tests --lib` | Issue #8696 metadata 3/3 通过；成功 replace 精确累计，失败 persist 不增加计数 |
+| `cargo test -p rocketmq-store --features tieredstore --example architecture_store_performance_collector` | 12/12 通过；覆盖三个 Tiered 变体、精确 metric inventory、counter 回退、缺失/非有限和错误 profile/variant 的反向拒绝 |
 | `cargo test -p rocketmq-store get_message_returns_dispatched_messages_after_reput --lib` | Issue #8692 受限 batch 回归 1/1 通过；`max_msg_nums=1` 在 CQ 尚有后续消息时按期返回，不再因 iterator exhausted 空转 |
 | `cargo test -p rocketmq-store --lib io_stats_aggregate_mapped_file_metrics` | Issue #8690 I/O 聚合正向测试 1/1 通过 |
 | `cargo clippy -p rocketmq-store-local --lib -- -D warnings` 和采集器 focused Clippy | 通过 |
@@ -166,13 +184,14 @@ runner 仍待实现。
 | `sync-flush/concurrency-64` release collector 本机烟测 | 真实 Store/GroupCommit 启停和五样本完整协议通过；观测到真实 `fsync_per_ack=0.03125`，仅为未批准开发机诊断值，不作为 Gate 结论 |
 | `local-pull/batch-32` release collector 本机烟测 | 真实 append/reput/hot pull、匹配 allocation control 和五样本完整协议通过；开发机观测仅验证 runner，不作为 baseline/candidate 或 Gate 结论 |
 | `rocks-pull/batch-32` release collector 本机烟测 | 真实 RocksDB CQ typed range read、Local WAL hot read 和五样本完整协议通过；五个 `native_read_calls_per_batch` 样本均为 3，开发机观测仅验证 runner |
+| 三个 Tiered release collector 本机烟测 | 2 priming + 5 measurement 完整协议通过；真实 POSIX cold pull 每批 2 reads、warm pull 0 reads，append 每批 128 writes；metadata 与延迟值仅为未批准开发机诊断，不作为 baseline/candidate 或 Gate 结论 |
 | dependency target/baseline guards | 通过；target compatibility 35/35、dev-only 3/3，baseline 无增长 |
 | release guard | 通过；32/32 topology、10/10 R0 crates，无提前移除/Proxy feature 激活 |
 | ArcMut guard | 通过 |
 | `.\scripts\check-agents-routing.ps1` | 通过；4 standalone Cargo、3 Node、8 routes |
 | `git diff --check` | 通过 |
-| `cargo fmt --all -- --check` | Issue #8688/#8690/#8692/#8694 通过 |
-| `cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings` | Issue #8688/#8690/#8692/#8694 通过 |
+| `cargo fmt --all -- --check` | Issue #8688/#8690/#8692/#8694/#8696 通过 |
+| `cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings` | Issue #8688/#8690/#8692/#8694/#8696 通过 |
 
 测试覆盖稳定样本通过、双方向超过 5% 回归、MAD 与离群样本、环境漂移、缺失/NaN、正确性不可豁免、
 例外有效期与作用域、fixture 显式 opt-in、原始 hash/dirty measurement/未知例外，以及输出报告对
