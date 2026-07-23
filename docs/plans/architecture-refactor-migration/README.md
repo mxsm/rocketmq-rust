@@ -8,10 +8,10 @@
 > PR-M12-01～06 未开始，合计剩余 7 个
 
 剩余任务数量、M11-12 内部执行批次与 M12 六个工作包见 [`REMAINING-TASKS.md`](REMAINING-TASKS.md)：正式口径
-剩余 7 个工作包；31 个最小可审查单元已完成 13 个，当前剩余 18 个。Issue #8623 / M11-12bc101 后
-reviewed ArcMut baseline 保持 31 identities / 71 occurrences（production 13/21、test 4/10、
-compatibility 14/40）；Broker fast-failure 已改持 `PutMessagePreflight`，Admin runtime 已改持
-`Weak<EscapeBridge>`，其构造与 clone 不再增加完整 Store 强 owner。
+剩余 7 个工作包；31 个最小可审查单元已完成 13 个，当前剩余 18 个。Issue #8625 / M11-12bc102 后
+reviewed ArcMut baseline 降至 28 identities / 67 occurrences（production 11/18、test 3/9、
+compatibility 14/40）；Broker runtime 现在是唯一 Store 生命周期强 owner，EscapeBridge 与 Admin runtime
+只保留标准弱 provider，强引用仅存在于单次请求或生命周期操作期间。
 
 ## 1. 使用方式
 
@@ -1293,6 +1293,17 @@ lease，可变 legacy 操作只在单次 Admin 请求期间取得 write lease。
 增加完整 Store root 强引用；Local/Rocks 查询、写入、read-ahead 配置与 Timer handle 行为保持不变。scanner
 baseline 保持 31/71（production 13/21、test 4/10、compatibility 14/40），没有移动或隐藏 identity；R01 下一切片
 继续拆分 EscapeBridge/lifecycle owner，执行清单保持完成 13 项、剩余 18 项，正式进度仍为 75/82。
+
+Broker Store lifecycle owner 随 Issue #8625 完成唯一化：`BrokerRuntimeInner` 持有唯一长期
+`Arc<LegacyEscapeStoreOwner<_>>`，`EscapeBridgeStoreCapability` 仅保存标准 `Weak` 并在单次操作时升级；Local/Rocks
+构造统一进入私有 owner factory，通用 `Clone`/`DerefMut` 传播入口被删除，Broker init/load/start/shutdown 与 hook wiring
+只取得短期 write lease。释放 Broker owner 后 provider fail closed，Admin clone 也不会增加外层或 legacy pointer 强计数。
+嵌入式 `rocketmq-proxy-local` 对齐仓库已有 Proxy/Client 入口，使用 256 的 codegen 查询深度预算，覆盖嵌套 Broker
+worker future 在完整构建中的布局计算，不改变运行时行为。reviewed baseline 从 31/71 降至 28/67
+（production 13/21→11/18、test 4/10→3/9、compatibility 保持
+14/40），Broker production 从 4/5 降至 2/2、Store production 保持 9/16；净删除 3 identities/4 occurrences。
+保留 constructor identity 与私有字段 occurrence 仅通过忽略的临时 ADR-013 一对一 relocation 审核，无提交态 approval。
+R01 仍剩私有 legacy owner 2/2，R17 降至 3/9；执行清单保持完成 13 项、剩余 18 项，正式进度仍为 75/82。
 
 Default HA client runtime ownership 随 Issue #8567 完成收窄：`DefaultHAClient` 以标准 `Arc<Inner>` 共享只读组合根，
 `Inner` 仅保留原子、锁、Notify、flow monitor 与现有 LocalStore 兼容句柄；从未安装连接的 stream 字段和重复 buffer/

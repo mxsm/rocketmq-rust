@@ -499,80 +499,17 @@
       "adr": "ADR-013"
     },
     {
-      "identity": "10374c39288235b4a31d1d0b",
-      "path": "rocketmq-broker/src/broker_runtime.rs",
-      "symbol": "*",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "d8463129a439bda73b3b705d",
-          "fingerprint": "fa1cf46ad3c0fd49f66412d9",
-          "item": "mod tests",
-          "line": 4956
-        }
-      ],
-      "owner": "broker",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "d3fcf7e19b855bb13f2cd350",
-      "path": "rocketmq-broker/src/broker_runtime.rs",
+      "identity": "5b0ce4895f6edc75d47a6de2",
+      "path": "rocketmq-broker/src/failover/escape_bridge_capability.rs",
       "symbol": "ArcMut",
       "kind": "constructor",
       "category": "production",
       "occurrences": [
         {
-          "id": "a7fd5aea70417dca5a9430eb",
-          "fingerprint": "4bd5206196565768a74ff0a6",
-          "item": "fn initialize_message_store",
-          "line": 2167
-        },
-        {
-          "id": "4cf7cc30ab77f47a2baa9ea5",
-          "fingerprint": "b5fa9f42dcbeddc3270cb3b1",
-          "item": "fn initialize_message_store",
-          "line": 2207
-        }
-      ],
-      "owner": "broker",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "903e8713fe35fbfa5a604c97",
-      "path": "rocketmq-broker/src/broker_runtime.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "594167f41d45f5059aa78fe4",
-          "fingerprint": "52b0378d1ef1edb3fc18819f",
-          "item": "<module>",
-          "line": 61
-        }
-      ],
-      "owner": "broker",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M05",
-      "adr": "ADR-002"
-    },
-    {
-      "identity": "9f66275469a44bf6a8a35fd3",
-      "path": "rocketmq-broker/src/broker_runtime.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "production",
-      "occurrences": [
-        {
-          "id": "6accef9ad22e851ef1dc1890",
-          "fingerprint": "993e032cc43bf3fde8bb9b8c",
-          "item": "struct BrokerRuntimeInner",
-          "line": 3805
+          "id": "699a02b5525bda62309d1072",
+          "fingerprint": "065faebc51f3b7f1f1ced9c2",
+          "item": "fn new",
+          "line": 131
         }
       ],
       "owner": "broker",
@@ -588,10 +525,10 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "87c355866ebe4e1307d4ba0e",
-          "fingerprint": "b97de439bbbc3b9809d34d8c",
+          "id": "8cf896d0e7854a3d1ad89efe",
+          "fingerprint": "2aecfa7cb469c22fd22208e2",
           "item": "struct LegacyEscapeStoreOwner",
-          "line": 126
+          "line": 127
         }
       ],
       "owner": "broker",

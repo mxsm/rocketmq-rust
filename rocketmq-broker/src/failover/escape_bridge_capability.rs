@@ -16,6 +16,7 @@ use std::collections::HashSet;
 use std::ops::Deref;
 use std::ops::DerefMut;
 use std::sync::Arc;
+use std::sync::Weak;
 
 use arc_swap::ArcSwap;
 use cheetah_string::CheetahString;
@@ -119,19 +120,30 @@ impl EscapeBridgePolicyState {
     }
 }
 
-/// Temporary Store owner used while the Store facade is migrated by R09-R16.
+/// Temporary Store lifecycle owner used while the Store facade is migrated by R09-R16.
 ///
-/// Keeping the compatibility pointer in this single tuple field prevents failover and offset
-/// consumers from importing or propagating the legacy pointer type.
-pub(crate) struct LegacyEscapeStoreOwner<MS: MessageStore>(pub(crate) rocketmq_rust::ArcMut<MS>);
+/// Broker runtime keeps the only long-lived strong owner. Other capabilities retain a weak
+/// provider and upgrade it only for the duration of one operation.
+pub(crate) struct LegacyEscapeStoreOwner<MS: MessageStore>(rocketmq_rust::ArcMut<MS>);
 
 impl<MS: MessageStore> LegacyEscapeStoreOwner<MS> {
+    pub(crate) fn new(store: MS) -> Self {
+        Self(rocketmq_rust::ArcMut::new(store))
+    }
+
     pub(crate) fn store(&self) -> &MS {
         self.0.as_ref()
     }
 
-    pub(crate) fn store_mut(&mut self) -> &mut MS {
-        self.0.as_mut()
+    pub(crate) fn write_lease(&self) -> LegacyEscapeStoreWriteLease<MS> {
+        LegacyEscapeStoreWriteLease {
+            owner: Self(self.0.clone()),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn legacy_strong_count(&self) -> usize {
+        self.0.strong_count()
     }
 
     fn cloned_store(&self) -> impl DerefMut<Target = MS> + Clone {
@@ -139,31 +151,10 @@ impl<MS: MessageStore> LegacyEscapeStoreOwner<MS> {
     }
 }
 
-impl<MS: MessageStore> Clone for LegacyEscapeStoreOwner<MS> {
-    fn clone(&self) -> Self {
-        Self(self.0.clone())
-    }
-}
-
-impl<MS: MessageStore> Deref for LegacyEscapeStoreOwner<MS> {
-    type Target = MS;
-
-    fn deref(&self) -> &Self::Target {
-        self.store()
-    }
-}
-
-impl<MS: MessageStore> DerefMut for LegacyEscapeStoreOwner<MS> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.store_mut()
-    }
-}
-
 /// Request-scoped read access to the legacy Store boundary.
 ///
-/// The lease shares the owner already retained by `EscapeBridge`; creating it does not clone the
-/// underlying compatibility pointer. Long-lived Broker capabilities must keep a weak provider
-/// instead of retaining this lease.
+/// The lease upgrades the weak provider for one operation without cloning the underlying
+/// compatibility pointer. Long-lived Broker capabilities must not retain this lease.
 pub(crate) struct LegacyEscapeStoreReadLease<MS: MessageStore> {
     owner: Arc<LegacyEscapeStoreOwner<MS>>,
 }
@@ -194,13 +185,13 @@ impl<MS: MessageStore> Deref for LegacyEscapeStoreWriteLease<MS> {
 
 impl<MS: MessageStore> DerefMut for LegacyEscapeStoreWriteLease<MS> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.owner.store_mut()
+        self.owner.0.as_mut()
     }
 }
 
 /// Late-bound Store operations required by failover and offset processing.
 pub(crate) struct EscapeBridgeStoreCapability<MS: MessageStore> {
-    current: Arc<RwLock<Option<Arc<LegacyEscapeStoreOwner<MS>>>>>,
+    current: Arc<RwLock<Option<Weak<LegacyEscapeStoreOwner<MS>>>>>,
 }
 
 impl<MS: MessageStore> Clone for EscapeBridgeStoreCapability<MS> {
@@ -220,12 +211,16 @@ impl<MS: MessageStore> Default for EscapeBridgeStoreCapability<MS> {
 }
 
 impl<MS: MessageStore> EscapeBridgeStoreCapability<MS> {
-    pub(crate) fn bind(&self, owner: LegacyEscapeStoreOwner<MS>) {
-        *self.current.write() = Some(Arc::new(owner));
+    pub(crate) fn bind(&self, owner: &Arc<LegacyEscapeStoreOwner<MS>>) {
+        *self.current.write() = Some(Arc::downgrade(owner));
     }
 
     fn owner(&self) -> Result<Arc<LegacyEscapeStoreOwner<MS>>, MessageStoreUnavailable> {
-        self.current.read().clone().ok_or(MessageStoreUnavailable)
+        self.current
+            .read()
+            .as_ref()
+            .and_then(Weak::upgrade)
+            .ok_or(MessageStoreUnavailable)
     }
 
     pub(crate) fn read_lease(&self) -> Result<LegacyEscapeStoreReadLease<MS>, MessageStoreUnavailable> {
@@ -233,9 +228,7 @@ impl<MS: MessageStore> EscapeBridgeStoreCapability<MS> {
     }
 
     pub(crate) fn write_lease(&self) -> Result<LegacyEscapeStoreWriteLease<MS>, MessageStoreUnavailable> {
-        Ok(LegacyEscapeStoreWriteLease {
-            owner: self.owner()?.as_ref().clone(),
-        })
+        Ok(self.owner()?.write_lease())
     }
 
     pub(crate) fn with_store<R>(&self, operation: impl FnOnce(&MS) -> R) -> Result<R, MessageStoreUnavailable> {
