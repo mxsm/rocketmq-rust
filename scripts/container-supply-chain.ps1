@@ -51,6 +51,7 @@ $outputPath = Join-Path $root $OutputDirectory
 New-Item -ItemType Directory -Force -Path $outputPath | Out-Null
 
 $policy = Get-Content -Raw -LiteralPath (Join-Path $root "docker/container-policy.json") | ConvertFrom-Json
+$tmpfsOptions = "$($policy.runtime.tmpfs_path):rw,noexec,nosuid,size=16m,uid=$($policy.runtime.uid),gid=$($policy.runtime.gid),mode=0700"
 $sourceCommit = (& git -C $root rev-parse HEAD).Trim()
 $sourceEpoch = (& git -C $root show -s --format=%ct HEAD).Trim()
 if ($LASTEXITCODE -ne 0) {
@@ -84,7 +85,7 @@ $smoke = @(
     "touch $($policy.runtime.writable_data_path)/data-write",
     "touch $($policy.runtime.tmpfs_path)/tmp-write"
 ) -join "; "
-Invoke-Checked docker run --rm --network none --read-only --mount "type=volume,destination=$($policy.runtime.writable_data_path)" --tmpfs "$($policy.runtime.tmpfs_path):rw,noexec,nosuid,size=16m" $ImageRef /bin/sh -c $smoke
+Invoke-Checked docker run --rm --network none --read-only --mount "type=volume,destination=$($policy.runtime.writable_data_path)" --tmpfs $tmpfsOptions $ImageRef /bin/sh -c $smoke
 
 $sbomPath = Join-Path $outputPath "runtime-base.cdx.json"
 $trivyPath = Join-Path $outputPath "runtime-base.trivy.json"
