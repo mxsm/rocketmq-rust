@@ -1089,12 +1089,7 @@ mod tests {
         message.message_ext_inner.born_host = "127.0.0.1:10000".parse::<SocketAddr>().expect("parse born host");
         message.message_ext_inner.store_host = "127.0.0.1:10911".parse::<SocketAddr>().expect("parse store host");
 
-        let put_result = admin
-            .message_store_mut()
-            .as_mut()
-            .expect("message store should exist")
-            .put_message(message)
-            .await;
+        let put_result = admin.put_message(message).await.expect("message store should exist");
         assert!(put_result.is_ok(), "put test message should succeed");
         put_result
             .append_message_result()

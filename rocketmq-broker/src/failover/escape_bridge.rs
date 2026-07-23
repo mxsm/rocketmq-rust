@@ -41,6 +41,7 @@ use rocketmq_store::filter::ArcMessageFilter;
 use rocketmq_store::ha::ha_connection_state_notification_request::HAConnectionStateNotificationRequest;
 use rocketmq_store::store_api_adapter::LegacyAppendReceipt;
 use rocketmq_store::store_api_adapter::LegacyStoreHealthSnapshot;
+use rocketmq_store::store_error::StoreError as LegacyStoreError;
 use rocketmq_store_api::StoreError;
 use tracing::error;
 use tracing::warn;
@@ -49,7 +50,6 @@ use crate::failover::escape_bridge_capability::EscapeBridgePolicyState;
 use crate::failover::escape_bridge_capability::EscapeBridgeStoreCapability;
 use crate::failover::escape_bridge_capability::LegacyEscapeStoreOwner;
 use crate::failover::escape_bridge_capability::LegacyEscapeStoreReadLease;
-use crate::failover::escape_bridge_capability::LegacyEscapeStoreWriteLease;
 use crate::out_api::broker_outer_api::BrokerOuterAPI;
 use crate::topic::manager::topic_route_info_manager::TopicRouteInfoManager;
 use crate::transaction::queue::transactional_message_util::TransactionalMessageUtil;
@@ -144,10 +144,6 @@ impl<MS: MessageStore> EscapeBridge<MS> {
 
     pub(crate) fn lease_message_store(&self) -> Result<LegacyEscapeStoreReadLease<MS>, MessageStoreUnavailable> {
         self.message_store.read_lease()
-    }
-
-    pub(crate) fn lease_message_store_mut(&self) -> Result<LegacyEscapeStoreWriteLease<MS>, MessageStoreUnavailable> {
-        self.message_store.write_lease()
     }
 
     pub fn start(&self) {
@@ -250,6 +246,14 @@ impl<MS: MessageStore> EscapeBridge<MS> {
         message: MessageExtBrokerInner,
     ) -> Result<PutMessageResult, MessageStoreUnavailable> {
         self.message_store.put_message(message).await
+    }
+
+    pub(crate) fn set_commitlog_read_mode(&self, read_ahead_mode: i32) -> Result<(), LegacyStoreError> {
+        self.message_store.set_commitlog_read_mode(read_ahead_mode)
+    }
+
+    pub(crate) fn delete_topics(&self, delete_topics: Vec<&CheetahString>) -> Result<i32, MessageStoreUnavailable> {
+        self.message_store.delete_topics(delete_topics)
     }
 
     pub(crate) fn get_min_offset_from_local_store(
@@ -752,6 +756,23 @@ mod tests {
             assert!(!source.contains(concat!("Arc", "Mut")));
             assert!(!source.contains(concat!("BrokerRuntime", "Inner")));
             assert!(!source.contains(concat!("mut", "_from_ref")));
+        }
+    }
+
+    #[test]
+    fn admin_store_mutations_use_named_operations_instead_of_complete_write_leases() {
+        let admin_source = include_str!("../broker/broker_admin_runtime.rs");
+        let bridge_source = include_str!("escape_bridge.rs");
+        let capability_source = include_str!("escape_bridge_capability.rs");
+
+        assert!(!admin_source.contains("fn message_store_mut"));
+        assert!(!bridge_source.contains(concat!("fn lease_message_store", "_mut")));
+        assert!(!capability_source.contains(concat!("fn write_lease(&self)", " -> Result")));
+        for operation in ["put_message", "set_commitlog_read_mode", "delete_topics"] {
+            assert!(
+                admin_source.contains(operation),
+                "Admin Store boundary must expose the named {operation} operation"
+            );
         }
     }
 

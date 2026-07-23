@@ -8,10 +8,11 @@
 > PR-M12-01～06 未开始，合计剩余 7 个
 
 剩余任务数量、M11-12 内部执行批次与 M12 六个工作包见 [`REMAINING-TASKS.md`](REMAINING-TASKS.md)：正式口径
-剩余 7 个工作包；31 个最小可审查单元已完成 13 个，当前剩余 18 个。Issue #8625 / M11-12bc102 后
+剩余 7 个工作包；31 个最小可审查单元已完成 13 个，当前剩余 18 个。Issue #8627 / M11-12bc103 后
 reviewed ArcMut baseline 降至 28 identities / 67 occurrences（production 11/18、test 3/9、
 compatibility 14/40）；Broker runtime 现在是唯一 Store 生命周期强 owner，EscapeBridge 与 Admin runtime
-只保留标准弱 provider，强引用仅存在于单次请求或生命周期操作期间。
+只保留标准弱 provider，强引用仅存在于单次请求或生命周期操作期间；Admin 和 processor 不再取得完整
+Store 可变租约，只能调用 append、read-mode 和 topic-delete 三个具名操作。
 
 ## 1. 使用方式
 
@@ -1304,6 +1305,14 @@ worker future 在完整构建中的布局计算，不改变运行时行为。rev
 14/40），Broker production 从 4/5 降至 2/2、Store production 保持 9/16；净删除 3 identities/4 occurrences。
 保留 constructor identity 与私有字段 occurrence 仅通过忽略的临时 ADR-013 一对一 relocation 审核，无提交态 approval。
 R01 仍剩私有 legacy owner 2/2，R17 降至 3/9；执行清单保持完成 13 项、剩余 18 项，正式进度仍为 75/82。
+
+Broker Admin 完整可变 Store 逃逸随 Issue #8627 完成关闭：`BrokerAdminRuntime::message_store_mut`、
+`EscapeBridge::lease_message_store_mut` 与 capability 层通用 write-lease 均已删除，production Admin/processor
+只能调用 message append、commit-log read-mode 和 topic delete 三个具名操作；测试 Store 启动也回到 Broker
+composition root。size-limited read 不再克隆 legacy mutable carrier，owner 释放后三个具名操作均 fail closed。
+reviewed baseline 保持 28/67（production 11/18、test 3/9、compatibility 14/40、Broker production 2/2、
+Store production 9/16），无 identity relocation、新债务或 baseline 变更。R01 尚未完成，下一切片继续提取
+普通消息共享 append capability；执行清单保持完成 13 项、剩余 18 项，正式进度仍为 75/82。
 
 Default HA client runtime ownership 随 Issue #8567 完成收窄：`DefaultHAClient` 以标准 `Arc<Inner>` 共享只读组合根，
 `Inner` 仅保留原子、锁、Notify、flow monitor 与现有 LocalStore 兼容句柄；从未安装连接的 stream 字段和重复 buffer/

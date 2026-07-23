@@ -360,13 +360,7 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
             ));
         }
 
-        match self
-            .broker_runtime_inner
-            .message_store_mut()
-            .as_mut()
-            .expect("message store should exist")
-            .set_commitlog_read_mode(mode)
-        {
+        match self.broker_runtime_inner.set_commitlog_read_mode(mode) {
             Ok(()) => {
                 Ok(Some(response.set_code(ResponseCode::Success).set_remark(format!(
                     "set commitlog readahead mode success, mode: {mode}"

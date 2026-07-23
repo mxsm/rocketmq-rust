@@ -153,12 +153,19 @@ impl MessageRelatedHandler {
             CheetahString::from_static_str("0"),
         );
 
-        let put_message_result = broker_runtime_inner
-            .message_store_mut()
-            .as_mut()
-            .unwrap()
+        let put_message_result = match broker_runtime_inner
             .put_message(to_half_message_ext_broker_inner(&message_ext))
-            .await;
+            .await
+        {
+            Ok(result) => result,
+            Err(_) => {
+                return Ok(Some(
+                    response
+                        .set_code(ResponseCode::SystemError)
+                        .set_remark("message store is unavailable"),
+                ));
+            }
+        };
 
         if put_message_result.put_message_status() == PutMessageStatus::PutOk || put_message_result.is_ok() {
             Ok(Some(response.set_code(ResponseCode::Success)))
@@ -595,11 +602,9 @@ mod tests {
         );
 
         let put_message_result = admin
-            .message_store_mut()
-            .as_mut()
-            .unwrap()
             .put_message(half_message)
-            .await;
+            .await
+            .expect("message store should exist");
         assert!(put_message_result.is_ok());
         let max_phy_offset_before_resume = admin.message_store().unwrap().get_max_phy_offset();
         let msg_id = put_message_result
@@ -639,18 +644,15 @@ mod tests {
 
     #[tokio::test]
     async fn query_consume_queue_returns_queue_data_and_online_subscription() {
-        let runtime = new_test_runtime("query-consume-queue").await;
+        let mut runtime = new_test_runtime("query-consume-queue").await;
+        runtime
+            .start_message_store_for_test()
+            .await
+            .expect("start message store");
         let admin = runtime.admin_runtime_for_test();
         let _ = admin
             .topic_config_manager()
             .update_topic_config(TopicConfig::with_queues("topic-a", 1, 1), 0);
-        admin
-            .message_store_mut()
-            .as_mut()
-            .unwrap()
-            .start()
-            .await
-            .expect("start message store");
         let register_channel = create_test_channel().await;
         let client_channel_info = ClientChannelInfo::new(
             register_channel.clone(),
