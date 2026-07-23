@@ -265,8 +265,10 @@ M11-12 已开始按 owner 子切片收口；首个 owned-value leaf 将 ArcMut g
 733、production occurrence 从 2,125 降为 2,082，并移除 Common 自身的 nightly unsafe-cell 需求。该下降不改变
 75/82 总进度；Remoting/Controller/NameServer/Client/Broker/Store owner、compatibility 删除与 stable/SLO/HUMAN
 Gate 仍由 [`M11-12 进度证据`](phase-3-production-readiness/11-soundness-closure-progress.md) 跟踪；
-nightly feature baseline/target 与 stable blocker 另见
-[`M11-12 stable surface 证据`](phase-3-production-readiness/11-stable-surface-evidence.md)。
+nightly feature 清零与 stable matrix 另见
+[`M11-12 stable surface 证据`](phase-3-production-readiness/11-stable-surface-evidence.md)；Miri expected-UB、
+Loom guarded replacement 与不得长期保留 ArcMut 的 R23 结论见
+[`M11-12 ArcMut soundness 证据`](phase-3-production-readiness/11-arc-mut-soundness-evidence.md)。
 Controller config owner 随 Issue #8295 改为不可变原子快照后，累计进一步降至 711 production/2,029 occurrence；
 `ArcMut<ControllerConfig>` 已清零，但 Controller 的其他 owner 仍有 31 条 production 债务，75/82 总进度不变。
 Controller manager/heartbeat owner 随 Issue #8297 改为安全 `Arc`/`Weak` 与内部同步生命周期后，实际快照进一步降至
