@@ -535,6 +535,8 @@ M09-04 再删除 MCP 未使用的 Auth/Error direct edges，并把承担 owned t
   - [x] 例外要求 owner、批准人、期限和回退配置，且不能覆盖 correctness/schema/环境/噪声失败
   - [x] guard 聚焦测试 11/11、全架构 guard 125/125 与 dependency/release/ArcMut/routing 门禁通过
   - [x] [`M10-05 证据`](phase-3-production-readiness/10-performance-gate-evidence.md) 明确区分 fixture 与真实测量
+  - [x] Issue #8682 增加 fail-closed 目标硬件 sidecar runner：正确性优先顺序执行 11 个变体，
+    transcript/hash 绑定并生成 measurement report；没有 fixture、脏树、部分 profile 或跟踪目录旁路
   - [x] 64/82 已完成、18 未完成，下一工作包 PR-M11-01
   - [ ] 真实固定硬件 baseline/candidate、原始数据 hash 与 `[HUMAN]` M10 Gate 待签署
 - [ ] 对应任务文档的 Exit Checklist 全部通过

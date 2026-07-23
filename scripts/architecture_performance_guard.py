@@ -50,6 +50,12 @@ REQUIRED_CORE_METRICS = {
     "allocations_per_operation",
     "io_amplification_ratio",
 }
+REQUIRED_SIDECAR_PROTOCOL = {
+    "schema_version": 1,
+    "runner": "scripts/architecture_performance_sidecar.py",
+    "output_root": "target/architecture-refactor/M10",
+    "report_kind": "measurement",
+}
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 
@@ -167,6 +173,10 @@ def validate_profile_policy(policy: dict[str, Any]) -> list[str]:
     findings: list[str] = []
     if policy.get("schema_version") != 1 or policy.get("milestone") != "M10-05":
         findings.append("performance profile schema or milestone is invalid")
+    if policy.get("sidecar_protocol") != REQUIRED_SIDECAR_PROTOCOL:
+        findings.append("performance sidecar protocol differs from the approved fail-closed contract")
+    elif not (ROOT / REQUIRED_SIDECAR_PROTOCOL["runner"]).is_file():
+        findings.append("performance sidecar runner is missing")
     default_budget = policy.get("default_max_regression_percent")
     if not is_finite_number(default_budget) or float(default_budget) != 5.0:
         findings.append("default performance regression budget must remain exactly 5%")
