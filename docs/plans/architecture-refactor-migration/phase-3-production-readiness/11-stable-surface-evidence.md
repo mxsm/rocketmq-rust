@@ -1,13 +1,13 @@
 # M11-12 Stable Rust surface evidence
 
-> Snapshot: Issue #8643 / M11-12bc111 candidate
-> Status: partial PASS; baseline guard passes, stable target remains fail closed
-> Scope: R22 nightly feature removal and stable-default preparation
+> Snapshot: Issue #8645 / M11-12bc112 candidate
+> Status: PASS; nightly surface is empty and the stable workspace matrix passes
+> Scope: R22 nightly feature removal and stable-default/full-feature verification
 
 ## Outcome
 
-The bc110 and bc111 stable-surface slices remove six obsolete nightly feature declarations while
-preserving the named Remoting and Runtime compatibility entry points:
+The bc110 through bc112 stable-surface slices remove all eight obsolete nightly feature
+declarations while preserving the named Remoting, Runtime, and ArcMut compatibility entry points:
 
 - `rocketmq-remoting` no longer enables `impl_trait_in_assoc_type` in its crate root, integration
   test, or complete example.
@@ -23,14 +23,21 @@ preserving the named Remoting and Runtime compatibility entry points:
   preserving the prior exclusive invocation behavior while reusing the stable scheduler.
 - Runtime, Client, and Broker callers clone their owned capabilities before returning
   `async move` futures; no complete Store or runtime root capture is introduced.
+- `ArcMut`, `WeakArcMut`, and `SyncUnsafeCellWrapper` use the workspace's existing stable
+  `parking_lot::RwLock` backing. The legacy reference escapes remain documented compatibility
+  debt; this implementation change does not claim that R18 public removal is complete.
+- `ArcMut::get_inner()` exposes the stable backing cell so new callers can use read/write guards.
+  There are no repository callers of the prior explicit nightly return type.
+- The obsolete `syncunsafecell_mut` comparison benchmark is removed instead of introducing a new
+  governed ArcMut test/bench caller.
 
-The repository nightly feature-attribute inventory decreases from eight to two. R22 remains open
-because the following registered debt is still present:
+The repository nightly feature-attribute inventory decreases from eight to zero. Both stable
+surface modes now pass:
 
-| Path | Feature | Exit owner |
-|---|---|---|
-| `rocketmq/src/lib.rs` | `sync_unsafe_cell` | R18 next-major public compatibility removal |
-| `rocketmq-broker/benches/syncunsafecell_mut.rs` | `sync_unsafe_cell` | R18 compatibility benchmark removal |
+| Mode | Result |
+|---|---|
+| baseline | PASS, exactly 0 registered/observed feature attributes |
+| target | PASS, no nightly feature remains |
 
 ## Guard contract
 
@@ -44,6 +51,8 @@ directories and compares feature attributes with `scripts/stable-surface-policy.
   unregistered/stale/remaining-target failures, retired source gates, and the three concrete
   zero-allocation core futures. Its Runtime source contract also rejects `AsyncFnMut` and both
   retired feature gates while requiring the stable owned-future bounds and serialized adapter.
+  The ArcMut source contract rejects `SyncUnsafeCell`, requires the stable `Arc<RwLock<T>>`
+  backing, and requires the obsolete benchmark to stay absent.
 - The root architecture CI executes the baseline guard on Windows and Linux.
 
 ## Verification
@@ -56,26 +65,30 @@ directories and compares feature attributes with `scripts/stable-surface-policy.
 | Runtime scheduler compile | Runtime, Client, and Broker all-target checks pass; Broker and Client cover every migrated repository call site |
 | Runtime scheduler behavior | owned-future serialization 1/1 and fixed-rate/fixed-delay/no-overlap 3/3 pass |
 | Stable Runtime | `RUSTFLAGS=-Cdebuginfo=0 cargo +stable check -p rocketmq-runtime --all-targets` passes after neutralizing the host nightly-only `-Zthreads=4` setting |
-| Stable surface guard | baseline reports exactly 2 registered features; 8/8 guard/source-contract tests pass |
-| Stable target | expected failure lists exactly the two R18 `sync_unsafe_cell` entries above |
+| ArcMut compatibility | `cargo check -p rocketmq-rust --all-targets` and 7/7 ArcMut facade tests pass; Broker all-target/all-feature check proves the retired benchmark manifest is clean |
+| ArcMut governance | reviewed baseline passes at 20 identities / 58 occurrences: production 6/12, test 1/7, compatibility 13/39; 27 fixtures and all 79 ArcMut guard tests pass |
+| Stable surface guard | baseline and target both pass with 0 features; 9/9 stable guard/source-contract tests pass |
+| Stable default workspace | `RUSTFLAGS=-Cdebuginfo=0 cargo +stable check --workspace` passes, including Proxy Local |
+| Stable full workspace matrix | `RUSTFLAGS=-Cdebuginfo=0 CARGO_INCREMENTAL=0 cargo +stable check --workspace --all-targets --all-features` passes on the same candidate snapshot |
 | Runtime ownership | enforcing runtime audit passes after the scheduler adapter and caller migration |
 | Proxy recursion regression | `cargo check -p rocketmq-proxy-local --all-targets --all-features` passes with the existing `recursion_limit = "256"` budget |
 | Final repository gates | format check, workspace all-target/all-feature strict Clippy, and diff check pass |
 
 ## Remaining work
 
-1. Complete R18 after the required next-major and HUMAN/Release Manager approval, removing ArcMut
-   and its comparison benchmark.
-2. Run the complete stable feature matrix on one frozen commit, then proceed to Miri/Loom and
-   soak/SLO evidence.
+1. Complete R18 after the required next-major and HUMAN/Release Manager approval, removing the
+   remaining public ArcMut compatibility facade. The comparison benchmark is already retired.
+2. Proceed to R23 Miri/Loom and R24 soak/SLO evidence; R22 itself is complete.
 
-This evidence does not mark R22, M11, or Phase 3 complete and does not substitute a fixture for a
-stable target PASS.
+This evidence marks R22 complete. It does not mark R18, M11, or Phase 3 complete and does not
+substitute stable compilation for Miri/Loom, dynamic fault, or HUMAN approval evidence.
 
 ## Rollback
 
-Reverting bc111 restores the duplicate lending scheduler and both Runtime feature attributes; its
-Runtime, Client, and Broker caller changes must be reverted together. Reverting bc110 restores the
-four Remoting/Controller feature attributes and opaque associated future aliases. Neither slice
-changes persisted data. The stable-surface policy must be reverted with the matching source slice
-to avoid a stale baseline.
+Reverting bc112 restores the unstable ArcMut backing, the two final feature attributes, and the
+obsolete benchmark; its Cargo dependency/lockfile, stable policy, guard contract, and ArcMut
+baseline changes must be reverted together. Reverting bc111 restores the duplicate lending
+scheduler and both Runtime feature attributes; its Runtime, Client, and Broker caller changes must
+be reverted together. Reverting bc110 restores the four Remoting/Controller feature attributes and
+opaque associated future aliases. None of the slices changes persisted data. The stable-surface
+policy must be reverted with the matching source slice to avoid a stale baseline.

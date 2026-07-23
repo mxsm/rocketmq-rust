@@ -3,25 +3,6 @@
   "current_milestone": "M05",
   "entries": [
     {
-      "identity": "fdc869a63b753f343d00eecb",
-      "path": "rocketmq/src/arc_mut.rs",
-      "symbol": "*",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "3e5036c17f2e1e54eec60402",
-          "fingerprint": "690409aa705895c90dfaabee",
-          "item": "mod arc_cell_wrapper_tests",
-          "line": 281
-        }
-      ],
-      "owner": "runtime-foundation",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
       "identity": "9572ffbaf11877ad7655a89c",
       "path": "rocketmq/src/arc_mut.rs",
       "symbol": "ArcMut",
@@ -134,25 +115,6 @@
       "adr": "ADR-013"
     },
     {
-      "identity": "e9de4ba9b5fb03a0172f8774",
-      "path": "rocketmq/src/arc_mut.rs",
-      "symbol": "ArcMut",
-      "kind": "shared_unsafe_cell_wrapper",
-      "category": "compatibility",
-      "occurrences": [
-        {
-          "id": "2c9fd770a08d366c924bd0a7",
-          "fingerprint": "07e4d670346428021a04d2fc",
-          "item": "fn upgrade",
-          "line": 87
-        }
-      ],
-      "owner": "runtime-foundation",
-      "reason": "Legacy shared UnsafeCell wrapper pending sound replacement",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
       "identity": "4d90f667e8966a75f78769f4",
       "path": "rocketmq/src/arc_mut.rs",
       "symbol": "ArcMut",
@@ -172,8 +134,8 @@
           "line": 77
         },
         {
-          "id": "e2eee7561b6436dd643438ec",
-          "fingerprint": "1fd0a989529f95731d30bfc2",
+          "id": "65456a537c534b55102638ba",
+          "fingerprint": "70e2473d7353c7a875fa9d38",
           "item": "struct ArcMut",
           "line": 87
         },
@@ -295,14 +257,14 @@
       "category": "compatibility",
       "occurrences": [
         {
-          "id": "9cd684a54a5f1794b0eafa73",
-          "fingerprint": "a8ff534dec97a724ab1bd182",
+          "id": "db04db873f2527b05f1da604",
+          "fingerprint": "a744d15147a565be7566f7f1",
           "item": "struct SyncUnsafeCellWrapper",
           "line": 194
         },
         {
-          "id": "2473f1709a0dc89dc58953e4",
-          "fingerprint": "15f6493f01e6697dbf294957",
+          "id": "0f8d03f9de1035c5d36c207d",
+          "fingerprint": "a32d4a9aef53d970ce53d889",
           "item": "impl T",
           "line": 198
         },
@@ -338,8 +300,8 @@
       "category": "compatibility",
       "occurrences": [
         {
-          "id": "49b14d4e73e9ebcdeefaa9d9",
-          "fingerprint": "185353025e774575a021a38d",
+          "id": "813243861ba77e53dcc4b02e",
+          "fingerprint": "cc56d0955a6c147fc72af03a",
           "item": "struct WeakArcMut",
           "line": 38
         },
@@ -452,7 +414,7 @@
           "id": "c4de3f11cf2c6814e89c1cc7",
           "fingerprint": "5edc64c5be9388581b1a13c9",
           "item": "mod schedule",
-          "line": 28
+          "line": 27
         }
       ],
       "owner": "runtime-foundation",
@@ -471,7 +433,7 @@
           "id": "9712d81a72a0f2df77faf112",
           "fingerprint": "843e8a2fd089f913717d13f1",
           "item": "mod schedule",
-          "line": 29
+          "line": 28
         }
       ],
       "owner": "runtime-foundation",
@@ -490,7 +452,7 @@
           "id": "04eed240a8b71eb693c91690",
           "fingerprint": "248f5f80abd496abd4be9b88",
           "item": "mod schedule",
-          "line": 30
+          "line": 29
         }
       ],
       "owner": "runtime-foundation",

@@ -15,7 +15,6 @@
 #![allow(dead_code)]
 
 use core::fmt;
-use std::cell::SyncUnsafeCell;
 use std::fmt::Debug;
 use std::fmt::Formatter;
 use std::hash::Hash;
@@ -25,6 +24,7 @@ use std::ops::DerefMut;
 use std::sync::Arc;
 use std::sync::Weak;
 
+use parking_lot::RwLock;
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
@@ -33,17 +33,19 @@ use serde::Serializer;
 /// A weak version of `ArcMut` that doesn't prevent the inner value from being dropped.
 ///
 /// # Safety
-/// This type uses `SyncUnsafeCell` which is not thread-safe by default.
-/// You must ensure that no data races occur when using this type across threads.
+/// The legacy compatibility accessors bypass the backing `RwLock` guards. Callers must ensure
+/// that no conflicting references or data races occur when using this type across threads.
 pub struct WeakArcMut<T: ?Sized> {
-    inner: Weak<SyncUnsafeCell<T>>,
+    inner: Weak<RwLock<T>>,
 }
 
 // Implementation of PartialEq for WeakArcMut<T>
 impl<T: PartialEq + ?Sized> PartialEq for WeakArcMut<T> {
     fn eq(&self, other: &Self) -> bool {
         if let (Some(a), Some(b)) = (self.inner.upgrade(), other.inner.upgrade()) {
-            unsafe { *a.get() == *b.get() }
+            // SAFETY: the legacy ArcMut contract requires callers to prevent concurrent mutation
+            // while equality reads the shared values.
+            unsafe { *a.data_ptr() == *b.data_ptr() }
         } else {
             false
         }
@@ -58,7 +60,9 @@ impl<T: Eq + ?Sized> Eq for WeakArcMut<T> {}
 impl<T: Hash + ?Sized> Hash for WeakArcMut<T> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         if let Some(arc) = self.inner.upgrade() {
-            unsafe { (*arc.get()).hash(state) }
+            // SAFETY: the legacy ArcMut contract requires callers to prevent concurrent mutation
+            // while hashing the shared value.
+            unsafe { (*arc.data_ptr()).hash(state) }
         }
     }
 }
@@ -81,17 +85,19 @@ impl<T: ?Sized> WeakArcMut<T> {
 /// A mutable reference-counted pointer with interior mutability.
 ///
 /// # Safety
-/// This type uses `SyncUnsafeCell` which is not thread-safe by default.
-/// You must ensure that no data races occur when using this type across threads.
+/// The legacy compatibility accessors bypass the backing `RwLock` guards. Callers must ensure
+/// that no conflicting references or data races occur when using this type across threads.
 #[derive(Default)]
 pub struct ArcMut<T: ?Sized> {
-    inner: Arc<SyncUnsafeCell<T>>,
+    inner: Arc<RwLock<T>>,
 }
 
 // Implementation of PartialEq for ArcMut<T>
 impl<T: PartialEq + ?Sized> PartialEq for ArcMut<T> {
     fn eq(&self, other: &Self) -> bool {
-        unsafe { *self.inner.get() == *other.inner.get() }
+        // SAFETY: the legacy ArcMut contract requires callers to prevent concurrent mutation
+        // while equality reads the shared values.
+        unsafe { *self.inner.data_ptr() == *other.inner.data_ptr() }
     }
 }
 
@@ -101,7 +107,9 @@ impl<T: Hash> Hash for ArcMut<T> {
     #[inline]
     fn hash<H: Hasher>(&self, state: &mut H) {
         // Compute the hash of the inner value
-        unsafe { (*self.inner.get()).hash(state) }
+        // SAFETY: the legacy ArcMut contract requires callers to prevent concurrent mutation
+        // while hashing the shared value.
+        unsafe { (*self.inner.data_ptr()).hash(state) }
     }
 }
 
@@ -109,7 +117,7 @@ impl<T> ArcMut<T> {
     #[inline]
     pub fn new(value: T) -> Self {
         Self {
-            inner: Arc::new(SyncUnsafeCell::new(value)),
+            inner: Arc::new(RwLock::new(value)),
         }
     }
 
@@ -121,7 +129,9 @@ impl<T> ArcMut<T> {
     #[inline]
     #[allow(clippy::mut_from_ref)]
     pub fn mut_from_ref(&self) -> &mut T {
-        unsafe { &mut *self.inner.get() }
+        // SAFETY: this method preserves the legacy compatibility contract documented above; the
+        // caller must provide exclusive access for the returned reference's entire lifetime.
+        unsafe { &mut *self.inner.data_ptr() }
     }
 
     #[inline]
@@ -132,7 +142,10 @@ impl<T> ArcMut<T> {
     }
 
     #[inline]
-    pub fn get_inner(&self) -> &Arc<SyncUnsafeCell<T>> {
+    /// Returns the stable backing cell.
+    ///
+    /// New code should use its `read` and `write` guards instead of the legacy reference escapes.
+    pub fn get_inner(&self) -> &Arc<RwLock<T>> {
         &self.inner
     }
 
@@ -164,14 +177,18 @@ impl<T: ?Sized> Clone for ArcMut<T> {
 impl<T: ?Sized> AsRef<T> for ArcMut<T> {
     #[inline]
     fn as_ref(&self) -> &T {
-        unsafe { &*self.inner.get() }
+        // SAFETY: the legacy compatibility contract requires callers to prevent concurrent
+        // mutable access for the returned reference's entire lifetime.
+        unsafe { &*self.inner.data_ptr() }
     }
 }
 
 impl<T: ?Sized> AsMut<T> for ArcMut<T> {
     #[inline]
     fn as_mut(&mut self) -> &mut T {
-        unsafe { &mut *self.inner.get() }
+        // SAFETY: the legacy compatibility contract permits cloned owners, so the caller must
+        // still ensure this mutable reference is exclusive across all clones.
+        unsafe { &mut *self.inner.data_ptr() }
     }
 }
 
@@ -191,15 +208,20 @@ impl<T: ?Sized> DerefMut for ArcMut<T> {
     }
 }
 
+/// Legacy shared-mutation wrapper backed by a stable `RwLock` allocation.
+///
+/// # Safety
+/// `mut_from_ref` and `AsRef` bypass lock guards for compatibility. Callers must ensure that no
+/// conflicting references or data races occur.
 pub struct SyncUnsafeCellWrapper<T: ?Sized> {
-    inner: SyncUnsafeCell<T>,
+    inner: RwLock<T>,
 }
 
 impl<T> SyncUnsafeCellWrapper<T> {
     #[inline]
     pub fn new(value: T) -> Self {
         Self {
-            inner: SyncUnsafeCell::new(value),
+            inner: RwLock::new(value),
         }
     }
 }
@@ -208,21 +230,25 @@ impl<T> SyncUnsafeCellWrapper<T> {
     #[inline]
     #[allow(clippy::mut_from_ref)]
     pub fn mut_from_ref(&self) -> &mut T {
-        unsafe { &mut *self.inner.get() }
+        // SAFETY: this method preserves the legacy compatibility contract documented above; the
+        // caller must provide exclusive access for the returned reference's entire lifetime.
+        unsafe { &mut *self.inner.data_ptr() }
     }
 }
 
 impl<T> AsRef<T> for SyncUnsafeCellWrapper<T> {
     #[inline]
     fn as_ref(&self) -> &T {
-        unsafe { &*self.inner.get() }
+        // SAFETY: the legacy compatibility contract requires callers to prevent concurrent
+        // mutable access for the returned reference's entire lifetime.
+        unsafe { &*self.inner.data_ptr() }
     }
 }
 
 impl<T> AsMut<T> for SyncUnsafeCellWrapper<T> {
     #[inline]
     fn as_mut(&mut self) -> &mut T {
-        &mut *self.inner.get_mut()
+        self.inner.get_mut()
     }
 }
 
@@ -256,7 +282,9 @@ where
     where
         S: Serializer,
     {
-        let inner_ref = unsafe { &*self.inner.get() };
+        // SAFETY: serialization requires callers to prevent concurrent mutation while the
+        // serializer observes the shared value.
+        let inner_ref = unsafe { &*self.inner.data_ptr() };
         inner_ref.serialize(serializer)
     }
 }

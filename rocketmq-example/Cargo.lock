@@ -2550,6 +2550,7 @@ dependencies = [
 name = "rocketmq-rust"
 version = "1.0.0"
 dependencies = [
+ "parking_lot",
  "rocketmq-runtime",
  "serde",
  "tokio",
