@@ -139,6 +139,10 @@ impl<MS: MessageStore> EscapeBridge<MS> {
         self.message_store.clone()
     }
 
+    pub(crate) fn detach_message_store(&self) {
+        self.message_store.detach();
+    }
+
     pub(crate) fn lease_message_store(&self) -> Result<LegacyEscapeStoreReadLease<MS>, MessageStoreUnavailable> {
         self.message_store.read_lease()
     }
@@ -781,6 +785,26 @@ mod tests {
                 "Admin Store boundary must expose the named {operation} operation"
             );
         }
+    }
+
+    #[test]
+    fn broker_store_lifecycle_requires_exclusive_owner_after_provider_detach() {
+        let runtime_source = include_str!("../broker_runtime.rs");
+        let capability_source = include_str!("escape_bridge_capability.rs");
+
+        assert!(!capability_source.contains("LegacyEscapeStoreLifecycleLease"));
+        assert!(runtime_source.contains(".and_then(Arc::get_mut)"));
+        let shutdown_source = runtime_source
+            .split_once("// Store durability therefore cannot be starved by a slow background component.")
+            .map(|(_, shutdown_source)| shutdown_source)
+            .expect("Store shutdown phase must remain documented");
+        let detach = shutdown_source
+            .find("self.detach_message_store_provider();")
+            .expect("shutdown must detach the request provider");
+        let shutdown = shutdown_source
+            .find("message_store.shutdown_gracefully()")
+            .expect("shutdown must flush and stop the Store");
+        assert!(detach < shutdown, "request provider detach must precede Store shutdown");
     }
 
     #[test]

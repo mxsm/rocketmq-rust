@@ -14,7 +14,6 @@
 
 use std::collections::HashSet;
 use std::ops::Deref;
-use std::ops::DerefMut;
 use std::sync::Arc;
 use std::sync::Weak;
 
@@ -136,10 +135,8 @@ impl<MS: MessageStore> LegacyEscapeStoreOwner<MS> {
         self.0.as_ref()
     }
 
-    pub(crate) fn lifecycle_lease(&self) -> LegacyEscapeStoreLifecycleLease<MS> {
-        LegacyEscapeStoreLifecycleLease {
-            owner: Self(self.0.clone()),
-        }
+    pub(crate) fn store_mut(&mut self) -> &mut MS {
+        self.0.as_mut()
     }
 
     fn set_commitlog_read_mode(&self, read_ahead_mode: i32) -> Result<(), LegacyStoreError> {
@@ -225,28 +222,6 @@ impl<MS: MessageStore> Deref for LegacyEscapeStoreReadLease<MS> {
     }
 }
 
-/// Composition-root lifecycle access to the legacy Store boundary.
-///
-/// Broker initialization, hook wiring, start, and shutdown temporarily clone the legacy owner.
-/// Request and control operations must use named capability methods instead of this lease.
-pub(crate) struct LegacyEscapeStoreLifecycleLease<MS: MessageStore> {
-    owner: LegacyEscapeStoreOwner<MS>,
-}
-
-impl<MS: MessageStore> Deref for LegacyEscapeStoreLifecycleLease<MS> {
-    type Target = MS;
-
-    fn deref(&self) -> &Self::Target {
-        self.owner.store()
-    }
-}
-
-impl<MS: MessageStore> DerefMut for LegacyEscapeStoreLifecycleLease<MS> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.owner.0.as_mut()
-    }
-}
-
 /// Late-bound Store operations required by failover and offset processing.
 pub(crate) struct EscapeBridgeStoreCapability<MS: MessageStore> {
     current: Arc<RwLock<Option<Weak<LegacyEscapeStoreOwner<MS>>>>>,
@@ -274,6 +249,11 @@ impl<MS: MessageStore> Default for EscapeBridgeStoreCapability<MS> {
 impl<MS: MessageStore> EscapeBridgeStoreCapability<MS> {
     fn bind(&self, owner: &Arc<LegacyEscapeStoreOwner<MS>>) {
         *self.current.write() = Some(Arc::downgrade(owner));
+    }
+
+    pub(crate) fn detach(&self) {
+        *self.current.write() = None;
+        *self.shared_append.write() = None;
     }
 
     fn owner(&self) -> Result<Arc<LegacyEscapeStoreOwner<MS>>, MessageStoreUnavailable> {

@@ -8,12 +8,14 @@
 > PR-M12-01～06 未开始，合计剩余 7 个
 
 剩余任务数量、M11-12 内部执行批次与 M12 六个工作包见 [`REMAINING-TASKS.md`](REMAINING-TASKS.md)：正式口径
-剩余 7 个工作包；31 个最小可审查单元已完成 13 个，当前剩余 18 个。Issue #8631 / M11-12bc105 后
+剩余 7 个工作包；31 个最小可审查单元已完成 13 个，当前剩余 18 个。Issue #8633 / M11-12bc106 后
 reviewed ArcMut baseline 降至 28 identities / 67 occurrences（production 11/18、test 3/9、
 compatibility 14/40）；Broker runtime 现在是唯一 Store 生命周期强 owner，EscapeBridge 与 Admin runtime
-只保留标准弱 provider，强引用仅存在于单次请求或生命周期操作期间；普通单条、批量和 Admin append
+只保留标准弱 provider，强引用仅存在于单次请求期间；普通单条、批量和 Admin append
 已通过私有强类型共享端口执行，controller role-change 不再跨 await 持完整 Store clone，read-mode/topic-delete
-只调用具名同步操作；剩余 read/lifecycle 能力继续从私有 legacy owner 提取。
+只调用具名同步操作；composition-root lifecycle lease 已删除，生命周期修改统一先解绑 provider，再通过
+`Arc::get_mut` 取得独占 owner，shutdown 在共享 deadline 内等待已接纳读租约退出；剩余只读能力继续从私有
+legacy owner 提取。
 
 ## 1. 使用方式
 
@@ -1331,6 +1333,15 @@ CommitLog read-mode 与 topic-delete 只在 owner 的具名同步方法内部使
 reviewed baseline 保持 28/67（production 11/18、test 3/9、compatibility 14/40、Broker production 2/2、
 Store production 9/16），无 identity relocation、新债务或 baseline 变更。R01 尚未完成，下一切片提取
 read/lifecycle capability 并删除私有 legacy owner；执行清单保持完成 13 项、剩余 18 项，正式进度仍为 75/82。
+
+Broker Store 生命周期修改随 Issue #8633 收口为独占访问：composition-root lifecycle lease 已删除；
+init、hook wiring、processor listener、load、start 与 shutdown 修改 Store 前先解绑 EscapeBridge 弱 provider，
+再通过外层 `Arc::get_mut` 证明没有其他强/弱 owner，需要继续服务请求的路径完成后重新绑定。shutdown 不重新
+绑定，并在共享绝对 deadline 内等待已接纳请求读租约退出，超时由统一 shutdown deadline 报告失败。Local/Rocks
+初始化、共享追加、hook、processor dispatch 与 provider 释放后的 fail-closed 语义保持。reviewed baseline
+保持 28/67（production 11/18、test 3/9、compatibility 14/40、Broker production 2/2、Store production
+9/16），无 identity relocation、新债务或 baseline 变更。R01 尚未完成，下一切片提取剩余只读 capability 并
+删除私有 legacy owner；执行清单保持完成 13 项、剩余 18 项，正式进度仍为 75/82。
 
 Default HA client runtime ownership 随 Issue #8567 完成收窄：`DefaultHAClient` 以标准 `Arc<Inner>` 共享只读组合根，
 `Inner` 仅保留原子、锁、Notify、flow monitor 与现有 LocalStore 兼容句柄；从未安装连接的 stream 字段和重复 buffer/
