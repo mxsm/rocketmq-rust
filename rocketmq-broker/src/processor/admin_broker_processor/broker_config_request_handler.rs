@@ -1173,7 +1173,7 @@ mod tests {
             ("serverLoadBalancerEnable".into(), "true".into()),
         ]);
         let unsupported =
-            BrokerConfigRequestHandler::<rocketmq_store::message_store::GenericMessageStore>::apply_supported_broker_config_properties(
+            BrokerConfigRequestHandler::<rocketmq_store::message_store::OwnedMessageStore>::apply_supported_broker_config_properties(
                 &mut BrokerConfig::default(),
                 &properties,
             )

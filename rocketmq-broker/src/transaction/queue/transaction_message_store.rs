@@ -102,11 +102,11 @@ impl<MS: MessageStore> TransactionMessageStore<MS> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rocketmq_store::message_store::GenericMessageStore;
+    use rocketmq_store::message_store::OwnedMessageStore;
 
     #[tokio::test]
     async fn transaction_store_fails_closed_after_provider_shutdown() {
-        let store = TransactionMessageStore::<GenericMessageStore> {
+        let store = TransactionMessageStore::<OwnedMessageStore> {
             escape_bridge: Weak::new(),
         };
         let topic = CheetahString::from_static_str("transaction-topic");

@@ -513,7 +513,7 @@ mod tests {
     use super::*;
     use rocketmq_runtime::RuntimeContext;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
-    use rocketmq_store::message_store::GenericMessageStore;
+    use rocketmq_store::message_store::OwnedMessageStore;
 
     use crate::broker_runtime::BrokerMessageStore;
     use crate::broker_runtime::BrokerRuntime;
@@ -612,10 +612,10 @@ mod tests {
 
     #[tokio::test]
     async fn notification_store_and_pop_capabilities_fail_closed_after_provider_shutdown() {
-        let store = NotificationStoreCapability::<GenericMessageStore> {
+        let store = NotificationStoreCapability::<OwnedMessageStore> {
             escape_bridge: Weak::new(),
         };
-        let pop = NotificationPopOffsetCapability::<GenericMessageStore> {
+        let pop = NotificationPopOffsetCapability::<OwnedMessageStore> {
             merge_service: Weak::new(),
         };
         let topic = CheetahString::from_static_str("topic-a");

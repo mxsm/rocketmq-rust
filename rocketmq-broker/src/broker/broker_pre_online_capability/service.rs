@@ -478,7 +478,7 @@ where
 mod tests {
     use std::sync::Weak;
 
-    use rocketmq_store::message_store::GenericMessageStore;
+    use rocketmq_store::message_store::OwnedMessageStore;
 
     use super::super::BrokerOnlineRoleState;
     use super::super::BrokerPreOnlineStoreCapability;
@@ -539,7 +539,7 @@ mod tests {
 
     #[tokio::test]
     async fn pre_online_store_capability_fails_closed_without_provider() {
-        let capability = BrokerPreOnlineStoreCapability::<GenericMessageStore> {
+        let capability = BrokerPreOnlineStoreCapability::<OwnedMessageStore> {
             escape_bridge: Weak::new(),
         };
 

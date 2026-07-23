@@ -38,7 +38,7 @@ use rocketmq_store::base::store_enum::StoreType;
 use rocketmq_store::config::flush_disk_type::FlushDiskType;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use rocketmq_store::message_store::rocksdb_message_store::RocksDBMessageStore;
-use rocketmq_store::message_store::GenericMessageStore;
+use rocketmq_store::message_store::OwnedMessageStore;
 use rocketmq_store::store_error::StoreErrorKind;
 use tempfile::TempDir;
 
@@ -83,8 +83,8 @@ fn new_owned_test_store_with_config(config: MessageStoreConfig) -> RocksDBMessag
         .expect("create RocksDB message store")
 }
 
-fn new_test_store(store: RocksDBMessageStore) -> GenericMessageStore {
-    GenericMessageStore::rocksdb(rocketmq_rust::ArcMut::new(store))
+fn new_test_store(store: RocksDBMessageStore) -> OwnedMessageStore {
+    OwnedMessageStore::rocksdb(store)
 }
 
 fn build_test_message(topic: &CheetahString, queue_id: i32, body: &'static [u8]) -> MessageExtBrokerInner {

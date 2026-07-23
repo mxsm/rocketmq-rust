@@ -512,7 +512,7 @@ fn recall_response_header_missing() -> RocketMQError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rocketmq_store::message_store::GenericMessageStore;
+    use rocketmq_store::message_store::OwnedMessageStore;
 
     #[test]
     fn test_recall_message_tag_constant() {
@@ -556,7 +556,7 @@ mod tests {
 
     #[tokio::test]
     async fn recall_put_capability_fails_closed_after_provider_shutdown() {
-        let capability = RecallMessageStoreCapability::<GenericMessageStore> {
+        let capability = RecallMessageStoreCapability::<OwnedMessageStore> {
             escape_bridge: Weak::new(),
         };
 

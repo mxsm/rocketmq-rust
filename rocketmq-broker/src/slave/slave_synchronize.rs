@@ -572,7 +572,7 @@ mod tests {
     use cheetah_string::CheetahString;
     use rocketmq_common::common::broker::broker_config::BrokerConfig;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
-    use rocketmq_store::message_store::GenericMessageStore;
+    use rocketmq_store::message_store::OwnedMessageStore;
 
     use super::SlaveMasterAddress;
     use super::SlaveMessageRequestModeCapability;
@@ -643,7 +643,7 @@ mod tests {
     fn slave_synchronize_weak_providers_do_not_keep_owners_alive() {
         let broker_config = Arc::new(BrokerConfig::default());
         let message_store_config = Arc::new(MessageStoreConfig::default());
-        let offset_manager = Arc::new(ConsumerOffsetManager::<GenericMessageStore>::new(
+        let offset_manager = Arc::new(ConsumerOffsetManager::<OwnedMessageStore>::new(
             Arc::clone(&broker_config),
             Arc::clone(&message_store_config),
         ));

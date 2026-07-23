@@ -647,25 +647,6 @@
       "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
       "remove_by": "M11",
       "adr": "ADR-013"
-    },
-    {
-      "identity": "83bf7406cdd6adc91539d351",
-      "path": "rocketmq-store/tests/rocksdb_store_semantics_tests.rs",
-      "symbol": "ArcMut",
-      "kind": "constructor",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "0de3d0f67921797ff7adcde6",
-          "fingerprint": "f3290e4af60a07fb607f1ade",
-          "item": "fn new_test_store",
-          "line": 87
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
     }
   ]
 }

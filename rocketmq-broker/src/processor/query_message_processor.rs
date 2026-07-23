@@ -304,7 +304,7 @@ where
 mod tests {
     use super::*;
     use rocketmq_store::base::query_message_result::QueryMessageResult;
-    use rocketmq_store::message_store::GenericMessageStore;
+    use rocketmq_store::message_store::OwnedMessageStore;
 
     fn header(index_type: Option<&'static str>) -> QueryMessageRequestHeader {
         QueryMessageRequestHeader {
@@ -378,7 +378,7 @@ mod tests {
 
     #[tokio::test]
     async fn query_store_capability_fails_closed_after_provider_shutdown() {
-        let capability = QueryMessageStoreCapability::<GenericMessageStore> {
+        let capability = QueryMessageStoreCapability::<OwnedMessageStore> {
             escape_bridge: Weak::new(),
         };
         let topic = CheetahString::from_static_str("TopicA");

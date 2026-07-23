@@ -647,7 +647,7 @@ fn end_message_transaction(msg_ext: &mut MessageExt) -> MessageExtBrokerInner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rocketmq_store::message_store::GenericMessageStore;
+    use rocketmq_store::message_store::OwnedMessageStore;
 
     #[test]
     fn end_message_transaction_with_valid_message() {
@@ -738,7 +738,7 @@ mod tests {
 
     #[tokio::test]
     async fn end_transaction_store_capability_fails_closed_after_provider_shutdown() {
-        let capability = EndTransactionStoreCapability::<GenericMessageStore> {
+        let capability = EndTransactionStoreCapability::<OwnedMessageStore> {
             escape_bridge: Weak::new(),
         };
 
