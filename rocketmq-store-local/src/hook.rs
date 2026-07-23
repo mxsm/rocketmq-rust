@@ -12,43 +12,50 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::slice;
 use std::sync::Arc;
+
+use parking_lot::RwLock;
 
 /// Runtime-neutral ordered ownership for store hook adapters.
 pub struct HookRegistry<T: ?Sized> {
-    hooks: Vec<Arc<T>>,
+    hooks: Arc<RwLock<Vec<Arc<T>>>>,
+}
+
+impl<T: ?Sized> Clone for HookRegistry<T> {
+    fn clone(&self) -> Self {
+        Self {
+            hooks: Arc::clone(&self.hooks),
+        }
+    }
 }
 
 impl<T: ?Sized> Default for HookRegistry<T> {
     fn default() -> Self {
-        Self { hooks: Vec::new() }
+        Self::new()
     }
 }
 
 impl<T: ?Sized> HookRegistry<T> {
-    pub const fn new() -> Self {
-        Self { hooks: Vec::new() }
+    pub fn new() -> Self {
+        Self {
+            hooks: Arc::new(RwLock::new(Vec::new())),
+        }
     }
 
-    pub fn push(&mut self, hook: Arc<T>) {
-        self.hooks.push(hook);
-    }
-
-    pub fn iter(&self) -> slice::Iter<'_, Arc<T>> {
-        self.hooks.iter()
+    pub fn push(&self, hook: Arc<T>) {
+        self.hooks.write().push(hook);
     }
 
     pub fn snapshot(&self) -> Vec<Arc<T>> {
-        self.hooks.clone()
+        self.hooks.read().clone()
     }
 
     pub fn len(&self) -> usize {
-        self.hooks.len()
+        self.hooks.read().len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.hooks.is_empty()
+        self.hooks.read().is_empty()
     }
 }
 
@@ -70,11 +77,18 @@ mod tests {
 
     #[test]
     fn preserves_registration_order_in_snapshots() {
-        let mut hooks: HookRegistry<dyn TestHook> = HookRegistry::new();
+        let hooks: HookRegistry<dyn TestHook> = HookRegistry::new();
         hooks.push(Arc::new(Hook(1)));
         hooks.push(Arc::new(Hook(2)));
 
         let snapshot = hooks.snapshot();
         assert_eq!(snapshot.iter().map(|hook| hook.value()).collect::<Vec<_>>(), [1, 2]);
+
+        let cloned = hooks.clone();
+        cloned.push(Arc::new(Hook(3)));
+        assert_eq!(
+            hooks.snapshot().iter().map(|hook| hook.value()).collect::<Vec<_>>(),
+            [1, 2, 3]
+        );
     }
 }

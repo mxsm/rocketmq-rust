@@ -675,10 +675,11 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
         let cloned = self.inner.consume_queue_table.lock().clone();
         for consume_queue_table in cloned.values() {
             for logic in consume_queue_table.values() {
-                let logic = logic.read();
-                let topic = logic.get_topic();
-                let queue_id = logic.get_queue_id();
-                self.truncate_dirty_logic_files(topic, queue_id, offset_to_truncate);
+                let (topic, queue_id) = {
+                    let logic = logic.read();
+                    (logic.get_topic().clone(), logic.get_queue_id())
+                };
+                self.truncate_dirty_logic_files(&topic, queue_id, offset_to_truncate);
             }
         }
     }

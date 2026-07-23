@@ -57,6 +57,44 @@ pub struct DefaultFlushManager {
     root: FlushManagerRoot<DefaultFlushManagerAdapter>,
 }
 
+/// Narrow wake-up capability for internal messages that never wait for durable acknowledgement.
+#[derive(Clone)]
+pub(crate) struct InternalMessageFlushHandle {
+    flush_disk_type: FlushDiskType,
+    transient_store_pool_enable: bool,
+    group_commit_notified: Option<Arc<Notify>>,
+    flush_real_time_notified: Option<Arc<Notify>>,
+    commit_real_time_notified: Option<Arc<Notify>>,
+}
+
+impl InternalMessageFlushHandle {
+    pub(crate) fn wakeup(&self) {
+        match self.flush_disk_type {
+            FlushDiskType::SyncFlush => {
+                if let Some(notified) = &self.group_commit_notified {
+                    notified.notify_one();
+                } else {
+                    warn!("sync flush wake-up is unavailable for internal message");
+                }
+            }
+            FlushDiskType::AsyncFlush if self.transient_store_pool_enable => {
+                if let Some(notified) = &self.commit_real_time_notified {
+                    notified.notify_one();
+                } else {
+                    warn!("commit wake-up is unavailable for internal message");
+                }
+            }
+            FlushDiskType::AsyncFlush => {
+                if let Some(notified) = &self.flush_real_time_notified {
+                    notified.notify_one();
+                } else {
+                    warn!("flush wake-up is unavailable for internal message");
+                }
+            }
+        }
+    }
+}
+
 mod adapter {
     /// Store-owned composition dependencies used by the legacy flush-manager facade.
     #[doc(hidden)]
@@ -166,6 +204,25 @@ impl DefaultFlushManager {
             flush_real_time_service.store_health_recorder = store_health_recorder.clone();
         }
         self.store_health_recorder = store_health_recorder;
+    }
+
+    pub(crate) fn internal_message_flush_handle(&self) -> InternalMessageFlushHandle {
+        InternalMessageFlushHandle {
+            flush_disk_type: self.message_store_config.flush_disk_type,
+            transient_store_pool_enable: self.message_store_config.transient_store_pool_enable,
+            group_commit_notified: self
+                .group_commit_service
+                .as_ref()
+                .map(|service| Arc::clone(&service.notified)),
+            flush_real_time_notified: self
+                .flush_real_time_service
+                .as_ref()
+                .map(|service| Arc::clone(&service.notified)),
+            commit_real_time_notified: self
+                .commit_real_time_service
+                .as_ref()
+                .map(|service| Arc::clone(&service.notified)),
+        }
     }
 }
 
