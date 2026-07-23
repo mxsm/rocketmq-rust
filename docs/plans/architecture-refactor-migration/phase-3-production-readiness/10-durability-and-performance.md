@@ -109,7 +109,8 @@ reader lease、validated rollback 和五故障点恢复；Compaction generation 
 - [x] `[DEV]` 真实采集器已覆盖 11/11 variants：Local append 3、SyncFlush 1、Local pull 1、
   Rocks pull 1、Tiered append/pull 3、connection soak 1、bounded overload 1；每个变体输出
   2 priming + 5 个隔离 measurement 样本。
-- [ ] `[DEV]` 补齐四项 correctness-first runner。
+- [x] `[DEV]` Issue #8700 补齐四项 correctness-first runner，并让 sidecar manifest 的 4 个 correctness
+  与 11 个 measurement command 全部指向仓库内统一 runner；批准主机环境元数据仍须在执行前填写。
 - [x] `[TEST]` 用明确标记为非 benchmark 证据的 deterministic fixture 验证重复采样、噪声和 5% 双方向门禁；真实固定硬件采样仍待执行。
 - [x] `[REV]` 报告 schema 强制记录硬件、内核、文件系统、profile、feature、message size、TLS/活跃度和原始数据 hash。
 - [ ] `[HUMAN]` 仅在正确性先通过后批准性能例外；例外有 owner/期限/回退配置。
