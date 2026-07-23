@@ -9,6 +9,103 @@
     "destructive_removal": "pending-next-major-evidence-gate",
     "constraint": "Approval of the release package does not authorize early removal of compatibility paths or early activation of Proxy mode features."
   },
+  "arc_mut_deprecation": {
+    "since": "1.0.0",
+    "minimum_deprecation_releases": 2,
+    "minimum_major_boundaries": 1,
+    "destructive_removal": "pending-next-major-evidence-gate",
+    "canonical_replacements": [
+      {
+        "id": "owned-message-store",
+        "path": "rocketmq-store/src/message_store/owned_message_store.rs",
+        "declaration": "pub enum OwnedMessageStore"
+      },
+      {
+        "id": "owned-root-wiring",
+        "path": "rocketmq-store/src/message_store/local_file_message_store.rs",
+        "declaration": "pub fn wire_owned_root_dependencies("
+      },
+      {
+        "id": "timer-config-constructor",
+        "path": "rocketmq-store/src/timer/timer_message_store.rs",
+        "declaration": "pub fn new_with_message_store_config("
+      }
+    ],
+    "surfaces": [
+      {
+        "id": "arc-mut-type",
+        "path": "rocketmq/src/arc_mut.rs",
+        "declaration": "pub struct ArcMut",
+        "note": "use std::sync::Arc with RwLock, Mutex, atomics, or an exclusive owner"
+      },
+      {
+        "id": "weak-arc-mut-type",
+        "path": "rocketmq/src/arc_mut.rs",
+        "declaration": "pub struct WeakArcMut",
+        "note": "use std::sync::Weak with an explicit lock or immutable state"
+      },
+      {
+        "id": "sync-unsafe-cell-wrapper-type",
+        "path": "rocketmq/src/arc_mut.rs",
+        "declaration": "pub struct SyncUnsafeCellWrapper",
+        "note": "use parking_lot::RwLock or an exclusive owner"
+      },
+      {
+        "id": "arc-mut-root-reexport",
+        "path": "rocketmq/src/lib.rs",
+        "declaration": "pub use arc_mut::ArcMut;",
+        "note": "use std::sync::Arc with RwLock, Mutex, atomics, or an exclusive owner"
+      },
+      {
+        "id": "weak-arc-mut-root-reexport",
+        "path": "rocketmq/src/lib.rs",
+        "declaration": "pub use arc_mut::WeakArcMut;",
+        "note": "use std::sync::Weak with an explicit lock or immutable state"
+      },
+      {
+        "id": "sync-unsafe-cell-wrapper-root-reexport",
+        "path": "rocketmq/src/lib.rs",
+        "declaration": "pub use arc_mut::SyncUnsafeCellWrapper;",
+        "note": "use parking_lot::RwLock or an exclusive owner"
+      },
+      {
+        "id": "generic-message-store",
+        "path": "rocketmq-store/src/message_store.rs",
+        "declaration": "pub enum GenericMessageStore",
+        "note": "use OwnedMessageStore and inject narrow Store capabilities into shared consumers"
+      },
+      {
+        "id": "local-file-shared-root-wiring",
+        "path": "rocketmq-store/src/message_store/local_file_message_store.rs",
+        "declaration": "pub fn set_message_store_arc(",
+        "note": "use LocalFileMessageStore::wire_owned_root_dependencies"
+      },
+      {
+        "id": "timer-full-store-field",
+        "path": "rocketmq-store/src/timer/timer_message_store.rs",
+        "declaration": "pub default_message_store:",
+        "note": "use new_with_message_store_config or wire_owned_root_dependencies"
+      },
+      {
+        "id": "timer-full-store-constructor",
+        "path": "rocketmq-store/src/timer/timer_message_store.rs",
+        "declaration": "pub fn new(default_message_store:",
+        "note": "use new_with_message_store_config or wire_owned_root_dependencies"
+      },
+      {
+        "id": "timer-full-store-config-constructor",
+        "path": "rocketmq-store/src/timer/timer_message_store.rs",
+        "declaration": "pub fn new_with_config(",
+        "note": "use new_with_message_store_config or wire_owned_root_dependencies"
+      },
+      {
+        "id": "timer-full-store-setter",
+        "path": "rocketmq-store/src/timer/timer_message_store.rs",
+        "declaration": "pub fn set_default_message_store(",
+        "note": "use new_with_message_store_config or wire_owned_root_dependencies"
+      }
+    ]
+  },
   "release_topology": {
     "required_chain": [
       "model/error/runtime/security/store-api",

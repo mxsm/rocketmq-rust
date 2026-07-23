@@ -13,6 +13,10 @@
 // limitations under the License.
 
 #![allow(dead_code)]
+#![allow(
+    deprecated,
+    reason = "this module implements the deprecated compatibility facade until its removal gate"
+)]
 
 use core::fmt;
 use std::fmt::Debug;
@@ -35,6 +39,10 @@ use serde::Serializer;
 /// # Safety
 /// The legacy compatibility accessors bypass the backing `RwLock` guards. Callers must ensure
 /// that no conflicting references or data races occur when using this type across threads.
+#[deprecated(
+    since = "1.0.0",
+    note = "use std::sync::Weak with an explicit lock or immutable state"
+)]
 pub struct WeakArcMut<T: ?Sized> {
     inner: Weak<RwLock<T>>,
 }
@@ -88,6 +96,10 @@ impl<T: ?Sized> WeakArcMut<T> {
 /// The legacy compatibility accessors bypass the backing `RwLock` guards. Callers must ensure
 /// that no conflicting references or data races occur when using this type across threads.
 #[derive(Default)]
+#[deprecated(
+    since = "1.0.0",
+    note = "use std::sync::Arc with RwLock, Mutex, atomics, or an exclusive owner"
+)]
 pub struct ArcMut<T: ?Sized> {
     inner: Arc<RwLock<T>>,
 }
@@ -213,6 +225,7 @@ impl<T: ?Sized> DerefMut for ArcMut<T> {
 /// # Safety
 /// `mut_from_ref` and `AsRef` bypass lock guards for compatibility. Callers must ensure that no
 /// conflicting references or data races occur.
+#[deprecated(since = "1.0.0", note = "use parking_lot::RwLock or an exclusive owner")]
 pub struct SyncUnsafeCellWrapper<T: ?Sized> {
     inner: RwLock<T>,
 }

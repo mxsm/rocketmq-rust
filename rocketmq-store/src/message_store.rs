@@ -37,6 +37,10 @@ use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_common::common::system_clock::SystemClock;
 use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
+#[allow(
+    deprecated,
+    reason = "GenericMessageStore preserves the public ArcMut signature during its deprecation window"
+)]
 use rocketmq_rust::ArcMut;
 
 use crate::base::allocate_mapped_file_service::AllocateMappedFileService;
@@ -72,6 +76,14 @@ use crate::store::running_flags::RunningFlags;
 use crate::store_error::StoreError;
 use crate::timer::timer_message_store::TimerMessageStore;
 
+#[allow(
+    deprecated,
+    reason = "this enum is the deprecated GenericMessageStore compatibility surface"
+)]
+#[deprecated(
+    since = "1.0.0",
+    note = "use OwnedMessageStore and inject narrow Store capabilities into shared consumers"
+)]
 pub enum GenericMessageStore {
     LocalFileStore(ArcMut<local_file_message_store::LocalFileMessageStore>),
 
@@ -79,6 +91,10 @@ pub enum GenericMessageStore {
     RocksDBStore(ArcMut<rocksdb_message_store::RocksDBMessageStore>),
 }
 
+#[allow(
+    deprecated,
+    reason = "this impl preserves deprecated GenericMessageStore constructors until removal"
+)]
 impl GenericMessageStore {
     pub fn local_file(store: ArcMut<local_file_message_store::LocalFileMessageStore>) -> Self {
         Self::LocalFileStore(store)
@@ -90,64 +106,69 @@ impl GenericMessageStore {
     }
 }
 
-macro_rules! impl_store_composition {
-    ($store:ty) => {
-        impl $store {
-            pub fn set_message_arriving_listener(
-                &mut self,
-                message_arriving_listener: Option<Arc<Box<dyn MessageArrivingListener + Sync + Send + 'static>>>,
-            ) {
-                match self {
-                    Self::LocalFileStore(store) => store.set_message_arriving_listener(message_arriving_listener),
-                    #[cfg(feature = "rocksdb_store")]
-                    Self::RocksDBStore(store) => store
-                        .local_file_store_mut()
-                        .set_message_arriving_listener(message_arriving_listener),
-                }
+macro_rules! store_composition_methods {
+    () => {
+        pub fn set_message_arriving_listener(
+            &mut self,
+            message_arriving_listener: Option<Arc<Box<dyn MessageArrivingListener + Sync + Send + 'static>>>,
+        ) {
+            match self {
+                Self::LocalFileStore(store) => store.set_message_arriving_listener(message_arriving_listener),
+                #[cfg(feature = "rocksdb_store")]
+                Self::RocksDBStore(store) => store
+                    .local_file_store_mut()
+                    .set_message_arriving_listener(message_arriving_listener),
             }
+        }
 
-            pub async fn reput_once(&mut self) {
-                match self {
-                    Self::LocalFileStore(store) => store.reput_once().await,
-                    #[cfg(feature = "rocksdb_store")]
-                    Self::RocksDBStore(store) => store.local_file_store_mut().reput_once().await,
-                }
+        pub async fn reput_once(&mut self) {
+            match self {
+                Self::LocalFileStore(store) => store.reput_once().await,
+                #[cfg(feature = "rocksdb_store")]
+                Self::RocksDBStore(store) => store.local_file_store_mut().reput_once().await,
             }
+        }
 
-            pub fn consume_queue_store_mut(&mut self) -> &mut ConsumeQueueStore {
-                match self {
-                    Self::LocalFileStore(store) => store.consume_queue_store_mut(),
-                    #[cfg(feature = "rocksdb_store")]
-                    Self::RocksDBStore(store) => store.local_file_store_mut().consume_queue_store_mut(),
-                }
+        pub fn consume_queue_store_mut(&mut self) -> &mut ConsumeQueueStore {
+            match self {
+                Self::LocalFileStore(store) => store.consume_queue_store_mut(),
+                #[cfg(feature = "rocksdb_store")]
+                Self::RocksDBStore(store) => store.local_file_store_mut().consume_queue_store_mut(),
             }
+        }
 
-            #[cfg(feature = "rocksdb_store")]
-            pub fn rocksdb_ticker_metrics(
-                &self,
-            ) -> Option<rocketmq_observability::metrics::rocksdb::RocksDbTickerMetrics> {
-                match self {
-                    Self::LocalFileStore(_) => None,
-                    Self::RocksDBStore(store) => Some(store.rocksdb_store().ticker_metrics()),
-                }
+        #[cfg(feature = "rocksdb_store")]
+        pub fn rocksdb_ticker_metrics(&self) -> Option<rocketmq_observability::metrics::rocksdb::RocksDbTickerMetrics> {
+            match self {
+                Self::LocalFileStore(_) => None,
+                Self::RocksDBStore(store) => Some(store.rocksdb_store().ticker_metrics()),
             }
+        }
 
-            #[cfg(feature = "tieredstore")]
-            pub fn tiered_store_metrics(
-                &self,
-            ) -> Option<Arc<rocketmq_observability::metrics::tiered_store::TieredStoreMetrics>> {
-                match self {
-                    Self::LocalFileStore(store) => store.tiered_store_metrics(),
-                    #[cfg(feature = "rocksdb_store")]
-                    Self::RocksDBStore(store) => store.local_file_store().tiered_store_metrics(),
-                }
+        #[cfg(feature = "tieredstore")]
+        pub fn tiered_store_metrics(
+            &self,
+        ) -> Option<Arc<rocketmq_observability::metrics::tiered_store::TieredStoreMetrics>> {
+            match self {
+                Self::LocalFileStore(store) => store.tiered_store_metrics(),
+                #[cfg(feature = "rocksdb_store")]
+                Self::RocksDBStore(store) => store.local_file_store().tiered_store_metrics(),
             }
         }
     };
 }
 
-impl_store_composition!(GenericMessageStore);
-impl_store_composition!(OwnedMessageStore);
+#[allow(
+    deprecated,
+    reason = "this impl preserves the deprecated GenericMessageStore composition helpers"
+)]
+impl GenericMessageStore {
+    store_composition_methods!();
+}
+
+impl OwnedMessageStore {
+    store_composition_methods!();
+}
 
 macro_rules! delegate_store {
     ($self:expr, $method:ident($($arg:expr),* $(,)?)) => {
@@ -812,6 +833,10 @@ macro_rules! message_store_methods {
     };
 }
 
+#[allow(
+    deprecated,
+    reason = "this impl preserves the deprecated GenericMessageStore adapter contract"
+)]
 impl MessageStore for GenericMessageStore {
     message_store_methods!();
 }

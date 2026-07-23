@@ -13,7 +13,7 @@
           "id": "742a110d6365535945f5a493",
           "fingerprint": "c81c9fcda8aacd07ba8d38aa",
           "item": "fn deserialize",
-          "line": 273
+          "line": 314
         }
       ],
       "owner": "runtime-foundation",
@@ -32,43 +32,43 @@
           "id": "92707fb69873d90005bf683d",
           "fingerprint": "2ad9cdad29a7fa743b039494",
           "item": "fn new_creates_arc_cell_wrapper_with_provided_value",
-          "line": 285
+          "line": 326
         },
         {
           "id": "6b42479dc202bcedcc7414b2",
           "fingerprint": "c37930ca2abeeace6e68b6d1",
           "item": "fn clone_creates_a_new_instance_with_same_value",
-          "line": 291
+          "line": 332
         },
         {
           "id": "02278a31f39ff7d9d0585bc6",
           "fingerprint": "275e756073bd9bbe5e6ecec9",
           "item": "fn as_ref_returns_immutable_reference_to_value",
-          "line": 298
+          "line": 339
         },
         {
           "id": "19888c5d6555a658b4c0d05f",
           "fingerprint": "99fee606655f8db08399dee1",
           "item": "fn as_mut_returns_mutable_reference_to_value",
-          "line": 304
+          "line": 345
         },
         {
           "id": "c7a8600dbf55ae8c7063777c",
           "fingerprint": "600b99c212e0fde410d85836",
           "item": "fn deref_returns_reference_to_inner_value",
-          "line": 311
+          "line": 352
         },
         {
           "id": "61a06c576a81a313f8a4776e",
           "fingerprint": "69ae2f27e70e3e1561a990e4",
           "item": "fn deref_mut_allows_modification_of_inner_value",
-          "line": 317
+          "line": 358
         },
         {
           "id": "1a57c29aa5712c52ec526d8a",
           "fingerprint": "13b59716ed2eea1aa627f4f4",
           "item": "fn multiple_clones_share_the_same_underlying_data",
-          "line": 324
+          "line": 365
         }
       ],
       "owner": "runtime-foundation",
@@ -87,7 +87,7 @@
           "id": "1eba97e12f9a9ab198baa839",
           "fingerprint": "f61ef173913849c47b6177c5",
           "item": "impl T",
-          "line": 171
+          "line": 198
         }
       ],
       "owner": "runtime-foundation",
@@ -106,7 +106,7 @@
           "id": "62b6cb745efa1d3ae6610e09",
           "fingerprint": "25f3cedc2b8ecb4b98920ab5",
           "item": "impl T",
-          "line": 187
+          "line": 216
         }
       ],
       "owner": "runtime-foundation",
@@ -125,85 +125,85 @@
           "id": "d80969477975ea537cb95714",
           "fingerprint": "050e621e5db5f4feee36cc04",
           "item": "fn upgrade",
-          "line": 76
+          "line": 88
         },
         {
           "id": "7459244afaa2bcf423c1b804",
           "fingerprint": "46b9feb352ae3739ad6a2e62",
           "item": "fn upgrade",
-          "line": 77
+          "line": 89
         },
         {
-          "id": "65456a537c534b55102638ba",
-          "fingerprint": "70e2473d7353c7a875fa9d38",
+          "id": "2585a834504cb60408a7521a",
+          "fingerprint": "f0e2f67955a7b3423369b4a3",
           "item": "struct ArcMut",
-          "line": 87
+          "line": 103
         },
         {
           "id": "7a15cb26f654e4c8b49cf86d",
           "fingerprint": "cb463c7c3e58dc88b5e155d9",
           "item": "impl T",
-          "line": 92
+          "line": 108
         },
         {
           "id": "a56340a6d89d10cf9b91749b",
           "fingerprint": "437df753e21acc4c1b31243a",
           "item": "impl T",
-          "line": 98
+          "line": 116
         },
         {
           "id": "9df7e890b1c98eaf7593e539",
           "fingerprint": "284bf9eb8fe03a9ccae981da",
           "item": "impl T",
-          "line": 100
+          "line": 118
         },
         {
           "id": "18da2c00bb61376ecbb0c1f6",
           "fingerprint": "a987616ecd8dd5634f82520f",
           "item": "impl T",
-          "line": 108
+          "line": 128
         },
         {
           "id": "c0fbed00f56e012f7a9ec272",
           "fingerprint": "c15112d3b5f3e5ddf472b5e0",
           "item": "impl T",
-          "line": 155
+          "line": 180
         },
         {
           "id": "7ae400833ab8df57b750eec3",
           "fingerprint": "8ed1aa4d9b6d7cc236010ebf",
           "item": "fn clone",
-          "line": 158
+          "line": 183
         },
         {
           "id": "880df078c86d981ad8030ebe",
           "fingerprint": "0a409e3235deb446e841003a",
           "item": "impl T",
-          "line": 164
+          "line": 189
         },
         {
           "id": "70a57941c75971bd7a131913",
           "fingerprint": "1125c5be270beb1e69f68afc",
           "item": "impl T",
-          "line": 178
+          "line": 207
         },
         {
           "id": "0daacef3fe97047da951ec00",
           "fingerprint": "1baaac59e83673b5fa70c6e5",
           "item": "impl T",
-          "line": 245
+          "line": 284
         },
         {
           "id": "44fcbec661d9f1d4ff75d377",
           "fingerprint": "8676a3a688a8cf764704e886",
           "item": "impl T",
-          "line": 251
+          "line": 290
         },
         {
           "id": "9e06065543594cb3bb2bdcaf",
           "fingerprint": "66d0200d401f15edc2938a4b",
           "item": "impl de",
-          "line": 264
+          "line": 305
         }
       ],
       "owner": "runtime-foundation",
@@ -222,7 +222,7 @@
           "id": "5db571eaef41901539e74f65",
           "fingerprint": "5701ec6da60fc50f3ae41537",
           "item": "impl T",
-          "line": 222
+          "line": 261
         }
       ],
       "owner": "runtime-foundation",
@@ -241,7 +241,7 @@
           "id": "63e96522c58ee5f239456ce2",
           "fingerprint": "0650d8ee9d6664094f0f5404",
           "item": "impl T",
-          "line": 238
+          "line": 277
         }
       ],
       "owner": "runtime-foundation",
@@ -257,34 +257,34 @@
       "category": "compatibility",
       "occurrences": [
         {
-          "id": "db04db873f2527b05f1da604",
-          "fingerprint": "a744d15147a565be7566f7f1",
+          "id": "34a3a1df2288b900841b1de7",
+          "fingerprint": "b22358e57e62d937f99ceb18",
           "item": "struct SyncUnsafeCellWrapper",
-          "line": 194
+          "line": 229
         },
         {
           "id": "0f8d03f9de1035c5d36c207d",
           "fingerprint": "a32d4a9aef53d970ce53d889",
           "item": "impl T",
-          "line": 198
+          "line": 233
         },
         {
           "id": "f2ea67473ecad266d2b8a62a",
           "fingerprint": "b4469e217060bb7ed9282f00",
           "item": "impl T",
-          "line": 207
+          "line": 242
         },
         {
           "id": "1178a4b7943a1876a44afd73",
           "fingerprint": "485c2ea32d5b8d9602a433bd",
           "item": "impl T",
-          "line": 215
+          "line": 252
         },
         {
           "id": "6273f98113278fe577f4904c",
           "fingerprint": "6cb79d116c1962aa1633975a",
           "item": "impl T",
-          "line": 229
+          "line": 268
         }
       ],
       "owner": "runtime-foundation",
@@ -300,52 +300,52 @@
       "category": "compatibility",
       "occurrences": [
         {
-          "id": "813243861ba77e53dcc4b02e",
-          "fingerprint": "cc56d0955a6c147fc72af03a",
+          "id": "56987f5bacacad808f3915fb",
+          "fingerprint": "17309aa6dfa40992a933103f",
           "item": "struct WeakArcMut",
-          "line": 38
+          "line": 46
         },
         {
           "id": "2c2c5a769ec2638b9f60bee2",
           "fingerprint": "19a9989d65fd33adf9af38f7",
           "item": "impl T",
-          "line": 43
+          "line": 51
         },
         {
           "id": "77169b88c05d209e9d13d0a4",
           "fingerprint": "7fba2df25ccbe5645492d489",
           "item": "impl T",
-          "line": 54
+          "line": 64
         },
         {
           "id": "9b927576c54e36a1704b43d5",
           "fingerprint": "fc73dd99015ddedb9a0db2ef",
           "item": "impl T",
-          "line": 58
+          "line": 68
         },
         {
           "id": "50ccdc8db7d3055a387faae9",
           "fingerprint": "d642d4749f6567740de9e3b4",
           "item": "impl T",
-          "line": 66
+          "line": 78
         },
         {
           "id": "6ff1b8b3515b243d1969c0ee",
           "fingerprint": "1de8b8e33e8649c6447d8343",
           "item": "impl T",
-          "line": 74
+          "line": 86
         },
         {
           "id": "0e50e9723b4bdbdabca2dd10",
           "fingerprint": "dedc80dcd8cb3b2ad35df8a8",
           "item": "fn downgrade",
-          "line": 128
+          "line": 150
         },
         {
           "id": "9a41fb8cef8e4f8539a6056c",
           "fingerprint": "dda7662c017745fa3a2e33ee",
           "item": "fn downgrade",
-          "line": 129
+          "line": 151
         }
       ],
       "owner": "runtime-foundation",
@@ -364,13 +364,13 @@
           "id": "9b2656ea02aef4270be49fcd",
           "fingerprint": "899d7e475a899bf5bb7173ed",
           "item": "fn new",
-          "line": 122
+          "line": 142
         },
         {
           "id": "609e6f37cecf9245bd1b7c51",
           "fingerprint": "a8cb42b4767c313bf138d831",
           "item": "impl T",
-          "line": 209
+          "line": 244
         }
       ],
       "owner": "runtime-foundation",
@@ -389,13 +389,13 @@
           "id": "52d5db03f3424f078d2731aa",
           "fingerprint": "374b8ec38e16d9efb4973346",
           "item": "fn mut_from_ref",
-          "line": 123
+          "line": 143
         },
         {
           "id": "028bf83090da8df7b3e1ca16",
           "fingerprint": "374b8ec38e16d9efb4973346",
           "item": "fn mut_from_ref",
-          "line": 210
+          "line": 245
         }
       ],
       "owner": "runtime-foundation",
@@ -411,10 +411,10 @@
       "category": "compatibility",
       "occurrences": [
         {
-          "id": "c4de3f11cf2c6814e89c1cc7",
-          "fingerprint": "5edc64c5be9388581b1a13c9",
+          "id": "603e5d7ed7671c2e2d6e56b3",
+          "fingerprint": "b84e48eaea4ff4e574ff761f",
           "item": "mod schedule",
-          "line": 27
+          "line": 35
         }
       ],
       "owner": "runtime-foundation",
@@ -430,10 +430,10 @@
       "category": "compatibility",
       "occurrences": [
         {
-          "id": "9712d81a72a0f2df77faf112",
-          "fingerprint": "843e8a2fd089f913717d13f1",
+          "id": "8289b0607ff9ede4585eeadc",
+          "fingerprint": "1398850d3142ed7b123fabb4",
           "item": "mod schedule",
-          "line": 28
+          "line": 41
         }
       ],
       "owner": "runtime-foundation",
@@ -449,10 +449,10 @@
       "category": "compatibility",
       "occurrences": [
         {
-          "id": "04eed240a8b71eb693c91690",
-          "fingerprint": "248f5f80abd496abd4be9b88",
+          "id": "3a0eef0133646b8a231a627b",
+          "fingerprint": "fccac5c16379cb93e1873244",
           "item": "mod schedule",
-          "line": 29
+          "line": 50
         }
       ],
       "owner": "runtime-foundation",
@@ -468,10 +468,10 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "ef5ed7a2fb3cfd78bc28e148",
-          "fingerprint": "79d7934245cbc8a78d433cb3",
+          "id": "27af12865a298c62b16135b0",
+          "fingerprint": "60305e98f790eadd708c1990",
           "item": "<module>",
-          "line": 86
+          "line": 90
         }
       ],
       "owner": "store",
@@ -487,10 +487,10 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "2fe46ccfd39fbe3e6291e485",
-          "fingerprint": "36bf179549bc6842180b8dfd",
+          "id": "7479d3bee96c4b30cc5f9437",
+          "fingerprint": "a7c3689a723703690f8d958f",
           "item": "fn set_message_store_arc",
-          "line": 1076
+          "line": 1085
         }
       ],
       "owner": "store",
@@ -506,10 +506,10 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "746542483fffcc017c2b2e5b",
-          "fingerprint": "f03c49a9cf69fb66e5e947be",
+          "id": "32f45d77d26aacb74f5a7de5",
+          "fingerprint": "3a82c532a0c21e0fd13f51a3",
           "item": "mod rocksdb_message_store",
-          "line": 40
+          "line": 44
         }
       ],
       "owner": "store",
@@ -525,28 +525,28 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "36361cc6ccd2b916d08d4dec",
-          "fingerprint": "f188643beba2ccecef5f9da0",
+          "id": "e534ff3b3fe9f567ee47c649",
+          "fingerprint": "0538579d1bd58175d6e47759",
           "item": "enum GenericMessageStore",
-          "line": 76
+          "line": 88
         },
         {
-          "id": "f6a3c6581db220e1627690d6",
-          "fingerprint": "131520c4ce58aed471b5ee64",
+          "id": "0246721faa7251f8829bd6bc",
+          "fingerprint": "6c7d4dc577e0e6cf15fa5348",
           "item": "enum GenericMessageStore",
-          "line": 79
+          "line": 91
         },
         {
-          "id": "98f940f936e81a1ad86d929b",
-          "fingerprint": "ae926679a6245276015ae367",
+          "id": "cc38530a2199810daf1d5abe",
+          "fingerprint": "fc1f714b4a27504e21bbb396",
           "item": "fn local_file",
-          "line": 83
+          "line": 99
         },
         {
           "id": "3c5132015f64c8e2b0630601",
           "fingerprint": "f19745ebb78552b6636b9aca",
           "item": "fn rocksdb",
-          "line": 88
+          "line": 104
         }
       ],
       "owner": "store",
@@ -562,10 +562,10 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "59690fe43b7e20d5c5b0b4ce",
-          "fingerprint": "86afd2fcada016a20ef11e69",
+          "id": "14bed5f0eb0004978a17e275",
+          "fingerprint": "dfb3e08f0b0ce50e90f12535",
           "item": "<module>",
-          "line": 40
+          "line": 44
         }
       ],
       "owner": "store",
@@ -581,28 +581,28 @@
       "category": "production",
       "occurrences": [
         {
-          "id": "af0fcd31eef971bc6f63e598",
-          "fingerprint": "86d104ca58d9a6dd7b7ef375",
+          "id": "e38c48cb2a1a487c9e0f5f68",
+          "fingerprint": "c3db569f8c46bbf7ccf82349",
           "item": "struct TimerMessageStore",
-          "line": 151
+          "line": 163
         },
         {
-          "id": "64375a083f99666818770b37",
-          "fingerprint": "74d7f955ebf55205899de652",
+          "id": "e2d2720bc4bddd1beb0bf467",
+          "fingerprint": "4abd74901af4a2a72f373b6f",
           "item": "fn new",
-          "line": 361
+          "line": 381
         },
         {
-          "id": "747bcf58098dd1ea8ed4efe3",
-          "fingerprint": "95753dce076ef08c0a080058",
+          "id": "c21ecee6b38b405535901d18",
+          "fingerprint": "00091e792564d0d977b610d6",
           "item": "fn new_with_config",
-          "line": 370
+          "line": 398
         },
         {
           "id": "a604b46790ddd1f7e32a25a1",
           "fingerprint": "726df4d5d9d742ff563f9a10",
           "item": "fn set_default_message_store",
-          "line": 409
+          "line": 460
         }
       ],
       "owner": "store",

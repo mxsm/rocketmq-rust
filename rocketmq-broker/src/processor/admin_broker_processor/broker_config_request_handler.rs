@@ -1004,7 +1004,7 @@ mod tests {
         });
         let mut runtime = BrokerRuntime::new(broker_config, message_store_config.clone());
 
-        let timer_message_store = TimerMessageStore::new_with_config(None, message_store_config);
+        let timer_message_store = TimerMessageStore::new_with_message_store_config(message_store_config);
         assert!(timer_message_store.load());
         runtime.inner_for_test().set_timer_message_store(timer_message_store);
 
