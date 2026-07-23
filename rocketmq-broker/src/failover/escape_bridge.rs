@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::Arc;
+
 use bytes::Bytes;
 use cheetah_string::CheetahString;
 use futures::future::BoxFuture;
@@ -132,7 +134,7 @@ impl<MS: MessageStore> EscapeBridge<MS> {
         }
     }
 
-    pub(crate) fn bind_message_store(&self, owner: LegacyEscapeStoreOwner<MS>) {
+    pub(crate) fn bind_message_store(&self, owner: &Arc<LegacyEscapeStoreOwner<MS>>) {
         self.message_store.bind(owner);
     }
 

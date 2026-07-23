@@ -58,7 +58,6 @@ use rocketmq_runtime::ServiceContext;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
-use rocketmq_rust::ArcMut;
 use rocketmq_store::base::commit_log_dispatcher::CommitLogDispatcher;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::base::message_store::MessageStoreShutdownReport;
@@ -115,6 +114,7 @@ use crate::controller::replicas_manager::ReplicasManager;
 use crate::failover::escape_bridge::EscapeBridge;
 use crate::failover::escape_bridge_capability::EscapeBridgePolicyState;
 use crate::failover::escape_bridge_capability::LegacyEscapeStoreOwner;
+use crate::failover::escape_bridge_capability::LegacyEscapeStoreWriteLease;
 use crate::filter::commit_log_dispatcher_calc_bit_map::CommitLogDispatcherCalcBitMap;
 use crate::filter::manager::consumer_filter_manager::ConsumerFilterManager;
 use crate::hook::batch_check_before_put_message::BatchCheckBeforePutMessageHook;
@@ -1606,7 +1606,7 @@ impl BrokerRuntime {
         // stop remaining background work -> telemetry.
         // Store durability therefore cannot be starved by a slow background component.
         let started = Instant::now();
-        let message_store_outcome = if let Some(message_store) = self.inner.message_store.as_mut() {
+        let message_store_outcome = if let Some(mut message_store) = self.inner.message_store_mut() {
             match await_shutdown_deadline(deadline, message_store.shutdown_gracefully()).await {
                 Ok(Ok(report)) => MessageStoreShutdownOutcome::Completed(report),
                 Ok(Err(error)) => MessageStoreShutdownOutcome::Failed(error),
@@ -2164,19 +2164,20 @@ impl BrokerRuntime {
                 return false;
             }
             self.inner.timer_message_store = local_file_store.get_timer_message_store().cloned();
-            let message_store = ArcMut::new(BrokerMessageStore::local_file(local_file_store));
+            let message_store = Arc::new(LegacyEscapeStoreOwner::new(BrokerMessageStore::local_file(
+                local_file_store,
+            )));
             self.inner.broker_stats = Some(Arc::new(BrokerStats::from_manager(
                 self.inner.broker_stats_manager.clone(),
             )));
-            self.inner.message_store = Some(message_store.clone());
-            self.escape_bridge_owner
-                .bind_message_store(LegacyEscapeStoreOwner(message_store.clone()));
-            let put_message_preflight = message_store.put_message_preflight();
+            let put_message_preflight = message_store.store().put_message_preflight();
+            self.escape_bridge_owner.bind_message_store(&message_store);
+            self.inner.message_store = Some(message_store);
             let page_cache_busy_timeout_millis = message_store_config.os_page_cache_busy_timeout_mills;
             self.inner.broker_fast_failure.set_page_cache_busy_checker(move || {
                 put_message_preflight.is_os_page_cache_busy(page_cache_busy_timeout_millis)
             });
-            if let Some(message_store) = &mut self.inner.message_store {
+            if let Some(mut message_store) = self.inner.message_store_mut() {
                 match message_store.init().await {
                     Ok(_) => {
                         info!("Initialize message store success");
@@ -2205,19 +2206,20 @@ impl BrokerRuntime {
                     }
                 };
                 self.inner.timer_message_store = rocksdb_message_store.get_timer_message_store().cloned();
-                let message_store = ArcMut::new(BrokerMessageStore::rocksdb(rocksdb_message_store));
+                let message_store = Arc::new(LegacyEscapeStoreOwner::new(BrokerMessageStore::rocksdb(
+                    rocksdb_message_store,
+                )));
                 self.inner.broker_stats = Some(Arc::new(BrokerStats::from_manager(
                     self.inner.broker_stats_manager.clone(),
                 )));
-                self.inner.message_store = Some(message_store.clone());
-                self.escape_bridge_owner
-                    .bind_message_store(LegacyEscapeStoreOwner(message_store.clone()));
-                let put_message_preflight = message_store.put_message_preflight();
+                let put_message_preflight = message_store.store().put_message_preflight();
+                self.escape_bridge_owner.bind_message_store(&message_store);
+                self.inner.message_store = Some(message_store);
                 let page_cache_busy_timeout_millis = message_store_config.os_page_cache_busy_timeout_mills;
                 self.inner.broker_fast_failure.set_page_cache_busy_checker(move || {
                     put_message_preflight.is_os_page_cache_busy(page_cache_busy_timeout_millis)
                 });
-                if let Some(message_store) = &mut self.inner.message_store {
+                if let Some(mut message_store) = self.inner.message_store_mut() {
                     match message_store.init().await {
                         Ok(_) => {
                             info!("Initialize RocksDB message store success");
@@ -2260,7 +2262,7 @@ impl BrokerRuntime {
         if self.inner.message_store.is_some() {
             self.register_message_store_hook();
             // load message store
-            result &= self.inner.message_store.as_mut().unwrap().load().await;
+            result &= self.inner.message_store_unchecked_mut().load().await;
             if !result {
                 warn!("Load message store failed");
                 return false;
@@ -2307,12 +2309,8 @@ impl BrokerRuntime {
         let topic_config_table = self.inner.topic_config_manager().topic_config_table();
         let timer_message_store = self.inner.timer_message_store().cloned();
         let schedule_message_service = self.inner.schedule_message_service().clone();
-        let put_message_preflight = self
-            .inner
-            .message_store
-            .as_ref()
-            .map(|message_store| message_store.put_message_preflight());
-        if let Some(ref mut message_store) = self.inner.message_store {
+        let put_message_preflight = self.inner.message_store().map(MessageStore::put_message_preflight);
+        if let Some(mut message_store) = self.inner.message_store_mut() {
             if let Some(put_message_preflight) = put_message_preflight {
                 message_store.set_put_message_hook(Box::new(CheckBeforePutMessageHook::new(
                     put_message_preflight,
@@ -2710,9 +2708,7 @@ impl BrokerRuntime {
             &notification_processor,
         );
         self.inner
-            .message_store
-            .as_mut()
-            .unwrap()
+            .message_store_unchecked_mut()
             .set_message_arriving_listener(Some(Arc::new(Box::new(message_arriving_listener))));
         let mut broker_request_processor = BrokerRequestProcessor::new();
         let request_processor_task_group = self.request_processor_task_group.clone().or_else(|| {
@@ -3122,9 +3118,8 @@ impl BrokerRuntime {
                 if let Some(ha_master_address) = ha_master_address {
                     if ha_master_address.len() > 6 {
                         self.inner
-                            .message_store
-                            .as_ref()
-                            .unwrap()
+                            .message_store()
+                            .expect("message store should be initialized before replica synchronization")
                             .update_ha_master_address(ha_master_address.as_str())
                             .await;
                         self.inner.update_master_haserver_addr_periodically = false;
@@ -3331,7 +3326,7 @@ impl BrokerRuntime {
     fn initial_request_pipeline(&mut self) {}
 
     async fn start_basic_service(&mut self) {
-        if let Some(ref mut message_store) = self.inner.message_store {
+        if let Some(mut message_store) = self.inner.message_store_mut() {
             message_store
                 .start()
                 .await
@@ -3805,7 +3800,7 @@ pub(crate) struct BrokerRuntimeInner<MS: MessageStore> {
     subscription_group_manager: Option<SubscriptionGroupManager>,
     consumer_filter_manager: Option<ConsumerFilterManager>,
     consumer_order_info_manager: Option<Arc<ConsumerOrderInfoManager>>,
-    message_store: Option<ArcMut<MS>>,
+    message_store: Option<Arc<LegacyEscapeStoreOwner<MS>>>,
     broker_stats: Option<Arc<BrokerStats<MS>>>,
     schedule_message_service: Option<Arc<ScheduleMessageService<MS>>>,
     timer_message_store: Option<Arc<TimerMessageStore>>,
@@ -4120,8 +4115,8 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn message_store_mut(&mut self) -> Option<&mut MS> {
-        self.message_store.as_deref_mut()
+    pub fn message_store_mut(&mut self) -> Option<LegacyEscapeStoreWriteLease<MS>> {
+        self.message_store.as_deref().map(LegacyEscapeStoreOwner::write_lease)
     }
 
     #[inline]
@@ -4311,12 +4306,12 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
 
     #[inline]
     pub fn message_store(&self) -> Option<&MS> {
-        self.message_store.as_deref()
+        self.message_store.as_deref().map(LegacyEscapeStoreOwner::store)
     }
 
     #[inline]
     pub(crate) fn message_store_ref(&self) -> Option<&MS> {
-        self.message_store.as_deref()
+        self.message_store.as_deref().map(LegacyEscapeStoreOwner::store)
     }
 
     #[inline]
@@ -4340,8 +4335,11 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn message_store_unchecked_mut(&mut self) -> &mut MS {
-        unsafe { self.message_store.as_deref_mut().unwrap_unchecked() }
+    pub fn message_store_unchecked_mut(&mut self) -> LegacyEscapeStoreWriteLease<MS> {
+        self.message_store
+            .as_deref()
+            .expect("message store should be initialized before mutable access")
+            .write_lease()
     }
 
     #[inline]
@@ -4361,11 +4359,9 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
 
     #[inline]
     pub fn timer_message_store(&self) -> Option<&Arc<TimerMessageStore>> {
-        self.timer_message_store.as_ref().or_else(|| {
-            self.message_store
-                .as_ref()
-                .and_then(|message_store| message_store.get_timer_message_store())
-        })
+        self.timer_message_store
+            .as_ref()
+            .or_else(|| self.message_store().and_then(MessageStore::get_timer_message_store))
     }
 
     #[inline]
@@ -6020,7 +6016,7 @@ accounts:
             .message_store
             .as_ref()
             .expect("message store should be initialized")
-            .strong_count();
+            .legacy_strong_count();
 
         runtime.register_message_store_hook();
 
@@ -6030,7 +6026,7 @@ accounts:
                 .message_store
                 .as_ref()
                 .expect("message store should remain initialized")
-                .strong_count(),
+                .legacy_strong_count(),
             store_strong_count_before
         );
         let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
@@ -6867,13 +6863,7 @@ accounts:
         runtime.inner.initialize_controller_mode();
         runtime.register_message_store_hook();
         assert!(
-            runtime
-                .inner
-                .message_store
-                .as_mut()
-                .expect("controller mode message store")
-                .load()
-                .await,
+            runtime.inner.message_store_unchecked_mut().load().await,
             "{broker_label} message store load should succeed"
         );
         assert!(
@@ -6948,7 +6938,7 @@ accounts:
     }
 
     #[tokio::test]
-    async fn fast_failure_checker_does_not_retain_message_store_root() {
+    async fn escape_bridge_provider_does_not_retain_message_store_root() {
         let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-broker-fast-failure-{}", current_millis()));
         let broker_config = Arc::new(BrokerConfig::default());
         let message_store_config = Arc::new(MessageStoreConfig {
@@ -6959,20 +6949,35 @@ accounts:
         assert!(runtime.initialize_metadata().await);
         assert!(runtime.initialize_message_store().await);
 
+        let capability = runtime.escape_bridge_owner.store_capability();
+        let message_store = runtime
+            .inner
+            .message_store
+            .as_ref()
+            .expect("message store should be initialized");
         assert_eq!(
-            runtime
-                .inner
-                .message_store
-                .as_ref()
-                .expect("message store should be initialized")
-                .strong_count(),
-            2,
-            "only BrokerRuntime and the late-bound EscapeBridge may retain the Store root"
+            Arc::strong_count(message_store),
+            1,
+            "BrokerRuntime must be the only long-lived Store lifecycle owner"
         );
+        assert_eq!(
+            message_store.legacy_strong_count(),
+            1,
+            "the weak provider must not clone the legacy compatibility pointer"
+        );
+        assert!(capability.with_store(|_| ()).is_ok());
 
-        if let Some(message_store) = runtime.inner.message_store.as_mut() {
-            message_store.shutdown().await;
-        }
+        let message_store = runtime
+            .inner
+            .message_store
+            .take()
+            .expect("message store should remain initialized");
+        message_store.write_lease().shutdown().await;
+        drop(message_store);
+        assert!(
+            capability.with_store(|_| ()).is_err(),
+            "the weak provider must fail closed after the lifecycle owner is released"
+        );
         let _ = std::fs::remove_dir_all(temp_root);
     }
 
@@ -6988,12 +6993,13 @@ accounts:
         assert!(runtime.initialize_metadata().await);
         assert!(runtime.initialize_message_store().await);
 
-        let store_owner_count = runtime
+        let store_owner = runtime
             .inner
             .message_store
             .as_ref()
-            .expect("message store should be initialized")
-            .strong_count();
+            .expect("message store should be initialized");
+        let store_owner_count = Arc::strong_count(store_owner);
+        let legacy_owner_count = store_owner.legacy_strong_count();
         let admin = runtime.admin_runtime_for_test();
         let admin_clone = admin.clone();
 
@@ -7004,15 +7010,25 @@ accounts:
                 .inner
                 .message_store
                 .as_ref()
-                .expect("message store should remain initialized")
-                .strong_count(),
+                .map(Arc::strong_count)
+                .expect("message store should remain initialized"),
             store_owner_count,
             "Admin runtime instances must retain only a weak Store provider"
+        );
+        assert_eq!(
+            runtime
+                .inner
+                .message_store
+                .as_ref()
+                .expect("message store should remain initialized")
+                .legacy_strong_count(),
+            legacy_owner_count,
+            "Admin runtime instances must not clone the legacy compatibility pointer"
         );
 
         drop(admin_clone);
         drop(admin);
-        if let Some(message_store) = runtime.inner.message_store.as_mut() {
+        if let Some(mut message_store) = runtime.inner.message_store_mut() {
             message_store.shutdown().await;
         }
         let _ = std::fs::remove_dir_all(temp_root);
@@ -7043,7 +7059,7 @@ accounts:
         };
         assert!(rocksdb_owner.rocksdb_config().path.ends_with("consumequeue_rocksdb"));
 
-        if let Some(message_store) = runtime.inner.message_store.as_mut() {
+        if let Some(mut message_store) = runtime.inner.message_store_mut() {
             message_store.shutdown().await;
         }
         let _ = std::fs::remove_dir_all(temp_root);
@@ -10158,10 +10174,8 @@ accounts:
         let surviving_broker = if broker_a_is_master { &broker_b } else { &broker_a };
         let surviving_store = surviving_broker
             .inner
-            .message_store
-            .as_ref()
-            .expect("surviving broker message store should exist")
-            .clone();
+            .message_store()
+            .expect("surviving broker message store should exist");
 
         wait_until(
             Duration::from_secs(15),
@@ -10231,10 +10245,8 @@ accounts:
 
         let rejoining_store = rejoining_broker
             .inner
-            .message_store
-            .as_ref()
-            .expect("rejoining broker message store should exist")
-            .clone();
+            .message_store()
+            .expect("rejoining broker message store should exist");
         let rejoining_addr = rejoining_broker.inner.get_broker_addr().clone();
         wait_until(
             Duration::from_secs(15),
