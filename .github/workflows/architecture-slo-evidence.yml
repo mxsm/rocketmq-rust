@@ -1,0 +1,205 @@
+name: Architecture production-readiness SLO evidence
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/architecture-slo-evidence.yml"
+      - "distribution/config/architecture-production-readiness-policy.json"
+      - "distribution/config/grafana-architecture-production-readiness.json"
+      - "distribution/config/prometheus-architecture-production-readiness-alerts.yaml"
+      - "distribution/kubernetes/fault-matrix-policy.json"
+      - "rocketmq-doc/en/architecture-production-readiness-runbook.md"
+      - "scripts/architecture_slo_guard.py"
+      - "scripts/fault_matrix_guard.py"
+      - "scripts/kind-architecture-refactor-e2e.ps1"
+      - "scripts/run-architecture-slo-evidence.ps1"
+      - "scripts/telemetry-semantic-registry.json"
+      - "scripts/tests/test_architecture_slo_guard.py"
+      - "scripts/tests/fixtures/m11-slo/**"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/architecture-slo-evidence.yml"
+      - "distribution/config/architecture-production-readiness-policy.json"
+      - "distribution/config/grafana-architecture-production-readiness.json"
+      - "distribution/config/prometheus-architecture-production-readiness-alerts.yaml"
+      - "distribution/kubernetes/fault-matrix-policy.json"
+      - "rocketmq-doc/en/architecture-production-readiness-runbook.md"
+      - "scripts/architecture_slo_guard.py"
+      - "scripts/fault_matrix_guard.py"
+      - "scripts/kind-architecture-refactor-e2e.ps1"
+      - "scripts/run-architecture-slo-evidence.ps1"
+      - "scripts/telemetry-semantic-registry.json"
+      - "scripts/tests/test_architecture_slo_guard.py"
+      - "scripts/tests/fixtures/m11-slo/**"
+  workflow_dispatch:
+    inputs:
+      backend:
+        description: Dynamic cluster backend
+        required: true
+        type: choice
+        options: [kind, k3d]
+      baseline_images_json:
+        description: Five baseline service image@sha256 references
+        required: true
+        type: string
+      candidate_images_json:
+        description: Five candidate service image@sha256 references
+        required: true
+        type: string
+      collector_image:
+        description: OpenTelemetry Collector image@sha256 reference
+        required: true
+        type: string
+      prometheus_url:
+        description: Prometheus API that observes the candidate cluster
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  static-contract:
+    name: Policy, fixture, and deliberate violations
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+
+      - name: Validate SLO policy and fixture
+        shell: bash
+        run: |
+          python scripts/architecture_slo_guard.py --policy-only
+          python scripts/architecture_slo_guard.py \
+            --evidence scripts/tests/fixtures/m11-slo/pass \
+            --allow-fixture
+          python -m unittest scripts.tests.test_architecture_slo_guard -v
+
+      - name: Validate PowerShell entrypoint without dynamic execution
+        shell: pwsh
+        run: ./scripts/run-architecture-slo-evidence.ps1 -Mode Validate
+
+  dynamic-candidate:
+    name: Dynamic fault and six-hour SLO evidence
+    if: github.event_name == 'workflow_dispatch'
+    needs: static-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 540
+    env:
+      PROMETHEUS_BEARER_TOKEN: ${{ secrets.M11_PROMETHEUS_BEARER_TOKEN }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+
+      - name: Install digest-verified cluster tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --silent --show-error \
+            --output /tmp/kind https://github.com/kubernetes-sigs/kind/releases/download/v0.27.0/kind-linux-amd64
+          echo 'a6875aaea358acf0ac07786b1a6755d08fd640f4c79b7a2e46681cc13f49a04b  /tmp/kind' | sha256sum --check
+          sudo install -m 0755 /tmp/kind /usr/local/bin/kind
+
+          curl --fail --location --silent --show-error \
+            --output /tmp/k3d https://github.com/k3d-io/k3d/releases/download/v5.9.0/k3d-linux-amd64
+          echo '06d8f25bc3a971c4eb29e0ff08429b180402db0f4dec838c9eac427e296800a0  /tmp/k3d' | sha256sum --check
+          sudo install -m 0755 /tmp/k3d /usr/local/bin/k3d
+
+          curl --fail --location --silent --show-error \
+            --output /tmp/kubectl https://dl.k8s.io/release/v1.32.2/bin/linux/amd64/kubectl
+          echo '4f6a959dcc5b702135f8354cc7109b542a2933c46b808b248a214c1f69f817ea  /tmp/kubectl' | sha256sum --check
+          sudo install -m 0755 /tmp/kubectl /usr/local/bin/kubectl
+
+          curl --fail --location --silent --show-error \
+            --output /tmp/helm.tgz https://get.helm.sh/helm-v4.2.3-linux-amd64.tar.gz
+          echo 'e9b88b4ee95b18c706839c28d3a0220e5bc470e9cd9262410c90793c45ff8b7c  /tmp/helm.tgz' | sha256sum --check
+          tar -xzf /tmp/helm.tgz -C /tmp
+          sudo install -m 0755 /tmp/linux-amd64/helm /usr/local/bin/helm
+
+      - name: Materialize dynamic inputs
+        shell: bash
+        env:
+          BASELINE_IMAGES: ${{ inputs.baseline_images_json }}
+          CANDIDATE_IMAGES: ${{ inputs.candidate_images_json }}
+          RUNTIME_SECRET_B64: ${{ secrets.M11_RUNTIME_SECRET_MANIFEST_B64 }}
+          ROTATED_RUNTIME_SECRET_B64: ${{ secrets.M11_ROTATED_RUNTIME_SECRET_MANIFEST_B64 }}
+          BASELINE_DRIVER_SECRET_B64: ${{ secrets.M11_BASELINE_DRIVER_SECRET_MANIFEST_B64 }}
+          ROTATED_DRIVER_SECRET_B64: ${{ secrets.M11_ROTATED_DRIVER_SECRET_MANIFEST_B64 }}
+        run: |
+          set -euo pipefail
+          test -n "$RUNTIME_SECRET_B64"
+          test -n "$ROTATED_RUNTIME_SECRET_B64"
+          test -n "$BASELINE_DRIVER_SECRET_B64"
+          test -n "$ROTATED_DRIVER_SECRET_B64"
+          mkdir -p target/slo-inputs
+          printf '%s' "$BASELINE_IMAGES" > target/slo-inputs/baseline-images.json
+          printf '%s' "$CANDIDATE_IMAGES" > target/slo-inputs/candidate-images.json
+          printf '%s' "$RUNTIME_SECRET_B64" | base64 --decode > target/slo-inputs/runtime-secret.yaml
+          printf '%s' "$ROTATED_RUNTIME_SECRET_B64" | base64 --decode > target/slo-inputs/rotated-runtime-secret.yaml
+          printf '%s' "$BASELINE_DRIVER_SECRET_B64" | base64 --decode > target/slo-inputs/baseline-driver-secret.yaml
+          printf '%s' "$ROTATED_DRIVER_SECRET_B64" | base64 --decode > target/slo-inputs/rotated-driver-secret.yaml
+
+      - name: Execute the dynamic fault matrix and keep the cluster
+        shell: pwsh
+        run: >-
+          ./scripts/kind-architecture-refactor-e2e.ps1
+          -Mode Run
+          -Backend '${{ inputs.backend }}'
+          -BaselineImageMap target/slo-inputs/baseline-images.json
+          -CandidateImageMap target/slo-inputs/candidate-images.json
+          -RuntimeSecretManifest target/slo-inputs/runtime-secret.yaml
+          -RotatedRuntimeSecretManifest target/slo-inputs/rotated-runtime-secret.yaml
+          -BaselineDriverSecretManifest target/slo-inputs/baseline-driver-secret.yaml
+          -RotatedDriverSecretManifest target/slo-inputs/rotated-driver-secret.yaml
+          -CollectorImage '${{ inputs.collector_image }}'
+          -KeepCluster
+
+      - name: Promote candidate images for the sustained soak
+        shell: pwsh
+        run: |
+          $images = Get-Content -Raw target/slo-inputs/candidate-images.json | ConvertFrom-Json
+          foreach ($service in @('broker', 'namesrv', 'controller')) {
+            kubectl -n rocketmq-system set image "statefulset/rocketmq-$service" "$service=$($images.$service)"
+            kubectl -n rocketmq-system rollout status "statefulset/rocketmq-$service" --timeout=300s
+          }
+          foreach ($service in @('proxy', 'mcp')) {
+            kubectl -n rocketmq-system set image "deployment/rocketmq-$service" "$service=$($images.$service)"
+            kubectl -n rocketmq-system rollout status "deployment/rocketmq-$service" --timeout=300s
+          }
+
+      - name: Collect and validate six-hour evidence
+        shell: pwsh
+        run: |
+          $fault = Get-ChildItem target/architecture-refactor/M11/fault-matrix -Directory |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+          if (-not $fault) { throw 'dynamic fault evidence directory is missing' }
+          ./scripts/run-architecture-slo-evidence.ps1 `
+            -Mode Run `
+            -CandidateCommit '${{ github.sha }}' `
+            -CandidateImageMap target/slo-inputs/candidate-images.json `
+            -FaultEvidence $fault.FullName `
+            -PrometheusUrl '${{ inputs.prometheus_url }}'
+
+      - name: Delete the retained cluster
+        if: always()
+        shell: bash
+        run: |
+          if [ '${{ inputs.backend }}' = kind ]; then
+            kind delete cluster --name rocketmq-architecture-refactor || true
+          else
+            k3d cluster delete rocketmq-architecture-refactor || true
+          fi
+
+      - name: Upload immutable release evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: m11-12-r24-${{ inputs.backend }}-${{ github.sha }}
+          path: |
+            target/architecture-refactor/M11/fault-matrix
+            target/architecture-refactor/M11/slo
+          if-no-files-found: error
+          retention-days: 30

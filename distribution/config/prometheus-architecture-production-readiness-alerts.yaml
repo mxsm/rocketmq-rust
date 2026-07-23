@@ -1,0 +1,60 @@
+groups:
+  - name: rocketmq-architecture-production-readiness
+    rules:
+      - alert: RocketMQMessageDeliveryRatioBurn
+        expr: |
+          sum(rate(rocketmq_messages_out_total[5m]))
+          /
+          clamp_min(sum(rate(rocketmq_messages_in_total[5m])), 0.000001)
+          < 0.999
+        for: 10m
+        labels:
+          severity: critical
+          slo: message-availability
+        annotations:
+          summary: RocketMQ message delivery ratio is below the release objective
+          runbook_url: https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-doc/en/architecture-production-readiness-runbook.md#message-availability
+
+      - alert: RocketMQSendMessageP99High
+        expr: |
+          histogram_quantile(
+            0.99,
+            sum(rate(rocketmq_send_message_latency_bucket[5m])) by (le)
+          ) > 1000
+        for: 10m
+        labels:
+          severity: critical
+          slo: send-latency
+        annotations:
+          summary: RocketMQ send-message p99 exceeds one second
+          runbook_url: https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-doc/en/architecture-production-readiness-runbook.md#send-latency
+
+      - alert: RocketMQConsumerLagHigh
+        expr: max(rocketmq_consumer_lag_messages) > 10000
+        for: 15m
+        labels:
+          severity: warning
+          slo: consumer-lag
+        annotations:
+          summary: RocketMQ consumer lag exceeds the release objective
+          runbook_url: https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-doc/en/architecture-production-readiness-runbook.md#consumer-lag
+
+      - alert: RocketMQStoreFlushBehindHigh
+        expr: max(rocketmq_storage_flush_behind_bytes) > 67108864
+        for: 10m
+        labels:
+          severity: critical
+          slo: store-flush
+        annotations:
+          summary: RocketMQ store flush lag exceeds 64 MiB
+          runbook_url: https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-doc/en/architecture-production-readiness-runbook.md#store-flush
+
+      - alert: RocketMQHaReplicationLagHigh
+        expr: max(rocketmq_store_ha_replication_lag_bytes) > 67108864
+        for: 10m
+        labels:
+          severity: critical
+          slo: ha-replication
+        annotations:
+          summary: RocketMQ HA replication lag exceeds 64 MiB
+          runbook_url: https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-doc/en/architecture-production-readiness-runbook.md#ha-replication

@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "milestone": "M11-11",
+  "run_id": "fixture-m11-11",
+  "dynamic_execution": false,
+  "fixture": true,
+  "candidate_images": {
+    "broker": "registry.example.invalid/rocketmq/broker@sha256:1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+    "namesrv": "registry.example.invalid/rocketmq/namesrv@sha256:234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1",
+    "controller": "registry.example.invalid/rocketmq/controller@sha256:34567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef12",
+    "proxy": "registry.example.invalid/rocketmq/proxy@sha256:4567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef123",
+    "mcp": "registry.example.invalid/rocketmq/mcp@sha256:567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234"
+  },
+  "global_assertions": {
+    "all_workloads_ready": true,
+    "all_faults_reverted": true,
+    "controller_quorum_restored": true,
+    "pvc_uid_set_preserved": true,
+    "acknowledged_message_recovered": true,
+    "queue_offset_preserved": true,
+    "commitlog_offset_preserved": true,
+    "drain_completed_within_deadline": true,
+    "slo_budget_satisfied": true,
+    "rollback_verified": true,
+    "unresolved_faults_empty": true
+  },
+  "unresolved_faults": [],
+  "scenarios": [
+    {
+      "id": "rolling_upgrade"
+    },
+    {
+      "id": "node_eviction"
+    },
+    {
+      "id": "collector_outage"
+    },
+    {
+      "id": "disk_pressure"
+    },
+    {
+      "id": "controller_leader_failure"
+    },
+    {
+      "id": "secret_rotation"
+    },
+    {
+      "id": "acknowledged_message_recovery"
+    }
+  ]
+}
