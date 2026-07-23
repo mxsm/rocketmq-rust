@@ -85,6 +85,7 @@ def audit_foundation(
     dockerfiles: set[str],
     service_script: str = "",
     signal_sources: dict[str, str] | None = None,
+    dockerignore: str = "",
 ) -> list[str]:
     findings: list[str] = []
     if policy.get("schema_version") != 1:
@@ -103,6 +104,8 @@ def audit_foundation(
         findings.append(f"unregistered Dockerfile: {path}")
     for path in sorted(registered - dockerfiles):
         findings.append(f"registered Dockerfile does not exist: {path}")
+    if re.search(r"(?m)^\s*(?:tests/|\*\*/tests/)\s*$", dockerignore):
+        findings.append("Docker build context must preserve explicit Cargo test targets")
 
     builder_ref = policy["base_images"]["builder"]["reference"]
     runtime_ref = policy["base_images"]["runtime"]["reference"]
@@ -417,6 +420,7 @@ def main() -> int:
         signal_sources = {
             name: (ROOT / path).read_text(encoding="utf-8") for name, path in policy["signal_sources"].items()
         }
+        dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8")
         findings = audit_foundation(
             policy,
             dockerfile,
@@ -425,6 +429,7 @@ def main() -> int:
             repository_dockerfiles(),
             service_script,
             signal_sources,
+            dockerignore,
         )
     except (OSError, KeyError, TypeError, json.JSONDecodeError) as error:
         print(f"CONTAINER_IMAGE_GUARD_FAILED {error}", file=sys.stderr)

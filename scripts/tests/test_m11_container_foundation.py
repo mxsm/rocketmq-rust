@@ -50,6 +50,7 @@ class ContainerFoundationTests(unittest.TestCase):
         cls.workflow = (ROOT / cls.policy["workflow"]["path"]).read_text(encoding="utf-8")
         cls.supply_script = (ROOT / "scripts" / "container-supply-chain.ps1").read_text(encoding="utf-8")
         cls.service_script = (ROOT / cls.policy["service_contract_script"]).read_text(encoding="utf-8")
+        cls.dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8")
         cls.signal_sources = {
             name: (ROOT / path).read_text(encoding="utf-8")
             for name, path in cls.policy["signal_sources"].items()
@@ -66,6 +67,7 @@ class ContainerFoundationTests(unittest.TestCase):
         service_script=None,
         signal_sources=None,
         dockerfiles=None,
+        dockerignore=None,
     ):
         return GUARD.audit_foundation(
             policy or self.policy,
@@ -75,6 +77,7 @@ class ContainerFoundationTests(unittest.TestCase):
             dockerfiles if dockerfiles is not None else self.dockerfiles,
             service_script if service_script is not None else self.service_script,
             signal_sources if signal_sources is not None else self.signal_sources,
+            dockerignore if dockerignore is not None else self.dockerignore,
         )
 
     def test_repository_foundation_contract_passes(self) -> None:
@@ -135,6 +138,13 @@ class ContainerFoundationTests(unittest.TestCase):
         )
         findings = self.audit(policy=policy, dockerfiles=dockerfiles | {"docker/Dockerfile"})
         self.assertTrue(any("retire all legacy" in finding for finding in findings))
+
+    def test_explicit_cargo_test_targets_must_remain_in_build_context(self) -> None:
+        for exclusion in ("tests/", "**/tests/"):
+            with self.subTest(exclusion=exclusion):
+                dockerignore = f"{self.dockerignore.rstrip()}\n{exclusion}\n"
+                findings = self.audit(dockerignore=dockerignore)
+                self.assertTrue(any("explicit Cargo test targets" in finding for finding in findings))
 
     def test_missing_read_only_or_signature_verification_is_rejected(self) -> None:
         no_read_only = self.supply_script.replace("--read-only", "--read-write", 1)
