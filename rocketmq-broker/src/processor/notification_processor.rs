@@ -515,10 +515,11 @@ mod tests {
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
     use rocketmq_store::message_store::GenericMessageStore;
 
+    use crate::broker_runtime::BrokerMessageStore;
     use crate::broker_runtime::BrokerRuntime;
     use crate::long_polling::long_polling_service::pop_long_polling_service::PopLongPollingPolicy;
 
-    fn notification_processor_for_test(runtime: &mut BrokerRuntime) -> Arc<NotificationProcessor<GenericMessageStore>> {
+    fn notification_processor_for_test(runtime: &mut BrokerRuntime) -> Arc<NotificationProcessor<BrokerMessageStore>> {
         let inner = runtime.inner_for_test();
         let policy = NotificationPolicy::from_config(&inner.broker_config());
         let long_polling_policy = PopLongPollingPolicy::from_config(&inner.broker_config());

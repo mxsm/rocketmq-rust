@@ -455,11 +455,11 @@ mod tests {
     use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
     use rocketmq_remoting::runtime::processor::RequestProcessor;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
-    use rocketmq_store::message_store::GenericMessageStore;
 
     use super::LiteSubscriptionCtlContext;
     use super::LiteSubscriptionCtlPolicy;
     use super::LiteSubscriptionCtlProcessor;
+    use crate::broker_runtime::BrokerMessageStore;
     use crate::broker_runtime::BrokerRuntime;
     use crate::processor::pop_lite_message_processor::PopLiteMessageStoreCapability;
     use crate::processor::pop_lite_message_processor::PopLiteOffsetCapability;
@@ -498,7 +498,7 @@ mod tests {
 
     fn lite_subscription_processor_for_test(
         runtime: &mut BrokerRuntime,
-    ) -> LiteSubscriptionCtlProcessor<GenericMessageStore> {
+    ) -> LiteSubscriptionCtlProcessor<BrokerMessageStore> {
         let inner = runtime.inner_for_test();
         let consumer_offset_manager = inner.consumer_offset_manager_handle();
         let escape_bridge = inner.escape_bridge();
