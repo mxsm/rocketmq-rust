@@ -25,6 +25,7 @@
       "cmake",
       "git",
       "libclang-dev",
+      "libprotobuf-dev",
       "libssl-dev",
       "llvm",
       "make",
