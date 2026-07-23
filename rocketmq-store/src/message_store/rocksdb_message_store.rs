@@ -170,8 +170,7 @@ impl RocksDBMessageStore {
             broker_stats_manager,
             notify_message_arrive_in_batch,
         )?);
-        let local_file_store_clone = local_file_store.clone();
-        local_file_store.set_message_store_arc(local_file_store_clone);
+        local_file_store.wire_owned_root_dependencies()?;
         let local_queue_offsets = local_file_store.consume_queue_store_mut().clone();
         local_file_store.add_dispatcher(Arc::new(
             CommitLogDispatcherBuildRocksDbConsumeQueue::new_with_local_queue_offsets(

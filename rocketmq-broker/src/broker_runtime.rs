@@ -2157,8 +2157,10 @@ impl BrokerRuntime {
                     return false;
                 }
             };
-            let local_file_store_clone = local_file_store.clone();
-            local_file_store.set_message_store_arc(local_file_store_clone);
+            if let Err(error) = local_file_store.wire_owned_root_dependencies() {
+                error!("Initialize LocalFile message store dependencies failed: {error}");
+                return false;
+            }
             self.inner.timer_message_store = local_file_store.get_timer_message_store().cloned();
             let message_store = ArcMut::new(GenericMessageStore::local_file(local_file_store));
             self.inner.broker_stats = Some(Arc::new(BrokerStats::from_manager(
@@ -4584,15 +4586,6 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     #[inline]
     pub fn set_consumer_filter_manager(&mut self, consumer_filter_manager: ConsumerFilterManager) {
         self.consumer_filter_manager = Some(consumer_filter_manager);
-    }
-
-    #[inline]
-    pub fn set_message_store(&mut self, message_store: MS) {
-        let message_store = ArcMut::new(message_store);
-        if let Some(escape_bridge) = self.escape_bridge.as_ref().and_then(Weak::upgrade) {
-            escape_bridge.bind_message_store(LegacyEscapeStoreOwner(message_store.clone()));
-        }
-        self.message_store = Some(message_store);
     }
 
     #[inline]

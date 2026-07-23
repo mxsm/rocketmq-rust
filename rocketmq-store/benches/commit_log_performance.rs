@@ -35,12 +35,12 @@ use criterion::BenchmarkId;
 use criterion::Criterion;
 use criterion::Throughput;
 use dashmap::DashMap;
+use futures_util::future::join_all;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_common::common::message::message_single::Message;
-use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::config::flush_disk_type::FlushDiskType;
@@ -50,7 +50,7 @@ use tempfile::TempDir;
 use tokio::runtime::Runtime;
 
 struct BenchStore {
-    store: ArcMut<LocalFileMessageStore>,
+    store: LocalFileMessageStore,
     _temp_dir: TempDir,
 }
 
@@ -164,15 +164,16 @@ fn new_bench_store(flush_disk_type: FlushDiskType) -> BenchStore {
     };
     message_store_config.mapped_file_size_commit_log = 1024 * 1024 * 256;
 
-    let mut store = ArcMut::new(LocalFileMessageStore::new(
+    let mut store = LocalFileMessageStore::new(
         Arc::new(message_store_config),
         Arc::new(BrokerConfig::default()),
         Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
         None,
         false,
-    ));
-    let store_clone = store.clone();
-    store.set_message_store_arc(store_clone);
+    );
+    store
+        .wire_owned_root_dependencies()
+        .expect("wire owned benchmark store dependencies");
 
     BenchStore {
         store,
@@ -211,23 +212,15 @@ fn benchmark_artifact_dir() -> PathBuf {
     workspace_root().join("target/runtime-baseline/prototype")
 }
 
-async fn start_store_if_needed(bench_store: &BenchStore, flush_disk_type: FlushDiskType) {
+async fn start_store_if_needed(bench_store: &mut BenchStore, flush_disk_type: FlushDiskType) {
     if flush_disk_type != FlushDiskType::SyncFlush {
         return;
     }
 
+    bench_store.store.init().await.expect("init sync flush benchmark store");
+    assert!(bench_store.store.load().await, "load store");
     bench_store
         .store
-        .clone()
-        .mut_from_ref()
-        .init()
-        .await
-        .expect("init sync flush benchmark store");
-    assert!(bench_store.store.clone().mut_from_ref().load().await, "load store");
-    bench_store
-        .store
-        .clone()
-        .mut_from_ref()
         .start()
         .await
         .expect("start sync flush benchmark store");
@@ -241,8 +234,7 @@ fn run_lock_profile_messages(runtime: &Runtime, bench_store: &BenchStore, scenar
                 let msg = create_test_message("BenchLockProfileTopic", 0, scenario.body_size, round);
                 let status = bench_store
                     .store
-                    .clone()
-                    .mut_from_ref()
+                    .get_commit_log()
                     .put_message(msg)
                     .await
                     .put_message_status();
@@ -251,18 +243,16 @@ fn run_lock_profile_messages(runtime: &Runtime, bench_store: &BenchStore, scenar
                 continue;
             }
 
-            let mut handles = Vec::with_capacity(scenario.queue_count);
+            let commit_log = bench_store.store.get_commit_log();
+            let mut futures = Vec::with_capacity(scenario.queue_count);
             for queue_id in 0..scenario.queue_count {
-                let store = bench_store.store.clone();
                 let key_seed = round * scenario.queue_count as u64 + queue_id as u64;
                 let msg = create_test_message("BenchLockProfileTopic", queue_id as i32, scenario.body_size, key_seed);
-                handles.push(tokio::spawn(async move {
-                    store.mut_from_ref().put_message(msg).await.put_message_status()
-                }));
+                futures.push(commit_log.put_message(msg));
             }
 
-            for handle in handles {
-                let status = handle.await.expect("join lock profile benchmark task");
+            for result in join_all(futures).await {
+                let status = result.put_message_status();
                 assert_eq!(status, PutMessageStatus::PutOk);
                 put_ok_total += 1;
             }
@@ -291,8 +281,8 @@ fn write_commit_log_lock_profile_artifact() {
 
     for scenario in LOCK_PROFILE_ARTIFACT_SCENARIOS {
         let runtime = Runtime::new().expect("create runtime");
-        let bench_store = new_bench_store(scenario.flush_disk_type);
-        runtime.block_on(start_store_if_needed(&bench_store, scenario.flush_disk_type));
+        let mut bench_store = new_bench_store(scenario.flush_disk_type);
+        runtime.block_on(start_store_if_needed(&mut bench_store, scenario.flush_disk_type));
         let put_ok_total = run_lock_profile_messages(&runtime, &bench_store, scenario);
         let profile = put_message_lock_profile_json(&bench_store);
         assert_eq!(profile["acquire_total"], serde_json::json!(put_ok_total));
@@ -342,8 +332,7 @@ fn bench_async_flush_single_message(c: &mut Criterion) {
                     let status = runtime.block_on(async {
                         bench_store
                             .store
-                            .clone()
-                            .mut_from_ref()
+                            .get_commit_log()
                             .put_message(msg)
                             .await
                             .put_message_status()
@@ -373,18 +362,16 @@ fn bench_async_flush_multi_queue(c: &mut Criterion) {
 
                 b.iter(|| {
                     runtime.block_on(async {
-                        let mut handles = Vec::with_capacity(queue_count);
+                        let commit_log = bench_store.store.get_commit_log();
+                        let mut futures = Vec::with_capacity(queue_count);
                         for queue_id in 0..queue_count {
-                            let store = bench_store.store.clone();
                             let key_seed = counter.fetch_add(1, Ordering::Relaxed);
                             let msg = create_test_message("BenchConcurrentTopic", queue_id as i32, 1024, key_seed);
-                            handles.push(tokio::spawn(async move {
-                                store.mut_from_ref().put_message(msg).await.put_message_status()
-                            }));
+                            futures.push(commit_log.put_message(msg));
                         }
 
-                        for handle in handles {
-                            black_box(handle.await.expect("join benchmark task"));
+                        for result in join_all(futures).await {
+                            black_box(result.put_message_status());
                         }
                     });
                 });
@@ -407,8 +394,8 @@ fn bench_commit_log_lock_profile_contention(c: &mut Criterion) {
         ));
         group.bench_with_input(BenchmarkId::from_parameter(scenario.name), &scenario, |b, &scenario| {
             let runtime = Runtime::new().expect("create runtime");
-            let bench_store = new_bench_store(scenario.flush_disk_type);
-            runtime.block_on(start_store_if_needed(&bench_store, scenario.flush_disk_type));
+            let mut bench_store = new_bench_store(scenario.flush_disk_type);
+            runtime.block_on(start_store_if_needed(&mut bench_store, scenario.flush_disk_type));
 
             b.iter_custom(|iters| {
                 let started = Instant::now();
@@ -448,8 +435,7 @@ fn bench_reput_once_after_batch(c: &mut Criterion) {
                                 black_box(
                                     bench_store
                                         .store
-                                        .clone()
-                                        .mut_from_ref()
+                                        .get_commit_log()
                                         .put_message(msg)
                                         .await
                                         .put_message_status(),
@@ -458,9 +444,9 @@ fn bench_reput_once_after_batch(c: &mut Criterion) {
                         });
                         bench_store
                     },
-                    |bench_store| {
+                    |mut bench_store| {
                         runtime.block_on(async {
-                            bench_store.store.mut_from_ref().reput_once().await;
+                            bench_store.store.reput_once().await;
                         });
                     },
                     BatchSize::LargeInput,
@@ -479,24 +465,8 @@ fn bench_sync_flush_tail_latency_baseline(c: &mut Criterion) {
 
     group.bench_function("single_1KiB_message", |b| {
         let runtime = Runtime::new().expect("create runtime");
-        let bench_store = new_sync_flush_bench_store();
-        runtime.block_on(async {
-            bench_store
-                .store
-                .clone()
-                .mut_from_ref()
-                .init()
-                .await
-                .expect("init sync flush benchmark store");
-            assert!(bench_store.store.clone().mut_from_ref().load().await, "load store");
-            bench_store
-                .store
-                .clone()
-                .mut_from_ref()
-                .start()
-                .await
-                .expect("start sync flush benchmark store");
-        });
+        let mut bench_store = new_sync_flush_bench_store();
+        runtime.block_on(start_store_if_needed(&mut bench_store, FlushDiskType::SyncFlush));
         let counter = AtomicU64::new(0);
 
         b.iter(|| {
@@ -506,8 +476,7 @@ fn bench_sync_flush_tail_latency_baseline(c: &mut Criterion) {
                 let started = Instant::now();
                 let status = bench_store
                     .store
-                    .clone()
-                    .mut_from_ref()
+                    .get_commit_log()
                     .put_message(msg)
                     .await
                     .put_message_status();
