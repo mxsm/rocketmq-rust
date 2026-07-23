@@ -24,8 +24,31 @@ use rocketmq_runtime::ServiceLifecycle;
 use rocketmq_runtime::ServiceLifecycleState;
 use rocketmq_runtime::ShutdownReason;
 
-#[tokio::main]
-async fn main() -> Result<(), McpError> {
+const RUNTIME_TEARDOWN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
+
+fn main() -> Result<(), McpError> {
+    let runtime = build_runtime()?;
+    let result = runtime.block_on(run());
+    shutdown_runtime(runtime, RUNTIME_TEARDOWN_TIMEOUT);
+    result
+}
+
+fn build_runtime() -> Result<tokio::runtime::Runtime, McpError> {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_name("rocketmq-mcp")
+        .build()
+        .map_err(|source| McpError::Infrastructure {
+            operation: "create MCP Tokio runtime",
+            source: Box::new(source),
+        })
+}
+
+fn shutdown_runtime(runtime: tokio::runtime::Runtime, timeout: std::time::Duration) {
+    runtime.shutdown_timeout(timeout);
+}
+
+async fn run() -> Result<(), McpError> {
     let args = Args::parse();
     let lifecycle = ServiceLifecycle::from_env("rocketmq-mcp")
         .map_err(|error| McpError::InvalidConfig(format!("invalid MCP lifecycle configuration: {error}")))?;
@@ -86,13 +109,7 @@ async fn serve_stdio(app: McpApp, lifecycle: ServiceLifecycle) -> Result<(), Mcp
     lifecycle
         .mark_ready()
         .map_err(|error| McpError::InvalidConfig(format!("failed to publish MCP readiness: {error}")))?;
-    tokio::select! {
-        result = transport::stdio::serve_typed(app) => result,
-        result = lifecycle.wait_for_shutdown_signal() => result.map(|_| ()).map_err(|source| McpError::Infrastructure {
-            operation: "wait for MCP lifecycle shutdown",
-            source: Box::new(source),
-        }),
-    }
+    transport::stdio::serve_typed_with_lifecycle(app, lifecycle).await
 }
 
 async fn serve_streamable_http(app: McpApp, lifecycle: ServiceLifecycle) -> Result<(), McpError> {
@@ -108,5 +125,34 @@ async fn serve_streamable_http(app: McpApp, lifecycle: ServiceLifecycle) -> Resu
             transport: "streamable-http",
             feature: "streamable-http",
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc;
+    use std::time::Duration;
+    use std::time::Instant;
+
+    use super::build_runtime;
+    use super::shutdown_runtime;
+
+    #[test]
+    fn runtime_teardown_is_bounded_when_blocking_work_is_still_open() {
+        let runtime = build_runtime().expect("test runtime should build");
+        let (started_tx, started_rx) = mpsc::sync_channel(1);
+        let (release_tx, release_rx) = mpsc::sync_channel(1);
+        runtime.spawn_blocking(move || {
+            started_tx.send(()).expect("test should observe blocking work");
+            let _ = release_rx.recv();
+        });
+        started_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("blocking work should start");
+
+        let started_at = Instant::now();
+        shutdown_runtime(runtime, Duration::from_millis(10));
+        assert!(started_at.elapsed() < Duration::from_secs(1));
+        release_tx.send(()).expect("blocking work should still be releasable");
     }
 }
