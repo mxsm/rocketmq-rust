@@ -328,6 +328,8 @@ def audit_foundation(
     for fragment in script_fragments:
         if fragment not in supply_script:
             findings.append(f"container supply-chain script missing: {fragment}")
+    if supply_script.count("[string]$Executable") < 1 or "[string]$Command" in supply_script:
+        findings.append("container supply-chain native runner must reserve -c for executable arguments")
     if "--ignore-unfixed" in supply_script:
         findings.append("critical vulnerability gate must not ignore unfixed findings")
 
@@ -349,6 +351,8 @@ def audit_foundation(
     for fragment in service_script_fragments:
         if fragment not in service_script:
             findings.append(f"service image contract script missing: {fragment}")
+    if service_script.count("[string]$Executable") < 2 or "[string]$Command" in service_script:
+        findings.append("service image native runners must reserve -c for executable arguments")
     if "--ignore-unfixed" in service_script:
         findings.append("service image CRITICAL vulnerability gate must not ignore unfixed findings")
     return findings

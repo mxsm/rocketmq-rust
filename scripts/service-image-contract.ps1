@@ -23,28 +23,31 @@ Set-StrictMode -Version Latest
 function Invoke-Checked {
     param(
         [Parameter(Mandatory = $true)]
-        [string]$Command,
+        # PowerShell abbreviates named parameters, so `Command` would consume
+        # native `-c` arguments intended for tools such as /bin/sh.
+        [string]$Executable,
         [Parameter(ValueFromRemainingArguments = $true)]
         [string[]]$Arguments
     )
 
-    & $Command @Arguments
+    & $Executable @Arguments
     if ($LASTEXITCODE -ne 0) {
-        throw "$Command failed with exit code $LASTEXITCODE"
+        throw "$Executable failed with exit code $LASTEXITCODE"
     }
 }
 
 function Invoke-Captured {
     param(
         [Parameter(Mandatory = $true)]
-        [string]$Command,
+        # Keep native switches distinct from this wrapper's named parameters.
+        [string]$Executable,
         [Parameter(ValueFromRemainingArguments = $true)]
         [string[]]$Arguments
     )
 
-    $output = (& $Command @Arguments | Out-String).Trim()
+    $output = (& $Executable @Arguments | Out-String).Trim()
     if ($LASTEXITCODE -ne 0) {
-        throw "$Command failed with exit code $LASTEXITCODE"
+        throw "$Executable failed with exit code $LASTEXITCODE"
     }
     return $output
 }
