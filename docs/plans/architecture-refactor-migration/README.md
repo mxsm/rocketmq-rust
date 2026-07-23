@@ -8,9 +8,10 @@
 > PR-M12-01～06 未开始，合计剩余 7 个
 
 剩余任务数量、M11-12 内部执行批次与 M12 六个工作包见 [`REMAINING-TASKS.md`](REMAINING-TASKS.md)：正式口径
-剩余 7 个工作包；31 个最小可审查单元已完成 13 个，当前剩余 18 个。Issue #8617 / M11-12bc99 后
-reviewed ArcMut baseline 为 31 identities / 71 occurrences（production 13/21、test 4/10、
-compatibility 14/40）。
+剩余 7 个工作包；31 个最小可审查单元已完成 13 个，当前剩余 18 个。Issue #8621 / M11-12bc100 后
+reviewed ArcMut baseline 保持 31 identities / 71 occurrences（production 13/21、test 4/10、
+compatibility 14/40）；Broker fast-failure 已改持 `PutMessagePreflight`，初始化后的完整 Store 强 owner 从
+3 个降为 2 个。
 
 ## 1. 使用方式
 
@@ -1278,6 +1279,13 @@ variant 直接拥有 concrete backend，Broker 不再为 backend 单独增加内
 从 4/7 降至 4/5，净删除 2 production occurrences、无新增 identity。两个保留外层 constructor 仅使用
 忽略的临时 ADR-013 同 item relocation approval。R01 仍等待外层 Admin/EscapeBridge/fast-failure/lifecycle
 能力拆分；执行清单保持完成 13 项、剩余 18 项，正式进度仍为 75/82。
+
+Broker fast-failure Store owner 随 Issue #8621 完成收窄：page-cache busy checker 不再捕获完整
+`ArcMut<OwnedMessageStore>`，只保留 `PutMessagePreflight` 原子只读能力和 busy-timeout 标量；Local/Rocks
+初始化路径行为一致。初始化完成且尚未创建 Admin runtime 时，完整 Store 强 owner 从 3 个降为 2 个，仅由
+`BrokerRuntimeInner` 与晚绑定 `EscapeBridge` 保留。scanner baseline 因没有移动或隐藏 ArcMut token 而保持
+31/71（production 13/21、test 4/10、compatibility 14/40）；R01 下一切片继续拆分 Admin owner，执行清单
+保持完成 13 项、剩余 18 项，正式进度仍为 75/82。
 
 Default HA client runtime ownership 随 Issue #8567 完成收窄：`DefaultHAClient` 以标准 `Arc<Inner>` 共享只读组合根，
 `Inner` 仅保留原子、锁、Notify、flow monitor 与现有 LocalStore 兼容句柄；从未安装连接的 stream 字段和重复 buffer/

@@ -2171,10 +2171,11 @@ impl BrokerRuntime {
             self.inner.message_store = Some(message_store.clone());
             self.escape_bridge_owner
                 .bind_message_store(LegacyEscapeStoreOwner(message_store.clone()));
-            let message_store_for_fast_failure = message_store.clone();
-            self.inner
-                .broker_fast_failure
-                .set_page_cache_busy_checker(move || message_store_for_fast_failure.is_os_page_cache_busy());
+            let put_message_preflight = message_store.put_message_preflight();
+            let page_cache_busy_timeout_millis = message_store_config.os_page_cache_busy_timeout_mills;
+            self.inner.broker_fast_failure.set_page_cache_busy_checker(move || {
+                put_message_preflight.is_os_page_cache_busy(page_cache_busy_timeout_millis)
+            });
             if let Some(message_store) = &mut self.inner.message_store {
                 match message_store.init().await {
                     Ok(_) => {
@@ -2211,10 +2212,11 @@ impl BrokerRuntime {
                 self.inner.message_store = Some(message_store.clone());
                 self.escape_bridge_owner
                     .bind_message_store(LegacyEscapeStoreOwner(message_store.clone()));
-                let message_store_for_fast_failure = message_store.clone();
-                self.inner
-                    .broker_fast_failure
-                    .set_page_cache_busy_checker(move || message_store_for_fast_failure.is_os_page_cache_busy());
+                let put_message_preflight = message_store.put_message_preflight();
+                let page_cache_busy_timeout_millis = message_store_config.os_page_cache_busy_timeout_mills;
+                self.inner.broker_fast_failure.set_page_cache_busy_checker(move || {
+                    put_message_preflight.is_os_page_cache_busy(page_cache_busy_timeout_millis)
+                });
                 if let Some(message_store) = &mut self.inner.message_store {
                     match message_store.init().await {
                         Ok(_) => {
@@ -6941,6 +6943,35 @@ accounts:
 
         assert!(Arc::ptr_eq(&store_timer, &runtime_timer));
 
+        let _ = std::fs::remove_dir_all(temp_root);
+    }
+
+    #[tokio::test]
+    async fn fast_failure_checker_does_not_retain_message_store_root() {
+        let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-broker-fast-failure-{}", current_millis()));
+        let broker_config = Arc::new(BrokerConfig::default());
+        let message_store_config = Arc::new(MessageStoreConfig {
+            store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+            ..MessageStoreConfig::default()
+        });
+        let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
+        assert!(runtime.initialize_metadata().await);
+        assert!(runtime.initialize_message_store().await);
+
+        assert_eq!(
+            runtime
+                .inner
+                .message_store
+                .as_ref()
+                .expect("message store should be initialized")
+                .strong_count(),
+            2,
+            "only BrokerRuntime and the late-bound EscapeBridge may retain the Store root"
+        );
+
+        if let Some(message_store) = runtime.inner.message_store.as_mut() {
+            message_store.shutdown().await;
+        }
         let _ = std::fs::remove_dir_all(temp_root);
     }
 
