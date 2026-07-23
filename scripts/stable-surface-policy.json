@@ -1,20 +1,5 @@
 {
   "schema_version": 1,
   "target": "stable-default",
-  "allowed_features": [
-    {
-      "path": "rocketmq/src/lib.rs",
-      "feature": "sync_unsafe_cell",
-      "owner": "runtime-foundation",
-      "remove_by": "R18",
-      "reason": "The public ArcMut compatibility facade still uses SyncUnsafeCell until the approved next-major removal window."
-    },
-    {
-      "path": "rocketmq-broker/benches/syncunsafecell_mut.rs",
-      "feature": "sync_unsafe_cell",
-      "owner": "broker",
-      "remove_by": "R18",
-      "reason": "The legacy shared-mutation comparison benchmark remains tied to the ArcMut compatibility removal."
-    }
-  ]
+  "allowed_features": []
 }

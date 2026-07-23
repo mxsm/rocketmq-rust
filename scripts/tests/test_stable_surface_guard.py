@@ -144,6 +144,15 @@ class RepositoryStableSurfaceContracts(unittest.TestCase):
         self.assertIn("let mut task_fn = task_fn.lock().await;", scheduler)
         self.assertIn("(task_fn)(token).await", scheduler)
 
+    def test_arc_mut_compatibility_no_longer_requires_nightly(self) -> None:
+        crate_root = (REPO_ROOT / "rocketmq" / "src" / "lib.rs").read_text(encoding="utf-8")
+        arc_mut = (REPO_ROOT / "rocketmq" / "src" / "arc_mut.rs").read_text(encoding="utf-8")
+        retired_benchmark = REPO_ROOT / "rocketmq-broker" / "benches" / "syncunsafecell_mut.rs"
+        self.assertNotIn("#![feature(sync_unsafe_cell)]", crate_root)
+        self.assertNotIn("std::cell::SyncUnsafeCell", arc_mut)
+        self.assertIn("Arc<RwLock<T>>", arc_mut)
+        self.assertFalse(retired_benchmark.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

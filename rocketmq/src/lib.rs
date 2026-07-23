@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![feature(sync_unsafe_cell)]
 #![allow(dead_code)]
 
 mod arc_mut;

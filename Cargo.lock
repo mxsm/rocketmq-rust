@@ -5001,6 +5001,7 @@ name = "rocketmq-rust"
 version = "1.0.0"
 dependencies = [
  "criterion",
+ "parking_lot",
  "rocketmq-observability",
  "rocketmq-runtime",
  "serde",
