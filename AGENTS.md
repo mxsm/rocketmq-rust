@@ -64,6 +64,8 @@
   only when intentionally grouping future or irrelevant cases.
 - Any new `#[allow(...)]` must be scoped to the narrowest item and include a reason. Do not add crate- or
   module-wide `allow(warnings)` or broad Clippy-group suppression.
+- Prefer native `async fn` methods in traits. `#[allow(async_fn_in_trait)]` is permitted when required by the
+  lint for an intentional public async trait API; do not add `#[async_trait]`.
 - Treat roughly 500 lines as a module review signal and avoid extending high-touch modules beyond roughly 800
   lines without a strong local reason. Do not split unrelated legacy modules solely to meet a number.
 - Keep comments focused on invariants, ordering, error handling, protocol compatibility, or concurrency assumptions; do not restate the code.
