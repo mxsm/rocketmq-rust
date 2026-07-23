@@ -147,6 +147,7 @@ def audit_foundation(
         "protoc --version",
         "COPY --from=ca-bundle /etc/ssl/certs/ /etc/ssl/certs/",
         f"USER {policy['runtime']['uid']}:{policy['runtime']['gid']}",
+        f"ROCKETMQ_SHUTDOWN_TIMEOUT_SECONDS={policy['runtime']['shutdown_timeout_seconds']}",
         'CMD ["/bin/true"]',
         "STOPSIGNAL SIGTERM",
     ]
@@ -190,6 +191,12 @@ def audit_foundation(
         findings.append("container runtime identity must be non-root")
     if runtime.get("read_only_rootfs_required") is not True:
         findings.append("container policy must require a read-only rootfs")
+    if runtime.get("shutdown_timeout_seconds") != 45:
+        findings.append("service application shutdown deadline must remain 45 seconds")
+    if runtime.get("stop_grace_period_seconds") != 60:
+        findings.append("service container stop grace period must remain 60 seconds")
+    if runtime.get("stop_grace_period_seconds", 0) <= runtime.get("shutdown_timeout_seconds", 0):
+        findings.append("service container stop grace must exceed the application shutdown deadline")
     if runtime.get("default_command") != ["/bin/true"]:
         findings.append("container foundation default command must remain /bin/true")
 
@@ -394,7 +401,7 @@ def audit_foundation(
         "--target $service.target",
         "--read-only",
         "must fail closed when its required config mount is absent",
-        "docker stop --signal SIGTERM --timeout 30",
+        "docker stop --signal SIGTERM --timeout $($policy.runtime.stop_grace_period_seconds)",
         "{{.State.ExitCode}}",
         "$service.data_path",
         "find /usr/local/bin",

@@ -188,6 +188,10 @@ class ContainerFoundationTests(unittest.TestCase):
         self.assertTrue(any("GHCR service digest" in finding for finding in self.audit(policy=policy)))
 
         policy = copy.deepcopy(self.policy)
+        policy["runtime"]["stop_grace_period_seconds"] = policy["runtime"]["shutdown_timeout_seconds"]
+        self.assertTrue(any("must exceed" in finding for finding in self.audit(policy=policy)))
+
+        policy = copy.deepcopy(self.policy)
         policy["build"]["runtime_base_packages"].remove("libssl3t64")
         self.assertTrue(any("pinned-base package" in finding for finding in self.audit(policy=policy)))
 
@@ -267,8 +271,11 @@ class ContainerFoundationTests(unittest.TestCase):
         findings = self.audit(signal_sources=signal_sources)
         self.assertTrue(any("Ctrl-C-only" in finding for finding in findings))
 
-        weakened = self.service_script.replace("docker stop --signal SIGTERM --timeout 30", "docker kill", 1)
-        self.assertTrue(any("docker stop --signal SIGTERM" in finding for finding in self.audit(service_script=weakened)))
+        stop_contract = "docker stop --signal SIGTERM --timeout $($policy.runtime.stop_grace_period_seconds)"
+        weakened = self.service_script.replace(stop_contract, "docker kill", 1)
+        self.assertTrue(
+            any("docker stop --signal SIGTERM" in finding for finding in self.audit(service_script=weakened))
+        )
 
     def test_native_dash_c_arguments_are_preserved_by_real_script_helpers(self) -> None:
         powershell = shutil.which("pwsh") or shutil.which("powershell")

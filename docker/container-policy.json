@@ -54,6 +54,8 @@
     "uid": 10001,
     "gid": 10001,
     "read_only_rootfs_required": true,
+    "shutdown_timeout_seconds": 45,
+    "stop_grace_period_seconds": 60,
     "writable_data_path": "/var/lib/rocketmq",
     "tmpfs_path": "/tmp/rocketmq",
     "default_command": [
