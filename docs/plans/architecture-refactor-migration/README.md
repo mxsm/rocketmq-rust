@@ -8,11 +8,12 @@
 > PR-M12-01～06 未开始，合计剩余 7 个
 
 剩余任务数量、M11-12 内部执行批次与 M12 六个工作包见 [`REMAINING-TASKS.md`](REMAINING-TASKS.md)：正式口径
-剩余 7 个工作包；31 个最小可审查单元已完成 13 个，当前剩余 18 个。Issue #8627 / M11-12bc103 后
+剩余 7 个工作包；31 个最小可审查单元已完成 13 个，当前剩余 18 个。Issue #8629 / M11-12bc104 后
 reviewed ArcMut baseline 降至 28 identities / 67 occurrences（production 11/18、test 3/9、
 compatibility 14/40）；Broker runtime 现在是唯一 Store 生命周期强 owner，EscapeBridge 与 Admin runtime
-只保留标准弱 provider，强引用仅存在于单次请求或生命周期操作期间；Admin 和 processor 不再取得完整
-Store 可变租约，只能调用 append、read-mode 和 topic-delete 三个具名操作。
+只保留标准弱 provider，强引用仅存在于单次请求或生命周期操作期间；普通单条、批量和 Admin append
+已通过私有强类型共享端口执行，不再克隆完整可变 Store carrier，剩余 role/admin control 与 read/lifecycle
+能力继续从私有 legacy owner 提取。
 
 ## 1. 使用方式
 
@@ -1313,6 +1314,14 @@ composition root。size-limited read 不再克隆 legacy mutable carrier，owner
 reviewed baseline 保持 28/67（production 11/18、test 3/9、compatibility 14/40、Broker production 2/2、
 Store production 9/16），无 identity relocation、新债务或 baseline 变更。R01 尚未完成，下一切片继续提取
 普通消息共享 append capability；执行清单保持完成 13 项、剩余 18 项，正式进度仍为 75/82。
+
+Broker 普通消息共享 append 边界随 Issue #8629 完成提取：`OwnedMessageStore` 为 Local/Rocks 组合根提供隐藏的
+共享单条/批量写入，EscapeBridge 以持有同一生命周期 owner 的标准 `Weak` 私有强类型端口执行普通单条、批量和
+Admin append；请求路径不再克隆完整可变 Store carrier，也不引入 dyn async 的热路径分配。Local/Rocks 写入回执、
+普通批次 ConsumeQueue 单元、HA/flush、hook/LMQ、reput 与派生队列语义保持，owner 释放后端口 fail closed。
+reviewed baseline 保持 28/67（production 11/18、test 3/9、compatibility 14/40、Broker production 2/2、
+Store production 9/16），无 identity relocation、新债务或 baseline 变更。R01 尚未完成，下一切片继续提取
+role/admin control 与 read/lifecycle capability；执行清单保持完成 13 项、剩余 18 项，正式进度仍为 75/82。
 
 Default HA client runtime ownership 随 Issue #8567 完成收窄：`DefaultHAClient` 以标准 `Arc<Inner>` 共享只读组合根，
 `Inner` 仅保留原子、锁、Notify、flow monitor 与现有 LocalStore 兼容句柄；从未安装连接的 stream 字段和重复 buffer/

@@ -15,6 +15,10 @@
 use super::local_file_message_store::LocalFileMessageStore;
 #[cfg(feature = "rocksdb_store")]
 use super::rocksdb_message_store::RocksDBMessageStore;
+use rocketmq_common::common::message::message_batch::MessageExtBatch;
+use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+
+use crate::base::message_result::PutMessageResult;
 
 /// Application composition root that exclusively owns the selected Store backend.
 ///
@@ -39,5 +43,25 @@ impl OwnedMessageStore {
     #[cfg(feature = "rocksdb_store")]
     pub fn rocksdb(store: RocksDBMessageStore) -> Self {
         Self::RocksDBStore(Box::new(store))
+    }
+
+    /// Appends one ordinary Broker message through the backend's shared write path.
+    #[doc(hidden)]
+    pub async fn put_message_shared(&self, message: MessageExtBrokerInner) -> PutMessageResult {
+        match self {
+            Self::LocalFileStore(store) => store.put_message_shared(message).await,
+            #[cfg(feature = "rocksdb_store")]
+            Self::RocksDBStore(store) => store.local_file_store().put_message_shared(message).await,
+        }
+    }
+
+    /// Appends one ordinary Broker batch through the backend's shared write path.
+    #[doc(hidden)]
+    pub async fn put_messages_shared(&self, batch: MessageExtBatch) -> PutMessageResult {
+        match self {
+            Self::LocalFileStore(store) => store.put_messages_shared(batch).await,
+            #[cfg(feature = "rocksdb_store")]
+            Self::RocksDBStore(store) => store.local_file_store().put_messages_shared(batch).await,
+        }
     }
 }

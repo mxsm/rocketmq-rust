@@ -4847,7 +4847,9 @@ mod tests {
     use std::time::Duration;
 
     use crate::controller::replicas_manager::RegisterState;
+    use bytes::BufMut;
     use bytes::Bytes;
+    use bytes::BytesMut;
     use cheetah_string::CheetahString;
     use rocketmq_common::common::attribute::subscription_group_attributes::LITE_BIND_TOPIC_ATTRIBUTE_NAME;
     use rocketmq_common::common::attribute::Attribute;
@@ -4857,6 +4859,7 @@ mod tests {
     use rocketmq_common::common::constant::PermName;
     use rocketmq_common::common::entity::ClientGroup;
     use rocketmq_common::common::lite::to_lmq_name;
+    use rocketmq_common::common::message::message_batch::MessageExtBatch;
     use rocketmq_common::common::message::message_decoder;
     use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
     use rocketmq_common::common::message::message_queue::MessageQueue;
@@ -4867,6 +4870,7 @@ mod tests {
     use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
     use rocketmq_common::common::server::config::ServerConfig;
     use rocketmq_common::common::topic::TopicValidator;
+    use rocketmq_common::CRC32Utils::crc32;
     use rocketmq_common::TimeUtils::current_millis;
     use rocketmq_common::TopicAttributes;
     use rocketmq_controller::config::RaftPeer;
@@ -4968,6 +4972,34 @@ mod tests {
     const CONTROLLER_TEST_MAX_BASE_PORT: u16 = 60_000;
     const CONTROLLER_TEST_PORT_BLOCK_SIZE: u16 = 128;
     const CONTROLLER_TEST_FALLBACK_EPHEMERAL_PORT_RANGE: RangeInclusive<u16> = 32_768..=60_999;
+
+    fn shared_append_test_message(topic: &CheetahString, body: Bytes) -> MessageExtBrokerInner {
+        let mut message = MessageExtBrokerInner::default();
+        message.set_topic(topic.clone());
+        message.message_ext_inner.set_queue_id(0);
+        message.set_body(body);
+        message
+    }
+
+    fn shared_append_test_batch(topic: &CheetahString, bodies: &[Bytes]) -> MessageExtBatch {
+        let mut batch_body = BytesMut::new();
+        for body in bodies {
+            let record_size = 4 + 4 + 4 + 4 + 4 + body.len() + 2;
+            batch_body.put_i32(record_size as i32);
+            batch_body.put_i32(0);
+            batch_body.put_i32(crc32(body.as_ref()) as i32);
+            batch_body.put_i32(0);
+            batch_body.put_i32(body.len() as i32);
+            batch_body.put_slice(body.as_ref());
+            batch_body.put_i16(0);
+        }
+
+        MessageExtBatch {
+            message_ext_broker_inner: shared_append_test_message(topic, batch_body.freeze()),
+            is_inner_batch: false,
+            encoded_buff: None,
+        }
+    }
     static NEXT_CONTROLLER_TEST_PORT_BLOCK: AtomicU16 = AtomicU16::new(0);
     static NEXT_CONTROLLER_TEST_TEMP_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -6987,6 +7019,92 @@ accounts:
             capability.with_store(|_| ()).is_err(),
             "the weak provider must fail closed after the lifecycle owner is released"
         );
+        assert!(capability
+            .append_message(MessageExtBrokerInner::default())
+            .await
+            .is_err());
+        assert!(capability.append_batch(MessageExtBatch::default()).await.is_err());
+        assert!(capability.put_message(MessageExtBrokerInner::default()).await.is_err());
+        let _ = std::fs::remove_dir_all(temp_root);
+    }
+
+    #[tokio::test]
+    async fn shared_append_port_preserves_single_and_batch_receipts_without_retaining_store() {
+        let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-broker-shared-append-{}", current_millis()));
+        let broker_config = Arc::new(BrokerConfig::default());
+        let message_store_config = Arc::new(MessageStoreConfig {
+            store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+            ..MessageStoreConfig::default()
+        });
+        let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
+        assert!(runtime.initialize_metadata().await);
+        assert!(runtime.initialize_message_store().await);
+
+        let topic = CheetahString::from_static_str("shared-append-topic");
+        let capability = runtime.escape_bridge_owner.store_capability();
+        let single = capability
+            .append_message(shared_append_test_message(
+                &topic,
+                Bytes::from_static(b"single-message"),
+            ))
+            .await
+            .expect("single shared append should succeed");
+        let batch = capability
+            .append_batch(shared_append_test_batch(
+                &topic,
+                &[
+                    Bytes::from_static(b"batch-message-one"),
+                    Bytes::from_static(b"batch-message-two"),
+                ],
+            ))
+            .await
+            .expect("batch shared append should succeed");
+
+        assert!(single.result().is_ok());
+        assert!(batch.result().is_ok());
+        assert_eq!(
+            single
+                .result()
+                .append_message_result()
+                .expect("single append result")
+                .msg_num,
+            1
+        );
+        assert_eq!(
+            batch
+                .result()
+                .append_message_result()
+                .expect("batch append result")
+                .msg_num,
+            2
+        );
+        let single_range = single
+            .canonical()
+            .expect("single canonical receipt")
+            .appended_range()
+            .expect("single appended range");
+        let batch_range = batch
+            .canonical()
+            .expect("batch canonical receipt")
+            .appended_range()
+            .expect("batch appended range");
+        assert!(single_range.end <= batch_range.start);
+        assert!(single.appended_watermark() >= single_range.end);
+        assert!(batch.appended_watermark() >= batch_range.end);
+        assert!(single.durable_watermark() <= single.appended_watermark());
+        assert!(batch.durable_watermark() <= batch.appended_watermark());
+
+        let message_store = runtime
+            .inner
+            .message_store
+            .as_ref()
+            .expect("message store should remain initialized");
+        assert_eq!(Arc::strong_count(message_store), 1);
+        assert_eq!(message_store.legacy_strong_count(), 1);
+
+        if let Some(mut message_store) = runtime.inner.message_store_mut() {
+            message_store.shutdown().await;
+        }
         let _ = std::fs::remove_dir_all(temp_root);
     }
 
@@ -7072,14 +7190,58 @@ accounts:
         let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
         assert!(runtime.initialize_metadata().await);
         assert!(runtime.initialize_message_store().await);
-        let message_store = runtime
+        runtime
+            .start_message_store_for_test()
+            .await
+            .expect("start RocksDB message store");
+        {
+            let message_store = runtime
+                .inner
+                .message_store()
+                .expect("message store should be initialized");
+            let BrokerMessageStore::RocksDBStore(rocksdb_owner) = message_store else {
+                panic!(
+                    "RocksDB store type should initialize the broker main store as BrokerMessageStore::RocksDBStore"
+                );
+            };
+            assert!(rocksdb_owner.rocksdb_config().path.ends_with("consumequeue_rocksdb"));
+        }
+
+        let topic = CheetahString::from_static_str("rocks-shared-append-topic");
+        let capability = runtime.escape_bridge_owner.store_capability();
+        assert!(capability
+            .append_message(shared_append_test_message(&topic, Bytes::from_static(b"rocks-single"),))
+            .await
+            .expect("Rocks single shared append")
+            .result()
+            .is_ok());
+        assert!(capability
+            .append_batch(shared_append_test_batch(
+                &topic,
+                &[
+                    Bytes::from_static(b"rocks-batch-one"),
+                    Bytes::from_static(b"rocks-batch-two")
+                ],
+            ))
+            .await
+            .expect("Rocks batch shared append")
+            .result()
+            .is_ok());
+        runtime
             .inner
-            .message_store()
-            .expect("message store should be initialized");
-        let BrokerMessageStore::RocksDBStore(rocksdb_owner) = message_store else {
-            panic!("RocksDB store type should initialize the broker main store as BrokerMessageStore::RocksDBStore");
-        };
-        assert!(rocksdb_owner.rocksdb_config().path.ends_with("consumequeue_rocksdb"));
+            .message_store_mut()
+            .expect("message store should be initialized")
+            .reput_once()
+            .await;
+        assert_eq!(
+            runtime
+                .inner
+                .message_store()
+                .expect("message store should be initialized")
+                .get_max_offset_in_queue(&topic, 0),
+            2,
+            "one single message and one ordinary batch must create two ConsumeQueue units"
+        );
 
         if let Some(mut message_store) = runtime.inner.message_store_mut() {
             message_store.shutdown().await;

@@ -39,6 +39,7 @@ use rocketmq_store::base::query_message_result::QueryMessageResult;
 use rocketmq_store::base::select_result::SelectMappedBufferResult;
 use rocketmq_store::filter::ArcMessageFilter;
 use rocketmq_store::ha::ha_connection_state_notification_request::HAConnectionStateNotificationRequest;
+use rocketmq_store::message_store::OwnedMessageStore;
 use rocketmq_store::store_api_adapter::LegacyAppendReceipt;
 use rocketmq_store::store_api_adapter::LegacyStoreHealthSnapshot;
 use rocketmq_store::store_error::StoreError as LegacyStoreError;
@@ -132,10 +133,6 @@ impl<MS: MessageStore> EscapeBridge<MS> {
             topic_route_info_manager,
             broker_outer_api,
         }
-    }
-
-    pub(crate) fn bind_message_store(&self, owner: &Arc<LegacyEscapeStoreOwner<MS>>) {
-        self.message_store.bind(owner);
     }
 
     pub(crate) fn store_capability(&self) -> EscapeBridgeStoreCapability<MS> {
@@ -375,6 +372,12 @@ impl<MS: MessageStore> EscapeBridge<MS> {
 
     pub(crate) fn local_timer_lag(&self) -> Result<(i64, i64), MessageStoreUnavailable> {
         self.message_store.timer_lag()
+    }
+}
+
+impl EscapeBridge<OwnedMessageStore> {
+    pub(crate) fn bind_message_store(&self, owner: &Arc<LegacyEscapeStoreOwner<OwnedMessageStore>>) {
+        self.message_store.bind_owned(owner);
     }
 }
 
@@ -772,6 +775,26 @@ mod tests {
             assert!(
                 admin_source.contains(operation),
                 "Admin Store boundary must expose the named {operation} operation"
+            );
+        }
+    }
+
+    #[test]
+    fn request_append_paths_use_the_shared_port_instead_of_complete_store_clones() {
+        let capability_source = include_str!("escape_bridge_capability.rs");
+
+        assert_eq!(
+            capability_source.matches(concat!("owner.cloned_", "store()")).count(),
+            1,
+            "only the controller role transition may retain a legacy mutable Store clone"
+        );
+        for operation in [
+            concat!(".put_", "message(message)"),
+            concat!(".put_", "messages(batch)"),
+        ] {
+            assert!(
+                capability_source.contains(operation),
+                "request append boundary must use {operation}"
             );
         }
     }
