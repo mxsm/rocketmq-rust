@@ -1411,6 +1411,15 @@ impl BrokerRuntime {
         self.admin_runtime()
     }
 
+    #[cfg(test)]
+    pub(crate) async fn start_message_store_for_test(&mut self) -> Result<(), StoreError> {
+        self.inner
+            .message_store_mut()
+            .ok_or(StoreError::NotStarted)?
+            .start()
+            .await
+    }
+
     pub(crate) fn auth_metrics_snapshot(&self) -> Option<AuthMetricsSnapshot> {
         self.inner.auth_metrics_snapshot()
     }
@@ -7026,11 +7035,24 @@ accounts:
             "Admin runtime instances must not clone the legacy compatibility pointer"
         );
 
+        let message_store = runtime
+            .inner
+            .message_store
+            .take()
+            .expect("message store should remain initialized");
+        message_store.write_lease().shutdown().await;
+        drop(message_store);
+
+        assert!(admin.message_store().is_none());
+        assert!(admin.put_message(MessageExtBrokerInner::default()).await.is_err());
+        assert!(matches!(
+            admin.set_commitlog_read_mode(MADV_NORMAL),
+            Err(StoreError::NotStarted)
+        ));
+        assert!(admin.delete_topics(Vec::new()).is_err());
+
         drop(admin_clone);
         drop(admin);
-        if let Some(mut message_store) = runtime.inner.message_store_mut() {
-            message_store.shutdown().await;
-        }
         let _ = std::fs::remove_dir_all(temp_root);
     }
 

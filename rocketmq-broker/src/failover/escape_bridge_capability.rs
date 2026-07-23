@@ -41,6 +41,7 @@ use rocketmq_store::store_api_adapter::LegacyMessageStoreHealthAdapter;
 use rocketmq_store::store_api_adapter::LegacyStoreHealthSnapshot;
 use rocketmq_store::store_error::HAError;
 use rocketmq_store::store_error::HAResult;
+use rocketmq_store::store_error::StoreError as LegacyStoreError;
 use rocketmq_store_api::MessageAppender;
 use rocketmq_store_api::StoreError;
 use rocketmq_store_api::StoreErrorKind;
@@ -227,10 +228,6 @@ impl<MS: MessageStore> EscapeBridgeStoreCapability<MS> {
         Ok(LegacyEscapeStoreReadLease { owner: self.owner()? })
     }
 
-    pub(crate) fn write_lease(&self) -> Result<LegacyEscapeStoreWriteLease<MS>, MessageStoreUnavailable> {
-        Ok(self.owner()?.write_lease())
-    }
-
     pub(crate) fn with_store<R>(&self, operation: impl FnOnce(&MS) -> R) -> Result<R, MessageStoreUnavailable> {
         let owner = self.owner()?;
         Ok(operation(owner.store()))
@@ -404,6 +401,16 @@ impl<MS: MessageStore> EscapeBridgeStoreCapability<MS> {
         Ok(store.put_message(message).await)
     }
 
+    pub(crate) fn set_commitlog_read_mode(&self, read_ahead_mode: i32) -> Result<(), LegacyStoreError> {
+        let owner = self.owner().map_err(|_| LegacyStoreError::NotStarted)?;
+        owner.write_lease().set_commitlog_read_mode(read_ahead_mode)
+    }
+
+    pub(crate) fn delete_topics(&self, delete_topics: Vec<&CheetahString>) -> Result<i32, MessageStoreUnavailable> {
+        let owner = self.owner()?;
+        Ok(owner.write_lease().delete_topics(delete_topics))
+    }
+
     pub(crate) fn min_offset(&self, topic: &CheetahString, queue_id: i32) -> Result<i64, MessageStoreUnavailable> {
         self.with_store(|store| store.get_min_offset_in_queue(topic, queue_id))
     }
@@ -459,7 +466,7 @@ impl<MS: MessageStore> EscapeBridgeStoreCapability<MS> {
         message_filter: ArcMessageFilter,
     ) -> Result<Option<GetMessageResult>, MessageStoreUnavailable> {
         let owner = self.owner()?;
-        let store = owner.cloned_store();
+        let store = owner.store();
         Ok(store
             .get_message_with_size_limit(
                 group,

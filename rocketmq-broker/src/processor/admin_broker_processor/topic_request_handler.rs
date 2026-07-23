@@ -47,6 +47,7 @@ use std::collections::HashMap;
 use tracing::info;
 
 use crate::broker::broker_admin_runtime::BrokerAdminRuntime;
+use crate::failover::escape_bridge::MessageStoreUnavailable;
 use crate::processor::admin_broker_processor::broker_config_request_handler::BrokerConfigRequestHandler;
 
 fn decode_topic_queue_mapping_detail(body: &[u8]) -> Result<TopicQueueMappingDetail, String> {
@@ -439,8 +440,15 @@ impl TopicRequestHandler {
                 .topic_config_manager()
                 .select_topic_config(pop_retry_topic_v2.as_ref())
                 .is_some()
+                && self
+                    .delete_topic_in_broker(broker_runtime_inner, pop_retry_topic_v2.as_ref())
+                    .is_err()
             {
-                self.delete_topic_in_broker(broker_runtime_inner, pop_retry_topic_v2.as_ref());
+                return Ok(Some(
+                    response
+                        .set_code(ResponseCode::SystemError)
+                        .set_remark("message store is unavailable"),
+                ));
             }
             let pop_retry_topic_v1 =
                 CheetahString::from_string(KeyBuilder::build_pop_retry_topic_v1(topic, group.as_str()));
@@ -448,11 +456,24 @@ impl TopicRequestHandler {
                 .topic_config_manager()
                 .select_topic_config(pop_retry_topic_v1.as_ref())
                 .is_some()
+                && self
+                    .delete_topic_in_broker(broker_runtime_inner, pop_retry_topic_v1.as_ref())
+                    .is_err()
             {
-                self.delete_topic_in_broker(broker_runtime_inner, pop_retry_topic_v1.as_ref());
+                return Ok(Some(
+                    response
+                        .set_code(ResponseCode::SystemError)
+                        .set_remark("message store is unavailable"),
+                ));
             }
         }
-        self.delete_topic_in_broker(broker_runtime_inner, topic);
+        if self.delete_topic_in_broker(broker_runtime_inner, topic).is_err() {
+            return Ok(Some(
+                response
+                    .set_code(ResponseCode::SystemError)
+                    .set_remark("message store is unavailable"),
+            ));
+        }
         broker_runtime_inner
             .topic_config_coordinator()
             .persist_and_wait()
@@ -692,7 +713,7 @@ impl TopicRequestHandler {
         &self,
         broker_runtime_inner: &mut BrokerAdminRuntime<MS>,
         topic: &CheetahString,
-    ) {
+    ) -> Result<(), MessageStoreUnavailable> {
         broker_runtime_inner
             .topic_config_manager()
             .delete_topic_config(topic, broker_runtime_inner.topic_config_state_machine_version());
@@ -703,11 +724,8 @@ impl TopicRequestHandler {
         broker_runtime_inner
             .pop_inflight_message_counter()
             .clear_in_flight_message_num_by_topic_name(topic);
-        broker_runtime_inner
-            .message_store_mut()
-            .as_mut()
-            .unwrap()
-            .delete_topics(vec![topic]);
+        broker_runtime_inner.delete_topics(vec![topic])?;
+        Ok(())
     }
 }
 

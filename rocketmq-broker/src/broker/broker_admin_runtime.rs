@@ -21,13 +21,16 @@ use std::sync::Weak;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::config::TopicConfig;
+use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_common::common::server::config::ServerConfig;
 use rocketmq_remoting::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
 use rocketmq_remoting::protocol::DataVersion;
+use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use rocketmq_store::stats::broker_stats::BrokerStats;
 use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
+use rocketmq_store::store_error::StoreError;
 use rocketmq_store::timer::timer_message_store::TimerMessageStore;
 use tracing::warn;
 
@@ -44,9 +47,9 @@ use crate::client::rebalance::rebalance_lock_manager::RebalanceLockManager;
 use crate::coldctr::cold_data_cg_ctr_service::ColdDataCgCtrService;
 use crate::controller::replicas_manager::ReplicasManager;
 use crate::failover::escape_bridge::EscapeBridge;
+use crate::failover::escape_bridge::MessageStoreUnavailable;
 use crate::failover::escape_bridge_capability::EscapeBridgePolicyState;
 use crate::failover::escape_bridge_capability::LegacyEscapeStoreReadLease;
-use crate::failover::escape_bridge_capability::LegacyEscapeStoreWriteLease;
 use crate::filter::manager::consumer_filter_manager::ConsumerFilterManager;
 use crate::long_polling::long_polling_service::pull_request_hold_service::PullRequestHoldService;
 use crate::offset::manager::consumer_offset_manager::ConsumerOffsetManager;
@@ -250,8 +253,26 @@ impl<MS: MessageStore> BrokerAdminRuntime<MS> {
         self.message_store_provider.upgrade()?.lease_message_store().ok()
     }
 
-    pub(crate) fn message_store_mut(&self) -> Option<LegacyEscapeStoreWriteLease<MS>> {
-        self.message_store_provider.upgrade()?.lease_message_store_mut().ok()
+    pub(crate) async fn put_message(
+        &self,
+        message: MessageExtBrokerInner,
+    ) -> Result<PutMessageResult, MessageStoreUnavailable> {
+        let message_store = self.message_store_provider.upgrade().ok_or(MessageStoreUnavailable)?;
+        message_store.put_message_to_local_store(message).await
+    }
+
+    pub(crate) fn set_commitlog_read_mode(&self, read_ahead_mode: i32) -> Result<(), StoreError> {
+        self.message_store_provider
+            .upgrade()
+            .ok_or(StoreError::NotStarted)?
+            .set_commitlog_read_mode(read_ahead_mode)
+    }
+
+    pub(crate) fn delete_topics(&self, delete_topics: Vec<&CheetahString>) -> Result<i32, MessageStoreUnavailable> {
+        self.message_store_provider
+            .upgrade()
+            .ok_or(MessageStoreUnavailable)?
+            .delete_topics(delete_topics)
     }
 
     pub(crate) fn topic_config_manager(&self) -> &TopicConfigManager {
