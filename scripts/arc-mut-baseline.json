@@ -509,7 +509,7 @@
           "id": "d8463129a439bda73b3b705d",
           "fingerprint": "fa1cf46ad3c0fd49f66412d9",
           "item": "mod tests",
-          "line": 4962
+          "line": 4955
         }
       ],
       "owner": "broker",
@@ -534,25 +534,19 @@
           "id": "74cc17d48db931fb59acef21",
           "fingerprint": "3de04c81a6ce8750c01dbb1e",
           "item": "fn initialize_message_store",
-          "line": 2163
+          "line": 2165
         },
         {
           "id": "7bfbb94e72a0c7018d7617e3",
           "fingerprint": "dcb507a9b34627030b03097c",
           "item": "fn initialize_message_store",
-          "line": 2202
+          "line": 2204
         },
         {
           "id": "052080cc76db61122b9aa40e",
           "fingerprint": "b268404c9afc32876ee95cbc",
           "item": "fn initialize_message_store",
-          "line": 2204
-        },
-        {
-          "id": "5b7b3163d443a001a0b3e66d",
-          "fingerprint": "fdf98a153c51f661eda8815f",
-          "item": "fn set_message_store",
-          "line": 4591
+          "line": 2206
         }
       ],
       "owner": "broker",
@@ -590,7 +584,7 @@
           "id": "6accef9ad22e851ef1dc1890",
           "fingerprint": "993e032cc43bf3fde8bb9b8c",
           "item": "struct BrokerRuntimeInner",
-          "line": 3802
+          "line": 3804
         }
       ],
       "owner": "broker",
@@ -616,154 +610,6 @@
       "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
       "remove_by": "M05",
       "adr": "ADR-002"
-    },
-    {
-      "identity": "c8ea74fe7e1e8bfaa415a469",
-      "path": "rocketmq-store/benches/commit_log_performance.rs",
-      "symbol": "ArcMut",
-      "kind": "constructor",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "68c889017c943ab9e3da8101",
-          "fingerprint": "4e52138d7cfba7cabf8bbf34",
-          "item": "fn new_bench_store",
-          "line": 167
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "cd6a7329ed815c6a3fad9b00",
-      "path": "rocketmq-store/benches/commit_log_performance.rs",
-      "symbol": "ArcMut",
-      "kind": "import",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "95e91e8ce3c1090752aaabdb",
-          "fingerprint": "0de9c54ce5d7b6349b392596",
-          "item": "<module>",
-          "line": 43
-        }
-      ],
-      "owner": "store",
-      "reason": "Import or glob brings governed shared-mutation debt into this module",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "0e84fd4edd7593efc0bf3a3f",
-      "path": "rocketmq-store/benches/commit_log_performance.rs",
-      "symbol": "ArcMut",
-      "kind": "type_reference",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "e0191e9b9fbdfc746599c59c",
-          "fingerprint": "0485cce4cad84639020880fb",
-          "item": "struct BenchStore",
-          "line": 53
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy shared-mutation type or propagated alias dependency pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
-    },
-    {
-      "identity": "02c5cd2a1c5bce03a9946486",
-      "path": "rocketmq-store/benches/commit_log_performance.rs",
-      "symbol": "mut_from_ref",
-      "kind": "mut_from_ref_call",
-      "category": "test",
-      "occurrences": [
-        {
-          "id": "38421207e90101bf99f0456b",
-          "fingerprint": "c408444e74cc34dadc7988e4",
-          "item": "fn start_store_if_needed",
-          "line": 222
-        },
-        {
-          "id": "a11d0f8495d21a0ad940e904",
-          "fingerprint": "f12b0e190a0d4ee55f81dfe9",
-          "item": "fn start_store_if_needed",
-          "line": 226
-        },
-        {
-          "id": "2f0c7fd3d9c985a6f8e53b00",
-          "fingerprint": "b70a0709bc3f6cb022a91f15",
-          "item": "fn start_store_if_needed",
-          "line": 230
-        },
-        {
-          "id": "a01e3a0559b5cc3cc3e2cd09",
-          "fingerprint": "b0e904cf662a098bc8e5cc26",
-          "item": "fn run_lock_profile_messages",
-          "line": 245
-        },
-        {
-          "id": "1b5faa084f0a2fb59edf0edc",
-          "fingerprint": "9605fd11dcceb5a15a664bd2",
-          "item": "fn run_lock_profile_messages",
-          "line": 260
-        },
-        {
-          "id": "34e18418386105af52fe9382",
-          "fingerprint": "d18768484494b0770a956a2c",
-          "item": "fn bench_async_flush_single_message",
-          "line": 346
-        },
-        {
-          "id": "70b6c05d0a5c3f968d797660",
-          "fingerprint": "9605fd11dcceb5a15a664bd2",
-          "item": "fn bench_async_flush_multi_queue",
-          "line": 382
-        },
-        {
-          "id": "8725415bb867e394b4973e19",
-          "fingerprint": "9fcb857c92b7447962afaf07",
-          "item": "fn bench_reput_once_after_batch",
-          "line": 452
-        },
-        {
-          "id": "60487d678c726030aefeb138",
-          "fingerprint": "d16587ebf1169aeabc2379ee",
-          "item": "fn bench_reput_once_after_batch",
-          "line": 463
-        },
-        {
-          "id": "12ef8df5b67201f1a5a0ef0a",
-          "fingerprint": "585d806c54af627f2616c0aa",
-          "item": "fn bench_sync_flush_tail_latency_baseline",
-          "line": 487
-        },
-        {
-          "id": "9a3c531fa224fd4590b53305",
-          "fingerprint": "f12b0e190a0d4ee55f81dfe9",
-          "item": "fn bench_sync_flush_tail_latency_baseline",
-          "line": 491
-        },
-        {
-          "id": "3d04fda1bfcfe06bc5dddf17",
-          "fingerprint": "b70a0709bc3f6cb022a91f15",
-          "item": "fn bench_sync_flush_tail_latency_baseline",
-          "line": 495
-        },
-        {
-          "id": "498b8da1eeadaf764a93d257",
-          "fingerprint": "b0e904cf662a098bc8e5cc26",
-          "item": "fn bench_sync_flush_tail_latency_baseline",
-          "line": 510
-        }
-      ],
-      "owner": "store",
-      "reason": "Legacy safe mutable-reference escape pending ownership migration",
-      "remove_by": "M11",
-      "adr": "ADR-013"
     },
     {
       "identity": "9df6be4b83a40eddcebc37be",
@@ -858,7 +704,7 @@
           "id": "acf0a21effeac5aa09fe7574",
           "fingerprint": "e4ab39f7884daf109dcbf1e9",
           "item": "fn local_file_store_arc",
-          "line": 211
+          "line": 210
         }
       ],
       "owner": "store",

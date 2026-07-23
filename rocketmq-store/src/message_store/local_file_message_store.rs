@@ -6729,14 +6729,14 @@ mod tests {
     }
 
     #[test]
-    fn local_store_does_not_retain_its_complete_root_handle() {
+    fn local_store_owned_wiring_does_not_retain_its_complete_root_handle() {
         let source = include_str!("local_file_message_store.rs").replace("\r\n", "\n");
         let production = source
             .split_once("#[cfg(test)]\nmod tests")
             .map(|(source, _)| source)
             .expect("LocalFileMessageStore production section");
         let wiring = production
-            .split_once("pub fn set_message_store_arc")
+            .split_once("pub fn wire_owned_root_dependencies")
             .and_then(|(_, source)| source.split_once("pub fn delay_level_table"))
             .map(|(source, _)| source)
             .expect("Local root wiring function");
@@ -6751,12 +6751,15 @@ mod tests {
         assert!(!production.contains("fn message_store_arc_or_error"));
         assert!(!production.contains("self.message_store_arc"));
         assert!(wiring.contains("self.consume_queue_store.set_context(self.consume_queue_context());"));
-        assert!(wiring.contains("TimerMessageStore::new(Some(message_store_arc.clone()))"));
+        assert!(wiring.contains("TimerMessageStore::new_with_store_context("));
+        assert!(wiring.contains("self.timer_store_context()"));
         assert!(wiring.contains("DefaultHAService::new(replica_store)"));
         assert!(wiring.contains("PendingHAService::AutoSwitch"));
         assert!(wiring.contains("PendingHAService::Default"));
         assert!(wiring.contains("PendingHAService::Default(Box::new("));
         assert!(wiring.contains("self.root_dependencies_wired = true;"));
+        assert!(!wiring.contains("ArcMut"));
+        assert!(!wiring.contains("message_store_arc"));
         assert!(!init.contains("DefaultHAService::new"));
         assert_eq!(init.matches("ArcMut::new(service)").count(), 0);
         assert_eq!(init.matches("ArcMut::new(*service)").count(), 0);

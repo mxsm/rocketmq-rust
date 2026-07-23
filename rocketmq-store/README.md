@@ -86,23 +86,20 @@ use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::config::TopicConfig;
-use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore;
 
 async fn start_store() -> Result<(), rocketmq_store::store_error::StoreError> {
     let topic_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>> = Arc::new(DashMap::new());
-    let mut store = ArcMut::new(LocalFileMessageStore::new(
+    let mut store = LocalFileMessageStore::new(
         Arc::new(MessageStoreConfig::default()),
         Arc::new(BrokerConfig::default()),
         topic_table,
         None,
         false,
-    ));
-
-    let store_ref = store.clone();
-    store.set_message_store_arc(store_ref);
+    );
+    store.wire_owned_root_dependencies()?;
 
     store.init().await?;
     if store.load().await {

@@ -12938,16 +12938,19 @@ def commit_log_recovery_route_contract_violations(
         violations.append("LocalFileMessageStore regained a retained complete-root handle")
     if "message_store_arc_or_error" in store_production or "self.message_store_arc" in store_production:
         violations.append("LocalFileMessageStore regained complete-root recovery")
-    wiring_compact = compact_rust(named_function_body(store_production, "set_message_store_arc") or "")
+    wiring_compact = compact_rust(named_function_body(store_production, "wire_owned_root_dependencies") or "")
     for required in (
         "self.consume_queue_store.set_context(self.consume_queue_context())",
-        "TimerMessageStore::new(Some(message_store_arc.clone()))",
+        "TimerMessageStore::new_with_store_context(self.timer_store_context(),Arc::clone(&self.message_store_config),)",
         "self.root_dependencies_wired=true",
     ):
         if wiring_compact.count(required) != 1:
             violations.append(f"Local root one-shot wiring changed: {required}")
     if wiring_compact.count("DefaultHAService::new(replica_store") != 2:
         violations.append("Local root HA construction must remain in one-shot wiring")
+    for forbidden_wiring in ("ArcMut", "message_store_arc"):
+        if forbidden_wiring in wiring_compact:
+            violations.append(f"Local owned wiring regained a complete-root dependency: {forbidden_wiring}")
     init_compact = compact_rust(named_function_body(store_production, "init") or "")
     for forbidden_init in ("message_store_arc_or_error", "DefaultHAService::new"):
         if forbidden_init in init_compact:
@@ -15696,7 +15699,11 @@ class StoreLocalContractTests(unittest.TestCase):
                 "Local root wiring completion removed",
                 local,
                 module,
-                store.replace("        self.root_dependencies_wired = true;", "", 1),
+                store.replace(
+                    "        self.root_dependencies_wired = true;\n        Ok(())",
+                    "        Ok(())",
+                    1,
+                ),
                 local_tests,
             ),
             (
