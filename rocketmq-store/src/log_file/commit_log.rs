@@ -109,7 +109,6 @@ use crate::store_error::StoreError;
 use crate::transfer::error::TransferError;
 use crate::transfer::error::TransferResult;
 use crate::transfer::segment::SegmentLease;
-use crate::utils::ffi::madvise;
 use crate::utils::ffi::MADV_NORMAL;
 use crate::utils::ffi::MADV_RANDOM;
 
@@ -1348,7 +1347,7 @@ impl CommitLog {
                 let pos = offset % mapped_file_size as i64;
                 let mut select_mapped_buffer_result = mmap_file.select_mapped_buffer(pos as i32, size);
                 if let Some(ref mut result) = select_mapped_buffer_result {
-                    result.mapped_file = Some(mmap_file);
+                    result.try_attach_mapped_file(mmap_file);
                 }
                 select_mapped_buffer_result
             }
@@ -3014,7 +3013,7 @@ impl CommitLog {
             let pos = (offset % mapped_file_size) as i32;
             let mut result = mapped_file.select_mapped_buffer_with_position(pos);
             if let Some(ref mut result) = result {
-                result.mapped_file = Some(mapped_file);
+                result.try_attach_mapped_file(mapped_file);
             }
             result
         } else {
@@ -3106,16 +3105,13 @@ impl CommitLog {
         let mapped_files = self.mapped_file_queue.get_mapped_files().load();
         let mut updated = 0;
         for mapped_file in mapped_files.iter() {
-            let mmap = mapped_file.get_mapped_file();
-            let result = madvise(mmap.as_ptr(), mmap.len(), read_ahead_mode);
-            if result == 0 {
+            if mapped_file.apply_memory_advice(read_ahead_mode).is_ok() {
                 updated += 1;
             } else {
                 warn!(
-                    "failed to apply read mode {} for {}: result={}",
+                    "failed to apply read mode {} for {}",
                     read_ahead_mode,
-                    mapped_file.get_file_name(),
-                    result
+                    mapped_file.get_file_name()
                 );
             }
         }

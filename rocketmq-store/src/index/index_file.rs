@@ -282,7 +282,7 @@ impl IndexFile {
     }
 
     fn read_index_bytes<const N: usize>(&self, position: usize) -> Option<[u8; N]> {
-        self.mapped_file.get_slice(position, N)?.try_into().ok()
+        self.mapped_file.get_slice(position, N)?.as_ref().try_into().ok()
     }
 
     fn apply_header_update(&self, update: IndexHeaderUpdate) {

@@ -16,6 +16,7 @@ use bytes::Bytes;
 use bytes::BytesMut;
 
 use crate::base::select_result::SelectMappedBufferResult;
+use crate::log_file::mapped_file::MappedFile;
 
 pub struct QueryMessageResult {
     pub message_maped_list: Vec<SelectMappedBufferResult>,
@@ -60,9 +61,8 @@ impl QueryMessageResult {
                 continue;
             }
             let mapped_file = msg.mapped_file.as_ref()?;
-            let data = &mapped_file.get_mapped_file()
-                [msg.start_offset as usize..(msg.start_offset + msg.size as u64) as usize];
-            bytes_mut.extend_from_slice(data);
+            let data = mapped_file.get_bytes(msg.file_offset as usize, msg.size as usize)?;
+            bytes_mut.extend_from_slice(data.as_ref());
         }
         Some(bytes_mut.freeze())
     }

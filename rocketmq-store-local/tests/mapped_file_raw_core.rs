@@ -59,62 +59,6 @@ fn copied_reads_preserve_file_and_readable_boundaries() {
 }
 
 #[test]
-fn append_operations_distinguish_progress_updates() {
-    let core = MappedFileRawCore::new(8);
-    let mut mapped = [0; 8];
-
-    assert!(core.append_bytes_with_position_update(|| &mut mapped, b"abcdef", 1, 3));
-    assert_eq!(&mapped[..3], b"bcd");
-    assert_eq!(core.wrote_position(), 3);
-
-    assert!(core.append_bytes_without_position_update(|| &mut mapped, b"XY", 0, 2));
-    assert_eq!(&mapped[3..5], b"XY");
-    assert_eq!(core.wrote_position(), 3);
-
-    assert!(!core.append_bytes_with_position_update(|| &mut mapped, b"x", 2, 1));
-    assert_eq!(core.wrote_position(), 3);
-    assert!(core.append_bytes_with_position_update(|| &mut mapped, b"", 0, 0));
-    assert_eq!(core.wrote_position(), 3);
-}
-
-#[test]
-fn direct_write_requires_an_explicit_non_empty_commit() {
-    let core = MappedFileRawCore::new(8);
-    let mut mapped = [0; 8];
-    core.set_wrote_position(6);
-
-    let (range, start) = core.direct_write_range(|| &mut mapped, 2).unwrap();
-    assert_eq!(start, 6);
-    range.copy_from_slice(b"ok");
-    assert_eq!(core.wrote_position(), 6);
-    assert!(core.direct_write_range(|| &mut mapped, 0).is_some());
-    assert!(core.direct_write_range(|| &mut mapped, 3).is_none());
-    assert!(!core.commit_direct_write(0));
-    assert!(!core.commit_direct_write(3));
-    assert!(core.commit_direct_write(2));
-    assert_eq!(core.wrote_position(), 8);
-    assert!(core.is_full());
-}
-
-#[test]
-fn indexed_writes_preserve_segment_and_exact_end_rules() {
-    let core = MappedFileRawCore::new(8);
-    let mut mapped = [0; 8];
-
-    assert!(core.write_bytes_segment(|| &mut mapped, b"AB", 0, usize::MAX, 2));
-    assert_eq!(&mapped[..2], b"AB");
-    assert!(core.write_bytes_segment(|| &mut mapped, b"abcdef", 2, 3, 2));
-    assert_eq!(&mapped[2..4], b"de");
-    assert!(core.write_bytes_segment(|| &mut mapped, b"", 8, 0, 0));
-    assert!(!core.write_bytes_segment(|| &mut mapped, b"x", 7, 1, 2));
-
-    assert!(core.put_slice(|| &mut mapped, b"WXYZ", 4));
-    assert_eq!(&mapped[4..], b"WXYZ");
-    assert!(!core.put_slice(|| &mut mapped, b"", 8));
-    assert!(!core.put_slice(|| &mut mapped, b"X", 8));
-}
-
-#[test]
 fn raw_slices_keep_the_legacy_exact_end_rejection() {
     let core = MappedFileRawCore::new(8);
     let mapped = *b"abcdefgh";
@@ -148,40 +92,13 @@ fn byte_providers_are_lazy_and_short_slices_fail_closed() {
     );
     assert_eq!(provider_calls.get(), 0);
 
-    let mut mapped = [0; 8];
-    assert!(!core.append_bytes_with_position_update(
-        || {
-            provider_calls.set(provider_calls.get() + 1);
-            &mut mapped
-        },
-        b"x",
-        0,
-        9,
-    ));
+    assert_eq!(core.copied_read_slice(|| &mapped, 8, 1), None);
     assert_eq!(provider_calls.get(), 0);
-
-    assert!(!core.append_bytes_with_position_update(
-        || {
-            provider_calls.set(provider_calls.get() + 1);
-            &mut mapped
-        },
-        b"x",
-        2,
-        1,
-    ));
-    assert_eq!(provider_calls.get(), 1);
 
     let short = [0; 4];
     assert_eq!(core.copied_read_slice(|| &short, 2, 3), None);
     assert_eq!(core.raw_slice(|| &short, 2, 3), None);
     assert_eq!(core.readable_slice(|| &short, 2, 3, 8), None);
-
-    let mut short = [0; 4];
-    assert!(!core.append_bytes_with_position_update(|| &mut short, b"abcde", 0, 5));
-    assert_eq!(core.wrote_position(), 0);
-    assert!(core.direct_write_range(|| &mut short, 5).is_none());
-    assert!(!core.write_bytes_segment(|| &mut short, b"abc", 2, 0, 3));
-    assert!(!core.put_slice(|| &mut short, b"abc", 2));
 }
 
 #[test]

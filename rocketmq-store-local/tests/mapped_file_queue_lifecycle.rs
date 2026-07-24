@@ -96,7 +96,7 @@ fn time_deletion_stops_before_the_pinned_wal_segment() {
 }
 
 #[test]
-fn offset_deletion_stops_when_the_selected_file_cannot_finish_destroy() {
+fn offset_deletion_releases_selection_before_destroy() {
     let temp_dir = tempfile::tempdir().expect("temp dir");
     let files = vec![
         mapped_file(&temp_dir, 0, 20),
@@ -112,8 +112,10 @@ fn offset_deletion_stops_when_the_selected_file_cannot_finish_destroy() {
 
     let deletion = delete_expired_mapped_files_by_offset(&files, 20, 10, 20);
 
-    assert_eq!(deletion.deleted_count(), 0);
-    assert!(deletion.into_mapped_files().is_empty());
+    assert_eq!(deletion.deleted_count(), 1);
+    let deleted_files = deletion.into_mapped_files();
+    assert_eq!(deleted_files.len(), 1);
+    assert!(Arc::ptr_eq(&deleted_files[0], &files[0]));
     assert!(!files[0].is_available());
     assert!(files[1].is_available());
     assert!(files[2].is_available());

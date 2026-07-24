@@ -25,8 +25,9 @@ use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
 use bytes::Bytes;
-use bytes::BytesMut;
 use cheetah_string::CheetahString;
+use parking_lot::Mutex;
+use parking_lot::MutexGuard;
 use rocketmq_error::RocketMQResult;
 use tracing::debug;
 use tracing::error;
@@ -40,6 +41,7 @@ use super::MappedFileMetrics;
 use super::MappedFileRawCore;
 use super::MappedFileResult;
 use super::MappedMemory;
+use super::MappedWriteLease;
 use super::NativeMappedMemory;
 use super::SelectMappedBufferCacheState;
 use super::SelectMappedBufferResult;
@@ -146,11 +148,82 @@ pub struct DefaultMappedFile<M: MappedMemory = NativeMappedMemory> {
     transient_store_pool: Option<TransientStorePool>,
     file_name: CheetahString,
     raw_core: MappedFileRawCore,
+    write_state: Mutex<MappedWriteState>,
     first_create_in_queue: bool,
     swap_map_time: AtomicU64,
     mapped_byte_buffer_access_count_since_last_swap: AtomicI64,
     metrics: Option<MappedFileMetrics>,
     flush_strategy: FlushStrategy,
+}
+
+#[derive(Default)]
+struct MappedWriteState {
+    staging: Vec<u8>,
+}
+
+/// Single-writer reservation backed by an owned staging buffer.
+///
+/// The lease holds the mapped file's writer sequencer for its complete lifetime. It never exposes
+/// the mmap itself, and dropping it does not publish or copy staged bytes.
+pub struct DefaultMappedWriteLease<'a, M: MappedMemory = NativeMappedMemory> {
+    owner: &'a DefaultMappedFile<M>,
+    state: MutexGuard<'a, MappedWriteState>,
+    start_position: usize,
+    capacity: usize,
+}
+
+impl<M: MappedMemory> MappedWriteLease for DefaultMappedWriteLease<'_, M> {
+    #[inline]
+    fn start_position(&self) -> usize {
+        self.start_position
+    }
+
+    #[inline]
+    fn capacity(&self) -> usize {
+        self.capacity
+    }
+
+    #[inline]
+    fn buffer_mut(&mut self) -> &mut [u8] {
+        &mut self.state.staging[..self.capacity]
+    }
+
+    fn commit(self, actual_bytes: usize, store_timestamp: Option<u64>) -> MappedFileResult<usize> {
+        if actual_bytes == 0 || actual_bytes > self.capacity {
+            return Err(MappedFileError::InvalidWriteCommit {
+                reserved: self.capacity,
+                actual: actual_bytes,
+            });
+        }
+
+        let end_position = self
+            .start_position
+            .checked_add(actual_bytes)
+            .filter(|end| *end <= self.owner.raw_core.file_size() as usize)
+            .ok_or_else(|| {
+                MappedFileError::out_of_bounds(self.start_position, actual_bytes, self.owner.raw_core.file_size())
+            })?;
+        let end_position_i32 = i32::try_from(end_position)
+            .map_err(|_| MappedFileError::WritePositionOverflow { position: end_position })?;
+        let current_position = self.owner.raw_core.wrote_position();
+        if usize::try_from(current_position).ok() != Some(self.start_position) {
+            return Err(MappedFileError::InvalidWritePosition {
+                position: current_position,
+                capacity: self.owner.raw_core.file_size(),
+            });
+        }
+
+        self.owner
+            .copy_to_mapping(self.start_position, &self.state.staging[..actual_bytes])?;
+        if let Some(store_timestamp) = store_timestamp {
+            self.owner.raw_core.set_store_timestamp(store_timestamp);
+        }
+        self.owner.raw_core.set_wrote_position(end_position_i32);
+        if let Some(metrics) = &self.owner.metrics {
+            metrics.record_write(actual_bytes);
+        }
+        Ok(end_position)
+    }
 }
 
 impl<M: MappedMemory> AsRef<DefaultMappedFile<M>> for DefaultMappedFile<M> {
@@ -237,6 +310,7 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
             mapping,
             file_name,
             raw_core: MappedFileRawCore::new(file_size),
+            write_state: Mutex::new(MappedWriteState::default()),
             first_create_in_queue: false,
             swap_map_time: AtomicU64::new(current_millis()),
             mapped_byte_buffer_access_count_since_last_swap: Default::default(),
@@ -244,6 +318,51 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
             metrics: Some(MappedFileMetrics::new()),
             flush_strategy: FlushStrategy::Async,
         })
+    }
+
+    fn copy_to_mapping(&self, start: usize, data: &[u8]) -> MappedFileResult<()> {
+        let end = start
+            .checked_add(data.len())
+            .filter(|end| *end <= self.raw_core.file_size() as usize)
+            .ok_or_else(|| MappedFileError::out_of_bounds(start, data.len(), self.raw_core.file_size()))?;
+        let mapped_memory = self.try_get_mapped_file_ref()?;
+        if end > mapped_memory.as_slice().len() {
+            return Err(MappedFileError::out_of_bounds(
+                start,
+                data.len(),
+                mapped_memory.as_slice().len() as u64,
+            ));
+        }
+
+        // SAFETY: the caller holds `write_state`, which is the only mapped-file mutation
+        // sequencer. The checked target range is live and in bounds, and the staging allocation
+        // cannot overlap the mmap allocation.
+        unsafe {
+            std::ptr::copy_nonoverlapping(data.as_ptr(), mapped_memory.as_mut_ptr().add(start), data.len());
+        }
+        Ok(())
+    }
+
+    fn write_at(&self, start: usize, data: &[u8]) -> bool {
+        let _writer = self.write_state.lock();
+        self.copy_to_mapping(start, data).is_ok()
+    }
+
+    fn copy_range(&self, pos: usize, size: usize, readable_position: Option<i32>) -> Option<Bytes> {
+        let end = pos.checked_add(size)?;
+        if end > self.raw_core.file_size() as usize {
+            return None;
+        }
+        if let Some(readable_position) = readable_position {
+            let readable_position = usize::try_from(readable_position).ok()?;
+            if end > readable_position {
+                return None;
+            }
+        }
+
+        let _writer = self.write_state.lock();
+        let mapped = self.try_get_mapped_file_ref().ok()?.as_slice();
+        mapped.get(pos..end).map(Bytes::copy_from_slice)
     }
 
     #[inline]
@@ -262,10 +381,6 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
 
     fn try_get_mapped_file_ref(&self) -> io::Result<&M> {
         self.mapping.get_or_try_init(|| M::map_mut(self.storage.file()))
-    }
-
-    fn try_get_mapped_memory(&self) -> io::Result<M> {
-        self.try_get_mapped_file_ref().cloned()
     }
 
     /// Extracts the file offset from the given file name.
@@ -333,6 +448,7 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
     where
         F: FnOnce(&Self, i32, i32) -> io::Result<()>,
     {
+        let _writer = self.write_state.lock();
         if !self.is_able_to_flush(flush_least_pages) {
             return Ok(self.get_flushed_position());
         }
@@ -366,6 +482,10 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
 #[allow(unused_variables)]
 impl<M: MappedMemory> MappedFile for DefaultMappedFile<M> {
     type SelectResult = SelectMappedBufferResult<M>;
+    type WriteLease<'a>
+        = DefaultMappedWriteLease<'a, M>
+    where
+        Self: 'a;
 
     #[inline]
     fn get_file_name(&self) -> &CheetahString {
@@ -403,102 +523,79 @@ impl<M: MappedMemory> MappedFile for DefaultMappedFile<M> {
 
     #[inline]
     fn get_bytes(&self, pos: usize, size: usize) -> Option<bytes::Bytes> {
-        self.raw_core
-            .copied_read_slice(|| self.get_mapped_file(), pos, size)
-            .map(Bytes::copy_from_slice)
+        self.copy_range(pos, size, None)
     }
 
     #[inline]
     fn get_bytes_readable_checked(&self, pos: usize, size: usize) -> Option<bytes::Bytes> {
-        self.raw_core
-            .copied_readable_slice(|| self.get_mapped_file(), pos, size, self.get_read_position())
-            .map(Bytes::copy_from_slice)
+        self.copy_range(pos, size, Some(self.get_read_position()))
     }
 
     fn append_message_offset_length(&self, data: &[u8], offset: usize, length: usize) -> bool {
-        self.raw_core.append_bytes_with_position_update(
-            || {
-                // SAFETY: mapped-file mutation is serialized by the owning Store operation.
-                let (ptr, len) = unsafe { self.mapped_file_mut_parts() };
-                // SAFETY: the live mapping remains exclusively owned for this append callback.
-                unsafe { Self::mutable_slice_from_parts(ptr, len) }
-            },
-            data,
-            offset,
-            length,
-        )
-    }
-
-    fn append_message_no_position_update(&self, data: &[u8], offset: usize, length: usize) -> bool {
-        self.raw_core.append_bytes_without_position_update(
-            || {
-                // SAFETY: mapped-file mutation is serialized by the owning Store operation.
-                let (ptr, len) = unsafe { self.mapped_file_mut_parts() };
-                // SAFETY: the live mapping remains exclusively owned for this append callback.
-                unsafe { Self::mutable_slice_from_parts(ptr, len) }
-            },
-            data,
-            offset,
-            length,
-        )
-    }
-
-    /// **Zero-Copy Implementation**
-    ///
-    /// Returns a direct mutable buffer for zero-copy message encoding.
-    /// Eliminates the intermediate pre_encode_buffer, reducing CPU usage.
-    fn get_direct_write_buffer(&self, required_space: usize) -> Option<(&mut [u8], usize)> {
-        self.raw_core.direct_write_range(
-            || {
-                // SAFETY: the caller owns the append operation until `commit_direct_write`.
-                let (ptr, len) = unsafe { self.mapped_file_mut_parts() };
-                // SAFETY: the direct-write contract keeps the selected range exclusive until it
-                // is committed.
-                unsafe { Self::mutable_slice_from_parts(ptr, len) }
-            },
-            required_space,
-        )
-    }
-
-    /// **Phase 3 Zero-Copy Implementation**
-    ///
-    /// Commits a direct write by updating the write position atomically.
-    fn commit_direct_write(&self, bytes_written: usize) -> bool {
-        let committed = self.raw_core.commit_direct_write(bytes_written);
-        if committed {
-            if let Some(metrics) = &self.metrics {
-                metrics.record_write(bytes_written);
-            }
+        let Some(end) = offset.checked_add(length) else {
+            return false;
+        };
+        let Some(source) = data.get(offset..end) else {
+            return false;
+        };
+        let Ok(mut lease) = self.reserve_write(length) else {
+            return false;
+        };
+        if lease.capacity() != length {
+            return false;
         }
-        committed
+        lease.buffer_mut().copy_from_slice(source);
+        lease.commit(length, None).is_ok()
+    }
+
+    fn reserve_write(&self, required_space: usize) -> MappedFileResult<Self::WriteLease<'_>> {
+        if required_space == 0 {
+            return Err(MappedFileError::InvalidWriteCommit { reserved: 0, actual: 0 });
+        }
+
+        let mut state = self.write_state.lock();
+        let wrote_position = self.raw_core.wrote_position();
+        let start_position = usize::try_from(wrote_position).map_err(|_| MappedFileError::InvalidWritePosition {
+            position: wrote_position,
+            capacity: self.raw_core.file_size(),
+        })?;
+        let file_size = self.raw_core.file_size() as usize;
+        if start_position > file_size {
+            return Err(MappedFileError::InvalidWritePosition {
+                position: wrote_position,
+                capacity: self.raw_core.file_size(),
+            });
+        }
+        if start_position == file_size {
+            return Err(MappedFileError::file_full(start_position, self.raw_core.file_size()));
+        }
+
+        let capacity = required_space.min(file_size - start_position);
+        state.staging.resize(capacity, 0);
+        state.staging[..capacity].fill(0);
+        Ok(DefaultMappedWriteLease {
+            owner: self,
+            state,
+            start_position,
+            capacity,
+        })
     }
 
     fn write_bytes_segment(&self, data: &[u8], start: usize, offset: usize, length: usize) -> bool {
-        self.raw_core.write_bytes_segment(
-            || {
-                // SAFETY: mapped-file mutation is serialized by the owning Store operation.
-                let (ptr, len) = unsafe { self.mapped_file_mut_parts() };
-                // SAFETY: the live mapping remains exclusively owned for this segment write.
-                unsafe { Self::mutable_slice_from_parts(ptr, len) }
-            },
-            data,
-            start,
-            offset,
-            length,
-        )
+        if data.len() == length {
+            return self.write_at(start, data);
+        }
+        let Some(end) = offset.checked_add(length) else {
+            return false;
+        };
+        let Some(source) = data.get(offset..end) else {
+            return false;
+        };
+        self.write_at(start, source)
     }
 
     fn put_slice(&self, data: &[u8], index: usize) -> bool {
-        self.raw_core.put_slice(
-            || {
-                // SAFETY: mapped-file mutation is serialized by the owning Store operation.
-                let (ptr, len) = unsafe { self.mapped_file_mut_parts() };
-                // SAFETY: the live mapping remains exclusively owned for this indexed write.
-                unsafe { Self::mutable_slice_from_parts(ptr, len) }
-            },
-            data,
-            index,
-        )
+        !data.is_empty() && self.write_at(index, data)
     }
 
     #[inline]
@@ -542,28 +639,20 @@ impl<M: MappedMemory> MappedFile for DefaultMappedFile<M> {
                     .fetch_add(1, Ordering::AcqRel);
 
                 let is_in_cache = self.record_cache_residency(pos as i64, size as usize);
-                let bytes = if size >= 8192 {
-                    // Try zero-copy read first
-                    self.get_bytes_zero_copy(pos as usize, size as usize)
-                        .unwrap_or_else(|| {
-                            // Fallback to standard method
-                            Bytes::from_owner(self.get_mapped_memory().region(pos as usize, size as usize))
-                        })
-                } else {
-                    // Small reads: use standard method
-                    Bytes::from_owner(self.get_mapped_memory().region(pos as usize, size as usize))
-                };
-
-                Some(SelectMappedBufferResult {
-                    start_offset: self.storage.file_from_offset() + pos as u64,
-                    size,
-                    bytes: Some(bytes),
-                    is_in_cache,
-                    source_kind: SelectMappedBufferSourceKind::MappedFile,
-                    file_offset: pos as u64,
-                    cache_state: SelectMappedBufferCacheState::from_residency(is_in_cache),
-                    mapped_file: None,
-                })
+                let result = self
+                    .get_bytes(pos as usize, size as usize)
+                    .map(|bytes| SelectMappedBufferResult {
+                        start_offset: self.storage.file_from_offset() + pos as u64,
+                        size,
+                        bytes: Some(bytes),
+                        is_in_cache,
+                        source_kind: SelectMappedBufferSourceKind::Bytes,
+                        file_offset: pos as u64,
+                        cache_state: SelectMappedBufferCacheState::from_residency(is_in_cache),
+                        mapped_file: None,
+                    });
+                MappedFile::release(self);
+                result
             } else {
                 warn!(
                     "matched, but hold failed, request pos: {}, fileFromOffset: {}",
@@ -584,7 +673,7 @@ impl<M: MappedMemory> MappedFile for DefaultMappedFile<M> {
     }
 
     #[inline]
-    fn get_mapped_byte_buffer(&self) -> &[u8] {
+    fn get_mapped_byte_buffer(&self) -> Bytes {
         self.mapped_byte_buffer_access_count_since_last_swap
             .fetch_add(1, Ordering::AcqRel);
 
@@ -592,11 +681,12 @@ impl<M: MappedMemory> MappedFile for DefaultMappedFile<M> {
             metrics.record_read(self.raw_core.file_size() as usize, false);
         }
 
-        self.get_mapped_file()
+        self.copy_range(0, self.raw_core.file_size() as usize, None)
+            .unwrap_or_default()
     }
 
     #[inline]
-    fn slice_byte_buffer(&self) -> &[u8] {
+    fn slice_byte_buffer(&self) -> Bytes {
         self.mapped_byte_buffer_access_count_since_last_swap
             .fetch_add(1, Ordering::AcqRel);
 
@@ -604,7 +694,8 @@ impl<M: MappedMemory> MappedFile for DefaultMappedFile<M> {
             metrics.record_read(self.raw_core.file_size() as usize, false);
         }
 
-        self.get_mapped_file()
+        self.copy_range(0, self.raw_core.file_size() as usize, None)
+            .unwrap_or_default()
     }
 
     #[inline]
@@ -629,16 +720,9 @@ impl<M: MappedMemory> MappedFile for DefaultMappedFile<M> {
         let read_position = self.get_read_position();
         if self.raw_core.is_readable_byte_range(pos, size, read_position) {
             if MappedFile::hold(self) {
-                let Some(slice) = self
-                    .raw_core
-                    .readable_slice(|| self.get_mapped_file(), pos, size, read_position)
-                else {
-                    MappedFile::release(self);
-                    return None;
-                };
-                let buffer = BytesMut::from(slice);
+                let buffer = self.copy_range(pos, size, Some(read_position));
                 MappedFile::release(self);
-                Some(buffer.freeze())
+                buffer
             } else {
                 debug!(
                     "matched, but hold failed, request pos: {}, fileFromOffset: {}",
@@ -717,15 +801,8 @@ impl<M: MappedMemory> MappedFile for DefaultMappedFile<M> {
 
     #[inline]
     fn set_wrote_position(&self, wrote_position: i32) {
+        let _writer = self.write_state.lock();
         self.raw_core.set_wrote_position(wrote_position)
-    }
-
-    #[inline]
-    fn record_append(&self, wrote_bytes: i32, store_timestamp: u64) {
-        self.raw_core.record_append(wrote_bytes, store_timestamp);
-        if let Some(metrics) = &self.metrics {
-            metrics.record_write(wrote_bytes as usize);
-        }
     }
 
     /// Return The max position which have valid data
@@ -939,23 +1016,20 @@ impl<M: MappedMemory> MappedFile for DefaultMappedFile<M> {
                 .fetch_add(1, Ordering::AcqRel);
             let is_in_cache = self.record_cache_residency(pos as i64, size as usize);
 
-            let bytes = if size >= 8192 {
-                self.get_bytes_zero_copy(pos as usize, size as usize)
-                    .unwrap_or_else(|| Bytes::from_owner(self.get_mapped_memory().region(pos as usize, size as usize)))
-            } else {
-                Bytes::from_owner(self.get_mapped_memory().region(pos as usize, size as usize))
-            };
-
-            Some(SelectMappedBufferResult {
-                start_offset: self.get_file_from_offset() + pos as u64,
-                size,
-                bytes: Some(bytes),
-                is_in_cache,
-                source_kind: SelectMappedBufferSourceKind::MappedFile,
-                file_offset: pos as u64,
-                cache_state: SelectMappedBufferCacheState::from_residency(is_in_cache),
-                mapped_file: None,
-            })
+            let result = self
+                .get_bytes(pos as usize, size as usize)
+                .map(|bytes| SelectMappedBufferResult {
+                    start_offset: self.get_file_from_offset() + pos as u64,
+                    size,
+                    bytes: Some(bytes),
+                    is_in_cache,
+                    source_kind: SelectMappedBufferSourceKind::Bytes,
+                    file_offset: pos as u64,
+                    cache_state: SelectMappedBufferCacheState::from_residency(is_in_cache),
+                    mapped_file: None,
+                });
+            MappedFile::release(self);
+            result
         } else {
             None
         }
@@ -993,8 +1067,12 @@ impl<M: MappedMemory> MappedFile for DefaultMappedFile<M> {
         Ok(())
     }
 
-    fn get_slice(&self, pos: usize, size: usize) -> Option<&[u8]> {
-        let slice = self.raw_core.raw_slice(|| self.get_mapped_file(), pos, size)?;
+    fn get_slice(&self, pos: usize, size: usize) -> Option<Bytes> {
+        let end = pos.checked_add(size)?;
+        if pos >= self.raw_core.file_size() as usize || end >= self.raw_core.file_size() as usize {
+            return None;
+        }
+        let slice = self.copy_range(pos, size, None)?;
         if let Some(metrics) = &self.metrics {
             metrics.record_read(size, false);
         }
@@ -1005,37 +1083,10 @@ impl<M: MappedMemory> MappedFile for DefaultMappedFile<M> {
 #[allow(unused_variables)]
 impl<M: MappedMemory> DefaultMappedFile<M> {
     #[inline]
-    /// Returns the pointer and length of the writable mapped bytes.
-    ///
-    /// # Safety
-    ///
-    /// The caller must exclusively own mapped-file mutation for every mutable slice or reference
-    /// derived from the returned parts. No read, write, flush, selection, or region operation may
-    /// overlap that access.
-    pub unsafe fn mapped_file_mut_parts(&self) -> (*mut u8, usize) {
-        let mapped_memory = self
-            .try_get_mapped_file_ref()
-            .expect("mapped file initialization failed");
-        (mapped_memory.as_mut_ptr(), mapped_memory.as_slice().len())
-    }
-
-    unsafe fn mutable_slice_from_parts<'a>(ptr: *mut u8, len: usize) -> &'a mut [u8] {
-        // SAFETY: the caller guarantees that the parts describe a live mapping and that mutation
-        // remains exclusive for the returned borrow.
-        unsafe { std::slice::from_raw_parts_mut(ptr, len) }
-    }
-
-    #[inline]
-    pub fn get_mapped_file(&self) -> &[u8] {
+    pub(crate) fn get_mapped_file(&self) -> &[u8] {
         self.try_get_mapped_file_ref()
             .expect("mapped file initialization failed")
             .as_slice()
-    }
-
-    /// Returns a cloned handle to the mapping backend for compatibility adapters.
-    #[inline]
-    pub fn get_mapped_memory(&self) -> M {
-        self.try_get_mapped_memory().expect("mapped file initialization failed")
     }
 
     fn touch_mapped_page(mapped_ptr: *mut u8, offset: usize) -> io::Result<()> {
@@ -1061,6 +1112,17 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
         }
     }
 
+    /// Applies an operating-system memory-access hint while excluding mapped-file mutation.
+    ///
+    /// # Errors
+    ///
+    /// Returns the platform error reported by the advice operation.
+    pub fn apply_memory_advice(&self, advice: i32) -> io::Result<()> {
+        let _writer = self.write_state.lock();
+        let mapped = self.try_get_mapped_file_ref()?;
+        Self::advise_mapped_file(mapped.as_slice().as_ptr(), mapped.as_slice().len(), advice)
+    }
+
     fn warm_mapped_file_with_ops<T, F, A, R>(
         &self,
         flush_disk_type: FlushDiskType,
@@ -1075,6 +1137,7 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
         A: FnMut(*const u8, usize, i32) -> io::Result<()>,
         R: FnMut(LinuxStorageDegradationEvent),
     {
+        let _writer = self.write_state.lock();
         let file_size = self.raw_core.file_size() as usize;
         if file_size == 0 {
             return;
@@ -1335,7 +1398,7 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
         self.flush_strategy = strategy;
     }
 
-    /// Zero-copy read operation - optimized memory access.
+    /// Copies a mapped range into an immutable snapshot.
     ///
     /// # Arguments
     ///
@@ -1344,34 +1407,19 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
     ///
     /// # Returns
     ///
-    /// `Some(Bytes)` containing the requested data, or `None` if out of bounds
-    ///
-    /// # Performance
-    ///
-    /// Optimized for different data sizes:
-    /// - Small (< 4KB): Fast copy, stays in L1/L2 cache
-    /// - Medium (4-64KB): Aligned access optimization for 10-15% improvement
-    /// - Large (> 64KB): Standard vectorized copy
+    /// `Some(Bytes)` containing the requested data, or `None` if out of bounds.
     ///
     /// # Examples
     ///
     /// ```ignore
-    /// let data = mapped_file.get_bytes_zero_copy(0, 16384)?;
+    /// let data = mapped_file.get_bytes_snapshot(0, 16384)?;
     /// process_message(&data);
     /// ```
-    pub fn get_bytes_zero_copy(&self, pos: usize, size: usize) -> Option<Bytes> {
-        // Record metrics
+    pub fn get_bytes_snapshot(&self, pos: usize, size: usize) -> Option<Bytes> {
         if let Some(metrics) = &self.metrics {
-            metrics.record_read(size, true);
+            metrics.record_read(size, false);
         }
-
-        // Bounds check
-        if !self.raw_core.is_file_range(pos, size) {
-            return None;
-        }
-
-        // True zero-copy: the backend region keeps the mapping alive while `Bytes` owns the view.
-        Some(Bytes::from_owner(self.get_mapped_memory().region(pos, size)))
+        self.copy_range(pos, size, None)
     }
 
     /// Flushes a specific range of the file to disk.
@@ -1589,10 +1637,10 @@ mod tests {
     }
 
     #[test]
-    fn test_get_bytes_zero_copy() {
+    fn test_get_bytes_snapshot() {
         let (_temp_dir, mapped_file) = create_test_file();
 
-        let data = mapped_file.get_bytes_zero_copy(0, 100);
+        let data = mapped_file.get_bytes_snapshot(0, 100);
         assert!(data.is_some());
 
         let data = data.unwrap();
@@ -1648,15 +1696,7 @@ mod tests {
             assert!(!MappedFile::append_message_offset_length(&mapped_file, b"x", 0, 4097,));
         });
         assert_stays_unmapped!(mapped_file, {
-            assert!(!MappedFile::append_message_no_position_update(
-                &mapped_file,
-                b"x",
-                0,
-                4097,
-            ));
-        });
-        assert_stays_unmapped!(mapped_file, {
-            assert!(MappedFile::get_direct_write_buffer(&mapped_file, 4097).is_none());
+            assert!(MappedFile::reserve_write(&mapped_file, 0).is_err());
         });
         assert_stays_unmapped!(mapped_file, {
             assert!(!MappedFile::write_bytes_segment(&mapped_file, b"x", 4096, 0, 1,));
@@ -1727,10 +1767,10 @@ mod tests {
     }
 
     #[test]
-    fn test_get_bytes_zero_copy_out_of_bounds() {
+    fn test_get_bytes_snapshot_out_of_bounds() {
         let (_temp_dir, mapped_file) = create_test_file();
 
-        let data = mapped_file.get_bytes_zero_copy(0, 10000);
+        let data = mapped_file.get_bytes_snapshot(0, 10000);
         assert!(data.is_none());
     }
 
@@ -1757,17 +1797,15 @@ mod tests {
     fn test_metrics_record_reads() {
         let (_temp_dir, mapped_file) = create_test_file();
 
-        // Perform some zero-copy reads
-        mapped_file.get_bytes_zero_copy(0, 100);
-        mapped_file.get_bytes_zero_copy(100, 200);
+        mapped_file.get_bytes_snapshot(0, 100);
+        mapped_file.get_bytes_snapshot(100, 200);
 
         // Check metrics
         let metrics = mapped_file.get_metrics().unwrap();
         assert_eq!(metrics.total_reads(), 2);
         assert_eq!(metrics.total_bytes_read(), 300);
 
-        // Both reads should be zero-copy
-        assert_eq!(metrics.zero_copy_read_percentage(), 100.0);
+        assert_eq!(metrics.zero_copy_read_percentage(), 0.0);
     }
 
     #[test]
@@ -1792,7 +1830,7 @@ mod tests {
         let (_temp_dir, mapped_file) = create_test_file();
 
         // Perform some operations
-        mapped_file.get_bytes_zero_copy(0, 1024);
+        mapped_file.get_bytes_snapshot(0, 1024);
         mapped_file.flush_range(0, 1024);
 
         // Get summary
@@ -1869,20 +1907,43 @@ mod tests {
     fn select_mapped_buffer_records_page_cache_residency() {
         let (_temp_dir, mapped_file) = create_test_file();
         assert!(mapped_file.append_message_bytes(b"cache-residency"));
+        let reference_count = ReferenceResource::get_ref_count(&mapped_file);
 
         let result = mapped_file
             .select_mapped_buffer(0, "cache-residency".len() as i32)
             .expect("selected buffer should exist");
 
+        assert_eq!(ReferenceResource::get_ref_count(&mapped_file), reference_count);
         let metrics = mapped_file.get_metrics().unwrap();
         assert_eq!(metrics.cache_hits() + metrics.cache_misses(), 1);
         assert_eq!(result.is_in_cache, metrics.cache_hits() == 1);
-        assert_eq!(result.source_kind, SelectMappedBufferSourceKind::MappedFile);
+        assert_eq!(result.source_kind, SelectMappedBufferSourceKind::Bytes);
         assert_eq!(result.file_offset, 0);
         assert_eq!(
             result.cache_state,
             SelectMappedBufferCacheState::from_residency(result.is_in_cache)
         );
+    }
+
+    #[test]
+    fn attached_selection_owns_and_releases_exactly_one_hold() {
+        let (_temp_dir, mapped_file) = create_test_file();
+        let mapped_file = Arc::new(mapped_file);
+        assert!(mapped_file.append_message_bytes(b"attached"));
+        let reference_count = ReferenceResource::get_ref_count(mapped_file.as_ref());
+        let mut result = mapped_file
+            .select_mapped_buffer(0, "attached".len() as i32)
+            .expect("selected buffer should exist");
+
+        assert!(result.try_attach_mapped_file(Arc::clone(&mapped_file)));
+        assert_eq!(
+            ReferenceResource::get_ref_count(mapped_file.as_ref()),
+            reference_count + 1
+        );
+        assert_eq!(result.source_kind, SelectMappedBufferSourceKind::MappedFile);
+
+        drop(result);
+        assert_eq!(ReferenceResource::get_ref_count(mapped_file.as_ref()), reference_count);
     }
 
     #[test]

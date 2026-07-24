@@ -53,6 +53,31 @@ pub enum MappedFileError {
         capacity: u64,
     },
 
+    /// The stored write position cannot identify a valid byte in this segment.
+    #[error("Invalid write position: position={position}, capacity={capacity}")]
+    InvalidWritePosition {
+        /// Current signed write position.
+        position: i32,
+        /// Maximum capacity of the file in bytes.
+        capacity: u64,
+    },
+
+    /// A write lease was committed with an invalid byte count.
+    #[error("Invalid write lease commit: reserved={reserved}, actual={actual}")]
+    InvalidWriteCommit {
+        /// Number of bytes reserved by the lease.
+        reserved: usize,
+        /// Number of bytes requested for publication.
+        actual: usize,
+    },
+
+    /// The next write position exceeds the signed position representation used by the store.
+    #[error("Write position cannot be represented: position={position}")]
+    WritePositionOverflow {
+        /// Unrepresentable file-local position.
+        position: usize,
+    },
+
     /// Memory mapping operation failed.
     ///
     /// This can occur during initial mmap creation, remapping after file expansion,
@@ -156,7 +181,11 @@ impl MappedFileError {
     pub fn is_recoverable(&self) -> bool {
         matches!(
             self,
-            Self::OutOfBounds { .. } | Self::FileFull { .. } | Self::TransientStoreExhausted
+            Self::OutOfBounds { .. }
+                | Self::FileFull { .. }
+                | Self::InvalidWritePosition { .. }
+                | Self::InvalidWriteCommit { .. }
+                | Self::TransientStoreExhausted
         )
     }
 

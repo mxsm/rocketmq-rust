@@ -294,7 +294,7 @@ impl ConsumeQueue {
                 let mut result =
                     mapped_file.select_mapped_buffer_with_position((offset % mapped_file_size as i64) as i32);
                 if let Some(ref mut result) = result {
-                    result.mapped_file = Some(mapped_file);
+                    result.try_attach_mapped_file(mapped_file);
                 }
                 return result;
             }
@@ -726,20 +726,10 @@ impl ConsumeQueueTrait for ConsumeQueue {
         }
         let last_mapped_file = last_mapped_file.unwrap();
         let max_readable_position = last_mapped_file.get_read_position();
-        let mut last_record =
+        let last_record =
             last_mapped_file.select_mapped_buffer(max_readable_position - CQ_STORE_UNIT_SIZE, CQ_STORE_UNIT_SIZE);
-        if let Some(ref mut result) = last_record {
-            result.mapped_file = Some(last_mapped_file.clone());
-        }
         if let Some(last_record) = last_record {
-            let last_record_pos = (last_record.start_offset - last_mapped_file.get_file_from_offset()) as usize;
-            let bytes = last_record
-                .mapped_file
-                .as_ref()
-                .unwrap()
-                .get_bytes(last_record_pos, last_record.size as usize)
-                .unwrap();
-            let Some(last_record) = ConsumeQueueRecord::decode(bytes.as_ref()) else {
+            let Some(last_record) = ConsumeQueueRecord::decode(last_record.get_buffer()) else {
                 return;
             };
             let commit_log_offset = last_record.physical_offset;
@@ -979,14 +969,20 @@ impl Iterator for ConsumeQueueIterator {
                 if self.counter * CQ_STORE_UNIT_SIZE >= value.size {
                     return None;
                 }
-                let mmp = value.mapped_file.as_ref().unwrap().get_mapped_file();
-                let start = value.start_offset as usize + (self.counter * CQ_STORE_UNIT_SIZE) as usize;
+                let bytes = match value.get_bytes_ref() {
+                    Some(bytes) => bytes.clone(),
+                    None => value
+                        .mapped_file
+                        .as_ref()?
+                        .get_bytes(value.file_offset as usize, value.size as usize)?,
+                };
+                let start = (self.counter * CQ_STORE_UNIT_SIZE) as usize;
                 self.counter += 1;
                 let end = start + CQ_STORE_UNIT_SIZE as usize;
-                let record = ConsumeQueueRecord::decode(&mmp[start..end])?;
+                let record = ConsumeQueueRecord::decode(&bytes[start..end])?;
                 self.remaining = self.remaining.saturating_sub(1);
                 let mut cq_unit = CqUnit {
-                    queue_offset: start as i64 / CQ_STORE_UNIT_SIZE as i64,
+                    queue_offset: (value.start_offset as i64 + start as i64) / CQ_STORE_UNIT_SIZE as i64,
                     size: record.message_size,
                     pos: record.physical_offset,
                     tags_code: record.tags_code,

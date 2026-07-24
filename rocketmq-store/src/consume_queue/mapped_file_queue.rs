@@ -156,7 +156,7 @@ impl MappedFileQueueReadHandle {
         let position = (offset % self.mapped_file_size as i64) as i32;
         let mut result = mapped_file.select_mapped_buffer_with_position(position);
         if let Some(result) = result.as_mut() {
-            result.mapped_file = Some(mapped_file);
+            result.try_attach_mapped_file(mapped_file);
         }
         result
     }
@@ -166,7 +166,7 @@ impl MappedFileQueueReadHandle {
         let position = (offset % self.mapped_file_size as i64) as i32;
         let mut result = mapped_file.select_mapped_buffer(position, size);
         if let Some(result) = result.as_mut() {
-            result.mapped_file = Some(mapped_file);
+            result.try_attach_mapped_file(mapped_file);
         }
         result
     }
@@ -185,7 +185,7 @@ impl MappedFileQueueReadHandle {
             let mapped_file = self.find_mapped_file_by_offset(current_offset, current_offset == offset)?;
             let pos = (current_offset % mapped_file_size) as i32;
             let mut result = mapped_file.select_mapped_buffer_with_position(pos)?;
-            result.mapped_file = Some(mapped_file);
+            result.try_attach_mapped_file(mapped_file);
 
             let readable = result.size.max(0) as usize;
             if readable == 0 {

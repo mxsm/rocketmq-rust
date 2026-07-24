@@ -50,7 +50,9 @@ pub mod queue_storage;
 pub mod raw;
 
 pub use contract::MappedFile;
+pub use contract::MappedWriteLease;
 pub use default_mapped_file::DefaultMappedFile;
+pub use default_mapped_file::DefaultMappedWriteLease;
 pub use default_mapped_file::LazyMmapStats;
 pub use default_mapped_file::OS_PAGE_SIZE;
 pub use direct_io::DirectIoBuffer;
