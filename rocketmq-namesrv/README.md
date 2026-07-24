@@ -8,8 +8,7 @@ RocketMQ NameServer implementation for [RocketMQ-Rust](../README.md).
 RocketMQ brokers, clients, and admin tools. It tracks broker liveness, topic
 route metadata, broker membership, write permissions, KV configuration,
 runtime configuration, and optional embedded controller integration. The
-default route manager is the production-ready V2 implementation built around
-concurrent tables and segmented locks.
+canonical route manager is built around concurrent tables and segmented locks.
 
 This crate can run as the `rocketmq-namesrv-rust` binary or be embedded through
 the `bootstrap::Builder` API for tests and service composition.
@@ -20,7 +19,7 @@ the `bootstrap::Builder` API for tests and service composition.
 | ---- | ---------------- |
 | Service discovery | Broker registration, unregistration, heartbeat tracking, inactive broker scanning, and channel destroy cleanup. |
 | Topic routing | Topic route lookup, standard/legacy JSON route encoding, zone-aware route filtering, filter-server metadata, and order-topic configuration lookup. |
-| Route storage | `RouteInfoManagerWrapper` selects V2 DashMap-based tables by default, with the legacy V1 manager still available through configuration. |
+| Route storage | `RouteInfoManager` owns the canonical DashMap-based tables and segmented cross-table locks. |
 | Broker and topic admin | Cluster info, broker member groups, topic registration/deletion, topic lists by cluster, unit-topic lists, and write-permission updates. |
 | KV configuration | Put/get/delete/list KV config namespaces with on-disk persistence through `KVConfigManager`. |
 | Runtime configuration | `GetNamesrvConfig` and `UpdateNamesrvConfig` support Java-properties payloads with a fixed blacklist for sensitive paths and home settings. |
@@ -155,7 +154,6 @@ field names where serde aliases are defined.
 | `listenPort` | `9876` | Remoting server port, configured through `ServerConfig` or CLI. |
 | `bindAddress` | `0.0.0.0` | Remoting server bind address, configured through `ServerConfig` or CLI. |
 | `scanNotActiveBrokerInterval` | `5000` | Broker inactivity scan interval in milliseconds. |
-| `useRouteInfoManagerV2` | `true` | Enables the DashMap-based route manager. |
 | `enableControllerInNamesrv` | `false` | Runs an embedded controller alongside the NameServer. |
 | `clusterTest` | `false` | Enables product-environment route fallback. |
 | `orderMessageEnable` | `false` | Adds `ORDER_TOPIC_CONFIG` data to route responses. |
@@ -170,14 +168,13 @@ Use `bootstrap::Builder` when embedding the NameServer in tests or higher-level
 services:
 
 ```rust
-use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
 use rocketmq_common::common::server::config::ServerConfig;
 use rocketmq_namesrv::bootstrap::Builder;
+use rocketmq_namesrv::NamesrvConfig;
 
 async fn run_namesrv() -> rocketmq_error::RocketMQResult<()> {
     let namesrv_config = NamesrvConfig {
         rocketmq_home: "/opt/rocketmq".to_string(),
-        use_route_info_manager_v2: true,
         ..NamesrvConfig::default()
     };
 

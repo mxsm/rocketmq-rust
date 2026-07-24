@@ -15,14 +15,14 @@
 use cheetah_string::CheetahString;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::common::mix_all::MASTER_ID;
-use rocketmq_common::common::mq_version::RocketMqVersion;
-use rocketmq_remoting::code::request_code::RequestCode;
-use rocketmq_remoting::code::response_code::ResponseCode;
-use rocketmq_remoting::protocol::header::client_request_header::GetRouteInfoRequestHeader;
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_remoting::protocol::route::route_data_view::BrokerData;
-use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
-use rocketmq_remoting::protocol::RemotingSerializable;
+use rocketmq_model::version::RocketMqVersion;
+use rocketmq_protocol::code::request_code::RequestCode;
+use rocketmq_protocol::code::response_code::ResponseCode;
+use rocketmq_protocol::protocol::header::client_request_header::GetRouteInfoRequestHeader;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::route::route_data_view::BrokerData;
+use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
+use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_remoting::runtime::RPCHook;
 
 pub struct ZoneRouteRPCHook;
@@ -32,7 +32,7 @@ impl RPCHook for ZoneRouteRPCHook {
     fn do_before_request(
         &self,
         _remote_addr: std::net::SocketAddr,
-        _request: &mut rocketmq_remoting::protocol::remoting_command::RemotingCommand,
+        _request: &mut rocketmq_protocol::protocol::remoting_command::RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<()> {
         Ok(())
     }
@@ -40,8 +40,8 @@ impl RPCHook for ZoneRouteRPCHook {
     fn do_after_response(
         &self,
         _remote_addr: std::net::SocketAddr,
-        request: &rocketmq_remoting::protocol::remoting_command::RemotingCommand,
-        response: &mut rocketmq_remoting::protocol::remoting_command::RemotingCommand,
+        request: &rocketmq_protocol::protocol::remoting_command::RemotingCommand,
+        response: &mut rocketmq_protocol::protocol::remoting_command::RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<()> {
         if RequestCode::GetRouteinfoByTopic as i32 != request.code() {
             return Ok(());
@@ -151,10 +151,10 @@ mod tests {
     use std::collections::HashMap;
     use std::net::SocketAddr;
 
-    use rocketmq_common::common::mq_version::RocketMqVersion;
-    use rocketmq_remoting::protocol::header::client_request_header::GetRouteInfoRequestHeader;
-    use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-    use rocketmq_remoting::protocol::route::route_data_view::QueueData;
+    use rocketmq_model::version::RocketMqVersion;
+    use rocketmq_protocol::protocol::header::client_request_header::GetRouteInfoRequestHeader;
+    use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+    use rocketmq_protocol::protocol::route::route_data_view::QueueData;
 
     use super::*;
 

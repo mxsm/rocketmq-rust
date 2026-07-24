@@ -24,10 +24,10 @@ use std::time::UNIX_EPOCH;
 use criterion::criterion_group;
 use criterion::criterion_main;
 use criterion::Criterion;
-use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
 use rocketmq_common::common::server::config::ServerConfig;
 use rocketmq_namesrv::bootstrap::Builder;
 use rocketmq_namesrv::bootstrap::NameServerShutdownReport;
+use rocketmq_namesrv::NamesrvConfig;
 
 #[derive(Debug)]
 struct NameSrvShutdownOutput {
@@ -78,7 +78,6 @@ fn namesrv_config(artifact_dir: &Path) -> NamesrvConfig {
         scan_not_active_broker_interval: 10,
         enable_controller_in_namesrv: false,
         cluster_test: false,
-        use_route_info_manager_v2: true,
         ..NamesrvConfig::default()
     }
 }

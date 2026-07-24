@@ -12,22 +12,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::fs;
 use std::path::PathBuf;
 
 use config::Config;
-use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
+use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use tracing::info;
 
+use crate::config::validate_namesrv_config_source;
+use crate::NamesrvConfig;
+
 pub fn parse_command_and_config_file(config_file: PathBuf) -> RocketMQResult<NamesrvConfig> {
+    let source = fs::read_to_string(&config_file).map_err(|error| {
+        RocketMQError::nameserver_config_invalid(format!("failed to read '{}': {error}", config_file.display()))
+    })?;
+    validate_namesrv_config_source(&source)?;
+
     let namesrv_config = Config::builder()
-        .add_source(config::File::with_name(
-            config_file.to_string_lossy().into_owned().as_str(),
-        ))
+        .add_source(config::File::from(config_file.clone()))
         .build()
-        .map_or(NamesrvConfig::default(), |result| {
-            result.try_deserialize::<NamesrvConfig>().unwrap_or_default()
-        });
+        .and_then(Config::try_deserialize::<NamesrvConfig>)
+        .map_err(|error| {
+            RocketMQError::nameserver_config_invalid(format!("failed to parse '{}': {error}", config_file.display()))
+        })?;
     info!("rocketmq-namesrv config: {:?}", namesrv_config);
     Ok(namesrv_config)
 }
@@ -56,7 +64,6 @@ mod tests {
             r#"
 rocketmqHome = "/tmp/rocketmq"
 kvConfigPath = "/tmp/rocketmq/kvConfig.json"
-useRouteInfoManagerV2 = false
 "#,
         )
         .expect("test config should be written");
@@ -66,7 +73,6 @@ useRouteInfoManagerV2 = false
 
         assert_eq!(config.rocketmq_home, "/tmp/rocketmq");
         assert_eq!(config.kv_config_path, "/tmp/rocketmq/kvConfig.json");
-        assert!(!config.use_route_info_manager_v2);
     }
 
     #[test]
@@ -77,7 +83,6 @@ useRouteInfoManagerV2 = false
 
         assert_eq!(config.rocketmq_home, "/opt/rocketmq");
         assert_eq!(config.kv_config_path, "/home/rocketmq/rocketmq-namesrv/kvConfig.json");
-        assert!(config.use_route_info_manager_v2);
     }
 
     #[test]
@@ -108,20 +113,32 @@ useRouteInfoManagerV2 = false
         assert_eq!(config.client_request_thread_pool_queue_capacity, 100000);
         assert_eq!(config.default_thread_pool_queue_capacity, 20000);
         assert_eq!(config.unregister_broker_queue_capacity, 5000);
-        assert!(config.use_route_info_manager_v2);
     }
 
     #[test]
-    fn namesrv_config_parse_falls_back_to_default_for_missing_file() {
-        let config =
-            parse_command_and_config_file(temp_config_path("missing")).expect("missing config should fall back");
-        let default_config = NamesrvConfig::default();
+    fn namesrv_config_parse_rejects_missing_file() {
+        let error = parse_command_and_config_file(temp_config_path("missing"))
+            .expect_err("missing config must fail explicitly");
 
-        assert_eq!(config.rocketmq_home, default_config.rocketmq_home);
-        assert_eq!(config.kv_config_path, default_config.kv_config_path);
-        assert_eq!(
-            config.use_route_info_manager_v2,
-            default_config.use_route_info_manager_v2
-        );
+        assert!(matches!(
+            error,
+            rocketmq_error::RocketMQError::Tools(rocketmq_error::ToolsError::NameServerConfigInvalid { .. })
+        ));
+    }
+
+    #[test]
+    fn namesrv_config_parse_rejects_removed_route_manager_switch() {
+        let path = temp_config_path("removed-route-manager-switch");
+        fs::write(&path, "useRouteInfoManagerV2 = false\n").expect("test config should be written");
+
+        let error =
+            parse_command_and_config_file(path.clone()).expect_err("removed route manager switch must fail explicitly");
+        fs::remove_file(path).expect("test config should be removed");
+
+        assert!(matches!(
+            error,
+            rocketmq_error::RocketMQError::Tools(rocketmq_error::ToolsError::NameServerConfigInvalid { .. })
+        ));
+        assert!(error.to_string().contains("useRouteInfoManagerV2"));
     }
 }

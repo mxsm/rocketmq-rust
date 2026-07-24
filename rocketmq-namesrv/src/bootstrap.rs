@@ -32,7 +32,6 @@ use std::time::Instant;
 use arc_swap::ArcSwap;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::controller::ControllerConfig;
-use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
 use rocketmq_common::common::server::config::ServerConfig;
 use rocketmq_common::utils::network_util::NetworkUtil;
 use rocketmq_controller::ControllerManager;
@@ -78,11 +77,10 @@ use crate::processor::NameServerRequestProcessor;
 use crate::processor::NameServerRequestProcessorWrapper;
 use crate::processor::TransportClusterTestRouteLookup;
 use crate::route::route_info_manager::RouteInfoManager;
-use crate::route::route_info_manager_v2::RouteInfoManagerV2;
-use crate::route::route_info_manager_wrapper::RouteInfoManagerWrapper;
 use crate::route::zone_route_rpc_hook::ZoneRouteRPCHook;
 use crate::route_info::broker_housekeeping_service::BrokerHousekeepingService;
 use crate::KVConfigManager;
+use crate::NamesrvConfig;
 
 /// Runtime lifecycle states for NameServer
 ///
@@ -903,18 +901,14 @@ impl NameServerRuntime {
         }
 
         info!("Phase 4/5: Shutting down route info manager...");
-        shutdown_report.route_unregistration = match tokio::time::timeout(
-            deadline.remaining(),
-            self.inner.route_info_manager().shutdown_unregister_service(),
-        )
-        .await
-        {
-            Ok(report) => report,
-            Err(_) => {
-                warn!("NameServer route unregistration exhausted the shutdown deadline");
-                None
-            }
-        };
+        shutdown_report.route_unregistration =
+            match tokio::time::timeout(deadline.remaining(), self.inner.route_info_manager().shutdown()).await {
+                Ok(report) => report,
+                Err(_) => {
+                    warn!("NameServer route unregistration exhausted the shutdown deadline");
+                    None
+                }
+            };
 
         if let Some(cluster_test_route_lookup) = self.inner.cluster_test_route_lookup() {
             shutdown_report.cluster_test_route_lookup_healthy = Some(
@@ -1158,10 +1152,6 @@ impl Builder {
             "  - Scan interval: {}ms",
             name_server_config.scan_not_active_broker_interval
         );
-        info!(
-            "  - Use V2 RouteManager: {}",
-            name_server_config.use_route_info_manager_v2
-        );
 
         let service_context = self
             .service_context
@@ -1193,8 +1183,6 @@ impl Builder {
             None => RocketmqDefaultClient::new(Arc::new(tokio_client_config.clone()), DefaultRemotingRequestProcessor),
         });
 
-        // Check configuration flag for RouteInfoManager version
-        let use_v2 = name_server_config.use_route_info_manager_v2;
         let unregister_broker_queue_capacity = name_server_config.unregister_broker_queue_capacity as usize;
         let initial_config = Arc::new(NameServerRuntimeConfig {
             name_server_config: Arc::new(name_server_config),
@@ -1207,19 +1195,7 @@ impl Builder {
         // root own every service without creating a service -> runtime strong cycle.
         let inner = Arc::new_cyclic(|weak_inner| {
             let runtime_handle = NameServerRuntimeHandle::from_weak(weak_inner.clone());
-            let route_info_manager = if use_v2 {
-                info!("Using RouteInfoManager V2 (DashMap-based, 5-50x faster)");
-                RouteInfoManagerWrapper::V2(Box::new(RouteInfoManagerV2::new(
-                    runtime_handle.clone(),
-                    unregister_broker_queue_capacity,
-                )))
-            } else {
-                warn!("Using RouteInfoManager V1 (legacy). Consider V2 for better performance.");
-                RouteInfoManagerWrapper::V1(Box::new(parking_lot::Mutex::new(RouteInfoManager::new(
-                    runtime_handle.clone(),
-                    unregister_broker_queue_capacity,
-                ))))
-            };
+            let route_info_manager = RouteInfoManager::new(runtime_handle.clone(), unregister_broker_queue_capacity);
 
             NameServerRuntimeInner {
                 config: ArcSwap::from(Arc::clone(&initial_config)),
@@ -1260,7 +1236,7 @@ impl Builder {
 pub(crate) struct NameServerRuntimeInner {
     config: ArcSwap<NameServerRuntimeConfig>,
     config_update_lock: parking_lot::Mutex<()>,
-    route_info_manager: Arc<RouteInfoManagerWrapper>,
+    route_info_manager: Arc<RouteInfoManager>,
     kvconfig_manager: Arc<KVConfigManager>,
     remoting_client: Arc<RocketmqDefaultClient>,
     broker_housekeeping_service: Arc<BrokerHousekeepingService>,
@@ -1314,11 +1290,11 @@ impl NameServerRuntimeHandle {
     pub(crate) fn update_name_server_config(
         &self,
         updates: HashMap<CheetahString, CheetahString>,
-    ) -> Result<(), String> {
+    ) -> RocketMQResult<()> {
         self.runtime().update_name_server_config(updates)
     }
 
-    pub(crate) fn route_info_manager(&self) -> Arc<RouteInfoManagerWrapper> {
+    pub(crate) fn route_info_manager(&self) -> Arc<RouteInfoManager> {
         self.runtime().route_info_manager()
     }
 
@@ -1334,7 +1310,7 @@ impl NameServerRuntimeHandle {
         self.runtime().cluster_test_route_lookup()
     }
 
-    pub(crate) fn update_runtime_config(&self, updates: HashMap<CheetahString, CheetahString>) -> Result<(), String> {
+    pub(crate) fn update_runtime_config(&self, updates: HashMap<CheetahString, CheetahString>) -> RocketMQResult<()> {
         self.runtime().update_runtime_config(updates)
     }
 
@@ -1403,7 +1379,7 @@ impl NameServerRuntimeInner {
     pub(crate) fn update_name_server_config(
         &self,
         updates: HashMap<CheetahString, CheetahString>,
-    ) -> Result<(), String> {
+    ) -> RocketMQResult<()> {
         let _update_guard = self.config_update_lock.lock();
         let current = self.config_snapshot();
         let mut name_server_config = (*current.name_server_config).clone();
@@ -1506,12 +1482,6 @@ impl NameServerRuntimeInner {
             name_server_config.delete_topic_with_broker_registration,
         );
         push_config_entry(&mut entries, "configBlackList", &name_server_config.config_black_list);
-        push_config_entry(
-            &mut entries,
-            "useRouteInfoManagerV2",
-            name_server_config.use_route_info_manager_v2,
-        );
-
         push_config_entry(&mut entries, "listenPort", server_config.listen_port);
         push_config_entry(&mut entries, "bindAddress", &server_config.bind_address);
         for (key, value) in server_config.tls_config.java_property_entries() {
@@ -1635,7 +1605,7 @@ impl NameServerRuntimeInner {
         Ok(config)
     }
 
-    pub fn update_runtime_config(&self, updates: HashMap<CheetahString, CheetahString>) -> Result<(), String> {
+    pub fn update_runtime_config(&self, updates: HashMap<CheetahString, CheetahString>) -> RocketMQResult<()> {
         let _update_guard = self.config_update_lock.lock();
         let current = self.config_snapshot();
         let mut name_server_config = (*current.name_server_config).clone();
@@ -1644,6 +1614,7 @@ impl NameServerRuntimeInner {
         let mut namesrv_updates = HashMap::new();
 
         for (key, value) in updates {
+            crate::config::reject_removed_route_manager_key(key.as_str())?;
             match key.as_str() {
                 "rocketmqHome"
                 | "kvConfigPath"
@@ -1666,8 +1637,7 @@ impl NameServerRuntimeInner {
                 | "needWaitForService"
                 | "waitSecondsForService"
                 | "deleteTopicWithBrokerRegistration"
-                | "configBlackList"
-                | "useRouteInfoManagerV2" => {
+                | "configBlackList" => {
                     namesrv_updates.insert(key, value);
                 }
                 "listenPort" => {
@@ -1756,7 +1726,7 @@ impl NameServerRuntimeInner {
     // Component accessors
 
     #[inline]
-    pub fn route_info_manager(&self) -> Arc<RouteInfoManagerWrapper> {
+    pub fn route_info_manager(&self) -> Arc<RouteInfoManager> {
         Arc::clone(&self.route_info_manager)
     }
 
@@ -1835,14 +1805,14 @@ fn is_tls_config_key(key: &str) -> bool {
     )
 }
 
-fn parse_config_value<T>(key: &str, value: &CheetahString) -> Result<T, String>
+fn parse_config_value<T>(key: &str, value: &CheetahString) -> RocketMQResult<T>
 where
     T: std::str::FromStr,
 {
     value
         .as_str()
         .parse()
-        .map_err(|_| format!("Invalid configuration value for key '{key}'"))
+        .map_err(|_| RocketMQError::nameserver_config_invalid(format!("invalid configuration value for key '{key}'")))
 }
 
 #[cfg(test)]
@@ -1858,13 +1828,12 @@ mod tests {
     use rocketmq_common::common::mix_all::string_to_properties;
     use rocketmq_common::common::mix_all::MASTER_ID;
     use rocketmq_common::common::mix_all::ZONE_NAME;
-    use rocketmq_common::common::mq_version::RocketMqVersion;
-    use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
     use rocketmq_common::common::server::config::ServerConfig;
     use rocketmq_common::common::tls_config::TlsMode;
     use rocketmq_common::common::TopicSysFlag;
     use rocketmq_common::CRC32Utils;
     use rocketmq_error::ErrorKind;
+    use rocketmq_model::version::RocketMqVersion;
     use rocketmq_remoting::code::request_code::RequestCode;
     use rocketmq_remoting::code::response_code::ResponseCode;
     use rocketmq_remoting::connection::ConnectionState;
@@ -1912,23 +1881,17 @@ mod tests {
     use crate::processor::default_request_processor::DefaultRequestProcessor;
     use crate::processor::ClientRequestProcessor;
 
-    fn build_bootstrap_with_v2_config(mut namesrv_config: NamesrvConfig) -> NameServerBootstrap {
-        namesrv_config.use_route_info_manager_v2 = true;
-        let bootstrap = Builder::new().set_name_server_config(namesrv_config).build();
-        assert!(matches!(
-            bootstrap.name_server_runtime.inner.route_info_manager().as_ref(),
-            RouteInfoManagerWrapper::V2(_)
-        ));
-        bootstrap
+    fn build_bootstrap_with_config(namesrv_config: NamesrvConfig) -> NameServerBootstrap {
+        Builder::new().set_name_server_config(namesrv_config).build()
     }
 
-    fn build_bootstrap_with_default_v2() -> NameServerBootstrap {
-        build_bootstrap_with_v2_config(NamesrvConfig::default())
+    fn build_default_bootstrap() -> NameServerBootstrap {
+        build_bootstrap_with_config(NamesrvConfig::default())
     }
 
     #[test]
     fn runtime_config_failed_update_preserves_published_snapshot() {
-        let bootstrap = build_bootstrap_with_default_v2();
+        let bootstrap = build_default_bootstrap();
         let runtime = bootstrap.runtime_inner();
         let before = runtime.config_snapshot();
         let before_port = before.server_config.listen_port;
@@ -1950,6 +1913,26 @@ mod tests {
         assert!(Arc::ptr_eq(&before, &after));
         assert_eq!(after.server_config.listen_port, before_port);
         assert_eq!(after.tokio_client_config.client_worker_threads, before_workers);
+    }
+
+    #[test]
+    fn runtime_config_rejects_removed_route_manager_switch_with_typed_error() {
+        let bootstrap = build_default_bootstrap();
+        let runtime = bootstrap.runtime_inner();
+        let before = runtime.config_snapshot();
+
+        let error = runtime
+            .update_runtime_config(HashMap::from([(
+                CheetahString::from_static_str("useRouteInfoManagerV2"),
+                CheetahString::from_static_str("false"),
+            )]))
+            .expect_err("removed route manager switch must fail");
+
+        assert!(matches!(
+            error,
+            RocketMQError::Tools(rocketmq_error::ToolsError::NameServerConfigInvalid { .. })
+        ));
+        assert!(Arc::ptr_eq(&before, &runtime.config_snapshot()));
     }
 
     #[test]
@@ -2007,33 +1990,26 @@ mod tests {
 
     #[test]
     fn runtime_owned_service_clones_do_not_keep_root_alive() {
-        for use_route_info_manager_v2 in [false, true] {
-            let bootstrap = Builder::new()
-                .set_name_server_config(NamesrvConfig {
-                    use_route_info_manager_v2,
-                    ..NamesrvConfig::default()
-                })
-                .build();
-            let request_processor = bootstrap.name_server_runtime.init_processors();
-            let runtime = bootstrap.runtime_inner();
-            let runtime_handle = NameServerRuntimeHandle::new(&runtime);
-            let weak_runtime = Arc::downgrade(&runtime);
-            let route_info_manager = runtime.route_info_manager();
-            let kvconfig_manager = runtime.kvconfig_manager();
-            let broker_housekeeping_service = runtime.broker_housekeeping_service();
+        let bootstrap = build_default_bootstrap();
+        let request_processor = bootstrap.name_server_runtime.init_processors();
+        let runtime = bootstrap.runtime_inner();
+        let runtime_handle = NameServerRuntimeHandle::new(&runtime);
+        let weak_runtime = Arc::downgrade(&runtime);
+        let route_info_manager = runtime.route_info_manager();
+        let kvconfig_manager = runtime.kvconfig_manager();
+        let broker_housekeeping_service = runtime.broker_housekeeping_service();
 
-            assert_eq!(route_info_manager.scan_not_active_broker(), 0);
-            drop(runtime);
-            drop(bootstrap);
+        assert_eq!(route_info_manager.scan_not_active_broker(), 0);
+        drop(runtime);
+        drop(bootstrap);
 
-            assert!(weak_runtime.upgrade().is_none());
-            assert!(runtime_handle.upgrade().is_none());
+        assert!(weak_runtime.upgrade().is_none());
+        assert!(runtime_handle.upgrade().is_none());
 
-            drop(route_info_manager);
-            drop(kvconfig_manager);
-            drop(broker_housekeeping_service);
-            drop(request_processor);
-        }
+        drop(route_info_manager);
+        drop(kvconfig_manager);
+        drop(broker_housekeeping_service);
+        drop(request_processor);
     }
 
     #[test]
@@ -2062,7 +2038,7 @@ mod tests {
 
     #[test]
     fn invalid_runtime_transition_uses_service_error_kind() {
-        let bootstrap = build_bootstrap_with_default_v2();
+        let bootstrap = build_default_bootstrap();
         let error = bootstrap
             .name_server_runtime
             .transition_to(RuntimeState::Running)
@@ -2095,7 +2071,9 @@ mod tests {
     async fn service_context_shutdown_report_includes_remoting_client() {
         let context = RuntimeContext::from_current("namesrv-runtime-owner-test");
         let service = context.service_context("namesrv-service");
+        let (namesrv_config, _namesrv_root) = isolated_namesrv_config(NamesrvConfig::default());
         let bootstrap = Builder::new()
+            .set_name_server_config(namesrv_config)
             .set_server_config(namesrv_server_config())
             .set_service_context(service)
             .build();
@@ -2117,7 +2095,7 @@ mod tests {
 
     #[tokio::test]
     async fn namesrv_in_flight_drain_zero_requests_is_healthy() {
-        let bootstrap = build_bootstrap_with_default_v2();
+        let bootstrap = build_default_bootstrap();
 
         let report = bootstrap
             .name_server_runtime
@@ -2132,7 +2110,7 @@ mod tests {
 
     #[tokio::test]
     async fn namesrv_in_flight_drain_waits_for_controlled_request() {
-        let bootstrap = build_bootstrap_with_default_v2();
+        let bootstrap = build_default_bootstrap();
         let guard = bootstrap.name_server_runtime.inner.in_flight_request_guard();
         let wait = bootstrap
             .name_server_runtime
@@ -2155,7 +2133,7 @@ mod tests {
 
     #[tokio::test]
     async fn namesrv_in_flight_drain_timeout_reports_remaining() {
-        let bootstrap = build_bootstrap_with_default_v2();
+        let bootstrap = build_default_bootstrap();
         let guard = bootstrap.name_server_runtime.inner.in_flight_request_guard();
 
         let report = bootstrap
@@ -2187,10 +2165,26 @@ mod tests {
         }
     }
 
-    fn embedded_controller_config() -> ControllerConfig {
-        ControllerConfig::default()
+    fn isolated_namesrv_config(mut config: NamesrvConfig) -> (NamesrvConfig, tempfile::TempDir) {
+        let root = tempfile::Builder::new()
+            .prefix("rocketmq-namesrv-test-")
+            .tempdir()
+            .expect("test should create an isolated NameServer directory");
+        config.rocketmq_home = root.path().to_string_lossy().into_owned();
+        config.kv_config_path = root.path().join("kvConfig.json").to_string_lossy().into_owned();
+        config.config_store_path = root.path().join("namesrv.properties").to_string_lossy().into_owned();
+        (config, root)
+    }
+
+    fn embedded_controller_config() -> (ControllerConfig, tempfile::TempDir) {
+        let root = tempfile::Builder::new()
+            .prefix("rocketmq-controller-test-")
+            .tempdir()
+            .expect("test should create an isolated controller directory");
+        let config = ControllerConfig::default()
             .with_node_info(1, format!("127.0.0.1:{}", reserve_local_port()).parse().unwrap())
-            .with_storage_path("".to_string())
+            .with_storage_path(root.path().to_string_lossy().into_owned());
+        (config, root)
     }
 
     async fn process_with_default_processor(
@@ -2236,7 +2230,7 @@ mod tests {
 
     #[tokio::test]
     async fn name_server_processor_records_completed_request() {
-        let bootstrap = build_bootstrap_with_default_v2();
+        let bootstrap = build_default_bootstrap();
         let harness = LocalRequestHarness::new().await.unwrap();
         let mut request = RemotingCommand::create_remoting_command(999_999);
 
@@ -2335,7 +2329,7 @@ mod tests {
         enable_acting_master: bool,
         topic_config_wrapper: TopicConfigAndMappingSerializeWrapper,
         filter_server_list: Vec<CheetahString>,
-        timeout_millis: Option<i64>,
+        timeout_millis: Option<u64>,
         harness: &LocalRequestHarness,
     ) {
         let result = bootstrap
@@ -2356,7 +2350,7 @@ mod tests {
                 harness.channel(),
             );
 
-        assert!(result.is_some());
+        assert!(result.is_ok());
     }
 
     async fn register_test_broker(
@@ -2387,8 +2381,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn default_v2_aggregate_processor_routes_register_and_route_queries() {
-        let bootstrap = build_bootstrap_with_default_v2();
+    async fn aggregate_processor_routes_register_and_route_queries() {
+        let bootstrap = build_default_bootstrap();
         let harness = LocalRequestHarness::new().await.unwrap();
         let cluster_name = CheetahString::from_static_str("cluster-a");
         let broker_name = CheetahString::from_static_str("broker-a");
@@ -2434,8 +2428,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn default_v2_namesrv_metadata_processors_return_java_compatible_bodies() {
-        let bootstrap = build_bootstrap_with_default_v2();
+    async fn namesrv_metadata_processors_return_java_compatible_bodies() {
+        let bootstrap = build_default_bootstrap();
         let harness = LocalRequestHarness::new().await.unwrap();
         let cluster_name = CheetahString::from_static_str("cluster-a");
         let broker_name = CheetahString::from_static_str("broker-a");
@@ -2558,8 +2552,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn default_v2_namesrv_topic_admin_processors_complete_phase2_contracts() {
-        let bootstrap = build_bootstrap_with_default_v2();
+    async fn namesrv_topic_admin_processors_complete_contracts() {
+        let bootstrap = build_default_bootstrap();
         let harness = LocalRequestHarness::new().await.unwrap();
         let cluster_name = CheetahString::from_static_str("phase2-cluster");
         let broker_name = CheetahString::from_static_str("phase2-broker");
@@ -2777,7 +2771,7 @@ mod tests {
                 .inner
                 .route_info_manager()
                 .pickup_topic_route_data(&registered_topic)
-                .is_some(),
+                .is_ok(),
             "registered topic should be visible through route manager"
         );
 
@@ -2795,14 +2789,14 @@ mod tests {
                 .inner
                 .route_info_manager()
                 .pickup_topic_route_data(&registered_topic)
-                .is_none(),
+                .is_err(),
             "deleted topic should no longer have route data"
         );
     }
 
     #[tokio::test]
-    async fn default_v2_register_broker_via_default_processor_populates_route_contract() {
-        let bootstrap = build_bootstrap_with_default_v2();
+    async fn register_broker_via_default_processor_populates_route_contract() {
+        let bootstrap = build_default_bootstrap();
         let harness = LocalRequestHarness::new().await.unwrap();
         let cluster_name = CheetahString::from_static_str("cluster-a");
         let broker_name = CheetahString::from_static_str("broker-a");
@@ -2882,8 +2876,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn default_v2_unregister_broker_via_default_processor_removes_route_contract() {
-        let bootstrap = build_bootstrap_with_default_v2();
+    async fn unregister_broker_via_default_processor_removes_route_contract() {
+        let bootstrap = build_default_bootstrap();
         let harness = LocalRequestHarness::new().await.unwrap();
         let cluster_name = CheetahString::from_static_str("cluster-a");
         let broker_name = CheetahString::from_static_str("broker-a");
@@ -2916,7 +2910,7 @@ mod tests {
                 .inner
                 .route_info_manager()
                 .pickup_topic_route_data(&topic_name)
-                .is_some(),
+                .is_ok(),
             "registered topic route should exist before unregister"
         );
 
@@ -2942,15 +2936,15 @@ mod tests {
                 .inner
                 .route_info_manager()
                 .pickup_topic_route_data(&topic_name)
-                .is_none()
+                .is_err()
         })
         .await;
         shutdown_unregister_service(&bootstrap).await;
     }
 
     #[tokio::test]
-    async fn default_v2_system_topic_list_includes_cluster_and_broker_names() {
-        let bootstrap = build_bootstrap_with_default_v2();
+    async fn system_topic_list_includes_cluster_and_broker_names() {
+        let bootstrap = build_default_bootstrap();
         let cluster_name = CheetahString::from_static_str("cluster-a");
         let broker_name = CheetahString::from_static_str("broker-a");
         let broker_addr = CheetahString::from_static_str("10.0.0.1:10911");
@@ -2980,8 +2974,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn default_v2_cluster_info_preserves_zone_and_acting_master_metadata() {
-        let bootstrap = build_bootstrap_with_default_v2();
+    async fn cluster_info_preserves_zone_and_acting_master_metadata() {
+        let bootstrap = build_default_bootstrap();
         let cluster_name = CheetahString::from_static_str("cluster-a");
         let broker_name = CheetahString::from_static_str("broker-a");
         let broker_addr = CheetahString::from_static_str("10.0.0.1:10911");
@@ -3022,8 +3016,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn default_v2_topics_by_cluster_matches_java_duplicate_semantics() {
-        let bootstrap = build_bootstrap_with_default_v2();
+    async fn topics_by_cluster_matches_java_duplicate_semantics() {
+        let bootstrap = build_default_bootstrap();
         let cluster_name = CheetahString::from_static_str("cluster-a");
         let zone_name = CheetahString::from_static_str("zone-a");
         let shared_topic = "shared-topic";
@@ -3051,31 +3045,25 @@ mod tests {
         )
         .await;
 
-        let topic_list = bootstrap
+        let topics = bootstrap
             .name_server_runtime
             .inner
             .route_info_manager()
-            .get_topics_by_cluster(&cluster_name);
+            .get_topics_by_cluster(&cluster_name)
+            .expect("registered cluster should have topics");
         let missing_cluster_topics = bootstrap
             .name_server_runtime
             .inner
             .route_info_manager()
             .get_topics_by_cluster(&CheetahString::from_static_str("missing-cluster"));
 
-        assert_eq!(
-            topic_list
-                .topic_list
-                .iter()
-                .filter(|topic| topic.as_str() == shared_topic)
-                .count(),
-            2
-        );
-        assert!(missing_cluster_topics.topic_list.is_empty());
+        assert_eq!(topics.iter().filter(|topic| topic.as_str() == shared_topic).count(), 2);
+        assert!(missing_cluster_topics.is_err());
     }
 
     #[tokio::test]
-    async fn default_v2_unit_topic_queries_match_java_flag_semantics() {
-        let bootstrap = build_bootstrap_with_default_v2();
+    async fn unit_topic_queries_match_java_flag_semantics() {
+        let bootstrap = build_default_bootstrap();
         let cluster_name = CheetahString::from_static_str("cluster-a");
         let broker_name = CheetahString::from_static_str("broker-a");
         let broker_addr = CheetahString::from_static_str("10.0.0.1:10911");
@@ -3123,7 +3111,7 @@ mod tests {
             .name_server_runtime
             .inner
             .route_info_manager()
-            .get_has_unit_sub_un_unit_topic_list();
+            .get_has_unit_sub_ununit_topic_list();
 
         assert!(unit_topics
             .topic_list
@@ -3151,12 +3139,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn default_v2_pickup_topic_route_data_promotes_read_only_prime_slave_to_acting_master() {
+    async fn pickup_topic_route_data_promotes_read_only_prime_slave_to_acting_master() {
         let namesrv_config = NamesrvConfig {
             support_acting_master: true,
             ..NamesrvConfig::default()
         };
-        let bootstrap = build_bootstrap_with_v2_config(namesrv_config);
+        let bootstrap = build_bootstrap_with_config(namesrv_config);
         let cluster_name = CheetahString::from_static_str("cluster-a");
         let broker_name = CheetahString::from_static_str("broker-a");
         let broker_addr = CheetahString::from_static_str("10.0.0.1:10911");
@@ -3198,8 +3186,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn default_v2_scan_not_active_broker_cleans_route_views_via_batch_unregister() {
-        let bootstrap = build_bootstrap_with_default_v2();
+    async fn scan_not_active_broker_cleans_route_views_via_batch_unregister() {
+        let bootstrap = build_default_bootstrap();
         let cluster_name = CheetahString::from_static_str("cluster-a");
         let broker_name = CheetahString::from_static_str("broker-a");
         let broker_addr = CheetahString::from_static_str("10.0.0.1:10911");
@@ -3236,7 +3224,7 @@ mod tests {
             let route_manager = bootstrap.name_server_runtime.inner.route_info_manager();
             let cluster_info = route_manager.get_all_cluster_info();
 
-            route_manager.pickup_topic_route_data(&topic_name).is_none()
+            route_manager.pickup_topic_route_data(&topic_name).is_err()
                 && route_manager
                     .query_broker_topic_config(cluster_name.clone(), broker_addr.clone())
                     .is_none()
@@ -3248,7 +3236,7 @@ mod tests {
                     .broker_addr_table
                     .as_ref()
                     .is_none_or(|brokers| !brokers.contains_key(&broker_name))
-                && route_manager.get_topics_by_cluster(&cluster_name).topic_list.is_empty()
+                && route_manager.get_topics_by_cluster(&cluster_name).is_err()
         })
         .await;
 
@@ -3256,8 +3244,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn default_v2_scan_not_active_broker_closes_expired_connection_before_batch_unregister() {
-        let bootstrap = build_bootstrap_with_default_v2();
+    async fn scan_not_active_broker_closes_expired_connection_before_batch_unregister() {
+        let bootstrap = build_default_bootstrap();
         let cluster_name = CheetahString::from_static_str("cluster-a");
         let broker_name = CheetahString::from_static_str("broker-a");
         let broker_addr = CheetahString::from_static_str("10.0.0.1:10911");
@@ -3300,8 +3288,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn default_v2_connection_disconnected_by_socket_addr_matches_channel_destroy_cleanup() {
-        let bootstrap = build_bootstrap_with_default_v2();
+    async fn connection_disconnected_by_socket_addr_matches_channel_destroy_cleanup() {
+        let bootstrap = build_default_bootstrap();
         let cluster_name = CheetahString::from_static_str("cluster-a");
         let broker_name = CheetahString::from_static_str("broker-a");
         let broker_addr = CheetahString::from_static_str("10.0.0.1:10911");
@@ -3336,7 +3324,7 @@ mod tests {
             let cluster_info = route_manager.get_all_cluster_info();
 
             harness.channel().connection_ref().state() == ConnectionState::Closed
-                && route_manager.pickup_topic_route_data(&topic_name).is_none()
+                && route_manager.pickup_topic_route_data(&topic_name).is_err()
                 && route_manager
                     .query_broker_topic_config(cluster_name.clone(), broker_addr.clone())
                     .is_none()
@@ -3355,12 +3343,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn default_v2_duplicate_channel_destroy_submission_is_idempotent_for_acting_master_cleanup() {
+    async fn duplicate_channel_destroy_submission_is_idempotent_for_acting_master_cleanup() {
         let namesrv_config = NamesrvConfig {
             support_acting_master: true,
             ..NamesrvConfig::default()
         };
-        let bootstrap = build_bootstrap_with_v2_config(namesrv_config);
+        let bootstrap = build_bootstrap_with_config(namesrv_config);
         let cluster_name = CheetahString::from_static_str("cluster-a");
         let broker_name = CheetahString::from_static_str("broker-a");
         let master_addr = CheetahString::from_static_str("10.0.0.1:10911");
@@ -3420,7 +3408,7 @@ mod tests {
         wait_until("duplicate unregister cleanup", || {
             let route_manager = bootstrap.name_server_runtime.inner.route_info_manager();
             let cluster_info = route_manager.get_all_cluster_info();
-            let Some(route_data) = route_manager.pickup_topic_route_data(&topic_name) else {
+            let Ok(route_data) = route_manager.pickup_topic_route_data(&topic_name) else {
                 return false;
             };
             let Some(route_broker_data) = route_data
@@ -3463,8 +3451,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn default_v2_on_channel_destroy_cleans_removed_broker_and_preserves_survivor() {
-        let bootstrap = build_bootstrap_with_default_v2();
+    async fn on_channel_destroy_cleans_removed_broker_and_preserves_survivor() {
+        let bootstrap = build_default_bootstrap();
         let cluster_name = CheetahString::from_static_str("cluster-a");
         let removed_broker_name = CheetahString::from_static_str("broker-a");
         let surviving_broker_name = CheetahString::from_static_str("broker-b");
@@ -3515,7 +3503,7 @@ mod tests {
         wait_until("channel destroy cleanup", || {
             let route_manager = bootstrap.name_server_runtime.inner.route_info_manager();
             let cluster_info = route_manager.get_all_cluster_info();
-            let Some(route_data) = route_manager.pickup_topic_route_data(&topic_name) else {
+            let Ok(route_data) = route_manager.pickup_topic_route_data(&topic_name) else {
                 return false;
             };
 
@@ -3553,12 +3541,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn default_v2_on_channel_destroy_reduces_to_read_only_acting_master() {
+    async fn on_channel_destroy_reduces_to_read_only_acting_master() {
         let namesrv_config = NamesrvConfig {
             support_acting_master: true,
             ..NamesrvConfig::default()
         };
-        let bootstrap = build_bootstrap_with_v2_config(namesrv_config);
+        let bootstrap = build_bootstrap_with_config(namesrv_config);
         let cluster_name = CheetahString::from_static_str("cluster-a");
         let broker_name = CheetahString::from_static_str("broker-a");
         let master_addr = CheetahString::from_static_str("10.0.0.1:10911");
@@ -3612,7 +3600,7 @@ mod tests {
         wait_until("acting master cleanup", || {
             let route_manager = bootstrap.name_server_runtime.inner.route_info_manager();
             let cluster_info = route_manager.get_all_cluster_info();
-            let Some(route_data) = route_manager.pickup_topic_route_data(&topic_name) else {
+            let Ok(route_data) = route_manager.pickup_topic_route_data(&topic_name) else {
                 return false;
             };
             let Some(route_broker_data) = route_data
@@ -3657,10 +3645,10 @@ mod tests {
     #[tokio::test]
     async fn boot_supports_cluster_test_mode() {
         let runtime = RuntimeContext::from_current("namesrv-cluster-test-mode");
-        let namesrv_config = NamesrvConfig {
+        let (namesrv_config, _namesrv_root) = isolated_namesrv_config(NamesrvConfig {
             cluster_test: true,
             ..NamesrvConfig::default()
-        };
+        });
         let bootstrap = Builder::new()
             .set_name_server_config(namesrv_config)
             .set_server_config(namesrv_server_config())
@@ -3680,14 +3668,15 @@ mod tests {
 
     #[tokio::test]
     async fn boot_supports_enable_controller_in_namesrv_mode() {
-        let namesrv_config = NamesrvConfig {
+        let (namesrv_config, _namesrv_root) = isolated_namesrv_config(NamesrvConfig {
             enable_controller_in_namesrv: true,
             ..NamesrvConfig::default()
-        };
+        });
+        let (controller_config, _controller_root) = embedded_controller_config();
         let bootstrap = Builder::new()
             .set_name_server_config(namesrv_config)
             .set_server_config(namesrv_server_config())
-            .set_controller_config(embedded_controller_config())
+            .set_controller_config(controller_config)
             .build();
 
         bootstrap
@@ -3698,7 +3687,11 @@ mod tests {
 
     #[tokio::test]
     async fn boot_shutdown_report_includes_remoting_server_report() {
-        let bootstrap = Builder::new().set_server_config(namesrv_server_config()).build();
+        let (namesrv_config, _namesrv_root) = isolated_namesrv_config(NamesrvConfig::default());
+        let bootstrap = Builder::new()
+            .set_name_server_config(namesrv_config)
+            .set_server_config(namesrv_server_config())
+            .build();
 
         let report = bootstrap
             .boot_with_shutdown_report(async {})
@@ -3726,8 +3719,13 @@ mod tests {
         let server_config = namesrv_server_config();
         let addr = format!("127.0.0.1:{}", server_config.listen_port);
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-        let bootstrap = Builder::new().set_server_config(server_config).build();
+        let (namesrv_config, namesrv_root) = isolated_namesrv_config(NamesrvConfig::default());
+        let bootstrap = Builder::new()
+            .set_name_server_config(namesrv_config)
+            .set_server_config(server_config)
+            .build();
         let server_task = tokio::spawn(async move {
+            let _namesrv_root = namesrv_root;
             bootstrap
                 .boot_with_shutdown_report(async {
                     let _ = shutdown_rx.await;
@@ -3792,14 +3790,15 @@ mod tests {
 
     #[tokio::test]
     async fn enable_controller_in_namesrv_lifecycle_matches_namesrv_runtime() {
-        let namesrv_config = NamesrvConfig {
+        let (namesrv_config, _namesrv_root) = isolated_namesrv_config(NamesrvConfig {
             enable_controller_in_namesrv: true,
             ..NamesrvConfig::default()
-        };
+        });
+        let (controller_config, _controller_root) = embedded_controller_config();
         let mut bootstrap = Builder::new()
             .set_name_server_config(namesrv_config)
             .set_server_config(namesrv_server_config())
-            .set_controller_config(embedded_controller_config())
+            .set_controller_config(controller_config)
             .build();
 
         let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
@@ -3836,8 +3835,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn default_v2_unsupported_request_code_returns_request_code_not_supported() {
-        let bootstrap = build_bootstrap_with_default_v2();
+    async fn unsupported_request_code_returns_request_code_not_supported() {
+        let bootstrap = build_default_bootstrap();
         let harness = LocalRequestHarness::new().await.unwrap();
         let processor =
             DefaultRequestProcessor::new(NameServerRuntimeHandle::new(&bootstrap.name_server_runtime.inner));
@@ -3860,7 +3859,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn default_v2_get_namesrv_config_returns_aggregated_runtime_properties() {
+    async fn get_namesrv_config_returns_aggregated_runtime_properties() {
         let namesrv_config = NamesrvConfig {
             client_request_thread_pool_nums: 12,
             ..NamesrvConfig::default()
@@ -3906,10 +3905,7 @@ mod tests {
             properties.get("clientWorkerThreads").map(|value| value.as_str()),
             Some(client_worker_threads.as_str())
         );
-        assert_eq!(
-            properties.get("useRouteInfoManagerV2").map(|value| value.as_str()),
-            Some("true")
-        );
+        assert!(!properties.contains_key("useRouteInfoManagerV2"));
         assert_eq!(
             properties.get("tls.server.mode").map(|value| value.as_str()),
             Some("permissive")
@@ -3921,8 +3917,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn default_v2_update_namesrv_config_updates_aggregate_known_keys_and_ignores_unknown() {
-        let bootstrap = build_bootstrap_with_default_v2();
+    async fn update_namesrv_config_updates_aggregate_known_keys_and_ignores_unknown() {
+        let bootstrap = build_default_bootstrap();
         let harness = LocalRequestHarness::new().await.unwrap();
         let mut request = RemotingCommand::create_remoting_command(RequestCode::UpdateNamesrvConfig).set_body(
             b"listenPort=19876\nbindAddress=127.0.0.2\nclientWorkerThreads=9\nenableTopicList=false\ntls.server.mode=enforcing\ntls.server.certPath=/certs/server.pem\nunknownKey=42"
@@ -3976,8 +3972,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn default_v2_update_namesrv_config_rejects_fixed_blacklist_keys() {
-        let bootstrap = build_bootstrap_with_default_v2();
+    async fn update_namesrv_config_rejects_fixed_blacklist_keys() {
+        let bootstrap = build_default_bootstrap();
         let harness = LocalRequestHarness::new().await.unwrap();
         let mut request = RemotingCommand::create_remoting_command(RequestCode::UpdateNamesrvConfig)
             .set_body(b"rocketmqHome=/tmp/namesrv".as_slice());
@@ -3996,8 +3992,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn default_v2_kvconfig_crud_roundtrip_via_default_processor() {
-        let bootstrap = build_bootstrap_with_default_v2();
+    async fn kvconfig_crud_roundtrip_via_default_processor() {
+        let bootstrap = build_default_bootstrap();
         let harness = LocalRequestHarness::new().await.unwrap();
         let namespace = CheetahString::from_static_str("phase5-namespace");
         let key = CheetahString::from_static_str("phase5-key");
@@ -4097,8 +4093,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn default_v2_route_query_via_client_processor_returns_order_config_and_route_contract() {
-        let bootstrap = build_bootstrap_with_v2_config(NamesrvConfig {
+    async fn route_query_via_client_processor_returns_order_config_and_route_contract() {
+        let bootstrap = build_bootstrap_with_config(NamesrvConfig {
             order_message_enable: true,
             ..NamesrvConfig::default()
         });

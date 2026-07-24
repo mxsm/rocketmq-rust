@@ -78,14 +78,14 @@
   <rect x="988" y="124" width="236" height="330" rx="14" class="panel"/>
   <text x="1018" y="157" class="section-title">Route Manager</text>
   <rect x="1018" y="198" width="176" height="58" rx="9" class="chip-green"/>
-  <text x="1040" y="221" class="label">RouteInfoManagerWrapper</text>
-  <text x="1040" y="238" class="small">selects V2 by default</text>
+  <text x="1040" y="221" class="label">RouteInfoManager</text>
+  <text x="1040" y="238" class="small">single canonical implementation</text>
   <rect x="1018" y="286" width="176" height="58" rx="9" class="chip-green"/>
-  <text x="1040" y="309" class="label">V2 route manager</text>
+  <text x="1040" y="309" class="label">Concurrent state</text>
   <text x="1040" y="326" class="small">DashMap + segmented locks</text>
   <rect x="1018" y="374" width="176" height="58" rx="9" class="chip-gray"/>
-  <text x="1040" y="397" class="label">V1 route manager</text>
-  <text x="1040" y="414" class="small">legacy lock-based tables</text>
+  <text x="1040" y="397" class="label">Reverse topic index</text>
+  <text x="1040" y="414" class="small">consistent broker/topic lookup</text>
 
   <rect x="42" y="508" width="1182" height="88" rx="14" class="panel"/>
   <text x="72" y="540" class="section-title">Route Tables</text>

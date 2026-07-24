@@ -22,9 +22,9 @@ use std::sync::Arc;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use rocketmq_common::TimeUtils::current_millis;
+use rocketmq_protocol::protocol::DataVersion;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::net::channel::ChannelId;
-use rocketmq_remoting::protocol::DataVersion;
 
 use crate::route_info::broker_addr_info::BrokerAddrInfo;
 
@@ -121,7 +121,7 @@ impl BrokerLiveInfo {
 /// use cheetah_string::CheetahString;
 /// use rocketmq_namesrv::route::tables::BrokerLiveInfo;
 /// use rocketmq_namesrv::route::tables::BrokerLiveTable;
-/// use rocketmq_remoting::protocol::DataVersion;
+/// use rocketmq_protocol::protocol::DataVersion;
 ///
 /// let table = BrokerLiveTable::new();
 /// let remote_addr = SocketAddr::from_str("127.0.0.1:10911").unwrap();
@@ -290,7 +290,7 @@ impl BrokerLiveTable {
             .collect()
     }
 
-    /// Get broker live info by broker address (v1 compatibility)
+    /// Get broker live info by broker address.
     ///
     /// # Arguments
     /// * `broker_addr` - Broker address string
@@ -358,7 +358,7 @@ impl BrokerLiveTable {
         None
     }
 
-    /// Update last update timestamp for a broker (v1 compatibility)
+    /// Update last update timestamp for a broker.
     ///
     /// # Arguments
     /// * `broker_addr` - Broker address string
@@ -558,10 +558,7 @@ mod tests {
         let broker_info = create_test_broker_addr_info("broker-a", 0);
         let remote_addr = SocketAddr::from_str("127.0.0.1:10912").unwrap();
         let channel_id = CheetahString::from_static_str("test-channel-002");
-        let mut data_version = rocketmq_remoting::protocol::data_version_facade::new_data_version();
-        data_version.set_state_version(7);
-        data_version.set_timestamp(12345);
-        data_version.set_counter(9);
+        let data_version = DataVersion::with_values(7, 12345, 9);
         let live_info = BrokerLiveInfo::new(1000, data_version.clone(), remote_addr, channel_id.clone())
             .with_timeout(45_000)
             .with_ha_server("ha-server:10912");

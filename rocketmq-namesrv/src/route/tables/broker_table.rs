@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
-use rocketmq_remoting::protocol::route::route_data_view::BrokerData;
+use rocketmq_protocol::protocol::route::route_data_view::BrokerData;
 
 use crate::route::types::public_name_from_route;
 use crate::route::types::route_broker_name;

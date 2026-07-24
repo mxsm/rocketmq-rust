@@ -18,7 +18,6 @@ use std::time::Duration;
 use std::time::Instant;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
 use rocketmq_common::FileUtils;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::body::kv_table::KVTable;
@@ -35,6 +34,7 @@ use tracing::info;
 
 use crate::bootstrap::NameServerRuntimeHandle;
 use crate::kvconfig::KVConfigSerializeWrapper;
+use crate::NamesrvConfig;
 
 /// Type alias for namespace in the KV configuration
 type Namespace = CheetahString;
@@ -179,8 +179,8 @@ impl KVConfigManager {
     /// # Returns
     ///
     /// - `Ok(())` if update succeeds
-    /// - `Err(String)` if update fails (legacy API)
-    pub fn update_namesrv_config(&self, updates: HashMap<CheetahString, CheetahString>) -> Result<(), String> {
+    /// - `Err(RocketMQError)` if validation fails
+    pub fn update_namesrv_config(&self, updates: HashMap<CheetahString, CheetahString>) -> RocketMQResult<()> {
         let result = self.name_server_runtime_inner.update_name_server_config(updates);
 
         if result.is_ok() {

@@ -56,8 +56,3 @@ defaultThreadPoolQueueCapacity = 20000
 # Unregister broker queue capacity.
 # Default: 3000. Raise alongside cluster size / broker churn rate.
 unRegisterBrokerQueueCapacity = 5000
-
-# Use RouteInfoManager V2 (DashMap-based concurrent implementation).
-# Default: true. V2 provides 5-50x better concurrency than the legacy V1
-# implementation and is the recommended production setting.
-useRouteInfoManagerV2 = true

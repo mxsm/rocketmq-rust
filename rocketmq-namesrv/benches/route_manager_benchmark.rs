@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Performance benchmarks for RouteInfoManager V2 DashMap tables
+//! Performance benchmarks for the canonical RouteInfoManager DashMap tables
 //!
 //! Run with: cargo bench --package rocketmq-namesrv --bench route_manager_benchmark
 //!
 //! These benchmarks focus on the core data structures (DashMap-based tables)
-//! which provide the main performance improvements in V2.
+//! which provide the route manager's main concurrency improvements.
 //!
 //! Key findings:
 //! - DashMap provides lock-free reads
