@@ -7,6 +7,47 @@ rocketmq-rust
 rocketmq-{{ .service }}
 {{- end -}}
 
+{{/* Fail early when cross-field topology invariants cannot be expressed by JSON Schema. */}}
+{{- define "rocketmq.validateValues" -}}
+{{- $profile := .Values.deploymentProfile -}}
+{{- if eq $profile "production-controller-ha" -}}
+  {{- $controllerReplicas := int .Values.services.controller.replicas -}}
+  {{- $controllerQuorum := add (div $controllerReplicas 2) 1 -}}
+  {{- if or (lt $controllerReplicas 3) (eq (mod $controllerReplicas 2) 0) -}}
+    {{- fail "production-controller-ha requires an odd Controller replica count of at least 3" -}}
+  {{- end -}}
+  {{- if ne (len .Values.services.controller.peerServiceClusterIPs) $controllerReplicas -}}
+    {{- fail "production-controller-ha requires one unique Controller peer Service IP per Controller replica" -}}
+  {{- end -}}
+  {{- if lt (int .Values.services.broker.replicas) 3 -}}
+    {{- fail "production-controller-ha requires at least 3 Broker replicas in the Controller-managed replica group" -}}
+  {{- end -}}
+  {{- if ne .Values.services.controller.storageBackend "RocksDB" -}}
+    {{- fail "production-controller-ha requires Controller RocksDB storage" -}}
+  {{- end -}}
+  {{- range $service := list "broker" "namesrv" "controller" -}}
+    {{- $config := index $.Values.services $service -}}
+    {{- if not $config.persistence.enabled -}}
+      {{- fail (printf "production-controller-ha requires services.%s.persistence.enabled=true" $service) -}}
+    {{- end -}}
+  {{- end -}}
+  {{- if lt (int .Values.services.controller.pdb.minAvailable) (int $controllerQuorum) -}}
+    {{- fail (printf "Controller PDB minAvailable must preserve quorum (%d)" $controllerQuorum) -}}
+  {{- end -}}
+{{- else if eq $profile "dev-single" -}}
+  {{- if or (ne (int .Values.services.broker.replicas) 1) (ne (int .Values.services.controller.replicas) 1) -}}
+    {{- fail "dev-single requires exactly one Broker and one Controller" -}}
+  {{- end -}}
+{{- else -}}
+  {{- fail (printf "unsupported deploymentProfile %q" $profile) -}}
+{{- end -}}
+{{- range $service, $config := .Values.services -}}
+  {{- if and $config.pdb.enabled (gt (int $config.pdb.minAvailable) (int $config.replicas)) -}}
+    {{- fail (printf "services.%s.pdb.minAvailable cannot exceed replicas" $service) -}}
+  {{- end -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "rocketmq.labels" -}}
 app.kubernetes.io/name: {{ include "rocketmq.serviceName" . }}
 app.kubernetes.io/instance: {{ .root.Release.Name }}
@@ -14,7 +55,7 @@ app.kubernetes.io/part-of: {{ include "rocketmq.partOf" . }}
 app.kubernetes.io/managed-by: {{ .root.Release.Service }}
 app.kubernetes.io/version: {{ .root.Chart.AppVersion | quote }}
 rocketmq.apache.org/service: {{ .service }}
-rocketmq.apache.org/architecture-milestone: M11-10
+rocketmq.apache.org/architecture-milestone: P0-04
 {{- end -}}
 
 {{/* Shared process lifecycle contract. The health port is kubelet-only and is not exposed by Services. */}}
@@ -57,20 +98,33 @@ rocketmq.apache.org/service: {{ .service }}
 {{- end -}}
 
 {{- define "rocketmq.image" -}}
-{{- $placeholder := "sha256:0000000000000000000000000000000000000000000000000000000000000000" -}}
-{{- $digest := required (printf "services.%s.image.digest is required" .service) .digest -}}
-{{- if eq $digest $placeholder -}}
-{{- fail (printf "services.%s.image.digest is unpublished; inject a verified signed digest" .service) -}}
+{{- $repository := required (printf "services.%s.image.repository is required" .service) .image.repository -}}
+{{- if .image.digest -}}
+{{ printf "%s@%s" $repository .image.digest }}
+{{- else -}}
+{{- $tag := required (printf "services.%s.image.tag is required when digest is empty" .service) .image.tag -}}
+{{ printf "%s:%s" $repository $tag }}
 {{- end -}}
-{{ printf "%s/%s@%s" .root.Values.global.imageRegistry .service $digest }}
 {{- end -}}
 
-{{- define "rocketmq.controllerServiceIP" -}}
-{{- $address := required "three explicit Controller peer Service IPs are required" .address -}}
-{{- if hasPrefix "192.0.2." $address -}}
-{{- fail "Controller peer Service IP is an unpublished documentation sentinel; inject an unused address from the cluster Service CIDR" -}}
+{{- define "rocketmq.namesrvAddresses" -}}
+{{- $addresses := list -}}
+{{- range $ordinal := until (int .Values.services.namesrv.replicas) -}}
+  {{- $addresses = append $addresses (printf "rocketmq-namesrv-%d.rocketmq-namesrv-headless.%s.svc.cluster.local:9876" $ordinal $.Release.Namespace) -}}
 {{- end -}}
-{{- $address -}}
+{{ join ";" $addresses }}
+{{- end -}}
+
+{{- define "rocketmq.controllerAddresses" -}}
+{{- if eq .Values.deploymentProfile "dev-single" -}}
+rocketmq-controller.{{ .Release.Namespace }}.svc.cluster.local:60109
+{{- else -}}
+{{- $addresses := list -}}
+{{- range $address := .Values.services.controller.peerServiceClusterIPs -}}
+  {{- $addresses = append $addresses (printf "%s:60109" $address) -}}
+{{- end -}}
+{{ join ";" $addresses }}
+{{- end -}}
 {{- end -}}
 
 {{- define "rocketmq.podSecurityContext" -}}
@@ -111,6 +165,14 @@ csi:
 {{- end -}}
 
 {{- define "rocketmq.topology" -}}
+{{- if and (eq .root.Values.deploymentProfile "production-controller-ha") (gt (int (index .root.Values.services .service).replicas) 1) }}
+affinity:
+  podAntiAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      - topologyKey: kubernetes.io/hostname
+        labelSelector:
+          matchLabels:
+{{ include "rocketmq.selectorLabels" . | indent 12 }}
 topologySpreadConstraints:
   - maxSkew: 1
     topologyKey: kubernetes.io/hostname
@@ -121,9 +183,10 @@ topologySpreadConstraints:
 {{- if eq .service "controller" }}
   - maxSkew: 1
     topologyKey: topology.kubernetes.io/zone
-    whenUnsatisfiable: DoNotSchedule
+    whenUnsatisfiable: ScheduleAnyway
     labelSelector:
       matchLabels:
 {{ include "rocketmq.selectorLabels" . | indent 8 }}
+{{- end }}
 {{- end }}
 {{- end -}}

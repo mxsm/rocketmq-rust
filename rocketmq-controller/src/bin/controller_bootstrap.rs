@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![recursion_limit = "256"]
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -217,6 +219,10 @@ async fn run_controller(
         shutdown_controller_after_startup_failure(&controller_manager, &lifecycle).await;
         return Err(error);
     }
+    if let Err(error) = wait_for_cluster_recovery(&controller_manager).await {
+        shutdown_controller_after_startup_failure(&controller_manager, &lifecycle).await;
+        return Err(error);
+    }
     if let Err(error) = lifecycle.mark_ready() {
         shutdown_controller_after_startup_failure(&controller_manager, &lifecycle).await;
         return Err(error.into());
@@ -388,6 +394,30 @@ async fn initialize_cluster_if_configured(controller_manager: &Arc<ControllerMan
 
     Err(ControllerError::Internal(format!(
         "controller node {} did not become leader after bootstrap",
+        config.node_id
+    ))
+    .into())
+}
+
+async fn wait_for_cluster_recovery(controller_manager: &Arc<ControllerManager>) -> Result<()> {
+    let config = controller_manager.controller_config();
+    if config.raft_peers.is_empty() {
+        return Ok(());
+    }
+
+    for _ in 0..300 {
+        if controller_manager.controller().has_recovered_cluster_state() {
+            info!(
+                node_id = config.node_id,
+                "Controller observed a Raft leader and recovered committed state"
+            );
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    Err(ControllerError::Internal(format!(
+        "controller node {} did not recover committed Raft state before the readiness deadline",
         config.node_id
     ))
     .into())

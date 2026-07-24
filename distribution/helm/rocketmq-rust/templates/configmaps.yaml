@@ -1,3 +1,4 @@
+{{- include "rocketmq.validateValues" . -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -6,12 +7,17 @@ metadata:
   labels:
 {{ include "rocketmq.labels" (dict "root" . "service" "broker") | indent 4 }}
 data:
-  broker.toml: |-
+{{- range $ordinal := until (int .Values.services.broker.replicas) }}
+  rocketmq-broker-{{ $ordinal }}.toml: |-
     listenPort = 10911
-    brokerIp1 = "rocketmq-broker-0.rocketmq-broker-headless.{{ .Release.Namespace }}.svc.cluster.local"
+    brokerIp1 = "rocketmq-broker-{{ $ordinal }}.rocketmq-broker-headless.{{ $.Release.Namespace }}.svc.cluster.local"
+    brokerIp2 = "rocketmq-broker-{{ $ordinal }}.rocketmq-broker-headless.{{ $.Release.Namespace }}.svc.cluster.local"
     storePathRootDir = "/var/lib/rocketmq/broker"
-    namesrvAddr = "rocketmq-namesrv-0.rocketmq-namesrv-headless.{{ .Release.Namespace }}.svc.cluster.local:9876;rocketmq-namesrv-1.rocketmq-namesrv-headless.{{ .Release.Namespace }}.svc.cluster.local:9876;rocketmq-namesrv-2.rocketmq-namesrv-headless.{{ .Release.Namespace }}.svc.cluster.local:9876"
-    autoCreateTopicEnable = {{ .Values.services.broker.autoCreateTopicEnable }}
+    storePathBrokerIdentity = "/var/lib/rocketmq/broker/brokerIdentity.json"
+    namesrvAddr = "{{ include "rocketmq.namesrvAddresses" $ }}"
+    autoCreateTopicEnable = {{ $.Values.services.broker.autoCreateTopicEnable }}
+    enableControllerMode = {{ eq $.Values.deploymentProfile "production-controller-ha" }}
+    controllerAddr = "{{ include "rocketmq.controllerAddresses" $ }}"
     authConfigPath = "/var/lib/rocketmq/broker/auth"
     aclFile = "/var/run/secrets/rocketmq/broker-acl.yml"
     aclFileWatchEnabled = true
@@ -20,9 +26,10 @@ data:
     signatureAlgorithm = "HmacSHA256"
 
     [brokerIdentity]
-    brokerName = "rocketmq-broker"
+    brokerName = {{ $.Values.services.broker.replicaGroupName | quote }}
     brokerClusterName = "RocketmqRust"
     brokerId = 0
+{{- end }}
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -47,7 +54,7 @@ metadata:
   labels:
 {{ include "rocketmq.labels" (dict "root" . "service" "controller") | indent 4 }}
 data:
-{{- range $ordinal := until 3 }}
+{{- range $ordinal := until (int .Values.services.controller.replicas) }}
   controller-{{ $ordinal }}.toml: |-
     rocketmqHome = "/var/lib/rocketmq/controller"
     configStorePath = "/var/lib/rocketmq/controller/controller.properties"
@@ -79,17 +86,28 @@ data:
     electionTimeoutMs = 1000
     heartbeatIntervalMs = 300
     storagePath = "/var/lib/rocketmq/controller/node-{{ add $ordinal 1 }}"
-    storageBackend = "File"
+    storageBackend = {{ $.Values.services.controller.storageBackend | quote }}
     enableElectUncleanMasterLocal = false
-{{- range $peer := until 3 }}
+{{- if eq $.Values.deploymentProfile "dev-single" }}
+
+    [[raftPeers]]
+    id = 1
+    addr = "127.0.0.1:60110"
+
+    [[controllerPeers]]
+    id = 1
+    addr = "127.0.0.1:60109"
+{{- else }}
+{{- range $peer := until (int $.Values.services.controller.replicas) }}
 
     [[raftPeers]]
     id = {{ add $peer 1 }}
-    addr = "{{ include "rocketmq.controllerServiceIP" (dict "address" (index $.Values.services.controller.peerServiceClusterIPs $peer)) }}:60110"
+    addr = "{{ index $.Values.services.controller.peerServiceClusterIPs $peer }}:60110"
 
     [[controllerPeers]]
     id = {{ add $peer 1 }}
-    addr = "{{ include "rocketmq.controllerServiceIP" (dict "address" (index $.Values.services.controller.peerServiceClusterIPs $peer)) }}:60109"
+    addr = "{{ index $.Values.services.controller.peerServiceClusterIPs $peer }}:60109"
+{{- end }}
 {{- end }}
 {{- end }}
 ---
@@ -113,7 +131,7 @@ data:
     listenAddr = "0.0.0.0:8080"
 
     [cluster]
-    namesrvAddr = "rocketmq-namesrv-0.rocketmq-namesrv-headless.{{ .Release.Namespace }}.svc.cluster.local:9876;rocketmq-namesrv-1.rocketmq-namesrv-headless.{{ .Release.Namespace }}.svc.cluster.local:9876;rocketmq-namesrv-2.rocketmq-namesrv-headless.{{ .Release.Namespace }}.svc.cluster.local:9876"
+    namesrvAddr = "{{ include "rocketmq.namesrvAddresses" . }}"
 
     [auth]
     authenticationEnabled = true
@@ -166,7 +184,7 @@ data:
 
     [[clusters]]
     name = "rocketmq-rust"
-    namesrv_addr = "rocketmq-namesrv-0.rocketmq-namesrv-headless.{{ .Release.Namespace }}.svc.cluster.local:9876;rocketmq-namesrv-1.rocketmq-namesrv-headless.{{ .Release.Namespace }}.svc.cluster.local:9876;rocketmq-namesrv-2.rocketmq-namesrv-headless.{{ .Release.Namespace }}.svc.cluster.local:9876"
+    namesrv_addr = "{{ include "rocketmq.namesrvAddresses" . }}"
     default = true
 
     [security]

@@ -1,5 +1,6 @@
+deploymentProfile: production-controller-ha
+
 global:
-  imageRegistry: ghcr.io/mxsm/rocketmq-rust
   imagePullSecrets: []
   otelEndpoint: http://otel-collector.observability.svc.cluster.local:4317
   secretRefs:
@@ -20,59 +21,96 @@ networkPolicy:
 
 services:
   broker:
-    replicas: 1
+    replicas: 3
+    replicaGroupName: rocketmq-broker
     autoCreateTopicEnable: false
     image:
-      digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+      repository: rocketmq-rust/broker
+      tag: local
+      digest: ""
+      pullPolicy: Never
     persistence:
+      enabled: true
       storageClassName: rocketmq-retain
       size: 100Gi
+    pdb:
+      enabled: true
+      minAvailable: 2
     resources:
       requests: {cpu: 1000m, memory: 2Gi}
       limits: {cpu: 4000m, memory: 8Gi}
   namesrv:
     replicas: 3
     image:
-      digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+      repository: rocketmq-rust/namesrv
+      tag: local
+      digest: ""
+      pullPolicy: Never
     persistence:
+      enabled: true
       storageClassName: rocketmq-retain
       size: 2Gi
+    pdb:
+      enabled: true
+      minAvailable: 2
     resources:
       requests: {cpu: 250m, memory: 256Mi}
       limits: {cpu: 1000m, memory: 1Gi}
   controller:
     replicas: 3
     peerServiceClusterIPs:
-      - 192.0.2.1
-      - 192.0.2.2
-      - 192.0.2.3
+      - 10.96.0.201
+      - 10.96.0.202
+      - 10.96.0.203
+    autoInitializeCluster: true
+    storageBackend: RocksDB
     image:
-      digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+      repository: rocketmq-rust/controller
+      tag: local
+      digest: ""
+      pullPolicy: Never
     persistence:
+      enabled: true
       storageClassName: rocketmq-retain
       size: 10Gi
+    pdb:
+      enabled: true
+      minAvailable: 2
     resources:
       requests: {cpu: 500m, memory: 512Mi}
       limits: {cpu: 2000m, memory: 2Gi}
   proxy:
     replicas: 2
     image:
-      digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+      repository: rocketmq-rust/proxy
+      tag: local
+      digest: ""
+      pullPolicy: Never
+    pdb:
+      enabled: true
+      minAvailable: 1
     resources:
       requests: {cpu: 500m, memory: 512Mi}
       limits: {cpu: 2000m, memory: 2Gi}
   mcp:
     replicas: 1
     image:
-      digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+      repository: rocketmq-rust/mcp
+      tag: local
+      digest: ""
+      pullPolicy: Never
     publicBaseUrl: https://mcp.example.invalid
     oauth:
       issuer: https://issuer.example.invalid
       audience: rocketmq-mcp
       jwksUrl: https://issuer.example.invalid/.well-known/jwks.json
     persistence:
+      enabled: true
       storageClassName: rocketmq-retain
       size: 10Gi
+    pdb:
+      enabled: true
+      minAvailable: 1
     resources:
       requests: {cpu: 250m, memory: 256Mi}
       limits: {cpu: 1000m, memory: 1Gi}

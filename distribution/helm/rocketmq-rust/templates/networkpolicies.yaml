@@ -6,53 +6,17 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     app.kubernetes.io/part-of: rocketmq-rust
-    rocketmq.apache.org/architecture-milestone: M11-09
-spec:
-  podSelector:
-    matchLabels:
-      app.kubernetes.io/part-of: rocketmq-rust
-  policyTypes:
-    - Ingress
-    - Egress
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: rocketmq-intra-cluster
-  namespace: {{ .Release.Namespace }}
-  labels:
-    app.kubernetes.io/part-of: rocketmq-rust
 spec:
   podSelector:
     matchLabels:
       app.kubernetes.io/part-of: rocketmq-rust
   policyTypes: [Ingress, Egress]
-  ingress:
-    - from:
-        - podSelector:
-            matchLabels:
-              app.kubernetes.io/part-of: rocketmq-rust
-      ports:
-{{- range $port := list 10911 10912 9876 60109 60110 8080 8081 8089 }}
-        - {protocol: TCP, port: {{ $port }}}
-{{- end }}
-  egress:
-    - to:
-        - podSelector:
-            matchLabels:
-              app.kubernetes.io/part-of: rocketmq-rust
-      ports:
-{{- range $port := list 10911 10912 9876 60109 60110 8080 8081 8089 }}
-        - {protocol: TCP, port: {{ $port }}}
-{{- end }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: rocketmq-dns-egress
   namespace: {{ .Release.Namespace }}
-  labels:
-    app.kubernetes.io/part-of: rocketmq-rust
 spec:
   podSelector:
     matchLabels:
@@ -75,8 +39,6 @@ kind: NetworkPolicy
 metadata:
   name: rocketmq-otel-egress
   namespace: {{ .Release.Namespace }}
-  labels:
-    app.kubernetes.io/part-of: rocketmq-rust
 spec:
   podSelector:
     matchLabels:
@@ -93,50 +55,187 @@ spec:
       ports:
         - {protocol: TCP, port: 4317}
 ---
-{{- range $service := list "broker" "proxy" "mcp" }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: rocketmq-{{ $service }}-client-ingress
-  namespace: {{ $.Release.Namespace }}
-  labels:
-{{ include "rocketmq.labels" (dict "root" $ "service" $service) | indent 4 }}
+  name: rocketmq-controller
+  namespace: {{ .Release.Namespace }}
 spec:
   podSelector:
     matchLabels:
-{{ include "rocketmq.selectorLabels" (dict "root" $ "service" $service) | indent 6 }}
+      rocketmq.apache.org/service: controller
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              rocketmq.apache.org/service: controller
+      ports:
+        - {protocol: TCP, port: 60110}
+    - from:
+        - podSelector:
+            matchLabels:
+              rocketmq.apache.org/service: broker
+        - namespaceSelector:
+            matchLabels:
+              {{ .Values.networkPolicy.clientNamespaceLabel }}: "true"
+      ports:
+        - {protocol: TCP, port: 60109}
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              rocketmq.apache.org/service: controller
+      ports:
+        - {protocol: TCP, port: 60110}
+    - to:
+        - podSelector:
+            matchLabels:
+              rocketmq.apache.org/service: broker
+      ports:
+        - {protocol: TCP, port: 10911}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rocketmq-broker
+  namespace: {{ .Release.Namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      rocketmq.apache.org/service: broker
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              rocketmq.apache.org/service: broker
+      ports:
+        - {protocol: TCP, port: 10912}
+    - from:
+        - podSelector:
+            matchLabels:
+              rocketmq.apache.org/service: controller
+        - podSelector:
+            matchLabels:
+              rocketmq.apache.org/service: proxy
+        - podSelector:
+            matchLabels:
+              rocketmq.apache.org/service: mcp
+        - namespaceSelector:
+            matchLabels:
+              {{ .Values.networkPolicy.clientNamespaceLabel }}: "true"
+      ports:
+        - {protocol: TCP, port: 10911}
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              rocketmq.apache.org/service: broker
+      ports:
+        - {protocol: TCP, port: 10912}
+    - to:
+        - podSelector:
+            matchLabels:
+              rocketmq.apache.org/service: namesrv
+      ports:
+        - {protocol: TCP, port: 9876}
+    - to:
+        - podSelector:
+            matchLabels:
+              rocketmq.apache.org/service: controller
+      ports:
+        - {protocol: TCP, port: 60109}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rocketmq-namesrv
+  namespace: {{ .Release.Namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      rocketmq.apache.org/service: namesrv
   policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              rocketmq.apache.org/service: broker
+        - podSelector:
+            matchLabels:
+              rocketmq.apache.org/service: proxy
+        - podSelector:
+            matchLabels:
+              rocketmq.apache.org/service: mcp
+        - namespaceSelector:
+            matchLabels:
+              {{ .Values.networkPolicy.clientNamespaceLabel }}: "true"
+      ports:
+        - {protocol: TCP, port: 9876}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rocketmq-proxy
+  namespace: {{ .Release.Namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      rocketmq.apache.org/service: proxy
+  policyTypes: [Ingress, Egress]
   ingress:
     - from:
         - namespaceSelector:
             matchLabels:
-              {{ $.Values.networkPolicy.clientNamespaceLabel }}: "true"
-{{- if eq $service "broker" }}
-      ports:
-        - {protocol: TCP, port: 10911}
-{{- else if eq $service "proxy" }}
+              {{ .Values.networkPolicy.clientNamespaceLabel }}: "true"
       ports:
         - {protocol: TCP, port: 8080}
         - {protocol: TCP, port: 8081}
-{{- else }}
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              rocketmq.apache.org/service: namesrv
       ports:
-        - {protocol: TCP, port: 8089}
-{{- end }}
+        - {protocol: TCP, port: 9876}
+    - to:
+        - podSelector:
+            matchLabels:
+              rocketmq.apache.org/service: broker
+      ports:
+        - {protocol: TCP, port: 10911}
 ---
-{{- end }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: rocketmq-mcp-jwks-egress
+  name: rocketmq-mcp
   namespace: {{ .Release.Namespace }}
-  labels:
-{{ include "rocketmq.labels" (dict "root" . "service" "mcp") | indent 4 }}
 spec:
   podSelector:
     matchLabels:
-{{ include "rocketmq.selectorLabels" (dict "root" . "service" "mcp") | indent 6 }}
-  policyTypes: [Egress]
+      rocketmq.apache.org/service: mcp
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              {{ .Values.networkPolicy.clientNamespaceLabel }}: "true"
+      ports:
+        - {protocol: TCP, port: 8089}
   egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              rocketmq.apache.org/service: namesrv
+      ports:
+        - {protocol: TCP, port: 9876}
+    - to:
+        - podSelector:
+            matchLabels:
+              rocketmq.apache.org/service: broker
+      ports:
+        - {protocol: TCP, port: 10911}
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0

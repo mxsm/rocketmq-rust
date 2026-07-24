@@ -1,0 +1,47 @@
+deploymentProfile: production-controller-ha
+
+# These tags are loaded into the local cluster and are never pulled. Build them
+# with `docker buildx build --load`, then use the cluster-specific image-load command.
+services:
+  broker:
+    replicas: 3
+    replicaGroupName: rocketmq-broker
+    image:
+      repository: rocketmq-rust/broker
+      tag: local
+      digest: ""
+      pullPolicy: Never
+  namesrv:
+    replicas: 3
+    image:
+      repository: rocketmq-rust/namesrv
+      tag: local
+      digest: ""
+      pullPolicy: Never
+  controller:
+    replicas: 3
+    peerServiceClusterIPs:
+      - 10.96.0.201
+      - 10.96.0.202
+      - 10.96.0.203
+    autoInitializeCluster: true
+    storageBackend: RocksDB
+    image:
+      repository: rocketmq-rust/controller
+      tag: local
+      digest: ""
+      pullPolicy: Never
+  proxy:
+    replicas: 2
+    image:
+      repository: rocketmq-rust/proxy
+      tag: local
+      digest: ""
+      pullPolicy: Never
+  mcp:
+    replicas: 1
+    image:
+      repository: rocketmq-rust/mcp
+      tag: local
+      digest: ""
+      pullPolicy: Never

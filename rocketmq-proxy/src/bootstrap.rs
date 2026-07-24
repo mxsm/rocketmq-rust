@@ -91,6 +91,21 @@ fn publish_listener_ready(readiness: Option<LifecycleReadiness>) -> ProxyResult<
     }
 }
 
+async fn verify_cluster_route_and_security(
+    mode: ProxyMode,
+    metadata_service: Option<&Arc<dyn MetadataService>>,
+) -> ProxyResult<()> {
+    if !matches!(mode, ProxyMode::Cluster) {
+        return Ok(());
+    }
+
+    let metadata_service = metadata_service.ok_or_else(|| ProxyError::Transport {
+        message: "Proxy Cluster readiness requires a metadata service".to_string(),
+    })?;
+    metadata_service.readiness_check().await?;
+    Ok(())
+}
+
 fn require_healthy_grpc_shutdown(report: server::ProxyGrpcServerShutdownReport) -> ProxyResult<()> {
     if report.is_healthy() {
         Ok(())
@@ -370,6 +385,7 @@ where
                      runtime",
                 ));
             }
+            verify_cluster_route_and_security(config.mode, auth_metadata_service.as_ref()).await?;
             let auth_runtime = match auth_runtime {
                 Some(auth_runtime) => Some(auth_runtime),
                 None => {
@@ -557,11 +573,14 @@ mod tests {
     use rocketmq_runtime::ServiceLifecycleConfig;
     use rocketmq_runtime::ServiceLifecycleState;
 
+    use super::verify_cluster_route_and_security;
     use super::LifecycleReadiness;
     use super::ProxyRuntime;
     use super::ProxyRuntimeBuilder;
     use crate::config::ProxyConfig;
     use crate::config::ProxyMode;
+    use crate::service::DefaultMetadataService;
+    use crate::service::MetadataService;
 
     fn lifecycle() -> ServiceLifecycle {
         ServiceLifecycle::new(ServiceLifecycleConfig {
@@ -582,6 +601,24 @@ mod tests {
         readiness.listener_bound().expect("second listener binds");
         assert_eq!(lifecycle.state(), ServiceLifecycleState::Ready);
         assert!(readiness.listener_bound().is_err());
+    }
+
+    #[tokio::test]
+    async fn cluster_readiness_requires_a_healthy_metadata_path() {
+        assert!(
+            verify_cluster_route_and_security(ProxyMode::Cluster, None)
+                .await
+                .is_err(),
+            "Cluster mode must fail closed without a route and security metadata path"
+        );
+
+        let metadata: Arc<dyn MetadataService> = Arc::new(DefaultMetadataService);
+        verify_cluster_route_and_security(ProxyMode::Cluster, Some(&metadata))
+            .await
+            .expect("healthy metadata path should satisfy the readiness preflight");
+        verify_cluster_route_and_security(ProxyMode::Local, None)
+            .await
+            .expect("Local mode does not require a Cluster metadata preflight");
     }
 
     #[tokio::test]

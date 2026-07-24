@@ -1,16 +1,20 @@
 {
   "schema_version": 1,
-  "milestone": "M11-10",
+  "milestone": "P0-04",
   "kubernetes_version": "1.32.0",
   "helm_chart": "distribution/helm/rocketmq-rust",
-  "helm_secure_values": "distribution/helm/rocketmq-rust/ci/secure-values.yaml",
   "kustomize_base": "distribution/kubernetes/base",
   "kustomize_secure_overlay": "distribution/kubernetes/overlays/secure",
+  "profiles": {
+    "development": "dev-single",
+    "production": "production-controller-ha"
+  },
   "image": {
-    "repository_prefix": "ghcr.io/mxsm/rocketmq-rust",
-    "digest_pattern": "^sha256:[0-9a-f]{64}$",
-    "unpublished_placeholder": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-    "secure_values_are_non_publishable_fixtures": true
+    "mode": "local",
+    "repository_prefix": "rocketmq-rust",
+    "tag": "local",
+    "pull_policy": "Never",
+    "remote_push_enabled": false
   },
   "security": {
     "profile": "restricted",
@@ -71,9 +75,9 @@
   },
   "services": {
     "broker": {
-      "repository": "ghcr.io/mxsm/rocketmq-rust/broker",
+      "repository": "rocketmq-rust/broker",
       "workload_kind": "StatefulSet",
-      "replicas": 1,
+      "replicas": 3,
       "config_path": "/etc/rocketmq/broker.toml",
       "data_path": "/var/lib/rocketmq/broker",
       "ports": [
@@ -88,7 +92,7 @@
         "retention": "Retain"
       },
       "pdb": {
-        "min_available": 1
+        "min_available": 2
       },
       "resources": {
         "requests": {
@@ -102,7 +106,7 @@
       }
     },
     "namesrv": {
-      "repository": "ghcr.io/mxsm/rocketmq-rust/namesrv",
+      "repository": "rocketmq-rust/namesrv",
       "workload_kind": "StatefulSet",
       "replicas": 3,
       "config_path": "/etc/rocketmq/namesrv.toml",
@@ -132,7 +136,7 @@
       }
     },
     "controller": {
-      "repository": "ghcr.io/mxsm/rocketmq-rust/controller",
+      "repository": "rocketmq-rust/controller",
       "workload_kind": "StatefulSet",
       "replicas": 3,
       "quorum": 2,
@@ -145,6 +149,7 @@
       ],
       "raft_bind_address": "0.0.0.0:60110",
       "auto_initialize_cluster": true,
+      "storage_backend": "RocksDB",
       "peer_service_ips_required": 3,
       "peer_service_ip_fixture": [
         "10.96.0.201",
@@ -172,7 +177,7 @@
       }
     },
     "proxy": {
-      "repository": "ghcr.io/mxsm/rocketmq-rust/proxy",
+      "repository": "rocketmq-rust/proxy",
       "workload_kind": "Deployment",
       "replicas": 2,
       "config_path": "/etc/rocketmq/proxy.toml",
@@ -200,7 +205,7 @@
       }
     },
     "mcp": {
-      "repository": "ghcr.io/mxsm/rocketmq-rust/mcp",
+      "repository": "rocketmq-rust/mcp",
       "workload_kind": "Deployment",
       "replicas": 1,
       "horizontal_scaling": false,
@@ -247,13 +252,6 @@
       "version": "v0.8.0",
       "linux_amd64_sha256": "9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883",
       "windows_amd64_sha256": "e3f56102bcf4f50b034a567e2482a1c5330799983ddd655952310211aef73d93"
-    }
-  },
-  "workflow": {
-    "path": ".github/workflows/kubernetes-assets-ci.yml",
-    "actions": {
-      "actions/checkout": "9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0",
-      "actions/upload-artifact": "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
     }
   }
 }

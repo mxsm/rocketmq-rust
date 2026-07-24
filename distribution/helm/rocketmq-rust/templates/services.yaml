@@ -1,3 +1,4 @@
+{{- include "rocketmq.validateValues" . -}}
 {{- $root := . -}}
 {{- range $service, $ports := dict "broker" (list 10911 10912) "namesrv" (list 9876) "controller" (list 60109 60110) }}
 apiVersion: v1
@@ -40,7 +41,8 @@ spec:
 {{- end }}
 ---
 {{- end }}
-{{- range $ordinal := until 3 }}
+{{- if eq .Values.deploymentProfile "production-controller-ha" }}
+{{- range $ordinal := until (int .Values.services.controller.replicas) }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -51,13 +53,15 @@ metadata:
     rocketmq.apache.org/controller-ordinal: {{ $ordinal | quote }}
 spec:
   type: ClusterIP
-  clusterIP: {{ include "rocketmq.controllerServiceIP" (dict "address" (index $root.Values.services.controller.peerServiceClusterIPs $ordinal)) }}
+  clusterIP: {{ index $root.Values.services.controller.peerServiceClusterIPs $ordinal }}
+  publishNotReadyAddresses: true
   selector:
     statefulset.kubernetes.io/pod-name: rocketmq-controller-{{ $ordinal }}
   ports:
     - {name: remoting, port: 60109, targetPort: 60109, protocol: TCP}
     - {name: raft, port: 60110, targetPort: 60110, protocol: TCP}
 ---
+{{- end }}
 {{- end }}
 {{- range $service, $ports := dict "proxy" (list 8080 8081) "mcp" (list 8089) }}
 apiVersion: v1

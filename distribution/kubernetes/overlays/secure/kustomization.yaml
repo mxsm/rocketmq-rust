@@ -1,21 +1,21 @@
-# non-publishable rendering fixture only. Replace every digest with a verified signed production digest before deployment.
+# Keep the hardened overlay on images loaded into the local cluster.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
   - ../../base
 images:
-  - name: ghcr.io/mxsm/rocketmq-rust/broker
-    newName: ghcr.io/mxsm/rocketmq-rust/broker
-    digest: sha256:1111111111111111111111111111111111111111111111111111111111111111
-  - name: ghcr.io/mxsm/rocketmq-rust/namesrv
-    newName: ghcr.io/mxsm/rocketmq-rust/namesrv
-    digest: sha256:2222222222222222222222222222222222222222222222222222222222222222
-  - name: ghcr.io/mxsm/rocketmq-rust/controller
-    newName: ghcr.io/mxsm/rocketmq-rust/controller
-    digest: sha256:3333333333333333333333333333333333333333333333333333333333333333
-  - name: ghcr.io/mxsm/rocketmq-rust/proxy
-    newName: ghcr.io/mxsm/rocketmq-rust/proxy
-    digest: sha256:4444444444444444444444444444444444444444444444444444444444444444
-  - name: ghcr.io/mxsm/rocketmq-rust/mcp
-    newName: ghcr.io/mxsm/rocketmq-rust/mcp
-    digest: sha256:5555555555555555555555555555555555555555555555555555555555555555
+  - name: rocketmq-rust/broker
+    newName: rocketmq-rust/broker
+    newTag: local
+  - name: rocketmq-rust/namesrv
+    newName: rocketmq-rust/namesrv
+    newTag: local
+  - name: rocketmq-rust/controller
+    newName: rocketmq-rust/controller
+    newTag: local
+  - name: rocketmq-rust/proxy
+    newName: rocketmq-rust/proxy
+    newTag: local
+  - name: rocketmq-rust/mcp
+    newName: rocketmq-rust/mcp
+    newTag: local

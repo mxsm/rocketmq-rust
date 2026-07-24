@@ -1,10 +1,10 @@
 apiVersion: v2
 name: rocketmq-rust
-description: Secure digest-only deployment assets for the five RocketMQ Rust services
+description: Controller-aware development and production HA deployment assets for RocketMQ Rust
 type: application
 version: 0.1.0
 appVersion: "0.1.0"
 kubeVersion: ">=1.32.0-0"
 annotations:
-  rocketmq.apache.org/architecture-milestone: M11-09
-  rocketmq.apache.org/image-policy: signed-digest-only
+  rocketmq.apache.org/architecture-milestone: P0-04
+  rocketmq.apache.org/image-policy: local-tag-or-immutable-digest

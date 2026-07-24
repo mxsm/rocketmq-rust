@@ -4,18 +4,18 @@ namespace: rocketmq
 resources:
   - manifest.yaml
 images:
-  - name: ghcr.io/mxsm/rocketmq-rust/broker
-    newName: ghcr.io/mxsm/rocketmq-rust/broker
-    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
-  - name: ghcr.io/mxsm/rocketmq-rust/namesrv
-    newName: ghcr.io/mxsm/rocketmq-rust/namesrv
-    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
-  - name: ghcr.io/mxsm/rocketmq-rust/controller
-    newName: ghcr.io/mxsm/rocketmq-rust/controller
-    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
-  - name: ghcr.io/mxsm/rocketmq-rust/proxy
-    newName: ghcr.io/mxsm/rocketmq-rust/proxy
-    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
-  - name: ghcr.io/mxsm/rocketmq-rust/mcp
-    newName: ghcr.io/mxsm/rocketmq-rust/mcp
-    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  - name: rocketmq-rust/broker
+    newName: rocketmq-rust/broker
+    newTag: local
+  - name: rocketmq-rust/namesrv
+    newName: rocketmq-rust/namesrv
+    newTag: local
+  - name: rocketmq-rust/controller
+    newName: rocketmq-rust/controller
+    newTag: local
+  - name: rocketmq-rust/proxy
+    newName: rocketmq-rust/proxy
+    newTag: local
+  - name: rocketmq-rust/mcp
+    newName: rocketmq-rust/mcp
+    newTag: local
