@@ -4783,7 +4783,7 @@ name = "rocketmq-model"
 version = "1.0.0"
 dependencies = [
  "cheetah-string",
- "md-5 0.10.6",
+ "md-5 0.11.0",
  "rocketmq-error",
  "serde",
  "serde_json",
