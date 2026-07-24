@@ -16,9 +16,9 @@ use clap::Parser;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
-use rocketmq_admin_core::core::topic::TopicListQueryRequest;
-use rocketmq_admin_core::core::topic::TopicListResult;
-use rocketmq_admin_core::core::topic::TopicService;
+use rocketmq_admin_core::client_adapter::services::topic::TopicListQueryRequest;
+use rocketmq_admin_core::client_adapter::services::topic::TopicListResult;
+use rocketmq_admin_core::client_adapter::services::topic::TopicService;
 
 #[derive(Debug, Clone, Parser)]
 pub struct TopicListSubCommand {
@@ -64,7 +64,7 @@ impl TopicListSubCommand {
 impl CommandExecute for TopicListSubCommand {
     async fn execute(
         &self,
-        _rpc_hook: Option<std::sync::Arc<dyn rocketmq_remoting::runtime::RPCHook>>,
+        _credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
     ) -> rocketmq_error::RocketMQResult<()> {
         let result = TopicService::query_topic_list(self.request()).await?;
         self.print_topics(result);

@@ -12,16 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use clap::Parser;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use rocketmq_admin_core::core::consumer::ConsumerConfigQueryRequest;
-use rocketmq_admin_core::core::consumer::ConsumerService;
+use rocketmq_admin_core::client_adapter::services::consumer::ConsumerConfigQueryRequest;
+use rocketmq_admin_core::client_adapter::services::consumer::ConsumerService;
 
 #[derive(Debug, Clone, Parser)]
 pub struct GetConsumerConfigSubCommand {
@@ -36,8 +33,12 @@ impl GetConsumerConfigSubCommand {
 }
 
 impl CommandExecute for GetConsumerConfigSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        let result = ConsumerService::query_consumer_config_by_request_with_rpc_hook(self.request()?, rpc_hook).await?;
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
+        let result =
+            ConsumerService::query_consumer_config_by_request_with_credentials(self.request()?, credentials).await?;
         for info in &result.entries {
             println!(
                 "============================={}:{}=============================",

@@ -12,17 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use clap::Parser;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use rocketmq_admin_core::core::message::MessageService;
-use rocketmq_admin_core::core::message::QueryMessageByOffsetRequest;
+use rocketmq_admin_core::client_adapter::services::message::MessageService;
+use rocketmq_admin_core::client_adapter::services::message::QueryMessageByOffsetRequest;
 
 #[derive(Debug, Clone, Parser)]
 pub struct QueryMsgByOffsetSubCommand {
@@ -56,7 +53,10 @@ pub struct QueryMsgByOffsetSubCommand {
 }
 
 impl CommandExecute for QueryMsgByOffsetSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         let request = QueryMessageByOffsetRequest::try_new(
             self.topic.clone(),
             self.broker_name.clone(),
@@ -64,7 +64,7 @@ impl CommandExecute for QueryMsgByOffsetSubCommand {
             self.offset,
             self.route_topic.clone(),
         )?;
-        let result = MessageService::query_message_by_offset_by_request_with_rpc_hook(request, rpc_hook).await?;
+        let result = MessageService::query_message_by_offset_by_request_with_credentials(request, credentials).await?;
 
         if let Some(msg) = result.message {
             let msg: &MessageExt = &msg;

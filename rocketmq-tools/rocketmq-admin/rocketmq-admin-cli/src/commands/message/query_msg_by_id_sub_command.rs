@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use cheetah_string::CheetahString;
 use chrono::Local;
 use chrono::TimeZone;
@@ -24,13 +22,12 @@ use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
-use rocketmq_admin_core::core::message::MessageService;
-use rocketmq_admin_core::core::message::QueryMessageByIdOutcome;
-use rocketmq_admin_core::core::message::QueryMessageByIdRequest;
+use rocketmq_admin_core::client_adapter::services::message::MessageService;
+use rocketmq_admin_core::client_adapter::services::message::QueryMessageByIdOutcome;
+use rocketmq_admin_core::client_adapter::services::message::QueryMessageByIdRequest;
 
 const DEFAULT_TIMEOUT_MS: u64 = 3000;
 
@@ -333,7 +330,10 @@ impl QueryMsgByIdSubCommand {
 }
 
 impl CommandExecute for QueryMsgByIdSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         if self.message_ids.is_empty() {
             return Err(RocketMQError::IllegalArgument(
                 "At least one message ID is required".to_string(),
@@ -353,7 +353,7 @@ impl CommandExecute for QueryMsgByIdSubCommand {
 
         let request = QueryMessageByIdRequest::try_new(self.message_ids.clone(), self.topic.clone(), self.timeout)?
             .with_optional_namesrv_addr(self.common_args.namesrv_addr.clone());
-        let result = MessageService::query_message_by_id_by_request_with_rpc_hook(request, rpc_hook).await?;
+        let result = MessageService::query_message_by_id_by_request_with_credentials(request, credentials).await?;
 
         let total_count = result.entries.len();
         for (index, entry) in result.entries.iter().enumerate() {

@@ -15,11 +15,9 @@
 use crate::commands::CommandExecute;
 use clap::ArgGroup;
 use clap::Parser;
-use rocketmq_admin_core::core::auth::AuthService;
-use rocketmq_admin_core::core::auth::UpdateUserRequest;
+use rocketmq_admin_core::client_adapter::services::auth::AuthService;
+use rocketmq_admin_core::client_adapter::services::auth::UpdateUserRequest;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
-use std::sync::Arc;
 
 #[derive(Debug, Clone, Parser)]
 #[command(group(ArgGroup::new("target")
@@ -50,7 +48,10 @@ pub struct UpdateUserSubCommand {
 }
 
 impl CommandExecute for UpdateUserSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         let request = UpdateUserRequest::try_new(
             self.broker_addr.clone(),
             self.cluster_name.clone(),
@@ -59,7 +60,7 @@ impl CommandExecute for UpdateUserSubCommand {
             self.user_type.clone(),
             self.user_status.clone(),
         )?;
-        let result = AuthService::update_user_by_request_with_rpc_hook(request, rpc_hook).await?;
+        let result = AuthService::update_user_by_request_with_credentials(request, credentials).await?;
         for broker_addr in result.broker_addrs {
             println!("update user to {} success.", broker_addr);
         }

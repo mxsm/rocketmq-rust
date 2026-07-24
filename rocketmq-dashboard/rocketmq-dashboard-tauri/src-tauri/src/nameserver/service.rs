@@ -18,7 +18,7 @@ use crate::nameserver::runtime::NameServerRuntimeState;
 use crate::nameserver::types::NameServerHomePageView;
 use crate::nameserver::types::NameServerStatusItem;
 use anyhow::Result;
-use rocketmq_admin_core::client_adapter::ClientAdminBuilder;
+use rocketmq_admin_core::core::admin::AdminBuilder;
 use rocketmq_dashboard_common::NameServerConfigSnapshot;
 use rocketmq_dashboard_common::NameServerMutationResult;
 use rocketmq_dashboard_common::NameServerService;
@@ -46,7 +46,7 @@ impl NameServerProbe for DefaultNameServerProbe {
         address: &'a str,
     ) -> Pin<Box<dyn Future<Output = bool> + Send + 'a>> {
         Box::pin(async move {
-            let mut admin = match ClientAdminBuilder::new()
+            let mut admin = match AdminBuilder::new()
                 .admin_group(format!("dashboard-nameserver-probe-{}", Uuid::new_v4()))
                 .namesrv_addr(address)
                 .timeout_millis(NAMESERVER_PROBE_TIMEOUT_MILLIS)

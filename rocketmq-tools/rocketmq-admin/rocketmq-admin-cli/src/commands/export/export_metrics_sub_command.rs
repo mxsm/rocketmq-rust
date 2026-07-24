@@ -13,14 +13,12 @@
 // limitations under the License.
 
 use std::path::Path;
-use std::sync::Arc;
 
 use clap::Parser;
-use rocketmq_admin_core::core::export_data::ExportMetricsRequest;
-use rocketmq_admin_core::core::export_data::ExportService;
+use rocketmq_admin_core::client_adapter::services::export_data::ExportMetricsRequest;
+use rocketmq_admin_core::client_adapter::services::export_data::ExportService;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
@@ -51,8 +49,11 @@ pub struct ExportMetricsSubCommand {
 }
 
 impl CommandExecute for ExportMetricsSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        let result = ExportService::export_metrics_by_request_with_rpc_hook(self.request()?, rpc_hook).await?;
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
+        let result = ExportService::export_metrics_by_request_with_credentials(self.request()?, credentials).await?;
         let output_path = self.output_path();
         let json_content = serde_json::to_string_pretty(&result)
             .map_err(|error| RocketMQError::Internal(format!("ExportMetricsSubCommand: {error}")))?;

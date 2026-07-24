@@ -19,6 +19,7 @@ use rocketmq_client_rust::MQAdminExt;
 use rocketmq_client_rust::SessionCredentials;
 
 use crate::client_adapter::lifecycle::AdminSession;
+use crate::core::security::AdminCredentials;
 use crate::core::security::ListUsersRequest;
 use crate::core::security::ListUsersResult;
 use crate::core::security::SecurityAdmin;
@@ -26,12 +27,12 @@ use crate::core::security::UserSummary;
 use crate::core::AdminError;
 use crate::core::AdminFuture;
 
-/// Build the legacy client adapter used by admin tools for a secure profile.
+/// Build the Client SDK hook used internally for a secure admin profile.
 ///
 /// Credential values are retained only by the redacting client RPC hook. The
 /// caller is responsible for obtaining them from a non-command-line secret
 /// source such as the process environment or a mounted secret provider.
-pub fn admin_acl_rpc_hook(
+fn admin_acl_rpc_hook(
     access_key: impl Into<CheetahString>,
     secret_key: impl Into<CheetahString>,
     security_token: Option<impl Into<CheetahString>>,
@@ -43,6 +44,16 @@ pub fn admin_acl_rpc_hook(
         None => SessionCredentials::with_keys(access_key, secret_key),
     };
     AclClientRPCHook::with_signature_algorithm(credentials, SigningAlgorithm::HmacSha256)
+}
+
+pub(crate) fn rpc_hook_from_credentials(
+    credentials: &AdminCredentials,
+) -> std::sync::Arc<dyn rocketmq_client_rust::admin_adapter_compat::remoting::runtime::RPCHook> {
+    std::sync::Arc::new(admin_acl_rpc_hook(
+        credentials.access_key(),
+        credentials.secret_key(),
+        credentials.security_token(),
+    ))
 }
 
 impl SecurityAdmin for AdminSession {

@@ -12,18 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use clap::ArgGroup;
 use clap::Parser;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use rocketmq_admin_core::core::broker::BrokerOperationResult;
-use rocketmq_admin_core::core::broker::BrokerService;
-use rocketmq_admin_core::core::broker::ColdDataFlowCtrGroupConfigRemoveRequest;
+use rocketmq_admin_core::client_adapter::services::broker::BrokerOperationResult;
+use rocketmq_admin_core::client_adapter::services::broker::BrokerService;
+use rocketmq_admin_core::client_adapter::services::broker::ColdDataFlowCtrGroupConfigRemoveRequest;
 
 #[derive(Debug, Clone, Parser)]
 #[command(group(ArgGroup::new("target")
@@ -77,10 +74,15 @@ impl RemoveColdDataFlowCtrGroupConfigSubCommand {
 }
 
 impl CommandExecute for RemoveColdDataFlowCtrGroupConfigSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        let result =
-            BrokerService::remove_cold_data_flow_ctr_group_config_by_request_with_rpc_hook(self.request()?, rpc_hook)
-                .await?;
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
+        let result = BrokerService::remove_cold_data_flow_ctr_group_config_by_request_with_credentials(
+            self.request()?,
+            credentials,
+        )
+        .await?;
         Self::print_result(&result)
     }
 }

@@ -12,15 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use clap::Parser;
-use rocketmq_admin_core::core::export_data::ExportMetadataInRocksDbRequest;
-use rocketmq_admin_core::core::export_data::ExportMetadataInRocksDbResult;
-use rocketmq_admin_core::core::export_data::ExportService;
+use rocketmq_admin_core::client_adapter::services::export_data::ExportMetadataInRocksDbRequest;
+use rocketmq_admin_core::client_adapter::services::export_data::ExportMetadataInRocksDbResult;
+use rocketmq_admin_core::client_adapter::services::export_data::ExportService;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
 
@@ -106,7 +103,10 @@ impl ExportMetadataInRocksDBSubCommand {
 }
 
 impl CommandExecute for ExportMetadataInRocksDBSubCommand {
-    async fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        _rpc_hook: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         let result = ExportService::export_metadata_in_rocksdb_by_request(&self.request())?;
         Self::print_result(&result)
     }
@@ -115,7 +115,7 @@ impl CommandExecute for ExportMetadataInRocksDBSubCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rocketmq_admin_core::core::export_data::ExportMetadataInRocksDbConfigType;
+    use rocketmq_admin_core::client_adapter::services::export_data::ExportMetadataInRocksDbConfigType;
 
     #[test]
     fn export_metadata_in_rocksdb_sub_command_builds_core_request() {

@@ -1,4 +1,4 @@
-use rocketmq_admin_core::core::stats::StatsAllQueryRequest;
+use rocketmq_admin_core::client_adapter::services::stats::StatsAllQueryRequest;
 
 #[test]
 fn stats_all_query_request_trims_optional_topic() {

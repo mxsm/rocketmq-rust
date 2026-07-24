@@ -18,11 +18,8 @@ mod reset_offset_by_time_old_sub_command;
 mod reset_offset_by_time_sub_command;
 mod skip_accumulated_message_sub_command;
 
-use std::sync::Arc;
-
 use clap::Subcommand;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
 use crate::commands::offset::clone_group_offset_sub_command::CloneGroupOffsetSubCommand;
@@ -91,13 +88,16 @@ EXAMPLES:
 }
 
 impl CommandExecute for OffsetCommands {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         match self {
-            OffsetCommands::CloneGroupOffset(cmd) => cmd.execute(rpc_hook).await,
-            OffsetCommands::GetConsumerStatus(cmd) => cmd.execute(rpc_hook).await,
-            OffsetCommands::ResetOffsetByTime(cmd) => cmd.execute(rpc_hook).await,
-            OffsetCommands::ResetOffsetByTimeOld(cmd) => cmd.execute(rpc_hook).await,
-            OffsetCommands::SkipAccumulatedMessage(cmd) => cmd.execute(rpc_hook).await,
+            OffsetCommands::CloneGroupOffset(cmd) => cmd.execute(credentials).await,
+            OffsetCommands::GetConsumerStatus(cmd) => cmd.execute(credentials).await,
+            OffsetCommands::ResetOffsetByTime(cmd) => cmd.execute(credentials).await,
+            OffsetCommands::ResetOffsetByTimeOld(cmd) => cmd.execute(credentials).await,
+            OffsetCommands::SkipAccumulatedMessage(cmd) => cmd.execute(credentials).await,
         }
     }
 }

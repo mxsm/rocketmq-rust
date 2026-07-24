@@ -12,13 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use clap::Parser;
-use rocketmq_admin_core::core::container::ContainerAddBrokerRequest;
-use rocketmq_admin_core::core::container::ContainerService;
+use rocketmq_admin_core::client_adapter::services::container::ContainerAddBrokerRequest;
+use rocketmq_admin_core::client_adapter::services::container::ContainerService;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
@@ -41,8 +38,11 @@ pub struct AddBrokerSubCommand {
 }
 
 impl CommandExecute for AddBrokerSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        let result = ContainerService::add_broker_by_request_with_rpc_hook(self.request()?, rpc_hook).await?;
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
+        let result = ContainerService::add_broker_by_request_with_credentials(self.request()?, credentials).await?;
         println!("add broker to {} success", result.broker_container_addr);
         Ok(())
     }

@@ -25,11 +25,9 @@ mod update_static_topic_sub_command;
 mod update_topic_list_sub_command;
 mod update_topic_perm_sub_command;
 mod update_topic_sub_command;
-use std::sync::Arc;
 
 use clap::Subcommand;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
 use crate::commands::topic::allocate_mq_sub_command::AllocateMQSubCommand;
@@ -134,20 +132,23 @@ more memory space, you can use this command to allocate it."#
 }
 
 impl CommandExecute for TopicCommands {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         match self {
-            TopicCommands::AllocateMQ(cmd) => cmd.execute(rpc_hook).await,
-            TopicCommands::DeleteTopic(cmd) => cmd.execute(rpc_hook).await,
-            TopicCommands::RemappingStaticTopic(cmd) => cmd.execute(rpc_hook).await,
-            TopicCommands::TopicCluster(cmd) => cmd.execute(rpc_hook).await,
-            TopicCommands::TopicList(cmd) => cmd.execute(rpc_hook).await,
-            TopicCommands::TopicRoute(cmd) => cmd.execute(rpc_hook).await,
-            TopicCommands::TopicStatus(cmd) => cmd.execute(rpc_hook).await,
-            TopicCommands::UpdateOrderConf(cmd) => cmd.execute(rpc_hook).await,
-            TopicCommands::UpdateStaticTopic(cmd) => cmd.execute(rpc_hook).await,
-            TopicCommands::UpdateTopicList(cmd) => cmd.execute(rpc_hook).await,
-            TopicCommands::UpdateTopicPerm(cmd) => cmd.execute(rpc_hook).await,
-            TopicCommands::UpdateTopic(cmd) => cmd.execute(rpc_hook).await,
+            TopicCommands::AllocateMQ(cmd) => cmd.execute(credentials).await,
+            TopicCommands::DeleteTopic(cmd) => cmd.execute(credentials).await,
+            TopicCommands::RemappingStaticTopic(cmd) => cmd.execute(credentials).await,
+            TopicCommands::TopicCluster(cmd) => cmd.execute(credentials).await,
+            TopicCommands::TopicList(cmd) => cmd.execute(credentials).await,
+            TopicCommands::TopicRoute(cmd) => cmd.execute(credentials).await,
+            TopicCommands::TopicStatus(cmd) => cmd.execute(credentials).await,
+            TopicCommands::UpdateOrderConf(cmd) => cmd.execute(credentials).await,
+            TopicCommands::UpdateStaticTopic(cmd) => cmd.execute(credentials).await,
+            TopicCommands::UpdateTopicList(cmd) => cmd.execute(credentials).await,
+            TopicCommands::UpdateTopicPerm(cmd) => cmd.execute(credentials).await,
+            TopicCommands::UpdateTopic(cmd) => cmd.execute(credentials).await,
         }
     }
 }

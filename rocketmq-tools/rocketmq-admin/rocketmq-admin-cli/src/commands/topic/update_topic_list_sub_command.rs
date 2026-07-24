@@ -23,10 +23,10 @@ use tokio::fs::File;
 use tokio::io::AsyncReadExt;
 
 use crate::commands::CommandExecute;
-use rocketmq_admin_core::core::topic::TopicService;
-use rocketmq_admin_core::core::topic::TopicTarget;
-use rocketmq_admin_core::core::topic::UpdateTopicListRequest;
-use rocketmq_admin_core::core::topic::UpdateTopicListResult;
+use rocketmq_admin_core::client_adapter::services::topic::TopicService;
+use rocketmq_admin_core::client_adapter::services::topic::TopicTarget;
+use rocketmq_admin_core::client_adapter::services::topic::UpdateTopicListRequest;
+use rocketmq_admin_core::client_adapter::services::topic::UpdateTopicListResult;
 
 #[derive(Parser)]
 pub struct UpdateTopicListSubCommand {
@@ -78,7 +78,7 @@ impl UpdateTopicListSubCommand {
 impl CommandExecute for UpdateTopicListSubCommand {
     async fn execute(
         &self,
-        _rpc_hook: Option<std::sync::Arc<dyn rocketmq_remoting::runtime::RPCHook>>,
+        _credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
     ) -> rocketmq_error::RocketMQResult<()> {
         if !self.file.is_file() {
             return Err(RocketMQError::Internal(

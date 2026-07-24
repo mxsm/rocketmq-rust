@@ -12,15 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use clap::Parser;
-use rocketmq_admin_core::core::message::DecodeMessageIdOutcome;
-use rocketmq_admin_core::core::message::DecodeMessageIdRequest;
-use rocketmq_admin_core::core::message::DecodeMessageIdResult;
-use rocketmq_admin_core::core::message::MessageService;
+use rocketmq_admin_core::client_adapter::services::message::DecodeMessageIdOutcome;
+use rocketmq_admin_core::client_adapter::services::message::DecodeMessageIdRequest;
+use rocketmq_admin_core::client_adapter::services::message::DecodeMessageIdResult;
+use rocketmq_admin_core::client_adapter::services::message::MessageService;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
 
@@ -68,7 +65,10 @@ impl DecodeMessageIdSubCommand {
 }
 
 impl CommandExecute for DecodeMessageIdSubCommand {
-    async fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        _rpc_hook: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         let result = MessageService::decode_message_ids(&self.request()?);
         Self::print_result(&result);
         Ok(())

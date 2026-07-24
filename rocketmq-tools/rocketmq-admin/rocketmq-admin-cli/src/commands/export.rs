@@ -19,11 +19,8 @@ mod export_metrics_sub_command;
 mod export_pop_record_sub_command;
 mod rocksdb_config_to_json_sub_command;
 
-use std::sync::Arc;
-
 use clap::Subcommand;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
 use crate::commands::export::export_configs_sub_command::ExportConfigsSubCommand;
@@ -79,14 +76,17 @@ pub enum ExportCommands {
 }
 
 impl CommandExecute for ExportCommands {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         match self {
-            ExportCommands::ExportConfigs(cmd) => cmd.execute(rpc_hook).await,
-            ExportCommands::ExportMetrics(cmd) => cmd.execute(rpc_hook).await,
-            ExportCommands::ExportMetadataInRocksDB(cmd) => cmd.execute(rpc_hook).await,
-            ExportCommands::ExportMetadata(cmd) => cmd.execute(rpc_hook).await,
-            ExportCommands::ExportPopRecord(cmd) => cmd.execute(rpc_hook).await,
-            ExportCommands::RocksDBConfigToJson(cmd) => cmd.execute(rpc_hook).await,
+            ExportCommands::ExportConfigs(cmd) => cmd.execute(credentials).await,
+            ExportCommands::ExportMetrics(cmd) => cmd.execute(credentials).await,
+            ExportCommands::ExportMetadataInRocksDB(cmd) => cmd.execute(credentials).await,
+            ExportCommands::ExportMetadata(cmd) => cmd.execute(credentials).await,
+            ExportCommands::ExportPopRecord(cmd) => cmd.execute(credentials).await,
+            ExportCommands::RocksDBConfigToJson(cmd) => cmd.execute(credentials).await,
         }
     }
 }

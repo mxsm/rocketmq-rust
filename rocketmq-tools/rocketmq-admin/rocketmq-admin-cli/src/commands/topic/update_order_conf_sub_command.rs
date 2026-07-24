@@ -16,10 +16,10 @@ use clap::Parser;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
-use rocketmq_admin_core::core::topic::OrderConfMethod;
-use rocketmq_admin_core::core::topic::OrderConfRequest;
-use rocketmq_admin_core::core::topic::OrderConfResult;
-use rocketmq_admin_core::core::topic::TopicService;
+use rocketmq_admin_core::client_adapter::services::topic::OrderConfMethod;
+use rocketmq_admin_core::client_adapter::services::topic::OrderConfRequest;
+use rocketmq_admin_core::client_adapter::services::topic::OrderConfResult;
+use rocketmq_admin_core::client_adapter::services::topic::TopicService;
 
 #[derive(Debug, Clone, Parser)]
 pub struct UpdateOrderConfSubCommand {
@@ -75,7 +75,7 @@ impl UpdateOrderConfSubCommand {
 impl CommandExecute for UpdateOrderConfSubCommand {
     async fn execute(
         &self,
-        _rpc_hook: Option<std::sync::Arc<dyn rocketmq_remoting::runtime::RPCHook>>,
+        _credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
     ) -> rocketmq_error::RocketMQResult<()> {
         let result = TopicService::apply_order_conf(self.request()?).await?;
         Self::print_result(result);

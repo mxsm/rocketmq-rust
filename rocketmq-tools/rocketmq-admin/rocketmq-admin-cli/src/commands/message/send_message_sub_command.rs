@@ -12,14 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use clap::Parser;
-use rocketmq_admin_core::core::producer::ProducerService;
-use rocketmq_admin_core::core::producer::SendMessageRequest;
-use rocketmq_admin_core::core::producer::SendMessageResult;
+use rocketmq_admin_core::client_adapter::services::producer::ProducerService;
+use rocketmq_admin_core::client_adapter::services::producer::SendMessageRequest;
+use rocketmq_admin_core::client_adapter::services::producer::SendMessageResult;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
 
@@ -89,13 +86,16 @@ impl SendMessageSubCommand {
 }
 
 impl CommandExecute for SendMessageSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         if self.queue_id.is_some() && self.broker_name.is_none() {
             println!("Broker name must be set if the queue is chosen!");
             return Ok(());
         }
 
-        let result = ProducerService::send_message_by_request_with_rpc_hook(self.request()?, rpc_hook).await?;
+        let result = ProducerService::send_message_by_request_with_credentials(self.request()?, credentials).await?;
         Self::print_result(&result);
         Ok(())
     }

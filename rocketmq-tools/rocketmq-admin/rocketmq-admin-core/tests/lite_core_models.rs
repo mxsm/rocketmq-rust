@@ -1,10 +1,10 @@
-use rocketmq_admin_core::core::lite::BrokerLiteInfoQueryRequest;
-use rocketmq_admin_core::core::lite::BrokerLiteInfoTarget;
-use rocketmq_admin_core::core::lite::LiteClientInfoQueryRequest;
-use rocketmq_admin_core::core::lite::LiteGroupInfoQueryRequest;
-use rocketmq_admin_core::core::lite::LiteTopicInfoQueryRequest;
-use rocketmq_admin_core::core::lite::ParentTopicInfoQueryRequest;
-use rocketmq_admin_core::core::lite::TriggerLiteDispatchRequest;
+use rocketmq_admin_core::client_adapter::services::lite::BrokerLiteInfoQueryRequest;
+use rocketmq_admin_core::client_adapter::services::lite::BrokerLiteInfoTarget;
+use rocketmq_admin_core::client_adapter::services::lite::LiteClientInfoQueryRequest;
+use rocketmq_admin_core::client_adapter::services::lite::LiteGroupInfoQueryRequest;
+use rocketmq_admin_core::client_adapter::services::lite::LiteTopicInfoQueryRequest;
+use rocketmq_admin_core::client_adapter::services::lite::ParentTopicInfoQueryRequest;
+use rocketmq_admin_core::client_adapter::services::lite::TriggerLiteDispatchRequest;
 
 #[test]
 fn broker_lite_info_query_request_trims_broker_target() {

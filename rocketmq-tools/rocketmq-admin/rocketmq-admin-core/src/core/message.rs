@@ -206,6 +206,3 @@ pub trait MessageAdmin: Send {
 
     fn query_trace_data<'a>(&'a mut self, request: &'a TraceQueryRequest) -> AdminFuture<'a, TraceData>;
 }
-
-#[cfg(feature = "legacy-common-compat")]
-pub use crate::client_adapter::legacy::core::message::*;

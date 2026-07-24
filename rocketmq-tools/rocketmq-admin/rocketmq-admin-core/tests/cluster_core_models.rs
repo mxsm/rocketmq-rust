@@ -1,7 +1,7 @@
-use rocketmq_admin_core::core::cluster::ClusterBrokerNameQueryRequest;
-use rocketmq_admin_core::core::cluster::ClusterListMode;
-use rocketmq_admin_core::core::cluster::ClusterListQueryRequest;
-use rocketmq_admin_core::core::cluster::ClusterSendMessageRtRequest;
+use rocketmq_admin_core::client_adapter::services::cluster::ClusterBrokerNameQueryRequest;
+use rocketmq_admin_core::client_adapter::services::cluster::ClusterListMode;
+use rocketmq_admin_core::client_adapter::services::cluster::ClusterListQueryRequest;
+use rocketmq_admin_core::client_adapter::services::cluster::ClusterSendMessageRtRequest;
 
 #[test]
 fn cluster_list_query_request_trims_optional_cluster() {

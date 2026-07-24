@@ -12,17 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use clap::Parser;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
-use rocketmq_admin_core::core::offset::OffsetService;
-use rocketmq_admin_core::core::offset::SkipAccumulatedMessageRequest;
-use rocketmq_admin_core::core::offset::SkipAccumulatedMessageResult;
+use rocketmq_admin_core::client_adapter::services::offset::OffsetService;
+use rocketmq_admin_core::client_adapter::services::offset::SkipAccumulatedMessageRequest;
+use rocketmq_admin_core::client_adapter::services::offset::SkipAccumulatedMessageResult;
 
 #[derive(Debug, Clone, Parser)]
 pub struct SkipAccumulatedMessageSubCommand {
@@ -65,9 +62,12 @@ impl SkipAccumulatedMessageSubCommand {
 }
 
 impl CommandExecute for SkipAccumulatedMessageSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         let result =
-            OffsetService::skip_accumulated_message_by_request_with_rpc_hook(self.request()?, rpc_hook).await?;
+            OffsetService::skip_accumulated_message_by_request_with_credentials(self.request()?, credentials).await?;
         print_skip_accumulated_message_result(result);
         Ok(())
     }

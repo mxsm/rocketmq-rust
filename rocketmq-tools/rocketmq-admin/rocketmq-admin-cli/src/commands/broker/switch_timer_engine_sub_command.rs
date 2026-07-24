@@ -12,17 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use clap::ArgGroup;
 use clap::Parser;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use rocketmq_admin_core::core::broker::BrokerOperationResult;
-use rocketmq_admin_core::core::broker::BrokerService;
-use rocketmq_admin_core::core::broker::SwitchTimerEngineRequest;
+use rocketmq_admin_core::client_adapter::services::broker::BrokerOperationResult;
+use rocketmq_admin_core::client_adapter::services::broker::BrokerService;
+use rocketmq_admin_core::client_adapter::services::broker::SwitchTimerEngineRequest;
 
 #[derive(Debug, Clone, Parser)]
 #[command(group(ArgGroup::new("target")
@@ -56,7 +53,10 @@ impl SwitchTimerEngineSubCommand {
 }
 
 impl CommandExecute for SwitchTimerEngineSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         let request = match self.request() {
             Ok(request) => request,
             Err(error) if error.to_string().contains("engineType") => {
@@ -67,7 +67,7 @@ impl CommandExecute for SwitchTimerEngineSubCommand {
         };
 
         let engine_name = request.engine_name().clone();
-        let result = BrokerService::switch_timer_engine_by_request_with_rpc_hook(request, rpc_hook).await?;
+        let result = BrokerService::switch_timer_engine_by_request_with_credentials(request, credentials).await?;
         print_switch_timer_engine_result(engine_name.as_str(), &result);
         Ok(())
     }
@@ -88,7 +88,7 @@ fn print_switch_timer_engine_result(engine_name: &str, result: &BrokerOperationR
 #[cfg(test)]
 mod tests {
     use clap::Parser;
-    use rocketmq_admin_core::core::broker::BrokerTarget;
+    use rocketmq_admin_core::client_adapter::services::broker::BrokerTarget;
 
     use super::*;
 

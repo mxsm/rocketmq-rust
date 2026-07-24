@@ -19,11 +19,8 @@ mod get_lite_topic_info_sub_command;
 mod get_parent_topic_info_sub_command;
 mod trigger_lite_dispatch_sub_command;
 
-use std::sync::Arc;
-
 use clap::Subcommand;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
 use crate::commands::lite::get_broker_lite_info_sub_command::GetBrokerLiteInfoSubCommand;
@@ -79,14 +76,17 @@ pub enum LiteCommands {
 }
 
 impl CommandExecute for LiteCommands {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         match self {
-            LiteCommands::GetBrokerLiteInfo(cmd) => cmd.execute(rpc_hook).await,
-            LiteCommands::GetLiteClientInfo(cmd) => cmd.execute(rpc_hook).await,
-            LiteCommands::GetLiteGroupInfo(cmd) => cmd.execute(rpc_hook).await,
-            LiteCommands::GetLiteTopicInfo(cmd) => cmd.execute(rpc_hook).await,
-            LiteCommands::GetParentTopicInfo(cmd) => cmd.execute(rpc_hook).await,
-            LiteCommands::TriggerLiteDispatch(cmd) => cmd.execute(rpc_hook).await,
+            LiteCommands::GetBrokerLiteInfo(cmd) => cmd.execute(credentials).await,
+            LiteCommands::GetLiteClientInfo(cmd) => cmd.execute(credentials).await,
+            LiteCommands::GetLiteGroupInfo(cmd) => cmd.execute(credentials).await,
+            LiteCommands::GetLiteTopicInfo(cmd) => cmd.execute(credentials).await,
+            LiteCommands::GetParentTopicInfo(cmd) => cmd.execute(credentials).await,
+            LiteCommands::TriggerLiteDispatch(cmd) => cmd.execute(credentials).await,
         }
     }
 }

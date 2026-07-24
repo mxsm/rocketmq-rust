@@ -12,18 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use clap::Parser;
 use rocketmq_common::UtilAll::time_millis_to_human_string2;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use rocketmq_admin_core::core::ha::HaService;
-use rocketmq_admin_core::core::ha::HaStatusQueryRequest;
-use rocketmq_admin_core::core::ha::HaStatusQueryResult;
+use rocketmq_admin_core::client_adapter::services::ha::HaService;
+use rocketmq_admin_core::client_adapter::services::ha::HaStatusQueryRequest;
+use rocketmq_admin_core::client_adapter::services::ha::HaStatusQueryResult;
 
 #[derive(Debug, Clone, Parser)]
 pub struct HAStatusSubCommand {
@@ -56,17 +53,21 @@ pub struct HAStatusSubCommand {
 }
 
 impl CommandExecute for HAStatusSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         if let Some(interval) = self.interval {
             let flush_second = if interval > 0 { interval } else { 3 };
             loop {
                 let result =
-                    HaService::query_ha_status_by_request_with_rpc_hook(self.request()?, rpc_hook.clone()).await?;
+                    HaService::query_ha_status_by_request_with_credentials(self.request()?, credentials.clone())
+                        .await?;
                 Self::print_status_result(&result);
                 tokio::time::sleep(tokio::time::Duration::from_secs(flush_second)).await;
             }
         } else {
-            let result = HaService::query_ha_status_by_request_with_rpc_hook(self.request()?, rpc_hook).await?;
+            let result = HaService::query_ha_status_by_request_with_credentials(self.request()?, credentials).await?;
             Self::print_status_result(&result);
         }
 
@@ -135,7 +136,7 @@ impl HAStatusSubCommand {
 #[cfg(test)]
 mod tests {
     use cheetah_string::CheetahString;
-    use rocketmq_admin_core::core::ha::HaStatusTarget;
+    use rocketmq_admin_core::client_adapter::services::ha::HaStatusTarget;
 
     use super::*;
 

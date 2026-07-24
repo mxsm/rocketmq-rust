@@ -13,12 +13,10 @@
 // limitations under the License.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use clap::Parser;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 use tabled::Table;
 use tabled::Tabled;
 use tabled::settings::Alignment;
@@ -28,8 +26,8 @@ use tabled::settings::object::Rows;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
-use rocketmq_admin_core::core::namesrv::NameServerService;
-use rocketmq_admin_core::core::namesrv::NamesrvConfigQueryRequest;
+use rocketmq_admin_core::client_adapter::services::namesrv::NameServerService;
+use rocketmq_admin_core::client_adapter::services::namesrv::NamesrvConfigQueryRequest;
 
 #[derive(Debug, Clone, Parser)]
 pub struct GetNamesrvConfigSubCommand {
@@ -44,7 +42,10 @@ impl GetNamesrvConfigSubCommand {
 }
 
 impl CommandExecute for GetNamesrvConfigSubCommand {
-    async fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        _rpc_hook: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         let request = match self.request() {
             Ok(request) => request,
             Err(_) => {

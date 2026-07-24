@@ -1,7 +1,7 @@
-use rocketmq_admin_core::core::producer::CheckMessageSendRtRequest;
-use rocketmq_admin_core::core::producer::ProducerInfoQueryRequest;
-use rocketmq_admin_core::core::producer::SendMessageRequest;
-use rocketmq_admin_core::core::producer::SendMessageStatusRequest;
+use rocketmq_admin_core::client_adapter::services::producer::CheckMessageSendRtRequest;
+use rocketmq_admin_core::client_adapter::services::producer::ProducerInfoQueryRequest;
+use rocketmq_admin_core::client_adapter::services::producer::SendMessageRequest;
+use rocketmq_admin_core::client_adapter::services::producer::SendMessageStatusRequest;
 
 #[test]
 fn producer_info_query_request_trims_fields() {

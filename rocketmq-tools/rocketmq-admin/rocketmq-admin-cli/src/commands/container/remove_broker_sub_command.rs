@@ -12,14 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use clap::Parser;
-use rocketmq_admin_core::core::container::ContainerRemoveBrokerRequest;
-use rocketmq_admin_core::core::container::ContainerService;
+use rocketmq_admin_core::client_adapter::services::container::ContainerRemoveBrokerRequest;
+use rocketmq_admin_core::client_adapter::services::container::ContainerService;
 use rocketmq_error::RocketMQResult;
 use rocketmq_error::ToolsError;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
@@ -47,8 +44,11 @@ pub struct RemoveBrokerSubCommand {
 }
 
 impl CommandExecute for RemoveBrokerSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        let result = ContainerService::remove_broker_by_request_with_rpc_hook(self.request()?, rpc_hook).await?;
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
+        let result = ContainerService::remove_broker_by_request_with_credentials(self.request()?, credentials).await?;
         println!("remove broker from {} success", result.broker_container_addr);
         Ok(())
     }

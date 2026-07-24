@@ -13,20 +13,18 @@
 // limitations under the License.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use chrono::Local;
 use chrono::TimeZone;
 use clap::Parser;
 use rocketmq_common::UtilAll::YYYY_MM_DD_HH_MM_SS_SSS;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
-use rocketmq_admin_core::core::message::MessageService;
-use rocketmq_admin_core::core::message::MessageTraceView;
-use rocketmq_admin_core::core::message::QueryMessageTraceByIdRequest;
+use rocketmq_admin_core::client_adapter::services::message::MessageService;
+use rocketmq_admin_core::client_adapter::services::message::MessageTraceView;
+use rocketmq_admin_core::client_adapter::services::message::QueryMessageTraceByIdRequest;
 
 #[derive(Debug, Clone, Parser)]
 pub struct QueryMsgTraceByIdSubCommand {
@@ -153,7 +151,10 @@ impl QueryMsgTraceByIdSubCommand {
 }
 
 impl CommandExecute for QueryMsgTraceByIdSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         let request = QueryMessageTraceByIdRequest::try_new(
             self.msg_id.clone(),
             self.trace_topic.clone(),
@@ -163,7 +164,8 @@ impl CommandExecute for QueryMsgTraceByIdSubCommand {
         )?
         .with_optional_namesrv_addr(self.common_args.namesrv_addr.clone());
 
-        let trace_views = MessageService::query_message_trace_by_id_by_request_with_rpc_hook(request, rpc_hook).await?;
+        let trace_views =
+            MessageService::query_message_trace_by_id_by_request_with_credentials(request, credentials).await?;
         Self::print_message_trace(trace_views);
         Ok(())
     }

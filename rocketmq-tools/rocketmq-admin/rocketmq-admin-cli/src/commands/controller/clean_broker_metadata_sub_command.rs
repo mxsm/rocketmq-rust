@@ -12,13 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use clap::Parser;
-use rocketmq_admin_core::core::controller::ControllerMetadataCleanRequest;
-use rocketmq_admin_core::core::controller::ControllerService;
+use rocketmq_admin_core::client_adapter::services::controller::ControllerMetadataCleanRequest;
+use rocketmq_admin_core::client_adapter::services::controller::ControllerService;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
 
@@ -67,10 +64,13 @@ pub struct CleanBrokerMetadataSubCommand {
 }
 
 impl CommandExecute for CleanBrokerMetadataSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         let request = self.request()?;
         let broker_name = request.broker_name().to_string();
-        ControllerService::clean_controller_metadata_by_request_with_rpc_hook(request, rpc_hook).await?;
+        ControllerService::clean_controller_metadata_by_request_with_credentials(request, credentials).await?;
         println!("clear broker {} metadata from controller success!", broker_name);
         Ok(())
     }

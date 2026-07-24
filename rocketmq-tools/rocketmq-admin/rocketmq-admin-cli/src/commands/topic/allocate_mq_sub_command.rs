@@ -12,17 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use clap::Parser;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
-use rocketmq_admin_core::core::topic::AllocateMqQueryRequest;
-use rocketmq_admin_core::core::topic::AllocatedMqQueryResult;
-use rocketmq_admin_core::core::topic::TopicService;
+use rocketmq_admin_core::client_adapter::services::topic::AllocateMqQueryRequest;
+use rocketmq_admin_core::client_adapter::services::topic::AllocatedMqQueryResult;
+use rocketmq_admin_core::client_adapter::services::topic::TopicService;
 
 #[derive(Debug, Clone, Parser)]
 pub struct AllocateMQSubCommand {
@@ -71,7 +68,10 @@ impl AllocateMQSubCommand {
 }
 
 impl CommandExecute for AllocateMQSubCommand {
-    async fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        _rpc_hook: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         let result = TopicService::query_allocated_mq_by_request(self.request()?).await?;
         Self::print_result(result);
         Ok(())

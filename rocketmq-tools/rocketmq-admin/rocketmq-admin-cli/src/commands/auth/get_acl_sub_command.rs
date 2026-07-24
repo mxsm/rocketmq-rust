@@ -12,17 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use clap::ArgGroup;
 use clap::Parser;
-use rocketmq_admin_core::core::auth::AuthService;
-use rocketmq_admin_core::core::auth::GetAclRequest;
-use rocketmq_admin_core::core::auth::GetAclResult;
+use rocketmq_admin_core::client_adapter::services::auth::AuthService;
+use rocketmq_admin_core::client_adapter::services::auth::GetAclRequest;
+use rocketmq_admin_core::client_adapter::services::auth::GetAclResult;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::body::acl_info::AclInfo;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
 
@@ -42,13 +39,16 @@ pub struct GetAclSubCommand {
 }
 
 impl CommandExecute for GetAclSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         let request = GetAclRequest::try_new(
             self.broker_addr.clone(),
             self.cluster_name.clone(),
             self.subject.clone(),
         )?;
-        let result = AuthService::get_acl_by_request_with_rpc_hook(request, rpc_hook).await?;
+        let result = AuthService::get_acl_by_request_with_credentials(request, credentials).await?;
         render_get_acl_result(result, self.subject.trim(), self.broker_addr.is_some())
     }
 }

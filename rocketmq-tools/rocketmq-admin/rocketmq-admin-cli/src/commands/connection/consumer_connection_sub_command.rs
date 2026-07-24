@@ -12,16 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use clap::Parser;
-use rocketmq_admin_core::core::connection::ConnectionService;
-use rocketmq_admin_core::core::connection::ConsumerConnectionQueryRequest;
-use rocketmq_admin_core::core::connection::ConsumerConnectionQueryResult;
+use rocketmq_admin_core::client_adapter::services::connection::ConnectionService;
+use rocketmq_admin_core::client_adapter::services::connection::ConsumerConnectionQueryRequest;
+use rocketmq_admin_core::client_adapter::services::connection::ConsumerConnectionQueryResult;
 use rocketmq_common::common::mq_version::RocketMqVersion;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::body::consumer_connection::ConsumerConnection;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
 
@@ -35,9 +32,13 @@ pub struct ConsumerConnectionSubCommand {
 }
 
 impl CommandExecute for ConsumerConnectionSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         let request = ConsumerConnectionQueryRequest::try_new(self.consumer_group.clone(), self.broker_addr.clone())?;
-        let result = ConnectionService::query_consumer_connection_by_request_with_rpc_hook(request, rpc_hook).await?;
+        let result =
+            ConnectionService::query_consumer_connection_by_request_with_credentials(request, credentials).await?;
         render_consumer_connection_result(result);
         Ok(())
     }

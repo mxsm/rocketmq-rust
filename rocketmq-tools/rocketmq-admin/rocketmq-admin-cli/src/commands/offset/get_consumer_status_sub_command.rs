@@ -12,16 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use clap::Parser;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use rocketmq_admin_core::core::offset::ConsumerStatusQueryRequest;
-use rocketmq_admin_core::core::offset::ConsumerStatusResult;
-use rocketmq_admin_core::core::offset::OffsetService;
+use rocketmq_admin_core::client_adapter::services::offset::ConsumerStatusQueryRequest;
+use rocketmq_admin_core::client_adapter::services::offset::ConsumerStatusResult;
+use rocketmq_admin_core::client_adapter::services::offset::OffsetService;
 
 #[derive(Debug, Clone, Parser)]
 pub struct GetConsumerStatusSubCommand {
@@ -47,9 +44,13 @@ impl GetConsumerStatusSubCommand {
 }
 
 impl CommandExecute for GetConsumerStatusSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         let request = self.request()?;
-        let result = OffsetService::query_consumer_status_by_request_with_rpc_hook(request.clone(), rpc_hook).await?;
+        let result =
+            OffsetService::query_consumer_status_by_request_with_credentials(request.clone(), credentials).await?;
         print_consumer_status_result(&request, &result);
         Ok(())
     }

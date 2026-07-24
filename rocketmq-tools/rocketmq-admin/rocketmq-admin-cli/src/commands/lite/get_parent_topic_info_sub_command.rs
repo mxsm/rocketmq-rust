@@ -12,18 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use cheetah_string::CheetahString;
 use clap::Parser;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::body::get_parent_topic_info_response_body::GetParentTopicInfoResponseBody;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use rocketmq_admin_core::core::lite::LiteService;
-use rocketmq_admin_core::core::lite::ParentTopicInfoQueryRequest;
-use rocketmq_admin_core::core::lite::ParentTopicInfoQueryResult;
+use rocketmq_admin_core::client_adapter::services::lite::LiteService;
+use rocketmq_admin_core::client_adapter::services::lite::ParentTopicInfoQueryRequest;
+use rocketmq_admin_core::client_adapter::services::lite::ParentTopicInfoQueryResult;
 
 #[derive(Debug, Clone, Parser)]
 pub struct GetParentTopicInfoSubCommand {
@@ -32,8 +29,12 @@ pub struct GetParentTopicInfoSubCommand {
 }
 
 impl CommandExecute for GetParentTopicInfoSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        let result = LiteService::query_parent_topic_info_by_request_with_rpc_hook(self.request()?, rpc_hook).await?;
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
+        let result =
+            LiteService::query_parent_topic_info_by_request_with_credentials(self.request()?, credentials).await?;
         Self::print_result(&result);
         Ok(())
     }

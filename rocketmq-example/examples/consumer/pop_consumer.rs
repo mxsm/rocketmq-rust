@@ -14,21 +14,19 @@
 
 #![recursion_limit = "256"]
 
-use std::collections::HashSet;
-
-use cheetah_string::CheetahString;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
 use rocketmq_client_rust::consumer::default_mq_push_consumer::DefaultMQPushConsumer;
 use rocketmq_client_rust::consumer::listener::consume_concurrently_context::ConsumeConcurrentlyContext;
 use rocketmq_client_rust::consumer::listener::consume_concurrently_status::ConsumeConcurrentlyStatus;
 use rocketmq_client_rust::consumer::listener::message_listener_concurrently::MessageListenerConcurrently;
 use rocketmq_client_rust::consumer::mq_push_consumer::MQPushConsumer;
-use rocketmq_common::common::message::message_enum::MessageRequestMode;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_error::RocketMQResult;
 use rocketmq_rust::rocketmq;
 use rocketmq_rust::wait_for_signal;
-use rocketmq_tools::admin::default_mq_admin_ext::DefaultMQAdminExt;
+use rocketmq_tools::core::admin::AdminBuilder;
+use rocketmq_tools::core::consumer::ConsumerAdmin;
+use rocketmq_tools::core::consumer::ConsumerRequestMode;
+use rocketmq_tools::core::consumer::SetConsumerRequestModeRequest;
 use tracing::info;
 pub const MESSAGE_COUNT: usize = 1;
 pub const CONSUMER_GROUP: &str = "please_rename_unique_group_name_4";
@@ -65,34 +63,18 @@ pub async fn main() -> RocketMQResult<()> {
 }
 
 async fn switch_pop_consumer() -> RocketMQResult<()> {
-    let mut mq_admin_ext = DefaultMQAdminExt::new();
-    mq_admin_ext.client_config_mut().namesrv_addr = Some(CheetahString::from_static_str(DEFAULT_NAMESRVADDR));
-    mq_admin_ext.start().await?;
-    let broker_datas = mq_admin_ext
-        .examine_topic_route_info(CheetahString::from_static_str(TOPIC))
-        .await?
-        .unwrap();
-    for broker_data in broker_datas.broker_datas {
-        let broker_addrs = broker_data
-            .broker_addrs()
-            .values()
-            .cloned()
-            .collect::<HashSet<CheetahString>>();
-        for broker_addr in broker_addrs {
-            mq_admin_ext
-                .set_message_request_mode(
-                    broker_addr,
-                    CheetahString::from_static_str(TOPIC),
-                    CheetahString::from_static_str(CONSUMER_GROUP),
-                    MessageRequestMode::Pop,
-                    8,
-                    3_000,
-                )
-                .await?;
-        }
-    }
-    mq_admin_ext.shutdown().await;
-    Ok(())
+    let mut admin = AdminBuilder::new()
+        .namesrv_addr(DEFAULT_NAMESRVADDR)
+        .build_and_start()
+        .await
+        .map_err(|error| rocketmq_error::RocketMQError::Internal(error.to_string()))?;
+    let request = SetConsumerRequestModeRequest::try_new(TOPIC, CONSUMER_GROUP, ConsumerRequestMode::Pop, 8, 3_000)
+        .map_err(|error| rocketmq_error::RocketMQError::Internal(error.to_string()))?;
+    let result = admin.set_consumer_request_mode(&request).await;
+    admin.shutdown().await;
+    result
+        .map(|_| ())
+        .map_err(|error| rocketmq_error::RocketMQError::Internal(error.to_string()))
 }
 
 pub struct MyMessageListener;

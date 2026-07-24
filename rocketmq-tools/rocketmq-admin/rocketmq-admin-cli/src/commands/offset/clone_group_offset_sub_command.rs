@@ -12,15 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use clap::Parser;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use rocketmq_admin_core::core::offset::CloneGroupOffsetRequest;
-use rocketmq_admin_core::core::offset::OffsetService;
+use rocketmq_admin_core::client_adapter::services::offset::CloneGroupOffsetRequest;
+use rocketmq_admin_core::client_adapter::services::offset::OffsetService;
 
 #[derive(Debug, Clone, Parser)]
 pub struct CloneGroupOffsetSubCommand {
@@ -59,9 +56,12 @@ impl CloneGroupOffsetSubCommand {
 }
 
 impl CommandExecute for CloneGroupOffsetSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         let request = self.request()?;
-        OffsetService::clone_group_offset_by_request_with_rpc_hook(request.clone(), rpc_hook).await?;
+        OffsetService::clone_group_offset_by_request_with_credentials(request.clone(), credentials).await?;
         println!(
             "clone group offset success. srcGroup[{}], destGroup=[{}], topic[{}]",
             request.src_group(),

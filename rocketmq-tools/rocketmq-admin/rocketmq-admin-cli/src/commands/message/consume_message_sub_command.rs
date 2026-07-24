@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use chrono::NaiveDateTime;
 use clap::Parser;
 use rocketmq_common::UtilAll::YYYY_MM_DD_HH_MM_SS_SSS;
@@ -21,12 +19,11 @@ use rocketmq_common::UtilAll::parse_date;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use rocketmq_admin_core::core::message::ConsumeMessagesRequest;
-use rocketmq_admin_core::core::message::MessagePullEvent;
-use rocketmq_admin_core::core::message::MessageService;
+use rocketmq_admin_core::client_adapter::services::message::ConsumeMessagesRequest;
+use rocketmq_admin_core::client_adapter::services::message::MessagePullEvent;
+use rocketmq_admin_core::client_adapter::services::message::MessageService;
 
 const DEFAULT_MESSAGE_COUNT: i64 = 128;
 
@@ -107,7 +104,10 @@ impl ConsumeMessageSubCommand {
 }
 
 impl CommandExecute for ConsumeMessageSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         let begin_timestamp = self
             .begin_timestamp
             .as_deref()
@@ -125,7 +125,7 @@ impl CommandExecute for ConsumeMessageSubCommand {
             self.message_number,
         )?;
 
-        MessageService::consume_messages_by_request_with_rpc_hook(request, rpc_hook, |event| {
+        MessageService::consume_messages_by_request_with_credentials(request, credentials, |event| {
             match event {
                 MessagePullEvent::ConsumeOk => println!("Consume ok"),
                 MessagePullEvent::Messages { messages } => Self::print_messages(&messages),

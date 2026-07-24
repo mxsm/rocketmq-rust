@@ -12,17 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use clap::Parser;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
-use rocketmq_admin_core::core::namesrv::NameServerService;
-use rocketmq_admin_core::core::namesrv::NamesrvConfigUpdateRequest;
-use rocketmq_admin_core::core::namesrv::NamesrvConfigUpdateResult;
+use rocketmq_admin_core::client_adapter::services::namesrv::NameServerService;
+use rocketmq_admin_core::client_adapter::services::namesrv::NamesrvConfigUpdateRequest;
+use rocketmq_admin_core::client_adapter::services::namesrv::NamesrvConfigUpdateResult;
 
 #[derive(Debug, Clone, Parser)]
 pub struct UpdateNamesrvConfigSubCommand {
@@ -63,7 +60,10 @@ impl UpdateNamesrvConfigSubCommand {
 }
 
 impl CommandExecute for UpdateNamesrvConfigSubCommand {
-    async fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        _rpc_hook: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         let result = NameServerService::update_namesrv_config_by_request(self.request()?).await?;
         Self::print_result(result);
         Ok(())

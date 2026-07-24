@@ -12,17 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use clap::Parser;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use rocketmq_admin_core::core::cluster::ClusterListMode;
-use rocketmq_admin_core::core::cluster::ClusterListQueryRequest;
-use rocketmq_admin_core::core::cluster::ClusterListQueryResult;
-use rocketmq_admin_core::core::cluster::ClusterService;
+use rocketmq_admin_core::client_adapter::services::cluster::ClusterListMode;
+use rocketmq_admin_core::client_adapter::services::cluster::ClusterListQueryRequest;
+use rocketmq_admin_core::client_adapter::services::cluster::ClusterListQueryResult;
+use rocketmq_admin_core::client_adapter::services::cluster::ClusterService;
 
 #[derive(Debug, Clone, Parser)]
 pub struct ClusterListSubCommand {
@@ -48,7 +45,10 @@ pub struct ClusterListSubCommand {
 }
 
 impl CommandExecute for ClusterListSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         let print_interval = self.interval.map(|i| i * 1000);
         let mut iteration = 0u64;
         loop {
@@ -60,7 +60,8 @@ impl CommandExecute for ClusterListSubCommand {
             iteration += 1;
 
             let result =
-                ClusterService::query_cluster_list_by_request_with_rpc_hook(self.request(), rpc_hook.clone()).await?;
+                ClusterService::query_cluster_list_by_request_with_credentials(self.request(), credentials.clone())
+                    .await?;
             Self::print_result(&result);
 
             if print_interval.is_none() {

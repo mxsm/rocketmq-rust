@@ -19,6 +19,3 @@ pub mod planner;
 pub use self::planner::StaticTopicAssignment;
 pub use self::planner::StaticTopicPlan;
 pub use self::planner::StaticTopicPlanRequest;
-
-#[cfg(feature = "legacy-common-compat")]
-pub use crate::client_adapter::legacy::core::static_topic::*;

@@ -1,5 +1,5 @@
-use rocketmq_admin_core::core::container::ContainerAddBrokerRequest;
-use rocketmq_admin_core::core::container::ContainerRemoveBrokerRequest;
+use rocketmq_admin_core::client_adapter::services::container::ContainerAddBrokerRequest;
+use rocketmq_admin_core::client_adapter::services::container::ContainerRemoveBrokerRequest;
 
 #[test]
 fn container_add_broker_request_trims_fields() {

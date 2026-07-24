@@ -34,12 +34,8 @@ description = "Reusable RocketMQ admin capability layer"
 rust-version.workspace = true
 
 [features]
-default        = ["legacy-common-compat"]
-client-adapter = ["dep:rocketmq-client-rust"]
-legacy-common-compat = [
-  "client-adapter",
-  "dep:rocketmq-common",
-]
+default        = []
+client-adapter = ["dep:rocketmq-client-rust", "dep:rocketmq-common"]
 rocksdb-export = ["dep:rocksdb"]
 
 [dependencies]
@@ -61,58 +57,50 @@ regex          = "1.12.4"
 bytes          = { workspace = true }
 rocksdb        = { workspace = true, optional = true }
 
-[[example]]
-name              = "admin_builder_pattern"
-required-features = ["legacy-common-compat"]
-
 [[test]]
 name              = "auth_core_models"
-required-features = ["legacy-common-compat"]
+required-features = ["client-adapter"]
 
 [[test]]
 name              = "cluster_core_models"
-required-features = ["legacy-common-compat"]
+required-features = ["client-adapter"]
 
 [[test]]
 name              = "connection_core_models"
-required-features = ["legacy-common-compat"]
+required-features = ["client-adapter"]
 
 [[test]]
 name              = "container_core_models"
-required-features = ["legacy-common-compat"]
+required-features = ["client-adapter"]
 
 [[test]]
 name              = "controller_core_models"
-required-features = ["legacy-common-compat"]
+required-features = ["client-adapter"]
 
 [[test]]
 name              = "export_core_models"
-required-features = ["legacy-common-compat"]
+required-features = ["client-adapter"]
 
 [[test]]
 name              = "ha_core_models"
-required-features = ["legacy-common-compat"]
+required-features = ["client-adapter"]
 
 [[test]]
 name              = "lite_core_models"
-required-features = ["legacy-common-compat"]
-
-[[test]]
-name              = "legacy_surface_compile"
-required-features = ["legacy-common-compat"]
+required-features = ["client-adapter"]
 
 [[test]]
 name              = "producer_core_models"
-required-features = ["legacy-common-compat"]
+required-features = ["client-adapter"]
 
 [[test]]
 name              = "static_topic_core_models"
-required-features = ["legacy-common-compat"]
+required-features = ["client-adapter"]
 
 [[test]]
 name              = "stats_core_models"
-required-features = ["legacy-common-compat"]
+required-features = ["client-adapter"]
 
 [[test]]
 name              = "topic_list_core_models"
-required-features = ["legacy-common-compat"]
+required-features = ["client-adapter"]

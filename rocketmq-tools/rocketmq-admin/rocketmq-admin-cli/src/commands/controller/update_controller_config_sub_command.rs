@@ -1,10 +1,8 @@
 use crate::commands::CommandExecute;
 use clap::Parser;
-use rocketmq_admin_core::core::controller::ControllerConfigUpdateRequest;
-use rocketmq_admin_core::core::controller::ControllerService;
+use rocketmq_admin_core::client_adapter::services::controller::ControllerConfigUpdateRequest;
+use rocketmq_admin_core::client_adapter::services::controller::ControllerService;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
-use std::sync::Arc;
 
 #[derive(Debug, Clone, Parser)]
 pub struct UpdateControllerConfigSubCommand {
@@ -25,8 +23,11 @@ pub struct UpdateControllerConfigSubCommand {
 }
 
 impl CommandExecute for UpdateControllerConfigSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        ControllerService::update_controller_config_by_request_with_rpc_hook(self.request()?, rpc_hook).await?;
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
+        ControllerService::update_controller_config_by_request_with_credentials(self.request()?, credentials).await?;
         println!("updated controller config successfully");
         Ok(())
     }

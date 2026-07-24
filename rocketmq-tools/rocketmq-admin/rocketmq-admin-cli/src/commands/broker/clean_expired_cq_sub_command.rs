@@ -12,18 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use clap::ArgGroup;
 use clap::Parser;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use rocketmq_admin_core::core::broker::BrokerService;
-use rocketmq_admin_core::core::broker::CleanExpiredConsumeQueueReport;
-use rocketmq_admin_core::core::broker::CleanExpiredConsumeQueueRequest;
+use rocketmq_admin_core::client_adapter::services::broker::BrokerService;
+use rocketmq_admin_core::client_adapter::services::broker::CleanExpiredConsumeQueueReport;
+use rocketmq_admin_core::client_adapter::services::broker::CleanExpiredConsumeQueueRequest;
 
 #[derive(Debug, Clone, Parser)]
 #[command(group(ArgGroup::new("target")
@@ -66,10 +63,14 @@ impl CleanExpiredCQSubCommand {
 }
 
 impl CommandExecute for CleanExpiredCQSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         let request = self.request()?;
         let report =
-            BrokerService::clean_expired_consume_queue_by_request_with_rpc_hook(request.clone(), rpc_hook).await?;
+            BrokerService::clean_expired_consume_queue_by_request_with_credentials(request.clone(), credentials)
+                .await?;
         print_scan_summary(
             &report,
             request.cluster_name().map(|value| value.as_str()),

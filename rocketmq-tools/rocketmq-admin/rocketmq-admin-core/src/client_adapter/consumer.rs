@@ -19,6 +19,7 @@ use std::time::SystemTime;
 use cheetah_string::CheetahString;
 use rocketmq_client_rust::admin_adapter_compat::error::RocketMQError;
 use rocketmq_client_rust::MQAdminExt;
+use rocketmq_common::common::message::message_enum::MessageRequestMode;
 use rocketmq_model::topic::RETRY_GROUP_TOPIC_PREFIX;
 use rocketmq_protocol::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_protocol::common::key_builder::KeyBuilder;
@@ -445,6 +446,51 @@ impl ConsumerAdmin for AdminSession {
                 consumer_group: group,
                 broker_names: selected_broker_names,
                 updated: false,
+            })
+        })
+    }
+
+    fn set_consumer_request_mode<'a>(
+        &'a mut self,
+        request: &'a consumer::SetConsumerRequestModeRequest,
+    ) -> AdminFuture<'a, consumer::SetConsumerRequestModeResult> {
+        Box::pin(async move {
+            self.ensure_open()?;
+            let route = self
+                .inner
+                .examine_topic_route_info(CheetahString::from(request.topic.as_str()))
+                .await
+                .map_err(|error| backend_error("examine_topic_route_info", error))?
+                .ok_or_else(|| AdminError::not_found("topic route", request.topic.clone()))?;
+            let mode = match request.mode {
+                consumer::ConsumerRequestMode::Pull => MessageRequestMode::Pull,
+                consumer::ConsumerRequestMode::Pop => MessageRequestMode::Pop,
+            };
+            let mut broker_addrs = route
+                .broker_datas
+                .into_iter()
+                .flat_map(|broker| broker.broker_addrs().values().cloned().collect::<Vec<_>>())
+                .collect::<HashSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>();
+            broker_addrs.sort();
+
+            for broker_addr in &broker_addrs {
+                self.inner
+                    .set_message_request_mode(
+                        broker_addr.clone(),
+                        CheetahString::from(request.topic.as_str()),
+                        CheetahString::from(request.consumer_group.as_str()),
+                        mode,
+                        request.pop_share_queue_num,
+                        request.timeout_millis,
+                    )
+                    .await
+                    .map_err(|error| backend_error("set_message_request_mode", error))?;
+            }
+
+            Ok(consumer::SetConsumerRequestModeResult {
+                broker_addrs: broker_addrs.into_iter().map(|addr| addr.to_string()).collect(),
             })
         })
     }

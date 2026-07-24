@@ -12,14 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use clap::Parser;
-use rocketmq_admin_core::core::producer::CheckMessageSendRtRequest;
-use rocketmq_admin_core::core::producer::CheckMessageSendRtResult;
-use rocketmq_admin_core::core::producer::ProducerService;
+use rocketmq_admin_core::client_adapter::services::producer::CheckMessageSendRtRequest;
+use rocketmq_admin_core::client_adapter::services::producer::CheckMessageSendRtResult;
+use rocketmq_admin_core::client_adapter::services::producer::ProducerService;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
 
@@ -65,8 +62,12 @@ impl CheckMsgSendRTSubCommand {
 }
 
 impl CommandExecute for CheckMsgSendRTSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        let result = ProducerService::check_message_send_rt_by_request_with_rpc_hook(self.request()?, rpc_hook).await?;
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
+        let result =
+            ProducerService::check_message_send_rt_by_request_with_credentials(self.request()?, credentials).await?;
         Self::print_result(&result);
         Ok(())
     }

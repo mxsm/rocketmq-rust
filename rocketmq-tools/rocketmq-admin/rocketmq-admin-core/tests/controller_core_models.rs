@@ -1,8 +1,8 @@
-use rocketmq_admin_core::core::controller::ControllerConfigQueryRequest;
-use rocketmq_admin_core::core::controller::ControllerConfigUpdateRequest;
-use rocketmq_admin_core::core::controller::ControllerElectMasterRequest;
-use rocketmq_admin_core::core::controller::ControllerMetadataCleanRequest;
-use rocketmq_admin_core::core::controller::ControllerMetadataQueryRequest;
+use rocketmq_admin_core::client_adapter::services::controller::ControllerConfigQueryRequest;
+use rocketmq_admin_core::client_adapter::services::controller::ControllerConfigUpdateRequest;
+use rocketmq_admin_core::client_adapter::services::controller::ControllerElectMasterRequest;
+use rocketmq_admin_core::client_adapter::services::controller::ControllerMetadataCleanRequest;
+use rocketmq_admin_core::client_adapter::services::controller::ControllerMetadataQueryRequest;
 
 #[test]
 fn controller_config_query_request_splits_and_trims_addresses() {

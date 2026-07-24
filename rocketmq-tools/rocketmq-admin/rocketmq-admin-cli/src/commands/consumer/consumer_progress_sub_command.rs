@@ -19,10 +19,10 @@ use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
 
 use crate::commands::CommandExecute;
-use rocketmq_admin_core::core::consumer::ConsumerProgressRequest;
-use rocketmq_admin_core::core::consumer::ConsumerProgressResult;
-use rocketmq_admin_core::core::consumer::ConsumerService;
-use rocketmq_admin_core::core::consumer::GroupConsumeInfo;
+use rocketmq_admin_core::client_adapter::services::consumer::ConsumerProgressRequest;
+use rocketmq_admin_core::client_adapter::services::consumer::ConsumerProgressResult;
+use rocketmq_admin_core::client_adapter::services::consumer::ConsumerService;
+use rocketmq_admin_core::client_adapter::services::consumer::GroupConsumeInfo;
 
 #[derive(Debug, Clone, Parser)]
 pub struct ConsumerProgressSubCommand {
@@ -162,10 +162,10 @@ impl ConsumerProgressSubCommand {
 impl CommandExecute for ConsumerProgressSubCommand {
     async fn execute(
         &self,
-        rpc_hook: Option<std::sync::Arc<dyn rocketmq_remoting::runtime::RPCHook>>,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
     ) -> RocketMQResult<()> {
         let result =
-            ConsumerService::query_consumer_progress_by_request_with_rpc_hook(self.request()?, rpc_hook).await?;
+            ConsumerService::query_consumer_progress_by_request_with_credentials(self.request()?, credentials).await?;
         Self::print_result(result);
         Ok(())
     }

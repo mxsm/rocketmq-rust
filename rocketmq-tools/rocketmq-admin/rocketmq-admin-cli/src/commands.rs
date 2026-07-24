@@ -30,31 +30,30 @@ mod queue;
 mod stats;
 mod topic;
 
-use std::sync::Arc;
-
 use clap::Parser;
 use clap::Subcommand;
-use rocketmq_remoting::runtime::RPCHook;
 use tabled::Table;
 use tabled::Tabled;
 use tabled::settings::Style;
 
-use rocketmq_admin_core::core::RocketMQResult;
+use rocketmq_admin_core::client_adapter::services::RocketMQResult;
 
 /// A trait that defines the execution behavior for commands.
 ///
 /// This trait is designed to be implemented by various command types
 /// that require execution logic. The `execute` method provides the
-/// functionality to execute a command with a given RPC hook.
+/// functionality to execute a command with optional Admin credentials.
 #[allow(async_fn_in_trait)]
 pub trait CommandExecute {
     /// Executes the command.
     ///
     /// # Parameters
-    /// - `rpcHook`: An `Arc` containing a reference to a type that implements the `RPCHook` trait.
-    ///   This hook is used to customize the behavior of remote procedure calls during command
-    ///   execution.
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()>;
+    /// - `credentials`: Optional credentials converted to a Client hook only inside the Admin Core
+    ///   adapter.
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()>;
 }
 
 #[derive(Debug, Parser, Clone)]
@@ -169,26 +168,29 @@ pub enum Commands {
 }
 
 impl CommandExecute for Commands {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         match self {
-            Commands::Auth(value) => value.execute(rpc_hook).await,
-            Commands::Broker(value) => value.execute(rpc_hook).await,
-            Commands::Cluster(value) => value.execute(rpc_hook).await,
-            Commands::Connection(value) => value.execute(rpc_hook).await,
-            Commands::Consumer(value) => value.execute(rpc_hook).await,
-            Commands::Container(value) => value.execute(rpc_hook).await,
-            Commands::Controller(value) => value.execute(rpc_hook).await,
-            Commands::Export(value) => value.execute(rpc_hook).await,
-            Commands::HA(value) => value.execute(rpc_hook).await,
-            Commands::Lite(value) => value.execute(rpc_hook).await,
-            Commands::Message(value) => value.execute(rpc_hook).await,
-            Commands::NameServer(value) => value.execute(rpc_hook).await,
-            Commands::Offset(value) => value.execute(rpc_hook).await,
-            Commands::Producer(value) => value.execute(rpc_hook).await,
-            Commands::Queue(value) => value.execute(rpc_hook).await,
-            Commands::Stats(value) => value.execute(rpc_hook).await,
-            Commands::Topic(value) => value.execute(rpc_hook).await,
-            Commands::Show(value) => value.execute(rpc_hook).await,
+            Commands::Auth(value) => value.execute(credentials).await,
+            Commands::Broker(value) => value.execute(credentials).await,
+            Commands::Cluster(value) => value.execute(credentials).await,
+            Commands::Connection(value) => value.execute(credentials).await,
+            Commands::Consumer(value) => value.execute(credentials).await,
+            Commands::Container(value) => value.execute(credentials).await,
+            Commands::Controller(value) => value.execute(credentials).await,
+            Commands::Export(value) => value.execute(credentials).await,
+            Commands::HA(value) => value.execute(credentials).await,
+            Commands::Lite(value) => value.execute(credentials).await,
+            Commands::Message(value) => value.execute(credentials).await,
+            Commands::NameServer(value) => value.execute(credentials).await,
+            Commands::Offset(value) => value.execute(credentials).await,
+            Commands::Producer(value) => value.execute(credentials).await,
+            Commands::Queue(value) => value.execute(credentials).await,
+            Commands::Stats(value) => value.execute(credentials).await,
+            Commands::Topic(value) => value.execute(credentials).await,
+            Commands::Show(value) => value.execute(credentials).await,
         }
     }
 }
@@ -210,7 +212,10 @@ struct Command {
 pub struct ClassificationTablePrint;
 
 impl CommandExecute for ClassificationTablePrint {
-    async fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        _rpc_hook: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         let commands: Vec<Command> = vec![
             Command {
                 category: "Auth",

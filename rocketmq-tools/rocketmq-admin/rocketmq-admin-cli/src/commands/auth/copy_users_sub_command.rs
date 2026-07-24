@@ -12,14 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use clap::Parser;
-use rocketmq_admin_core::core::auth::AuthService;
-use rocketmq_admin_core::core::auth::CopyUsersRequest;
-use rocketmq_admin_core::core::auth::CopyUsersResult;
+use rocketmq_admin_core::client_adapter::services::auth::AuthService;
+use rocketmq_admin_core::client_adapter::services::auth::CopyUsersRequest;
+use rocketmq_admin_core::client_adapter::services::auth::CopyUsersResult;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
 
@@ -51,12 +48,15 @@ pub struct CopyUsersSubCommand {
 }
 
 impl CommandExecute for CopyUsersSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         let request =
             CopyUsersRequest::try_new(self.from_broker.clone(), self.to_broker.clone(), self.usernames.clone())?;
         let from_broker = request.from_broker().clone();
         let to_broker = request.to_broker().clone();
-        let result = AuthService::copy_users_by_request_with_rpc_hook(request, rpc_hook).await?;
+        let result = AuthService::copy_users_by_request_with_credentials(request, credentials).await?;
         render_copy_users_result(result, from_broker.as_str(), to_broker.as_str());
         Ok(())
     }

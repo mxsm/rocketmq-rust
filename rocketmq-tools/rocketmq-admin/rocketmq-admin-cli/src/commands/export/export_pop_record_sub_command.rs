@@ -12,14 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use clap::Parser;
-use rocketmq_admin_core::core::export_data::ExportPopRecordRequest;
-use rocketmq_admin_core::core::export_data::ExportPopRecordResult;
-use rocketmq_admin_core::core::export_data::ExportService;
+use rocketmq_admin_core::client_adapter::services::export_data::ExportPopRecordRequest;
+use rocketmq_admin_core::client_adapter::services::export_data::ExportPopRecordResult;
+use rocketmq_admin_core::client_adapter::services::export_data::ExportService;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
@@ -81,8 +78,12 @@ impl ExportPopRecordSubCommand {
 }
 
 impl CommandExecute for ExportPopRecordSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        let result = ExportService::export_pop_records_by_request_with_rpc_hook(self.request()?, rpc_hook).await?;
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
+        let result =
+            ExportService::export_pop_records_by_request_with_credentials(self.request()?, credentials).await?;
         Self::print_result(&result);
         Ok(())
     }
@@ -91,7 +92,7 @@ impl CommandExecute for ExportPopRecordSubCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rocketmq_admin_core::core::export_data::ExportPopRecordTarget;
+    use rocketmq_admin_core::client_adapter::services::export_data::ExportPopRecordTarget;
 
     #[test]
     fn export_pop_record_sub_command_builds_broker_request() {

@@ -12,11 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Stable admin error view models.
+//! Stable views for backend-neutral Admin errors.
 
-use rocketmq_error::RocketMQError;
 use serde::Deserialize;
 use serde::Serialize;
+
+use crate::core::AdminError;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AdminErrorView {
@@ -26,12 +27,34 @@ pub struct AdminErrorView {
 }
 
 impl AdminErrorView {
-    pub fn from_error(error: &RocketMQError) -> Self {
-        let context = error.context();
-        Self {
-            code: error.spec().code.as_str().to_string(),
-            message: error.public_message().to_string(),
-            context: (!context.is_empty()).then(|| context.to_string()),
+    pub fn from_error(error: &AdminError) -> Self {
+        match error {
+            AdminError::InvalidArgument { field, reason } => Self {
+                code: "ADMIN_INVALID_ARGUMENT".to_string(),
+                message: "Invalid admin argument".to_string(),
+                context: Some(format!("field={field}; reason={reason}")),
+            },
+            AdminError::NotFound { resource, name } => Self {
+                code: "ADMIN_NOT_FOUND".to_string(),
+                message: "Admin resource was not found".to_string(),
+                context: Some(format!("resource={resource}; name={name}")),
+            },
+            AdminError::Backend {
+                operation,
+                reason,
+                code,
+                context,
+                ..
+            } => Self {
+                code: code.clone().unwrap_or_else(|| "ADMIN_BACKEND".to_string()),
+                message: format!("{operation} failed: {reason}"),
+                context: context.clone(),
+            },
+            AdminError::SessionClosed => Self {
+                code: "ADMIN_SESSION_CLOSED".to_string(),
+                message: "Admin session is closed".to_string(),
+                context: None,
+            },
         }
     }
 
@@ -43,28 +66,37 @@ impl AdminErrorView {
     }
 }
 
-pub fn stable_error_code(error: &RocketMQError) -> String {
+pub fn stable_error_code(error: &AdminError) -> String {
     AdminErrorView::from_error(error).code
 }
 
-pub fn stable_error_message(error: &RocketMQError) -> String {
+pub fn stable_error_message(error: &AdminError) -> String {
     AdminErrorView::from_error(error).stable_message()
 }
 
 #[cfg(test)]
 mod tests {
     use super::AdminErrorView;
-    use rocketmq_error::RocketMQError;
+    use crate::core::AdminError;
 
     #[test]
-    fn admin_error_view_uses_stable_code_and_redacted_context() {
-        let error = RocketMQError::storage_read_failed("C:/secret/token/file", "permission denied");
+    fn admin_error_view_preserves_stable_backend_metadata() {
+        let error = AdminError::backend_view(
+            "query_topic",
+            "TOPIC_QUERY_FAILED",
+            "Topic query failed",
+            Some("broker=broker-a".to_string()),
+            503,
+            true,
+        );
         let view = AdminErrorView::from_error(&error);
 
-        assert_eq!(view.code, "STORAGE_READ_FAILED");
-        assert_eq!(view.message, "Storage read failed");
-        let rendered = view.stable_message();
-        assert!(rendered.contains("path=<redacted>"));
-        assert!(!rendered.contains("secret/token"));
+        assert_eq!(view.code, "TOPIC_QUERY_FAILED");
+        assert_eq!(view.message, "query_topic failed: Topic query failed");
+        assert_eq!(view.context.as_deref(), Some("broker=broker-a"));
+        assert_eq!(
+            view.stable_message(),
+            "query_topic failed: Topic query failed: broker=broker-a"
+        );
     }
 }

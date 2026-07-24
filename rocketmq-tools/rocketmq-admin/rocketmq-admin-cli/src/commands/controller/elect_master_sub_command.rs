@@ -12,14 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use clap::Parser;
-use rocketmq_admin_core::core::controller::ControllerElectMasterRequest;
-use rocketmq_admin_core::core::controller::ControllerElectMasterResult;
-use rocketmq_admin_core::core::controller::ControllerService;
+use rocketmq_admin_core::client_adapter::services::controller::ControllerElectMasterRequest;
+use rocketmq_admin_core::client_adapter::services::controller::ControllerElectMasterResult;
+use rocketmq_admin_core::client_adapter::services::controller::ControllerService;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
@@ -64,8 +61,11 @@ pub struct ElectMasterSubCommand {
 }
 
 impl CommandExecute for ElectMasterSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        let result = ControllerService::elect_master_by_request_with_rpc_hook(self.request()?, rpc_hook).await?;
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
+        let result = ControllerService::elect_master_by_request_with_credentials(self.request()?, credentials).await?;
         Self::print_result(&result);
         Ok(())
     }

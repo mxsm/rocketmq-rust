@@ -15,11 +15,8 @@
 mod check_rocksdb_cq_write_progress_sub_command;
 mod query_consume_queue_sub_command;
 
-use std::sync::Arc;
-
 use clap::Subcommand;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
 use crate::commands::queue::check_rocksdb_cq_write_progress_sub_command::CheckRocksdbCqWriteProgressSubCommand;
@@ -43,10 +40,13 @@ pub enum QueueCommands {
 }
 
 impl CommandExecute for QueueCommands {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         match self {
-            QueueCommands::CheckRocksdbCqWriteProgress(cmd) => cmd.execute(rpc_hook).await,
-            QueueCommands::QueryCq(cmd) => cmd.execute(rpc_hook).await,
+            QueueCommands::CheckRocksdbCqWriteProgress(cmd) => cmd.execute(credentials).await,
+            QueueCommands::QueryCq(cmd) => cmd.execute(credentials).await,
         }
     }
 }

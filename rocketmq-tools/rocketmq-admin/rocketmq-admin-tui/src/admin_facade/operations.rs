@@ -1,207 +1,207 @@
-use rocketmq_admin_core::core::auth::AuthOperationResult;
-use rocketmq_admin_core::core::auth::AuthService;
-use rocketmq_admin_core::core::auth::CopyAclRequest;
-use rocketmq_admin_core::core::auth::CopyAclResult;
-use rocketmq_admin_core::core::auth::CopyUsersRequest;
-use rocketmq_admin_core::core::auth::CopyUsersResult;
-use rocketmq_admin_core::core::auth::CreateAclRequest;
-use rocketmq_admin_core::core::auth::CreateUserRequest;
-use rocketmq_admin_core::core::auth::DeleteAclRequest;
-use rocketmq_admin_core::core::auth::DeleteUserRequest;
-use rocketmq_admin_core::core::auth::GetAclRequest;
-use rocketmq_admin_core::core::auth::GetAclResult;
-use rocketmq_admin_core::core::auth::GetUserRequest;
-use rocketmq_admin_core::core::auth::GetUserResult;
-use rocketmq_admin_core::core::auth::ListAclRequest;
-use rocketmq_admin_core::core::auth::ListAclResult;
-use rocketmq_admin_core::core::auth::ListUsersRequest;
-use rocketmq_admin_core::core::auth::ListUsersResult;
-use rocketmq_admin_core::core::auth::UpdateAclRequest;
-use rocketmq_admin_core::core::auth::UpdateUserRequest;
-use rocketmq_admin_core::core::broker::BrokerBooleanOperationResult;
-use rocketmq_admin_core::core::broker::BrokerConfigQueryRequest;
-use rocketmq_admin_core::core::broker::BrokerConfigQueryResult;
-use rocketmq_admin_core::core::broker::BrokerConfigUpdateApplyResult;
-use rocketmq_admin_core::core::broker::BrokerConfigUpdatePlanResult;
-use rocketmq_admin_core::core::broker::BrokerConfigUpdateRequest;
-use rocketmq_admin_core::core::broker::BrokerConsumeStatsQueryRequest;
-use rocketmq_admin_core::core::broker::BrokerConsumeStatsResult;
-use rocketmq_admin_core::core::broker::BrokerEpochQueryRequest;
-use rocketmq_admin_core::core::broker::BrokerEpochQueryResult;
-use rocketmq_admin_core::core::broker::BrokerOperationResult;
-use rocketmq_admin_core::core::broker::BrokerOptionalTarget;
-use rocketmq_admin_core::core::broker::BrokerRuntimeStatsQueryRequest;
-use rocketmq_admin_core::core::broker::BrokerRuntimeStatsResult;
-use rocketmq_admin_core::core::broker::BrokerService;
-use rocketmq_admin_core::core::broker::CleanExpiredConsumeQueueReport;
-use rocketmq_admin_core::core::broker::CleanExpiredConsumeQueueRequest;
-use rocketmq_admin_core::core::broker::ColdDataFlowCtrGroupConfigRemoveRequest;
-use rocketmq_admin_core::core::broker::ColdDataFlowCtrGroupConfigUpdateRequest;
-use rocketmq_admin_core::core::broker::ColdDataFlowCtrInfoQueryRequest;
-use rocketmq_admin_core::core::broker::ColdDataFlowCtrInfoQueryResult;
-use rocketmq_admin_core::core::broker::CommitLogReadAheadRequest;
-use rocketmq_admin_core::core::broker::CommitLogReadAheadResult;
-use rocketmq_admin_core::core::broker::ResetMasterFlushOffsetRequest;
-use rocketmq_admin_core::core::broker::SwitchTimerEngineRequest;
-use rocketmq_admin_core::core::cluster::ClusterBrokerNameQueryRequest;
-use rocketmq_admin_core::core::cluster::ClusterBrokerNameQueryResult;
-use rocketmq_admin_core::core::cluster::ClusterListQueryRequest;
-use rocketmq_admin_core::core::cluster::ClusterListQueryResult;
-use rocketmq_admin_core::core::cluster::ClusterSendMessageRtRequest;
-use rocketmq_admin_core::core::cluster::ClusterSendMessageRtResult;
-use rocketmq_admin_core::core::cluster::ClusterService;
-use rocketmq_admin_core::core::connection::ConnectionService;
-use rocketmq_admin_core::core::connection::ConsumerConnectionQueryRequest;
-use rocketmq_admin_core::core::connection::ConsumerConnectionQueryResult;
-use rocketmq_admin_core::core::connection::ProducerConnectionQueryRequest;
-use rocketmq_admin_core::core::connection::ProducerConnectionQueryResult;
-use rocketmq_admin_core::core::consumer::ConsumerConfigQueryRequest;
-use rocketmq_admin_core::core::consumer::ConsumerConfigQueryResult;
-use rocketmq_admin_core::core::consumer::ConsumerOperationResult;
-use rocketmq_admin_core::core::consumer::ConsumerProgressRequest;
-use rocketmq_admin_core::core::consumer::ConsumerProgressResult;
-use rocketmq_admin_core::core::consumer::ConsumerRunningInfoRequest;
-use rocketmq_admin_core::core::consumer::ConsumerRunningInfoResult;
-use rocketmq_admin_core::core::consumer::ConsumerService;
-use rocketmq_admin_core::core::consumer::DeleteSubscriptionGroupRequest;
-use rocketmq_admin_core::core::consumer::MonitoringEvent;
-use rocketmq_admin_core::core::consumer::MonitoringResult;
-use rocketmq_admin_core::core::consumer::SetConsumeModeRequest;
-use rocketmq_admin_core::core::consumer::StartMonitoringRequest;
-use rocketmq_admin_core::core::consumer::UpdateSubscriptionGroupListRequest;
-use rocketmq_admin_core::core::consumer::UpdateSubscriptionGroupRequest;
-use rocketmq_admin_core::core::container::ContainerAddBrokerRequest;
-use rocketmq_admin_core::core::container::ContainerOperationResult;
-use rocketmq_admin_core::core::container::ContainerRemoveBrokerRequest;
-use rocketmq_admin_core::core::container::ContainerService;
-use rocketmq_admin_core::core::controller::ControllerConfigQueryRequest;
-use rocketmq_admin_core::core::controller::ControllerConfigQueryResult;
-use rocketmq_admin_core::core::controller::ControllerConfigUpdateRequest;
-use rocketmq_admin_core::core::controller::ControllerElectMasterRequest;
-use rocketmq_admin_core::core::controller::ControllerElectMasterResult;
-use rocketmq_admin_core::core::controller::ControllerMetadataCleanRequest;
-use rocketmq_admin_core::core::controller::ControllerMetadataQueryRequest;
-use rocketmq_admin_core::core::controller::ControllerMetadataQueryResult;
-use rocketmq_admin_core::core::controller::ControllerService;
-use rocketmq_admin_core::core::export_data::ExportConfigsRequest;
-use rocketmq_admin_core::core::export_data::ExportConfigsResult;
-use rocketmq_admin_core::core::export_data::ExportFileOverwritePolicy;
-use rocketmq_admin_core::core::export_data::ExportFileWriteRequest;
-use rocketmq_admin_core::core::export_data::ExportFileWriteResult;
-use rocketmq_admin_core::core::export_data::ExportMetadataInRocksDbRequest;
-use rocketmq_admin_core::core::export_data::ExportMetadataInRocksDbResult;
-use rocketmq_admin_core::core::export_data::ExportMetadataRequest;
-use rocketmq_admin_core::core::export_data::ExportMetadataResult;
-use rocketmq_admin_core::core::export_data::ExportMetricsRequest;
-use rocketmq_admin_core::core::export_data::ExportMetricsResult;
-use rocketmq_admin_core::core::export_data::ExportPopRecordRequest;
-use rocketmq_admin_core::core::export_data::ExportPopRecordResult;
-use rocketmq_admin_core::core::export_data::ExportRocksDbConfigRpcRequest;
-use rocketmq_admin_core::core::export_data::ExportRocksDbConfigRpcResult;
-use rocketmq_admin_core::core::export_data::ExportService;
-use rocketmq_admin_core::core::ha::HaService;
-use rocketmq_admin_core::core::ha::HaStatusQueryRequest;
-use rocketmq_admin_core::core::ha::HaStatusQueryResult;
-use rocketmq_admin_core::core::ha::SyncStateSetQueryRequest;
-use rocketmq_admin_core::core::ha::SyncStateSetQueryResult;
-use rocketmq_admin_core::core::lite::BrokerLiteInfoQueryRequest;
-use rocketmq_admin_core::core::lite::BrokerLiteInfoQueryResult;
-use rocketmq_admin_core::core::lite::LiteClientInfoQueryRequest;
-use rocketmq_admin_core::core::lite::LiteClientInfoQueryResult;
-use rocketmq_admin_core::core::lite::LiteGroupInfoQueryRequest;
-use rocketmq_admin_core::core::lite::LiteGroupInfoQueryResult;
-use rocketmq_admin_core::core::lite::LiteService;
-use rocketmq_admin_core::core::lite::LiteTopicInfoQueryRequest;
-use rocketmq_admin_core::core::lite::LiteTopicInfoQueryResult;
-use rocketmq_admin_core::core::lite::ParentTopicInfoQueryRequest;
-use rocketmq_admin_core::core::lite::ParentTopicInfoQueryResult;
-use rocketmq_admin_core::core::lite::TriggerLiteDispatchRequest;
-use rocketmq_admin_core::core::lite::TriggerLiteDispatchResult;
-use rocketmq_admin_core::core::message::ConsumeMessagesRequest;
-use rocketmq_admin_core::core::message::DecodeMessageIdRequest;
-use rocketmq_admin_core::core::message::DecodeMessageIdResult;
-use rocketmq_admin_core::core::message::DirectConsumeMessageRequest;
-use rocketmq_admin_core::core::message::DirectConsumeMessageResult;
-use rocketmq_admin_core::core::message::DumpCompactionLogRequest;
-use rocketmq_admin_core::core::message::DumpCompactionLogResult;
-use rocketmq_admin_core::core::message::MessagePullEvent;
-use rocketmq_admin_core::core::message::MessageService;
-use rocketmq_admin_core::core::message::MessageTraceView;
-use rocketmq_admin_core::core::message::MessageTrackRequest;
-use rocketmq_admin_core::core::message::MessageTrackResult;
-use rocketmq_admin_core::core::message::PrintMessagesByQueueRequest;
-use rocketmq_admin_core::core::message::PrintMessagesRequest;
-use rocketmq_admin_core::core::message::QueryMessageByIdRequest;
-use rocketmq_admin_core::core::message::QueryMessageByIdResult;
-use rocketmq_admin_core::core::message::QueryMessageByKeyRequest;
-use rocketmq_admin_core::core::message::QueryMessageByKeyResult;
-use rocketmq_admin_core::core::message::QueryMessageByOffsetRequest;
-use rocketmq_admin_core::core::message::QueryMessageByOffsetResult;
-use rocketmq_admin_core::core::message::QueryMessageByUniqueKeyRequest;
-use rocketmq_admin_core::core::message::QueryMessageByUniqueKeyResult;
-use rocketmq_admin_core::core::message::QueryMessageTraceByIdRequest;
-use rocketmq_admin_core::core::namesrv::KvConfigDeleteRequest;
-use rocketmq_admin_core::core::namesrv::KvConfigUpdateRequest;
-use rocketmq_admin_core::core::namesrv::KvConfigUpdateResult;
-use rocketmq_admin_core::core::namesrv::NameServerService;
-use rocketmq_admin_core::core::namesrv::NamesrvConfigQueryRequest;
-use rocketmq_admin_core::core::namesrv::NamesrvConfigQueryResult;
-use rocketmq_admin_core::core::namesrv::NamesrvConfigUpdateRequest;
-use rocketmq_admin_core::core::namesrv::NamesrvConfigUpdateResult;
-use rocketmq_admin_core::core::namesrv::WritePermRequest;
-use rocketmq_admin_core::core::namesrv::WritePermResult;
-use rocketmq_admin_core::core::offset::CloneGroupOffsetRequest;
-use rocketmq_admin_core::core::offset::ConsumerStatusQueryRequest;
-use rocketmq_admin_core::core::offset::ConsumerStatusResult;
-use rocketmq_admin_core::core::offset::OffsetService;
-use rocketmq_admin_core::core::offset::ResetOffsetByTimeOldRequest;
-use rocketmq_admin_core::core::offset::ResetOffsetByTimeRequest;
-use rocketmq_admin_core::core::offset::ResetOffsetByTimeResult;
-use rocketmq_admin_core::core::offset::SkipAccumulatedMessageRequest;
-use rocketmq_admin_core::core::offset::SkipAccumulatedMessageResult;
-use rocketmq_admin_core::core::producer::CheckMessageSendRtRequest;
-use rocketmq_admin_core::core::producer::CheckMessageSendRtResult;
-use rocketmq_admin_core::core::producer::ProducerInfoQueryRequest;
-use rocketmq_admin_core::core::producer::ProducerInfoQueryResult;
-use rocketmq_admin_core::core::producer::ProducerService;
-use rocketmq_admin_core::core::producer::SendMessageRequest;
-use rocketmq_admin_core::core::producer::SendMessageResult;
-use rocketmq_admin_core::core::producer::SendMessageStatusRequest;
-use rocketmq_admin_core::core::producer::SendMessageStatusResult;
-use rocketmq_admin_core::core::queue::CheckRocksdbCqWriteProgressRequest;
-use rocketmq_admin_core::core::queue::CheckRocksdbCqWriteProgressResult;
-use rocketmq_admin_core::core::queue::QueryConsumeQueueRequest;
-use rocketmq_admin_core::core::queue::QueryConsumeQueueResult;
-use rocketmq_admin_core::core::queue::QueueService;
-use rocketmq_admin_core::core::static_topic::RemappingStaticTopicRequest;
-use rocketmq_admin_core::core::static_topic::StaticTopicMappingPlan;
-use rocketmq_admin_core::core::static_topic::StaticTopicService;
-use rocketmq_admin_core::core::static_topic::UpdateStaticTopicRequest;
-use rocketmq_admin_core::core::stats::StatsAllQueryRequest;
-use rocketmq_admin_core::core::stats::StatsAllQueryResult;
-use rocketmq_admin_core::core::stats::StatsService;
-use rocketmq_admin_core::core::topic::AllocateMqQueryRequest;
-use rocketmq_admin_core::core::topic::AllocatedMqQueryResult;
-use rocketmq_admin_core::core::topic::DeleteTopicRequest;
-use rocketmq_admin_core::core::topic::DeleteTopicResult;
-use rocketmq_admin_core::core::topic::OrderConfRequest;
-use rocketmq_admin_core::core::topic::OrderConfResult;
-use rocketmq_admin_core::core::topic::TopicClusterList;
-use rocketmq_admin_core::core::topic::TopicClusterQueryRequest;
-use rocketmq_admin_core::core::topic::TopicListQueryRequest;
-use rocketmq_admin_core::core::topic::TopicListResult;
-use rocketmq_admin_core::core::topic::TopicRouteData;
-use rocketmq_admin_core::core::topic::TopicRouteQueryRequest;
-use rocketmq_admin_core::core::topic::TopicService;
-use rocketmq_admin_core::core::topic::TopicStatsTable;
-use rocketmq_admin_core::core::topic::TopicStatusQueryRequest;
-use rocketmq_admin_core::core::topic::TopicTarget;
-use rocketmq_admin_core::core::topic::UpdateTopicPermRequest;
-use rocketmq_admin_core::core::topic::UpdateTopicPermResult;
-use rocketmq_admin_core::core::topic::UpdateTopicRequest;
-use rocketmq_admin_core::core::topic::UpdateTopicResult;
-use rocketmq_admin_core::core::RocketMQError;
-use rocketmq_admin_core::core::RocketMQResult;
+use rocketmq_admin_core::client_adapter::services::auth::AuthOperationResult;
+use rocketmq_admin_core::client_adapter::services::auth::AuthService;
+use rocketmq_admin_core::client_adapter::services::auth::CopyAclRequest;
+use rocketmq_admin_core::client_adapter::services::auth::CopyAclResult;
+use rocketmq_admin_core::client_adapter::services::auth::CopyUsersRequest;
+use rocketmq_admin_core::client_adapter::services::auth::CopyUsersResult;
+use rocketmq_admin_core::client_adapter::services::auth::CreateAclRequest;
+use rocketmq_admin_core::client_adapter::services::auth::CreateUserRequest;
+use rocketmq_admin_core::client_adapter::services::auth::DeleteAclRequest;
+use rocketmq_admin_core::client_adapter::services::auth::DeleteUserRequest;
+use rocketmq_admin_core::client_adapter::services::auth::GetAclRequest;
+use rocketmq_admin_core::client_adapter::services::auth::GetAclResult;
+use rocketmq_admin_core::client_adapter::services::auth::GetUserRequest;
+use rocketmq_admin_core::client_adapter::services::auth::GetUserResult;
+use rocketmq_admin_core::client_adapter::services::auth::ListAclRequest;
+use rocketmq_admin_core::client_adapter::services::auth::ListAclResult;
+use rocketmq_admin_core::client_adapter::services::auth::ListUsersRequest;
+use rocketmq_admin_core::client_adapter::services::auth::ListUsersResult;
+use rocketmq_admin_core::client_adapter::services::auth::UpdateAclRequest;
+use rocketmq_admin_core::client_adapter::services::auth::UpdateUserRequest;
+use rocketmq_admin_core::client_adapter::services::broker::BrokerBooleanOperationResult;
+use rocketmq_admin_core::client_adapter::services::broker::BrokerConfigQueryRequest;
+use rocketmq_admin_core::client_adapter::services::broker::BrokerConfigQueryResult;
+use rocketmq_admin_core::client_adapter::services::broker::BrokerConfigUpdateApplyResult;
+use rocketmq_admin_core::client_adapter::services::broker::BrokerConfigUpdatePlanResult;
+use rocketmq_admin_core::client_adapter::services::broker::BrokerConfigUpdateRequest;
+use rocketmq_admin_core::client_adapter::services::broker::BrokerConsumeStatsQueryRequest;
+use rocketmq_admin_core::client_adapter::services::broker::BrokerConsumeStatsResult;
+use rocketmq_admin_core::client_adapter::services::broker::BrokerEpochQueryRequest;
+use rocketmq_admin_core::client_adapter::services::broker::BrokerEpochQueryResult;
+use rocketmq_admin_core::client_adapter::services::broker::BrokerOperationResult;
+use rocketmq_admin_core::client_adapter::services::broker::BrokerOptionalTarget;
+use rocketmq_admin_core::client_adapter::services::broker::BrokerRuntimeStatsQueryRequest;
+use rocketmq_admin_core::client_adapter::services::broker::BrokerRuntimeStatsResult;
+use rocketmq_admin_core::client_adapter::services::broker::BrokerService;
+use rocketmq_admin_core::client_adapter::services::broker::CleanExpiredConsumeQueueReport;
+use rocketmq_admin_core::client_adapter::services::broker::CleanExpiredConsumeQueueRequest;
+use rocketmq_admin_core::client_adapter::services::broker::ColdDataFlowCtrGroupConfigRemoveRequest;
+use rocketmq_admin_core::client_adapter::services::broker::ColdDataFlowCtrGroupConfigUpdateRequest;
+use rocketmq_admin_core::client_adapter::services::broker::ColdDataFlowCtrInfoQueryRequest;
+use rocketmq_admin_core::client_adapter::services::broker::ColdDataFlowCtrInfoQueryResult;
+use rocketmq_admin_core::client_adapter::services::broker::CommitLogReadAheadRequest;
+use rocketmq_admin_core::client_adapter::services::broker::CommitLogReadAheadResult;
+use rocketmq_admin_core::client_adapter::services::broker::ResetMasterFlushOffsetRequest;
+use rocketmq_admin_core::client_adapter::services::broker::SwitchTimerEngineRequest;
+use rocketmq_admin_core::client_adapter::services::cluster::ClusterBrokerNameQueryRequest;
+use rocketmq_admin_core::client_adapter::services::cluster::ClusterBrokerNameQueryResult;
+use rocketmq_admin_core::client_adapter::services::cluster::ClusterListQueryRequest;
+use rocketmq_admin_core::client_adapter::services::cluster::ClusterListQueryResult;
+use rocketmq_admin_core::client_adapter::services::cluster::ClusterSendMessageRtRequest;
+use rocketmq_admin_core::client_adapter::services::cluster::ClusterSendMessageRtResult;
+use rocketmq_admin_core::client_adapter::services::cluster::ClusterService;
+use rocketmq_admin_core::client_adapter::services::connection::ConnectionService;
+use rocketmq_admin_core::client_adapter::services::connection::ConsumerConnectionQueryRequest;
+use rocketmq_admin_core::client_adapter::services::connection::ConsumerConnectionQueryResult;
+use rocketmq_admin_core::client_adapter::services::connection::ProducerConnectionQueryRequest;
+use rocketmq_admin_core::client_adapter::services::connection::ProducerConnectionQueryResult;
+use rocketmq_admin_core::client_adapter::services::consumer::ConsumerConfigQueryRequest;
+use rocketmq_admin_core::client_adapter::services::consumer::ConsumerConfigQueryResult;
+use rocketmq_admin_core::client_adapter::services::consumer::ConsumerOperationResult;
+use rocketmq_admin_core::client_adapter::services::consumer::ConsumerProgressRequest;
+use rocketmq_admin_core::client_adapter::services::consumer::ConsumerProgressResult;
+use rocketmq_admin_core::client_adapter::services::consumer::ConsumerRunningInfoRequest;
+use rocketmq_admin_core::client_adapter::services::consumer::ConsumerRunningInfoResult;
+use rocketmq_admin_core::client_adapter::services::consumer::ConsumerService;
+use rocketmq_admin_core::client_adapter::services::consumer::DeleteSubscriptionGroupRequest;
+use rocketmq_admin_core::client_adapter::services::consumer::MonitoringEvent;
+use rocketmq_admin_core::client_adapter::services::consumer::MonitoringResult;
+use rocketmq_admin_core::client_adapter::services::consumer::SetConsumeModeRequest;
+use rocketmq_admin_core::client_adapter::services::consumer::StartMonitoringRequest;
+use rocketmq_admin_core::client_adapter::services::consumer::UpdateSubscriptionGroupListRequest;
+use rocketmq_admin_core::client_adapter::services::consumer::UpdateSubscriptionGroupRequest;
+use rocketmq_admin_core::client_adapter::services::container::ContainerAddBrokerRequest;
+use rocketmq_admin_core::client_adapter::services::container::ContainerOperationResult;
+use rocketmq_admin_core::client_adapter::services::container::ContainerRemoveBrokerRequest;
+use rocketmq_admin_core::client_adapter::services::container::ContainerService;
+use rocketmq_admin_core::client_adapter::services::controller::ControllerConfigQueryRequest;
+use rocketmq_admin_core::client_adapter::services::controller::ControllerConfigQueryResult;
+use rocketmq_admin_core::client_adapter::services::controller::ControllerConfigUpdateRequest;
+use rocketmq_admin_core::client_adapter::services::controller::ControllerElectMasterRequest;
+use rocketmq_admin_core::client_adapter::services::controller::ControllerElectMasterResult;
+use rocketmq_admin_core::client_adapter::services::controller::ControllerMetadataCleanRequest;
+use rocketmq_admin_core::client_adapter::services::controller::ControllerMetadataQueryRequest;
+use rocketmq_admin_core::client_adapter::services::controller::ControllerMetadataQueryResult;
+use rocketmq_admin_core::client_adapter::services::controller::ControllerService;
+use rocketmq_admin_core::client_adapter::services::export_data::ExportConfigsRequest;
+use rocketmq_admin_core::client_adapter::services::export_data::ExportConfigsResult;
+use rocketmq_admin_core::client_adapter::services::export_data::ExportFileOverwritePolicy;
+use rocketmq_admin_core::client_adapter::services::export_data::ExportFileWriteRequest;
+use rocketmq_admin_core::client_adapter::services::export_data::ExportFileWriteResult;
+use rocketmq_admin_core::client_adapter::services::export_data::ExportMetadataInRocksDbRequest;
+use rocketmq_admin_core::client_adapter::services::export_data::ExportMetadataInRocksDbResult;
+use rocketmq_admin_core::client_adapter::services::export_data::ExportMetadataRequest;
+use rocketmq_admin_core::client_adapter::services::export_data::ExportMetadataResult;
+use rocketmq_admin_core::client_adapter::services::export_data::ExportMetricsRequest;
+use rocketmq_admin_core::client_adapter::services::export_data::ExportMetricsResult;
+use rocketmq_admin_core::client_adapter::services::export_data::ExportPopRecordRequest;
+use rocketmq_admin_core::client_adapter::services::export_data::ExportPopRecordResult;
+use rocketmq_admin_core::client_adapter::services::export_data::ExportRocksDbConfigRpcRequest;
+use rocketmq_admin_core::client_adapter::services::export_data::ExportRocksDbConfigRpcResult;
+use rocketmq_admin_core::client_adapter::services::export_data::ExportService;
+use rocketmq_admin_core::client_adapter::services::ha::HaService;
+use rocketmq_admin_core::client_adapter::services::ha::HaStatusQueryRequest;
+use rocketmq_admin_core::client_adapter::services::ha::HaStatusQueryResult;
+use rocketmq_admin_core::client_adapter::services::ha::SyncStateSetQueryRequest;
+use rocketmq_admin_core::client_adapter::services::ha::SyncStateSetQueryResult;
+use rocketmq_admin_core::client_adapter::services::lite::BrokerLiteInfoQueryRequest;
+use rocketmq_admin_core::client_adapter::services::lite::BrokerLiteInfoQueryResult;
+use rocketmq_admin_core::client_adapter::services::lite::LiteClientInfoQueryRequest;
+use rocketmq_admin_core::client_adapter::services::lite::LiteClientInfoQueryResult;
+use rocketmq_admin_core::client_adapter::services::lite::LiteGroupInfoQueryRequest;
+use rocketmq_admin_core::client_adapter::services::lite::LiteGroupInfoQueryResult;
+use rocketmq_admin_core::client_adapter::services::lite::LiteService;
+use rocketmq_admin_core::client_adapter::services::lite::LiteTopicInfoQueryRequest;
+use rocketmq_admin_core::client_adapter::services::lite::LiteTopicInfoQueryResult;
+use rocketmq_admin_core::client_adapter::services::lite::ParentTopicInfoQueryRequest;
+use rocketmq_admin_core::client_adapter::services::lite::ParentTopicInfoQueryResult;
+use rocketmq_admin_core::client_adapter::services::lite::TriggerLiteDispatchRequest;
+use rocketmq_admin_core::client_adapter::services::lite::TriggerLiteDispatchResult;
+use rocketmq_admin_core::client_adapter::services::message::ConsumeMessagesRequest;
+use rocketmq_admin_core::client_adapter::services::message::DecodeMessageIdRequest;
+use rocketmq_admin_core::client_adapter::services::message::DecodeMessageIdResult;
+use rocketmq_admin_core::client_adapter::services::message::DirectConsumeMessageRequest;
+use rocketmq_admin_core::client_adapter::services::message::DirectConsumeMessageResult;
+use rocketmq_admin_core::client_adapter::services::message::DumpCompactionLogRequest;
+use rocketmq_admin_core::client_adapter::services::message::DumpCompactionLogResult;
+use rocketmq_admin_core::client_adapter::services::message::MessagePullEvent;
+use rocketmq_admin_core::client_adapter::services::message::MessageService;
+use rocketmq_admin_core::client_adapter::services::message::MessageTraceView;
+use rocketmq_admin_core::client_adapter::services::message::MessageTrackRequest;
+use rocketmq_admin_core::client_adapter::services::message::MessageTrackResult;
+use rocketmq_admin_core::client_adapter::services::message::PrintMessagesByQueueRequest;
+use rocketmq_admin_core::client_adapter::services::message::PrintMessagesRequest;
+use rocketmq_admin_core::client_adapter::services::message::QueryMessageByIdRequest;
+use rocketmq_admin_core::client_adapter::services::message::QueryMessageByIdResult;
+use rocketmq_admin_core::client_adapter::services::message::QueryMessageByKeyRequest;
+use rocketmq_admin_core::client_adapter::services::message::QueryMessageByKeyResult;
+use rocketmq_admin_core::client_adapter::services::message::QueryMessageByOffsetRequest;
+use rocketmq_admin_core::client_adapter::services::message::QueryMessageByOffsetResult;
+use rocketmq_admin_core::client_adapter::services::message::QueryMessageByUniqueKeyRequest;
+use rocketmq_admin_core::client_adapter::services::message::QueryMessageByUniqueKeyResult;
+use rocketmq_admin_core::client_adapter::services::message::QueryMessageTraceByIdRequest;
+use rocketmq_admin_core::client_adapter::services::namesrv::KvConfigDeleteRequest;
+use rocketmq_admin_core::client_adapter::services::namesrv::KvConfigUpdateRequest;
+use rocketmq_admin_core::client_adapter::services::namesrv::KvConfigUpdateResult;
+use rocketmq_admin_core::client_adapter::services::namesrv::NameServerService;
+use rocketmq_admin_core::client_adapter::services::namesrv::NamesrvConfigQueryRequest;
+use rocketmq_admin_core::client_adapter::services::namesrv::NamesrvConfigQueryResult;
+use rocketmq_admin_core::client_adapter::services::namesrv::NamesrvConfigUpdateRequest;
+use rocketmq_admin_core::client_adapter::services::namesrv::NamesrvConfigUpdateResult;
+use rocketmq_admin_core::client_adapter::services::namesrv::WritePermRequest;
+use rocketmq_admin_core::client_adapter::services::namesrv::WritePermResult;
+use rocketmq_admin_core::client_adapter::services::offset::CloneGroupOffsetRequest;
+use rocketmq_admin_core::client_adapter::services::offset::ConsumerStatusQueryRequest;
+use rocketmq_admin_core::client_adapter::services::offset::ConsumerStatusResult;
+use rocketmq_admin_core::client_adapter::services::offset::OffsetService;
+use rocketmq_admin_core::client_adapter::services::offset::ResetOffsetByTimeOldRequest;
+use rocketmq_admin_core::client_adapter::services::offset::ResetOffsetByTimeRequest;
+use rocketmq_admin_core::client_adapter::services::offset::ResetOffsetByTimeResult;
+use rocketmq_admin_core::client_adapter::services::offset::SkipAccumulatedMessageRequest;
+use rocketmq_admin_core::client_adapter::services::offset::SkipAccumulatedMessageResult;
+use rocketmq_admin_core::client_adapter::services::producer::CheckMessageSendRtRequest;
+use rocketmq_admin_core::client_adapter::services::producer::CheckMessageSendRtResult;
+use rocketmq_admin_core::client_adapter::services::producer::ProducerInfoQueryRequest;
+use rocketmq_admin_core::client_adapter::services::producer::ProducerInfoQueryResult;
+use rocketmq_admin_core::client_adapter::services::producer::ProducerService;
+use rocketmq_admin_core::client_adapter::services::producer::SendMessageRequest;
+use rocketmq_admin_core::client_adapter::services::producer::SendMessageResult;
+use rocketmq_admin_core::client_adapter::services::producer::SendMessageStatusRequest;
+use rocketmq_admin_core::client_adapter::services::producer::SendMessageStatusResult;
+use rocketmq_admin_core::client_adapter::services::queue::CheckRocksdbCqWriteProgressRequest;
+use rocketmq_admin_core::client_adapter::services::queue::CheckRocksdbCqWriteProgressResult;
+use rocketmq_admin_core::client_adapter::services::queue::QueryConsumeQueueRequest;
+use rocketmq_admin_core::client_adapter::services::queue::QueryConsumeQueueResult;
+use rocketmq_admin_core::client_adapter::services::queue::QueueService;
+use rocketmq_admin_core::client_adapter::services::static_topic::RemappingStaticTopicRequest;
+use rocketmq_admin_core::client_adapter::services::static_topic::StaticTopicMappingPlan;
+use rocketmq_admin_core::client_adapter::services::static_topic::StaticTopicService;
+use rocketmq_admin_core::client_adapter::services::static_topic::UpdateStaticTopicRequest;
+use rocketmq_admin_core::client_adapter::services::stats::StatsAllQueryRequest;
+use rocketmq_admin_core::client_adapter::services::stats::StatsAllQueryResult;
+use rocketmq_admin_core::client_adapter::services::stats::StatsService;
+use rocketmq_admin_core::client_adapter::services::topic::AllocateMqQueryRequest;
+use rocketmq_admin_core::client_adapter::services::topic::AllocatedMqQueryResult;
+use rocketmq_admin_core::client_adapter::services::topic::DeleteTopicRequest;
+use rocketmq_admin_core::client_adapter::services::topic::DeleteTopicResult;
+use rocketmq_admin_core::client_adapter::services::topic::OrderConfRequest;
+use rocketmq_admin_core::client_adapter::services::topic::OrderConfResult;
+use rocketmq_admin_core::client_adapter::services::topic::TopicClusterList;
+use rocketmq_admin_core::client_adapter::services::topic::TopicClusterQueryRequest;
+use rocketmq_admin_core::client_adapter::services::topic::TopicListQueryRequest;
+use rocketmq_admin_core::client_adapter::services::topic::TopicListResult;
+use rocketmq_admin_core::client_adapter::services::topic::TopicRouteData;
+use rocketmq_admin_core::client_adapter::services::topic::TopicRouteQueryRequest;
+use rocketmq_admin_core::client_adapter::services::topic::TopicService;
+use rocketmq_admin_core::client_adapter::services::topic::TopicStatsTable;
+use rocketmq_admin_core::client_adapter::services::topic::TopicStatusQueryRequest;
+use rocketmq_admin_core::client_adapter::services::topic::TopicTarget;
+use rocketmq_admin_core::client_adapter::services::topic::UpdateTopicPermRequest;
+use rocketmq_admin_core::client_adapter::services::topic::UpdateTopicPermResult;
+use rocketmq_admin_core::client_adapter::services::topic::UpdateTopicRequest;
+use rocketmq_admin_core::client_adapter::services::topic::UpdateTopicResult;
+use rocketmq_admin_core::client_adapter::services::RocketMQError;
+use rocketmq_admin_core::client_adapter::services::RocketMQResult;
 use rocketmq_common::common::message::message_enum::MessageRequestMode;
 use rocketmq_remoting::protocol::admin::rollback_stats::RollbackStats;
 use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
@@ -1490,7 +1490,7 @@ impl TuiAdminFacade {
         cluster_name: Option<String>,
         username: impl Into<String>,
     ) -> RocketMQResult<GetUserResult> {
-        AuthService::get_user_by_request_with_rpc_hook(
+        AuthService::get_user_by_request_with_credentials(
             self.auth_get_user_request(broker_addr, cluster_name, username)?,
             None,
         )
@@ -1505,7 +1505,7 @@ impl TuiAdminFacade {
         password: impl Into<String>,
         user_type: Option<String>,
     ) -> RocketMQResult<AuthOperationResult> {
-        AuthService::create_user_by_request_with_rpc_hook(
+        AuthService::create_user_by_request_with_credentials(
             self.auth_create_user_request(broker_addr, cluster_name, username, password, user_type)?,
             None,
         )
@@ -1521,7 +1521,7 @@ impl TuiAdminFacade {
         user_type: Option<String>,
         user_status: Option<String>,
     ) -> RocketMQResult<AuthOperationResult> {
-        AuthService::update_user_by_request_with_rpc_hook(
+        AuthService::update_user_by_request_with_credentials(
             self.auth_update_user_request(broker_addr, cluster_name, username, password, user_type, user_status)?,
             None,
         )
@@ -1534,7 +1534,7 @@ impl TuiAdminFacade {
         cluster_name: Option<String>,
         username: impl Into<String>,
     ) -> RocketMQResult<AuthOperationResult> {
-        AuthService::delete_user_by_request_with_rpc_hook(
+        AuthService::delete_user_by_request_with_credentials(
             self.auth_delete_user_request(broker_addr, cluster_name, username)?,
             None,
         )
@@ -1547,7 +1547,7 @@ impl TuiAdminFacade {
         to_broker: impl Into<String>,
         usernames: Option<String>,
     ) -> RocketMQResult<CopyUsersResult> {
-        AuthService::copy_users_by_request_with_rpc_hook(
+        AuthService::copy_users_by_request_with_credentials(
             self.auth_copy_users_request(from_broker, to_broker, usernames)?,
             None,
         )
@@ -1560,7 +1560,7 @@ impl TuiAdminFacade {
         cluster_name: Option<String>,
         filter: Option<String>,
     ) -> RocketMQResult<ListUsersResult> {
-        AuthService::list_users_by_request_with_rpc_hook(
+        AuthService::list_users_by_request_with_credentials(
             self.auth_list_users_request(broker_addr, cluster_name, filter)?,
             None,
         )
@@ -1573,7 +1573,7 @@ impl TuiAdminFacade {
         cluster_name: Option<String>,
         subject: impl Into<String>,
     ) -> RocketMQResult<GetAclResult> {
-        AuthService::get_acl_by_request_with_rpc_hook(
+        AuthService::get_acl_by_request_with_credentials(
             self.auth_get_acl_request(broker_addr, cluster_name, subject)?,
             None,
         )
@@ -1591,7 +1591,7 @@ impl TuiAdminFacade {
         decision: impl Into<String>,
         source_ip: Option<String>,
     ) -> RocketMQResult<AuthOperationResult> {
-        AuthService::create_acl_by_request_with_rpc_hook(
+        AuthService::create_acl_by_request_with_credentials(
             self.auth_create_acl_request(
                 broker_addr,
                 cluster_name,
@@ -1617,7 +1617,7 @@ impl TuiAdminFacade {
         decision: impl Into<String>,
         source_ip: Option<String>,
     ) -> RocketMQResult<AuthOperationResult> {
-        AuthService::update_acl_by_request_with_rpc_hook(
+        AuthService::update_acl_by_request_with_credentials(
             self.auth_update_acl_request(
                 broker_addr,
                 cluster_name,
@@ -1639,7 +1639,7 @@ impl TuiAdminFacade {
         subject: impl Into<String>,
         resource: Option<String>,
     ) -> RocketMQResult<AuthOperationResult> {
-        AuthService::delete_acl_by_request_with_rpc_hook(
+        AuthService::delete_acl_by_request_with_credentials(
             self.auth_delete_acl_request(broker_addr, cluster_name, subject, resource)?,
             None,
         )
@@ -1652,7 +1652,7 @@ impl TuiAdminFacade {
         to_broker: impl Into<String>,
         subjects: Option<String>,
     ) -> RocketMQResult<CopyAclResult> {
-        AuthService::copy_acl_by_request_with_rpc_hook(
+        AuthService::copy_acl_by_request_with_credentials(
             self.auth_copy_acl_request(from_broker, to_broker, subjects)?,
             None,
         )
@@ -1666,7 +1666,7 @@ impl TuiAdminFacade {
         subject_filter: Option<String>,
         resource_filter: Option<String>,
     ) -> RocketMQResult<ListAclResult> {
-        AuthService::list_acl_by_request_with_rpc_hook(
+        AuthService::list_acl_by_request_with_credentials(
             self.auth_list_acl_request(broker_addr, cluster_name, subject_filter, resource_filter)?,
             None,
         )
@@ -1677,7 +1677,7 @@ impl TuiAdminFacade {
         &self,
         controller_address: impl Into<String>,
     ) -> RocketMQResult<ControllerConfigQueryResult> {
-        ControllerService::query_controller_config_by_request_with_rpc_hook(
+        ControllerService::query_controller_config_by_request_with_credentials(
             self.controller_config_query_request(controller_address)?,
             None,
         )
@@ -1690,7 +1690,7 @@ impl TuiAdminFacade {
         key: impl Into<String>,
         value: impl Into<String>,
     ) -> RocketMQResult<()> {
-        ControllerService::update_controller_config_by_request_with_rpc_hook(
+        ControllerService::update_controller_config_by_request_with_credentials(
             self.controller_config_update_request(controller_address, key, value)?,
             None,
         )
@@ -1701,7 +1701,7 @@ impl TuiAdminFacade {
         &self,
         controller_address: impl Into<String>,
     ) -> RocketMQResult<ControllerMetadataQueryResult> {
-        ControllerService::query_controller_metadata_by_request_with_rpc_hook(
+        ControllerService::query_controller_metadata_by_request_with_credentials(
             self.controller_metadata_query_request(controller_address)?,
             None,
         )
@@ -1715,7 +1715,7 @@ impl TuiAdminFacade {
         broker_name: impl Into<String>,
         broker_id: i64,
     ) -> RocketMQResult<ControllerElectMasterResult> {
-        ControllerService::elect_master_by_request_with_rpc_hook(
+        ControllerService::elect_master_by_request_with_credentials(
             self.controller_elect_master_request(controller_address, cluster_name, broker_name, broker_id)?,
             None,
         )
@@ -1730,7 +1730,7 @@ impl TuiAdminFacade {
         cluster_name: Option<String>,
         clean_living_broker: bool,
     ) -> RocketMQResult<()> {
-        ControllerService::clean_controller_metadata_by_request_with_rpc_hook(
+        ControllerService::clean_controller_metadata_by_request_with_credentials(
             self.controller_metadata_clean_request(
                 controller_address,
                 broker_name,
@@ -1748,7 +1748,7 @@ impl TuiAdminFacade {
         broker_container_addr: impl Into<String>,
         broker_config_path: impl Into<String>,
     ) -> RocketMQResult<ContainerOperationResult> {
-        ContainerService::add_broker_by_request_with_rpc_hook(
+        ContainerService::add_broker_by_request_with_credentials(
             self.container_add_broker_request(broker_container_addr, broker_config_path)?,
             None,
         )
@@ -1762,7 +1762,7 @@ impl TuiAdminFacade {
         broker_name: impl Into<String>,
         broker_id: i64,
     ) -> RocketMQResult<ContainerOperationResult> {
-        ContainerService::remove_broker_by_request_with_rpc_hook(
+        ContainerService::remove_broker_by_request_with_credentials(
             self.container_remove_broker_request(broker_container_addr, cluster_name, broker_name, broker_id)?,
             None,
         )
@@ -1866,7 +1866,7 @@ impl TuiAdminFacade {
         broker_name: Option<String>,
         cluster_name: Option<String>,
     ) -> RocketMQResult<BrokerEpochQueryResult> {
-        BrokerService::query_broker_epoch_by_request_with_rpc_hook(
+        BrokerService::query_broker_epoch_by_request_with_credentials(
             self.broker_epoch_request(broker_name, cluster_name)?,
             None,
         )
@@ -1878,7 +1878,7 @@ impl TuiAdminFacade {
         broker_addr: Option<String>,
         cluster_name: Option<String>,
     ) -> RocketMQResult<ColdDataFlowCtrInfoQueryResult> {
-        BrokerService::query_cold_data_flow_ctr_info_by_request_with_rpc_hook(
+        BrokerService::query_cold_data_flow_ctr_info_by_request_with_credentials(
             self.cold_data_flow_ctr_info_request(broker_addr, cluster_name)?,
             None,
         )
@@ -1892,7 +1892,7 @@ impl TuiAdminFacade {
         topic: Option<String>,
         dry_run: bool,
     ) -> RocketMQResult<CleanExpiredConsumeQueueReport> {
-        BrokerService::clean_expired_consume_queue_by_request_with_rpc_hook(
+        BrokerService::clean_expired_consume_queue_by_request_with_credentials(
             self.clean_expired_consume_queue_request(broker_addr, cluster_name, topic, dry_run)?,
             None,
         )
@@ -1904,7 +1904,7 @@ impl TuiAdminFacade {
         broker_addr: Option<String>,
         cluster_name: Option<String>,
     ) -> RocketMQResult<BrokerBooleanOperationResult> {
-        BrokerService::delete_expired_commit_log_by_request_with_rpc_hook(
+        BrokerService::delete_expired_commit_log_by_request_with_credentials(
             self.broker_optional_target_request(broker_addr, cluster_name)?,
             None,
         )
@@ -1916,7 +1916,7 @@ impl TuiAdminFacade {
         broker_addr: Option<String>,
         cluster_name: Option<String>,
     ) -> RocketMQResult<BrokerBooleanOperationResult> {
-        BrokerService::clean_unused_topic_by_request_with_rpc_hook(
+        BrokerService::clean_unused_topic_by_request_with_credentials(
             self.broker_optional_target_request(broker_addr, cluster_name)?,
             None,
         )
@@ -1928,7 +1928,7 @@ impl TuiAdminFacade {
         broker_addr: Option<String>,
         offset: Option<i64>,
     ) -> RocketMQResult<()> {
-        BrokerService::reset_master_flush_offset_by_request_with_rpc_hook(
+        BrokerService::reset_master_flush_offset_by_request_with_credentials(
             self.reset_master_flush_offset_request(broker_addr, offset)?,
             None,
         )
@@ -1942,7 +1942,7 @@ impl TuiAdminFacade {
         consumer_group: impl Into<String>,
         threshold: impl Into<String>,
     ) -> RocketMQResult<BrokerOperationResult> {
-        BrokerService::update_cold_data_flow_ctr_group_config_by_request_with_rpc_hook(
+        BrokerService::update_cold_data_flow_ctr_group_config_by_request_with_credentials(
             self.cold_data_flow_ctr_group_config_update_request(broker_addr, cluster_name, consumer_group, threshold)?,
             None,
         )
@@ -1955,7 +1955,7 @@ impl TuiAdminFacade {
         cluster_name: Option<String>,
         consumer_group: impl Into<String>,
     ) -> RocketMQResult<BrokerOperationResult> {
-        BrokerService::remove_cold_data_flow_ctr_group_config_by_request_with_rpc_hook(
+        BrokerService::remove_cold_data_flow_ctr_group_config_by_request_with_credentials(
             self.cold_data_flow_ctr_group_config_remove_request(broker_addr, cluster_name, consumer_group)?,
             None,
         )
@@ -1974,7 +1974,7 @@ impl TuiAdminFacade {
         read_ahead_size_key: Option<String>,
         show_only: bool,
     ) -> RocketMQResult<CommitLogReadAheadResult> {
-        BrokerService::set_commit_log_read_ahead_by_request_with_rpc_hook(
+        BrokerService::set_commit_log_read_ahead_by_request_with_credentials(
             self.commit_log_read_ahead_request(
                 broker_addr,
                 cluster_name,
@@ -1996,7 +1996,7 @@ impl TuiAdminFacade {
         cluster_name: Option<String>,
         engine_type: impl Into<String>,
     ) -> RocketMQResult<BrokerOperationResult> {
-        BrokerService::switch_timer_engine_by_request_with_rpc_hook(
+        BrokerService::switch_timer_engine_by_request_with_credentials(
             self.switch_timer_engine_request(broker_addr, cluster_name, engine_type)?,
             None,
         )
@@ -2008,7 +2008,7 @@ impl TuiAdminFacade {
         more_stats: bool,
         cluster_name: Option<String>,
     ) -> RocketMQResult<ClusterListQueryResult> {
-        ClusterService::query_cluster_list_by_request_with_rpc_hook(
+        ClusterService::query_cluster_list_by_request_with_credentials(
             self.cluster_list_request(more_stats, cluster_name),
             None,
         )
@@ -2019,7 +2019,7 @@ impl TuiAdminFacade {
         &self,
         cluster_name: Option<String>,
     ) -> RocketMQResult<ClusterBrokerNameQueryResult> {
-        ClusterService::query_cluster_broker_names_by_request_with_rpc_hook(
+        ClusterService::query_cluster_broker_names_by_request_with_credentials(
             self.cluster_broker_names_request(cluster_name),
             None,
         )
@@ -2032,7 +2032,7 @@ impl TuiAdminFacade {
         size: u64,
         cluster_name: Option<String>,
     ) -> RocketMQResult<ClusterSendMessageRtResult> {
-        ClusterService::send_message_rt_by_request_with_rpc_hook(
+        ClusterService::send_message_rt_by_request_with_credentials(
             self.cluster_send_message_rt_request(amount, size, cluster_name)?,
             None,
         )
@@ -2044,7 +2044,7 @@ impl TuiAdminFacade {
         consumer_group: impl Into<String>,
         broker_addr: Option<String>,
     ) -> RocketMQResult<ConsumerConnectionQueryResult> {
-        ConnectionService::query_consumer_connection_by_request_with_rpc_hook(
+        ConnectionService::query_consumer_connection_by_request_with_credentials(
             self.consumer_connection_request(consumer_group, broker_addr)?,
             None,
         )
@@ -2056,7 +2056,7 @@ impl TuiAdminFacade {
         producer_group: impl Into<String>,
         topic: impl Into<String>,
     ) -> RocketMQResult<ProducerConnectionQueryResult> {
-        ConnectionService::query_producer_connection_by_request_with_rpc_hook(
+        ConnectionService::query_producer_connection_by_request_with_credentials(
             self.producer_connection_request(producer_group, topic)?,
             None,
         )
@@ -2067,8 +2067,11 @@ impl TuiAdminFacade {
         &self,
         group_name: impl Into<String>,
     ) -> RocketMQResult<ConsumerConfigQueryResult> {
-        ConsumerService::query_consumer_config_by_request_with_rpc_hook(self.consumer_config_request(group_name)?, None)
-            .await
+        ConsumerService::query_consumer_config_by_request_with_credentials(
+            self.consumer_config_request(group_name)?,
+            None,
+        )
+        .await
     }
 
     pub async fn delete_subscription_group(
@@ -2078,7 +2081,7 @@ impl TuiAdminFacade {
         group_name: impl Into<String>,
         remove_offset: bool,
     ) -> RocketMQResult<ConsumerOperationResult> {
-        ConsumerService::delete_subscription_group_by_request_with_rpc_hook(
+        ConsumerService::delete_subscription_group_by_request_with_credentials(
             self.delete_subscription_group_request(broker_addr, cluster_name, group_name, remove_offset)?,
             None,
         )
@@ -2094,7 +2097,7 @@ impl TuiAdminFacade {
         mode: MessageRequestMode,
         pop_share_queue_num: Option<i32>,
     ) -> RocketMQResult<ConsumerOperationResult> {
-        ConsumerService::set_consume_mode_by_request_with_rpc_hook(
+        ConsumerService::set_consume_mode_by_request_with_credentials(
             self.set_consume_mode_request(
                 broker_addr,
                 cluster_name,
@@ -2126,7 +2129,7 @@ impl TuiAdminFacade {
         group_sys_flag: i32,
         consume_timeout_minute: i32,
     ) -> RocketMQResult<ConsumerOperationResult> {
-        ConsumerService::update_subscription_group_by_request_with_rpc_hook(
+        ConsumerService::update_subscription_group_by_request_with_credentials(
             self.update_subscription_group_request(
                 broker_addr,
                 cluster_name,
@@ -2166,7 +2169,7 @@ impl TuiAdminFacade {
         group_sys_flag: i32,
         consume_timeout_minute: i32,
     ) -> RocketMQResult<ConsumerOperationResult> {
-        ConsumerService::update_subscription_group_list_by_request_with_rpc_hook(
+        ConsumerService::update_subscription_group_list_by_request_with_credentials(
             self.update_subscription_group_list_request(
                 broker_addr,
                 cluster_name,
@@ -2195,7 +2198,7 @@ impl TuiAdminFacade {
         broker_addr: Option<String>,
         jstack: bool,
     ) -> RocketMQResult<ConsumerRunningInfoResult> {
-        ConsumerService::query_consumer_running_info_by_request_with_rpc_hook(
+        ConsumerService::query_consumer_running_info_by_request_with_credentials(
             self.consumer_running_info_request(group_name, client_id, broker_addr, jstack)?,
             None,
         )
@@ -2209,7 +2212,7 @@ impl TuiAdminFacade {
         show_client_ip: bool,
         cluster: Option<String>,
     ) -> RocketMQResult<ConsumerProgressResult> {
-        ConsumerService::query_consumer_progress_by_request_with_rpc_hook(
+        ConsumerService::query_consumer_progress_by_request_with_credentials(
             self.consumer_progress_request(consumer_group, topic_name, show_client_ip, cluster)?,
             None,
         )
@@ -2236,7 +2239,7 @@ impl TuiAdminFacade {
             Some(max_events),
         )?;
         let mut event_count = 0usize;
-        ConsumerService::start_monitoring_with_event_sink_by_request_with_rpc_hook(request, None, |event| {
+        ConsumerService::start_monitoring_with_event_sink_by_request_with_credentials(request, None, |event| {
             event_count += 1;
             progress(monitoring_progress_message(event_count, event));
             Ok(())
@@ -2251,7 +2254,7 @@ impl TuiAdminFacade {
         topic: impl Into<String>,
         offline: bool,
     ) -> RocketMQResult<()> {
-        OffsetService::clone_group_offset_by_request_with_rpc_hook(
+        OffsetService::clone_group_offset_by_request_with_credentials(
             self.clone_group_offset_request(src_group, dest_group, topic, offline)?,
             None,
         )
@@ -2264,7 +2267,7 @@ impl TuiAdminFacade {
         topic: impl Into<String>,
         origin_client_id: Option<String>,
     ) -> RocketMQResult<ConsumerStatusResult> {
-        OffsetService::query_consumer_status_by_request_with_rpc_hook(
+        OffsetService::query_consumer_status_by_request_with_credentials(
             self.consumer_status_request(group, topic, origin_client_id)?,
             None,
         )
@@ -2278,7 +2281,7 @@ impl TuiAdminFacade {
         cluster: Option<String>,
         force: Option<bool>,
     ) -> RocketMQResult<SkipAccumulatedMessageResult> {
-        OffsetService::skip_accumulated_message_by_request_with_rpc_hook(
+        OffsetService::skip_accumulated_message_by_request_with_credentials(
             self.skip_accumulated_message_request(group, topic, cluster, force)?,
             None,
         )
@@ -2291,7 +2294,7 @@ impl TuiAdminFacade {
         topic: impl Into<String>,
         timestamp: u64,
     ) -> RocketMQResult<ResetOffsetByTimeResult> {
-        OffsetService::reset_offset_by_time_by_request_with_rpc_hook(
+        OffsetService::reset_offset_by_time_by_request_with_credentials(
             self.reset_offset_by_time_request(group, topic, timestamp)?,
             None,
         )
@@ -2306,7 +2309,7 @@ impl TuiAdminFacade {
         force: Option<bool>,
         cluster: Option<String>,
     ) -> RocketMQResult<Vec<RollbackStats>> {
-        OffsetService::reset_offset_by_time_old_by_request_with_rpc_hook(
+        OffsetService::reset_offset_by_time_old_by_request_with_credentials(
             self.reset_offset_by_time_old_request(group, topic, timestamp, force, cluster)?,
             None,
         )
@@ -2322,7 +2325,7 @@ impl TuiAdminFacade {
         broker_addr: Option<String>,
         consumer_group: Option<String>,
     ) -> RocketMQResult<QueryConsumeQueueResult> {
-        QueueService::query_consume_queue_by_request_with_rpc_hook(
+        QueueService::query_consume_queue_by_request_with_credentials(
             self.query_consume_queue_request(topic, queue_id, index, count, broker_addr, consumer_group)?,
             None,
         )
@@ -2335,7 +2338,7 @@ impl TuiAdminFacade {
         topic: Option<String>,
         check_from: Option<i64>,
     ) -> RocketMQResult<CheckRocksdbCqWriteProgressResult> {
-        QueueService::check_rocksdb_cq_write_progress_by_request_with_rpc_hook(
+        QueueService::check_rocksdb_cq_write_progress_by_request_with_credentials(
             self.check_rocksdb_cq_write_progress_request(cluster_name, topic, check_from)?,
             None,
         )
@@ -2347,7 +2350,7 @@ impl TuiAdminFacade {
         broker_addr: Option<String>,
         cluster_name: Option<String>,
     ) -> RocketMQResult<HaStatusQueryResult> {
-        HaService::query_ha_status_by_request_with_rpc_hook(self.ha_status_request(broker_addr, cluster_name)?, None)
+        HaService::query_ha_status_by_request_with_credentials(self.ha_status_request(broker_addr, cluster_name)?, None)
             .await
     }
 
@@ -2357,7 +2360,7 @@ impl TuiAdminFacade {
         broker_name: Option<String>,
         cluster_name: Option<String>,
     ) -> RocketMQResult<SyncStateSetQueryResult> {
-        HaService::query_sync_state_set_by_request_with_rpc_hook(
+        HaService::query_sync_state_set_by_request_with_credentials(
             self.sync_state_set_request(controller_address, broker_name, cluster_name)?,
             None,
         )
@@ -2369,11 +2372,12 @@ impl TuiAdminFacade {
         active_topic: bool,
         topic: Option<String>,
     ) -> RocketMQResult<StatsAllQueryResult> {
-        StatsService::query_stats_all_by_request_with_rpc_hook(self.stats_all_request(active_topic, topic), None).await
+        StatsService::query_stats_all_by_request_with_credentials(self.stats_all_request(active_topic, topic), None)
+            .await
     }
 
     pub async fn query_producer_info(&self, broker_addr: impl Into<String>) -> RocketMQResult<ProducerInfoQueryResult> {
-        ProducerService::query_producer_info_by_request_with_rpc_hook(self.producer_info_request(broker_addr)?, None)
+        ProducerService::query_producer_info_by_request_with_credentials(self.producer_info_request(broker_addr)?, None)
             .await
     }
 
@@ -2388,7 +2392,7 @@ impl TuiAdminFacade {
         queue_id: Option<i32>,
         msg_trace_enable: bool,
     ) -> RocketMQResult<SendMessageResult> {
-        ProducerService::send_message_by_request_with_rpc_hook(
+        ProducerService::send_message_by_request_with_credentials(
             self.send_message_request(topic, body, keys, tags, broker_name, queue_id, msg_trace_enable)?,
             None,
         )
@@ -2401,7 +2405,7 @@ impl TuiAdminFacade {
         message_size: usize,
         count: u32,
     ) -> RocketMQResult<SendMessageStatusResult> {
-        ProducerService::send_message_status_by_request_with_rpc_hook(
+        ProducerService::send_message_status_by_request_with_credentials(
             self.send_message_status_request(broker_name, message_size, count)?,
             None,
         )
@@ -2414,7 +2418,7 @@ impl TuiAdminFacade {
         amount: u64,
         size: usize,
     ) -> RocketMQResult<CheckMessageSendRtResult> {
-        ProducerService::check_message_send_rt_by_request_with_rpc_hook(
+        ProducerService::check_message_send_rt_by_request_with_credentials(
             self.check_message_send_rt_request(topic, amount, size)?,
             None,
         )
@@ -2426,7 +2430,7 @@ impl TuiAdminFacade {
         broker_addr: Option<String>,
         cluster_name: Option<String>,
     ) -> RocketMQResult<BrokerLiteInfoQueryResult> {
-        LiteService::query_broker_lite_info_by_request_with_rpc_hook(
+        LiteService::query_broker_lite_info_by_request_with_credentials(
             self.broker_lite_info_request(broker_addr, cluster_name)?,
             None,
         )
@@ -2437,7 +2441,7 @@ impl TuiAdminFacade {
         &self,
         parent_topic: impl Into<String>,
     ) -> RocketMQResult<ParentTopicInfoQueryResult> {
-        LiteService::query_parent_topic_info_by_request_with_rpc_hook(
+        LiteService::query_parent_topic_info_by_request_with_credentials(
             self.parent_topic_info_request(parent_topic)?,
             None,
         )
@@ -2449,7 +2453,7 @@ impl TuiAdminFacade {
         parent_topic: impl Into<String>,
         lite_topic: impl Into<String>,
     ) -> RocketMQResult<LiteTopicInfoQueryResult> {
-        LiteService::query_lite_topic_info_by_request_with_rpc_hook(
+        LiteService::query_lite_topic_info_by_request_with_credentials(
             self.lite_topic_info_request(parent_topic, lite_topic)?,
             None,
         )
@@ -2463,7 +2467,7 @@ impl TuiAdminFacade {
         lite_topic: Option<String>,
         top_k: Option<i32>,
     ) -> RocketMQResult<LiteGroupInfoQueryResult> {
-        LiteService::query_lite_group_info_by_request_with_rpc_hook(
+        LiteService::query_lite_group_info_by_request_with_credentials(
             self.lite_group_info_request(parent_topic, group, lite_topic, top_k)?,
             None,
         )
@@ -2476,7 +2480,7 @@ impl TuiAdminFacade {
         group: impl Into<String>,
         client_id: impl Into<String>,
     ) -> RocketMQResult<LiteClientInfoQueryResult> {
-        LiteService::query_lite_client_info_by_request_with_rpc_hook(
+        LiteService::query_lite_client_info_by_request_with_credentials(
             self.lite_client_info_request(parent_topic, group, client_id)?,
             None,
         )
@@ -2490,7 +2494,7 @@ impl TuiAdminFacade {
         client_id: Option<String>,
         broker_name: Option<String>,
     ) -> RocketMQResult<TriggerLiteDispatchResult> {
-        LiteService::trigger_lite_dispatch_by_request_with_rpc_hook(
+        LiteService::trigger_lite_dispatch_by_request_with_credentials(
             self.trigger_lite_dispatch_request(parent_topic, group, client_id, broker_name)?,
             None,
         )
@@ -2504,7 +2508,7 @@ impl TuiAdminFacade {
         queue_num: impl AsRef<str>,
         cluster_names: Option<String>,
     ) -> RocketMQResult<StaticTopicMappingPlan> {
-        StaticTopicService::update_static_topic_by_request_with_rpc_hook(
+        StaticTopicService::update_static_topic_by_request_with_credentials(
             self.update_static_topic_request(topic, broker_names, queue_num, cluster_names)?,
             None,
         )
@@ -2518,7 +2522,7 @@ impl TuiAdminFacade {
         cluster_names: Option<String>,
         force_replace: Option<bool>,
     ) -> RocketMQResult<StaticTopicMappingPlan> {
-        StaticTopicService::remapping_static_topic_by_request_with_rpc_hook(
+        StaticTopicService::remapping_static_topic_by_request_with_credentials(
             self.remapping_static_topic_request(topic, broker_names, cluster_names, force_replace)?,
             None,
         )
@@ -2536,7 +2540,7 @@ impl TuiAdminFacade {
         topic: Option<String>,
         timeout_millis: u64,
     ) -> RocketMQResult<QueryMessageByIdResult> {
-        MessageService::query_message_by_id_by_request_with_rpc_hook(
+        MessageService::query_message_by_id_by_request_with_credentials(
             self.query_message_by_id_request(message_ids, topic, timeout_millis)?,
             None,
         )
@@ -2555,7 +2559,7 @@ impl TuiAdminFacade {
         key_type: Option<String>,
         last_key: Option<String>,
     ) -> RocketMQResult<QueryMessageByKeyResult> {
-        MessageService::query_message_by_key_by_request_with_rpc_hook(
+        MessageService::query_message_by_key_by_request_with_credentials(
             self.query_message_by_key_request(
                 topic,
                 msg_key,
@@ -2579,7 +2583,7 @@ impl TuiAdminFacade {
         offset: i64,
         route_topic: Option<String>,
     ) -> RocketMQResult<QueryMessageByOffsetResult> {
-        MessageService::query_message_by_offset_by_request_with_rpc_hook(
+        MessageService::query_message_by_offset_by_request_with_credentials(
             self.query_message_by_offset_request(topic, broker_name, queue_id, offset, route_topic)?,
             None,
         )
@@ -2598,7 +2602,7 @@ impl TuiAdminFacade {
         start_time: Option<i64>,
         end_time: Option<i64>,
     ) -> RocketMQResult<QueryMessageByUniqueKeyResult> {
-        MessageService::query_message_by_unique_key_by_request_with_rpc_hook(
+        MessageService::query_message_by_unique_key_by_request_with_credentials(
             self.query_message_by_unique_key_request(
                 msg_id,
                 consumer_group,
@@ -2622,7 +2626,7 @@ impl TuiAdminFacade {
         client_id: impl Into<String>,
         cluster: Option<String>,
     ) -> RocketMQResult<DirectConsumeMessageResult> {
-        MessageService::direct_consume_message_by_request_with_rpc_hook(
+        MessageService::direct_consume_message_by_request_with_credentials(
             self.direct_consume_message_request(topic, msg_id, consumer_group, client_id, cluster)?,
             None,
         )
@@ -2636,7 +2640,7 @@ impl TuiAdminFacade {
         cluster: Option<String>,
         timeout_millis: u64,
     ) -> RocketMQResult<MessageTrackResult> {
-        MessageService::message_track_by_request_with_rpc_hook(
+        MessageService::message_track_by_request_with_credentials(
             self.message_track_request(message_ids, topic, cluster, timeout_millis)?,
             None,
         )
@@ -2651,7 +2655,7 @@ impl TuiAdminFacade {
         end_timestamp: Option<i64>,
         max_num: i32,
     ) -> RocketMQResult<Vec<MessageTraceView>> {
-        MessageService::query_message_trace_by_id_by_request_with_rpc_hook(
+        MessageService::query_message_trace_by_id_by_request_with_credentials(
             self.query_message_trace_by_id_request(msg_id, trace_topic, begin_timestamp, end_timestamp, max_num)?,
             None,
         )
@@ -2664,7 +2668,8 @@ impl TuiAdminFacade {
     }
 
     pub async fn export_configs(&self, cluster_name: impl Into<String>) -> RocketMQResult<ExportConfigsResult> {
-        ExportService::export_configs_by_request_with_rpc_hook(self.export_configs_request(cluster_name)?, None).await
+        ExportService::export_configs_by_request_with_credentials(self.export_configs_request(cluster_name)?, None)
+            .await
     }
 
     pub async fn export_metrics(
@@ -2672,7 +2677,7 @@ impl TuiAdminFacade {
         cluster_name: impl Into<String>,
         timeout_millis: Option<u64>,
     ) -> RocketMQResult<ExportMetricsResult> {
-        ExportService::export_metrics_by_request_with_rpc_hook(
+        ExportService::export_metrics_by_request_with_credentials(
             self.export_metrics_request(cluster_name, timeout_millis)?,
             None,
         )
@@ -2687,7 +2692,7 @@ impl TuiAdminFacade {
         subscription_group_only: bool,
         special_topic: bool,
     ) -> RocketMQResult<ExportMetadataResult> {
-        ExportService::export_metadata_by_request_with_rpc_hook(
+        ExportService::export_metadata_by_request_with_credentials(
             self.export_metadata_request(
                 cluster_name,
                 broker_addr,
@@ -2717,7 +2722,7 @@ impl TuiAdminFacade {
         config_types: impl Into<String>,
         timeout_millis: Option<u64>,
     ) -> RocketMQResult<ExportRocksDbConfigRpcResult> {
-        ExportService::export_rocksdb_config_rpc_by_request_with_rpc_hook(
+        ExportService::export_rocksdb_config_rpc_by_request_with_credentials(
             self.export_rocksdb_config_rpc_request(cluster_name, broker_addr, config_types, timeout_millis)?,
             None,
         )
@@ -2731,7 +2736,7 @@ impl TuiAdminFacade {
         dry_run: bool,
         timeout_millis: Option<u64>,
     ) -> RocketMQResult<ExportPopRecordResult> {
-        ExportService::export_pop_records_by_request_with_rpc_hook(
+        ExportService::export_pop_records_by_request_with_credentials(
             self.export_pop_record_request(cluster_name, broker_addr, dry_run, timeout_millis)?,
             None,
         )
@@ -2769,7 +2774,7 @@ impl TuiAdminFacade {
             self.print_messages_request(topic, sub_expression, begin_timestamp, end_timestamp, lmq_parent_topic)?;
         let mut events = Vec::new();
         let mut event_count = 0usize;
-        let result = MessageService::print_messages_by_request_with_rpc_hook(request, None, |event| {
+        let result = MessageService::print_messages_by_request_with_credentials(request, None, |event| {
             event_count += 1;
             progress(message_pull_progress_message(event_count, &event));
             capture_message_pull_event(&mut events, max_events, event)
@@ -2807,7 +2812,7 @@ impl TuiAdminFacade {
         )?;
         let mut events = Vec::new();
         let mut event_count = 0usize;
-        let result = MessageService::print_messages_by_queue_by_request_with_rpc_hook(request, None, |event| {
+        let result = MessageService::print_messages_by_queue_by_request_with_credentials(request, None, |event| {
             event_count += 1;
             progress(message_pull_progress_message(event_count, &event));
             capture_message_pull_event(&mut events, max_events, event)
@@ -2845,7 +2850,7 @@ impl TuiAdminFacade {
         )?;
         let mut events = Vec::new();
         let mut event_count = 0usize;
-        let result = MessageService::consume_messages_by_request_with_rpc_hook(request, None, |event| {
+        let result = MessageService::consume_messages_by_request_with_credentials(request, None, |event| {
             event_count += 1;
             progress(message_pull_progress_message(event_count, &event));
             capture_message_pull_event(&mut events, max_events, event)

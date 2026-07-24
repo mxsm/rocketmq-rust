@@ -2,9 +2,9 @@ use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
 
-use rocketmq_admin_core::core::topic::TopicTarget;
-use rocketmq_admin_core::core::RocketMQError;
-use rocketmq_admin_core::core::RocketMQResult;
+use rocketmq_admin_core::client_adapter::services::topic::TopicTarget;
+use rocketmq_admin_core::client_adapter::services::RocketMQError;
+use rocketmq_admin_core::client_adapter::services::RocketMQResult;
 use rocketmq_common::common::message::message_enum::MessageRequestMode;
 use serde::Serialize;
 
@@ -1442,7 +1442,7 @@ fn topic_target(form: &CommandFormState) -> RocketMQResult<TopicTarget> {
 fn broker_config_update_request(
     facade: &TuiAdminFacade,
     form: &CommandFormState,
-) -> RocketMQResult<rocketmq_admin_core::core::broker::BrokerConfigUpdateRequest> {
+) -> RocketMQResult<rocketmq_admin_core::client_adapter::services::broker::BrokerConfigUpdateRequest> {
     let entries: BTreeMap<String, String> = form.key_value_map("entries")?.into_iter().collect();
     facade.broker_config_update_request(
         form.optional_string("broker_addr"),

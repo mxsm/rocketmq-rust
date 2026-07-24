@@ -12,17 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use clap::Parser;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
-use rocketmq_admin_core::core::namesrv::NameServerService;
-use rocketmq_admin_core::core::namesrv::WritePermRequest;
-use rocketmq_admin_core::core::namesrv::WritePermResult;
+use rocketmq_admin_core::client_adapter::services::namesrv::NameServerService;
+use rocketmq_admin_core::client_adapter::services::namesrv::WritePermRequest;
+use rocketmq_admin_core::client_adapter::services::namesrv::WritePermResult;
 
 #[derive(Debug, Clone, Parser)]
 pub struct AddWritePermSubCommand {
@@ -60,7 +57,10 @@ impl AddWritePermSubCommand {
 }
 
 impl CommandExecute for AddWritePermSubCommand {
-    async fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        _rpc_hook: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         let result = NameServerService::add_write_perm_by_request(self.request()?).await?;
         Self::print_result(result);
         Ok(())

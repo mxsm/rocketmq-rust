@@ -4067,6 +4067,7 @@ dependencies = [
  "futures",
  "regex",
  "rocketmq-client-rust",
+ "rocketmq-common",
  "rocketmq-model",
  "rocketmq-protocol",
  "rocketmq-security-api",

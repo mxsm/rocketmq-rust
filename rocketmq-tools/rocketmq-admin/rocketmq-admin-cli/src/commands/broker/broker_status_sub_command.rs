@@ -12,17 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use clap::Parser;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use rocketmq_admin_core::core::broker::BrokerRuntimeStatsQueryRequest;
-use rocketmq_admin_core::core::broker::BrokerRuntimeStatsResult;
-use rocketmq_admin_core::core::broker::BrokerService;
-use rocketmq_admin_core::core::broker::BrokerTarget;
+use rocketmq_admin_core::client_adapter::services::broker::BrokerRuntimeStatsQueryRequest;
+use rocketmq_admin_core::client_adapter::services::broker::BrokerRuntimeStatsResult;
+use rocketmq_admin_core::client_adapter::services::broker::BrokerService;
+use rocketmq_admin_core::client_adapter::services::broker::BrokerTarget;
 
 #[derive(Debug, Clone, Parser)]
 #[command(group(
@@ -45,10 +42,14 @@ impl BrokerStatusSubCommand {
 }
 
 impl CommandExecute for BrokerStatusSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         let request = self.request()?;
         let print_broker = matches!(request.target(), BrokerTarget::ClusterName(_));
-        let result = BrokerService::query_broker_runtime_stats_by_request_with_rpc_hook(request, rpc_hook).await?;
+        let result =
+            BrokerService::query_broker_runtime_stats_by_request_with_credentials(request, credentials).await?;
         print_runtime_stats_result(&result, print_broker);
         Ok(())
     }

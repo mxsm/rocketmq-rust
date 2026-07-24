@@ -12,16 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use clap::Parser;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use rocketmq_admin_core::core::message::MessageService;
-use rocketmq_admin_core::core::message::QueryMessageByKeyRequest;
+use rocketmq_admin_core::client_adapter::services::message::MessageService;
+use rocketmq_admin_core::client_adapter::services::message::QueryMessageByKeyRequest;
 
 #[derive(Debug, Clone, Parser)]
 pub struct QueryMsgByKeySubCommand {
@@ -77,7 +74,10 @@ pub struct QueryMsgByKeySubCommand {
 }
 
 impl CommandExecute for QueryMsgByKeySubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         let request = QueryMessageByKeyRequest::try_new(
             self.topic.clone(),
             self.msg_key.clone(),
@@ -89,7 +89,7 @@ impl CommandExecute for QueryMsgByKeySubCommand {
             self.last_key.clone(),
         )?;
 
-        let query_result = MessageService::query_message_by_key_by_request_with_rpc_hook(request, rpc_hook)
+        let query_result = MessageService::query_message_by_key_by_request_with_credentials(request, credentials)
             .await
             .map_err(|e| RocketMQError::Internal(format!("Failed to query message by key: {}", e)))?;
 

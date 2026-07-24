@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_admin_core::core::RocketMQError;
-use rocketmq_admin_core::core::RocketMQResult;
-use rocketmq_admin_core::core::ToolsError;
+use rocketmq_admin_core::client_adapter::services::RocketMQError;
+use rocketmq_admin_core::client_adapter::services::RocketMQResult;
+use rocketmq_admin_core::client_adapter::services::ToolsError;
 
 pub fn validate_namesrv_addr(addr: &str) -> RocketMQResult<()> {
     if addr.is_empty() {

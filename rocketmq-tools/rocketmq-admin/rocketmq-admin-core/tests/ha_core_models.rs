@@ -1,7 +1,7 @@
-use rocketmq_admin_core::core::ha::HaStatusQueryRequest;
-use rocketmq_admin_core::core::ha::HaStatusTarget;
-use rocketmq_admin_core::core::ha::SyncStateSetQueryRequest;
-use rocketmq_admin_core::core::ha::SyncStateSetTarget;
+use rocketmq_admin_core::client_adapter::services::ha::HaStatusQueryRequest;
+use rocketmq_admin_core::client_adapter::services::ha::HaStatusTarget;
+use rocketmq_admin_core::client_adapter::services::ha::SyncStateSetQueryRequest;
+use rocketmq_admin_core::client_adapter::services::ha::SyncStateSetTarget;
 
 #[test]
 fn ha_status_query_request_trims_broker_target() {

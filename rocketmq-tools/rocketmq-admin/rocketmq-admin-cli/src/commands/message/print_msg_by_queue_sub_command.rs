@@ -12,19 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use clap::Parser;
 use rocketmq_common::UtilAll::YYYY_MM_DD_HH_MM_SS_SSS;
 use rocketmq_common::UtilAll::parse_date;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use rocketmq_admin_core::core::message::MessagePullEvent;
-use rocketmq_admin_core::core::message::MessageService;
-use rocketmq_admin_core::core::message::PrintMessagesByQueueRequest;
+use rocketmq_admin_core::client_adapter::services::message::MessagePullEvent;
+use rocketmq_admin_core::client_adapter::services::message::MessageService;
+use rocketmq_admin_core::client_adapter::services::message::PrintMessagesByQueueRequest;
 
 #[derive(Debug, Clone, Parser)]
 pub struct PrintMsgByQueueSubCommand {
@@ -111,7 +108,10 @@ fn timestamp_format(value: &str) -> u64 {
 }
 
 impl CommandExecute for PrintMsgByQueueSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         let begin_timestamp = self.begin_timestamp.as_deref().map(str::trim).map(timestamp_format);
         let end_timestamp = self.end_timestamp.as_deref().map(str::trim).map(timestamp_format);
         let request = PrintMessagesByQueueRequest::try_new(
@@ -127,7 +127,7 @@ impl CommandExecute for PrintMsgByQueueSubCommand {
         let charset_name = self.charset_name.trim().to_string();
         let print_body = self.print_body;
 
-        MessageService::print_messages_by_queue_by_request_with_rpc_hook(request, rpc_hook, |event| {
+        MessageService::print_messages_by_queue_by_request_with_credentials(request, credentials, |event| {
             match event {
                 MessagePullEvent::Messages { messages } => print_messages(&messages, &charset_name, print_body),
                 MessagePullEvent::PullError { error } => eprintln!("Pull message error: {}", error),

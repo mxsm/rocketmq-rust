@@ -25,11 +25,8 @@ pub mod query_msg_by_unique_key_sub_command;
 pub mod query_msg_trace_by_id_sub_command;
 pub mod send_message_sub_command;
 
-use std::sync::Arc;
-
 use clap::Subcommand;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
 use crate::commands::message::check_msg_send_rt_sub_command::CheckMsgSendRTSubCommand;
@@ -134,20 +131,23 @@ pub enum MessageCommands {
 }
 
 impl CommandExecute for MessageCommands {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         match self {
-            MessageCommands::CheckMsgSendRT(value) => value.execute(rpc_hook).await,
-            MessageCommands::ConsumeMessage(value) => value.execute(rpc_hook).await,
-            MessageCommands::DecodeMessageId(value) => value.execute(rpc_hook).await,
-            MessageCommands::DumpCompactionLog(value) => value.execute(rpc_hook).await,
-            MessageCommands::PrintMessage(value) => value.execute(rpc_hook).await,
-            MessageCommands::PrintMsgByQueue(value) => value.execute(rpc_hook).await,
-            MessageCommands::QueryMsgById(value) => value.execute(rpc_hook).await,
-            MessageCommands::QueryMsgByKey(value) => value.execute(rpc_hook).await,
-            MessageCommands::QueryMsgByOffset(value) => value.execute(rpc_hook).await,
-            MessageCommands::QueryMsgByUniqueKey(value) => value.execute(rpc_hook).await,
-            MessageCommands::QueryMsgTraceById(value) => value.execute(rpc_hook).await,
-            MessageCommands::SendMessage(value) => value.execute(rpc_hook).await,
+            MessageCommands::CheckMsgSendRT(value) => value.execute(credentials).await,
+            MessageCommands::ConsumeMessage(value) => value.execute(credentials).await,
+            MessageCommands::DecodeMessageId(value) => value.execute(credentials).await,
+            MessageCommands::DumpCompactionLog(value) => value.execute(credentials).await,
+            MessageCommands::PrintMessage(value) => value.execute(credentials).await,
+            MessageCommands::PrintMsgByQueue(value) => value.execute(credentials).await,
+            MessageCommands::QueryMsgById(value) => value.execute(credentials).await,
+            MessageCommands::QueryMsgByKey(value) => value.execute(credentials).await,
+            MessageCommands::QueryMsgByOffset(value) => value.execute(credentials).await,
+            MessageCommands::QueryMsgByUniqueKey(value) => value.execute(credentials).await,
+            MessageCommands::QueryMsgTraceById(value) => value.execute(credentials).await,
+            MessageCommands::SendMessage(value) => value.execute(credentials).await,
         }
     }
 }

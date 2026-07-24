@@ -12,17 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use clap::Parser;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::body::broker_replicas_info::BrokerReplicasInfo;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use rocketmq_admin_core::core::ha::HaService;
-use rocketmq_admin_core::core::ha::SyncStateSetQueryRequest;
-use rocketmq_admin_core::core::ha::SyncStateSetQueryResult;
+use rocketmq_admin_core::client_adapter::services::ha::HaService;
+use rocketmq_admin_core::client_adapter::services::ha::SyncStateSetQueryRequest;
+use rocketmq_admin_core::client_adapter::services::ha::SyncStateSetQueryResult;
 
 #[derive(Debug, Clone, Parser)]
 pub struct GetSyncStateSetSubCommand {
@@ -64,17 +61,22 @@ pub struct GetSyncStateSetSubCommand {
 }
 
 impl CommandExecute for GetSyncStateSetSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         if let Some(interval) = self.interval {
             let flush_second = if interval > 0 { interval } else { 3 };
             loop {
                 let result =
-                    HaService::query_sync_state_set_by_request_with_rpc_hook(self.request()?, rpc_hook.clone()).await?;
+                    HaService::query_sync_state_set_by_request_with_credentials(self.request()?, credentials.clone())
+                        .await?;
                 Self::print_result(&result);
                 tokio::time::sleep(tokio::time::Duration::from_secs(flush_second)).await;
             }
         } else {
-            let result = HaService::query_sync_state_set_by_request_with_rpc_hook(self.request()?, rpc_hook).await?;
+            let result =
+                HaService::query_sync_state_set_by_request_with_credentials(self.request()?, credentials).await?;
             Self::print_result(&result);
         }
 
@@ -128,7 +130,7 @@ impl GetSyncStateSetSubCommand {
 #[cfg(test)]
 mod tests {
     use cheetah_string::CheetahString;
-    use rocketmq_admin_core::core::ha::SyncStateSetTarget;
+    use rocketmq_admin_core::client_adapter::services::ha::SyncStateSetTarget;
 
     use super::*;
 

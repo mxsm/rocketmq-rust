@@ -13,21 +13,19 @@
 // limitations under the License.
 
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use clap::ArgGroup;
 use clap::Parser;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
-use rocketmq_remoting::runtime::RPCHook;
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
 
 use crate::commands::CommandExecute;
-use rocketmq_admin_core::core::consumer::ConsumerOperationResult;
-use rocketmq_admin_core::core::consumer::ConsumerService;
-use rocketmq_admin_core::core::consumer::UpdateSubscriptionGroupListRequest;
+use rocketmq_admin_core::client_adapter::services::consumer::ConsumerOperationResult;
+use rocketmq_admin_core::client_adapter::services::consumer::ConsumerService;
+use rocketmq_admin_core::client_adapter::services::consumer::UpdateSubscriptionGroupListRequest;
 
 #[derive(Debug, Clone, Parser)]
 #[command(group(ArgGroup::new("target").required(true).args(&["broker_addr", "cluster_name"])))]
@@ -101,13 +99,16 @@ impl UpdateSubGroupListSubCommand {
 }
 
 impl CommandExecute for UpdateSubGroupListSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         let request = self.request().await?;
         if request.configs().is_empty() {
             return Ok(());
         }
         let result =
-            ConsumerService::update_subscription_group_list_by_request_with_rpc_hook(request, rpc_hook).await?;
+            ConsumerService::update_subscription_group_list_by_request_with_credentials(request, credentials).await?;
         Self::print_result(result)
     }
 }

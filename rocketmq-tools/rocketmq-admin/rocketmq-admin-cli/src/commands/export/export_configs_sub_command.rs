@@ -12,15 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use clap::Parser;
-use rocketmq_admin_core::core::export_data::ExportConfigsRequest;
-use rocketmq_admin_core::core::export_data::ExportConfigsResult;
-use rocketmq_admin_core::core::export_data::ExportService;
+use rocketmq_admin_core::client_adapter::services::export_data::ExportConfigsRequest;
+use rocketmq_admin_core::client_adapter::services::export_data::ExportConfigsResult;
+use rocketmq_admin_core::client_adapter::services::export_data::ExportService;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 
 const DEFAULT_FILE_PATH: &str = "/tmp/rocketmq/export";
 
@@ -58,9 +55,12 @@ impl ExportConfigsSubCommand {
 }
 
 impl CommandExecute for ExportConfigsSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         let file_path = self.file_path.trim();
-        let result = ExportService::export_configs_by_request_with_rpc_hook(self.request()?, rpc_hook).await?;
+        let result = ExportService::export_configs_by_request_with_credentials(self.request()?, credentials).await?;
 
         Self::write_result(&result, file_path)
     }
