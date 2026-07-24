@@ -122,6 +122,13 @@ impl RaftController {
         self.inner.has_committed_log()
     }
 
+    /// Returns whether this node has observed a Raft leader and applied committed state.
+    ///
+    /// This is the minimum recovery evidence required before publishing process readiness.
+    pub fn has_recovered_cluster_state(&self) -> bool {
+        self.inner.has_recovered_cluster_state()
+    }
+
     pub fn scheduling_enabled(&self) -> bool {
         self.inner.scheduling_enabled()
     }

@@ -1,6 +1,26 @@
 # Cargo build artifacts
 target/
 **/target/
+target-*/
+**/target-*/
+.codex-target/
+**/.codex-target/
+
+# Node and website build artifacts
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+build/
+**/build/
+.docusaurus/
+**/.docusaurus/
+.cache/
+**/.cache/
+.npm/
+**/.npm/
+.pnpm-store/
+**/.pnpm-store/
 
 # IDE and editor files
 .vscode/

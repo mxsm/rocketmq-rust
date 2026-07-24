@@ -296,6 +296,16 @@ impl OpenRaftController {
         metrics.current_leader == Some(self.config.snapshot().node_id)
     }
 
+    pub(crate) fn has_recovered_cluster_state(&self) -> bool {
+        let Some(node) = self.node() else {
+            return false;
+        };
+
+        use openraft::async_runtime::WatchReceiver;
+        let metrics = node.raft().metrics().borrow_watched().clone();
+        metrics.current_leader.is_some() && metrics.last_applied.is_some()
+    }
+
     fn not_leader_response(&self) -> Option<RemotingCommand> {
         Some(RemotingCommand::create_response_command_with_code_remark(
             ResponseCode::ControllerNotLeader,
@@ -1030,8 +1040,10 @@ fn parse_controller_raft_bind_addr(raw: &str) -> std::result::Result<SocketAddr,
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::net::TcpListener as StdTcpListener;
     use std::sync::Arc;
+    use std::time::Duration;
 
     use rocketmq_common::common::controller::controller_config::RaftPeer;
     use rocketmq_common::common::controller::ControllerConfig;
@@ -1042,6 +1054,7 @@ mod tests {
     use super::parse_controller_raft_bind_addr;
     use super::OpenRaftController;
     use crate::config::ControllerConfigReader;
+    use crate::typ::Node;
     use std::net::SocketAddr;
 
     #[test]
@@ -1087,9 +1100,31 @@ mod tests {
         second_start.expect("repeat OpenRaft controller startup");
         assert!(controller.node().is_some(), "startup should publish the Raft node");
         assert!(
+            !controller.has_recovered_cluster_state(),
+            "a bound Raft listener alone must not publish business readiness"
+        );
+        assert!(
             StdTcpListener::bind(addr).is_err(),
             "OpenRaft controller startup should return only after binding the gRPC listener"
         );
+
+        controller
+            .initialize_cluster(BTreeMap::from([(
+                1,
+                Node {
+                    node_id: 1,
+                    rpc_addr: addr.to_string(),
+                },
+            )]))
+            .await
+            .expect("initialize single-node cluster");
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !controller.has_recovered_cluster_state() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("Controller should observe a leader and committed state");
 
         let (first_shutdown, second_shutdown) =
             tokio::join!(controller.shutdown_shared(), controller.shutdown_shared());

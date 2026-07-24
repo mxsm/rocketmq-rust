@@ -126,6 +126,11 @@ pub trait ClusterClient: Send + Sync {
         None
     }
 
+    /// Verifies that NameServer exposes at least one registered Broker route.
+    async fn readiness_check(&self) -> ProxyResult<()> {
+        Ok(())
+    }
+
     async fn query_route(&self, topic: &ResourceIdentity) -> ProxyResult<TopicRouteData>;
 
     async fn query_assignment(
@@ -825,6 +830,10 @@ impl ClusterClient for RocketmqClusterClient {
         Some(format!("{prefix}-{identity}"))
     }
 
+    async fn readiness_check(&self) -> ProxyResult<()> {
+        self.executor.readiness_check().await
+    }
+
     async fn query_route(&self, topic: &ResourceIdentity) -> ProxyResult<TopicRouteData> {
         self.executor.query_route(topic.clone()).await
     }
@@ -969,6 +978,9 @@ struct ClusterTaskExecutor {
 }
 
 enum ClusterCommand {
+    ReadinessCheck {
+        reply: oneshot::Sender<ProxyResult<()>>,
+    },
     QueryRoute {
         topic: ResourceIdentity,
         reply: oneshot::Sender<ProxyResult<TopicRouteData>>,
@@ -1282,6 +1294,10 @@ impl ClusterTaskExecutor {
         Self { sender, startup_error }
     }
 
+    async fn readiness_check(&self) -> ProxyResult<()> {
+        self.execute(|reply| ClusterCommand::ReadinessCheck { reply }).await
+    }
+
     async fn query_route(&self, topic: ResourceIdentity) -> ProxyResult<TopicRouteData> {
         self.execute(|reply| ClusterCommand::QueryRoute { topic, reply }).await
     }
@@ -1573,6 +1589,9 @@ fn cluster_client_config(config: &ClusterConfig) -> RocketmqClientConfig {
 
 async fn handle_cluster_command(config: &ClusterConfig, state: &mut ClusterWorkerState, command: ClusterCommand) {
     match command {
+        ClusterCommand::ReadinessCheck { reply } => {
+            let _ = reply.send(cluster_readiness_inner(config, state).await);
+        }
         ClusterCommand::QueryRoute { topic, reply } => {
             let _ = reply.send(query_route_inner(config, state, topic).await);
         }
@@ -1685,6 +1704,30 @@ async fn handle_cluster_command(config: &ClusterConfig, state: &mut ClusterWorke
             let _ = reply.send(unlock_batch_mq_inner(config, state, request).await);
         }
     }
+}
+
+async fn cluster_readiness_inner(config: &ClusterConfig, state: &mut ClusterWorkerState) -> ProxyResult<()> {
+    let client = state.client(config).await?;
+    let cluster_info = client.broker_cluster_info(config.mq_client_api_timeout_ms).await?;
+    if cluster_info_has_registered_broker(&cluster_info) {
+        Ok(())
+    } else {
+        Err(ProxyError::Transport {
+            message: "Proxy Cluster readiness found no registered Broker route".to_string(),
+        })
+    }
+}
+
+fn cluster_info_has_registered_broker(cluster_info: &ClusterInfo) -> bool {
+    let has_broker = cluster_info
+        .broker_addr_table
+        .as_ref()
+        .is_some_and(|brokers| !brokers.is_empty());
+    let has_cluster = cluster_info
+        .cluster_addr_table
+        .as_ref()
+        .is_some_and(|clusters| !clusters.is_empty());
+    has_broker && has_cluster
 }
 
 async fn lock_batch_mq_inner(
@@ -3096,6 +3139,7 @@ mod tests {
 
     use super::build_send_producer;
     use super::cluster_client_config;
+    use super::cluster_info_has_registered_broker;
     use super::convert_subscription_group;
     use super::convert_topic_message_type;
     use super::select_auth_metadata_broker_addr;
@@ -3187,6 +3231,8 @@ mod tests {
             "127.0.0.1:10911"
         );
         assert!(select_auth_metadata_broker_addr(&cluster_info, "missing").is_none());
+        assert!(cluster_info_has_registered_broker(&cluster_info));
+        assert!(!cluster_info_has_registered_broker(&ClusterInfo::default()));
     }
 
     #[test]

@@ -85,6 +85,11 @@ pub trait RouteService: Send + Sync {
 
 #[async_trait]
 pub trait MetadataService: Send + Sync {
+    /// Verifies that the backing metadata route is available before listeners publish readiness.
+    async fn readiness_check(&self) -> ProxyResult<()> {
+        Ok(())
+    }
+
     async fn topic_message_type(
         &self,
         context: &ProxyContext,

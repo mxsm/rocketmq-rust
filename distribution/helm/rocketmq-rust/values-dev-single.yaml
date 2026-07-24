@@ -1,0 +1,76 @@
+deploymentProfile: dev-single
+
+networkPolicy:
+  enabled: false
+
+services:
+  broker:
+    replicas: 1
+    replicaGroupName: rocketmq-dev-broker
+    image:
+      repository: rocketmq-rust/broker
+      tag: local
+      digest: ""
+      pullPolicy: Never
+    persistence:
+      enabled: false
+      storageClassName: ""
+      size: 10Gi
+    pdb:
+      enabled: false
+      minAvailable: 1
+  namesrv:
+    replicas: 1
+    image:
+      repository: rocketmq-rust/namesrv
+      tag: local
+      digest: ""
+      pullPolicy: Never
+    persistence:
+      enabled: false
+      storageClassName: ""
+      size: 1Gi
+    pdb:
+      enabled: false
+      minAvailable: 1
+  controller:
+    replicas: 1
+    peerServiceClusterIPs: []
+    autoInitializeCluster: true
+    storageBackend: Memory
+    image:
+      repository: rocketmq-rust/controller
+      tag: local
+      digest: ""
+      pullPolicy: Never
+    persistence:
+      enabled: false
+      storageClassName: ""
+      size: 1Gi
+    pdb:
+      enabled: false
+      minAvailable: 1
+  proxy:
+    replicas: 1
+    image:
+      repository: rocketmq-rust/proxy
+      tag: local
+      digest: ""
+      pullPolicy: Never
+    pdb:
+      enabled: false
+      minAvailable: 1
+  mcp:
+    replicas: 1
+    image:
+      repository: rocketmq-rust/mcp
+      tag: local
+      digest: ""
+      pullPolicy: Never
+    persistence:
+      enabled: false
+      storageClassName: ""
+      size: 1Gi
+    pdb:
+      enabled: false
+      minAvailable: 1

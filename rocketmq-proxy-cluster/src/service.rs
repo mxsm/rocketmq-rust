@@ -102,6 +102,10 @@ impl ClusterMetadataService {
 
 #[async_trait]
 impl MetadataService for ClusterMetadataService {
+    async fn readiness_check(&self) -> ProxyResult<()> {
+        self.client.readiness_check().await
+    }
+
     async fn topic_message_type(
         &self,
         _context: &ProxyContext,

@@ -1,2 +1,3 @@
 distribution/kubernetes/fault-matrix-policy.json text eol=lf
 scripts/tests/fixtures/m11-fault-matrix/pass/** text eol=lf
+docker/Dockerfile* text eol=lf

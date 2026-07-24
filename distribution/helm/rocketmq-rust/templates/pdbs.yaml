@@ -1,5 +1,6 @@
 {{- $root := . -}}
-{{- range $service, $minAvailable := dict "broker" 1 "namesrv" 2 "controller" 2 "proxy" 1 "mcp" 1 }}
+{{- range $service, $config := .Values.services }}
+{{- if $config.pdb.enabled }}
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
@@ -8,9 +9,10 @@ metadata:
   labels:
 {{ include "rocketmq.labels" (dict "root" $root "service" $service) | indent 4 }}
 spec:
-  minAvailable: {{ $minAvailable }}
+  minAvailable: {{ $config.pdb.minAvailable }}
   selector:
     matchLabels:
 {{ include "rocketmq.selectorLabels" (dict "root" $root "service" $service) | indent 6 }}
 ---
+{{- end }}
 {{- end }}
