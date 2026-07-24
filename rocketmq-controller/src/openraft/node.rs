@@ -21,6 +21,8 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use openraft::Config;
+use openraft::ReadPolicy;
+use rocketmq_runtime::TaskGroup;
 use tracing::info;
 
 use crate::config::ControllerConfigReader;
@@ -52,11 +54,28 @@ pub struct RaftNodeManager {
 impl RaftNodeManager {
     /// Create a new Raft node manager
     pub async fn new(config: ControllerConfigReader) -> Result<Self> {
+        Self::new_with_optional_task_group(config, None).await
+    }
+
+    pub async fn new_with_parent_task_group(
+        config: ControllerConfigReader,
+        parent_task_group: TaskGroup,
+    ) -> Result<Self> {
+        Self::new_with_optional_task_group(config, Some(parent_task_group)).await
+    }
+
+    async fn new_with_optional_task_group(
+        config: ControllerConfigReader,
+        parent_task_group: Option<TaskGroup>,
+    ) -> Result<Self> {
         let startup_config = config.snapshot();
         let node_id = startup_config.node_id;
 
         // Create storage
-        let store = Arc::new(Store::open(config.clone()).await?);
+        let store = Arc::new(match parent_task_group {
+            Some(parent_task_group) => Store::open_with_task_group(config.clone(), parent_task_group).await?,
+            None => Store::open(config.clone()).await?,
+        });
 
         // Create network factory
         let network = NetworkFactory::new();
@@ -189,6 +208,15 @@ impl RaftNodeManager {
             .client_write(request)
             .await
             .map_err(|e| ControllerError::raft_source("client write", e))
+    }
+
+    /// Confirms leadership through ReadIndex and waits until the local state machine has applied
+    /// every log entry required by the read barrier.
+    pub async fn ensure_linearizable_read(&self) -> Result<Option<crate::typ::LogId>> {
+        self.raft
+            .ensure_linearizable(ReadPolicy::ReadIndex)
+            .await
+            .map_err(|error| ControllerError::raft_source("linearizable ReadIndex", error))
     }
 
     /// Get the Raft instance

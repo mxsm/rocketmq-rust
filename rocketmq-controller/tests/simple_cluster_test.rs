@@ -21,6 +21,7 @@ use std::time::Duration;
 use rocketmq_controller::config::ControllerConfig;
 use rocketmq_controller::config::ControllerConfigReader;
 use rocketmq_controller::config::RaftPeer;
+use rocketmq_controller::config::StorageBackendType;
 use rocketmq_controller::openraft::GrpcRaftService;
 use rocketmq_controller::openraft::RaftNodeManager;
 use rocketmq_controller::protobuf::openraft::open_raft_service_server::OpenRaftServiceServer;
@@ -58,6 +59,7 @@ async fn test_simple_cluster_setup() {
             .with_node_info(node_id, addr)
             .with_election_timeout_ms(1000)
             .with_heartbeat_interval_ms(300)
+            .with_storage_backend(StorageBackendType::Memory)
             .with_raft_peers(peers);
 
         let node = Arc::new(RaftNodeManager::new(ControllerConfigReader::new(config)).await.unwrap());

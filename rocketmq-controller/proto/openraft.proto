@@ -84,6 +84,8 @@ message OpenRaftSnapshotRequest {
   uint64 offset = 3;
   bytes data = 4;
   bool done = 5;
+  uint64 total_size = 6;
+  uint32 checksum = 7;
 }
 
 // Snapshot response

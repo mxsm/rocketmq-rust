@@ -281,14 +281,10 @@ impl ControllerRequestProcessor {
     ///
     /// # Implementation Note
     ///
-    /// This method requires the Controller (RaftController or DLedgerController) to implement
-    /// the `alter_sync_state_set` method. The actual logic is delegated to the controller layer
-    /// which handles:
+    /// The actual logic is delegated to the Raft controller layer, which handles:
     /// - Leader state validation
     /// - Raft consensus (proposal submission)
     /// - State machine application via ReplicasInfoManager
-    ///
-    /// **TODO**: Implement Controller::alter_sync_state_set() in the controller layer
     async fn handle_alter_sync_state_set(
         &self,
         _channel: Channel,

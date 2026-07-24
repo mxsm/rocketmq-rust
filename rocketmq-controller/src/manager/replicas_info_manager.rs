@@ -928,21 +928,6 @@ impl ReplicasInfoManager {
             .collect()
     }
 
-    /// Apply events to memory state machine
-    ///
-    /// # Thread Safety
-    ///
-    /// This method is thread-safe and can be called concurrently.
-    /// Applies an event through the legacy infallible facade.
-    ///
-    /// New internal callers should use [`Self::try_apply_event`] so an event-type/payload mismatch
-    /// is not lost.
-    pub fn apply_event(&self, event: &dyn EventMessage) {
-        if let Err(error) = self.try_apply_event(event) {
-            warn!(error = %error, "controller event rejected by legacy apply_event facade");
-        }
-    }
-
     /// Applies an event and reports an event-type/payload mismatch as a typed error.
     pub fn try_apply_event(&self, event: &dyn EventMessage) -> Result<()> {
         match event.get_event_type() {

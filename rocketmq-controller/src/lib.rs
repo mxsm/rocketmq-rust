@@ -23,23 +23,16 @@
 //! ## Architecture
 //!
 //! ```text
-//! ┌─────────────────────────────────────────┐
-//! │      Controller Manager (Entry)         │
-//! └──────────────┬──────────────────────────┘
-//!                │
-//!        ┌───────┴────────┐
-//!        │                │
-//! ┌──────▼──────┐  ┌─────▼──────┐
-//! │ OpenRaft    │  │  Processor │
-//! │  Module     │  │   Layer    │
-//! └──────┬──────┘  └─────┬──────┘
-//!        │                │
-//!        └────────┬───────┘
-//!                 │
-//!        ┌────────▼─────────┐
-//!        │  Metadata Store  │
-//!        │  (DashMap/Raft)  │
-//!        └──────────────────┘
+//! Broker request
+//!      |
+//!      v
+//! ControllerRequestProcessor -> RaftController -> OpenRaft client_write
+//!                                                |
+//!                                                v
+//!                                  committed state machine
+//!                                                |
+//!                                                v
+//!                                    RocksDB durable state
 //! ```
 //!
 //! ## Usage
@@ -79,11 +72,9 @@ pub mod event;
 pub mod heartbeat;
 pub mod helper;
 pub mod manager;
-pub mod metadata;
 pub mod metrics;
 pub mod openraft;
 pub mod processor;
-pub mod rpc;
 pub mod storage;
 pub mod task;
 pub mod typ;
@@ -124,7 +115,6 @@ pub mod bench_support {
     use std::sync::Arc;
     use std::time::Duration;
     use std::time::Instant;
-    use std::time::SystemTime;
 
     use rocketmq_common::common::controller::controller_config::RaftPeer;
     use rocketmq_runtime::ShutdownReport;
@@ -136,9 +126,6 @@ pub mod bench_support {
     use crate::controller::open_raft_controller::OpenRaftController;
     use crate::controller::Controller;
     use crate::heartbeat::default_broker_heartbeat_manager::DefaultBrokerHeartbeatManager;
-    use crate::metadata::BrokerInfo;
-    use crate::metadata::BrokerManager;
-    use crate::metadata::BrokerRole;
     use crate::typ::Node;
     use crate::ControllerManager;
 
@@ -152,20 +139,6 @@ pub mod bench_support {
         pub scheduled_failures: u64,
         pub shutdown_elapsed_us: u128,
         pub shutdown_report: ShutdownReport,
-        pub healthy: bool,
-    }
-
-    #[derive(Clone, Debug, Serialize)]
-    pub struct ControllerBrokerMetadataLifecycleProbe {
-        pub task_count_before_shutdown: usize,
-        pub task_count_after_shutdown: usize,
-        pub scheduled_runs: u64,
-        pub scheduled_skips: u64,
-        pub scheduled_overlaps: u64,
-        pub scheduled_failures: u64,
-        pub expired_broker_removed: bool,
-        pub shutdown_elapsed_us: u128,
-        pub shutdown_report: Option<ShutdownReport>,
         pub healthy: bool,
     }
 
@@ -244,77 +217,6 @@ pub mod bench_support {
         }
     }
 
-    pub async fn run_controller_broker_metadata_lifecycle_probe() -> ControllerBrokerMetadataLifecycleProbe {
-        let manager = BrokerManager::new(ControllerConfigReader::new(ControllerConfig::test_config()));
-        let expired = BrokerInfo {
-            name: "metadata-expired-broker".to_string(),
-            broker_id: 0,
-            cluster_name: "DefaultCluster".to_string(),
-            addr: "127.0.0.1:10911"
-                .parse()
-                .expect("benchmark broker address should parse"),
-            last_heartbeat: SystemTime::now() - Duration::from_secs(60),
-            version: "5.0.0".to_string(),
-            role: BrokerRole::Master,
-            metadata: serde_json::json!({}),
-        };
-
-        manager
-            .register(expired)
-            .await
-            .expect("benchmark broker should register");
-        manager.start().await.expect("benchmark broker manager should start");
-
-        let mut snapshots = manager.schedule_snapshot();
-        for _ in 0..50 {
-            if snapshots
-                .iter()
-                .any(|snapshot| snapshot.runs > 0 && snapshot.active_runs == 0)
-            {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(1)).await;
-            snapshots = manager.schedule_snapshot();
-        }
-        let expired_broker_removed = manager.list_brokers().await.is_empty();
-        let scheduled_runs = snapshots.iter().map(|snapshot| snapshot.runs).sum();
-        let scheduled_skips = snapshots.iter().map(|snapshot| snapshot.skips).sum();
-        let scheduled_overlaps = snapshots.iter().map(|snapshot| snapshot.overlaps).sum();
-        let scheduled_failures = snapshots.iter().map(|snapshot| snapshot.failures).sum();
-        let task_count_before_shutdown = manager.task_count();
-        let shutdown_started_at = Instant::now();
-        let shutdown_report = manager
-            .shutdown_with_report()
-            .await
-            .expect("benchmark broker manager should shut down");
-        let shutdown_elapsed_us = shutdown_started_at.elapsed().as_micros();
-        let task_count_after_shutdown = manager.task_count();
-        let shutdown_healthy = shutdown_report
-            .as_ref()
-            .map(ShutdownReport::is_healthy)
-            .unwrap_or(false);
-        let healthy = expired_broker_removed
-            && scheduled_runs > 0
-            && scheduled_overlaps == 0
-            && scheduled_failures == 0
-            && task_count_before_shutdown > 0
-            && task_count_after_shutdown == 0
-            && shutdown_healthy;
-
-        ControllerBrokerMetadataLifecycleProbe {
-            task_count_before_shutdown,
-            task_count_after_shutdown,
-            scheduled_runs,
-            scheduled_skips,
-            scheduled_overlaps,
-            scheduled_failures,
-            expired_broker_removed,
-            shutdown_elapsed_us,
-            shutdown_report,
-            healthy,
-        }
-    }
-
     pub async fn run_controller_leadership_watch_lifecycle_probe() -> ControllerLeadershipWatchLifecycleProbe {
         let remoting_addr = free_loopback_addr();
         let raft_addr = free_loopback_addr();
@@ -326,7 +228,8 @@ pub mod bench_support {
                 addr: remoting_addr,
             }])
             .with_heartbeat_interval_ms(100)
-            .with_election_timeout_ms(300);
+            .with_election_timeout_ms(300)
+            .with_storage_backend(crate::config::StorageBackendType::Memory);
 
         let manager = Arc::new(
             ControllerManager::new(config)
@@ -415,7 +318,8 @@ pub mod bench_support {
             .with_scan_not_active_broker_interval(1)
             .with_raft_scan_wait_timeout_ms(0)
             .with_heartbeat_interval_ms(100)
-            .with_election_timeout_ms(300);
+            .with_election_timeout_ms(300)
+            .with_storage_backend(crate::config::StorageBackendType::Memory);
         let mut controller = OpenRaftController::new(ControllerConfigReader::new(config));
         controller
             .startup()
@@ -524,17 +428,6 @@ mod bench_support_tests {
             "{}",
             probe.shutdown_report.to_json()
         );
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn controller_broker_metadata_lifecycle_probe_reports_clean_shutdown() {
-        let probe = super::bench_support::run_controller_broker_metadata_lifecycle_probe().await;
-
-        assert!(probe.healthy, "{probe:?}");
-        assert!(probe.expired_broker_removed, "{probe:?}");
-        assert_eq!(probe.task_count_after_shutdown, 0, "{probe:?}");
-        assert_eq!(probe.scheduled_overlaps, 0, "{probe:?}");
-        assert_eq!(probe.scheduled_failures, 0, "{probe:?}");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

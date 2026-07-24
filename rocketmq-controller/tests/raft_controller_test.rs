@@ -17,6 +17,7 @@ use std::time::Duration;
 
 use rocketmq_common::common::controller::ControllerConfig;
 use rocketmq_controller::config::ControllerConfigReader;
+use rocketmq_controller::config::StorageBackendType;
 use rocketmq_controller::typ::Node;
 use rocketmq_controller::Controller;
 use rocketmq_controller::RaftController;
@@ -26,7 +27,8 @@ fn test_config(port: u16) -> ControllerConfigReader {
         ControllerConfig::default()
             .with_node_info(1, format!("127.0.0.1:{port}").parse().expect("valid test address"))
             .with_election_timeout_ms(300)
-            .with_heartbeat_interval_ms(100),
+            .with_heartbeat_interval_ms(100)
+            .with_storage_backend(StorageBackendType::Memory),
     )
 }
 

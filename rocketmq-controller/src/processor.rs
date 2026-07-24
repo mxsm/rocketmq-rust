@@ -12,140 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod broker_processor;
 pub mod controller_request_processor;
-pub mod metadata_processor;
-pub mod request;
-pub mod topic_processor;
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
-// Re-export processors
-use crate::config::ControllerConfigReader;
-use crate::controller::raft_controller::RaftController;
-use crate::error::ControllerError;
-use crate::error::Result;
-use crate::metadata::MetadataStore;
 use crate::metrics::RequestType as MetricsRequestType;
 use crate::processor::controller_request_processor::ControllerRequestProcessor;
-pub use broker_processor::BrokerHeartbeatProcessor;
-pub use broker_processor::ElectMasterProcessor;
-pub use broker_processor::RegisterBrokerProcessor;
-pub use broker_processor::UnregisterBrokerProcessor;
-pub use metadata_processor::GetMetadataProcessor;
-pub use request::RequestType;
-pub use request::*;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_remoting::runtime::processor::RejectRequestResponse;
-pub use topic_processor::CreateTopicProcessor;
-pub use topic_processor::DeleteTopicProcessor;
-pub use topic_processor::UpdateTopicProcessor;
-use tracing::info;
-
-/// Request processor trait
-#[async_trait::async_trait]
-pub trait RequestProcessor: Send + Sync {
-    /// Process a request
-    async fn process(&self, request: &[u8]) -> Result<Vec<u8>>;
-}
-
-/// Processor manager
-///
-/// This component manages all request processors for handling
-/// RPC requests from brokers and clients.
-pub struct ProcessorManager {
-    /// Raft controller
-    raft: Arc<RaftController>,
-
-    /// Metadata store
-    metadata: Arc<MetadataStore>,
-
-    /// Processor registry
-    processors: HashMap<RequestType, Arc<dyn RequestProcessor>>,
-}
-
-impl ProcessorManager {
-    /// Create a new processor manager
-    pub fn new(_config: ControllerConfigReader, raft: Arc<RaftController>, metadata: Arc<MetadataStore>) -> Self {
-        // Initialize processors
-        let mut processors: HashMap<RequestType, Arc<dyn RequestProcessor>> = HashMap::new();
-
-        // Register broker processors
-        processors.insert(
-            RequestType::RegisterBroker,
-            Arc::new(RegisterBrokerProcessor::new(metadata.clone(), raft.clone())),
-        );
-        processors.insert(
-            RequestType::UnregisterBroker,
-            Arc::new(UnregisterBrokerProcessor::new(metadata.clone(), raft.clone())),
-        );
-        processors.insert(
-            RequestType::BrokerHeartbeat,
-            Arc::new(BrokerHeartbeatProcessor::new(metadata.clone())),
-        );
-        processors.insert(
-            RequestType::ElectMaster,
-            Arc::new(ElectMasterProcessor::new(metadata.clone(), raft.clone())),
-        );
-
-        // Register metadata processor
-        processors.insert(
-            RequestType::GetMetadata,
-            Arc::new(GetMetadataProcessor::new(metadata.clone())),
-        );
-
-        // Register topic processors
-        processors.insert(
-            RequestType::CreateTopic,
-            Arc::new(CreateTopicProcessor::new(metadata.clone(), raft.clone())),
-        );
-        processors.insert(
-            RequestType::UpdateTopic,
-            Arc::new(UpdateTopicProcessor::new(metadata.clone(), raft.clone())),
-        );
-        processors.insert(
-            RequestType::DeleteTopic,
-            Arc::new(DeleteTopicProcessor::new(metadata.clone(), raft.clone())),
-        );
-
-        Self {
-            raft,
-            metadata,
-            processors,
-        }
-    }
-
-    /// Process a request
-    pub async fn process_request(&self, request_type: RequestType, data: &[u8]) -> Result<Vec<u8>> {
-        // Find the processor
-        let processor = self
-            .processors
-            .get(&request_type)
-            .ok_or_else(|| ControllerError::InvalidRequest(format!("Unknown request type: {:?}", request_type)))?;
-
-        // Process the request
-        processor.process(data).await
-    }
-
-    /// Start the processor manager
-    pub async fn start(&self) -> Result<()> {
-        info!("Starting processor manager with {} processors", self.processors.len());
-        // TODO: Start network server to handle incoming requests
-        Ok(())
-    }
-
-    /// Shutdown the processor manager
-    pub async fn shutdown(&self) -> Result<()> {
-        info!("Shutting down processor manager");
-        // TODO: Stop network server and cleanup
-        Ok(())
-    }
-}
 
 pub(crate) type RequestCodeType = i32;
 

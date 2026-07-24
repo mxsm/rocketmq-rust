@@ -87,7 +87,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let next_broker_id = node
         .store()
         .state_machine
-        .replicas_info_manager()
+        .read_view()
         .get_next_broker_id("DefaultCluster", "broker-a")
         .response()
         .and_then(|header| header.next_broker_id)

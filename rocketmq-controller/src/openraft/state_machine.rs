@@ -14,20 +14,26 @@
 
 //! Raft state machine implementation backed by `ReplicasInfoManager`.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
+use arc_swap::ArcSwap;
 use openraft::storage::RaftStateMachine;
 use openraft::EntryPayload;
 use openraft::OptionalSend;
 use openraft::RaftSnapshotBuilder;
+use rocketmq_common::utils::crc32_utils::crc32;
 use rocketmq_remoting::code::response_code::ResponseCode;
+use rocketmq_remoting::protocol::header::controller::get_next_broker_id_response_header::GetNextBrokerIdResponseHeader;
+use rocketmq_remoting::protocol::header::controller::get_replica_info_response_header::GetReplicaInfoResponseHeader;
 use serde::de::DeserializeOwned;
-use serde::Serialize;
+use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 
 use crate::config::ControllerConfigReader;
 use crate::event::controller_result::ControllerResult;
 use crate::manager::replicas_info_manager::ReplicasInfoManager;
+use crate::openraft::SNAPSHOT_MAX_BYTES;
 use crate::storage::SharedStorageBackend;
 use crate::typ::ControllerRequest;
 use crate::typ::ControllerResponse;
@@ -43,6 +49,7 @@ const SNAPSHOT_DATA_KEY: &str = "openraft/state_machine/current_snapshot_data";
 const REPLICAS_INFO_MANAGER_STATE_KEY: &str = "openraft/state_machine/replicas_info_manager";
 const LAST_APPLIED_KEY: &str = "openraft/state_machine/last_applied";
 const LAST_MEMBERSHIP_KEY: &str = "openraft/state_machine/last_membership";
+const SNAPSHOT_FORMAT_VERSION: u16 = 1;
 
 fn storage_error(error: impl std::fmt::Display) -> std::io::Error {
     std::io::Error::other(error.to_string())
@@ -59,21 +66,71 @@ async fn load_json<T: DeserializeOwned>(
     serde_json::from_slice(&bytes).map(Some).map_err(storage_error)
 }
 
-async fn persist_json<T: Serialize>(
-    backend: &SharedStorageBackend,
-    key: &str,
-    value: &T,
-) -> Result<(), std::io::Error> {
-    let bytes = serde_json::to_vec(value).map_err(storage_error)?;
-    backend.put(key, &bytes).await.map_err(storage_error)?;
-    Ok(())
-}
-
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SnapshotData {
     pub replicas_info_manager_state: Vec<u8>,
     pub last_applied: Option<LogId>,
     pub last_membership: Option<StoredMembership>,
+    pub snapshot_id: String,
+    pub format_version: u16,
+    pub checksum: u32,
+}
+
+impl SnapshotData {
+    fn new(
+        replicas_info_manager_state: Vec<u8>,
+        last_applied: Option<LogId>,
+        last_membership: StoredMembership,
+    ) -> Result<Self, std::io::Error> {
+        let mut data = Self {
+            replicas_info_manager_state,
+            last_applied,
+            last_membership: Some(last_membership),
+            snapshot_id: format!("snapshot-{}", last_applied.map_or(0, |log_id| log_id.index)),
+            format_version: SNAPSHOT_FORMAT_VERSION,
+            checksum: 0,
+        };
+        data.checksum = data.calculate_checksum()?;
+        Ok(data)
+    }
+
+    fn validate(&self) -> Result<(), std::io::Error> {
+        if self.format_version != SNAPSHOT_FORMAT_VERSION {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Unsupported controller snapshot format version {}", self.format_version),
+            ));
+        }
+        if self.last_membership.is_none() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Controller snapshot is missing its membership state",
+            ));
+        }
+        let actual_checksum = self.calculate_checksum()?;
+        if actual_checksum != self.checksum {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "Controller snapshot checksum mismatch: expected {}, calculated {}",
+                    self.checksum, actual_checksum
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    fn calculate_checksum(&self) -> Result<u32, std::io::Error> {
+        serde_json::to_vec(&(
+            self.format_version,
+            &self.replicas_info_manager_state,
+            self.last_applied,
+            &self.last_membership,
+            &self.snapshot_id,
+        ))
+        .map(|bytes| crc32(&bytes))
+        .map_err(storage_error)
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -89,76 +146,176 @@ struct CurrentSnapshot {
     data: Vec<u8>,
 }
 
+/// Read-only view of the locally applied controller state.
+///
+/// The view does not perform a Raft read barrier itself. Callers serving
+/// business traffic must first complete
+/// [`crate::openraft::RaftNodeManager::ensure_linearizable_read`]. It intentionally exposes no
+/// state mutation API.
+#[derive(Clone)]
+pub struct StateMachineReadView {
+    inner: Arc<ReplicasInfoManager>,
+}
+
+impl StateMachineReadView {
+    /// Returns the next broker ID calculated from this immutable state revision.
+    pub fn get_next_broker_id(
+        &self,
+        cluster_name: &str,
+        broker_name: &str,
+    ) -> ControllerResult<GetNextBrokerIdResponseHeader> {
+        self.inner.get_next_broker_id(cluster_name, broker_name)
+    }
+
+    /// Returns replica metadata for a broker from this state revision.
+    pub fn get_replica_info(&self, broker_name: &str) -> ControllerResult<GetReplicaInfoResponseHeader> {
+        self.inner.get_replica_info(broker_name)
+    }
+
+    /// Returns all broker IDs known for a broker name.
+    pub fn broker_ids(&self, broker_name: &str) -> HashSet<u64> {
+        self.inner.broker_ids(broker_name)
+    }
+
+    /// Returns the cluster owning a broker name.
+    pub fn cluster_name(&self, broker_name: &str) -> Option<String> {
+        self.inner.cluster_name(broker_name)
+    }
+
+    /// Tests broker liveness at an explicit timestamp.
+    pub fn is_broker_active_at(
+        &self,
+        cluster_name: &str,
+        broker_name: &str,
+        broker_id: i64,
+        check_time_millis: u64,
+    ) -> bool {
+        self.inner
+            .is_broker_active_at(cluster_name, broker_name, broker_id, check_time_millis)
+    }
+}
+
 #[derive(Clone)]
 pub struct StateMachine {
-    replicas_info_manager: Arc<ReplicasInfoManager>,
+    config: ControllerConfigReader,
+    replicas_info_manager: Arc<ArcSwap<ReplicasInfoManager>>,
     last_applied: Arc<RwLock<Option<LogId>>>,
     last_membership: Arc<RwLock<StoredMembership>>,
     current_snapshot: Arc<RwLock<Option<CurrentSnapshot>>>,
     backend: Option<SharedStorageBackend>,
+    /// Serializes durable state transitions and snapshot capture/installation.
+    state_lock: Arc<Mutex<()>>,
 }
 
 impl StateMachine {
     pub fn new(config: ControllerConfigReader) -> Self {
         Self {
-            replicas_info_manager: Arc::new(ReplicasInfoManager::new(config)),
+            replicas_info_manager: Arc::new(ArcSwap::from_pointee(ReplicasInfoManager::new(config.clone()))),
+            config,
             last_applied: Arc::new(RwLock::new(None)),
             last_membership: Arc::new(RwLock::new(StoredMembership::default())),
             current_snapshot: Arc::new(RwLock::new(None)),
             backend: None,
+            state_lock: Arc::new(Mutex::new(())),
         }
     }
 
     pub async fn open(config: ControllerConfigReader, backend: SharedStorageBackend) -> Result<Self, std::io::Error> {
-        let state_machine = Self {
-            replicas_info_manager: Arc::new(ReplicasInfoManager::new(config)),
-            last_applied: Arc::new(RwLock::new(load_json(&backend, LAST_APPLIED_KEY).await?)),
-            last_membership: Arc::new(RwLock::new(
-                load_json(&backend, LAST_MEMBERSHIP_KEY).await?.unwrap_or_default(),
-            )),
-            current_snapshot: Arc::new(RwLock::new(None)),
-            backend: Some(backend.clone()),
-        };
-
-        if let Some(state) = backend
+        let replicas_state = backend
             .get(REPLICAS_INFO_MANAGER_STATE_KEY)
             .await
-            .map_err(storage_error)?
-        {
-            state_machine
-                .replicas_info_manager
-                .deserialize_from(&state)
-                .map_err(storage_error)?;
+            .map_err(storage_error)?;
+        let last_applied_bytes = backend.get(LAST_APPLIED_KEY).await.map_err(storage_error)?;
+        let last_membership_bytes = backend.get(LAST_MEMBERSHIP_KEY).await.map_err(storage_error)?;
+        let (replicas_state, last_applied, last_membership) =
+            match (replicas_state, last_applied_bytes, last_membership_bytes) {
+                (None, None, None) => (None, None, StoredMembership::default()),
+                (Some(state), Some(last_applied), Some(last_membership)) => (
+                    Some(state),
+                    serde_json::from_slice(&last_applied).map_err(storage_error)?,
+                    serde_json::from_slice(&last_membership).map_err(storage_error)?,
+                ),
+                _ => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "Controller state, last-applied index, and membership must be committed together",
+                    ));
+                }
+            };
+        let replicas_info_manager = Arc::new(ReplicasInfoManager::new(config.clone()));
+        if let Some(state) = replicas_state {
+            replicas_info_manager.deserialize_from(&state).map_err(storage_error)?;
         }
+        let state_machine = Self {
+            replicas_info_manager: Arc::new(ArcSwap::from(replicas_info_manager)),
+            config,
+            last_applied: Arc::new(RwLock::new(last_applied)),
+            last_membership: Arc::new(RwLock::new(last_membership)),
+            current_snapshot: Arc::new(RwLock::new(None)),
+            backend: Some(backend.clone()),
+            state_lock: Arc::new(Mutex::new(())),
+        };
 
-        if let (Some(meta), Some(data)) = (
+        match (
             load_json::<PersistedSnapshotMeta>(&backend, SNAPSHOT_META_KEY).await?,
             backend.get(SNAPSHOT_DATA_KEY).await.map_err(storage_error)?,
         ) {
-            *state_machine.current_snapshot.write().await = Some(CurrentSnapshot {
-                meta: SnapshotMeta {
-                    last_log_id: meta.last_log_id,
-                    last_membership: meta.last_membership,
-                    snapshot_id: meta.snapshot_id,
-                },
-                data,
-            });
+            (Some(meta), Some(data)) => {
+                let snapshot_data = validate_snapshot_bytes(&data)?;
+                let snapshot_membership = snapshot_data.last_membership.unwrap_or_default();
+                if snapshot_data.last_applied != meta.last_log_id
+                    || snapshot_membership != meta.last_membership
+                    || snapshot_data.snapshot_id != meta.snapshot_id
+                {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "Persisted controller snapshot metadata does not match its checksummed payload",
+                    ));
+                }
+                *state_machine.current_snapshot.write().await = Some(CurrentSnapshot {
+                    meta: SnapshotMeta {
+                        last_log_id: meta.last_log_id,
+                        last_membership: meta.last_membership,
+                        snapshot_id: meta.snapshot_id,
+                    },
+                    data,
+                });
+            }
+            (None, None) => {}
+            _ => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "Controller snapshot metadata and payload must be committed together",
+                ));
+            }
         }
 
         Ok(state_machine)
     }
 
-    pub fn replicas_info_manager(&self) -> Arc<ReplicasInfoManager> {
-        self.replicas_info_manager.clone()
+    pub(crate) fn replicas_info_manager(&self) -> Arc<ReplicasInfoManager> {
+        self.replicas_info_manager.load_full()
     }
 
-    fn response_from_result<T, F>(&self, result: ControllerResult<T>, map_header: F) -> ControllerResponse
+    /// Returns a read-only local state view without performing a Raft read barrier.
+    #[must_use]
+    pub fn read_view(&self) -> StateMachineReadView {
+        StateMachineReadView {
+            inner: self.replicas_info_manager.load_full(),
+        }
+    }
+
+    fn response_from_result<T, F>(
+        replicas_info_manager: &ReplicasInfoManager,
+        result: ControllerResult<T>,
+        map_header: F,
+    ) -> ControllerResponse
     where
         F: FnOnce(T) -> ControllerResponseHeader,
     {
         let (events, header, body, response_code, remark) = result.into_parts();
         for event in events {
-            if let Err(error) = self.replicas_info_manager.try_apply_event(event.as_ref()) {
+            if let Err(error) = replicas_info_manager.try_apply_event(event.as_ref()) {
                 return ControllerResponse::new(ResponseCode::SystemError.into(), Some(error.to_string()), None, None);
             }
         }
@@ -171,10 +328,13 @@ impl StateMachine {
         )
     }
 
-    fn response_from_result_without_header(&self, result: ControllerResult<()>) -> ControllerResponse {
+    fn response_from_result_without_header(
+        replicas_info_manager: &ReplicasInfoManager,
+        result: ControllerResult<()>,
+    ) -> ControllerResponse {
         let (events, _header, body, response_code, remark) = result.into_parts();
         for event in events {
-            if let Err(error) = self.replicas_info_manager.try_apply_event(event.as_ref()) {
+            if let Err(error) = replicas_info_manager.try_apply_event(event.as_ref()) {
                 return ControllerResponse::new(ResponseCode::SystemError.into(), Some(error.to_string()), None, None);
             }
         }
@@ -187,7 +347,10 @@ impl StateMachine {
         )
     }
 
-    fn apply_request(&self, request: &ControllerRequest) -> ControllerResponse {
+    fn apply_request_to(
+        replicas_info_manager: &ReplicasInfoManager,
+        request: &ControllerRequest,
+    ) -> ControllerResponse {
         match request {
             ControllerRequest::ApplyBrokerId {
                 cluster_name,
@@ -196,14 +359,14 @@ impl StateMachine {
                 applied_broker_id,
                 register_check_code,
             } => {
-                let result = self.replicas_info_manager.apply_broker_id(
+                let result = replicas_info_manager.apply_broker_id(
                     cluster_name,
                     broker_name,
                     broker_address,
                     *applied_broker_id,
                     register_check_code,
                 );
-                self.response_from_result(result, ControllerResponseHeader::ApplyBrokerId)
+                Self::response_from_result(replicas_info_manager, result, ControllerResponseHeader::ApplyBrokerId)
             }
             ControllerRequest::RegisterBroker {
                 cluster_name,
@@ -212,14 +375,14 @@ impl StateMachine {
                 broker_id,
                 alive_broker_ids: _,
             } => {
-                let result = self.replicas_info_manager.register_broker(
+                let result = replicas_info_manager.register_broker(
                     cluster_name,
                     broker_name,
                     broker_address,
                     *broker_id,
-                    self.replicas_info_manager.as_ref(),
+                    replicas_info_manager,
                 );
-                self.response_from_result(result, ControllerResponseHeader::RegisterBroker)
+                Self::response_from_result(replicas_info_manager, result, ControllerResponseHeader::RegisterBroker)
             }
             ControllerRequest::AlterSyncStateSet {
                 cluster_name: _cluster_name,
@@ -230,15 +393,19 @@ impl StateMachine {
                 sync_state_set_epoch,
                 alive_broker_ids: _,
             } => {
-                let result = self.replicas_info_manager.alter_sync_state_set(
+                let result = replicas_info_manager.alter_sync_state_set(
                     broker_name,
                     *master_broker_id,
                     *master_epoch,
                     new_sync_state_set.clone(),
                     *sync_state_set_epoch,
-                    self.replicas_info_manager.as_ref(),
+                    replicas_info_manager,
                 );
-                self.response_from_result(result, ControllerResponseHeader::AlterSyncStateSet)
+                Self::response_from_result(
+                    replicas_info_manager,
+                    result,
+                    ControllerResponseHeader::AlterSyncStateSet,
+                )
             }
             ControllerRequest::ElectMaster {
                 cluster_name: _cluster_name,
@@ -248,13 +415,13 @@ impl StateMachine {
                 alive_broker_ids: _,
                 live_broker_infos: _,
             } => {
-                let result = self.replicas_info_manager.elect_master(
+                let result = replicas_info_manager.elect_master(
                     broker_name,
                     *broker_id,
                     *designate_elect,
-                    self.replicas_info_manager.as_ref(),
+                    replicas_info_manager,
                 );
-                self.response_from_result(result, ControllerResponseHeader::ElectMaster)
+                Self::response_from_result(replicas_info_manager, result, ControllerResponseHeader::ElectMaster)
             }
             ControllerRequest::CleanBrokerData {
                 cluster_name,
@@ -263,21 +430,20 @@ impl StateMachine {
                 clean_living_broker,
                 alive_broker_ids: _,
             } => {
-                let result = self.replicas_info_manager.clean_broker_data(
+                let result = replicas_info_manager.clean_broker_data(
                     cluster_name,
                     broker_name,
                     broker_controller_ids_to_clean.as_deref(),
                     *clean_living_broker,
-                    self.replicas_info_manager.as_ref(),
+                    replicas_info_manager,
                 );
-                self.response_from_result_without_header(result)
+                Self::response_from_result_without_header(replicas_info_manager, result)
             }
             ControllerRequest::BrokerHeartbeat {
                 broker_identity,
                 broker_live_info,
             } => {
-                self.replicas_info_manager
-                    .on_broker_heartbeat(broker_identity.clone(), broker_live_info.clone());
+                replicas_info_manager.on_broker_heartbeat(broker_identity.clone(), broker_live_info.clone());
                 ControllerResponse::new(
                     rocketmq_remoting::code::response_code::ResponseCode::Success.into(),
                     Some("Heart beat success".to_string()),
@@ -286,11 +452,11 @@ impl StateMachine {
                 )
             }
             ControllerRequest::BrokerChannelClose { broker_identity } => {
-                self.replicas_info_manager.on_broker_channel_close(broker_identity);
+                replicas_info_manager.on_broker_channel_close(broker_identity);
                 ControllerResponse::success()
             }
             ControllerRequest::CheckNotActiveBroker { check_time_millis } => {
-                let inactive_brokers = self.replicas_info_manager.check_not_active_broker(*check_time_millis);
+                let inactive_brokers = replicas_info_manager.check_not_active_broker(*check_time_millis);
                 let body = serde_json::to_vec(&inactive_brokers).ok();
                 ControllerResponse::new(
                     rocketmq_remoting::code::response_code::ResponseCode::Success.into(),
@@ -302,52 +468,48 @@ impl StateMachine {
         }
     }
 
+    #[cfg(test)]
+    fn apply_request(&self, request: &ControllerRequest) -> ControllerResponse {
+        Self::apply_request_to(self.replicas_info_manager.load().as_ref(), request)
+    }
+
     async fn build_snapshot_data(&self) -> Result<SnapshotData, std::io::Error> {
         let replicas_info_manager_state = self
             .replicas_info_manager
+            .load()
             .serialize()
             .map_err(|error| std::io::Error::other(error.to_string()))?;
         let last_applied = *self.last_applied.read().await;
         let last_membership = self.last_membership.read().await.clone();
 
-        Ok(SnapshotData {
-            replicas_info_manager_state,
-            last_applied,
-            last_membership: Some(last_membership),
-        })
+        SnapshotData::new(replicas_info_manager_state, last_applied, last_membership)
     }
 
-    async fn install_snapshot_data(&self, data: SnapshotData) -> Result<(), std::io::Error> {
-        self.replicas_info_manager
-            .deserialize_from(&data.replicas_info_manager_state)
-            .map_err(|error| std::io::Error::other(error.to_string()))?;
-        *self.last_applied.write().await = data.last_applied;
-        *self.last_membership.write().await = data.last_membership.unwrap_or_default();
-        self.persist_state().await?;
-        Ok(())
-    }
-
-    async fn persist_state(&self) -> Result<(), std::io::Error> {
+    async fn persist_state_values(
+        &self,
+        replicas_info_manager_state: Vec<u8>,
+        last_applied: Option<LogId>,
+        last_membership: &StoredMembership,
+    ) -> Result<(), std::io::Error> {
         let Some(backend) = &self.backend else {
             return Ok(());
         };
 
-        let replicas_info_manager_state = self.replicas_info_manager.serialize().map_err(storage_error)?;
-        let last_applied = *self.last_applied.read().await;
-        let last_membership = self.last_membership.read().await.clone();
-
         backend
-            .batch_put(vec![
-                (REPLICAS_INFO_MANAGER_STATE_KEY.to_string(), replicas_info_manager_state),
-                (
-                    LAST_APPLIED_KEY.to_string(),
-                    serde_json::to_vec(&last_applied).map_err(storage_error)?,
-                ),
-                (
-                    LAST_MEMBERSHIP_KEY.to_string(),
-                    serde_json::to_vec(&last_membership).map_err(storage_error)?,
-                ),
-            ])
+            .write_batch(
+                vec![
+                    (REPLICAS_INFO_MANAGER_STATE_KEY.to_string(), replicas_info_manager_state),
+                    (
+                        LAST_APPLIED_KEY.to_string(),
+                        serde_json::to_vec(&last_applied).map_err(storage_error)?,
+                    ),
+                    (
+                        LAST_MEMBERSHIP_KEY.to_string(),
+                        serde_json::to_vec(last_membership).map_err(storage_error)?,
+                    ),
+                ],
+                Vec::new(),
+            )
             .await
             .map_err(storage_error)?;
         backend.sync().await.map_err(storage_error)?;
@@ -364,33 +526,116 @@ impl StateMachine {
             last_membership: snapshot.meta.last_membership.clone(),
             snapshot_id: snapshot.meta.snapshot_id.clone(),
         };
-        persist_json(backend, SNAPSHOT_META_KEY, &persisted_meta).await?;
         backend
-            .put(SNAPSHOT_DATA_KEY, &snapshot.data)
+            .write_batch(
+                vec![
+                    (
+                        SNAPSHOT_META_KEY.to_string(),
+                        serde_json::to_vec(&persisted_meta).map_err(storage_error)?,
+                    ),
+                    (SNAPSHOT_DATA_KEY.to_string(), snapshot.data.clone()),
+                ],
+                Vec::new(),
+            )
             .await
             .map_err(storage_error)?;
         backend.sync().await.map_err(storage_error)?;
         Ok(())
     }
+
+    async fn persist_snapshot_install(
+        &self,
+        data: &SnapshotData,
+        current_snapshot: &CurrentSnapshot,
+    ) -> Result<(), std::io::Error> {
+        let Some(backend) = &self.backend else {
+            return Ok(());
+        };
+        let persisted_meta = PersistedSnapshotMeta {
+            last_log_id: current_snapshot.meta.last_log_id,
+            last_membership: current_snapshot.meta.last_membership.clone(),
+            snapshot_id: current_snapshot.meta.snapshot_id.clone(),
+        };
+        let last_membership = data.last_membership.clone().unwrap_or_default();
+        backend
+            .write_batch(
+                vec![
+                    (
+                        REPLICAS_INFO_MANAGER_STATE_KEY.to_string(),
+                        data.replicas_info_manager_state.clone(),
+                    ),
+                    (
+                        LAST_APPLIED_KEY.to_string(),
+                        serde_json::to_vec(&data.last_applied).map_err(storage_error)?,
+                    ),
+                    (
+                        LAST_MEMBERSHIP_KEY.to_string(),
+                        serde_json::to_vec(&last_membership).map_err(storage_error)?,
+                    ),
+                    (
+                        SNAPSHOT_META_KEY.to_string(),
+                        serde_json::to_vec(&persisted_meta).map_err(storage_error)?,
+                    ),
+                    (SNAPSHOT_DATA_KEY.to_string(), current_snapshot.data.clone()),
+                ],
+                Vec::new(),
+            )
+            .await
+            .map_err(storage_error)?;
+        backend.sync().await.map_err(storage_error)
+    }
+}
+
+fn validate_snapshot_bytes(bytes: &[u8]) -> Result<SnapshotData, std::io::Error> {
+    if bytes.len() > SNAPSHOT_MAX_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "Controller snapshot size {} exceeds the {} byte limit",
+                bytes.len(),
+                SNAPSHOT_MAX_BYTES
+            ),
+        ));
+    }
+    let data: SnapshotData = serde_json::from_slice(bytes).map_err(|error| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("Failed to deserialize snapshot: {error}"),
+        )
+    })?;
+    data.validate()?;
+    Ok(data)
 }
 
 impl RaftSnapshotBuilder<TypeConfig> for StateMachine {
     async fn build_snapshot(&mut self) -> Result<Snapshot, std::io::Error> {
+        let _state_guard = self.state_lock.lock().await;
         let data = self.build_snapshot_data().await?;
         let last_applied = data.last_applied;
         let last_membership = data.last_membership.clone().unwrap_or_default();
+        let snapshot_id = data.snapshot_id.clone();
         let snapshot_data = serde_json::to_vec(&data)
             .map_err(|error| std::io::Error::other(format!("Failed to serialize snapshot: {}", error)))?;
+        if snapshot_data.len() > SNAPSHOT_MAX_BYTES {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "Controller snapshot size {} exceeds the {} byte limit",
+                    snapshot_data.len(),
+                    SNAPSHOT_MAX_BYTES
+                ),
+            ));
+        }
         let current_snapshot = CurrentSnapshot {
             meta: SnapshotMeta {
                 last_log_id: last_applied,
                 last_membership,
-                snapshot_id: format!("snapshot-{}", last_applied.map_or(0, |log_id| log_id.index)),
+                snapshot_id,
             },
             data: snapshot_data.clone(),
         };
-        *self.current_snapshot.write().await = Some(current_snapshot.clone());
         self.persist_snapshot(&current_snapshot).await?;
+        *self.current_snapshot.write().await = Some(current_snapshot.clone());
 
         Ok(Snapshot {
             meta: current_snapshot.meta,
@@ -417,20 +662,27 @@ impl RaftStateMachine<TypeConfig> for StateMachine {
     {
         use futures::StreamExt;
 
+        let _state_guard = self.state_lock.lock().await;
         futures::pin_mut!(entries);
         let mut responses = Vec::new();
+        let candidate_manager = ReplicasInfoManager::new(self.config.clone());
+        candidate_manager
+            .deserialize_from(&self.replicas_info_manager.load().serialize().map_err(storage_error)?)
+            .map_err(storage_error)?;
+        let mut candidate_last_applied = *self.last_applied.read().await;
+        let mut candidate_last_membership = self.last_membership.read().await.clone();
 
         while let Some(entry_result) = entries.next().await {
             let (entry, responder) = entry_result?;
             let log_id = entry.log_id;
 
-            *self.last_applied.write().await = Some(log_id);
+            candidate_last_applied = Some(log_id);
 
             let response = match entry.payload {
                 EntryPayload::Blank => ControllerResponse::success(),
-                EntryPayload::Normal(ref request) => self.apply_request(request),
+                EntryPayload::Normal(ref request) => Self::apply_request_to(&candidate_manager, request),
                 EntryPayload::Membership(ref membership) => {
-                    *self.last_membership.write().await = StoredMembership::new(Some(log_id), membership.clone());
+                    candidate_last_membership = StoredMembership::new(Some(log_id), membership.clone());
                     ControllerResponse::success()
                 }
             };
@@ -438,7 +690,20 @@ impl RaftStateMachine<TypeConfig> for StateMachine {
             responses.push((responder, response));
         }
 
-        self.persist_state().await?;
+        if responses.is_empty() {
+            return Ok(());
+        }
+        let candidate_state = candidate_manager.serialize().map_err(storage_error)?;
+        self.persist_state_values(
+            candidate_state.clone(),
+            candidate_last_applied,
+            &candidate_last_membership,
+        )
+        .await?;
+
+        self.replicas_info_manager.store(Arc::new(candidate_manager));
+        *self.last_applied.write().await = candidate_last_applied;
+        *self.last_membership.write().await = candidate_last_membership;
 
         for (responder, response) in responses {
             if let Some(tx) = responder {
@@ -462,20 +727,31 @@ impl RaftStateMachine<TypeConfig> for StateMachine {
         meta: &SnapshotMeta,
         snapshot: std::io::Cursor<Vec<u8>>,
     ) -> Result<(), std::io::Error> {
-        let snapshot_data: SnapshotData = serde_json::from_slice(snapshot.get_ref()).map_err(|error| {
-            std::io::Error::new(
+        let _state_guard = self.state_lock.lock().await;
+        let snapshot_data = validate_snapshot_bytes(snapshot.get_ref())?;
+        let snapshot_membership = snapshot_data.last_membership.clone().unwrap_or_default();
+        if snapshot_data.last_applied != meta.last_log_id
+            || snapshot_membership != meta.last_membership
+            || snapshot_data.snapshot_id != meta.snapshot_id
+        {
+            return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                format!("Failed to deserialize snapshot: {}", error),
-            )
-        })?;
-
-        self.install_snapshot_data(snapshot_data).await?;
+                "Controller snapshot metadata does not match its checksummed payload",
+            ));
+        }
+        let candidate_manager = ReplicasInfoManager::new(self.config.clone());
+        candidate_manager
+            .deserialize_from(&snapshot_data.replicas_info_manager_state)
+            .map_err(storage_error)?;
         let current_snapshot = CurrentSnapshot {
             meta: meta.clone(),
             data: snapshot.into_inner(),
         };
-        *self.current_snapshot.write().await = Some(current_snapshot.clone());
-        self.persist_snapshot(&current_snapshot).await?;
+        self.persist_snapshot_install(&snapshot_data, &current_snapshot).await?;
+        self.replicas_info_manager.store(Arc::new(candidate_manager));
+        *self.last_applied.write().await = snapshot_data.last_applied;
+        *self.last_membership.write().await = snapshot_membership;
+        *self.current_snapshot.write().await = Some(current_snapshot);
         tracing::info!("Installed snapshot at {:?}", meta.last_log_id);
         Ok(())
     }

@@ -29,11 +29,16 @@ use openraft::raft::SnapshotResponse;
 use openraft::raft::VoteRequest;
 use openraft::raft::VoteResponse;
 use openraft::OptionalSend;
+use tokio_stream::StreamExt;
 use tonic::transport::Channel;
 use tonic::Request;
 use tracing::debug;
 use tracing::error;
 
+use rocketmq_common::utils::crc32_utils::crc32;
+
+use crate::openraft::SNAPSHOT_CHUNK_BYTES;
+use crate::openraft::SNAPSHOT_MAX_BYTES;
 use crate::protobuf::openraft::open_raft_service_client::OpenRaftServiceClient;
 use crate::protobuf::openraft::OpenRaftAppendRequest;
 use crate::protobuf::openraft::OpenRaftVote as ProtoVote;
@@ -219,34 +224,55 @@ impl RaftNetworkV2<TypeConfig> for GrpcNetworkClient {
             ))))
         })?;
 
-        // Extract snapshot data from Cursor
+        // Extract the bounded snapshot payload from the OpenRaft cursor.
         let snapshot_data = snapshot.snapshot.into_inner();
+        if snapshot_data.len() > SNAPSHOT_MAX_BYTES {
+            return Err(StreamingError::Network(NetworkError::new(&std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "Snapshot size {} exceeds the {} byte transport limit",
+                    snapshot_data.len(),
+                    SNAPSHOT_MAX_BYTES
+                ),
+            ))));
+        }
+        let snapshot_checksum = crc32(&snapshot_data);
+        let total_size = snapshot_data.len() as u64;
+        let snapshot_meta = snapshot.meta;
 
-        // For streaming API, we need to send data in chunks
-        let request = crate::protobuf::openraft::OpenRaftSnapshotRequest {
-            vote: Some(crate::protobuf::openraft::OpenRaftVote {
-                term: vote.leader_id().term,
-                node_id: vote.leader_id().node_id,
-                committed: vote.is_committed(),
-            }),
-            meta: Some(crate::protobuf::openraft::OpenRaftSnapshotMeta {
-                last_log_id: snapshot
-                    .meta
-                    .last_log_id
-                    .map(|id| crate::protobuf::openraft::OpenRaftLogId {
-                        term: id.leader_id.term,
-                        node_id: id.leader_id.node_id,
-                        index: id.index,
-                    }),
-                snapshot_id: snapshot.meta.snapshot_id.clone(),
-                last_membership: last_membership.clone(),
-            }),
-            offset: 0,
-            data: snapshot_data,
-            done: true,
-        };
-
-        let stream = tokio_stream::iter(vec![request]);
+        let chunk_count = snapshot_data.len().max(1).div_ceil(SNAPSHOT_CHUNK_BYTES);
+        let stream = tokio_stream::iter(0..chunk_count).map(move |chunk_index| {
+            let start = chunk_index * SNAPSHOT_CHUNK_BYTES;
+            let end = (start + SNAPSHOT_CHUNK_BYTES).min(snapshot_data.len());
+            let data = if snapshot_data.is_empty() {
+                Vec::new()
+            } else {
+                snapshot_data[start..end].to_vec()
+            };
+            crate::protobuf::openraft::OpenRaftSnapshotRequest {
+                vote: (chunk_index == 0).then_some(crate::protobuf::openraft::OpenRaftVote {
+                    term: vote.leader_id().term,
+                    node_id: vote.leader_id().node_id,
+                    committed: vote.is_committed(),
+                }),
+                meta: (chunk_index == 0).then_some(crate::protobuf::openraft::OpenRaftSnapshotMeta {
+                    last_log_id: snapshot_meta
+                        .last_log_id
+                        .map(|id| crate::protobuf::openraft::OpenRaftLogId {
+                            term: id.leader_id.term,
+                            node_id: id.leader_id.node_id,
+                            index: id.index,
+                        }),
+                    snapshot_id: snapshot_meta.snapshot_id.clone(),
+                    last_membership: last_membership.clone(),
+                }),
+                offset: start as u64,
+                data,
+                done: chunk_index + 1 == chunk_count,
+                total_size,
+                checksum: snapshot_checksum,
+            }
+        });
 
         // Send streaming request
         let response = client.install_snapshot(Request::new(stream)).await.map_err(|e| {
