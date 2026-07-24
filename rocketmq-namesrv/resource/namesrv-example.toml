@@ -104,8 +104,3 @@ deleteTopicWithBrokerRegistration = false
 # Configuration blacklist (properties that won't be persisted)
 # Default: "configBlackList;configStorePath;kvConfigPath"
 configBlackList = "configBlackList;configStorePath;kvConfigPath"
-
-# Use RouteInfoManager V2 (DashMap-based concurrent implementation)
-# V2 provides 5-50x better concurrency performance
-# Default: true (V2 is production-ready as of v0.7.0)
-useRouteInfoManagerV2 = true

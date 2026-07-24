@@ -14,5 +14,4 @@
 
 pub mod default_top_addressing;
 pub mod name_server_update_callback;
-pub mod namesrv_config;
 pub mod top_addressing;

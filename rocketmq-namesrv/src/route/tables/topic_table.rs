@@ -21,7 +21,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use dashmap::DashMap;
-use rocketmq_remoting::protocol::route::route_data_view::QueueData;
+use rocketmq_protocol::protocol::route::route_data_view::QueueData;
 
 use crate::route::types::public_name_from_route;
 use crate::route::types::route_broker_name;
@@ -251,7 +251,7 @@ impl TopicQueueTable {
         removed
     }
 
-    /// Update queue data permission for a specific topic-broker (v1 compatibility)
+    /// Update queue data permission for a specific topic-broker.
     ///
     /// # Arguments
     /// * `topic` - Topic name

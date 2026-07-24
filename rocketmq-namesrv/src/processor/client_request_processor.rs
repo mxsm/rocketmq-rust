@@ -16,9 +16,9 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::mq_version::RocketMqVersion;
 use rocketmq_common::common::FAQUrl;
 use rocketmq_common::TimeUtils;
+use rocketmq_model::version::RocketMqVersion;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::error_response;
@@ -121,8 +121,11 @@ impl ClientRequestProcessor {
             .route_info_manager()
             .pickup_topic_route_data(request_header.topic.as_ref())
         {
-            Some(data) => data,
-            None => {
+            Ok(data) => data,
+            Err(
+                rocketmq_error::RocketMQError::TopicNotExist { .. }
+                | rocketmq_error::RocketMQError::RouteNotFound { .. },
+            ) => {
                 return Ok(Some(
                     RemotingCommand::create_response_command_with_code(ResponseCode::TopicNotExist).set_remark(
                         format!(
@@ -133,6 +136,7 @@ impl ClientRequestProcessor {
                     ),
                 ));
             }
+            Err(error) => return Err(error),
         };
 
         if self.need_check_namesrv_ready.load(Ordering::Relaxed) {

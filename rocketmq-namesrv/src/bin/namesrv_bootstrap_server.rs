@@ -26,15 +26,16 @@ use config::Config;
 use rocketmq_common::common::controller::controller_config::RaftPeer;
 use rocketmq_common::common::controller::controller_config::StorageBackendType;
 use rocketmq_common::common::metrics::MetricsExporterType;
-use rocketmq_common::common::mq_version::CURRENT_VERSION;
-use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
 use rocketmq_common::common::server::config::ServerConfig;
 use rocketmq_common::EnvUtils::EnvUtils;
 use rocketmq_common::ParseConfigFile;
 use rocketmq_controller::resolve_controller_raft_bind_addr;
 use rocketmq_controller::ControllerCli;
 use rocketmq_controller::ControllerConfig;
+use rocketmq_model::version::CURRENT_VERSION;
 use rocketmq_namesrv::bootstrap::Builder;
+use rocketmq_namesrv::parse_command_and_config_file;
+use rocketmq_namesrv::NamesrvConfig;
 use rocketmq_remoting::protocol::remoting_command;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
@@ -179,7 +180,6 @@ async fn run(service_context: ServiceContext, lifecycle: ServiceLifecycle) -> Re
     );
     info!("KV Config Path: {}", namesrv_config.kv_config_path);
     info!("Config Store Path: {}", namesrv_config.config_store_path);
-    info!("Use RouteInfoManager V2: {}", namesrv_config.use_route_info_manager_v2);
     info!("===============================================");
     // Start the name server
     let boot_result = Builder::new()
@@ -318,7 +318,7 @@ fn parse_and_merge_config(
             bail!("Config file does not exist or is not a file: {:?}", config_file);
         }
         info!("Loading config from file: {:?}", config_file);
-        ParseConfigFile::parse_config_file::<NamesrvConfig>(config_file)?
+        parse_command_and_config_file(config_file)?
     } else {
         info!("No config file specified, using default configuration");
         NamesrvConfig::default()
@@ -435,7 +435,6 @@ fn print_config(
         "deleteTopicWithBrokerRegistration = {}",
         namesrv_config.delete_topic_with_broker_registration
     );
-    println!("useRouteInfoManagerV2 = {}", namesrv_config.use_route_info_manager_v2);
 
     println!("\n========== Server Configuration ==========");
     println!("listenPort = {}", server_config.listen_port);

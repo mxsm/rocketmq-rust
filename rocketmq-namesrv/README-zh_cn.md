@@ -5,8 +5,8 @@
 [RocketMQ-Rust](../README-zh_cn.md) 的 RocketMQ NameServer 实现。
 
 `rocketmq-namesrv` 为 RocketMQ broker、client 和 admin tool 提供轻量级服务发现与路由能力。它负责 broker 存活状态、
-topic route metadata、broker member group、写权限、KV 配置、运行时配置以及可选的内嵌 controller 集成。默认路由管理器是
-基于并发表和 segmented lock 的生产可用 V2 实现。
+topic route metadata、broker member group、写权限、KV 配置、运行时配置以及可选的内嵌 controller 集成。规范路由管理器
+基于 DashMap 并发表和 segmented lock 实现。
 
 该 crate 既可以作为 `rocketmq-namesrv-rust` 二进制运行，也可以通过 `bootstrap::Builder` API 嵌入测试或上层服务。
 
@@ -16,7 +16,7 @@ topic route metadata、broker member group、写权限、KV 配置、运行时�
 | ---- | -------- |
 | 服务发现 | Broker 注册、注销、heartbeat 跟踪、inactive broker 扫描和 channel destroy 清理。 |
 | Topic 路由 | Topic route 查询、standard/legacy JSON route 编码、zone-aware route filtering、filter-server metadata 和 order-topic config 查询。 |
-| 路由存储 | `RouteInfoManagerWrapper` 默认选择 V2 DashMap 并发表，同时保留可配置的 legacy V1 manager。 |
+| 路由存储 | `RouteInfoManager` 统一管理 DashMap 并发表及跨表 segmented lock。 |
 | Broker 与 topic 管理 | Cluster info、broker member group、topic 注册/删除、按 cluster 查询 topic list、unit-topic list 和写权限更新。 |
 | KV 配置 | 通过 `KVConfigManager` 支持 KV namespace 的 put/get/delete/list 和磁盘持久化。 |
 | 运行时配置 | `GetNamesrvConfig` 和 `UpdateNamesrvConfig` 支持 Java-properties payload，并对敏感路径和 home 设置保留固定黑名单。 |
@@ -146,7 +146,6 @@ Rust 风格字段名。
 | `listenPort` | `9876` | Remoting server 端口，通过 `ServerConfig` 或 CLI 配置。 |
 | `bindAddress` | `0.0.0.0` | Remoting server 绑定地址，通过 `ServerConfig` 或 CLI 配置。 |
 | `scanNotActiveBrokerInterval` | `5000` | Broker inactive 扫描间隔，单位毫秒。 |
-| `useRouteInfoManagerV2` | `true` | 启用 DashMap-based route manager。 |
 | `enableControllerInNamesrv` | `false` | 在 NameServer 内运行 embedded controller。 |
 | `clusterTest` | `false` | 启用 product-environment route fallback。 |
 | `orderMessageEnable` | `false` | 在 route response 中附加 `ORDER_TOPIC_CONFIG`。 |
@@ -160,14 +159,13 @@ Rust 风格字段名。
 在测试或上层服务中可以使用 `bootstrap::Builder` 嵌入 NameServer：
 
 ```rust
-use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
 use rocketmq_common::common::server::config::ServerConfig;
 use rocketmq_namesrv::bootstrap::Builder;
+use rocketmq_namesrv::NamesrvConfig;
 
 async fn run_namesrv() -> rocketmq_error::RocketMQResult<()> {
     let namesrv_config = NamesrvConfig {
         rocketmq_home: "/opt/rocketmq".to_string(),
-        use_route_info_manager_v2: true,
         ..NamesrvConfig::default()
     };
 

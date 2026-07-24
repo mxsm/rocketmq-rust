@@ -22,12 +22,12 @@ use std::time::Duration;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::mix_all;
-use rocketmq_common::common::mq_version::RocketMqVersion;
-use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
 use rocketmq_common::common::server::config::ServerConfig;
 use rocketmq_common::utils::crc32_utils;
 use rocketmq_error::RocketMQResult;
+use rocketmq_model::version::RocketMqVersion;
 use rocketmq_namesrv::bootstrap::Builder;
+use rocketmq_namesrv::NamesrvConfig;
 use rocketmq_remoting::clients::rocketmq_tokio_client::RocketmqDefaultClient;
 use rocketmq_remoting::clients::RemotingClient;
 use rocketmq_remoting::code::request_code::RequestCode;
@@ -228,11 +228,8 @@ async fn describe_finished_server_task(server_task: &mut JoinHandle<RocketMQResu
     }
 }
 
-fn default_v2_namesrv_config() -> NamesrvConfig {
-    NamesrvConfig {
-        use_route_info_manager_v2: true,
-        ..NamesrvConfig::default()
-    }
+fn default_namesrv_config() -> NamesrvConfig {
+    NamesrvConfig::default()
 }
 
 fn route_request(topic: &CheetahString) -> RemotingCommand {
@@ -341,7 +338,7 @@ fn unregister_broker_request(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn namesrv_returns_java_style_config_properties_over_remoting() {
-    let harness = NamesrvHarness::start(default_v2_namesrv_config()).await;
+    let harness = NamesrvHarness::start(default_namesrv_config()).await;
 
     let mut request = RemotingCommand::create_request_command(
         RequestCode::GetNamesrvConfig,
@@ -355,14 +352,14 @@ async fn namesrv_returns_java_style_config_properties_over_remoting() {
     let properties = std::str::from_utf8(body).expect("config response should be valid utf-8");
     assert!(properties.contains("listenPort="));
     assert!(properties.contains("bindAddress=127.0.0.1"));
-    assert!(properties.contains("useRouteInfoManagerV2=true"));
+    assert!(!properties.contains("useRouteInfoManagerV2"));
 
     harness.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn namesrv_kvconfig_roundtrip_works_over_remoting() {
-    let harness = NamesrvHarness::start(default_v2_namesrv_config()).await;
+    let harness = NamesrvHarness::start(default_namesrv_config()).await;
     let namespace = CheetahString::from_static_str("phase5-network-namespace");
     let key = CheetahString::from_static_str("phase5-network-key");
     let value = CheetahString::from_static_str("phase5-network-value");
@@ -422,7 +419,6 @@ async fn namesrv_kvconfig_roundtrip_works_over_remoting() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn namesrv_register_query_unregister_route_roundtrip_works_over_remoting() {
     let harness = NamesrvHarness::start(NamesrvConfig {
-        use_route_info_manager_v2: true,
         order_message_enable: true,
         ..NamesrvConfig::default()
     })
@@ -495,22 +491,18 @@ async fn namesrv_register_query_unregister_route_roundtrip_works_over_remoting()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn namesrv_v1_serializes_concurrent_route_table_mutations_over_remoting() {
-    let harness = NamesrvHarness::start(NamesrvConfig {
-        use_route_info_manager_v2: false,
-        ..NamesrvConfig::default()
-    })
-    .await;
+async fn namesrv_serializes_concurrent_route_table_mutations_over_remoting() {
+    let harness = NamesrvHarness::start(NamesrvConfig::default()).await;
 
-    let cluster_name = CheetahString::from_static_str("v1-concurrent-cluster");
-    let first_broker = CheetahString::from_static_str("v1-concurrent-broker-a");
+    let cluster_name = CheetahString::from_static_str("concurrent-cluster");
+    let first_broker = CheetahString::from_static_str("concurrent-broker-a");
     let first_addr = CheetahString::from_static_str("10.30.0.1:10911");
-    let first_topic = CheetahString::from_static_str("v1-concurrent-topic-a");
-    let first_aux_topic = CheetahString::from_static_str("v1-concurrent-topic-a-aux");
-    let second_broker = CheetahString::from_static_str("v1-concurrent-broker-b");
+    let first_topic = CheetahString::from_static_str("concurrent-topic-a");
+    let first_aux_topic = CheetahString::from_static_str("concurrent-topic-a-aux");
+    let second_broker = CheetahString::from_static_str("concurrent-broker-b");
     let second_addr = CheetahString::from_static_str("10.30.0.2:10911");
-    let second_topic = CheetahString::from_static_str("v1-concurrent-topic-b");
-    let second_aux_topic = CheetahString::from_static_str("v1-concurrent-topic-b-aux");
+    let second_topic = CheetahString::from_static_str("concurrent-topic-b");
+    let second_aux_topic = CheetahString::from_static_str("concurrent-topic-b-aux");
 
     let (first_register, second_register) = tokio::join!(
         harness.request(register_broker_request_with_options(
@@ -533,11 +525,11 @@ async fn namesrv_v1_serializes_concurrent_route_table_mutations_over_remoting() 
         )),
     );
     assert_eq!(
-        ResponseCode::from(first_register.expect("first V1 registration should complete").code()),
+        ResponseCode::from(first_register.expect("first registration should complete").code()),
         ResponseCode::Success
     );
     assert_eq!(
-        ResponseCode::from(second_register.expect("second V1 registration should complete").code()),
+        ResponseCode::from(second_register.expect("second registration should complete").code()),
         ResponseCode::Success
     );
 
@@ -547,7 +539,7 @@ async fn namesrv_v1_serializes_concurrent_route_table_mutations_over_remoting() 
     ] {
         let response = harness.request(route_request(topic)).await.unwrap();
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
-        let route = TopicRouteData::decode(response.body().expect("V1 route response should include a body")).unwrap();
+        let route = TopicRouteData::decode(response.body().expect("route response should include a body")).unwrap();
         assert_eq!(route.queue_datas.len(), 1);
         assert_eq!(route.broker_datas.len(), 1);
         assert_eq!(route.queue_datas[0].broker_name(), broker);
@@ -559,11 +551,11 @@ async fn namesrv_v1_serializes_concurrent_route_table_mutations_over_remoting() 
         harness.request(unregister_broker_request(&cluster_name, &second_broker, &second_addr,)),
     );
     assert_eq!(
-        ResponseCode::from(first_unregister.expect("first V1 unregister should complete").code()),
+        ResponseCode::from(first_unregister.expect("first unregister should complete").code()),
         ResponseCode::Success
     );
     assert_eq!(
-        ResponseCode::from(second_unregister.expect("second V1 unregister should complete").code()),
+        ResponseCode::from(second_unregister.expect("second unregister should complete").code()),
         ResponseCode::Success
     );
 
@@ -576,7 +568,7 @@ async fn namesrv_v1_serializes_concurrent_route_table_mutations_over_remoting() 
                 ResponseCode::Success if Instant::now() < deadline => {
                     tokio::time::sleep(Duration::from_millis(50)).await;
                 }
-                code => panic!("expected V1 topic cleanup after unregister, got {code:?}"),
+                code => panic!("expected topic cleanup after unregister, got {code:?}"),
             }
         }
     }
@@ -586,7 +578,7 @@ async fn namesrv_v1_serializes_concurrent_route_table_mutations_over_remoting() 
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn namesrv_zone_route_filters_removed_zone_and_keeps_master_down_broker_over_remoting() {
-    let harness = NamesrvHarness::start(default_v2_namesrv_config()).await;
+    let harness = NamesrvHarness::start(default_namesrv_config()).await;
 
     let cluster_name = CheetahString::from_static_str("phase5-zone-cluster");
     let topic_name = CheetahString::from_static_str("phase5-zone-topic");
@@ -693,7 +685,7 @@ async fn namesrv_zone_route_filters_removed_zone_and_keeps_master_down_broker_ov
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn namesrv_zone_route_accept_standard_json_only_preserves_standard_json_over_remoting() {
-    let harness = NamesrvHarness::start(default_v2_namesrv_config()).await;
+    let harness = NamesrvHarness::start(default_namesrv_config()).await;
 
     let cluster_name = CheetahString::from_static_str("phase5-standard-json-cluster");
     let topic_name = CheetahString::from_static_str("phase5-standard-json-topic");
@@ -795,7 +787,6 @@ async fn namesrv_zone_route_accept_standard_json_only_preserves_standard_json_ov
 async fn namesrv_cluster_test_returns_local_order_conf_and_legacy_route_encoding_over_remoting() {
     let product_env_name = format!("cluster-test-env-{}", reserve_local_port());
     let harness = NamesrvHarness::start(NamesrvConfig {
-        use_route_info_manager_v2: true,
         cluster_test: true,
         order_message_enable: false,
         product_env_name,

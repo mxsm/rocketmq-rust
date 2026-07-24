@@ -16,13 +16,14 @@
 #![allow(clippy::result_large_err)]
 #![recursion_limit = "512"]
 
+pub use self::config::NamesrvConfig;
+pub use self::config::REMOVED_ROUTE_MANAGER_CONFIG_KEY;
 pub use self::kvconfig::kvconfig_mananger::KVConfigManager;
 pub use self::namesrv_config_parse::parse_command_and_config_file;
 pub use self::route::route_info_manager::RouteInfoManager;
-pub use self::route::route_info_manager_v2::RouteInfoManagerV2;
-pub use self::route::route_info_manager_wrapper::RouteInfoManagerWrapper;
 
 pub mod bootstrap;
+pub mod config;
 mod kvconfig;
 mod namesrv_config_parse;
 pub mod processor;

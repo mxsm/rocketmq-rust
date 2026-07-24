@@ -5428,7 +5428,6 @@ mod tests {
     use rocketmq_common::common::message::MessageTrait;
     use rocketmq_common::common::mix_all;
     use rocketmq_common::common::mix_all::MASTER_ID;
-    use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
     use rocketmq_common::common::server::config::ServerConfig;
     use rocketmq_common::common::topic::TopicValidator;
     use rocketmq_common::CRC32Utils::crc32;
@@ -5442,6 +5441,7 @@ mod tests {
     use rocketmq_controller::ControllerConfig as TestControllerConfig;
     use rocketmq_controller::ControllerManager as TestControllerManager;
     use rocketmq_namesrv::bootstrap::Builder as NameServerBuilder;
+    use rocketmq_namesrv::NamesrvConfig;
     use rocketmq_remoting::base::response_future::ResponseFuture;
     use rocketmq_remoting::clients::rocketmq_tokio_client::RocketmqDefaultClient;
     use rocketmq_remoting::clients::RemotingClient;
@@ -6953,7 +6953,6 @@ accounts:
             rocketmq_home: root.to_string_lossy().into_owned(),
             kv_config_path: namesrv_root.join("kvConfig.json").to_string_lossy().into_owned(),
             config_store_path: namesrv_root.join("namesrv.properties").to_string_lossy().into_owned(),
-            use_route_info_manager_v2: true,
             ..NamesrvConfig::default()
         };
         let server_config = ServerConfig {

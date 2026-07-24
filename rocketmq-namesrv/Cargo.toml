@@ -34,6 +34,7 @@ observability = ["rocketmq-observability/otel-metrics"]
 [dependencies]
 rocketmq-rust          = { workspace = true }
 rocketmq-common        = { workspace = true }
+rocketmq-model         = { workspace = true }
 rocketmq-remoting      = { workspace = true }
 rocketmq-error         = { workspace = true }
 rocketmq-protocol      = { workspace = true }
@@ -54,9 +55,11 @@ tracing.workspace = true
 
 
 #json spupport
-serde.workspace = true
+serde.workspace      = true
+serde_json.workspace = true
 
 config.workspace      = true
+dirs.workspace        = true
 parking_lot.workspace = true
 dashmap               = { version = "6.2.1", features = ["serde"] }
 hashbrown             = "0.17"
@@ -67,7 +70,6 @@ cheetah-string = { workspace = true }
 [dev-dependencies]
 criterion = { version = "0.8", features = ["html_reports", "async_futures"] }
 futures   = "0.3"
-serde_json.workspace = true
 tempfile = "3.27.0"
 
 [[bin]]

@@ -14,15 +14,18 @@
 
 use std::collections::HashMap;
 use std::env;
-use std::path::MAIN_SEPARATOR;
 
 use cheetah_string::CheetahString;
+use rocketmq_common::common::mix_all::ROCKETMQ_HOME_ENV;
+use rocketmq_common::common::mix_all::ROCKETMQ_HOME_PROPERTY;
+use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
+use rocketmq_error::RocketMQError;
+use rocketmq_error::RocketMQResult;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::common::mix_all::ROCKETMQ_HOME_ENV;
-use crate::common::mix_all::ROCKETMQ_HOME_PROPERTY;
-use crate::utils::serde_json_utils::SerdeJsonUtils;
+pub const REMOVED_ROUTE_MANAGER_CONFIG_KEY: &str = "useRouteInfoManagerV2";
+const REMOVED_ROUTE_MANAGER_CONFIG_FIELD: &str = "use_route_info_manager_v2";
 
 /// Default value functions for serde deserialization
 mod defaults {
@@ -51,11 +54,6 @@ mod defaults {
     }
 
     pub fn return_order_topic_config_to_broker() -> bool {
-        true
-    }
-
-    /// Default to V2 (production-ready as of v0.7.0)
-    pub fn default_use_v2() -> bool {
         true
     }
 
@@ -185,13 +183,6 @@ pub struct NamesrvConfig {
 
     #[serde(alias = "configBlackList", default = "defaults::config_black_list")]
     pub config_black_list: String,
-
-    /// Enable RouteInfoManager v2 with DashMap-based concurrent tables
-    /// V2 provides improved concurrency performance (5-50x faster for concurrent operations)
-    /// Default: true (V2 is production-ready as of v0.7.0)
-    /// Set to false to use legacy v1 implementation if needed
-    #[serde(alias = "useRouteInfoManagerV2", default = "defaults::default_use_v2")]
-    pub use_route_info_manager_v2: bool,
 }
 
 impl Default for NamesrvConfig {
@@ -219,7 +210,6 @@ impl Default for NamesrvConfig {
             wait_seconds_for_service: 45,
             delete_topic_with_broker_registration: false,
             config_black_list: "configBlackList;configStorePath;kvConfigPath".to_string(),
-            use_route_info_manager_v2: true, // Default to V2 (production-ready)
         }
     }
 }
@@ -328,99 +318,83 @@ impl NamesrvConfig {
             .collect()
     }
 
-    pub fn update(&mut self, properties: HashMap<CheetahString, CheetahString>) -> Result<(), String> {
+    pub fn update(&mut self, properties: HashMap<CheetahString, CheetahString>) -> RocketMQResult<()> {
         for (key, value) in properties {
+            reject_removed_route_manager_key(key.as_str())?;
             match key.as_str() {
                 "rocketmqHome" => self.rocketmq_home = value.to_string(),
                 "kvConfigPath" => self.kv_config_path = value.to_string(),
                 "configStorePath" => self.config_store_path = value.to_string(),
                 "productEnvName" => self.product_env_name = value.to_string(),
                 "clusterTest" => {
-                    self.cluster_test = value
-                        .parse()
-                        .map_err(|_| format!("Invalid boolean value for key '{key}'"))?
+                    self.cluster_test = value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
                 }
                 "orderMessageEnable" => {
-                    self.order_message_enable = value
-                        .parse()
-                        .map_err(|_| format!("Invalid boolean value for key '{key}'"))?
+                    self.order_message_enable = value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
+                }
+                "returnOrderTopicConfigToBroker" => {
+                    self.return_order_topic_config_to_broker =
+                        value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
                 }
                 "clientRequestThreadPoolNums" => {
-                    self.client_request_thread_pool_nums = value
-                        .parse()
-                        .map_err(|_| format!("Invalid integer value for key '{key}'"))?
+                    self.client_request_thread_pool_nums =
+                        value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
                 }
                 "defaultThreadPoolNums" => {
-                    self.default_thread_pool_nums = value
-                        .parse()
-                        .map_err(|_| format!("Invalid integer value for key '{key}'"))?
+                    self.default_thread_pool_nums =
+                        value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
                 }
                 "clientRequestThreadPoolQueueCapacity" => {
-                    self.client_request_thread_pool_queue_capacity = value
-                        .parse()
-                        .map_err(|_| format!("Invalid integer value for key '{key}'"))?
+                    self.client_request_thread_pool_queue_capacity =
+                        value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
                 }
                 "defaultThreadPoolQueueCapacity" => {
-                    self.default_thread_pool_queue_capacity = value
-                        .parse()
-                        .map_err(|_| format!("Invalid integer value for key '{key}'"))?
+                    self.default_thread_pool_queue_capacity =
+                        value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
                 }
                 "scanNotActiveBrokerInterval" => {
                     self.scan_not_active_broker_interval =
-                        value.parse().map_err(|_| format!("Invalid value for key '{key}'"))?
+                        value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
                 }
                 "unRegisterBrokerQueueCapacity" => {
-                    self.unregister_broker_queue_capacity = value
-                        .parse()
-                        .map_err(|_| format!("Invalid integer value for key '{key}'"))?
+                    self.unregister_broker_queue_capacity =
+                        value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
                 }
                 "supportActingMaster" => {
-                    self.support_acting_master = value
-                        .parse()
-                        .map_err(|_| format!("Invalid boolean value for key '{key}'"))?
+                    self.support_acting_master = value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
                 }
                 "enableAllTopicList" => {
-                    self.enable_all_topic_list = value
-                        .parse()
-                        .map_err(|_| format!("Invalid boolean value for key '{key}'"))?
+                    self.enable_all_topic_list = value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
                 }
                 "enableTopicList" => {
-                    self.enable_topic_list = value
-                        .parse()
-                        .map_err(|_| format!("Invalid boolean value for key '{key}'"))?
+                    self.enable_topic_list = value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
                 }
                 "notifyMinBrokerIdChanged" => {
-                    self.notify_min_broker_id_changed = value
-                        .parse()
-                        .map_err(|_| format!("Invalid boolean value for key '{key}'"))?
+                    self.notify_min_broker_id_changed =
+                        value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
                 }
                 "enableControllerInNamesrv" => {
-                    self.enable_controller_in_namesrv = value
-                        .parse()
-                        .map_err(|_| format!("Invalid boolean value for key '{key}'"))?
+                    self.enable_controller_in_namesrv =
+                        value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
                 }
                 "needWaitForService" => {
-                    self.need_wait_for_service = value
-                        .parse()
-                        .map_err(|_| format!("Invalid boolean value for key '{key}'"))?
+                    self.need_wait_for_service = value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
                 }
                 "waitSecondsForService" => {
-                    self.wait_seconds_for_service = value
-                        .parse()
-                        .map_err(|_| format!("Invalid integer value for key '{key}'"))?
+                    self.wait_seconds_for_service =
+                        value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
                 }
                 "deleteTopicWithBrokerRegistration" => {
-                    self.delete_topic_with_broker_registration = value
-                        .parse()
-                        .map_err(|_| format!("Invalid boolean value for key '{key}'"))?
+                    self.delete_topic_with_broker_registration =
+                        value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
                 }
                 "configBlackList" => {
-                    self.config_black_list = value
-                        .parse()
-                        .map_err(|_| format!("Invalid string value for key '{key}'"))?
+                    self.config_black_list = value.to_string();
                 }
                 _ => {
-                    return Err(format!("Unknown configuration key: '{key}'"));
+                    return Err(RocketMQError::nameserver_config_invalid(format!(
+                        "unknown configuration key '{key}'"
+                    )));
                 }
             }
         }
@@ -429,13 +403,42 @@ impl NamesrvConfig {
     }
 }
 
+fn invalid_value(key: &str, reason: &str) -> RocketMQError {
+    RocketMQError::nameserver_config_invalid(format!("invalid value for '{key}': {reason}"))
+}
+
+pub fn reject_removed_route_manager_key(key: &str) -> RocketMQResult<()> {
+    let key = key.trim();
+    if key == REMOVED_ROUTE_MANAGER_CONFIG_KEY || key == REMOVED_ROUTE_MANAGER_CONFIG_FIELD {
+        return Err(RocketMQError::nameserver_config_invalid(format!(
+            "'{key}' was removed; NameServer now always uses the canonical route manager"
+        )));
+    }
+    Ok(())
+}
+
+pub fn validate_namesrv_config_source(source: &str) -> RocketMQResult<()> {
+    for line in source.lines() {
+        let candidate = line
+            .split_once('#')
+            .map_or(line, |(value, _)| value)
+            .split_once('=')
+            .or_else(|| line.split_once(':'))
+            .map(|(key, _)| key.trim().trim_matches('"').trim_matches('\''));
+        if let Some(key) = candidate {
+            reject_removed_route_manager_key(key)?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::env;
 
     use super::*;
-    use crate::common::mix_all::ROCKETMQ_HOME_ENV;
-    use crate::common::mix_all::ROCKETMQ_HOME_PROPERTY;
+    use rocketmq_common::common::mix_all::ROCKETMQ_HOME_ENV;
+    use rocketmq_common::common::mix_all::ROCKETMQ_HOME_PROPERTY;
 
     #[test]
     fn test_namesrv_config() {
@@ -653,5 +656,32 @@ mod tests {
             config.delete_topic_with_broker_registration.to_string()
         );
         assert_eq!(parsed["configBlackList"], config.config_black_list);
+    }
+
+    #[test]
+    fn removed_route_manager_switch_is_a_typed_config_error() {
+        let mut config = NamesrvConfig::default();
+        let error = config
+            .update(HashMap::from([(
+                CheetahString::from_static_str(REMOVED_ROUTE_MANAGER_CONFIG_KEY),
+                CheetahString::from_static_str("false"),
+            )]))
+            .expect_err("removed switch must fail");
+
+        assert!(matches!(
+            error,
+            RocketMQError::Tools(rocketmq_error::ToolsError::NameServerConfigInvalid { .. })
+        ));
+    }
+
+    #[test]
+    fn source_validation_ignores_comments_and_values() {
+        validate_namesrv_config_source(
+            r#"
+# useRouteInfoManagerV2 = false
+productEnvName = "useRouteInfoManagerV2"
+"#,
+        )
+        .expect("comments and values must not be interpreted as keys");
     }
 }

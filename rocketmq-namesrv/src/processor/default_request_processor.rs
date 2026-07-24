@@ -19,14 +19,15 @@ use std::time::Duration;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::common::mix_all::string_to_properties;
-use rocketmq_common::common::mq_version::RocketMqVersion;
 use rocketmq_common::CRC32Utils;
+use rocketmq_model::version::RocketMqVersion;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::RemotingSysResponseCode;
 use rocketmq_remoting::error_response;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::body::broker_body::broker_member_group::GetBrokerMemberGroupResponseBody;
 use rocketmq_remoting::protocol::body::broker_body::register_broker_body::RegisterBrokerBody;
+use rocketmq_remoting::protocol::body::topic::topic_list::TopicList;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
 use rocketmq_remoting::protocol::header::namesrv::broker_request::BrokerHeartbeatRequestHeader;
 use rocketmq_remoting::protocol::header::namesrv::broker_request::GetBrokerMemberGroupRequestHeader;
@@ -61,6 +62,7 @@ use tracing::warn;
 
 use crate::bootstrap::NameServerRuntimeHandle;
 use crate::processor::NAMESPACE_ORDER_TOPIC_CONFIG;
+use crate::NamesrvConfig;
 
 pub struct DefaultRequestProcessor {
     name_server_runtime_inner: NameServerRuntimeHandle,
@@ -272,7 +274,17 @@ impl DefaultRequestProcessor {
         } else {
             topic_config_wrapper = extract_register_topic_config_from_request(request)?;
         }
-        let result = self.name_server_runtime_inner.route_info_manager().register_broker(
+        let heartbeat_timeout_millis = request_header
+            .heartbeat_timeout_millis
+            .map(u64::try_from)
+            .transpose()
+            .map_err(|_| {
+                rocketmq_error::RocketMQError::validation_error(
+                    "heartbeatTimeoutMillis",
+                    "must be zero or a positive integer",
+                )
+            })?;
+        let register_broker_result = self.name_server_runtime_inner.route_info_manager().register_broker(
             request_header.cluster_name,
             request_header.broker_addr,
             request_header.broker_name,
@@ -281,15 +293,12 @@ impl DefaultRequestProcessor {
             request
                 .ext_fields()
                 .and_then(|map| map.get(mix_all::ZONE_NAME).cloned()),
-            request_header.heartbeat_timeout_millis,
+            heartbeat_timeout_millis,
             request_header.enable_acting_master,
             topic_config_wrapper,
             filter_server_list,
             channel,
-        );
-        let Some(register_broker_result) = result else {
-            return Ok(error_response::internal_error("register broker failed"));
-        };
+        )?;
         if self
             .name_server_runtime_inner
             .name_server_config()
@@ -377,7 +386,7 @@ impl DefaultRequestProcessor {
         let wipe_topic_cnt = self
             .name_server_runtime_inner
             .route_info_manager()
-            .wipe_write_perm_of_broker_by_lock(&request_header.broker_name);
+            .wipe_write_perm_of_broker_by_lock(request_header.broker_name.to_string());
         Ok(RemotingCommand::create_response_command()
             .set_command_custom_header(WipeWritePermOfBrokerResponseHeader::new(wipe_topic_cnt)))
     }
@@ -390,7 +399,7 @@ impl DefaultRequestProcessor {
         let add_topic_cnt = self
             .name_server_runtime_inner
             .route_info_manager()
-            .add_write_perm_of_broker_by_lock(&request_header.broker_name);
+            .add_write_perm_of_broker_by_lock(request_header.broker_name.to_string());
         Ok(RemotingCommand::create_response_command()
             .set_command_custom_header(AddWritePermOfBrokerResponseHeader::new(add_topic_cnt)))
     }
@@ -404,7 +413,10 @@ impl DefaultRequestProcessor {
             .name_server_config()
             .enable_all_topic_list
         {
-            let topics = self.name_server_runtime_inner.route_info_manager().get_all_topic_list();
+            let topics = TopicList {
+                topic_list: self.name_server_runtime_inner.route_info_manager().get_all_topics(),
+                broker_addr: None,
+            };
             let body = topics.encode()?;
             return Ok(RemotingCommand::create_response_command().set_body(body));
         }
@@ -467,10 +479,13 @@ impl DefaultRequestProcessor {
         }
 
         let request_header = request.decode_command_custom_header::<GetTopicsByClusterRequestHeader>()?;
-        let topics_by_cluster = self
-            .name_server_runtime_inner
-            .route_info_manager()
-            .get_topics_by_cluster(&request_header.cluster);
+        let topics_by_cluster = TopicList {
+            topic_list: self
+                .name_server_runtime_inner
+                .route_info_manager()
+                .get_topics_by_cluster(request_header.cluster.as_str())?,
+            broker_addr: None,
+        };
         let body = topics_by_cluster.encode()?;
         Ok(RemotingCommand::create_response_command().set_body(body))
     }
@@ -519,7 +534,7 @@ impl DefaultRequestProcessor {
             let topic_list = self
                 .name_server_runtime_inner
                 .route_info_manager()
-                .get_has_unit_sub_un_unit_topic_list();
+                .get_has_unit_sub_ununit_topic_list();
             return Ok(RemotingCommand::create_response_command().set_body(topic_list.encode()?));
         }
         Ok(error_response::internal_error("disable"))
@@ -553,10 +568,7 @@ impl DefaultRequestProcessor {
                 ));
             }
 
-            let result = self.name_server_runtime_inner.update_runtime_config(properties);
-            if let Err(e) = result {
-                return Ok(error_response::internal_error(format!("Update error {e:?}")));
-            }
+            self.name_server_runtime_inner.update_runtime_config(properties)?;
         }
 
         Ok(
@@ -662,9 +674,7 @@ fn validate_blacklist_config_exist(
     false
 }
 
-fn build_effective_config_blacklist(
-    config: &rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig,
-) -> Vec<CheetahString> {
+fn build_effective_config_blacklist(config: &NamesrvConfig) -> Vec<CheetahString> {
     let mut blacklist = vec![
         CheetahString::from_static_str("configBlackList"),
         CheetahString::from_static_str("configStorePath"),
@@ -843,11 +853,10 @@ mod tests {
 
     #[test]
     fn build_effective_config_blacklist_includes_fixed_keys() {
-        let effective =
-            build_effective_config_blacklist(&rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig {
-                config_black_list: "customConfig".to_string(),
-                ..Default::default()
-            });
+        let effective = build_effective_config_blacklist(&NamesrvConfig {
+            config_black_list: "customConfig".to_string(),
+            ..Default::default()
+        });
 
         for required in ["configBlackList", "configStorePath", "kvConfigPath", "rocketmqHome"] {
             assert!(
@@ -859,11 +868,10 @@ mod tests {
 
     #[test]
     fn build_effective_config_blacklist_appends_unique_custom_entries() {
-        let effective =
-            build_effective_config_blacklist(&rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig {
-                config_black_list: "customConfig; rocketmqHome ; customConfig ; anotherConfig".to_string(),
-                ..Default::default()
-            });
+        let effective = build_effective_config_blacklist(&NamesrvConfig {
+            config_black_list: "customConfig; rocketmqHome ; customConfig ; anotherConfig".to_string(),
+            ..Default::default()
+        });
         let effective_keys: Vec<&str> = effective.iter().map(|entry| entry.as_str()).collect();
 
         assert_eq!(

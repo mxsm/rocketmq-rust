@@ -12,1084 +12,1934 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! `RouteInfoManager` is a core component in Apache RocketMQ, primarily responsible for
-//! managing and maintaining the routing information of the cluster. It ensures correct message
-//! routing and load balancing within the system. Below are its main functions:
+//! Canonical RouteInfoManager with DashMap-based concurrent tables
 //!
-//! ### 1. **Broker Information Management**
-//! - Maintains information about all Brokers in the cluster, including addresses, names, and the
-//!   clusters they belong to.
-//! - Handles Broker registration, unregistration, and status updates.
-//!
-//! ### 2. **Topic Routing Information Management**
-//! - Maintains the mapping relationship between Topics and Brokers to ensure messages are correctly
-//!   routed to the target Brokers.
-//! - Handles Topic creation, updates, and deletion operations.
-//!
-//! ### 3. **Consumer Group Information Management**
-//! - Records the subscription relationships of consumer groups to ensure messages are correctly
-//!   pushed to consumers.
-//! - Handles consumer group registration, unregistration, and status updates.
-//!
-//! ### 4. **Routing Discovery Service**
-//! - Provides the latest routing information to producers and consumers to ensure correct message
-//!   routing and consumption.
-//! - Clients periodically request the latest routing information.
-//!
-//! ### 5. **Broker Failure Handling**
-//! - Detects Broker failures and updates routing information to avoid routing messages to
-//!   unavailable Brokers.
-//! - Supports automatic recovery and re-registration of Brokers.
-//!
-//! ### 6. **Cluster Scaling Support**
-//! - Dynamically adjusts routing information to accommodate cluster scaling (expansion or
-//!   reduction), ensuring high availability and load balancing.
-//!
-//! ### 7. **NameServer Data Maintenance**
-//! - Stores and manages routing information in the NameServer to ensure data consistency and high
-//!   availability.
-//!
-//! ### Summary
-//! `RouteInfoManager` is a critical component in RocketMQ, responsible for managing routing
-//! information and ensuring correct message routing and system stability.
+//! Fine-grained concurrent tables and segmented locks preserve cross-table
+//! invariants without a single global route lock.
+
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::mix_all;
-use rocketmq_common::common::topic::TopicValidator;
-use rocketmq_common::common::TopicSysFlag;
-use rocketmq_common::TimeUtils;
 use rocketmq_common::TimeUtils::current_millis;
+use rocketmq_protocol::code::request_code::RequestCode;
+use rocketmq_protocol::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
+use rocketmq_protocol::protocol::body::broker_body::cluster_info::ClusterInfo;
+use rocketmq_protocol::protocol::body::topic::topic_list::TopicList;
+use rocketmq_protocol::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
+use rocketmq_protocol::protocol::header::namesrv::broker_request::UnRegisterBrokerRequestHeader;
+use rocketmq_protocol::protocol::header::namesrv::brokerid_change_request_header::NotifyMinBrokerIdChangeRequestHeader;
+use rocketmq_protocol::protocol::namesrv::RegisterBrokerResult;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::route::route_data_view::BrokerData;
+use rocketmq_protocol::protocol::route::route_data_view::QueueData;
+use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
+use rocketmq_protocol::protocol::DataVersion;
 use rocketmq_remoting::clients::RemotingClient;
-use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::net::channel::Channel;
-use rocketmq_remoting::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
-use rocketmq_remoting::protocol::body::broker_body::cluster_info::ClusterInfo;
-use rocketmq_remoting::protocol::body::topic::topic_list::TopicList;
-use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
-use rocketmq_remoting::protocol::header::namesrv::broker_request::UnRegisterBrokerRequestHeader;
-use rocketmq_remoting::protocol::header::namesrv::brokerid_change_request_header::NotifyMinBrokerIdChangeRequestHeader;
-use rocketmq_remoting::protocol::namesrv::RegisterBrokerResult;
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_remoting::protocol::route::route_data_view::BrokerData;
-use rocketmq_remoting::protocol::route::route_data_view::QueueData;
-use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
-use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_info::TopicQueueMappingInfo;
-use rocketmq_remoting::protocol::DataVersion;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
 
 use crate::bootstrap::NameServerRuntimeHandle;
 use crate::route::batch_unregistration_service::BatchUnregistrationService;
+use crate::route::error::RocketMQError;
+use crate::route::error::RouteResult;
+use crate::route::segmented_lock::SegmentedLock;
+use crate::route::tables::BrokerAddrTable;
+use crate::route::tables::BrokerLiveInfo;
+use crate::route::tables::BrokerLiveTable;
+use crate::route::tables::ClusterAddrTable;
+use crate::route::tables::FilterServerTable;
+use crate::route::tables::TopicQueueMappingInfoTable;
+use crate::route::tables::TopicQueueTable;
+use crate::route::types::BrokerName;
+use crate::route::types::TopicName;
 use crate::route_info::broker_addr_info::BrokerAddrInfo;
-use crate::route_info::broker_addr_info::BrokerLiveInfo;
-use crate::route_info::broker_addr_info::BrokerStatusChangeInfo;
 
-const DEFAULT_BROKER_CHANNEL_EXPIRED_TIME: i64 = 1000 * 60 * 2;
+const DEFAULT_BROKER_CHANNEL_EXPIRED_TIME: u64 = 1000 * 60 * 2; // 2 minutes
 
-type TopicQueueTable = HashMap<CheetahString /* topic */, HashMap<CheetahString /* broker name */, QueueData>>;
-type BrokerAddrTable = HashMap<CheetahString /* brokerName */, BrokerData>;
-type ClusterAddrTable = HashMap<CheetahString /* clusterName */, HashSet<CheetahString /* brokerName */>>;
-type BrokerLiveTable = HashMap<BrokerAddrInfo /* brokerAddr */, BrokerLiveInfo>;
-type FilterServerTable = HashMap<BrokerAddrInfo /* brokerAddr */, Vec<CheetahString> /* Filter Server */>;
-type TopicQueueMappingInfoTable =
-    HashMap<CheetahString /* topic */, HashMap<CheetahString /* brokerName */, TopicQueueMappingInfo>>;
-
+/// Canonical route manager with DashMap-based concurrent tables and segmented locking
+///
+/// Key properties:
+/// - Fine-grained concurrency: DashMap per table instead of global RwLock
+/// - Segmented locking: Per-broker/topic locks for atomic cross-table operations
+/// - Zero-copy: Arc<str> for shared strings instead of String clones
+/// - Type-safe errors: Result<T, RocketMQError> instead of Option
+/// - Better modularity: Separate table modules for maintainability
+///
+/// ## Concurrency Model
+///
+/// This implementation uses a hybrid approach combining DashMap's lock-free concurrency
+/// with segmented read-write locks for operations that span multiple tables:
+///
+/// 1. **DashMap**: Each table (topic, broker, cluster, live) uses DashMap for lock-free concurrent
+///    reads and writes within a single table.
+///
+/// 2. **Segmented Locks**: For operations that need to atomically update multiple tables (e.g.,
+///    broker registration, unregistration), we use segment-level read-write locks based on the
+///    broker name or topic name hash.
+///
+/// ### Lock Acquisition Strategy
+///
+/// - **Single-table operations**: Use DashMap directly (no explicit locking)
+/// - **Multi-table reads**: Acquire segment read lock, then use DashMap
+/// - **Multi-table writes**: Acquire segment write lock, then use DashMap
+///
+/// ### Deadlock Prevention
+///
+/// When acquiring multiple locks, always sort by segment index to prevent deadlocks.
+/// The `SegmentedLock::*_lock_multiple` methods handle this automatically.
+///
+/// ## Performance Characteristics
+///
+/// - **Single-table ops**: O(1) lock-free (DashMap only)
+/// - **Multi-table read**: O(1) segment read lock + O(1) DashMap read
+/// - **Multi-table write**: O(1) segment write lock + O(1) DashMap write
+/// - **Contention**: Minimal due to 16-way lock striping
 pub struct RouteInfoManager {
-    pub(crate) topic_queue_table: TopicQueueTable,
-    pub(crate) broker_addr_table: BrokerAddrTable,
-    pub(crate) cluster_addr_table: ClusterAddrTable,
-    pub(crate) broker_live_table: BrokerLiveTable,
-    pub(crate) filter_server_table: FilterServerTable,
-    pub(crate) topic_queue_mapping_info_table: TopicQueueMappingInfoTable,
-    pub(crate) name_server_runtime_inner: NameServerRuntimeHandle,
-    pub(crate) un_register_service: Arc<BatchUnregistrationService>,
+    // DashMap-based concurrent tables (lock-free for single-table operations)
+    topic_queue_table: TopicQueueTable,
+    broker_addr_table: BrokerAddrTable,
+    cluster_addr_table: ClusterAddrTable,
+    broker_live_table: BrokerLiveTable,
+    filter_server_table: FilterServerTable,
+    topic_queue_mapping_info_table: TopicQueueMappingInfoTable,
+
+    // Segmented locks for atomic cross-table operations
+    // - broker_locks: Locks for broker-related operations (keyed by broker name)
+    // - topic_locks: Locks for topic-related operations (keyed by topic name)
+    broker_locks: SegmentedLock,
+    topic_locks: SegmentedLock,
+
+    // Runtime and lifecycle components
+    name_server_runtime_inner: NameServerRuntimeHandle,
+    un_register_service: Arc<BatchUnregistrationService>,
 }
 
-#[allow(private_interfaces)]
 impl RouteInfoManager {
+    /// Create a new RouteInfoManager with DashMap-based tables and segmented locks
     pub(crate) fn new(name_server_runtime_inner: NameServerRuntimeHandle, queue_capacity: usize) -> Self {
         let un_register_service = Arc::new(BatchUnregistrationService::new(
             name_server_runtime_inner.clone(),
             queue_capacity,
         ));
-        RouteInfoManager {
-            topic_queue_table: HashMap::new(),
-            broker_addr_table: HashMap::new(),
-            cluster_addr_table: HashMap::new(),
-            broker_live_table: HashMap::new(),
-            filter_server_table: HashMap::new(),
-            topic_queue_mapping_info_table: HashMap::new(),
+
+        Self {
+            // Initialize with estimated capacities based on typical cluster sizes
+            topic_queue_table: TopicQueueTable::with_capacity(1024),
+            broker_addr_table: BrokerAddrTable::with_capacity(128),
+            cluster_addr_table: ClusterAddrTable::with_capacity(32),
+            broker_live_table: BrokerLiveTable::with_capacity(256),
+            filter_server_table: FilterServerTable::with_capacity(128),
+            topic_queue_mapping_info_table: TopicQueueMappingInfoTable::with_capacity(256),
+
+            // Initialize segmented locks (16 segments each for optimal performance)
+            broker_locks: SegmentedLock::new(),
+            topic_locks: SegmentedLock::new(),
+
             name_server_runtime_inner,
             un_register_service,
         }
     }
-}
 
-//impl register broker
-impl RouteInfoManager {
-    pub fn submit_unregister_broker_request(&self, request: UnRegisterBrokerRequestHeader) -> bool {
-        self.un_register_service.submit(request)
+    /// Start the route manager
+    pub fn start(&self) {
+        info!("Starting RouteInfoManager with DashMap tables");
+        self.un_register_service.start();
     }
 
+    /// Find broker info by channel identity
+    #[inline]
+    fn find_broker_by_channel(broker_live_table: &BrokerLiveTable, channel: &Channel) -> Option<Arc<BrokerAddrInfo>> {
+        broker_live_table.get_broker_info_by_channel(channel)
+    }
+
+    /// Find broker info and live state by remote socket address.
+    fn find_broker_by_remote_addr(
+        broker_live_table: &BrokerLiveTable,
+        socket_addr: SocketAddr,
+    ) -> Option<(Arc<BrokerAddrInfo>, Arc<BrokerLiveInfo>)> {
+        broker_live_table.get_broker_info_by_remote_addr(socket_addr)
+    }
+
+    /// Cleanup broker from all tables
+    fn cleanup_broker_from_tables(
+        broker_name: &str,
+        cluster_name: &str,
+        broker_addr_table: &BrokerAddrTable,
+        cluster_addr_table: &ClusterAddrTable,
+        topic_queue_table: &TopicQueueTable,
+    ) {
+        broker_addr_table.remove(broker_name);
+        cluster_addr_table.remove_broker(cluster_name, broker_name);
+
+        // Remove broker from topics that actually contain it
+        for topic in topic_queue_table.topics_for_broker(broker_name) {
+            topic_queue_table.remove_broker(topic.as_ref(), broker_name);
+        }
+
+        // Cleanup empty topics
+        topic_queue_table.cleanup_empty_topics();
+    }
+
+    /// Handle connection disconnection by socket address
+    ///
+    /// 1. Find broker info by socket address
+    /// 2. Setup unregister request
+    /// 3. Submit to batch unregistration service
+    pub fn on_channel_destroy(&self, channel: &Channel) {
+        let mut unregister_request = UnRegisterBrokerRequestHeader::default();
+        let mut need_unregister = false;
+
+        // Find broker by socket address and setup unregister request
+        if let Some(broker_addr_info) = Self::find_broker_by_channel(&self.broker_live_table, channel) {
+            need_unregister = self.setup_unregister_request(&mut unregister_request, &broker_addr_info);
+        }
+
+        if need_unregister {
+            let result = self.submit_unregister_broker_request(unregister_request.clone());
+            info!(
+                "the broker's channel destroyed, submit the unregister request at once, broker info: {:?}, submit \
+                 result: {}",
+                unregister_request, result
+            );
+        }
+    }
+
+    /// Handle broker disconnection when only the remote socket address is available.
+    pub fn connection_disconnected(&self, socket_addr: SocketAddr) {
+        if let Some((broker_addr_info, live_info)) =
+            Self::find_broker_by_remote_addr(&self.broker_live_table, socket_addr)
+        {
+            if let Some(channel) = live_info.channel.as_ref() {
+                channel.connection_ref().close();
+                self.on_channel_destroy(channel);
+            } else {
+                self.on_channel_destroy_by_addr_info(broker_addr_info);
+            }
+        }
+    }
+
+    /// Shutdown the route manager
+    pub async fn shutdown(&self) -> Option<rocketmq_runtime::ShutdownReport> {
+        info!("Shutting down RouteInfoManager");
+        self.un_register_service.shutdown().await
+    }
+}
+
+// ============================================================================
+// Broker Registration
+// ============================================================================
+
+impl RouteInfoManager {
+    /// Register a broker with the name server
+    ///
+    /// This is the main entry point for broker registration, handling:
+    /// - Cluster membership updates
+    /// - Broker address mapping
+    /// - Topic configuration sync
+    /// - Heartbeat registration
+    /// - Conflict detection and resolution
+    /// - Acting master support
+    ///
+    /// # Arguments
+    /// * `cluster_name` - Name of the cluster
+    /// * `broker_addr` - Broker network address
+    /// * `broker_name` - Logical broker name
+    /// * `broker_id` - Broker ID (0 for master, >0 for slaves)
+    /// * `ha_server_addr` - HA server address
+    /// * `zone_name` - Optional zone/region identifier
+    /// * `timeout_millis` - Heartbeat timeout in milliseconds
+    /// * `enable_acting_master` - Whether to enable acting master mode
+    /// * `topic_config_wrapper` - Topic configurations
+    /// * `filter_server_list` - Message filter servers
+    /// * `channel` - Network channel for communication
+    ///
+    /// # Returns
+    /// Result containing RegisterBrokerResult or RocketMQError
+    #[allow(clippy::too_many_arguments)]
     pub fn register_broker(
-        &mut self,
+        &self,
         cluster_name: CheetahString,
         broker_addr: CheetahString,
         broker_name: CheetahString,
         broker_id: u64,
         ha_server_addr: CheetahString,
         zone_name: Option<CheetahString>,
-        timeout_millis: Option<i64>,
+        timeout_millis: Option<u64>,
         enable_acting_master: Option<bool>,
-        topic_config_serialize_wrapper: TopicConfigAndMappingSerializeWrapper,
+        topic_config_wrapper: TopicConfigAndMappingSerializeWrapper,
         filter_server_list: Vec<CheetahString>,
         channel: Channel,
-    ) -> Option<RegisterBrokerResult> {
+    ) -> RouteResult<RegisterBrokerResult> {
+        // ===================================================================
+        // SEGMENTED LOCK ACQUISITION
+        // ===================================================================
+        // Acquire write lock for this broker segment to ensure atomic updates
+        // across multiple tables (cluster, broker_addr, topic_queue, broker_live).
+        //
+        // This prevents race conditions such as:
+        // 1. Concurrent registrations of the same broker
+        // 2. Registration racing with unregistration
+        // 3. Inconsistent state across tables
+        //
+        // Lock scope: Only brokers hashing to the same segment will contend.
+        // Other brokers can register concurrently in different segments.
+        let _broker_lock = self.broker_locks.write_lock(&broker_name.as_str());
+
         let mut result = RegisterBrokerResult::default();
-        //init or update cluster information
+
+        let cluster_name_arc = cluster_name.clone();
+        let broker_name_arc = broker_name.clone();
+
+        // Step 1: Update cluster membership
+        // This is safe because we hold the broker write lock
         self.cluster_addr_table
-            .entry(cluster_name.clone())
-            .or_default()
-            .insert(broker_name.clone());
+            .add_broker(cluster_name_arc, broker_name_arc.clone());
 
-        let enable_acting_master_inner = enable_acting_master.unwrap_or_default();
-        let mut register_first = if let Some(broker_data) = self.broker_addr_table.get_mut(&broker_name) {
-            broker_data.set_enable_acting_master(enable_acting_master_inner);
-            broker_data.set_zone_name(zone_name);
-            false
-        } else {
-            let mut broker_data = BrokerData::new(cluster_name.clone(), broker_name.clone(), HashMap::new(), zone_name);
-            broker_data.set_enable_acting_master(enable_acting_master_inner);
-            self.broker_addr_table.insert(broker_name.clone(), broker_data);
-            true
-        };
-        let broker_data = self.broker_addr_table.get_mut(&broker_name).unwrap();
-        let mut prev_min_broker_id = 0;
-        if !broker_data.broker_addrs().is_empty() {
-            prev_min_broker_id = broker_data.broker_addrs().keys().min().copied().unwrap();
-        }
-        let mut is_min_broker_id_changed = false;
-        if broker_id < prev_min_broker_id {
-            is_min_broker_id_changed = true;
-        }
-
-        //Switch slave to master: first remove <1, IP:PORT> in rocketmq-namesrv, then add <0,
-        // IP:PORT> The same IP:PORT must only have one record in brokerAddrTable
-        broker_data.remove_broker_by_addr(broker_id, &broker_addr);
-
-        //If Local brokerId stateVersion bigger than the registering one
-        if let Some(old_broker_addr) = broker_data.broker_addrs().get(&broker_id) {
-            if old_broker_addr != &broker_addr {
-                let addr_info_old = BrokerAddrInfo::new(cluster_name.clone(), old_broker_addr.to_string());
-                if let Some(val) = self.broker_live_table.get(&addr_info_old) {
-                    let old_state_version = val.data_version().state_version();
-                    let new_state_version = topic_config_serialize_wrapper
-                        .topic_config_serialize_wrapper
-                        .data_version()
-                        .state_version();
-                    if old_state_version > new_state_version {
-                        warn!(
-                            "Registered Broker conflicts with the existed one, just ignore.:  Cluster:{}, \
-                             BrokerName:{}, BrokerId:{},Old BrokerAddr:{}, Old Version:{}, New BrokerAddr:{}, New \
-                             Version:{}.",
-                            &cluster_name,
-                            &broker_name,
-                            broker_id,
-                            old_broker_addr,
-                            old_state_version,
-                            &broker_addr,
-                            new_state_version
-                        );
-                        self.broker_live_table
-                            .remove(BrokerAddrInfo::new(cluster_name, broker_addr.clone()).as_ref());
-                        return Some(result);
-                    }
-                }
-            }
-        }
-        let size = topic_config_serialize_wrapper
-            .topic_config_serialize_wrapper
-            .topic_config_table()
-            .len();
-        if !broker_data.broker_addrs().contains_key(&broker_id) && size == 1 {
-            warn!(
-                "Can't register topicConfigWrapper={:?} because broker[{}]={} has not registered.",
-                topic_config_serialize_wrapper
-                    .topic_config_serialize_wrapper
-                    .topic_config_table(),
-                broker_id,
-                broker_addr
-            );
-            return None;
-        }
-
-        let old_addr = broker_data.broker_addrs_mut().insert(broker_id, broker_addr.clone());
-
-        register_first |= old_addr.is_none() || old_addr.as_ref().unwrap().is_empty();
-        let is_master = mix_all::MASTER_ID == broker_id;
-
-        let is_prime_slave = enable_acting_master.is_some()
-            && !is_master
-            && broker_id == broker_data.broker_addrs().keys().min().copied().unwrap();
-        let broker_data = broker_data.clone();
-        //handle master or prime slave topic config update
-        if is_master || is_prime_slave {
-            let tc_table = topic_config_serialize_wrapper
-                .topic_config_serialize_wrapper
-                .topic_config_table();
-            let topic_queue_mapping_info_map = topic_config_serialize_wrapper.topic_queue_mapping_info_map();
-
-            // Delete the topics that don't exist in tcTable from the current broker
-            // Static topic is not supported currently
-            if self
-                .name_server_runtime_inner
-                .name_server_config()
-                .delete_topic_with_broker_registration
-                && topic_queue_mapping_info_map.is_empty()
-            {
-                let old_topic_set = self.topic_set_of_broker_name(&broker_name);
-                let new_topic_set = tc_table
-                    .keys()
-                    .map(|item| item.to_string())
-                    .collect::<HashSet<String>>();
-                let to_delete_topics = new_topic_set
-                    .difference(&old_topic_set)
-                    .map(|item| item.to_string())
-                    .collect::<HashSet<String>>();
-                for to_delete_topic in to_delete_topics {
-                    let queue_data_map = self.topic_queue_table.get_mut(to_delete_topic.as_str());
-                    if let Some(queue_data) = queue_data_map {
-                        let removed_qd = queue_data.remove(&broker_name);
-                        if let Some(ref removed_qd_inner) = removed_qd {
-                            info!(
-                                "broker[{}] delete topic[{}] queue[{:?}] because of master change",
-                                broker_name, to_delete_topic, removed_qd_inner
-                            );
-                        }
-                        if queue_data.is_empty() {
-                            self.topic_queue_table.remove(to_delete_topic.as_str());
-                        }
-                    }
-                }
-            }
-            let data_version = topic_config_serialize_wrapper
-                .topic_config_serialize_wrapper
-                .data_version();
-            for topic_config in tc_table.values() {
-                let mut config = topic_config.clone();
-                if (register_first
-                    || self.is_topic_config_changed(
-                        &cluster_name,
-                        &broker_addr,
-                        data_version,
-                        &broker_name,
-                        topic_config.topic_name.as_ref().unwrap(),
-                    ))
-                    && is_prime_slave
-                    && broker_data.enable_acting_master()
-                {
-                    config.perm &= !PermName::PERM_WRITE;
-                }
-                self.create_and_update_queue_data(&broker_name, config);
-            }
-            if self.is_broker_topic_config_changed(&cluster_name, &broker_addr, data_version) || register_first {
-                for (topic, vtq_info) in topic_queue_mapping_info_map {
-                    if !self.topic_queue_mapping_info_table.contains_key(topic) {
-                        self.topic_queue_mapping_info_table
-                            .insert(topic.clone(), HashMap::new());
-                    }
-                    self.topic_queue_mapping_info_table
-                        .get_mut(topic)
-                        .unwrap()
-                        .insert(vtq_info.bname.as_ref().unwrap().clone(), vtq_info.clone());
-                }
-            }
-        }
-
-        let broker_addr_info = BrokerAddrInfo::new(cluster_name.clone(), broker_addr.clone());
-
-        self.broker_live_table.insert(
-            broker_addr_info.clone(),
-            BrokerLiveInfo::new(
-                current_millis() as i64,
-                timeout_millis.unwrap_or(DEFAULT_BROKER_CHANNEL_EXPIRED_TIME),
-                topic_config_serialize_wrapper
-                    .topic_config_serialize_wrapper
-                    .data_version()
-                    .clone(),
-                ha_server_addr,
-                channel.remote_address(),
-                channel.channel_id_owned(),
-            ),
+        debug!(
+            "Cluster membership updated: cluster={}, broker={}",
+            cluster_name, broker_name
         );
+
+        // Step 2: Update broker address table with conflict detection
+        // Protected by broker write lock - atomic with cluster update
+        let update_result = self.update_broker_addr_table(
+            &cluster_name,
+            &broker_name,
+            broker_id,
+            &broker_addr,
+            zone_name.as_ref(),
+            enable_acting_master,
+            &topic_config_wrapper,
+        )?;
+
+        // Step 3: Check if broker registration should be rejected
+        if update_result.is_none() {
+            warn!(
+                "Broker registration rejected due to version conflict: cluster={}, broker={}, id={}, addr={}",
+                cluster_name, broker_name, broker_id, broker_addr
+            );
+            rocketmq_observability::metrics::namesrv::record_broker_registration(self.active_broker_count());
+            return Ok(result);
+        }
+        let (register_first, is_min_broker_id_changed) = update_result.unwrap();
+
+        // Step 4: Update topic queue configurations
+        // Protected by broker write lock - atomic with broker updates
+        let is_master = broker_id == mix_all::MASTER_ID;
+        let is_old_version_broker = enable_acting_master.is_none();
+
+        // Determine if this is a prime slave (acting master candidate)
+        let is_prime_slave = if !is_old_version_broker && !is_master {
+            // Get current broker addresses to find minimum broker ID
+            if let Some(broker_data) = self.broker_addr_table.get(&broker_name) {
+                if let Some(&min_broker_id) = broker_data.broker_addrs().keys().min() {
+                    broker_id == min_broker_id
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        if is_master || is_prime_slave {
+            self.update_topic_queue_table(&broker_name_arc, &topic_config_wrapper, register_first, is_prime_slave)?;
+        }
+
+        // Step 5: Register broker live status
+        // Protected by broker write lock - atomic with all above updates
+        let prev_broker_live_info = self.register_broker_live_info(
+            cluster_name.clone(),
+            broker_addr.clone(),
+            timeout_millis,
+            topic_config_wrapper
+                .topic_config_serialize_wrapper()
+                .data_version()
+                .clone(),
+            channel,
+            ha_server_addr.clone(),
+        )?;
+
+        if prev_broker_live_info.is_none() {
+            info!(
+                "New broker registered: cluster={}, broker={}, id={}, addr={}, HAService: {}",
+                cluster_name, broker_name, broker_id, broker_addr, ha_server_addr
+            );
+        }
+
+        // Step 6: Handle filter server list
+        let broker_addr_info = Arc::new(BrokerAddrInfo::new(cluster_name.clone(), broker_addr.clone()));
         if filter_server_list.is_empty() {
             self.filter_server_table.remove(&broker_addr_info);
         } else {
             self.filter_server_table
-                .insert(broker_addr_info.clone(), filter_server_list);
+                .register(broker_addr_info.clone(), filter_server_list);
         }
 
-        if mix_all::MASTER_ID != broker_id {
-            let master_address = broker_data.broker_addrs().get(&(mix_all::MASTER_ID));
-            if let Some(master_addr) = master_address {
-                let master_livie_info = self
-                    .broker_live_table
-                    .get(BrokerAddrInfo::new(cluster_name, master_addr.clone()).as_ref());
-                if let Some(info) = master_livie_info {
-                    result.ha_server_addr = info.ha_server_addr().clone();
-                    result.master_addr = info.ha_server_addr().clone();
+        // Step 7: Handle master address for slaves
+        // Protected by broker write lock - consistent read of master info
+        if !is_master {
+            if let Some(master_addr) = self.get_master_address(&broker_name)? {
+                result.master_addr = master_addr.clone();
+                if let Some(master_live_info) = self.get_broker_live_info(&cluster_name, &master_addr) {
+                    if let Some(ref ha_addr) = master_live_info.ha_server_addr {
+                        result.ha_server_addr = ha_addr.clone();
+                    }
                 }
             }
         }
+
+        // Step 8: Notify if min broker ID changed
         if is_min_broker_id_changed
             && self
                 .name_server_runtime_inner
                 .name_server_config()
                 .notify_min_broker_id_changed
         {
-            self.notify_min_broker_id_changed(
-                broker_data.broker_addrs(),
-                None,
-                Some(
-                    self.broker_live_table
-                        .get(&broker_addr_info)
-                        .unwrap()
-                        .ha_server_addr()
-                        .clone(),
-                ),
-            )
-        }
-        Some(result)
-    }
-}
-
-impl RouteInfoManager {
-    pub(crate) fn get_all_cluster_info(&self) -> ClusterInfo {
-        ClusterInfo::new(
-            Some(self.broker_addr_table.clone()),
-            Some(self.cluster_addr_table.clone()),
-        )
-    }
-
-    pub(crate) fn pickup_topic_route_data(&self, topic: &CheetahString) -> Option<TopicRouteData> {
-        let mut topic_route_data = TopicRouteData {
-            order_topic_conf: None,
-            broker_datas: Vec::new(),
-            queue_datas: Vec::new(),
-            filter_server_table: HashMap::new(),
-            topic_queue_mapping_by_broker: None,
-        };
-
-        let mut found_queue_data = false;
-        let mut found_broker_data = false;
-
-        if let Some(queue_data_map) = self.topic_queue_table.get(topic) {
-            topic_route_data
-                .queue_datas
-                .extend(queue_data_map.values().cloned().collect::<Vec<_>>());
-
-            found_queue_data = true;
-
-            for broker_name in queue_data_map.keys() {
-                if let Some(broker_data) = self.broker_addr_table.get(broker_name) {
-                    let broker_data_clone = broker_data.clone();
-                    topic_route_data.broker_datas.push(broker_data_clone);
-                    found_broker_data = true;
-
-                    if !self.filter_server_table.is_empty() {
-                        for broker_addr in broker_data.broker_addrs().values() {
-                            let broker_addr_info = BrokerAddrInfo::new(broker_data.cluster(), broker_addr.clone());
-                            if let Some(filter_server_list) = self.filter_server_table.get(&broker_addr_info) {
-                                topic_route_data
-                                    .filter_server_table
-                                    .insert(broker_addr.clone(), filter_server_list.clone());
-                            }
-                        }
-                    }
-                }
+            if let Some(broker_data) = self.broker_addr_table.get(&broker_name) {
+                let ha_server_addr = self
+                    .broker_live_table
+                    .get(broker_addr_info.as_ref())
+                    .map(|item| item.ha_server_addr.clone())
+                    .unwrap_or_default();
+                self.notify_min_broker_id_changed(broker_data.broker_addrs(), None, ha_server_addr);
             }
         }
-        debug!("pickup_topic_route_data {:?} {:?}", topic, topic_route_data);
 
-        if found_broker_data && found_queue_data {
-            topic_route_data.topic_queue_mapping_by_broker = self.topic_queue_mapping_info_table.get(topic).cloned();
+        info!(
+            "Broker registered: cluster={}, broker={}, id={}, addr={}, first={}",
+            cluster_name, broker_name, broker_id, broker_addr, register_first
+        );
 
-            if !self
-                .name_server_runtime_inner
-                .name_server_config()
-                .support_acting_master
-            {
-                return Some(topic_route_data);
-            }
-
-            if topic.starts_with(TopicValidator::SYNC_BROKER_MEMBER_GROUP_PREFIX) {
-                return Some(topic_route_data);
-            }
-
-            if topic_route_data.broker_datas.is_empty() || topic_route_data.queue_datas.is_empty() {
-                return Some(topic_route_data);
-            }
-
-            let need_acting_master = topic_route_data.broker_datas.iter().any(|broker_data| {
-                !broker_data.broker_addrs().is_empty()
-                    && !broker_data.broker_addrs().contains_key(&(mix_all::MASTER_ID))
-            });
-
-            if !need_acting_master {
-                return Some(topic_route_data);
-            }
-
-            for broker_data in &mut topic_route_data.broker_datas {
-                if broker_data.broker_addrs().is_empty()
-                    || broker_data.broker_addrs().contains_key(&(mix_all::MASTER_ID))
-                    || !broker_data.enable_acting_master()
-                {
-                    continue;
-                }
-
-                // No master
-                for queue_data in &topic_route_data.queue_datas {
-                    if queue_data.broker_name() == broker_data.broker_name() {
-                        if !PermName::is_writeable(queue_data.perm()) {
-                            if let Some(min_broker_id) = broker_data.broker_addrs().keys().min() {
-                                let min_broker_id = *min_broker_id;
-                                if let Some(acting_master_addr) = broker_data.broker_addrs_mut().remove(&min_broker_id)
-                                {
-                                    broker_data
-                                        .broker_addrs_mut()
-                                        .insert(mix_all::MASTER_ID, acting_master_addr);
-                                }
-                            }
-                        }
-                        break;
-                    }
-                }
-            }
-
-            return Some(topic_route_data);
-        }
-
-        None
-    }
-}
-
-impl RouteInfoManager {
-    fn topic_set_of_broker_name(&self, broker_name: &str) -> HashSet<String> {
-        let mut topic_of_broker = HashSet::new();
-        for (key, value) in self.topic_queue_table.iter() {
-            if value.contains_key(broker_name) {
-                topic_of_broker.insert(key.to_string());
-            }
-        }
-        topic_of_broker
+        rocketmq_observability::metrics::namesrv::record_broker_registration(self.active_broker_count());
+        Ok(result)
     }
 
-    pub(crate) fn is_topic_config_changed(
+    /// Update broker address table with conflict detection.
+    ///
+    /// Returns:
+    /// - Ok(Some((register_first, is_min_broker_id_changed))): Success
+    /// - Ok(None): Registration rejected due to version conflict
+    /// - Err: Other errors
+    fn update_broker_addr_table(
         &self,
         cluster_name: &CheetahString,
-        broker_addr: &CheetahString,
-        data_version: &DataVersion,
         broker_name: &CheetahString,
+        broker_id: u64,
+        broker_addr: &CheetahString,
+        zone_name: Option<&CheetahString>,
+        enable_acting_master: Option<bool>,
+        topic_config_wrapper: &TopicConfigAndMappingSerializeWrapper,
+    ) -> RouteResult<Option<(bool, bool)>> {
+        let broker_name_arc: BrokerName = broker_name.clone();
+        let mut is_min_broker_id_changed = false;
+
+        // Check if broker already exists
+        let mut register_first = false;
+        if let Some(existing_broker) = self.broker_addr_table.get(broker_name) {
+            // Broker exists, update it
+            let mut new_broker_data = (*existing_broker).clone();
+
+            let is_old_version_broker = enable_acting_master.is_none();
+            new_broker_data
+                .set_enable_acting_master(!is_old_version_broker && enable_acting_master.unwrap_or_default());
+            if let Some(zone) = zone_name {
+                new_broker_data.set_zone_name(Some(zone.clone()));
+            }
+
+            let broker_addrs_map = new_broker_data.broker_addrs_mut();
+
+            // Track minBrokerId changes
+            let prev_min_broker_id = broker_addrs_map.keys().min().copied().unwrap_or(u64::MAX);
+            if broker_id < prev_min_broker_id {
+                is_min_broker_id_changed = true;
+            }
+
+            // Switch slave to master: remove same IP:PORT with different broker ID
+            // The same IP:PORT must only have one record in brokerAddrTable
+            broker_addrs_map.retain(|&id, addr| !(addr.as_str() == broker_addr.as_str() && id != broker_id));
+
+            // Check for address conflict with different stateVersion
+            if let Some(old_broker_addr) = broker_addrs_map.get(&broker_id) {
+                if old_broker_addr.as_str() != broker_addr.as_str() {
+                    // Address changed for same broker ID - check version conflict
+                    let old_broker_info = BrokerAddrInfo::new(cluster_name.clone(), old_broker_addr.clone());
+
+                    if let Some(old_broker_live_info) = self.broker_live_table.get(&old_broker_info) {
+                        let old_state_version = old_broker_live_info.data_version.get_state_version();
+                        let new_state_version = topic_config_wrapper
+                            .topic_config_serialize_wrapper()
+                            .data_version()
+                            .get_state_version();
+
+                        if old_state_version > new_state_version {
+                            warn!(
+                                "Registering Broker conflicts with the existed one, just ignore.: Cluster:{}, \
+                                 BrokerName:{}, BrokerId:{}, Old BrokerAddr:{}, Old Version:{}, New BrokerAddr:{}, \
+                                 New Version:{}",
+                                cluster_name,
+                                broker_name,
+                                broker_id,
+                                old_broker_addr,
+                                old_state_version,
+                                broker_addr,
+                                new_state_version
+                            );
+
+                            // Remove the rejected broker from brokerLiveTable
+                            let rejected_broker_info = BrokerAddrInfo::new(cluster_name.clone(), broker_addr.clone());
+                            self.broker_live_table.remove(&rejected_broker_info);
+
+                            return Ok(None); // Registration rejected
+                        }
+                    }
+                }
+            }
+
+            // Check if broker has only one topic but is not registered yet
+            if !broker_addrs_map.contains_key(&broker_id)
+                && topic_config_wrapper
+                    .topic_config_serialize_wrapper()
+                    .topic_config_table()
+                    .len()
+                    == 1
+            {
+                warn!(
+                    "Can't register topicConfigWrapper={:?} because broker[{}]={} has not registered.",
+                    topic_config_wrapper
+                        .topic_config_serialize_wrapper()
+                        .topic_config_table()
+                        .keys()
+                        .collect::<Vec<_>>(),
+                    broker_id,
+                    broker_addr
+                );
+                return Ok(None); // Registration rejected
+            }
+
+            // Check if this is first registration
+            let old_addr = broker_addrs_map.insert(broker_id, broker_addr.clone());
+            register_first =
+                register_first || old_addr.is_none() || old_addr.as_ref().map(|s| s.is_empty()).unwrap_or(false);
+
+            // Update in table
+            self.broker_addr_table.insert(broker_name_arc, new_broker_data);
+        } else {
+            // New broker, create it
+            register_first = true;
+            let mut broker_addrs = HashMap::new();
+            broker_addrs.insert(broker_id, broker_addr.clone());
+
+            let is_old_version_broker = enable_acting_master.is_none();
+            let mut broker_data = BrokerData::new(
+                cluster_name.clone(),
+                broker_name.clone(),
+                broker_addrs,
+                zone_name.cloned(),
+            );
+            broker_data.set_enable_acting_master(!is_old_version_broker && enable_acting_master.unwrap_or_default());
+
+            self.broker_addr_table.insert(broker_name_arc, broker_data);
+        }
+
+        Ok(Some((register_first, is_min_broker_id_changed)))
+    }
+
+    /// Update topic queue table with deletion and prime-slave handling.
+    fn update_topic_queue_table(
+        &self,
+        broker_name: &BrokerName,
+        topic_config_wrapper: &TopicConfigAndMappingSerializeWrapper,
+        register_first: bool,
+        is_prime_slave: bool,
+    ) -> RouteResult<()> {
+        use std::collections::HashSet;
+
+        use rocketmq_common::common::constant::PermName;
+
+        let topic_config_table = topic_config_wrapper
+            .topic_config_serialize_wrapper()
+            .topic_config_table();
+        let topic_queue_mapping_info_map = topic_config_wrapper.topic_queue_mapping_info_map();
+
+        // Delete topics that don't exist in tcTable from the current broker
+        // Static topic is not supported if topicQueueMappingInfoMap is empty
+        if self
+            .name_server_runtime_inner
+            .name_server_config()
+            .delete_topic_with_broker_registration
+            && topic_queue_mapping_info_map.is_empty()
+        {
+            let old_topic_set = self.topic_set_of_broker_name(broker_name.as_str());
+            let new_topic_set: HashSet<_> = topic_config_table.keys().cloned().collect();
+
+            // Find topics to delete (in old but not in new)
+            for to_delete_topic in old_topic_set.difference(&new_topic_set) {
+                if let Some(removed_qd) = self
+                    .topic_queue_table
+                    .remove_broker(to_delete_topic.as_ref(), broker_name.as_str())
+                {
+                    info!(
+                        "deleteTopic, remove one broker's topic {} {} {:?}",
+                        broker_name, to_delete_topic, removed_qd
+                    );
+                }
+
+                // Check if topic is now empty
+                if self
+                    .topic_queue_table
+                    .get_topic_queues_map(to_delete_topic.as_str())
+                    .map(|map| map.is_empty())
+                    .unwrap_or(true)
+                {
+                    self.topic_queue_table.remove_topic(to_delete_topic.as_ref());
+                    info!("deleteTopic, remove the topic all queue {}", to_delete_topic);
+                }
+            }
+        }
+
+        // Get cluster name and broker addr for config change detection
+        let (cluster_name, broker_addr) = if let Some(broker_data) = self.broker_addr_table.get(broker_name) {
+            let cluster = broker_data.cluster().to_string();
+            let addr = broker_data
+                .broker_addrs()
+                .values()
+                .next()
+                .map(|s| s.to_string())
+                .unwrap_or_default();
+            (cluster, addr)
+        } else {
+            (String::new(), String::new())
+        };
+
+        // Process each topic configuration
+        for (topic_name, topic_config) in topic_config_table.iter() {
+            let topic_name_cheetah = topic_name.clone();
+
+            // Check if we should update this topic
+            if register_first
+                || self.is_topic_config_changed(
+                    &cluster_name,
+                    &broker_addr,
+                    topic_config_wrapper.topic_config_serialize_wrapper().data_version(),
+                    broker_name.as_str(),
+                    topic_name.as_str(),
+                )
+            {
+                let mut topic_config = topic_config.clone();
+
+                // In Slave Acting Master mode, Namesrv regards the surviving Slave
+                // with the smallest brokerId as the "agent" Master, and modifies
+                // the brokerPermission to read-only
+                if is_prime_slave {
+                    if let Some(broker_data) = self.broker_addr_table.get(broker_name) {
+                        if broker_data.enable_acting_master() {
+                            // Wipe write permission for prime slave
+                            topic_config.perm &= !PermName::PERM_WRITE;
+                        }
+                    }
+                }
+
+                // Create QueueData from TopicConfig
+                let queue_data = QueueData::new(
+                    broker_name.to_string().into(),
+                    topic_config.read_queue_nums,
+                    topic_config.write_queue_nums,
+                    topic_config.perm,
+                    topic_config.topic_sys_flag,
+                );
+
+                // Check if queue data exists and log appropriately
+                let old_queue_data = self.topic_queue_table.get(topic_name, broker_name.as_str());
+                if let Some(existed_qd) = old_queue_data {
+                    if existed_qd.as_ref() != &queue_data {
+                        info!(
+                            "topic changed, {} OLD: {:?} NEW: {:?}",
+                            topic_name, existed_qd, queue_data
+                        );
+                    }
+                } else {
+                    info!("new topic registered, {} {:?}", topic_name, &queue_data);
+                }
+
+                self.topic_queue_table
+                    .insert(topic_name_cheetah.clone(), broker_name.clone(), queue_data);
+
+                debug!(
+                    "Topic queue updated: topic={}, broker={}, read={}, write={}, perm={}",
+                    topic_name,
+                    broker_name.as_str(),
+                    topic_config.read_queue_nums,
+                    topic_config.write_queue_nums,
+                    topic_config.perm
+                );
+            }
+        }
+
+        // Update topic queue mapping info if broker topic config changed or first registration
+        if self.is_broker_topic_config_changed(
+            &cluster_name.into(),
+            &broker_addr.into(),
+            topic_config_wrapper.topic_config_serialize_wrapper().data_version(),
+        ) || register_first
+        {
+            for (topic, mapping_info) in topic_queue_mapping_info_map {
+                let topic = topic.clone();
+
+                // Extract broker name from mapping info (bname is a field, not a method)
+                let broker_name_mapping = mapping_info.bname.clone().unwrap_or_else(|| broker_name.clone());
+
+                self.topic_queue_mapping_info_table.register(
+                    topic,
+                    broker_name_mapping,
+                    Arc::new(mapping_info.clone()),
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Register broker live information (heartbeat tracking)
+    /// Returns the previous BrokerLiveInfo if it existed
+    fn register_broker_live_info(
+        &self,
+        cluster_name: CheetahString,
+        broker_addr: CheetahString,
+        timeout_millis: Option<u64>,
+        data_version: DataVersion,
+        channel: Channel,
+        ha_server_addr: CheetahString,
+    ) -> RouteResult<Option<Arc<BrokerLiveInfo>>> {
+        let broker_addr_info = Arc::new(BrokerAddrInfo::new(cluster_name, broker_addr));
+
+        let timeout = timeout_millis.unwrap_or(DEFAULT_BROKER_CHANNEL_EXPIRED_TIME);
+        let current_time = current_millis();
+
+        let live_info = BrokerLiveInfo::new(
+            current_time,
+            data_version,
+            channel.remote_address(),
+            channel.channel_id_owned(),
+        )
+        .with_channel(channel.clone())
+        .with_timeout(timeout)
+        .with_ha_server(ha_server_addr);
+
+        let prev = self.broker_live_table.register(broker_addr_info, live_info);
+
+        Ok(prev)
+    }
+
+    /// Check if topic configuration has changed (extended version)
+    fn is_topic_config_changed(
+        &self,
+        cluster_name: &str,
+        broker_addr: &str,
+        data_version: &DataVersion,
+        broker_name: &str,
         topic: &str,
     ) -> bool {
-        let is_change = self.is_broker_topic_config_changed(cluster_name, broker_addr, data_version);
+        let is_change = self.is_broker_topic_config_changed(&cluster_name.into(), &broker_addr.into(), data_version);
         if is_change {
             return true;
         }
-        let queue_data_map = self.topic_queue_table.get(topic);
-        if let Some(queue_data) = queue_data_map {
-            if queue_data.is_empty() {
-                return true;
-            }
-            !queue_data.contains_key(broker_name)
-        } else {
-            true
+
+        // Check if topic exists in table
+        if !self.topic_queue_table.contains_topic(topic) {
+            return true;
         }
+
+        // Check if broker exists for this topic
+        self.topic_queue_table.get(topic, broker_name).is_none()
     }
 
-    pub(crate) fn is_broker_topic_config_changed(
-        &self,
-        cluster_name: &CheetahString,
-        broker_addr: &CheetahString,
-        data_version: &DataVersion,
-    ) -> bool {
-        let option = self.query_broker_topic_config(cluster_name.clone(), broker_addr.clone());
-        if let Some(pre) = option {
-            pre != data_version
-        } else {
-            true
-        }
+    /// Get all topics registered by a specific broker
+    fn topic_set_of_broker_name(&self, broker_name: &str) -> std::collections::HashSet<CheetahString> {
+        self.topic_queue_table
+            .topics_for_broker(broker_name)
+            .into_iter()
+            .collect()
     }
 
-    pub(crate) fn query_broker_topic_config(
-        &self,
-        cluster_name: CheetahString,
-        broker_addr: CheetahString,
-    ) -> Option<&DataVersion> {
-        let info = BrokerAddrInfo::new(cluster_name, broker_addr);
-        let pre = self.broker_live_table.get(info.as_ref());
-        if let Some(live_info) = pre {
-            return Some(live_info.data_version());
-        }
-        None
-    }
-
-    fn create_and_update_queue_data(&mut self, broker_name: &CheetahString, topic_config: TopicConfig) {
-        let queue_data = QueueData::new(
-            broker_name.clone(),
-            topic_config.write_queue_nums,
-            topic_config.read_queue_nums,
-            topic_config.perm,
-            topic_config.topic_sys_flag,
-        );
-
-        let queue_data_map = self
-            .topic_queue_table
-            .get_mut(topic_config.topic_name.as_ref().unwrap().as_str());
-        if let Some(queue_data_map_inner) = queue_data_map {
-            let existed_qd = queue_data_map_inner.get(broker_name);
-
-            if let Some(existed_qd) = existed_qd {
-                if existed_qd != &queue_data {
-                    info!(
-                        "topic changed, {} OLD: {:?} NEW: {:?}",
-                        topic_config.topic_name.as_ref().unwrap(),
-                        existed_qd,
-                        queue_data
-                    );
-                    queue_data_map_inner.insert(broker_name.clone(), queue_data);
-                } else {
-                    queue_data_map_inner.insert(broker_name.clone(), queue_data);
-                }
-            }
-        } else {
-            let mut queue_data_map_inner = HashMap::new();
-            info!(
-                "new topic registered, {} {:?}",
-                topic_config.topic_name.as_ref().unwrap(),
-                &queue_data
-            );
-            queue_data_map_inner.insert(broker_name.clone(), queue_data);
-            self.topic_queue_table
-                .insert(topic_config.topic_name.as_ref().unwrap().clone(), queue_data_map_inner);
-        }
-    }
-
+    /// Notify when minimum broker ID has changed (for master election)
+    ///
+    /// This method notifies brokers when the minimum broker ID changes,
+    /// which is critical for acting master mode where the slave with the
+    /// smallest broker ID becomes the acting master.
+    ///
+    /// # Arguments
+    /// * `broker_addrs` - Map of broker IDs to addresses
+    /// * `offline_broker_addr` - Address of broker going offline (if any)
+    /// * `ha_server_addr` - HA server address
     fn notify_min_broker_id_changed(
         &self,
-        broker_addr_map: &HashMap<u64, CheetahString>,
+        broker_addrs: &HashMap<u64, CheetahString>,
         offline_broker_addr: Option<CheetahString>,
-        ha_broker_addr: Option<CheetahString>,
+        ha_server_addr: Option<CheetahString>,
     ) {
-        if broker_addr_map.is_empty() {
+        if broker_addrs.is_empty() {
             return;
         }
-        let min_broker_id = broker_addr_map.keys().min().copied().unwrap();
-        // notify master
+
+        let min_broker_id = match broker_addrs.keys().min().copied() {
+            Some(id) => id,
+            None => return,
+        };
+
+        let min_broker_addr = broker_addrs.get(&min_broker_id).cloned();
+
         let request_header = NotifyMinBrokerIdChangeRequestHeader::new(
             Some(min_broker_id),
             None,
-            broker_addr_map.get(&min_broker_id).cloned(),
+            min_broker_addr,
             offline_broker_addr.clone(),
-            ha_broker_addr,
+            ha_server_addr,
         );
 
-        if let Some(broker_addrs_notify) = Self::choose_broker_addrs_to_notify(broker_addr_map, offline_broker_addr) {
-            let Some(task_group) = self.name_server_runtime_inner.task_group() else {
-                warn!("skip min broker id notification because NameServer task group is unavailable");
-                return;
-            };
-            for broker_addr in broker_addrs_notify {
-                let remoting_client = self.name_server_runtime_inner.clone();
-                let requst_header = request_header.clone();
-                let broker_addr = broker_addr.clone();
+        // Choose which brokers to notify
+        let broker_addrs_notify = Self::choose_broker_addrs_to_notify(broker_addrs, &offline_broker_addr);
 
-                if let Err(error) = task_group.spawn_service("namesrv.notify-min-broker-id", async move {
-                    if let Some(runtime) = remoting_client.upgrade() {
-                        let _ = runtime
-                            .remoting_client()
-                            .invoke_request_oneway(
-                                &broker_addr,
-                                RemotingCommand::create_request_command(
-                                    RequestCode::NotifyMinBrokerIdChange,
-                                    requst_header,
-                                ),
-                                3000,
-                            )
-                            .await;
-                    }
-                }) {
-                    warn!("failed to spawn min broker id notification task: {error}");
+        if broker_addrs_notify.is_empty() {
+            return;
+        }
+
+        info!(
+            "Min broker id changed to {}, notify {:?}, offline broker addr {:?}",
+            min_broker_id, broker_addrs_notify, offline_broker_addr
+        );
+
+        // Create remoting command
+        let request = RemotingCommand::create_request_command(RequestCode::NotifyMinBrokerIdChange, request_header);
+
+        // Send notification to each broker asynchronously
+        let Some(task_group) = self.name_server_runtime_inner.task_group() else {
+            warn!("skip min broker id notification because NameServer task group is unavailable");
+            return;
+        };
+        for broker_addr in broker_addrs_notify {
+            let remoting_client = self.name_server_runtime_inner.clone();
+            let request = request.clone();
+            let broker_addr = broker_addr.clone();
+
+            if let Err(error) = task_group.spawn_service("namesrv.notify-min-broker-id", async move {
+                if let Some(runtime) = remoting_client.upgrade() {
+                    let _ = runtime
+                        .remoting_client()
+                        .invoke_request_oneway(&broker_addr, request, 3000)
+                        .await;
                 }
+            }) {
+                warn!("failed to spawn min broker id notification task: {error}");
             }
         }
     }
 
+    /// Choose which broker addresses should receive the min broker ID change notification
+    ///
+    /// # Logic
+    /// - If only 1 broker or offline event: notify all brokers
+    /// - Otherwise: notify all brokers except the one with min broker ID
+    ///
+    /// # Arguments
+    /// * `broker_addrs` - Map of broker IDs to addresses
+    /// * `offline_broker_addr` - Address of broker going offline (if any)
+    ///
+    /// # Returns
+    /// Vector of broker addresses to notify
     fn choose_broker_addrs_to_notify(
-        broker_addr_map: &HashMap<u64, CheetahString>,
-        offline_broker_addr: Option<CheetahString>,
-    ) -> Option<Vec<&CheetahString>> {
-        if broker_addr_map.len() == 1 || offline_broker_addr.is_some() {
-            return Some(broker_addr_map.values().collect());
+        broker_addrs: &HashMap<u64, CheetahString>,
+        offline_broker_addr: &Option<CheetahString>,
+    ) -> Vec<CheetahString> {
+        // If only one broker or there's an offline event, notify all
+        if broker_addrs.len() == 1 || offline_broker_addr.is_some() {
+            return broker_addrs.values().cloned().collect();
         }
-        let min_broker_id = broker_addr_map.keys().min().copied().unwrap();
-        let broker_addr_vec = broker_addr_map
+
+        // Otherwise, notify all except the min broker ID
+        let min_broker_id = match broker_addrs.keys().min().copied() {
+            Some(id) => id,
+            None => return Vec::new(),
+        };
+
+        broker_addrs
             .iter()
-            .filter(|(key, _value)| **key != min_broker_id)
-            .map(|(_, value)| value)
-            .collect();
-        Some(broker_addr_vec)
+            .filter(|(&id, _)| id != min_broker_id)
+            .map(|(_, addr)| addr.clone())
+            .collect()
     }
 
-    pub(crate) fn update_broker_info_update_timestamp(
-        &mut self,
-        cluster_name: CheetahString,
-        broker_addr: CheetahString,
-    ) {
-        let broker_addr_info = BrokerAddrInfo::new(cluster_name, broker_addr);
-        if let Some(value) = self.broker_live_table.get_mut(broker_addr_info.as_ref()) {
-            value.last_update_timestamp = TimeUtils::current_millis() as i64;
-        }
-    }
-
-    pub(crate) fn get_broker_member_group(
-        &mut self,
-        cluster_name: CheetahString,
-        broker_name: CheetahString,
-    ) -> Option<BrokerMemberGroup> {
-        let mut group_member = BrokerMemberGroup::new(cluster_name, broker_name.clone());
-        if let Some(broker_data) = self.broker_addr_table.get(&broker_name) {
-            group_member.broker_addrs = broker_data.broker_addrs().clone();
-        }
-        Some(group_member)
-    }
-
-    #[inline]
-    pub(crate) fn wipe_write_perm_of_broker_by_lock(&mut self, broker_name: &CheetahString) -> i32 {
-        self.operate_write_perm_of_broker(broker_name, RequestCode::WipeWritePermOfBroker)
-    }
-
-    #[inline]
-    pub(crate) fn add_write_perm_of_broker_by_lock(&mut self, broker_name: &CheetahString) -> i32 {
-        self.operate_write_perm_of_broker(broker_name, RequestCode::AddWritePermOfBroker)
-    }
-
-    fn operate_write_perm_of_broker(&mut self, broker_name: &CheetahString, request_code: RequestCode) -> i32 {
-        let mut topic_cnt = 0;
-        for qd_map in self.topic_queue_table.values_mut() {
-            let qd = qd_map.get_mut(broker_name);
-            if qd.is_none() {
-                continue;
-            }
-            let qd = qd.unwrap();
-            let mut perm = qd.perm;
-            match request_code {
-                RequestCode::WipeWritePermOfBroker => {
-                    perm &= !PermName::PERM_WRITE;
-                }
-                RequestCode::AddWritePermOfBroker => {
-                    perm = PermName::PERM_READ | PermName::PERM_WRITE;
-                }
-                _ => {}
-            }
-            qd.perm = perm;
-            topic_cnt += 1;
-        }
-        topic_cnt
-    }
-
-    pub(crate) fn get_all_topic_list(&self) -> TopicList {
-        let topics = self.topic_queue_table.keys().cloned().collect::<Vec<CheetahString>>();
-        TopicList {
-            topic_list: topics,
-            broker_addr: None,
-        }
-    }
-
-    pub(crate) fn delete_topic(&mut self, topic: CheetahString, cluster_name: Option<CheetahString>) {
-        if cluster_name.as_ref().is_some_and(|inner| !inner.is_empty()) {
-            let cluster_name_inner = cluster_name.unwrap();
-            let broker_names = self.cluster_addr_table.get(&cluster_name_inner);
-            if broker_names.is_none() || broker_names.unwrap().is_empty() {
-                return;
-            }
-            let topic_queue_table_ = &mut self.topic_queue_table;
-            if let Some(queue_data_map) = topic_queue_table_.get_mut(&topic) {
-                for broker_name in broker_names.unwrap() {
-                    if let Some(remove_qd) = queue_data_map.remove(broker_name) {
-                        info!(
-                            "deleteTopic, remove one broker's topic {} {} {:?}",
-                            broker_name, &topic, remove_qd
-                        )
-                    }
-                }
-                if queue_data_map.is_empty() {
-                    topic_queue_table_.remove(&topic);
-                }
-            }
+    /// Get master broker address for a broker name
+    fn get_master_address(&self, broker_name: &str) -> RouteResult<Option<CheetahString>> {
+        if let Some(broker_data) = self.broker_addr_table.get(broker_name) {
+            Ok(broker_data.broker_addrs().get(&mix_all::MASTER_ID).cloned())
         } else {
-            self.topic_queue_table.remove(&topic);
+            Ok(None)
         }
     }
 
-    pub(crate) fn register_topic(&mut self, topic: CheetahString, queue_data_vec: Vec<QueueData>) {
+    /// Get broker live info
+    fn get_broker_live_info(&self, cluster_name: &str, broker_addr: &str) -> Option<Arc<BrokerLiveInfo>> {
+        let broker_addr_info = BrokerAddrInfo::new(cluster_name.to_string(), broker_addr.to_string());
+        self.broker_live_table.get(&broker_addr_info)
+    }
+
+    /// Register a topic with queue data for multiple brokers
+    ///
+    /// This method ensures atomicity by acquiring locks for:
+    /// 1. The topic being registered (write lock)
+    /// 2. All brokers referenced in queue_data_vec (read locks)
+    ///
+    /// ## Consistency Guarantee
+    ///
+    /// The method performs two operations that must be atomic:
+    /// 1. Validate all brokers exist in broker_addr_table
+    /// 2. Insert queue data into topic_queue_table
+    ///
+    /// Without locking, a concurrent unregister_broker could delete a broker
+    /// between validation and insertion, causing inconsistent state where
+    /// topic_queue_table references non-existent brokers.
+    ///
+    /// ## Lock Strategy
+    ///
+    /// - **Topic write lock**: Prevents concurrent modifications to this topic
+    /// - **Broker read locks**: Prevents brokers from being deleted during registration
+    ///
+    /// This ensures that if all brokers pass validation, they're guaranteed to
+    /// still exist when we insert the queue data.
+    pub(crate) fn register_topic(&self, topic: CheetahString, queue_data_vec: Vec<QueueData>) {
         if queue_data_vec.is_empty() {
             return;
         }
-        if !self.topic_queue_table.contains_key(&topic) {
-            self.topic_queue_table.insert(topic.clone(), HashMap::new());
-        }
-        let queue_data_map = self.topic_queue_table.get_mut(&topic).unwrap();
-        let vec_length = queue_data_vec.len();
-        for queue_data in queue_data_vec {
-            if !self.broker_addr_table.contains_key(queue_data.broker_name()) {
+
+        // Acquire topic write lock and broker read locks atomically
+        // This prevents:
+        // 1. Concurrent topic registrations (topic write lock)
+        // 2. Broker deletion during registration (broker read locks)
+        let broker_names: Vec<_> = queue_data_vec.iter().map(|qd| qd.broker_name.as_str()).collect();
+
+        let _topic_lock = self.topic_locks.write_lock(&topic);
+        let _broker_locks = self.broker_locks.read_lock_multiple(&broker_names);
+
+        // Check if topic already exists
+        let topic_exists = self.topic_queue_table.contains_topic(topic.as_str());
+
+        // Validate all brokers exist first (before any modification)
+        for queue_data in &queue_data_vec {
+            if !self.broker_addr_table.contains(&queue_data.broker_name) {
                 warn!("Register topic contains illegal broker, {}, {:?}", topic, queue_data);
                 return;
             }
-            queue_data_map.insert(queue_data.broker_name().clone(), queue_data);
         }
-        if queue_data_map.len() > vec_length {
-            info!("Topic route already exist.{}, {:?}", topic, queue_data_map)
+
+        // All brokers valid, proceed with insertion/update
+        for queue_data in &queue_data_vec {
+            self.topic_queue_table
+                .insert(topic.clone(), queue_data.broker_name.clone(), queue_data.clone());
+        }
+
+        // Log appropriate message based on whether topic existed
+        if topic_exists {
+            info!(
+                "Topic route already exist.{}, {:?}",
+                topic,
+                self.topic_queue_table.get_topic_queues(&topic)
+            );
         } else {
-            info!("Register topic route:{}, {:?}", topic, queue_data_map)
+            info!("Register topic route:{}, {:?}", topic, queue_data_vec);
         }
     }
 
-    pub(crate) fn get_topics_by_cluster(&self, cluster: &CheetahString) -> TopicList {
-        let mut topic_list = Vec::new();
-        if let Some(broker_name_set) = self.cluster_addr_table.get(cluster) {
-            for broker_name in broker_name_set {
-                for (topic, queue_data_map) in self.topic_queue_table.iter() {
-                    if let Some(_queue_data) = queue_data_map.get(broker_name) {
-                        topic_list.push(topic.clone());
+    /// Delete a topic from the name server
+    ///
+    /// This method deletes topic queue data either for a specific cluster
+    /// or completely if no cluster is specified.
+    ///
+    /// ## Consistency Guarantee
+    ///
+    /// The method performs multiple operations that must be atomic:
+    /// 1. Query brokers in the cluster (cluster_addr_table)
+    /// 2. Remove topic-broker mappings (topic_queue_table)
+    /// 3. Cleanup empty topics (topic_queue_table)
+    ///
+    /// ## Lock Strategy
+    ///
+    /// - **Topic write lock**: Ensures no concurrent topic registration/deletion
+    /// - **Cluster read lock** (if cluster specified): Prevents cluster modification
+    ///
+    /// This ensures consistent deletion without race conditions with register_topic
+    /// or register_broker operations.
+    pub(crate) fn delete_topic(&self, topic: CheetahString, cluster_name: Option<CheetahString>) {
+        // Acquire topic write lock to prevent concurrent modifications
+        let _topic_lock = self.topic_locks.write_lock(&topic);
+
+        match cluster_name {
+            Some(cluster_name) => {
+                // Get all the brokerNames for the specified cluster
+                let broker_names = self.cluster_addr_table.get_brokers(cluster_name.as_str());
+
+                if broker_names.is_empty() || !self.topic_queue_table.contains_topic(topic.as_str()) {
+                    return;
+                }
+
+                let topic_str = topic.as_str();
+
+                // Remove topic from each broker in the cluster
+                for broker_name in &broker_names {
+                    if let Some(qd) = self.topic_queue_table.remove_broker(topic_str, broker_name.as_str()) {
+                        info!(
+                            "deleteTopic, remove one broker's topic {} {} {:?}",
+                            broker_name, topic, qd
+                        );
                     }
                 }
-            }
-        }
-        TopicList {
-            topic_list,
-            broker_addr: None,
-        }
-    }
 
-    pub(crate) fn get_system_topic_list(&self) -> TopicList {
-        let mut topic_list = Vec::new();
-        let mut broker_addr_out = None;
-        for (cluster_name, broker_set) in self.cluster_addr_table.iter() {
-            topic_list.push(cluster_name.clone());
-            broker_set.iter().for_each(|broker_name| {
-                topic_list.push(broker_name.clone());
-            });
-        }
-        if !self.broker_addr_table.is_empty() {
-            for broker_addr in self.broker_addr_table.values() {
-                let broker_addrs = broker_addr.broker_addrs();
-                if !broker_addrs.is_empty() {
-                    broker_addr_out = Some(broker_addrs.values().next().unwrap().clone());
-                    break;
+                // Check if topic queue map is empty after removal
+                if !broker_names.is_empty()
+                    && self
+                        .topic_queue_table
+                        .get_topic_queues_map(topic_str)
+                        .is_none_or(|map| map.is_empty())
+                {
+                    info!("deleteTopic, remove the topic all queue {} {}", cluster_name, topic);
+                    self.topic_queue_table.remove_topic(topic_str);
                 }
             }
-        }
-        TopicList {
-            topic_list,
-            broker_addr: broker_addr_out,
-        }
-    }
-
-    pub(crate) fn get_unit_topics(&self) -> TopicList {
-        let mut topic_list = Vec::new();
-        for (topic, entry) in self.topic_queue_table.iter() {
-            if !entry.is_empty() && TopicSysFlag::has_unit_flag(entry.values().next().unwrap().topic_sys_flag()) {
-                topic_list.push(topic.clone());
-            }
-        }
-        TopicList {
-            topic_list,
-            broker_addr: None,
-        }
-    }
-
-    pub(crate) fn get_has_unit_sub_topic_list(&self) -> TopicList {
-        let mut topic_list = Vec::new();
-        for (topic, entry) in self.topic_queue_table.iter() {
-            if !entry.is_empty() && TopicSysFlag::has_unit_sub_flag(entry.values().next().unwrap().topic_sys_flag()) {
-                topic_list.push(topic.clone());
-            }
-        }
-        TopicList {
-            topic_list,
-            broker_addr: None,
-        }
-    }
-
-    pub(crate) fn get_has_unit_sub_un_unit_topic_list(&self) -> TopicList {
-        let mut topic_list = Vec::new();
-        for (topic, entry) in self.topic_queue_table.iter() {
-            if !entry.is_empty()
-                && !TopicSysFlag::has_unit_flag(entry.values().next().unwrap().topic_sys_flag())
-                && TopicSysFlag::has_unit_sub_flag(entry.values().next().unwrap().topic_sys_flag())
-            {
-                topic_list.push(topic.clone());
-            }
-        }
-        TopicList {
-            topic_list,
-            broker_addr: None,
-        }
-    }
-
-    pub fn scan_not_active_broker(&mut self) {
-        for (broker_addr_info, broker_live_info) in self.broker_live_table.clone().iter() {
-            if broker_live_info.heartbeat_timeout_millis + broker_live_info.last_update_timestamp
-                < TimeUtils::current_millis() as i64
-            {
-                self.on_connection_disconnected(broker_addr_info);
+            None => {
+                // Delete entire topic across all brokers
+                self.topic_queue_table.remove_topic(topic.as_str());
             }
         }
     }
+}
 
-    fn on_connection_disconnected(&mut self, broker_addr_info: &BrokerAddrInfo) {
-        let mut request_header = UnRegisterBrokerRequestHeader::default();
-        let need_un_register = self.setup_un_register_request(&mut request_header, broker_addr_info);
-        if need_un_register {
-            self.un_register_broker(vec![request_header]);
-        }
+// ============================================================================
+// Broker Unregistration
+// ============================================================================
+
+impl RouteInfoManager {
+    /// Submit broker unregistration request to batch service
+    pub fn submit_unregister_broker_request(&self, request: UnRegisterBrokerRequestHeader) -> bool {
+        self.un_register_service.submit(request)
     }
 
-    fn setup_un_register_request(
+    /// Unregister a broker from the name server
+    ///
+    /// This method atomically removes a broker from all tables using segmented locking
+    /// to prevent race conditions with concurrent registrations or route lookups.
+    pub fn unregister_broker(
         &self,
-        un_register_request: &mut UnRegisterBrokerRequestHeader,
-        broker_addr_info: &BrokerAddrInfo,
-    ) -> bool {
-        un_register_request
-            .cluster_name
-            .clone_from(&CheetahString::from_slice(broker_addr_info.cluster_name.as_str()));
-        un_register_request
-            .broker_addr
-            .clone_from(&CheetahString::from_slice(broker_addr_info.broker_addr.as_str()));
+        cluster_name: CheetahString,
+        broker_addr: CheetahString,
+        broker_name: CheetahString,
+        broker_id: u64,
+    ) -> RouteResult<()> {
+        // ===================================================================
+        // SEGMENTED LOCK ACQUISITION
+        // ===================================================================
+        // Acquire write lock for this broker segment to ensure atomic cleanup
+        // across multiple tables (broker_live, broker_addr, cluster, topic_queue).
+        //
+        // This prevents race conditions such as:
+        // 1. Unregistration racing with registration
+        // 2. Partial cleanup visible to route lookups
+        // 3. Inconsistent broker state across tables
+        //
+        // Lock scope: Only brokers hashing to the same segment will contend.
+        // Other broker operations can proceed concurrently in different segments.
+        let _broker_lock = self.broker_locks.write_lock(&broker_name.as_str());
 
-        for broker_data in self.broker_addr_table.values() {
-            if broker_addr_info.cluster_name != broker_data.cluster() {
-                continue;
-            }
-            for (broker_id, ip) in broker_data.broker_addrs().iter() {
-                if &broker_addr_info.broker_addr == ip {
-                    un_register_request.broker_name = broker_data.broker_name().clone();
-                    un_register_request.broker_id = *broker_id;
-                    return true;
-                }
-            }
+        // Step 1: Remove from broker live table
+        // Protected by broker write lock - atomic with all cleanup operations
+        let broker_addr_info = BrokerAddrInfo::new(cluster_name.clone(), broker_addr.clone());
+        let removed = self.broker_live_table.remove(&broker_addr_info);
+
+        info!(
+            "Broker live info removed: cluster={}, broker={}, addr={}, success={}",
+            cluster_name,
+            broker_name,
+            broker_addr,
+            removed.is_some()
+        );
+
+        // Step 2: Remove broker address from broker table
+        // Protected by broker write lock - atomic with live table update
+        let _broker_removed = self
+            .broker_addr_table
+            .remove_broker_address(broker_name.as_str(), broker_id);
+
+        // Step 3: Check if all broker addresses are gone
+        // Protected by broker write lock - consistent visibility
+        let broker_empty = if let Some(broker_data) = self.broker_addr_table.get(&broker_name) {
+            broker_data.broker_addrs().is_empty()
+        } else {
+            true
+        };
+
+        // Step 4: If broker completely removed, clean up cluster and topics
+        // All cleanup operations are atomic within the broker write lock
+        if broker_empty {
+            self.broker_addr_table.remove(&broker_name);
+            self.cluster_addr_table
+                .remove_broker(cluster_name.as_str(), broker_name.as_str());
+            self.cleanup_topics_for_broker(broker_name.as_str())?;
+
+            info!(
+                "Broker completely removed: cluster={}, broker={}",
+                cluster_name, broker_name
+            );
         }
-        false
+
+        rocketmq_observability::metrics::namesrv::record_active_broker_count(self.active_broker_count());
+        Ok(())
     }
 
-    pub(crate) fn un_register_broker(&mut self, un_register_requests: Vec<UnRegisterBrokerRequestHeader>) {
-        let mut remove_broker = HashSet::new();
-        let mut reduced_broker = HashSet::new();
-        let mut need_notify_broker_map = HashMap::new();
+    /// Clean up topics associated with a removed broker
+    fn cleanup_topics_for_broker(&self, broker_name: &str) -> RouteResult<()> {
+        for topic in self.topic_queue_table.topics_for_broker(broker_name) {
+            // Remove broker from topic
+            self.topic_queue_table.remove_broker(topic.as_ref(), broker_name);
+        }
 
+        // Clean up empty topics
+        let removed_count = self.topic_queue_table.cleanup_empty_topics();
+        if removed_count > 0 {
+            debug!("Cleaned up {} empty topics after broker removal", removed_count);
+        }
+
+        Ok(())
+    }
+
+    /// Batch unregister brokers from the name server
+    ///
+    /// `RouteInfoManager.unRegisterBroker(Set<UnRegisterBrokerRequestHeader>)` and provides
+    /// batch processing of broker unregistration requests for better performance.
+    ///
+    /// ## Key Features
+    /// 1. Batch processing: Process multiple unregistration requests in one call
+    /// 2. Track removed vs reduced brokers for proper cleanup
+    /// 3. Clean topics by unregister requests (remove queue data or wipe write perm)
+    /// 4. Notify min broker ID changes for acting master support
+    ///
+    /// ## Arguments
+    /// * `un_register_requests` - Vector of unregistration requests to process
+    pub fn un_register_broker(&self, un_register_requests: Vec<UnRegisterBrokerRequestHeader>) {
+        if un_register_requests.is_empty() {
+            return;
+        }
+
+        // Track brokers that are completely removed vs reduced (still have addresses)
+        let mut removed_broker: HashSet<CheetahString> = HashSet::new();
+        let mut reduced_broker: HashSet<CheetahString> = HashSet::new();
+
+        // Track brokers that need notification for min broker ID change
+        // Key: broker_name, Value: (broker_addrs, offline_broker_addr)
+        let mut need_notify_broker_map: HashMap<CheetahString, (HashMap<u64, CheetahString>, CheetahString)> =
+            HashMap::new();
+
+        // Process each unregistration request
         for un_register_request in &un_register_requests {
             let broker_name = &un_register_request.broker_name;
             let cluster_name = &un_register_request.cluster_name;
             let broker_addr = &un_register_request.broker_addr;
+            let broker_id = un_register_request.broker_id;
 
+            // Acquire write lock for this broker segment
+            let _broker_lock = self.broker_locks.write_lock(broker_name.as_str());
+
+            // Step 1: Remove from broker live table
             let broker_addr_info = BrokerAddrInfo::new(cluster_name.clone(), broker_addr.clone());
-            let pre = self.broker_live_table.remove(&broker_addr_info);
+            let prev_live_info = self.broker_live_table.remove(&broker_addr_info);
             info!(
                 "unregisterBroker, remove from brokerLiveTable {}, {}",
-                if pre.is_some() { "OK" } else { "Fail" },
-                &broker_addr_info
+                if prev_live_info.is_some() { "OK" } else { "Failed" },
+                broker_addr_info
             );
 
-            self.filter_server_table.remove(&broker_addr_info);
+            // Step 2: Remove from filter server table
+            self.filter_server_table.remove(&Arc::new(broker_addr_info.clone()));
 
+            // Step 3: Process broker address table
             let mut remove_broker_name = false;
             let mut is_min_broker_id_changed = false;
 
-            if let Some(broker_data) = self.broker_addr_table.get_mut(broker_name) {
-                if !broker_data.broker_addrs().is_empty()
-                    && un_register_request.broker_id == broker_data.broker_addrs().keys().min().copied().unwrap()
-                {
-                    is_min_broker_id_changed = true;
-                }
-                broker_data
-                    .broker_addrs_mut()
-                    .retain(|_broker_id, broker_addr_inner| broker_addr != broker_addr_inner);
+            if let Some(broker_data) = self.broker_addr_table.get(broker_name) {
+                let mut broker_data_clone = (*broker_data).clone();
+                let broker_addrs = broker_data_clone.broker_addrs_mut();
 
-                if broker_data.broker_addrs_mut().is_empty() {
-                    self.broker_addr_table.remove(broker_name);
-                    remove_broker_name = true;
-                } else if is_min_broker_id_changed {
-                    need_notify_broker_map.insert(
-                        broker_name.clone(),
-                        BrokerStatusChangeInfo {
-                            broker_addrs: broker_data.broker_addrs().clone(),
-                            offline_broker_addr: broker_addr.clone(),
-                            ha_broker_addr: CheetahString::empty(),
-                        },
-                    );
-                }
-            }
-
-            if remove_broker_name {
-                let name_set = self.cluster_addr_table.get_mut(cluster_name.as_str());
-                if let Some(name_set_inner) = name_set {
-                    name_set_inner.remove(broker_name);
-                    if name_set_inner.is_empty() {
-                        self.cluster_addr_table.remove(cluster_name.as_str());
+                // Check if min broker ID will change
+                if !broker_addrs.is_empty() {
+                    if let Some(&min_id) = broker_addrs.keys().min() {
+                        if broker_id == min_id {
+                            is_min_broker_id_changed = true;
+                        }
                     }
                 }
-                remove_broker.insert(broker_name);
+
+                // Remove the broker address
+                broker_addrs.retain(|_id, addr| addr.as_str() != broker_addr.as_str());
+
+                info!(
+                    "unregisterBroker, remove addr from brokerAddrTable, broker={}, addr={}",
+                    broker_name, broker_addr
+                );
+
+                if broker_addrs.is_empty() {
+                    // Broker completely removed
+                    self.broker_addr_table.remove(broker_name);
+                    info!("unregisterBroker, remove name from brokerAddrTable OK, {}", broker_name);
+                    remove_broker_name = true;
+                } else {
+                    // Broker still has addresses, update it
+                    if is_min_broker_id_changed {
+                        need_notify_broker_map.insert(broker_name.clone(), (broker_addrs.clone(), broker_addr.clone()));
+                    }
+                    self.broker_addr_table.insert(broker_name.clone(), broker_data_clone);
+                }
+            }
+
+            // Step 4: Update cluster table if broker completely removed
+            if remove_broker_name {
+                self.cluster_addr_table
+                    .remove_broker(cluster_name.as_str(), broker_name.as_str());
+
+                // Check if cluster is now empty
+                if self.cluster_addr_table.get_brokers(cluster_name.as_str()).is_empty() {
+                    self.cluster_addr_table.remove_cluster(cluster_name.as_str());
+                    info!(
+                        "unregisterBroker, remove cluster from clusterAddrTable {}",
+                        cluster_name
+                    );
+                }
+
+                removed_broker.insert(broker_name.clone());
             } else {
-                reduced_broker.insert(broker_name);
+                reduced_broker.insert(broker_name.clone());
             }
         }
-        self.clean_topic_by_un_register_requests(remove_broker, reduced_broker);
+
+        // Step 5: Clean topics by unregister requests
+        self.clean_topic_by_un_register_requests(&removed_broker, &reduced_broker);
+
+        // Step 6: Notify min broker ID changed if needed
         if !need_notify_broker_map.is_empty()
             && self
                 .name_server_runtime_inner
                 .name_server_config()
                 .notify_min_broker_id_changed
         {
-            for (broker_name, broker_status_change_info) in need_notify_broker_map {
-                let broker_data = self.broker_addr_table.get(&broker_name);
-                if let Some(broker_data) = broker_data {
-                    if !broker_data.enable_acting_master() {
-                        continue;
+            for (broker_name, (broker_addrs, offline_broker_addr)) in need_notify_broker_map {
+                // Check if broker exists and has acting master enabled
+                if let Some(broker_data) = self.broker_addr_table.get(&broker_name) {
+                    if broker_data.enable_acting_master() {
+                        self.notify_min_broker_id_changed(&broker_addrs, Some(offline_broker_addr), None);
                     }
-                    let broker_addrs = broker_status_change_info.broker_addrs;
-                    let offline_broker_addr = broker_status_change_info.offline_broker_addr;
-                    self.notify_min_broker_id_changed(&broker_addrs, Some(offline_broker_addr), None);
                 }
             }
         }
     }
 
+    /// Clean topic queue data by unregister requests
+    ///
+    /// 1. For removed brokers: Remove queue data from all topics
+    /// 2. For reduced brokers (acting master mode): Wipe write permission if no master exists
     fn clean_topic_by_un_register_requests(
-        &mut self,
-        removed_broker: HashSet<&CheetahString>,
-        reduced_broker: HashSet<&CheetahString>,
+        &self,
+        removed_broker: &HashSet<CheetahString>,
+        reduced_broker: &HashSet<CheetahString>,
     ) {
-        let mut delete_topic = HashSet::new();
-        for (topic, queue_data_map) in self.topic_queue_table.iter_mut() {
-            for broker_name in removed_broker.iter() {
-                if let Some(removed_qd) = queue_data_map.remove(*broker_name) {
-                    info!(
-                        "removeTopicByBrokerName, remove one broker's topic {} {:?}",
-                        topic, removed_qd
-                    );
+        for (topic, broker_name) in self.topic_queue_table.topic_broker_pairs_for_brokers(removed_broker) {
+            if let Some(removed_qd) = self
+                .topic_queue_table
+                .remove_broker(topic.as_str(), broker_name.as_str())
+            {
+                debug!(
+                    "removeTopicByBrokerName, remove one broker's topic {} {:?}",
+                    topic, removed_qd
+                );
+            }
+        }
+
+        let removed_topic_count = self.topic_queue_table.cleanup_empty_topics();
+        if removed_topic_count > 0 {
+            debug!(
+                "removeTopicByBrokerName, remove {} topics with no remaining queue data",
+                removed_topic_count
+            );
+        }
+
+        let reduced_brokers_requiring_write_wipe = reduced_broker
+            .iter()
+            .filter_map(|broker_name| {
+                let broker_data = self.broker_addr_table.get(broker_name.as_str())?;
+                let no_master_exists = broker_data.broker_addrs().is_empty()
+                    || broker_data.broker_addrs().keys().min().copied().unwrap_or(0) > 0;
+
+                (broker_data.enable_acting_master() && no_master_exists).then(|| broker_name.clone())
+            })
+            .collect::<HashSet<_>>();
+
+        for (topic, broker_name) in self
+            .topic_queue_table
+            .topic_broker_pairs_for_brokers(&reduced_brokers_requiring_write_wipe)
+        {
+            if let Some(queue_data) = self.topic_queue_table.get(topic.as_str(), broker_name.as_str()) {
+                let perm = queue_data.perm() & !PermName::PERM_WRITE;
+                self.topic_queue_table
+                    .update_queue_data_perm(topic.as_str(), broker_name.as_str(), perm as i32);
+            }
+        }
+        rocketmq_observability::metrics::namesrv::record_active_broker_count(self.active_broker_count());
+    }
+}
+
+// ============================================================================
+// Route Lookup
+// ============================================================================
+
+impl RouteInfoManager {
+    /// Get topic route data for a given topic
+    ///
+    /// This is the main query API used by producers and consumers
+    /// to discover where a topic's messages should be sent/consumed.
+    ///
+    /// ## Consistency Guarantee
+    ///
+    /// This method acquires a segment-level read lock for the topic to ensure
+    /// consistent reads across multiple tables. Without this lock, we could see:
+    /// - Topic queues that reference non-existent brokers
+    /// - Partial broker registration state
+    /// - Inconsistent broker address mappings
+    ///
+    /// The read lock allows concurrent reads of the same topic while preventing
+    /// concurrent writes (broker registration/unregistration) from causing
+    /// inconsistent state.
+    pub fn pickup_topic_route_data(&self, topic: &str) -> RouteResult<TopicRouteData> {
+        use rocketmq_common::common::constant::PermName;
+        use rocketmq_common::common::topic::TopicValidator;
+
+        // ===================================================================
+        // SEGMENTED LOCK ACQUISITION
+        // ===================================================================
+        // Acquire read lock for this topic segment to ensure consistent reads
+        // across multiple tables (topic_queue, broker_addr, broker_live).
+        //
+        // This prevents reading inconsistent state such as:
+        // 1. Queue data referencing brokers that are being unregistered
+        // 2. Broker data that is partially updated
+        // 3. Stale broker addresses during registration
+        //
+        // Lock scope: Only topics hashing to the same segment will share a lock.
+        // Other topic queries can proceed concurrently in different segments.
+        // Multiple readers can hold the lock simultaneously.
+        let _topic_lock = self.topic_locks.read_lock(&topic);
+
+        let mut found_queue_data = false;
+        let mut found_broker_data = false;
+
+        // Get queue data for the topic
+        // Protected by topic read lock - consistent with broker table
+        let queue_data_list = self.topic_queue_table.get_topic_queues(topic);
+
+        if queue_data_list.is_empty() {
+            return Err(RocketMQError::route_not_found(topic));
+        }
+
+        // Convert queue data to Vec<QueueData>
+        let queue_data_vec: Vec<QueueData> = queue_data_list
+            .into_iter()
+            .map(|(_, queue_data)| {
+                found_queue_data = true;
+                (*queue_data).clone()
+            })
+            .collect();
+
+        // Collect broker names from queue data (already CheetahString)
+        // Protected by topic read lock - brokers are stable during this read
+        let broker_names: Vec<BrokerName> = queue_data_vec.iter().map(|qd| qd.broker_name.clone()).collect();
+
+        // Get broker data for each broker
+        // Protected by topic read lock - broker data is consistent
+        let mut broker_data_list = Vec::new();
+        for broker_name in broker_names {
+            if let Some(broker_data) = self.broker_addr_table.get(broker_name.as_str()) {
+                // Clone BrokerData for the route response
+                broker_data_list.push((*broker_data).clone());
+                found_broker_data = true;
+            }
+        }
+
+        debug!(
+            "pickup_topic_route_data topic={}, found_queue_data={}, found_broker_data={}",
+            topic, found_queue_data, found_broker_data
+        );
+
+        if !found_broker_data || !found_queue_data {
+            return Err(RocketMQError::route_not_found(topic));
+        }
+
+        // Construct TopicRouteData
+        let mut topic_route_data = TopicRouteData {
+            queue_datas: queue_data_vec,
+            broker_datas: broker_data_list.clone(),
+            ..Default::default()
+        };
+
+        // Populate filter server table from filter_server_table
+        if !self.filter_server_table.is_empty() {
+            for broker_data in &broker_data_list {
+                for broker_addr in broker_data.broker_addrs().values() {
+                    let broker_addr_info = Arc::new(BrokerAddrInfo {
+                        cluster_name: broker_data.cluster().into(),
+                        broker_addr: broker_addr.clone(),
+                    });
+
+                    // Get filter server list (may be None)
+                    let filter_servers = self.filter_server_table.get(&broker_addr_info);
+
+                    // Insert into map even if None
+                    if let Some(servers) = filter_servers {
+                        topic_route_data
+                            .filter_server_table
+                            .insert(broker_addr.clone(), servers.clone());
+                    }
                 }
             }
+        }
 
-            if queue_data_map.is_empty() {
-                info!("removeTopicByBrokerName, remove the topic all queue {}", topic);
-                delete_topic.insert(topic.clone());
+        // Set topic queue mapping info for static topic support
+        if let Some(mapping_info) = self.topic_queue_mapping_info_table.get_topic_mappings(topic) {
+            topic_route_data.topic_queue_mapping_by_broker = Some(mapping_info);
+        }
+
+        // Check if acting master support is enabled
+        if !self
+            .name_server_runtime_inner
+            .name_server_config()
+            .support_acting_master
+        {
+            return Ok(topic_route_data);
+        }
+
+        // Skip acting master logic for sync broker member group topics
+        if topic.starts_with(TopicValidator::SYNC_BROKER_MEMBER_GROUP_PREFIX) {
+            return Ok(topic_route_data);
+        }
+
+        // Check if broker and queue data are available
+        if topic_route_data.broker_datas.is_empty() || topic_route_data.queue_datas.is_empty() {
+            return Ok(topic_route_data);
+        }
+
+        // Check if any broker needs acting master (no master broker ID present)
+        let need_acting_master = topic_route_data.broker_datas.iter().any(|broker_data| {
+            !broker_data.broker_addrs().is_empty() && !broker_data.broker_addrs().contains_key(&mix_all::MASTER_ID)
+        });
+
+        if !need_acting_master {
+            return Ok(topic_route_data);
+        }
+
+        // Process acting master for brokers without master
+        for broker_data in &mut topic_route_data.broker_datas {
+            // Check conditions before getting mutable reference
+            let enable_acting_master = broker_data.enable_acting_master();
+            let broker_name = broker_data.broker_name().to_string();
+            let broker_addrs = broker_data.broker_addrs_mut();
+
+            // Skip if:
+            // 1. No broker addresses
+            // 2. Master already exists
+            // 3. Acting master not enabled for this broker
+            if broker_addrs.is_empty() || broker_addrs.contains_key(&mix_all::MASTER_ID) || !enable_acting_master {
+                continue;
             }
 
-            for broker_name in &reduced_broker {
-                if let Some(queue_data) = queue_data_map.get_mut(*broker_name) {
-                    if self
-                        .broker_addr_table
-                        .get(*broker_name)
-                        .is_some_and(|b| b.enable_acting_master())
-                    {
-                        // Master has been unregistered, wipe the write perm
-                        let flag = {
-                            let broker_data = self.broker_addr_table.get(*broker_name);
-                            if let Some(broker_data_unwrap) = broker_data {
-                                if broker_data_unwrap.broker_addrs().is_empty() {
-                                    true
-                                } else {
-                                    broker_data_unwrap.broker_addrs().keys().copied().min().unwrap() > 0
-                                }
-                            } else {
-                                true
+            // No master - check if we should promote a slave to acting master
+            for queue_data in &topic_route_data.queue_datas {
+                if queue_data.broker_name() == broker_name.as_str() {
+                    // Only promote if queue is not writable (read-only)
+                    if !PermName::is_writeable(queue_data.perm()) {
+                        // Find the minimum broker ID (closest slave)
+                        if let Some(&min_broker_id) = broker_addrs.keys().min() {
+                            // Remove the slave with minimum ID and promote it to master
+                            if let Some(acting_master_addr) = broker_addrs.remove(&min_broker_id) {
+                                broker_addrs.insert(mix_all::MASTER_ID, acting_master_addr);
+                                debug!(
+                                    "Promoted acting master: broker={}, slave_id={} -> master",
+                                    broker_name, min_broker_id
+                                );
                             }
-                        };
-                        //if self.is_no_master_exists(broker_name.as_str()) {
-                        if flag {
-                            // Update the queue data's permission, assuming PermName is an enum
-                            // For simplicity, I'm using 0 as PERM_WRITE value, please replace it
-                            // with the actual value
-                            queue_data.perm &= !PermName::PERM_WRITE
                         }
                     }
+                    break;
                 }
             }
         }
-        for topic in delete_topic {
-            self.topic_queue_table.remove(topic.as_str());
-        }
+
+        debug!(
+            "Topic route data retrieved: topic={}, brokers={}, queues={}",
+            topic,
+            topic_route_data.broker_datas.len(),
+            topic_route_data.queue_datas.len()
+        );
+
+        Ok(topic_route_data)
     }
 
-    fn is_no_master_exists(&self, broker_name: &str) -> bool {
-        let broker_data = self.broker_addr_table.get(broker_name);
-        if broker_data.is_none() {
-            return true;
-        }
-        let broker_data_unwrap = broker_data.unwrap();
-        if broker_data_unwrap.broker_addrs().is_empty() {
-            return true;
-        }
-        broker_data_unwrap.broker_addrs().keys().cloned().min().unwrap() > 0
+    /// Get all topics registered in the name server
+    pub fn get_all_topics(&self) -> Vec<TopicName> {
+        self.topic_queue_table.get_all_topics()
     }
 
-    pub fn connection_disconnected(&mut self, socket_addr: SocketAddr) {
-        let mut broker_addr_info = None;
-        for (bai, bli) in &self.broker_live_table {
-            if bli.remote_addr == socket_addr {
-                broker_addr_info = Some(bai.clone());
-                break;
-            }
-        }
-        if let Some(bai) = broker_addr_info {
-            let mut request_header = UnRegisterBrokerRequestHeader::default();
-            let need_un_register = self.setup_un_register_request(&mut request_header, &bai);
-            if need_un_register {
-                self.un_register_broker(vec![request_header]);
-            }
-        }
+    /// Get the number of brokers currently tracked as live.
+    pub fn active_broker_count(&self) -> usize {
+        self.broker_live_table.len()
     }
 
-    pub fn on_channel_destroy(&self, channel: &Channel) {
-        let mut un_register_request = UnRegisterBrokerRequestHeader::default();
-        let mut broker_addr_found = None;
-        let mut need_un_register = false;
-        for (broker_addr_info, broker_live_info) in &self.broker_live_table {
-            if broker_live_info.channel_id.as_str() == channel.channel_id() {
-                broker_addr_found = Some(broker_addr_info.clone());
-                break;
+    /// Get topics for a specific cluster
+    pub fn get_topics_by_cluster(&self, cluster_name: &str) -> RouteResult<Vec<TopicName>> {
+        let broker_names = self.cluster_addr_table.get_brokers(cluster_name);
+
+        if broker_names.is_empty() {
+            return Err(RocketMQError::cluster_not_found(cluster_name));
+        }
+
+        let broker_names = broker_names.into_iter().collect::<HashSet<_>>();
+        Ok(self.topic_queue_table.topics_for_brokers_with_duplicates(&broker_names))
+    }
+}
+
+// ============================================================================
+// Broker Heartbeat & Health Check
+// ============================================================================
+
+impl RouteInfoManager {
+    /// Scan for inactive brokers and remove them
+    ///
+    /// This should be called periodically (e.g., every 5 seconds)
+    ///
+    /// # Implementation Notes
+    ///
+    /// 1. Iterate through broker_live_table to find expired brokers
+    /// 2. Close the channel for expired brokers (logged for tracking)
+    /// 3. Call onChannelDestroy to trigger async batch unregistration
+    ///
+    /// The key difference from directly calling unregister_broker:
+    /// - uses BatchUnregistrationService for better performance
+    /// - Submissions are batched and processed together
+    /// - This reduces lock contention on the global route tables
+    pub fn scan_not_active_broker(&self) -> usize {
+        debug!("start scanNotActiveBroker");
+        let current_time = current_millis();
+
+        // Get expired brokers by checking heartbeat timeout
+        let expired_brokers = self.broker_live_table.get_expired_brokers(current_time);
+
+        let count = expired_brokers.len();
+        if count > 0 {
+            // Submit unregistration requests for each expired broker
+            for broker_addr_info in expired_brokers {
+                if let Some(live_info) = self.broker_live_table.get(&broker_addr_info) {
+                    warn!(
+                        "The broker channel expired, {} {}ms",
+                        broker_addr_info, live_info.heartbeat_timeout_millis
+                    );
+
+                    if let Some(channel) = live_info.channel.as_ref() {
+                        channel.connection_ref().close();
+                        self.on_channel_destroy(channel);
+                        continue;
+                    }
+                }
+
+                // Trigger channel destroy logic, which will submit to batch unregistration service
+                self.on_channel_destroy_by_addr_info(broker_addr_info);
             }
         }
-        if let Some(broker_addr_info) = &mut broker_addr_found {
-            need_un_register = self.setup_un_register_request(&mut un_register_request, broker_addr_info);
-        }
-        if need_un_register {
-            let result = self.submit_unregister_broker_request(un_register_request.clone());
+
+        rocketmq_observability::metrics::namesrv::record_active_broker_count(self.active_broker_count());
+        count
+    }
+
+    /// Handle channel destruction by broker address info
+    ///
+    /// 1. Setup unregister request with broker info
+    /// 2. Submit to batch unregistration service
+    ///
+    /// The batch service will process the request asynchronously.
+    fn on_channel_destroy_by_addr_info(&self, broker_addr_info: Arc<BrokerAddrInfo>) {
+        let mut unregister_request = UnRegisterBrokerRequestHeader::default();
+        let need_unregister = self.setup_unregister_request(&mut unregister_request, &broker_addr_info);
+
+        if need_unregister {
+            let result = self.submit_unregister_broker_request(unregister_request.clone());
             info!(
                 "the broker's channel destroyed, submit the unregister request at once, broker info: {}, submit \
                  result: {}",
-                un_register_request, result
+                unregister_request, result
             );
+        }
+    }
+
+    /// Setup unregister request from broker address info (instance method)
+    ///
+    /// Finds the broker name and broker ID from broker_addr_table
+    /// and populates the unregister request header.
+    ///
+    /// Returns true if the broker was found and request was setup successfully.
+    fn setup_unregister_request(
+        &self,
+        unregister_request: &mut UnRegisterBrokerRequestHeader,
+        broker_addr_info: &BrokerAddrInfo,
+    ) -> bool {
+        Self::setup_unregister_request_static(unregister_request, broker_addr_info, &self.broker_addr_table)
+    }
+
+    /// Static helper to setup unregister request from broker address info
+    ///
+    /// This is a static method that doesn't hold &self to allow calling from async contexts.
+    /// Finds the broker name and broker ID from broker_addr_table
+    /// and populates the unregister request header.
+    ///
+    /// Returns true if the broker was found and request was setup successfully.
+    fn setup_unregister_request_static(
+        unregister_request: &mut UnRegisterBrokerRequestHeader,
+        broker_addr_info: &BrokerAddrInfo,
+        broker_addr_table: &BrokerAddrTable,
+    ) -> bool {
+        unregister_request.cluster_name = broker_addr_info.cluster_name.clone();
+        unregister_request.broker_addr = broker_addr_info.broker_addr.clone();
+
+        if let Some((broker_name, broker_id)) = broker_addr_table.find_broker_by_addr_in_cluster(
+            broker_addr_info.cluster_name.as_str(),
+            broker_addr_info.broker_addr.as_str(),
+        ) {
+            unregister_request.broker_name = broker_name;
+            unregister_request.broker_id = broker_id;
+            return true;
+        }
+
+        false
+    }
+
+    /// Find broker name and ID by address
+    fn find_broker_by_addr(&self, broker_addr: &str) -> Option<(CheetahString, u64)> {
+        self.broker_addr_table.find_broker_by_addr(broker_addr)
+    }
+
+    /// Check if broker topic config has changed
+    ///
+    /// Compares the provided data version with the broker's current data version
+    /// to determine if the topic configuration has changed.
+    ///
+    /// # Arguments
+    /// * `cluster_name` - Name of the cluster
+    /// * `broker_addr` - Broker network address
+    /// * `data_version` - Data version to compare against
+    ///
+    /// # Returns
+    /// `true` if configuration has changed or broker not found, `false` otherwise
+    pub fn is_broker_topic_config_changed(
+        &self,
+        cluster_name: &CheetahString,
+        broker_addr: &CheetahString,
+        data_version: &DataVersion,
+    ) -> bool {
+        // Find broker using addr info
+        let find_data_version = self.query_broker_topic_config(cluster_name.clone(), broker_addr.clone());
+        if let Some(existing_version) = find_data_version {
+            return &existing_version != data_version; // Compare values, not references
+        }
+        true // If broker not found, assume changed
+    }
+
+    /// Update broker info update timestamp
+    ///
+    /// This method updates the last update timestamp for a broker in the live table.
+    ///
+    /// # Arguments
+    /// * `cluster_name` - Name of the cluster the broker belongs to
+    /// * `broker_addr` - Network address of the broker
+    pub fn update_broker_info_update_timestamp(&self, cluster_name: CheetahString, broker_addr: CheetahString) {
+        let broker_addr_info = BrokerAddrInfo::new(cluster_name, broker_addr);
+        self.broker_live_table
+            .update_last_update_timestamp_by_addr_info(&broker_addr_info);
+    }
+
+    /// Query broker topic config data version
+    ///
+    /// This method retrieves the data version for a broker's topic configuration
+    /// by looking up the broker in the live table using cluster name and broker address.
+    ///
+    /// # Arguments
+    /// * `cluster_name` - Name of the cluster the broker belongs to
+    /// * `broker_addr` - Network address of the broker
+    ///
+    /// # Returns
+    /// `Some(DataVersion)` if broker is found and alive, `None` otherwise
+    pub fn query_broker_topic_config(
+        &self,
+        cluster_name: CheetahString,
+        broker_addr: CheetahString,
+    ) -> Option<DataVersion> {
+        let broker_addr_info = BrokerAddrInfo::new(cluster_name, broker_addr);
+        self.broker_live_table
+            .get(&broker_addr_info)
+            .map(|info| info.data_version.clone())
+    }
+
+    /// Get broker member group
+    ///
+    /// Returns a BrokerMemberGroup containing all broker addresses for the given broker name.
+    ///
+    /// # Arguments
+    /// * `cluster_name` - Name of the cluster
+    /// * `broker_name` - Name of the broker
+    ///
+    /// # Returns
+    /// Always returns `Some(BrokerMemberGroup)`. If the broker exists in `broker_addr_table`, the
+    /// group will contain its addresses; otherwise, it returns an empty `BrokerMemberGroup` with
+    /// the provided cluster name and broker name but no addresses.
+    pub fn get_broker_member_group(
+        &self,
+        cluster_name: CheetahString,
+        broker_name: CheetahString,
+    ) -> Option<BrokerMemberGroup> {
+        let mut group_member = BrokerMemberGroup::new(cluster_name, broker_name.clone());
+
+        // Get broker addresses from broker_addr_table
+        if let Some(broker_data) = self.broker_addr_table.get(&broker_name) {
+            group_member.broker_addrs = broker_data.broker_addrs().clone();
+        }
+
+        Some(group_member)
+    }
+
+    /// Get all cluster info
+    ///
+    /// Rust requires creating snapshot copies due to ownership rules and DashMap usage.
+    pub fn get_all_cluster_info(&self) -> ClusterInfo {
+        ClusterInfo {
+            broker_addr_table: Some(self.broker_addr_table.snapshot()),
+            cluster_addr_table: Some(self.cluster_addr_table.snapshot()),
+        }
+    }
+
+    /// Wipe write permission of broker by lock
+    ///
+    /// This method removes write permission from all topics that contain queue data
+    /// for the specified broker:
+    /// 1. Acquiring a write lock
+    /// 2. Directly looking up the broker in each topic's queue map
+    /// 3. Removing write permission from matched queue data
+    ///
+    /// # Arguments
+    /// * `broker_name` - Name of the broker whose write permission should be wiped
+    ///
+    /// # Returns
+    /// Number of topics whose queue data was updated
+    pub fn wipe_write_perm_of_broker_by_lock(&self, broker_name: String) -> i32 {
+        use rocketmq_common::common::constant::PermName;
+
+        // Acquire write lock for this broker segment
+        // This ensures no concurrent modifications to topics containing this broker
+        let _broker_lock = self.broker_locks.write_lock(&broker_name);
+
+        let mut wipe_topic_count = 0;
+
+        for (topic, queue_data) in self.topic_queue_table.topic_queue_pairs_for_broker(&broker_name) {
+            let perm = queue_data.perm() & !PermName::PERM_WRITE;
+            self.topic_queue_table
+                .update_queue_data_perm(&topic, &broker_name, perm as i32);
+            wipe_topic_count += 1;
+        }
+
+        wipe_topic_count
+    }
+
+    /// Add write permission of broker by lock.
+    ///
+    /// This method adds write permission to all topics that contain queue data
+    /// for the specified broker:
+    /// 1. Acquiring a write lock
+    /// 2. Directly looking up the broker in each topic's queue map
+    /// 3. Setting permission to READ | WRITE (not just adding write flag)
+    ///
+    /// # Arguments
+    /// * `broker_name` - Name of the broker whose write permission should be added
+    ///
+    /// # Returns
+    /// Number of topics whose queue data was updated
+    pub fn add_write_perm_of_broker_by_lock(&self, broker_name: String) -> i32 {
+        use rocketmq_common::common::constant::PermName;
+
+        // Acquire write lock for this broker segment
+        // This ensures no concurrent modifications to topics containing this broker
+        let _broker_lock = self.broker_locks.write_lock(&broker_name);
+
+        let mut add_topic_count = 0;
+
+        for (topic, _) in self.topic_queue_table.topic_queue_pairs_for_broker(&broker_name) {
+            let perm = PermName::PERM_READ | PermName::PERM_WRITE;
+            self.topic_queue_table
+                .update_queue_data_perm(&topic, &broker_name, perm as i32);
+            add_topic_count += 1;
+        }
+
+        add_topic_count
+    }
+
+    /// Get system topic list.
+    ///
+    /// Java NameServer exposes cluster names and broker names here rather than
+    /// filtering the topic table by built-in system topics.
+    pub fn get_system_topic_list(&self) -> TopicList {
+        let mut topic_list =
+            Vec::with_capacity(self.cluster_addr_table.cluster_count() + self.cluster_addr_table.total_broker_count());
+        self.cluster_addr_table.append_cluster_and_broker_names(&mut topic_list);
+
+        TopicList {
+            topic_list,
+            broker_addr: self.broker_addr_table.first_broker_addr(),
+        }
+    }
+
+    /// Get unit topics.
+    ///
+    /// Returns topics marked with the Unit flag (FLAG_UNIT = 0x1).
+    /// These are pure unit topics that support unit-based message routing.
+    pub fn get_unit_topics(&self) -> TopicList {
+        use rocketmq_common::common::TopicSysFlag;
+
+        let topics = self
+            .topic_queue_table
+            .filter_topics_by_first_queue(|queue_data| TopicSysFlag::has_unit_flag(queue_data.topic_sys_flag()));
+
+        TopicList {
+            topic_list: topics,
+            broker_addr: None,
+        }
+    }
+
+    /// Get topics with unit-subscription semantics.
+    ///
+    /// Returns topics marked with the Unit Subscription flag (FLAG_UNIT_SUB = 0x2).
+    /// These topics have consumers that support unit-based subscription.
+    pub fn get_has_unit_sub_topic_list(&self) -> TopicList {
+        use rocketmq_common::common::TopicSysFlag;
+
+        let topics = self
+            .topic_queue_table
+            .filter_topics_by_first_queue(|queue_data| TopicSysFlag::has_unit_sub_flag(queue_data.topic_sys_flag()));
+
+        TopicList {
+            topic_list: topics,
+            broker_addr: None,
+        }
+    }
+
+    /// Get non-unit topics with unit-subscription semantics.
+    ///
+    /// Returns topics that:
+    /// - Have unit subscription flag (FLAG_UNIT_SUB = 0x2) set
+    /// - Do NOT have unit flag (FLAG_UNIT = 0x1) set
+    ///
+    /// These are non-unit topics whose consumers support unit-based subscription.
+    pub fn get_has_unit_sub_ununit_topic_list(&self) -> TopicList {
+        use rocketmq_common::common::TopicSysFlag;
+
+        let topics = self.topic_queue_table.filter_topics_by_first_queue(|queue_data| {
+            let sys_flag = queue_data.topic_sys_flag();
+            !TopicSysFlag::has_unit_flag(sys_flag) && TopicSysFlag::has_unit_sub_flag(sys_flag)
+        });
+
+        TopicList {
+            topic_list: topics,
+            broker_addr: None,
         }
     }
 }
 
-// Non-instance method implementations
-impl RouteInfoManager {
-    //! start client connection disconnected listener
-    pub fn start(&self) {
-        self.un_register_service.start();
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // NOTE: Integration tests for RouteInfoManager require complex setup.
+    // Unit tests for underlying components are in their respective modules:
+    // - TopicQueueTable: route::tables::topic_table::tests (8 tests)
+    // - BrokerAddrTable: route::tables::broker_table::tests (7 tests)
+    // - ClusterAddrTable: route::tables::cluster_table::tests (7 tests)
+    // - BrokerLiveTable: route::tables::live_table::tests (7 tests)
+    // - Error handling: route::error::tests (5 tests)
+    //
+    // Total: 34 tests covering all table operations.
+
+    #[test]
+    fn test_default_broker_timeout() {
+        assert_eq!(DEFAULT_BROKER_CHANNEL_EXPIRED_TIME, 1000 * 60 * 2);
     }
 
-    pub async fn shutdown(&self) -> Option<rocketmq_runtime::ShutdownReport> {
-        self.un_register_service.shutdown().await
+    #[test]
+    fn test_choose_broker_addrs_to_notify_single_broker() {
+        let mut broker_addrs = HashMap::new();
+        broker_addrs.insert(0, CheetahString::from_static_str("broker0:10911"));
+
+        let result = RouteInfoManager::choose_broker_addrs_to_notify(&broker_addrs, &None);
+
+        // Single broker: notify all (itself)
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].as_str(), "broker0:10911");
+    }
+
+    #[test]
+    fn test_choose_broker_addrs_to_notify_multiple_brokers_no_offline() {
+        let mut broker_addrs = HashMap::new();
+        broker_addrs.insert(0, CheetahString::from_static_str("broker0:10911"));
+        broker_addrs.insert(1, CheetahString::from_static_str("broker1:10911"));
+        broker_addrs.insert(2, CheetahString::from_static_str("broker2:10911"));
+
+        let result = RouteInfoManager::choose_broker_addrs_to_notify(&broker_addrs, &None);
+
+        // Multiple brokers, no offline: notify all except min broker ID (0)
+        assert_eq!(result.len(), 2);
+        assert!(result.iter().any(|s| s.as_str() == "broker1:10911"));
+        assert!(result.iter().any(|s| s.as_str() == "broker2:10911"));
+        assert!(!result.iter().any(|s| s.as_str() == "broker0:10911"));
+    }
+
+    #[test]
+    fn test_choose_broker_addrs_to_notify_with_offline() {
+        let mut broker_addrs = HashMap::new();
+        broker_addrs.insert(0, CheetahString::from_static_str("broker0:10911"));
+        broker_addrs.insert(1, CheetahString::from_static_str("broker1:10911"));
+        broker_addrs.insert(2, CheetahString::from_static_str("broker2:10911"));
+
+        let offline = Some(CheetahString::from_static_str("broker1:10911"));
+        let result = RouteInfoManager::choose_broker_addrs_to_notify(&broker_addrs, &offline);
+
+        // With offline broker: notify all brokers (including min broker ID)
+        assert_eq!(result.len(), 3);
+        assert!(result.iter().any(|s| s.as_str() == "broker0:10911"));
+        assert!(result.iter().any(|s| s.as_str() == "broker1:10911"));
+        assert!(result.iter().any(|s| s.as_str() == "broker2:10911"));
+    }
+
+    #[test]
+    fn test_choose_broker_addrs_to_notify_empty() {
+        let broker_addrs = HashMap::new();
+        let result = RouteInfoManager::choose_broker_addrs_to_notify(&broker_addrs, &None);
+
+        // Empty map: no notifications
+        assert_eq!(result.len(), 0);
     }
 }

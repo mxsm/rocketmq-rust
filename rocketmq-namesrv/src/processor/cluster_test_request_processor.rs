@@ -50,10 +50,18 @@ impl ClusterTestRequestProcessor {
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_header = request.decode_command_custom_header::<GetRouteInfoRequestHeader>()?;
 
-        let mut topic_route_data = self
+        let mut topic_route_data = match self
             .name_server_runtime_inner
             .route_info_manager()
-            .pickup_topic_route_data(request_header.topic.as_ref());
+            .pickup_topic_route_data(request_header.topic.as_ref())
+        {
+            Ok(route_data) => Some(route_data),
+            Err(
+                rocketmq_error::RocketMQError::TopicNotExist { .. }
+                | rocketmq_error::RocketMQError::RouteNotFound { .. },
+            ) => None,
+            Err(error) => return Err(error),
+        };
 
         if let Some(route_data) = topic_route_data.as_mut() {
             route_data.order_topic_conf = self.name_server_runtime_inner.kvconfig_manager().get_kvconfig(
@@ -131,8 +139,7 @@ mod tests {
     use super::*;
     use crate::bootstrap::Builder;
     use crate::bootstrap::NameServerRuntimeHandle;
-    use crate::route::route_info_manager_wrapper::RouteInfoManagerWrapper;
-    use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
+    use crate::NamesrvConfig;
     use rocketmq_remoting::local::LocalRequestHarness;
     use rocketmq_remoting::protocol::route::route_data_view::BrokerData;
     use rocketmq_remoting::protocol::route::route_data_view::QueueData;
@@ -182,7 +189,6 @@ mod tests {
     async fn cluster_test_processor_falls_back_to_product_env_lookup() {
         let namesrv_config = NamesrvConfig {
             cluster_test: true,
-            use_route_info_manager_v2: true,
             ..NamesrvConfig::default()
         };
         let mock_lookup = Arc::new(TestClusterTestRouteLookup {
@@ -193,11 +199,6 @@ mod tests {
             .set_name_server_config(namesrv_config)
             .set_cluster_test_route_lookup(mock_lookup)
             .build();
-
-        assert!(matches!(
-            bootstrap.runtime_inner().route_info_manager().as_ref(),
-            RouteInfoManagerWrapper::V2(_)
-        ));
 
         let harness = LocalRequestHarness::new().await.unwrap();
         let runtime = bootstrap.runtime_inner();
