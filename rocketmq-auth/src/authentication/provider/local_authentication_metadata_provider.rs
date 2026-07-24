@@ -25,6 +25,8 @@ use std::sync::Arc;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_error::SerializationError;
+use rocketmq_runtime::MetadataDeadline;
+use rocketmq_runtime::MetadataIoActor;
 use tokio::fs;
 
 use crate::authentication::model::user::User;
@@ -38,6 +40,7 @@ pub struct LocalAuthenticationMetadataProvider {
     storage: Arc<tokio::sync::RwLock<HashMap<String, User>>>,
     storage_path: Option<PathBuf>,
     write_lock: Arc<tokio::sync::Mutex<()>>,
+    metadata_io: Option<MetadataIoActor>,
 }
 
 impl LocalAuthenticationMetadataProvider {
@@ -47,10 +50,18 @@ impl LocalAuthenticationMetadataProvider {
             storage: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
             storage_path: None,
             write_lock: Arc::new(tokio::sync::Mutex::new(())),
+            metadata_io: None,
         }
     }
 
     pub fn with_config(config: &AuthConfig) -> RocketMQResult<Self> {
+        Self::with_config_and_metadata_io(config, None)
+    }
+
+    pub fn with_config_and_metadata_io(
+        config: &AuthConfig,
+        metadata_io: Option<MetadataIoActor>,
+    ) -> RocketMQResult<Self> {
         let storage_path = auth_metadata_snapshot_path(config, "users.json");
         let users = match &storage_path {
             Some(path) => read_users_snapshot_blocking(path)?,
@@ -60,6 +71,7 @@ impl LocalAuthenticationMetadataProvider {
             storage: Arc::new(tokio::sync::RwLock::new(users)),
             storage_path,
             write_lock: Arc::new(tokio::sync::Mutex::new(())),
+            metadata_io,
         })
     }
 
@@ -67,7 +79,23 @@ impl LocalAuthenticationMetadataProvider {
         let Some(path) = &self.storage_path else {
             return Ok(());
         };
-        write_users_snapshot(path, users).await
+        let content = serde_json::to_vec_pretty(users).map_err(|error| {
+            RocketMQError::Serialization(SerializationError::encode_failed("JSON", error.to_string()))
+        })?;
+        if let Some(metadata_io) = &self.metadata_io {
+            metadata_io
+                .submit_next_durable(
+                    "auth.authentication-users",
+                    path,
+                    content,
+                    MetadataDeadline::after(std::time::Duration::from_secs(5)),
+                )
+                .await
+                .map_err(|error| RocketMQError::IO(std::io::Error::other(error)))?;
+            Ok(())
+        } else {
+            write_users_snapshot(path, content).await
+        }
     }
 
     async fn mutate_users<F>(&self, mutation: F) -> RocketMQResult<()>
@@ -264,9 +292,7 @@ fn decode_users_snapshot(path: &Path, bytes: &[u8]) -> RocketMQResult<HashMap<St
         .map_err(|error| RocketMQError::deserialization_failed("JSON", format!("{}: {error}", path.display())))
 }
 
-async fn write_users_snapshot(path: &Path, users: &HashMap<String, User>) -> RocketMQResult<()> {
-    let content = serde_json::to_vec_pretty(users)
-        .map_err(|error| RocketMQError::Serialization(SerializationError::encode_failed("JSON", error.to_string())))?;
+async fn write_users_snapshot(path: &Path, content: Vec<u8>) -> RocketMQResult<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .await
@@ -419,6 +445,45 @@ mod tests {
         assert_eq!(restored.username().as_str(), "persisted");
         assert_eq!(restored.password().map(|value| value.as_str()), Some("secret"));
         assert_eq!(restored.user_status(), Some(UserStatus::Enable));
+    }
+
+    #[tokio::test]
+    async fn metadata_io_actor_durably_persists_authentication_snapshot() {
+        let temp = TempDir::new().unwrap();
+        let config = AuthConfig {
+            auth_config_path: CheetahString::from_string(temp.path().join("auth.json").to_string_lossy().into_owned()),
+            ..AuthConfig::default()
+        };
+        let context = rocketmq_runtime::RuntimeContext::try_from_current("auth-metadata-io-test").unwrap();
+        let actor = rocketmq_runtime::MetadataIoActor::start(
+            &context.service_context("auth"),
+            rocketmq_runtime::MetadataIoConfig::default(),
+        )
+        .unwrap();
+        let provider =
+            LocalAuthenticationMetadataProvider::with_config_and_metadata_io(&config, Some(actor.clone())).unwrap();
+
+        provider
+            .create_user(User::of_with_password("durable-user", "secret"))
+            .await
+            .unwrap();
+
+        let snapshot = actor.snapshot();
+        let users = snapshot
+            .resources
+            .iter()
+            .find(|resource| resource.resource.as_ref() == "auth.authentication-users")
+            .expect("authentication metadata resource should be tracked");
+        assert!(users.durable_generation.is_some());
+        assert_eq!(snapshot.pending_operations, 0);
+        assert!(temp.path().join("auth").join("users.json").is_file());
+
+        let report = actor
+            .shutdown_until(rocketmq_runtime::MetadataDeadline::after(
+                std::time::Duration::from_secs(5),
+            ))
+            .await;
+        assert!(!report.timed_out);
     }
 
     #[tokio::test]

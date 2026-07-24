@@ -43,6 +43,11 @@ uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
 criterion = { version = "0.8.2", features = ["html_reports"] }
+tempfile = "3.27.0"
+tokio = { workspace = true, features = ["test-util"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = ["Win32_Storage_FileSystem"] }
 
 [[test]]
 name = "task_group_concurrency_model"

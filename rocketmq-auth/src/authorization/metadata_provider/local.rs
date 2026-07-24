@@ -28,6 +28,8 @@ use std::sync::RwLockWriteGuard;
 use std::time::Duration;
 
 use rocketmq_common::common::action::Action;
+use rocketmq_runtime::MetadataDeadline;
+use rocketmq_runtime::MetadataIoActor;
 use serde::Deserialize;
 use serde::Serialize;
 use tracing::debug;
@@ -108,6 +110,7 @@ pub struct LocalAuthorizationMetadataProvider {
     initialized: Arc<RwLock<bool>>,
     write_lock: Arc<tokio::sync::Mutex<()>>,
     blocking: AuthBlockingExecutor,
+    metadata_io: Option<MetadataIoActor>,
 }
 
 /// Cached ACL entry with expiration
@@ -181,6 +184,14 @@ impl LocalAuthorizationMetadataProvider {
             initialized: Arc::new(RwLock::new(false)),
             write_lock: Arc::new(tokio::sync::Mutex::new(())),
             blocking: AuthBlockingExecutor::default(),
+            metadata_io: None,
+        }
+    }
+
+    pub fn with_metadata_io(metadata_io: MetadataIoActor) -> Self {
+        Self {
+            metadata_io: Some(metadata_io),
+            ..Self::new()
         }
     }
 
@@ -193,12 +204,24 @@ impl LocalAuthorizationMetadataProvider {
         let Some(path) = &self.storage_path else {
             return Ok(());
         };
+        let content = encode_acl_snapshot(snapshot)?;
+        if let Some(metadata_io) = &self.metadata_io {
+            metadata_io
+                .submit_next_durable(
+                    "auth.authorization-acls",
+                    path,
+                    content,
+                    MetadataDeadline::after(Duration::from_secs(5)),
+                )
+                .await
+                .map_err(AuthorizationError::MetadataIo)?;
+            return Ok(());
+        }
         let path = path.clone();
         let path_display = path.display().to_string();
-        let snapshot = snapshot.clone();
         self.blocking
             .spawn_io("auth.authorization.write_acl_snapshot", move || {
-                write_acl_snapshot(&path, &snapshot)
+                write_acl_snapshot(&path, &content)
             })
             .await
             .map_err(|error| AuthorizationError::StorageWriteFailed {
@@ -440,12 +463,14 @@ fn read_acl_snapshot(path: &Path) -> MetadataResult<HashMap<String, Acl>> {
     Ok(acls)
 }
 
-fn write_acl_snapshot(path: &Path, acls: &HashMap<String, Acl>) -> MetadataResult<()> {
+fn encode_acl_snapshot(acls: &HashMap<String, Acl>) -> MetadataResult<Vec<u8>> {
     let mut records = acls.values().map(acl_to_record).collect::<Vec<_>>();
     records.sort_by(|left, right| left.subject.cmp(&right.subject));
     let snapshot = StoredAclSnapshot { acls: records };
-    let content = serde_json::to_vec_pretty(&snapshot).map_err(|error| snapshot_encode_error(error.to_string()))?;
+    serde_json::to_vec_pretty(&snapshot).map_err(|error| snapshot_encode_error(error.to_string()))
+}
 
+fn write_acl_snapshot(path: &Path, content: &[u8]) -> MetadataResult<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|error| storage_write_error(parent, error))?;
     }

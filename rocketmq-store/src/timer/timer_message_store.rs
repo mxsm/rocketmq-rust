@@ -209,7 +209,10 @@ impl TimerMessageStore {
         self.refresh_timer_backlog_distribution();
         if self.should_check_and_revise_metrics() {
             self.check_and_revise_metrics();
-            self.timer_metrics.persist();
+            if let Err(error) = self.timer_metrics.persist() {
+                error!("persist revised timer metrics failed: {error}");
+                return false;
+            }
         }
         true
     }
@@ -475,7 +478,9 @@ impl TimerMessageStore {
 
     fn shutdown_storage(&self) {
         self.sync_last_read_time_ms();
-        self.timer_metrics.persist();
+        if let Err(error) = self.timer_metrics.persist() {
+            error!("persist timer metrics during shutdown failed: {error}");
+        }
         if let Some(timer_log) = self.timer_log.lock().take() {
             let _ = timer_log.shutdown();
         }

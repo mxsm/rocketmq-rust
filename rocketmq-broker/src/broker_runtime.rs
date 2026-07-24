@@ -44,6 +44,7 @@ use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::common::mix_all::MASTER_ID;
 use rocketmq_common::common::server::config::ServerConfig;
+use rocketmq_common::FileUtils;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_common::UtilAll::compute_next_morning_time_millis;
 use rocketmq_remoting::base::channel_event_listener::ChannelEventListener;
@@ -53,6 +54,11 @@ use rocketmq_remoting::protocol::subscription::subscription_group_config::Subscr
 use rocketmq_remoting::remoting_server::rocketmq_tokio_server::RocketMQServer;
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
 use rocketmq_runtime::schedule::simple_scheduler::ScheduledTaskManager;
+use rocketmq_runtime::BlockingExecutor;
+use rocketmq_runtime::MetadataDeadline;
+use rocketmq_runtime::MetadataIoActor;
+use rocketmq_runtime::MetadataIoConfig;
+use rocketmq_runtime::MetadataIoError;
 use rocketmq_runtime::RuntimeHandle;
 use rocketmq_runtime::ServiceContext;
 use rocketmq_runtime::ShutdownDeadline;
@@ -377,6 +383,36 @@ where
         Ok(Err(_closed)) => Err(BrokerBlockingShutdownError::ResultChannelClosed),
         Err(_elapsed) => Err(BrokerBlockingShutdownError::TimedOut),
     }
+}
+
+async fn persist_config_manager<T>(
+    manager: Arc<T>,
+    resource: &'static str,
+    metadata_io: Option<MetadataIoActor>,
+    blocking: BlockingExecutor,
+    deadline: MetadataDeadline,
+) -> rocketmq_error::RocketMQResult<()>
+where
+    T: ConfigManager + Send + Sync + 'static,
+{
+    if manager.supports_metadata_io_actor() {
+        if let Some(metadata_io) = metadata_io {
+            let content = manager.encode_pretty(true);
+            if content.is_empty() {
+                return Ok(());
+            }
+            metadata_io
+                .submit_next_durable(resource, manager.config_file_path(), content.into_bytes(), deadline)
+                .await
+                .map_err(FileUtils::metadata_io_error)?;
+            return Ok(());
+        }
+    }
+
+    blocking
+        .spawn_io(resource, move || manager.persist())
+        .await
+        .map_err(|error| rocketmq_error::RocketMQError::IO(std::io::Error::other(error)))?
 }
 
 enum MessageStoreShutdownOutcome {
@@ -747,6 +783,7 @@ pub(crate) struct BrokerBasicServiceShutdownReport {
     pub(crate) topic_route: BrokerShutdownComponentReport,
     pub(crate) consumer_offset: BrokerShutdownComponentReport,
     pub(crate) subscription_group: BrokerShutdownComponentReport,
+    pub(crate) metadata_io: BrokerShutdownComponentReport,
     pub(crate) deadline: BrokerShutdownComponentReport,
     pub(crate) unfinished_components: Vec<&'static str>,
 }
@@ -761,7 +798,7 @@ impl BrokerShutdownProgress {
     fn new() -> Self {
         Self {
             unfinished: Arc::new(StdMutex::new(
-                BrokerBasicServiceShutdownReport::COMPONENT_NAMES[..16].to_vec(),
+                BrokerBasicServiceShutdownReport::COMPONENT_NAMES[..17].to_vec(),
             )),
             message_store_report: Arc::new(StdMutex::new(None)),
         }
@@ -942,7 +979,7 @@ fn record_message_store_shutdown_outcome(
 }
 
 impl BrokerBasicServiceShutdownReport {
-    const COMPONENT_NAMES: [&'static str; 17] = [
+    const COMPONENT_NAMES: [&'static str; 18] = [
         "remoting",
         "request_processor",
         "topic_config",
@@ -959,6 +996,7 @@ impl BrokerBasicServiceShutdownReport {
         "topic_route",
         "consumer_offset",
         "subscription_group",
+        "metadata_io",
         "shutdown_deadline",
     ];
 
@@ -1056,6 +1094,7 @@ impl BrokerBasicServiceShutdownReport {
             &self.topic_route,
             &self.consumer_offset,
             &self.subscription_group,
+            &self.metadata_io,
             &self.deadline,
         ]
     }
@@ -1108,9 +1147,12 @@ impl BrokerRuntime {
             .as_ref()
             .map(|context| ScheduledTaskManager::new_with_task_group(context.task_group().clone()))
             .unwrap_or_else(ScheduledTaskManager::new_legacy_compatibility);
+        let metadata_io = service_context
+            .as_ref()
+            .map(|context| MetadataIoActor::start(&context.child("broker.metadata-io"), MetadataIoConfig::default()));
         let broker_outer_api = BrokerOuterAPI::new(Arc::new(TokioClientConfig::default()));
 
-        let topic_queue_mapping_manager = service_context
+        let mut topic_queue_mapping_manager = service_context
             .as_ref()
             .map(|context| {
                 TopicQueueMappingManager::new_with_parent_task_group(
@@ -1119,6 +1161,9 @@ impl BrokerRuntime {
                 )
             })
             .unwrap_or_else(|| TopicQueueMappingManager::new(broker_config.clone()));
+        if let Some(actor) = metadata_io.as_ref().and_then(|result| result.as_ref().ok()) {
+            topic_queue_mapping_manager.set_metadata_io_actor(actor.clone());
+        }
         let mut broker_member_group = BrokerMemberGroup::new(
             broker_config.broker_identity.broker_cluster_name.clone(),
             broker_config.broker_identity.broker_name.clone(),
@@ -1228,6 +1273,7 @@ impl BrokerRuntime {
             notification_processor: None,
             query_assignment_processor: None,
             auth_runtime: None,
+            metadata_io,
             broker_attached_plugins: vec![],
             transactional_message_service: None,
             slave_synchronize: None,
@@ -1275,10 +1321,15 @@ impl BrokerRuntime {
             inner.consumer_manager.clone_shared_state(),
         )));
         let stats_manager = Arc::new(stats_manager);
-        inner.topic_config_coordinator = Some(Arc::new(TopicConfigCoordinator::new(
+        inner.topic_config_coordinator = Some(Arc::new(TopicConfigCoordinator::new_with_metadata_io(
             inner.topic_config_manager_handle(),
             inner.service_context.clone(),
             scheduled_task_manager.clone(),
+            inner
+                .metadata_io
+                .as_ref()
+                .and_then(|result| result.as_ref().ok())
+                .cloned(),
         )));
         inner.topic_route_info_manager = Some(TopicRouteInfoManager::new(
             inner.broker_outer_api.clone(),
@@ -1356,6 +1407,18 @@ impl BrokerRuntime {
                 state_machine_version,
             ));
         }
+        if let Some(actor) = inner
+            .metadata_io
+            .as_ref()
+            .and_then(|result| result.as_ref().ok())
+            .cloned()
+        {
+            inner
+                .subscription_group_manager
+                .as_mut()
+                .expect("subscription group manager is initialized above")
+                .set_metadata_io_actor(actor);
+        }
         let consumer_order_info_manager = Arc::new(ConsumerOrderInfoManager::new(
             broker_config_snapshot.store_path_root_dir.clone(),
             inner.topic_config_manager_handle(),
@@ -1390,6 +1453,12 @@ impl BrokerRuntime {
                 inner.schedule_message_service().clone(),
                 inner.subscription_group_manager().clone(),
                 SlaveTimerStoreCapability::new(&escape_bridge),
+                inner
+                    .metadata_io
+                    .as_ref()
+                    .and_then(|result| result.as_ref().ok())
+                    .cloned(),
+                inner.service_context.as_ref().map(|context| context.blocking().clone()),
             ),
             Arc::clone(&inner.slave_master_addr),
         )));
@@ -1899,34 +1968,48 @@ impl BrokerRuntime {
 
         if let Some(consumer_filter_manager) = self.inner.consumer_filter_manager.take() {
             let result = if let Some(service_context) = self.inner.service_context.as_ref() {
-                run_shutdown_blocking_operation(
-                    service_context,
-                    deadline,
-                    "broker.consumer-filter.persist",
-                    move || consumer_filter_manager.persist(),
+                persist_config_manager(
+                    Arc::new(consumer_filter_manager),
+                    "broker.consumer-filter",
+                    self.inner
+                        .metadata_io
+                        .as_ref()
+                        .and_then(|result| result.as_ref().ok())
+                        .cloned(),
+                    service_context.blocking().clone(),
+                    MetadataDeadline::after(deadline.remaining()),
                 )
                 .await
             } else {
-                Err(BrokerBlockingShutdownError::MissingServiceContext)
+                Err(rocketmq_error::RocketMQError::not_initialized(
+                    "broker consumer-filter persistence requires ServiceContext",
+                ))
             };
             if let Err(error) = result {
-                warn!(error = %error.detail(), "Failed to persist consumer filters during shutdown");
+                warn!(%error, "Failed to persist consumer filters during shutdown");
             }
         }
         if let Some(consumer_order_info_manager) = self.inner.consumer_order_info_manager.take() {
             let result = if let Some(service_context) = self.inner.service_context.as_ref() {
-                run_shutdown_blocking_operation(
-                    service_context,
-                    deadline,
-                    "broker.consumer-order-info.persist",
-                    move || consumer_order_info_manager.persist(),
+                persist_config_manager(
+                    consumer_order_info_manager,
+                    "broker.consumer-order-info",
+                    self.inner
+                        .metadata_io
+                        .as_ref()
+                        .and_then(|result| result.as_ref().ok())
+                        .cloned(),
+                    service_context.blocking().clone(),
+                    MetadataDeadline::after(deadline.remaining()),
                 )
                 .await
             } else {
-                Err(BrokerBlockingShutdownError::MissingServiceContext)
+                Err(rocketmq_error::RocketMQError::not_initialized(
+                    "broker consumer-order persistence requires ServiceContext",
+                ))
             };
             if let Err(error) = result {
-                warn!(error = %error.detail(), "Failed to persist consumer order info during shutdown");
+                warn!(%error, "Failed to persist consumer order info during shutdown");
             }
         }
 
@@ -1945,31 +2028,40 @@ impl BrokerRuntime {
         progress.complete("topic_route");
 
         let started = Instant::now();
-        if let Some(mut subscription_group_manager) = self.inner.subscription_group_manager.take() {
+        if let Some(subscription_group_manager) = self.inner.subscription_group_manager.take() {
             let result = if let Some(service_context) = self.inner.service_context.as_ref() {
-                run_shutdown_blocking_operation(
-                    service_context,
-                    deadline,
-                    "broker.subscription-group.persist-stop",
-                    move || {
-                        subscription_group_manager.persist();
-                        subscription_group_manager.stop();
-                    },
+                let manager = Arc::new(subscription_group_manager);
+                let result = persist_config_manager(
+                    manager.clone(),
+                    "broker.subscription-group",
+                    self.inner
+                        .metadata_io
+                        .as_ref()
+                        .and_then(|result| result.as_ref().ok())
+                        .cloned(),
+                    service_context.blocking().clone(),
+                    MetadataDeadline::after(deadline.remaining()),
                 )
-                .await
+                .await;
+                if let Ok(mut manager) = Arc::try_unwrap(manager) {
+                    manager.stop();
+                }
+                result
             } else {
-                Err(BrokerBlockingShutdownError::MissingServiceContext)
+                Err(rocketmq_error::RocketMQError::not_initialized(
+                    "broker subscription-group persistence requires ServiceContext",
+                ))
             };
             shutdown_report.subscription_group = match result {
                 Ok(()) => {
                     progress.complete("subscription_group");
                     BrokerShutdownComponentReport::completed("subscription_group", started.elapsed())
                 }
-                Err(error) if error.is_timed_out() => {
+                Err(_error) if deadline.is_expired() => {
                     BrokerShutdownComponentReport::timed_out("subscription_group", started.elapsed())
                 }
                 Err(error) => {
-                    BrokerShutdownComponentReport::unhealthy("subscription_group", started.elapsed(), error.detail())
+                    BrokerShutdownComponentReport::unhealthy("subscription_group", started.elapsed(), error.to_string())
                 }
             };
         } else {
@@ -1985,39 +2077,45 @@ impl BrokerRuntime {
             Arc::new(ConsumerOffsetManager::new(broker_config, message_store_config)),
         );
         let result = if let Some(service_context) = self.inner.service_context.as_ref() {
-            run_shutdown_blocking_operation(
-                service_context,
-                deadline,
-                "broker.consumer-offset.persist-stop",
-                move || {
-                    consumer_offset_manager.persist();
-                    match Arc::try_unwrap(consumer_offset_manager) {
-                        Ok(mut manager) => {
-                            manager.stop();
-                        }
-                        Err(manager) => {
-                            warn!(
-                                strong_count = Arc::strong_count(&manager),
-                                "Consumer offset manager still has live capability owners during shutdown"
-                            );
-                        }
-                    }
-                },
+            let result = persist_config_manager(
+                consumer_offset_manager.clone(),
+                "broker.consumer-offset",
+                self.inner
+                    .metadata_io
+                    .as_ref()
+                    .and_then(|result| result.as_ref().ok())
+                    .cloned(),
+                service_context.blocking().clone(),
+                MetadataDeadline::after(deadline.remaining()),
             )
-            .await
+            .await;
+            match Arc::try_unwrap(consumer_offset_manager) {
+                Ok(mut manager) => {
+                    manager.stop();
+                }
+                Err(manager) => {
+                    warn!(
+                        strong_count = Arc::strong_count(&manager),
+                        "Consumer offset manager still has live capability owners during shutdown"
+                    );
+                }
+            }
+            result
         } else {
-            Err(BrokerBlockingShutdownError::MissingServiceContext)
+            Err(rocketmq_error::RocketMQError::not_initialized(
+                "broker consumer-offset persistence requires ServiceContext",
+            ))
         };
         shutdown_report.consumer_offset = match result {
             Ok(()) => {
                 progress.complete("consumer_offset");
                 BrokerShutdownComponentReport::completed("consumer_offset", started.elapsed())
             }
-            Err(error) if error.is_timed_out() => {
+            Err(_error) if deadline.is_expired() => {
                 BrokerShutdownComponentReport::timed_out("consumer_offset", started.elapsed())
             }
             Err(error) => {
-                BrokerShutdownComponentReport::unhealthy("consumer_offset", started.elapsed(), error.detail())
+                BrokerShutdownComponentReport::unhealthy("consumer_offset", started.elapsed(), error.to_string())
             }
         };
 
@@ -2041,6 +2139,63 @@ impl BrokerRuntime {
                     rocksdb_config_managers.close_all();
                 }
             }
+        }
+
+        let metadata_flush_error = if let Some(service_context) = self.inner.service_context.as_ref() {
+            persist_config_manager(
+                self.inner.topic_queue_mapping_manager_handle(),
+                "broker.topic-queue-mapping",
+                self.inner
+                    .metadata_io
+                    .as_ref()
+                    .and_then(|result| result.as_ref().ok())
+                    .cloned(),
+                service_context.blocking().clone(),
+                MetadataDeadline::after(deadline.remaining()),
+            )
+            .await
+            .err()
+        } else {
+            None
+        };
+
+        let started = Instant::now();
+        shutdown_report.metadata_io = match self.inner.metadata_io.take() {
+            Some(Ok(metadata_io)) => {
+                let report = metadata_io
+                    .shutdown_until(MetadataDeadline::after(deadline.remaining()))
+                    .await;
+                if report.timed_out {
+                    BrokerShutdownComponentReport::timed_out("metadata_io", started.elapsed())
+                } else if report.pending_operations == 0 && report.pending_bytes == 0 {
+                    BrokerShutdownComponentReport::completed("metadata_io", started.elapsed())
+                } else {
+                    BrokerShutdownComponentReport::unhealthy(
+                        "metadata_io",
+                        started.elapsed(),
+                        format!(
+                            "pending_operations={}, pending_bytes={}, unfinished_resources={}",
+                            report.pending_operations,
+                            report.pending_bytes,
+                            report.unfinished.len()
+                        ),
+                    )
+                }
+            }
+            Some(Err(error)) => {
+                BrokerShutdownComponentReport::unhealthy("metadata_io", started.elapsed(), error.to_string())
+            }
+            None => BrokerShutdownComponentReport::skipped("metadata_io"),
+        };
+        if let Some(error) = metadata_flush_error {
+            shutdown_report.metadata_io = BrokerShutdownComponentReport::unhealthy(
+                "metadata_io",
+                started.elapsed(),
+                format!("final topic queue mapping persistence failed: {error}"),
+            );
+        }
+        if shutdown_report.metadata_io.healthy {
+            progress.complete("metadata_io");
         }
 
         let started = Instant::now();
@@ -2301,6 +2456,12 @@ impl BrokerRuntime {
     /// the whole initialization is considered failed and the function returns `false`.
     async fn initialize_metadata(&self) -> Result<(), BrokerStartupError> {
         info!("======Starting initialize metadata========");
+        if let Some(Err(error)) = self.inner.metadata_io.as_ref() {
+            return Err(BrokerStartupError::Initialization {
+                component: "metadata_io_actor",
+                detail: error.to_string(),
+            });
+        }
         match self.inner.topic_config_coordinator().load().await {
             Ok(true) => {}
             Ok(false) => {
@@ -2890,11 +3051,16 @@ impl BrokerRuntime {
             pop_revive_services,
         )));
         self.inner.ack_message_processor = Some(ack_message_processor.clone());
-        let query_assignment_processor = Arc::new(QueryAssignmentProcessor::new(
+        let query_assignment_processor = Arc::new(QueryAssignmentProcessor::new_with_metadata_io(
             self.inner.broker_config_arc(),
             self.inner.message_store_config_arc(),
             self.inner.topic_route_info_manager().clone(),
             self.inner.consumer_manager().assignment_view(),
+            self.inner
+                .metadata_io
+                .as_ref()
+                .and_then(|result| result.as_ref().ok())
+                .cloned(),
         ));
         if let Some(slave_synchronize) = self.inner.slave_synchronize() {
             slave_synchronize
@@ -3256,6 +3422,17 @@ impl BrokerRuntime {
         let consumer_offset_shutdown = Arc::clone(&self.inner.shutdown);
         let consumer_offset_manager = self.inner.consumer_offset_manager_handle();
         let flush_consumer_offset_interval = self.inner.broker_config().flush_consumer_offset_interval;
+        let metadata_io = self
+            .inner
+            .metadata_io
+            .as_ref()
+            .and_then(|result| result.as_ref().ok())
+            .cloned();
+        let metadata_blocking = self
+            .inner
+            .service_context
+            .as_ref()
+            .map(|context| context.blocking().clone());
 
         Self::log_scheduled_task_start(
             "flush_consumer_offset",
@@ -3265,11 +3442,28 @@ impl BrokerRuntime {
                 move |ctx| {
                     let consumer_offset_shutdown = Arc::clone(&consumer_offset_shutdown);
                     let consumer_offset_manager = consumer_offset_manager.clone();
+                    let metadata_io = metadata_io.clone();
+                    let metadata_blocking = metadata_blocking.clone();
                     async move {
                         if ctx.is_cancelled() || consumer_offset_shutdown.load(Ordering::Acquire) {
                             return Ok(());
                         }
-                        consumer_offset_manager.persist();
+                        let result = match metadata_blocking {
+                            Some(blocking) => {
+                                persist_config_manager(
+                                    consumer_offset_manager,
+                                    "broker.consumer-offset",
+                                    metadata_io,
+                                    blocking,
+                                    MetadataDeadline::after(Duration::from_secs(5)),
+                                )
+                                .await
+                            }
+                            None => consumer_offset_manager.persist(),
+                        };
+                        if let Err(error) = result {
+                            warn!(%error, "Failed to persist consumer offsets");
+                        }
                         Ok(())
                     }
                 },
@@ -3277,8 +3471,19 @@ impl BrokerRuntime {
         );
 
         let persistence_shutdown = Arc::clone(&self.inner.shutdown);
-        let consumer_filter_manager = self.inner.consumer_filter_manager.clone();
+        let consumer_filter_manager = self.inner.consumer_filter_manager.clone().map(Arc::new);
         let consumer_order_info_manager = self.inner.consumer_order_info_manager.clone();
+        let metadata_io = self
+            .inner
+            .metadata_io
+            .as_ref()
+            .and_then(|result| result.as_ref().ok())
+            .cloned();
+        let metadata_blocking = self
+            .inner
+            .service_context
+            .as_ref()
+            .map(|context| context.blocking().clone());
         Self::log_scheduled_task_start(
             "persist_consumer_filter_and_order_info",
             self.scheduled_task_manager.add_fixed_rate_task_async(
@@ -3288,17 +3493,49 @@ impl BrokerRuntime {
                     let persistence_shutdown = Arc::clone(&persistence_shutdown);
                     let consumer_filter_manager = consumer_filter_manager.clone();
                     let consumer_order_info_manager = consumer_order_info_manager.clone();
+                    let metadata_io = metadata_io.clone();
+                    let metadata_blocking = metadata_blocking.clone();
                     async move {
                         if ctx.is_cancelled() || persistence_shutdown.load(Ordering::Acquire) {
                             return Ok(());
                         }
                         if let Some(consumer_filter_manager) = consumer_filter_manager.as_ref() {
-                            consumer_filter_manager.persist();
+                            let result = match metadata_blocking.clone() {
+                                Some(blocking) => {
+                                    persist_config_manager(
+                                        consumer_filter_manager.clone(),
+                                        "broker.consumer-filter",
+                                        metadata_io.clone(),
+                                        blocking,
+                                        MetadataDeadline::after(Duration::from_secs(5)),
+                                    )
+                                    .await
+                                }
+                                None => consumer_filter_manager.persist(),
+                            };
+                            if let Err(error) = result {
+                                warn!(%error, "Failed to persist consumer filters");
+                            }
                         } else {
                             warn!("ConsumerFilterManager is not initialized");
                         }
                         if let Some(consumer_order_info_manager) = consumer_order_info_manager.as_ref() {
-                            consumer_order_info_manager.persist();
+                            let result = match metadata_blocking {
+                                Some(blocking) => {
+                                    persist_config_manager(
+                                        consumer_order_info_manager.clone(),
+                                        "broker.consumer-order-info",
+                                        metadata_io,
+                                        blocking,
+                                        MetadataDeadline::after(Duration::from_secs(5)),
+                                    )
+                                    .await
+                                }
+                                None => consumer_order_info_manager.persist(),
+                            };
+                            if let Err(error) = result {
+                                warn!(%error, "Failed to persist consumer order info");
+                            }
                         } else {
                             warn!("ConsumerOrderInfoManager is not initialized");
                         }
@@ -3571,7 +3808,15 @@ impl BrokerRuntime {
         }
 
         let auth_config = build_auth_config(&self.inner.broker_config());
-        match AuthRuntimeBuilder::new(auth_config).build().await {
+        let auth_runtime_builder = match self.inner.metadata_io.as_ref() {
+            Some(Ok(metadata_io)) => AuthRuntimeBuilder::new(auth_config).with_metadata_io_actor(metadata_io.clone()),
+            Some(Err(error)) => {
+                error!(%error, "Initialize auth runtime failed because metadata I/O actor is unavailable");
+                return false;
+            }
+            None => AuthRuntimeBuilder::new(auth_config),
+        };
+        match auth_runtime_builder.build().await {
             Ok(auth_runtime) => {
                 let auth_runtime = Arc::new(auth_runtime);
                 if let Some(metrics_manager) =
@@ -4137,6 +4382,11 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             self.pull_message_policy_state.clone(),
             self.pop_policy_state.clone(),
             self.escape_bridge_policy_state.clone(),
+            self.metadata_io
+                .as_ref()
+                .and_then(|result| result.as_ref().ok())
+                .cloned(),
+            self.service_context.as_ref().map(|context| context.blocking().clone()),
         ))
     }
 
@@ -4255,6 +4505,7 @@ pub(crate) struct BrokerRuntimeInner<MS: MessageStore> {
     notification_processor: Option<Arc<NotificationProcessor<MS>>>,
     query_assignment_processor: Option<Arc<QueryAssignmentProcessor>>,
     auth_runtime: Option<Arc<AuthRuntime>>,
+    metadata_io: Option<Result<MetadataIoActor, MetadataIoError>>,
     broker_attached_plugins: Vec<Arc<dyn BrokerAttachedPlugin>>,
     transactional_message_service: Option<Arc<DefaultTransactionalMessageService<MS>>>,
     slave_synchronize: Option<Arc<SlaveSynchronize<MS>>>,
@@ -4439,6 +4690,11 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             self.timer_message_store(),
             &self.broker_attached_plugins,
             transition,
+            self.metadata_io
+                .as_ref()
+                .and_then(|result| result.as_ref().ok())
+                .cloned(),
+            self.service_context.as_ref().map(|context| context.blocking().clone()),
         );
         BrokerPreOnlineService::new(context, self.broker_service_task_group())
     }
@@ -5564,6 +5820,56 @@ mod tests {
             "{}",
             service_report.to_json()
         );
+    }
+
+    #[tokio::test]
+    async fn broker_metadata_io_actor_durably_persists_topic_snapshot() {
+        let temp = tempfile::tempdir().expect("metadata I/O test directory should be created");
+        let root = temp.path().to_string_lossy().into_owned();
+        let broker_config = Arc::new(BrokerConfig {
+            store_path_root_dir: root.clone().into(),
+            ..BrokerConfig::default()
+        });
+        let message_store_config = Arc::new(MessageStoreConfig {
+            store_path_root_dir: root.into(),
+            ..MessageStoreConfig::default()
+        });
+        let context = RuntimeContext::try_from_current("broker-metadata-io-test").unwrap();
+        let runtime = BrokerRuntime::new_with_service_context(
+            broker_config,
+            message_store_config,
+            context.service_context("broker"),
+        );
+        let manager = runtime.inner.topic_config_manager_handle();
+        manager.update_topic_config(TopicConfig::with_queues("MetadataIoTopic", 2, 3), 0);
+        let coordinator = runtime.inner.topic_config_coordinator_handle();
+        coordinator.persist_and_wait().await.unwrap();
+
+        let actor = runtime
+            .inner
+            .metadata_io
+            .as_ref()
+            .and_then(|result| result.as_ref().ok())
+            .expect("service-context broker should own metadata I/O actor")
+            .clone();
+        let snapshot = actor.snapshot();
+        let topics = snapshot
+            .resources
+            .iter()
+            .find(|resource| resource.resource.as_ref() == "broker.topic-config")
+            .expect("topic resource should be tracked");
+        assert!(topics.durable_generation.is_some());
+        assert_eq!(snapshot.pending_operations, 0);
+        assert!(std::path::Path::new(&manager.config_file_path()).is_file());
+
+        let coordinator_report = coordinator
+            .shutdown_until(ShutdownDeadline::after(Duration::from_secs(5)))
+            .await;
+        assert!(coordinator_report.can_unregister(), "{coordinator_report:?}");
+        let metadata_report = actor
+            .shutdown_until(MetadataDeadline::after(Duration::from_secs(5)))
+            .await;
+        assert!(!metadata_report.timed_out);
     }
 
     #[tokio::test]
@@ -9911,7 +10217,7 @@ accounts:
             inner
                 .topic_config_manager()
                 .update_topic_config(TopicConfig::with_queues(topic.clone(), 3, 5), 0);
-            inner.topic_config_manager().persist();
+            inner.topic_config_manager().persist().unwrap();
             inner.consumer_offset_manager().commit_offset(
                 CheetahString::from_static_str("127.0.0.1:10911"),
                 &group,
@@ -9919,7 +10225,7 @@ accounts:
                 1,
                 42,
             );
-            inner.consumer_offset_manager().persist();
+            inner.consumer_offset_manager().persist().unwrap();
             let mut group_config = SubscriptionGroupConfig::new(group.clone());
             group_config.set_consume_broadcast_enable(false);
             inner

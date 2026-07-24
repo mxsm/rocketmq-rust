@@ -15,6 +15,7 @@
 use std::any::Any;
 use std::collections::HashMap;
 
+use rocketmq_error::RocketMQResult;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -23,6 +24,15 @@ use crate::FileUtils;
 
 // Define the trait ConfigManager
 pub trait ConfigManager {
+    /// Returns whether immutable snapshots may be persisted by the shared
+    /// metadata I/O actor.
+    ///
+    /// Backends with their own transactional engine, such as RocksDB, return
+    /// `false` and are routed through the injected blocking executor instead.
+    fn supports_metadata_io_actor(&self) -> bool {
+        true
+    }
+
     /// Loads the configuration from a file.
     ///
     /// This method attempts to load the configuration from a file whose path is returned by
@@ -78,7 +88,7 @@ pub trait ConfigManager {
     ///
     /// This method persists the configuration with a given topic.
     /// The actual implementation is delegated to the `persist` method.
-    fn persist_with_topic(&mut self, _topic_name: &str, _t: Box<dyn Any>) {
+    fn persist_with_topic(&mut self, _topic_name: &str, _t: Box<dyn Any>) -> RocketMQResult<()> {
         self.persist()
     }
 
@@ -86,7 +96,7 @@ pub trait ConfigManager {
     ///
     /// This method persists the configuration with a given map.
     /// The actual implementation is delegated to the `persist` method.
-    fn persist_map(&mut self, _m: &HashMap<String, Box<dyn Any>>) {
+    fn persist_map(&mut self, _m: &HashMap<String, Box<dyn Any>>) -> RocketMQResult<()> {
         self.persist()
     }
 
@@ -95,14 +105,18 @@ pub trait ConfigManager {
     /// This method persists the configuration to a file whose path is returned by
     /// `config_file_path`. If the encoded configuration is not empty, it writes the
     /// configuration to the file.
-    fn persist(&self) {
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed serialization or durability failure. Persistence
+    /// errors are never converted into a successful return value.
+    fn persist(&self) -> RocketMQResult<()> {
         let json = self.encode_pretty(true);
         if !json.is_empty() {
             let file_name = self.config_file_path();
-            if FileUtils::string_to_file(json.as_str(), file_name.as_str()).is_err() {
-                error!("persist file {} exception", file_name);
-            }
+            FileUtils::string_to_file(json.as_str(), file_name.as_str())?;
         }
+        Ok(())
     }
 
     /// Decodes the configuration.

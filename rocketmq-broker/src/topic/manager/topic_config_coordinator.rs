@@ -21,11 +21,14 @@ use std::time::Duration;
 use std::time::Instant;
 
 use rocketmq_common::common::config_manager::ConfigManager;
+use rocketmq_common::FileUtils;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_runtime::schedule::simple_scheduler::ScheduledTaskManager;
 use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::BlockingPoolPolicy;
+use rocketmq_runtime::MetadataDeadline;
+use rocketmq_runtime::MetadataIoActor;
 use rocketmq_runtime::ServiceContext;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::TaskGroup;
@@ -127,6 +130,7 @@ pub(crate) struct TopicConfigCoordinator {
     rejected_after_close: AtomicU64,
     persist_failures: Arc<AtomicU64>,
     registration_failures: Arc<AtomicU64>,
+    metadata_io: Option<MetadataIoActor>,
 }
 
 impl TopicConfigCoordinator {
@@ -134,6 +138,15 @@ impl TopicConfigCoordinator {
         manager: Arc<TopicConfigManager>,
         service_context: Option<ServiceContext>,
         compatibility_scheduler: ScheduledTaskManager,
+    ) -> Self {
+        Self::new_with_metadata_io(manager, service_context, compatibility_scheduler, None)
+    }
+
+    pub(crate) fn new_with_metadata_io(
+        manager: Arc<TopicConfigManager>,
+        service_context: Option<ServiceContext>,
+        compatibility_scheduler: ScheduledTaskManager,
+        metadata_io: Option<MetadataIoActor>,
     ) -> Self {
         Self {
             manager,
@@ -150,6 +163,7 @@ impl TopicConfigCoordinator {
             rejected_after_close: AtomicU64::new(0),
             persist_failures: Arc::new(AtomicU64::new(0)),
             registration_failures: Arc::new(AtomicU64::new(0)),
+            metadata_io,
         }
     }
 
@@ -223,10 +237,18 @@ impl TopicConfigCoordinator {
         let blocking = capabilities.blocking.clone();
         let persist_failures = Arc::clone(&self.persist_failures);
         let registration_failures = Arc::clone(&self.registration_failures);
+        let metadata_io = self.metadata_io.clone();
         let worker = task_group
             .spawn_service(
                 "broker.topic-config.coordinator",
-                run_topic_config_worker(manager, blocking, receiver, persist_failures, registration_failures),
+                run_topic_config_worker(
+                    manager,
+                    blocking,
+                    metadata_io,
+                    receiver,
+                    persist_failures,
+                    registration_failures,
+                ),
             )
             .map_err(topic_coordinator_error)?;
         *self.admission.lock().await = Some(sender);
@@ -407,6 +429,7 @@ impl TopicConfigCoordinator {
 async fn run_topic_config_worker(
     manager: Arc<TopicConfigManager>,
     blocking: BlockingExecutor,
+    metadata_io: Option<MetadataIoActor>,
     mut receiver: mpsc::Receiver<TopicConfigCommand>,
     persist_failures: Arc<AtomicU64>,
     registration_failures: Arc<AtomicU64>,
@@ -418,10 +441,10 @@ async fn run_topic_config_worker(
                 completion,
                 _pending,
             } => {
-                let result = persist_stable(&manager, &blocking).await;
+                let result = persist_stable(&manager, &blocking, metadata_io.as_ref()).await;
                 let result = match (result, registration) {
                     (Ok(()), Some(registration)) => match registration().await {
-                        Ok(()) => persist_stable(&manager, &blocking).await,
+                        Ok(()) => persist_stable(&manager, &blocking, metadata_io.as_ref()).await,
                         Err(error) => {
                             registration_failures.fetch_add(1, Ordering::AcqRel);
                             Err(error)
@@ -439,7 +462,7 @@ async fn run_topic_config_worker(
                 }
             }
             TopicConfigCommand::Finalize { completion } => {
-                let result = persist_stable(&manager, &blocking).await;
+                let result = persist_stable(&manager, &blocking, metadata_io.as_ref()).await;
                 if result.is_err() {
                     persist_failures.fetch_add(1, Ordering::AcqRel);
                 }
@@ -450,15 +473,43 @@ async fn run_topic_config_worker(
     }
 }
 
-async fn persist_stable(manager: &Arc<TopicConfigManager>, blocking: &BlockingExecutor) -> RocketMQResult<()> {
+async fn persist_stable(
+    manager: &Arc<TopicConfigManager>,
+    blocking: &BlockingExecutor,
+    metadata_io: Option<&MetadataIoActor>,
+) -> RocketMQResult<()> {
     loop {
-        let manager_for_write = Arc::clone(manager);
-        let persisted_version = blocking
-            .spawn_io("broker.topic-config.persist", move || {
-                manager_for_write.persist_latest_snapshot()
-            })
-            .await
-            .map_err(topic_coordinator_error)??;
+        let persisted_version = if manager.supports_metadata_io_actor() {
+            if let Some(metadata_io) = metadata_io {
+                let (version, path, content) = manager.encoded_persistence_snapshot()?;
+                metadata_io
+                    .submit_next_durable(
+                        "broker.topic-config",
+                        path,
+                        content,
+                        MetadataDeadline::after(Duration::from_secs(30)),
+                    )
+                    .await
+                    .map_err(FileUtils::metadata_io_error)?;
+                version
+            } else {
+                let manager_for_write = Arc::clone(manager);
+                blocking
+                    .spawn_io("broker.topic-config.persist", move || {
+                        manager_for_write.persist_latest_snapshot()
+                    })
+                    .await
+                    .map_err(topic_coordinator_error)??
+            }
+        } else {
+            let manager_for_write = Arc::clone(manager);
+            blocking
+                .spawn_io("broker.topic-config.persist", move || {
+                    manager_for_write.persist_latest_snapshot()
+                })
+                .await
+                .map_err(topic_coordinator_error)??
+        };
         if manager.data_version() == persisted_version {
             return Ok(());
         }

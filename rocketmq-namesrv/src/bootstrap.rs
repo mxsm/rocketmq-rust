@@ -49,6 +49,9 @@ use rocketmq_remoting::remoting_server::rocketmq_tokio_server::RocketMQServer;
 use rocketmq_remoting::request_processor::default_request_processor::DefaultRemotingRequestProcessor;
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
 use rocketmq_runtime::wait_for_signal;
+use rocketmq_runtime::MetadataDeadline;
+use rocketmq_runtime::MetadataIoActor;
+use rocketmq_runtime::MetadataIoConfig;
 use rocketmq_runtime::RuntimeHandle;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
@@ -198,6 +201,7 @@ pub struct NameServerShutdownReport {
     pub server: Option<ShutdownReport>,
     pub remoting_server: Option<ShutdownReport>,
     pub remoting_client: Option<RemotingClientShutdownReport>,
+    pub metadata_io_healthy: Option<bool>,
     pub root: Option<ShutdownReport>,
 }
 
@@ -219,6 +223,7 @@ impl NameServerShutdownReport {
                 .remoting_client
                 .as_ref()
                 .is_none_or(RemotingClientShutdownReport::is_healthy)
+            && self.metadata_io_healthy.unwrap_or(true)
             && self.root.as_ref().is_none_or(ShutdownReport::is_healthy)
     }
 }
@@ -869,6 +874,22 @@ impl NameServerRuntime {
             shutdown_report.scheduled = Some(scheduled_report);
         }
 
+        let metadata_deadline = MetadataDeadline::after(deadline.remaining());
+        let metadata_persisted = match self.inner.kvconfig_manager().force_persist(metadata_deadline).await {
+            Ok(()) => true,
+            Err(error) => {
+                warn!(%error, "NameServer final KV metadata persistence failed");
+                false
+            }
+        };
+        let metadata_drained = self
+            .inner
+            .kvconfig_manager()
+            .shutdown_metadata_io(metadata_deadline)
+            .await
+            .is_none_or(|report| !report.timed_out && report.pending_operations == 0 && report.pending_bytes == 0);
+        shutdown_report.metadata_io_healthy = Some(metadata_persisted && metadata_drained);
+
         info!("Phase 3/5: Shutting down embedded controller...");
         if let Some(controller_manager) = self.inner.controller_manager() {
             shutdown_report.embedded_controller_healthy =
@@ -1146,6 +1167,9 @@ impl Builder {
             .service_context
             .as_ref()
             .map(|context| context.child("rocketmq-namesrv"));
+        let metadata_io = service_context
+            .as_ref()
+            .map(|context| MetadataIoActor::start(&context.child("namesrv.metadata-io"), MetadataIoConfig::default()));
         let cluster_test_route_lookup = if name_server_config.cluster_test {
             self.cluster_test_route_lookup.or_else(|| {
                 service_context.as_ref().map(|context| {
@@ -1201,7 +1225,7 @@ impl Builder {
                 config: ArcSwap::from(Arc::clone(&initial_config)),
                 config_update_lock: parking_lot::Mutex::new(()),
                 route_info_manager: Arc::new(route_info_manager),
-                kvconfig_manager: Arc::new(KVConfigManager::new(runtime_handle.clone())),
+                kvconfig_manager: Arc::new(KVConfigManager::new(runtime_handle.clone(), metadata_io.clone())),
                 remoting_client,
                 broker_housekeeping_service: Arc::new(BrokerHousekeepingService::new(runtime_handle)),
                 controller_manager: OnceLock::new(),
@@ -3821,6 +3845,7 @@ mod tests {
 
         let response = processor
             .process_request_inner(harness.channel(), RequestCode::SendMessage, &mut request)
+            .await
             .expect("request should be handled")
             .expect("processor should return a response");
 
@@ -4030,6 +4055,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn namesrv_kvconfig_metadata_io_actor_persists_durable_generation() {
+        let temp = tempfile::tempdir().expect("NameServer metadata test directory should be created");
+        let config_path = temp.path().join("kv-config.json");
+        let context = RuntimeContext::try_from_current("namesrv-metadata-io-test").unwrap();
+        let bootstrap = Builder::new()
+            .set_name_server_config(NamesrvConfig {
+                kv_config_path: config_path.to_string_lossy().into_owned(),
+                ..NamesrvConfig::default()
+            })
+            .set_service_context(context.service_context("namesrv"))
+            .build();
+        let manager = bootstrap.name_server_runtime.inner.kvconfig_manager();
+        manager
+            .put_kv_config(
+                CheetahString::from_static_str("namespace"),
+                CheetahString::from_static_str("key"),
+                CheetahString::from_static_str("value"),
+                MetadataDeadline::after(Duration::from_secs(5)),
+            )
+            .await
+            .unwrap();
+
+        let snapshot = manager
+            .metadata_io_snapshot()
+            .expect("service-context NameServer should own metadata I/O actor");
+        let resource = snapshot
+            .resources
+            .iter()
+            .find(|resource| resource.resource.as_ref() == "namesrv.kv-config")
+            .expect("KV metadata resource should be tracked");
+        assert!(resource.durable_generation.is_some());
+        assert_eq!(snapshot.pending_operations, 0);
+        assert!(config_path.is_file());
+
+        let report = manager
+            .shutdown_metadata_io(MetadataDeadline::after(Duration::from_secs(5)))
+            .await
+            .expect("metadata actor should produce shutdown report");
+        assert!(!report.timed_out);
+    }
+
+    #[tokio::test]
     async fn default_v2_route_query_via_client_processor_returns_order_config_and_route_contract() {
         let bootstrap = build_bootstrap_with_v2_config(NamesrvConfig {
             order_message_enable: true,
@@ -4067,7 +4134,9 @@ mod tests {
                 CheetahString::from_static_str("ORDER_TOPIC_CONFIG"),
                 topic_name.clone(),
                 order_conf.clone(),
+                MetadataDeadline::after(Duration::from_secs(5)),
             )
+            .await
             .unwrap();
 
         let mut route_request = RemotingCommand::create_request_command(

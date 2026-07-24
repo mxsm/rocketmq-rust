@@ -19,7 +19,6 @@ use std::sync::Weak;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::common::mix_all::MASTER_ID;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
@@ -236,7 +235,14 @@ where
                     if should_sync_from_peer(&local_version, Some(offset_wrapper.data_version())) {
                         let data_version = offset_wrapper.data_version().clone();
                         consumer_offset_manager.merge_offsets_from_peer(offset_wrapper.offset_table(), data_version);
-                        consumer_offset_manager.persist();
+                        if let Err(error) = self
+                            .context
+                            .persist_config_manager("broker.consumer-offset", consumer_offset_manager)
+                            .await
+                        {
+                            error!(%error, "Failed to persist reverse-synchronized consumer offsets");
+                            success = false;
+                        }
                         info!(
                             "{}'s consumer offset data version is newer or equal, merged into local broker",
                             broker_addr

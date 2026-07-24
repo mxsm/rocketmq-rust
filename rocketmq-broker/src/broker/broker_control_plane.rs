@@ -23,6 +23,8 @@ use parking_lot::RawRwLock;
 use parking_lot::RwLock;
 use rocketmq_common::common::mix_all::MASTER_ID;
 use rocketmq_remoting::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
+use rocketmq_runtime::BlockingExecutor;
+use rocketmq_runtime::MetadataIoActor;
 use rocketmq_store::base::message_store::MessageStore;
 use tokio::sync::Mutex as TokioMutex;
 
@@ -132,6 +134,8 @@ pub(crate) struct BrokerControllerRuntime<MS: MessageStore> {
     pull_policy: PullMessagePolicyState,
     pop_policy: PopPolicyState,
     escape_policy: EscapeBridgePolicyState,
+    metadata_io: Option<MetadataIoActor>,
+    blocking: Option<BlockingExecutor>,
 }
 
 impl<MS: MessageStore> BrokerControllerRuntime<MS> {
@@ -157,6 +161,8 @@ impl<MS: MessageStore> BrokerControllerRuntime<MS> {
         pull_policy: PullMessagePolicyState,
         pop_policy: PopPolicyState,
         escape_policy: EscapeBridgePolicyState,
+        metadata_io: Option<MetadataIoActor>,
+        blocking: Option<BlockingExecutor>,
     ) -> Self {
         Self {
             controller,
@@ -176,6 +182,8 @@ impl<MS: MessageStore> BrokerControllerRuntime<MS> {
             pull_policy,
             pop_policy,
             escape_policy,
+            metadata_io,
+            blocking,
         }
     }
 

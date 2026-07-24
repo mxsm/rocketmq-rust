@@ -19,6 +19,7 @@ use rocketmq_admin_core::core::AdminError;
 use rocketmq_dashboard_common::DashboardCommonError;
 use rocketmq_error::HttpStatusCode;
 use rocketmq_error::RocketMQError;
+use rocketmq_runtime::MetadataIoError;
 use std::borrow::Cow;
 use std::error::Error as StdError;
 use thiserror::Error;
@@ -104,7 +105,9 @@ impl DashboardError {
         match self {
             Self::Validation(_) => Cow::Borrowed("VALIDATION_ERROR"),
             Self::Config(_) | Self::ConfigSource { .. } => Cow::Borrowed("CONFIG_ERROR"),
-            Self::RocketMq(error) => Cow::Borrowed(error.boundary_view().code().as_str()),
+            Self::RocketMq(error) => metadata_io_code(error)
+                .map(Cow::Borrowed)
+                .unwrap_or_else(|| Cow::Borrowed(error.boundary_view().code().as_str())),
             Self::Admin(error) => Cow::Owned(error.code().unwrap_or("ADMIN_ERROR").to_string()),
             Self::NotFound(_) => Cow::Borrowed("NOT_FOUND"),
             Self::Auth(_) => Cow::Borrowed("AUTH_ERROR"),
@@ -117,7 +120,9 @@ impl DashboardError {
         match self {
             Self::Validation(_) => StatusCode::BAD_REQUEST,
             Self::Config(_) | Self::ConfigSource { .. } => StatusCode::BAD_REQUEST,
-            Self::RocketMq(error) => status_code_from_spec(error.boundary_view().http().status),
+            Self::RocketMq(error) => {
+                metadata_io_status(error).unwrap_or_else(|| status_code_from_spec(error.boundary_view().http().status))
+            }
             Self::Admin(error) => error
                 .http_status()
                 .and_then(|status| StatusCode::from_u16(status).ok())
@@ -138,7 +143,9 @@ impl DashboardError {
             | Self::NotImplemented(message)
             | Self::Internal(message) => message.clone(),
             Self::ConfigSource { message, .. } | Self::InternalSource { message, .. } => (*message).to_string(),
-            Self::RocketMq(error) => rocketmq_response_message(error),
+            Self::RocketMq(error) => metadata_io_response_message(error)
+                .map(str::to_string)
+                .unwrap_or_else(|| rocketmq_response_message(error)),
             Self::Admin(error) => admin_response_message(error),
         }
     }
@@ -165,6 +172,55 @@ fn rocketmq_response_message(error: &RocketMQError) -> String {
     }
 }
 
+fn metadata_io_source(error: &RocketMQError) -> Option<&MetadataIoError> {
+    match error {
+        RocketMQError::IO(error) => error.get_ref()?.downcast_ref::<MetadataIoError>(),
+        _ => None,
+    }
+}
+
+fn metadata_io_code(error: &RocketMQError) -> Option<&'static str> {
+    match metadata_io_source(error)? {
+        MetadataIoError::DeadlineExceeded { .. } => Some("METADATA_IO_DEADLINE_EXCEEDED"),
+        MetadataIoError::QueueFull { .. } | MetadataIoError::ByteLimitExceeded { .. } => Some("METADATA_IO_SATURATED"),
+        MetadataIoError::Closed | MetadataIoError::WorkerStopped { .. } => Some("METADATA_IO_UNAVAILABLE"),
+        MetadataIoError::InvalidConfig(_)
+        | MetadataIoError::ResourcePathConflict { .. }
+        | MetadataIoError::WorkerFailed { .. }
+        | MetadataIoError::Io { .. } => Some("METADATA_IO_FAILED"),
+    }
+}
+
+fn metadata_io_status(error: &RocketMQError) -> Option<StatusCode> {
+    match metadata_io_source(error)? {
+        MetadataIoError::DeadlineExceeded { .. } => Some(StatusCode::GATEWAY_TIMEOUT),
+        MetadataIoError::QueueFull { .. }
+        | MetadataIoError::ByteLimitExceeded { .. }
+        | MetadataIoError::Closed
+        | MetadataIoError::WorkerStopped { .. } => Some(StatusCode::SERVICE_UNAVAILABLE),
+        MetadataIoError::InvalidConfig(_)
+        | MetadataIoError::ResourcePathConflict { .. }
+        | MetadataIoError::WorkerFailed { .. }
+        | MetadataIoError::Io { .. } => Some(StatusCode::INTERNAL_SERVER_ERROR),
+    }
+}
+
+fn metadata_io_response_message(error: &RocketMQError) -> Option<&'static str> {
+    match metadata_io_source(error)? {
+        MetadataIoError::DeadlineExceeded { .. } => Some("Metadata durability deadline exceeded"),
+        MetadataIoError::QueueFull { .. } | MetadataIoError::ByteLimitExceeded { .. } => {
+            Some("Metadata persistence is temporarily saturated")
+        }
+        MetadataIoError::Closed | MetadataIoError::WorkerStopped { .. } => {
+            Some("Metadata persistence is temporarily unavailable")
+        }
+        MetadataIoError::InvalidConfig(_)
+        | MetadataIoError::ResourcePathConflict { .. }
+        | MetadataIoError::WorkerFailed { .. }
+        | MetadataIoError::Io { .. } => Some("Metadata persistence failed"),
+    }
+}
+
 fn admin_response_message(error: &AdminError) -> String {
     match error {
         AdminError::Backend { reason, context, .. } => context
@@ -185,6 +241,7 @@ mod tests {
     use rocketmq_admin_core::core::AdminError;
     use rocketmq_error::REDACTED;
     use rocketmq_error::RocketMQError;
+    use rocketmq_runtime::MetadataIoError;
     use serde_json::Value;
     use std::io;
 
@@ -265,6 +322,18 @@ mod tests {
         assert_eq!(body.code, "CONFIG_ERROR");
         assert_eq!(body.message, "Failed to read config file");
         assert!(!body.message.contains("token=plain-text"));
+    }
+
+    #[tokio::test]
+    async fn metadata_io_saturation_uses_typed_retryable_boundary_without_internal_details() {
+        let error = RocketMQError::IO(io::Error::other(MetadataIoError::QueueFull { limit: 32 }));
+
+        let (status, body) = failure_response(DashboardError::from(error)).await;
+
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body.code, "METADATA_IO_SATURATED");
+        assert_eq!(body.message, "Metadata persistence is temporarily saturated");
+        assert!(!body.message.contains("32"));
     }
 
     #[test]

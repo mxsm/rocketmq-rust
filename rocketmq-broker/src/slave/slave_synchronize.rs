@@ -15,12 +15,18 @@
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::Weak;
+use std::time::Duration;
 
 use arc_swap::ArcSwapOption;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
+use rocketmq_common::FileUtils;
+use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
+use rocketmq_runtime::BlockingExecutor;
+use rocketmq_runtime::MetadataDeadline;
+use rocketmq_runtime::MetadataIoActor;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use rocketmq_store::timer::timer_message_store::TimerMessageStore;
@@ -155,6 +161,8 @@ pub(crate) struct SlaveSynchronizeContext<MS: MessageStore> {
     subscription_group_manager: SlaveSubscriptionGroupCapability,
     timer_store: SlaveTimerStoreCapability<MS>,
     message_request_mode: SlaveMessageRequestModeCapability,
+    metadata_io: Option<MetadataIoActor>,
+    blocking: Option<BlockingExecutor>,
 }
 
 impl<MS: MessageStore> SlaveSynchronizeContext<MS> {
@@ -171,6 +179,8 @@ impl<MS: MessageStore> SlaveSynchronizeContext<MS> {
         schedule_message_service: Arc<ScheduleMessageService<MS>>,
         subscription_group_manager: SubscriptionGroupManager,
         timer_store: SlaveTimerStoreCapability<MS>,
+        metadata_io: Option<MetadataIoActor>,
+        blocking: Option<BlockingExecutor>,
     ) -> Self {
         Self {
             policy,
@@ -183,7 +193,58 @@ impl<MS: MessageStore> SlaveSynchronizeContext<MS> {
             subscription_group_manager: SlaveSubscriptionGroupCapability::new(&subscription_group_manager),
             timer_store,
             message_request_mode: SlaveMessageRequestModeCapability::default(),
+            metadata_io,
+            blocking,
         }
+    }
+
+    async fn persist_snapshot(&self, resource: &'static str, path: String, content: String) -> RocketMQResult<()> {
+        if content.is_empty() {
+            return Ok(());
+        }
+        if let Some(metadata_io) = self.metadata_io.as_ref() {
+            metadata_io
+                .submit_next_durable(
+                    resource,
+                    path,
+                    content.into_bytes(),
+                    MetadataDeadline::after(Duration::from_secs(5)),
+                )
+                .await
+                .map_err(FileUtils::metadata_io_error)?;
+            return Ok(());
+        }
+        if let Some(blocking) = self.blocking.as_ref() {
+            return blocking
+                .spawn_io(resource, move || {
+                    FileUtils::string_to_file(content.as_str(), path.as_str())
+                })
+                .await
+                .map_err(|error| RocketMQError::IO(std::io::Error::other(error)))?;
+        }
+        FileUtils::string_to_file(content.as_str(), path.as_str())
+    }
+
+    async fn persist_config_manager<T>(&self, resource: &'static str, manager: Arc<T>) -> RocketMQResult<()>
+    where
+        T: ConfigManager + Send + Sync + 'static,
+    {
+        if manager.supports_metadata_io_actor() {
+            return self
+                .persist_snapshot(
+                    resource,
+                    manager.config_file_path().to_string(),
+                    manager.encode_pretty(true),
+                )
+                .await;
+        }
+        if let Some(blocking) = self.blocking.as_ref() {
+            return blocking
+                .spawn_io(resource, move || manager.persist())
+                .await
+                .map_err(|error| RocketMQError::IO(std::io::Error::other(error)))?;
+        }
+        manager.persist()
     }
 }
 
@@ -371,7 +432,9 @@ where
                 .lock()
                 .assign_new_one(&version);
 
-            topic_queue_mapping_manager.persist();
+            self.context
+                .persist_config_manager("broker.topic-queue-mapping", topic_queue_mapping_manager)
+                .await?;
         }
         Ok(())
     }
@@ -398,7 +461,16 @@ where
                             let data_version = offset_wrapper.data_version().clone();
                             consumer_offset_manager
                                 .merge_offsets_from_peer(offset_wrapper.offset_table(), data_version);
-                            consumer_offset_manager.persist();
+                            if let Err(error) = self
+                                .context
+                                .persist_config_manager("broker.consumer-offset", consumer_offset_manager)
+                                .await
+                            {
+                                error!(
+                                    "Persist synchronized consumer offsets from {} failed: {}",
+                                    master_addr, error
+                                );
+                            }
                             info!("Update slave consumer offset from master, {}", master_addr);
                         } else {
                             warn!("GetAllConsumerOffset return null, {}", master_addr);
@@ -487,7 +559,16 @@ where
                                 for (key, value) in new_subscription_table {
                                     subscription_table.insert(key, value);
                                 }
-                                subscription_group_manager.persist();
+                                if let Err(error) = self
+                                    .context
+                                    .persist_config_manager("broker.subscription-group", subscription_group_manager)
+                                    .await
+                                {
+                                    error!(
+                                        "Persist synchronized subscription groups from {} failed: {}",
+                                        master_addr, error
+                                    );
+                                }
                             }
                             info!("Update slave subscription group config from master, {}", master_addr);
                         } else {
@@ -521,12 +602,22 @@ where
                                 );
                                 return;
                             };
-                            let message_request_mode_map = message_request_mode_manager.message_request_mode_map();
-                            let mut message_request_mode_map = message_request_mode_map.lock();
-                            message_request_mode_map.clear();
-                            message_request_mode_map.extend(mode.into_inner());
-                            drop(message_request_mode_map);
-                            message_request_mode_manager.persist();
+                            {
+                                let message_request_mode_map = message_request_mode_manager.message_request_mode_map();
+                                let mut message_request_mode_map = message_request_mode_map.lock();
+                                message_request_mode_map.clear();
+                                message_request_mode_map.extend(mode.into_inner());
+                            }
+                            if let Err(error) = self
+                                .context
+                                .persist_config_manager("broker.message-request-mode", message_request_mode_manager)
+                                .await
+                            {
+                                error!(
+                                    "Persist synchronized message request mode from {} failed: {}",
+                                    master_addr, error
+                                );
+                            }
                         } else {
                             warn!("GetMessageRequestMode return null, {}", master_addr);
                         }
@@ -554,7 +645,20 @@ where
                 Ok(Some(metrics_wrapper)) => {
                     if timer_message_store.timer_metrics.data_version() != *metrics_wrapper.data_version() {
                         timer_message_store.timer_metrics.apply_wrapper(metrics_wrapper);
-                        timer_message_store.timer_metrics.persist();
+                        if let Err(error) = self
+                            .context
+                            .persist_snapshot(
+                                "broker.timer-metrics",
+                                timer_message_store.timer_metrics.config_file_path().to_string(),
+                                timer_message_store.timer_metrics.encode_pretty(true),
+                            )
+                            .await
+                        {
+                            error!(
+                                "Persist synchronized timer metrics from {} failed: {}",
+                                master_addr, error
+                            );
+                        }
                     }
                     info!("Update slave timer metrics from master, {}", master_addr);
                 }

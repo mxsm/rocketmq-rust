@@ -68,6 +68,7 @@ cheetah-string = { workspace = true }
 criterion = { version = "0.8", features = ["html_reports", "async_futures"] }
 futures   = "0.3"
 serde_json.workspace = true
+tempfile = "3.27.0"
 
 [[bin]]
 name = "rocketmq-namesrv-rust"

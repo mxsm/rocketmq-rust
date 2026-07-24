@@ -14,6 +14,7 @@
 
 use core::str;
 use std::collections::HashMap;
+use std::time::Duration;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::mix_all;
@@ -54,6 +55,7 @@ use rocketmq_remoting::protocol::RemotingDeserializable;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
+use rocketmq_runtime::MetadataDeadline;
 use tracing::info;
 use tracing::warn;
 
@@ -89,21 +91,21 @@ impl DefaultRequestProcessor {
             "Name server DefaultRequestProcessor Received request code: {:?}",
             request_code
         );
-        self.process_request_inner(channel, request_code, request)
+        self.process_request_inner(channel, request_code, request).await
     }
 }
 
 impl DefaultRequestProcessor {
-    pub fn process_request_inner(
+    pub async fn process_request_inner(
         &self,
         channel: Channel,
         request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let response = match request_code {
-            RequestCode::PutKvConfig => self.put_kv_config(request),
+            RequestCode::PutKvConfig => self.put_kv_config(request).await,
             RequestCode::GetKvConfig => self.get_kv_config(request),
-            RequestCode::DeleteKvConfig => self.delete_kv_config(request),
+            RequestCode::DeleteKvConfig => self.delete_kv_config(request).await,
             RequestCode::QueryDataVersion => self.query_broker_topic_config(request),
             //handle register broker
             RequestCode::RegisterBroker => self.process_register_broker(channel, request),
@@ -136,7 +138,7 @@ impl DefaultRequestProcessor {
 
 ///implementation put KV config
 impl DefaultRequestProcessor {
-    fn put_kv_config(&self, request: &mut RemotingCommand) -> rocketmq_error::RocketMQResult<RemotingCommand> {
+    async fn put_kv_config(&self, request: &mut RemotingCommand) -> rocketmq_error::RocketMQResult<RemotingCommand> {
         let request_header = request.decode_command_custom_header::<PutKVConfigRequestHeader>()?;
         //check namespace and key, need?
         if request_header.namespace.is_empty() || request_header.key.is_empty() {
@@ -145,11 +147,15 @@ impl DefaultRequestProcessor {
             ));
         }
 
-        self.name_server_runtime_inner.kvconfig_manager().put_kv_config(
-            request_header.namespace,
-            request_header.key,
-            request_header.value,
-        )?;
+        self.name_server_runtime_inner
+            .kvconfig_manager()
+            .put_kv_config(
+                request_header.namespace,
+                request_header.key,
+                request_header.value,
+                MetadataDeadline::after(Duration::from_secs(5)),
+            )
+            .await?;
         Ok(RemotingCommand::create_response_command())
     }
 
@@ -171,13 +177,17 @@ impl DefaultRequestProcessor {
         )))
     }
 
-    fn delete_kv_config(&self, request: &mut RemotingCommand) -> rocketmq_error::RocketMQResult<RemotingCommand> {
+    async fn delete_kv_config(&self, request: &mut RemotingCommand) -> rocketmq_error::RocketMQResult<RemotingCommand> {
         let request_header = request.decode_command_custom_header::<DeleteKVConfigRequestHeader>()?;
 
-        let _ = self
-            .name_server_runtime_inner
+        self.name_server_runtime_inner
             .kvconfig_manager()
-            .delete_kv_config(&request_header.namespace, &request_header.key);
+            .delete_kv_config(
+                &request_header.namespace,
+                &request_header.key,
+                MetadataDeadline::after(Duration::from_secs(5)),
+            )
+            .await?;
         Ok(RemotingCommand::create_response_command())
     }
 

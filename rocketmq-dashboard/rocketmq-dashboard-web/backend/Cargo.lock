@@ -2556,6 +2556,7 @@ dependencies = [
  "rocketmq-dashboard-common",
  "rocketmq-error",
  "rocketmq-observability",
+ "rocketmq-runtime",
  "rusqlite",
  "serde",
  "serde_json",
@@ -2686,6 +2687,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
