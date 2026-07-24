@@ -668,6 +668,36 @@ impl RocketMQError {
         Self::Network(NetworkError::request_timeout(addr, timeout.as_millis() as u64))
     }
 
+    /// Create a connection-stage timeout error.
+    #[inline]
+    pub fn network_connection_timeout(addr: impl Into<String>, timeout_millis: u64) -> Self {
+        Self::Network(NetworkError::connection_timeout(addr, timeout_millis))
+    }
+
+    /// Create an outbound queue capacity error.
+    #[inline]
+    pub fn network_queue_full(addr: impl Into<String>) -> Self {
+        Self::Network(NetworkError::queue_full(addr))
+    }
+
+    /// Create a request-expired-before-send error.
+    #[inline]
+    pub fn network_deadline_exceeded_before_send(addr: impl Into<String>) -> Self {
+        Self::Network(NetworkError::deadline_exceeded_before_send(addr))
+    }
+
+    /// Create a socket write timeout error.
+    #[inline]
+    pub fn network_write_timeout(addr: impl Into<String>, timeout_millis: u64) -> Self {
+        Self::Network(NetworkError::write_timeout(addr, timeout_millis))
+    }
+
+    /// Create a response-stage timeout error.
+    #[inline]
+    pub fn network_response_timeout(addr: impl Into<String>, timeout_millis: u64) -> Self {
+        Self::Network(NetworkError::response_timeout(addr, timeout_millis))
+    }
+
     /// Create a network request failed error
     #[inline]
     pub fn network_request_failed(addr: impl Into<String>, reason: impl Into<String>) -> Self {

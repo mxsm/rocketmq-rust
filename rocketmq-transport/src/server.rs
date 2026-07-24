@@ -26,6 +26,7 @@ use std::time::Duration;
 
 use futures_util::SinkExt;
 use futures_util::StreamExt;
+use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
@@ -385,8 +386,25 @@ async fn run_framed_session<H>(
                     bytes,
                     completion,
                     _permit,
+                    deadline,
+                    target,
+                    progress,
                 }) => {
-                    let result = sink.send(bytes).await;
+                    let result = match deadline {
+                        Some(deadline) if deadline.is_expired() => {
+                            Err(RocketMQError::network_deadline_exceeded_before_send(target))
+                        }
+                        Some(deadline) => {
+                            if let Some(progress) = progress.as_ref() {
+                                progress.start_write();
+                            }
+                            match deadline.timeout(sink.send(bytes)).await {
+                                Ok(result) => result,
+                                Err(_) => Err(RocketMQError::network_write_timeout(target, deadline.budget_millis())),
+                            }
+                        }
+                        None => sink.send(bytes).await,
+                    };
                     if result.is_err() {
                         let _ = writer_state.send(ConnectionState::Degraded);
                     }
@@ -848,8 +866,11 @@ mod retirement_tests {
     use std::sync::Arc;
     use std::time::Duration;
 
+    use rocketmq_error::NetworkError;
+    use rocketmq_error::RocketMQError;
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
     use rocketmq_runtime::RuntimeContext;
+    use tokio::io::AsyncReadExt;
     use tokio::sync::oneshot;
     use tokio::sync::Notify;
 
@@ -858,6 +879,7 @@ mod retirement_tests {
     use crate::admission::AdmissionController;
     use crate::admission::AdmissionLimits;
     use crate::connection::Connection;
+    use crate::deadline::RequestDeadline;
     use crate::security::TransportSecurity;
 
     struct CaptureSession {
@@ -988,5 +1010,64 @@ mod retirement_tests {
             .unwrap()
             .is_err());
         runner.await.unwrap();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn request_deadline_wins_the_enqueue_race_without_a_socket_write() {
+        let runtime = RuntimeContext::from_current("transport-request-deadline-race-test");
+        let service = runtime.service_context("transport-request-deadline-race");
+        let (transport, mut peer_stream) = tokio::io::duplex(4096);
+        let (session_tx, session_rx) = oneshot::channel();
+        let handler = Arc::new(CaptureSession {
+            sender: std::sync::Mutex::new(Some(session_tx)),
+        });
+        let local_addr: SocketAddr = "127.0.0.1:19005".parse().unwrap();
+        let remote_addr: SocketAddr = "127.0.0.1:19006".parse().unwrap();
+        let runner = tokio::spawn(super::run_connected_session(
+            Connection::new_with_stream(transport),
+            local_addr,
+            remote_addr,
+            service.task_group().clone(),
+            Arc::new(AdmissionController::new(AdmissionLimits::default())),
+            Arc::new(TransportSecurity::development_insecure_loopback(None, None)),
+            None,
+            Duration::from_secs(30),
+            handler,
+        ));
+        let session = session_rx.await.expect("session capture");
+        let checked = Arc::new(Notify::new());
+        let resume_enqueue = Arc::new(Notify::new());
+        let mut connection = session.connection_with_enqueue_gate(checked.clone(), resume_enqueue);
+        let deadline = RequestDeadline::after(Duration::from_millis(50));
+        let send = tokio::spawn(async move {
+            connection
+                .send_command_with_deadline(
+                    RemotingCommand::create_remoting_command(4),
+                    deadline,
+                    "127.0.0.1:19006".to_string(),
+                )
+                .await
+        });
+        checked.notified().await;
+
+        tokio::time::advance(Duration::from_millis(50)).await;
+        let error = send
+            .await
+            .expect("send task")
+            .expect_err("deadline must win the enqueue race");
+
+        assert!(matches!(
+            error,
+            RocketMQError::Network(NetworkError::DeadlineExceededBeforeSend { .. })
+        ));
+        let mut byte = [0_u8; 1];
+        tokio::select! {
+            biased;
+            read = peer_stream.read(&mut byte) => panic!("unexpected socket read after deadline: {read:?}"),
+            () = tokio::task::yield_now() => {}
+        }
+
+        session.retire().await.expect("retire session");
+        runner.await.expect("session runner");
     }
 }

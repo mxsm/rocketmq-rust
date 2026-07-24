@@ -84,6 +84,7 @@ observability = ["rocketmq-transport/observability"]
 bytes     = "1.11.1"
 criterion = { version = "0.8", features = ["html_reports"] }
 tempfile  = "3.27.0"
+tokio     = { workspace = true, features = ["test-util"] }
 
 [[bench]]
 name    = "encode_decode_bench"

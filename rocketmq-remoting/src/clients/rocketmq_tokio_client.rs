@@ -22,6 +22,9 @@ use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use parking_lot::Mutex;
 use parking_lot::RwLock;
+use rocketmq_error::NetworkError;
+use rocketmq_error::RocketMQError;
+use rocketmq_error::RocketMQResult;
 use rocketmq_runtime::RuntimeHandle;
 use rocketmq_runtime::RuntimeResult;
 use rocketmq_runtime::ServiceContext;
@@ -54,6 +57,7 @@ use crate::runtime::config::client_config::TokioClientConfig;
 use crate::runtime::processor::RequestProcessor;
 use crate::runtime::RPCHook;
 use crate::tls::TlsConfig;
+use rocketmq_transport::deadline::RequestDeadline;
 use rocketmq_transport::security::TransportSecurity;
 
 /// High-performance async RocketMQ client with connection pooling and auto-reconnection.
@@ -550,7 +554,11 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
     ///
     /// * `Some(client)` - Connected to healthy nameserver
     /// * `None` - No nameservers available or all unhealthy
-    async fn get_and_create_nameserver_client(&self) -> Option<Client<PR>> {
+    async fn get_and_create_nameserver_client_until(
+        &self,
+        deadline: RequestDeadline,
+    ) -> RocketMQResult<Option<Client<PR>>> {
+        deadline.ensure_before_send("<nameserver>")?;
         let cached_addr = self.namesrv_addr_choosed.read().clone();
 
         if let Some(ref addr) = cached_addr {
@@ -558,7 +566,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
             if let Some(client) = self.connection_tables.get(addr) {
                 if client.connection().is_healthy() && self.latency_tracker.is_healthy(addr) {
                     // Fast path: Cached nameserver is healthy
-                    return Some(client.value().clone());
+                    return Ok(Some(client.value().clone()));
                 }
                 debug!("Cached nameserver {} is unhealthy, selecting new one", addr);
             }
@@ -568,7 +576,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
 
         if addr_list.is_empty() {
             warn!("No nameservers configured in namesrv_addr_list");
-            return None;
+            return Ok(None);
         }
 
         // Use latency tracker to select best nameserver
@@ -580,7 +588,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
                     "Failed to select healthy nameserver. Available list: {:?}, Available set: {:?}",
                     addr_list, available
                 );
-                return None;
+                return Ok(None);
             }
         };
 
@@ -596,11 +604,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
         // Update cached selection
         self.namesrv_addr_choosed.write().replace(selected_addr.clone());
 
-        self.create_client(
-            selected_addr,
-            Duration::from_millis(self.tokio_client_config.connect_timeout_millis as u64),
-        )
-        .await
+        self.create_client_until(selected_addr, deadline).await
     }
 
     /// Get existing healthy client or create new connection.
@@ -615,29 +619,43 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
     /// - **Fast path**: Single lock acquire + HashMap lookup + health check (< 100ns)
     /// - **Slow path**: Lock + TCP handshake + TLS (if enabled) (10-50ms)
     async fn get_and_create_client(&self, addr: Option<&CheetahString>) -> Option<Client<PR>> {
+        let deadline = RequestDeadline::after(Duration::from_millis(
+            self.tokio_client_config.connect_timeout_millis as u64,
+        ));
+        match self.get_and_create_client_until(addr, deadline).await {
+            Ok(client) => client,
+            Err(error) => {
+                warn!(error = ?error, "Failed to get or create remoting client");
+                None
+            }
+        }
+    }
+
+    async fn get_and_create_client_until(
+        &self,
+        addr: Option<&CheetahString>,
+        deadline: RequestDeadline,
+    ) -> RocketMQResult<Option<Client<PR>>> {
         // Route empty addresses to nameserver
         let target_addr = match addr {
-            None => return self.get_and_create_nameserver_client().await,
-            Some(addr) if addr.is_empty() => return self.get_and_create_nameserver_client().await,
+            None => return self.get_and_create_nameserver_client_until(deadline).await,
+            Some(addr) if addr.is_empty() => return self.get_and_create_nameserver_client_until(deadline).await,
             Some(addr) => addr,
         };
+        deadline.ensure_before_send(target_addr.to_string())?;
 
         // Fast path: Check connection pool (lock-free with DashMap)
         if let Some(client_ref) = self.connection_tables.get(target_addr) {
             let client = client_ref.value().clone();
             if client.connection().is_healthy() {
-                return Some(client); // Return healthy cached client
+                return Ok(Some(client)); // Return healthy cached client
             }
             // Client unhealthy - will create new connection
             debug!("Cached client for {} is unhealthy, reconnecting...", target_addr);
         }
 
         // Slow path: Create new connection
-        self.create_client(
-            target_addr,
-            Duration::from_millis(self.tokio_client_config.connect_timeout_millis as u64),
-        )
-        .await
+        self.create_client_until(target_addr, deadline).await
     }
 
     /// Create new client connection with double-checked locking pattern.
@@ -678,11 +696,26 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
     /// * `Some(client)` - Successfully connected (either new or cached)
     /// * `None` - Connection failed or timed out (or circuit breaker OPEN)
     async fn create_client(&self, addr: &CheetahString, duration: Duration) -> Option<Client<PR>> {
+        match self.create_client_until(addr, RequestDeadline::after(duration)).await {
+            Ok(client) => client,
+            Err(error) => {
+                error!(remote_addr = %addr, error = ?error, "Failed to create remoting client");
+                None
+            }
+        }
+    }
+
+    async fn create_client_until(
+        &self,
+        addr: &CheetahString,
+        deadline: RequestDeadline,
+    ) -> RocketMQResult<Option<Client<PR>>> {
+        deadline.ensure_before_send(addr.to_string())?;
         if let Some(ref pool) = self.connection_pool {
             if let Some(pooled_conn) = pool.get(addr) {
                 if pooled_conn.is_healthy() {
                     debug!("Reusing pooled connection to {}", addr);
-                    return Some(pooled_conn.client().clone());
+                    return Ok(Some(pooled_conn.client().clone()));
                 }
                 // Unhealthy connection - remove from pool
                 pool.remove(addr);
@@ -693,7 +726,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
         if let Some(client_ref) = self.connection_tables.get(addr) {
             let client = client_ref.value().clone();
             if client.connection().is_healthy() {
-                return Some(client);
+                return Ok(Some(client));
             }
             // Client unhealthy - remove it immediately (DashMap allows concurrent removal)
             drop(client_ref); // Release read guard before removal
@@ -710,7 +743,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
         // Check if request allowed (CLOSED or HALF_OPEN)
         if !breaker.allow_request() {
             warn!("Circuit breaker OPEN for {}, rejecting connection attempt", addr);
-            return None;
+            return Ok(None);
         }
 
         let addr_inner = addr.to_string();
@@ -719,28 +752,33 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
 
         let service_context = self.service_context.clone();
         let transport_security = self.transport_security.clone();
-        let connect_result = time::timeout(duration, async move {
-            let result = if let Some(service_context) = service_context.as_ref() {
-                Client::connect_with_service_context(
-                    service_context,
-                    addr_inner,
-                    self.cmd_handler.clone(),
-                    self.tx.as_ref(),
-                    tls_config,
-                )
-                .await
-            } else {
-                Client::connect(addr_inner, self.cmd_handler.clone(), self.tx.as_ref(), tls_config).await
-            };
-            match transport_security {
-                Some(transport_security) => result.map(|client| client.with_transport_security(transport_security)),
-                None => result,
-            }
-        })
-        .await;
+        let connect_result = if let Some(service_context) = service_context.as_ref() {
+            Client::connect_with_service_context_until(
+                service_context,
+                addr_inner,
+                self.cmd_handler.clone(),
+                self.tx.as_ref(),
+                tls_config,
+                deadline,
+            )
+            .await
+        } else {
+            Client::connect_until(
+                addr_inner,
+                self.cmd_handler.clone(),
+                self.tx.as_ref(),
+                tls_config,
+                deadline,
+            )
+            .await
+        };
+        let connect_result = match transport_security {
+            Some(transport_security) => connect_result.map(|client| client.with_transport_security(transport_security)),
+            None => connect_result,
+        };
 
         match connect_result {
-            Ok(Ok(new_client)) => {
+            Ok(new_client) => {
                 // Connection successful - record success in circuit breaker
                 breaker.record_success();
                 self.circuit_breakers.insert(addr.clone(), breaker);
@@ -758,7 +796,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
                         // Check if existing is still healthy
                         if entry.get().connection().is_healthy() {
                             info!("Race condition: {} already connected by another task", addr);
-                            return Some(entry.get().clone());
+                            return Ok(Some(entry.get().clone()));
                         }
                         // Replace unhealthy with new client
                         entry.insert(new_client.clone());
@@ -769,21 +807,14 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
                 }
 
                 info!("Successfully created client for {}", addr);
-                Some(new_client)
+                Ok(Some(new_client))
             }
-            Ok(Err(e)) => {
+            Err(error) => {
                 // Connection failed - record failure in circuit breaker
-                error!("Failed to connect to {}: {:?}", addr, e);
+                error!(remote_addr = %addr, error = ?error, "Failed to connect");
                 breaker.record_failure();
                 self.circuit_breakers.insert(addr.clone(), breaker);
-                None
-            }
-            Err(_) => {
-                // Timeout - record failure in circuit breaker
-                error!("Connection to {} timed out after {:?}", addr, duration);
-                breaker.record_failure();
-                self.circuit_breakers.insert(addr.clone(), breaker);
-                None
+                Err(error)
             }
         }
     }
@@ -1199,15 +1230,26 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
         request: RemotingCommand,
         timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
+        self.invoke_request_with_deadline(addr, request, RequestDeadline::from_timeout_millis(timeout_millis))
+            .await
+    }
+
+    async fn invoke_request_with_deadline(
+        &self,
+        addr: Option<&CheetahString>,
+        request: RemotingCommand,
+        deadline: RequestDeadline,
+    ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
         // Record start time for latency tracking
         let start = time::Instant::now();
+        let timeout_millis = deadline.budget_millis();
+        let target = addr.map_or_else(|| "<nameserver>".to_string(), ToString::to_string);
+        deadline.ensure_before_send(target.clone())?;
 
         // Determine target address (for metrics recording)
         let target_addr = addr.cloned().or_else(|| self.namesrv_addr_choosed.read().clone());
 
-        let mut client = self.get_and_create_client(addr).await.ok_or_else(|| {
-            let target = addr.map(|a| a.as_str()).unwrap_or("<nameserver>");
-
+        let mut client = self.get_and_create_client_until(addr, deadline).await?.ok_or_else(|| {
             if target == "<nameserver>" {
                 let configured_list = self.namesrv_addr_list.read().clone();
                 let available_set = self.available_namesrv_addr_set.read().clone();
@@ -1229,37 +1271,41 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
                 self.latency_tracker.record_error(addr);
             }
 
-            rocketmq_error::RocketMQError::network_connection_failed(target.to_string(), "Failed to connect")
+            RocketMQError::network_connection_failed(target.clone(), "Failed to connect")
         })?;
 
         if self.shutdown_token.is_cancelled() {
-            return Err(rocketmq_error::RocketMQError::ClientNotStarted);
+            return Err(RocketMQError::ClientNotStarted);
         }
 
         let mut request = request;
         let remote_address = client.remote_address();
+        deadline.ensure_before_send(remote_address.to_string())?;
         let request_for_after = if self.cmd_handler.has_rpc_hooks() {
             request.make_custom_header_to_net();
             self.cmd_handler
                 .do_before_rpc_hooks_with_addr(remote_address, Some(&mut request))?;
+            deadline.ensure_before_send(remote_address.to_string())?;
             Some(request.clone())
         } else {
             None
         };
 
-        let send_result = time::timeout(
-            Duration::from_millis(timeout_millis),
-            client.send_read(request, timeout_millis),
-        )
-        .await;
+        let send_result = client.send_read(request, deadline).await;
 
         let latency = start.elapsed();
 
         match send_result {
-            Ok(Ok(mut response)) => {
+            Ok(mut response) => {
                 if let Some(request) = request_for_after.as_ref() {
                     self.cmd_handler
                         .do_after_rpc_hooks_with_addr(remote_address, request, Some(&mut response))?;
+                    if deadline.is_expired() {
+                        return Err(RocketMQError::network_response_timeout(
+                            remote_address.to_string(),
+                            timeout_millis,
+                        ));
+                    }
                 }
 
                 if let Some(ref addr) = target_addr {
@@ -1278,8 +1324,11 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
                 }
                 Ok(response)
             }
-            Ok(Err(err)) => {
-                if matches!(err, rocketmq_error::RocketMQError::Timeout { .. }) {
+            Err(err) => {
+                if matches!(
+                    err,
+                    RocketMQError::Network(NetworkError::WriteTimeout { .. } | NetworkError::ResponseTimeout { .. })
+                ) {
                     client.retire_after_timeout().await;
                     if let Some(ref addr) = target_addr {
                         self.connection_tables.remove(addr);
@@ -1304,37 +1353,31 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
                 }
                 Err(err)
             }
-            Err(_) => {
-                client.retire_after_timeout().await;
-                if let Some(ref addr) = target_addr {
-                    self.connection_tables.remove(addr);
-                    if let Some(ref pool) = self.connection_pool {
-                        pool.remove(addr);
-                    }
-                    self.latency_tracker.record_error(addr);
-
-                    if let Some(ref pool) = self.connection_pool {
-                        pool.record_error(addr);
-                    }
-                }
-                Err(rocketmq_error::RocketMQError::Timeout {
-                    operation: "send_request",
-                    timeout_ms: timeout_millis,
-                })
-            }
         }
     }
 
     async fn invoke_request_oneway(&self, addr: &CheetahString, request: RemotingCommand, timeout_millis: u64) {
-        let client = self.get_and_create_client(Some(addr)).await;
+        let deadline = RequestDeadline::from_timeout_millis(timeout_millis);
+        let client = self.get_and_create_client_until(Some(addr), deadline).await;
         match client {
-            None => {
+            Ok(None) => {
                 error!(remote_addr = %addr, "invoke oneway client unavailable");
             }
-            Some(mut client) => {
+            Err(error) => {
+                warn!(
+                    remote_addr = %addr,
+                    error = ?error,
+                    "invoke oneway connection failed"
+                );
+            }
+            Ok(Some(mut client)) => {
                 let mut request = request;
                 if self.cmd_handler.has_rpc_hooks() {
                     let remote_address = client.remote_address();
+                    if let Err(error) = deadline.ensure_before_send(remote_address.to_string()) {
+                        warn!(remote_addr = %addr, error = ?error, "invoke oneway deadline expired");
+                        return;
+                    }
                     request.make_custom_header_to_net();
                     if let Err(error) = self
                         .cmd_handler
@@ -1347,6 +1390,10 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
                         );
                         return;
                     }
+                    if let Err(error) = deadline.ensure_before_send(remote_address.to_string()) {
+                        warn!(remote_addr = %addr, error = ?error, "invoke oneway hook exceeded deadline");
+                        return;
+                    }
                 }
                 let addr_clone = addr.clone();
                 let Some(task_group) = self.get_or_create_worker_task_group() else {
@@ -1354,26 +1401,15 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
                     return;
                 };
                 if let Err(error) = task_group.spawn_service("remoting.client.oneway-send", async move {
-                    match time::timeout(Duration::from_millis(timeout_millis), async move {
-                        let mut request = request;
-                        request.mark_oneway_rpc_ref();
-                        client.send(request).await
-                    })
-                    .await
-                    {
-                        Ok(Ok(())) => {}
-                        Ok(Err(e)) => {
+                    let mut request = request;
+                    request.mark_oneway_rpc_ref();
+                    match client.send_until(request, deadline).await {
+                        Ok(()) => {}
+                        Err(error) => {
                             warn!(
                                 remote_addr = %addr_clone,
-                                error = ?e,
+                                error = ?error,
                                 "invoke oneway send failed"
-                            );
-                        }
-                        Err(_) => {
-                            warn!(
-                                remote_addr = %addr_clone,
-                                timeout_ms = timeout_millis,
-                                "invoke oneway send timed out"
                             );
                         }
                     }

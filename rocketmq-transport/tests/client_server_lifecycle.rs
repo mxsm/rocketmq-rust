@@ -47,6 +47,7 @@ use rocketmq_transport::config::TlsConfig;
 use rocketmq_transport::config::TlsMode;
 use rocketmq_transport::connection::transport_io_snapshot;
 use rocketmq_transport::connection::Connection;
+use rocketmq_transport::deadline::RequestDeadline;
 use rocketmq_transport::security::TransportSecurity;
 use rocketmq_transport::server::ConnectionHandler;
 use rocketmq_transport::server::RequestProcessor;
@@ -241,7 +242,7 @@ async fn real_request_uses_one_deadline_and_drains_all_owned_tasks() {
         .invoke(
             address,
             RemotingCommand::create_remoting_command(105).set_body("payload"),
-            ShutdownDeadline::after(Duration::from_secs(2)),
+            RequestDeadline::after(Duration::from_secs(2)),
         )
         .await
         .unwrap();
@@ -279,7 +280,7 @@ async fn hung_processor_and_send_failure_complete_without_leaking_pending_or_tas
         .invoke(
             address,
             RemotingCommand::create_remoting_command(105),
-            ShutdownDeadline::after(Duration::from_millis(100)),
+            RequestDeadline::after(Duration::from_millis(100)),
         )
         .await
         .is_err());
@@ -287,7 +288,7 @@ async fn hung_processor_and_send_failure_complete_without_leaking_pending_or_tas
         .invoke(
             "127.0.0.1:1".parse().unwrap(),
             RemotingCommand::create_remoting_command(105),
-            ShutdownDeadline::after(Duration::from_millis(100)),
+            RequestDeadline::after(Duration::from_millis(100)),
         )
         .await
         .is_err());
@@ -321,7 +322,7 @@ async fn wrong_response_opaque_is_rejected_and_cannot_complete_the_request() {
         .invoke(
             address,
             RemotingCommand::create_remoting_command(105),
-            ShutdownDeadline::after(Duration::from_millis(100)),
+            RequestDeadline::after(Duration::from_millis(100)),
         )
         .await;
 
@@ -473,7 +474,7 @@ async fn transport_security_signs_outbound_and_fails_closed_without_a_principal(
         .invoke(
             signed_address,
             RemotingCommand::create_remoting_command(RequestCode::HeartBeat),
-            ShutdownDeadline::after(Duration::from_secs(1)),
+            RequestDeadline::after(Duration::from_secs(1)),
         )
         .await
         .expect("signed request");
@@ -523,7 +524,7 @@ async fn tls_client_invocation_releases_pending_and_server_ownership() {
             address,
             RemotingCommand::create_remoting_command(RequestCode::HeartBeat).set_body(vec![7_u8; 1024]),
             &client_tls,
-            ShutdownDeadline::after(Duration::from_secs(2)),
+            RequestDeadline::after(Duration::from_secs(2)),
         )
         .await
         .expect("TLS invocation");

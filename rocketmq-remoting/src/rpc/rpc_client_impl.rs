@@ -80,6 +80,7 @@ use crate::rpc::rpc_client_hook::RpcClientHookFn;
 use crate::rpc::rpc_client_utils::RpcClientUtils;
 use crate::rpc::rpc_request::RpcRequest;
 use crate::rpc::rpc_response::RpcResponse;
+use rocketmq_transport::deadline::RequestDeadline;
 
 /// Configuration for response handling
 struct ResponseConfig {
@@ -205,13 +206,14 @@ impl RpcClientImpl {
         &self,
         addr: &CheetahString,
         request: RpcRequest<H>,
-        timeout_millis: u64,
+        deadline: RequestDeadline,
         config: ResponseConfig,
     ) -> Result<RpcResponse, RpcClientError>
     where
         H: CommandCustomHeader + TopicRequestHeaderTrait,
         R: CommandCustomHeader + FromMap<Target = R, Error = rocketmq_error::RocketMQError> + Send + Sync + 'static,
     {
+        let timeout_millis = deadline.budget_millis();
         trace!(
             "Sending RPC request: addr={}, code={}, timeout={}ms",
             addr,
@@ -220,10 +222,18 @@ impl RpcClientImpl {
         );
 
         let (request_code, request_command) = self.create_request_command(addr, request, timeout_millis)?;
+        deadline
+            .ensure_before_send(addr.to_string())
+            .map_err(|err| RpcClientError::RequestFailed {
+                addr: addr.to_string(),
+                request_code,
+                timeout_ms: timeout_millis,
+                source: Box::new(err),
+            })?;
 
         let response = self
             .remoting_client
-            .invoke_request(Some(addr), request_command, timeout_millis)
+            .invoke_request_with_deadline(Some(addr), request_command, deadline)
             .await
             .map_err(|err| {
                 error!(
@@ -267,7 +277,7 @@ impl RpcClientImpl {
         &self,
         addr: &CheetahString,
         request: RpcRequest<H>,
-        timeout_millis: u64,
+        deadline: RequestDeadline,
     ) -> Result<RpcResponse, RpcClientError> {
         const PULL_SUCCESS_CODES: &[ResponseCode] = &[
             ResponseCode::Success,
@@ -279,7 +289,7 @@ impl RpcClientImpl {
         self.handle_request::<H, PullMessageResponseHeader>(
             addr,
             request,
-            timeout_millis,
+            deadline,
             ResponseConfig::new(PULL_SUCCESS_CODES),
         )
         .await
@@ -290,13 +300,22 @@ impl RpcClientImpl {
         &self,
         addr: &CheetahString,
         request: RpcRequest<H>,
-        timeout_millis: u64,
+        deadline: RequestDeadline,
     ) -> Result<RpcResponse, RpcClientError> {
+        let timeout_millis = deadline.budget_millis();
         let (request_code, request_command) = self.create_request_command(addr, request, timeout_millis)?;
+        deadline
+            .ensure_before_send(addr.to_string())
+            .map_err(|err| RpcClientError::RequestFailed {
+                addr: addr.to_string(),
+                request_code,
+                timeout_ms: timeout_millis,
+                source: Box::new(err),
+            })?;
 
         let response = self
             .remoting_client
-            .invoke_request(Some(addr), request_command, timeout_millis)
+            .invoke_request_with_deadline(Some(addr), request_command, deadline)
             .await
             .map_err(|err| RpcClientError::RequestFailed {
                 addr: addr.to_string(),
@@ -342,28 +361,23 @@ impl RpcClientImpl {
         }
         Ok(None)
     }
-}
 
-impl RpcClient for RpcClientImpl {
-    /// Invokes RPC request synchronously
-    ///
-    /// # Flow
-    ///
-    /// 1. Execute client hooks (may short-circuit)
-    /// 2. Resolve broker address
-    /// 3. Dispatch to specific handler based on request code
-    /// 4. Return response or error
-    async fn invoke<H: CommandCustomHeader + TopicRequestHeaderTrait>(
+    async fn invoke_until<H: CommandCustomHeader + TopicRequestHeaderTrait>(
         &self,
         request: RpcRequest<H>,
-        timeout_millis: u64,
+        deadline: RequestDeadline,
     ) -> RocketMQResult<RpcResponse> {
-        // Execute hooks
+        let timeout_millis = deadline.budget_millis();
         if let Some(response) = self.execute_hooks(&request)? {
+            if deadline.is_expired() {
+                return Err(rocketmq_error::RocketMQError::network_response_timeout(
+                    "<rpc-hook>",
+                    timeout_millis,
+                ));
+            }
             return Ok(response);
         }
 
-        // Resolve broker address
         let broker_name = request
             .header
             .broker_name()
@@ -371,14 +385,15 @@ impl RpcClient for RpcClientImpl {
                 broker_name: "<missing brokerName>".to_string(),
             })?;
         let addr = self.get_broker_addr_by_name(broker_name.as_ref())?;
+        deadline.ensure_before_send(addr.to_string())?;
 
         let result = match RequestCode::from(request.code) {
-            RequestCode::PullMessage => self.handle_pull_message(&addr, request, timeout_millis).await?,
+            RequestCode::PullMessage => self.handle_pull_message(&addr, request, deadline).await?,
             RequestCode::GetMinOffset => {
                 self.handle_request::<H, GetMinOffsetResponseHeader>(
                     &addr,
                     request,
-                    timeout_millis,
+                    deadline,
                     ResponseConfig::new(&[ResponseCode::Success]),
                 )
                 .await?
@@ -387,7 +402,7 @@ impl RpcClient for RpcClientImpl {
                 self.handle_request::<H, GetMaxOffsetResponseHeader>(
                     &addr,
                     request,
-                    timeout_millis,
+                    deadline,
                     ResponseConfig::new(&[ResponseCode::Success]),
                 )
                 .await?
@@ -396,7 +411,7 @@ impl RpcClient for RpcClientImpl {
                 self.handle_request::<H, SearchOffsetResponseHeader>(
                     &addr,
                     request,
-                    timeout_millis,
+                    deadline,
                     ResponseConfig::new(&[ResponseCode::Success]),
                 )
                 .await?
@@ -405,29 +420,27 @@ impl RpcClient for RpcClientImpl {
                 self.handle_request::<H, GetEarliestMsgStoretimeResponseHeader>(
                     &addr,
                     request,
-                    timeout_millis,
+                    deadline,
                     ResponseConfig::new(&[ResponseCode::Success]),
                 )
                 .await?
             }
-            RequestCode::QueryConsumerOffset => {
-                self.handle_query_consumer_offset(&addr, request, timeout_millis)
-                    .await?
-            }
+            RequestCode::QueryConsumerOffset => self.handle_query_consumer_offset(&addr, request, deadline).await?,
             RequestCode::UpdateConsumerOffset => {
                 self.handle_request::<H, UpdateConsumerOffsetResponseHeader>(
                     &addr,
                     request,
-                    timeout_millis,
+                    deadline,
                     ResponseConfig::new(&[ResponseCode::Success]),
                 )
                 .await?
             }
             RequestCode::GetTopicStatsInfo | RequestCode::GetTopicConfig => {
                 let (request_code, request_command) = self.create_request_command(&addr, request, timeout_millis)?;
+                deadline.ensure_before_send(addr.to_string())?;
                 let response = self
                     .remoting_client
-                    .invoke_request(Some(&addr), request_command, timeout_millis)
+                    .invoke_request_with_deadline(Some(&addr), request_command, deadline)
                     .await
                     .map_err(|err| RpcClientError::RequestFailed {
                         addr: addr.to_string(),
@@ -452,6 +465,25 @@ impl RpcClient for RpcClientImpl {
 
         Ok(result)
     }
+}
+
+impl RpcClient for RpcClientImpl {
+    /// Invokes RPC request synchronously
+    ///
+    /// # Flow
+    ///
+    /// 1. Execute client hooks (may short-circuit)
+    /// 2. Resolve broker address
+    /// 3. Dispatch to specific handler based on request code
+    /// 4. Return response or error
+    async fn invoke<H: CommandCustomHeader + TopicRequestHeaderTrait>(
+        &self,
+        request: RpcRequest<H>,
+        timeout_millis: u64,
+    ) -> RocketMQResult<RpcResponse> {
+        self.invoke_until(request, RequestDeadline::from_timeout_millis(timeout_millis))
+            .await
+    }
 
     /// Invokes RPC request with message queue context
     ///
@@ -462,10 +494,11 @@ impl RpcClient for RpcClientImpl {
         mut request: RpcRequest<H>,
         timeout_millis: u64,
     ) -> RocketMQResult<RpcResponse> {
+        let deadline = RequestDeadline::from_timeout_millis(timeout_millis);
         if let Some(broker_name) = self.client_metadata.get_broker_name_from_message_queue(&mq) {
             request.header.set_broker_name(broker_name);
         }
-        self.invoke(request, timeout_millis).await
+        self.invoke_until(request, deadline).await
     }
 }
 
@@ -498,6 +531,7 @@ impl RpcClientImpl {
         H: CommandCustomHeader + TopicRequestHeaderTrait + Send + 'static,
         F: FnOnce(RocketMQResult<RpcResponse>) + Send + 'static,
     {
+        let deadline = RequestDeadline::from_timeout_millis(timeout_millis);
         let client_metadata = self.client_metadata.clone();
         let remoting_client = self.remoting_client.clone();
         let remoting_client_for_task = remoting_client.clone();
@@ -512,7 +546,7 @@ impl RpcClientImpl {
                     client_hook_list: hooks,
                 };
 
-                let result = temp_client.invoke(request, timeout_millis).await;
+                let result = temp_client.invoke_until(request, deadline).await;
                 callback(result);
             })
             .expect("RPC callback task should be spawned on the remoting worker task group")

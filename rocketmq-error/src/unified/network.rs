@@ -51,6 +51,22 @@ pub enum NetworkError {
     #[error("Too many requests to {addr}, limit: {limit}")]
     TooManyRequests { addr: String, limit: usize },
 
+    /// Outbound queue cannot admit another request.
+    #[error("Outbound queue is full for {addr}")]
+    QueueFull { addr: String },
+
+    /// The request expired before its first socket write.
+    #[error("Request deadline exceeded before send to {addr}")]
+    DeadlineExceededBeforeSend { addr: String },
+
+    /// A socket write did not complete inside the request deadline.
+    #[error("Write timeout to {addr} after {timeout_ms}ms")]
+    WriteTimeout { addr: String, timeout_ms: u64 },
+
+    /// A sent request did not receive its response inside the request deadline.
+    #[error("Response timeout from {addr} after {timeout_ms}ms")]
+    ResponseTimeout { addr: String, timeout_ms: u64 },
+
     /// Request timeout
     #[error("Request timeout to {addr} after {timeout_ms}ms")]
     RequestTimeout { addr: String, timeout_ms: u64 },
@@ -93,6 +109,36 @@ impl NetworkError {
         }
     }
 
+    /// Create a bounded outbound queue rejection.
+    #[inline]
+    pub fn queue_full(addr: impl Into<String>) -> Self {
+        Self::QueueFull { addr: addr.into() }
+    }
+
+    /// Create a before-send deadline failure.
+    #[inline]
+    pub fn deadline_exceeded_before_send(addr: impl Into<String>) -> Self {
+        Self::DeadlineExceededBeforeSend { addr: addr.into() }
+    }
+
+    /// Create a socket write timeout.
+    #[inline]
+    pub fn write_timeout(addr: impl Into<String>, timeout_ms: u64) -> Self {
+        Self::WriteTimeout {
+            addr: addr.into(),
+            timeout_ms,
+        }
+    }
+
+    /// Create a response timeout.
+    #[inline]
+    pub fn response_timeout(addr: impl Into<String>, timeout_ms: u64) -> Self {
+        Self::ResponseTimeout {
+            addr: addr.into(),
+            timeout_ms,
+        }
+    }
+
     /// Get the associated address if available
     pub fn addr(&self) -> &str {
         match self {
@@ -103,6 +149,10 @@ impl NetworkError {
             | Self::ReceiveFailed { addr, .. }
             | Self::InvalidAddress { addr }
             | Self::TooManyRequests { addr, .. }
+            | Self::QueueFull { addr }
+            | Self::DeadlineExceededBeforeSend { addr }
+            | Self::WriteTimeout { addr, .. }
+            | Self::ResponseTimeout { addr, .. }
             | Self::RequestTimeout { addr, .. } => addr,
             Self::DnsResolutionFailed { host, .. } => host,
         }
@@ -179,6 +229,26 @@ mod tests {
             timeout_ms: 100,
         };
         assert_eq!(err.to_string(), "Request timeout to localhost:10911 after 100ms");
+    }
+
+    #[test]
+    fn request_deadline_stages_have_stable_variants() {
+        assert!(matches!(
+            NetworkError::queue_full("localhost:10911"),
+            NetworkError::QueueFull { .. }
+        ));
+        assert!(matches!(
+            NetworkError::deadline_exceeded_before_send("localhost:10911"),
+            NetworkError::DeadlineExceededBeforeSend { .. }
+        ));
+        assert!(matches!(
+            NetworkError::write_timeout("localhost:10911", 100),
+            NetworkError::WriteTimeout { timeout_ms: 100, .. }
+        ));
+        assert!(matches!(
+            NetworkError::response_timeout("localhost:10911", 100),
+            NetworkError::ResponseTimeout { timeout_ms: 100, .. }
+        ));
     }
 
     #[test]

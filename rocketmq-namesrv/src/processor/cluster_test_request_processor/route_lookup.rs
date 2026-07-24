@@ -36,6 +36,7 @@ use rocketmq_runtime::TaskGroup;
 use rocketmq_transport::admission::AdmissionController;
 use rocketmq_transport::admission::AdmissionLimits;
 use rocketmq_transport::client::TransportClient;
+use rocketmq_transport::deadline::RequestDeadline;
 
 const ROUTE_LOOKUP_TIMEOUT: Duration = Duration::from_secs(3);
 const ROUTE_LOOKUP_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
@@ -53,7 +54,7 @@ pub(crate) trait ClusterTestRouteLookup: Send + Sync {
 }
 
 trait ClusterTestEndpointResolver: Send + Sync {
-    fn resolve(&self, deadline: ShutdownDeadline) -> EndpointResolveFuture<'_>;
+    fn resolve(&self, deadline: RequestDeadline) -> EndpointResolveFuture<'_>;
 }
 
 struct ProductEnvironmentEndpointResolver {
@@ -72,16 +73,15 @@ impl ProductEnvironmentEndpointResolver {
 }
 
 impl ClusterTestEndpointResolver for ProductEnvironmentEndpointResolver {
-    fn resolve(&self, deadline: ShutdownDeadline) -> EndpointResolveFuture<'_> {
+    fn resolve(&self, deadline: RequestDeadline) -> EndpointResolveFuture<'_> {
         Box::pin(async move {
             if deadline.is_expired() {
                 return Err(route_lookup_timeout(deadline));
             }
 
-            let timeout_at = tokio::time::Instant::from_std(deadline.instant());
             let timeout_millis = deadline.remaining().as_millis().min(u128::from(u64::MAX)).max(1) as u64;
             let address_list = tokio::time::timeout_at(
-                timeout_at,
+                deadline.instant(),
                 self.addressing.fetch_ns_addr_inner_async(true, timeout_millis),
             )
             .await
@@ -137,7 +137,7 @@ impl TransportClusterTestRouteLookup {
     async fn lookup_topic_route_until(
         &self,
         topic: &CheetahString,
-        deadline: ShutdownDeadline,
+        deadline: RequestDeadline,
     ) -> RocketMQResult<Option<TopicRouteData>> {
         let endpoints = self.resolve_endpoints(deadline).await?;
         let mut last_error = None;
@@ -159,7 +159,7 @@ impl TransportClusterTestRouteLookup {
         }))
     }
 
-    async fn resolve_endpoints(&self, deadline: ShutdownDeadline) -> RocketMQResult<Vec<SocketAddr>> {
+    async fn resolve_endpoints(&self, deadline: RequestDeadline) -> RocketMQResult<Vec<SocketAddr>> {
         let cached = self.cached_endpoints.read().clone();
         if !cached.is_empty() {
             return Ok(cached);
@@ -190,7 +190,7 @@ impl ClusterTestRouteLookup for TransportClusterTestRouteLookup {
     fn lookup_topic_route(&self, topic: &CheetahString) -> ClusterTestLookupFuture<'_, Option<TopicRouteData>> {
         let topic = topic.clone();
         Box::pin(async move {
-            let deadline = ShutdownDeadline::after(self.request_timeout);
+            let deadline = RequestDeadline::after(self.request_timeout);
             let cancellation = self.task_group.cancellation_token();
             tokio::select! {
                 biased;
@@ -240,8 +240,7 @@ fn decode_route_response(response: RemotingCommand) -> RocketMQResult<Option<Top
     }
 }
 
-async fn resolve_socket_addresses(address_list: &str, deadline: ShutdownDeadline) -> RocketMQResult<Vec<SocketAddr>> {
-    let timeout_at = tokio::time::Instant::from_std(deadline.instant());
+async fn resolve_socket_addresses(address_list: &str, deadline: RequestDeadline) -> RocketMQResult<Vec<SocketAddr>> {
     let mut resolved = Vec::new();
     let mut last_error = None;
 
@@ -253,7 +252,7 @@ async fn resolve_socket_addresses(address_list: &str, deadline: ShutdownDeadline
             continue;
         }
 
-        match tokio::time::timeout_at(timeout_at, tokio::net::lookup_host(endpoint)).await {
+        match tokio::time::timeout_at(deadline.instant(), tokio::net::lookup_host(endpoint)).await {
             Ok(Ok(addresses)) => {
                 for address in addresses {
                     if !resolved.contains(&address) {
@@ -275,8 +274,8 @@ async fn resolve_socket_addresses(address_list: &str, deadline: ShutdownDeadline
     Ok(resolved)
 }
 
-fn route_lookup_timeout(deadline: ShutdownDeadline) -> RocketMQError {
-    RocketMQError::network_timeout(LOOKUP_OWNER, deadline.remaining())
+fn route_lookup_timeout(deadline: RequestDeadline) -> RocketMQError {
+    RocketMQError::network_connection_timeout(LOOKUP_OWNER, deadline.budget_millis())
 }
 
 fn route_lookup_cancelled() -> RocketMQError {
@@ -317,7 +316,7 @@ mod tests {
     }
 
     impl ClusterTestEndpointResolver for FixedEndpointResolver {
-        fn resolve(&self, _deadline: ShutdownDeadline) -> EndpointResolveFuture<'_> {
+        fn resolve(&self, _deadline: RequestDeadline) -> EndpointResolveFuture<'_> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             let endpoints = self.endpoints.clone();
             Box::pin(async move { Ok(endpoints) })
@@ -372,7 +371,7 @@ mod tests {
     }
 
     impl ClusterTestEndpointResolver for BlockingResolver {
-        fn resolve(&self, _deadline: ShutdownDeadline) -> EndpointResolveFuture<'_> {
+        fn resolve(&self, _deadline: RequestDeadline) -> EndpointResolveFuture<'_> {
             Box::pin(async move {
                 self.entered.notify_one();
                 std::future::pending().await
