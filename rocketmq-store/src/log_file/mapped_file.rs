@@ -68,15 +68,13 @@ pub trait MappedFileAppend: MappedFile {
                 ..Default::default()
             };
         }
-        let result = message_callback.do_append(
+        message_callback.do_append(
             self.get_file_from_offset() as i64,
             self,
             (self.get_file_size() - current_pos) as i32,
             message,
             put_message_context,
-        );
-        self.record_append(result.wrote_bytes, result.store_timestamp as u64);
-        result
+        )
     }
 
     fn append_messages<AMC: AppendMessageCallback>(
@@ -101,16 +99,14 @@ pub trait MappedFileAppend: MappedFile {
                 ..Default::default()
             };
         }
-        let result = message_callback.do_append_batch(
+        message_callback.do_append_batch(
             self.get_file_from_offset() as i64,
             self,
             (self.get_file_size() - current_pos) as i32,
             message,
             put_message_context,
             enabled_append_prop_crc,
-        );
-        self.record_append(result.wrote_bytes, result.store_timestamp as u64);
-        result
+        )
     }
 
     fn append_messages_batch<AMC: AppendMessageCallback>(
@@ -150,12 +146,55 @@ impl<T: MappedFile> MappedFileAppend for T {}
 #[cfg(test)]
 mod tests {
     use cheetah_string::CheetahString;
+    use rocketmq_store_local::mapped_file::MappedWriteLease;
     use tempfile::TempDir;
 
     use super::default_mapped_file_impl::DefaultMappedFile;
     use super::*;
 
     struct RejectingCompactionCallback;
+    struct LeaseAppendCallback;
+
+    impl AppendMessageCallback for LeaseAppendCallback {
+        fn do_append<MF: MappedFile>(
+            &self,
+            _file_from_offset: i64,
+            mapped_file: &MF,
+            _max_blank: i32,
+            _msg: &mut MessageExtBrokerInner,
+            _put_message_context: &PutMessageContext,
+        ) -> AppendMessageResult {
+            let mut lease = mapped_file.reserve_write(4).expect("write reservation");
+            lease.buffer_mut().copy_from_slice(b"once");
+            lease.commit(4, Some(7)).expect("write commit");
+            AppendMessageResult {
+                status: AppendMessageStatus::PutOk,
+                wrote_bytes: 4,
+                store_timestamp: 7,
+                ..Default::default()
+            }
+        }
+
+        fn do_append_batch<MF: MappedFile>(
+            &self,
+            _file_from_offset: i64,
+            mapped_file: &MF,
+            _max_blank: i32,
+            _msg: &mut MessageExtBatch,
+            _put_message_context: &mut PutMessageContext,
+            _enabled_append_prop_crc: bool,
+        ) -> AppendMessageResult {
+            let mut lease = mapped_file.reserve_write(4).expect("write reservation");
+            lease.buffer_mut().copy_from_slice(b"once");
+            lease.commit(4, Some(7)).expect("write commit");
+            AppendMessageResult {
+                status: AppendMessageStatus::PutOk,
+                wrote_bytes: 4,
+                store_timestamp: 7,
+                ..Default::default()
+            }
+        }
+    }
 
     impl CompactionAppendMsgCallback for RejectingCompactionCallback {
         fn do_append(
@@ -182,5 +221,23 @@ mod tests {
 
         assert_eq!(result.status, AppendMessageStatus::UnknownError);
         assert_eq!(result.wrote_bytes, 0);
+    }
+
+    #[test]
+    fn append_adapter_does_not_publish_a_lease_twice() {
+        let temp_dir = TempDir::new().expect("temporary mapped-file directory");
+        let file_path = temp_dir.path().join("00000000000000000000");
+        let mapped_file = DefaultMappedFile::new(CheetahString::from(file_path.to_string_lossy().into_owned()), 4096);
+        let mut message = MessageExtBrokerInner::default();
+        let context = PutMessageContext::new("lease-once".to_string());
+
+        let result = mapped_file.append_message(&mut message, &LeaseAppendCallback, &context);
+
+        assert_eq!(result.status, AppendMessageStatus::PutOk);
+        assert_eq!(mapped_file.get_wrote_position(), 4);
+        assert_eq!(
+            mapped_file.get_bytes_readable_checked(0, 4).as_deref(),
+            Some(&b"once"[..])
+        );
     }
 }

@@ -5121,6 +5121,7 @@ dependencies = [
  "cheetah-string",
  "dashmap",
  "libc",
+ "loom",
  "memmap2",
  "page_size",
  "parking_lot",

@@ -124,7 +124,7 @@ fn lazy_mmap_metrics_aggregate_mapped_and_unmapped_files() {
         )
         .expect("second lazy file"),
     );
-    assert_eq!(first.get_mapped_file().len(), 16);
+    assert_eq!(first.get_mapped_byte_buffer().len(), 16);
 
     let stats = mapped_file_queue_lazy_mmap_stats(&[first, second]);
 

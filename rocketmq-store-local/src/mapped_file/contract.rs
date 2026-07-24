@@ -21,9 +21,42 @@ use cheetah_string::CheetahString;
 
 use super::MappedFileResult;
 
+/// Exclusive reservation for one append to a mapped-file segment.
+///
+/// A lease exposes only a private staging buffer. The mapped bytes and the published write
+/// position are changed together when [`Self::commit`] consumes the lease. Dropping the lease,
+/// including during panic unwinding, leaves both unchanged.
+pub trait MappedWriteLease {
+    /// Returns the file-local position at which this reservation starts.
+    fn start_position(&self) -> usize;
+
+    /// Returns the number of bytes reserved in this segment.
+    fn capacity(&self) -> usize;
+
+    /// Returns the staging buffer owned exclusively by this lease.
+    fn buffer_mut(&mut self) -> &mut [u8];
+
+    /// Copies `actual_bytes` from the staging buffer to the mapping and publishes the new write
+    /// position.
+    ///
+    /// `store_timestamp` is published before the write position when supplied, so a reader that
+    /// observes the new position can also observe the associated timestamp.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `actual_bytes` is zero, exceeds the reservation, or the target range
+    /// is outside the mapped segment.
+    fn commit(self, actual_bytes: usize, store_timestamp: Option<u64>) -> MappedFileResult<usize>;
+}
+
 pub trait MappedFile {
     /// Backend-specific selection result returned by range selection methods.
     type SelectResult;
+
+    /// Backend-specific append reservation.
+    type WriteLease<'a>: MappedWriteLease
+    where
+        Self: 'a;
 
     /// Returns the file name of the mapped file.
     ///
@@ -149,108 +182,16 @@ pub trait MappedFile {
     /// requested slice goes beyond the file boundaries or the file is not available.
     fn get_bytes_readable_checked(&self, pos: usize, size: usize) -> Option<bytes::Bytes>;
 
-    /// Appends a byte array to the mapped file without updating the write position.
+    /// Reserves up to `required_space` bytes at the current write position.
     ///
-    /// This method appends the given byte array to the mapped file without updating the internal
-    /// write position. It is useful for scenarios where the write position should remain unchanged.
+    /// The returned lease holds the mapped file's single-writer sequencer until it is committed or
+    /// dropped. When the segment has fewer bytes remaining than requested, the lease covers only
+    /// the remaining bytes so the caller can atomically publish an end-of-file marker.
     ///
-    /// # Arguments
-    /// * `data` - A reference to the byte array to be appended.
+    /// # Errors
     ///
-    /// # Returns
-    /// `true` if the append operation was successful, `false` otherwise.
-    fn append_message_bytes_no_position_update(&self, data: &bytes::Bytes) -> bool {
-        self.append_message_no_position_update(data.as_ref(), 0, data.len())
-    }
-
-    /// Appends a byte array to the mapped file without updating the write position.
-    ///
-    /// This method appends the given byte array to the mapped file without updating the internal
-    /// write position. It is useful for scenarios where the write position should remain unchanged.
-    ///
-    /// # Arguments
-    /// * `data` - A reference to the byte array to be appended.
-    ///
-    /// # Returns
-    /// `true` if the append operation was successful, `false` otherwise.
-    fn append_message_bytes_no_position_update_ref(&self, data: &[u8]) -> bool {
-        self.append_message_no_position_update(data, 0, data.len())
-    }
-
-    /// Appends a byte array to the mapped file without updating the write position.
-    ///
-    /// This method appends a specified portion of the given byte array to the mapped file without
-    /// updating the internal write position. It allows for more controlled appending by specifying
-    /// an offset and length.
-    ///
-    /// # Arguments
-    /// * `data` - A reference to the byte array to be appended.
-    /// * `offset` - The starting offset in the byte array from where bytes should be appended.
-    /// * `length` - The number of bytes to append starting from the offset.
-    ///
-    /// # Returns
-    /// `true` if the append operation was successful, `false` otherwise.
-    fn append_message_no_position_update(&self, data: &[u8], offset: usize, length: usize) -> bool;
-
-    /// **Phase 3 Optimization**: Gets a direct mutable buffer slice for zero-copy message encoding.
-    ///
-    /// This method returns a mutable byte slice directly pointing to the mmap region, allowing
-    /// message encoding to occur directly in the target buffer without intermediate copies.
-    ///
-    /// # Performance Benefits
-    /// - **Eliminates memory copy**: No copy from pre_encode_buffer to mmap
-    /// - **CPU reduction**: 20-30% less CPU usage during message append
-    /// - **Throughput increase**: 15-25% higher throughput
-    ///
-    /// # Arguments
-    /// * `required_space` - The minimum number of bytes required in the buffer
-    ///
-    /// # Returns
-    /// `Option<(&mut [u8], usize)>` - A tuple of (mutable buffer, start position) if space is
-    /// available, or `None` if insufficient space remains
-    ///
-    /// # Safety
-    /// The returned buffer is safe to write to, but the caller must ensure:
-    /// 1. Data written does not exceed the returned buffer length
-    /// 2. Position updates are done via `commit_direct_write` after writing
-    ///
-    /// # Example
-    /// ```ignore
-    /// if let Some((buffer, pos)) = mapped_file.get_direct_write_buffer(msg_len) {
-    ///     // Encode message directly into buffer
-    ///     encoder.encode_to_buffer(buffer, message);
-    ///
-    ///     // Commit the write
-    ///     mapped_file.commit_direct_write(msg_len);
-    /// }
-    /// ```
-    fn get_direct_write_buffer(&self, _required_space: usize) -> Option<(&mut [u8], usize)> {
-        // Default implementation returns None (zero-copy not supported)
-        None
-    }
-
-    /// **Phase 3 Optimization**: Commits a direct write operation, updating the write position.
-    ///
-    /// This method should be called after writing data via `get_direct_write_buffer` to update
-    /// the internal write position.
-    ///
-    /// # Arguments
-    /// * `bytes_written` - Number of bytes that were written to the direct buffer
-    ///
-    /// # Returns
-    /// `true` if the commit was successful, `false` otherwise
-    ///
-    /// # Example
-    /// ```ignore
-    /// if let Some((buffer, pos)) = mapped_file.get_direct_write_buffer(100) {
-    ///     buffer[..100].copy_from_slice(&data);
-    ///     mapped_file.commit_direct_write(100);
-    /// }
-    /// ```
-    fn commit_direct_write(&self, _bytes_written: usize) -> bool {
-        // Default implementation does nothing
-        false
-    }
+    /// Returns an error for a zero-sized reservation, an invalid write position, or a full file.
+    fn reserve_write(&self, required_space: usize) -> MappedFileResult<Self::WriteLease<'_>>;
 
     /// Writes a segment of bytes to the mapped file.
     ///
@@ -326,14 +267,14 @@ pub trait MappedFile {
     /// The number of pages actually committed.
     fn commit(&self, commit_least_pages: i32) -> i32;
 
-    /// Retrieves the entire mapped byte buffer.
+    /// Copies the entire mapped byte buffer into an owned snapshot.
     ///
     /// This method provides access to the entire byte buffer of the mapped file. It is useful for
     /// operations that need to work with the complete contents of the file.
     ///
     /// # Returns
     /// A `bytes::Bytes` instance containing the byte buffer of the entire mapped file.
-    fn get_mapped_byte_buffer(&self) -> &[u8];
+    fn get_mapped_byte_buffer(&self) -> bytes::Bytes;
 
     /// Creates a slice of the mapped byte buffer.
     ///
@@ -342,7 +283,7 @@ pub trait MappedFile {
     ///
     /// # Returns
     /// A `bytes::Bytes` instance representing a slice of the mapped byte buffer.
-    fn slice_byte_buffer(&self) -> &[u8];
+    fn slice_byte_buffer(&self) -> bytes::Bytes;
 
     /// Returns the timestamp when the store was created.
     ///
@@ -378,9 +319,9 @@ pub trait MappedFile {
     /// * `size` - The number of bytes to read from the starting position.
     ///
     /// # Returns
-    /// An `Option<&[u8]>` containing the requested byte slice if available, or `None` if the
+    /// An owned `bytes::Bytes` snapshot containing the requested range, or `None` if the
     /// requested slice goes beyond the file boundaries or the file is not available.
-    fn get_slice(&self, pos: usize, size: usize) -> Option<&[u8]>;
+    fn get_slice(&self, pos: usize, size: usize) -> Option<bytes::Bytes>;
 
     /// Destroys the store after a specified interval.
     ///
@@ -445,9 +386,6 @@ pub trait MappedFile {
     /// # Arguments
     /// * `wrote_position` - The position up to which the file has been written.
     fn set_wrote_position(&self, wrote_position: i32);
-
-    /// Records a successful append and its store timestamp.
-    fn record_append(&self, wrote_bytes: i32, store_timestamp: u64);
 
     /// Retrieves the current read position in the mapped file.
     ///

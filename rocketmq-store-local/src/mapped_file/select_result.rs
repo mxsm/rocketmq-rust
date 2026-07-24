@@ -79,29 +79,29 @@ impl<M: MappedMemory> Default for SelectMappedBufferResult<M> {
 }
 
 impl<M: MappedMemory> SelectMappedBufferResult<M> {
-    /// Returns the buffer.
-    pub fn get_buffer(&self) -> &[u8] {
-        if let Some(bytes) = self.bytes.as_ref() {
-            return bytes.as_ref();
+    /// Retains the mapped file as an optional transfer source.
+    ///
+    /// The immutable byte snapshot remains available when the mapped file can no longer be held,
+    /// so callers can safely fall back to the copied representation.
+    pub fn try_attach_mapped_file(&mut self, mapped_file: Arc<DefaultMappedFile<M>>) -> bool {
+        if self.mapped_file.is_some() || !mapped_file.hold() {
+            return false;
         }
-        self.mapped_file.as_ref().unwrap().get_mapped_file()
-            [self.start_offset as usize..(self.start_offset + self.size as u64) as usize]
-            .as_ref()
+        self.source_kind = SelectMappedBufferSourceKind::MappedFile;
+        self.mapped_file = Some(mapped_file);
+        true
     }
 
-    /// Returns mutable access to the selected mapped-file range.
+    /// Returns the buffer.
     ///
-    /// # Safety
+    /// # Panics
     ///
-    /// The caller must hold exclusive mapped-file mutation ownership for the lifetime of the
-    /// returned slice and must not overlap it with any mapped-file read or region lease.
-    pub unsafe fn get_buffer_slice_mut(&mut self) -> &mut [u8] {
-        // SAFETY: the caller accepts the same exclusive-access contract as the mapped-file owner.
-        let (ptr, len) = unsafe { self.mapped_file.as_ref().unwrap().mapped_file_mut_parts() };
-        // SAFETY: the pointer and length describe the live mapping; the caller guarantees
-        // exclusive access for the returned selection borrow.
-        let mapped_file = unsafe { std::slice::from_raw_parts_mut(ptr, len) };
-        mapped_file[self.start_offset as usize..(self.start_offset + self.size as u64) as usize].as_mut()
+    /// Panics when an internal producer constructs a selection without its required immutable
+    /// byte snapshot.
+    pub fn get_buffer(&self) -> &[u8] {
+        self.bytes
+            .as_deref()
+            .expect("selected mapped buffers must own an immutable byte snapshot")
     }
 
     #[inline]

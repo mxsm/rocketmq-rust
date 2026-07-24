@@ -129,11 +129,7 @@ name    = "mapped_buffer_bench"
 harness = false
 
 [[bench]]
-name    = "zero_copy_comparison"
-harness = false
-
-[[bench]]
-name    = "zerocopy_performance"
+name    = "mapped_write_lease"
 harness = false
 
 [[bench]]

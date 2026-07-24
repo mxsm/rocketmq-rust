@@ -52,6 +52,7 @@ tokio-util.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+loom = "=0.7.2"
 serde_json.workspace = true
 tempfile = "3.27.0"
 
