@@ -23,13 +23,18 @@ use openraft::RaftSnapshotBuilder;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_controller::config::ControllerConfig;
 use rocketmq_controller::config::ControllerConfigReader;
+use rocketmq_controller::config::StorageBackendType;
 use rocketmq_controller::openraft::RaftNodeManager;
 use rocketmq_controller::openraft::StateMachine;
 use rocketmq_controller::typ::BrokerIdentityInfoSnapshot;
 use rocketmq_controller::typ::BrokerLiveInfoSnapshot;
 use rocketmq_controller::typ::ControllerRequest;
 use rocketmq_controller::typ::ControllerResponseHeader;
+use rocketmq_controller::typ::EntryPayload;
+use rocketmq_controller::typ::LogEntry;
+use rocketmq_controller::typ::LogId;
 use rocketmq_controller::typ::Node;
+use rocketmq_controller::typ::Vote;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::protocol::body::sync_state_set_body::SyncStateSet;
 
@@ -38,7 +43,8 @@ fn test_config(port: u16) -> ControllerConfigReader {
         ControllerConfig::default()
             .with_node_info(1, format!("127.0.0.1:{port}").parse().expect("valid socket addr"))
             .with_election_timeout_ms(1000)
-            .with_heartbeat_interval_ms(300),
+            .with_heartbeat_interval_ms(300)
+            .with_storage_backend(StorageBackendType::Memory),
     )
 }
 
@@ -63,6 +69,26 @@ fn broker_heartbeat_request(
             election_priority: Some(1),
         },
     }
+}
+
+async fn apply_committed_broker_id(state_machine: &mut StateMachine) {
+    let entry = LogEntry {
+        log_id: LogId {
+            leader_id: Vote::new(1, 1).leader_id,
+            index: 1,
+        },
+        payload: EntryPayload::Normal(ControllerRequest::ApplyBrokerId {
+            cluster_name: "test-cluster".to_string(),
+            broker_name: "broker-a".to_string(),
+            broker_address: "127.0.0.1:10911".to_string(),
+            applied_broker_id: 1,
+            register_check_code: "check-code".to_string(),
+        }),
+    };
+    let entries = futures::stream::iter([Ok::<_, std::io::Error>((entry, None))]);
+    RaftStateMachine::apply(state_machine, entries)
+        .await
+        .expect("apply committed broker id");
 }
 
 #[tokio::test]
@@ -115,7 +141,7 @@ async fn test_snapshot_creation() {
     let next_broker_id = node
         .store()
         .state_machine
-        .replicas_info_manager()
+        .read_view()
         .get_next_broker_id("test-cluster", "broker-a")
         .response()
         .and_then(|header| header.next_broker_id)
@@ -137,14 +163,7 @@ async fn test_state_machine_snapshot() {
 #[tokio::test]
 async fn test_snapshot_install() {
     let mut source = StateMachine::new(test_config(59876));
-    let replicas_info_manager = source.replicas_info_manager();
-    let apply_result =
-        replicas_info_manager.apply_broker_id("test-cluster", "broker-a", "127.0.0.1:10911", 1, "check-code");
-    for event in apply_result.events() {
-        replicas_info_manager
-            .try_apply_event(event.as_ref())
-            .expect("generated broker id event should apply");
-    }
+    apply_committed_broker_id(&mut source).await;
 
     let snapshot = source.build_snapshot().await.unwrap();
 
@@ -153,7 +172,7 @@ async fn test_snapshot_install() {
     assert!(result.is_ok(), "Failed to install snapshot");
 
     let next_broker_id = target
-        .replicas_info_manager()
+        .read_view()
         .get_next_broker_id("test-cluster", "broker-a")
         .response()
         .and_then(|header| header.next_broker_id)
@@ -287,7 +306,7 @@ async fn test_snapshot_install_preserves_master_and_sync_state_set() {
         .await
         .unwrap();
 
-    let replica_info = target.replicas_info_manager().get_replica_info("broker-sync");
+    let replica_info = target.read_view().get_replica_info("broker-sync");
     assert!(
         replica_info.is_success(),
         "replica info should be restored from snapshot"
@@ -305,11 +324,11 @@ async fn test_snapshot_install_preserves_master_and_sync_state_set() {
         HashSet::from([1_i64, 2_i64])
     );
     assert_eq!(
-        target.replicas_info_manager().cluster_name("broker-sync").as_deref(),
+        target.read_view().cluster_name("broker-sync").as_deref(),
         Some("test-cluster")
     );
     assert_eq!(
-        target.replicas_info_manager().broker_ids("broker-sync"),
+        target.read_view().broker_ids("broker-sync"),
         HashSet::from([1_u64, 2_u64])
     );
 }

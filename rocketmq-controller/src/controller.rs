@@ -26,30 +26,16 @@
 //! ## Architecture
 //!
 //! ```text
-//! ┌──────────────────────────────────────────────────────────────┐
-//! │                     Controller Trait                         │
-//! │  (Abstract interface for all controller implementations)     │
-//! └──────────────────────┬───────────────────────────────────────┘
-//!                        │
-//!                        │ implements
-//!                        │
-//!          ┌─────────────▼──────────────┐
-//!          │     RaftController         │
-//!          │   (OpenRaft wrapper)       │
-//!          └──────────────┬─────────────┘
-//!                         │
-//!                         │ delegates
-//!                         │
-//!          ┌──────────────▼──────────────┐
-//!          │     OpenRaftController      │
-//!          │     (OpenRaft backend)      │
-//!          └──────────────┬──────────────┘
-//!                         │
-//!          ┌──────────────▼──────────────┐
-//!          │  ReplicasInfoManager        │
-//!          │  BrokerHeartbeatManager     │
-//!          │  MetadataStore              │
-//!          └─────────────────────────────┘
+//! ControllerRequestProcessor
+//!          |
+//!          v
+//! Controller trait -> RaftController -> OpenRaftController
+//!                                      |
+//!                                      v
+//!                         OpenRaft committed state machine
+//!                                      |
+//!                                      v
+//!                         ReplicasInfoManager + durable store
 //! ```
 //!
 //! ## Lifecycle
@@ -590,10 +576,6 @@ impl Controller for MockController {
     fn register_broker_lifecycle_listener(&self, _listener: Arc<dyn BrokerLifecycleListener>) {
         // No-op
     }
-
-    /*    fn get_runtime(&self) -> Arc<RocketMQRuntime> {
-        unimplemented!("MockController does not provide runtime in tests")
-    }*/
 }
 
 #[cfg(test)]

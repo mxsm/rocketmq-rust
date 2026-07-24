@@ -24,7 +24,9 @@ use crate::config::ControllerConfigReader;
 use crate::config::StorageBackendType;
 use crate::error::Result;
 use crate::storage::create_storage;
+use crate::storage::create_storage_with_task_group;
 use crate::storage::StorageConfig;
+use rocketmq_runtime::TaskGroup;
 
 use super::log_store::LogStore;
 use super::state_machine::StateMachine;
@@ -51,6 +53,19 @@ impl Store {
     pub async fn open(config: ControllerConfigReader) -> Result<Self> {
         let startup_config = config.snapshot();
         let backend = create_storage(storage_config(&startup_config)?).await?;
+        Self::open_with_backend(config, backend).await
+    }
+
+    pub async fn open_with_task_group(config: ControllerConfigReader, parent_task_group: TaskGroup) -> Result<Self> {
+        let startup_config = config.snapshot();
+        let backend = create_storage_with_task_group(storage_config(&startup_config)?, parent_task_group).await?;
+        Self::open_with_backend(config, backend).await
+    }
+
+    async fn open_with_backend(
+        config: ControllerConfigReader,
+        backend: crate::storage::SharedStorageBackend,
+    ) -> Result<Self> {
         let log_store = LogStore::open(backend.clone()).await?;
         let state_machine = StateMachine::open(config, backend).await?;
 
@@ -65,16 +80,16 @@ fn storage_config(config: &ControllerConfig) -> Result<StorageConfig> {
     match config.storage_backend {
         StorageBackendType::Memory => Ok(StorageConfig::Memory),
         StorageBackendType::File => {
-            #[cfg(feature = "storage-file")]
+            #[cfg(feature = "dev-single")]
             {
                 Ok(StorageConfig::File {
                     path: resolved_storage_path(config),
                 })
             }
-            #[cfg(not(feature = "storage-file"))]
+            #[cfg(not(feature = "dev-single"))]
             {
                 Err(crate::error::ControllerError::StorageError(
-                    "The file storage backend is not enabled for rocketmq-controller".to_string(),
+                    "The file storage backend is restricted to the `dev-single` feature".to_string(),
                 ))
             }
         }

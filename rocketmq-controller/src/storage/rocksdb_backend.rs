@@ -23,6 +23,7 @@ use rocketmq_runtime::RuntimeHandle;
 use rocketmq_runtime::TaskGroup;
 use rocksdb::Options;
 use rocksdb::WriteBatch;
+use rocksdb::WriteOptions;
 use rocksdb::DB;
 use tracing::debug;
 use tracing::info;
@@ -74,7 +75,7 @@ impl RocksDBBackend {
 
         // Performance tuning
         opts.set_max_open_files(1000);
-        opts.set_use_fsync(false);
+        opts.set_use_fsync(true);
         opts.set_bytes_per_sync(1024 * 1024);
         opts.set_level_compaction_dynamic_level_bytes(true);
         opts.set_max_background_jobs(4);
@@ -139,6 +140,13 @@ impl RocksDBBackend {
         )
         .map_err(map_blocking_error)
     }
+
+    fn durable_write_options() -> WriteOptions {
+        let mut options = WriteOptions::default();
+        options.set_sync(true);
+        options.disable_wal(false);
+        options
+    }
 }
 
 fn map_blocking_error(error: rocketmq_runtime::RuntimeError) -> ControllerError {
@@ -155,7 +163,7 @@ impl StorageBackend for RocksDBBackend {
         let value = value.to_vec();
 
         self.spawn_io("controller.rocksdb.put", move || {
-            db.put(key.as_bytes(), value)
+            db.put_opt(key.as_bytes(), value, &Self::durable_write_options())
                 .map_err(|e| ControllerError::storage_source("RocksDB put failed", e))
         })
         .await?;
@@ -183,7 +191,7 @@ impl StorageBackend for RocksDBBackend {
         let key = key.to_string();
 
         self.spawn_io("controller.rocksdb.delete", move || {
-            db.delete(key.as_bytes())
+            db.delete_opt(key.as_bytes(), &Self::durable_write_options())
                 .map_err(|e| ControllerError::storage_source("RocksDB delete failed", e))
         })
         .await?;
@@ -233,7 +241,7 @@ impl StorageBackend for RocksDBBackend {
                 batch.put(key.as_bytes(), value);
             }
 
-            db.write(batch)
+            db.write_opt(batch, &Self::durable_write_options())
                 .map_err(|e| ControllerError::storage_source("RocksDB batch write failed", e))
         })
         .await?;
@@ -253,12 +261,29 @@ impl StorageBackend for RocksDBBackend {
                 batch.delete(key.as_bytes());
             }
 
-            db.write(batch)
+            db.write_opt(batch, &Self::durable_write_options())
                 .map_err(|e| ControllerError::storage_source("RocksDB batch delete failed", e))
         })
         .await?;
 
         Ok(())
+    }
+
+    async fn write_batch(&self, puts: Vec<(String, Vec<u8>)>, deletes: Vec<String>) -> Result<()> {
+        debug!(puts = puts.len(), deletes = deletes.len(), "RocksDB atomic write batch");
+        let db = self.db.clone();
+        self.spawn_io("controller.rocksdb.write_batch", move || {
+            let mut batch = WriteBatch::default();
+            for key in deletes {
+                batch.delete(key.as_bytes());
+            }
+            for (key, value) in puts {
+                batch.put(key.as_bytes(), value);
+            }
+            db.write_opt(batch, &Self::durable_write_options())
+                .map_err(|error| ControllerError::storage_source("RocksDB atomic batch failed", error))
+        })
+        .await
     }
 
     async fn exists(&self, key: &str) -> Result<bool> {
@@ -295,7 +320,7 @@ impl StorageBackend for RocksDBBackend {
                 }
             }
 
-            db.write(batch)
+            db.write_opt(batch, &Self::durable_write_options())
                 .map_err(|e| ControllerError::storage_source("RocksDB clear failed", e))
         })
         .await?;
@@ -309,8 +334,8 @@ impl StorageBackend for RocksDBBackend {
         let db = self.db.clone();
 
         self.spawn_io("controller.rocksdb.sync", move || {
-            db.flush()
-                .map_err(|e| ControllerError::storage_source("RocksDB sync failed", e))
+            db.flush_wal(true)
+                .map_err(|e| ControllerError::storage_source("RocksDB WAL sync failed", e))
         })
         .await?;
 

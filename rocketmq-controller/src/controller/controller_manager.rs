@@ -29,13 +29,11 @@ use crate::error::ControllerError;
 use crate::error::Result;
 use crate::heartbeat::default_broker_heartbeat_manager::DefaultBrokerHeartbeatManager;
 use crate::helper::broker_lifecycle_listener::BrokerLifecycleListener;
-use crate::metadata::MetadataStore;
 #[cfg(feature = "metrics")]
 use crate::metrics::controller_metrics_manager::active_broker_count_from_snapshot;
 #[cfg(feature = "metrics")]
 use crate::metrics::ControllerMetricsManager;
 use crate::processor::controller_request_processor::ControllerRequestProcessor;
-use crate::processor::ProcessorManager;
 use cheetah_string::CheetahString;
 use parking_lot::Mutex;
 use parking_lot::RwLock;
@@ -332,29 +330,22 @@ impl BrokerLifecycleListener for BrokerInactiveListener {
 ///
 /// This is the central component that coordinates all controller operations.
 /// It manages:
-/// - Raft consensus layer for leader election
-/// - Metadata storage for broker and topic information
+/// - Raft consensus and the only authoritative metadata state machine
 /// - Broker heartbeat monitoring
-/// - Request processing
+/// - Broker-facing remoting request processing
 /// - Metrics collection (optional)
 ///
 /// # Architecture
 ///
 /// ```text
-/// ┌────────────────────────────────────────┐
-/// │      ControllerManager                 │
-/// ├────────────────────────────────────────┤
-/// │  - Configuration                       │
-/// │  - RaftController (Leader Election)   │
-/// │  - MetadataStore                      │
-/// │  - HeartbeatManager                   │
-/// │  - ProcessorManager                   │
-/// │  - MetricsManager (optional)          │
-/// └────────────────────────────────────────┘
-///          │           │            │
-///          ▼           ▼            ▼
-///    Leader       Metadata     Heartbeat
-///    Election     Storage      Monitoring
+/// ControllerManager
+///   +-- ControllerRequestProcessor
+///   +-- RaftController
+///   |     +-- OpenRaft consensus
+///   |     +-- committed ReplicasInfoManager state
+///   |     `-- RocksDB durable storage
+///   +-- HeartbeatManager
+///   `-- MetricsManager (optional)
 /// ```
 ///
 /// # Lifecycle
@@ -362,7 +353,7 @@ impl BrokerLifecycleListener for BrokerInactiveListener {
 /// 1. **Creation**: `new()` - Initialize basic components
 /// 2. **Initialization**: `initialize()` - Allocate resources, register listeners
 /// 3. **Start**: `start()` - Start all components in correct order
-/// 4. **Runtime**: Handle requests, monitor brokers, manage metadata
+/// 4. **Runtime**: Handle requests and monitor brokers through committed Raft state
 /// 5. **Shutdown**: `shutdown()` - Gracefully stop all components in reverse order
 ///
 /// # Thread Safety
@@ -377,15 +368,9 @@ pub struct ControllerManager {
     /// Lifecycle mutation is synchronized inside the controller.
     raft_controller: Arc<RaftController>,
 
-    /// Metadata store for broker and topic information
-    metadata: Arc<MetadataStore>,
-
     /// Heartbeat manager for broker liveness detection
     /// Shared safely; lifecycle slots and listeners are synchronized internally.
     heartbeat_manager: Arc<DefaultBrokerHeartbeatManager>,
-
-    /// Request processor manager
-    processor: Arc<ProcessorManager>,
 
     /// Remoting server for inbound RPC requests
     remoting_server: Mutex<Option<RocketMQServer<ControllerRequestProcessor>>>,
@@ -432,7 +417,6 @@ impl ControllerManager {
     ///
     /// Returns `ControllerError` if:
     /// - Raft controller creation fails
-    /// - Metadata store creation fails
     /// - Configuration is invalid
     pub async fn new(config: ControllerConfig) -> Result<Self> {
         Self::new_with_optional_runtime_context(config, None, None).await
@@ -473,25 +457,14 @@ impl ControllerManager {
         // Initialize Raft controller for leader election.
         // The controller and request processor must share the same heartbeat manager so that
         // liveness-aware paths observe the broker heartbeats recorded by RPC handlers.
-        let raft_arc = Arc::new(RaftController::new_open_raft_with_heartbeat(
-            config.reader(),
-            heartbeat_manager.clone(),
-        ));
-
-        // Initialize metadata store
-        // This MUST succeed before proceeding
-        let metadata = Arc::new(
-            MetadataStore::new(config.reader())
-                .await
-                .map_err(|e| ControllerError::storage_source("create metadata store", e))?,
-        );
-
-        // Initialize processor manager (needs Arc<RaftController>)
-        let processor = Arc::new(ProcessorManager::new(
-            config.reader(),
-            raft_arc.clone(),
-            metadata.clone(),
-        ));
+        let raft_arc = Arc::new(match parent_task_group.as_ref() {
+            Some(parent_task_group) => RaftController::new_open_raft_with_heartbeat_and_task_group(
+                config.reader(),
+                heartbeat_manager.clone(),
+                parent_task_group.clone(),
+            ),
+            None => RaftController::new_open_raft_with_heartbeat(config.reader(), heartbeat_manager.clone()),
+        });
 
         // Initialize remoting server for inbound requests
         let listen_port = config.snapshot().listen_addr.port() as u32;
@@ -532,9 +505,7 @@ impl ControllerManager {
         Ok(Self {
             config,
             raft_controller: raft_arc,
-            metadata,
             heartbeat_manager,
-            processor,
             remoting_server: Mutex::new(remoting_server),
             remoting_server_shutdown_tx: Arc::new(Mutex::new(None)),
             manager_task_group: Arc::new(Mutex::new(None)),
@@ -776,22 +747,6 @@ impl ControllerManager {
             info!("Heartbeat manager started");
         }
 
-        // Start metadata store
-        if let Err(error) = self.metadata.start().await {
-            self.running.store(false, Ordering::SeqCst);
-            let error = ControllerError::storage_source("start metadata store", error);
-            return Err(self.cleanup_after_start_failure(error).await);
-        }
-        info!("Metadata store started");
-
-        // Start processor manager (for request handling)
-        if let Err(error) = self.processor.start().await {
-            self.running.store(false, Ordering::SeqCst);
-            let error = ControllerError::runtime_error(format!("Failed to start processor manager: {error}"));
-            return Err(self.cleanup_after_start_failure(error).await);
-        }
-        info!("Processor manager started");
-
         let manager_task_group = match self.ensure_manager_task_group() {
             Ok(task_group) => task_group,
             Err(error) => return Err(self.cleanup_after_start_failure(error).await),
@@ -939,27 +894,10 @@ impl ControllerManager {
             failures.push("manager tasks did not stop cleanly".to_string());
         }
 
-        // Shutdown processor first to stop accepting requests
-        // Errors are logged but don't stop the shutdown process
-        if let Err(e) = self.processor.shutdown().await {
-            error!("Failed to shutdown processor: {}", e);
-            failures.push(format!("processor: {e}"));
-        } else {
-            info!("Processor manager shut down");
-        }
-
         // Shutdown heartbeat manager
         {
             self.heartbeat_manager.shutdown_gracefully().await;
             info!("Heartbeat manager shut down");
-        }
-
-        // Shutdown metadata store
-        if let Err(e) = self.metadata.shutdown().await {
-            error!("Failed to shutdown metadata: {}", e);
-            failures.push(format!("metadata: {e}"));
-        } else {
-            info!("Metadata store shut down");
         }
 
         // Shutdown remoting client
@@ -1039,24 +977,6 @@ impl ControllerManager {
     /// A reference to the Raft controller
     pub fn raft(&self) -> &RaftController {
         &self.raft_controller
-    }
-
-    /// Get the metadata store
-    ///
-    /// # Returns
-    ///
-    /// A reference to the metadata store
-    pub fn metadata(&self) -> &Arc<MetadataStore> {
-        &self.metadata
-    }
-
-    /// Get the processor manager
-    ///
-    /// # Returns
-    ///
-    /// A reference to the processor manager
-    pub fn processor(&self) -> &Arc<ProcessorManager> {
-        &self.processor
     }
 
     /// Get the configuration
@@ -1840,7 +1760,8 @@ mod tests {
         let config = ControllerConfig::default()
             .with_node_info(1, format!("127.0.0.1:{port}").parse::<SocketAddr>().unwrap())
             .with_heartbeat_interval_ms(100)
-            .with_election_timeout_ms(300);
+            .with_election_timeout_ms(300)
+            .with_storage_backend(crate::config::StorageBackendType::Memory);
 
         let manager = Arc::new(ControllerManager::new(config).await.expect("Failed to create manager"));
         manager.initialize().await.expect("initialize manager");
@@ -1884,6 +1805,7 @@ mod tests {
             .with_node_info(1, format!("127.0.0.1:{port}").parse::<SocketAddr>().unwrap())
             .with_heartbeat_interval_ms(100)
             .with_election_timeout_ms(300)
+            .with_storage_backend(crate::config::StorageBackendType::Memory)
             .with_notify_broker_role_changed(false);
 
         let manager = Arc::new(ControllerManager::new(config).await.expect("create manager"));
@@ -2061,6 +1983,7 @@ mod tests {
             .with_node_info(1, format!("127.0.0.1:{port}").parse::<SocketAddr>().unwrap())
             .with_heartbeat_interval_ms(100)
             .with_election_timeout_ms(300)
+            .with_storage_backend(crate::config::StorageBackendType::Memory)
             .with_notify_broker_role_changed(true);
 
         let manager = Arc::new(ControllerManager::new(config).await.expect("create manager"));

@@ -31,6 +31,7 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 
 use crate::error::Result;
+use rocketmq_runtime::TaskGroup;
 
 /// Storage backend configuration
 #[derive(Debug, Clone)]
@@ -76,6 +77,9 @@ pub trait StorageBackend: Send + Sync {
 
     /// Batch delete multiple keys
     async fn batch_delete(&self, keys: Vec<String>) -> Result<()>;
+
+    /// Atomically apply puts and deletes as one storage transaction.
+    async fn write_batch(&self, puts: Vec<(String, Vec<u8>)>, deletes: Vec<String>) -> Result<()>;
 
     /// Check if a key exists
     async fn exists(&self, key: &str) -> Result<bool>;
@@ -150,10 +154,30 @@ impl<T: StorageBackend + ?Sized> StorageBackendExt for T {}
 
 /// Create a storage backend based on configuration
 pub async fn create_storage(config: StorageConfig) -> Result<SharedStorageBackend> {
+    create_storage_with_optional_task_group(config, None).await
+}
+
+/// Creates a storage backend whose blocking I/O is owned by the supplied controller task group.
+pub async fn create_storage_with_task_group(
+    config: StorageConfig,
+    parent_task_group: TaskGroup,
+) -> Result<SharedStorageBackend> {
+    create_storage_with_optional_task_group(config, Some(parent_task_group)).await
+}
+
+async fn create_storage_with_optional_task_group(
+    config: StorageConfig,
+    parent_task_group: Option<TaskGroup>,
+) -> Result<SharedStorageBackend> {
     match config {
         #[cfg(feature = "storage-rocksdb")]
         StorageConfig::RocksDB { path } => {
-            let backend = rocksdb_backend::RocksDBBackend::new(path).await?;
+            let backend = match parent_task_group {
+                Some(parent_task_group) => {
+                    rocksdb_backend::RocksDBBackend::new_with_parent_task_group(path, parent_task_group).await?
+                }
+                None => rocksdb_backend::RocksDBBackend::new(path).await?,
+            };
             Ok(Arc::new(backend))
         }
 
@@ -213,6 +237,17 @@ pub async fn create_storage(config: StorageConfig) -> Result<SharedStorageBacken
                     let mut data = self.data.write();
                     for key in keys {
                         data.remove(&key);
+                    }
+                    Ok(())
+                }
+
+                async fn write_batch(&self, puts: Vec<(String, Vec<u8>)>, deletes: Vec<String>) -> Result<()> {
+                    let mut data = self.data.write();
+                    for key in deletes {
+                        data.remove(&key);
+                    }
+                    for (key, value) in puts {
+                        data.insert(key, value);
                     }
                     Ok(())
                 }

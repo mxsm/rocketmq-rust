@@ -334,7 +334,7 @@ impl Default for ControllerConfig {
             election_timeout_ms: 1000,
             heartbeat_interval_ms: 300,
             storage_path: String::new(),
-            storage_backend: StorageBackendType::Memory,
+            storage_backend: StorageBackendType::RocksDB,
             enable_elect_unclean_master_local: false,
             rw_lock: RwLock::new(()),
         }
@@ -519,7 +519,9 @@ impl ControllerConfig {
 
     /// Test config helper
     pub fn test_config() -> Self {
-        Self::default().with_node_info(1, SocketAddr::from(([127, 0, 0, 1], 60109)))
+        Self::default()
+            .with_node_info(1, SocketAddr::from(([127, 0, 0, 1], 60109)))
+            .with_storage_backend(StorageBackendType::Memory)
     }
 
     /// Resolve the Raft RPC address for a node.

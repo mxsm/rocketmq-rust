@@ -42,6 +42,7 @@ use crate::heartbeat::default_broker_heartbeat_manager::DefaultBrokerHeartbeatMa
 use crate::helper::broker_lifecycle_listener::BrokerLifecycleListener;
 use crate::openraft::GrpcRaftService;
 use crate::openraft::RaftNodeManager;
+use crate::openraft::StateMachineReadView;
 use crate::protobuf::openraft::open_raft_service_server::OpenRaftServiceServer;
 use crate::typ::BrokerIdentityInfoSnapshot;
 use crate::typ::BrokerLiveInfoSnapshot;
@@ -344,14 +345,25 @@ impl OpenRaftController {
             .map(|node| node.store().state_machine.replicas_info_manager())
     }
 
-    fn snapshot_alive_broker_ids(&self, cluster_name: &str, broker_name: &str) -> HashSet<u64> {
-        self.replicas_info_manager()
-            .map(|manager| manager.active_broker_ids(cluster_name, broker_name))
-            .unwrap_or_default()
+    async fn linearizable_replicas_info_manager(&self) -> RocketMQResult<Option<Arc<ReplicasInfoManager>>> {
+        let Some(node) = self.node() else {
+            return Ok(None);
+        };
+        node.ensure_linearizable_read().await?;
+        Ok(Some(node.store().state_machine.replicas_info_manager()))
+    }
+
+    /// Returns the local state-machine view without a Raft read barrier.
+    ///
+    /// This API is diagnostic-only. Broker-facing business reads use
+    /// `linearizable_replicas_info_manager` and ReadIndex.
+    #[must_use]
+    pub fn diagnostic_stale_read_view(&self) -> Option<StateMachineReadView> {
+        self.node().map(|node| node.store().state_machine.read_view())
     }
 
     fn snapshot_live_broker_infos(
-        &self,
+        replicas_info_manager: &ReplicasInfoManager,
         cluster_name: &str,
         broker_name: &str,
         alive_broker_ids: &HashSet<u64>,
@@ -359,8 +371,8 @@ impl OpenRaftController {
         alive_broker_ids
             .iter()
             .filter_map(|broker_id| {
-                self.replicas_info_manager()
-                    .and_then(|manager| manager.get_broker_live_info(cluster_name, broker_name, *broker_id as i64))
+                replicas_info_manager
+                    .get_broker_live_info(cluster_name, broker_name, *broker_id as i64)
                     .map(|live_info| (*broker_id, live_info))
             })
             .collect()
@@ -573,7 +585,8 @@ impl OpenRaftController {
             )
         })?;
         let task_group = self.ensure_task_group()?;
-        let node = Arc::new(RaftNodeManager::new(self.config.clone()).await?);
+        let node =
+            Arc::new(RaftNodeManager::new_with_parent_task_group(self.config.clone(), task_group.clone()).await?);
         let service = GrpcRaftService::new(node.raft());
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         let shutdown_token = task_group.cancellation_token();
@@ -751,7 +764,10 @@ impl Controller for OpenRaftController {
         let broker_name = request.broker_name.clone().unwrap_or_default();
         let broker_address = request.broker_address.clone().unwrap_or_default();
         let broker_id = request.broker_id.unwrap_or_default() as u64;
-        let alive_broker_ids = self.snapshot_alive_broker_ids(cluster_name.as_str(), broker_name.as_str());
+        let Some(read_state) = self.linearizable_replicas_info_manager().await? else {
+            return Ok(self.not_started_response());
+        };
+        let alive_broker_ids = read_state.active_broker_ids(cluster_name.as_str(), broker_name.as_str());
 
         let response = self
             .write_request(ControllerRequest::RegisterBroker {
@@ -770,7 +786,7 @@ impl Controller for OpenRaftController {
             return Ok(Some(response));
         }
 
-        let Some(replicas_info_manager) = self.replicas_info_manager() else {
+        let Some(replicas_info_manager) = self.linearizable_replicas_info_manager().await? else {
             return Ok(Some(response));
         };
         let replica_info = replicas_info_manager.get_replica_info(broker_name.as_str());
@@ -812,7 +828,7 @@ impl Controller for OpenRaftController {
         &self,
         request: &GetNextBrokerIdRequestHeader,
     ) -> RocketMQResult<Option<RemotingCommand>> {
-        let Some(replicas_info_manager) = self.replicas_info_manager() else {
+        let Some(replicas_info_manager) = self.linearizable_replicas_info_manager().await? else {
             return Ok(self.not_started_response());
         };
 
@@ -852,7 +868,10 @@ impl Controller for OpenRaftController {
         request: &CleanBrokerDataRequestHeader,
     ) -> RocketMQResult<Option<RemotingCommand>> {
         let cluster_name = request.cluster_name.clone().unwrap_or_default();
-        let alive_broker_ids = self.snapshot_alive_broker_ids(cluster_name.as_str(), request.broker_name.as_str());
+        let Some(read_state) = self.linearizable_replicas_info_manager().await? else {
+            return Ok(self.not_started_response());
+        };
+        let alive_broker_ids = read_state.active_broker_ids(cluster_name.as_str(), request.broker_name.as_str());
 
         self.write_request(ControllerRequest::CleanBrokerData {
             cluster_name: cluster_name.to_string(),
@@ -868,9 +887,13 @@ impl Controller for OpenRaftController {
     }
 
     async fn elect_master(&self, request: &ElectMasterRequestHeader) -> RocketMQResult<Option<RemotingCommand>> {
+        let Some(read_state) = self.linearizable_replicas_info_manager().await? else {
+            return Ok(self.not_started_response());
+        };
         let alive_broker_ids =
-            self.snapshot_alive_broker_ids(request.cluster_name.as_str(), request.broker_name.as_str());
-        let live_broker_infos = self.snapshot_live_broker_infos(
+            read_state.active_broker_ids(request.cluster_name.as_str(), request.broker_name.as_str());
+        let live_broker_infos = Self::snapshot_live_broker_infos(
+            read_state.as_ref(),
             request.cluster_name.as_str(),
             request.broker_name.as_str(),
             &alive_broker_ids,
@@ -892,7 +915,7 @@ impl Controller for OpenRaftController {
         request: &AlterSyncStateSetRequestHeader,
         sync_state_set: SyncStateSet,
     ) -> RocketMQResult<Option<RemotingCommand>> {
-        let Some(replicas_info_manager) = self.replicas_info_manager() else {
+        let Some(replicas_info_manager) = self.linearizable_replicas_info_manager().await? else {
             return Ok(self.not_started_response());
         };
 
@@ -903,7 +926,8 @@ impl Controller for OpenRaftController {
             .get_sync_state_set()
             .map(|state_set| state_set.iter().copied().map(|id| id as u64).collect())
             .unwrap_or_default();
-        let alive_broker_ids = self.snapshot_alive_broker_ids(cluster_name.as_str(), request.broker_name.as_str());
+        let alive_broker_ids =
+            replicas_info_manager.active_broker_ids(cluster_name.as_str(), request.broker_name.as_str());
 
         self.write_request(ControllerRequest::AlterSyncStateSet {
             cluster_name,
@@ -918,7 +942,7 @@ impl Controller for OpenRaftController {
     }
 
     async fn get_replica_info(&self, request: &GetReplicaInfoRequestHeader) -> RocketMQResult<Option<RemotingCommand>> {
-        let Some(replicas_info_manager) = self.replicas_info_manager() else {
+        let Some(replicas_info_manager) = self.linearizable_replicas_info_manager().await? else {
             return Ok(self.not_started_response());
         };
 
@@ -970,7 +994,7 @@ impl Controller for OpenRaftController {
     }
 
     async fn get_sync_state_data(&self, broker_names: &[CheetahString]) -> RocketMQResult<Option<RemotingCommand>> {
-        let Some(replicas_info_manager) = self.replicas_info_manager() else {
+        let Some(replicas_info_manager) = self.linearizable_replicas_info_manager().await? else {
             return Ok(self.not_started_response());
         };
 
@@ -1054,7 +1078,8 @@ mod tests {
 
         let config = ControllerConfig::default()
             .with_node_info(1, addr)
-            .with_raft_peers(vec![RaftPeer { id: 1, addr }]);
+            .with_raft_peers(vec![RaftPeer { id: 1, addr }])
+            .with_storage_backend(crate::config::StorageBackendType::Memory);
         let controller = Arc::new(OpenRaftController::new(ControllerConfigReader::new(config)));
 
         let (first_start, second_start) = tokio::join!(controller.startup_shared(), controller.startup_shared());

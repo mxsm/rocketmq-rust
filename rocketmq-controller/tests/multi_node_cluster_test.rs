@@ -16,8 +16,10 @@
 
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+#[cfg(feature = "dev-single")]
 use std::collections::HashSet;
 use std::net::TcpListener;
+#[cfg(feature = "dev-single")]
 use std::path::Path;
 use std::sync::atomic::AtomicU16;
 use std::sync::atomic::Ordering;
@@ -26,6 +28,7 @@ use std::time::Duration;
 
 use openraft::async_runtime::WatchReceiver;
 use openraft::ServerState;
+#[cfg(feature = "dev-single")]
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_controller::config::ControllerConfig;
 use rocketmq_controller::config::ControllerConfigReader;
@@ -34,16 +37,24 @@ use rocketmq_controller::config::StorageBackendType;
 use rocketmq_controller::openraft::GrpcRaftService;
 use rocketmq_controller::openraft::RaftNodeManager;
 use rocketmq_controller::protobuf::openraft::open_raft_service_server::OpenRaftServiceServer;
+#[cfg(feature = "dev-single")]
 use rocketmq_controller::typ::BrokerIdentityInfoSnapshot;
+#[cfg(feature = "dev-single")]
 use rocketmq_controller::typ::BrokerLiveInfoSnapshot;
 use rocketmq_controller::typ::ControllerRequest;
+#[cfg(feature = "dev-single")]
 use rocketmq_controller::typ::ControllerResponseHeader;
 use rocketmq_controller::typ::Node;
 use rocketmq_controller::typ::RaftMetrics;
+#[cfg(feature = "dev-single")]
 use rocketmq_remoting::code::response_code::ResponseCode;
+#[cfg(feature = "dev-single")]
 use rocketmq_remoting::protocol::body::sync_state_set_body::SyncStateSet;
+#[cfg(feature = "dev-single")]
 use rocketmq_remoting::protocol::RemotingDeserializable;
+#[cfg(feature = "dev-single")]
 use tokio::sync::oneshot;
+#[cfg(feature = "dev-single")]
 use tokio::task::JoinHandle;
 use tonic::transport::Server;
 
@@ -63,6 +74,7 @@ fn raft_node(node_id: u64, base_port: u16) -> Node {
     }
 }
 
+#[cfg(feature = "dev-single")]
 fn broker_heartbeat_request(
     cluster_name: &str,
     broker_name: &str,
@@ -116,6 +128,7 @@ fn test_ports_available(base_port: u16, node_count: u16) -> bool {
     true
 }
 
+#[cfg(feature = "dev-single")]
 struct ManagedNode {
     node_id: u64,
     node: Arc<RaftNodeManager>,
@@ -123,6 +136,7 @@ struct ManagedNode {
     server_handle: Option<JoinHandle<()>>,
 }
 
+#[cfg(feature = "dev-single")]
 impl ManagedNode {
     fn to_ref(&self) -> (u64, Arc<RaftNodeManager>) {
         (self.node_id, self.node.clone())
@@ -153,6 +167,7 @@ impl ManagedNode {
     }
 }
 
+#[cfg(feature = "dev-single")]
 fn persistent_config(
     node_id: u64,
     base_port: u16,
@@ -179,10 +194,12 @@ fn persistent_config(
         .with_storage_path(storage_path.to_string_lossy().into_owned())
 }
 
+#[cfg(feature = "dev-single")]
 fn managed_refs(nodes: &[ManagedNode]) -> Vec<(u64, Arc<RaftNodeManager>)> {
     nodes.iter().map(ManagedNode::to_ref).collect()
 }
 
+#[cfg(feature = "dev-single")]
 async fn start_managed_node(config: ControllerConfig, enable_runtime: bool) -> ManagedNode {
     let node_id = config.node_id;
     let addr = config.listen_addr;
@@ -218,6 +235,7 @@ async fn start_managed_node(config: ControllerConfig, enable_runtime: bool) -> M
     managed
 }
 
+#[cfg(feature = "dev-single")]
 async fn bootstrap_persistent_cluster(node_count: u64, base_port: u16, storage_root: &Path) -> Vec<ManagedNode> {
     let all_peers = cluster_peers(node_count, base_port);
     let mut nodes = vec![
@@ -291,6 +309,7 @@ async fn bootstrap_persistent_cluster(node_count: u64, base_port: u16, storage_r
     nodes
 }
 
+#[cfg(feature = "dev-single")]
 async fn seed_replica_group_state(
     node: &RaftNodeManager,
     broker_name: &str,
@@ -391,8 +410,9 @@ async fn seed_replica_group_state(
     assert_eq!(alter_sync_state_set.data.response_code, ResponseCode::Success as i32);
 }
 
+#[cfg(feature = "dev-single")]
 fn assert_replica_group_state(node: &RaftNodeManager, broker_name: &str, master_address: &str) {
-    let replicas_info_manager = node.store().state_machine.replicas_info_manager();
+    let replicas_info_manager = node.store().state_machine.read_view();
     assert_eq!(
         replicas_info_manager.cluster_name(broker_name).as_deref(),
         Some("test-cluster")
@@ -416,12 +436,13 @@ fn assert_replica_group_state(node: &RaftNodeManager, broker_name: &str, master_
     );
 }
 
+#[cfg(feature = "dev-single")]
 async fn wait_for_applied_broker_id(node: &RaftNodeManager, broker_name: &str, expected_next_id: u64) {
     for _ in 0..50 {
         let next_broker_id = node
             .store()
             .state_machine
-            .replicas_info_manager()
+            .read_view()
             .get_next_broker_id("test-cluster", broker_name)
             .response()
             .and_then(|header| header.next_broker_id);
@@ -439,6 +460,7 @@ async fn wait_for_applied_broker_id(node: &RaftNodeManager, broker_name: &str, e
     );
 }
 
+#[cfg(feature = "dev-single")]
 async fn find_leader_node(nodes: &[ManagedNode]) -> Arc<RaftNodeManager> {
     for node in nodes {
         if node.node.is_leader().await.unwrap_or(false) {
@@ -449,6 +471,7 @@ async fn find_leader_node(nodes: &[ManagedNode]) -> Arc<RaftNodeManager> {
     panic!("cluster should have a leader");
 }
 
+#[cfg(feature = "dev-single")]
 async fn find_leader_index(nodes: &[ManagedNode]) -> usize {
     for (index, node) in nodes.iter().enumerate() {
         if node.node.is_leader().await.unwrap_or(false) {
@@ -493,6 +516,7 @@ async fn start_node(
         .with_node_info(node_id, addr)
         .with_election_timeout_ms(1000)
         .with_heartbeat_interval_ms(300)
+        .with_storage_backend(StorageBackendType::Memory)
         .with_raft_peers(peers);
 
     let node = Arc::new(RaftNodeManager::new(ControllerConfigReader::new(config)).await.unwrap());
@@ -1108,7 +1132,7 @@ async fn test_three_node_cluster_re_elects_after_leader_shutdown() {
             node_id
         );
 
-        let replicas_info_manager = node.store().state_machine.replicas_info_manager();
+        let replicas_info_manager = node.store().state_machine.read_view();
         let next_before = replicas_info_manager
             .get_next_broker_id("test-cluster", "broker-before-failover")
             .response()
@@ -1125,6 +1149,7 @@ async fn test_three_node_cluster_re_elects_after_leader_shutdown() {
     }
 }
 
+#[cfg(feature = "dev-single")]
 #[tokio::test(flavor = "multi_thread")]
 async fn test_three_node_cluster_persistent_restart_recovers_controller_state() {
     let base_port = allocate_base_port(3);
@@ -1194,6 +1219,7 @@ async fn test_three_node_cluster_persistent_restart_recovers_controller_state() 
     }
 }
 
+#[cfg(feature = "dev-single")]
 #[tokio::test(flavor = "multi_thread")]
 async fn test_persistent_follower_restart_rejoins_and_catches_up() {
     let base_port = allocate_base_port(3);

@@ -30,4 +30,11 @@ pub use network::GrpcNetworkClient;
 pub use network::NetworkFactory;
 pub use node::RaftNodeManager;
 pub use state_machine::StateMachine;
+pub use state_machine::StateMachineReadView;
 pub use storage::Store;
+
+/// Maximum payload carried by one snapshot transport chunk.
+pub const SNAPSHOT_CHUNK_BYTES: usize = 256 * 1024;
+
+/// Hard upper bound for one controller snapshot.
+pub const SNAPSHOT_MAX_BYTES: usize = 64 * 1024 * 1024;

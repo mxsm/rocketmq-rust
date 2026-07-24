@@ -66,6 +66,22 @@ impl RaftController {
         }
     }
 
+    /// Create an OpenRaft controller whose networking, storage, and blocking work are owned by
+    /// the supplied controller task group.
+    pub fn new_open_raft_with_heartbeat_and_task_group(
+        config: ControllerConfigReader,
+        heartbeat_manager: Arc<DefaultBrokerHeartbeatManager>,
+        parent_task_group: rocketmq_runtime::TaskGroup,
+    ) -> Self {
+        Self {
+            inner: Arc::new(OpenRaftController::new_with_heartbeat_and_task_group(
+                config,
+                heartbeat_manager,
+                parent_task_group,
+            )),
+        }
+    }
+
     pub(crate) async fn startup_shared(&self) -> RocketMQResult<()> {
         self.inner.startup_shared().await
     }

@@ -16,6 +16,7 @@
 
 use std::collections::BTreeMap;
 use std::collections::HashSet;
+#[cfg(feature = "dev-single")]
 use std::path::Path;
 
 use rocketmq_common::TimeUtils::current_millis;
@@ -28,8 +29,10 @@ use rocketmq_controller::openraft::Store;
 use rocketmq_controller::typ::BrokerIdentityInfoSnapshot;
 use rocketmq_controller::typ::BrokerLiveInfoSnapshot;
 use rocketmq_controller::typ::ControllerRequest;
+#[cfg(feature = "dev-single")]
 use rocketmq_controller::typ::ControllerResponseHeader;
 use rocketmq_controller::typ::Node;
+#[cfg(feature = "dev-single")]
 use rocketmq_remoting::code::response_code::ResponseCode;
 
 fn test_config(port: u16) -> ControllerConfigReader {
@@ -37,10 +40,12 @@ fn test_config(port: u16) -> ControllerConfigReader {
         ControllerConfig::default()
             .with_node_info(1, format!("127.0.0.1:{port}").parse().expect("valid socket addr"))
             .with_election_timeout_ms(1000)
-            .with_heartbeat_interval_ms(300),
+            .with_heartbeat_interval_ms(300)
+            .with_storage_backend(StorageBackendType::Memory),
     )
 }
 
+#[cfg(feature = "dev-single")]
 fn persistent_test_config(port: u16, storage_path: &Path) -> ControllerConfigReader {
     ControllerConfigReader::new(
         ControllerConfig::default()
@@ -126,7 +131,7 @@ async fn test_log_store() {
 async fn test_state_machine_uses_replicas_info_manager() {
     let state_machine = StateMachine::new(test_config(29876));
     let next_broker_id = state_machine
-        .replicas_info_manager()
+        .read_view()
         .get_next_broker_id("test-cluster", "broker-a")
         .response()
         .and_then(|header| header.next_broker_id)
@@ -147,7 +152,7 @@ async fn test_storage_operations() {
 
     let next_broker_id = store
         .state_machine
-        .replicas_info_manager()
+        .read_view()
         .get_next_broker_id("test-cluster", "broker-a")
         .response()
         .and_then(|header| header.next_broker_id)
@@ -208,7 +213,7 @@ async fn test_client_write_updates_replicas_info_manager() {
     let next_broker_id = node
         .store()
         .state_machine
-        .replicas_info_manager()
+        .read_view()
         .get_next_broker_id("test-cluster", "test-broker")
         .response()
         .and_then(|header| header.next_broker_id)
@@ -216,6 +221,7 @@ async fn test_client_write_updates_replicas_info_manager() {
     assert_eq!(next_broker_id, 2);
 }
 
+#[cfg(feature = "dev-single")]
 #[tokio::test]
 async fn test_single_node_restart_recovers_state_from_file_storage() {
     let temp_root = tempfile::tempdir().expect("create temp dir for persistent openraft controller storage");
@@ -339,7 +345,7 @@ async fn test_single_node_restart_recovers_state_from_file_storage() {
     node.shutdown().await.expect("shutdown node before restart");
 
     let restarted_node = RaftNodeManager::new(config).await.unwrap();
-    let replicas_info_manager = restarted_node.store().state_machine.replicas_info_manager();
+    let replicas_info_manager = restarted_node.store().state_machine.read_view();
 
     assert_eq!(
         replicas_info_manager.cluster_name("restart-broker").as_deref(),
