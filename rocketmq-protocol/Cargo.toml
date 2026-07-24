@@ -33,7 +33,7 @@ bytes.workspace = true
 bitvec = "1.0.1"
 cheetah-string.workspace = true
 flate2 = { version = "1.1.9", features = ["zlib"], default-features = false }
-lz4_flex = { version = "0.13", default-features = false }
+lz4_flex = { version = "0.14", default-features = false }
 rocketmq-error = { workspace = true, features = ["with_serde"] }
 bytemuck = "1.25.0"
 chrono = "0.4.45"
