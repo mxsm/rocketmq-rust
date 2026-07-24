@@ -20,12 +20,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rocketmq_runtime::RuntimeContext;
-use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_transport::admission::AdmissionController;
 use rocketmq_transport::admission::AdmissionLimits;
 use rocketmq_transport::client::connect_with_config;
 use rocketmq_transport::codec::remoting_command_codec::FrameLimits;
 use rocketmq_transport::config::TlsConfig;
+use rocketmq_transport::deadline::RequestDeadline;
 use rocketmq_transport::server::ConnectionHandler;
 use rocketmq_transport::server::SessionHandle;
 use rocketmq_transport::server::TransportListener;
@@ -60,7 +60,7 @@ async fn canonical_client_connect_builds_the_framed_transport() {
         &address.to_string(),
         &TlsConfig::default(),
         FrameLimits::legacy_compatibility(),
-        ShutdownDeadline::after(Duration::from_secs(1)),
+        RequestDeadline::after(Duration::from_secs(1)),
     )
     .await
     .unwrap();

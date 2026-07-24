@@ -25,6 +25,7 @@ pub mod codec;
 pub mod config;
 pub mod connection;
 pub mod connection_context;
+pub mod deadline;
 pub mod error_helpers;
 pub mod security;
 pub mod server;

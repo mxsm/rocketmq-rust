@@ -21,7 +21,6 @@ use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::ServiceContext;
-use rocketmq_runtime::ShutdownDeadline;
 
 use crate::admission::AdmissionClass;
 use crate::admission::AdmissionController;
@@ -33,6 +32,7 @@ use crate::base::pending_request_table::PendingRequestUsage;
 use crate::codec::remoting_command_codec::FrameLimits;
 use crate::config::TlsConfig;
 use crate::connection::Connection;
+use crate::deadline::RequestDeadline;
 use crate::security::TransportSecurity;
 #[cfg(feature = "tls")]
 use crate::tls::connect_tls_stream;
@@ -72,12 +72,12 @@ pub async fn connect_with_config(
     address: &str,
     tls_config: &TlsConfig,
     frame_limits: FrameLimits,
-    deadline: ShutdownDeadline,
+    deadline: RequestDeadline,
 ) -> RocketMQResult<ConnectedTransport> {
-    let timeout_at = tokio::time::Instant::from_std(deadline.instant());
-    let stream = tokio::time::timeout_at(timeout_at, tokio::net::TcpStream::connect(address))
+    let stream = deadline
+        .timeout(tokio::net::TcpStream::connect(address))
         .await
-        .map_err(|_| RocketMQError::network_timeout(address, deadline.remaining()))??;
+        .map_err(|_| RocketMQError::network_connection_timeout(address, deadline.budget_millis()))??;
     let local_addr = stream.local_addr()?;
     let remote_addr = stream.peer_addr()?;
     let negotiated_tls = tls_config.enable;
@@ -85,9 +85,10 @@ pub async fn connect_with_config(
         #[cfg(feature = "tls")]
         {
             let server_name = server_name_from_address(address);
-            let tls_stream = tokio::time::timeout_at(timeout_at, connect_tls_stream(stream, &server_name, tls_config))
+            let tls_stream = deadline
+                .timeout(connect_tls_stream(stream, &server_name, tls_config))
                 .await
-                .map_err(|_| RocketMQError::network_timeout(address, deadline.remaining()))??;
+                .map_err(|_| RocketMQError::network_connection_timeout(address, deadline.budget_millis()))??;
             Connection::new_with_stream_and_limits(tls_stream, frame_limits)
         }
         #[cfg(not(feature = "tls"))]
@@ -161,7 +162,7 @@ impl TransportClient {
         &self,
         address: SocketAddr,
         request: RemotingCommand,
-        deadline: ShutdownDeadline,
+        deadline: RequestDeadline,
     ) -> RocketMQResult<RemotingCommand> {
         let tls_config = TlsConfig::default();
         self.invoke_with_config(address, request, &tls_config, deadline).await
@@ -177,16 +178,17 @@ impl TransportClient {
         address: SocketAddr,
         mut request: RemotingCommand,
         tls_config: &TlsConfig,
-        deadline: ShutdownDeadline,
+        deadline: RequestDeadline,
     ) -> RocketMQResult<RemotingCommand> {
-        let timeout_at = tokio::time::Instant::from_std(deadline.instant());
         let connected = connect_with_config(&address.to_string(), tls_config, FrameLimits::default(), deadline).await?;
         let (mut connection, local_addr, remote_addr, negotiated_tls) = connected.into_parts_with_tls();
         let scope = AdmissionScope::new(remote_addr.ip()).with_session(remote_addr.port() as u64);
         let peer = PeerInfo::new(remote_addr, negotiated_tls);
+        deadline.ensure_before_send(address.to_string())?;
         self.security
             .sign(&mut request, Some(&peer))
             .map_err(|error| RocketMQError::network_connection_failed(address.to_string(), error.to_string()))?;
+        deadline.ensure_before_send(address.to_string())?;
         let retained_bytes = request.body().map_or(0, bytes::Bytes::len);
         let _connection_permit = self
             .admission
@@ -206,26 +208,22 @@ impl TransportClient {
         let opaque = self.next_opaque.fetch_add(1, Ordering::Relaxed);
         request.set_opaque_mut(opaque);
         let (sender, receiver) = tokio::sync::oneshot::channel();
-        let guard = self.pending.register_for_owner_with_bytes(
-            &owner,
-            opaque,
-            deadline.remaining().as_millis().min(u128::from(u64::MAX)) as u64,
-            retained_bytes,
-            sender,
-        )?;
+        let guard = self
+            .pending
+            .register_for_owner_with_bytes(&owner, opaque, deadline, retained_bytes, sender)?;
 
-        if let Err(error) = tokio::time::timeout_at(timeout_at, connection.send_command(request))
+        if let Err(error) = connection
+            .send_command_with_deadline(request, deadline, address.to_string())
             .await
-            .map_err(|_| RocketMQError::network_timeout(address.to_string(), deadline.remaining()))?
         {
             guard.complete(Err(error));
-            let _ = connection.shutdown().await;
+            let _ = deadline.timeout(connection.shutdown()).await;
             return receiver.await.map_err(|_| {
                 RocketMQError::network_connection_failed(address.to_string(), "send completion dropped")
             })?;
         }
 
-        match tokio::time::timeout_at(timeout_at, connection.receive_command()).await {
+        match deadline.timeout(connection.receive_command()).await {
             Ok(Some(Ok(response))) => {
                 let response_opaque = response.opaque();
                 if !self
@@ -247,13 +245,10 @@ impl TransportClient {
                 });
             }
             Err(_) => {
-                guard.expire(
-                    "transport_response",
-                    deadline.remaining().as_millis().min(u128::from(u64::MAX)) as u64,
-                );
+                guard.expire(address.to_string());
             }
         }
-        let _ = connection.shutdown().await;
+        let _ = deadline.timeout(connection.shutdown()).await;
         receiver
             .await
             .map_err(|_| RocketMQError::network_connection_failed(address.to_string(), "response completion dropped"))?

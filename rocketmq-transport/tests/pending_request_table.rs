@@ -17,17 +17,17 @@ use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_transport::base::pending_request_table::PendingRequestLimits;
 use rocketmq_transport::base::pending_request_table::PendingRequestTable;
+use rocketmq_transport::deadline::RequestDeadline;
 use std::sync::Arc;
 use std::sync::Barrier;
 use std::time::Duration;
-use std::time::Instant;
 
 #[tokio::test]
 async fn response_completion_is_exactly_once_and_releases_the_reservation() {
     let table = PendingRequestTable::new();
     let (sender, receiver) = tokio::sync::oneshot::channel();
     let guard = table
-        .register(7, 3_000, sender)
+        .register(7, RequestDeadline::from_timeout_millis(3_000), sender)
         .expect("first reservation should succeed");
 
     assert_eq!(table.len(), 1);
@@ -58,18 +58,23 @@ async fn expiring_ten_thousand_requests_completes_every_waiter_and_releases_ever
         let (sender, receiver) = tokio::sync::oneshot::channel();
         guards.push(
             table
-                .register(opaque, 3_000, sender)
+                .register(opaque, RequestDeadline::from_timeout_millis(3_000), sender)
                 .expect("unique opaque should reserve successfully"),
         );
         receivers.push(receiver);
     }
 
-    assert_eq!(table.expire_due(Instant::now() + Duration::from_secs(4)), REQUESTS);
+    assert_eq!(
+        table.expire_due(tokio::time::Instant::now() + Duration::from_secs(4)),
+        REQUESTS
+    );
     assert_eq!(table.len(), 0);
     for receiver in receivers {
         assert!(matches!(
             receiver.await.expect("timeout should notify every waiter"),
-            Err(RocketMQError::Timeout { .. })
+            Err(RocketMQError::Network(
+                rocketmq_error::NetworkError::ResponseTimeout { .. }
+            ))
         ));
     }
     drop(guards);
@@ -79,7 +84,9 @@ async fn expiring_ten_thousand_requests_completes_every_waiter_and_releases_ever
 async fn dropping_guard_completes_waiter_with_typed_cancellation() {
     let table = PendingRequestTable::new();
     let (sender, receiver) = tokio::sync::oneshot::channel();
-    let guard = table.register(41, 3_000, sender).unwrap();
+    let guard = table
+        .register(41, RequestDeadline::from_timeout_millis(3_000), sender)
+        .unwrap();
 
     drop(guard);
 
@@ -94,16 +101,25 @@ async fn dropping_guard_completes_waiter_with_typed_cancellation() {
 async fn retired_opaque_cannot_be_reused_by_a_late_response() {
     let table = PendingRequestTable::new();
     let (first_sender, first_receiver) = tokio::sync::oneshot::channel();
-    let first = table.register(9, 1, first_sender).unwrap();
-    assert_eq!(table.expire_due(Instant::now() + Duration::from_millis(2)), 1);
+    let first = table
+        .register(9, RequestDeadline::from_timeout_millis(1), first_sender)
+        .unwrap();
+    assert_eq!(
+        table.expire_due(tokio::time::Instant::now() + Duration::from_millis(2)),
+        1
+    );
     assert!(matches!(
         first_receiver.await.unwrap(),
-        Err(RocketMQError::Timeout { .. })
+        Err(RocketMQError::Network(
+            rocketmq_error::NetworkError::ResponseTimeout { .. }
+        ))
     ));
     drop(first);
 
     let (second_sender, _second_receiver) = tokio::sync::oneshot::channel();
-    assert!(table.register(9, 3_000, second_sender).is_err());
+    assert!(table
+        .register(9, RequestDeadline::from_timeout_millis(3_000), second_sender)
+        .is_err());
     assert!(!table.complete_response(
         9,
         RemotingCommand::create_response_command_with_code(ResponseCode::Success),
@@ -114,14 +130,20 @@ async fn retired_opaque_cannot_be_reused_by_a_late_response() {
 async fn admission_permit_is_released_after_completion() {
     let table = PendingRequestTable::with_capacity(1);
     let (first_sender, first_receiver) = tokio::sync::oneshot::channel();
-    let first = table.register(1, 3_000, first_sender).unwrap();
+    let first = table
+        .register(1, RequestDeadline::from_timeout_millis(3_000), first_sender)
+        .unwrap();
     let (blocked_sender, _blocked_receiver) = tokio::sync::oneshot::channel();
-    assert!(table.register(2, 3_000, blocked_sender).is_err());
+    assert!(table
+        .register(2, RequestDeadline::from_timeout_millis(3_000), blocked_sender)
+        .is_err());
 
     assert!(first.complete(Err(RocketMQError::network_connection_failed("test", "done",))));
     assert!(first_receiver.await.unwrap().is_err());
     let (next_sender, _next_receiver) = tokio::sync::oneshot::channel();
-    assert!(table.register(2, 3_000, next_sender).is_ok());
+    assert!(table
+        .register(2, RequestDeadline::from_timeout_millis(3_000), next_sender)
+        .is_ok());
 }
 
 #[tokio::test]
@@ -135,7 +157,7 @@ async fn close_all_completes_every_waiter_with_a_typed_cause() {
         let (sender, receiver) = tokio::sync::oneshot::channel();
         guards.push(
             table
-                .register(opaque, 3_000, sender)
+                .register(opaque, RequestDeadline::from_timeout_millis(3_000), sender)
                 .expect("unique opaque should reserve successfully"),
         );
         receivers.push(receiver);
@@ -163,9 +185,21 @@ async fn closing_one_connection_owner_does_not_complete_another_owners_request()
     let second_owner = table.new_owner();
     let (first_sender, first_receiver) = tokio::sync::oneshot::channel();
     let (second_sender, mut second_receiver) = tokio::sync::oneshot::channel();
-    let first_guard = table.register_for_owner(&first_owner, 17, 3_000, first_sender).unwrap();
+    let first_guard = table
+        .register_for_owner(
+            &first_owner,
+            17,
+            RequestDeadline::from_timeout_millis(3_000),
+            first_sender,
+        )
+        .unwrap();
     let second_guard = table
-        .register_for_owner(&second_owner, 17, 3_000, second_sender)
+        .register_for_owner(
+            &second_owner,
+            17,
+            RequestDeadline::from_timeout_millis(3_000),
+            second_sender,
+        )
         .unwrap();
 
     assert_eq!(
@@ -198,23 +232,45 @@ async fn timed_out_owner_rejects_reuse_but_rotated_owner_is_safe_from_late_respo
     let table = PendingRequestTable::new();
     let retired_owner = table.new_owner();
     let (first_sender, first_receiver) = tokio::sync::oneshot::channel();
-    let first = table.register_for_owner(&retired_owner, 29, 1, first_sender).unwrap();
+    let first = table
+        .register_for_owner(
+            &retired_owner,
+            29,
+            RequestDeadline::from_timeout_millis(1),
+            first_sender,
+        )
+        .unwrap();
 
-    assert_eq!(table.expire_due(Instant::now() + Duration::from_millis(2)), 1);
+    assert_eq!(
+        table.expire_due(tokio::time::Instant::now() + Duration::from_millis(2)),
+        1
+    );
     assert!(matches!(
         first_receiver.await.unwrap(),
-        Err(RocketMQError::Timeout { .. })
+        Err(RocketMQError::Network(
+            rocketmq_error::NetworkError::ResponseTimeout { .. }
+        ))
     ));
     drop(first);
     let (reused_sender, _reused_receiver) = tokio::sync::oneshot::channel();
     assert!(table
-        .register_for_owner(&retired_owner, 29, 3_000, reused_sender)
+        .register_for_owner(
+            &retired_owner,
+            29,
+            RequestDeadline::from_timeout_millis(3_000),
+            reused_sender,
+        )
         .is_err());
 
     let rotated_owner = table.new_owner();
     let (rotated_sender, rotated_receiver) = tokio::sync::oneshot::channel();
     let rotated = table
-        .register_for_owner(&rotated_owner, 29, 3_000, rotated_sender)
+        .register_for_owner(
+            &rotated_owner,
+            29,
+            RequestDeadline::from_timeout_millis(3_000),
+            rotated_sender,
+        )
         .unwrap();
     assert!(!table.complete_response_for_owner(
         &retired_owner,
@@ -241,13 +297,15 @@ async fn count_and_byte_admission_are_observable_and_released_on_every_completio
     });
     let (first_sender, first_receiver) = tokio::sync::oneshot::channel();
     let first = table
-        .register_with_bytes(1, 3_000, 6, first_sender)
+        .register_with_bytes(1, RequestDeadline::from_timeout_millis(3_000), 6, first_sender)
         .expect("first request fits both budgets");
     assert_eq!(table.usage().count, 1);
     assert_eq!(table.usage().bytes, 6);
 
     let (byte_blocked_sender, _byte_blocked_receiver) = tokio::sync::oneshot::channel();
-    assert!(table.register_with_bytes(2, 3_000, 3, byte_blocked_sender).is_err());
+    assert!(table
+        .register_with_bytes(2, RequestDeadline::from_timeout_millis(3_000), 3, byte_blocked_sender,)
+        .is_err());
     assert_eq!(table.usage().rejected_bytes, 1);
 
     assert!(first.complete(Err(RocketMQError::network_connection_failed("test", "send failed",))));
@@ -256,7 +314,9 @@ async fn count_and_byte_admission_are_observable_and_released_on_every_completio
     assert_eq!(table.usage().bytes, 0);
 
     let (next_sender, next_receiver) = tokio::sync::oneshot::channel();
-    let next = table.register_with_bytes(2, 3_000, 8, next_sender).unwrap();
+    let next = table
+        .register_with_bytes(2, RequestDeadline::from_timeout_millis(3_000), 8, next_sender)
+        .unwrap();
     assert_eq!(
         table.close_all(|| { RocketMQError::network_connection_failed("test", "connection closed") }),
         1
@@ -282,7 +342,10 @@ fn close_and_registration_are_one_atomic_owner_epoch() {
         registrations.push(std::thread::spawn(move || {
             let (sender, receiver) = tokio::sync::oneshot::channel();
             barrier.wait();
-            (table.register_for_owner(&owner, opaque, 30_000, sender), receiver)
+            (
+                table.register_for_owner(&owner, opaque, RequestDeadline::from_timeout_millis(30_000), sender),
+                receiver,
+            )
         }));
     }
     let close_table = table.clone();

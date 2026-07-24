@@ -25,7 +25,6 @@ use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_runtime::RuntimeHandle;
 use rocketmq_runtime::ServiceContext;
-use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskGroupChildLease;
 use tokio::sync::broadcast;
@@ -33,11 +32,9 @@ use tokio::sync::broadcast;
 use crate::base::connection_net_event::ConnectionNetEvent;
 use crate::base::pending_request_table::PendingRequestOwner;
 use crate::base::pending_request_table::PendingRequestTable;
-use crate::base::pending_request_table::PendingRequestToken;
 use crate::codec::remoting_command_codec::FrameLimits;
 use crate::connection::ConnectionStateHandle;
 // Import error helpers for convenient error creation
-use crate::error_helpers::connection_invalid;
 use crate::error_helpers::remote_error;
 use crate::net::channel::Channel;
 use crate::net::channel::ChannelInner;
@@ -48,6 +45,7 @@ use crate::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
 use crate::runtime::processor::RequestProcessor;
 use rocketmq_transport::admission::AdmissionController;
 use rocketmq_transport::admission::AdmissionLimits;
+use rocketmq_transport::deadline::RequestDeadline;
 use rocketmq_transport::security::TransportSecurity;
 use rocketmq_transport::server::ConnectionHandler as TransportConnectionHandler;
 use rocketmq_transport::server::SessionHandle;
@@ -190,6 +188,7 @@ fn connect<PR>(
     _send_notify: broadcast::Receiver<()>,
     tls_config: TlsConfig,
     task_group: TaskGroup,
+    deadline: RequestDeadline,
 ) -> ClientConnectFuture
 where
     PR: RequestProcessor + Sync + Clone + 'static,
@@ -199,7 +198,7 @@ where
             addr.as_str(),
             &tls_config,
             FrameLimits::legacy_compatibility(),
-            ShutdownDeadline::after(Duration::from_secs(10)),
+            deadline,
         )
         .await?;
         let (connection, local_addr, remote_address, negotiated_tls) = connected.into_parts_with_tls();
@@ -226,8 +225,10 @@ where
         task_group
             .spawn_service("rocketmq.transport.client-session", session_runner)
             .map_err(|error| remote_error(format!("failed to spawn transport client session: {error}")))?;
-        let (channel, pending_request_owner, session) = connected_session
+        let (channel, pending_request_owner, session) = deadline
+            .timeout(connected_session)
             .await
+            .map_err(|_| RocketMQError::network_connection_timeout(addr.clone(), deadline.budget_millis()))?
             .map_err(|_| remote_error("transport client session ended before connection setup"))?;
         if let Some(tx) = tx {
             let _ = tx.send(ConnectionNetEvent::CONNECTED(channel.remote_address()));
@@ -255,8 +256,25 @@ where
         tx: Option<&tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
         tls_config: TlsConfig,
     ) -> RocketMQResult<Client<PR>> {
+        Self::connect_until(
+            addr,
+            cmd_handler,
+            tx,
+            tls_config,
+            RequestDeadline::after(Duration::from_secs(10)),
+        )
+        .await
+    }
+
+    pub(crate) async fn connect_until(
+        addr: String,
+        cmd_handler: Arc<RemotingGeneralHandler<PR>>,
+        tx: Option<&tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
+        tls_config: TlsConfig,
+        deadline: RequestDeadline,
+    ) -> RocketMQResult<Client<PR>> {
         let (task_group, child_lease) = new_client_connection_task_group(&addr)?;
-        Self::connect_with_task_group(addr, cmd_handler, tx, tls_config, task_group, child_lease).await
+        Self::connect_with_task_group(addr, cmd_handler, tx, tls_config, task_group, child_lease, deadline).await
     }
 
     pub(crate) async fn connect_with_service_context(
@@ -266,8 +284,27 @@ where
         tx: Option<&tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
         tls_config: TlsConfig,
     ) -> RocketMQResult<Client<PR>> {
+        Self::connect_with_service_context_until(
+            context,
+            addr,
+            cmd_handler,
+            tx,
+            tls_config,
+            RequestDeadline::after(Duration::from_secs(10)),
+        )
+        .await
+    }
+
+    pub(crate) async fn connect_with_service_context_until(
+        context: &ServiceContext,
+        addr: String,
+        cmd_handler: Arc<RemotingGeneralHandler<PR>>,
+        tx: Option<&tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
+        tls_config: TlsConfig,
+        deadline: RequestDeadline,
+    ) -> RocketMQResult<Client<PR>> {
         let (task_group, child_lease) = new_client_connection_task_group_with_service_context(context, &addr)?;
-        Self::connect_with_task_group(addr, cmd_handler, tx, tls_config, task_group, child_lease).await
+        Self::connect_with_task_group(addr, cmd_handler, tx, tls_config, task_group, child_lease, deadline).await
     }
 
     async fn connect_with_task_group(
@@ -277,6 +314,7 @@ where
         tls_config: TlsConfig,
         task_group: TaskGroup,
         child_lease: Option<TaskGroupChildLease>,
+        deadline: RequestDeadline,
     ) -> RocketMQResult<Client<PR>> {
         let (notify_shutdown, _) = broadcast::channel(1);
         let receiver = notify_shutdown.subscribe();
@@ -294,6 +332,7 @@ where
             send_receiver,
             tls_config,
             task_group,
+            deadline,
         )
         .await?;
         Ok(Client {
@@ -314,30 +353,16 @@ where
         self
     }
 
-    async fn send_transport(
-        &self,
-        mut request: RemotingCommand,
-        reservation: Option<PendingRequestToken>,
-    ) -> RocketMQResult<()> {
+    async fn send_transport(&self, mut request: RemotingCommand, deadline: RequestDeadline) -> RocketMQResult<()> {
         let transport_security = &self.transport_security;
+        let target = self.peer.address().to_string();
+        deadline.ensure_before_send(target.clone())?;
         transport_security
             .sign(&mut request, Some(&self.peer))
             .map_err(|error| remote_error(format!("request signing failed: {error}")))?;
+        deadline.ensure_before_send(target.clone())?;
         let mut connection = self.session.connection();
-        match connection.send_command(request).await {
-            Ok(()) => Ok(()),
-            Err(error) => {
-                let connection_broken = matches!(error, rocketmq_error::RocketMQError::IO(_));
-                if let Some(reservation) = reservation {
-                    self.pending_requests.complete_token(reservation, Err(error));
-                }
-                if connection_broken {
-                    Err(connection_invalid("connection send failed"))
-                } else {
-                    Err(remote_error("request send failed"))
-                }
-            }
-        }
+        connection.send_command_with_deadline(request, deadline, target).await
     }
 
     /// Invokes a remote operation with the given `RemotingCommand`.
@@ -353,7 +378,7 @@ where
     pub async fn send_read(
         &mut self,
         request: RemotingCommand,
-        timeout_millis: u64,
+        deadline: RequestDeadline,
     ) -> RocketMQResult<RemotingCommand> {
         let (tx, rx) = tokio::sync::oneshot::channel::<RocketMQResult<RemotingCommand>>();
         let opaque = request.opaque();
@@ -361,16 +386,16 @@ where
         let guard = self.pending_requests.register_for_owner_with_bytes(
             &self.pending_request_owner,
             opaque,
-            timeout_millis,
+            deadline,
             retained_bytes,
             tx,
         )?;
 
-        self.send_transport(request, Some(guard.token())).await?;
-        match tokio::time::timeout_at(tokio::time::Instant::from_std(guard.deadline()), rx).await {
+        self.send_transport(request, deadline).await?;
+        match deadline.timeout(rx).await {
             Ok(Ok(value)) => value,
             Ok(Err(error)) => Err(remote_error(error.to_string())),
-            Err(_) => Err(guard.expire("remoting_client_response", timeout_millis)),
+            Err(_) => Err(guard.expire(self.peer.address().to_string())),
         }
     }
 
@@ -394,27 +419,24 @@ where
         F: FnMut(),
     {
         let (tx, rx) = tokio::sync::oneshot::channel::<RocketMQResult<RemotingCommand>>();
-        let timeout_millis = timeout.as_millis().min(u128::from(u64::MAX)) as u64;
+        let deadline = RequestDeadline::after(timeout);
         let retained_bytes = request.body().map_or(0, bytes::Bytes::len);
         let guard = match self.pending_requests.register_for_owner_with_bytes(
             &self.pending_request_owner,
             request.opaque(),
-            timeout_millis,
+            deadline,
             retained_bytes,
             tx,
         ) {
             Ok(guard) => guard,
             Err(_) => return,
         };
-        if self.send_transport(request, Some(guard.token())).await.is_err() {
+        if self.send_transport(request, deadline).await.is_err() {
             return;
         }
 
-        if tokio::time::timeout_at(tokio::time::Instant::from_std(guard.deadline()), rx)
-            .await
-            .is_err()
-        {
-            guard.expire("remoting_client_callback_response", timeout_millis);
+        if deadline.timeout(rx).await.is_err() {
+            guard.expire(self.peer.address().to_string());
             self.retire_after_timeout().await;
         }
         func();
@@ -430,7 +452,13 @@ where
     ///
     /// A `Result` indicating success or failure in sending the request.
     pub async fn send(&mut self, request: RemotingCommand) -> RocketMQResult<()> {
-        self.send_transport(request, None).await
+        self.send_transport(request, RequestDeadline::after(DEFAULT_CALLBACK_RESPONSE_TIMEOUT))
+            .await
+    }
+
+    /// Sends a request using the caller's existing immutable deadline.
+    pub async fn send_until(&mut self, request: RemotingCommand, deadline: RequestDeadline) -> RocketMQResult<()> {
+        self.send_transport(request, deadline).await
     }
 
     /// Sends multiple requests in a batch (fire-and-forget, no response expected).
@@ -470,7 +498,8 @@ where
         // Send all commands individually through the channel
         // The underlying connection will buffer them efficiently
         for request in requests {
-            self.send_transport(request, None).await?;
+            self.send_transport(request, RequestDeadline::after(DEFAULT_CALLBACK_RESPONSE_TIMEOUT))
+                .await?;
         }
         Ok(())
     }
@@ -511,6 +540,7 @@ where
         requests: Vec<RemotingCommand>,
         timeout_millis: u64,
     ) -> RocketMQResult<Vec<RocketMQResult<RemotingCommand>>> {
+        let deadline = RequestDeadline::from_timeout_millis(timeout_millis);
         let mut receivers = Vec::with_capacity(requests.len());
 
         // Send all requests and collect oneshot receivers
@@ -520,27 +550,25 @@ where
             let guard = self.pending_requests.register_for_owner_with_bytes(
                 &self.pending_request_owner,
                 request.opaque(),
-                timeout_millis,
+                deadline,
                 retained_bytes,
                 tx,
             )?;
 
-            self.send_transport(request, Some(guard.token())).await?;
-
-            let deadline = guard.deadline();
-            receivers.push((guard, deadline, rx));
+            self.send_transport(request, deadline).await?;
+            receivers.push((guard, rx));
         }
 
         // Collect all responses
         let mut results = Vec::with_capacity(receivers.len());
         let mut timed_out = false;
-        for (guard, deadline, rx) in receivers {
-            let result = match tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), rx).await {
+        for (guard, rx) in receivers {
+            let result = match deadline.timeout(rx).await {
                 Ok(Ok(value)) => value,
                 Ok(Err(error)) => Err(remote_error(error.to_string())),
                 Err(_) => {
                     timed_out = true;
-                    Err(guard.expire("remoting_client_batch_response", timeout_millis))
+                    Err(guard.expire(self.peer.address().to_string()))
                 }
             };
             results.push(result);
@@ -648,7 +676,7 @@ mod lifecycle_tests {
     }
 
     #[tokio::test]
-    async fn close_with_report_stops_connection_tasks() {
+    async fn batch_requests_share_one_absolute_response_deadline() {
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind listener");
         let addr = listener.local_addr().expect("listener addr");
         let server = tokio::spawn(async move {
@@ -680,9 +708,12 @@ mod lifecycle_tests {
             .await
             .expect("batch registration should succeed");
         assert_eq!(results.len(), 3);
-        assert!(results
-            .iter()
-            .all(|result| matches!(result, Err(RocketMQError::Timeout { .. }))));
+        assert!(results.iter().all(|result| matches!(
+            result,
+            Err(RocketMQError::Network(
+                rocketmq_error::NetworkError::ResponseTimeout { .. }
+            ))
+        )));
         assert!(
             time::Instant::now().duration_since(started_at) < Duration::from_millis(200),
             "batch timeout must be one absolute deadline, not one timeout per sequential await"
@@ -735,7 +766,11 @@ mod lifecycle_tests {
 
         let mut retained_client = client.clone();
         let retained_request = RemotingCommand::create_remoting_command(105).set_body(vec![7_u8; 4096]);
-        let retained_invocation = tokio::spawn(async move { retained_client.send_read(retained_request, 100).await });
+        let retained_invocation = tokio::spawn(async move {
+            retained_client
+                .send_read(retained_request, RequestDeadline::from_timeout_millis(100))
+                .await
+        });
         time::timeout(Duration::from_secs(1), async {
             while response_table.usage().count == 0 {
                 tokio::task::yield_now().await;

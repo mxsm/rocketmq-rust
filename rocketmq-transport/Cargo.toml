@@ -58,7 +58,7 @@ tokio-rustls = { version = "0.26", optional = true }
 anyhow.workspace = true
 serde_json.workspace = true
 tempfile = "3.27.0"
-tokio.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
 
 [target.'cfg(unix)'.dev-dependencies]
 libc = "0.2.186"

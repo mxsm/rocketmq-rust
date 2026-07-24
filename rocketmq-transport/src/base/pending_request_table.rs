@@ -29,6 +29,8 @@ use tokio::sync::Semaphore;
 
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
+use crate::deadline::RequestDeadline;
+
 static NEXT_TABLE_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -83,7 +85,7 @@ struct PendingRequest {
     reservation: u64,
     owner: PendingRequestOwner,
     created_at: Instant,
-    deadline: Instant,
+    deadline: RequestDeadline,
     timeout_millis: u64,
     _permit: OwnedSemaphorePermit,
     _byte_permit: PendingBytePermit,
@@ -179,7 +181,7 @@ pub struct PendingRequestTable {
 pub struct PendingRequestGuard {
     table: PendingRequestTable,
     token: Option<PendingRequestToken>,
-    deadline: Instant,
+    deadline: RequestDeadline,
 }
 
 impl Default for PendingRequestTable {
@@ -241,46 +243,41 @@ impl PendingRequestTable {
     pub fn register(
         &self,
         opaque: i32,
-        timeout_millis: u64,
+        deadline: RequestDeadline,
         sender: tokio::sync::oneshot::Sender<RocketMQResult<RemotingCommand>>,
     ) -> RocketMQResult<PendingRequestGuard> {
-        self.register_with_bytes(opaque, timeout_millis, 0, sender)
+        self.register_with_bytes(opaque, deadline, 0, sender)
     }
 
     pub fn register_with_bytes(
         &self,
         opaque: i32,
-        timeout_millis: u64,
+        deadline: RequestDeadline,
         retained_bytes: usize,
         sender: tokio::sync::oneshot::Sender<RocketMQResult<RemotingCommand>>,
     ) -> RocketMQResult<PendingRequestGuard> {
-        self.register_for_owner_with_bytes(
-            &self.inner.default_owner,
-            opaque,
-            timeout_millis,
-            retained_bytes,
-            sender,
-        )
+        self.register_for_owner_with_bytes(&self.inner.default_owner, opaque, deadline, retained_bytes, sender)
     }
 
     pub fn register_for_owner(
         &self,
         owner: &PendingRequestOwner,
         opaque: i32,
-        timeout_millis: u64,
+        deadline: RequestDeadline,
         sender: tokio::sync::oneshot::Sender<RocketMQResult<RemotingCommand>>,
     ) -> RocketMQResult<PendingRequestGuard> {
-        self.register_for_owner_with_bytes(owner, opaque, timeout_millis, 0, sender)
+        self.register_for_owner_with_bytes(owner, opaque, deadline, 0, sender)
     }
 
     pub fn register_for_owner_with_bytes(
         &self,
         owner: &PendingRequestOwner,
         opaque: i32,
-        timeout_millis: u64,
+        deadline: RequestDeadline,
         retained_bytes: usize,
         sender: tokio::sync::oneshot::Sender<RocketMQResult<RemotingCommand>>,
     ) -> RocketMQResult<PendingRequestGuard> {
+        deadline.ensure_before_send("pending_request")?;
         self.validate_owner(owner)?;
         let owner_state = owner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if !owner_state.accepting {
@@ -291,11 +288,11 @@ impl PendingRequestTable {
         }
         let permit = self.inner.permits.clone().try_acquire_owned().map_err(|_| {
             self.inner.rejected_count.fetch_add(1, Ordering::Relaxed);
-            RocketMQError::network_connection_failed("pending_request", "pending request count capacity exhausted")
+            RocketMQError::network_queue_full("pending_request")
         })?;
         let byte_permit = self.inner.byte_budget.try_acquire(retained_bytes).ok_or_else(|| {
             self.inner.rejected_bytes.fetch_add(1, Ordering::Relaxed);
-            RocketMQError::network_connection_failed("pending_request", "pending request byte capacity exhausted")
+            RocketMQError::network_queue_full("pending_request")
         })?;
         let reservation = self.inner.next_reservation.fetch_add(1, Ordering::Relaxed);
         let key = PendingRequestKey {
@@ -304,7 +301,7 @@ impl PendingRequestTable {
         };
         let token = PendingRequestToken { key, reservation };
         let created_at = Instant::now();
-        let deadline = created_at + Duration::from_millis(timeout_millis);
+        let timeout_millis = deadline.budget_millis();
         let pending = PendingRequest {
             reservation,
             owner: owner.clone(),
@@ -432,7 +429,7 @@ impl PendingRequestTable {
     }
 
     /// Completes every request whose registered absolute response deadline has elapsed.
-    pub fn expire_due(&self, now: Instant) -> usize {
+    pub fn expire_due(&self, now: tokio::time::Instant) -> usize {
         let expired: Vec<(PendingRequestToken, u64, PendingRequestOwner)> = self
             .inner
             .entries
@@ -454,10 +451,10 @@ impl PendingRequestTable {
             owner.retire();
             if self.complete_token(
                 token,
-                Err(RocketMQError::Timeout {
-                    operation: "pending_request_response",
-                    timeout_ms: timeout_millis,
-                }),
+                Err(RocketMQError::network_response_timeout(
+                    "pending_request",
+                    timeout_millis,
+                )),
             ) {
                 completed += 1;
             }
@@ -519,7 +516,7 @@ impl PendingRequestGuard {
     }
 
     #[doc(hidden)]
-    pub fn deadline(&self) -> Instant {
+    pub fn deadline(&self) -> RequestDeadline {
         self.deadline
     }
 
@@ -532,21 +529,19 @@ impl PendingRequestGuard {
     }
 
     #[doc(hidden)]
-    pub fn expire(mut self, operation: &'static str, timeout_millis: u64) -> RocketMQError {
+    pub fn expire(mut self, addr: impl Into<String>) -> RocketMQError {
         let token = self
             .token
             .take()
             .expect("active pending request guard must have a token");
-        let error = RocketMQError::Timeout {
-            operation,
-            timeout_ms: timeout_millis,
-        };
+        let addr = addr.into();
+        let timeout_millis = self.deadline.budget_millis();
+        let error = RocketMQError::network_response_timeout(addr.clone(), timeout_millis);
         if let Some(pending) = self.table.take_token(token) {
             pending.owner.retire();
-            pending.completion.complete(Err(RocketMQError::Timeout {
-                operation,
-                timeout_ms: timeout_millis,
-            }));
+            pending
+                .completion
+                .complete(Err(RocketMQError::network_response_timeout(addr, timeout_millis)));
         }
         error
     }
@@ -571,8 +566,8 @@ impl PendingRequest {
         now.saturating_duration_since(self.created_at)
     }
 
-    fn is_expired(&self, now: Instant) -> bool {
-        now >= self.deadline
+    fn is_expired(&self, now: tokio::time::Instant) -> bool {
+        now >= self.deadline.instant()
     }
 }
 
@@ -594,7 +589,12 @@ mod owner_epoch_tests {
         let registration = std::thread::spawn(move || {
             let (sender, _receiver) = tokio::sync::oneshot::channel();
             started_tx.send(()).unwrap();
-            let result = registering_table.register_for_owner(&registering_owner, 7, 30_000, sender);
+            let result = registering_table.register_for_owner(
+                &registering_owner,
+                7,
+                RequestDeadline::from_timeout_millis(30_000),
+                sender,
+            );
             result_tx.send(result.is_ok()).unwrap();
         });
 

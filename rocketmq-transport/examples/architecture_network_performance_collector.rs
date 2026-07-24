@@ -67,6 +67,7 @@ use rocketmq_transport::config::TlsClientConfig;
 use rocketmq_transport::config::TlsConfig;
 use rocketmq_transport::config::TlsMode;
 use rocketmq_transport::connection::transport_io_snapshot;
+use rocketmq_transport::deadline::RequestDeadline;
 use rocketmq_transport::server::RequestProcessor;
 use rocketmq_transport::server::TransportServer;
 use rocketmq_transport::server::TransportServerConfig;
@@ -674,7 +675,7 @@ async fn collect_connection_soak_inner(spec: RunSpec, harness: &TransportHarness
                 harness.server.local_addr(),
                 data_request(),
                 &tls,
-                ShutdownDeadline::after(spec.request_timeout),
+                RequestDeadline::after(spec.request_timeout),
             )
             .await
             .with_context(|| format!("connection soak request {operation}"))?;
@@ -769,7 +770,7 @@ async fn collect_overload_inner(spec: RunSpec, harness: &TransportHarness) -> Re
                             server_addr,
                             data_request(),
                             &tls,
-                            ShutdownDeadline::after(request_timeout),
+                            RequestDeadline::after(request_timeout),
                         )
                         .await;
                     (request_started.elapsed(), result)
@@ -785,7 +786,7 @@ async fn collect_overload_inner(spec: RunSpec, harness: &TransportHarness) -> Re
                     server_addr,
                     RemotingCommand::create_remoting_command(RequestCode::HeartBeat.to_i32()),
                     &control_tls,
-                    ShutdownDeadline::after(request_timeout),
+                    RequestDeadline::after(request_timeout),
                 )
                 .await
         };

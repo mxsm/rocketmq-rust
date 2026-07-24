@@ -15,6 +15,7 @@
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::sync::atomic::AtomicU64;
+use std::sync::atomic::AtomicU8;
 use std::sync::atomic::Ordering;
 
 use bytes::BufMut;
@@ -42,14 +43,37 @@ use crate::admission::AdmissionScope;
 use crate::codec::remoting_command_codec::CompositeCodec;
 use crate::codec::remoting_command_codec::FrameLimits;
 use crate::codec::remoting_command_codec::SessionCodec;
+use crate::deadline::RequestDeadline;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use std::sync::Arc;
+
+const QUEUED_WRITE_WAITING: u8 = 0;
+const QUEUED_WRITE_STARTED: u8 = 1;
+
+pub(crate) struct QueuedWriteProgress(AtomicU8);
+
+impl QueuedWriteProgress {
+    fn waiting() -> Self {
+        Self(AtomicU8::new(QUEUED_WRITE_WAITING))
+    }
+
+    pub(crate) fn start_write(&self) {
+        self.0.store(QUEUED_WRITE_STARTED, Ordering::Release);
+    }
+
+    fn write_started(&self) -> bool {
+        self.0.load(Ordering::Acquire) == QUEUED_WRITE_STARTED
+    }
+}
 
 pub(crate) enum QueuedWrite {
     Data {
         bytes: Bytes,
         completion: oneshot::Sender<rocketmq_error::RocketMQResult<()>>,
         _permit: AdmissionPermit,
+        deadline: Option<RequestDeadline>,
+        target: String,
+        progress: Option<Arc<QueuedWriteProgress>>,
     },
     Close {
         completion: oneshot::Sender<rocketmq_error::RocketMQResult<()>>,
@@ -495,50 +519,83 @@ impl Connection {
         self.inbound_stream.next().await
     }
 
-    async fn send_encoded(&mut self, bytes: Bytes, class: AdmissionClass) -> rocketmq_error::RocketMQResult<()> {
+    async fn send_encoded(
+        &mut self,
+        bytes: Bytes,
+        class: AdmissionClass,
+        deadline: Option<RequestDeadline>,
+        target: String,
+    ) -> rocketmq_error::RocketMQResult<()> {
         let encoded_len = bytes.len();
+        if let Some(deadline) = deadline {
+            deadline.ensure_before_send(target.clone())?;
+        }
         if let Some(queued) = self.queued.as_ref() {
-            let _lifecycle_guard = queued.lifecycle.begin_send().await;
+            let _lifecycle_guard = if let Some(deadline) = deadline {
+                deadline
+                    .timeout(queued.lifecycle.begin_send())
+                    .await
+                    .map_err(|_| rocketmq_error::RocketMQError::network_deadline_exceeded_before_send(target.clone()))?
+            } else {
+                queued.lifecycle.begin_send().await
+            };
             if self.state() == ConnectionState::Closed {
                 return Err(rocketmq_error::RocketMQError::network_connection_failed(
-                    "transport-session-writer",
+                    target,
                     "connection is closed",
                 ));
             }
             #[cfg(test)]
             if let Some((checked, resume)) = self.enqueue_gate.as_ref() {
                 checked.notify_one();
-                resume.notified().await;
+                if let Some(deadline) = deadline {
+                    deadline.timeout(resume.notified()).await.map_err(|_| {
+                        rocketmq_error::RocketMQError::network_deadline_exceeded_before_send(target.clone())
+                    })?;
+                } else {
+                    resume.notified().await;
+                }
             }
             let permit = queued
                 .admission
                 .try_acquire(AdmissionResource::Queued, queued.scope, bytes.len(), class)
-                .map_err(|error| {
-                    rocketmq_error::RocketMQError::network_connection_failed(
-                        "transport-session-writer",
-                        error.to_string(),
-                    )
-                })?;
+                .map_err(|_| rocketmq_error::RocketMQError::network_queue_full(target.clone()))?;
+            if let Some(deadline) = deadline {
+                deadline.ensure_before_send(target.clone())?;
+            }
             let (completion, result) = oneshot::channel();
+            let progress = deadline.map(|_| Arc::new(QueuedWriteProgress::waiting()));
             queued
                 .writer
-                .send(QueuedWrite::Data {
+                .try_send(QueuedWrite::Data {
                     bytes,
                     completion,
                     _permit: permit,
+                    deadline,
+                    target: target.clone(),
+                    progress: progress.clone(),
                 })
-                .await
-                .map_err(|_| {
-                    rocketmq_error::RocketMQError::network_connection_failed(
-                        "transport-session-writer",
-                        "writer queue closed",
-                    )
+                .map_err(|error| match error {
+                    tokio::sync::mpsc::error::TrySendError::Full(_) => {
+                        rocketmq_error::RocketMQError::network_queue_full(target.clone())
+                    }
+                    tokio::sync::mpsc::error::TrySendError::Closed(_) => {
+                        rocketmq_error::RocketMQError::network_connection_failed(target.clone(), "writer queue closed")
+                    }
                 })?;
-            let outcome = result.await.map_err(|_| {
-                rocketmq_error::RocketMQError::network_connection_failed(
-                    "transport-session-writer",
-                    "writer completion dropped",
-                )
+            let outcome = if let Some(deadline) = deadline {
+                deadline.timeout(result).await.map_err(|_| {
+                    if progress.as_ref().is_some_and(|progress| !progress.write_started()) {
+                        rocketmq_error::RocketMQError::network_deadline_exceeded_before_send(target.clone())
+                    } else {
+                        rocketmq_error::RocketMQError::network_write_timeout(target.clone(), deadline.budget_millis())
+                    }
+                })?
+            } else {
+                result.await
+            }
+            .map_err(|_| {
+                rocketmq_error::RocketMQError::network_connection_failed(target.clone(), "writer completion dropped")
             })?;
             if outcome.is_ok() {
                 record_transport_write(encoded_len);
@@ -547,11 +604,18 @@ impl Connection {
         }
         if self.state() == ConnectionState::Closed {
             return Err(rocketmq_error::RocketMQError::network_connection_failed(
-                "transport-session-writer",
+                target,
                 "connection is closed",
             ));
         }
-        match self.outbound_sink.send(bytes).await {
+        let send_result = if let Some(deadline) = deadline {
+            deadline.timeout(self.outbound_sink.send(bytes)).await.map_err(|_| {
+                rocketmq_error::RocketMQError::network_write_timeout(target.clone(), deadline.budget_millis())
+            })?
+        } else {
+            self.outbound_sink.send(bytes).await
+        };
+        match send_result {
             Ok(()) => {
                 record_transport_write(encoded_len);
                 Ok(())
@@ -618,7 +682,43 @@ impl Connection {
             .as_ref()
             .and_then(|queued| queued.response_class)
             .unwrap_or_else(|| AdmissionClass::for_request_code(command.code()));
-        self.send_encoded(bytes, class).await
+        self.send_encoded(bytes, class, None, "transport-session-writer".to_string())
+            .await
+    }
+
+    /// Sends one command under a caller-owned immutable request deadline.
+    ///
+    /// The deadline is checked before encoding, after encoding, during queue
+    /// admission, immediately before socket write, and while the write is in
+    /// progress.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed queue, before-send, write-timeout, or transport error.
+    pub async fn send_command_with_deadline(
+        &mut self,
+        mut command: RemotingCommand,
+        deadline: RequestDeadline,
+        target: impl Into<String>,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        let target = target.into();
+        deadline.ensure_before_send(target.clone())?;
+        command.fast_header_encode(&mut self.encode_buffer);
+        if let Some(body_inner) = command.take_body() {
+            self.encode_buffer.put(body_inner);
+        }
+        deadline.ensure_before_send(target.clone())?;
+
+        let len = self.encode_buffer.len();
+        #[cfg(feature = "observability")]
+        rocketmq_observability::metrics::remoting::record_network_bytes(len as u64);
+        let bytes = self.encode_buffer.split_to(len).freeze();
+        let class = self
+            .queued
+            .as_ref()
+            .and_then(|queued| queued.response_class)
+            .unwrap_or_else(|| AdmissionClass::for_request_code(command.code()));
+        self.send_encoded(bytes, class, Some(deadline), target).await
     }
 
     /// Sends a `RemotingCommand` to the peer (borrows command).
@@ -658,7 +758,8 @@ impl Connection {
             .as_ref()
             .and_then(|queued| queued.response_class)
             .unwrap_or_else(|| AdmissionClass::for_request_code(command.code()));
-        self.send_encoded(bytes, class).await
+        self.send_encoded(bytes, class, None, "transport-session-writer".to_string())
+            .await
     }
 
     /// Sends multiple `RemotingCommand`s in a single batch (optimized for throughput).
@@ -713,7 +814,13 @@ impl Connection {
         rocketmq_observability::metrics::remoting::record_network_bytes(len as u64);
         let bytes = self.encode_buffer.split_to(len).freeze();
 
-        self.send_encoded(bytes, AdmissionClass::Data).await
+        self.send_encoded(
+            bytes,
+            AdmissionClass::Data,
+            None,
+            "transport-session-writer".to_string(),
+        )
+        .await
     }
 
     /// Sends raw `Bytes` directly to the peer (zero-copy).
@@ -738,7 +845,13 @@ impl Connection {
     pub async fn send_bytes(&mut self, bytes: Bytes) -> rocketmq_error::RocketMQResult<()> {
         #[cfg(feature = "observability")]
         rocketmq_observability::metrics::remoting::record_network_bytes(bytes.len() as u64);
-        self.send_encoded(bytes, AdmissionClass::Data).await
+        self.send_encoded(
+            bytes,
+            AdmissionClass::Data,
+            None,
+            "transport-session-writer".to_string(),
+        )
+        .await
     }
 
     /// Sends a static byte slice to the peer (zero-copy).
@@ -766,7 +879,13 @@ impl Connection {
         #[cfg(feature = "observability")]
         rocketmq_observability::metrics::remoting::record_network_bytes(slice.len() as u64);
         let bytes = slice.into();
-        self.send_encoded(bytes, AdmissionClass::Control).await
+        self.send_encoded(
+            bytes,
+            AdmissionClass::Control,
+            None,
+            "transport-session-writer".to_string(),
+        )
+        .await
     }
 
     /// Gets the unique identifier for this connection.

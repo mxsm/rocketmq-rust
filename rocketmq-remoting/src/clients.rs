@@ -22,6 +22,7 @@ use crate::protocol::remoting_command::RemotingCommand;
 use crate::remoting::InvokeCallback;
 use crate::remoting::RemotingService;
 use crate::runtime::processor::RequestProcessor;
+use rocketmq_transport::deadline::RequestDeadline;
 
 mod async_client;
 mod blocking_client;
@@ -72,6 +73,14 @@ pub trait RemotingClient: RemotingService {
         addr: Option<&CheetahString>,
         request: RemotingCommand,
         timeout_millis: u64,
+    ) -> rocketmq_error::RocketMQResult<RemotingCommand>;
+
+    /// Invokes a command using an already-frozen end-to-end deadline.
+    async fn invoke_request_with_deadline(
+        &self,
+        addr: Option<&CheetahString>,
+        request: RemotingCommand,
+        deadline: RequestDeadline,
     ) -> rocketmq_error::RocketMQResult<RemotingCommand>;
 
     /// Invokes a command on a specified address without waiting for a response.
