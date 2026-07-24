@@ -14,6 +14,8 @@
 
 use std::collections::HashMap;
 use std::env;
+use std::net::IpAddr;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use anyhow::Context;
@@ -24,6 +26,8 @@ use rocketmq_broker::command::Args;
 use rocketmq_broker::Builder;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::mq_version::CURRENT_VERSION;
+#[cfg(test)]
+use rocketmq_common::common::server::config::ServerConfig;
 use rocketmq_common::EnvUtils::EnvUtils;
 use rocketmq_common::ParseConfigFile;
 use rocketmq_remoting::protocol::remoting_command;
@@ -32,6 +36,9 @@ use rocketmq_runtime::RuntimeOwner;
 use rocketmq_runtime::ServiceContext;
 use rocketmq_runtime::ServiceLifecycle;
 use rocketmq_runtime::ShutdownReason;
+use rocketmq_security_api::SecurityBootstrapConfig;
+use rocketmq_security_api::SecurityBootstrapProfile;
+use rocketmq_security_api::ValidatedSecurityBootstrap;
 #[cfg(feature = "tieredstore")]
 use rocketmq_store::base::store_enum::StoreType;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
@@ -113,6 +120,24 @@ async fn run(service_context: ServiceContext, lifecycle: ServiceLifecycle) -> Re
     // Validate broker configuration
     validate_broker_config(&broker_config, &message_store_config).context("invalid broker configuration")?;
 
+    verify_rocketmq_home()?;
+
+    // Handle print config and exit without creating telemetry or service listeners.
+    if args.should_exit_after_print() {
+        print_config(&broker_config, &message_store_config, args.print_important_config);
+        return Ok(());
+    }
+
+    let security_config =
+        SecurityBootstrapConfig::from_env().context("failed to load broker security bootstrap configuration")?;
+    let validated_security = validate_broker_security(
+        &security_config,
+        &broker_config,
+        &message_store_config,
+        lifecycle.config().probe_bind_addr,
+    )
+    .context("broker security bootstrap failed before listener bind")?;
+
     let environment_filter = rocketmq_observability::read_rust_log().context("failed to read RUST_LOG")?;
     let resolved_filter = resolve_startup_log_filter(&args, &logging_overrides, environment_filter.as_deref())
         .context("failed to resolve broker log filter")?;
@@ -126,27 +151,7 @@ async fn run(service_context: ServiceContext, lifecycle: ServiceLifecycle) -> Re
         &resolved_filter,
         telemetry_guard.subscriber_install_status(),
     );
-
-    // Check ROCKETMQ_HOME environment variable
-    if let Err(error) = verify_rocketmq_home() {
-        lifecycle.mark_failed();
-        let request = lifecycle.request_shutdown(ShutdownReason::Internal);
-        telemetry_guard
-            .shutdown_with_timeout(request.deadline.remaining())
-            .into_result()
-            .context("failed to shutdown broker telemetry bootstrap after ROCKETMQ_HOME validation failed")?;
-        return Err(error);
-    }
-
-    // Handle print config and exit
-    if args.should_exit_after_print() {
-        print_config(&broker_config, &message_store_config, args.print_important_config);
-        telemetry_guard
-            .shutdown()
-            .into_result()
-            .context("failed to shutdown broker telemetry bootstrap after printing broker configuration")?;
-        return Ok(());
-    }
+    log_security_bootstrap(validated_security);
 
     // Print logo
     println!("{}", LOGO);
@@ -177,6 +182,59 @@ async fn run(service_context: ServiceContext, lifecycle: ServiceLifecycle) -> Re
         .context("broker lifecycle failed")?;
 
     Ok(())
+}
+
+fn validate_broker_security(
+    security_config: &SecurityBootstrapConfig,
+    broker_config: &BrokerConfig,
+    message_store_config: &MessageStoreConfig,
+    probe_bind_addr: Option<SocketAddr>,
+) -> Result<ValidatedSecurityBootstrap> {
+    let bind_ip = broker_config
+        .broker_server_config
+        .bind_address
+        .parse::<IpAddr>()
+        .context("broker bindAddress must be an IP address")?;
+    let listen_port = u16::try_from(broker_config.broker_server_config.listen_port)
+        .context("broker listenPort must fit a TCP port")?;
+    let fast_listen_port = listen_port
+        .checked_sub(2)
+        .context("broker listenPort must leave room for the fast remoting listener")?;
+    let mut listeners = vec![
+        SocketAddr::new(bind_ip, listen_port),
+        SocketAddr::new(bind_ip, fast_listen_port),
+    ];
+    if !message_store_config.duplication_enable {
+        let ha_listen_port =
+            u16::try_from(message_store_config.ha_listen_port).context("broker haListenPort must fit a TCP port")?;
+        listeners.push(SocketAddr::new(message_store_config.ha_listen_address, ha_listen_port));
+    }
+    if broker_config.metrics_exporter_type == rocketmq_common::common::metrics::MetricsExporterType::Prom {
+        let metrics_ip = broker_config
+            .metrics_prom_exporter_host
+            .parse::<IpAddr>()
+            .context("broker metricsPromExporterHost must be an IP address")?;
+        listeners.push(SocketAddr::new(metrics_ip, broker_config.metrics_prom_exporter_port));
+    }
+    if let Some(probe_bind_addr) = probe_bind_addr {
+        listeners.push(probe_bind_addr);
+    }
+    security_config.validate(&listeners).map_err(anyhow::Error::from)
+}
+
+fn log_security_bootstrap(validated: ValidatedSecurityBootstrap) {
+    match validated.profile() {
+        SecurityBootstrapProfile::DevelopmentInsecureLoopback => warn!(
+            profile = validated.profile().as_str(),
+            listener_count = validated.listener_count(),
+            "broker development-insecure security profile is active; every listener is restricted to loopback"
+        ),
+        SecurityBootstrapProfile::SecureEnforced => info!(
+            profile = validated.profile().as_str(),
+            listener_count = validated.listener_count(),
+            "broker secure bootstrap completed before listener bind"
+        ),
+    }
 }
 
 fn log_telemetry_bootstrap(
@@ -549,6 +607,43 @@ fn print_tieredstore_startup_info(message_store_config: &MessageStoreConfig) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn security_bootstrap_precedes_broker_listener_bind() {
+        let security = SecurityBootstrapConfig::new(SecurityBootstrapProfile::DevelopmentInsecureLoopback);
+        let mut broker = BrokerConfig {
+            broker_server_config: ServerConfig {
+                bind_address: "127.0.0.1".to_string(),
+                listen_port: 10911,
+                ..ServerConfig::default()
+            },
+            ..BrokerConfig::default()
+        };
+        let mut store = MessageStoreConfig {
+            ha_listen_address: IpAddr::from([127, 0, 0, 1]),
+            ..MessageStoreConfig::default()
+        };
+
+        validate_broker_security(
+            &security,
+            &broker,
+            &store,
+            Some(SocketAddr::from(([127, 0, 0, 1], 8088))),
+        )
+        .expect("loopback-only Broker bootstrap should pass");
+
+        store.ha_listen_address = IpAddr::from([0, 0, 0, 0]);
+        assert!(validate_broker_security(&security, &broker, &store, None).is_err());
+        store.ha_listen_address = IpAddr::from([127, 0, 0, 1]);
+
+        broker.metrics_exporter_type = rocketmq_common::common::metrics::MetricsExporterType::Prom;
+        broker.metrics_prom_exporter_host = "0.0.0.0".into();
+        assert!(validate_broker_security(&security, &broker, &store, None).is_err());
+        broker.metrics_exporter_type = rocketmq_common::common::metrics::MetricsExporterType::Disable;
+
+        broker.broker_server_config.bind_address = "0.0.0.0".to_string();
+        assert!(validate_broker_security(&security, &broker, &store, None).is_err());
+    }
 
     #[cfg(feature = "tieredstore")]
     fn tieredstore_message_store_config(store_type: StoreType) -> MessageStoreConfig {

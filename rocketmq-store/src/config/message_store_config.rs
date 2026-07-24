@@ -13,6 +13,8 @@
 // limitations under the License.
 
 use std::collections::HashMap;
+use std::net::IpAddr;
+use std::net::Ipv4Addr;
 use std::path::PathBuf;
 use std::sync::LazyLock;
 
@@ -366,6 +368,9 @@ mod defaults {
     }
     pub fn ha_listen_port() -> usize {
         10912
+    }
+    pub fn ha_listen_address() -> IpAddr {
+        IpAddr::V4(Ipv4Addr::UNSPECIFIED)
     }
     pub fn default_query_max_num() -> usize {
         32
@@ -839,6 +844,9 @@ pub struct MessageStoreConfig {
 
     #[serde(default)]
     pub message_index_safe: bool,
+
+    #[serde(default = "defaults::ha_listen_address")]
+    pub ha_listen_address: IpAddr,
 
     #[serde(default = "defaults::ha_listen_port")]
     pub ha_listen_port: usize,
@@ -1325,6 +1333,7 @@ impl Default for MessageStoreConfig {
             max_index_num: 5000000 * 4,
             max_msgs_num_batch: 64,
             message_index_safe: false,
+            ha_listen_address: defaults::ha_listen_address(),
             ha_listen_port: 10912,
             ha_send_heartbeat_interval: 1000 * 5,
             ha_housekeeping_interval: 1000 * 20,
@@ -1913,6 +1922,7 @@ impl MessageStoreConfig {
         properties.insert("maxIndexNum".to_string(), self.max_index_num.to_string());
         properties.insert("maxMsgsNumBatch".to_string(), self.max_msgs_num_batch.to_string());
         properties.insert("messageIndexSafe".to_string(), self.message_index_safe.to_string());
+        properties.insert("haListenAddress".to_string(), self.ha_listen_address.to_string());
         properties.insert("haListenPort".to_string(), self.ha_listen_port.to_string());
         properties.insert(
             "haSendHeartbeatInterval".to_string(),
@@ -2289,6 +2299,15 @@ mod tests {
     #[test]
     fn default_max_checksum_range_matches_java_default() {
         assert_eq!(MessageStoreConfig::default().max_checksum_range, 1024 * 1024 * 1024);
+    }
+
+    #[test]
+    fn ha_listener_address_is_configurable_and_exported() {
+        let config: MessageStoreConfig = serde_json::from_value(serde_json::json!({ "haListenAddress": "127.0.0.1" }))
+            .expect("HA listener address should deserialize");
+
+        assert_eq!(config.ha_listen_address, std::net::IpAddr::from([127, 0, 0, 1]));
+        assert_eq!(config.get_properties()["haListenAddress"], "127.0.0.1");
     }
 
     #[test]

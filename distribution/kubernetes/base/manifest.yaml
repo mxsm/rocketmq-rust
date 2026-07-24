@@ -277,7 +277,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
     rocketmq.apache.org/service: broker
-    rocketmq.apache.org/architecture-milestone: P0-04
+    rocketmq.apache.org/architecture-milestone: P0-05
 spec:
   minAvailable: 2
   selector:
@@ -299,7 +299,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
     rocketmq.apache.org/service: controller
-    rocketmq.apache.org/architecture-milestone: P0-04
+    rocketmq.apache.org/architecture-milestone: P0-05
 spec:
   minAvailable: 2
   selector:
@@ -321,7 +321,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
     rocketmq.apache.org/service: mcp
-    rocketmq.apache.org/architecture-milestone: P0-04
+    rocketmq.apache.org/architecture-milestone: P0-05
 spec:
   minAvailable: 1
   selector:
@@ -343,7 +343,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
     rocketmq.apache.org/service: namesrv
-    rocketmq.apache.org/architecture-milestone: P0-04
+    rocketmq.apache.org/architecture-milestone: P0-05
 spec:
   minAvailable: 2
   selector:
@@ -365,7 +365,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
     rocketmq.apache.org/service: proxy
-    rocketmq.apache.org/architecture-milestone: P0-04
+    rocketmq.apache.org/architecture-milestone: P0-05
 spec:
   minAvailable: 1
   selector:
@@ -399,10 +399,11 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
     rocketmq.apache.org/service: broker
-    rocketmq.apache.org/architecture-milestone: P0-04
+    rocketmq.apache.org/architecture-milestone: P0-05
 data:
   rocketmq-broker-0.toml: |-
     listenPort = 10911
+    haListenAddress = "0.0.0.0"
     brokerIp1 = "rocketmq-broker-0.rocketmq-broker-headless.rocketmq.svc.cluster.local"
     brokerIp2 = "rocketmq-broker-0.rocketmq-broker-headless.rocketmq.svc.cluster.local"
     storePathRootDir = "/var/lib/rocketmq/broker"
@@ -424,6 +425,7 @@ data:
     brokerId = 0
   rocketmq-broker-1.toml: |-
     listenPort = 10911
+    haListenAddress = "0.0.0.0"
     brokerIp1 = "rocketmq-broker-1.rocketmq-broker-headless.rocketmq.svc.cluster.local"
     brokerIp2 = "rocketmq-broker-1.rocketmq-broker-headless.rocketmq.svc.cluster.local"
     storePathRootDir = "/var/lib/rocketmq/broker"
@@ -445,6 +447,7 @@ data:
     brokerId = 0
   rocketmq-broker-2.toml: |-
     listenPort = 10911
+    haListenAddress = "0.0.0.0"
     brokerIp1 = "rocketmq-broker-2.rocketmq-broker-headless.rocketmq.svc.cluster.local"
     brokerIp2 = "rocketmq-broker-2.rocketmq-broker-headless.rocketmq.svc.cluster.local"
     storePathRootDir = "/var/lib/rocketmq/broker"
@@ -478,7 +481,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
     rocketmq.apache.org/service: namesrv
-    rocketmq.apache.org/architecture-milestone: P0-04
+    rocketmq.apache.org/architecture-milestone: P0-05
 data:
   namesrv.toml: |-
     rocketmqHome = "/var/lib/rocketmq/namesrv"
@@ -500,7 +503,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
     rocketmq.apache.org/service: controller
-    rocketmq.apache.org/architecture-milestone: P0-04
+    rocketmq.apache.org/architecture-milestone: P0-05
 data:
   controller-0.toml: |-
     rocketmqHome = "/var/lib/rocketmq/controller"
@@ -687,7 +690,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
     rocketmq.apache.org/service: proxy
-    rocketmq.apache.org/architecture-milestone: P0-04
+    rocketmq.apache.org/architecture-milestone: P0-05
 data:
   proxy.toml: |-
     mode = "cluster"
@@ -723,7 +726,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
     rocketmq.apache.org/service: mcp
-    rocketmq.apache.org/architecture-milestone: P0-04
+    rocketmq.apache.org/architecture-milestone: P0-05
 data:
   mcp.toml: |-
     [server]
@@ -827,7 +830,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
     rocketmq.apache.org/service: mcp
-    rocketmq.apache.org/architecture-milestone: P0-04
+    rocketmq.apache.org/architecture-milestone: P0-05
   annotations:
     helm.sh/resource-policy: keep
     rocketmq.apache.org/persisted-format: mcp-audit-v1
@@ -851,7 +854,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
     rocketmq.apache.org/service: broker
-    rocketmq.apache.org/architecture-milestone: P0-04
+    rocketmq.apache.org/architecture-milestone: P0-05
 spec:
   clusterIP: None
   publishNotReadyAddresses: true
@@ -882,7 +885,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
     rocketmq.apache.org/service: broker
-    rocketmq.apache.org/architecture-milestone: P0-04
+    rocketmq.apache.org/architecture-milestone: P0-05
 spec:
   type: ClusterIP
   selector:
@@ -912,7 +915,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
     rocketmq.apache.org/service: controller
-    rocketmq.apache.org/architecture-milestone: P0-04
+    rocketmq.apache.org/architecture-milestone: P0-05
 spec:
   clusterIP: None
   publishNotReadyAddresses: true
@@ -943,7 +946,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
     rocketmq.apache.org/service: controller
-    rocketmq.apache.org/architecture-milestone: P0-04
+    rocketmq.apache.org/architecture-milestone: P0-05
 spec:
   type: ClusterIP
   selector:
@@ -973,7 +976,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
     rocketmq.apache.org/service: namesrv
-    rocketmq.apache.org/architecture-milestone: P0-04
+    rocketmq.apache.org/architecture-milestone: P0-05
 spec:
   clusterIP: None
   publishNotReadyAddresses: true
@@ -1000,7 +1003,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
     rocketmq.apache.org/service: namesrv
-    rocketmq.apache.org/architecture-milestone: P0-04
+    rocketmq.apache.org/architecture-milestone: P0-05
 spec:
   type: ClusterIP
   selector:
@@ -1026,7 +1029,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
     rocketmq.apache.org/service: controller
-    rocketmq.apache.org/architecture-milestone: P0-04
+    rocketmq.apache.org/architecture-milestone: P0-05
     rocketmq.apache.org/controller-ordinal: "0"
 spec:
   type: ClusterIP
@@ -1051,7 +1054,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
     rocketmq.apache.org/service: controller
-    rocketmq.apache.org/architecture-milestone: P0-04
+    rocketmq.apache.org/architecture-milestone: P0-05
     rocketmq.apache.org/controller-ordinal: "1"
 spec:
   type: ClusterIP
@@ -1076,7 +1079,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
     rocketmq.apache.org/service: controller
-    rocketmq.apache.org/architecture-milestone: P0-04
+    rocketmq.apache.org/architecture-milestone: P0-05
     rocketmq.apache.org/controller-ordinal: "2"
 spec:
   type: ClusterIP
@@ -1101,7 +1104,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
     rocketmq.apache.org/service: mcp
-    rocketmq.apache.org/architecture-milestone: P0-04
+    rocketmq.apache.org/architecture-milestone: P0-05
 spec:
   type: ClusterIP
   selector:
@@ -1127,7 +1130,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
     rocketmq.apache.org/service: proxy
-    rocketmq.apache.org/architecture-milestone: P0-04
+    rocketmq.apache.org/architecture-milestone: P0-05
 spec:
   type: ClusterIP
   selector:
@@ -1157,7 +1160,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
     rocketmq.apache.org/service: proxy
-    rocketmq.apache.org/architecture-milestone: P0-04
+    rocketmq.apache.org/architecture-milestone: P0-05
 spec:
   replicas: 2
   strategy:
@@ -1177,7 +1180,7 @@ spec:
         app.kubernetes.io/managed-by: Helm
         app.kubernetes.io/version: "0.1.0"
         rocketmq.apache.org/service: proxy
-        rocketmq.apache.org/architecture-milestone: P0-04
+        rocketmq.apache.org/architecture-milestone: P0-05
     spec:
       serviceAccountName: rocketmq-runtime
       automountServiceAccountToken: false
@@ -1218,6 +1221,13 @@ spec:
             - {name: ROCKETMQ_HEALTH_BIND_ADDR, value: "0.0.0.0:8088"}
             - {name: ROCKETMQ_SHUTDOWN_TIMEOUT_SECONDS, value: "45"}
             - {name: ROCKETMQ_LIVENESS_STALE_SECONDS, value: "30"}
+            - {name: ROCKETMQ_SECURITY_PROFILE, value: "secure-enforced"}
+            - {name: ROCKETMQ_SECURITY_TRUST_ANCHOR, value: "/var/run/secrets/rocketmq/ca.crt"}
+            - {name: ROCKETMQ_SECURITY_TLS_CERT, value: "/var/run/secrets/rocketmq/tls.crt"}
+            - {name: ROCKETMQ_SECURITY_TLS_KEY, value: "/var/run/secrets/rocketmq/tls.key"}
+            - {name: ROCKETMQ_SECURITY_SECRET_PROVIDER, value: "mounted-files"}
+            - {name: ROCKETMQ_SECURITY_ADMIN_IDENTITY, value: "/var/run/secrets/rocketmq/admin.identity"}
+            - {name: ROCKETMQ_SECURITY_REQUEST_POLICY, value: "/var/run/secrets/rocketmq/request-policy.json"}
             - {name: ROCKETMQ_HOME, value: /var/lib/rocketmq/proxy}
             - {name: OTEL_SERVICE_NAME, value: rocketmq-proxy}
             - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://otel-collector.observability.svc.cluster.local:4317"}
@@ -1283,6 +1293,7 @@ spec:
           secret:
             secretName: "rocketmq-runtime-secrets"
             optional: false
+            defaultMode: 0440
         - name: tmp
           emptyDir:
             medium: Memory
@@ -1301,7 +1312,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
     rocketmq.apache.org/service: mcp
-    rocketmq.apache.org/architecture-milestone: P0-04
+    rocketmq.apache.org/architecture-milestone: P0-05
 spec:
   replicas: 1
   strategy:
@@ -1320,7 +1331,7 @@ spec:
         app.kubernetes.io/managed-by: Helm
         app.kubernetes.io/version: "0.1.0"
         rocketmq.apache.org/service: mcp
-        rocketmq.apache.org/architecture-milestone: P0-04
+        rocketmq.apache.org/architecture-milestone: P0-05
     spec:
       serviceAccountName: rocketmq-runtime
       automountServiceAccountToken: false
@@ -1342,6 +1353,13 @@ spec:
             - {name: ROCKETMQ_HEALTH_BIND_ADDR, value: "0.0.0.0:8088"}
             - {name: ROCKETMQ_SHUTDOWN_TIMEOUT_SECONDS, value: "45"}
             - {name: ROCKETMQ_LIVENESS_STALE_SECONDS, value: "30"}
+            - {name: ROCKETMQ_SECURITY_PROFILE, value: "secure-enforced"}
+            - {name: ROCKETMQ_SECURITY_TRUST_ANCHOR, value: "/var/run/secrets/rocketmq/ca.crt"}
+            - {name: ROCKETMQ_SECURITY_TLS_CERT, value: "/var/run/secrets/rocketmq/tls.crt"}
+            - {name: ROCKETMQ_SECURITY_TLS_KEY, value: "/var/run/secrets/rocketmq/tls.key"}
+            - {name: ROCKETMQ_SECURITY_SECRET_PROVIDER, value: "mounted-files"}
+            - {name: ROCKETMQ_SECURITY_ADMIN_IDENTITY, value: "/var/run/secrets/rocketmq/admin.identity"}
+            - {name: ROCKETMQ_SECURITY_REQUEST_POLICY, value: "/var/run/secrets/rocketmq/request-policy.json"}
             - {name: ROCKETMQ_HOME, value: /var/lib/rocketmq/mcp}
             - {name: OTEL_SERVICE_NAME, value: rocketmq-mcp}
             - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://otel-collector.observability.svc.cluster.local:4317"}
@@ -1407,6 +1425,7 @@ spec:
           secret:
             secretName: "rocketmq-runtime-secrets"
             optional: false
+            defaultMode: 0440
         - name: tmp
           emptyDir:
             medium: Memory
@@ -1426,7 +1445,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
     rocketmq.apache.org/service: broker
-    rocketmq.apache.org/architecture-milestone: P0-04
+    rocketmq.apache.org/architecture-milestone: P0-05
 spec:
   serviceName: rocketmq-broker-headless
   replicas: 3
@@ -1450,7 +1469,7 @@ spec:
         app.kubernetes.io/managed-by: Helm
         app.kubernetes.io/version: "0.1.0"
         rocketmq.apache.org/service: broker
-        rocketmq.apache.org/architecture-milestone: P0-04
+        rocketmq.apache.org/architecture-milestone: P0-05
     spec:
       serviceAccountName: rocketmq-runtime
       automountServiceAccountToken: false
@@ -1491,6 +1510,13 @@ spec:
             - {name: ROCKETMQ_HEALTH_BIND_ADDR, value: "0.0.0.0:8088"}
             - {name: ROCKETMQ_SHUTDOWN_TIMEOUT_SECONDS, value: "45"}
             - {name: ROCKETMQ_LIVENESS_STALE_SECONDS, value: "30"}
+            - {name: ROCKETMQ_SECURITY_PROFILE, value: "secure-enforced"}
+            - {name: ROCKETMQ_SECURITY_TRUST_ANCHOR, value: "/var/run/secrets/rocketmq/ca.crt"}
+            - {name: ROCKETMQ_SECURITY_TLS_CERT, value: "/var/run/secrets/rocketmq/tls.crt"}
+            - {name: ROCKETMQ_SECURITY_TLS_KEY, value: "/var/run/secrets/rocketmq/tls.key"}
+            - {name: ROCKETMQ_SECURITY_SECRET_PROVIDER, value: "mounted-files"}
+            - {name: ROCKETMQ_SECURITY_ADMIN_IDENTITY, value: "/var/run/secrets/rocketmq/admin.identity"}
+            - {name: ROCKETMQ_SECURITY_REQUEST_POLICY, value: "/var/run/secrets/rocketmq/request-policy.json"}
             - name: POD_NAME
               valueFrom:
                 fieldRef:
@@ -1560,6 +1586,7 @@ spec:
           secret:
             secretName: "rocketmq-runtime-secrets"
             optional: false
+            defaultMode: 0440
         - name: tmp
           emptyDir:
             medium: Memory
@@ -1574,7 +1601,7 @@ spec:
           app.kubernetes.io/managed-by: Helm
           app.kubernetes.io/version: "0.1.0"
           rocketmq.apache.org/service: broker
-          rocketmq.apache.org/architecture-milestone: P0-04
+          rocketmq.apache.org/architecture-milestone: P0-05
       spec:
         accessModes: [ReadWriteOnce]
         storageClassName: "rocketmq-retain"
@@ -1595,7 +1622,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
     rocketmq.apache.org/service: namesrv
-    rocketmq.apache.org/architecture-milestone: P0-04
+    rocketmq.apache.org/architecture-milestone: P0-05
 spec:
   serviceName: rocketmq-namesrv-headless
   replicas: 3
@@ -1619,7 +1646,7 @@ spec:
         app.kubernetes.io/managed-by: Helm
         app.kubernetes.io/version: "0.1.0"
         rocketmq.apache.org/service: namesrv
-        rocketmq.apache.org/architecture-milestone: P0-04
+        rocketmq.apache.org/architecture-milestone: P0-05
     spec:
       serviceAccountName: rocketmq-runtime
       automountServiceAccountToken: false
@@ -1660,6 +1687,13 @@ spec:
             - {name: ROCKETMQ_HEALTH_BIND_ADDR, value: "0.0.0.0:8088"}
             - {name: ROCKETMQ_SHUTDOWN_TIMEOUT_SECONDS, value: "45"}
             - {name: ROCKETMQ_LIVENESS_STALE_SECONDS, value: "30"}
+            - {name: ROCKETMQ_SECURITY_PROFILE, value: "secure-enforced"}
+            - {name: ROCKETMQ_SECURITY_TRUST_ANCHOR, value: "/var/run/secrets/rocketmq/ca.crt"}
+            - {name: ROCKETMQ_SECURITY_TLS_CERT, value: "/var/run/secrets/rocketmq/tls.crt"}
+            - {name: ROCKETMQ_SECURITY_TLS_KEY, value: "/var/run/secrets/rocketmq/tls.key"}
+            - {name: ROCKETMQ_SECURITY_SECRET_PROVIDER, value: "mounted-files"}
+            - {name: ROCKETMQ_SECURITY_ADMIN_IDENTITY, value: "/var/run/secrets/rocketmq/admin.identity"}
+            - {name: ROCKETMQ_SECURITY_REQUEST_POLICY, value: "/var/run/secrets/rocketmq/request-policy.json"}
             - {name: ROCKETMQ_HOME, value: /var/lib/rocketmq/namesrv}
             - {name: OTEL_SERVICE_NAME, value: rocketmq-namesrv}
             - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://otel-collector.observability.svc.cluster.local:4317"}
@@ -1721,6 +1755,7 @@ spec:
           secret:
             secretName: "rocketmq-runtime-secrets"
             optional: false
+            defaultMode: 0440
         - name: tmp
           emptyDir:
             medium: Memory
@@ -1735,7 +1770,7 @@ spec:
           app.kubernetes.io/managed-by: Helm
           app.kubernetes.io/version: "0.1.0"
           rocketmq.apache.org/service: namesrv
-          rocketmq.apache.org/architecture-milestone: P0-04
+          rocketmq.apache.org/architecture-milestone: P0-05
       spec:
         accessModes: [ReadWriteOnce]
         storageClassName: "rocketmq-retain"
@@ -1756,7 +1791,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
     rocketmq.apache.org/service: controller
-    rocketmq.apache.org/architecture-milestone: P0-04
+    rocketmq.apache.org/architecture-milestone: P0-05
 spec:
   serviceName: rocketmq-controller-headless
   replicas: 3
@@ -1780,7 +1815,7 @@ spec:
         app.kubernetes.io/managed-by: Helm
         app.kubernetes.io/version: "0.1.0"
         rocketmq.apache.org/service: controller
-        rocketmq.apache.org/architecture-milestone: P0-04
+        rocketmq.apache.org/architecture-milestone: P0-05
     spec:
       serviceAccountName: rocketmq-runtime
       automountServiceAccountToken: false
@@ -1829,6 +1864,13 @@ spec:
             - {name: ROCKETMQ_HEALTH_BIND_ADDR, value: "0.0.0.0:8088"}
             - {name: ROCKETMQ_SHUTDOWN_TIMEOUT_SECONDS, value: "45"}
             - {name: ROCKETMQ_LIVENESS_STALE_SECONDS, value: "30"}
+            - {name: ROCKETMQ_SECURITY_PROFILE, value: "secure-enforced"}
+            - {name: ROCKETMQ_SECURITY_TRUST_ANCHOR, value: "/var/run/secrets/rocketmq/ca.crt"}
+            - {name: ROCKETMQ_SECURITY_TLS_CERT, value: "/var/run/secrets/rocketmq/tls.crt"}
+            - {name: ROCKETMQ_SECURITY_TLS_KEY, value: "/var/run/secrets/rocketmq/tls.key"}
+            - {name: ROCKETMQ_SECURITY_SECRET_PROVIDER, value: "mounted-files"}
+            - {name: ROCKETMQ_SECURITY_ADMIN_IDENTITY, value: "/var/run/secrets/rocketmq/admin.identity"}
+            - {name: ROCKETMQ_SECURITY_REQUEST_POLICY, value: "/var/run/secrets/rocketmq/request-policy.json"}
             - name: POD_NAME
               valueFrom:
                 fieldRef:
@@ -1900,6 +1942,7 @@ spec:
           secret:
             secretName: "rocketmq-runtime-secrets"
             optional: false
+            defaultMode: 0440
         - name: tmp
           emptyDir:
             medium: Memory
@@ -1914,7 +1957,7 @@ spec:
           app.kubernetes.io/managed-by: Helm
           app.kubernetes.io/version: "0.1.0"
           rocketmq.apache.org/service: controller
-          rocketmq.apache.org/architecture-milestone: P0-04
+          rocketmq.apache.org/architecture-milestone: P0-05
       spec:
         accessModes: [ReadWriteOnce]
         storageClassName: "rocketmq-retain"

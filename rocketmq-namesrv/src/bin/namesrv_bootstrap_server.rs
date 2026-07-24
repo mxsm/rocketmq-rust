@@ -14,6 +14,7 @@
 
 #![recursion_limit = "512"]
 
+use std::net::IpAddr;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
@@ -30,6 +31,7 @@ use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
 use rocketmq_common::common::server::config::ServerConfig;
 use rocketmq_common::EnvUtils::EnvUtils;
 use rocketmq_common::ParseConfigFile;
+use rocketmq_controller::resolve_controller_raft_bind_addr;
 use rocketmq_controller::ControllerCli;
 use rocketmq_controller::ControllerConfig;
 use rocketmq_namesrv::bootstrap::Builder;
@@ -40,6 +42,9 @@ use rocketmq_runtime::ServiceContext;
 use rocketmq_runtime::ServiceLifecycle;
 use rocketmq_runtime::ServiceLifecycleState;
 use rocketmq_runtime::ShutdownReason;
+use rocketmq_security_api::SecurityBootstrapConfig;
+use rocketmq_security_api::SecurityBootstrapProfile;
+use rocketmq_security_api::ValidatedSecurityBootstrap;
 use serde::Deserialize;
 use tracing::info;
 
@@ -121,6 +126,22 @@ async fn run(service_context: ServiceContext, lifecycle: ServiceLifecycle) -> Re
         );
     }
 
+    let security_config =
+        SecurityBootstrapConfig::from_env().context("failed to load NameServer security bootstrap configuration")?;
+    let controller_raft_bind_addr = controller_config
+        .as_ref()
+        .map(|config| resolve_controller_raft_bind_addr(config.local_raft_addr()))
+        .transpose()
+        .context("failed to resolve embedded Controller Raft listener address")?;
+    let validated_security = validate_namesrv_security(
+        &security_config,
+        &server_config,
+        controller_config.as_ref(),
+        controller_raft_bind_addr,
+        lifecycle.config().probe_bind_addr,
+    )
+    .context("NameServer security bootstrap failed before listener bind")?;
+
     let environment_filter = rocketmq_observability::read_rust_log().context("failed to read RUST_LOG")?;
     let resolved_filter = resolve_startup_log_filter(&args, &logging_overrides, environment_filter.as_deref())
         .context("failed to resolve namesrv log filter")?;
@@ -134,6 +155,7 @@ async fn run(service_context: ServiceContext, lifecycle: ServiceLifecycle) -> Re
         &resolved_filter,
         telemetry_guard.subscriber_install_status(),
     );
+    log_security_bootstrap(validated_security);
 
     if let Err(error) = lifecycle.start(&service_context).await {
         lifecycle.mark_failed();
@@ -191,6 +213,45 @@ async fn run(service_context: ServiceContext, lifecycle: ServiceLifecycle) -> Re
             bail!("NameServer lifecycle failed while observing or completing shutdown")
         }
         (Ok(_report), Ok(_telemetry_report)) => Ok(()),
+    }
+}
+
+fn validate_namesrv_security(
+    security_config: &SecurityBootstrapConfig,
+    server_config: &ServerConfig,
+    controller_config: Option<&ControllerConfig>,
+    controller_raft_bind_addr: Option<SocketAddr>,
+    probe_bind_addr: Option<SocketAddr>,
+) -> Result<ValidatedSecurityBootstrap> {
+    let bind_ip = server_config
+        .bind_address
+        .parse::<IpAddr>()
+        .context("NameServer bindAddress must be an IP address")?;
+    let listen_port = u16::try_from(server_config.listen_port).context("NameServer listenPort must fit a TCP port")?;
+    let mut listeners = vec![SocketAddr::new(bind_ip, listen_port)];
+    if let Some(controller_config) = controller_config {
+        listeners.push(controller_config.listen_addr);
+        listeners
+            .push(controller_raft_bind_addr.context("embedded Controller Raft listener address must be resolved")?);
+    }
+    if let Some(probe_bind_addr) = probe_bind_addr {
+        listeners.push(probe_bind_addr);
+    }
+    security_config.validate(&listeners).map_err(anyhow::Error::from)
+}
+
+fn log_security_bootstrap(validated: ValidatedSecurityBootstrap) {
+    match validated.profile() {
+        SecurityBootstrapProfile::DevelopmentInsecureLoopback => tracing::warn!(
+            profile = validated.profile().as_str(),
+            listener_count = validated.listener_count(),
+            "NameServer development-insecure security profile is active; every listener is restricted to loopback"
+        ),
+        SecurityBootstrapProfile::SecureEnforced => info!(
+            profile = validated.profile().as_str(),
+            listener_count = validated.listener_count(),
+            "NameServer secure bootstrap completed before listener bind"
+        ),
     }
 }
 
@@ -634,6 +695,28 @@ struct Args {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn security_bootstrap_precedes_namesrv_listener_bind() {
+        let security = SecurityBootstrapConfig::new(SecurityBootstrapProfile::DevelopmentInsecureLoopback);
+        let mut server = ServerConfig {
+            bind_address: "127.0.0.1".to_string(),
+            listen_port: 9876,
+            ..ServerConfig::default()
+        };
+
+        validate_namesrv_security(
+            &security,
+            &server,
+            None,
+            None,
+            Some(SocketAddr::from(([127, 0, 0, 1], 8088))),
+        )
+        .expect("loopback-only NameServer bootstrap should pass");
+
+        server.bind_address = "0.0.0.0".to_string();
+        assert!(validate_namesrv_security(&security, &server, None, None, None).is_err());
+    }
 
     #[test]
     fn namesrv_cli_parses_log_filter_override() {

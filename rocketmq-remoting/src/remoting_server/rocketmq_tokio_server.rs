@@ -1556,10 +1556,9 @@ mod tests {
         let policy = Arc::new(RequireTransportSignature {
             calls: std::sync::atomic::AtomicUsize::new(0),
         });
-        let security = Arc::new(rocketmq_transport::security::TransportSecurity::new(
-            Some(policy.clone()),
-            None,
-        ));
+        let security = Arc::new(
+            rocketmq_transport::security::TransportSecurity::development_insecure_loopback(Some(policy.clone()), None),
+        );
         let config = Arc::new(ServerConfig {
             bind_address: addr.ip().to_string(),
             listen_port: u32::from(addr.port()),
@@ -1581,10 +1580,12 @@ mod tests {
 
         let client =
             RocketmqDefaultClient::new(Arc::new(TokioClientConfig::default()), DefaultRemotingRequestProcessor)
-                .with_transport_security(Arc::new(rocketmq_transport::security::TransportSecurity::new(
-                    None,
-                    Some(Arc::new(RemotingMarkerSigner)),
-                )));
+                .with_transport_security(Arc::new(
+                    rocketmq_transport::security::TransportSecurity::development_insecure_loopback(
+                        None,
+                        Some(Arc::new(RemotingMarkerSigner)),
+                    ),
+                ));
         let remote = cheetah_string::CheetahString::from_string(addr.to_string());
         let response = client
             .invoke_request(

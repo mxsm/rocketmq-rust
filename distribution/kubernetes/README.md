@@ -45,9 +45,14 @@ endpoints, disabled required persistence, and a non-RocksDB Controller backend.
   default-deny NetworkPolicies follow the production replica model.
 - Pods run as UID/GID 10001 with a read-only root filesystem, dropped
   capabilities, no privilege escalation, and no mounted service-account token.
-- No Kubernetes Secret is generated. Operators supply `broker-acl.yml`,
-  `proxy-acl.yml`, `tls.crt`, and `tls.key` through an existing Secret or a
-  Secrets Store CSI provider.
+- Every process completes the same `secure-enforced` bootstrap before its first
+  listener bind. Missing or unreadable trust anchor, TLS identity, mounted-file
+  provider, administrator identity, or request policy stops startup.
+- No Kubernetes Secret is generated. Operators supply `ca.crt`, `tls.crt`,
+  `tls.key`, `admin.identity`, `request-policy.json`, `broker-acl.yml`, and
+  `proxy-acl.yml` through an existing Secret or a Secrets Store CSI provider.
+  The `dev-single` profile also uses secure bootstrap because Pod listeners are
+  necessarily non-loopback.
 
 ## Local validation
 

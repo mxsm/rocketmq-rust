@@ -33,6 +33,7 @@ rocketmq-error    = { workspace = true }
 rocketmq-remoting = { workspace = true }
 rocketmq-runtime  = { workspace = true }
 rocketmq-rust     = { workspace = true }
+rocketmq-security-api = { workspace = true }
 rocketmq-observability = { workspace = true }
 
 # Core async runtime

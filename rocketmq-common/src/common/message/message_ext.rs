@@ -28,7 +28,7 @@ use crate::common::message::message_single::Message;
 use crate::common::message::MessageTrait;
 use crate::common::sys_flag::message_sys_flag::MessageSysFlag;
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct MessageExt {
     pub message: Message,
     pub broker_name: CheetahString,
@@ -270,25 +270,34 @@ impl fmt::Display for MessageExt {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "MessageExt [brokerName={}, queueId={}, storeSize={}, queueOffset={}, sysFlag={}, bornTimestamp={}, \
-             bornHost={}, storeTimestamp={}, storeHost={}, msgId={}, commitLogOffset={}, bodyCRC={}, \
-             reconsumeTimes={}, preparedTransactionOffset={}, toString()={}]",
-            self.broker_name,
+            "MessageExt{{topic='{}', queueId={}, queueOffset={}, flag={}, sysFlag={}, bodyLen={}, propertyCount={}, \
+             msgId='{}', reconsumeTimes={}}}",
+            self.topic(),
             self.queue_id,
-            self.store_size,
             self.queue_offset,
+            self.flag(),
             self.sys_flag,
-            self.born_timestamp,
-            self.born_host,
-            self.store_timestamp,
-            self.store_host,
+            self.message.body_slice().len(),
+            self.message.properties().len(),
             self.msg_id,
-            self.commit_log_offset,
-            self.body_crc,
-            self.reconsume_times,
-            self.prepared_transaction_offset,
-            self.message
+            self.reconsume_times
         )
+    }
+}
+
+impl fmt::Debug for MessageExt {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MessageExt")
+            .field("topic", self.topic())
+            .field("queue_id", &self.queue_id)
+            .field("queue_offset", &self.queue_offset)
+            .field("flag", &self.flag())
+            .field("sys_flag", &self.sys_flag)
+            .field("body_len", &self.message.body_slice().len())
+            .field("property_count", &self.message.properties().len())
+            .field("msg_id", &self.msg_id)
+            .field("reconsume_times", &self.reconsume_times)
+            .finish()
     }
 }
 impl MessageTrait for MessageExt {
@@ -461,7 +470,7 @@ mod tests {
     }
 
     #[test]
-    fn message_ext_display_matches_java_to_string_shape() {
+    fn message_ext_display_contains_only_safe_metadata() {
         let mut message_ext = MessageExt::default();
         message_ext.set_broker_name(CheetahString::from_static_str("BrokerA"));
         message_ext.set_queue_id(3);
@@ -480,10 +489,8 @@ mod tests {
 
         assert_eq!(
             message_ext.to_string(),
-            "MessageExt [brokerName=BrokerA, queueId=3, storeSize=128, queueOffset=42, sysFlag=1, bornTimestamp=10, \
-             bornHost=127.0.0.1:10911, storeTimestamp=20, storeHost=127.0.0.1:10911, msgId=MSGID, \
-             commitLogOffset=1000, bodyCRC=99, reconsumeTimes=2, preparedTransactionOffset=7, \
-             toString()=Message{topic='TopicA', flag=0, properties={}, body=[1, -1], transactionId='null'}]"
+            "MessageExt{topic='TopicA', queueId=3, queueOffset=42, flag=0, sysFlag=1, bodyLen=2, propertyCount=0, \
+             msgId='MSGID', reconsumeTimes=2}"
         );
     }
 }

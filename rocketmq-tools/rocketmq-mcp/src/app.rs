@@ -16,7 +16,6 @@ use std::sync::Arc;
 
 use crate::adapter::admin_session::AdminCoreSessionFactory;
 use crate::adapter::query_facade::QueryFacade;
-use crate::config::Args;
 use crate::config::McpConfig;
 use crate::config::TransportKind;
 use crate::guard::audit::AuditDrainReport;
@@ -102,8 +101,17 @@ impl McpApp {
         })
     }
 
-    pub async fn bootstrap_typed(args: Args) -> Result<Self, crate::error::McpError> {
-        let config = McpConfig::load_with_overrides(&args)?;
+    /// Initializes telemetry and background work only after the composition root has
+    /// completed the process-wide pre-bind security validation.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed MCP error when telemetry, guards, adapters, or background
+    /// services cannot be initialized.
+    pub async fn bootstrap_typed(
+        config: McpConfig,
+        _validated_security: rocketmq_security_api::ValidatedSecurityBootstrap,
+    ) -> Result<Self, crate::error::McpError> {
         let telemetry = init_tracing_typed(&config)?;
         let mut app = Self::new(config)?;
         *app.telemetry.lock().unwrap_or_else(|error| error.into_inner()) = Some(telemetry);
@@ -112,8 +120,13 @@ impl McpApp {
     }
 
     #[deprecated(since = "1.0.0", note = "use McpApp::bootstrap_typed")]
-    pub async fn bootstrap(args: Args) -> anyhow::Result<Self> {
-        Self::bootstrap_typed(args).await.map_err(anyhow::Error::new)
+    pub async fn bootstrap(
+        config: McpConfig,
+        validated_security: rocketmq_security_api::ValidatedSecurityBootstrap,
+    ) -> anyhow::Result<Self> {
+        Self::bootstrap_typed(config, validated_security)
+            .await
+            .map_err(anyhow::Error::new)
     }
 
     pub fn config(&self) -> &McpConfig {

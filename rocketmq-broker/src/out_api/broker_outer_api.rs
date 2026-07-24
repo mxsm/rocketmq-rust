@@ -267,11 +267,11 @@ impl BrokerOuterAPI {
     ) -> Option<RegisterBrokerResult> {
         debug!(
             "Register broker to name remoting_server, namesrv_addr={},request_code={:?}, request_header={:?}, \
-             body={:?}",
+             body_len={}",
             namesrv_addr,
             RequestCode::RegisterBroker,
             request_header,
-            body
+            body.len()
         );
         let request =
             RemotingCommand::create_request_command(RequestCode::RegisterBroker, request_header).set_body(body.clone());
@@ -289,9 +289,9 @@ impl BrokerOuterAPI {
             Ok(response) => match From::from(response.code()) {
                 ResponseCode::Success => {
                     info!(
-                        "Register broker to name remoting_server success, namesrv_addr={} response body={:?}",
+                        "Register broker to name remoting_server success, namesrv_addr={} response_body_len={}",
                         namesrv_addr,
-                        response.body()
+                        response.body().map_or(0, bytes::Bytes::len)
                     );
                     let register_broker_result =
                         response.decode_command_custom_header::<RegisterBrokerResponseHeader>();

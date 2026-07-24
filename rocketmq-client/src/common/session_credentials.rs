@@ -24,12 +24,6 @@ pub const SECRET_KEY: &str = "SecretKey";
 pub const SIGNATURE: &str = "Signature";
 pub const SECURITY_TOKEN: &str = "SecurityToken";
 
-const REDACTED: &str = "<redacted>";
-
-fn redacted_value(value: Option<&CheetahString>) -> Option<&'static str> {
-    value.map(|_| REDACTED)
-}
-
 fn get_key_file_path() -> PathBuf {
     if let Ok(key_file) = std::env::var("rocketmq.client.keyFile") {
         PathBuf::from(key_file)
@@ -155,13 +149,21 @@ impl PartialEq for SessionCredentials {
 
 impl Eq for SessionCredentials {}
 
+fn redacted_if_present<T>(value: &Option<T>) -> &'static str {
+    if value.is_some() {
+        "<redacted>"
+    } else {
+        "<unset>"
+    }
+}
+
 impl fmt::Debug for SessionCredentials {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SessionCredentials")
-            .field("access_key", &self.access_key)
-            .field("secret_key", &redacted_value(self.secret_key.as_ref()))
-            .field("signature", &redacted_value(self.signature.as_ref()))
-            .field("security_token", &redacted_value(self.security_token.as_ref()))
+            .field("access_key", &redacted_if_present(&self.access_key))
+            .field("secret_key", &redacted_if_present(&self.secret_key))
+            .field("signature", &redacted_if_present(&self.signature))
+            .field("security_token", &redacted_if_present(&self.security_token))
             .finish()
     }
 }
@@ -178,11 +180,11 @@ impl fmt::Display for SessionCredentials {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "SessionCredentials [accessKey={:?}, secretKey={:?}, signature={:?}, SecurityToken={:?}]",
-            self.access_key,
-            redacted_value(self.secret_key.as_ref()),
-            redacted_value(self.signature.as_ref()),
-            redacted_value(self.security_token.as_ref())
+            "SessionCredentials [accessKey={}, secretKey={}, signature={}, securityToken={}]",
+            redacted_if_present(&self.access_key),
+            redacted_if_present(&self.secret_key),
+            redacted_if_present(&self.signature),
+            redacted_if_present(&self.security_token)
         )
     }
 }
@@ -287,13 +289,13 @@ mod tests {
         credentials.set_signature("sig");
 
         let display = format!("{}", credentials);
-        let expected = "SessionCredentials [accessKey=Some(\"ak\"), secretKey=Some(\"<redacted>\"), \
-                        signature=Some(\"<redacted>\"), SecurityToken=Some(\"<redacted>\")]";
+        let expected = "SessionCredentials [accessKey=<redacted>, secretKey=<redacted>, signature=<redacted>, \
+                        securityToken=<redacted>]";
 
         assert_eq!(display, expected);
-        assert!(!display.contains("\"sk\""));
-        assert!(!display.contains("\"tk\""));
-        assert!(!display.contains("\"sig\""));
+        for secret in ["ak", "sk", "tk", "sig"] {
+            assert!(!display.contains(&format!("\"{secret}\"")));
+        }
     }
 
     #[test]
@@ -303,12 +305,12 @@ mod tests {
 
         let debug = format!("{credentials:?}");
 
-        assert!(debug.contains("access_key: Some(\"ak\")"));
-        assert!(debug.contains("secret_key: Some(\"<redacted>\")"));
-        assert!(debug.contains("signature: Some(\"<redacted>\")"));
-        assert!(debug.contains("security_token: Some(\"<redacted>\")"));
-        assert!(!debug.contains("\"sk\""));
-        assert!(!debug.contains("\"tk\""));
-        assert!(!debug.contains("\"sig\""));
+        assert!(debug.contains("access_key: \"<redacted>\""));
+        assert!(debug.contains("secret_key: \"<redacted>\""));
+        assert!(debug.contains("signature: \"<redacted>\""));
+        assert!(debug.contains("security_token: \"<redacted>\""));
+        for secret in ["ak", "sk", "tk", "sig"] {
+            assert!(!debug.contains(&format!("\"{secret}\"")));
+        }
     }
 }

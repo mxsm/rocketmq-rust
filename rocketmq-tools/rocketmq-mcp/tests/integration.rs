@@ -140,6 +140,10 @@ fn run_stdio_server_with_namesrv(input: &str, namesrv_addr: &str) -> StdioOutput
     let binary = env!("CARGO_BIN_EXE_rocketmq-mcp");
     let config = temporary_memory_audit_config(namesrv_addr);
     let mut child = Command::new(binary)
+        .env(
+            rocketmq_security_api::SECURITY_PROFILE_ENV,
+            "development-insecure-loopback",
+        )
         .arg("--config")
         .arg(&config)
         .arg("--transport")

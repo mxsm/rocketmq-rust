@@ -202,51 +202,38 @@ impl MessageExtBrokerInner {
 
 impl fmt::Display for MessageExtBrokerInner {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let encoded_buff_str = match &self.encoded_buff {
-            Some(encoded_buff) =>
-            /* format!("Some({:?})", encoded_buff) */
-            {
-                "****".to_string()
-            }
-            None => "None".to_string(),
-        };
-
         write!(
             f,
-            "MessageExtBrokerInner {{ message_ext_inner: {}, properties_string: {}, tags_code: {}, encoded_buff: {}, \
-             encode_completed: {}, version: {} }}",
-            self.message_ext_inner,
-            self.properties_string,
-            self.tags_code,
-            encoded_buff_str,
+            "MessageExtBrokerInner{{topic='{}', queueId={}, queueOffset={}, flag={}, sysFlag={}, bodyLen={}, \
+             propertyCount={}, msgId='{}', encodeCompleted={}, version={}}}",
+            self.topic(),
+            self.queue_id(),
+            self.queue_offset(),
+            self.flag(),
+            self.sys_flag(),
+            self.body_len(),
+            self.message_ext_inner.message.properties().len(),
+            self.message_ext_inner.msg_id(),
             self.encode_completed,
-            self.version
+            self.version,
         )
     }
 }
 
 impl Debug for MessageExtBrokerInner {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        let encoded_buff_str = match &self.encoded_buff {
-            Some(encoded_buff) =>
-            /* format!("Some({:?})", encoded_buff) */
-            {
-                "****".to_string()
-            }
-            None => "None".to_string(),
-        };
-
-        write!(
-            f,
-            "MessageExtBrokerInner {{ message_ext_inner: {:?}, properties_string: {}, tags_code: {}, encoded_buff: \
-             {}, encode_completed: {}, version: {} }}",
-            self.message_ext_inner,
-            self.properties_string,
-            self.tags_code,
-            encoded_buff_str,
-            self.encode_completed,
-            self.version
-        )
+        f.debug_struct("MessageExtBrokerInner")
+            .field("topic", self.topic())
+            .field("queue_id", &self.queue_id())
+            .field("queue_offset", &self.queue_offset())
+            .field("flag", &self.flag())
+            .field("sys_flag", &self.sys_flag())
+            .field("body_len", &self.body_len())
+            .field("property_count", &self.message_ext_inner.message.properties().len())
+            .field("msg_id", self.message_ext_inner.msg_id())
+            .field("encode_completed", &self.encode_completed)
+            .field("version", &self.version)
+            .finish()
     }
 }
 

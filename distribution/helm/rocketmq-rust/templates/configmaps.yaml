@@ -10,6 +10,7 @@ data:
 {{- range $ordinal := until (int .Values.services.broker.replicas) }}
   rocketmq-broker-{{ $ordinal }}.toml: |-
     listenPort = 10911
+    haListenAddress = "0.0.0.0"
     brokerIp1 = "rocketmq-broker-{{ $ordinal }}.rocketmq-broker-headless.{{ $.Release.Namespace }}.svc.cluster.local"
     brokerIp2 = "rocketmq-broker-{{ $ordinal }}.rocketmq-broker-headless.{{ $.Release.Namespace }}.svc.cluster.local"
     storePathRootDir = "/var/lib/rocketmq/broker"

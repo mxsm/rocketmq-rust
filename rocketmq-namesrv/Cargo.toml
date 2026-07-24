@@ -41,6 +41,7 @@ rocketmq-transport     = { workspace = true }
 rocketmq-controller    = { workspace = true }
 rocketmq-observability = { workspace = true }
 rocketmq-runtime       = { workspace = true }
+rocketmq-security-api  = { workspace = true }
 
 
 anyhow.workspace = true

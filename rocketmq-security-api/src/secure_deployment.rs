@@ -14,14 +14,305 @@
 
 //! Pure profile resolution and readiness contracts for secure deployments.
 
+use std::env;
+use std::fmt;
 use std::fs::File;
+use std::net::SocketAddr;
 use std::path::Path;
+use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::SystemTime;
 
 use thiserror::Error;
 
 use crate::DeploymentProfile;
+
+pub const SECURITY_PROFILE_ENV: &str = "ROCKETMQ_SECURITY_PROFILE";
+pub const SECURITY_TRUST_ANCHOR_ENV: &str = "ROCKETMQ_SECURITY_TRUST_ANCHOR";
+pub const SECURITY_TLS_CERT_ENV: &str = "ROCKETMQ_SECURITY_TLS_CERT";
+pub const SECURITY_TLS_KEY_ENV: &str = "ROCKETMQ_SECURITY_TLS_KEY";
+pub const SECURITY_SECRET_PROVIDER_ENV: &str = "ROCKETMQ_SECURITY_SECRET_PROVIDER";
+pub const SECURITY_ADMIN_IDENTITY_ENV: &str = "ROCKETMQ_SECURITY_ADMIN_IDENTITY";
+pub const SECURITY_REQUEST_POLICY_ENV: &str = "ROCKETMQ_SECURITY_REQUEST_POLICY";
+pub const MOUNTED_FILES_SECRET_PROVIDER: &str = "mounted-files";
+
+/// Explicit startup posture shared by every production service composition root.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SecurityBootstrapProfile {
+    DevelopmentInsecureLoopback,
+    SecureEnforced,
+}
+
+impl SecurityBootstrapProfile {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::DevelopmentInsecureLoopback => "development-insecure-loopback",
+            Self::SecureEnforced => "secure-enforced",
+        }
+    }
+}
+
+impl FromStr for SecurityBootstrapProfile {
+    type Err = SecurityBootstrapError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "development-insecure-loopback" => Ok(Self::DevelopmentInsecureLoopback),
+            "secure-enforced" => Ok(Self::SecureEnforced),
+            _ => Err(SecurityBootstrapError::UnknownProfile),
+        }
+    }
+}
+
+/// Security material required before a service is allowed to bind listeners.
+#[derive(Clone)]
+pub struct SecurityBootstrapConfig {
+    profile: SecurityBootstrapProfile,
+    trust_anchor: Option<PathBuf>,
+    tls_certificate: Option<PathBuf>,
+    tls_private_key: Option<PathBuf>,
+    secret_provider: Option<String>,
+    admin_identity: Option<PathBuf>,
+    request_policy: Option<PathBuf>,
+}
+
+impl fmt::Debug for SecurityBootstrapConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SecurityBootstrapConfig")
+            .field("profile", &self.profile)
+            .field("trust_anchor_configured", &self.trust_anchor.is_some())
+            .field("tls_certificate_configured", &self.tls_certificate.is_some())
+            .field("tls_private_key_configured", &self.tls_private_key.is_some())
+            .field("secret_provider_configured", &self.secret_provider.is_some())
+            .field("admin_identity_configured", &self.admin_identity.is_some())
+            .field("request_policy_configured", &self.request_policy.is_some())
+            .finish()
+    }
+}
+
+impl SecurityBootstrapConfig {
+    pub const fn new(profile: SecurityBootstrapProfile) -> Self {
+        Self {
+            profile,
+            trust_anchor: None,
+            tls_certificate: None,
+            tls_private_key: None,
+            secret_provider: None,
+            admin_identity: None,
+            request_policy: None,
+        }
+    }
+
+    /// Loads the canonical bootstrap environment without exposing configured values in errors.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error when the profile is absent, unknown, non-UTF-8, or when any
+    /// configured bootstrap field is non-UTF-8.
+    pub fn from_env() -> Result<Self, SecurityBootstrapError> {
+        let profile = required_env(SECURITY_PROFILE_ENV)?
+            .parse::<SecurityBootstrapProfile>()
+            .map_err(|_| SecurityBootstrapError::UnknownProfile)?;
+        Ok(Self {
+            profile,
+            trust_anchor: optional_path_env(SECURITY_TRUST_ANCHOR_ENV)?,
+            tls_certificate: optional_path_env(SECURITY_TLS_CERT_ENV)?,
+            tls_private_key: optional_path_env(SECURITY_TLS_KEY_ENV)?,
+            secret_provider: optional_env(SECURITY_SECRET_PROVIDER_ENV)?,
+            admin_identity: optional_path_env(SECURITY_ADMIN_IDENTITY_ENV)?,
+            request_policy: optional_path_env(SECURITY_REQUEST_POLICY_ENV)?,
+        })
+    }
+
+    pub fn with_trust_anchor(mut self, path: impl Into<PathBuf>) -> Self {
+        self.trust_anchor = Some(path.into());
+        self
+    }
+
+    pub fn with_tls_identity(mut self, certificate: impl Into<PathBuf>, private_key: impl Into<PathBuf>) -> Self {
+        self.tls_certificate = Some(certificate.into());
+        self.tls_private_key = Some(private_key.into());
+        self
+    }
+
+    pub fn with_secret_provider(mut self, provider: impl Into<String>) -> Self {
+        self.secret_provider = Some(provider.into());
+        self
+    }
+
+    pub fn with_admin_identity(mut self, path: impl Into<PathBuf>) -> Self {
+        self.admin_identity = Some(path.into());
+        self
+    }
+
+    pub fn with_request_policy(mut self, path: impl Into<PathBuf>) -> Self {
+        self.request_policy = Some(path.into());
+        self
+    }
+
+    /// Validates all security prerequisites before the caller binds any listener.
+    ///
+    /// # Errors
+    ///
+    /// Secure mode fails closed for missing or unreadable material and unsupported providers.
+    /// Development mode fails closed when any supplied listener is not loopback.
+    pub fn validate(
+        &self,
+        listener_addresses: &[SocketAddr],
+    ) -> Result<ValidatedSecurityBootstrap, SecurityBootstrapError> {
+        match self.profile {
+            SecurityBootstrapProfile::DevelopmentInsecureLoopback => {
+                if listener_addresses.iter().any(|address| !address.ip().is_loopback()) {
+                    return Err(SecurityBootstrapError::DevelopmentListenerNotLoopback);
+                }
+            }
+            SecurityBootstrapProfile::SecureEnforced => {
+                inspect_bootstrap_file(self.trust_anchor.as_deref(), SecurityBootstrapMaterial::TrustAnchor)?;
+                inspect_bootstrap_file(
+                    self.tls_certificate.as_deref(),
+                    SecurityBootstrapMaterial::TlsCertificate,
+                )?;
+                inspect_bootstrap_file(
+                    self.tls_private_key.as_deref(),
+                    SecurityBootstrapMaterial::TlsPrivateKey,
+                )?;
+                let provider = self
+                    .secret_provider
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|provider| !provider.is_empty())
+                    .ok_or(SecurityBootstrapError::MissingSecretProvider)?;
+                if provider != MOUNTED_FILES_SECRET_PROVIDER {
+                    return Err(SecurityBootstrapError::UnsupportedSecretProvider);
+                }
+                inspect_bootstrap_file(self.admin_identity.as_deref(), SecurityBootstrapMaterial::AdminIdentity)?;
+                inspect_bootstrap_file(self.request_policy.as_deref(), SecurityBootstrapMaterial::RequestPolicy)?;
+            }
+        }
+
+        Ok(ValidatedSecurityBootstrap {
+            profile: self.profile,
+            listener_count: listener_addresses.len(),
+        })
+    }
+}
+
+/// Loads and validates the canonical process environment before listener bind.
+///
+/// # Errors
+///
+/// Returns [`SecurityBootstrapError`] for every incomplete, unsupported, or unsafe profile.
+pub fn validate_security_bootstrap_from_env(
+    listener_addresses: &[SocketAddr],
+) -> Result<ValidatedSecurityBootstrap, SecurityBootstrapError> {
+    SecurityBootstrapConfig::from_env()?.validate(listener_addresses)
+}
+
+/// Non-sensitive proof that canonical bootstrap completed before listener ownership begins.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ValidatedSecurityBootstrap {
+    profile: SecurityBootstrapProfile,
+    listener_count: usize,
+}
+
+impl ValidatedSecurityBootstrap {
+    pub const fn profile(self) -> SecurityBootstrapProfile {
+        self.profile
+    }
+
+    pub const fn listener_count(self) -> usize {
+        self.listener_count
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SecurityBootstrapMaterial {
+    TrustAnchor,
+    TlsCertificate,
+    TlsPrivateKey,
+    AdminIdentity,
+    RequestPolicy,
+}
+
+impl fmt::Display for SecurityBootstrapMaterial {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::TrustAnchor => "trust anchor",
+            Self::TlsCertificate => "TLS certificate",
+            Self::TlsPrivateKey => "TLS private key",
+            Self::AdminIdentity => "administrator identity",
+            Self::RequestPolicy => "request policy",
+        })
+    }
+}
+
+/// Typed, value-free startup failures returned before listener bind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum SecurityBootstrapError {
+    #[error("security bootstrap profile is required")]
+    MissingProfile,
+    #[error("security bootstrap profile is unknown")]
+    UnknownProfile,
+    #[error("security bootstrap environment field is not valid UTF-8")]
+    InvalidEnvironmentEncoding,
+    #[error("secure bootstrap is missing {0}")]
+    MissingMaterial(SecurityBootstrapMaterial),
+    #[error("secure bootstrap {0} is unavailable")]
+    MaterialUnavailable(SecurityBootstrapMaterial),
+    #[error("secure bootstrap {0} is not a regular file")]
+    MaterialNotRegularFile(SecurityBootstrapMaterial),
+    #[error("secure bootstrap {0} is empty")]
+    MaterialEmpty(SecurityBootstrapMaterial),
+    #[error("secure bootstrap secret provider is required")]
+    MissingSecretProvider,
+    #[error("secure bootstrap secret provider is unsupported")]
+    UnsupportedSecretProvider,
+    #[error("development-insecure profile requires every listener to use a loopback address")]
+    DevelopmentListenerNotLoopback,
+}
+
+fn required_env(name: &'static str) -> Result<String, SecurityBootstrapError> {
+    optional_env(name)?.ok_or(SecurityBootstrapError::MissingProfile)
+}
+
+fn optional_path_env(name: &'static str) -> Result<Option<PathBuf>, SecurityBootstrapError> {
+    optional_env(name).map(|value| value.map(PathBuf::from))
+}
+
+fn optional_env(name: &'static str) -> Result<Option<String>, SecurityBootstrapError> {
+    let Some(value) = env::var_os(name) else {
+        return Ok(None);
+    };
+    let value = value
+        .into_string()
+        .map_err(|_| SecurityBootstrapError::InvalidEnvironmentEncoding)?;
+    let value = value.trim();
+    Ok((!value.is_empty()).then(|| value.to_string()))
+}
+
+fn inspect_bootstrap_file(
+    path: Option<&Path>,
+    material: SecurityBootstrapMaterial,
+) -> Result<(), SecurityBootstrapError> {
+    let path = path.ok_or(SecurityBootstrapError::MissingMaterial(material))?;
+    let metadata = path
+        .metadata()
+        .map_err(|_| SecurityBootstrapError::MaterialUnavailable(material))?;
+    if !metadata.is_file() {
+        return Err(SecurityBootstrapError::MaterialNotRegularFile(material));
+    }
+    let file = File::open(path).map_err(|_| SecurityBootstrapError::MaterialUnavailable(material))?;
+    let metadata = file
+        .metadata()
+        .map_err(|_| SecurityBootstrapError::MaterialUnavailable(material))?;
+    if !metadata.is_file() {
+        return Err(SecurityBootstrapError::MaterialNotRegularFile(material));
+    }
+    if metadata.len() == 0 {
+        return Err(SecurityBootstrapError::MaterialEmpty(material));
+    }
+    Ok(())
+}
 
 /// Whether configuration belongs to a newly created or already deployed installation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
