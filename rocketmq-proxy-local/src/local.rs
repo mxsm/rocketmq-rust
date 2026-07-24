@@ -630,7 +630,7 @@ async fn run_local_broker_worker(
     cancellation: CancellationToken,
 ) {
     let mut facade = ProxyBrokerFacade::new(build_broker_config(&config), build_message_store_config(&config));
-    let initialized = tokio::select! {
+    let initialization = tokio::select! {
         biased;
         () = cancellation.cancelled() => {
             shutdown_local_broker(&mut facade, config.shutdown_timeout()).await;
@@ -638,8 +638,8 @@ async fn run_local_broker_worker(
         }
         initialized = facade.initialize() => initialized,
     };
-    let startup_error = if !initialized {
-        Some("embedded broker initialization failed".to_owned())
+    let startup_error = if let Err(error) = initialization {
+        Some(format!("embedded broker initialization failed: {error}"))
     } else {
         tokio::select! {
             biased;
@@ -647,9 +647,14 @@ async fn run_local_broker_worker(
                 shutdown_local_broker(&mut facade, config.shutdown_timeout()).await;
                 return;
             }
-            () = facade.start() => {}
+            result = facade.start() => {
+                if let Err(error) = result {
+                    Some(format!("embedded broker startup failed: {error}"))
+                } else {
+                    None
+                }
+            }
         }
-        None
     };
 
     loop {

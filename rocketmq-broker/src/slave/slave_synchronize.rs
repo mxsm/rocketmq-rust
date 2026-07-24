@@ -212,10 +212,14 @@ where
     MS: MessageStore,
 {
     pub(crate) fn new(context: SlaveSynchronizeContext<MS>) -> Self {
-        Self {
-            context,
-            master_addr: Arc::new(SlaveMasterAddress::default()),
-        }
+        Self::new_with_master_addr(context, Arc::new(SlaveMasterAddress::default()))
+    }
+
+    pub(crate) fn new_with_master_addr(
+        context: SlaveSynchronizeContext<MS>,
+        master_addr: Arc<SlaveMasterAddress>,
+    ) -> Self {
+        Self { context, master_addr }
     }
 
     pub(crate) fn bind_message_request_mode_manager(&self, manager: &MessageRequestModeManager) {

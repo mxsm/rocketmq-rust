@@ -27,27 +27,50 @@ use tracing::error;
 use tracing::info;
 
 use crate::broker_runtime::BrokerRuntime;
+use crate::lifecycle::BrokerReadiness;
+use crate::lifecycle::BrokerStartupError;
+use crate::lifecycle::Configured;
+use crate::lifecycle::Initialized;
+use crate::lifecycle::Running;
 
-pub struct BrokerBootstrap {
+pub struct BrokerBootstrap<State = Configured> {
     broker_runtime: BrokerRuntime,
+    state: State,
 }
 
-impl BrokerBootstrap {
-    pub async fn boot(mut self) {
-        if !self.initialize().await {
-            error!("Broker initialization failed");
-            return;
+impl BrokerBootstrap<Configured> {
+    pub async fn initialize(mut self) -> Result<BrokerBootstrap<Initialized>, BrokerStartupError> {
+        if let Err(error) = self.broker_runtime.initialize().await {
+            return Err(self.broker_runtime.rollback_startup(error).await);
         }
+        Ok(BrokerBootstrap {
+            broker_runtime: self.broker_runtime,
+            state: Initialized,
+        })
+    }
 
-        // Start broker services (non-blocking)
-        self.start().await;
+    pub async fn boot(self) {
+        let initialized = match self.initialize().await {
+            Ok(initialized) => initialized,
+            Err(error) => {
+                error!(%error, "Broker initialization failed");
+                return;
+            }
+        };
+        let running = match initialized.start().await {
+            Ok(running) => running,
+            Err(error) => {
+                error!(%error, "Broker startup failed");
+                return;
+            }
+        };
 
         // Wait for shutdown signal (Ctrl+C or SIGTERM)
         wait_for_signal().await;
         info!("Broker received shutdown signal");
 
         // Graceful shutdown
-        self.shutdown().await;
+        running.shutdown().await;
         info!("Broker shutdown completed");
     }
 
@@ -57,17 +80,23 @@ impl BrokerBootstrap {
     ///
     /// Returns a lifecycle error when broker initialization, readiness publication, or
     /// platform signal observation fails.
-    pub async fn boot_with_lifecycle(mut self, lifecycle: ServiceLifecycle) -> RuntimeResult<()> {
-        if !self.initialize().await {
+    pub async fn boot_with_lifecycle(self, lifecycle: ServiceLifecycle) -> RuntimeResult<()> {
+        let initialized = self.initialize().await.map_err(|error| {
             lifecycle.mark_failed();
             lifecycle.request_shutdown(ShutdownReason::Internal);
-            return Err(RuntimeError::LifecycleOperation {
+            RuntimeError::LifecycleOperation {
                 operation: "initialize_broker",
-                message: "broker initialization returned false".to_string(),
-            });
-        }
-
-        self.start().await;
+                message: error.to_string(),
+            }
+        })?;
+        let mut running = initialized.start().await.map_err(|error| {
+            lifecycle.mark_failed();
+            lifecycle.request_shutdown(ShutdownReason::Internal);
+            RuntimeError::LifecycleOperation {
+                operation: "start_broker",
+                message: error.to_string(),
+            }
+        })?;
         lifecycle.mark_ready()?;
         let shutdown_request = match lifecycle.wait_for_shutdown_signal().await {
             Ok(request) => request,
@@ -83,7 +112,7 @@ impl BrokerBootstrap {
             "Broker received shutdown request"
         );
 
-        let report = self
+        let report = running
             .broker_runtime
             .shutdown_basic_service_until(shutdown_request.deadline)
             .await;
@@ -105,19 +134,25 @@ impl BrokerBootstrap {
         info!("Broker shutdown completed");
         Ok(())
     }
+}
 
-    #[inline]
-    async fn initialize(&mut self) -> bool {
-        self.broker_runtime.initialize().await
+impl BrokerBootstrap<Initialized> {
+    pub async fn start(mut self) -> Result<BrokerBootstrap<Running>, BrokerStartupError> {
+        let readiness = self.broker_runtime.start().await?;
+        Ok(BrokerBootstrap {
+            broker_runtime: self.broker_runtime,
+            state: Running::new(readiness),
+        })
+    }
+}
+
+impl BrokerBootstrap<Running> {
+    #[must_use]
+    pub fn readiness(&self) -> &BrokerReadiness {
+        self.state.readiness()
     }
 
-    #[inline]
-    async fn start(&mut self) {
-        self.broker_runtime.start().await;
-    }
-
-    #[inline]
-    async fn shutdown(&mut self) {
+    pub async fn shutdown(mut self) {
         self.broker_runtime.shutdown().await;
     }
 }
@@ -160,7 +195,7 @@ impl Builder {
         self
     }
     #[inline]
-    pub fn build(self) -> BrokerBootstrap {
+    pub fn build(self) -> BrokerBootstrap<Configured> {
         let broker_config = Arc::new(self.broker_config);
         let message_store_config = Arc::new(self.message_store_config);
         let mut broker_runtime = match self.service_context {
@@ -173,7 +208,10 @@ impl Builder {
             broker_runtime.set_telemetry_runtime_guard(telemetry_runtime_guard);
         }
 
-        BrokerBootstrap { broker_runtime }
+        BrokerBootstrap {
+            broker_runtime,
+            state: Configured,
+        }
     }
 }
 

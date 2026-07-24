@@ -131,7 +131,7 @@ mod tests {
             ..MessageStoreConfig::default()
         });
         let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
-        assert!(runtime.initialize().await);
+        assert!(runtime.initialize().await.is_ok());
         runtime
     }
 

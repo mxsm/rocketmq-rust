@@ -14,5 +14,4 @@
 
 pub(crate) mod broadcast_offset_manager;
 pub(crate) mod consumer_offset_manager;
-mod consumer_order_info_lock_manager;
 pub(crate) mod consumer_order_info_manager;

@@ -65,8 +65,6 @@ use tracing::info;
 use tracing::warn;
 
 use crate::client::consumer_group_info::ConsumerGroupInfo;
-use crate::coldctr::cold_data_pull_request_hold_service::ColdDataPullRequest;
-use crate::coldctr::cold_data_pull_request_hold_service::NO_SUSPEND_KEY;
 use crate::filter::consumer_filter_data::ConsumerFilterData;
 use crate::filter::expression_for_retry_message_filter::ExpressionForRetryMessageFilter;
 use crate::filter::expression_message_filter::ExpressionMessageFilter;
@@ -644,7 +642,7 @@ where
         request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        self.process_request_inner(request_code, channel, ctx, request, true, true)
+        self.process_request_inner(request_code, channel, ctx, request, true)
             .await
     }
 
@@ -663,7 +661,6 @@ where
     /// # Arguments
     ///
     /// * `broker_allow_suspend` - Whether the broker allows suspending the request
-    /// * `broker_allow_flow_ctr_suspend` - Whether cold data flow control suspension is allowed
     ///
     /// # Returns
     ///
@@ -677,7 +674,6 @@ where
         ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
         broker_allow_suspend: bool,
-        broker_allow_flow_ctr_suspend: bool,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let begin_time_mills = current_millis();
         let mut response = RemotingCommand::create_response_command();
@@ -861,23 +857,11 @@ where
                                         ));
                                     }
                                     ConsumeType::ConsumeActively => {
-                                        if broker_allow_flow_ctr_suspend {
-                                            if let Ok(now) = self.context.store().now() {
-                                                let pull_request = ColdDataPullRequest::new(
-                                                    request.clone(),
-                                                    channel.clone(),
-                                                    1000,
-                                                    now,
-                                                    request_header.queue_offset,
-                                                    subscription_data.clone(),
-                                                    message_filter.clone(),
-                                                );
-                                                if self.context.suspend_cold_data_pull(pull_request) {
-                                                    return Ok(None);
-                                                }
-                                            }
-                                        }
-                                        request_header.max_msg_nums = 1;
+                                        return Ok(Some(
+                                            response
+                                                .set_code(ResponseCode::SystemBusy)
+                                                .set_remark("Cold-data pull suspension is not supported"),
+                                        ));
                                     }
                                     _ => {}
                                 }
@@ -1028,8 +1012,6 @@ where
         let pull_message_processor = Arc::clone(self);
         let locks = Arc::clone(&self.wakeup_write_locks);
         let task = async move {
-            let broker_allow_flow_ctr_suspend =
-                !(request.ext_fields().is_some() && request.ext_fields().unwrap().contains_key(NO_SUSPEND_KEY));
             let opaque = request.opaque();
             let write_lock = wakeup_write_lock_for_channel(&locks, &channel);
             let response = pull_message_processor
@@ -1039,7 +1021,6 @@ where
                     ctx.clone(),
                     &mut request,
                     false,
-                    broker_allow_flow_ctr_suspend,
                 )
                 .await;
 
@@ -1174,7 +1155,7 @@ mod tests {
             ..MessageStoreConfig::default()
         });
         let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
-        assert!(runtime.initialize().await);
+        assert!(runtime.initialize().await.is_ok());
         runtime
     }
 

@@ -609,7 +609,8 @@ mod tests {
         let mut broker_runtime = BrokerRuntime::new(broker_config, Arc::new(message_store_config));
         let service = broker_runtime
             .inner_for_test()
-            .topic_queue_mapping_clean_service_unchecked()
+            .topic_queue_mapping_clean_service_for_test()
+            .expect("topic queue mapping clean service should be configured")
             .clone();
 
         assert!(!service.run_once().await.expect("run_once should not fail"));
@@ -623,7 +624,8 @@ mod tests {
         let mut broker_runtime = BrokerRuntime::new(broker_config, message_store_config);
         let service = broker_runtime
             .inner_for_test()
-            .topic_queue_mapping_clean_service_unchecked()
+            .topic_queue_mapping_clean_service_for_test()
+            .expect("topic queue mapping clean service should be configured")
             .clone();
 
         service.start();
@@ -650,7 +652,8 @@ mod tests {
             BrokerRuntime::new_with_service_context(broker_config, message_store_config, broker_service.clone());
         let service = broker_runtime
             .inner_for_test()
-            .topic_queue_mapping_clean_service_unchecked()
+            .topic_queue_mapping_clean_service_for_test()
+            .expect("topic queue mapping clean service should be configured")
             .clone();
 
         service.start();

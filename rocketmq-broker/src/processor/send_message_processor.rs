@@ -1581,17 +1581,6 @@ where
             .and_then(|value| value.get(BrokerStatsManager::COMMERCIAL_OWNER).cloned());
         let (response, succeeded) = match put_message_result.put_message_status() {
             PutMessageStatus::PutOk => {
-                let mut _back_topic = msg_ext.topic().clone();
-                let correct_topic =
-                    msg_ext.property(&CheetahString::from_static_str(MessageConst::PROPERTY_RETRY_TOPIC));
-                if let Some(topic) = correct_topic {
-                    _back_topic = topic;
-                }
-
-                if TopicValidator::RMQ_SYS_SCHEDULE_TOPIC == inner_topic {
-                    //TODO: implement this
-                }
-
                 if is_dlq {
                     if let Some(metrics) = crate::metrics::broker_metrics_manager::BrokerMetricsManager::try_global() {
                         metrics.inc_send_to_dlq_messages(inner_topic.as_str(), request_header.group.as_str(), 1);

@@ -20,6 +20,11 @@
 pub use broker_bootstrap::BrokerBootstrap;
 pub use broker_bootstrap::Builder;
 pub use broker_runtime::build_broker_telemetry_bootstrap_config;
+pub use lifecycle::BrokerReadiness;
+pub use lifecycle::BrokerStartupError;
+pub use lifecycle::Configured;
+pub use lifecycle::Initialized;
+pub use lifecycle::Running;
 #[doc(hidden)]
 pub use proxy_facade::proxy_adapter_compat;
 pub use proxy_facade::ProxyBrokerFacade;
@@ -27,6 +32,8 @@ pub use proxy_facade::ProxyBrokerFacade;
 pub mod command;
 pub mod proxy_facade;
 pub mod send_message_constants;
+
+mod lifecycle;
 
 // Re-export types needed for benchmarking
 #[doc(hidden)]
@@ -420,7 +427,8 @@ pub mod bench_support {
         let mut runtime = crate::broker_runtime::BrokerRuntime::new(broker_config, message_store_config);
         let service = runtime
             .inner_for_test()
-            .topic_queue_mapping_clean_service_unchecked()
+            .topic_queue_mapping_clean_service_for_test()
+            .expect("topic queue mapping clean service should be configured")
             .clone();
         service.start_with_schedule(Duration::ZERO, Duration::from_millis(1));
 
@@ -560,7 +568,11 @@ pub mod bench_support {
             message_store_config,
             service_context,
         );
-        let service = runtime.inner_for_test().schedule_message_service_unchecked().clone();
+        let service = runtime
+            .inner_for_test()
+            .schedule_message_service_for_test()
+            .expect("schedule message service should be configured")
+            .clone();
 
         crate::schedule::schedule_message_service::ScheduleMessageService::start_persist_task_for_probe(
             service.clone(),
