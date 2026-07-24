@@ -18,15 +18,21 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Weak;
+use std::time::Duration;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::config::TopicConfig;
+use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_common::common::constant::PermName;
+use rocketmq_common::FileUtils;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::common::remoting_helper::RemotingHelper;
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
+use rocketmq_runtime::BlockingExecutor;
+use rocketmq_runtime::MetadataDeadline;
+use rocketmq_runtime::MetadataIoActor;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use rocketmq_store::ha::ha_connection_state_notification_request::HAConnectionStateNotificationRequest;
@@ -564,6 +570,8 @@ pub(crate) struct BrokerPreOnlineContext<MS: MessageStore> {
     timer: Option<Weak<TimerMessageStore>>,
     plugins: Vec<Weak<dyn BrokerAttachedPlugin>>,
     transition: BrokerOnlineTransitionCapability<MS>,
+    metadata_io: Option<MetadataIoActor>,
+    blocking: Option<BlockingExecutor>,
 }
 
 impl<MS: MessageStore> BrokerPreOnlineContext<MS> {
@@ -581,6 +589,8 @@ impl<MS: MessageStore> BrokerPreOnlineContext<MS> {
         timer: Option<&Arc<TimerMessageStore>>,
         plugins: &[Arc<dyn BrokerAttachedPlugin>],
         transition: BrokerOnlineTransitionCapability<MS>,
+        metadata_io: Option<MetadataIoActor>,
+        blocking: Option<BlockingExecutor>,
     ) -> Self {
         Self {
             policy,
@@ -592,7 +602,40 @@ impl<MS: MessageStore> BrokerPreOnlineContext<MS> {
             timer: timer.map(Arc::downgrade),
             plugins: plugins.iter().map(Arc::downgrade).collect(),
             transition,
+            metadata_io,
+            blocking,
         }
+    }
+
+    async fn persist_config_manager<T>(&self, resource: &'static str, manager: Arc<T>) -> RocketMQResult<()>
+    where
+        T: ConfigManager + Send + Sync + 'static,
+    {
+        if manager.supports_metadata_io_actor() {
+            let content = manager.encode_pretty(true);
+            if content.is_empty() {
+                return Ok(());
+            }
+            if let Some(metadata_io) = self.metadata_io.as_ref() {
+                metadata_io
+                    .submit_next_durable(
+                        resource,
+                        manager.config_file_path(),
+                        content.into_bytes(),
+                        MetadataDeadline::after(Duration::from_secs(5)),
+                    )
+                    .await
+                    .map_err(FileUtils::metadata_io_error)?;
+                return Ok(());
+            }
+        }
+        if let Some(blocking) = self.blocking.as_ref() {
+            return blocking
+                .spawn_io(resource, move || manager.persist())
+                .await
+                .map_err(|error| RocketMQError::IO(std::io::Error::other(error)))?;
+        }
+        manager.persist()
     }
 }
 

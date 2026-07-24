@@ -26,6 +26,7 @@ use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::message_queue_assignment::MessageQueueAssignment;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::common::mix_all::RETRY_GROUP_TOPIC_PREFIX;
+use rocketmq_common::FileUtils;
 use rocketmq_model::allocation::AllocateMessageQueueAveragely;
 use rocketmq_model::allocation::AllocateMessageQueueAveragelyByCircle;
 use rocketmq_model::allocation::AllocateMessageQueueStrategy;
@@ -42,10 +43,13 @@ use rocketmq_remoting::protocol::RemotingDeserializable;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
+use rocketmq_runtime::MetadataDeadline;
+use rocketmq_runtime::MetadataIoActor;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::time::Duration;
 use tracing::info;
 use tracing::warn;
 
@@ -66,6 +70,7 @@ pub struct QueryAssignmentProcessor {
     broker_config: Arc<BrokerConfig>,
     topic_route_info_manager: TopicRouteInfoManager,
     consumer_assignment_view: ConsumerAssignmentView,
+    metadata_io: Option<MetadataIoActor>,
 }
 
 impl RequestProcessor for QueryAssignmentProcessor {
@@ -104,6 +109,22 @@ impl QueryAssignmentProcessor {
         topic_route_info_manager: TopicRouteInfoManager,
         consumer_assignment_view: ConsumerAssignmentView,
     ) -> Self {
+        Self::new_with_metadata_io(
+            broker_config,
+            message_store_config,
+            topic_route_info_manager,
+            consumer_assignment_view,
+            None,
+        )
+    }
+
+    pub(crate) fn new_with_metadata_io(
+        broker_config: Arc<BrokerConfig>,
+        message_store_config: Arc<MessageStoreConfig>,
+        topic_route_info_manager: TopicRouteInfoManager,
+        consumer_assignment_view: ConsumerAssignmentView,
+        metadata_io: Option<MetadataIoActor>,
+    ) -> Self {
         let allocate_message_queue_averagely: Arc<dyn AllocateMessageQueueStrategy> =
             Arc::new(AllocateMessageQueueAveragely);
         let allocate_message_queue_averagely_by_circle: Arc<dyn AllocateMessageQueueStrategy> =
@@ -125,6 +146,7 @@ impl QueryAssignmentProcessor {
             broker_config,
             topic_route_info_manager,
             consumer_assignment_view,
+            metadata_io,
         }
     }
 
@@ -151,6 +173,7 @@ impl Clone for QueryAssignmentProcessor {
             broker_config: Arc::clone(&self.broker_config),
             topic_route_info_manager: self.topic_route_info_manager.clone(),
             consumer_assignment_view: self.consumer_assignment_view.clone(),
+            metadata_io: self.metadata_io.clone(),
         }
     }
 }
@@ -481,7 +504,20 @@ impl QueryAssignmentProcessor {
             request_body.consumer_group.clone(),
             request_body,
         );
-        self.message_request_mode_manager.persist();
+        if let Some(metadata_io) = &self.metadata_io {
+            let content = self.message_request_mode_manager.encode_pretty(true);
+            metadata_io
+                .submit_next_durable(
+                    "broker.message-request-mode",
+                    self.message_request_mode_manager.config_file_path(),
+                    content.into_bytes(),
+                    MetadataDeadline::after(Duration::from_secs(5)),
+                )
+                .await
+                .map_err(FileUtils::metadata_io_error)?;
+        } else {
+            self.message_request_mode_manager.persist()?;
+        }
         Ok(Some(RemotingCommand::create_response_command_with_code(
             ResponseCode::Success,
         )))

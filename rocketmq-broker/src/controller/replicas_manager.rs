@@ -118,18 +118,41 @@ impl RoleChangeOutcome {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-struct BrokerMetadataRecord {
+pub(crate) struct BrokerMetadataRecord {
     cluster_name: String,
     broker_name: String,
     broker_id: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-struct TempBrokerMetadataRecord {
+pub(crate) struct TempBrokerMetadataRecord {
     cluster_name: String,
     broker_name: String,
     broker_id: u64,
     register_check_code: String,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum ControllerBrokerIdPersistencePlan {
+    UseCurrent(u64),
+    ReusePending {
+        broker_id: u64,
+        register_check_code: CheetahString,
+        temporary: PathBuf,
+    },
+    PersistPending {
+        target: PathBuf,
+        content: Vec<u8>,
+        record: TempBrokerMetadataRecord,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ControllerBrokerIdCommitSnapshot {
+    pub(crate) target: PathBuf,
+    pub(crate) content: Vec<u8>,
+    pub(crate) record: BrokerMetadataRecord,
+    pub(crate) temporary: PathBuf,
 }
 
 /// Controller replica state.
@@ -292,6 +315,108 @@ impl ReplicasManager {
         validate_metadata_record(self.metadata.as_ref(), config, "broker metadata")?;
         validate_temp_metadata_record(self.temp_metadata.as_ref(), config)?;
         Ok(())
+    }
+
+    pub(crate) fn plan_controller_broker_id_persistence(
+        &self,
+        config: &BrokerConfig,
+        next_broker_id: Option<u64>,
+    ) -> RocketMQResult<ControllerBrokerIdPersistencePlan> {
+        if !self.needs_broker_id_application() {
+            return Ok(ControllerBrokerIdPersistencePlan::UseCurrent(self.broker_controller_id));
+        }
+        if let Some((broker_id, register_check_code)) = self.pending_registration() {
+            return Ok(ControllerBrokerIdPersistencePlan::ReusePending {
+                broker_id,
+                register_check_code,
+                temporary: self.temp_metadata_path.clone(),
+            });
+        }
+
+        let broker_id = next_broker_id.ok_or_else(|| {
+            RocketMQError::illegal_argument(
+                "controller broker id preparation requires next broker id when no pending registration exists",
+            )
+        })?;
+        let record = TempBrokerMetadataRecord {
+            cluster_name: config.broker_identity.broker_cluster_name.to_string(),
+            broker_name: config.broker_identity.broker_name.to_string(),
+            broker_id,
+            register_check_code: format!("{};{}", self.broker_address, current_millis()),
+        };
+        let content = serde_json::to_vec(&record)?;
+        Ok(ControllerBrokerIdPersistencePlan::PersistPending {
+            target: self.temp_metadata_path.clone(),
+            content,
+            record,
+        })
+    }
+
+    pub(crate) fn publish_pending_broker_id(
+        &mut self,
+        record: TempBrokerMetadataRecord,
+    ) -> RocketMQResult<ControllerBrokerIdAction> {
+        if let Some(existing) = self.temp_metadata.as_ref() {
+            if existing != &record {
+                return Err(RocketMQError::illegal_argument(
+                    "controller broker id pending metadata changed during durable persistence",
+                ));
+            }
+        }
+        self.broker_controller_id = record.broker_id;
+        self.register_state = RegisterState::CreateTempMetadataFileDone;
+        let action = ControllerBrokerIdAction::ApplyBrokerId {
+            broker_id: record.broker_id,
+            register_check_code: CheetahString::from(record.register_check_code.clone()),
+        };
+        self.temp_metadata = Some(record);
+        Ok(action)
+    }
+
+    pub(crate) fn plan_controller_broker_id_commit(
+        &self,
+        config: &BrokerConfig,
+    ) -> RocketMQResult<Option<ControllerBrokerIdCommitSnapshot>> {
+        let Some(temp_metadata) = self.temp_metadata.as_ref() else {
+            return Ok(None);
+        };
+        let record = BrokerMetadataRecord {
+            cluster_name: config.broker_identity.broker_cluster_name.to_string(),
+            broker_name: config.broker_identity.broker_name.to_string(),
+            broker_id: temp_metadata.broker_id,
+        };
+        Ok(Some(ControllerBrokerIdCommitSnapshot {
+            target: self.metadata_path.clone(),
+            content: serde_json::to_vec(&record)?,
+            record,
+            temporary: self.temp_metadata_path.clone(),
+        }))
+    }
+
+    pub(crate) fn publish_committed_broker_id(&mut self, record: BrokerMetadataRecord) -> RocketMQResult<u64> {
+        if self
+            .temp_metadata
+            .as_ref()
+            .is_some_and(|temporary| temporary.broker_id != record.broker_id)
+        {
+            return Err(RocketMQError::illegal_argument(
+                "controller broker id changed during durable commit",
+            ));
+        }
+        self.broker_controller_id = record.broker_id;
+        self.metadata = Some(record);
+        self.temp_metadata = None;
+        self.register_state = RegisterState::CreateMetadataFileDone;
+        Ok(self.broker_controller_id)
+    }
+
+    pub(crate) fn clear_temp_metadata_state(&mut self) {
+        self.temp_metadata = None;
+        self.register_state = if self.metadata.is_some() {
+            RegisterState::CreateMetadataFileDone
+        } else {
+            RegisterState::Initial
+        };
     }
 
     pub fn create_temp_metadata(&mut self, config: &BrokerConfig, broker_id: u64) -> RocketMQResult<()> {
@@ -673,8 +798,13 @@ fn delete_metadata_file(path: &Path) -> RocketMQResult<()> {
 #[cfg(test)]
 mod tests {
     use std::env;
+    use std::time::Duration;
 
     use super::*;
+    use rocketmq_runtime::MetadataDeadline;
+    use rocketmq_runtime::MetadataIoActor;
+    use rocketmq_runtime::MetadataIoConfig;
+    use rocketmq_runtime::RuntimeContext;
 
     fn broker_config_with_controller_addr(controller_addr: &str, broker_id: u64) -> BrokerConfig {
         let mut config = BrokerConfig {
@@ -730,6 +860,70 @@ mod tests {
         let recovered = ReplicasManager::new(&config, &message_store_config, "127.0.0.1:10911".into());
         assert_eq!(recovered.broker_controller_id(), 9);
         assert_eq!(recovered.register_state(), RegisterState::CreateMetadataFileDone);
+    }
+
+    #[tokio::test]
+    async fn controller_broker_id_persistence_is_published_after_actor_durability() {
+        let directory = tempfile::tempdir().expect("broker identity test directory");
+        let identity_path = directory.path().join("brokerIdentity.json");
+        let config = broker_config_with_controller_addr("127.0.0.1:9878", 0);
+        let message_store_config = MessageStoreConfig {
+            store_path_broker_identity: Some(identity_path.to_string_lossy().into_owned().into()),
+            ..MessageStoreConfig::default()
+        };
+        let mut manager = ReplicasManager::new(
+            &config,
+            &message_store_config,
+            CheetahString::from_static_str("127.0.0.1:10911"),
+        );
+        let runtime = RuntimeContext::try_from_current("broker-id-persistence-test").unwrap();
+        let actor = MetadataIoActor::start(
+            &runtime.service_context("broker-id-persistence"),
+            MetadataIoConfig::default(),
+        )
+        .unwrap();
+        let deadline = MetadataDeadline::after(Duration::from_secs(5));
+
+        let plan = manager
+            .plan_controller_broker_id_persistence(&config, Some(11))
+            .unwrap();
+        let ControllerBrokerIdPersistencePlan::PersistPending {
+            target,
+            content,
+            record,
+        } = plan
+        else {
+            panic!("new broker id should require a durable pending snapshot");
+        };
+        assert!(manager.pending_registration().is_none());
+        actor
+            .submit_next_durable("broker.identity.pending", target.clone(), content, deadline)
+            .await
+            .unwrap();
+        let action = manager.publish_pending_broker_id(record).unwrap();
+        assert!(matches!(
+            action,
+            ControllerBrokerIdAction::ApplyBrokerId { broker_id: 11, .. }
+        ));
+        assert!(target.is_file());
+
+        let snapshot = manager
+            .plan_controller_broker_id_commit(&config)
+            .unwrap()
+            .expect("pending broker id should produce a commit snapshot");
+        actor
+            .submit_next_durable(
+                "broker.identity.committed",
+                snapshot.target.clone(),
+                snapshot.content,
+                deadline,
+            )
+            .await
+            .unwrap();
+        std::fs::remove_file(snapshot.temporary).unwrap();
+        assert_eq!(manager.publish_committed_broker_id(snapshot.record).unwrap(), 11);
+        assert!(snapshot.target.is_file());
+        assert!(!actor.shutdown_until(deadline).await.timed_out);
     }
 
     #[test]

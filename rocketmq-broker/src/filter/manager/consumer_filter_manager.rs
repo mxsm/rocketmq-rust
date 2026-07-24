@@ -1400,7 +1400,7 @@ mod tests {
             "GroupTest",
             &HashSet::from([sql_subscription("TopicTest", "color = 'blue'", 9)]),
         );
-        manager.persist();
+        manager.persist().unwrap();
 
         let restored = ConsumerFilterManager::new(broker_config, message_store_config);
         assert!(restored.load());

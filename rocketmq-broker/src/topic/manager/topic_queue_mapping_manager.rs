@@ -15,6 +15,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::OnceLock;
+use std::time::Duration;
 
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
@@ -35,9 +36,12 @@ use rocketmq_remoting::protocol::DataVersion;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::BlockingPoolPolicy;
+use rocketmq_runtime::MetadataDeadline;
+use rocketmq_runtime::MetadataIoActor;
 use rocketmq_runtime::RuntimeHandle;
 use rocketmq_runtime::TaskGroup;
 use tokio::runtime::Handle;
+use tracing::error;
 use tracing::info;
 use tracing::warn;
 
@@ -50,6 +54,7 @@ pub(crate) struct TopicQueueMappingManager {
     pub(crate) broker_config: Arc<BrokerConfig>,
     blocking_executor: OnceLock<BlockingExecutor>,
     parent_task_group: Option<TaskGroup>,
+    metadata_io: Option<MetadataIoActor>,
 }
 
 impl TopicQueueMappingManager {
@@ -65,6 +70,31 @@ impl TopicQueueMappingManager {
             broker_config,
             parent_task_group: Some(parent_task_group),
             ..Default::default()
+        }
+    }
+
+    pub(crate) fn set_metadata_io_actor(&mut self, metadata_io: MetadataIoActor) {
+        self.metadata_io = Some(metadata_io);
+    }
+
+    fn persist_after_mutation(&self, operation: &'static str) {
+        let Some(metadata_io) = self.metadata_io.as_ref() else {
+            if let Err(error) = self.persist() {
+                error!(%error, operation, "Failed to persist topic queue mapping mutation");
+            }
+            return;
+        };
+        let content = self.encode_pretty(true);
+        if content.is_empty() {
+            return;
+        }
+        if let Err(error) = metadata_io.submit_next_accepted(
+            "broker.topic-queue-mapping",
+            self.config_file_path(),
+            content.into_bytes(),
+            MetadataDeadline::after(Duration::from_secs(5)),
+        ) {
+            error!(%error, operation, "Failed to admit topic queue mapping snapshot");
         }
     }
 
@@ -217,7 +247,7 @@ impl TopicQueueMappingManager {
         self.topic_queue_mapping_table
             .insert(topic, Arc::new(topic_queue_mapping_detail));
         self.data_version.lock().next_version();
-        self.persist();
+        self.persist_after_mutation("update");
     }
 
     pub(crate) fn snapshot_topic_queue_mapping_table(&self) -> Vec<(CheetahString, TopicQueueMappingDetail)> {
@@ -346,6 +376,18 @@ impl TopicQueueMappingManager {
         }
 
         let file_name = self.config_file_path();
+        if let Some(metadata_io) = self.metadata_io.as_ref() {
+            metadata_io
+                .submit_next_durable(
+                    "broker.topic-queue-mapping",
+                    file_name,
+                    json.into_bytes(),
+                    MetadataDeadline::after(Duration::from_secs(5)),
+                )
+                .await
+                .map_err(rocketmq_common::FileUtils::metadata_io_error)?;
+            return Ok(());
+        }
         let error_path = file_name.clone();
         self.blocking_executor()?
             .spawn_io("broker.topic_queue_mapping.persist_clean_result", move || {
@@ -364,7 +406,7 @@ impl TopicQueueMappingManager {
             Some(value) => {
                 info!("delete topic queue mapping OK, static topic queue mapping: {:?}", value);
                 self.data_version.lock().next_version();
-                self.persist();
+                self.persist_after_mutation("delete");
             }
         }
     }

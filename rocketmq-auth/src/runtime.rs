@@ -14,6 +14,7 @@ use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
+use rocketmq_runtime::MetadataIoActor;
 use rocketmq_runtime::RuntimeHandle;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
@@ -70,6 +71,10 @@ pub struct ProviderRegistry {
 
 impl ProviderRegistry {
     pub fn local(config: &AuthConfig) -> RocketMQResult<Self> {
+        Self::local_with_metadata_io(config, None)
+    }
+
+    pub fn local_with_metadata_io(config: &AuthConfig, metadata_io: Option<MetadataIoActor>) -> RocketMQResult<Self> {
         validate_metadata_provider_name(
             "authenticationMetadataProvider",
             config.authentication_metadata_provider.as_str(),
@@ -91,8 +96,13 @@ impl ProviderRegistry {
             ],
         )?;
 
-        let authentication_metadata_provider = Arc::new(LocalAuthenticationMetadataProvider::with_config(config)?);
-        let mut authorization_metadata_provider = LocalAuthorizationMetadataProvider::new();
+        let authentication_metadata_provider = Arc::new(
+            LocalAuthenticationMetadataProvider::with_config_and_metadata_io(config, metadata_io.clone())?,
+        );
+        let mut authorization_metadata_provider = metadata_io.map_or_else(
+            LocalAuthorizationMetadataProvider::new,
+            LocalAuthorizationMetadataProvider::with_metadata_io,
+        );
         authorization_metadata_provider
             .initialize(config.clone(), None)
             .map_err(map_authorization_error)?;
@@ -248,6 +258,7 @@ fn validate_metadata_provider_name(key: &'static str, configured: &str, supporte
 pub struct AuthRuntimeBuilder {
     config: AuthConfig,
     provider_registry: Option<ProviderRegistry>,
+    metadata_io: Option<MetadataIoActor>,
 }
 
 impl AuthRuntimeBuilder {
@@ -255,6 +266,7 @@ impl AuthRuntimeBuilder {
         Self {
             config,
             provider_registry: None,
+            metadata_io: None,
         }
     }
 
@@ -263,10 +275,15 @@ impl AuthRuntimeBuilder {
         self
     }
 
+    pub fn with_metadata_io_actor(mut self, metadata_io: MetadataIoActor) -> Self {
+        self.metadata_io = Some(metadata_io);
+        self
+    }
+
     pub async fn build(self) -> RocketMQResult<AuthRuntime> {
         let provider_registry = match self.provider_registry {
             Some(provider_registry) => provider_registry,
-            None => ProviderRegistry::local(&self.config)?,
+            None => ProviderRegistry::local_with_metadata_io(&self.config, self.metadata_io)?,
         };
 
         seed_initial_users(&provider_registry, &self.config).await?;

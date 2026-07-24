@@ -753,6 +753,15 @@ impl<MS> ConfigManager for ConsumerOffsetManager<MS>
 where
     MS: MessageStore,
 {
+    fn supports_metadata_io_actor(&self) -> bool {
+        #[cfg(feature = "rocksdb_store")]
+        {
+            self.rocksdb_config_manager.is_none()
+        }
+        #[cfg(not(feature = "rocksdb_store"))]
+        true
+    }
+
     fn load(&self) -> bool {
         #[cfg(feature = "rocksdb_store")]
         if self.rocksdb_config_manager.is_some() {
@@ -761,22 +770,18 @@ where
         self.load_from_config_file()
     }
 
-    fn persist(&self) {
+    fn persist(&self) -> rocketmq_error::RocketMQResult<()> {
         #[cfg(feature = "rocksdb_store")]
         if self.rocksdb_config_manager.is_some() {
-            if let Err(error) = self.persist_offsets_to_rocksdb() {
-                error!("persist consumer offsets to rocksdb failed: {}", error);
-            }
-            return;
+            return self.persist_offsets_to_rocksdb();
         }
 
         let json = self.encode_pretty(true);
         if !json.is_empty() {
             let file_name = self.config_file_path();
-            if file_utils::string_to_file(json.as_str(), file_name.as_str()).is_err() {
-                error!("persist file {} exception", file_name);
-            }
+            file_utils::string_to_file(json.as_str(), file_name.as_str())?;
         }
+        Ok(())
     }
 
     fn stop(&mut self) -> bool {
@@ -1391,7 +1396,7 @@ mod tests {
         manager.commit_offset("127.0.0.1:10911".into(), &group, &topic, 0, 12);
         manager.commit_offset("127.0.0.1:10911".into(), &group, &topic, 1, 24);
         manager.advance_data_version();
-        manager.persist();
+        manager.persist().unwrap();
         drop(manager);
 
         let restarted: ConsumerOffsetManager<LocalFileMessageStore> =
@@ -1442,7 +1447,7 @@ mod tests {
 
         manager.commit_offset("127.0.0.1:10911".into(), &group, &topic, 0, 12);
         manager.advance_data_version();
-        manager.persist();
+        manager.persist().unwrap();
         manager.clean_offset_by_group(&group);
         drop(manager);
 

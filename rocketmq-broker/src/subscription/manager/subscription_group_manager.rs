@@ -16,6 +16,7 @@ use std::collections::HashMap;
 #[cfg(feature = "rocksdb_store")]
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 use std::time::Instant;
 
 use cheetah_string::CheetahString;
@@ -31,6 +32,8 @@ use rocketmq_remoting::protocol::data_version_facade::DataVersionExt;
 use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 use rocketmq_remoting::protocol::DataVersion;
 use rocketmq_remoting::protocol::RemotingSerializable;
+use rocketmq_runtime::MetadataDeadline;
+use rocketmq_runtime::MetadataIoActor;
 use rocketmq_store::base::message_store::StateMachineVersionView;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use serde::Deserialize;
@@ -83,6 +86,7 @@ pub(crate) struct SubscriptionGroupManager {
     state_machine_version: StateMachineVersionView,
     #[cfg(feature = "rocksdb_store")]
     rocksdb_config_manager: Option<Arc<RocksDbBrokerConfigManager>>,
+    metadata_io: Option<MetadataIoActor>,
 }
 
 #[derive(Clone)]
@@ -123,9 +127,39 @@ impl SubscriptionGroupManager {
             state_machine_version,
             #[cfg(feature = "rocksdb_store")]
             rocksdb_config_manager: None,
+            metadata_io: None,
         };
         manager.init();
         manager
+    }
+
+    pub(crate) fn set_metadata_io_actor(&mut self, metadata_io: MetadataIoActor) {
+        self.metadata_io = Some(metadata_io);
+    }
+
+    fn persist_after_mutation(&self, operation: &'static str) {
+        let Some(metadata_io) = self.metadata_io.as_ref() else {
+            if let Err(error) = self.persist() {
+                error!(%error, operation, "Failed to persist subscription group mutation");
+            }
+            return;
+        };
+        if !self.supports_metadata_io_actor() {
+            return;
+        }
+
+        let content = self.encode_pretty(true);
+        if content.is_empty() {
+            return;
+        }
+        if let Err(error) = metadata_io.submit_next_accepted(
+            "broker.subscription-group",
+            self.config_file_path(),
+            content.into_bytes(),
+            MetadataDeadline::after(Duration::from_secs(5)),
+        ) {
+            error!(%error, operation, "Failed to admit subscription group metadata snapshot");
+        }
     }
 
     #[cfg(feature = "rocksdb_store")]
@@ -294,7 +328,7 @@ impl SubscriptionGroupManager {
 
     pub(crate) fn update_subscription_group_config(&mut self, config: &mut SubscriptionGroupConfig) {
         self.update_subscription_group_config_without_persist(config);
-        self.persist();
+        self.persist_after_mutation("update");
     }
 
     fn update_subscription_group_config_without_persist(&mut self, config: &mut SubscriptionGroupConfig) {
@@ -580,6 +614,15 @@ impl SubscriptionGroupManager {
 }
 
 impl ConfigManager for SubscriptionGroupManager {
+    fn supports_metadata_io_actor(&self) -> bool {
+        #[cfg(feature = "rocksdb_store")]
+        {
+            self.rocksdb_config_manager.is_none()
+        }
+        #[cfg(not(feature = "rocksdb_store"))]
+        true
+    }
+
     fn load(&self) -> bool {
         #[cfg(feature = "rocksdb_store")]
         if self.rocksdb_config_manager.is_some() {
@@ -588,22 +631,18 @@ impl ConfigManager for SubscriptionGroupManager {
         self.load_from_config_file()
     }
 
-    fn persist(&self) {
+    fn persist(&self) -> rocketmq_error::RocketMQResult<()> {
         #[cfg(feature = "rocksdb_store")]
         if self.rocksdb_config_manager.is_some() {
-            if let Err(error) = self.persist_to_rocksdb() {
-                error!("persist subscription groups to rocksdb failed: {}", error);
-            }
-            return;
+            return self.persist_to_rocksdb();
         }
 
         let json = self.encode_pretty(true);
         if !json.is_empty() {
             let file_name = self.config_file_path();
-            if file_utils::string_to_file(json.as_str(), file_name.as_str()).is_err() {
-                error!("persist file {} exception", file_name);
-            }
+            file_utils::string_to_file(json.as_str(), file_name.as_str())?;
         }
+        Ok(())
     }
 
     fn stop(&mut self) -> bool {
@@ -695,7 +734,7 @@ impl SubscriptionGroupManager {
                 Self::record_consumer_group_create_latency(start_time);
             }
             self.update_data_version();
-            self.persist();
+            self.persist_after_mutation("auto-create");
             subscription_group_config = Some(arc_config);
         }
         subscription_group_config
@@ -811,7 +850,7 @@ impl SubscriptionGroupManager {
                     group_name, error
                 );
             }
-            self.persist();
+            self.persist_after_mutation("delete");
         } else {
             warn!("Delete failed, subscription group not found: {}", group_name);
         }
@@ -834,7 +873,7 @@ impl SubscriptionGroupManager {
             self.update_subscription_group_config_without_persist(&mut config);
         }
 
-        self.persist();
+        self.persist_after_mutation("batch-update");
         info!("Batch updated subscription groups");
     }
 
@@ -904,7 +943,7 @@ impl SubscriptionGroupManager {
         }
 
         self.update_data_version();
-        self.persist();
+        self.persist_after_mutation("forbidden-state");
     }
 
     /// Check if a specific forbidden flag is set

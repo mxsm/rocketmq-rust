@@ -26,6 +26,7 @@ rocketmq-dashboard-common = { path = "../../rocketmq-dashboard-common", features
 rocketmq-admin-core = { path = "../../../rocketmq-tools/rocketmq-admin/rocketmq-admin-core", default-features = false, features = ["client-adapter"] }
 rocketmq-error = { path = "../../../rocketmq-error" }
 rocketmq-observability = { path = "../../../rocketmq-observability" }
+rocketmq-runtime = { path = "../../../rocketmq-runtime" }
 
 [dev-dependencies]
 tempfile = "3"

@@ -4819,6 +4819,7 @@ dependencies = [
  "rocketmq-transport",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tokio-util",
  "tracing",
@@ -5022,11 +5023,13 @@ dependencies = [
  "parking_lot",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",
  "tracing",
  "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

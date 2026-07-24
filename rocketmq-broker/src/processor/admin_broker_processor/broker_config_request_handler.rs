@@ -1245,7 +1245,7 @@ mod tests {
                 77,
             );
             inner_mut.consumer_offset_manager().advance_data_version();
-            inner_mut.consumer_offset_manager().persist();
+            inner_mut.consumer_offset_manager().persist().unwrap();
             let mut group_config = SubscriptionGroupConfig::new(group.clone());
             group_config.set_consume_broadcast_enable(false);
             inner_mut

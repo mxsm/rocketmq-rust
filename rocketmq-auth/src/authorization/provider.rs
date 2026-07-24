@@ -23,6 +23,7 @@ use rocketmq_error::AuthError;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::SerializationError;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+use rocketmq_runtime::MetadataIoError;
 
 use crate::authentication::provider::LocalAuthenticationMetadataProvider;
 use crate::authorization::builder::default_authorization_context_builder::DefaultAuthorizationContextBuilder;
@@ -90,6 +91,10 @@ pub enum AuthorizationError {
     #[error("Authorization metadata write failed for '{path}': {reason}")]
     StorageWriteFailed { path: String, reason: String },
 
+    /// Authorization metadata actor or durability protocol failed.
+    #[error("Authorization metadata persistence failed: {0}")]
+    MetadataIo(#[source] MetadataIoError),
+
     /// Authorization metadata lock acquisition failed.
     #[error("Authorization metadata lock failed for '{0}'")]
     StorageLockFailed(String),
@@ -125,6 +130,7 @@ impl From<AuthorizationError> for RocketMQError {
             AuthorizationError::StorageWriteFailed { path, reason } => {
                 RocketMQError::storage_write_failed(path, reason)
             }
+            AuthorizationError::MetadataIo(error) => RocketMQError::IO(std::io::Error::other(error)),
             AuthorizationError::StorageLockFailed(path) => RocketMQError::StorageLockFailed { path },
             AuthorizationError::SerializationFailed {
                 operation: "encode",

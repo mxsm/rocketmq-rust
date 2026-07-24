@@ -14,10 +14,16 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
+use rocketmq_common::FileUtils;
+use rocketmq_error::RocketMQError;
+use rocketmq_error::RocketMQResult;
+use rocketmq_runtime::MetadataDeadline;
 use rocketmq_store::base::message_store::MessageStore;
 use tracing::error;
 use tracing::info;
@@ -25,6 +31,7 @@ use tracing::warn;
 
 use super::BrokerControllerRuntime;
 use crate::controller::replicas_manager::ControllerBrokerIdAction;
+use crate::controller::replicas_manager::ControllerBrokerIdPersistencePlan;
 use crate::controller::replicas_manager::ControllerRegisterFollowup;
 use crate::controller::replicas_manager::ControllerReplicaInfoFollowup;
 use crate::controller::replicas_manager::ControllerReplicaSyncFollowup;
@@ -250,10 +257,43 @@ impl<MS: MessageStore> BrokerControllerRuntime<MS> {
         true
     }
 
+    async fn persist_broker_id_snapshot(
+        &self,
+        resource: &'static str,
+        target: PathBuf,
+        content: Vec<u8>,
+    ) -> RocketMQResult<()> {
+        let metadata_io = self.metadata_io.as_ref().ok_or_else(|| {
+            RocketMQError::illegal_argument("broker-id metadata actor is unavailable in the production control plane")
+        })?;
+        metadata_io
+            .submit_next_durable(
+                resource,
+                target,
+                content,
+                MetadataDeadline::after(Duration::from_secs(10)),
+            )
+            .await
+            .map_err(FileUtils::metadata_io_error)?;
+        Ok(())
+    }
+
+    async fn remove_broker_id_temporary(&self, target: PathBuf) -> RocketMQResult<()> {
+        if let Some(blocking) = self.blocking.as_ref() {
+            return blocking
+                .spawn_io("broker.identity.remove-pending", move || remove_file_if_exists(&target))
+                .await
+                .map_err(|error| RocketMQError::IO(std::io::Error::other(error)))?
+                .map_err(RocketMQError::IO);
+        }
+        remove_file_if_exists(&target).map_err(RocketMQError::IO)
+    }
+
     pub(crate) async fn ensure_controller_broker_id(
         &self,
         controller_leader: &CheetahString,
     ) -> rocketmq_error::RocketMQResult<u64> {
+        let _operation_guard = self.controller.lock_operation().await;
         let broker_config = self.config.broker_snapshot();
         let cluster_name = broker_config.broker_identity.broker_cluster_name.clone();
         let broker_name = broker_config.broker_identity.broker_name.clone();
@@ -276,16 +316,55 @@ impl<MS: MessageStore> BrokerControllerRuntime<MS> {
         } else {
             None
         };
-        let action = self
-            .controller
-            .with_replicas_mut(|replicas_manager| {
-                replicas_manager.prepare_controller_broker_id_action(&broker_config, next_broker_id)
-            })
-            .ok_or_else(|| {
-                rocketmq_error::RocketMQError::illegal_argument(
-                    "replicas manager missing while preparing controller broker id",
-                )
-            })??;
+        let (action, pending_temporary) = if self.metadata_io.is_some() {
+            let plan = self
+                .replicas_snapshot()
+                .ok_or_else(|| {
+                    RocketMQError::illegal_argument("replicas manager missing while planning controller broker id")
+                })?
+                .plan_controller_broker_id_persistence(&broker_config, next_broker_id)?;
+            match plan {
+                ControllerBrokerIdPersistencePlan::UseCurrent(broker_id) => return Ok(broker_id),
+                ControllerBrokerIdPersistencePlan::ReusePending {
+                    broker_id,
+                    register_check_code,
+                    temporary,
+                } => (
+                    ControllerBrokerIdAction::ApplyBrokerId {
+                        broker_id,
+                        register_check_code,
+                    },
+                    Some(temporary),
+                ),
+                ControllerBrokerIdPersistencePlan::PersistPending {
+                    target,
+                    content,
+                    record,
+                } => {
+                    self.persist_broker_id_snapshot("broker.identity.pending", target.clone(), content)
+                        .await?;
+                    let action = self
+                        .controller
+                        .with_replicas_mut(|replicas_manager| replicas_manager.publish_pending_broker_id(record))
+                        .ok_or_else(|| {
+                            RocketMQError::illegal_argument(
+                                "replicas manager missing while publishing durable controller broker id",
+                            )
+                        })??;
+                    (action, Some(target))
+                }
+            }
+        } else {
+            let action = self
+                .controller
+                .with_replicas_mut(|replicas_manager| {
+                    replicas_manager.prepare_controller_broker_id_action(&broker_config, next_broker_id)
+                })
+                .ok_or_else(|| {
+                    RocketMQError::illegal_argument("replicas manager missing while preparing controller broker id")
+                })??;
+            (action, None)
+        };
 
         let (broker_id, register_check_code) = match action {
             ControllerBrokerIdAction::UseCurrent(broker_id) => return Ok(broker_id),
@@ -306,9 +385,42 @@ impl<MS: MessageStore> BrokerControllerRuntime<MS> {
             )
             .await
         {
-            self.controller
-                .with_replicas_mut(|replicas_manager| replicas_manager.clear_temp_metadata());
+            if let Some(temporary) = pending_temporary {
+                match self.remove_broker_id_temporary(temporary).await {
+                    Ok(()) => {
+                        self.controller
+                            .with_replicas_mut(ReplicasManager::clear_temp_metadata_state);
+                    }
+                    Err(cleanup_error) => {
+                        warn!(%cleanup_error, "Failed to remove pending broker-id metadata after controller rejection");
+                    }
+                }
+            } else {
+                self.controller
+                    .with_replicas_mut(|replicas_manager| replicas_manager.clear_temp_metadata());
+            }
             return Err(error);
+        }
+
+        if self.metadata_io.is_some() {
+            let snapshot = self
+                .replicas_snapshot()
+                .ok_or_else(|| {
+                    RocketMQError::illegal_argument("replicas manager missing while planning broker id commit")
+                })?
+                .plan_controller_broker_id_commit(&broker_config)?;
+            let Some(snapshot) = snapshot else {
+                return Ok(broker_id);
+            };
+            self.persist_broker_id_snapshot("broker.identity.committed", snapshot.target, snapshot.content)
+                .await?;
+            self.remove_broker_id_temporary(snapshot.temporary).await?;
+            return self
+                .controller
+                .with_replicas_mut(|replicas_manager| replicas_manager.publish_committed_broker_id(snapshot.record))
+                .ok_or_else(|| {
+                    RocketMQError::illegal_argument("replicas manager missing while publishing broker id commit")
+                })?;
         }
 
         self.controller
@@ -316,9 +428,7 @@ impl<MS: MessageStore> BrokerControllerRuntime<MS> {
                 replicas_manager.complete_controller_broker_id_application(&broker_config)
             })
             .ok_or_else(|| {
-                rocketmq_error::RocketMQError::illegal_argument(
-                    "replicas manager missing while committing controller broker id",
-                )
+                RocketMQError::illegal_argument("replicas manager missing while committing controller broker id")
             })?
     }
 
@@ -598,6 +708,14 @@ impl<MS: MessageStore> BrokerControllerRuntime<MS> {
                 Some(broker_config.broker_election_priority),
             )
             .await
+    }
+}
+
+fn remove_file_if_exists(target: &Path) -> std::io::Result<()> {
+    match std::fs::remove_file(target) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
     }
 }
 

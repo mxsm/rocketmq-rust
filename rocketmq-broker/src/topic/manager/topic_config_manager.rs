@@ -1068,10 +1068,8 @@ impl TopicConfigManager {
         Ok(())
     }
 
-    fn persist_topic_config(&self, _topic_name: &str) {
-        if let Err(error) = self.persist_latest_snapshot() {
-            error!(?error, "persist topic config failed");
-        }
+    fn persist_topic_config(&self, _topic_name: &str) -> rocketmq_error::RocketMQResult<()> {
+        self.persist_latest_snapshot().map(|_| ())
     }
 
     pub(crate) fn persist_latest_snapshot(&self) -> Result<DataVersion, rocketmq_error::RocketMQError> {
@@ -1101,6 +1099,22 @@ impl TopicConfigManager {
             })?;
         }
         Ok(data_version)
+    }
+
+    pub(crate) fn encoded_persistence_snapshot(
+        &self,
+    ) -> Result<(DataVersion, String, Vec<u8>), rocketmq_error::RocketMQError> {
+        let _persist = self.persist_lock.lock();
+        let (topic_config_table, data_version) = self.metadata_snapshot();
+        let content = TopicConfigSerializeWrapper::new(Some(topic_config_table), Some(data_version.clone()))
+            .serialize_json_pretty()
+            .map_err(|error| {
+                rocketmq_error::RocketMQError::storage_write_failed(
+                    self.config_file_path(),
+                    format!("encode topic config snapshot failed: {error}"),
+                )
+            })?;
+        Ok((data_version, self.config_file_path(), content.into_bytes()))
     }
 
     fn load_from_config_file(&self) -> bool {
@@ -1134,6 +1148,15 @@ impl TopicConfigManager {
 }
 
 impl ConfigManager for TopicConfigManager {
+    fn supports_metadata_io_actor(&self) -> bool {
+        #[cfg(feature = "rocksdb_store")]
+        {
+            self.rocksdb_config_manager.is_none()
+        }
+        #[cfg(not(feature = "rocksdb_store"))]
+        true
+    }
+
     fn load(&self) -> bool {
         #[cfg(feature = "rocksdb_store")]
         if self.rocksdb_config_manager.is_some() {
@@ -1142,14 +1165,16 @@ impl ConfigManager for TopicConfigManager {
         self.load_from_config_file()
     }
 
-    fn persist_with_topic(&mut self, topic_name: &str, _t: Box<dyn std::any::Any>) {
+    fn persist_with_topic(
+        &mut self,
+        topic_name: &str,
+        _t: Box<dyn std::any::Any>,
+    ) -> rocketmq_error::RocketMQResult<()> {
         self.persist_topic_config(topic_name)
     }
 
-    fn persist(&self) {
-        if let Err(error) = self.persist_latest_snapshot() {
-            error!(?error, "persist topic config failed");
-        }
+    fn persist(&self) -> rocketmq_error::RocketMQResult<()> {
+        self.persist_latest_snapshot().map(|_| ())
     }
 
     fn stop(&mut self) -> bool {
@@ -1440,7 +1465,7 @@ mod rocksdb_config_tests {
             rocksdb_manager,
         );
         topic_manager.update_topic_config(TopicConfig::with_queues("TopicA", 4, 5), 0);
-        topic_manager.persist();
+        topic_manager.persist().unwrap();
         drop(topic_manager);
 
         let restarted_rocksdb_manager = Arc::new(
@@ -1480,9 +1505,9 @@ mod rocksdb_config_tests {
         );
         let topic_name = CheetahString::from_static_str("TopicDelete");
         topic_manager.update_topic_config(TopicConfig::with_queues(topic_name.clone(), 1, 1), 0);
-        topic_manager.persist();
+        topic_manager.persist().unwrap();
         topic_manager.delete_topic_config(&topic_name, 0);
-        topic_manager.persist();
+        topic_manager.persist().unwrap();
         drop(topic_manager);
 
         let restarted_rocksdb_manager = Arc::new(

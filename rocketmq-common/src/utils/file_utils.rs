@@ -12,14 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fs::File;
-use std::io::Write;
 use std::io::{self};
 use std::path::Path;
 
 use parking_lot::Mutex;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
+use rocketmq_runtime::LocalMetadataFileSystem;
+use rocketmq_runtime::MetadataFileSystem;
+use rocketmq_runtime::MetadataIoError;
 #[cfg(feature = "async_fs")]
 use tokio::io::AsyncReadExt;
 #[cfg(feature = "async_fs")]
@@ -53,27 +54,19 @@ pub fn string_to_file(str_content: &str, file_name: impl AsRef<Path>) -> RocketM
 
     // Create a backup if the file exists
     if file_path.exists() {
-        std::fs::copy(file_path, &bak_file)?;
+        let previous = std::fs::read(file_path)?;
+        LocalMetadataFileSystem
+            .persist_atomic(Path::new(&bak_file), &previous)
+            .map_err(metadata_io_error)?;
     }
 
-    // Write new content to the file
-    string_to_file_not_safe(str_content, file_path)?;
-    Ok(())
+    LocalMetadataFileSystem
+        .persist_atomic(file_path, str_content.as_bytes())
+        .map_err(metadata_io_error)
 }
 
-fn string_to_file_not_safe(str_content: &str, file_name: impl AsRef<Path>) -> RocketMQResult<()> {
-    let path = file_name.as_ref();
-
-    // Create parent directories if they don't exist
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    let file = File::create(path)?;
-    let mut writer = io::BufWriter::new(file);
-    writer.write_all(str_content.as_bytes())?;
-    writer.flush()?;
-    Ok(())
+pub fn metadata_io_error(error: MetadataIoError) -> RocketMQError {
+    RocketMQError::IO(io::Error::other(error))
 }
 
 #[cfg(feature = "async_fs")]

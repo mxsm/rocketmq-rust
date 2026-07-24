@@ -20,11 +20,15 @@ use std::time::Instant;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
 use rocketmq_common::FileUtils;
-use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::body::kv_table::KVTable;
 use rocketmq_remoting::protocol::RemotingDeserializable;
 use rocketmq_remoting::protocol::RemotingSerializable;
+use rocketmq_runtime::MetadataDeadline;
+use rocketmq_runtime::MetadataIoActor;
+use rocketmq_runtime::MetadataIoError;
+use rocketmq_runtime::MetadataIoShutdownReport;
+use rocketmq_runtime::MetadataIoSnapshot;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
@@ -60,6 +64,9 @@ pub struct KVConfigManager {
     last_persist_time: Arc<parking_lot::Mutex<Instant>>,
     /// Serializes file replacement while allowing concurrent table access.
     persist_lock: parking_lot::Mutex<()>,
+    /// Production persistence owner. Absence is retained only for legacy
+    /// builders that do not inject a service lifecycle.
+    metadata_io: Option<Result<MetadataIoActor, MetadataIoError>>,
 }
 
 impl KVConfigManager {
@@ -72,13 +79,17 @@ impl KVConfigManager {
     /// # Returns
     ///
     /// A new `KVConfigManager` instance.
-    pub(crate) fn new(name_server_runtime_inner: NameServerRuntimeHandle) -> Self {
+    pub(crate) fn new(
+        name_server_runtime_inner: NameServerRuntimeHandle,
+        metadata_io: Option<Result<MetadataIoActor, MetadataIoError>>,
+    ) -> Self {
         Self {
             config_table: Arc::new(dashmap::DashMap::with_capacity(64)),
             name_server_runtime_inner,
             pending_changes: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             last_persist_time: Arc::new(parking_lot::Mutex::new(Instant::now())),
             persist_lock: parking_lot::Mutex::new(()),
+            metadata_io,
         }
     }
 
@@ -90,6 +101,13 @@ impl KVConfigManager {
     #[inline]
     pub fn get_config_table(&self) -> &dashmap::DashMap<Namespace, ConfigMap> {
         &self.config_table
+    }
+
+    pub(crate) fn metadata_io_snapshot(&self) -> Option<MetadataIoSnapshot> {
+        self.metadata_io
+            .as_ref()
+            .and_then(|result| result.as_ref().ok())
+            .map(MetadataIoActor::snapshot)
     }
 
     /// Gets a reference to the Namesrv configuration.
@@ -174,33 +192,43 @@ impl KVConfigManager {
 
     /// Persists the current key-value configurations to a file.
     ///
-    /// This method performs actual file I/O. For better performance,
-    /// consider using `persist_if_needed()` which applies deferred persistence.
+    /// This method submits an immutable snapshot to the owned metadata actor
+    /// and waits for durable completion.
     ///
     /// # Returns
     ///
     /// - `Ok(())` if persistence succeeds
     /// - `Err(RocketMQError)` if serialization or file write fails
-    pub fn persist(&self) -> RocketMQResult<()> {
-        let _persist_guard = self.persist_lock.lock();
+    pub async fn persist_until(&self, deadline: MetadataDeadline) -> RocketMQResult<()> {
         let namesrv_config = self.name_server_runtime_inner.name_server_config();
-        let config_path = namesrv_config.kv_config_path.as_str();
+        let config_path = namesrv_config.kv_config_path.to_string();
 
         // Create a snapshot to minimize lock time
-        let snapshot: dashmap::DashMap<Namespace, ConfigMap> = self
-            .config_table
-            .iter()
-            .map(|entry| (entry.key().clone(), entry.value().clone()))
-            .collect();
+        let content = {
+            let _persist_guard = self.persist_lock.lock();
+            let snapshot: dashmap::DashMap<Namespace, ConfigMap> = self
+                .config_table
+                .iter()
+                .map(|entry| (entry.key().clone(), entry.value().clone()))
+                .collect();
+            KVConfigSerializeWrapper::new_with_config_table(snapshot).serialize_json_pretty()?
+        };
 
-        let wrapper = KVConfigSerializeWrapper::new_with_config_table(snapshot);
-
-        let content = wrapper.serialize_json_pretty()?;
-
-        FileUtils::string_to_file(content.as_str(), config_path).map_err(|e| {
-            error!("Failed to persist KV config to {}: {}", config_path, e);
-            RocketMQError::storage_write_failed(config_path, format!("Write failed: {}", e))
-        })?;
+        match self.metadata_io.as_ref() {
+            Some(Ok(metadata_io)) => {
+                metadata_io
+                    .submit_next_durable("namesrv.kv-config", &config_path, content.into_bytes(), deadline)
+                    .await
+                    .map_err(FileUtils::metadata_io_error)?;
+            }
+            Some(Err(error)) => return Err(FileUtils::metadata_io_error(error.clone())),
+            None => {
+                // Legacy builders without ServiceContext retain a synchronous
+                // compatibility path. Production builders always install the
+                // actor above.
+                FileUtils::string_to_file(content.as_str(), &config_path)?;
+            }
+        }
 
         // Reset counters after successful persistence
         self.pending_changes.store(0, std::sync::atomic::Ordering::Relaxed);
@@ -221,12 +249,12 @@ impl KVConfigManager {
     /// - `Ok(true)` if persistence was performed
     /// - `Ok(false)` if persistence was skipped
     /// - `Err(RocketMQError)` if persistence fails
-    pub fn persist_if_needed(&self) -> RocketMQResult<bool> {
+    pub async fn persist_if_needed(&self, deadline: MetadataDeadline) -> RocketMQResult<bool> {
         let pending = self.pending_changes.load(std::sync::atomic::Ordering::Relaxed);
         let elapsed = self.last_persist_time.lock().elapsed();
 
         if pending >= AUTO_PERSIST_THRESHOLD || elapsed >= MIN_PERSIST_INTERVAL {
-            self.persist()?;
+            self.persist_until(deadline).await?;
             Ok(true)
         } else {
             Ok(false)
@@ -238,21 +266,34 @@ impl KVConfigManager {
     /// This should be called when shutting down or when immediate
     /// durability is required.
     #[inline]
-    pub fn force_persist(&self) -> RocketMQResult<()> {
-        self.persist()
+    pub async fn force_persist(&self, deadline: MetadataDeadline) -> RocketMQResult<()> {
+        self.persist_until(deadline).await
+    }
+
+    /// Stops admission and drains the owned persistence actor.
+    pub async fn shutdown_metadata_io(&self, deadline: MetadataDeadline) -> Option<MetadataIoShutdownReport> {
+        match self.metadata_io.as_ref() {
+            Some(Ok(metadata_io)) => Some(metadata_io.shutdown_until(deadline).await),
+            Some(Err(_)) | None => None,
+        }
     }
 
     /// Adds or updates a key-value configuration.
     ///
-    /// Uses deferred persistence to reduce I/O operations.
-    /// Call `persist_if_needed()` or `force_persist()` to save changes.
+    /// The mutation returns only after its generation is durable.
     ///
     /// # Arguments
     ///
     /// * `namespace` - The namespace for the configuration
     /// * `key` - The configuration key
     /// * `value` - The configuration value
-    pub fn put_kv_config(&self, namespace: Namespace, key: Key, value: Value) -> RocketMQResult<()> {
+    pub async fn put_kv_config(
+        &self,
+        namespace: Namespace,
+        key: Key,
+        value: Value,
+        deadline: MetadataDeadline,
+    ) -> RocketMQResult<()> {
         let is_new = {
             let mut namespace_entry = self.config_table.entry(namespace.clone()).or_default();
             let pre_value = namespace_entry.insert(key.clone(), value.clone());
@@ -274,15 +315,13 @@ impl KVConfigManager {
             );
         }
 
-        // Auto-persist if threshold reached
-        self.persist_if_needed()?;
+        self.persist_until(deadline).await?;
         Ok(())
     }
 
     /// Deletes a key-value configuration.
     ///
-    /// Uses deferred persistence to reduce I/O operations.
-    /// Call `persist_if_needed()` or `force_persist()` to save changes.
+    /// The mutation returns only after its generation is durable.
     ///
     /// # Arguments
     ///
@@ -293,7 +332,12 @@ impl KVConfigManager {
     ///
     /// - `Ok(true)` if the key was deleted
     /// - `Ok(false)` if the key didn't exist
-    pub fn delete_kv_config(&self, namespace: &Namespace, key: &Key) -> RocketMQResult<bool> {
+    pub async fn delete_kv_config(
+        &self,
+        namespace: &Namespace,
+        key: &Key,
+        deadline: MetadataDeadline,
+    ) -> RocketMQResult<bool> {
         let deleted_value = self
             .config_table
             .get_mut(namespace)
@@ -308,8 +352,7 @@ impl KVConfigManager {
                 namespace, key, value
             );
 
-            // Auto-persist if threshold reached
-            self.persist_if_needed()?;
+            self.persist_until(deadline).await?;
             Ok(true)
         } else {
             debug!("KV config not found for deletion: namespace={}, key={}", namespace, key);
@@ -330,7 +373,12 @@ impl KVConfigManager {
     /// # Returns
     ///
     /// - `Ok(usize)` - Number of entries updated
-    pub fn batch_put_kv_config(&self, namespace: Namespace, kv_pairs: HashMap<Key, Value>) -> RocketMQResult<usize> {
+    pub async fn batch_put_kv_config(
+        &self,
+        namespace: Namespace,
+        kv_pairs: HashMap<Key, Value>,
+        deadline: MetadataDeadline,
+    ) -> RocketMQResult<usize> {
         if kv_pairs.is_empty() {
             return Ok(0);
         }
@@ -349,8 +397,7 @@ impl KVConfigManager {
 
         debug!("Batch updated {} KV configs in namespace={}", count, namespace);
 
-        // Auto-persist if threshold reached
-        self.persist_if_needed()?;
+        self.persist_until(deadline).await?;
         Ok(count)
     }
 
@@ -364,7 +411,12 @@ impl KVConfigManager {
     /// # Returns
     ///
     /// - `Ok(usize)` - Number of entries deleted
-    pub fn batch_delete_kv_config(&self, namespace: &Namespace, keys: &[Key]) -> RocketMQResult<usize> {
+    pub async fn batch_delete_kv_config(
+        &self,
+        namespace: &Namespace,
+        keys: &[Key],
+        deadline: MetadataDeadline,
+    ) -> RocketMQResult<usize> {
         if keys.is_empty() {
             return Ok(0);
         }
@@ -388,8 +440,7 @@ impl KVConfigManager {
                 deleted_count, namespace
             );
 
-            // Auto-persist if threshold reached
-            self.persist_if_needed()?;
+            self.persist_until(deadline).await?;
         }
 
         Ok(deleted_count)
@@ -404,7 +455,7 @@ impl KVConfigManager {
     /// # Returns
     ///
     /// - `Ok(usize)` - Number of keys deleted
-    pub fn delete_namespace(&self, namespace: &Namespace) -> RocketMQResult<usize> {
+    pub async fn delete_namespace(&self, namespace: &Namespace, deadline: MetadataDeadline) -> RocketMQResult<usize> {
         if let Some((_, kv_map)) = self.config_table.remove(namespace) {
             let count = kv_map.len();
 
@@ -414,8 +465,7 @@ impl KVConfigManager {
 
             info!("Deleted namespace={} with {} configs", namespace, count);
 
-            // Auto-persist if threshold reached
-            self.persist_if_needed()?;
+            self.persist_until(deadline).await?;
             Ok(count)
         } else {
             debug!("Namespace not found for deletion: {}", namespace);

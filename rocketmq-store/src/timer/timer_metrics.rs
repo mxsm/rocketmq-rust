@@ -14,12 +14,13 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
 
 use cheetah_string::CheetahString;
 use parking_lot::Mutex;
 use rocketmq_common::common::config_manager::ConfigManager;
+use rocketmq_common::FileUtils;
 use rocketmq_common::TimeUtils::current_millis;
+use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::data_version_facade::DataVersionExt;
 use rocketmq_remoting::protocol::DataVersion;
 use rocketmq_store_local::timer::metrics::default_timer_dist;
@@ -68,17 +69,11 @@ impl ConfigManager for TimerMetrics {
         }
     }
 
-    fn persist(&self) {
+    fn persist(&self) -> RocketMQResult<()> {
         let Some(config_path) = self.config_path.lock().clone() else {
-            return;
+            return Ok(());
         };
-        let Some(parent) = Path::new(config_path.as_str()).parent() else {
-            return;
-        };
-        if fs::create_dir_all(parent).is_err() {
-            return;
-        }
-        let _ = fs::write(config_path, self.encode_pretty(true));
+        FileUtils::string_to_file(&self.encode_pretty(true), config_path)
     }
 
     fn config_file_path(&self) -> String {
