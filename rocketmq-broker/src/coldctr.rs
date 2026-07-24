@@ -13,4 +13,3 @@
 // limitations under the License.
 
 pub(crate) mod cold_data_cg_ctr_service;
-pub(crate) mod cold_data_pull_request_hold_service;

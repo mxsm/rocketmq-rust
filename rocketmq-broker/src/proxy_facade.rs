@@ -31,6 +31,8 @@ use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use tokio::time::timeout;
 
 use crate::broker_runtime::BrokerRuntime;
+use crate::lifecycle::BrokerReadiness;
+use crate::lifecycle::BrokerStartupError;
 
 const LOCAL_PROXY_RESPONSE_TIMEOUT: Duration = Duration::from_secs(3);
 
@@ -109,12 +111,12 @@ impl ProxyBrokerFacade {
         }
     }
 
-    pub async fn initialize(&mut self) -> bool {
+    pub async fn initialize(&mut self) -> Result<(), BrokerStartupError> {
         self.runtime.initialize().await
     }
 
-    pub async fn start(&mut self) {
-        self.runtime.start().await;
+    pub async fn start(&mut self) -> Result<BrokerReadiness, BrokerStartupError> {
+        self.runtime.start().await
     }
 
     pub async fn shutdown(&mut self) {

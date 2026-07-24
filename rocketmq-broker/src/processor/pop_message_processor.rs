@@ -753,7 +753,7 @@ where
         message_filter: Option<ArcMessageFilter>,
         start_offset_info: &mut String,
         msg_offset_info: &mut String,
-        order_count_info: &mut str,
+        order_count_info: &mut String,
         random_q: i32,
         mut rest_num: i64,
     ) -> i64 {
@@ -793,7 +793,7 @@ where
         message_filter: Option<ArcMessageFilter>,
         start_offset_info: &mut String,
         msg_offset_info: &mut String,
-        order_count_info: &mut str,
+        order_count_info: &mut String,
         random_q: i32,
         rest_num: i64,
     ) -> i64 {
@@ -834,7 +834,7 @@ where
         message_filter: Option<ArcMessageFilter>,
         start_offset_info: &mut String,
         msg_offset_info: &mut String,
-        order_count_info: &mut str,
+        order_count_info: &mut String,
     ) -> i64 {
         let policy = self.context.policy.snapshot();
         let lock_key = CheetahString::from_string(QueueLockManager::build_lock_key(
@@ -1713,7 +1713,7 @@ mod tests {
             ..MessageStoreConfig::default()
         });
         let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
-        assert!(runtime.initialize().await);
+        assert!(runtime.initialize().await.is_ok());
         runtime
     }
 

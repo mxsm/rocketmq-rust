@@ -512,6 +512,14 @@ impl<MS: MessageStore> EscapeBridgeStoreCapability<MS> {
         self.with_store(|store| store.check_in_mem_by_consume_offset(topic, queue_id, 0, 1))
     }
 
+    pub(crate) fn max_offset_in_queue(
+        &self,
+        topic: &CheetahString,
+        queue_id: i32,
+    ) -> Result<i64, MessageStoreUnavailable> {
+        self.with_store(|store| store.get_max_offset_in_queue(topic, queue_id))
+    }
+
     pub(crate) fn timer_lag(&self) -> Result<(i64, i64), MessageStoreUnavailable> {
         self.with_store(|store| {
             store

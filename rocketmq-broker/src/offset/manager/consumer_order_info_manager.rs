@@ -12,12 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![allow(unused_variables)]
-
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt::Display;
-use std::ops::Deref;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
@@ -28,11 +25,11 @@ use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 use serde::Deserialize;
 use serde::Serialize;
+use tracing::error;
 use tracing::info;
 use tracing::warn;
 
 use crate::broker_path_config_helper::get_consumer_order_info_path;
-use crate::offset::manager::consumer_order_info_lock_manager::ConsumerOrderInfoLockManager;
 use crate::topic::manager::topic_config_manager::TopicConfigManager;
 
 const TOPIC_GROUP_SEPARATOR: &str = "@";
@@ -41,7 +38,6 @@ type SubscriptionGroupTable = Arc<DashMap<CheetahString, Arc<SubscriptionGroupCo
 
 pub(crate) struct ConsumerOrderInfoManager {
     pub(crate) consumer_order_info_wrapper: parking_lot::Mutex<ConsumerOrderInfoWrapper>,
-    pub(crate) consumer_order_info_lock_manager: Option<ConsumerOrderInfoLockManager>,
     store_path_root_dir: CheetahString,
     topic_config_manager: Arc<TopicConfigManager>,
     subscription_group_table: SubscriptionGroupTable,
@@ -55,7 +51,6 @@ impl ConsumerOrderInfoManager {
     ) -> Self {
         Self {
             consumer_order_info_wrapper: parking_lot::Mutex::new(ConsumerOrderInfoWrapper::default()),
-            consumer_order_info_lock_manager: None,
             store_path_root_dir,
             topic_config_manager,
             subscription_group_table,
@@ -63,8 +58,6 @@ impl ConsumerOrderInfoManager {
     }
 }
 
-//Fully implemented will be removed
-#[allow(unused_variables)]
 impl ConfigManager for ConsumerOrderInfoManager {
     fn config_file_path(&self) -> String {
         get_consumer_order_info_path(self.store_path_root_dir.as_str())
@@ -73,30 +66,45 @@ impl ConfigManager for ConsumerOrderInfoManager {
     fn encode_pretty(&self, pretty_format: bool) -> String {
         self.auto_clean();
         let wrapper = self.consumer_order_info_wrapper.lock();
-        match pretty_format {
-            true => SerdeJsonUtils::serialize_json_pretty(&wrapper.table)
-                .expect("Failed to serialize consumer order info wrapper"),
-            false => serde_json::to_string(&wrapper.table).expect("Failed to serialize consumer order info wrapper"),
+        if pretty_format {
+            return SerdeJsonUtils::serialize_json_pretty(&*wrapper).unwrap_or_else(|error| {
+                error!(%error, "Failed to serialize consumer order information");
+                String::new()
+            });
         }
+        serde_json::to_string(&*wrapper).unwrap_or_else(|error| {
+            error!(%error, "Failed to serialize consumer order information");
+            String::new()
+        })
     }
 
     fn decode(&self, json_string: &str) {
         if json_string.is_empty() {
             return;
         }
-        let wrapper = serde_json::from_str::<ConsumerOrderInfoWrapper>(json_string).unwrap_or_default();
+        let wrapper = serde_json::from_str::<ConsumerOrderInfoWrapper>(json_string)
+            .or_else(|_| {
+                serde_json::from_str::<HashMap<CheetahString, HashMap<i32, OrderInfo>>>(json_string)
+                    .map(|table| ConsumerOrderInfoWrapper { table })
+            })
+            .unwrap_or_default();
         if !wrapper.table.is_empty() {
             self.consumer_order_info_wrapper.lock().table.clone_from(&wrapper.table);
-            if let Some(consumer_order_info_lock_manager) = self.consumer_order_info_lock_manager.as_ref() {
-                consumer_order_info_lock_manager.recover(self.consumer_order_info_wrapper.lock().deref());
-            }
         }
     }
 }
 
 impl ConsumerOrderInfoManager {
     pub fn clear_block(&self, topic: &CheetahString, group: &CheetahString, queue_id: i32) {
-        unimplemented!()
+        let key = CheetahString::from_string(build_key(topic, group));
+        let mut wrapper = self.consumer_order_info_wrapper.lock();
+        let remove_key = wrapper.table.get_mut(&key).is_some_and(|queues| {
+            queues.remove(&queue_id);
+            queues.is_empty()
+        });
+        if remove_key {
+            wrapper.table.remove(&key);
+        }
     }
 
     pub fn auto_clean(&self) {
@@ -134,11 +142,15 @@ impl ConsumerOrderInfoManager {
                 keys_to_remove.push(topic_at_group.clone());
                 continue;
             }
-            let topic_config = topic_config.unwrap();
+            let Some(topic_config) = topic_config else {
+                continue;
+            };
             // Clean individual queues in the current topic@group
             let mut queues_to_remove = Vec::new();
             for (queue_id, order_info) in qs.iter_mut() {
-                if *queue_id == topic_config.read_queue_nums as i32 {
+                if *queue_id >= topic_config.read_queue_nums as i32
+                    || current_millis().saturating_sub(order_info.last_consume_timestamp) > CLEAN_SPAN_FROM_LAST
+                {
                     queues_to_remove.push(*queue_id);
                     info!(
                         "Queue not exist, Clean order info, {}:{}, {:?}",
@@ -179,23 +191,21 @@ impl ConsumerOrderInfoManager {
         let key = CheetahString::from_string(build_key(topic, group));
         let mut table = self.consumer_order_info_wrapper.lock();
         let qs = table.table.get_mut(&key);
-        if qs.is_none() {
+        let Some(qs) = qs else {
             warn!(
                 "orderInfo of queueId is null. key: {}, queueOffset: {}, queueId: {}",
                 key, queue_offset, queue_id
             );
             return;
-        }
-        let qs = qs.unwrap();
+        };
         let order_info = qs.get_mut(&queue_id);
-        if order_info.is_none() {
+        let Some(order_info) = order_info else {
             warn!(
                 "orderInfo of queueId is null. key: {}, queueOffset: {}, queueId: {}",
                 key, queue_offset, queue_id
             );
             return;
-        }
-        let order_info = order_info.unwrap();
+        };
         if pop_time != order_info.pop_time {
             warn!(
                 "popTime is not equal to orderInfo saved. key: {}, queueOffset: {}, orderInfo: {}, popTime: {}",
@@ -204,17 +214,6 @@ impl ConsumerOrderInfoManager {
             return;
         }
         order_info.update_offset_next_visible_time(queue_offset, next_visible_time);
-        self.update_lock_free_timestamp(topic, group, queue_id, order_info);
-    }
-
-    fn update_lock_free_timestamp(
-        &self,
-        _topic: &CheetahString,
-        _group: &CheetahString,
-        _queue_id: i32,
-        _order_info: &OrderInfo,
-    ) {
-        unimplemented!("")
     }
 
     pub fn commit_and_next(
@@ -225,7 +224,47 @@ impl ConsumerOrderInfoManager {
         queue_offset: u64,
         pop_time: u64,
     ) -> i64 {
-        unimplemented!()
+        let key = CheetahString::from_string(build_key(topic, group));
+        let mut wrapper = self.consumer_order_info_wrapper.lock();
+        let Some(queues) = wrapper.table.get_mut(&key) else {
+            return queue_offset.saturating_add(1) as i64;
+        };
+        let Some(order_info) = queues.get_mut(&queue_id) else {
+            warn!(%key, queue_offset, queue_id, "Order information is missing while committing");
+            return queue_offset.saturating_add(1) as i64;
+        };
+        if order_info.offset_list.is_empty() {
+            warn!(%key, queue_offset, queue_id, "Order information has no offsets");
+            return -1;
+        }
+        if pop_time != order_info.pop_time {
+            warn!(
+                %key,
+                queue_offset,
+                queue_id,
+                expected_pop_time = order_info.pop_time,
+                pop_time,
+                "Ignoring a stale ordered-message commit"
+            );
+            return -2;
+        }
+
+        let Some(offset_index) = order_info
+            .offset_list
+            .iter()
+            .enumerate()
+            .find_map(|(index, _)| (order_info.get_queue_offset(index) == queue_offset).then_some(index))
+        else {
+            warn!(%key, queue_offset, queue_id, "Ordered-message commit offset is not part of the active batch");
+            return -1;
+        };
+        let Some(commit_bit) = 1_u64.checked_shl(offset_index as u32) else {
+            warn!(%key, queue_offset, queue_id, offset_index, "Ordered-message batch exceeds the 64-offset commit bitmap");
+            return -1;
+        };
+        order_info.commit_offset_bit |= commit_bit;
+        order_info.last_consume_timestamp = current_millis();
+        order_info.get_next_offset()
     }
 
     pub fn check_block(
@@ -236,22 +275,74 @@ impl ConsumerOrderInfoManager {
         queue_id: i32,
         invisible_time: u64,
     ) -> bool {
-        unimplemented!()
+        let key = CheetahString::from_string(build_key(topic, group));
+        self.consumer_order_info_wrapper
+            .lock()
+            .table
+            .get_mut(&key)
+            .and_then(|queues| queues.get_mut(&queue_id))
+            .is_some_and(|order_info| order_info.need_block(attempt_id.as_str(), invisible_time))
     }
 
     pub fn update(
         &self,
         attempt_id: CheetahString,
-        is_retry: bool,
+        _is_retry: bool,
         topic: &CheetahString,
         group: &CheetahString,
         queue_id: i32,
         pop_time: u64,
         invisible_time: u64,
         msg_queue_offset_list: Vec<u64>,
-        order_info_builder: &str,
+        order_info_builder: &mut String,
     ) -> bool {
-        unimplemented!()
+        let key = CheetahString::from_string(build_key(topic, group));
+        let mut wrapper = self.consumer_order_info_wrapper.lock();
+        let queues = wrapper.table.entry(key).or_default();
+        let previous = queues.get(&queue_id).cloned();
+        let mut order_info = OrderInfo {
+            pop_time,
+            invisible_time: Some(invisible_time),
+            offset_list: OrderInfo::build_offset_list(msg_queue_offset_list),
+            offset_next_visible_time: HashMap::new(),
+            offset_consumed_count: HashMap::new(),
+            last_consume_timestamp: current_millis(),
+            commit_offset_bit: 0,
+            attempt_id: attempt_id.to_string(),
+        };
+        if let Some(previous) = previous {
+            order_info.merge_offset_consumed_count(
+                previous.attempt_id.as_str(),
+                previous.offset_list,
+                previous.offset_consumed_count,
+            );
+        }
+        queues.insert(queue_id, order_info.clone());
+
+        let mut min_consumed_times = i32::MAX;
+        for (offset, consumed_times) in &order_info.offset_consumed_count {
+            rocketmq_remoting::protocol::header::extra_info_util::ExtraInfoUtil::build_queue_offset_order_count_info(
+                order_info_builder,
+                topic.as_str(),
+                queue_id as i64,
+                *offset as i64,
+                *consumed_times,
+            );
+            min_consumed_times = min_consumed_times.min(*consumed_times);
+        }
+        if order_info.offset_consumed_count.len() != order_info.offset_list.len() {
+            min_consumed_times = 0;
+        }
+        if min_consumed_times == i32::MAX {
+            min_consumed_times = 0;
+        }
+        rocketmq_remoting::protocol::header::extra_info_util::ExtraInfoUtil::build_queue_id_order_count_info(
+            order_info_builder,
+            topic.as_str(),
+            queue_id,
+            min_consumed_times,
+        );
+        true
     }
 }
 
@@ -272,7 +363,7 @@ pub(crate) struct OrderInfo {
     pub(crate) pop_time: u64,
     #[serde(rename = "i")]
     pub(crate) invisible_time: Option<u64>,
-    #[serde(rename = "0")]
+    #[serde(rename = "o")]
     pub(crate) offset_list: Vec<u64>,
     #[serde(rename = "ot")]
     pub(crate) offset_next_visible_time: HashMap<u64, u64>,
@@ -318,6 +409,9 @@ impl OrderInfo {
     ///
     /// A vector of offsets.
     pub fn build_offset_list(queue_offset_list: Vec<u64>) -> Vec<u64> {
+        if queue_offset_list.is_empty() {
+            return Vec::new();
+        }
         let mut simple = Vec::new();
         if queue_offset_list.len() == 1 {
             simple.extend(queue_offset_list);
@@ -479,6 +573,10 @@ impl OrderInfo {
             self.offset_consumed_count = prev_offset_consumed_count;
             return;
         }
+        if pre_offset_list.is_empty() || self.offset_list.is_empty() {
+            self.offset_consumed_count = offset_consumed_count;
+            return;
+        }
         let mut pre_queue_offset_set = HashSet::new();
         for (index, _) in pre_offset_list.iter().enumerate() {
             pre_queue_offset_set.insert(Self::get_queue_offset_from_list(&pre_offset_list, index));
@@ -565,11 +663,16 @@ mod tests {
         topic_config_manager.update_topic_config(TopicConfig::new(topic.as_str()), 0);
         subscription_group_table.insert(group.clone(), Arc::new(SubscriptionGroupConfig::new(group.clone())));
         let key = CheetahString::from_string(build_key(&topic, &group));
-        manager
-            .consumer_order_info_wrapper
-            .lock()
-            .table
-            .insert(key.clone(), HashMap::from([(0, OrderInfo::default())]));
+        manager.consumer_order_info_wrapper.lock().table.insert(
+            key.clone(),
+            HashMap::from([(
+                0,
+                OrderInfo {
+                    last_consume_timestamp: current_millis(),
+                    ..OrderInfo::default()
+                },
+            )]),
+        );
 
         manager.auto_clean();
         assert!(manager.consumer_order_info_wrapper.lock().table.contains_key(&key));
@@ -648,5 +751,100 @@ mod tests {
         order_info.merge_offset_consumed_count("test", pre_offset_list, prev_offset_consumed_count);
         assert_eq!(order_info.offset_consumed_count.get(&1), Some(&1));
         assert_eq!(order_info.offset_consumed_count.get(&2), Some(&1));
+    }
+
+    #[test]
+    fn update_block_commit_and_clear_follow_ordered_batch_semantics() {
+        let (manager, topic_config_manager, subscription_group_table) = test_manager();
+        let topic = CheetahString::from_static_str("OrderTopic");
+        let group = CheetahString::from_static_str("OrderGroup");
+        topic_config_manager.update_topic_config(TopicConfig::new(topic.as_str()), 0);
+        subscription_group_table.insert(group.clone(), Arc::new(SubscriptionGroupConfig::new(group.clone())));
+        let pop_time = current_millis();
+        let mut order_info = String::new();
+
+        assert!(manager.update(
+            CheetahString::from_static_str("attempt-1"),
+            false,
+            &topic,
+            &group,
+            0,
+            pop_time,
+            30_000,
+            vec![10, 11, 13],
+            &mut order_info,
+        ));
+        assert!(!order_info.is_empty());
+        assert!(manager.check_block(&CheetahString::from_static_str("attempt-2"), &topic, &group, 0, 30_000,));
+        assert!(!manager.check_block(&CheetahString::from_static_str("attempt-1"), &topic, &group, 0, 30_000,));
+
+        assert_eq!(manager.commit_and_next(&topic, &group, 0, 11, pop_time), 10);
+        assert_eq!(manager.commit_and_next(&topic, &group, 0, 10, pop_time), 13);
+        assert_eq!(manager.commit_and_next(&topic, &group, 0, 13, pop_time), 14);
+        assert_eq!(manager.commit_and_next(&topic, &group, 0, 13, pop_time + 1), -2);
+
+        manager.clear_block(&topic, &group, 0);
+        assert!(!manager.check_block(&CheetahString::from_static_str("attempt-2"), &topic, &group, 0, 30_000,));
+    }
+
+    #[test]
+    fn persisted_shape_uses_java_compatible_order_info_fields_and_round_trips() {
+        let (manager, topic_config_manager, subscription_group_table) = test_manager();
+        let topic = CheetahString::from_static_str("OrderTopic");
+        let group = CheetahString::from_static_str("OrderGroup");
+        topic_config_manager.update_topic_config(TopicConfig::new(topic.as_str()), 0);
+        subscription_group_table.insert(group.clone(), Arc::new(SubscriptionGroupConfig::new(group.clone())));
+        let pop_time = current_millis();
+        let mut order_info = String::new();
+        manager.update(
+            CheetahString::from_static_str("attempt-1"),
+            false,
+            &topic,
+            &group,
+            0,
+            pop_time,
+            30_000,
+            vec![10, 11],
+            &mut order_info,
+        );
+
+        let encoded = manager.encode_pretty(false);
+        assert!(encoded.contains("\"table\""));
+        let encoded_value: serde_json::Value = serde_json::from_str(&encoded).expect("decode persisted order info");
+        let persisted_order = &encoded_value["table"]["OrderTopic@OrderGroup"]["0"];
+        assert!(persisted_order.get("o").is_some());
+        assert!(persisted_order.get("0").is_none());
+
+        let (restored, _, _) = test_manager();
+        restored.decode(&encoded);
+        assert!(restored.check_block(&CheetahString::from_static_str("attempt-2"), &topic, &group, 0, 30_000,));
+        assert_eq!(restored.commit_and_next(&topic, &group, 0, 10, pop_time), 11);
+    }
+
+    #[test]
+    fn decode_accepts_legacy_bare_table_shape() {
+        let (manager, _, _) = test_manager();
+        let topic = CheetahString::from_static_str("OrderTopic");
+        let group = CheetahString::from_static_str("OrderGroup");
+        let key = CheetahString::from_string(build_key(&topic, &group));
+        let pop_time = current_millis();
+        let table = HashMap::from([(
+            key,
+            HashMap::from([(
+                0,
+                OrderInfo {
+                    pop_time,
+                    invisible_time: Some(30_000),
+                    offset_list: vec![10],
+                    last_consume_timestamp: pop_time,
+                    attempt_id: "attempt-1".to_owned(),
+                    ..OrderInfo::default()
+                },
+            )]),
+        )]);
+
+        manager.decode(&serde_json::to_string(&table).expect("serialize legacy table"));
+
+        assert_eq!(manager.commit_and_next(&topic, &group, 0, 10, pop_time), 11);
     }
 }

@@ -33,6 +33,7 @@ use rocketmq_runtime::TaskKind;
 use tokio::net::TcpListener;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
+use tokio::sync::oneshot;
 use tracing::error;
 use tracing::info;
 
@@ -527,11 +528,66 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> RocketMQServer<RP> {
     where
         S: Future,
     {
+        self.run_with_shutdown_report_inner(request_processor, channel_event_listener, shutdown, None)
+            .await
+    }
+
+    /// Runs the server and reports whether its listener is ready before entering the accept loop.
+    ///
+    /// The startup signal is sent only after the socket is bound and the remoting runtime and TLS
+    /// state have been initialized. This prevents lifecycle owners from treating a spawned server
+    /// task as a bound, production-ready listener.
+    #[doc(hidden)]
+    pub async fn run_with_shutdown_report_and_startup<S>(
+        &mut self,
+        request_processor: RP,
+        channel_event_listener: Option<Arc<dyn ChannelEventListener>>,
+        shutdown: S,
+        startup: oneshot::Sender<RocketMQResult<SocketAddr>>,
+    ) -> Option<ShutdownReport>
+    where
+        S: Future,
+    {
+        self.run_with_shutdown_report_inner(request_processor, channel_event_listener, shutdown, Some(startup))
+            .await
+    }
+
+    async fn run_with_shutdown_report_inner<S>(
+        &mut self,
+        request_processor: RP,
+        channel_event_listener: Option<Arc<dyn ChannelEventListener>>,
+        shutdown: S,
+        mut startup: Option<oneshot::Sender<RocketMQResult<SocketAddr>>>,
+    ) -> Option<ShutdownReport>
+    where
+        S: Future,
+    {
         let addr = format!("{}:{}", self.config.bind_address, self.config.listen_port);
         let listener = match TcpListener::bind(&addr).await {
             Ok(listener) => listener,
             Err(err) => {
                 error!(addr = %addr, error = %err, "failed to bind remoting_server");
+                notify_server_startup(
+                    &mut startup,
+                    Err(RocketMQError::network_connection_failed(
+                        "remoting-server-bind",
+                        format!("{addr}: {err}"),
+                    )),
+                );
+                return None;
+            }
+        };
+        let local_addr = match listener.local_addr() {
+            Ok(local_addr) => local_addr,
+            Err(error) => {
+                error!(addr = %addr, %error, "failed to read bound remoting server address");
+                notify_server_startup(
+                    &mut startup,
+                    Err(RocketMQError::network_connection_failed(
+                        "remoting-server-local-address",
+                        format!("{addr}: {error}"),
+                    )),
+                );
                 return None;
             }
         };
@@ -542,6 +598,13 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> RocketMQServer<RP> {
                 Ok(context) => context,
                 Err(error) => {
                     error!(%error, "failed to initialize remoting server runtime context");
+                    notify_server_startup(
+                        &mut startup,
+                        Err(RocketMQError::network_connection_failed(
+                            "remoting-server-runtime",
+                            error.to_string(),
+                        )),
+                    );
                     return None;
                 }
             },
@@ -554,10 +617,18 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> RocketMQServer<RP> {
                 Ok(runtime) => runtime,
                 Err(error) => {
                     error!(%error, "failed to initialize remoting server TLS runtime");
+                    notify_server_startup(
+                        &mut startup,
+                        Err(RocketMQError::network_connection_failed(
+                            "remoting-server-tls",
+                            error.to_string(),
+                        )),
+                    );
                     return None;
                 }
             };
         info!("Starting remoting_server at: {}", addr);
+        notify_server_startup(&mut startup, Ok(local_addr));
         let (notify_conn_disconnect, _) = broadcast::channel::<SocketAddr>(100);
         #[cfg(all(test, not(doctest)))]
         let command_interceptor: Arc<dyn SessionCommandInterceptor> = Arc::new(self.test_request_hook.clone());
@@ -578,6 +649,15 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> RocketMQServer<RP> {
             command_interceptor,
         )
         .await
+    }
+}
+
+fn notify_server_startup(
+    startup: &mut Option<oneshot::Sender<RocketMQResult<SocketAddr>>>,
+    result: RocketMQResult<SocketAddr>,
+) {
+    if let Some(startup) = startup.take() {
+        let _ = startup.send(result);
     }
 }
 
@@ -1039,6 +1119,73 @@ mod tests {
             .await;
 
         assert!(report.is_none());
+    }
+
+    #[tokio::test]
+    async fn startup_acknowledgement_reports_bind_failure() {
+        let config = Arc::new(ServerConfig {
+            bind_address: "127.0.0.1".to_string(),
+            listen_port: 70000,
+            ..ServerConfig::default()
+        });
+        let mut server = RocketMQServer::<DefaultRemotingRequestProcessor>::new(config);
+        let (startup_tx, startup_rx) = oneshot::channel();
+
+        let report = server
+            .run_with_shutdown_report_and_startup(
+                DefaultRemotingRequestProcessor,
+                None,
+                future::pending::<()>(),
+                startup_tx,
+            )
+            .await;
+
+        assert!(report.is_none());
+        let error = startup_rx
+            .await
+            .expect("startup acknowledgement should be sent")
+            .expect_err("invalid port must fail startup");
+        assert!(error.to_string().contains("remoting-server-bind"));
+    }
+
+    #[tokio::test]
+    async fn startup_acknowledgement_is_sent_after_listener_binding() {
+        let config = Arc::new(ServerConfig {
+            bind_address: "127.0.0.1".to_string(),
+            listen_port: 0,
+            ..ServerConfig::default()
+        });
+        let mut server = RocketMQServer::<DefaultRemotingRequestProcessor>::new(config);
+        let (startup_tx, startup_rx) = oneshot::channel();
+        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+        let server_task = tokio::spawn(async move {
+            server
+                .run_with_shutdown_report_and_startup(
+                    DefaultRemotingRequestProcessor,
+                    None,
+                    async {
+                        let _ = shutdown_rx.await;
+                    },
+                    startup_tx,
+                )
+                .await
+        });
+
+        let bound_address = startup_rx
+            .await
+            .expect("startup acknowledgement should be sent")
+            .expect("listener should become ready");
+        assert_ne!(bound_address.port(), 0);
+        TcpStream::connect(bound_address)
+            .await
+            .expect("acknowledged listener should accept connections");
+
+        let _ = shutdown_tx.send(());
+        let report = server_task
+            .await
+            .expect("server task should not panic")
+            .expect("server should report shutdown");
+        assert!(report.is_healthy(), "{}", report.to_json());
     }
 
     #[tokio::test]

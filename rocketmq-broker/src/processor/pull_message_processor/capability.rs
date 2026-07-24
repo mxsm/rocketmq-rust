@@ -30,8 +30,6 @@ use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
 use crate::broker::broker_pre_online_capability::BrokerOnlineRoleState;
 use crate::client::manager::consumer_manager::ConsumerManager;
 use crate::coldctr::cold_data_cg_ctr_service::ColdDataCgCtrService;
-use crate::coldctr::cold_data_pull_request_hold_service::ColdDataPullRequest;
-use crate::coldctr::cold_data_pull_request_hold_service::ColdDataPullRequestHoldService;
 use crate::failover::escape_bridge::EscapeBridge;
 use crate::failover::escape_bridge::MessageStoreUnavailable;
 use crate::filter::manager::consumer_filter_manager::ConsumerFilterManager;
@@ -233,7 +231,6 @@ pub(crate) struct PullMessageProcessorContext<MS: MessageStore> {
     online_role_state: Arc<BrokerOnlineRoleState>,
     store: PullMessageStoreCapability<MS>,
     cold_data_flow: Option<Arc<ColdDataCgCtrService>>,
-    cold_data_hold: Option<Arc<ColdDataPullRequestHoldService>>,
     pull_request_hold: Arc<OnceLock<Arc<PullRequestHoldService<MS>>>>,
 }
 
@@ -256,7 +253,6 @@ impl<MS: MessageStore> PullMessageProcessorContext<MS> {
         online_role_state: Arc<BrokerOnlineRoleState>,
         store: PullMessageStoreCapability<MS>,
         cold_data_flow: Option<Arc<ColdDataCgCtrService>>,
-        cold_data_hold: Option<Arc<ColdDataPullRequestHoldService>>,
     ) -> Self {
         Self {
             policy,
@@ -272,7 +268,6 @@ impl<MS: MessageStore> PullMessageProcessorContext<MS> {
             online_role_state,
             store,
             cold_data_flow,
-            cold_data_hold,
             pull_request_hold: Arc::new(OnceLock::new()),
         }
     }
@@ -319,14 +314,6 @@ impl<MS: MessageStore> PullMessageProcessorContext<MS> {
 
     pub(crate) fn cold_data_flow(&self) -> Option<&ColdDataCgCtrService> {
         self.cold_data_flow.as_deref()
-    }
-
-    pub(crate) fn suspend_cold_data_pull(&self, request: ColdDataPullRequest) -> bool {
-        let Some(service) = self.cold_data_hold.as_ref() else {
-            return false;
-        };
-        service.suspend_cold_data_read_request(request);
-        true
     }
 
     pub(crate) fn install_pull_request_hold_service(&self, service: Arc<PullRequestHoldService<MS>>) -> bool {

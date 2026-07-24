@@ -40,6 +40,28 @@ use crate::topic::manager::topic_config_coordinator::TopicRegistrationAction;
 use crate::topic::manager::topic_config_manager::TopicConfigManager;
 use crate::topic::manager::topic_queue_mapping_manager::TopicQueueMappingManager;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum BrokerRegistrationStatus {
+    NotConfigured,
+    Unchanged,
+    Registered { name_server_count: usize },
+    OnewaySubmitted,
+}
+
+#[derive(Clone, Debug, thiserror::Error)]
+pub(crate) enum BrokerRegistrationError {
+    #[error("broker registration was requested after shutdown")]
+    ShuttingDown,
+    #[error("broker registration coordination failed: {0}")]
+    Coordination(String),
+    #[error("broker registration completion channel was dropped")]
+    CompletionDropped,
+    #[error("broker registration snapshot contains a topic without a name")]
+    MissingTopicName,
+    #[error("no NameServer accepted broker registration for configured address `{configured_address}`")]
+    NoSuccessfulNameServer { configured_address: CheetahString },
+}
+
 /// Explicit capability carrier for NameServer registration.
 ///
 /// Registration observes live configuration and topic metadata, but it does not retain the
@@ -102,33 +124,61 @@ impl<MS: MessageStore> BrokerRegistrationRuntime<MS> {
         }
     }
 
-    pub(crate) async fn register_broker_all(&self, check_order_config: bool, oneway: bool, force_register: bool) {
+    pub(crate) async fn register_broker_all(
+        &self,
+        check_order_config: bool,
+        oneway: bool,
+        force_register: bool,
+    ) -> Result<BrokerRegistrationStatus, BrokerRegistrationError> {
         if self.shutdown.load(Ordering::Acquire) {
             info!("Skip broker registration after shutdown");
-            return;
+            return Err(BrokerRegistrationError::ShuttingDown);
         }
 
         let runtime = self.clone();
+        let (result_tx, result_rx) = tokio::sync::oneshot::channel();
         let registration: TopicRegistrationAction = Box::new(move || {
             Box::pin(async move {
-                runtime
+                let result = runtime
                     .register_full_snapshot(check_order_config, oneway, force_register)
                     .await;
-                Ok(())
+                let coordination_result = result.as_ref().map(|_| ()).map_err(|error| {
+                    rocketmq_error::RocketMQError::network_connection_failed("broker-registration", error.to_string())
+                });
+                let _ = result_tx.send(result);
+                coordination_result
             })
         });
-        if let Err(error) = self
+        let coordination_result = self
             .topic_config_coordinator
             .persist_and_register_wait(registration)
-            .await
-        {
-            warn!(?error, "failed to coordinate full broker registration");
+            .await;
+        let registration_result = match result_rx.await {
+            Ok(result) => result,
+            Err(_) => {
+                return match coordination_result {
+                    Ok(()) => Err(BrokerRegistrationError::CompletionDropped),
+                    Err(error) => Err(BrokerRegistrationError::Coordination(error.to_string())),
+                };
+            }
+        };
+        match registration_result {
+            Ok(status) => {
+                coordination_result.map_err(|error| BrokerRegistrationError::Coordination(error.to_string()))?;
+                Ok(status)
+            }
+            Err(error) => Err(error),
         }
     }
 
-    async fn register_full_snapshot(&self, check_order_config: bool, oneway: bool, force_register: bool) {
+    async fn register_full_snapshot(
+        &self,
+        check_order_config: bool,
+        oneway: bool,
+        force_register: bool,
+    ) -> Result<BrokerRegistrationStatus, BrokerRegistrationError> {
         if self.shutdown.load(Ordering::Acquire) {
-            return;
+            return Err(BrokerRegistrationError::ShuttingDown);
         }
 
         let broker_config = self.config.broker_snapshot();
@@ -141,21 +191,19 @@ impl<MS: MessageStore> BrokerRegistrationRuntime<MS> {
             .into_values()
             .map(|topic_config| {
                 let topic_config = self.topic_config_for_registration(&topic_config);
-                (
-                    topic_config
-                        .topic_name
-                        .clone()
-                        .expect("registered topic config requires topic_name"),
-                    topic_config,
-                )
+                let topic_name = topic_config
+                    .topic_name
+                    .clone()
+                    .ok_or(BrokerRegistrationError::MissingTopicName)?;
+                Ok((topic_name, topic_config))
             })
-            .collect::<HashMap<_, _>>();
+            .collect::<Result<HashMap<_, _>, BrokerRegistrationError>>()?;
 
         if let Some(split_data_version) = split_data_version {
             let wrapper = self
                 .topic_config_manager
                 .build_serialize_wrapper(topic_config_table.clone(), split_data_version);
-            self.register_wrapper(wrapper, check_order_config, oneway).await;
+            self.register_wrapper(wrapper, check_order_config, oneway).await?;
             topic_config_table.clear();
         }
 
@@ -187,7 +235,9 @@ impl<MS: MessageStore> BrokerRegistrationRuntime<MS> {
                     .await,
             );
         if should_register {
-            self.register_wrapper(wrapper, check_order_config, oneway).await;
+            self.register_wrapper(wrapper, check_order_config, oneway).await
+        } else {
+            Ok(BrokerRegistrationStatus::Unchanged)
         }
     }
 
@@ -238,7 +288,9 @@ impl<MS: MessageStore> BrokerRegistrationRuntime<MS> {
                     })
             })
             .collect();
-        self.register_wrapper(wrapper, true, false).await;
+        if let Err(error) = self.register_wrapper(wrapper, true, false).await {
+            warn!(%error, "failed to register incremental broker data");
+        }
     }
 
     pub(crate) async fn register_single_topic_all(&self, topic_config: Arc<TopicConfig>) {
@@ -279,9 +331,9 @@ impl<MS: MessageStore> BrokerRegistrationRuntime<MS> {
         wrapper: TopicConfigAndMappingSerializeWrapper,
         check_order_config: bool,
         oneway: bool,
-    ) {
+    ) -> Result<BrokerRegistrationStatus, BrokerRegistrationError> {
         if self.shutdown.load(Ordering::Acquire) {
-            return;
+            return Err(BrokerRegistrationError::ShuttingDown);
         }
         let broker_config = self.config.broker_snapshot();
         let broker_addr = self.broker_addr(&broker_config);
@@ -305,7 +357,18 @@ impl<MS: MessageStore> BrokerRegistrationRuntime<MS> {
                 Default::default(),
             )
             .await;
+        if oneway {
+            return Ok(BrokerRegistrationStatus::OnewaySubmitted);
+        }
+        if results.is_empty() {
+            return match broker_config.namesrv_addr.clone() {
+                Some(configured_address) => Err(BrokerRegistrationError::NoSuccessfulNameServer { configured_address }),
+                None => Ok(BrokerRegistrationStatus::NotConfigured),
+            };
+        }
+        let name_server_count = results.len();
         self.handle_register_broker_result(results, check_order_config).await;
+        Ok(BrokerRegistrationStatus::Registered { name_server_count })
     }
 
     async fn handle_register_broker_result(

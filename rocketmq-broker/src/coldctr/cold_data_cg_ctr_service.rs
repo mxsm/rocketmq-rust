@@ -16,12 +16,12 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
-use std::sync::RwLock;
 use std::time::SystemTime;
 
+use parking_lot::RwLock;
 use rocketmq_common::common::mix_all;
 use serde::Serialize;
-use tracing::warn;
+use tracing::error;
 
 const DEFAULT_CG_COLD_READ_THRESHOLD: i64 = 3 * 1024 * 1024;
 const DEFAULT_GLOBAL_COLD_READ_THRESHOLD: i64 = 100 * 1024 * 1024;
@@ -95,10 +95,6 @@ impl ColdDataCgCtrService {
         }
     }
 
-    pub fn start(&self) {
-        warn!("ColdDataCgCtrService started not implemented");
-    }
-
     /// Check if a consumer group needs cold data flow control
     pub fn is_cg_need_cold_data_flow_ctr(&self, consumer_group: &str) -> bool {
         if !self.cold_data_flow_control_enable || mix_all::is_sys_consumer_group_for_no_cold_read_limit(consumer_group)
@@ -107,14 +103,14 @@ impl ColdDataCgCtrService {
         }
 
         let cold_acc = {
-            let acc_map = self.cg_cold_acc.read().unwrap();
+            let acc_map = self.cg_cold_acc.read();
             let Some(counter) = acc_map.get(consumer_group) else {
                 return false;
             };
             counter.cold_acc()
         };
 
-        let threshold_map = self.cg_cold_read_threshold.read().unwrap();
+        let threshold_map = self.cg_cold_read_threshold.read();
         let threshold = threshold_map
             .get(consumer_group)
             .copied()
@@ -130,12 +126,12 @@ impl ColdDataCgCtrService {
 
         self.global_acc.fetch_add(cold_data_sum, Ordering::Relaxed);
         let now_millis = current_time_millis();
-        let acc_map = self.cg_cold_acc.read().unwrap();
+        let acc_map = self.cg_cold_acc.read();
         if let Some(counter) = acc_map.get(consumer_group) {
             counter.add(cold_data_sum, now_millis);
         } else {
             drop(acc_map);
-            let mut acc_map = self.cg_cold_acc.write().unwrap();
+            let mut acc_map = self.cg_cold_acc.write();
             acc_map
                 .entry(consumer_group.to_string())
                 .and_modify(|counter| counter.add(cold_data_sum, now_millis))
@@ -145,7 +141,7 @@ impl ColdDataCgCtrService {
 
     /// Add a consumer group to cold data flow control
     pub fn add_cg_cold_read_threshold(&self, consumer_group: &str, threshold: i64) {
-        let mut threshold_map = self.cg_cold_read_threshold.write().unwrap();
+        let mut threshold_map = self.cg_cold_read_threshold.write();
         threshold_map.insert(consumer_group.to_string(), threshold);
     }
 
@@ -155,7 +151,7 @@ impl ColdDataCgCtrService {
 
     /// Remove a consumer group from cold data flow control
     pub fn remove_cg_cold_read_threshold(&self, consumer_group: &str) {
-        let mut threshold_map = self.cg_cold_read_threshold.write().unwrap();
+        let mut threshold_map = self.cg_cold_read_threshold.write();
         threshold_map.remove(consumer_group);
     }
 
@@ -183,31 +179,30 @@ impl ColdDataCgCtrService {
         let config_table = self
             .cg_cold_read_threshold
             .read()
-            .unwrap()
             .iter()
             .map(|(group, threshold)| (group.clone(), *threshold))
             .collect::<BTreeMap<_, _>>();
         let runtime_table = self
             .cg_cold_acc
             .read()
-            .unwrap()
             .iter()
             .map(|(group, acc)| (group.clone(), acc.snapshot()))
             .collect::<BTreeMap<_, _>>();
 
-        serde_json::to_string(&ColdDataFlowCtrInfo {
+        match serde_json::to_string(&ColdDataFlowCtrInfo {
             runtime_table,
             config_table,
             cold_data_flow_control_enable: self.cold_data_flow_control_enable,
             cg_cold_read_threshold: DEFAULT_CG_COLD_READ_THRESHOLD,
             global_cold_read_threshold: DEFAULT_GLOBAL_COLD_READ_THRESHOLD,
             global_acc: self.global_acc.load(Ordering::Relaxed),
-        })
-        .expect("serialize cold data flow ctr info")
-    }
-
-    pub fn shutdown(&self) {
-        warn!("ColdDataCgCtrService shutdown not implemented");
+        }) {
+            Ok(info) => info,
+            Err(error) => {
+                error!(%error, "Failed to serialize cold data flow-control information");
+                "{}".to_owned()
+            }
+        }
     }
 }
 

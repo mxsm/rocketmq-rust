@@ -146,16 +146,8 @@ impl<MS: MessageStore> EscapeBridge<MS> {
         self.message_store.read_lease()
     }
 
-    pub fn start(&self) {
-        let policy = self.policy_state.snapshot();
-        if policy.enable_slave_acting_master && policy.enable_remote_escape {
-
-            //self.message_store = message_store;
-        }
-    }
-
     pub fn shutdown(&self) {
-        warn!("EscapeBridge shutdown not implemented");
+        self.message_store.detach();
     }
 
     pub(crate) fn with_message_store<R>(&self, operation: impl FnOnce(&MS) -> R) -> R {

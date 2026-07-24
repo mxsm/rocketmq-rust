@@ -274,7 +274,7 @@ impl PopOrderCapability {
         pop_time: u64,
         invisible_time: u64,
         offsets: Vec<u64>,
-        order_info: &str,
+        order_info: &mut String,
     ) -> bool {
         self.manager.upgrade().is_some_and(|manager| {
             manager.update(
