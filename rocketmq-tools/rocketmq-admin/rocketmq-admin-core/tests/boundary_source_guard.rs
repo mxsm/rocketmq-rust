@@ -16,7 +16,7 @@ use std::fs;
 use std::path::Path;
 
 #[test]
-fn core_has_no_client_or_legacy_common_source_edge() {
+fn core_has_no_client_common_or_remoting_source_edge() {
     let source_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let core_root = source_root.join("core");
     let mut violations = Vec::new();
@@ -25,6 +25,7 @@ fn core_has_no_client_or_legacy_common_source_edge() {
         for forbidden in [
             "rocketmq_client_rust::",
             "rocketmq_common::",
+            "rocketmq_remoting::",
             "MQAdminExt",
             "DefaultMQAdminExt",
             "DefaultMQProducer",
@@ -45,7 +46,7 @@ fn core_has_no_client_or_legacy_common_source_edge() {
 }
 
 #[test]
-fn direct_client_and_common_imports_are_adapter_only() {
+fn direct_sdk_imports_are_adapter_only() {
     let source_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let adapter_root = source_root.join("client_adapter");
     let adapter_module = source_root.join("client_adapter.rs");
@@ -53,25 +54,66 @@ fn direct_client_and_common_imports_are_adapter_only() {
 
     visit_rust_files(&source_root, &mut |path, source| {
         let is_adapter = path.starts_with(&adapter_root) || path == adapter_module;
-        if !is_adapter && (source.contains("rocketmq_client_rust::") || source.contains("rocketmq_common::")) {
+        if !is_adapter
+            && (source.contains("rocketmq_client_rust::")
+                || source.contains("rocketmq_common::")
+                || source.contains("rocketmq_remoting::"))
+        {
             violations.push(path.display().to_string());
         }
     });
 
     assert!(
         violations.is_empty(),
-        "direct Client/Common imports outside client_adapter:\n{}",
+        "direct Client/Common/Remoting imports outside client_adapter:\n{}",
         violations.join("\n")
     );
 }
 
 #[test]
-fn feature_implication_is_explicit() {
+fn client_adapter_feature_owns_all_sdk_dependencies() {
     let manifest = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml")).unwrap();
-    assert!(manifest.contains("default        = [\"legacy-common-compat\"]"));
-    assert!(manifest.contains("client-adapter = [\"dep:rocketmq-client-rust\"]"));
-    assert!(manifest.contains("\"client-adapter\","));
-    assert!(manifest.contains("\"dep:rocketmq-common\","));
+    assert!(manifest.contains("default        = []"));
+    assert!(manifest.contains("client-adapter = [\"dep:rocketmq-client-rust\", \"dep:rocketmq-common\"]"));
+    assert!(!manifest.contains("legacy-common-compat"));
+}
+
+#[test]
+fn removed_facades_cannot_reappear() {
+    let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let source_root = crate_root.join("src");
+    assert!(!source_root.join("admin.rs").exists());
+    assert!(!source_root.join("admin").exists());
+    assert!(!source_root.join("client_adapter").join("legacy").exists());
+
+    let lib_rs = fs::read_to_string(source_root.join("lib.rs")).unwrap();
+    assert!(!lib_rs.contains("extern crate self"));
+    assert!(!lib_rs.contains("DefaultMQAdminExt"));
+}
+
+#[test]
+fn sdk_admin_handles_are_not_part_of_the_public_adapter_surface() {
+    let source_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let adapter_root = source_root.join("client_adapter");
+    let adapter_module = fs::read_to_string(source_root.join("client_adapter.rs")).unwrap();
+    assert!(!adapter_module.contains("DefaultMQAdminExt"));
+    assert!(!adapter_module.contains("RPCHook"));
+    assert!(!adapter_module.contains("admin_acl_rpc_hook"));
+
+    let mut violations = Vec::new();
+    visit_rust_files(&adapter_root.join("services"), &mut |path, source| {
+        for line in source.lines() {
+            if line.contains("pub async fn") && line.contains("_with_admin") {
+                violations.push(format!("{} exports {}", path.display(), line.trim()));
+            }
+        }
+    });
+
+    assert!(
+        violations.is_empty(),
+        "raw SDK admin helpers must remain crate-private:\n{}",
+        violations.join("\n")
+    );
 }
 
 fn visit_rust_files(root: &Path, visit: &mut impl FnMut(&Path, &str)) {

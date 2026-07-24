@@ -12,16 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use clap::Parser;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
-use rocketmq_admin_core::core::namesrv::KvConfigUpdateRequest;
-use rocketmq_admin_core::core::namesrv::NameServerService;
+use rocketmq_admin_core::client_adapter::services::namesrv::KvConfigUpdateRequest;
+use rocketmq_admin_core::client_adapter::services::namesrv::NameServerService;
 
 #[derive(Debug, Clone, Parser)]
 pub struct UpdateKvConfigSubCommand {
@@ -48,7 +45,10 @@ impl UpdateKvConfigSubCommand {
 }
 
 impl CommandExecute for UpdateKvConfigSubCommand {
-    async fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        _rpc_hook: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         NameServerService::update_kv_config_by_request(self.request()?).await?;
         println!("update kv config in namespace success.");
         Ok(())

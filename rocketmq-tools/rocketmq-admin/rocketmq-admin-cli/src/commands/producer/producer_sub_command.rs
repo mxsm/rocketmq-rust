@@ -12,17 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use clap::Parser;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::body::producer_table_info::ProducerTableInfo;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use rocketmq_admin_core::core::producer::ProducerInfoQueryRequest;
-use rocketmq_admin_core::core::producer::ProducerInfoQueryResult;
-use rocketmq_admin_core::core::producer::ProducerService;
+use rocketmq_admin_core::client_adapter::services::producer::ProducerInfoQueryRequest;
+use rocketmq_admin_core::client_adapter::services::producer::ProducerInfoQueryResult;
+use rocketmq_admin_core::client_adapter::services::producer::ProducerService;
 
 #[derive(Debug, Clone, Parser)]
 pub struct ProducerSubCommand {
@@ -59,9 +56,13 @@ impl ProducerSubCommand {
 }
 
 impl CommandExecute for ProducerSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         let request = self.request()?;
-        let result = ProducerService::query_producer_info_by_request_with_rpc_hook(request.clone(), rpc_hook).await?;
+        let result =
+            ProducerService::query_producer_info_by_request_with_credentials(request.clone(), credentials).await?;
         Self::print_result(&request, &result);
         Ok(())
     }

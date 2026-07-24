@@ -8,8 +8,8 @@ use crate::commands::CommandCategory;
 use crate::commands::CommandSpec;
 use crate::commands::RiskLevel;
 use crate::view_model::CommandResultViewModel;
-use rocketmq_admin_core::core::RocketMQError;
-use rocketmq_admin_core::core::RocketMQResult;
+use rocketmq_admin_core::client_adapter::services::RocketMQError;
+use rocketmq_admin_core::client_adapter::services::RocketMQResult;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FocusArea {

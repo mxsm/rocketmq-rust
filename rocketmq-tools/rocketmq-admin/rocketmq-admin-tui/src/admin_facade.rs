@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use rocketmq_admin_core::client_adapter::services::message::MessagePullEvent;
 use rocketmq_admin_core::core::admin::AdminBuilder;
-use rocketmq_admin_core::core::message::MessagePullEvent;
 
 #[derive(Debug, Clone, Default)]
 pub struct TuiAdminFacade {

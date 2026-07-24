@@ -15,11 +15,8 @@
 mod consumer_connection_sub_command;
 mod producer_connection_sub_command;
 
-use std::sync::Arc;
-
 use clap::Subcommand;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
 use crate::commands::connection::consumer_connection_sub_command::ConsumerConnectionSubCommand;
@@ -38,10 +35,13 @@ pub enum ConnectionCommands {
 }
 
 impl CommandExecute for ConnectionCommands {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         match self {
-            ConnectionCommands::ConsumerConnection(cmd) => cmd.execute(rpc_hook).await,
-            ConnectionCommands::ProducerConnection(cmd) => cmd.execute(rpc_hook).await,
+            ConnectionCommands::ConsumerConnection(cmd) => cmd.execute(credentials).await,
+            ConnectionCommands::ProducerConnection(cmd) => cmd.execute(credentials).await,
         }
     }
 }

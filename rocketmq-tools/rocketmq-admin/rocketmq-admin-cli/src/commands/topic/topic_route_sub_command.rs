@@ -23,9 +23,9 @@ use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
-use rocketmq_admin_core::core::ToolsError;
-use rocketmq_admin_core::core::topic::TopicRouteQueryRequest;
-use rocketmq_admin_core::core::topic::TopicService;
+use rocketmq_admin_core::client_adapter::services::ToolsError;
+use rocketmq_admin_core::client_adapter::services::topic::TopicRouteQueryRequest;
+use rocketmq_admin_core::client_adapter::services::topic::TopicService;
 
 #[derive(Debug, Clone, Parser)]
 pub struct TopicRouteSubCommand {
@@ -93,7 +93,7 @@ impl TopicRouteSubCommand {
 impl CommandExecute for TopicRouteSubCommand {
     async fn execute(
         &self,
-        _rpc_hook: Option<std::sync::Arc<dyn rocketmq_remoting::runtime::RPCHook>>,
+        _credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
     ) -> rocketmq_error::RocketMQResult<()> {
         let request = TopicRouteQueryRequest::try_new(self.topic.clone())?
             .with_optional_namesrv_addr(self.common_args.namesrv_addr.clone());

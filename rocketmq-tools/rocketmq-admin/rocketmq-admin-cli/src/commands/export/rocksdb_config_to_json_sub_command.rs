@@ -12,21 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use clap::Parser;
-use rocketmq_admin_core::core::export_data::ExportFileOverwritePolicy;
-use rocketmq_admin_core::core::export_data::ExportFileWriteRequest;
-use rocketmq_admin_core::core::export_data::ExportMetadataInRocksDbConfigType;
-use rocketmq_admin_core::core::export_data::ExportMetadataInRocksDbRequest;
-use rocketmq_admin_core::core::export_data::ExportMetadataInRocksDbResult;
-use rocketmq_admin_core::core::export_data::ExportRocksDbConfigRpcRequest;
-use rocketmq_admin_core::core::export_data::ExportRocksDbConfigRpcResult;
-use rocketmq_admin_core::core::export_data::ExportService;
+use rocketmq_admin_core::client_adapter::services::export_data::ExportFileOverwritePolicy;
+use rocketmq_admin_core::client_adapter::services::export_data::ExportFileWriteRequest;
+use rocketmq_admin_core::client_adapter::services::export_data::ExportMetadataInRocksDbConfigType;
+use rocketmq_admin_core::client_adapter::services::export_data::ExportMetadataInRocksDbRequest;
+use rocketmq_admin_core::client_adapter::services::export_data::ExportMetadataInRocksDbResult;
+use rocketmq_admin_core::client_adapter::services::export_data::ExportRocksDbConfigRpcRequest;
+use rocketmq_admin_core::client_adapter::services::export_data::ExportRocksDbConfigRpcResult;
+use rocketmq_admin_core::client_adapter::services::export_data::ExportService;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_error::ToolsError;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
 
@@ -100,7 +97,10 @@ enum RocksDBConfigToJsonMode {
 }
 
 impl CommandExecute for RocksDBConfigToJsonSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         match self.mode()? {
             RocksDBConfigToJsonMode::Local { request, export_file } => {
                 println!("Use [local mode] load rocksdb to print or export file");
@@ -110,7 +110,7 @@ impl CommandExecute for RocksDBConfigToJsonSubCommand {
             RocksDBConfigToJsonMode::Rpc(request) => {
                 println!("Use [rpc mode] call broker(s) to export to json file");
                 let result =
-                    ExportService::export_rocksdb_config_rpc_by_request_with_rpc_hook(request, rpc_hook).await?;
+                    ExportService::export_rocksdb_config_rpc_by_request_with_credentials(request, credentials).await?;
                 Self::print_rpc_result(&result);
                 Ok(())
             }
@@ -211,7 +211,7 @@ impl RocksDBConfigToJsonSubCommand {
 
     fn entries_json_value(
         config_type: ExportMetadataInRocksDbConfigType,
-        entries: &[rocketmq_admin_core::core::export_data::ExportMetadataInRocksDbEntry],
+        entries: &[rocketmq_admin_core::client_adapter::services::export_data::ExportMetadataInRocksDbEntry],
     ) -> RocketMQResult<serde_json::Value> {
         let mut config_table = serde_json::Map::new();
         for entry in entries {
@@ -266,7 +266,7 @@ fn trim_optional(value: &Option<String>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rocketmq_admin_core::core::export_data::ExportRocksDbConfigRpcTarget;
+    use rocketmq_admin_core::client_adapter::services::export_data::ExportRocksDbConfigRpcTarget;
 
     #[test]
     fn rocksdb_config_to_json_builds_local_request_with_export_file() {

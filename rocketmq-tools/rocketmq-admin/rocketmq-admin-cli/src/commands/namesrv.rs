@@ -19,11 +19,8 @@ mod update_kv_config_sub_command;
 mod update_namesrv_config_sub_command;
 mod wipe_write_perm_sub_command;
 
-use std::sync::Arc;
-
 use clap::Subcommand;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
 use crate::commands::namesrv::add_write_perm_sub_command::AddWritePermSubCommand;
@@ -79,14 +76,17 @@ pub enum NameServerCommands {
 }
 
 impl CommandExecute for NameServerCommands {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         match self {
-            NameServerCommands::AddWritePerm(value) => value.execute(rpc_hook).await,
-            NameServerCommands::DeleteKvConfig(value) => value.execute(rpc_hook).await,
-            NameServerCommands::GetNamesrvConfig(value) => value.execute(rpc_hook).await,
-            NameServerCommands::UpdateKvConfig(value) => value.execute(rpc_hook).await,
-            NameServerCommands::UpdateNamesrvConfig(value) => value.execute(rpc_hook).await,
-            NameServerCommands::WipeWritePerm(value) => value.execute(rpc_hook).await,
+            NameServerCommands::AddWritePerm(value) => value.execute(credentials).await,
+            NameServerCommands::DeleteKvConfig(value) => value.execute(credentials).await,
+            NameServerCommands::GetNamesrvConfig(value) => value.execute(credentials).await,
+            NameServerCommands::UpdateKvConfig(value) => value.execute(credentials).await,
+            NameServerCommands::UpdateNamesrvConfig(value) => value.execute(credentials).await,
+            NameServerCommands::WipeWritePerm(value) => value.execute(credentials).await,
         }
     }
 }

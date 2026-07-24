@@ -12,17 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use clap::ArgGroup;
 use clap::Parser;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use rocketmq_admin_core::core::broker::BrokerEpochQueryRequest;
-use rocketmq_admin_core::core::broker::BrokerEpochQueryResult;
-use rocketmq_admin_core::core::broker::BrokerService;
+use rocketmq_admin_core::client_adapter::services::broker::BrokerEpochQueryRequest;
+use rocketmq_admin_core::client_adapter::services::broker::BrokerEpochQueryResult;
+use rocketmq_admin_core::client_adapter::services::broker::BrokerService;
 
 #[derive(Debug, Clone, Parser)]
 #[command(group(
@@ -69,13 +66,19 @@ impl GetBrokerEpochSubCommand {
 }
 
 impl CommandExecute for GetBrokerEpochSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         let request = self.request()?;
         if let Some(interval) = self.interval {
             let flush_second = if interval > 0 { interval } else { 3 };
             loop {
-                match BrokerService::query_broker_epoch_by_request_with_rpc_hook(request.clone(), rpc_hook.clone())
-                    .await
+                match BrokerService::query_broker_epoch_by_request_with_credentials(
+                    request.clone(),
+                    credentials.clone(),
+                )
+                .await
                 {
                     Ok(result) => Self::print_result(result),
                     Err(error) => eprintln!("GetBrokerEpochSubCommand: error: {}", error),
@@ -83,7 +86,7 @@ impl CommandExecute for GetBrokerEpochSubCommand {
                 tokio::time::sleep(tokio::time::Duration::from_secs(flush_second)).await;
             }
         } else {
-            let result = BrokerService::query_broker_epoch_by_request_with_rpc_hook(request, rpc_hook).await?;
+            let result = BrokerService::query_broker_epoch_by_request_with_credentials(request, credentials).await?;
             Self::print_result(result);
             Ok(())
         }
@@ -95,7 +98,7 @@ mod tests {
     use clap::Parser;
 
     use super::*;
-    use rocketmq_admin_core::core::broker::BrokerEpochQueryTarget;
+    use rocketmq_admin_core::client_adapter::services::broker::BrokerEpochQueryTarget;
 
     #[test]
     fn parses_get_broker_epoch_request() {

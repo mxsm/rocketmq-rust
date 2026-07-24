@@ -12,15 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use clap::Parser;
-use rocketmq_admin_core::core::static_topic::StaticTopicMappingFileRequest;
-use rocketmq_admin_core::core::static_topic::StaticTopicMappingPlan;
-use rocketmq_admin_core::core::static_topic::StaticTopicService;
-use rocketmq_admin_core::core::static_topic::UpdateStaticTopicRequest;
+use rocketmq_admin_core::client_adapter::services::static_topic::StaticTopicMappingFileRequest;
+use rocketmq_admin_core::client_adapter::services::static_topic::StaticTopicMappingPlan;
+use rocketmq_admin_core::client_adapter::services::static_topic::StaticTopicService;
+use rocketmq_admin_core::client_adapter::services::static_topic::UpdateStaticTopicRequest;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
@@ -90,13 +87,17 @@ impl UpdateStaticTopicSubCommand {
     pub async fn execute_from_file(
         &self,
         map_file_name: &str,
-        rpc_hook: Option<Arc<dyn RPCHook>>,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
     ) -> RocketMQResult<()> {
         let map_file_name = map_file_name.trim();
         if let Some(wrapper) = static_topic_file::read_mapping(map_file_name) {
             let request = self.mapping_file_request()?;
-            StaticTopicService::update_static_topic_from_mapping_by_request_with_rpc_hook(request, wrapper, rpc_hook)
-                .await?;
+            StaticTopicService::update_static_topic_from_mapping_by_request_with_credentials(
+                request,
+                wrapper,
+                credentials,
+            )
+            .await?;
         }
         Ok(())
     }
@@ -112,13 +113,17 @@ impl UpdateStaticTopicSubCommand {
     }
 }
 impl CommandExecute for UpdateStaticTopicSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         if let Some(f_name) = &self.mapping_file {
-            return self.execute_from_file(f_name, rpc_hook).await;
+            return self.execute_from_file(f_name, credentials).await;
         }
 
         let plan =
-            StaticTopicService::update_static_topic_by_request_with_rpc_hook(self.update_request()?, rpc_hook).await?;
+            StaticTopicService::update_static_topic_by_request_with_credentials(self.update_request()?, credentials)
+                .await?;
         Self::write_mapping_plan(&plan)?;
         Ok(())
     }

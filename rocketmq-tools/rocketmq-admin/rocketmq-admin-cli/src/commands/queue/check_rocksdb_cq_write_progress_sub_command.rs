@@ -12,17 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use clap::Parser;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::body::check_rocksdb_cqwrite_progress_response_body::CheckStatus;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use rocketmq_admin_core::core::queue::CheckRocksdbCqWriteProgressRequest;
-use rocketmq_admin_core::core::queue::CheckRocksdbCqWriteProgressResult;
-use rocketmq_admin_core::core::queue::QueueService;
+use rocketmq_admin_core::client_adapter::services::queue::CheckRocksdbCqWriteProgressRequest;
+use rocketmq_admin_core::client_adapter::services::queue::CheckRocksdbCqWriteProgressResult;
+use rocketmq_admin_core::client_adapter::services::queue::QueueService;
 
 #[derive(Debug, Clone, Parser)]
 pub struct CheckRocksdbCqWriteProgressSubCommand {
@@ -51,9 +48,13 @@ impl CheckRocksdbCqWriteProgressSubCommand {
 }
 
 impl CommandExecute for CheckRocksdbCqWriteProgressSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         let result =
-            QueueService::check_rocksdb_cq_write_progress_by_request_with_rpc_hook(self.request()?, rpc_hook).await?;
+            QueueService::check_rocksdb_cq_write_progress_by_request_with_credentials(self.request()?, credentials)
+                .await?;
         print_check_rocksdb_cq_write_progress_result(&result);
         Ok(())
     }

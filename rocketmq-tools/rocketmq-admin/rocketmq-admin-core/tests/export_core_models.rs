@@ -3,24 +3,24 @@ use std::fs;
 use std::time::SystemTime;
 
 use cheetah_string::CheetahString;
-use rocketmq_admin_core::core::export_data::filter_export_broker_properties;
-use rocketmq_admin_core::core::export_data::ExportConfigsRequest;
-use rocketmq_admin_core::core::export_data::ExportConfigsResult;
-use rocketmq_admin_core::core::export_data::ExportFileOverwritePolicy;
-use rocketmq_admin_core::core::export_data::ExportFileWriteRequest;
-use rocketmq_admin_core::core::export_data::ExportMetadataInRocksDbConfigType;
-use rocketmq_admin_core::core::export_data::ExportMetadataInRocksDbRequest;
-use rocketmq_admin_core::core::export_data::ExportMetadataInRocksDbResult;
-use rocketmq_admin_core::core::export_data::ExportMetadataRequest;
-use rocketmq_admin_core::core::export_data::ExportMetadataScope;
-use rocketmq_admin_core::core::export_data::ExportMetadataTarget;
-use rocketmq_admin_core::core::export_data::ExportMetricsRequest;
-use rocketmq_admin_core::core::export_data::ExportMetricsTotals;
-use rocketmq_admin_core::core::export_data::ExportPopRecordRequest;
-use rocketmq_admin_core::core::export_data::ExportPopRecordTarget;
-use rocketmq_admin_core::core::export_data::ExportRocksDbConfigRpcRequest;
-use rocketmq_admin_core::core::export_data::ExportRocksDbConfigRpcTarget;
-use rocketmq_admin_core::core::export_data::ExportService;
+use rocketmq_admin_core::client_adapter::services::export_data::filter_export_broker_properties;
+use rocketmq_admin_core::client_adapter::services::export_data::ExportConfigsRequest;
+use rocketmq_admin_core::client_adapter::services::export_data::ExportConfigsResult;
+use rocketmq_admin_core::client_adapter::services::export_data::ExportFileOverwritePolicy;
+use rocketmq_admin_core::client_adapter::services::export_data::ExportFileWriteRequest;
+use rocketmq_admin_core::client_adapter::services::export_data::ExportMetadataInRocksDbConfigType;
+use rocketmq_admin_core::client_adapter::services::export_data::ExportMetadataInRocksDbRequest;
+use rocketmq_admin_core::client_adapter::services::export_data::ExportMetadataInRocksDbResult;
+use rocketmq_admin_core::client_adapter::services::export_data::ExportMetadataRequest;
+use rocketmq_admin_core::client_adapter::services::export_data::ExportMetadataScope;
+use rocketmq_admin_core::client_adapter::services::export_data::ExportMetadataTarget;
+use rocketmq_admin_core::client_adapter::services::export_data::ExportMetricsRequest;
+use rocketmq_admin_core::client_adapter::services::export_data::ExportMetricsTotals;
+use rocketmq_admin_core::client_adapter::services::export_data::ExportPopRecordRequest;
+use rocketmq_admin_core::client_adapter::services::export_data::ExportPopRecordTarget;
+use rocketmq_admin_core::client_adapter::services::export_data::ExportRocksDbConfigRpcRequest;
+use rocketmq_admin_core::client_adapter::services::export_data::ExportRocksDbConfigRpcTarget;
+use rocketmq_admin_core::client_adapter::services::export_data::ExportService;
 use rocketmq_protocol::protocol::body::broker_stats_item::BrokerStatsItem;
 use rocketmq_protocol::protocol::body::kv_table::KVTable;
 use rocketmq_protocol::protocol::subscription::broker_stats_data::BrokerStatsData;
@@ -332,10 +332,12 @@ fn export_rocksdb_config_rpc_request_rejects_invalid_target_or_config_type() {
 
 #[test]
 fn export_metadata_in_rocksdb_consumer_offsets_extracts_offset_table() {
-    let entries = vec![rocketmq_admin_core::core::export_data::ExportMetadataInRocksDbEntry {
-        key: "GroupA@TopicA".to_string(),
-        value: r#"{"offsetTable":{"0":12,"1":34}}"#.to_string(),
-    }];
+    let entries = vec![
+        rocketmq_admin_core::client_adapter::services::export_data::ExportMetadataInRocksDbEntry {
+            key: "GroupA@TopicA".to_string(),
+            value: r#"{"offsetTable":{"0":12,"1":34}}"#.to_string(),
+        },
+    ];
 
     let entries =
         ExportService::convert_rocksdb_metadata_entries(ExportMetadataInRocksDbConfigType::ConsumerOffsets, entries)

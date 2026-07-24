@@ -1,6 +1,6 @@
 use super::TuiAdminFacade;
-use rocketmq_admin_core::core::consumer::MonitoringEvent;
-use rocketmq_admin_core::core::message::MessagePullEvent;
+use rocketmq_admin_core::client_adapter::services::consumer::MonitoringEvent;
+use rocketmq_admin_core::client_adapter::services::message::MessagePullEvent;
 
 #[test]
 fn facade_builds_topic_cluster_request_without_cli_types() {
@@ -78,7 +78,7 @@ fn facade_builds_update_topic_requests_without_cli_types() {
     let update_topic = facade
         .update_topic_request(
             " TestTopic ",
-            rocketmq_admin_core::core::topic::TopicTarget::Broker("127.0.0.1:10911".into()),
+            rocketmq_admin_core::client_adapter::services::topic::TopicTarget::Broker("127.0.0.1:10911".into()),
             8,
             8,
             Some(6),
@@ -92,7 +92,7 @@ fn facade_builds_update_topic_requests_without_cli_types() {
     let update_perm = facade
         .update_topic_perm_request(
             " TestTopic ",
-            rocketmq_admin_core::core::topic::TopicTarget::Cluster("DefaultCluster".into()),
+            rocketmq_admin_core::client_adapter::services::topic::TopicTarget::Cluster("DefaultCluster".into()),
             6,
         )
         .unwrap();
@@ -142,7 +142,7 @@ fn facade_builds_broker_config_request_without_cli_types() {
     assert_eq!(request.key_pattern(), Some("^flush.*"));
     assert!(matches!(
         request.target(),
-        rocketmq_admin_core::core::broker::BrokerTarget::ClusterName(cluster) if cluster.as_str() == "DefaultCluster"
+        rocketmq_admin_core::client_adapter::services::broker::BrokerTarget::ClusterName(cluster) if cluster.as_str() == "DefaultCluster"
     ));
 
     let mut entries = std::collections::BTreeMap::new();
@@ -154,7 +154,7 @@ fn facade_builds_broker_config_request_without_cli_types() {
     assert!(!update_request.rollback_enabled());
     assert!(matches!(
         update_request.target(),
-        rocketmq_admin_core::core::broker::BrokerTarget::BrokerAddr(addr) if addr.as_str() == "127.0.0.1:10911"
+        rocketmq_admin_core::client_adapter::services::broker::BrokerTarget::BrokerAddr(addr) if addr.as_str() == "127.0.0.1:10911"
     ));
 }
 
@@ -168,7 +168,7 @@ fn facade_builds_broker_runtime_stats_request_without_cli_types() {
     assert_eq!(request.namesrv_addr(), Some("127.0.0.1:9876"));
     assert!(matches!(
         request.target(),
-        rocketmq_admin_core::core::broker::BrokerTarget::ClusterName(cluster) if cluster.as_str() == "DefaultCluster"
+        rocketmq_admin_core::client_adapter::services::broker::BrokerTarget::ClusterName(cluster) if cluster.as_str() == "DefaultCluster"
     ));
 }
 
@@ -201,7 +201,7 @@ fn facade_exposes_topic_service_futures_without_cli_types() {
     let update_topic = facade
         .update_topic_request(
             "TestTopic",
-            rocketmq_admin_core::core::topic::TopicTarget::Broker("127.0.0.1:10911".into()),
+            rocketmq_admin_core::client_adapter::services::topic::TopicTarget::Broker("127.0.0.1:10911".into()),
             8,
             8,
             Some(6),
@@ -215,7 +215,7 @@ fn facade_exposes_topic_service_futures_without_cli_types() {
     let update_perm = facade
         .update_topic_perm_request(
             "TestTopic",
-            rocketmq_admin_core::core::topic::TopicTarget::Cluster("DefaultCluster".into()),
+            rocketmq_admin_core::client_adapter::services::topic::TopicTarget::Cluster("DefaultCluster".into()),
             6,
         )
         .unwrap();

@@ -12,19 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use clap::Parser;
 use rocketmq_common::UtilAll::YYYY_MM_DD_HH_MM_SS_SSS;
 use rocketmq_common::UtilAll::parse_date;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::admin::rollback_stats::RollbackStats;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
-use rocketmq_admin_core::core::offset::OffsetService;
-use rocketmq_admin_core::core::offset::ResetOffsetByTimeOldRequest;
+use rocketmq_admin_core::client_adapter::services::offset::OffsetService;
+use rocketmq_admin_core::client_adapter::services::offset::ResetOffsetByTimeOldRequest;
 
 #[derive(Debug, Clone, Parser)]
 pub struct ResetOffsetByTimeOldSubCommand {
@@ -133,13 +130,16 @@ impl ResetOffsetByTimeOldSubCommand {
 }
 
 impl CommandExecute for ResetOffsetByTimeOldSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         let Some(request) = self.request()? else {
             return Ok(());
         };
 
         let rollback_stats =
-            OffsetService::reset_offset_by_time_old_by_request_with_rpc_hook(request.clone(), rpc_hook).await?;
+            OffsetService::reset_offset_by_time_old_by_request_with_credentials(request.clone(), credentials).await?;
         Self::print_result(&request, self.timestamp.trim(), rollback_stats);
         Ok(())
     }

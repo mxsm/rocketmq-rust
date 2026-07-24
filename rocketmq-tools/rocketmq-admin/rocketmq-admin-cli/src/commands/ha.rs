@@ -15,11 +15,8 @@
 mod get_sync_state_set_sub_command;
 mod ha_status_sub_command;
 
-use std::sync::Arc;
-
 use clap::Subcommand;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
 use crate::commands::ha::get_sync_state_set_sub_command::GetSyncStateSetSubCommand;
@@ -43,10 +40,13 @@ pub enum HACommands {
 }
 
 impl CommandExecute for HACommands {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         match self {
-            HACommands::GetSyncStateSet(value) => value.execute(rpc_hook).await,
-            HACommands::HaStatus(value) => value.execute(rpc_hook).await,
+            HACommands::GetSyncStateSet(value) => value.execute(credentials).await,
+            HACommands::HaStatus(value) => value.execute(credentials).await,
         }
     }
 }

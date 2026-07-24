@@ -17,18 +17,10 @@
 mod broker;
 mod consumer;
 mod dashboard;
-pub mod lifecycle;
+pub(crate) mod lifecycle;
 mod lite;
 mod message;
 mod security;
+pub mod services;
 mod static_topic;
 mod topic;
-
-pub use self::lifecycle::AdminGuard;
-pub use self::lifecycle::AdminSession;
-pub use self::lifecycle::ClientAdminBuilder;
-pub use self::security::admin_acl_rpc_hook;
-
-#[cfg(feature = "legacy-common-compat")]
-#[doc(hidden)]
-pub mod legacy;

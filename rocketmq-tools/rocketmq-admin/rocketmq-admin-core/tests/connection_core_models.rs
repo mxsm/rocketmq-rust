@@ -1,5 +1,5 @@
-use rocketmq_admin_core::core::connection::ConsumerConnectionQueryRequest;
-use rocketmq_admin_core::core::connection::ProducerConnectionQueryRequest;
+use rocketmq_admin_core::client_adapter::services::connection::ConsumerConnectionQueryRequest;
+use rocketmq_admin_core::client_adapter::services::connection::ProducerConnectionQueryRequest;
 
 #[test]
 fn consumer_connection_query_request_trims_fields() {

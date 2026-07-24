@@ -21,11 +21,9 @@ mod set_consume_mode_sub_command;
 mod start_monitoring_sub_command;
 mod update_sub_group_list_sub_command;
 mod update_sub_group_sub_command;
-use std::sync::Arc;
 
 use clap::Subcommand;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::consumer::consumer_progress_sub_command::ConsumerProgressSubCommand;
 use crate::commands::consumer::consumer_status_sub_command::ConsumerStatusSubCommand;
@@ -106,17 +104,20 @@ pub enum ConsumerCommands {
 }
 
 impl CommandExecute for ConsumerCommands {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         match self {
-            ConsumerCommands::ConsumerStatus(cmd) => cmd.execute(rpc_hook).await,
-            ConsumerCommands::Consumer(cmd) => cmd.execute(rpc_hook).await,
-            ConsumerCommands::DeleteSubscriptionGroup(cmd) => cmd.execute(rpc_hook).await,
-            ConsumerCommands::GetConsumerConfig(cmd) => cmd.execute(rpc_hook).await,
-            ConsumerCommands::SetConsumeMode(cmd) => cmd.execute(rpc_hook).await,
-            ConsumerCommands::StartMonitoring(cmd) => cmd.execute(rpc_hook).await,
-            ConsumerCommands::UpdateSubGroupList(cmd) => cmd.execute(rpc_hook).await,
-            ConsumerCommands::UpdateSubGroup(value) => value.execute(rpc_hook).await,
-            ConsumerCommands::QueryConsumer(value) => value.execute(rpc_hook).await,
+            ConsumerCommands::ConsumerStatus(cmd) => cmd.execute(credentials).await,
+            ConsumerCommands::Consumer(cmd) => cmd.execute(credentials).await,
+            ConsumerCommands::DeleteSubscriptionGroup(cmd) => cmd.execute(credentials).await,
+            ConsumerCommands::GetConsumerConfig(cmd) => cmd.execute(credentials).await,
+            ConsumerCommands::SetConsumeMode(cmd) => cmd.execute(credentials).await,
+            ConsumerCommands::StartMonitoring(cmd) => cmd.execute(credentials).await,
+            ConsumerCommands::UpdateSubGroupList(cmd) => cmd.execute(credentials).await,
+            ConsumerCommands::UpdateSubGroup(value) => value.execute(credentials).await,
+            ConsumerCommands::QueryConsumer(value) => value.execute(credentials).await,
         }
     }
 }

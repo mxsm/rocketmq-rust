@@ -12,18 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use clap::Parser;
 use rocketmq_common::UtilAll::time_millis_to_human_string2;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::body::get_lite_client_info_response_body::GetLiteClientInfoResponseBody;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use rocketmq_admin_core::core::lite::LiteClientInfoQueryRequest;
-use rocketmq_admin_core::core::lite::LiteClientInfoQueryResult;
-use rocketmq_admin_core::core::lite::LiteService;
+use rocketmq_admin_core::client_adapter::services::lite::LiteClientInfoQueryRequest;
+use rocketmq_admin_core::client_adapter::services::lite::LiteClientInfoQueryResult;
+use rocketmq_admin_core::client_adapter::services::lite::LiteService;
 
 #[derive(Debug, Clone, Parser)]
 pub struct GetLiteClientInfoSubCommand {
@@ -41,8 +38,12 @@ pub struct GetLiteClientInfoSubCommand {
 }
 
 impl CommandExecute for GetLiteClientInfoSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        let result = LiteService::query_lite_client_info_by_request_with_rpc_hook(self.request()?, rpc_hook).await?;
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
+        let result =
+            LiteService::query_lite_client_info_by_request_with_credentials(self.request()?, credentials).await?;
         Self::print_result(&result, self.show_detail);
         Ok(())
     }

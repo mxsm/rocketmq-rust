@@ -16,4 +16,4 @@
 //!
 //! The deterministic allocation and epoch policy live in
 //! `core::static_topic::planner`. Legacy SDK orchestration remains isolated in
-//! `client_adapter::legacy::core::static_topic` for R0 compatibility.
+//! Higher-level command orchestration lives in `client_adapter::services::static_topic`.

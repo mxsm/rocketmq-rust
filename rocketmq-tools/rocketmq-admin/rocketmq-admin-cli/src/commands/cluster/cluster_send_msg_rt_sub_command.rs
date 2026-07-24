@@ -12,18 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use chrono::FixedOffset;
 use chrono::Utc;
 use clap::Parser;
-use rocketmq_admin_core::core::cluster::ClusterSendMessageRtRequest;
-use rocketmq_admin_core::core::cluster::ClusterSendMessageRtResult;
+use rocketmq_admin_core::client_adapter::services::cluster::ClusterSendMessageRtRequest;
+use rocketmq_admin_core::client_adapter::services::cluster::ClusterSendMessageRtResult;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use rocketmq_admin_core::core::cluster::ClusterService;
+use rocketmq_admin_core::client_adapter::services::cluster::ClusterService;
 
 fn get_cur_time() -> String {
     let offset = FixedOffset::east_opt(8 * 3600).unwrap();
@@ -94,7 +91,10 @@ impl ClusterSendMsgRTSubCommand {
 }
 
 impl CommandExecute for ClusterSendMsgRTSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         if !self.print_as_tlog {
             println!(
                 "{:<24}  {:<24}  {:<4}  {:<8}  {:<8}",
@@ -104,7 +104,8 @@ impl CommandExecute for ClusterSendMsgRTSubCommand {
 
         loop {
             let result =
-                ClusterService::send_message_rt_by_request_with_rpc_hook(self.request()?, rpc_hook.clone()).await?;
+                ClusterService::send_message_rt_by_request_with_credentials(self.request()?, credentials.clone())
+                    .await?;
             self.print_result(&result);
             tokio::time::sleep(tokio::time::Duration::from_secs(self.interval)).await;
         }

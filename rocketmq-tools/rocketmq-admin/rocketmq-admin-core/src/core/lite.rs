@@ -50,6 +50,3 @@ pub trait LiteAdmin: Send {
     fn get_lite_broker_info<'a>(&'a mut self, request: &'a GetLiteBrokerInfoRequest)
         -> AdminFuture<'a, LiteBrokerInfo>;
 }
-
-#[cfg(feature = "legacy-common-compat")]
-pub use crate::client_adapter::legacy::core::lite::*;

@@ -12,16 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use clap::Parser;
-use rocketmq_admin_core::core::export_data::ExportMetadataRequest;
-use rocketmq_admin_core::core::export_data::ExportMetadataResult;
-use rocketmq_admin_core::core::export_data::ExportMetadataScope;
-use rocketmq_admin_core::core::export_data::ExportService;
+use rocketmq_admin_core::client_adapter::services::export_data::ExportMetadataRequest;
+use rocketmq_admin_core::client_adapter::services::export_data::ExportMetadataResult;
+use rocketmq_admin_core::client_adapter::services::export_data::ExportMetadataScope;
+use rocketmq_admin_core::client_adapter::services::export_data::ExportService;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
@@ -175,9 +172,12 @@ impl ExportMetadataSubCommand {
 }
 
 impl CommandExecute for ExportMetadataSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         let file_path = self.file_path.trim();
-        let result = ExportService::export_metadata_by_request_with_rpc_hook(self.request()?, rpc_hook).await?;
+        let result = ExportService::export_metadata_by_request_with_credentials(self.request()?, credentials).await?;
 
         Self::write_result(&result, file_path)
     }
@@ -186,7 +186,7 @@ impl CommandExecute for ExportMetadataSubCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rocketmq_admin_core::core::export_data::ExportMetadataTarget;
+    use rocketmq_admin_core::client_adapter::services::export_data::ExportMetadataTarget;
 
     #[test]
     fn export_metadata_sub_command_builds_cluster_request() {

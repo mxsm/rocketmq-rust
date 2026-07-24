@@ -13,21 +13,19 @@
 // limitations under the License.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use clap::ArgGroup;
 use clap::Parser;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use rocketmq_admin_core::core::broker::BrokerConfigSectionTarget;
-use rocketmq_admin_core::core::broker::BrokerService;
-use rocketmq_admin_core::core::broker::CommitLogReadAheadRequest;
-use rocketmq_admin_core::core::broker::CommitLogReadAheadResult;
-use rocketmq_admin_core::core::broker::CommitLogReadAheadSection;
+use rocketmq_admin_core::client_adapter::services::broker::BrokerConfigSectionTarget;
+use rocketmq_admin_core::client_adapter::services::broker::BrokerService;
+use rocketmq_admin_core::client_adapter::services::broker::CommitLogReadAheadRequest;
+use rocketmq_admin_core::client_adapter::services::broker::CommitLogReadAheadResult;
+use rocketmq_admin_core::client_adapter::services::broker::CommitLogReadAheadSection;
 
 const MADV_NORMAL: &str = "0";
 const MADV_RANDOM: &str = "1";
@@ -128,10 +126,13 @@ impl CommitLogSetReadAheadSubCommand {
 }
 
 impl CommandExecute for CommitLogSetReadAheadSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         let request = self.request()?;
         let result =
-            BrokerService::set_commit_log_read_ahead_by_request_with_rpc_hook(request.clone(), rpc_hook).await?;
+            BrokerService::set_commit_log_read_ahead_by_request_with_credentials(request.clone(), credentials).await?;
         Self::print_result(&request, result)
     }
 }
@@ -256,7 +257,7 @@ fn print_read_ahead_config(config: &HashMap<CheetahString, CheetahString>, prefe
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rocketmq_admin_core::core::broker::CommitLogReadAheadMode;
+    use rocketmq_admin_core::client_adapter::services::broker::CommitLogReadAheadMode;
 
     #[test]
     fn parse_java_compatible_mode_for_single_broker() {

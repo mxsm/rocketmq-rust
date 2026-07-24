@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use clap::Parser;
@@ -22,12 +21,11 @@ use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::subscription::group_retry_policy::GroupRetryPolicy;
 use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use rocketmq_admin_core::core::consumer::ConsumerOperationResult;
-use rocketmq_admin_core::core::consumer::ConsumerService;
-use rocketmq_admin_core::core::consumer::UpdateSubscriptionGroupRequest;
+use rocketmq_admin_core::client_adapter::services::consumer::ConsumerOperationResult;
+use rocketmq_admin_core::client_adapter::services::consumer::ConsumerService;
+use rocketmq_admin_core::client_adapter::services::consumer::UpdateSubscriptionGroupRequest;
 
 #[derive(Debug, Clone, Parser)]
 pub struct UpdateSubGroupSubCommand {
@@ -221,10 +219,14 @@ impl UpdateSubGroupSubCommand {
 }
 
 impl CommandExecute for UpdateSubGroupSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         let request = self.request()?;
         let config = request.config().clone();
-        let result = ConsumerService::update_subscription_group_by_request_with_rpc_hook(request, rpc_hook).await?;
+        let result =
+            ConsumerService::update_subscription_group_by_request_with_credentials(request, credentials).await?;
         Self::print_result(&config, result)
     }
 }

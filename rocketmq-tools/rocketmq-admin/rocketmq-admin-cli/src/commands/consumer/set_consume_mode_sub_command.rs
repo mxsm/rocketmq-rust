@@ -12,19 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use clap::Parser;
 use rocketmq_common::common::message::message_enum::MessageRequestMode;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
-use rocketmq_admin_core::core::consumer::ConsumerOperationResult;
-use rocketmq_admin_core::core::consumer::ConsumerService;
-use rocketmq_admin_core::core::consumer::SetConsumeModeRequest;
+use rocketmq_admin_core::client_adapter::services::consumer::ConsumerOperationResult;
+use rocketmq_admin_core::client_adapter::services::consumer::ConsumerService;
+use rocketmq_admin_core::client_adapter::services::consumer::SetConsumeModeRequest;
 
 #[derive(Debug, Clone, Parser)]
 pub struct SetConsumeModeSubCommand {
@@ -124,9 +121,13 @@ impl SetConsumeModeSubCommand {
 }
 
 impl CommandExecute for SetConsumeModeSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         let request = self.request()?;
-        let result = ConsumerService::set_consume_mode_by_request_with_rpc_hook(request.clone(), rpc_hook).await?;
+        let result =
+            ConsumerService::set_consume_mode_by_request_with_credentials(request.clone(), credentials).await?;
         Self::print_result(&request, result)
     }
 }

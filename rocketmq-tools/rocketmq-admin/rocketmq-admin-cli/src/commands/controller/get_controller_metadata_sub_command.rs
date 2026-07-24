@@ -12,16 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use clap::Parser;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use rocketmq_admin_core::core::controller::ControllerMetadataQueryRequest;
-use rocketmq_admin_core::core::controller::ControllerMetadataQueryResult;
-use rocketmq_admin_core::core::controller::ControllerService;
+use rocketmq_admin_core::client_adapter::services::controller::ControllerMetadataQueryRequest;
+use rocketmq_admin_core::client_adapter::services::controller::ControllerMetadataQueryResult;
+use rocketmq_admin_core::client_adapter::services::controller::ControllerService;
 
 #[derive(Debug, Clone, Parser)]
 pub struct GetControllerMetadataSubCommand {
@@ -36,9 +33,13 @@ pub struct GetControllerMetadataSubCommand {
 }
 
 impl CommandExecute for GetControllerMetadataSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         let result =
-            ControllerService::query_controller_metadata_by_request_with_rpc_hook(self.request()?, rpc_hook).await?;
+            ControllerService::query_controller_metadata_by_request_with_credentials(self.request()?, credentials)
+                .await?;
         Self::print_result(&result);
         Ok(())
     }

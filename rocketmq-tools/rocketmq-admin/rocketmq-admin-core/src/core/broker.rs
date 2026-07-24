@@ -82,6 +82,3 @@ pub trait BrokerAdmin: Send {
         request: &'a ProbeBrokerRuntimeRequest,
     ) -> AdminFuture<'a, ProbeBrokerRuntimeResult>;
 }
-
-#[cfg(feature = "legacy-common-compat")]
-pub use crate::client_adapter::legacy::core::broker::*;

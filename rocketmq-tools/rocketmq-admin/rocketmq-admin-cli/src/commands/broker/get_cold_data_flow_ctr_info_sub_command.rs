@@ -12,21 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use clap::ArgGroup;
 use clap::Parser;
 use rocketmq_common::utils::util_all::time_millis_to_human_string2;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 use serde_json::Value;
 
 use crate::commands::CommandExecute;
-use rocketmq_admin_core::core::broker::BrokerConfigSectionTarget;
-use rocketmq_admin_core::core::broker::BrokerService;
-use rocketmq_admin_core::core::broker::ColdDataFlowCtrInfoQueryRequest;
-use rocketmq_admin_core::core::broker::ColdDataFlowCtrInfoSection;
+use rocketmq_admin_core::client_adapter::services::broker::BrokerConfigSectionTarget;
+use rocketmq_admin_core::client_adapter::services::broker::BrokerService;
+use rocketmq_admin_core::client_adapter::services::broker::ColdDataFlowCtrInfoQueryRequest;
+use rocketmq_admin_core::client_adapter::services::broker::ColdDataFlowCtrInfoSection;
 
 #[derive(Debug, Clone, Parser)]
 #[command(group(ArgGroup::new("target")
@@ -102,9 +99,13 @@ impl GetColdDataFlowCtrInfoSubCommand {
 }
 
 impl CommandExecute for GetColdDataFlowCtrInfoSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         let result =
-            BrokerService::query_cold_data_flow_ctr_info_by_request_with_rpc_hook(self.request()?, rpc_hook).await?;
+            BrokerService::query_cold_data_flow_ctr_info_by_request_with_credentials(self.request()?, credentials)
+                .await?;
         for section in result.sections {
             Self::print_section(section)?;
         }
@@ -142,7 +143,7 @@ mod tests {
 
         assert!(matches!(
             request.target(),
-            rocketmq_admin_core::core::broker::BrokerTarget::BrokerAddr(addr)
+            rocketmq_admin_core::client_adapter::services::broker::BrokerTarget::BrokerAddr(addr)
                 if addr.as_str() == "127.0.0.1:10911"
         ));
     }

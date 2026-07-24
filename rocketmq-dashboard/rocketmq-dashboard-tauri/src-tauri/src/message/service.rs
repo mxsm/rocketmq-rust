@@ -39,7 +39,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use chrono::Local;
 use chrono::TimeZone;
-use rocketmq_admin_core::client_adapter::AdminSession;
+use rocketmq_admin_core::core::admin::AdminSession;
 use rocketmq_admin_core::core::message::DirectConsumeRequest;
 use rocketmq_admin_core::core::message::DirectConsumeResult;
 use rocketmq_admin_core::core::message::DlqMessageLookupRequest;

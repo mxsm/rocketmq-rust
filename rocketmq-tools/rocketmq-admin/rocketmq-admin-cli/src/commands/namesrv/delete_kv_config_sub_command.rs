@@ -12,15 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use clap::Parser;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use rocketmq_admin_core::core::namesrv::KvConfigDeleteRequest;
-use rocketmq_admin_core::core::namesrv::NameServerService;
+use rocketmq_admin_core::client_adapter::services::namesrv::KvConfigDeleteRequest;
+use rocketmq_admin_core::client_adapter::services::namesrv::NameServerService;
 
 #[derive(Debug, Clone, Parser)]
 pub struct DeleteKvConfigSubCommand {
@@ -38,7 +35,10 @@ impl DeleteKvConfigSubCommand {
 }
 
 impl CommandExecute for DeleteKvConfigSubCommand {
-    async fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        _rpc_hook: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         NameServerService::delete_kv_config_by_request(self.request()?).await?;
         println!("delete kv config from namespace success.");
         Ok(())

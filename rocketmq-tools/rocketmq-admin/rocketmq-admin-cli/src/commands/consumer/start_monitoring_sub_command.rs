@@ -12,12 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use clap::Parser;
-use rocketmq_admin_core::core::consumer::ConsumerService;
-use rocketmq_admin_core::core::consumer::StartMonitoringRequest;
-use rocketmq_remoting::runtime::RPCHook;
+use rocketmq_admin_core::client_adapter::services::consumer::ConsumerService;
+use rocketmq_admin_core::client_adapter::services::consumer::StartMonitoringRequest;
 
 use crate::commands::CommandExecute;
 
@@ -39,8 +36,11 @@ impl StartMonitoringSubCommand {
 }
 
 impl CommandExecute for StartMonitoringSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> rocketmq_error::RocketMQResult<()> {
-        let result = ConsumerService::start_monitoring_by_request_with_rpc_hook(self.request(), rpc_hook).await?;
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        let result = ConsumerService::start_monitoring_by_request_with_credentials(self.request(), credentials).await?;
         for event in result.events {
             println!("{event:?}");
         }

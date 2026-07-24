@@ -13,18 +13,16 @@
 // limitations under the License.
 
 use std::collections::HashSet;
-use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use clap::ArgGroup;
 use clap::Parser;
-use rocketmq_admin_core::core::auth::AuthService;
-use rocketmq_admin_core::core::auth::ListAclRequest;
-use rocketmq_admin_core::core::auth::ListAclResult;
+use rocketmq_admin_core::client_adapter::services::auth::AuthService;
+use rocketmq_admin_core::client_adapter::services::auth::ListAclRequest;
+use rocketmq_admin_core::client_adapter::services::auth::ListAclResult;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::body::acl_info::AclInfo;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
@@ -58,14 +56,17 @@ struct AclRow {
 }
 
 impl CommandExecute for ListAclSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         let request = ListAclRequest::try_new(
             self.broker_addr.clone(),
             self.cluster_name.clone(),
             self.subject.clone(),
         )?
         .with_optional_namesrv_addr(self.common_args.namesrv_addr.clone());
-        let result = AuthService::list_acl_by_request_with_rpc_hook(request, rpc_hook).await?;
+        let result = AuthService::list_acl_by_request_with_credentials(request, credentials).await?;
         render_list_acl_result(result)
     }
 }

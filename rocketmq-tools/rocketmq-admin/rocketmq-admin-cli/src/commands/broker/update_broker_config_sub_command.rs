@@ -13,20 +13,18 @@
 // limitations under the License.
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
 
 use clap::ArgAction;
 use clap::ArgGroup;
 use clap::Parser;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use rocketmq_admin_core::core::broker::BrokerConfigUpdateApplyResult;
-use rocketmq_admin_core::core::broker::BrokerConfigUpdatePlanResult;
-use rocketmq_admin_core::core::broker::BrokerConfigUpdateRequest;
-use rocketmq_admin_core::core::broker::BrokerService;
+use rocketmq_admin_core::client_adapter::services::broker::BrokerConfigUpdateApplyResult;
+use rocketmq_admin_core::client_adapter::services::broker::BrokerConfigUpdatePlanResult;
+use rocketmq_admin_core::client_adapter::services::broker::BrokerConfigUpdateRequest;
+use rocketmq_admin_core::client_adapter::services::broker::BrokerService;
 
 #[derive(Debug, Clone, Parser)]
 #[command(group(
@@ -130,11 +128,16 @@ impl UpdateBrokerConfigSubCommand {
 }
 
 impl CommandExecute for UpdateBrokerConfigSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         let request = self.request()?;
-        let plan =
-            BrokerService::build_broker_config_update_plan_by_request_with_rpc_hook(request.clone(), rpc_hook.clone())
-                .await?;
+        let plan = BrokerService::build_broker_config_update_plan_by_request_with_credentials(
+            request.clone(),
+            credentials.clone(),
+        )
+        .await?;
 
         print_update_plan(&plan);
         if self.dry_run {
@@ -148,7 +151,8 @@ impl CommandExecute for UpdateBrokerConfigSubCommand {
         }
 
         let apply_result =
-            BrokerService::apply_broker_config_update_plan_by_request_with_rpc_hook(&request, &plan, rpc_hook).await?;
+            BrokerService::apply_broker_config_update_plan_by_request_with_credentials(&request, &plan, credentials)
+                .await?;
         print_apply_result(&apply_result, plan.changed_broker_count());
         Ok(())
     }

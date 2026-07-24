@@ -25,8 +25,6 @@ mod list_users_sub_command;
 mod update_acl_sub_command;
 mod update_user_sub_command;
 
-use std::sync::Arc;
-
 use crate::commands::CommandExecute;
 use crate::commands::auth::copy_acl_sub_command::CopyAclSubCommand;
 use crate::commands::auth::copy_users_sub_command::CopyUsersSubCommand;
@@ -42,7 +40,6 @@ use crate::commands::auth::update_acl_sub_command::UpdateAclSubCommand;
 use crate::commands::auth::update_user_sub_command::UpdateUserSubCommand;
 use clap::Subcommand;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 
 #[derive(Subcommand)]
 pub enum AuthCommands {
@@ -133,20 +130,23 @@ pub enum AuthCommands {
 }
 
 impl CommandExecute for AuthCommands {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         match self {
-            AuthCommands::CopyAcl(value) => value.execute(rpc_hook).await,
-            AuthCommands::CopyUsers(value) => value.execute(rpc_hook).await,
-            AuthCommands::CreateAcl(value) => value.execute(rpc_hook).await,
-            AuthCommands::CreateUser(value) => value.execute(rpc_hook).await,
-            AuthCommands::DeleteAcl(value) => value.execute(rpc_hook).await,
-            AuthCommands::DeleteUser(value) => value.execute(rpc_hook).await,
-            AuthCommands::GetAcl(value) => value.execute(rpc_hook).await,
-            AuthCommands::GetUser(value) => value.execute(rpc_hook).await,
-            AuthCommands::ListAcl(value) => value.execute(rpc_hook).await,
-            AuthCommands::ListUsers(value) => value.execute(rpc_hook).await,
-            AuthCommands::UpdateAcl(value) => value.execute(rpc_hook).await,
-            AuthCommands::UpdateUser(value) => value.execute(rpc_hook).await,
+            AuthCommands::CopyAcl(value) => value.execute(credentials).await,
+            AuthCommands::CopyUsers(value) => value.execute(credentials).await,
+            AuthCommands::CreateAcl(value) => value.execute(credentials).await,
+            AuthCommands::CreateUser(value) => value.execute(credentials).await,
+            AuthCommands::DeleteAcl(value) => value.execute(credentials).await,
+            AuthCommands::DeleteUser(value) => value.execute(credentials).await,
+            AuthCommands::GetAcl(value) => value.execute(credentials).await,
+            AuthCommands::GetUser(value) => value.execute(credentials).await,
+            AuthCommands::ListAcl(value) => value.execute(credentials).await,
+            AuthCommands::ListUsers(value) => value.execute(credentials).await,
+            AuthCommands::UpdateAcl(value) => value.execute(credentials).await,
+            AuthCommands::UpdateUser(value) => value.execute(credentials).await,
         }
     }
 }

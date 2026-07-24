@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use chrono::Local;
 use chrono::NaiveDateTime;
 use chrono::TimeZone;
@@ -22,13 +20,12 @@ use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::admin::rollback_stats::RollbackStats;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
-use rocketmq_admin_core::core::offset::OffsetService;
-use rocketmq_admin_core::core::offset::ResetOffsetByTimeRequest;
-use rocketmq_admin_core::core::offset::ResetOffsetByTimeResult;
+use rocketmq_admin_core::client_adapter::services::offset::OffsetService;
+use rocketmq_admin_core::client_adapter::services::offset::ResetOffsetByTimeRequest;
+use rocketmq_admin_core::client_adapter::services::offset::ResetOffsetByTimeResult;
 
 /// Timestamp format used by the Java reference implementation.
 const TIMESTAMP_FORMAT: &str = "%Y-%m-%d#%H:%M:%S:%3f";
@@ -210,9 +207,13 @@ impl ResetOffsetByTimeSubCommand {
 }
 
 impl CommandExecute for ResetOffsetByTimeSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         let request = self.request()?;
-        let result = OffsetService::reset_offset_by_time_by_request_with_rpc_hook(request.clone(), rpc_hook).await?;
+        let result =
+            OffsetService::reset_offset_by_time_by_request_with_credentials(request.clone(), credentials).await?;
         Self::print_result(&request, result);
         Ok(())
     }

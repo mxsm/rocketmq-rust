@@ -12,16 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use clap::Parser;
-use rocketmq_admin_core::core::connection::ConnectionService;
-use rocketmq_admin_core::core::connection::ProducerConnectionQueryRequest;
-use rocketmq_admin_core::core::connection::ProducerConnectionQueryResult;
+use rocketmq_admin_core::client_adapter::services::connection::ConnectionService;
+use rocketmq_admin_core::client_adapter::services::connection::ProducerConnectionQueryRequest;
+use rocketmq_admin_core::client_adapter::services::connection::ProducerConnectionQueryResult;
 use rocketmq_common::common::mq_version::RocketMqVersion;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::body::producer_connection::ProducerConnection;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
 
@@ -35,9 +32,13 @@ pub struct ProducerConnectionSubCommand {
 }
 
 impl CommandExecute for ProducerConnectionSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         let request = ProducerConnectionQueryRequest::try_new(self.producer_group.clone(), self.topic.clone())?;
-        let result = ConnectionService::query_producer_connection_by_request_with_rpc_hook(request, rpc_hook).await?;
+        let result =
+            ConnectionService::query_producer_connection_by_request_with_credentials(request, credentials).await?;
         render_producer_connection_result(result);
         Ok(())
     }

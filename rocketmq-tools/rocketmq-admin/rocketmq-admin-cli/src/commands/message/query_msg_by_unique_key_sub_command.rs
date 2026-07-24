@@ -14,20 +14,18 @@
 
 use std::fs;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use clap::Parser;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::utils::util_all::time_millis_to_human_string2;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use rocketmq_admin_core::core::message::MessageService;
-use rocketmq_admin_core::core::message::QueryMessageByUniqueKeyRequest;
-use rocketmq_admin_core::core::message::QueryMessageByUniqueKeyResult;
-use rocketmq_admin_core::core::message::UniqueKeyDirectStatus;
+use rocketmq_admin_core::client_adapter::services::message::MessageService;
+use rocketmq_admin_core::client_adapter::services::message::QueryMessageByUniqueKeyRequest;
+use rocketmq_admin_core::client_adapter::services::message::QueryMessageByUniqueKeyResult;
+use rocketmq_admin_core::client_adapter::services::message::UniqueKeyDirectStatus;
 
 #[derive(Debug, Clone, Parser)]
 pub struct QueryMsgByUniqueKeySubCommand {
@@ -118,7 +116,10 @@ impl QueryMsgByUniqueKeySubCommand {
 }
 
 impl CommandExecute for QueryMsgByUniqueKeySubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         let start_time = self
             .start_time
             .as_deref()
@@ -151,7 +152,7 @@ impl CommandExecute for QueryMsgByUniqueKeySubCommand {
             end_time,
         )?;
 
-        match MessageService::query_message_by_unique_key_by_request_with_rpc_hook(request, rpc_hook).await? {
+        match MessageService::query_message_by_unique_key_by_request_with_credentials(request, credentials).await? {
             QueryMessageByUniqueKeyResult::Messages(messages) => {
                 for (index, msg) in messages.iter().enumerate() {
                     Self::show_message(msg, index)?;

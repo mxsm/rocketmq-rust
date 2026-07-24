@@ -15,8 +15,8 @@
 use crate::cluster::types::ClusterError;
 use crate::cluster::types::ClusterResult;
 use crate::nameserver::NameServerRuntimeState;
-use rocketmq_admin_core::client_adapter::AdminSession;
-use rocketmq_admin_core::client_adapter::ClientAdminBuilder;
+use rocketmq_admin_core::core::admin::AdminBuilder;
+use rocketmq_admin_core::core::admin::AdminSession;
 use rocketmq_dashboard_common::NameServerConfigSnapshot;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -34,7 +34,7 @@ impl ManagedClusterAdmin {
             ClusterError::Configuration("No active NameServer is configured. Add and select a NameServer first.".into())
         })?;
 
-        let admin = ClientAdminBuilder::new()
+        let admin = AdminBuilder::new()
             .admin_group(format!("dashboard-cluster-admin-{}", Uuid::new_v4()))
             .namesrv_addr(current_namesrv)
             .timeout_millis(5_000)

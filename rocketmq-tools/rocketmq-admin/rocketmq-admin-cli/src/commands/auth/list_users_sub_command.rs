@@ -12,18 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use clap::ArgGroup;
 use clap::Parser;
 
-use rocketmq_admin_core::core::auth::AuthService;
-use rocketmq_admin_core::core::auth::ListUsersRequest;
-use rocketmq_admin_core::core::auth::ListUsersResult;
+use rocketmq_admin_core::client_adapter::services::auth::AuthService;
+use rocketmq_admin_core::client_adapter::services::auth::ListUsersRequest;
+use rocketmq_admin_core::client_adapter::services::auth::ListUsersResult;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::body::user_info::UserInfo;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
 
@@ -43,10 +40,13 @@ pub struct ListUsersSubCommand {
 }
 
 impl CommandExecute for ListUsersSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         let request =
             ListUsersRequest::try_new(self.broker_addr.clone(), self.cluster_name.clone(), self.filter.clone())?;
-        let result = AuthService::list_users_by_request_with_rpc_hook(request, rpc_hook).await?;
+        let result = AuthService::list_users_by_request_with_credentials(request, credentials).await?;
         render_list_users_result(result)
     }
 }

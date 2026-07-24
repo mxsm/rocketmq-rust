@@ -19,9 +19,9 @@ use rocketmq_error::RocketMQResult;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
-use rocketmq_admin_core::core::topic::DeleteTopicRequest;
-use rocketmq_admin_core::core::topic::DeleteTopicResult;
-use rocketmq_admin_core::core::topic::TopicService;
+use rocketmq_admin_core::client_adapter::services::topic::DeleteTopicRequest;
+use rocketmq_admin_core::client_adapter::services::topic::DeleteTopicResult;
+use rocketmq_admin_core::client_adapter::services::topic::TopicService;
 
 #[derive(Debug, Clone, Parser)]
 pub struct DeleteTopicSubCommand {
@@ -58,7 +58,7 @@ impl DeleteTopicSubCommand {
 impl CommandExecute for DeleteTopicSubCommand {
     async fn execute(
         &self,
-        _rpc_hook: Option<std::sync::Arc<dyn rocketmq_remoting::runtime::RPCHook>>,
+        _credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
     ) -> rocketmq_error::RocketMQResult<()> {
         if self.cluster_name.is_none() {
             return Err(RocketMQError::IllegalArgument(

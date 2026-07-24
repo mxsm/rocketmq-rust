@@ -15,11 +15,8 @@
 mod add_broker_sub_command;
 mod remove_broker_sub_command;
 
-use std::sync::Arc;
-
 use clap::Subcommand;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
 use crate::commands::container::add_broker_sub_command::AddBrokerSubCommand;
@@ -43,10 +40,13 @@ pub enum ContainerCommands {
 }
 
 impl CommandExecute for ContainerCommands {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         match self {
-            ContainerCommands::AddBroker(cmd) => cmd.execute(rpc_hook).await,
-            ContainerCommands::RemoveBroker(cmd) => cmd.execute(rpc_hook).await,
+            ContainerCommands::AddBroker(cmd) => cmd.execute(credentials).await,
+            ContainerCommands::RemoveBroker(cmd) => cmd.execute(credentials).await,
         }
     }
 }

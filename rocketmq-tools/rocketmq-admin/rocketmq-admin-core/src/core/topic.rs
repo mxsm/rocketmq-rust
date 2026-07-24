@@ -295,6 +295,3 @@ pub trait TopicAdmin: Send {
 
     fn send_topic_test_message<'a>(&'a mut self, request: &'a TopicSendRequest) -> AdminFuture<'a, TopicSendResult>;
 }
-
-#[cfg(feature = "legacy-common-compat")]
-pub use crate::client_adapter::legacy::core::topic::*;

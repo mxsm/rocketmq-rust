@@ -12,14 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use clap::Parser;
-use rocketmq_admin_core::core::stats::StatsAllQueryRequest;
-use rocketmq_admin_core::core::stats::StatsAllRow;
-use rocketmq_admin_core::core::stats::StatsService;
+use rocketmq_admin_core::client_adapter::services::stats::StatsAllQueryRequest;
+use rocketmq_admin_core::client_adapter::services::stats::StatsAllRow;
+use rocketmq_admin_core::client_adapter::services::stats::StatsService;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 use tracing::warn;
 
 use crate::commands::CommandExecute;
@@ -74,8 +71,11 @@ impl StatsAllSubCommand {
 }
 
 impl CommandExecute for StatsAllSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        let result = StatsService::query_stats_all_by_request_with_rpc_hook(self.request(), rpc_hook).await?;
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
+        let result = StatsService::query_stats_all_by_request_with_credentials(self.request(), credentials).await?;
 
         println!(
             "{:<64}  {:<64} {:>12} {:>11} {:>11} {:>14} {:>14}",

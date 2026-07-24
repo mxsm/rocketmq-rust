@@ -21,27 +21,7 @@
 //! interactive prompts belong in `rocketmq-admin-cli`; future terminal UI state
 //! belongs in `rocketmq-admin-tui`.
 
-#[cfg(feature = "legacy-common-compat")]
-#[doc(hidden)]
-pub extern crate self as rocketmq_error;
-#[cfg(feature = "legacy-common-compat")]
-#[doc(hidden)]
-pub extern crate self as rocketmq_remoting;
-#[cfg(feature = "legacy-common-compat")]
-#[doc(hidden)]
-pub extern crate self as rocketmq_rust;
-
-#[cfg(feature = "legacy-common-compat")]
-#[doc(hidden)]
-pub use crate::client_adapter::legacy::error_compat::*;
-#[cfg(feature = "legacy-common-compat")]
-#[doc(hidden)]
-pub use crate::client_adapter::legacy::remoting_compat::*;
-
 pub mod core;
 
 #[cfg(feature = "client-adapter")]
 pub mod client_adapter;
-
-#[cfg(feature = "legacy-common-compat")]
-pub mod admin;

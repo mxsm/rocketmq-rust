@@ -1,6 +1,6 @@
-use rocketmq_admin_core::core::static_topic::RemappingStaticTopicRequest;
-use rocketmq_admin_core::core::static_topic::StaticTopicMappingFileRequest;
-use rocketmq_admin_core::core::static_topic::UpdateStaticTopicRequest;
+use rocketmq_admin_core::client_adapter::services::static_topic::RemappingStaticTopicRequest;
+use rocketmq_admin_core::client_adapter::services::static_topic::StaticTopicMappingFileRequest;
+use rocketmq_admin_core::client_adapter::services::static_topic::UpdateStaticTopicRequest;
 
 #[test]
 fn update_static_topic_request_trims_and_splits_targets() {

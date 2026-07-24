@@ -243,6 +243,56 @@ pub struct DashboardConsumerMutationResult {
     pub updated: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ConsumerRequestMode {
+    Pull,
+    Pop,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetConsumerRequestModeRequest {
+    pub topic: String,
+    pub consumer_group: String,
+    pub mode: ConsumerRequestMode,
+    pub pop_share_queue_num: i32,
+    pub timeout_millis: u64,
+}
+
+impl SetConsumerRequestModeRequest {
+    pub fn try_new(
+        topic: impl Into<String>,
+        consumer_group: impl Into<String>,
+        mode: ConsumerRequestMode,
+        pop_share_queue_num: i32,
+        timeout_millis: u64,
+    ) -> AdminResult<Self> {
+        if pop_share_queue_num < 0 {
+            return Err(crate::core::AdminError::invalid_argument(
+                "popShareQueueNum",
+                "must be greater than or equal to zero",
+            ));
+        }
+        if timeout_millis == 0 {
+            return Err(crate::core::AdminError::invalid_argument(
+                "timeoutMillis",
+                "must be greater than zero",
+            ));
+        }
+        Ok(Self {
+            topic: crate::core::error::required("topic", topic)?,
+            consumer_group: crate::core::error::required("consumerGroup", consumer_group)?,
+            mode,
+            pop_share_queue_num,
+            timeout_millis,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetConsumerRequestModeResult {
+    pub broker_addrs: Vec<String>,
+}
+
 pub trait ConsumerAdmin: Send {
     fn list_consumer_groups<'a>(
         &'a mut self,
@@ -283,7 +333,9 @@ pub trait ConsumerAdmin: Send {
         &'a mut self,
         request: &'a DashboardConsumerDeleteRequest,
     ) -> AdminFuture<'a, DashboardConsumerMutationResult>;
-}
 
-#[cfg(feature = "legacy-common-compat")]
-pub use crate::client_adapter::legacy::core::consumer::*;
+    fn set_consumer_request_mode<'a>(
+        &'a mut self,
+        request: &'a SetConsumerRequestModeRequest,
+    ) -> AdminFuture<'a, SetConsumerRequestModeResult>;
+}

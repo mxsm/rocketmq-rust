@@ -1,12 +1,12 @@
-use rocketmq_admin_core::core::auth::AuthTarget;
-use rocketmq_admin_core::core::auth::CopyAclRequest;
-use rocketmq_admin_core::core::auth::CreateAclRequest;
-use rocketmq_admin_core::core::auth::CreateUserRequest;
-use rocketmq_admin_core::core::auth::DeleteAclRequest;
-use rocketmq_admin_core::core::auth::ListAclRequest;
-use rocketmq_admin_core::core::auth::ListUsersRequest;
-use rocketmq_admin_core::core::auth::UpdateAclRequest;
-use rocketmq_admin_core::core::auth::UpdateUserRequest;
+use rocketmq_admin_core::client_adapter::services::auth::AuthTarget;
+use rocketmq_admin_core::client_adapter::services::auth::CopyAclRequest;
+use rocketmq_admin_core::client_adapter::services::auth::CreateAclRequest;
+use rocketmq_admin_core::client_adapter::services::auth::CreateUserRequest;
+use rocketmq_admin_core::client_adapter::services::auth::DeleteAclRequest;
+use rocketmq_admin_core::client_adapter::services::auth::ListAclRequest;
+use rocketmq_admin_core::client_adapter::services::auth::ListUsersRequest;
+use rocketmq_admin_core::client_adapter::services::auth::UpdateAclRequest;
+use rocketmq_admin_core::client_adapter::services::auth::UpdateUserRequest;
 
 #[test]
 fn auth_user_requests_trim_fields_and_validate_targets() {

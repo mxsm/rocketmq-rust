@@ -12,16 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use clap::Parser;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::body::query_consume_queue_response_body::QueryConsumeQueueResponseBody;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use rocketmq_admin_core::core::queue::QueryConsumeQueueRequest;
-use rocketmq_admin_core::core::queue::QueueService;
+use rocketmq_admin_core::client_adapter::services::queue::QueryConsumeQueueRequest;
+use rocketmq_admin_core::client_adapter::services::queue::QueueService;
 
 #[derive(Debug, Clone, Parser)]
 pub struct QueryCqSubCommand {
@@ -64,10 +61,13 @@ impl QueryCqSubCommand {
 }
 
 impl CommandExecute for QueryCqSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         let request = self.request()?;
         let index = request.index();
-        let result = QueueService::query_consume_queue_by_request_with_rpc_hook(request, rpc_hook).await?;
+        let result = QueueService::query_consume_queue_by_request_with_credentials(request, credentials).await?;
         print_query_consume_queue_response(&result.response_body, index);
         Ok(())
     }

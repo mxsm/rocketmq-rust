@@ -12,13 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use clap::Parser;
-use rocketmq_admin_core::core::message::DumpCompactionLogRequest;
-use rocketmq_admin_core::core::message::MessageService;
+use rocketmq_admin_core::client_adapter::services::message::DumpCompactionLogRequest;
+use rocketmq_admin_core::client_adapter::services::message::MessageService;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
 
@@ -35,7 +32,10 @@ impl DumpCompactionLogSubCommand {
 }
 
 impl CommandExecute for DumpCompactionLogSubCommand {
-    async fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        _rpc_hook: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         let result = MessageService::dump_compaction_log_by_request(&self.request())?;
         if result.missing_file_name {
             println!("miss dump log file name");

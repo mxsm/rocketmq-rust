@@ -12,17 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use clap::Parser;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
-use rocketmq_admin_core::core::topic::TopicClusterList;
-use rocketmq_admin_core::core::topic::TopicClusterQueryRequest;
-use rocketmq_admin_core::core::topic::TopicService;
+use rocketmq_admin_core::client_adapter::services::topic::TopicClusterList;
+use rocketmq_admin_core::client_adapter::services::topic::TopicClusterQueryRequest;
+use rocketmq_admin_core::client_adapter::services::topic::TopicService;
 
 #[derive(Debug, Clone, Parser)]
 pub struct TopicClusterSubCommand {
@@ -50,7 +47,10 @@ impl TopicClusterSubCommand {
     }
 }
 impl CommandExecute for TopicClusterSubCommand {
-    async fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) -> rocketmq_error::RocketMQResult<()> {
+    async fn execute(
+        &self,
+        _rpc_hook: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> rocketmq_error::RocketMQResult<()> {
         let clusters = self.get_topic_clusters().await?;
         self.print_clusters(&clusters);
         Ok(())

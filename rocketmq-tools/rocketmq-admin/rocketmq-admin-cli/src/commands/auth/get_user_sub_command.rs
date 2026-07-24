@@ -12,19 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use clap::ArgGroup;
 use clap::Parser;
 
 use cheetah_string::CheetahString;
-use rocketmq_admin_core::core::auth::AuthService;
-use rocketmq_admin_core::core::auth::GetUserRequest;
-use rocketmq_admin_core::core::auth::GetUserResult;
+use rocketmq_admin_core::client_adapter::services::auth::AuthService;
+use rocketmq_admin_core::client_adapter::services::auth::GetUserRequest;
+use rocketmq_admin_core::client_adapter::services::auth::GetUserResult;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::body::user_info::UserInfo;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
 
@@ -64,14 +61,17 @@ impl ParseGetUserSubCommand {
 }
 
 impl CommandExecute for GetUserSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         let command = ParseGetUserSubCommand::new(self)?;
         let request = GetUserRequest::try_new(
             self.broker_addr.clone(),
             self.cluster_name.clone(),
             command.username.clone().to_string(),
         )?;
-        let result = AuthService::get_user_by_request_with_rpc_hook(request, rpc_hook).await?;
+        let result = AuthService::get_user_by_request_with_credentials(request, credentials).await?;
         render_get_user_result(&command, result, self.broker_addr.is_some())
     }
 }

@@ -18,11 +18,8 @@ mod get_controller_config_sub_command;
 mod get_controller_metadata_sub_command;
 mod update_controller_config_sub_command;
 
-use std::sync::Arc;
-
 use clap::Subcommand;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
 use crate::commands::controller::clean_broker_metadata_sub_command::CleanBrokerMetadataSubCommand;
@@ -71,13 +68,16 @@ pub enum ControllerCommands {
 }
 
 impl CommandExecute for ControllerCommands {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         match self {
-            ControllerCommands::CleanBrokerMetadata(cmd) => cmd.execute(rpc_hook).await,
-            ControllerCommands::ElectMaster(value) => value.execute(rpc_hook).await,
-            ControllerCommands::GetControllerConfig(value) => value.execute(rpc_hook).await,
-            ControllerCommands::GetControllerMetadata(value) => value.execute(rpc_hook).await,
-            ControllerCommands::UpdateControllerConfig(value) => value.execute(rpc_hook).await,
+            ControllerCommands::CleanBrokerMetadata(cmd) => cmd.execute(credentials).await,
+            ControllerCommands::ElectMaster(value) => value.execute(credentials).await,
+            ControllerCommands::GetControllerConfig(value) => value.execute(credentials).await,
+            ControllerCommands::GetControllerMetadata(value) => value.execute(credentials).await,
+            ControllerCommands::UpdateControllerConfig(value) => value.execute(credentials).await,
         }
     }
 }

@@ -12,17 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use clap::ArgGroup;
 use clap::Parser;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use rocketmq_admin_core::core::broker::BrokerBooleanOperationResult;
-use rocketmq_admin_core::core::broker::BrokerOptionalTarget;
-use rocketmq_admin_core::core::broker::BrokerService;
+use rocketmq_admin_core::client_adapter::services::broker::BrokerBooleanOperationResult;
+use rocketmq_admin_core::client_adapter::services::broker::BrokerOptionalTarget;
+use rocketmq_admin_core::client_adapter::services::broker::BrokerService;
 
 #[derive(Debug, Clone, Parser)]
 #[command(group(ArgGroup::new("target")
@@ -44,8 +41,12 @@ impl CleanUnusedTopicSubCommand {
 }
 
 impl CommandExecute for CleanUnusedTopicSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        let result = BrokerService::clean_unused_topic_by_request_with_rpc_hook(self.request()?, rpc_hook).await?;
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
+        let result =
+            BrokerService::clean_unused_topic_by_request_with_credentials(self.request()?, credentials).await?;
         print_result(&result);
         Ok(())
     }

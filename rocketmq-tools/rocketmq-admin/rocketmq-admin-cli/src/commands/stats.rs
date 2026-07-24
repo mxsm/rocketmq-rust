@@ -14,11 +14,8 @@
 
 mod stats_all_sub_command;
 
-use std::sync::Arc;
-
 use clap::Subcommand;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
 use crate::commands::stats::stats_all_sub_command::StatsAllSubCommand;
@@ -34,9 +31,12 @@ pub enum StatsCommands {
 }
 
 impl CommandExecute for StatsCommands {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         match self {
-            StatsCommands::StatsAll(cmd) => cmd.execute(rpc_hook).await,
+            StatsCommands::StatsAll(cmd) => cmd.execute(credentials).await,
         }
     }
 }

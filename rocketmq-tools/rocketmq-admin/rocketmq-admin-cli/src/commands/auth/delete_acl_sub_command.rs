@@ -12,14 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use clap::ArgGroup;
 use clap::Parser;
-use rocketmq_admin_core::core::auth::AuthService;
-use rocketmq_admin_core::core::auth::DeleteAclRequest;
+use rocketmq_admin_core::client_adapter::services::auth::AuthService;
+use rocketmq_admin_core::client_adapter::services::auth::DeleteAclRequest;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
 
@@ -62,14 +59,17 @@ pub struct DeleteAclSubCommand {
 }
 
 impl CommandExecute for DeleteAclSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         let request = DeleteAclRequest::try_new(
             self.broker_addr.clone(),
             self.cluster_name.clone(),
             self.subject.clone(),
             self.resources.clone(),
         )?;
-        let result = AuthService::delete_acl_by_request_with_rpc_hook(request, rpc_hook).await?;
+        let result = AuthService::delete_acl_by_request_with_credentials(request, credentials).await?;
         for broker_addr in result.broker_addrs {
             println!("delete acl to {} success.", broker_addr);
         }

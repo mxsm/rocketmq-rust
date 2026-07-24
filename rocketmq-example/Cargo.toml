@@ -47,7 +47,7 @@ rocketmq-error       = { path = "../rocketmq-error" }
 rocketmq-observability = { path = "../rocketmq-observability" }
 rocketmq-remoting    = { path = "../rocketmq-remoting" }
 rocketmq-rust        = { path = "../rocketmq" }
-rocketmq-tools       = { path = "../rocketmq-tools/rocketmq-admin/rocketmq-admin-core", package = "rocketmq-admin-core" }
+rocketmq-tools       = { path = "../rocketmq-tools/rocketmq-admin/rocketmq-admin-core", package = "rocketmq-admin-core", default-features = false, features = ["client-adapter"] }
 tokio                = { version = "1.49", features = ["full"] }
 tracing              = "0.1.44"
 

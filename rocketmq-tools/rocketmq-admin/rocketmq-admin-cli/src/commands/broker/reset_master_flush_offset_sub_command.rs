@@ -12,15 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use clap::Parser;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use rocketmq_admin_core::core::broker::BrokerService;
-use rocketmq_admin_core::core::broker::ResetMasterFlushOffsetRequest;
+use rocketmq_admin_core::client_adapter::services::broker::BrokerService;
+use rocketmq_admin_core::client_adapter::services::broker::ResetMasterFlushOffsetRequest;
 
 #[derive(Debug, Clone, Parser)]
 pub struct ResetMasterFlushOffsetSubCommand {
@@ -38,9 +35,12 @@ impl ResetMasterFlushOffsetSubCommand {
 }
 
 impl CommandExecute for ResetMasterFlushOffsetSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         let request = self.request()?;
-        BrokerService::reset_master_flush_offset_by_request_with_rpc_hook(request.clone(), rpc_hook).await?;
+        BrokerService::reset_master_flush_offset_by_request_with_credentials(request.clone(), credentials).await?;
         println!("reset master flush offset to {} success", request.master_flush_offset());
         Ok(())
     }

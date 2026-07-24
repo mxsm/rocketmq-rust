@@ -23,6 +23,3 @@ pub struct QueueRef {
     pub broker_name: String,
     pub queue_id: i32,
 }
-
-#[cfg(feature = "legacy-common-compat")]
-pub use crate::client_adapter::legacy::core::queue::*;

@@ -17,9 +17,9 @@ use std::sync::Arc;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
-use rocketmq_admin_core::client_adapter::AdminGuard;
-use rocketmq_admin_core::client_adapter::AdminSession;
-use rocketmq_admin_core::client_adapter::ClientAdminBuilder;
+use rocketmq_admin_core::core::admin::AdminBuilder;
+use rocketmq_admin_core::core::admin::AdminGuard;
+use rocketmq_admin_core::core::admin::AdminSession;
 use rocketmq_admin_core::core::dashboard as core;
 use rocketmq_admin_core::core::dashboard::DashboardAdmin;
 use tokio::sync::Mutex;
@@ -698,7 +698,7 @@ impl DashboardAdminClient {
             session.guard.shutdown().await;
         }
 
-        let guard = ClientAdminBuilder::new()
+        let guard = AdminBuilder::new()
             .namesrv_addr(snapshot.namesrv_addr.clone())
             .admin_group(unique_admin_group())
             .timeout_millis(5_000)

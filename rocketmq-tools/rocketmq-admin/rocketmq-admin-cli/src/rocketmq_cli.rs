@@ -20,12 +20,10 @@ use clap_complete::generate;
 use clap_complete::shells::Bash;
 use clap_complete::shells::Fish;
 use clap_complete::shells::Zsh;
-use rocketmq_admin_core::client_adapter::admin_acl_rpc_hook;
+use rocketmq_admin_core::core::security::AdminCredentials;
 use rocketmq_error::CliErrorView;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
-use std::sync::Arc;
 
 use crate::commands::CommandExecute;
 use crate::commands::Commands;
@@ -80,11 +78,11 @@ impl RocketMQCli {
         }
 
         if let Some(ref commands) = self.commands {
-            let rpc_hook = match rpc_hook_from_environment() {
-                Ok(rpc_hook) => rpc_hook,
+            let credentials = match credentials_from_environment() {
+                Ok(credentials) => credentials,
                 Err(error) => return render_cli_error(&error),
             };
-            if let Err(e) = commands.execute(rpc_hook).await {
+            if let Err(e) = commands.execute(credentials).await {
                 return render_cli_error(&e);
             }
             0
@@ -97,8 +95,8 @@ impl RocketMQCli {
     }
 }
 
-fn rpc_hook_from_environment() -> RocketMQResult<Option<Arc<dyn RPCHook>>> {
-    rpc_hook_from_values(
+fn credentials_from_environment() -> RocketMQResult<Option<AdminCredentials>> {
+    credentials_from_values(
         read_optional_env(ACL_ACCESS_KEY_ENV)?,
         read_optional_env(ACL_SECRET_KEY_ENV)?,
         read_optional_env(ACL_SECURITY_TOKEN_ENV)?,
@@ -116,21 +114,21 @@ fn read_optional_env(name: &'static str) -> RocketMQResult<Option<String>> {
     }
 }
 
-fn rpc_hook_from_values(
+fn credentials_from_values(
     access_key: Option<String>,
     secret_key: Option<String>,
     security_token: Option<String>,
-) -> RocketMQResult<Option<Arc<dyn RPCHook>>> {
+) -> RocketMQResult<Option<AdminCredentials>> {
     let access_key = access_key.and_then(non_blank);
     let secret_key = secret_key.and_then(non_blank);
     let security_token = security_token.and_then(non_blank);
     match (access_key, secret_key, security_token) {
         (None, None, None) => Ok(None),
-        (Some(access_key), Some(secret_key), security_token) => Ok(Some(Arc::new(admin_acl_rpc_hook(
-            access_key,
-            secret_key,
-            security_token,
-        )))),
+        (Some(access_key), Some(secret_key), security_token) => {
+            AdminCredentials::try_new(access_key, secret_key, security_token)
+                .map(Some)
+                .map_err(|error| RocketMQError::validation_failed("admin-acl-environment", error.to_string()))
+        }
         _ => Err(RocketMQError::validation_failed(
             "admin-acl-environment",
             "ROCKETMQ_ACL_ACCESS_KEY and ROCKETMQ_ACL_SECRET_KEY must be supplied together; the security token is \
@@ -168,8 +166,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::RocketMQCli;
+    use super::credentials_from_values;
     use super::normalize_java_compatible_args;
-    use super::rpc_hook_from_values;
     use clap::Parser;
     use rocketmq_error::CliExitCode;
     use std::ffi::OsString;
@@ -203,18 +201,26 @@ mod tests {
 
     #[test]
     fn acl_environment_is_optional_and_requires_complete_credentials() {
-        assert!(rpc_hook_from_values(None, None, None).unwrap().is_none());
-        assert!(rpc_hook_from_values(Some("access".into()), None, None).is_err());
-        assert!(rpc_hook_from_values(None, Some("secret".into()), None).is_err());
-        assert!(rpc_hook_from_values(None, None, Some("token".into())).is_err());
-        assert!(rpc_hook_from_values(Some(" ".into()), Some("secret".into()), None).is_err());
+        assert!(credentials_from_values(None, None, None).unwrap().is_none());
+        assert!(credentials_from_values(Some("access".into()), None, None).is_err());
+        assert!(credentials_from_values(None, Some("secret".into()), None).is_err());
+        assert!(credentials_from_values(None, None, Some("token".into())).is_err());
+        assert!(credentials_from_values(Some(" ".into()), Some("secret".into()), None).is_err());
     }
 
     #[test]
-    fn acl_environment_builds_sha256_rpc_hook_without_exposing_values() {
-        let hook =
-            rpc_hook_from_values(Some(" access ".into()), Some(" secret ".into()), Some(" token ".into())).unwrap();
+    fn acl_environment_builds_redacted_admin_credentials() {
+        let credentials = credentials_from_values(
+            Some(" access-value-42 ".into()),
+            Some(" secret-value-42 ".into()),
+            Some(" token-value-42 ".into()),
+        )
+        .unwrap();
 
-        assert!(hook.is_some());
+        let debug = format!("{:?}", credentials.expect("credentials"));
+        assert!(!debug.contains("access-value-42"));
+        assert!(!debug.contains("secret-value-42"));
+        assert!(!debug.contains("token-value-42"));
+        assert!(debug.contains("<redacted>"));
     }
 }

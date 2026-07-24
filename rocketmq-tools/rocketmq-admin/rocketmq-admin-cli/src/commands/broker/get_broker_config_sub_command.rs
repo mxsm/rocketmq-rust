@@ -12,18 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use clap::Parser;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use rocketmq_admin_core::core::broker::BrokerConfigQueryRequest;
-use rocketmq_admin_core::core::broker::BrokerConfigQueryResult;
-use rocketmq_admin_core::core::broker::BrokerConfigSection;
-use rocketmq_admin_core::core::broker::BrokerConfigSectionTarget;
-use rocketmq_admin_core::core::broker::BrokerService;
+use rocketmq_admin_core::client_adapter::services::broker::BrokerConfigQueryRequest;
+use rocketmq_admin_core::client_adapter::services::broker::BrokerConfigQueryResult;
+use rocketmq_admin_core::client_adapter::services::broker::BrokerConfigSection;
+use rocketmq_admin_core::client_adapter::services::broker::BrokerConfigSectionTarget;
+use rocketmq_admin_core::client_adapter::services::broker::BrokerService;
 
 #[derive(Debug, Clone, Parser)]
 #[command(group(
@@ -57,7 +54,10 @@ impl GetBrokerConfigSubCommand {
 }
 
 impl CommandExecute for GetBrokerConfigSubCommand {
-    async fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        _rpc_hook: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         let result = BrokerService::query_broker_config_by_request(self.request()?).await?;
         print_broker_config_result(&result);
         Ok(())

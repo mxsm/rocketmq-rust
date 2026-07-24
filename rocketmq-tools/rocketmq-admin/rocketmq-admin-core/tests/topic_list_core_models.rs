@@ -1,6 +1,6 @@
 use cheetah_string::CheetahString;
-use rocketmq_admin_core::core::topic::TopicTarget;
-use rocketmq_admin_core::core::topic::UpdateTopicListRequest;
+use rocketmq_admin_core::client_adapter::services::topic::TopicTarget;
+use rocketmq_admin_core::client_adapter::services::topic::UpdateTopicListRequest;
 use rocketmq_common::common::config::TopicConfig as RocketMQTopicConfig;
 
 #[test]

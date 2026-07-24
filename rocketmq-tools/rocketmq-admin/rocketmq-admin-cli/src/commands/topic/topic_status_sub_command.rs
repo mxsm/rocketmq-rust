@@ -17,8 +17,8 @@ use rocketmq_common::UtilAll::time_millis_to_human_string2;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
-use rocketmq_admin_core::core::topic::TopicService;
-use rocketmq_admin_core::core::topic::TopicStatusQueryRequest;
+use rocketmq_admin_core::client_adapter::services::topic::TopicService;
+use rocketmq_admin_core::client_adapter::services::topic::TopicStatusQueryRequest;
 
 #[derive(Debug, Clone, Parser)]
 pub struct TopicStatusSubCommand {
@@ -39,7 +39,7 @@ pub struct TopicStatusSubCommand {
 impl CommandExecute for TopicStatusSubCommand {
     async fn execute(
         &self,
-        _rpc_hook: Option<std::sync::Arc<dyn rocketmq_remoting::runtime::RPCHook>>,
+        _credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
     ) -> rocketmq_error::RocketMQResult<()> {
         let request = TopicStatusQueryRequest::try_new(self.topic.clone())?
             .with_optional_namesrv_addr(self.common_args.namesrv_addr.clone())

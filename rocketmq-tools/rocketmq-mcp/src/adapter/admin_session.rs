@@ -14,8 +14,8 @@
 
 use std::collections::BTreeMap;
 
-use rocketmq_admin_core::client_adapter::AdminGuard;
-use rocketmq_admin_core::client_adapter::ClientAdminBuilder as AdminBuilder;
+use rocketmq_admin_core::core::admin::AdminBuilder;
+use rocketmq_admin_core::core::admin::AdminGuard;
 use rocketmq_admin_core::core::broker::BrokerAdmin;
 use rocketmq_admin_core::core::broker::ListBrokersRequest;
 use rocketmq_admin_core::core::broker::ProbeBrokerRuntimeRequest;

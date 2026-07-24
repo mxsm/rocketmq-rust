@@ -12,17 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use clap::ArgGroup;
 use clap::Parser;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use rocketmq_admin_core::core::broker::BrokerBooleanOperationResult;
-use rocketmq_admin_core::core::broker::BrokerOptionalTarget;
-use rocketmq_admin_core::core::broker::BrokerService;
+use rocketmq_admin_core::client_adapter::services::broker::BrokerBooleanOperationResult;
+use rocketmq_admin_core::client_adapter::services::broker::BrokerOptionalTarget;
+use rocketmq_admin_core::client_adapter::services::broker::BrokerService;
 
 #[derive(Debug, Clone, Parser)]
 #[command(group(ArgGroup::new("target")
@@ -44,9 +41,12 @@ impl DeleteExpiredCommitLogSubCommand {
 }
 
 impl CommandExecute for DeleteExpiredCommitLogSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(
+        &self,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+    ) -> RocketMQResult<()> {
         let result =
-            BrokerService::delete_expired_commit_log_by_request_with_rpc_hook(self.request()?, rpc_hook).await?;
+            BrokerService::delete_expired_commit_log_by_request_with_credentials(self.request()?, credentials).await?;
         print_result(&result);
         Ok(())
     }
