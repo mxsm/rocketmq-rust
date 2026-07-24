@@ -55,14 +55,21 @@ app.kubernetes.io/part-of: {{ include "rocketmq.partOf" . }}
 app.kubernetes.io/managed-by: {{ .root.Release.Service }}
 app.kubernetes.io/version: {{ .root.Chart.AppVersion | quote }}
 rocketmq.apache.org/service: {{ .service }}
-rocketmq.apache.org/architecture-milestone: P0-04
+rocketmq.apache.org/architecture-milestone: P0-05
 {{- end -}}
 
-{{/* Shared process lifecycle contract. The health port is kubelet-only and is not exposed by Services. */}}
+{{/* Shared pre-bind lifecycle and security contract. The health port is kubelet-only and is not exposed by Services. */}}
 {{- define "rocketmq.lifecycleEnv" -}}
 - {name: ROCKETMQ_HEALTH_BIND_ADDR, value: "0.0.0.0:8088"}
 - {name: ROCKETMQ_SHUTDOWN_TIMEOUT_SECONDS, value: "45"}
 - {name: ROCKETMQ_LIVENESS_STALE_SECONDS, value: "30"}
+- {name: ROCKETMQ_SECURITY_PROFILE, value: "secure-enforced"}
+- {name: ROCKETMQ_SECURITY_TRUST_ANCHOR, value: "/var/run/secrets/rocketmq/ca.crt"}
+- {name: ROCKETMQ_SECURITY_TLS_CERT, value: "/var/run/secrets/rocketmq/tls.crt"}
+- {name: ROCKETMQ_SECURITY_TLS_KEY, value: "/var/run/secrets/rocketmq/tls.key"}
+- {name: ROCKETMQ_SECURITY_SECRET_PROVIDER, value: "mounted-files"}
+- {name: ROCKETMQ_SECURITY_ADMIN_IDENTITY, value: "/var/run/secrets/rocketmq/admin.identity"}
+- {name: ROCKETMQ_SECURITY_REQUEST_POLICY, value: "/var/run/secrets/rocketmq/request-policy.json"}
 {{- end -}}
 
 {{- define "rocketmq.lifecycleProbes" -}}
@@ -155,6 +162,7 @@ seccompProfile:
 secret:
   secretName: {{ .Values.global.secretRefs.existingSecret | quote }}
   optional: false
+  defaultMode: 0440
 {{- else -}}
 csi:
   driver: secrets-store.csi.k8s.io

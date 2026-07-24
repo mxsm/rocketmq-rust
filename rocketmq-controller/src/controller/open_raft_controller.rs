@@ -580,7 +580,7 @@ impl OpenRaftController {
 
         let startup_config = self.config.snapshot();
         let advertised_raft_addr = startup_config.local_raft_addr();
-        let raft_bind_addr = controller_raft_bind_addr(advertised_raft_addr)?;
+        let raft_bind_addr = resolve_controller_raft_bind_addr(advertised_raft_addr)?;
         info!(
             "Starting OpenRaft controller, remoting_addr={}, raft_bind_addr={}, advertised_raft_addr={}",
             startup_config.listen_addr, raft_bind_addr, advertised_raft_addr
@@ -1019,7 +1019,13 @@ impl Controller for OpenRaftController {
     }
 }
 
-fn controller_raft_bind_addr(fallback: SocketAddr) -> RocketMQResult<SocketAddr> {
+/// Resolves the actual Raft listener address used by standalone and embedded Controllers.
+///
+/// # Errors
+///
+/// Returns a typed configuration error when `ROCKETMQ_CONTROLLER_RAFT_BIND_ADDR`
+/// is non-UTF-8 or not a socket address.
+pub fn resolve_controller_raft_bind_addr(fallback: SocketAddr) -> RocketMQResult<SocketAddr> {
     let Some(raw) = env::var_os(CONTROLLER_RAFT_BIND_ADDR_ENV) else {
         return Ok(fallback);
     };

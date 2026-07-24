@@ -218,7 +218,7 @@ where
                 remote_address,
                 session_task_group,
                 Arc::new(AdmissionController::new(AdmissionLimits::default())),
-                Arc::new(TransportSecurity::new(None, None)),
+                Arc::new(TransportSecurity::development_insecure_loopback(None, None)),
                 None,
                 Duration::from_secs(120),
                 session_handler,
@@ -303,7 +303,7 @@ where
             pending_requests,
             pending_request_owner,
             task_lifecycle,
-            transport_security: Arc::new(TransportSecurity::new(None, None)),
+            transport_security: Arc::new(TransportSecurity::development_insecure_loopback(None, None)),
             peer: PeerInfo::new(remote_address, negotiated_tls),
             _processor: PhantomData,
         })

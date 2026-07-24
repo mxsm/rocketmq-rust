@@ -114,10 +114,30 @@ the repository.
 ```powershell
 kubectl create namespace rocketmq --dry-run=client -o yaml | kubectl apply -f -
 kubectl -n rocketmq create secret generic rocketmq-runtime-secrets `
+  --from-file=ca.crt=<path-to-trust-anchor> `
+  --from-file=admin.identity=<path-to-administrator-identity> `
+  --from-file=request-policy.json=<path-to-request-policy> `
   --from-file=broker-acl.yml=<path-to-broker-acl> `
   --from-file=proxy-acl.yml=<path-to-proxy-acl> `
   --from-file=tls.crt=<path-to-tls-certificate> `
   --from-file=tls.key=<path-to-tls-private-key>
+```
+
+All seven files must be non-empty and readable by UID/GID 10001. The chart
+injects `ROCKETMQ_SECURITY_PROFILE=secure-enforced` and canonical mounted-file
+paths into Broker, NameServer, Controller, Proxy, and MCP. Each process
+validates the complete material set before starting its lifecycle listener.
+The `dev-single` Kubernetes profile remains secure because Pod listeners bind
+non-loopback addresses.
+
+For a process run directly on a developer workstation, insecure startup must be
+selected explicitly and every configured listener, including the health
+listener, must use a loopback address. A Broker configuration must also set
+`haListenAddress = "127.0.0.1"`:
+
+```powershell
+$env:ROCKETMQ_SECURITY_PROFILE = "development-insecure-loopback"
+$env:ROCKETMQ_HEALTH_BIND_ADDR = "127.0.0.1:8088"
 ```
 
 Use a Secrets Store CSI provider instead by clearing

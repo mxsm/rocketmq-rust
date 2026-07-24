@@ -91,6 +91,7 @@ pub use cli::parse_command_line;
 pub use cli::ControllerCli;
 pub use config::ControllerConfig;
 pub use config::ControllerConfigReader;
+pub use controller::open_raft_controller::resolve_controller_raft_bind_addr;
 pub use controller::open_raft_controller::OpenRaftController;
 pub use controller::raft_controller::RaftController;
 pub use controller::Controller;

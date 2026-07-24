@@ -27,6 +27,7 @@ use rocketmq_security_api::Principal;
 use rocketmq_security_api::RequestContext;
 use rocketmq_security_api::RequestPolicy;
 use rocketmq_security_api::Resource;
+use rocketmq_security_api::SecurityBootstrapProfile;
 use rocketmq_security_api::SecurityRequestView;
 use rocketmq_security_api::SigningError;
 
@@ -52,13 +53,33 @@ pub fn request_view<'a>(command: &'a RemotingCommand, peer: Option<&'a PeerInfo>
 
 /// Injected transport ports; provider implementations remain in composition crates.
 pub struct TransportSecurity {
+    profile: SecurityBootstrapProfile,
     policy: Option<Arc<dyn RequestPolicy>>,
     signer: Option<Arc<dyn OutboundSigner>>,
 }
 
 impl TransportSecurity {
-    pub fn new(policy: Option<Arc<dyn RequestPolicy>>, signer: Option<Arc<dyn OutboundSigner>>) -> Self {
-        Self { policy, signer }
+    /// Creates an explicitly insecure transport adapter for loopback-only development.
+    ///
+    /// The listener address restriction is enforced by the process security bootstrap before bind.
+    pub fn development_insecure_loopback(
+        policy: Option<Arc<dyn RequestPolicy>>,
+        signer: Option<Arc<dyn OutboundSigner>>,
+    ) -> Self {
+        Self {
+            profile: SecurityBootstrapProfile::DevelopmentInsecureLoopback,
+            policy,
+            signer,
+        }
+    }
+
+    /// Creates a fail-closed transport adapter for a securely bootstrapped process.
+    pub fn secure_enforced(policy: Option<Arc<dyn RequestPolicy>>, signer: Option<Arc<dyn OutboundSigner>>) -> Self {
+        Self {
+            profile: SecurityBootstrapProfile::SecureEnforced,
+            policy,
+            signer,
+        }
     }
 
     pub fn authorize(
@@ -70,7 +91,10 @@ impl TransportSecurity {
         action: Action,
     ) -> Decision {
         let Some(policy) = &self.policy else {
-            return Decision::Allow;
+            return match self.profile {
+                SecurityBootstrapProfile::DevelopmentInsecureLoopback => Decision::Allow,
+                SecurityBootstrapProfile::SecureEnforced => Decision::deny("request policy is unavailable"),
+            };
         };
         let context = RequestContext::new(request_view(command, peer), principal, resource, action);
         evaluate_request(policy.as_ref(), &context)
@@ -78,7 +102,10 @@ impl TransportSecurity {
 
     pub fn sign(&self, command: &mut RemotingCommand, peer: Option<&PeerInfo>) -> Result<(), SigningError> {
         let Some(signer) = &self.signer else {
-            return Ok(());
+            return match self.profile {
+                SecurityBootstrapProfile::DevelopmentInsecureLoopback => Ok(()),
+                SecurityBootstrapProfile::SecureEnforced => Err(SigningError::CredentialsUnavailable),
+            };
         };
         let signature = signer.sign(request_view(command, peer))?;
         command.ensure_ext_fields_initialized();

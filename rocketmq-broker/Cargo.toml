@@ -60,6 +60,7 @@ rocketmq-filter      = { workspace = true }
 rocketmq-runtime     = { workspace = true }
 rocketmq-error       = { workspace = true }
 rocketmq-auth        = { workspace = true }
+rocketmq-security-api = { workspace = true }
 rocketmq-observability = { workspace = true }
 rocketmq-model = { workspace = true }
 

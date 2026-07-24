@@ -129,7 +129,11 @@ pub struct TransportClient {
 
 impl TransportClient {
     pub fn new(service_context: ServiceContext, admission: Arc<AdmissionController>) -> Self {
-        Self::new_with_security(service_context, admission, Arc::new(TransportSecurity::new(None, None)))
+        Self::new_with_security(
+            service_context,
+            admission,
+            Arc::new(TransportSecurity::development_insecure_loopback(None, None)),
+        )
     }
 
     pub fn new_with_security(

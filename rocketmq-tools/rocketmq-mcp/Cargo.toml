@@ -50,6 +50,7 @@ change-planning = []
 rocketmq-admin-core   = { version = "1.0.0", path = "../rocketmq-admin/rocketmq-admin-core", default-features = false, features = ["client-adapter"] }
 rocketmq-observability = { workspace = true }
 rocketmq-runtime      = { workspace = true }
+rocketmq-security-api = { workspace = true }
 rocketmq-transport    = { workspace = true, features = ["tls"], optional = true }
 
 anyhow             = { workspace = true }

@@ -15,6 +15,7 @@
 #![recursion_limit = "256"]
 
 use std::collections::BTreeMap;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -25,6 +26,7 @@ use rocketmq_common::common::mq_version::CURRENT_VERSION;
 use rocketmq_common::EnvUtils::EnvUtils;
 use rocketmq_common::ParseConfigFile;
 use rocketmq_controller::parse_command_line;
+use rocketmq_controller::resolve_controller_raft_bind_addr;
 use rocketmq_controller::typ::Node;
 use rocketmq_controller::ControllerCli;
 use rocketmq_controller::ControllerConfig;
@@ -37,6 +39,9 @@ use rocketmq_runtime::ServiceContext;
 use rocketmq_runtime::ServiceLifecycle;
 use rocketmq_runtime::ServiceLifecycleState;
 use rocketmq_runtime::ShutdownReason;
+use rocketmq_security_api::SecurityBootstrapConfig;
+use rocketmq_security_api::SecurityBootstrapProfile;
+use rocketmq_security_api::ValidatedSecurityBootstrap;
 use tracing::info;
 
 /// RocketMQ Controller Bootstrap
@@ -133,6 +138,18 @@ async fn run(service_context: ServiceContext, lifecycle: ServiceLifecycle) -> Re
     }
 
     let logging_overrides = load_logging_overrides(cli.config_file.as_deref())?;
+    let security_config =
+        SecurityBootstrapConfig::from_env().context("failed to load Controller security bootstrap configuration")?;
+    let raft_bind_addr = resolve_controller_raft_bind_addr(config.local_raft_addr())
+        .context("failed to resolve Controller Raft listener address")?;
+    let validated_security = validate_controller_security(
+        &security_config,
+        &config,
+        raft_bind_addr,
+        lifecycle.config().probe_bind_addr,
+    )
+    .context("Controller security bootstrap failed before listener bind")?;
+
     let environment_filter = rocketmq_observability::read_rust_log().context("failed to read RUST_LOG")?;
     let resolved_filter = resolve_startup_log_filter(&cli, &logging_overrides, environment_filter.as_deref())
         .context("failed to resolve controller log filter")?;
@@ -146,6 +163,7 @@ async fn run(service_context: ServiceContext, lifecycle: ServiceLifecycle) -> Re
         &resolved_filter,
         telemetry_guard.subscriber_install_status(),
     );
+    log_security_bootstrap(validated_security);
 
     if let Err(error) = lifecycle.start(&service_context).await {
         lifecycle.mark_failed();
@@ -184,6 +202,34 @@ async fn run(service_context: ServiceContext, lifecycle: ServiceLifecycle) -> Re
         (Err(error), _) => Err(error),
         (Ok(()), Err(error)) => Err(error),
         (Ok(()), Ok(_report)) => Ok(()),
+    }
+}
+
+fn validate_controller_security(
+    security_config: &SecurityBootstrapConfig,
+    controller_config: &ControllerConfig,
+    raft_bind_addr: SocketAddr,
+    probe_bind_addr: Option<SocketAddr>,
+) -> Result<ValidatedSecurityBootstrap> {
+    let mut listeners = vec![controller_config.listen_addr, raft_bind_addr];
+    if let Some(probe_bind_addr) = probe_bind_addr {
+        listeners.push(probe_bind_addr);
+    }
+    security_config.validate(&listeners).map_err(anyhow::Error::from)
+}
+
+fn log_security_bootstrap(validated: ValidatedSecurityBootstrap) {
+    match validated.profile() {
+        SecurityBootstrapProfile::DevelopmentInsecureLoopback => tracing::warn!(
+            profile = validated.profile().as_str(),
+            listener_count = validated.listener_count(),
+            "Controller development-insecure security profile is active; every listener is restricted to loopback"
+        ),
+        SecurityBootstrapProfile::SecureEnforced => info!(
+            profile = validated.profile().as_str(),
+            listener_count = validated.listener_count(),
+            "Controller secure bootstrap completed before listener bind"
+        ),
     }
 }
 
@@ -449,6 +495,25 @@ fn parse_auto_initialize_cluster_flag(raw: &str) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn security_bootstrap_precedes_controller_listener_bind() {
+        let security = SecurityBootstrapConfig::new(SecurityBootstrapProfile::DevelopmentInsecureLoopback);
+        let mut controller = ControllerConfig::default()
+            .with_node_info(1, SocketAddr::from(([127, 0, 0, 1], 60109)))
+            .with_raft_peers(Vec::new());
+
+        validate_controller_security(
+            &security,
+            &controller,
+            controller.local_raft_addr(),
+            Some(SocketAddr::from(([127, 0, 0, 1], 8088))),
+        )
+        .expect("loopback-only Controller bootstrap should pass");
+
+        controller.listen_addr = SocketAddr::from(([0, 0, 0, 0], 60109));
+        assert!(validate_controller_security(&security, &controller, controller.local_raft_addr(), None).is_err());
+    }
 
     #[test]
     fn auto_initialize_cluster_flag_accepts_only_explicit_boolean_values() {

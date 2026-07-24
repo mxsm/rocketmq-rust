@@ -761,7 +761,7 @@ impl AcceptSocketService {
         is_auto_switch: bool,
     ) -> Self {
         let ha_listen_port = message_store_config.ha_listen_port;
-        let socket_address_listen = SocketAddr::from(([0u8, 0u8, 0u8, 0u8], ha_listen_port as u16));
+        let socket_address_listen = SocketAddr::new(message_store_config.ha_listen_address, ha_listen_port as u16);
         AcceptSocketService {
             socket_address_listen,
             message_store_config,

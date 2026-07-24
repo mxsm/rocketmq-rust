@@ -41,7 +41,7 @@ use crate::common::sys_flag::message_sys_flag::MessageSysFlag;
 use crate::common::TopicFilterType;
 use crate::MessageUtils;
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Message {
     topic: CheetahString,
     flag: MessageFlag,
@@ -553,36 +553,15 @@ impl Message {
     }
 }
 
-fn java_properties_to_string(properties: &HashMap<CheetahString, CheetahString>) -> String {
-    if properties.is_empty() {
-        return "{}".to_string();
-    }
-
-    let mut entries = properties
-        .iter()
-        .map(|(key, value)| (key.as_str(), value.as_str()))
-        .collect::<Vec<_>>();
-    entries.sort_unstable_by(|left, right| left.0.cmp(right.0).then_with(|| left.1.cmp(right.1)));
-
-    let body = entries
-        .into_iter()
-        .map(|(key, value)| format!("{key}={value}"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!("{{{body}}}")
-}
-
-fn java_body_to_string(body: Option<&Bytes>) -> String {
-    match body {
-        Some(body) => {
-            let values = body
-                .iter()
-                .map(|byte| (*byte as i8).to_string())
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("[{values}]")
-        }
-        None => "null".to_string(),
+impl fmt::Debug for Message {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Message")
+            .field("topic", &self.topic)
+            .field("flag", &self.flag.bits())
+            .field("body_len", &self.body_slice().len())
+            .field("property_count", &self.properties.len())
+            .field("transaction_id_present", &self.transaction_id.is_some())
+            .finish()
     }
 }
 
@@ -590,12 +569,12 @@ impl Display for Message {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "Message{{topic='{}', flag={}, properties={}, body={}, transactionId='{}'}}",
+            "Message{{topic='{}', flag={}, bodyLen={}, propertyCount={}, transactionIdPresent={}}}",
             self.topic,
             self.flag.bits(),
-            java_properties_to_string(self.properties.as_map()),
-            java_body_to_string(self.body.raw()),
-            self.transaction_id.as_deref().unwrap_or("null")
+            self.body_slice().len(),
+            self.properties.len(),
+            self.transaction_id.is_some()
         )
     }
 }
@@ -841,24 +820,24 @@ mod tests {
     }
 
     #[test]
-    fn message_display_matches_java_to_string_shape() {
+    fn message_display_redacts_body_properties_and_transaction_id() {
         let mut msg = Message::with_tags("TopicA", "TagA", &[1, 255]);
         msg.set_flag(7);
         msg.set_transaction_id(CheetahString::from_static_str("tx-1"));
 
         assert_eq!(
             msg.to_string(),
-            "Message{topic='TopicA', flag=7, properties={TAGS=TagA, WAIT=true}, body=[1, -1], transactionId='tx-1'}"
+            "Message{topic='TopicA', flag=7, bodyLen=2, propertyCount=2, transactionIdPresent=true}"
         );
     }
 
     #[test]
-    fn empty_message_display_uses_java_array_null_wording_for_absent_body() {
+    fn empty_message_display_contains_only_safe_metadata() {
         let msg = Message::default();
 
         assert_eq!(
             msg.to_string(),
-            "Message{topic='', flag=0, properties={}, body=null, transactionId='null'}"
+            "Message{topic='', flag=0, bodyLen=0, propertyCount=0, transactionIdPresent=false}"
         );
     }
 

@@ -18,17 +18,24 @@ use std::env;
 use std::path::PathBuf;
 
 use rocketmq_error::RocketMQError;
+#[cfg(test)]
+use rocketmq_proxy::GrpcConfig;
 use rocketmq_proxy::ProxyConfig;
 use rocketmq_proxy::ProxyError;
 use rocketmq_proxy::ProxyMode;
 use rocketmq_proxy::ProxyResult;
 use rocketmq_proxy::ProxyRuntime;
+#[cfg(test)]
+use rocketmq_proxy::RemotingConfig;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 use rocketmq_runtime::ServiceContext;
 use rocketmq_runtime::ServiceLifecycle;
 use rocketmq_runtime::ServiceLifecycleState;
 use rocketmq_runtime::ShutdownReason;
+use rocketmq_security_api::SecurityBootstrapConfig;
+use rocketmq_security_api::SecurityBootstrapProfile;
+use rocketmq_security_api::ValidatedSecurityBootstrap;
 use tracing::info;
 
 const ENTRYPOINT_MAX_BLOCKING_THREADS: usize = 64;
@@ -96,6 +103,9 @@ async fn run(service_context: ServiceContext, lifecycle: ServiceLifecycle) -> Pr
         return Ok(());
     }
 
+    let security_config = SecurityBootstrapConfig::from_env().map_err(proxy_security_error)?;
+    let validated_security = validate_proxy_security(&security_config, &config, lifecycle.config().probe_bind_addr)?;
+
     let environment_filter = rocketmq_observability::read_rust_log().map_err(|error| ProxyError::Transport {
         message: format!("failed to read RUST_LOG: {error}"),
     })?;
@@ -116,6 +126,7 @@ async fn run(service_context: ServiceContext, lifecycle: ServiceLifecycle) -> Pr
         &resolved_filter,
         telemetry_guard.subscriber_install_status(),
     );
+    log_security_bootstrap(validated_security);
 
     if let Err(error) = lifecycle.start(&service_context).await {
         lifecycle.mark_failed();
@@ -162,6 +173,42 @@ async fn run(service_context: ServiceContext, lifecycle: ServiceLifecycle) -> Pr
             lifecycle.mark_stopped();
             Ok(())
         }
+    }
+}
+
+fn proxy_security_error(error: rocketmq_security_api::SecurityBootstrapError) -> ProxyError {
+    ProxyError::Transport {
+        message: format!("Proxy security bootstrap failed before listener bind: {error}"),
+    }
+}
+
+fn validate_proxy_security(
+    security_config: &SecurityBootstrapConfig,
+    config: &ProxyConfig,
+    probe_bind_addr: Option<std::net::SocketAddr>,
+) -> ProxyResult<ValidatedSecurityBootstrap> {
+    let mut listeners = vec![config.grpc.socket_addr()?];
+    if config.remoting.enabled {
+        listeners.push(config.remoting.socket_addr()?);
+    }
+    if let Some(probe_bind_addr) = probe_bind_addr {
+        listeners.push(probe_bind_addr);
+    }
+    security_config.validate(&listeners).map_err(proxy_security_error)
+}
+
+fn log_security_bootstrap(validated: ValidatedSecurityBootstrap) {
+    match validated.profile() {
+        SecurityBootstrapProfile::DevelopmentInsecureLoopback => tracing::warn!(
+            profile = validated.profile().as_str(),
+            listener_count = validated.listener_count(),
+            "Proxy development-insecure security profile is active; every listener is restricted to loopback"
+        ),
+        SecurityBootstrapProfile::SecureEnforced => info!(
+            profile = validated.profile().as_str(),
+            listener_count = validated.listener_count(),
+            "Proxy secure bootstrap completed before listener bind"
+        ),
     }
 }
 
@@ -356,6 +403,32 @@ fn print_config(config: &ProxyConfig) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn security_bootstrap_precedes_proxy_listener_bind() {
+        let security = SecurityBootstrapConfig::new(SecurityBootstrapProfile::DevelopmentInsecureLoopback);
+        let mut config = ProxyConfig {
+            grpc: GrpcConfig {
+                listen_addr: "127.0.0.1:8081".to_string(),
+                ..GrpcConfig::default()
+            },
+            remoting: RemotingConfig {
+                enabled: true,
+                listen_addr: "127.0.0.1:8080".to_string(),
+            },
+            ..ProxyConfig::default()
+        };
+
+        validate_proxy_security(
+            &security,
+            &config,
+            Some(std::net::SocketAddr::from(([127, 0, 0, 1], 8088))),
+        )
+        .expect("loopback-only Proxy bootstrap should pass");
+
+        config.grpc.listen_addr = "0.0.0.0:8081".to_string();
+        assert!(validate_proxy_security(&security, &config, None).is_err());
+    }
 
     #[test]
     fn proxy_cli_parses_log_filter_override() {

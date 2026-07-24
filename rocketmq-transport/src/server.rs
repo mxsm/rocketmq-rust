@@ -250,7 +250,7 @@ impl TransportListener {
             admission,
             handshake_timeout,
             idle_timeout: Duration::from_secs(120),
-            security: Arc::new(TransportSecurity::new(None, None)),
+            security: Arc::new(TransportSecurity::development_insecure_loopback(None, None)),
             principal: None,
             next_session: AtomicU64::new(1),
         }
@@ -604,7 +604,7 @@ impl TransportServer {
             config,
             processor,
             admission,
-            Arc::new(TransportSecurity::new(None, None)),
+            Arc::new(TransportSecurity::development_insecure_loopback(None, None)),
             None,
         )
         .await
@@ -899,7 +899,7 @@ mod retirement_tests {
             remote_addr,
             service.task_group().clone(),
             Arc::new(AdmissionController::new(AdmissionLimits::default())),
-            Arc::new(TransportSecurity::new(None, None)),
+            Arc::new(TransportSecurity::development_insecure_loopback(None, None)),
             None,
             Duration::from_secs(30),
             handler,
@@ -960,7 +960,7 @@ mod retirement_tests {
             remote_addr,
             service.task_group().clone(),
             Arc::new(AdmissionController::new(AdmissionLimits::default())),
-            Arc::new(TransportSecurity::new(None, None)),
+            Arc::new(TransportSecurity::development_insecure_loopback(None, None)),
             None,
             Duration::from_secs(30),
             handler,

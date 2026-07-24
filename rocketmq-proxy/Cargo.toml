@@ -47,6 +47,7 @@ rocketmq-remoting    = { workspace = true }
 rocketmq-auth        = { workspace = true, features = ["grpc"] }
 rocketmq-observability = { workspace = true }
 rocketmq-runtime     = { workspace = true }
+rocketmq-security-api = { workspace = true }
 
 tokio        = { workspace = true }
 tokio-stream = { workspace = true }

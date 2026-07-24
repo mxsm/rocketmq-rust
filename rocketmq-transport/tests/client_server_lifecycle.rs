@@ -415,7 +415,10 @@ async fn data_overload_rejects_without_closing_and_control_reserve_survives() {
 async fn transport_security_signs_outbound_and_fails_closed_without_a_principal() {
     let runtime = RuntimeContext::from_current("transport-security-lifecycle-test");
     let admission = Arc::new(AdmissionController::new(AdmissionLimits::default()));
-    let server_security = Arc::new(TransportSecurity::new(Some(Arc::new(AllowAuthenticated)), None));
+    let server_security = Arc::new(TransportSecurity::secure_enforced(
+        Some(Arc::new(AllowAuthenticated)),
+        None,
+    ));
     let server = TransportServer::bind_with_security(
         runtime.service_context("transport-server"),
         TransportServerConfig::loopback(),
@@ -451,7 +454,7 @@ async fn transport_security_signs_outbound_and_fails_closed_without_a_principal(
         TransportServerConfig::loopback(),
         Arc::new(SignatureProcessor),
         admission.clone(),
-        Arc::new(TransportSecurity::new(None, None)),
+        Arc::new(TransportSecurity::development_insecure_loopback(None, None)),
         Some(Principal::new("authenticated")),
     )
     .await
@@ -461,7 +464,10 @@ async fn transport_security_signs_outbound_and_fails_closed_without_a_principal(
     let client = TransportClient::new_with_security(
         runtime.service_context("signed-client"),
         admission,
-        Arc::new(TransportSecurity::new(None, Some(Arc::new(MarkerSigner)))),
+        Arc::new(TransportSecurity::development_insecure_loopback(
+            None,
+            Some(Arc::new(MarkerSigner)),
+        )),
     );
     let response = client
         .invoke(
@@ -553,7 +559,7 @@ async fn transport_server_reports_plaintext_for_permissive_tls_connections() {
         config,
         Arc::new(EchoProcessor),
         Arc::new(AdmissionController::new(AdmissionLimits::default())),
-        Arc::new(TransportSecurity::new(Some(policy.clone()), None)),
+        Arc::new(TransportSecurity::secure_enforced(Some(policy.clone()), None)),
         Some(Principal::new("test")),
     )
     .await
@@ -592,7 +598,7 @@ async fn canonical_listener_reports_plaintext_for_permissive_tls_connections() {
         Duration::from_secs(1),
     )
     .with_security(
-        Arc::new(TransportSecurity::new(Some(policy.clone()), None)),
+        Arc::new(TransportSecurity::secure_enforced(Some(policy.clone()), None)),
         Some(Principal::new("test")),
     );
     service

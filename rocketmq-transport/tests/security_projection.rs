@@ -60,7 +60,7 @@ fn command_projection_borrows_canonical_values_and_injected_ports() {
         .set_version(403)
         .set_body("payload");
     command.add_ext_field("topic", "TopicA");
-    let security = TransportSecurity::new(Some(Arc::new(AllowPolicy)), Some(Arc::new(TestSigner)));
+    let security = TransportSecurity::secure_enforced(Some(Arc::new(AllowPolicy)), Some(Arc::new(TestSigner)));
 
     assert_eq!(
         security.authorize(
@@ -81,9 +81,44 @@ fn command_projection_borrows_canonical_values_and_injected_ports() {
 #[test]
 fn missing_principal_is_fail_closed_without_an_auth_provider_dependency() {
     let command = RemotingCommand::create_remoting_command(105);
-    let security = TransportSecurity::new(Some(Arc::new(AllowPolicy)), None);
+    let security = TransportSecurity::secure_enforced(Some(Arc::new(AllowPolicy)), None);
     assert!(matches!(
         security.authorize(&command, None, None, Resource::topic("TopicA"), Action::Publish,),
         Decision::Deny { .. }
     ));
+}
+
+#[test]
+fn secure_transport_never_downgrades_when_policy_or_signer_is_missing() {
+    let mut command = RemotingCommand::create_remoting_command(105);
+    let security = TransportSecurity::secure_enforced(None, None);
+
+    assert!(matches!(
+        security.authorize(
+            &command,
+            None,
+            Some(&Principal::new("tenant-user")),
+            Resource::topic("TopicA"),
+            Action::Publish,
+        ),
+        Decision::Deny { .. }
+    ));
+    assert!(matches!(
+        security.sign(&mut command, None),
+        Err(SigningError::CredentialsUnavailable)
+    ));
+}
+
+#[test]
+fn development_transport_keeps_explicit_loopback_compatibility_behavior() {
+    let mut command = RemotingCommand::create_remoting_command(105);
+    let security = TransportSecurity::development_insecure_loopback(None, None);
+
+    assert_eq!(
+        security.authorize(&command, None, None, Resource::topic("TopicA"), Action::Publish,),
+        Decision::Allow
+    );
+    security
+        .sign(&mut command, None)
+        .expect("development signing should be a no-op");
 }
