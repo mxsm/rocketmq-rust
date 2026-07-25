@@ -583,13 +583,10 @@ where
     Fut: Future<Output = T>,
 {
     let (sender, receiver) = mpsc::channel(CLUSTER_COMMAND_CAPACITY);
-    let executor = ClusterTaskExecutor {
-        sender,
-        startup_error: None,
-    };
+    let executor = ClusterTaskExecutor { sender };
     let cancellation = CancellationToken::new();
     let scenario = scenario(executor, cancellation.clone());
-    let worker = run_cluster_worker_with_state(config, state, receiver, cancellation);
+    let worker = run_cluster_worker_with_state(config, state, receiver, cancellation, None);
     let ((), result) = tokio::join!(worker, scenario);
     result
 }

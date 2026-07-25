@@ -311,16 +311,18 @@ accounts:
         Arc::new(DefaultTransactionService),
     ));
     let listen_addr = reserve_loopback_addr();
-    let runtime = ProxyRuntime::builder(ProxyConfig {
-        grpc: GrpcConfig {
-            listen_addr: listen_addr.to_string(),
-            ..GrpcConfig::default()
+    let runtime = ProxyRuntime::builder(
+        ProxyConfig {
+            grpc: GrpcConfig {
+                listen_addr: listen_addr.to_string(),
+                ..GrpcConfig::default()
+            },
+            ..ProxyConfig::default()
         },
-        ..ProxyConfig::default()
-    })
+        runtime_context.service_context("proxy-grpc-auth"),
+    )
     .with_service_manager(service_manager)
     .with_auth_runtime(auth_runtime)
-    .with_service_context(runtime_context.service_context("proxy-grpc-auth"))
     .build()
     .expect("the injected child context should build the proxy runtime");
 
@@ -687,16 +689,18 @@ accounts:
         Arc::new(DefaultTransactionService),
     ));
     let listen_addr = reserve_loopback_addr();
-    let runtime = ProxyRuntime::builder(ProxyConfig {
-        grpc: GrpcConfig {
-            listen_addr: listen_addr.to_string(),
-            ..GrpcConfig::default()
+    let runtime = ProxyRuntime::builder(
+        ProxyConfig {
+            grpc: GrpcConfig {
+                listen_addr: listen_addr.to_string(),
+                ..GrpcConfig::default()
+            },
+            ..ProxyConfig::default()
         },
-        ..ProxyConfig::default()
-    })
+        runtime_context.service_context("proxy-grpc-auth-watcher"),
+    )
     .with_service_manager(service_manager)
     .with_auth_runtime(auth_runtime)
-    .with_service_context(runtime_context.service_context("proxy-grpc-auth-watcher"))
     .build()
     .expect("the injected child context should build the proxy runtime");
 
@@ -792,15 +796,17 @@ fn spawn_runtime_on_addr(
     tokio::task::JoinHandle<rocketmq_proxy::ProxyResult<()>>,
 ) {
     let runtime_context = RuntimeContext::from_current("proxy-grpc-listener-test");
-    let runtime = ProxyRuntime::builder(ProxyConfig {
-        grpc: GrpcConfig {
-            listen_addr: listen_addr.to_string(),
-            ..GrpcConfig::default()
+    let runtime = ProxyRuntime::builder(
+        ProxyConfig {
+            grpc: GrpcConfig {
+                listen_addr: listen_addr.to_string(),
+                ..GrpcConfig::default()
+            },
+            ..ProxyConfig::default()
         },
-        ..ProxyConfig::default()
-    })
+        runtime_context.service_context("proxy-grpc-listener"),
+    )
     .with_service_manager(service_manager)
-    .with_service_context(runtime_context.service_context("proxy-grpc-listener"))
     .build()
     .expect("the injected child context should build the proxy runtime");
 

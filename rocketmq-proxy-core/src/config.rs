@@ -56,6 +56,10 @@ impl Default for GrpcConfig {
 }
 
 impl GrpcConfig {
+    pub fn shutdown_timeout(&self) -> Duration {
+        Duration::from_secs(10)
+    }
+
     pub fn socket_addr(&self) -> ProxyResult<SocketAddr> {
         self.listen_addr.parse().map_err(|error| {
             RocketMQError::illegal_argument(format!(

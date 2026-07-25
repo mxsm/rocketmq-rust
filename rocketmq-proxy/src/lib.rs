@@ -23,11 +23,13 @@
 pub mod auth;
 mod auth_metadata;
 pub mod bootstrap;
+#[cfg(feature = "cluster-mode")]
 pub mod cluster;
 pub mod config;
 pub mod context;
 pub mod error;
 pub mod grpc;
+#[cfg(feature = "local-mode")]
 pub mod local;
 mod message;
 pub mod observability;
@@ -41,10 +43,14 @@ pub mod status;
 pub use auth::ProxyAuthRuntime;
 pub use bootstrap::ProxyRuntime;
 pub use bootstrap::ProxyRuntimeBuilder;
+#[cfg(feature = "cluster-mode")]
 pub use cluster::ClusterClient;
+#[cfg(feature = "cluster-mode")]
 pub use cluster::RocketmqClusterClient;
+#[cfg(feature = "cluster-mode")]
 pub use config::ClusterConfig;
 pub use config::GrpcConfig;
+#[cfg(feature = "local-mode")]
 pub use config::LocalConfig;
 pub use config::ProxyAuthConfig;
 pub use config::ProxyConfig;
@@ -102,6 +108,7 @@ pub use remoting::ProxyRemotingDispatcher;
 pub use rocketmq_proxy_core::ProxyMessage;
 pub use rocketmq_proxy_core::ProxyMessageExt;
 pub use service::AssignmentService;
+#[cfg(feature = "cluster-mode")]
 pub use service::ClusterServiceManager;
 pub use service::ConsumerService;
 pub use service::DefaultAssignmentService;
@@ -110,6 +117,7 @@ pub use service::DefaultMessageService;
 pub use service::DefaultMetadataService;
 pub use service::DefaultRouteService;
 pub use service::DefaultTransactionService;
+#[cfg(feature = "local-mode")]
 pub use service::LocalServiceManager;
 pub use service::MessageService;
 pub use service::MetadataService;
@@ -144,6 +152,7 @@ pub const DEFAULT_PROXY_GRPC_PORT: u16 = rocketmq_proxy_core::DEFAULT_PROXY_GRPC
 pub const DEFAULT_PROXY_REMOTING_PORT: u16 = rocketmq_proxy_core::DEFAULT_PROXY_REMOTING_PORT;
 
 #[doc(hidden)]
+#[cfg(feature = "local-mode")]
 pub mod bench_support {
     use std::sync::Arc;
     use std::time::Duration;

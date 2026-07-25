@@ -41,8 +41,20 @@ pub(crate) fn init_observability_metrics(config: &ProxyConfig) {
 #[cfg(feature = "observability")]
 fn proxy_up_attributes(config: &ProxyConfig) -> rocketmq_observability::metrics::proxy::ProxyUpAttributes {
     let (cluster, node_id) = match config.mode {
-        ProxyMode::Cluster => (&config.cluster.broker_cluster_name, &config.cluster.instance_name),
-        ProxyMode::Local => (&config.local.broker_cluster_name, &config.local.broker_name),
+        #[cfg(feature = "cluster-mode")]
+        ProxyMode::Cluster => (
+            config.cluster.broker_cluster_name.as_str(),
+            config.cluster.instance_name.as_str(),
+        ),
+        #[cfg(not(feature = "cluster-mode"))]
+        ProxyMode::Cluster => ("unavailable", "unavailable"),
+        #[cfg(feature = "local-mode")]
+        ProxyMode::Local => (
+            config.local.broker_cluster_name.as_str(),
+            config.local.broker_name.as_str(),
+        ),
+        #[cfg(not(feature = "local-mode"))]
+        ProxyMode::Local => ("unavailable", "unavailable"),
     };
     let proxy_mode = match config.mode {
         ProxyMode::Cluster => "cluster",

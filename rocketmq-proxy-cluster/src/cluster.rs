@@ -781,38 +781,16 @@ pub struct RocketmqClusterClient {
 }
 
 impl RocketmqClusterClient {
-    pub fn new(config: ClusterConfig) -> Self {
-        Self::with_outbound_signer(config, None)
-    }
-
-    pub fn with_outbound_signer(config: ClusterConfig, signer: Option<Arc<dyn OutboundSigner>>) -> Self {
-        let executor = ClusterTaskExecutor::new(config.clone(), signer, None);
-        Self {
-            executor,
-            producer_group_prefix: config.producer_group_prefix,
-        }
-    }
-
-    /// Compatibility constructor for the legacy Proxy Client hook path.
-    #[doc(hidden)]
-    pub fn with_rpc_hook(config: ClusterConfig, rpc_hook: Option<Arc<ClientRpcHook>>) -> Self {
-        let executor = ClusterTaskExecutor::new_with_rpc_hook(config.clone(), rpc_hook, None);
-        Self {
-            executor,
-            producer_group_prefix: config.producer_group_prefix,
-        }
-    }
-
-    pub fn with_service_context(
+    pub fn new(
         config: ClusterConfig,
         signer: Option<Arc<dyn OutboundSigner>>,
         service_context: &ChildServiceContext,
-    ) -> Self {
-        let executor = ClusterTaskExecutor::new(config.clone(), signer, Some(service_context));
-        Self {
+    ) -> ProxyResult<Self> {
+        let executor = ClusterTaskExecutor::new(config.clone(), signer, service_context)?;
+        Ok(Self {
             executor,
             producer_group_prefix: config.producer_group_prefix,
-        }
+        })
     }
 
     pub(crate) async fn lock_batch_mq(&self, request: LockBatchRequestBody) -> ProxyResult<LockBatchResponseBody> {
@@ -821,12 +799,6 @@ impl RocketmqClusterClient {
 
     pub(crate) async fn unlock_batch_mq(&self, request: UnlockBatchRequestBody) -> ProxyResult<()> {
         self.executor.unlock_batch_mq(request).await
-    }
-}
-
-impl Default for RocketmqClusterClient {
-    fn default() -> Self {
-        Self::new(ClusterConfig::default())
     }
 }
 
@@ -982,7 +954,6 @@ impl ClusterClient for RocketmqClusterClient {
 #[derive(Clone)]
 struct ClusterTaskExecutor {
     sender: mpsc::Sender<ClusterCommand>,
-    startup_error: Option<Arc<str>>,
 }
 
 enum ClusterCommand {
@@ -1288,8 +1259,8 @@ impl ClusterTaskExecutor {
     fn new(
         config: ClusterConfig,
         signer: Option<Arc<dyn OutboundSigner>>,
-        service_context: Option<&ChildServiceContext>,
-    ) -> Self {
+        service_context: &ChildServiceContext,
+    ) -> ProxyResult<Self> {
         let rpc_hook = signer.map(rpc_hook_from_outbound_signer);
         Self::new_with_rpc_hook(config, rpc_hook, service_context)
     }
@@ -1297,31 +1268,31 @@ impl ClusterTaskExecutor {
     fn new_with_rpc_hook(
         config: ClusterConfig,
         rpc_hook: Option<Arc<ClientRpcHook>>,
-        service_context: Option<&ChildServiceContext>,
-    ) -> Self {
+        service_context: &ChildServiceContext,
+    ) -> ProxyResult<Self> {
         let (sender, receiver) = mpsc::channel(CLUSTER_COMMAND_CAPACITY);
-        let startup_error = if let Some(service_context) = service_context {
-            // Each adapter owns an isolated Client manager domain even when a
-            // caller reuses the same parent ChildServiceContext for several
-            // adapters. The child group also makes that ownership visible in
-            // the runtime lifecycle tree.
-            let worker_context = service_context.child("proxy.cluster.adapter");
-            let client_runtime =
-                ClientRuntime::new(worker_context.child("client-runtime"), ClientRuntimeConfig::default());
-            let cancellation = worker_context.task_group().cancellation_token();
-            let domain_id = worker_context.task_group().id().as_u64();
-            worker_context
-                .spawn_service("proxy.cluster.worker", async move {
-                    run_cluster_worker(config, client_runtime, domain_id, rpc_hook, receiver, cancellation).await;
-                })
-                .err()
-                .map(|error| Arc::<str>::from(format!("failed to spawn proxy cluster worker: {error}")))
-        } else {
-            Some(Arc::<str>::from(
-                "proxy cluster worker requires an injected ChildServiceContext",
-            ))
-        };
-        Self { sender, startup_error }
+        let worker_context = service_context.child("command-worker");
+        let shutdown_context = service_context.clone();
+        let client_runtime = ClientRuntime::new(worker_context.child("client-runtime"), ClientRuntimeConfig::default());
+        let cancellation = worker_context.task_group().cancellation_token();
+        let domain_id = worker_context.task_group().id().as_u64();
+        worker_context
+            .spawn_service("proxy.cluster.worker", async move {
+                run_cluster_worker(
+                    config,
+                    client_runtime,
+                    domain_id,
+                    rpc_hook,
+                    receiver,
+                    cancellation,
+                    shutdown_context,
+                )
+                .await;
+            })
+            .map_err(|error| ProxyError::Transport {
+                message: format!("failed to spawn proxy cluster worker: {error}"),
+            })?;
+        Ok(Self { sender })
     }
 
     async fn readiness_check(&self) -> ProxyResult<()> {
@@ -1534,11 +1505,6 @@ impl ClusterTaskExecutor {
     where
         T: Send + 'static,
     {
-        if let Some(message) = &self.startup_error {
-            return Err(ProxyError::Transport {
-                message: message.to_string(),
-            });
-        }
         let (reply, receiver) = oneshot::channel();
         self.sender
             .send(command(reply))
@@ -1559,9 +1525,10 @@ async fn run_cluster_worker(
     rpc_hook: Option<Arc<ClientRpcHook>>,
     receiver: mpsc::Receiver<ClusterCommand>,
     cancellation: tokio_util::sync::CancellationToken,
+    shutdown_context: ChildServiceContext,
 ) {
     let state = ClusterWorkerState::with_rpc_hook(client_runtime, domain_id, rpc_hook);
-    run_cluster_worker_with_state(config, state, receiver, cancellation).await;
+    run_cluster_worker_with_state(config, state, receiver, cancellation, Some(shutdown_context)).await;
 }
 
 async fn run_cluster_worker_with_state(
@@ -1569,6 +1536,7 @@ async fn run_cluster_worker_with_state(
     mut state: ClusterWorkerState,
     mut receiver: mpsc::Receiver<ClusterCommand>,
     cancellation: tokio_util::sync::CancellationToken,
+    shutdown_context: Option<ChildServiceContext>,
 ) {
     loop {
         tokio::select! {
@@ -1586,7 +1554,9 @@ async fn run_cluster_worker_with_state(
             },
         }
     }
-    let shutdown_deadline = ShutdownDeadline::after(config.shutdown_timeout());
+    let shutdown_deadline = shutdown_context
+        .and_then(|context| context.task_group().shutdown_deadline())
+        .unwrap_or_else(|| ShutdownDeadline::after(config.shutdown_timeout()));
     for (producer_group, producer) in &mut state.send_producers {
         if tokio::time::timeout(shutdown_deadline.remaining(), producer.shutdown())
             .await
@@ -3184,7 +3154,6 @@ mod tests {
     use super::single_broker_and_topic;
     use super::test_client_runtime;
     use super::CachedValue;
-    use super::ClusterClient;
     use super::ClusterTaskExecutor;
     use super::ClusterWorkerState;
     use super::RocketmqClusterClient;
@@ -3193,7 +3162,6 @@ mod tests {
     use rocketmq_client_rust::proxy_adapter_compat::MessageQueue;
     use rocketmq_proxy_core::ProxyError;
     use rocketmq_proxy_core::ProxyTopicMessageType;
-    use rocketmq_proxy_core::ResourceIdentity;
 
     #[test]
     fn cluster_client_prefers_master_broker_address() {
@@ -3348,19 +3316,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn client_without_service_context_returns_typed_startup_error() {
-        let client = RocketmqClusterClient::new(ClusterConfig::default());
-        let error = client
-            .query_route(&ResourceIdentity::new("", "TopicA"))
-            .await
-            .expect_err("unmanaged client must reject work");
-        assert!(matches!(error, ProxyError::Transport { message } if message.contains("ChildServiceContext")));
-    }
-
-    #[test]
-    fn cluster_command_queue_is_bounded() {
-        let executor = ClusterTaskExecutor::new(ClusterConfig::default(), None, None);
+    async fn cluster_command_queue_is_bounded() {
+        let runtime =
+            rocketmq_runtime::RuntimeContext::try_from_current("proxy-cluster-test").expect("test runtime context");
+        let service = runtime.service_context("proxy-cluster-test.queue");
+        let executor =
+            ClusterTaskExecutor::new(ClusterConfig::default(), None, &service).expect("managed executor builds");
         assert_eq!(executor.sender.max_capacity(), CLUSTER_COMMAND_CAPACITY);
+        let report = service.task_group().shutdown(Duration::from_secs(1)).await;
+        assert!(report.is_healthy(), "{}", report.to_json());
     }
 
     #[tokio::test]
@@ -3368,7 +3332,8 @@ mod tests {
         let runtime =
             rocketmq_runtime::RuntimeContext::try_from_current("proxy-cluster-test").expect("test runtime context");
         let service = runtime.service_context("proxy-cluster-test.service");
-        let client = RocketmqClusterClient::with_service_context(ClusterConfig::default(), None, &service);
+        let client =
+            RocketmqClusterClient::new(ClusterConfig::default(), None, &service).expect("managed client builds");
         assert_eq!(service.task_group().task_count(), 0);
         assert_eq!(service.task_group().child_count(), 1);
 

@@ -15,17 +15,24 @@
 use futures::FutureExt;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ServiceLifecycle;
+use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::ShutdownReason;
+use rocketmq_runtime::ShutdownReport;
 use std::future;
 use std::future::Future;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::time::Duration;
 
+#[cfg(feature = "cluster-mode")]
 use crate::auth::build_cluster_acl_signer;
 use crate::auth::ProxyAuthRuntime;
+#[cfg(feature = "cluster-mode")]
 use crate::cluster::ClusterClient;
+#[cfg(feature = "cluster-mode")]
 use crate::cluster::ClusterRemotingBackend;
+#[cfg(feature = "cluster-mode")]
 use crate::cluster::RocketmqClusterClient;
 use crate::config::ProxyConfig;
 use crate::config::ProxyMode;
@@ -33,7 +40,9 @@ use crate::error::ProxyError;
 use crate::error::ProxyResult;
 use crate::grpc::server;
 use crate::grpc::ProxyGrpcService;
+#[cfg(feature = "local-mode")]
 use crate::local::local_components_from_config_with_service_context;
+#[cfg(feature = "local-mode")]
 use crate::local::LocalRemotingBackend;
 use crate::observability::ProxyHookChain;
 use crate::observability::ProxyMetrics;
@@ -41,6 +50,7 @@ use crate::processor::DefaultMessagingProcessor;
 use crate::processor::MessagingProcessor;
 use crate::remoting;
 use crate::remoting::ProxyRemotingBackend;
+#[cfg(feature = "cluster-mode")]
 use crate::service::ClusterServiceManager;
 use crate::service::MetadataService;
 use crate::service::ServiceManager;
@@ -50,6 +60,12 @@ use crate::session::ClientSessionRegistry;
 struct LifecycleReadiness {
     lifecycle: ServiceLifecycle,
     remaining_listeners: Arc<AtomicUsize>,
+}
+
+struct DefaultBackend {
+    service_manager: Arc<dyn ServiceManager>,
+    remoting_backend: Option<Arc<dyn ProxyRemotingBackend>>,
+    context: Option<ChildServiceContext>,
 }
 
 impl LifecycleReadiness {
@@ -130,10 +146,33 @@ pub struct ProxyRuntimeBuilder {
     hooks: Option<ProxyHookChain>,
     metrics: Option<ProxyMetrics>,
     remoting_backend: Option<Arc<dyn ProxyRemotingBackend>>,
-    service_context: Option<ChildServiceContext>,
+    service_context: ChildServiceContext,
+}
+
+fn require_healthy_component_shutdown(component: &'static str, report: ShutdownReport) -> ProxyResult<()> {
+    if report.is_healthy() {
+        Ok(())
+    } else {
+        Err(ProxyError::Transport {
+            message: format!("{component} shutdown report is unhealthy: {}", report.to_json()),
+        })
+    }
 }
 
 impl ProxyRuntimeBuilder {
+    fn new(config: ProxyConfig, service_context: ChildServiceContext) -> Self {
+        Self {
+            config,
+            service_manager: None,
+            session_registry: None,
+            auth_runtime: None,
+            hooks: None,
+            metrics: None,
+            remoting_backend: None,
+            service_context,
+        }
+    }
+
     pub fn with_service_manager(mut self, service_manager: Arc<dyn ServiceManager>) -> Self {
         self.service_manager = Some(service_manager);
         self
@@ -164,28 +203,25 @@ impl ProxyRuntimeBuilder {
         self
     }
 
-    pub fn with_service_context(mut self, service_context: ChildServiceContext) -> Self {
-        self.service_context = Some(service_context);
-        self
-    }
-
     pub fn build(self) -> ProxyResult<ProxyRuntime<DefaultMessagingProcessor>> {
-        let service_context = self.service_context.clone().ok_or_else(|| ProxyError::Transport {
-            message: "Proxy runtime requires an injected ChildServiceContext".to_string(),
-        })?;
-        Ok(self.build_inner(service_context))
+        self.build_inner()
     }
 
-    fn build_inner(self, service_context: ChildServiceContext) -> ProxyRuntime<DefaultMessagingProcessor> {
+    fn build_inner(self) -> ProxyResult<ProxyRuntime<DefaultMessagingProcessor>> {
+        let service_context = self.service_context.clone();
         let local_mode_supported = true;
-        let (service_manager, remoting_backend) = match self.service_manager {
-            Some(service_manager) => (service_manager, self.remoting_backend),
-            None => default_service_manager_and_backend(&self.config, &service_context),
+        let backend = match self.service_manager {
+            Some(service_manager) => DefaultBackend {
+                service_manager,
+                remoting_backend: self.remoting_backend,
+                context: None,
+            },
+            None => default_service_manager_and_backend(&self.config, &service_context)?,
         };
-        let auth_metadata_service = Some(service_manager.metadata_service());
+        let auth_metadata_service = Some(backend.service_manager.metadata_service());
         let session_registry = self.session_registry.unwrap_or_default();
-        let processor = Arc::new(DefaultMessagingProcessor::new(service_manager));
-        ProxyRuntime::from_processor_with_local_mode_support(
+        let processor = Arc::new(DefaultMessagingProcessor::new(backend.service_manager));
+        Ok(ProxyRuntime::from_processor_with_local_mode_support(
             self.config,
             processor,
             session_registry,
@@ -194,9 +230,10 @@ impl ProxyRuntimeBuilder {
             auth_metadata_service,
             self.hooks.unwrap_or_default(),
             self.metrics.unwrap_or_default(),
-            remoting_backend,
+            backend.remoting_backend,
+            backend.context,
             service_context,
-        )
+        ))
     }
 }
 
@@ -209,25 +246,17 @@ pub struct ProxyRuntime<P = DefaultMessagingProcessor> {
     auth_runtime: Option<ProxyAuthRuntime>,
     auth_metadata_service: Option<Arc<dyn MetadataService>>,
     remoting_backend: Option<Arc<dyn ProxyRemotingBackend>>,
+    backend_context: Option<ChildServiceContext>,
     service_context: ChildServiceContext,
 }
 
 impl ProxyRuntime<DefaultMessagingProcessor> {
-    pub fn builder(config: ProxyConfig) -> ProxyRuntimeBuilder {
-        ProxyRuntimeBuilder {
-            config,
-            service_manager: None,
-            session_registry: None,
-            auth_runtime: None,
-            hooks: None,
-            metrics: None,
-            remoting_backend: None,
-            service_context: None,
-        }
+    pub fn builder(config: ProxyConfig, service_context: ChildServiceContext) -> ProxyRuntimeBuilder {
+        ProxyRuntimeBuilder::new(config, service_context)
     }
 
     pub fn new(config: ProxyConfig, service_context: ChildServiceContext) -> ProxyResult<Self> {
-        Self::builder(config).with_service_context(service_context).build()
+        Self::builder(config, service_context).build()
     }
 }
 
@@ -251,6 +280,7 @@ where
             ProxyHookChain::default(),
             ProxyMetrics::default(),
             None,
+            None,
             service_context,
         )
     }
@@ -265,6 +295,7 @@ where
         hooks: ProxyHookChain,
         metrics: ProxyMetrics,
         remoting_backend: Option<Arc<dyn ProxyRemotingBackend>>,
+        backend_context: Option<ChildServiceContext>,
         service_context: ChildServiceContext,
     ) -> Self {
         #[cfg(feature = "observability")]
@@ -285,6 +316,7 @@ where
             auth_runtime,
             auth_metadata_service,
             remoting_backend,
+            backend_context,
             service_context,
         }
     }
@@ -301,7 +333,14 @@ where
     where
         F: Future<Output = ()> + Send + 'static,
     {
-        self.serve_with_shutdown_and_lifecycle(shutdown, None).await
+        self.serve_with_shutdown_and_lifecycle(
+            async move {
+                shutdown.await;
+                ShutdownDeadline::after(Duration::from_secs(10))
+            },
+            None,
+        )
+        .await
     }
 
     /// Serves until pre-stop or an operating-system signal requests the shared lifecycle deadline.
@@ -313,10 +352,13 @@ where
         let shutdown_lifecycle = lifecycle.clone();
         self.serve_with_shutdown_and_lifecycle(
             async move {
-                if let Err(error) = shutdown_lifecycle.wait_for_shutdown_signal().await {
-                    tracing::warn!(error = %error, "Proxy signal observation failed");
-                    shutdown_lifecycle.mark_failed();
-                    shutdown_lifecycle.request_shutdown(ShutdownReason::Internal);
+                match shutdown_lifecycle.wait_for_shutdown_signal().await {
+                    Ok(request) => request.deadline,
+                    Err(error) => {
+                        tracing::warn!(error = %error, "Proxy signal observation failed");
+                        shutdown_lifecycle.mark_failed();
+                        shutdown_lifecycle.request_shutdown(ShutdownReason::Internal).deadline
+                    }
                 }
             },
             Some(lifecycle),
@@ -330,7 +372,7 @@ where
         lifecycle: Option<ServiceLifecycle>,
     ) -> ProxyResult<()>
     where
-        F: Future<Output = ()> + Send + 'static,
+        F: Future<Output = ShutdownDeadline> + Send + 'static,
     {
         let ProxyRuntime {
             config,
@@ -341,6 +383,7 @@ where
             auth_runtime,
             auth_metadata_service,
             remoting_backend,
+            backend_context,
             service_context,
         } = self;
         async move {
@@ -351,55 +394,58 @@ where
                 ));
             }
             verify_cluster_route_and_security(config.mode, auth_metadata_service.as_ref()).await?;
+            let auth_context = service_context.child("auth");
             let auth_runtime = match auth_runtime {
                 Some(auth_runtime) => Some(auth_runtime),
                 None => {
                     ProxyAuthRuntime::from_proxy_config_with_metadata_service(
                         &config.auth,
                         auth_metadata_service,
-                        &service_context.child("rocketmq-proxy.auth"),
+                        &auth_context,
                     )
                     .await?
                 }
             };
             let auth_runtime_for_shutdown = auth_runtime.clone();
             let grpc_service = grpc_service.with_auth_runtime(auth_runtime.clone());
+            let lifecycle_for_shutdown = lifecycle.clone();
             let readiness = lifecycle
                 .map(|lifecycle| LifecycleReadiness::new(lifecycle, if config.remoting.enabled { 2 } else { 1 }));
+            let shared_shutdown = shutdown.boxed().shared();
             if !config.remoting.enabled {
                 let grpc_ready = readiness;
-                let result = server::serve_with_report_with_task_group_and_ready(
+                let grpc_context = service_context.child("grpc-ingress");
+                let listener_result = server::serve_with_report_with_task_group_and_ready(
                     config,
                     grpc_service,
-                    shutdown,
-                    service_context.task_group().clone(),
+                    shared_shutdown.clone(),
+                    grpc_context.task_group().clone(),
                     move || publish_listener_ready(grpc_ready),
                 )
                 .await
                 .and_then(require_healthy_grpc_shutdown);
-                let shutdown_result = match auth_runtime_for_shutdown {
-                    Some(auth_runtime) => Some(auth_runtime.shutdown().await),
-                    None => None,
-                };
-                result?;
-                if let Some(shutdown_result) = shutdown_result {
-                    shutdown_result?;
-                }
-                return Ok(());
+                let deadline = resolve_shutdown_deadline(&shared_shutdown, lifecycle_for_shutdown.as_ref());
+                let shutdown_result = shutdown_proxy_components(
+                    backend_context.as_ref(),
+                    auth_runtime_for_shutdown.as_ref(),
+                    &auth_context,
+                    &service_context,
+                    deadline,
+                )
+                .await;
+                listener_result?;
+                return shutdown_result;
             }
 
-            let shared_shutdown = shutdown.boxed().shared();
-            let grpc_shutdown = {
+            let grpc_shutdown = shared_shutdown.clone();
+            let remoting_shutdown = {
                 let shared_shutdown = shared_shutdown.clone();
                 async move {
-                    shared_shutdown.await;
+                    let _ = shared_shutdown.await;
                 }
             };
-            let remoting_shutdown = async move {
-                shared_shutdown.await;
-            };
-            let grpc_parent_task_group = service_context.task_group().clone();
-            let remoting_service_context = service_context.child("rocketmq-proxy.remoting");
+            let grpc_parent_task_group = service_context.child("grpc-ingress").task_group().clone();
+            let remoting_service_context = service_context.child("remoting-ingress");
             let grpc_config = config.clone();
             let remoting_config = config;
             let grpc_ready = readiness.clone();
@@ -430,52 +476,103 @@ where
                 .and_then(require_healthy_remoting_shutdown)
             };
             let listener_result = tokio::try_join!(grpc_future, remoting_future);
-            let shutdown_result = match auth_runtime_for_shutdown {
-                Some(auth_runtime) => Some(auth_runtime.shutdown().await),
-                None => None,
-            };
+            let deadline = resolve_shutdown_deadline(&shared_shutdown, lifecycle_for_shutdown.as_ref());
+            let shutdown_result = shutdown_proxy_components(
+                backend_context.as_ref(),
+                auth_runtime_for_shutdown.as_ref(),
+                &auth_context,
+                &service_context,
+                deadline,
+            )
+            .await;
             listener_result?;
-            if let Some(shutdown_result) = shutdown_result {
-                shutdown_result?;
-            }
-            Ok(())
+            shutdown_result
         }
         .await
     }
 }
 
+fn resolve_shutdown_deadline(
+    shutdown: &futures::future::Shared<futures::future::BoxFuture<'static, ShutdownDeadline>>,
+    lifecycle: Option<&ServiceLifecycle>,
+) -> ShutdownDeadline {
+    shutdown.clone().now_or_never().unwrap_or_else(|| {
+        lifecycle.map_or_else(
+            || ShutdownDeadline::after(Duration::from_secs(10)),
+            |lifecycle| lifecycle.request_shutdown(ShutdownReason::Internal).deadline,
+        )
+    })
+}
+
+async fn shutdown_proxy_components(
+    backend_context: Option<&ChildServiceContext>,
+    auth_runtime: Option<&ProxyAuthRuntime>,
+    auth_context: &ChildServiceContext,
+    service_context: &ChildServiceContext,
+    deadline: ShutdownDeadline,
+) -> ProxyResult<()> {
+    if let Some(backend_context) = backend_context {
+        let report = backend_context.task_group().shutdown_until(deadline).await;
+        require_healthy_component_shutdown("Proxy backend", report)?;
+    }
+
+    if let Some(auth_runtime) = auth_runtime {
+        tokio::time::timeout(deadline.remaining(), auth_runtime.shutdown())
+            .await
+            .map_err(|_| ProxyError::Transport {
+                message: "Proxy authentication shutdown exceeded the shared deadline".to_owned(),
+            })??;
+    }
+    let auth_report = auth_context.task_group().shutdown_until(deadline).await;
+    require_healthy_component_shutdown("Proxy authentication", auth_report)?;
+
+    let report = service_context.task_group().shutdown_until(deadline).await;
+    require_healthy_component_shutdown("Proxy service", report)
+}
+
 fn default_service_manager_and_backend(
     config: &ProxyConfig,
     service_context: &ChildServiceContext,
-) -> (Arc<dyn ServiceManager>, Option<Arc<dyn ProxyRemotingBackend>>) {
+) -> ProxyResult<DefaultBackend> {
     match config.mode {
+        #[cfg(feature = "cluster-mode")]
         ProxyMode::Cluster => {
             let mut cluster_config = config.cluster.clone();
             if !config.auth.cluster_name.trim().is_empty() {
                 cluster_config.broker_cluster_name = config.auth.cluster_name.clone();
             }
             let signer = build_cluster_acl_signer(config).map(|signer| signer.into_outbound_signer());
-            let cluster_context = service_context.child("rocketmq-proxy.cluster");
-            let client = Arc::new(RocketmqClusterClient::with_service_context(
-                cluster_config,
-                signer,
-                &cluster_context,
-            ));
+            let cluster_context = service_context.child("cluster-backend");
+            let client = Arc::new(RocketmqClusterClient::new(cluster_config, signer, &cluster_context)?);
             let service_client: Arc<dyn ClusterClient> = client.clone();
-            (
-                Arc::new(ClusterServiceManager::from_cluster_client(service_client)),
-                Some(Arc::new(ClusterRemotingBackend::new(client))),
-            )
+            Ok(DefaultBackend {
+                service_manager: Arc::new(ClusterServiceManager::from_cluster_client(service_client)),
+                remoting_backend: Some(Arc::new(ClusterRemotingBackend::new(client))),
+                context: Some(cluster_context),
+            })
         }
+        #[cfg(not(feature = "cluster-mode"))]
+        ProxyMode::Cluster => Err(ProxyError::not_implemented(
+            "Cluster mode is unavailable because the 'cluster-mode' feature is disabled",
+        )),
+        #[cfg(feature = "local-mode")]
         ProxyMode::Local => {
-            let local_context = service_context.child("rocketmq-proxy.local");
+            let local_context = service_context.child("local-backend");
             let (manager, client) = local_components_from_config_with_service_context(
                 config.local.clone(),
-                config.cluster.query_assignment_strategy_name.clone(),
+                config.local.query_assignment_strategy_name.clone(),
                 &local_context,
-            );
-            (Arc::new(manager), Some(Arc::new(LocalRemotingBackend::new(client))))
+            )?;
+            Ok(DefaultBackend {
+                service_manager: Arc::new(manager),
+                remoting_backend: Some(Arc::new(LocalRemotingBackend::new(client))),
+                context: Some(local_context),
+            })
         }
+        #[cfg(not(feature = "local-mode"))]
+        ProxyMode::Local => Err(ProxyError::not_implemented(
+            "Local mode is unavailable because the 'local-mode' feature is disabled",
+        )),
     }
 }
 
@@ -540,13 +637,13 @@ mod tests {
     #[tokio::test]
     async fn default_local_mode_builds_broker_backed_runtime() {
         let runtime_context = RuntimeContext::from_current("proxy-local-runtime-test");
-        let runtime = ProxyRuntimeBuilder::build(
-            ProxyRuntime::builder(ProxyConfig {
+        let runtime = ProxyRuntimeBuilder::build(ProxyRuntime::builder(
+            ProxyConfig {
                 mode: ProxyMode::Local,
                 ..ProxyConfig::default()
-            })
-            .with_service_context(runtime_context.service_context("proxy-local-runtime")),
-        )
+            },
+            runtime_context.service_context("proxy-local-runtime"),
+        ))
         .expect("an injected child context should build the Local proxy runtime");
 
         assert!(matches!(runtime.config().mode, ProxyMode::Local));
@@ -566,15 +663,5 @@ mod tests {
         drop(runtime);
         let report = runtime_context.shutdown_tasks(Duration::from_secs(1)).await;
         assert!(report.is_healthy(), "{}", report.to_json());
-    }
-
-    #[test]
-    fn build_rejects_missing_child_context() {
-        let error = ProxyRuntime::builder(ProxyConfig::default())
-            .build()
-            .err()
-            .expect("library constructors must not discover or create a runtime");
-
-        assert!(error.to_string().contains("requires an injected ChildServiceContext"));
     }
 }

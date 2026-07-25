@@ -23,11 +23,13 @@ use rocketmq_proxy_core::DefaultTransactionService;
 use rocketmq_proxy_core::MessageService;
 use rocketmq_proxy_core::MetadataService;
 use rocketmq_proxy_core::ProxyMode;
+use rocketmq_proxy_core::ProxyResult;
 use rocketmq_proxy_core::RouteService;
 use rocketmq_proxy_core::ServiceManager;
 use rocketmq_proxy_core::StaticMetadataService;
 use rocketmq_proxy_core::StaticRouteService;
 use rocketmq_proxy_core::TransactionService;
+use rocketmq_runtime::ChildServiceContext;
 
 use crate::config::LocalConfig;
 use crate::local::local_service_manager_from_config;
@@ -86,8 +88,12 @@ impl LocalServiceManager {
         }
     }
 
-    pub fn from_local_config(config: LocalConfig, assignment_strategy_name: impl Into<String>) -> Self {
-        local_service_manager_from_config(config, assignment_strategy_name)
+    pub fn from_local_config(
+        config: LocalConfig,
+        assignment_strategy_name: impl Into<String>,
+        service_context: &ChildServiceContext,
+    ) -> ProxyResult<Self> {
+        local_service_manager_from_config(config, assignment_strategy_name, service_context)
     }
 }
 

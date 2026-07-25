@@ -341,42 +341,16 @@ impl ClusterServiceManager {
         )
     }
 
-    pub fn from_cluster_config(config: ClusterConfig) -> Self {
-        Self::from_cluster_client(Arc::new(RocketmqClusterClient::new(config)))
-    }
-
-    pub fn from_cluster_config_with_outbound_signer(
-        config: ClusterConfig,
-        signer: Option<Arc<dyn OutboundSigner>>,
-    ) -> Self {
-        Self::from_cluster_client(Arc::new(RocketmqClusterClient::with_outbound_signer(config, signer)))
-    }
-
-    /// Compatibility constructor for the legacy Proxy Client hook path.
-    #[doc(hidden)]
-    pub fn from_cluster_config_with_rpc_hook(
-        config: ClusterConfig,
-        rpc_hook: Option<Arc<rocketmq_client_rust::proxy_adapter_compat::ClientRpcHook>>,
-    ) -> Self {
-        Self::from_cluster_client(Arc::new(RocketmqClusterClient::with_rpc_hook(config, rpc_hook)))
-    }
-
-    pub fn from_cluster_config_with_service_context(
+    pub fn from_cluster_config(
         config: ClusterConfig,
         signer: Option<Arc<dyn OutboundSigner>>,
         service_context: &ChildServiceContext,
-    ) -> Self {
-        Self::from_cluster_client(Arc::new(RocketmqClusterClient::with_service_context(
+    ) -> rocketmq_proxy_core::ProxyResult<Self> {
+        Ok(Self::from_cluster_client(Arc::new(RocketmqClusterClient::new(
             config,
             signer,
             service_context,
-        )))
-    }
-}
-
-impl Default for ClusterServiceManager {
-    fn default() -> Self {
-        Self::from_cluster_config(ClusterConfig::default())
+        )?)))
     }
 }
 

@@ -75,22 +75,10 @@ fn legacy_generated_client_and_session_registry_keep_type_identity() {
 }
 
 #[test]
-fn legacy_cluster_paths_and_rpc_hook_constructors_keep_type_identity() {
+fn cluster_config_reexport_keeps_type_identity() {
     let canonical_config = rocketmq_proxy_cluster::ClusterConfig::default();
     let legacy_config: rocketmq_proxy::ClusterConfig = canonical_config;
     let _: rocketmq_proxy_cluster::ClusterConfig = legacy_config;
-
-    let canonical_client = rocketmq_proxy_cluster::RocketmqClusterClient::new(Default::default());
-    let _: rocketmq_proxy::RocketmqClusterClient = canonical_client;
-
-    type RpcHook = dyn rocketmq_transport::runtime::RPCHook;
-    let _: fn(rocketmq_proxy::ClusterConfig, Option<std::sync::Arc<RpcHook>>) -> rocketmq_proxy::RocketmqClusterClient =
-        rocketmq_proxy::RocketmqClusterClient::with_rpc_hook;
-    let _: fn(
-        rocketmq_proxy::ClusterConfig,
-        Option<std::sync::Arc<RpcHook>>,
-    ) -> rocketmq_proxy::service::ClusterServiceManager =
-        rocketmq_proxy::service::ClusterServiceManager::from_cluster_config_with_rpc_hook;
 }
 
 #[test]

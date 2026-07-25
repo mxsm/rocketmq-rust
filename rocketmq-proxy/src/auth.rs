@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::collections::HashSet;
+#[cfg(feature = "cluster-mode")]
 use std::path::Path;
 use std::sync::Arc;
 
@@ -25,6 +26,7 @@ use rocketmq_auth::authentication::model::subject::Subject;
 use rocketmq_auth::authentication::model::user::User;
 use rocketmq_auth::authentication::provider::AuthenticationMetadataProvider;
 use rocketmq_auth::authentication::provider::AuthenticationProvider;
+#[cfg(feature = "cluster-mode")]
 use rocketmq_auth::authentication::AclClientRpcHook;
 use rocketmq_auth::authorization::context::default_authorization_context::DefaultAuthorizationContext;
 use rocketmq_auth::authorization::metadata_provider::AuthorizationMetadataProvider;
@@ -41,7 +43,9 @@ use rocketmq_auth::DefaultAuthenticationProvider;
 use rocketmq_auth::ProviderRegistry;
 use rocketmq_error::AuthError;
 use rocketmq_error::RocketMQError;
+#[cfg(feature = "cluster-mode")]
 use rocketmq_model::common::mix_all::ACL_CONF_TOOLS_FILE;
+#[cfg(feature = "cluster-mode")]
 use rocketmq_model::utils::env_utils::EnvUtils;
 #[cfg(test)]
 use rocketmq_protocol::protocol::body::acl_info::AclInfo;
@@ -59,9 +63,11 @@ use rocketmq_transport::net::channel::Channel;
 use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
 use tonic::Request;
+#[cfg(feature = "cluster-mode")]
 use tracing::warn;
 
 use crate::config::ProxyAuthConfig;
+#[cfg(feature = "cluster-mode")]
 use crate::config::ProxyConfig;
 use crate::context::ProxyContext;
 use crate::error::ProxyError;
@@ -83,6 +89,7 @@ use crate::proto::v2;
 use crate::service::MetadataService;
 use crate::service::ResourceIdentity;
 
+#[cfg(feature = "cluster-mode")]
 pub(crate) fn build_cluster_acl_signer(config: &ProxyConfig) -> Option<AclClientRpcHook> {
     if !config.enable_acl_rpc_hook_for_cluster_mode {
         return None;
@@ -989,6 +996,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "cluster-mode")]
     #[test]
     fn build_cluster_acl_signer_uses_enabled_proxy_inner_credentials() {
         let config = ProxyConfig {

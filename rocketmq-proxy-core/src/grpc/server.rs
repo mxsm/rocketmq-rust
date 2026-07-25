@@ -14,8 +14,8 @@
 
 use std::future::Future;
 use std::net::SocketAddr;
-use std::time::Duration;
 
+use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
 use tokio::net::TcpListener;
@@ -52,7 +52,7 @@ pub async fn serve_with_lifecycle<F, H, HFut, S, SFut>(
     serve: S,
 ) -> ProxyResult<GrpcServerShutdownReport>
 where
-    F: Future<Output = ()> + Send,
+    F: Future<Output = ShutdownDeadline> + Send,
     H: FnOnce(watch::Receiver<bool>, TaskGroup) -> HFut + Send + 'static,
     HFut: Future<Output = GrpcHousekeepingRunReport> + Send + 'static,
     S: FnOnce(TcpListener, SocketAddr, watch::Receiver<bool>) -> SFut,
@@ -72,7 +72,7 @@ pub async fn serve_with_lifecycle_and_ready<F, R, H, HFut, S, SFut>(
     serve: S,
 ) -> ProxyResult<GrpcServerShutdownReport>
 where
-    F: Future<Output = ()> + Send,
+    F: Future<Output = ShutdownDeadline> + Send,
     R: FnOnce() -> ProxyResult<()>,
     H: FnOnce(watch::Receiver<bool>, TaskGroup) -> HFut + Send + 'static,
     HFut: Future<Output = GrpcHousekeepingRunReport> + Send + 'static,
@@ -102,16 +102,16 @@ where
     ready()?;
     tokio::pin!(serve_future);
     tokio::pin!(shutdown);
-    let serve_result = tokio::select! {
-        result = &mut serve_future => result,
-        () = &mut shutdown => {
+    let (serve_result, shutdown_deadline) = tokio::select! {
+        result = &mut serve_future => (result, ShutdownDeadline::after(config.shutdown_timeout())),
+        deadline = &mut shutdown => {
             let _ = shutdown_tx.send(true);
-            serve_future.await
+            (serve_future.await, deadline)
         }
     };
     let _ = shutdown_tx.send(true);
-    let task_group_report = task_group.shutdown(Duration::from_secs(10)).await;
-    let housekeeping_report = match tokio::time::timeout(Duration::from_secs(1), housekeeping_report_rx).await {
+    let task_group_report = task_group.shutdown_until(shutdown_deadline).await;
+    let housekeeping_report = match tokio::time::timeout(shutdown_deadline.remaining(), housekeeping_report_rx).await {
         Ok(Ok(report)) => Some(report),
         Ok(Err(_)) | Err(_) => None,
     };
