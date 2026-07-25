@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Client-backed Cluster adapter exports.
-
-pub use rocketmq_proxy_cluster::cluster::*;
-pub use rocketmq_proxy_cluster::ClusterRemotingBackend;
+#[test]
+fn proxy_runtime_ownership_boundary_is_compile_time_enforced() {
+    let tests = trybuild::TestCases::new();
+    tests.compile_fail("tests/ui/proxy_runtime/*.rs");
+}

@@ -19,6 +19,7 @@ use tokio_stream::wrappers::TcpListenerStream;
 use tonic::service::interceptor::InterceptedService;
 use tonic::transport::Server;
 
+use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::TaskGroup;
 
 use crate::config::ProxyConfig;
@@ -40,7 +41,7 @@ pub async fn serve<P, F>(
 ) -> ProxyResult<()>
 where
     P: MessagingProcessor + 'static,
-    F: Future<Output = ()> + Send + 'static,
+    F: Future<Output = ShutdownDeadline> + Send + 'static,
 {
     serve_with_report(config, service, shutdown, parent_task_group)
         .await
@@ -57,7 +58,7 @@ pub async fn serve_with_ready<P, F, R>(
 ) -> ProxyResult<ProxyGrpcServerShutdownReport>
 where
     P: MessagingProcessor + 'static,
-    F: Future<Output = ()> + Send + 'static,
+    F: Future<Output = ShutdownDeadline> + Send + 'static,
     R: FnOnce() -> ProxyResult<()> + Send + 'static,
 {
     serve_with_report_and_ready(config, service, shutdown, parent_task_group, Some(Box::new(ready))).await
@@ -72,7 +73,7 @@ pub async fn serve_with_report<P, F>(
 ) -> ProxyResult<ProxyGrpcServerShutdownReport>
 where
     P: MessagingProcessor + 'static,
-    F: Future<Output = ()> + Send + 'static,
+    F: Future<Output = ShutdownDeadline> + Send + 'static,
 {
     serve_with_report_and_ready(config, service, shutdown, parent_task_group, None).await
 }
@@ -86,7 +87,7 @@ pub async fn serve_with_report_with_task_group<P, F>(
 ) -> ProxyResult<ProxyGrpcServerShutdownReport>
 where
     P: MessagingProcessor + 'static,
-    F: Future<Output = ()> + Send + 'static,
+    F: Future<Output = ShutdownDeadline> + Send + 'static,
 {
     serve_with_report_and_ready(config, service, shutdown, parent_task_group, None).await
 }
@@ -101,7 +102,7 @@ pub async fn serve_with_report_with_task_group_and_ready<P, F, R>(
 ) -> ProxyResult<ProxyGrpcServerShutdownReport>
 where
     P: MessagingProcessor + 'static,
-    F: Future<Output = ()> + Send + 'static,
+    F: Future<Output = ShutdownDeadline> + Send + 'static,
     R: FnOnce() -> ProxyResult<()> + Send + 'static,
 {
     serve_with_report_and_ready(config, service, shutdown, parent_task_group, Some(Box::new(ready))).await
@@ -116,7 +117,7 @@ async fn serve_with_report_and_ready<P, F>(
 ) -> ProxyResult<ProxyGrpcServerShutdownReport>
 where
     P: MessagingProcessor + 'static,
-    F: Future<Output = ()> + Send + 'static,
+    F: Future<Output = ShutdownDeadline> + Send + 'static,
 {
     let task_group = parent_task_group.child("rocketmq-proxy.grpc-server");
     let housekeeping_service = service.clone();
@@ -196,6 +197,7 @@ mod tests {
     use rocketmq_auth::authorization::model::resource::Resource;
     use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
     use rocketmq_runtime::RuntimeContext;
+    use rocketmq_runtime::ShutdownDeadline;
     use rocketmq_security_api::Action;
     use sha1::Sha1;
     use tokio::sync::oneshot;
@@ -317,7 +319,7 @@ mod tests {
         let report = serve_with_report(
             config,
             service,
-            async {},
+            async { ShutdownDeadline::after(Duration::from_secs(1)) },
             context.service_context("proxy").task_group().clone(),
         )
         .await
@@ -360,9 +362,14 @@ mod tests {
         let context = RuntimeContext::from_current("proxy-grpc-server-parent-test");
         let proxy_service = context.service_context("proxy-service");
 
-        let report = serve_with_report_with_task_group(config, service, async {}, proxy_service.task_group().clone())
-            .await
-            .expect("server should return a shutdown report");
+        let report = serve_with_report_with_task_group(
+            config,
+            service,
+            async { ShutdownDeadline::after(Duration::from_secs(1)) },
+            proxy_service.task_group().clone(),
+        )
+        .await
+        .expect("server should return a shutdown report");
 
         assert!(report.is_healthy(), "{report:?}");
         let parent_report = proxy_service.task_group().shutdown(Duration::from_secs(1)).await;
@@ -424,6 +431,7 @@ mod tests {
                 service,
                 async move {
                     let _ = shutdown_rx.await;
+                    ShutdownDeadline::after(Duration::from_secs(1))
                 },
                 server_task_group,
             )

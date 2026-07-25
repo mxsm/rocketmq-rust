@@ -4872,6 +4872,7 @@ dependencies = [
  "tokio-util",
  "tonic",
  "tracing",
+ "trybuild",
  "uuid",
 ]
 

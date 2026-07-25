@@ -23,12 +23,14 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::error::ProxyResult;
+#[cfg(feature = "cluster-mode")]
 pub use rocketmq_proxy_cluster::ClusterConfig;
 pub use rocketmq_proxy_core::config::GrpcConfig;
 pub use rocketmq_proxy_core::config::ProxyMode;
 pub use rocketmq_proxy_core::config::RemotingConfig;
 pub use rocketmq_proxy_core::config::RuntimeConfig;
 pub use rocketmq_proxy_core::config::SessionConfig;
+#[cfg(feature = "local-mode")]
 pub use rocketmq_proxy_local::LocalConfig;
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -226,18 +228,53 @@ impl ProxyAuthConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ProxyConfig {
     pub mode: ProxyMode,
     pub enable_acl_rpc_hook_for_cluster_mode: bool,
     pub grpc: GrpcConfig,
     pub remoting: RemotingConfig,
+    #[cfg(feature = "cluster-mode")]
     pub cluster: ClusterConfig,
+    #[cfg(feature = "local-mode")]
     pub local: LocalConfig,
     pub runtime: RuntimeConfig,
     pub session: SessionConfig,
     pub auth: ProxyAuthConfig,
+}
+
+impl Default for ProxyConfig {
+    fn default() -> Self {
+        Self {
+            mode: default_compiled_proxy_mode(),
+            enable_acl_rpc_hook_for_cluster_mode: false,
+            grpc: GrpcConfig::default(),
+            remoting: RemotingConfig::default(),
+            #[cfg(feature = "cluster-mode")]
+            cluster: ClusterConfig::default(),
+            #[cfg(feature = "local-mode")]
+            local: LocalConfig::default(),
+            runtime: RuntimeConfig::default(),
+            session: SessionConfig::default(),
+            auth: ProxyAuthConfig::default(),
+        }
+    }
+}
+
+#[cfg(feature = "cluster-mode")]
+fn default_compiled_proxy_mode() -> ProxyMode {
+    ProxyMode::Cluster
+}
+
+#[cfg(all(not(feature = "cluster-mode"), feature = "local-mode"))]
+fn default_compiled_proxy_mode() -> ProxyMode {
+    ProxyMode::Local
+}
+
+#[cfg(not(any(feature = "cluster-mode", feature = "local-mode")))]
+fn default_compiled_proxy_mode() -> ProxyMode {
+    ProxyMode::Cluster
 }
 
 impl ProxyConfig {

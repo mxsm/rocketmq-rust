@@ -12,6 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Compatibility exports for the dedicated local adapter crate.
+//! Embedded Broker-backed Local adapter exports.
 
 pub use rocketmq_proxy_local::local::*;

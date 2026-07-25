@@ -130,19 +130,21 @@ async fn query_route_over_remoting_integration_injects_transport_context() {
         remoting: remoting_addr,
     } = free_proxy_test_addrs();
     let runtime_context = RuntimeContext::from_current("proxy-remoting-route-test");
-    let runtime = ProxyRuntime::builder(ProxyConfig {
-        grpc: GrpcConfig {
-            listen_addr: grpc_addr.to_string(),
-            ..GrpcConfig::default()
+    let runtime = ProxyRuntime::builder(
+        ProxyConfig {
+            grpc: GrpcConfig {
+                listen_addr: grpc_addr.to_string(),
+                ..GrpcConfig::default()
+            },
+            remoting: RemotingConfig {
+                enabled: true,
+                listen_addr: remoting_addr.to_string(),
+            },
+            ..ProxyConfig::default()
         },
-        remoting: RemotingConfig {
-            enabled: true,
-            listen_addr: remoting_addr.to_string(),
-        },
-        ..ProxyConfig::default()
-    })
+        runtime_context.service_context("proxy-remoting-route"),
+    )
     .with_service_manager(service_manager)
-    .with_service_context(runtime_context.service_context("proxy-remoting-route"))
     .build()
     .expect("the injected child context should build the proxy runtime");
 
@@ -249,20 +251,22 @@ accounts:
         grpc: grpc_addr,
         remoting: remoting_addr,
     } = free_proxy_test_addrs();
-    let runtime = ProxyRuntime::builder(ProxyConfig {
-        grpc: GrpcConfig {
-            listen_addr: grpc_addr.to_string(),
-            ..GrpcConfig::default()
+    let runtime = ProxyRuntime::builder(
+        ProxyConfig {
+            grpc: GrpcConfig {
+                listen_addr: grpc_addr.to_string(),
+                ..GrpcConfig::default()
+            },
+            remoting: RemotingConfig {
+                enabled: true,
+                listen_addr: remoting_addr.to_string(),
+            },
+            ..ProxyConfig::default()
         },
-        remoting: RemotingConfig {
-            enabled: true,
-            listen_addr: remoting_addr.to_string(),
-        },
-        ..ProxyConfig::default()
-    })
+        runtime_context.service_context("proxy-remoting-auth"),
+    )
     .with_service_manager(service_manager)
     .with_auth_runtime(auth_runtime)
-    .with_service_context(runtime_context.service_context("proxy-remoting-auth"))
     .build()
     .expect("the injected child context should build the proxy runtime");
 
@@ -335,19 +339,21 @@ async fn request_code_not_supported_over_remoting_integration_returns_compatible
         remoting: remoting_addr,
     } = free_proxy_test_addrs();
     let runtime_context = RuntimeContext::from_current("proxy-remoting-unsupported-test");
-    let runtime = ProxyRuntime::builder(ProxyConfig {
-        grpc: GrpcConfig {
-            listen_addr: grpc_addr.to_string(),
-            ..GrpcConfig::default()
+    let runtime = ProxyRuntime::builder(
+        ProxyConfig {
+            grpc: GrpcConfig {
+                listen_addr: grpc_addr.to_string(),
+                ..GrpcConfig::default()
+            },
+            remoting: RemotingConfig {
+                enabled: true,
+                listen_addr: remoting_addr.to_string(),
+            },
+            ..ProxyConfig::default()
         },
-        remoting: RemotingConfig {
-            enabled: true,
-            listen_addr: remoting_addr.to_string(),
-        },
-        ..ProxyConfig::default()
-    })
+        runtime_context.service_context("proxy-remoting-unsupported"),
+    )
     .with_service_manager(service_manager)
-    .with_service_context(runtime_context.service_context("proxy-remoting-unsupported"))
     .build()
     .expect("the injected child context should build the proxy runtime");
 

@@ -28,21 +28,23 @@ description            = "RocketMQ Proxy Module - gRPC proxy runtime for the Rus
 rust-version.workspace = true
 
 [features]
-default = []
+default = ["cluster-mode", "local-mode"]
+cluster-mode = ["dep:rocketmq-proxy-cluster"]
+local-mode = ["dep:rocketmq-proxy-local"]
 observability = [
   "rocketmq-observability/otel-metrics",
-  "rocketmq-proxy-local/observability",
+  "rocketmq-proxy-local?/observability",
   "rocketmq-transport/observability",
 ]
-tieredstore = ["rocketmq-proxy-local/tieredstore"]
+tieredstore = ["local-mode", "rocketmq-proxy-local/tieredstore"]
 
 [dependencies]
 rocketmq-error       = { workspace = true }
 rocketmq-model       = { workspace = true }
 rocketmq-protocol    = { workspace = true }
 rocketmq-proxy-core  = { workspace = true }
-rocketmq-proxy-cluster = { workspace = true }
-rocketmq-proxy-local = { workspace = true }
+rocketmq-proxy-cluster = { workspace = true, optional = true }
+rocketmq-proxy-local = { workspace = true, optional = true }
 rocketmq-auth        = { workspace = true, features = ["grpc"] }
 rocketmq-observability = { workspace = true }
 rocketmq-runtime     = { workspace = true }
@@ -74,6 +76,7 @@ hmac = "0.13.0"
 sha1 = "0.11"
 criterion = { version = "0.8", features = ["html_reports"] }
 serde_json = { workspace = true }
+trybuild = "1.0.116"
 
 [[bench]]
 name    = "proxy_housekeeping_lifecycle_bench"

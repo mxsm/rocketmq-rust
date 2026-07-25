@@ -18,6 +18,9 @@ use serde::Deserialize;
 use serde::Serialize;
 
 const LOCAL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+const DEFAULT_LOCAL_COMMAND_QUEUE_CAPACITY: usize = 1_024;
+const DEFAULT_LOCAL_COMMAND_QUEUE_MAX_BYTES: usize = 16 * 1024 * 1024;
+const DEFAULT_LOCAL_COMMAND_QUEUE_MAX_AGE_MILLIS: u64 = 1_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
@@ -27,11 +30,19 @@ pub struct LocalConfig {
     pub broker_ip: String,
     pub broker_listen_port: u16,
     pub store_root_dir: String,
+    pub query_assignment_strategy_name: String,
+    pub command_queue_capacity: usize,
+    pub command_queue_max_bytes: usize,
+    pub command_queue_max_age_millis: u64,
 }
 
 impl LocalConfig {
     pub fn shutdown_timeout(&self) -> Duration {
         LOCAL_SHUTDOWN_TIMEOUT
+    }
+
+    pub fn command_queue_max_age(&self) -> Duration {
+        Duration::from_millis(self.command_queue_max_age_millis)
     }
 }
 
@@ -43,6 +54,10 @@ impl Default for LocalConfig {
             broker_ip: "127.0.0.1".to_owned(),
             broker_listen_port: 10911,
             store_root_dir: "store/proxy/local-broker".to_owned(),
+            query_assignment_strategy_name: "AVG".to_owned(),
+            command_queue_capacity: DEFAULT_LOCAL_COMMAND_QUEUE_CAPACITY,
+            command_queue_max_bytes: DEFAULT_LOCAL_COMMAND_QUEUE_MAX_BYTES,
+            command_queue_max_age_millis: DEFAULT_LOCAL_COMMAND_QUEUE_MAX_AGE_MILLIS,
         }
     }
 }

@@ -42,7 +42,7 @@ const ENTRYPOINT_MAX_BLOCKING_THREADS: usize = 64;
 
 fn main() -> ProxyResult<()> {
     let owner = RuntimeOwner::new(proxy_runtime_config()).map_err(proxy_runtime_error("build proxy runtime"))?;
-    let service_context = owner.root_context().child("rocketmq-proxy-runtime");
+    let service_context = owner.root_context().child("proxy");
     let lifecycle = ServiceLifecycle::from_env("rocketmq-proxy").map_err(|error| ProxyError::Transport {
         message: format!("invalid Proxy lifecycle configuration: {error}"),
     })?;
@@ -146,8 +146,7 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
         "Starting RocketMQ proxy: mode={:?}, grpc={}, remotingEnabled={}, remoting={}",
         config.mode, config.grpc.listen_addr, config.remoting.enabled, config.remoting.listen_addr
     );
-    let serve_result = ProxyRuntime::builder(config)
-        .with_service_context(service_context)
+    let serve_result = ProxyRuntime::builder(config, service_context)
         .build()?
         .serve_with_lifecycle(lifecycle.clone())
         .await;
@@ -352,8 +351,18 @@ fn next_value(args: &mut impl Iterator<Item = String>, name: &str) -> ProxyResul
 
 fn parse_mode(value: &str) -> ProxyResult<ProxyMode> {
     match value {
+        #[cfg(feature = "cluster-mode")]
         "cluster" | "Cluster" => Ok(ProxyMode::Cluster),
+        #[cfg(not(feature = "cluster-mode"))]
+        "cluster" | "Cluster" => Err(ProxyError::not_implemented(
+            "Cluster mode is unavailable because the 'cluster-mode' feature is disabled",
+        )),
+        #[cfg(feature = "local-mode")]
         "local" | "Local" => Ok(ProxyMode::Local),
+        #[cfg(not(feature = "local-mode"))]
+        "local" | "Local" => Err(ProxyError::not_implemented(
+            "Local mode is unavailable because the 'local-mode' feature is disabled",
+        )),
         _ => Err(ProxyError::from(RocketMQError::illegal_argument(format!(
             "invalid proxy mode '{value}', expected cluster or local"
         )))),
@@ -374,7 +383,17 @@ fn apply_overrides(config: &mut ProxyConfig, args: &Args) -> ProxyResult<()> {
         config.remoting.enabled = true;
     }
     if let Some(addr) = &args.namesrv_addr {
-        config.cluster.namesrv_addr = Some(addr.clone());
+        #[cfg(feature = "cluster-mode")]
+        {
+            config.cluster.namesrv_addr = Some(addr.clone());
+        }
+        #[cfg(not(feature = "cluster-mode"))]
+        {
+            let _ = addr;
+            return Err(ProxyError::not_implemented(
+                "--namesrvAddr requires the 'cluster-mode' feature",
+            ));
+        }
     }
 
     config.grpc.socket_addr()?;
@@ -397,6 +416,7 @@ fn print_config(config: &ProxyConfig) {
     println!("grpc.listenAddr = {}", config.grpc.listen_addr);
     println!("remoting.enabled = {}", config.remoting.enabled);
     println!("remoting.listenAddr = {}", config.remoting.listen_addr);
+    #[cfg(feature = "cluster-mode")]
     println!("cluster.namesrvAddr = {:?}", config.cluster.namesrv_addr);
 }
 
