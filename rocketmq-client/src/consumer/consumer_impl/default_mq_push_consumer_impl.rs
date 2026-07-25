@@ -18,7 +18,6 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
 use std::time::Instant;
 
 use cheetah_string::CheetahString;
@@ -67,7 +66,6 @@ use crate::consumer::consumer_impl::consume_message_pop_concurrently_service::Co
 use crate::consumer::consumer_impl::consume_message_pop_orderly_service::ConsumeMessagePopOrderlyService;
 use crate::consumer::consumer_impl::consume_message_service::ConsumeMessagePopServiceGeneral;
 use crate::consumer::consumer_impl::consume_message_service::ConsumeMessageServiceGeneral;
-use crate::consumer::consumer_impl::consume_message_service::ShutdownReport;
 use crate::consumer::consumer_impl::pop_request::PopRequest;
 use crate::consumer::consumer_impl::pull_api_wrapper::PullAPIWrapper;
 use crate::consumer::consumer_impl::pull_request::PullRequest;
@@ -376,8 +374,8 @@ impl DefaultMQPushConsumerImpl {
             ServiceState::ShutdownAlready => {
                 return Err(mq_client_err!("The PushConsumer service state is ShutdownAlready"));
             }
-            ServiceState::Starting | ServiceState::Stopping => {
-                return Err(mq_client_err!("The PushConsumer service is starting or stopping"));
+            ServiceState::Starting => {
+                return Err(mq_client_err!("The PushConsumer service is Starting"));
             }
             ServiceState::StartFailed => {
                 return Err(mq_client_err!(format!(
@@ -390,10 +388,7 @@ impl DefaultMQPushConsumerImpl {
         Ok(())
     }
 
-    pub async fn shutdown(&mut self, await_terminate_millis: u64) -> ShutdownReport {
-        let started = Instant::now();
-        let budget = Duration::from_millis(await_terminate_millis);
-        let mut report = ShutdownReport::default();
+    pub async fn shutdown(&mut self, await_terminate_millis: u64) {
         let _lock = self.global_lock.lock().await;
         match *self.service_state {
             ServiceState::CreateJust | ServiceState::StartFailed | ServiceState::Starting => {
@@ -403,29 +398,16 @@ impl DefaultMQPushConsumerImpl {
                 );
                 let had_client_instance = self.client_instance.is_some();
                 if let Some(client) = self.client_instance.as_mut() {
-                    if tokio::time::timeout(
-                        budget.saturating_sub(started.elapsed()),
-                        client.unregister_consumer(self.consumer_config.consumer_group.as_str()),
-                    )
-                    .await
-                    .is_ok()
-                    {
-                        report.local_unregistered = true;
-                    } else {
-                        report.broker_unregister_failures += 1;
-                    }
-                    if tokio::time::timeout(budget.saturating_sub(started.elapsed()), client.shutdown())
-                        .await
-                        .is_ok()
-                    {
-                        report.shared_factory_stopped = true;
-                    }
+                    client
+                        .unregister_consumer(self.consumer_config.consumer_group.as_str())
+                        .await;
+                    client.shutdown().await;
                 }
                 if let Some(consume_message_service) = self.consume_message_service.as_mut() {
-                    report.merge(consume_message_service.shutdown(await_terminate_millis).await);
+                    consume_message_service.shutdown(await_terminate_millis).await;
                 }
                 if let Some(consume_message_pop_service) = self.consume_message_pop_service.as_mut() {
-                    report.merge(consume_message_pop_service.shutdown(await_terminate_millis).await);
+                    consume_message_pop_service.shutdown(await_terminate_millis).await;
                 }
                 if had_client_instance {
                     self.rebalance_impl.destroy();
@@ -433,47 +415,20 @@ impl DefaultMQPushConsumerImpl {
                 *self.service_state = ServiceState::ShutdownAlready;
             }
             ServiceState::Running => {
-                *self.service_state = ServiceState::Stopping;
-                let queues = {
-                    let table = self.rebalance_impl.rebalance_impl_inner.process_queue_table.read().await;
-                    table.values().cloned().collect::<Vec<_>>()
-                };
-                for queue in queues {
-                    queue.set_dropped(true);
-                }
-                if let Some(client) = self.client_instance.as_mut() {
-                    if tokio::time::timeout(
-                        budget.saturating_sub(started.elapsed()),
-                        client.unregister_consumer(self.consumer_config.consumer_group.as_str()),
-                    )
-                    .await
-                    .is_ok()
-                    {
-                        report.local_unregistered = true;
-                    } else {
-                        report.broker_unregister_failures += 1;
-                    }
-                }
-                if let Some(consume_message_service) = self.consume_message_service.as_mut() {
-                    report.merge(consume_message_service.shutdown(await_terminate_millis).await);
+                if let Some(consume_message_concurrently_service) = self.consume_message_service.as_mut() {
+                    consume_message_concurrently_service
+                        .shutdown(await_terminate_millis)
+                        .await;
                 }
                 if let Some(consume_message_pop_service) = self.consume_message_pop_service.as_mut() {
-                    report.merge(consume_message_pop_service.shutdown(await_terminate_millis).await);
+                    consume_message_pop_service.shutdown(await_terminate_millis).await;
                 }
-                if tokio::time::timeout(budget.saturating_sub(started.elapsed()), self.persist_consumer_offset())
-                    .await
-                    .is_ok()
-                {
-                    report.offsets_persisted = true;
-                }
-                if let Some(client) = self.client_instance.as_mut() {
-                    if tokio::time::timeout(budget.saturating_sub(started.elapsed()), client.shutdown())
-                        .await
-                        .is_ok()
-                    {
-                        report.shared_factory_stopped = true;
-                    }
-                }
+                self.persist_consumer_offset().await;
+                let client = self.client_instance.as_mut().unwrap();
+                client
+                    .unregister_consumer(self.consumer_config.consumer_group.as_str())
+                    .await;
+                client.shutdown().await;
                 info!(
                     "the consumer [{}] shutdown OK",
                     self.consumer_config.consumer_group.as_str()
@@ -487,12 +442,8 @@ impl DefaultMQPushConsumerImpl {
                     self.consumer_config.consumer_group
                 );
             }
-            ServiceState::Stopping => {
-                warn!("the consumer [{}] is already stopping", self.consumer_config.consumer_group);
-            }
         }
-        report.elapsed = started.elapsed();
-        report
+        drop(_lock);
     }
 
     async fn update_topic_subscribe_info_when_subscription_changed(&mut self) {
@@ -1547,21 +1498,26 @@ impl MQConsumerInner for DefaultMQPushConsumerImpl {
     }
 
     async fn persist_consumer_offset(&self) {
-        let allocate_mq = {
+        if let Err(err) = self.make_sure_state_ok() {
+            error!(
+                "group: {} persistConsumerOffset exception:{}",
+                self.consumer_config.consumer_group, err
+            );
+        } else {
             let guard = self
                 .rebalance_impl
                 .rebalance_impl_inner
                 .process_queue_table
                 .read()
                 .await;
-            guard.keys().cloned().collect::<HashSet<_>>()
-        };
-        self.offset_store
-            .as_ref()
-            .unwrap()
-            .mut_from_ref()
-            .persist_all(&allocate_mq)
-            .await;
+            let allocate_mq = guard.keys().cloned().collect::<HashSet<_>>();
+            self.offset_store
+                .as_ref()
+                .unwrap()
+                .mut_from_ref()
+                .persist_all(&allocate_mq)
+                .await;
+        }
     }
 
     async fn update_topic_subscribe_info(&self, topic: CheetahString, info: &HashSet<MessageQueue>) {

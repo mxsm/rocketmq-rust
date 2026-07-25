@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_client_ext::MessageClientExt;
@@ -25,31 +24,6 @@ use rocketmq_rust::WeakArcMut;
 
 use crate::consumer::consumer_impl::pop_process_queue::PopProcessQueue;
 use crate::consumer::consumer_impl::process_queue::ProcessQueue;
-
-/// The local outcome of a consumer shutdown.  Callers must not treat a
-/// partially-drained consumer as safe to replace in-process.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct ShutdownReport {
-    pub local_unregistered: bool,
-    pub consume_tasks_drained: usize,
-    pub consume_tasks_aborted: usize,
-    pub offsets_persisted: bool,
-    pub broker_unregister_failures: usize,
-    pub shared_factory_stopped: bool,
-    pub elapsed: Duration,
-}
-
-impl ShutdownReport {
-    pub fn merge(&mut self, other: Self) {
-        self.consume_tasks_drained += other.consume_tasks_drained;
-        self.consume_tasks_aborted += other.consume_tasks_aborted;
-        self.local_unregistered |= other.local_unregistered;
-        self.offsets_persisted |= other.offsets_persisted;
-        self.broker_unregister_failures += other.broker_unregister_failures;
-        self.shared_factory_stopped |= other.shared_factory_stopped;
-        self.elapsed = self.elapsed.max(other.elapsed);
-    }
-}
 
 pub struct ConsumeMessageServiceGeneral<T, K> {
     consume_message_concurrently_service: Option<ArcMut<T>>,
@@ -88,15 +62,31 @@ where
         }
     }
 
-    pub async fn shutdown(&mut self, await_terminate_millis: u64) -> ShutdownReport {
-        let mut report = ShutdownReport::default();
+    pub async fn shutdown(&mut self, await_terminate_millis: u64) {
         if let Some(consume_message_concurrently_service) = &mut self.consume_message_concurrently_service {
-            report.merge(consume_message_concurrently_service.shutdown(await_terminate_millis).await);
+            consume_message_concurrently_service
+                .shutdown(await_terminate_millis)
+                .await;
         }
         if let Some(consume_message_orderly_service) = &mut self.consume_message_orderly_service {
-            report.merge(consume_message_orderly_service.shutdown(await_terminate_millis).await);
+            consume_message_orderly_service.shutdown(await_terminate_millis).await;
         }
-        report
+    }
+
+    pub fn update_core_pool_size(&self, core_pool_size: usize) {
+        todo!()
+    }
+
+    pub fn inc_core_pool_size(&self) {
+        todo!()
+    }
+
+    pub fn dec_core_pool_size(&self) {
+        todo!()
+    }
+
+    pub fn get_core_pool_size(&self) -> usize {
+        todo!()
     }
 
     pub async fn consume_message_directly(
@@ -105,10 +95,12 @@ where
         broker_name: Option<CheetahString>,
     ) -> ConsumeMessageDirectlyResult {
         if let Some(consume_message_concurrently_service) = &self.consume_message_concurrently_service {
+            let this = consume_message_concurrently_service.clone();
             consume_message_concurrently_service
                 .consume_message_directly(msg, broker_name)
                 .await
         } else if let Some(consume_message_orderly_service) = &self.consume_message_orderly_service {
+            let this = consume_message_orderly_service.clone();
             consume_message_orderly_service
                 .consume_message_directly(msg, broker_name)
                 .await
@@ -185,15 +177,33 @@ where
         }
     }
 
-    pub async fn shutdown(&mut self, await_terminate_millis: u64) -> ShutdownReport {
-        let mut report = ShutdownReport::default();
+    pub async fn shutdown(&mut self, await_terminate_millis: u64) {
         if let Some(consume_message_pop_concurrently_service) = &mut self.consume_message_pop_concurrently_service {
-            report.merge(consume_message_pop_concurrently_service.shutdown(await_terminate_millis).await);
+            consume_message_pop_concurrently_service
+                .shutdown(await_terminate_millis)
+                .await;
         }
         if let Some(consume_message_pop_orderly_service) = &mut self.consume_message_pop_orderly_service {
-            report.merge(consume_message_pop_orderly_service.shutdown(await_terminate_millis).await);
+            consume_message_pop_orderly_service
+                .shutdown(await_terminate_millis)
+                .await;
         }
-        report
+    }
+
+    fn update_core_pool_size(&self, core_pool_size: usize) {
+        todo!()
+    }
+
+    fn inc_core_pool_size(&self) {
+        todo!()
+    }
+
+    fn dec_core_pool_size(&self) {
+        todo!()
+    }
+
+    fn get_core_pool_size(&self) -> usize {
+        todo!()
     }
 
     pub(crate) async fn consume_message_directly(
@@ -260,7 +270,29 @@ pub trait ConsumeMessageServiceTrait {
     /// # Arguments
     ///
     /// * `await_terminate_millis` - The number of milliseconds to wait for termination.
-    async fn shutdown(&mut self, await_terminate_millis: u64) -> ShutdownReport;
+    async fn shutdown(&mut self, await_terminate_millis: u64);
+
+    /// Updates the core pool size of the service.
+    ///
+    /// # Arguments
+    ///
+    /// * `core_pool_size` - The new core pool size.
+    fn update_core_pool_size(&self, core_pool_size: usize) {}
+
+    /// Increases the core pool size of the service by one.
+    fn inc_core_pool_size(&self) {}
+
+    /// Decreases the core pool size of the service by one.
+    fn dec_core_pool_size(&self) {}
+
+    /// Gets the current core pool size of the service.
+    ///
+    /// # Returns
+    ///
+    /// The current core pool size.
+    fn get_core_pool_size(&self) -> usize {
+        num_cpus::get()
+    }
 
     /// Consumes a message directly.
     ///

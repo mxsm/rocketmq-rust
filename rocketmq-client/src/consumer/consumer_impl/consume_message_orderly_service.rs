@@ -37,7 +37,6 @@ use tracing::warn;
 
 use crate::base::client_config::ClientConfig;
 use crate::consumer::consumer_impl::consume_message_service::ConsumeMessageServiceTrait;
-use crate::consumer::consumer_impl::consume_message_service::ShutdownReport;
 use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
 use crate::consumer::consumer_impl::pop_process_queue::PopProcessQueue;
 use crate::consumer::consumer_impl::process_queue::ProcessQueue;
@@ -65,7 +64,7 @@ pub struct ConsumeMessageOrderlyService {
     pub(crate) consumer_config: ArcMut<ConsumerConfig>,
     pub(crate) consumer_group: CheetahString,
     pub(crate) message_listener: ArcBoxMessageListenerOrderly,
-    pub(crate) consume_runtime: Option<RocketMQRuntime>,
+    pub(crate) consume_runtime: RocketMQRuntime,
     pub(crate) stopped: AtomicBool,
     pub(crate) global_lock: Arc<RocketMQTokioMutex<()>>,
     pub(crate) message_queue_lock: MessageQueueLock,
@@ -87,7 +86,7 @@ impl ConsumeMessageOrderlyService {
             consumer_config,
             consumer_group,
             message_listener,
-            consume_runtime: Some(RocketMQRuntime::new_multi(consume_thread as usize, consumer_group_tag.as_str())),
+            consume_runtime: RocketMQRuntime::new_multi(consume_thread as usize, consumer_group_tag.as_str()),
             stopped: AtomicBool::new(false),
             global_lock: Arc::new(Default::default()),
             message_queue_lock: Default::default(),
@@ -134,7 +133,7 @@ impl ConsumeMessageOrderlyService {
     ) {
         let consume_message_orderly_service_cloned = consume_message_orderly_service.clone();
         let message_queue = message_queue.clone();
-        self.consume_runtime.as_ref().expect("orderly consumer runtime is stopped").get_handle().spawn(async move {
+        self.consume_runtime.get_handle().spawn(async move {
             tokio::time::sleep(tokio::time::Duration::from_millis(delay_mills)).await;
 
             if consume_message_orderly_service.lock_one_mq(&message_queue).await {
@@ -348,7 +347,7 @@ impl ConsumeMessageOrderlyService {
 impl ConsumeMessageServiceTrait for ConsumeMessageOrderlyService {
     fn start(&mut self, mut this: ArcMut<Self>) {
         if MessageModel::Clustering == self.consumer_config.message_model {
-            self.consume_runtime.as_ref().expect("orderly consumer runtime is stopped").get_handle().spawn(async move {
+            self.consume_runtime.get_handle().spawn(async move {
                 tokio::time::sleep(tokio::time::Duration::from_millis(1_000)).await;
                 loop {
                     this.lock_mqperiodically().await;
@@ -358,26 +357,10 @@ impl ConsumeMessageServiceTrait for ConsumeMessageOrderlyService {
         }
     }
 
-    async fn shutdown(&mut self, await_terminate_millis: u64) -> ShutdownReport {
-        let started = Instant::now();
-        let mut report = ShutdownReport::default();
-        if self.stopped.swap(true, std::sync::atomic::Ordering::AcqRel) {
-            return report;
-        }
+    async fn shutdown(&mut self, await_terminate_millis: u64) {
         if MessageModel::Clustering == self.consumer_config.message_model {
-            if tokio::time::timeout(Duration::from_millis(await_terminate_millis), self.unlock_all_mq())
-                .await
-                .is_err()
-            {
-                report.broker_unregister_failures += 1;
-            }
+            self.unlock_all_mq().await;
         }
-        if let Some(runtime) = self.consume_runtime.take() {
-            let remaining = Duration::from_millis(await_terminate_millis).saturating_sub(started.elapsed());
-            let _ = std::thread::spawn(move || runtime.shutdown_timeout(remaining)).join();
-        }
-        report.elapsed = started.elapsed();
-        report
     }
 
     #[allow(deprecated)]
@@ -447,7 +430,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessageOrderlyService {
             default_mqpush_consumer_impl: self.default_mqpush_consumer_impl.clone(),
             consumer_group: self.consumer_group.clone(),
         };
-        self.consume_runtime.as_ref().expect("orderly consumer runtime is stopped").get_handle().spawn(async move {
+        self.consume_runtime.get_handle().spawn(async move {
             consume_request.run(this).await;
         });
     }

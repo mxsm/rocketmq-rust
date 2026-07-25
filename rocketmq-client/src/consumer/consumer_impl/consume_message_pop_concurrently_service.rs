@@ -13,10 +13,7 @@
 // limitations under the License.
 
 use std::error::Error;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::time::Duration;
 use std::time::Instant;
 
 use cheetah_string::CheetahString;
@@ -40,7 +37,6 @@ use crate::base::client_config::ClientConfig;
 use crate::consumer::ack_callback::AckCallback;
 use crate::consumer::ack_result::AckResult;
 use crate::consumer::consumer_impl::consume_message_service::ConsumeMessageServiceTrait;
-use crate::consumer::consumer_impl::consume_message_service::ShutdownReport;
 use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
 use crate::consumer::consumer_impl::pop_process_queue::PopProcessQueue;
 use crate::consumer::consumer_impl::process_queue::ProcessQueue;
@@ -57,8 +53,7 @@ pub struct ConsumeMessagePopConcurrentlyService {
     pub(crate) consumer_config: ArcMut<ConsumerConfig>,
     pub(crate) consumer_group: CheetahString,
     pub(crate) message_listener: ArcBoxMessageListenerConcurrently,
-    pub(crate) pop_consume_runtime: Option<RocketMQRuntime>,
-    accepting: AtomicBool,
+    pub(crate) pop_consume_runtime: RocketMQRuntime,
 }
 
 impl ConsumeMessagePopConcurrentlyService {
@@ -77,8 +72,7 @@ impl ConsumeMessagePopConcurrentlyService {
             consumer_config,
             consumer_group,
             message_listener,
-            pop_consume_runtime: Some(RocketMQRuntime::new_multi(consume_thread as usize, consumer_group_tag.as_str())),
-            accepting: AtomicBool::new(true),
+            pop_consume_runtime: RocketMQRuntime::new_multi(consume_thread as usize, consumer_group_tag.as_str()),
         }
     }
 }
@@ -88,19 +82,12 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopConcurrentlyService {
         // nothing to do need
     }
 
-    async fn shutdown(&mut self, await_terminate_millis: u64) -> ShutdownReport {
-        let started = Instant::now();
-        let mut report = ShutdownReport::default();
-        if !self.accepting.swap(false, Ordering::AcqRel) {
-            return report;
-        }
-        if let Some(runtime) = self.pop_consume_runtime.take() {
-            let timeout = Duration::from_millis(await_terminate_millis);
-            let _ = std::thread::spawn(move || runtime.shutdown_timeout(timeout)).join();
-            report.consume_tasks_aborted = 1;
-        }
-        report.elapsed = started.elapsed();
-        report
+    async fn shutdown(&mut self, await_terminate_millis: u64) {
+        // The POP concurrent service does not start a background task in its
+        // current implementation. Keep shutdown idempotent until POP task
+        // ownership is implemented, rather than panicking during push-consumer
+        // lifecycle cleanup.
+        let _ = await_terminate_millis;
     }
 
     async fn consume_message_directly(
@@ -165,9 +152,6 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopConcurrentlyService {
         process_queue: &PopProcessQueue,
         message_queue: &MessageQueue,
     ) {
-        if !self.accepting.load(Ordering::Acquire) {
-            return;
-        }
         let consume_batch_size = self.consumer_config.consume_message_batch_max_size;
         let msgs = msgs
             .into_iter()
@@ -175,7 +159,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopConcurrentlyService {
             .collect::<Vec<ArcMut<MessageClientExt>>>();
         if msgs.len() < consume_batch_size as usize {
             let mut request = ConsumeRequest::new(msgs, Arc::new(process_queue.clone()), message_queue.clone());
-            self.pop_consume_runtime.as_ref().expect("POP consumer runtime is stopped").get_handle().spawn(async move {
+            self.pop_consume_runtime.get_handle().spawn(async move {
                 request.run(this).await;
             });
         } else {
@@ -185,7 +169,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopConcurrentlyService {
                     let mut consume_request =
                         ConsumeRequest::new(msgs, Arc::new(process_queue.clone()), message_queue.clone());
                     let pop_consume_message_concurrently_service = this.clone();
-                    self.pop_consume_runtime.as_ref().expect("POP consumer runtime is stopped")
+                    self.pop_consume_runtime
                         .get_handle()
                         .spawn(async move { consume_request.run(pop_consume_message_concurrently_service).await });
                 });

@@ -22,8 +22,6 @@ pub enum ServiceState {
     Starting,
     /// Service running
     Running,
-    /// Teardown is in progress. New pulls and callback scheduling must stop.
-    Stopping,
     /// Service shutdown
     ShutdownAlready,
     /// Service start failure
@@ -36,7 +34,6 @@ impl Display for ServiceState {
             ServiceState::CreateJust => write!(f, "CreateJust"),
             ServiceState::Starting => write!(f, "Starting"),
             ServiceState::Running => write!(f, "Running"),
-            ServiceState::Stopping => write!(f, "Stopping"),
             ServiceState::ShutdownAlready => write!(f, "ShutdownAlready"),
             ServiceState::StartFailed => write!(f, "StartFailed"),
         }

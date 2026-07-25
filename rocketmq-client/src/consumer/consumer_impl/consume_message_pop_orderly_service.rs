@@ -15,10 +15,7 @@
 use std::collections::HashSet;
 use std::hash::Hash;
 use std::hash::Hasher;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::time::Duration;
 use std::time::Instant;
 
 use cheetah_string::CheetahString;
@@ -33,7 +30,6 @@ use tracing::warn;
 
 use crate::base::client_config::ClientConfig;
 use crate::consumer::consumer_impl::consume_message_service::ConsumeMessageServiceTrait;
-use crate::consumer::consumer_impl::consume_message_service::ShutdownReport;
 use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
 use crate::consumer::consumer_impl::pop_process_queue::PopProcessQueue;
 use crate::consumer::consumer_impl::process_queue::ProcessQueue;
@@ -49,8 +45,7 @@ pub struct ConsumeMessagePopOrderlyService {
     pub(crate) consumer_config: ArcMut<ConsumerConfig>,
     pub(crate) consumer_group: CheetahString,
     pub(crate) message_listener: ArcBoxMessageListenerOrderly,
-    pub(crate) consume_runtime: Option<RocketMQRuntime>,
-    accepting: AtomicBool,
+    pub(crate) consume_runtime: RocketMQRuntime,
     pub(self) consume_request_set: HashSet<ConsumeRequest>,
     pub(crate) message_queue_lock: MessageQueueLock,
     pub(crate) consume_request_lock: MessageQueueLock,
@@ -72,8 +67,7 @@ impl ConsumeMessagePopOrderlyService {
             consumer_config,
             consumer_group,
             message_listener,
-            consume_runtime: Some(RocketMQRuntime::new_multi(consume_thread as usize, consumer_group_tag.as_str())),
-            accepting: AtomicBool::new(true),
+            consume_runtime: RocketMQRuntime::new_multi(consume_thread as usize, consumer_group_tag.as_str()),
             consume_request_set: Default::default(),
             message_queue_lock: Default::default(),
             consume_request_lock: Default::default(),
@@ -92,7 +86,7 @@ impl ConsumeMessagePopOrderlyService {
         let _lock = lock.lock().await;
         let is_new_req = self.consume_request_set.insert(request.clone());
         if is_new_req || force {
-            self.consume_runtime.as_ref().expect("POP orderly consumer runtime is stopped").get_handle().spawn(async move {
+            self.consume_runtime.get_handle().spawn(async move {
                 request.run(this).await;
             });
         }
@@ -102,20 +96,10 @@ impl ConsumeMessagePopOrderlyService {
 impl ConsumeMessageServiceTrait for ConsumeMessagePopOrderlyService {
     fn start(&mut self, this: ArcMut<Self>) {}
 
-    async fn shutdown(&mut self, await_terminate_millis: u64) -> ShutdownReport {
-        let started = Instant::now();
-        let mut report = ShutdownReport::default();
-        if !self.accepting.swap(false, Ordering::AcqRel) {
-            return report;
-        }
-        if let Some(runtime) = self.consume_runtime.take() {
-            let timeout = Duration::from_millis(await_terminate_millis);
-            let _ = std::thread::spawn(move || runtime.shutdown_timeout(timeout)).join();
-            report.consume_tasks_aborted = self.consume_request_set.len();
-        }
-        self.consume_request_set.clear();
-        report.elapsed = started.elapsed();
-        report
+    async fn shutdown(&mut self, await_terminate_millis: u64) {
+        // See the concurrent POP service: no independently-owned background
+        // task exists to terminate yet, but shutdown must never panic.
+        let _ = await_terminate_millis;
     }
 
     #[allow(deprecated)]
