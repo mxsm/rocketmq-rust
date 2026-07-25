@@ -118,6 +118,7 @@ pub mod bench_support {
     use std::time::Instant;
 
     use crate::config::RaftPeer;
+    use rocketmq_runtime::ChildServiceContext;
     use rocketmq_runtime::ShutdownReport;
     use serde::Serialize;
 
@@ -169,10 +170,14 @@ pub mod bench_support {
         pub healthy: bool,
     }
 
-    pub async fn run_controller_heartbeat_lifecycle_probe() -> ControllerHeartbeatLifecycleProbe {
-        let mut manager =
-            DefaultBrokerHeartbeatManager::new(ControllerConfigReader::new(ControllerConfig::test_config()))
-                .with_scan_interval_ms(1);
+    pub async fn run_controller_heartbeat_lifecycle_probe(
+        service_context: ChildServiceContext,
+    ) -> ControllerHeartbeatLifecycleProbe {
+        let mut manager = DefaultBrokerHeartbeatManager::new(
+            ControllerConfigReader::new(ControllerConfig::test_config()),
+            service_context.task_group().clone(),
+        )
+        .with_scan_interval_ms(1);
 
         manager.start();
         let mut snapshots = manager.scan_schedule_snapshot();
@@ -218,7 +223,9 @@ pub mod bench_support {
         }
     }
 
-    pub async fn run_controller_leadership_watch_lifecycle_probe() -> ControllerLeadershipWatchLifecycleProbe {
+    pub async fn run_controller_leadership_watch_lifecycle_probe(
+        service_context: ChildServiceContext,
+    ) -> ControllerLeadershipWatchLifecycleProbe {
         let remoting_addr = free_loopback_addr();
         let raft_addr = free_loopback_addr();
         let config = ControllerConfig::default()
@@ -233,7 +240,7 @@ pub mod bench_support {
             .with_storage_backend(crate::config::StorageBackendType::Memory);
 
         let manager = Arc::new(
-            ControllerManager::new(config)
+            ControllerManager::new(config, service_context)
                 .await
                 .expect("benchmark controller manager should create"),
         );
@@ -310,7 +317,9 @@ pub mod bench_support {
         }
     }
 
-    pub async fn run_controller_openraft_scan_lifecycle_probe() -> ControllerOpenRaftScanLifecycleProbe {
+    pub async fn run_controller_openraft_scan_lifecycle_probe(
+        service_context: ChildServiceContext,
+    ) -> ControllerOpenRaftScanLifecycleProbe {
         let remoting_addr = free_loopback_addr();
         let raft_addr = free_loopback_addr();
         let config = ControllerConfig::default()
@@ -321,7 +330,7 @@ pub mod bench_support {
             .with_heartbeat_interval_ms(100)
             .with_election_timeout_ms(300)
             .with_storage_backend(crate::config::StorageBackendType::Memory);
-        let mut controller = OpenRaftController::new(ControllerConfigReader::new(config));
+        let mut controller = OpenRaftController::new(ControllerConfigReader::new(config), service_context);
         controller
             .startup()
             .await
@@ -418,7 +427,11 @@ pub mod bench_support {
 mod bench_support_tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn controller_heartbeat_lifecycle_probe_reports_clean_shutdown() {
-        let probe = super::bench_support::run_controller_heartbeat_lifecycle_probe().await;
+        let runtime = rocketmq_runtime::RuntimeContext::from_current("controller-heartbeat-probe-test");
+        let probe = super::bench_support::run_controller_heartbeat_lifecycle_probe(
+            runtime.service_context("controller-heartbeat"),
+        )
+        .await;
 
         assert!(probe.healthy, "{probe:?}");
         assert_eq!(probe.task_count_after_shutdown, 0, "{probe:?}");
@@ -433,7 +446,11 @@ mod bench_support_tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn controller_leadership_watch_lifecycle_probe_reports_clean_shutdown() {
-        let probe = super::bench_support::run_controller_leadership_watch_lifecycle_probe().await;
+        let runtime = rocketmq_runtime::RuntimeContext::from_current("controller-leadership-probe-test");
+        let probe = super::bench_support::run_controller_leadership_watch_lifecycle_probe(
+            runtime.service_context("controller"),
+        )
+        .await;
 
         assert!(probe.healthy, "{probe:?}");
         assert!(probe.scheduling_enabled, "{probe:?}");
@@ -444,7 +461,11 @@ mod bench_support_tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn controller_openraft_scan_lifecycle_probe_reports_clean_shutdown() {
-        let probe = super::bench_support::run_controller_openraft_scan_lifecycle_probe().await;
+        let runtime = rocketmq_runtime::RuntimeContext::from_current("controller-openraft-probe-test");
+        let probe = super::bench_support::run_controller_openraft_scan_lifecycle_probe(
+            runtime.service_context("controller-openraft"),
+        )
+        .await;
 
         assert!(probe.healthy, "{probe:?}");
         assert!(probe.became_leader, "{probe:?}");

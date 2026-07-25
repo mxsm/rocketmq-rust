@@ -68,15 +68,16 @@ impl RocksDbConsumeQueueGroupCommitService {
     pub fn start(
         store: Arc<RocksDbStore>,
         config: RocksDbConsumeQueueGroupCommitConfig,
+        runtime_scope: crate::runtime::RocksDbRuntimeScope,
     ) -> Result<Self, RocketMQError> {
         let config = config.validate()?;
         let (sender, receiver) = mpsc::channel(config.queue_capacity);
-        let task_group = crate::runtime::task_group("rocksdb.consume_queue.group_commit")?;
+        let task_group = crate::runtime::task_group(&runtime_scope, "rocksdb.consume_queue.group_commit");
         let task_error = Arc::new(tokio::sync::Mutex::new(None));
         let task_error_clone = task_error.clone();
         task_group
             .spawn_service("consume-queue-group-commit", async move {
-                if let Err(error) = run_group_commit_loop(store, receiver, config.batch_size).await {
+                if let Err(error) = run_group_commit_loop(store, receiver, config.batch_size, runtime_scope).await {
                     *task_error_clone.lock().await = Some(error);
                 }
             })
@@ -120,6 +121,7 @@ async fn run_group_commit_loop(
     store: Arc<RocksDbStore>,
     mut receiver: mpsc::Receiver<ConsumeQueueBatchWriteRequest>,
     batch_size: usize,
+    runtime_scope: crate::runtime::RocksDbRuntimeScope,
 ) -> Result<(), RocketMQError> {
     while let Some(first_request) = receiver.recv().await {
         let mut requests = Vec::with_capacity(batch_size);
@@ -138,7 +140,7 @@ async fn run_group_commit_loop(
         }
 
         let store = Arc::clone(&store);
-        crate::runtime::spawn_io("rocksdb.consume_queue.group_commit", move || {
+        crate::runtime::spawn_io(&runtime_scope, "rocksdb.consume_queue.group_commit", move || {
             let writer = RocksDbConsumeQueueBatchWriter::new(store.as_ref());
             writer.write(&request)
         })

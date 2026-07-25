@@ -54,7 +54,6 @@ use crate::authentication::strategy::StatefulAuthenticationStrategy;
 use crate::authentication::strategy::StatelessAuthenticationStrategy;
 use crate::authorization::metadata_provider::AuthorizationMetadataProvider;
 use crate::config::AuthConfig;
-use crate::runtime_bridge::block_on_sync_bridge;
 
 /// Global instance cache for authentication components
 ///
@@ -103,7 +102,7 @@ impl AuthenticationFactory {
     /// let config = AuthConfig::default();
     /// let provider = AuthenticationFactory::get_provider(&config)?;
     /// ```
-    pub fn get_provider(config: &AuthConfig) -> RocketMQResult<Arc<DefaultAuthenticationProvider>> {
+    pub async fn get_provider(config: &AuthConfig) -> RocketMQResult<Arc<DefaultAuthenticationProvider>> {
         if !is_blank_or_supported(
             config.authentication_provider.as_str(),
             &["DefaultAuthenticationProvider", "default"],
@@ -115,12 +114,14 @@ impl AuthenticationFactory {
         }
 
         let key = format!("{}{}", PROVIDER_PREFIX, config.config_name);
+        if let Some(cached) = Self::cached(&key)? {
+            return cached
+                .downcast::<DefaultAuthenticationProvider>()
+                .map_err(|_| RocketMQError::illegal_argument("Failed to downcast provider"));
+        }
+        let provider = new_initialized_default_provider(config.clone(), None).await?;
 
-        Self::compute_if_absent(&key, || {
-            let provider = new_initialized_default_provider(config.clone(), None)?;
-            Ok(Arc::new(provider) as Arc<dyn Any + Send + Sync>)
-        })
-        .and_then(|any_arc| {
+        Self::compute_if_absent(&key, || Ok(Arc::new(provider) as Arc<dyn Any + Send + Sync>)).and_then(|any_arc| {
             any_arc
                 .downcast::<DefaultAuthenticationProvider>()
                 .map_err(|_| RocketMQError::illegal_argument("Failed to downcast provider"))
@@ -138,10 +139,10 @@ impl AuthenticationFactory {
     /// * `config` - Authentication configuration
     ///
     /// # Returns
-    pub fn get_metadata_provider(
+    pub async fn get_metadata_provider(
         config: &AuthConfig,
     ) -> RocketMQResult<Option<Arc<dyn AuthenticationMetadataProvider>>> {
-        Self::get_metadata_provider_with_service(config, None)
+        Self::get_metadata_provider_with_service(config, None).await
     }
 
     /// Get authentication metadata provider with service
@@ -152,7 +153,7 @@ impl AuthenticationFactory {
     /// * `metadata_service` - Optional provider-specific metadata service
     ///
     /// # Returns
-    pub fn get_metadata_provider_with_service(
+    pub async fn get_metadata_provider_with_service(
         config: &AuthConfig,
         metadata_service: Option<Arc<dyn Any + Send + Sync>>,
     ) -> RocketMQResult<Option<Arc<dyn AuthenticationMetadataProvider>>> {
@@ -168,16 +169,20 @@ impl AuthenticationFactory {
         }
 
         let key = format!("{}{}", METADATA_PROVIDER_PREFIX, config.config_name);
-        Self::compute_if_absent(&key, || {
-            let provider = new_initialized_local_metadata_provider(config.clone(), metadata_service)?;
-            Ok(Arc::new(provider) as Arc<dyn Any + Send + Sync>)
-        })
-        .and_then(|any_arc| {
-            any_arc
+        if let Some(cached) = Self::cached(&key)? {
+            return cached
                 .downcast::<LocalAuthenticationMetadataProvider>()
                 .map_err(|_| RocketMQError::illegal_argument("Failed to downcast metadata provider"))
-        })
-        .map(|provider| Some(provider as Arc<dyn AuthenticationMetadataProvider>))
+                .map(|provider| Some(provider as Arc<dyn AuthenticationMetadataProvider>));
+        }
+        let provider = new_initialized_local_metadata_provider(config.clone(), metadata_service).await?;
+        Self::compute_if_absent(&key, || Ok(Arc::new(provider) as Arc<dyn Any + Send + Sync>))
+            .and_then(|any_arc| {
+                any_arc
+                    .downcast::<LocalAuthenticationMetadataProvider>()
+                    .map_err(|_| RocketMQError::illegal_argument("Failed to downcast metadata provider"))
+            })
+            .map(|provider| Some(provider as Arc<dyn AuthenticationMetadataProvider>))
     }
 
     /// Create an authentication strategy matching the configured Java class name.
@@ -185,11 +190,11 @@ impl AuthenticationFactory {
     /// Blank configuration uses `StatelessAuthenticationStrategy`, matching Java.
     /// The Rust implementation supports the built-in stateless and stateful
     /// strategies and returns a configuration error for unsupported class names.
-    pub fn get_strategy(
+    pub async fn get_strategy(
         config: &AuthConfig,
         _metadata_service: Option<Arc<dyn Any + Send + Sync>>,
     ) -> RocketMQResult<Box<dyn AuthenticationStrategy>> {
-        let provider = Self::get_provider(config)?;
+        let provider = Self::get_provider(config).await?;
         let strategy = config.authentication_strategy.as_str();
         if strategy.trim().is_empty()
             || strategy.ends_with("StatelessAuthenticationStrategy")
@@ -213,20 +218,25 @@ impl AuthenticationFactory {
     }
 
     /// Get or create a cached authentication evaluator.
-    pub fn get_evaluator(
+    pub async fn get_evaluator(
         config: &AuthConfig,
     ) -> RocketMQResult<Arc<AuthenticationEvaluator<Box<dyn AuthenticationStrategy>>>> {
-        Self::get_evaluator_with_service(config, None)
+        Self::get_evaluator_with_service(config, None).await
     }
 
     /// Get or create a cached authentication evaluator with provider-specific service.
-    pub fn get_evaluator_with_service(
+    pub async fn get_evaluator_with_service(
         config: &AuthConfig,
         metadata_service: Option<Arc<dyn Any + Send + Sync>>,
     ) -> RocketMQResult<Arc<AuthenticationEvaluator<Box<dyn AuthenticationStrategy>>>> {
         let key = format!("{}{}", EVALUATOR_PREFIX, config.config_name);
+        if let Some(cached) = Self::cached(&key)? {
+            return cached
+                .downcast::<AuthenticationEvaluator<Box<dyn AuthenticationStrategy>>>()
+                .map_err(|_| RocketMQError::illegal_argument("Failed to downcast evaluator"));
+        }
+        let strategy = Self::get_strategy(config, metadata_service).await?;
         Self::compute_if_absent(&key, || {
-            let strategy = Self::get_strategy(config, metadata_service)?;
             Ok(Arc::new(AuthenticationEvaluator::new(strategy)) as Arc<dyn Any + Send + Sync>)
         })
         .and_then(|any_arc| {
@@ -279,12 +289,12 @@ impl AuthenticationFactory {
     ///
     /// * `Ok(Some(context))` - Successfully created context
     /// * `Err(RocketMQError)` - If provider retrieval fails
-    pub fn new_context_from_metadata(
+    pub async fn new_context_from_metadata(
         config: &AuthConfig,
         metadata: &HashMap<String, String>,
         request: Box<dyn Any + Send>,
     ) -> RocketMQResult<Option<DefaultAuthenticationContext>> {
-        let provider = Self::get_provider(config)?;
+        let provider = Self::get_provider(config).await?;
         Ok(Some(
             <DefaultAuthenticationProvider as AuthenticationProvider>::new_context_from_metadata(
                 &provider, metadata, request,
@@ -303,11 +313,11 @@ impl AuthenticationFactory {
     ///
     /// * `Ok(Some(context))` - Successfully created context
     /// * `Err(RocketMQError)` - If provider retrieval fails
-    pub fn new_context_from_command(
+    pub async fn new_context_from_command(
         config: &AuthConfig,
         command: &RemotingCommand,
     ) -> RocketMQResult<Option<DefaultAuthenticationContext>> {
-        let provider = Self::get_provider(config)?;
+        let provider = Self::get_provider(config).await?;
         Ok(Some(
             <DefaultAuthenticationProvider as AuthenticationProvider>::new_context_from_command(&provider, command),
         ))
@@ -362,62 +372,46 @@ impl AuthenticationFactory {
         cache_guard.insert(key.to_string(), Arc::clone(&instance));
         Ok(instance)
     }
+
+    fn cached(key: &str) -> RocketMQResult<Option<Arc<dyn Any + Send + Sync>>> {
+        let cache = INSTANCE_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+        let guard = cache
+            .lock()
+            .map_err(|error| RocketMQError::illegal_argument(format!("Cache lock error: {error}")))?;
+        Ok(guard.get(key).cloned())
+    }
 }
 
 impl AuthenticationStrategy for Box<dyn AuthenticationStrategy> {
-    fn authenticate(
-        &self,
-        context: &dyn crate::authorization::context::authentication_context::AuthenticationContext,
-    ) -> Result<(), rocketmq_error::AuthError> {
+    fn authenticate<'a>(
+        &'a self,
+        context: &'a dyn crate::authorization::context::authentication_context::AuthenticationContext,
+    ) -> crate::authentication::strategy::AuthenticationFuture<'a> {
         self.as_ref().authenticate(context)
     }
 }
 
-fn new_initialized_default_provider(
+async fn new_initialized_default_provider(
     config: AuthConfig,
     metadata_service: Option<Arc<dyn Any + Send + Sync>>,
 ) -> RocketMQResult<DefaultAuthenticationProvider> {
     let mut provider = DefaultAuthenticationProvider::new();
-    block_on_sync_bridge(
-        || provider.initialize(config, metadata_service),
-        |error| {
-            RocketMQError::auth_config_invalid(
-                "authenticationProvider",
-                format!("Failed to create initialization runtime: {error}"),
-            )
-        },
-        || {
-            RocketMQError::auth_config_invalid(
-                "authenticationProvider",
-                "DefaultAuthenticationProvider initialization panicked",
-            )
-        },
-    )
-    .map_err(|error| RocketMQError::auth_config_invalid("authenticationProvider", error.to_string()))?;
+    provider
+        .initialize(config, metadata_service)
+        .await
+        .map_err(|error| RocketMQError::auth_config_invalid("authenticationProvider", error.to_string()))?;
     Ok(provider)
 }
 
-fn new_initialized_local_metadata_provider(
+async fn new_initialized_local_metadata_provider(
     config: AuthConfig,
     metadata_service: Option<Arc<dyn Any + Send + Sync>>,
 ) -> RocketMQResult<LocalAuthenticationMetadataProvider> {
     let mut provider = LocalAuthenticationMetadataProvider::new();
-    block_on_sync_bridge(
-        || provider.initialize(config, metadata_service),
-        |error| {
-            RocketMQError::auth_config_invalid(
-                "authenticationMetadataProvider",
-                format!("Failed to create initialization runtime: {error}"),
-            )
-        },
-        || {
-            RocketMQError::auth_config_invalid(
-                "authenticationMetadataProvider",
-                "LocalAuthenticationMetadataProvider initialization panicked",
-            )
-        },
-    )
-    .map_err(|error| RocketMQError::auth_config_invalid("authenticationMetadataProvider", error.to_string()))?;
+    provider
+        .initialize(config, metadata_service)
+        .await
+        .map_err(|error| RocketMQError::auth_config_invalid("authenticationMetadataProvider", error.to_string()))?;
     Ok(provider)
 }
 
@@ -444,19 +438,19 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_get_provider_default() {
+    #[tokio::test]
+    async fn test_get_provider_default() {
         let config = create_test_config("test_provider_default");
-        let provider = AuthenticationFactory::get_provider(&config);
+        let provider = AuthenticationFactory::get_provider(&config).await;
         assert!(provider.is_ok());
     }
 
-    #[test]
-    fn test_get_provider_unsupported() {
+    #[tokio::test]
+    async fn test_get_provider_unsupported() {
         let mut config = create_test_config("test_provider_unsupported");
         config.authentication_provider = CheetahString::from_static_str("UnsupportedAuthenticationProvider");
 
-        let error = match AuthenticationFactory::get_provider(&config) {
+        let error = match AuthenticationFactory::get_provider(&config).await {
             Ok(_) => panic!("unsupported authentication provider should fail"),
             Err(error) => error,
         };
@@ -464,30 +458,36 @@ mod tests {
         assert!(error.to_string().contains("authenticationProvider"));
     }
 
-    #[test]
-    fn test_get_metadata_provider_not_configured() {
+    #[tokio::test]
+    async fn test_get_metadata_provider_not_configured() {
         let config = create_test_config("test_metadata_provider_none");
-        let provider = AuthenticationFactory::get_metadata_provider(&config);
+        let provider = AuthenticationFactory::get_metadata_provider(&config).await;
         assert!(provider.is_ok());
         assert!(provider.unwrap().is_none());
     }
 
-    #[test]
-    fn test_get_metadata_provider_local() {
+    #[tokio::test]
+    async fn test_get_metadata_provider_local() {
         let mut config = create_test_config("test_metadata_provider_local");
         config.authentication_metadata_provider = CheetahString::from_static_str("LocalAuthenticationMetadataProvider");
-        let provider1 = AuthenticationFactory::get_metadata_provider(&config).unwrap().unwrap();
-        let provider2 = AuthenticationFactory::get_metadata_provider(&config).unwrap().unwrap();
+        let provider1 = AuthenticationFactory::get_metadata_provider(&config)
+            .await
+            .unwrap()
+            .unwrap();
+        let provider2 = AuthenticationFactory::get_metadata_provider(&config)
+            .await
+            .unwrap()
+            .unwrap();
 
         assert!(Arc::ptr_eq(&provider1, &provider2));
     }
 
-    #[test]
-    fn test_get_metadata_provider_unsupported() {
+    #[tokio::test]
+    async fn test_get_metadata_provider_unsupported() {
         let mut config = create_test_config("test_metadata_provider_unsupported");
         config.authentication_metadata_provider = CheetahString::from_static_str("UnsupportedMetadataProvider");
 
-        let error = match AuthenticationFactory::get_metadata_provider(&config) {
+        let error = match AuthenticationFactory::get_metadata_provider(&config).await {
             Ok(_) => panic!("unsupported metadata provider should fail"),
             Err(error) => error,
         };
@@ -495,39 +495,39 @@ mod tests {
         assert!(error.to_string().contains("authenticationMetadataProvider"));
     }
 
-    #[test]
-    fn test_provider_caching() {
+    #[tokio::test]
+    async fn test_provider_caching() {
         let config = create_test_config("test_cache");
-        let provider1 = AuthenticationFactory::get_provider(&config).unwrap();
-        let provider2 = AuthenticationFactory::get_provider(&config).unwrap();
+        let provider1 = AuthenticationFactory::get_provider(&config).await.unwrap();
+        let provider2 = AuthenticationFactory::get_provider(&config).await.unwrap();
         assert!(Arc::ptr_eq(&provider1, &provider2));
     }
 
-    #[test]
-    fn test_get_strategy_defaults_to_stateless() {
+    #[tokio::test]
+    async fn test_get_strategy_defaults_to_stateless() {
         let config = create_test_config("test_strategy_default");
-        let strategy = AuthenticationFactory::get_strategy(&config, None).unwrap();
+        let strategy = AuthenticationFactory::get_strategy(&config, None).await.unwrap();
         let context = DefaultAuthenticationContext::new();
 
-        assert!(strategy.authenticate(&context).is_ok());
+        assert!(strategy.authenticate(&context).await.is_ok());
     }
 
-    #[test]
-    fn test_get_strategy_supports_stateful_alias() {
+    #[tokio::test]
+    async fn test_get_strategy_supports_stateful_alias() {
         let mut config = create_test_config("test_strategy_stateful");
         config.authentication_strategy = CheetahString::from_static_str("stateful");
-        let strategy = AuthenticationFactory::get_strategy(&config, None).unwrap();
+        let strategy = AuthenticationFactory::get_strategy(&config, None).await.unwrap();
         let context = DefaultAuthenticationContext::new();
 
-        assert!(strategy.authenticate(&context).is_ok());
+        assert!(strategy.authenticate(&context).await.is_ok());
     }
 
-    #[test]
-    fn test_get_strategy_unsupported() {
+    #[tokio::test]
+    async fn test_get_strategy_unsupported() {
         let mut config = create_test_config("test_strategy_unsupported");
         config.authentication_strategy = CheetahString::from_static_str("UnsupportedAuthenticationStrategy");
 
-        let error = match AuthenticationFactory::get_strategy(&config, None) {
+        let error = match AuthenticationFactory::get_strategy(&config, None).await {
             Ok(_) => panic!("unsupported authentication strategy should fail"),
             Err(error) => error,
         };
@@ -535,11 +535,11 @@ mod tests {
         assert!(error.to_string().contains("authenticationStrategy"));
     }
 
-    #[test]
-    fn test_get_evaluator_caching() {
+    #[tokio::test]
+    async fn test_get_evaluator_caching() {
         let config = create_test_config("test_evaluator_cache");
-        let evaluator1 = AuthenticationFactory::get_evaluator(&config).unwrap();
-        let evaluator2 = AuthenticationFactory::get_evaluator(&config).unwrap();
+        let evaluator1 = AuthenticationFactory::get_evaluator(&config).await.unwrap();
+        let evaluator2 = AuthenticationFactory::get_evaluator(&config).await.unwrap();
 
         assert!(Arc::ptr_eq(&evaluator1, &evaluator2));
     }

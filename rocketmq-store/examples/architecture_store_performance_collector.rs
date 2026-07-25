@@ -67,6 +67,9 @@ use rocketmq_model::common::config::TopicConfig;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_model::common::message::message_single::Message;
+use rocketmq_runtime::ChildServiceContext;
+use rocketmq_runtime::RuntimeConfig;
+use rocketmq_runtime::RuntimeOwner;
 use rocketmq_store::base::get_message_result::GetMessageResult;
 use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::base::message_status_enum::GetMessageStatus;
@@ -103,7 +106,6 @@ use rocketmq_tieredstore::TieredStoreConfig;
 use serde::Deserialize;
 use serde::Serialize;
 use tempfile::TempDir;
-use tokio::runtime::Builder;
 
 const LOCAL_APPEND_PROFILE: &str = "local-append";
 const LOCAL_PULL_PROFILE: &str = "local-pull";
@@ -830,24 +832,31 @@ fn build_envelope(scenario: Scenario, observations: Vec<SampleObservation>) -> R
 }
 
 fn collect_one_sample(scenario: Scenario) -> Result<SampleObservation> {
-    let runtime = Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .context("create sample runtime")?;
+    let owner = RuntimeOwner::new(RuntimeConfig {
+        worker_threads: 1,
+        thread_name: "rocketmq-store-performance-collector".to_string(),
+        ..RuntimeConfig::default()
+    })
+    .context("create sample runtime")?;
     #[cfg(feature = "tieredstore")]
     if scenario.is_tiered() {
-        return runtime
+        let output = owner
             .block_on(collect_one_tiered_sample(scenario))
-            .with_context(|| format!("collect {}/{} TieredStore sample", scenario.profile, scenario.variant));
+            .with_context(|| format!("collect {}/{} TieredStore sample", scenario.profile, scenario.variant))?;
+        owner
+            .shutdown_runtime_blocking()
+            .context("shut down TieredStore sample runtime")?;
+        return Ok(output);
     }
     ensure!(
         !scenario.is_tiered(),
         "TieredStore scenario requires the tieredstore feature"
     );
-    let mut collector_store = new_collector_store(scenario)?;
+    let service_context = owner.root_context().child("store-performance-collector");
+    let mut collector_store = new_collector_store(scenario, service_context)?;
     let pull_context = if scenario.is_pull() {
         Some(
-            runtime
+            owner
                 .block_on(seed_pull_store(&mut collector_store, scenario))
                 .with_context(|| format!("seed {}/{} sample store", scenario.profile, scenario.variant))?,
         )
@@ -855,20 +864,20 @@ fn collect_one_sample(scenario: Scenario) -> Result<SampleObservation> {
         None
     };
     if scenario.requires_started_store() {
-        runtime
+        owner
             .block_on(start_collector_store(&mut collector_store))
             .context("start sync-flush sample store")?;
     }
 
     let warmup = match pull_context.as_ref() {
-        Some(context) => runtime.block_on(run_pull_workload(
+        Some(context) => owner.block_on(run_pull_workload(
             &collector_store,
             context,
             scenario,
             scenario.warmup_operations,
             false,
         )),
-        None => runtime.block_on(run_append_workload(
+        None => owner.block_on(run_append_workload(
             &collector_store,
             scenario,
             scenario.warmup_operations,
@@ -879,7 +888,7 @@ fn collect_one_sample(scenario: Scenario) -> Result<SampleObservation> {
 
     let cq_unit_allocations_per_message = match (scenario.includes_local_pull_observations(), pull_context.as_ref()) {
         (true, Some(context)) => Some(
-            runtime
+            owner
                 .block_on(measure_cq_unit_allocations_per_message(&collector_store, context))
                 .context("measure local-pull CQ-unit allocations")?,
         ),
@@ -901,14 +910,14 @@ fn collect_one_sample(scenario: Scenario) -> Result<SampleObservation> {
     );
     let allocations_before = ALLOCATION_CALLS.load(Ordering::Relaxed);
     let workload = match pull_context.as_ref() {
-        Some(context) => runtime.block_on(run_pull_workload(
+        Some(context) => owner.block_on(run_pull_workload(
             &collector_store,
             context,
             scenario,
             scenario.operations_per_sample,
             true,
         )),
-        None => runtime.block_on(run_append_workload(
+        None => owner.block_on(run_append_workload(
             &collector_store,
             scenario,
             scenario.operations_per_sample,
@@ -964,11 +973,15 @@ fn collect_one_sample(scenario: Scenario) -> Result<SampleObservation> {
     };
     observation.validate(scenario)?;
     if scenario.requires_started_store() {
-        runtime
+        owner
             .block_on(collector_store.local_file_store_mut().shutdown_gracefully())
             .context("shut down sync-flush sample store")?;
     }
     collector_store.close_rocksdb();
+    drop(collector_store);
+    owner
+        .shutdown_runtime_blocking()
+        .context("shut down store performance collector runtime")?;
     Ok(observation)
 }
 
@@ -1273,7 +1286,7 @@ fn tiered_io_delta(before: PosixProviderIoSnapshot, after: PosixProviderIoSnapsh
     })
 }
 
-fn new_collector_store(scenario: Scenario) -> Result<CollectorStore> {
+fn new_collector_store(scenario: Scenario, service_context: ChildServiceContext) -> Result<CollectorStore> {
     let temp_dir = TempDir::new().context("create store performance sample directory")?;
     let mut message_store_config = MessageStoreConfig {
         store_path_root_dir: temp_dir.path().to_string_lossy().to_string().into(),
@@ -1300,6 +1313,7 @@ fn new_collector_store(scenario: Scenario) -> Result<CollectorStore> {
             Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
             None,
             false,
+            service_context,
         )
         .context("create RocksDB store performance sample")?;
         return Ok(CollectorStore {
@@ -1314,6 +1328,7 @@ fn new_collector_store(scenario: Scenario) -> Result<CollectorStore> {
         Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
         None,
         false,
+        service_context,
     );
     store
         .wire_owned_root_dependencies()

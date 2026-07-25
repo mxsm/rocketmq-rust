@@ -30,9 +30,9 @@ use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::RuntimeError;
 use rocketmq_runtime::RuntimeResult;
-use rocketmq_runtime::ServiceContext;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
@@ -593,7 +593,7 @@ impl TransportServerConfig {
 pub struct TransportServer {
     local_addr: SocketAddr,
     listener: Mutex<Option<tokio::net::TcpListener>>,
-    service_context: ServiceContext,
+    service_context: ChildServiceContext,
     config: TransportServerConfig,
     processor: Arc<dyn RequestProcessor>,
     admission: Arc<AdmissionController>,
@@ -612,7 +612,7 @@ struct RequestAdmission {
 
 impl TransportServer {
     pub async fn bind(
-        service_context: ServiceContext,
+        service_context: ChildServiceContext,
         config: TransportServerConfig,
         processor: Arc<dyn RequestProcessor>,
         admission: Arc<AdmissionController>,
@@ -629,7 +629,7 @@ impl TransportServer {
     }
 
     pub async fn bind_with_security(
-        service_context: ServiceContext,
+        service_context: ChildServiceContext,
         config: TransportServerConfig,
         processor: Arc<dyn RequestProcessor>,
         admission: Arc<AdmissionController>,
@@ -716,7 +716,7 @@ impl TransportServer {
         stream: tokio::net::TcpStream,
         remote_addr: SocketAddr,
         session_id: u64,
-        session_context: ServiceContext,
+        session_context: ChildServiceContext,
     ) {
         let scope = AdmissionScope::new(remote_addr.ip()).with_session(session_id);
         let Ok(_handshake_permit) =

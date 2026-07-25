@@ -22,9 +22,7 @@ use crate::config::ServerConfig;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_runtime::wait_for_signal;
-use rocketmq_runtime::RuntimeContext;
-use rocketmq_runtime::RuntimeHandle;
-use rocketmq_runtime::ServiceContext;
+use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
@@ -417,7 +415,7 @@ impl<RP: RequestProcessor + Sync + Clone + 'static> TransportConnectionHandler f
 pub struct RocketMQServer<RP> {
     config: Arc<ServerConfig>,
     rpc_hooks: Option<Vec<Arc<dyn RPCHook>>>,
-    service_context: Option<ServiceContext>,
+    service_context: ChildServiceContext,
     transport_security: Option<Arc<TransportSecurity>>,
     transport_principal: Option<Principal>,
     admission: Option<Arc<AdmissionController>>,
@@ -427,11 +425,11 @@ pub struct RocketMQServer<RP> {
 }
 
 impl<RP> RocketMQServer<RP> {
-    pub fn new(config: Arc<ServerConfig>) -> Self {
+    pub fn new(config: Arc<ServerConfig>, service_context: ChildServiceContext) -> Self {
         Self {
             config,
             rpc_hooks: Some(vec![]),
-            service_context: None,
+            service_context,
             transport_security: None,
             transport_principal: None,
             admission: None,
@@ -441,18 +439,8 @@ impl<RP> RocketMQServer<RP> {
         }
     }
 
-    pub fn new_with_service_context(config: Arc<ServerConfig>, service_context: ServiceContext) -> Self {
-        Self {
-            config,
-            rpc_hooks: Some(vec![]),
-            service_context: Some(service_context),
-            transport_security: None,
-            transport_principal: None,
-            admission: None,
-            #[cfg(all(test, not(doctest)))]
-            test_request_hook: None,
-            _phantom_data: std::marker::PhantomData,
-        }
+    pub fn new_with_service_context(config: Arc<ServerConfig>, service_context: ChildServiceContext) -> Self {
+        Self::new(config, service_context)
     }
 
     pub fn register_rpc_hook(&mut self, hook: Arc<dyn RPCHook>) {
@@ -580,24 +568,8 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> RocketMQServer<RP> {
             }
         };
         let rpc_hooks = self.rpc_hooks.take().unwrap_or_default();
-        let remoting_context = match self.service_context.as_ref() {
-            Some(context) => new_remoting_server_context(context),
-            None => match standalone_remoting_server_context() {
-                Ok(context) => context,
-                Err(error) => {
-                    error!(%error, "failed to initialize remoting server runtime context");
-                    notify_server_startup(
-                        &mut startup,
-                        Err(RocketMQError::network_connection_failed(
-                            "remoting-server-runtime",
-                            error.to_string(),
-                        )),
-                    );
-                    return None;
-                }
-            },
-        };
-        let task_group = Some(remoting_context.task_group().clone());
+        let remoting_context = new_remoting_server_context(&self.service_context);
+        let task_group = remoting_context.task_group().clone();
         let tls_runtime =
             match TlsServerRuntime::initialize_with_service_context(self.config.tls_config.clone(), &remoting_context)
                 .await
@@ -650,6 +622,7 @@ fn notify_server_startup(
 }
 
 pub async fn run<RP: RequestProcessor + Sync + 'static + Clone>(
+    service_context: ChildServiceContext,
     listener: TcpListener,
     shutdown: impl Future,
     request_processor: RP,
@@ -658,6 +631,7 @@ pub async fn run<RP: RequestProcessor + Sync + 'static + Clone>(
     channel_event_listener: Option<Arc<dyn ChannelEventListener>>,
 ) {
     let _ = run_with_report(
+        service_context,
         listener,
         shutdown,
         request_processor,
@@ -670,6 +644,7 @@ pub async fn run<RP: RequestProcessor + Sync + 'static + Clone>(
 
 #[doc(hidden)]
 pub async fn run_with_report<RP: RequestProcessor + Sync + 'static + Clone>(
+    service_context: ChildServiceContext,
     listener: TcpListener,
     shutdown: impl Future,
     request_processor: RP,
@@ -677,13 +652,6 @@ pub async fn run_with_report<RP: RequestProcessor + Sync + 'static + Clone>(
     rpc_hooks: Vec<Arc<dyn RPCHook>>,
     channel_event_listener: Option<Arc<dyn ChannelEventListener>>,
 ) -> Option<ShutdownReport> {
-    let service_context = match standalone_remoting_server_context() {
-        Ok(context) => context,
-        Err(error) => {
-            error!(%error, "failed to initialize remoting server runtime context");
-            return None;
-        }
-    };
     run_with_report_with_service_context(
         service_context,
         listener,
@@ -698,7 +666,7 @@ pub async fn run_with_report<RP: RequestProcessor + Sync + 'static + Clone>(
 
 #[doc(hidden)]
 pub async fn run_with_report_with_service_context<RP: RequestProcessor + Sync + 'static + Clone>(
-    service_context: ServiceContext,
+    service_context: ChildServiceContext,
     listener: TcpListener,
     shutdown: impl Future,
     request_processor: RP,
@@ -723,7 +691,7 @@ pub async fn run_with_report_with_service_context<RP: RequestProcessor + Sync + 
         rpc_hooks,
         channel_event_listener,
         tls_runtime,
-        Some(remoting_context.task_group().clone()),
+        remoting_context.task_group().clone(),
         None,
         None,
         None,
@@ -740,7 +708,7 @@ async fn run_with_tls_config_report<RP: RequestProcessor + Sync + 'static + Clon
     rpc_hooks: Vec<Arc<dyn RPCHook>>,
     channel_event_listener: Option<Arc<dyn ChannelEventListener>>,
     tls_runtime: TlsServerRuntime,
-    parented_task_group: Option<TaskGroup>,
+    task_group: TaskGroup,
     transport_security: Option<Arc<TransportSecurity>>,
     transport_principal: Option<Principal>,
     admission: Option<Arc<AdmissionController>>,
@@ -748,17 +716,6 @@ async fn run_with_tls_config_report<RP: RequestProcessor + Sync + 'static + Clon
 ) -> Option<ShutdownReport> {
     let (notify_shutdown, _) = broadcast::channel(1);
     let (shutdown_complete_tx, mut shutdown_complete_rx) = mpsc::channel(1);
-    let task_group = if let Some(parented_task_group) = parented_task_group {
-        parented_task_group
-    } else {
-        match new_remoting_server_task_group() {
-            Ok(task_group) => task_group,
-            Err(error) => {
-                error!(%error, "failed to start remoting server task group");
-                return None;
-            }
-        }
-    };
     // Initialize the connection listener state
     let handler = RemotingGeneralHandler::new(request_processor, rpc_hooks, PendingRequestTable::with_capacity(512));
     let mut admission_limits = AdmissionLimits::default();
@@ -830,28 +787,12 @@ async fn run_with_tls_config_report<RP: RequestProcessor + Sync + 'static + Clon
     Some(report)
 }
 
-fn new_remoting_server_task_group() -> rocketmq_error::RocketMQResult<TaskGroup> {
-    let runtime = tokio::runtime::Handle::try_current().map_err(|error| {
-        rocketmq_error::RocketMQError::network_connection_failed(
-            "remoting-server",
-            format!("remoting server task group requires a Tokio runtime: {error}"),
-        )
-    })?;
-    Ok(TaskGroup::root("rocketmq.remoting.server", RuntimeHandle::new(runtime)))
-}
-
-fn new_remoting_server_context(context: &ServiceContext) -> ServiceContext {
+fn new_remoting_server_context(context: &ChildServiceContext) -> ChildServiceContext {
     context.child("rocketmq.remoting.server")
 }
 
-fn standalone_remoting_server_context() -> rocketmq_error::RocketMQResult<ServiceContext> {
-    let runtime = RuntimeContext::try_from_current("rocketmq.remoting.server")
-        .map_err(|error| RocketMQError::network_connection_failed("remoting-server", error.to_string()))?;
-    Ok(runtime.service_context("rocketmq.remoting.server.service"))
-}
-
 #[cfg(test)]
-fn new_remoting_server_task_group_with_service_context(context: &ServiceContext) -> TaskGroup {
+fn new_remoting_server_task_group_with_service_context(context: &ChildServiceContext) -> TaskGroup {
     new_remoting_server_context(context).task_group().clone()
 }
 
@@ -922,6 +863,10 @@ mod tests {
 
     type DelayedResponse = (String, TestDeferredResponse);
 
+    fn test_service_context(name: &'static str) -> ChildServiceContext {
+        RuntimeContext::from_current(name).service_context("remoting-server-service")
+    }
+
     impl rocketmq_security_api::OutboundSigner for RemotingMarkerSigner {
         fn sign(
             &self,
@@ -948,16 +893,6 @@ mod tests {
         fn on_channel_idle(&self, _remote_addr: &str, _channel: &Channel) {}
 
         fn on_channel_active(&self, _remote_addr: &str, _channel: &Channel) {}
-    }
-
-    #[test]
-    fn remoting_server_task_group_without_tokio_runtime_returns_error() {
-        let error = new_remoting_server_task_group()
-            .expect_err("remoting server task group should require an ambient Tokio runtime");
-
-        assert!(error
-            .to_string()
-            .contains("remoting server task group requires a Tokio runtime"));
     }
 
     #[tokio::test]
@@ -1022,7 +957,10 @@ mod tests {
             listen_port: 70000,
             ..ServerConfig::default()
         });
-        let mut server = RocketMQServer::<DefaultRemotingRequestProcessor>::new(config);
+        let mut server = RocketMQServer::<DefaultRemotingRequestProcessor>::new(
+            config,
+            test_service_context("remoting-server-bind-error-test"),
+        );
 
         server
             .run_with_shutdown(DefaultRemotingRequestProcessor, None, future::pending::<()>())
@@ -1036,7 +974,10 @@ mod tests {
             listen_port: 70000,
             ..ServerConfig::default()
         });
-        let mut server = RocketMQServer::<DefaultRemotingRequestProcessor>::new(config);
+        let mut server = RocketMQServer::<DefaultRemotingRequestProcessor>::new(
+            config,
+            test_service_context("remoting-server-report-bind-error-test"),
+        );
 
         let report = server
             .run_with_shutdown_report(DefaultRemotingRequestProcessor, None, future::pending::<()>())
@@ -1052,7 +993,10 @@ mod tests {
             listen_port: 70000,
             ..ServerConfig::default()
         });
-        let mut server = RocketMQServer::<DefaultRemotingRequestProcessor>::new(config);
+        let mut server = RocketMQServer::<DefaultRemotingRequestProcessor>::new(
+            config,
+            test_service_context("remoting-server-startup-failure-test"),
+        );
         let (startup_tx, startup_rx) = oneshot::channel();
 
         let report = server
@@ -1079,7 +1023,10 @@ mod tests {
             listen_port: 0,
             ..ServerConfig::default()
         });
-        let mut server = RocketMQServer::<DefaultRemotingRequestProcessor>::new(config);
+        let mut server = RocketMQServer::<DefaultRemotingRequestProcessor>::new(
+            config,
+            test_service_context("remoting-server-startup-test"),
+        );
         let (startup_tx, startup_rx) = oneshot::channel();
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
         let server_task = tokio::spawn(async move {
@@ -1120,6 +1067,7 @@ mod tests {
         let addr = listener.local_addr().expect("listener should have local addr");
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
         let server_task = tokio::spawn(run_with_report(
+            test_service_context("remoting-server-drain-test"),
             listener,
             async {
                 let _ = shutdown_rx.await;
@@ -1152,7 +1100,9 @@ mod tests {
             .expect("test listener should bind");
         let addr = listener.local_addr().expect("listener address");
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+        let service = test_service_context("remoting-server-exchange-test");
         let server_task = tokio::spawn(run_with_report(
+            service.clone(),
             listener,
             async {
                 let _ = shutdown_rx.await;
@@ -1162,8 +1112,11 @@ mod tests {
             Vec::new(),
             None,
         ));
-        let client =
-            RocketmqDefaultClient::new(Arc::new(TokioClientConfig::default()), DefaultRemotingRequestProcessor);
+        let client = RocketmqDefaultClient::new(
+            Arc::new(TokioClientConfig::default()),
+            DefaultRemotingRequestProcessor,
+            service.child("client"),
+        );
         let remote_addr = cheetah_string::CheetahString::from_string(addr.to_string());
         let request = rocketmq_protocol::protocol::remoting_command::RemotingCommand::create_remoting_command(105);
         let opaque = request.opaque();
@@ -1214,8 +1167,11 @@ mod tests {
             listen_port: u32::from(addr.port()),
             ..ServerConfig::default()
         });
-        let mut server =
-            RocketMQServer::<DefaultRemotingRequestProcessor>::new(config).with_admission_controller(admission);
+        let mut server = RocketMQServer::<DefaultRemotingRequestProcessor>::new(
+            config,
+            test_service_context("remoting-server-control-reserve-test"),
+        )
+        .with_admission_controller(admission);
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
         let server_task = tokio::spawn(async move {
             server
@@ -1273,7 +1229,11 @@ mod tests {
             listen_port: u32::from(addr.port()),
             ..ServerConfig::default()
         });
-        let mut server = RocketMQServer::<DefaultRemotingRequestProcessor>::new(config).with_test_request_hook(hook);
+        let mut server = RocketMQServer::<DefaultRemotingRequestProcessor>::new(
+            config,
+            test_service_context("remoting-server-snapshot-test"),
+        )
+        .with_test_request_hook(hook);
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
         let server_task = tokio::spawn(async move {
             server
@@ -1380,9 +1340,12 @@ mod tests {
             listen_port: u32::from(addr.port()),
             ..ServerConfig::default()
         });
-        let mut server = RocketMQServer::<DefaultRemotingRequestProcessor>::new(config)
-            .with_admission_controller(admission.clone())
-            .with_test_request_hook(hook);
+        let mut server = RocketMQServer::<DefaultRemotingRequestProcessor>::new(
+            config,
+            test_service_context("remoting-server-admission-snapshot-test"),
+        )
+        .with_admission_controller(admission.clone())
+        .with_test_request_hook(hook);
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
         let server_task = tokio::spawn(async move {
             server
@@ -1495,7 +1458,8 @@ mod tests {
             listen_port: u32::from(addr.port()),
             ..ServerConfig::default()
         });
-        let mut server = RocketMQServer::<DefaultRemotingRequestProcessor>::new(config)
+        let service = test_service_context("remoting-server-security-test");
+        let mut server = RocketMQServer::<DefaultRemotingRequestProcessor>::new(config, service.clone())
             .with_transport_security(security, Some(rocketmq_security_api::Principal::new("remoting-test")));
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
         let server_task = tokio::spawn(async move {
@@ -1507,14 +1471,17 @@ mod tests {
         });
         tokio::time::sleep(Duration::from_millis(25)).await;
 
-        let client =
-            RocketmqDefaultClient::new(Arc::new(TokioClientConfig::default()), DefaultRemotingRequestProcessor)
-                .with_transport_security(Arc::new(
-                    crate::security::TransportSecurity::development_insecure_loopback(
-                        None,
-                        Some(Arc::new(RemotingMarkerSigner)),
-                    ),
-                ));
+        let client = RocketmqDefaultClient::new(
+            Arc::new(TokioClientConfig::default()),
+            DefaultRemotingRequestProcessor,
+            service.child("client"),
+        )
+        .with_transport_security(Arc::new(
+            crate::security::TransportSecurity::development_insecure_loopback(
+                None,
+                Some(Arc::new(RemotingMarkerSigner)),
+            ),
+        ));
         let remote = cheetah_string::CheetahString::from_string(addr.to_string());
         let response = client
             .invoke_request(
@@ -1542,6 +1509,7 @@ mod tests {
         let addr = listener.local_addr().expect("listener should have local addr");
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
         let server_task = tokio::spawn(run_with_report(
+            test_service_context("remoting-server-tls-peek-test"),
             listener,
             async {
                 let _ = shutdown_rx.await;
@@ -1623,7 +1591,7 @@ mod tests {
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
         let context = RuntimeContext::from_current("remoting-server-tls-report-test");
         let service = context.service_context("remoting-server-tls-report");
-        let tls_runtime = TlsServerRuntime::new_with_service_context(
+        let tls_runtime = TlsServerRuntime::initialize_with_service_context(
             TlsConfig {
                 test_mode_enable: true,
                 server: TlsServerConfig {
@@ -1633,7 +1601,9 @@ mod tests {
                 ..Default::default()
             },
             &service,
-        );
+        )
+        .await
+        .expect("TLS runtime should initialize");
 
         let report = run_with_tls_config_report(
             listener,
@@ -1645,7 +1615,7 @@ mod tests {
             Vec::new(),
             None,
             tls_runtime,
-            None,
+            service.task_group().child("remoting-server"),
             None,
             None,
             None,

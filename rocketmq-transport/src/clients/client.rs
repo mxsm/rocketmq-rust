@@ -22,8 +22,7 @@ use std::time::Duration;
 use crate::config::TlsConfig;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
-use rocketmq_runtime::RuntimeHandle;
-use rocketmq_runtime::ServiceContext;
+use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskGroupChildLease;
 use rocketmq_security_api::PeerInfo;
@@ -136,23 +135,8 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportConnectionHandler f
     }
 }
 
-fn new_client_connection_task_group(addr: &str) -> RocketMQResult<(TaskGroup, Option<TaskGroupChildLease>)> {
-    let runtime = tokio::runtime::Handle::try_current().map_err(|error| {
-        remote_error(format!(
-            "failed to create remoting client connection task group outside Tokio runtime: {error}"
-        ))
-    })?;
-    Ok((
-        TaskGroup::root(
-            format!("rocketmq-transport.client.connection[{addr}]"),
-            RuntimeHandle::new(runtime),
-        ),
-        None,
-    ))
-}
-
 fn new_client_connection_task_group_with_service_context(
-    context: &ServiceContext,
+    context: &ChildServiceContext,
     addr: &str,
 ) -> RocketMQResult<(TaskGroup, Option<TaskGroupChildLease>)> {
     let lease = context
@@ -240,19 +224,8 @@ impl<PR> Client<PR>
 where
     PR: RequestProcessor + Sync + Clone + 'static,
 {
-    pub(crate) async fn connect_until(
-        addr: String,
-        cmd_handler: Arc<RemotingGeneralHandler<PR>>,
-        tx: Option<&tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
-        tls_config: TlsConfig,
-        deadline: RequestDeadline,
-    ) -> RocketMQResult<Client<PR>> {
-        let (task_group, child_lease) = new_client_connection_task_group(&addr)?;
-        Self::connect_with_task_group(addr, cmd_handler, tx, tls_config, task_group, child_lease, deadline).await
-    }
-
     pub(crate) async fn connect_with_service_context_until(
-        context: &ServiceContext,
+        context: &ChildServiceContext,
         addr: String,
         cmd_handler: Arc<RemotingGeneralHandler<PR>>,
         tx: Option<&tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
@@ -579,18 +552,10 @@ mod lifecycle_tests {
     use crate::base::pending_request_table::PendingRequestTable;
     use crate::request_processor::default_request_processor::DefaultRemotingRequestProcessor;
 
-    #[test]
-    fn connection_task_group_without_tokio_runtime_returns_error() {
-        let error = new_client_connection_task_group("127.0.0.1:10911")
-            .expect_err("client connection task group should require an ambient Tokio runtime");
-
-        assert!(error
-            .to_string()
-            .contains("failed to create remoting client connection task group outside Tokio runtime"));
-    }
-
     #[tokio::test]
     async fn drop_last_client_closes_connection_task_group() {
+        let runtime_context = RuntimeContext::from_current("remoting-client-drop-test");
+        let service = runtime_context.service_context("remoting-client-service");
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind listener");
         let addr = listener.local_addr().expect("listener addr");
         let server = tokio::spawn(async move {
@@ -603,7 +568,8 @@ mod lifecycle_tests {
             PendingRequestTable::new(),
         ));
 
-        let mut client = Client::connect_until(
+        let mut client = Client::connect_with_service_context_until(
+            &service,
             addr.to_string(),
             cmd_handler,
             None,
@@ -639,6 +605,8 @@ mod lifecycle_tests {
 
     #[tokio::test]
     async fn batch_requests_share_one_absolute_response_deadline() {
+        let runtime_context = RuntimeContext::from_current("remoting-client-batch-test");
+        let service = runtime_context.service_context("remoting-client-service");
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind listener");
         let addr = listener.local_addr().expect("listener addr");
         let server = tokio::spawn(async move {
@@ -651,7 +619,8 @@ mod lifecycle_tests {
             PendingRequestTable::new(),
         ));
 
-        let mut client = Client::connect_until(
+        let mut client = Client::connect_with_service_context_until(
+            &service,
             addr.to_string(),
             cmd_handler,
             None,

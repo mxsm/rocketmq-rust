@@ -76,7 +76,9 @@ async fn canonical_listener_times_out_a_silent_tls_peek() {
     let service = runtime.service_context("listener");
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
-    let tls = TlsServerRuntime::new_with_service_context(TlsConfig::default(), &service);
+    let tls = TlsServerRuntime::initialize_with_service_context(TlsConfig::default(), &service)
+        .await
+        .unwrap();
     let admission = Arc::new(AdmissionController::new(AdmissionLimits::default()));
     let handled = Arc::new(CountConnections(AtomicUsize::new(0)));
     let runtime_listener = TransportListener::new(

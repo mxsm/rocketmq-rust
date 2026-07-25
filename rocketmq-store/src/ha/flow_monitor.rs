@@ -15,9 +15,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use rocketmq_runtime::task::service_task::ServiceContext;
 use rocketmq_runtime::task::service_task::ServiceTask;
+use rocketmq_runtime::task::service_task::ServiceTaskContext;
 use rocketmq_runtime::task::ServiceManager;
+use rocketmq_runtime::TaskGroup;
 
 use crate::config::message_store_config::MessageStoreConfig;
 
@@ -26,9 +27,9 @@ pub struct FlowMonitor {
 }
 
 impl FlowMonitor {
-    pub fn new(message_store_config: Arc<MessageStoreConfig>) -> Self {
+    pub fn new(message_store_config: Arc<MessageStoreConfig>, parent_task_group: TaskGroup) -> Self {
         let inner = FlowMonitorInner::new(message_store_config);
-        let server_manager = ServiceManager::new(inner);
+        let server_manager = ServiceManager::new_with_task_group(inner, parent_task_group);
         FlowMonitor { server_manager }
     }
 
@@ -99,7 +100,7 @@ impl ServiceTask for FlowMonitorInner {
         String::from("FlowMonitor")
     }
 
-    async fn run(&self, context: &ServiceContext) {
+    async fn run(&self, context: &ServiceTaskContext) {
         while !context.is_stopped() {
             context.wait_for_running(Duration::from_millis(1000)).await;
             self.calculate_speed();
@@ -114,14 +115,20 @@ mod tests {
     #[tokio::test]
     async fn flow_monitor_starts_successfully() {
         let config = Arc::new(MessageStoreConfig::default());
-        let monitor = FlowMonitor::new(config);
+        let monitor = FlowMonitor::new(
+            config,
+            crate::runtime::test_scope("flow-monitor-start-test").task_group("flow-monitor"),
+        );
         monitor.start().await.expect("flow monitor should start");
     }
 
     #[tokio::test]
     async fn flow_monitor_shuts_down_successfully() {
         let config = Arc::new(MessageStoreConfig::default());
-        let monitor = FlowMonitor::new(config);
+        let monitor = FlowMonitor::new(
+            config,
+            crate::runtime::test_scope("flow-monitor-shutdown-test").task_group("flow-monitor"),
+        );
         monitor.start().await.expect("flow monitor should start");
         monitor.shutdown().await;
     }

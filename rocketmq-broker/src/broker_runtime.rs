@@ -50,12 +50,11 @@ use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::common::util_all::compute_next_morning_time_millis;
 use rocketmq_runtime::schedule::simple_scheduler::ScheduledTaskManager;
 use rocketmq_runtime::BlockingExecutor;
+use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::MetadataDeadline;
 use rocketmq_runtime::MetadataIoActor;
 use rocketmq_runtime::MetadataIoConfig;
 use rocketmq_runtime::MetadataIoError;
-use rocketmq_runtime::RuntimeHandle;
-use rocketmq_runtime::ServiceContext;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
@@ -358,7 +357,7 @@ async fn await_remoting_server_startup(
 }
 
 async fn run_shutdown_blocking_operation<T, F>(
-    service_context: &ServiceContext,
+    service_context: &ChildServiceContext,
     deadline: ShutdownDeadline,
     name: &'static str,
     operation: F,
@@ -367,7 +366,7 @@ where
     T: Send + 'static,
     F: FnOnce() -> T + Send + 'static,
 {
-    let blocking = service_context.blocking().clone();
+    let blocking = service_context.metadata_io().clone();
     let (result_tx, result_rx) = oneshot::channel();
     service_context
         .spawn_service(format!("{name}.owner"), async move {
@@ -1116,27 +1115,26 @@ impl Drop for BrokerRuntime {
     }
 }
 
-impl BrokerRuntime {
-    pub(crate) fn new(
-        broker_config: Arc<BrokerConfig>,
-        message_store_config: Arc<MessageStoreConfig>,
-        //server_config: Arc<ServerConfig>,
-    ) -> Self {
-        Self::new_with_optional_service_context(broker_config, message_store_config, None)
-    }
+#[cfg(test)]
+mod test_support {
+    use super::*;
 
+    impl BrokerRuntime {
+        pub(crate) fn new(broker_config: Arc<BrokerConfig>, message_store_config: Arc<MessageStoreConfig>) -> Self {
+            Self::new_with_service_context(
+                broker_config,
+                message_store_config,
+                crate::test_service_context("broker-runtime"),
+            )
+        }
+    }
+}
+
+impl BrokerRuntime {
     pub(crate) fn new_with_service_context(
         broker_config: Arc<BrokerConfig>,
         message_store_config: Arc<MessageStoreConfig>,
-        service_context: ServiceContext,
-    ) -> Self {
-        Self::new_with_optional_service_context(broker_config, message_store_config, Some(service_context))
-    }
-
-    fn new_with_optional_service_context(
-        broker_config: Arc<BrokerConfig>,
-        message_store_config: Arc<MessageStoreConfig>,
-        service_context: Option<ServiceContext>,
+        service_context: ChildServiceContext,
     ) -> Self {
         let broker_address = format!("{}:{}", broker_config.broker_ip1, broker_config.listen_port);
         let (store_host, configuration_error) = match broker_address.parse::<SocketAddr>() {
@@ -1146,24 +1144,20 @@ impl BrokerRuntime {
                 Some(format!("invalid broker store address `{broker_address}`: {error}")),
             ),
         };
-        let scheduled_task_manager = service_context
-            .as_ref()
-            .map(|context| ScheduledTaskManager::new_with_task_group(context.task_group().clone()))
-            .unwrap_or_else(ScheduledTaskManager::new_legacy_compatibility);
-        let metadata_io = service_context
-            .as_ref()
-            .map(|context| MetadataIoActor::start(&context.child("broker.metadata-io"), MetadataIoConfig::default()));
-        let broker_outer_api = BrokerOuterAPI::new(Arc::new(TokioClientConfig::default()));
+        let scheduled_task_manager = ScheduledTaskManager::new_with_task_group(service_context.task_group().clone());
+        let metadata_io = Some(MetadataIoActor::start(
+            &service_context.child("broker.metadata-io"),
+            MetadataIoConfig::default(),
+        ));
+        let broker_outer_api = BrokerOuterAPI::new(
+            Arc::new(TokioClientConfig::default()),
+            service_context.child("broker.outer-api"),
+        );
 
-        let mut topic_queue_mapping_manager = service_context
-            .as_ref()
-            .map(|context| {
-                TopicQueueMappingManager::new_with_parent_task_group(
-                    broker_config.clone(),
-                    context.task_group().clone(),
-                )
-            })
-            .unwrap_or_else(|| TopicQueueMappingManager::new(broker_config.clone()));
+        let mut topic_queue_mapping_manager = TopicQueueMappingManager::new_with_service_context(
+            broker_config.clone(),
+            service_context.child("broker.topic-queue-mapping"),
+        );
         if let Some(actor) = metadata_io.as_ref().and_then(|result| result.as_ref().ok()) {
             topic_queue_mapping_manager.set_metadata_io_actor(actor.clone());
         }
@@ -1184,12 +1178,8 @@ impl BrokerRuntime {
 
         let should_start_time = Arc::new(AtomicU64::new(0));
         let pop_inflight_message_counter = PopInflightMessageCounter::new(should_start_time);
-        let broker_fast_failure = service_context
-            .as_ref()
-            .map(|context| {
-                BrokerFastFailure::new_with_parent_task_group(broker_config.clone(), context.task_group().clone())
-            })
-            .unwrap_or_else(|| BrokerFastFailure::new(broker_config.clone()));
+        let broker_fast_failure =
+            BrokerFastFailure::new_with_parent_task_group(broker_config.clone(), service_context.task_group().clone());
         #[cfg(feature = "rocksdb_store")]
         let rocksdb_config_managers =
             open_broker_rocksdb_config_managers(broker_config.as_ref(), message_store_config.as_ref());
@@ -1276,13 +1266,14 @@ impl BrokerRuntime {
             notification_processor: None,
             query_assignment_processor: None,
             auth_runtime: None,
+            auth_admin_service: None,
             metadata_io,
             broker_attached_plugins: vec![],
             transactional_message_service: None,
             slave_synchronize: None,
             slave_master_addr,
             broker_pre_online_service: None,
-            service_context,
+            service_context: Some(service_context.clone()),
             lock: Default::default(),
         });
         let broker_config_snapshot = inner.broker_config_arc();
@@ -1291,6 +1282,7 @@ impl BrokerRuntime {
         let mut stats_manager = BrokerStatsManager::new_with_scheduler(
             Arc::clone(&store_runtime_config),
             Some(Arc::new(scheduled_task_manager.clone())),
+            service_context.task_group().child("broker.statistics"),
         );
         #[cfg(feature = "rocksdb_store")]
         {
@@ -1327,8 +1319,11 @@ impl BrokerRuntime {
         let stats_manager = Arc::new(stats_manager);
         inner.topic_config_coordinator = Some(Arc::new(TopicConfigCoordinator::new_with_metadata_io(
             inner.topic_config_manager_handle(),
-            inner.service_context.clone(),
-            scheduled_task_manager.clone(),
+            inner
+                .service_context
+                .clone()
+                .expect("BrokerRuntime always owns an injected service context")
+                .child("broker.topic-config"),
             inner
                 .metadata_io
                 .as_ref()
@@ -1438,8 +1433,10 @@ impl BrokerRuntime {
             Arc::clone(&broker_config_snapshot),
             Arc::clone(&message_store_config_snapshot),
             Arc::downgrade(&escape_bridge),
-            inner.service_context.clone(),
-            scheduled_task_manager.clone(),
+            inner
+                .service_context
+                .clone()
+                .expect("BrokerRuntime always owns an injected service context"),
         )));
         inner.client_housekeeping_service = Some(Arc::new(ClientHousekeepingService::new(
             inner.producer_manager.connection_housekeeping(),
@@ -1462,7 +1459,10 @@ impl BrokerRuntime {
                     .as_ref()
                     .and_then(|result| result.as_ref().ok())
                     .cloned(),
-                inner.service_context.as_ref().map(|context| context.blocking().clone()),
+                inner
+                    .service_context
+                    .as_ref()
+                    .map(|context| context.metadata_io().clone()),
             ),
             Arc::clone(&inner.slave_master_addr),
         )));
@@ -1980,13 +1980,13 @@ impl BrokerRuntime {
                         .as_ref()
                         .and_then(|result| result.as_ref().ok())
                         .cloned(),
-                    service_context.blocking().clone(),
+                    service_context.metadata_io().clone(),
                     MetadataDeadline::after(deadline.remaining()),
                 )
                 .await
             } else {
                 Err(rocketmq_error::RocketMQError::not_initialized(
-                    "broker consumer-filter persistence requires ServiceContext",
+                    "broker consumer-filter persistence requires ChildServiceContext",
                 ))
             };
             if let Err(error) = result {
@@ -2003,13 +2003,13 @@ impl BrokerRuntime {
                         .as_ref()
                         .and_then(|result| result.as_ref().ok())
                         .cloned(),
-                    service_context.blocking().clone(),
+                    service_context.metadata_io().clone(),
                     MetadataDeadline::after(deadline.remaining()),
                 )
                 .await
             } else {
                 Err(rocketmq_error::RocketMQError::not_initialized(
-                    "broker consumer-order persistence requires ServiceContext",
+                    "broker consumer-order persistence requires ChildServiceContext",
                 ))
             };
             if let Err(error) = result {
@@ -2043,7 +2043,7 @@ impl BrokerRuntime {
                         .as_ref()
                         .and_then(|result| result.as_ref().ok())
                         .cloned(),
-                    service_context.blocking().clone(),
+                    service_context.metadata_io().clone(),
                     MetadataDeadline::after(deadline.remaining()),
                 )
                 .await;
@@ -2053,7 +2053,7 @@ impl BrokerRuntime {
                 result
             } else {
                 Err(rocketmq_error::RocketMQError::not_initialized(
-                    "broker subscription-group persistence requires ServiceContext",
+                    "broker subscription-group persistence requires ChildServiceContext",
                 ))
             };
             shutdown_report.subscription_group = match result {
@@ -2089,7 +2089,7 @@ impl BrokerRuntime {
                     .as_ref()
                     .and_then(|result| result.as_ref().ok())
                     .cloned(),
-                service_context.blocking().clone(),
+                service_context.metadata_io().clone(),
                 MetadataDeadline::after(deadline.remaining()),
             )
             .await;
@@ -2107,7 +2107,7 @@ impl BrokerRuntime {
             result
         } else {
             Err(rocketmq_error::RocketMQError::not_initialized(
-                "broker consumer-offset persistence requires ServiceContext",
+                "broker consumer-offset persistence requires ChildServiceContext",
             ))
         };
         shutdown_report.consumer_offset = match result {
@@ -2154,7 +2154,7 @@ impl BrokerRuntime {
                     .as_ref()
                     .and_then(|result| result.as_ref().ok())
                     .cloned(),
-                service_context.blocking().clone(),
+                service_context.metadata_io().clone(),
                 MetadataDeadline::after(deadline.remaining()),
             )
             .await
@@ -2501,12 +2501,17 @@ impl BrokerRuntime {
         let message_store_config = self.inner.message_store_config_arc();
         if message_store_config.store_type == StoreType::LocalFile {
             info!("Use local file as message store");
+            let Some(service_context) = self.inner.service_context.as_ref() else {
+                error!("LocalFile message store requires an injected broker service context");
+                return false;
+            };
             let mut local_file_store = match LocalFileMessageStore::try_new(
                 Arc::clone(&message_store_config),
                 Arc::clone(&store_runtime_config),
                 self.inner.topic_config_manager().topic_config_table(),
                 self.inner.broker_stats_manager.clone(),
                 false,
+                service_context.child("broker.store.local-file"),
             ) {
                 Ok(message_store) => message_store,
                 Err(error) => {
@@ -2544,12 +2549,17 @@ impl BrokerRuntime {
             #[cfg(feature = "rocksdb_store")]
             {
                 info!("Use RocksDB as consume queue store with local file commit log");
+                let Some(service_context) = self.inner.service_context.as_ref() else {
+                    error!("RocksDB message store requires an injected broker service context");
+                    return false;
+                };
                 let rocksdb_message_store = match RocksDBMessageStore::try_new(
                     Arc::clone(&message_store_config),
                     Arc::clone(&store_runtime_config),
                     self.inner.topic_config_manager().topic_config_table(),
                     self.inner.broker_stats_manager.clone(),
                     false,
+                    service_context.child("broker.store.rocksdb"),
                 ) {
                     Ok(message_store) => message_store,
                     Err(error) => {
@@ -2919,6 +2929,11 @@ impl BrokerRuntime {
 
     #[cfg(test)]
     fn init_processor(&mut self) -> (DefaultServerProcessor, FasterServerProcessor) {
+        if self.inner.auth_admin_service.is_none() {
+            let provider_registry =
+                rocketmq_auth::ProviderRegistry::local(&AuthConfig::default()).expect("create in-memory auth registry");
+            self.inner.auth_admin_service = Some(Arc::new(AuthAdminService::with_provider_registry(provider_registry)));
+        }
         self.init_processor_checked()
             .expect("test runtime should initialize request processor dependencies")
     }
@@ -3008,7 +3023,7 @@ impl BrokerRuntime {
         let pop_lite_queue_lock_manager = pop_lite_parent_task_group
             .clone()
             .map(QueueLockManager::new_with_parent_task_group)
-            .unwrap_or_else(QueueLockManager::new);
+            .expect("BrokerRuntime always has an injected ChildServiceContext");
         let pop_lite_long_polling_context = PopLiteLongPollingServiceContext::new(
             PopLiteLongPollingPolicy::from_config(&self.inner.broker_config()),
             pop_lite_event_dispatcher.clone(),
@@ -3374,18 +3389,14 @@ impl BrokerRuntime {
                 ),
             ))),
         );
-        let auth_admin_service = Arc::new(match &self.inner.auth_runtime {
-            Some(auth_runtime) => AuthAdminService::with_provider_registry_and_config(
-                auth_runtime.provider_registry().clone(),
-                auth_runtime.config().clone(),
-            ),
-            None => AuthAdminService::new(build_auth_config(&self.inner.broker_config())).map_err(|error| {
-                BrokerStartupError::Initialization {
+        let auth_admin_service =
+            self.inner
+                .auth_admin_service
+                .clone()
+                .ok_or_else(|| BrokerStartupError::Initialization {
                     component: "auth_admin_service",
-                    detail: error.to_string(),
-                }
-            })?,
-        });
+                    detail: "auth admin service must be initialized before request processors".to_owned(),
+                })?;
         let admin_broker_processor = Arc::new(Mutex::new(AdminBrokerProcessor::new(
             self.admin_runtime(),
             auth_admin_service,
@@ -3437,7 +3448,7 @@ impl BrokerRuntime {
             .inner
             .service_context
             .as_ref()
-            .map(|context| context.blocking().clone());
+            .map(|context| context.metadata_io().clone());
 
         Self::log_scheduled_task_start(
             "flush_consumer_offset",
@@ -3488,7 +3499,7 @@ impl BrokerRuntime {
             .inner
             .service_context
             .as_ref()
-            .map(|context| context.blocking().clone());
+            .map(|context| context.metadata_io().clone());
         Self::log_scheduled_task_start(
             "persist_consumer_filter_and_order_info",
             self.scheduled_task_manager.add_fixed_rate_task_async(
@@ -3809,17 +3820,44 @@ impl BrokerRuntime {
         let broker_config = self.inner.broker_config();
         if !broker_config.authentication_enabled && !broker_config.authorization_enabled {
             self.inner.auth_runtime = None;
-            return true;
+            let Some(service_context) = self.inner.service_context.as_ref() else {
+                error!("Initialize auth admin service failed because ChildServiceContext is unavailable");
+                return false;
+            };
+            return match AuthAdminService::new(
+                build_auth_config(&broker_config),
+                service_context.child("broker.auth-admin"),
+            )
+            .await
+            {
+                Ok(service) => {
+                    self.inner.auth_admin_service = Some(Arc::new(service));
+                    true
+                }
+                Err(error) => {
+                    error!("Initialize auth admin service failed: {error}");
+                    false
+                }
+            };
         }
 
         let auth_config = build_auth_config(&self.inner.broker_config());
+        let auth_context = match self.inner.service_context.as_ref() {
+            Some(service_context) => service_context.child("broker.auth"),
+            None => {
+                error!("Initialize auth runtime failed because ChildServiceContext is unavailable");
+                return false;
+            }
+        };
         let auth_runtime_builder = match self.inner.metadata_io.as_ref() {
-            Some(Ok(metadata_io)) => AuthRuntimeBuilder::new(auth_config).with_metadata_io_actor(metadata_io.clone()),
+            Some(Ok(metadata_io)) => {
+                AuthRuntimeBuilder::new(auth_config, auth_context).with_metadata_io_actor(metadata_io.clone())
+            }
             Some(Err(error)) => {
                 error!(%error, "Initialize auth runtime failed because metadata I/O actor is unavailable");
                 return false;
             }
-            None => AuthRuntimeBuilder::new(auth_config),
+            None => AuthRuntimeBuilder::new(auth_config, auth_context),
         };
         match auth_runtime_builder.build().await {
             Ok(auth_runtime) => {
@@ -3831,6 +3869,10 @@ impl BrokerRuntime {
                     metrics_manager
                         .register_auth_observable_gauge(move || Some(auth_runtime_for_metrics.metrics_snapshot()));
                 }
+                self.inner.auth_admin_service = Some(Arc::new(AuthAdminService::with_provider_registry_and_config(
+                    auth_runtime.provider_registry().clone(),
+                    auth_runtime.config().clone(),
+                )));
                 self.inner.auth_runtime = Some(auth_runtime);
                 true
             }
@@ -3885,7 +3927,18 @@ impl BrokerRuntime {
         self.remoting_server_task_group = Some(remoting_server_task_group.clone());
 
         let broker_config = self.inner.broker_config();
-        let mut server = RocketMQServer::new(Arc::new(broker_config.broker_server_config.clone()));
+        let service_context =
+            self.inner
+                .service_context
+                .as_ref()
+                .ok_or_else(|| BrokerStartupError::Initialization {
+                    component: "service_context",
+                    detail: "broker remoting servers require an injected service context".to_owned(),
+                })?;
+        let mut server = RocketMQServer::new(
+            Arc::new(broker_config.broker_server_config.clone()),
+            service_context.child("broker.remoting-server.normal"),
+        );
         //start nomarl broker remoting_server
         let client_housekeeping_service_main = self
             .inner
@@ -3917,7 +3970,10 @@ impl BrokerRuntime {
         //start fast broker remoting_server
         let mut fast_server_config = broker_config.broker_server_config.clone();
         fast_server_config.listen_port = broker_config.broker_server_config.listen_port - 2;
-        let mut fast_server = RocketMQServer::new(Arc::new(fast_server_config));
+        let mut fast_server = RocketMQServer::new(
+            Arc::new(fast_server_config),
+            service_context.child("broker.remoting-server.fast"),
+        );
         let shutdown_token = remoting_server_task_group.cancellation_token();
         let (fast_report_tx, fast_report_rx) = oneshot::channel();
         let (fast_startup_tx, fast_startup_rx) = oneshot::channel();
@@ -4391,7 +4447,9 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
                 .as_ref()
                 .and_then(|result| result.as_ref().ok())
                 .cloned(),
-            self.service_context.as_ref().map(|context| context.blocking().clone()),
+            self.service_context
+                .as_ref()
+                .map(|context| context.metadata_io().clone()),
         ))
     }
 
@@ -4510,13 +4568,14 @@ pub(crate) struct BrokerRuntimeInner<MS: MessageStore> {
     notification_processor: Option<Arc<NotificationProcessor<MS>>>,
     query_assignment_processor: Option<Arc<QueryAssignmentProcessor>>,
     auth_runtime: Option<Arc<AuthRuntime>>,
+    auth_admin_service: Option<Arc<AuthAdminService>>,
     metadata_io: Option<Result<MetadataIoActor, MetadataIoError>>,
     broker_attached_plugins: Vec<Arc<dyn BrokerAttachedPlugin>>,
     transactional_message_service: Option<Arc<DefaultTransactionalMessageService<MS>>>,
     slave_synchronize: Option<Arc<SlaveSynchronize<MS>>>,
     slave_master_addr: Arc<SlaveMasterAddress>,
     broker_pre_online_service: Option<BrokerPreOnlineService<MS>>,
-    service_context: Option<ServiceContext>,
+    service_context: Option<ChildServiceContext>,
     lock: Mutex<()>,
 }
 
@@ -4526,18 +4585,12 @@ pub(crate) fn broker_task_group_or_current(
     no_runtime_warning: &'static str,
 ) -> Option<TaskGroup> {
     let name = name.into();
-    if let Some(parent_task_group) = parent_task_group {
-        return Some(parent_task_group.child(Arc::clone(&name)));
-    }
-
-    let runtime = match tokio::runtime::Handle::try_current() {
-        Ok(handle) => RuntimeHandle::new(handle),
-        Err(error) => {
-            warn!(?error, "{no_runtime_warning}");
-            return None;
-        }
-    };
-    Some(TaskGroup::root(name, runtime))
+    parent_task_group
+        .map(|parent_task_group| parent_task_group.child(name))
+        .or_else(|| {
+            warn!("{no_runtime_warning}");
+            None
+        })
 }
 
 impl<MS: MessageStore> BrokerRuntimeInner<MS> {
@@ -4570,7 +4623,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         let queue_lock_manager = parent_task_group
             .clone()
             .map(QueueLockManager::new_with_parent_task_group)
-            .unwrap_or_else(QueueLockManager::new);
+            .expect("BrokerRuntime always has an injected ChildServiceContext");
         let context = Arc::new(PopMessageProcessorContext::new(
             self.pop_policy_state.clone(),
             Arc::clone(&topics),
@@ -4699,7 +4752,9 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
                 .as_ref()
                 .and_then(|result| result.as_ref().ok())
                 .cloned(),
-            self.service_context.as_ref().map(|context| context.blocking().clone()),
+            self.service_context
+                .as_ref()
+                .map(|context| context.metadata_io().clone()),
         );
         BrokerPreOnlineService::new(context, self.broker_service_task_group())
     }
@@ -4744,7 +4799,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         no_runtime_warning: &'static str,
     ) -> Option<TaskGroup> {
         crate::broker_runtime::broker_task_group_or_current(
-            self.service_context.as_ref().map(ServiceContext::task_group),
+            self.service_context.as_ref().map(ChildServiceContext::task_group),
             name,
             no_runtime_warning,
         )
@@ -5573,9 +5628,9 @@ mod tests {
     #[test]
     fn background_tasks_capture_narrow_capabilities() {
         let production_source = include_str!("broker_runtime.rs")
-            .split("#[cfg(test)]")
+            .split("mod test_support {")
             .next()
-            .expect("broker runtime production source should precede its tests");
+            .expect("broker runtime production source should precede test support");
 
         assert!(
             !production_source.contains("self.inner.clone()"),
@@ -6078,14 +6133,14 @@ mod tests {
         .await;
 
         assert!(matches!(result, Err(BrokerBlockingShutdownError::TimedOut)));
-        assert_eq!(service.blocking().blocking_still_running(), 1);
+        assert_eq!(service.metadata_io().blocking_still_running(), 1);
         assert!(service.task_group().task_count() > 0);
 
         let (released, signal) = &*release;
         *released.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = true;
         signal.notify_all();
         tokio::time::timeout(Duration::from_secs(1), async {
-            while service.blocking().blocking_still_running() != 0 || service.task_group().task_count() != 0 {
+            while service.metadata_io().blocking_still_running() != 0 || service.task_group().task_count() != 0 {
                 tokio::task::yield_now().await;
             }
         })
@@ -6531,7 +6586,11 @@ accounts:
         let tcp_stream = tokio::net::TcpStream::from_std(std_stream).expect("convert tcp stream");
         let connection = Connection::new(tcp_stream);
         let response_table = std::sync::Arc::new(parking_lot::Mutex::new(HashMap::<i32, ResponseFuture>::new()));
-        let inner = std::sync::Arc::new(ChannelInner::new(connection, response_table));
+        let inner = std::sync::Arc::new(ChannelInner::new(
+            connection,
+            response_table,
+            crate::test_task_group("channel"),
+        ));
         Channel::new(inner, local_addr, local_addr)
     }
 
@@ -6572,7 +6631,9 @@ accounts:
         let mut request = RemotingCommand::create_request_command(RequestCode::SendMessage, send_header).set_body(body);
         request.make_custom_header_to_net();
 
-        let mut harness = LocalRequestHarness::new().await.expect("local harness should start");
+        let mut harness = LocalRequestHarness::new(crate::test_task_group("local-harness"))
+            .await
+            .expect("local harness should start");
         let direct_response = processor
             .process_request(harness.channel(), harness.context(), &mut request)
             .await
@@ -6970,8 +7031,9 @@ accounts:
             ..ServerConfig::default()
         };
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let namesrv_context = RuntimeContext::from_current("broker-namesrv-test").service_context("namesrv");
         let handle = tokio::spawn(async move {
-            NameServerBuilder::new()
+            NameServerBuilder::new(namesrv_context)
                 .set_name_server_config(namesrv_config)
                 .set_server_config(server_config)
                 .build()
@@ -7015,6 +7077,7 @@ accounts:
         let client = Arc::new(RocketmqDefaultClient::new(
             Arc::new(TokioClientConfig::default()),
             DefaultRemotingRequestProcessor,
+            crate::test_service_context("namesrv-client"),
         ));
         let weak_client = Arc::downgrade(&client);
         client.start(weak_client).await;
@@ -7115,7 +7178,7 @@ accounts:
             .with_enable_elect_unclean_master_local(true);
 
         let manager = Arc::new(
-            TestControllerManager::new(config)
+            TestControllerManager::new(config, crate::test_service_context("controller-manager"))
                 .await
                 .expect("create controller manager"),
         );
@@ -7551,7 +7614,9 @@ accounts:
         let broker_config = Arc::new(BrokerConfig::default());
         let message_store_config = Arc::new(MessageStoreConfig::default());
         let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
-        runtime.inner.set_timer_message_store(TimerMessageStore::new_empty());
+        runtime
+            .inner
+            .set_timer_message_store(TimerMessageStore::new_empty(crate::test_service_context("timer-store")));
 
         let timer_store = runtime
             .inner
@@ -7994,7 +8059,9 @@ accounts:
             .set_body(Bytes::from_static(b"phase3-message-body"));
         request.make_custom_header_to_net();
 
-        let mut harness = LocalRequestHarness::new().await.expect("local harness should start");
+        let mut harness = LocalRequestHarness::new(crate::test_task_group("local-harness"))
+            .await
+            .expect("local harness should start");
         let direct_response = processor
             .process_request(harness.channel(), harness.context(), &mut request)
             .await
@@ -8777,7 +8844,8 @@ accounts:
             timer_wheel_enable: true,
             ..MessageStoreConfig::default()
         });
-        let timer_message_store = TimerMessageStore::new_with_message_store_config(timer_config);
+        let timer_message_store =
+            TimerMessageStore::new_with_message_store_config(timer_config, crate::test_service_context("timer-store"));
         assert!(timer_message_store.load());
         runtime.inner_for_test().set_timer_message_store(timer_message_store);
 

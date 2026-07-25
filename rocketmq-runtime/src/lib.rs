@@ -15,14 +15,17 @@
 //! Runtime substrate for the RocketMQ Rust unified thread model.
 //!
 //! This crate standardizes how components own or borrow a Tokio runtime, how
-//! they derive service-level task scopes through [`ServiceContext`], how
+//! they derive service-level task scopes through [`RootServiceContext`] and
+//! [`ChildServiceContext`], how
 //! [`TaskGroup`] and [`ScheduledTaskGroup`] track long-running and periodic
 //! tasks, how [`BlockingExecutor`] isolates short blocking work, and how
 //! [`ShutdownReport`] records verifiable shutdown evidence.
 //!
-//! New production code should prefer [`RuntimeOwner`], [`RuntimeContext`], and
-//! [`ServiceContext`]. [`RocketMQRuntime`] remains only as a deprecated
-//! compatibility boundary.
+//! Process entrypoints own [`RuntimeOwner`] and derive a single
+//! [`RootServiceContext`]. Production libraries receive a
+//! [`ChildServiceContext`] or a narrower capability. [`RuntimeContext`] is a
+//! test and migration harness, while [`RocketMQRuntime`] remains only as a
+//! deprecated compatibility boundary.
 
 pub mod actor;
 pub mod blocking;
@@ -52,6 +55,8 @@ pub use actor::ActorRuntime;
 pub use blocking::BlockingExecutor;
 pub use blocking::BlockingExecutorSnapshot;
 pub use blocking::BlockingKind;
+pub use blocking::BlockingLane;
+pub use blocking::BlockingLanePolicies;
 pub use blocking::BlockingPoolPolicy;
 pub use blocking::BlockingTaskSnapshot;
 pub use config::RuntimeConfig;
@@ -101,7 +106,9 @@ pub use scheduled::ScheduledTaskConfig;
 pub use scheduled::ScheduledTaskControl;
 pub use scheduled::ScheduledTaskGroup;
 pub use scheduled::ScheduledTaskSnapshot;
-pub use service_context::ServiceContext;
+pub use service_context::ChildServiceContext;
+pub use service_context::RootServiceContext;
+pub use service_context::ScopeId;
 pub use service_lifecycle::ServiceLifecycle;
 pub use service_lifecycle::ServiceLifecycleConfig;
 pub use service_lifecycle::ServiceLifecycleState;

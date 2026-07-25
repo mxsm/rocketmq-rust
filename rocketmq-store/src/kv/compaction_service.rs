@@ -24,8 +24,10 @@ use tracing::error;
 use tracing::info;
 
 use crate::kv::compaction_store::CompactionStore;
+use crate::runtime::StoreRuntimeScope;
 
 pub struct CompactionService {
+    runtime_scope: StoreRuntimeScope,
     compaction_store: Arc<CompactionStore>,
     schedule_interval: Duration,
     shutdown_token: CancellationToken,
@@ -35,8 +37,13 @@ pub struct CompactionService {
 }
 
 impl CompactionService {
-    pub fn new(compaction_store: Arc<CompactionStore>, schedule_interval_ms: usize) -> Self {
+    pub fn new(
+        runtime_scope: StoreRuntimeScope,
+        compaction_store: Arc<CompactionStore>,
+        schedule_interval_ms: usize,
+    ) -> Self {
         Self {
+            runtime_scope,
             compaction_store,
             schedule_interval: Duration::from_millis(schedule_interval_ms.max(1) as u64),
             shutdown_token: CancellationToken::new(),
@@ -68,13 +75,7 @@ impl CompactionService {
         self.shutdown_token = CancellationToken::new();
         let compaction_store = self.compaction_store.clone();
         let schedule_interval = self.schedule_interval;
-        let worker_group = match crate::runtime::task_group("rocketmq-store.kv.compaction") {
-            Ok(worker_group) => worker_group,
-            Err(error) => {
-                error!("failed to create compaction service task group: {error}");
-                return;
-            }
-        };
+        let worker_group = crate::runtime::task_group(&self.runtime_scope, "rocketmq-store.kv.compaction");
         let scheduled_tasks = ScheduledTaskGroup::new(worker_group.child("scheduled"));
         let mut config = ScheduledTaskConfig::fixed_rate_no_overlap("store.kv.compaction", schedule_interval);
         config.initial_delay = schedule_interval;
@@ -170,7 +171,11 @@ mod tests {
         compaction_store.put_message_with_key(&topic, 0, 0, 1, Some(key.clone()), Bytes::from_static(b"old-message"));
         compaction_store.put_message_with_key(&topic, 0, 1, 1, Some(key), Bytes::from_static(b"latest-message"));
 
-        let mut service = CompactionService::new(compaction_store.clone(), 1);
+        let mut service = CompactionService::new(
+            crate::runtime::test_scope("compaction-service-test"),
+            compaction_store.clone(),
+            1,
+        );
         assert!(service.load(true, 0).await);
         compaction_store.finish_recovery(0);
         service.start();

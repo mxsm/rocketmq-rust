@@ -67,7 +67,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .with_raft_peers(peers.clone()),
     );
 
-    let node = RaftNodeManager::new(config).await?;
+    let runtime = rocketmq_runtime::RuntimeContext::from_current("controller-three-node-example");
+    let node = RaftNodeManager::new(
+        config,
+        runtime.service_context("controller-three-node").storage_io().clone(),
+    )
+    .await?;
 
     if args.node_id == 1 && args.init {
         let mut nodes = BTreeMap::new();

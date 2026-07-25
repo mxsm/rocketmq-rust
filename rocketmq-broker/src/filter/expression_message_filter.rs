@@ -235,6 +235,7 @@ mod tests {
             topic_table,
             None,
             false,
+            crate::test_service_context("message-store"),
         );
         store
             .wire_owned_root_dependencies()

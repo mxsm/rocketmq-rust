@@ -27,6 +27,7 @@ use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 use bytes::Bytes;
 use cheetah_string::CheetahString;
@@ -36,6 +37,9 @@ use rocketmq_model::common::config::TopicConfig;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_model::common::message::MessageConst;
 use rocketmq_model::common::message::MessageTrait;
+use rocketmq_runtime::ChildServiceContext;
+use rocketmq_runtime::RuntimeConfig;
+use rocketmq_runtime::RuntimeOwner;
 use rocketmq_store::base::message_status_enum::GetMessageStatus;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
@@ -54,13 +58,31 @@ use tempfile::TempDir;
 const RECOVERY_SEGMENT_SIZE: usize = 512;
 static FIRST_RECOVERY_BODY: [u8; 120] = [0x41; 120];
 
+fn test_service_context() -> ChildServiceContext {
+    static OWNER: OnceLock<RuntimeOwner> = OnceLock::new();
+    OWNER
+        .get_or_init(|| {
+            RuntimeOwner::new(RuntimeConfig::server_default("commitlog-recovery-tests"))
+                .expect("commitlog recovery test runtime should start")
+        })
+        .root_context()
+        .child("commitlog-recovery-store")
+}
+
 fn new_test_store(temp_dir: &TempDir, mut message_store_config: MessageStoreConfig) -> LocalFileMessageStore {
     message_store_config.store_path_root_dir = temp_dir.path().to_string_lossy().to_string().into();
     message_store_config.timer_wheel_enable = false;
     let broker_config = Arc::new(StoreRuntimeConfig::default());
     let topic_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>> = Arc::new(DashMap::new());
 
-    let mut store = LocalFileMessageStore::new(Arc::new(message_store_config), broker_config, topic_table, None, false);
+    let mut store = LocalFileMessageStore::new(
+        Arc::new(message_store_config),
+        broker_config,
+        topic_table,
+        None,
+        false,
+        test_service_context(),
+    );
     store
         .wire_owned_root_dependencies()
         .expect("CommitLog recovery tests should wire owned Store capabilities");

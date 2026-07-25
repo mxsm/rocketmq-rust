@@ -23,12 +23,10 @@ use std::time::Instant;
 use crate::config::config_manager::ConfigManager;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
-use rocketmq_runtime::schedule::simple_scheduler::ScheduledTaskManager;
 use rocketmq_runtime::BlockingExecutor;
-use rocketmq_runtime::BlockingPoolPolicy;
+use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::MetadataDeadline;
 use rocketmq_runtime::MetadataIoActor;
-use rocketmq_runtime::ServiceContext;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskGroupChildLease;
@@ -120,9 +118,7 @@ impl TopicConfigCoordinatorShutdownReport {
 
 pub(crate) struct TopicConfigCoordinator {
     manager: Arc<TopicConfigManager>,
-    service_context: Option<ServiceContext>,
-    compatibility_scheduler: ScheduledTaskManager,
-    runtime_capabilities: std::sync::OnceLock<TopicConfigRuntimeCapabilities>,
+    runtime_capabilities: TopicConfigRuntimeCapabilities,
     lifecycle: Mutex<TopicConfigLifecycle>,
     admission: Mutex<Option<mpsc::Sender<TopicConfigCommand>>>,
     pending: Arc<AtomicU64>,
@@ -133,25 +129,22 @@ pub(crate) struct TopicConfigCoordinator {
 }
 
 impl TopicConfigCoordinator {
-    pub(crate) fn new(
-        manager: Arc<TopicConfigManager>,
-        service_context: Option<ServiceContext>,
-        compatibility_scheduler: ScheduledTaskManager,
-    ) -> Self {
-        Self::new_with_metadata_io(manager, service_context, compatibility_scheduler, None)
+    pub(crate) fn new(manager: Arc<TopicConfigManager>, service_context: ChildServiceContext) -> Self {
+        Self::new_with_metadata_io(manager, service_context, None)
     }
 
     pub(crate) fn new_with_metadata_io(
         manager: Arc<TopicConfigManager>,
-        service_context: Option<ServiceContext>,
-        compatibility_scheduler: ScheduledTaskManager,
+        service_context: ChildServiceContext,
         metadata_io: Option<MetadataIoActor>,
     ) -> Self {
+        let runtime_capabilities = TopicConfigRuntimeCapabilities {
+            task_group: service_context.task_group().clone(),
+            blocking: service_context.metadata_io().clone(),
+        };
         Self {
             manager,
-            service_context,
-            compatibility_scheduler,
-            runtime_capabilities: std::sync::OnceLock::new(),
+            runtime_capabilities,
             lifecycle: Mutex::new(TopicConfigLifecycle {
                 next_generation: 1,
                 run: None,
@@ -186,32 +179,8 @@ impl TopicConfigCoordinator {
         self.registration_failures.load(Ordering::Acquire)
     }
 
-    fn runtime_capabilities(&self) -> RocketMQResult<&TopicConfigRuntimeCapabilities> {
-        if let Some(capabilities) = self.runtime_capabilities.get() {
-            return Ok(capabilities);
-        }
-
-        let capabilities = if let Some(service_context) = &self.service_context {
-            TopicConfigRuntimeCapabilities {
-                task_group: service_context.task_group().clone(),
-                blocking: service_context.blocking().clone(),
-            }
-        } else {
-            let task_group = self
-                .compatibility_scheduler
-                .compatibility_task_group()
-                .map_err(topic_coordinator_error)?;
-            let reaper_group = task_group
-                .try_child("topic-config.blocking-reaper")
-                .map_err(topic_coordinator_error)?;
-            let blocking =
-                BlockingExecutor::new(BlockingPoolPolicy::default(), reaper_group).map_err(topic_coordinator_error)?;
-            TopicConfigRuntimeCapabilities { task_group, blocking }
-        };
-        let _ = self.runtime_capabilities.set(capabilities);
-        self.runtime_capabilities
-            .get()
-            .ok_or_else(|| topic_coordinator_error("failed to install runtime capabilities"))
+    fn runtime_capabilities(&self) -> &TopicConfigRuntimeCapabilities {
+        &self.runtime_capabilities
     }
 
     async fn ensure_started(&self) -> RocketMQResult<()> {
@@ -223,7 +192,7 @@ impl TopicConfigCoordinator {
             return Ok(());
         }
 
-        let capabilities = self.runtime_capabilities()?;
+        let capabilities = self.runtime_capabilities();
         let generation = lifecycle.next_generation;
         lifecycle.next_generation = generation.checked_add(1).unwrap_or(1);
         let lease = capabilities
@@ -262,7 +231,7 @@ impl TopicConfigCoordinator {
     pub(crate) async fn load(&self) -> RocketMQResult<bool> {
         self.ensure_started().await?;
         let manager = Arc::clone(&self.manager);
-        self.runtime_capabilities()?
+        self.runtime_capabilities()
             .blocking
             .spawn_io("broker.topic-config.load", move || manager.load())
             .await
@@ -273,7 +242,7 @@ impl TopicConfigCoordinator {
     pub(crate) async fn export_to_json(&self) -> RocketMQResult<()> {
         self.ensure_started().await?;
         let manager = Arc::clone(&self.manager);
-        self.runtime_capabilities()?
+        self.runtime_capabilities()
             .blocking
             .spawn_io("broker.topic-config.export-json", move || manager.export_to_json())
             .await
@@ -361,9 +330,7 @@ impl TopicConfigCoordinator {
                 worker_exited: true,
                 registration_quiesced: true,
                 unregister_succeeded: false,
-                blocking_still_running: self.runtime_capabilities.get().map_or(0, |capabilities| {
-                    capabilities.blocking.snapshot().blocking_still_running
-                }),
+                blocking_still_running: self.runtime_capabilities.blocking.snapshot().blocking_still_running,
                 timed_out: false,
                 elapsed: started.elapsed(),
                 detail: None,
@@ -401,9 +368,7 @@ impl TopicConfigCoordinator {
         };
         let timed_out = deadline.is_expired() || (!final_persist_succeeded && detail.is_none());
         let worker_exited = run.task_group.wait_task(run.worker, deadline.remaining()).await;
-        let blocking_still_running = self.runtime_capabilities.get().map_or(0, |capabilities| {
-            capabilities.blocking.snapshot().blocking_still_running
-        });
+        let blocking_still_running = self.runtime_capabilities.blocking.snapshot().blocking_still_running;
         let report = TopicConfigCoordinatorShutdownReport {
             admission_closed,
             pending_at_end: self.pending_count(),
@@ -526,7 +491,7 @@ mod tests {
 
     use crate::config::broker_config::BrokerConfig;
     use rocketmq_model::common::config::TopicConfig;
-    use rocketmq_runtime::schedule::simple_scheduler::ScheduledTaskManager;
+    use rocketmq_runtime::RuntimeContext;
     use rocketmq_runtime::ShutdownDeadline;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
     use tempfile::TempDir;
@@ -536,7 +501,7 @@ mod tests {
     use super::TopicRegistrationAction;
     use crate::topic::manager::topic_config_manager::TopicConfigManager;
 
-    fn test_coordinator(temp_dir: &TempDir) -> Arc<TopicConfigCoordinator> {
+    fn test_coordinator(temp_dir: &TempDir) -> (RuntimeContext, Arc<TopicConfigCoordinator>) {
         let root = temp_dir.path().to_string_lossy().to_string();
         let broker_config = BrokerConfig {
             store_path_root_dir: root.clone().into(),
@@ -547,17 +512,18 @@ mod tests {
             ..MessageStoreConfig::default()
         };
         let manager = Arc::new(TopicConfigManager::new(&broker_config, &message_store_config, false));
-        Arc::new(TopicConfigCoordinator::new(
+        let runtime = RuntimeContext::from_current("topic-config-coordinator-test");
+        let coordinator = Arc::new(TopicConfigCoordinator::new(
             manager,
-            None,
-            ScheduledTaskManager::new_legacy_compatibility(),
-        ))
+            runtime.service_context("topic-config-coordinator"),
+        ));
+        (runtime, coordinator)
     }
 
     #[tokio::test]
     async fn shutdown_drains_accepted_registration_before_closing_admission() {
         let temp_dir = TempDir::new().expect("temp dir should be created");
-        let coordinator = test_coordinator(&temp_dir);
+        let (runtime, coordinator) = test_coordinator(&temp_dir);
         coordinator
             .manager()
             .update_topic_config(TopicConfig::with_queues("BarrierTopic", 1, 1), 0);
@@ -594,12 +560,14 @@ mod tests {
         assert!(report.can_detach(), "{report:?}");
         assert!(coordinator.persist_and_wait().await.is_err());
         assert_eq!(coordinator.rejected_after_close_count(), 1);
+        let runtime_report = runtime.shutdown_tasks(Duration::from_secs(1)).await;
+        assert!(runtime_report.is_healthy(), "{}", runtime_report.to_json());
     }
 
     #[tokio::test]
     async fn persistence_runs_through_single_worker_and_records_no_failure() {
         let temp_dir = TempDir::new().expect("temp dir should be created");
-        let coordinator = test_coordinator(&temp_dir);
+        let (runtime, coordinator) = test_coordinator(&temp_dir);
         coordinator
             .manager()
             .update_topic_config(TopicConfig::with_queues("PersistedTopic", 3, 4), 0);
@@ -613,5 +581,7 @@ mod tests {
             .shutdown_until(ShutdownDeadline::after(Duration::from_secs(5)))
             .await;
         assert!(report.can_unregister(), "{report:?}");
+        let runtime_report = runtime.shutdown_tasks(Duration::from_secs(1)).await;
+        assert!(runtime_report.is_healthy(), "{}", runtime_report.to_json());
     }
 }

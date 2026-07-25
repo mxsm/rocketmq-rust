@@ -19,8 +19,8 @@ use std::time::Duration;
 
 use crate::config::broker_config::BrokerConfig;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_runtime::task::service_task::ServiceContext;
 use rocketmq_runtime::task::service_task::ServiceTask;
+use rocketmq_runtime::task::service_task::ServiceTaskContext;
 use rocketmq_runtime::task::ServiceManager;
 use rocketmq_store::base::message_store::MessageStore;
 use tracing::info;
@@ -91,7 +91,7 @@ where
         "TransactionalOpBatchService".to_string()
     }
 
-    async fn run(&self, context: &ServiceContext) {
+    async fn run(&self, context: &ServiceTaskContext) {
         info!("TransactionalOpBatchService started");
         let transaction_op_batch_interval = self.broker_config.transaction_op_batch_interval;
         self.wakeup_timestamp.store(

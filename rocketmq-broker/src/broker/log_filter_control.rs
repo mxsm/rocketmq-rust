@@ -28,7 +28,7 @@ use rocketmq_observability::LogFilterResolver;
 use rocketmq_observability::ResolvedLogFilter;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::BlockingExecutor;
-use rocketmq_runtime::ServiceContext;
+use rocketmq_runtime::ChildServiceContext;
 use serde::Serialize;
 use thiserror::Error;
 use tokio::sync::mpsc;
@@ -260,7 +260,7 @@ pub(crate) struct BrokerLogFilterControl {
 impl BrokerLogFilterControl {
     pub(crate) fn start(
         handle: LogFilterHandle,
-        service_context: &ServiceContext,
+        service_context: &ChildServiceContext,
         store_path_root_dir: &str,
     ) -> Result<Arc<Self>, BrokerLogFilterControlError> {
         let baseline = handle.current();
@@ -277,7 +277,7 @@ impl BrokerLogFilterControl {
                 run_ttl_controller(TtlControllerContext {
                     handle: handle.clone(),
                     baseline: baseline.clone(),
-                    blocking: service_context.blocking().clone(),
+                    blocking: service_context.storage_io().clone(),
                     audit_path: audit_path.clone(),
                     operation: Arc::clone(&operation),
                     active: Arc::clone(&active),
@@ -290,7 +290,7 @@ impl BrokerLogFilterControl {
         Ok(Arc::new(Self {
             handle,
             baseline,
-            blocking: service_context.blocking().clone(),
+            blocking: service_context.storage_io().clone(),
             audit_path,
             ttl_sender,
             operation,

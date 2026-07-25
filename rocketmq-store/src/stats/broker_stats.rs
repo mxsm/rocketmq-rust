@@ -132,13 +132,31 @@ impl<MS: MessageStore> BrokerStats<MS> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::OnceLock;
+
+    use rocketmq_runtime::RuntimeConfig;
+    use rocketmq_runtime::RuntimeOwner;
+
     use crate::config::store_runtime_config::StoreRuntimeConfig;
 
     use super::*;
 
+    fn test_task_group() -> rocketmq_runtime::TaskGroup {
+        static OWNER: OnceLock<RuntimeOwner> = OnceLock::new();
+        OWNER
+            .get_or_init(|| RuntimeOwner::new(RuntimeConfig::default()).expect("test runtime owner should start"))
+            .root_context()
+            .child("broker-stats-test")
+            .task_group()
+            .clone()
+    }
+
     #[test]
     fn records_snapshots_from_injected_stats_manager() {
-        let manager = Arc::new(BrokerStatsManager::new(Arc::new(StoreRuntimeConfig::default())));
+        let manager = Arc::new(BrokerStatsManager::new(
+            Arc::new(StoreRuntimeConfig::default()),
+            test_task_group(),
+        ));
         let stats = BrokerStats::<()>::from_manager(Some(Arc::clone(&manager)));
 
         manager.inc_broker_put_nums("UserTopic", 10);

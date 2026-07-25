@@ -75,7 +75,12 @@ impl ProcessorHarness {
             .with_storage_backend(StorageBackendType::Memory)
             .with_heartbeat_interval_ms(100)
             .with_election_timeout_ms(300);
-        let manager = Arc::new(ControllerManager::new(config).await.expect("create controller manager"));
+        let runtime = rocketmq_runtime::RuntimeContext::from_current("controller-processor-contract-test");
+        let manager = Arc::new(
+            ControllerManager::new(config, runtime.service_context("controller"))
+                .await
+                .expect("create controller manager"),
+        );
         manager.initialize().await.expect("initialize controller manager");
         manager.start().await.expect("start controller manager");
 
@@ -297,7 +302,12 @@ async fn create_test_channel() -> Channel {
     let tcp_stream = tokio::net::TcpStream::from_std(std_stream).expect("convert tcp stream");
     let connection = Connection::new(tcp_stream);
     let response_table = Arc::new(parking_lot::Mutex::new(HashMap::<i32, ResponseFuture>::new()));
-    let inner = Arc::new(ChannelInner::new(connection, response_table));
+    let runtime = rocketmq_runtime::RuntimeContext::from_current("controller-processor-channel-test");
+    let inner = Arc::new(ChannelInner::new(
+        connection,
+        response_table,
+        runtime.service_context("controller-channel").task_group().clone(),
+    ));
     Channel::new(inner, local_addr, local_addr)
 }
 

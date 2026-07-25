@@ -355,7 +355,8 @@ mod tests {
         let mut config = McpConfig::load(example_config_path()).unwrap();
         config.audit.enabled = true;
         config.audit.sink = "memory".to_string();
-        let app = McpApp::new(config).unwrap();
+        let runtime = rocketmq_runtime::RuntimeContext::from_current("mcp-streamable-http-test");
+        let app = McpApp::new(config, runtime.service_context("mcp-app")).unwrap();
         let router = build_router_typed(app.clone(), CancellationToken::new()).unwrap();
 
         let metadata = router
@@ -452,9 +453,13 @@ mod tests {
         config.server.http.tls.key_path = key_path.to_string_lossy().into_owned();
         let tcp = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = tcp.local_addr().unwrap();
+        let runtime = rocketmq_runtime::RuntimeContext::from_current("mcp-https-listener-test");
+        let service_context = runtime.service_context("mcp-https-listener");
         let listener = HttpsListener {
             tcp,
-            tls: TlsServerRuntime::new(tls_config(&config.server.http)),
+            tls: TlsServerRuntime::initialize_with_service_context(tls_config(&config.server.http), &service_context)
+                .await
+                .unwrap(),
         };
         assert_eq!(listener.tls.active_generation(), 1);
 

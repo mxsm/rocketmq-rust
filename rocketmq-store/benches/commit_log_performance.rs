@@ -23,6 +23,7 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::time::Instant;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -40,6 +41,9 @@ use rocketmq_model::common::config::TopicConfig;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_model::common::message::message_single::Message;
+use rocketmq_runtime::ChildServiceContext;
+use rocketmq_runtime::RuntimeConfig;
+use rocketmq_runtime::RuntimeOwner;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::config::flush_disk_type::FlushDiskType;
@@ -154,6 +158,17 @@ fn new_sync_flush_bench_store() -> BenchStore {
     new_bench_store(FlushDiskType::SyncFlush)
 }
 
+fn benchmark_service_context() -> ChildServiceContext {
+    static OWNER: OnceLock<RuntimeOwner> = OnceLock::new();
+    OWNER
+        .get_or_init(|| {
+            RuntimeOwner::new(RuntimeConfig::server_default("commit-log-performance-bench"))
+                .expect("commit log benchmark runtime should start")
+        })
+        .root_context()
+        .child("commit-log-benchmark-store")
+}
+
 fn new_bench_store(flush_disk_type: FlushDiskType) -> BenchStore {
     let temp_dir = TempDir::new().expect("create temp dir for benchmark");
     let mut message_store_config = MessageStoreConfig {
@@ -170,6 +185,7 @@ fn new_bench_store(flush_disk_type: FlushDiskType) -> BenchStore {
         Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
         None,
         false,
+        benchmark_service_context(),
     );
     store
         .wire_owned_root_dependencies()

@@ -21,6 +21,9 @@ use rocketmq_mcp::config::McpConfig;
 use rocketmq_mcp::config::TransportKind;
 use rocketmq_mcp::error::McpError;
 use rocketmq_mcp::transport;
+use rocketmq_runtime::ChildServiceContext;
+use rocketmq_runtime::RuntimeConfig;
+use rocketmq_runtime::RuntimeOwner;
 use rocketmq_runtime::ServiceLifecycle;
 use rocketmq_runtime::ServiceLifecycleState;
 use rocketmq_runtime::ShutdownReason;
@@ -29,33 +32,54 @@ use rocketmq_security_api::SecurityBootstrapProfile;
 use rocketmq_security_api::ValidatedSecurityBootstrap;
 
 const RUNTIME_TEARDOWN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
+const ENTRYPOINT_MAX_BLOCKING_THREADS: usize = 32;
 
 fn main() -> Result<(), McpError> {
-    let runtime = build_runtime()?;
-    let result = runtime.block_on(run());
-    shutdown_runtime(runtime, RUNTIME_TEARDOWN_TIMEOUT);
-    result
-}
-
-fn build_runtime() -> Result<tokio::runtime::Runtime, McpError> {
-    tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .thread_name("rocketmq-mcp")
-        .build()
-        .map_err(|source| McpError::Infrastructure {
-            operation: "create MCP Tokio runtime",
-            source: Box::new(source),
-        })
-}
-
-fn shutdown_runtime(runtime: tokio::runtime::Runtime, timeout: std::time::Duration) {
-    runtime.shutdown_timeout(timeout);
-}
-
-async fn run() -> Result<(), McpError> {
-    let args = Args::parse();
+    let owner = RuntimeOwner::new(mcp_runtime_config()).map_err(|source| McpError::Infrastructure {
+        operation: "create MCP runtime owner",
+        source: Box::new(source),
+    })?;
+    let service_context = owner.root_context().child("rocketmq-mcp");
     let lifecycle = ServiceLifecycle::from_env("rocketmq-mcp")
         .map_err(|error| McpError::InvalidConfig(format!("invalid MCP lifecycle configuration: {error}")))?;
+
+    let run_result = owner.block_on(run(service_context, lifecycle.clone()));
+    if run_result.is_err() {
+        lifecycle.mark_failed();
+    }
+    let shutdown_request = lifecycle
+        .shutdown_request()
+        .unwrap_or_else(|| lifecycle.request_shutdown(ShutdownReason::Internal));
+    let shutdown_result = owner
+        .shutdown_runtime_blocking_until(shutdown_request.deadline)
+        .map_err(|source| McpError::Infrastructure {
+            operation: "shutdown MCP runtime owner",
+            source: Box::new(source),
+        });
+
+    match (run_result, shutdown_result) {
+        (Err(error), _) => Err(error),
+        (Ok(()), Err(error)) => Err(error),
+        (Ok(()), Ok(report)) if !report.is_healthy() => {
+            lifecycle.mark_failed();
+            Err(McpError::Infrastructure {
+                operation: "complete MCP runtime shutdown without task leaks",
+                source: Box::new(std::io::Error::other(report.to_json())),
+            })
+        }
+        (Ok(()), Ok(_report)) => Ok(()),
+    }
+}
+
+fn mcp_runtime_config() -> RuntimeConfig {
+    let mut config = RuntimeConfig::server_default("rocketmq-mcp");
+    config.max_blocking_threads = ENTRYPOINT_MAX_BLOCKING_THREADS;
+    config.shutdown_timeout = RUNTIME_TEARDOWN_TIMEOUT;
+    config
+}
+
+async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) -> Result<(), McpError> {
+    let args = Args::parse();
     let config = McpConfig::load_with_overrides(&args)?;
     let security_config = SecurityBootstrapConfig::from_env()
         .map_err(|error| McpError::InvalidConfig(format!("MCP security bootstrap configuration failed: {error}")))?;
@@ -65,7 +89,7 @@ async fn run() -> Result<(), McpError> {
         &config.server.http.bind,
         lifecycle.config().probe_bind_addr,
     )?;
-    let app = McpApp::bootstrap_typed(config, validated_security).await?;
+    let app = McpApp::bootstrap_typed(config, validated_security, service_context).await?;
     log_security_bootstrap(validated_security);
     if let Err(error) = app.start_lifecycle(&lifecycle).await {
         lifecycle.mark_failed();
@@ -181,12 +205,7 @@ async fn serve_streamable_http(app: McpApp, lifecycle: ServiceLifecycle) -> Resu
 
 #[cfg(test)]
 mod tests {
-    use std::sync::mpsc;
-    use std::time::Duration;
-    use std::time::Instant;
-
-    use super::build_runtime;
-    use super::shutdown_runtime;
+    use super::mcp_runtime_config;
     use super::validate_mcp_security;
     use super::TransportKind;
     use rocketmq_security_api::SecurityBootstrapConfig;
@@ -208,21 +227,14 @@ mod tests {
     }
 
     #[test]
-    fn runtime_teardown_is_bounded_when_blocking_work_is_still_open() {
-        let runtime = build_runtime().expect("test runtime should build");
-        let (started_tx, started_rx) = mpsc::sync_channel(1);
-        let (release_tx, release_rx) = mpsc::sync_channel(1);
-        runtime.spawn_blocking(move || {
-            started_tx.send(()).expect("test should observe blocking work");
-            let _ = release_rx.recv();
-        });
-        started_rx
-            .recv_timeout(Duration::from_secs(1))
-            .expect("blocking work should start");
+    fn runtime_owner_configuration_is_bounded() {
+        let config = mcp_runtime_config();
 
-        let started_at = Instant::now();
-        shutdown_runtime(runtime, Duration::from_millis(10));
-        assert!(started_at.elapsed() < Duration::from_secs(1));
-        release_tx.send(()).expect("blocking work should still be releasable");
+        assert_eq!(config.thread_name, "rocketmq-mcp");
+        assert_eq!(config.max_blocking_threads, super::ENTRYPOINT_MAX_BLOCKING_THREADS);
+        assert_eq!(config.shutdown_timeout, super::RUNTIME_TEARDOWN_TIMEOUT);
+        assert!(config.blocking_lane_policies.storage_io.max_queue_depth > 0);
+        assert!(config.blocking_lane_policies.metadata_io.max_queue_depth > 0);
+        assert!(config.blocking_lane_policies.cpu_crypto.max_queue_depth > 0);
     }
 }

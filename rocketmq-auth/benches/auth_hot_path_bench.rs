@@ -199,16 +199,14 @@ fn bench_stateful_authentication_cache(c: &mut Criterion) {
         .set_channel_id(Some(CheetahString::from_static_str("channel-a")));
     context.set_username(CheetahString::from_static_str("alice"));
 
-    runtime.block_on(async {
-        strategy
-            .authenticate(&context)
-            .expect("benchmark authentication cache should warm")
-    });
+    runtime
+        .block_on(strategy.authenticate(&context))
+        .expect("benchmark authentication cache should warm");
 
     c.bench_function("auth_stateful_authentication/cache_hit", |b| {
         b.iter(|| {
-            strategy
-                .authenticate(black_box(&context))
+            runtime
+                .block_on(strategy.authenticate(black_box(&context)))
                 .expect("benchmark authentication cache hit should allow")
         })
     });
@@ -219,7 +217,6 @@ fn bench_stateful_authorization_cache(c: &mut Criterion) {
         .enable_all()
         .build()
         .expect("benchmark runtime should build");
-    let _guard = runtime.enter();
     let strategy = StatefulAuthorizationStrategy::new_with_acl_generation(
         AuthConfig {
             authorization_enabled: false,
@@ -240,14 +237,14 @@ fn bench_stateful_authorization_cache(c: &mut Criterion) {
     );
     context.set_channel_id("channel-a".to_owned());
 
-    strategy
-        .evaluate(&context)
+    runtime
+        .block_on(strategy.evaluate(&context))
         .expect("benchmark authorization cache should warm");
 
     c.bench_function("auth_stateful_authorization/cache_hit", |b| {
         b.iter(|| {
-            strategy
-                .evaluate(black_box(&context))
+            runtime
+                .block_on(strategy.evaluate(black_box(&context)))
                 .expect("benchmark authorization cache hit should allow")
         })
     });
@@ -258,7 +255,6 @@ fn bench_stateful_authorization_negative_cache(c: &mut Criterion) {
         .enable_all()
         .build()
         .expect("benchmark runtime should build");
-    let _guard = runtime.enter();
     let mut disabled_config = AuthConfig {
         config_name: CheetahString::from_static_str("negative-cache-disabled"),
         authorization_enabled: true,
@@ -287,17 +283,29 @@ fn bench_stateful_authorization_negative_cache(c: &mut Criterion) {
     );
     context.set_channel_id("channel-denied".to_owned());
 
-    assert!(disabled_strategy.evaluate(&context).is_err());
+    assert!(runtime.block_on(disabled_strategy.evaluate(&context)).is_err());
     assert_eq!(disabled_strategy.cache_size(), 0);
-    assert!(enabled_strategy.evaluate(&context).is_err());
+    assert!(runtime.block_on(enabled_strategy.evaluate(&context)).is_err());
     assert_eq!(enabled_strategy.cache_size(), 1);
 
     let mut group = c.benchmark_group("auth_stateful_authorization_negative_cache");
     group.bench_function("deny_no_cache", |b| {
-        b.iter(|| black_box(disabled_strategy.evaluate(black_box(&context)).is_err()))
+        b.iter(|| {
+            black_box(
+                runtime
+                    .block_on(disabled_strategy.evaluate(black_box(&context)))
+                    .is_err(),
+            )
+        })
     });
     group.bench_function("deny_negative_cache_enabled", |b| {
-        b.iter(|| black_box(enabled_strategy.evaluate(black_box(&context)).is_err()))
+        b.iter(|| {
+            black_box(
+                runtime
+                    .block_on(enabled_strategy.evaluate(black_box(&context)))
+                    .is_err(),
+            )
+        })
     });
     group.finish();
 }

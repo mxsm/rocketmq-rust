@@ -378,7 +378,7 @@ mod tests {
 
     #[test]
     fn transform_timer_message_accepts_future_delivery_by_default_and_rewrites_topic() {
-        let timer_message_store = TimerMessageStore::new_empty();
+        let timer_message_store = TimerMessageStore::new_empty(crate::test_service_context("timer-store"));
         let message_store_config = MessageStoreConfig::default();
         let mut msg = MessageExtBrokerInner::default();
         msg.set_topic(CheetahString::from_static_str("test_topic"));
@@ -415,7 +415,7 @@ mod tests {
 
     #[test]
     fn transform_timer_message_accepts_timer_delay_ms_and_preserves_real_queue_id() {
-        let timer_message_store = TimerMessageStore::new_empty();
+        let timer_message_store = TimerMessageStore::new_empty(crate::test_service_context("timer-store"));
         let message_store_config = MessageStoreConfig::default();
         let mut msg = MessageExtBrokerInner::default();
         msg.set_topic(CheetahString::from_static_str("delay_ms_topic"));
@@ -449,7 +449,7 @@ mod tests {
 
     #[test]
     fn transform_timer_message_accepts_timer_delay_sec_within_max_delay() {
-        let timer_message_store = TimerMessageStore::new_empty();
+        let timer_message_store = TimerMessageStore::new_empty(crate::test_service_context("timer-store"));
         let message_store_config = MessageStoreConfig {
             timer_max_delay_sec: 10,
             ..MessageStoreConfig::default()
@@ -479,7 +479,7 @@ mod tests {
 
     #[test]
     fn transform_timer_message_rejects_delay_ms_beyond_max_delay_boundary() {
-        let timer_message_store = TimerMessageStore::new_empty();
+        let timer_message_store = TimerMessageStore::new_empty(crate::test_service_context("timer-store"));
         let message_store_config = MessageStoreConfig {
             timer_max_delay_sec: 1,
             ..MessageStoreConfig::default()

@@ -36,7 +36,8 @@ use crate::authorization::provider::AuthorizationError;
 use crate::authorization::strategy::abstract_authorization_strategy::AbstractAuthorizationStrategy;
 use crate::authorization::strategy::abstract_authorization_strategy::AuthorizationStrategy;
 use crate::authorization::strategy::abstract_authorization_strategy::StrategyResult;
-use crate::authorization::strategy::block_on_base_authorization;
+use crate::authorization::strategy::evaluate_base_authorization;
+use crate::authorization::strategy::AuthorizationFuture;
 use crate::config::AuthConfig;
 use crate::AuthMetrics;
 
@@ -359,75 +360,77 @@ impl AuthorizationStrategy for StatefulAuthorizationStrategy {
     /// context.set_channel_id("channel-123");
     /// strategy.evaluate(&context)?;
     /// ```
-    fn evaluate(&self, context: &DefaultAuthorizationContext) -> StrategyResult<()> {
-        // If no channel ID, bypass cache
-        if context.channel_id().is_none_or(str::is_empty) {
-            debug!("No channel ID, bypassing cache");
-            return block_on_base_authorization(&self.base, context);
-        }
+    fn evaluate<'a>(&'a self, context: &'a DefaultAuthorizationContext) -> AuthorizationFuture<'a> {
+        Box::pin(async move {
+            // If no channel ID, bypass cache
+            if context.channel_id().is_none_or(str::is_empty) {
+                debug!("No channel ID, bypassing cache");
+                return evaluate_base_authorization(&self.base, context).await;
+            }
 
-        let cache_key = self.build_key(context);
+            let cache_key = self.build_key(context);
 
-        // Check cache
-        {
-            match self.auth_cache.read() {
-                Ok(cache) => {
-                    if let Some(cached_result) = cache.get(&cache_key) {
-                        if !cached_result.is_expired(self.cache_ttl) {
-                            debug!("Cache hit for key: {}", cache_key);
-                            self.metrics.record_cache_hit();
-                            return if cached_result.granted {
-                                Ok(())
+            // Check cache
+            {
+                match self.auth_cache.read() {
+                    Ok(cache) => {
+                        if let Some(cached_result) = cache.get(&cache_key) {
+                            if !cached_result.is_expired(self.cache_ttl) {
+                                debug!("Cache hit for key: {}", cache_key);
+                                self.metrics.record_cache_hit();
+                                return if cached_result.granted {
+                                    Ok(())
+                                } else {
+                                    Err(AuthorizationError::PermissionDenied {
+                                        subject: context.subject_key().unwrap_or("unknown").to_string(),
+                                        resource: context.resource_key().unwrap_or_else(|| "unknown".to_string()),
+                                        reason: cached_result
+                                            .error
+                                            .clone()
+                                            .unwrap_or_else(|| "Authorization denied (cached)".to_string()),
+                                    })
+                                };
                             } else {
-                                Err(AuthorizationError::PermissionDenied {
-                                    subject: context.subject_key().unwrap_or("unknown").to_string(),
-                                    resource: context.resource_key().unwrap_or_else(|| "unknown".to_string()),
-                                    reason: cached_result
-                                        .error
-                                        .clone()
-                                        .unwrap_or_else(|| "Authorization denied (cached)".to_string()),
-                                })
-                            };
-                        } else {
-                            debug!("Cache entry expired for key: {}", cache_key);
+                                debug!("Cache entry expired for key: {}", cache_key);
+                            }
                         }
                     }
-                }
-                Err(poisoned) => {
-                    drop(poisoned);
-                    self.recover_poisoned_cache();
-                    debug!("Cache unavailable for key after poison recovery: {}", cache_key);
+                    Err(poisoned) => {
+                        drop(poisoned);
+                        self.recover_poisoned_cache();
+                        debug!("Cache unavailable for key after poison recovery: {}", cache_key);
+                    }
                 }
             }
-        }
 
-        // Cache miss - evaluate and cache result
-        debug!("Cache miss for key: {}", cache_key);
-        self.metrics.record_cache_miss();
+            // Cache miss - evaluate and cache result
+            debug!("Cache miss for key: {}", cache_key);
+            self.metrics.record_cache_miss();
 
-        let result = block_on_base_authorization(&self.base, context);
+            let result = evaluate_base_authorization(&self.base, context).await;
 
-        // Cache granted results by default. Denied results are cached only when
-        // explicitly enabled because ACL updates must take effect conservatively.
-        if result.is_ok() || self.cache_negative_result {
-            self.evict_if_full();
+            // Cache granted results by default. Denied results are cached only when
+            // explicitly enabled because ACL updates must take effect conservatively.
+            if result.is_ok() || self.cache_negative_result {
+                self.evict_if_full();
 
-            let mut cache = self.write_cache_recovering();
-            let cached_result = match &result {
-                Ok(()) => CachedAuthResult::new_granted(),
-                Err(e) => CachedAuthResult::new_denied(e.clone()),
-            };
-            cache.insert(cache_key.clone(), cached_result);
-            debug!("Cached result for key: {}", cache_key);
-        }
+                let mut cache = self.write_cache_recovering();
+                let cached_result = match &result {
+                    Ok(()) => CachedAuthResult::new_granted(),
+                    Err(e) => CachedAuthResult::new_denied(e.clone()),
+                };
+                cache.insert(cache_key.clone(), cached_result);
+                debug!("Cached result for key: {}", cache_key);
+            }
 
-        // Periodic cleanup every 100 requests
-        let counter = self.request_counter.fetch_add(1, Ordering::Relaxed);
-        if counter.is_multiple_of(100) {
-            self.evict_expired();
-        }
+            // Periodic cleanup every 100 requests
+            let counter = self.request_counter.fetch_add(1, Ordering::Relaxed);
+            if counter.is_multiple_of(100) {
+                self.evict_expired();
+            }
 
-        result
+            result
+        })
     }
 }
 
@@ -518,18 +521,15 @@ mod tests {
         assert!(key.starts_with("12#ch-123#"));
     }
 
-    #[test]
-    fn test_no_channel_id_bypasses_cache() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let _guard = rt.enter();
-
+    #[tokio::test]
+    async fn test_no_channel_id_bypasses_cache() {
         let mut config = create_test_config();
         config.authorization_enabled = false;
 
         let strategy = StatefulAuthorizationStrategy::new(config, None).unwrap();
         let context = DefaultAuthorizationContext::default();
 
-        let result = strategy.evaluate(&context);
+        let result = strategy.evaluate(&context).await;
         assert!(result.is_ok());
         assert_eq!(strategy.cache_size(), 0); // Nothing cached
     }
@@ -543,11 +543,8 @@ mod tests {
         assert_eq!(strategy.cache_size(), 0);
     }
 
-    #[test]
-    fn test_acl_generation_change_invalidates_cached_authorization_result() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let _guard = rt.enter();
-
+    #[tokio::test]
+    async fn test_acl_generation_change_invalidates_cached_authorization_result() {
         let config = create_test_config();
         let acl_generation = Arc::new(AtomicU64::new(0));
         let strategy =
@@ -556,22 +553,19 @@ mod tests {
         context.set_channel_id("ch-123".to_string());
         context.set_source_ip("192.168.0.1".to_string());
 
-        assert!(strategy.evaluate(&context).is_ok());
+        assert!(strategy.evaluate(&context).await.is_ok());
         assert_eq!(strategy.cache_size(), 1);
 
         acl_generation.fetch_add(1, Ordering::AcqRel);
-        assert!(strategy.evaluate(&context).is_ok());
+        assert!(strategy.evaluate(&context).await.is_ok());
         assert_eq!(strategy.cache_size(), 1);
 
         let cache = strategy.auth_cache.read().unwrap();
         assert!(cache.keys().all(|key| key.starts_with("1#")));
     }
 
-    #[test]
-    fn poisoned_authorization_cache_is_cleared_and_evaluation_continues() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let _guard = rt.enter();
-
+    #[tokio::test]
+    async fn poisoned_authorization_cache_is_cleared_and_evaluation_continues() {
         let config = create_test_config();
         let strategy = StatefulAuthorizationStrategy::new(config, None).unwrap();
         let cache = strategy.auth_cache.clone();
@@ -586,34 +580,24 @@ mod tests {
         let mut context = DefaultAuthorizationContext::default();
         context.set_channel_id("ch-poison".to_string());
 
-        assert!(strategy.evaluate(&context).is_ok());
+        assert!(strategy.evaluate(&context).await.is_ok());
         assert_eq!(strategy.cache_size(), 1);
         assert!(strategy.auth_cache.read().is_ok());
     }
 
-    #[test]
-    fn evaluate_cache_miss_inside_current_thread_runtime_without_nested_block_on_panic() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn evaluate_cache_miss_inside_current_thread_runtime_without_nested_block_on_panic() {
         let config = create_test_config();
         let strategy = StatefulAuthorizationStrategy::new(config, None).unwrap();
         let mut context = DefaultAuthorizationContext::default();
         context.set_channel_id("ch-current-thread".to_string());
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-
-        runtime.block_on(async {
-            assert!(strategy.evaluate(&context).is_ok());
-        });
+        assert!(strategy.evaluate(&context).await.is_ok());
 
         assert_eq!(strategy.cache_size(), 1);
     }
 
-    #[test]
-    fn denied_authorization_is_not_cached_by_default() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let _guard = rt.enter();
-
+    #[tokio::test]
+    async fn denied_authorization_is_not_cached_by_default() {
         let config = create_test_config();
         let strategy = StatefulAuthorizationStrategy::new(config, None).unwrap();
         let mut context = DefaultAuthorizationContext::of(
@@ -625,15 +609,12 @@ mod tests {
         );
         context.set_channel_id("ch-denied-default".to_string());
 
-        assert!(strategy.evaluate(&context).is_err());
+        assert!(strategy.evaluate(&context).await.is_err());
         assert_eq!(strategy.cache_size(), 0);
     }
 
-    #[test]
-    fn denied_authorization_can_be_cached_when_enabled() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let _guard = rt.enter();
-
+    #[tokio::test]
+    async fn denied_authorization_can_be_cached_when_enabled() {
         let mut config = create_test_config();
         config.stateful_authorization_cache_negative_enable = true;
         let strategy = StatefulAuthorizationStrategy::new(config, None).unwrap();
@@ -646,7 +627,7 @@ mod tests {
         );
         context.set_channel_id("ch-denied-cached".to_string());
 
-        assert!(strategy.evaluate(&context).is_err());
+        assert!(strategy.evaluate(&context).await.is_err());
         assert_eq!(strategy.cache_size(), 1);
     }
 }

@@ -45,6 +45,7 @@ use rocketmq_proxy::ResourceIdentity;
 use rocketmq_proxy::RouteService;
 use rocketmq_proxy::SubscriptionGroupMetadata;
 use rocketmq_proxy_core::ProxyContext;
+use rocketmq_runtime::RuntimeContext;
 use rocketmq_transport::connection::Connection;
 use std::collections::BTreeMap;
 use tokio::sync::oneshot;
@@ -128,6 +129,7 @@ async fn query_route_over_remoting_integration_injects_transport_context() {
         grpc: grpc_addr,
         remoting: remoting_addr,
     } = free_proxy_test_addrs();
+    let runtime_context = RuntimeContext::from_current("proxy-remoting-route-test");
     let runtime = ProxyRuntime::builder(ProxyConfig {
         grpc: GrpcConfig {
             listen_addr: grpc_addr.to_string(),
@@ -140,7 +142,9 @@ async fn query_route_over_remoting_integration_injects_transport_context() {
         ..ProxyConfig::default()
     })
     .with_service_manager(service_manager)
-    .build();
+    .with_service_context(runtime_context.service_context("proxy-remoting-route"))
+    .build()
+    .expect("the injected child context should build the proxy runtime");
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
     let server_task = tokio::spawn(async move {
@@ -217,13 +221,17 @@ accounts:
     )
     .expect("write proxy remoting auth acl file");
 
-    let auth_runtime = ProxyAuthRuntime::from_proxy_config(&ProxyAuthConfig {
-        auth_config_path: test_dir.join("auth-store").to_string_lossy().into_owned(),
-        acl_file: acl_file.to_string_lossy().into_owned(),
-        authentication_enabled: true,
-        authorization_enabled: true,
-        ..ProxyAuthConfig::default()
-    })
+    let runtime_context = RuntimeContext::from_current("proxy-remoting-auth-test");
+    let auth_runtime = ProxyAuthRuntime::from_proxy_config(
+        &ProxyAuthConfig {
+            auth_config_path: test_dir.join("auth-store").to_string_lossy().into_owned(),
+            acl_file: acl_file.to_string_lossy().into_owned(),
+            authentication_enabled: true,
+            authorization_enabled: true,
+            ..ProxyAuthConfig::default()
+        },
+        &runtime_context.service_context("proxy-remoting-auth-runtime"),
+    )
     .await
     .expect("proxy auth runtime should build")
     .expect("proxy auth runtime should be enabled");
@@ -254,7 +262,9 @@ accounts:
     })
     .with_service_manager(service_manager)
     .with_auth_runtime(auth_runtime)
-    .build();
+    .with_service_context(runtime_context.service_context("proxy-remoting-auth"))
+    .build()
+    .expect("the injected child context should build the proxy runtime");
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
     let server_task = tokio::spawn(async move {
@@ -324,6 +334,7 @@ async fn request_code_not_supported_over_remoting_integration_returns_compatible
         grpc: grpc_addr,
         remoting: remoting_addr,
     } = free_proxy_test_addrs();
+    let runtime_context = RuntimeContext::from_current("proxy-remoting-unsupported-test");
     let runtime = ProxyRuntime::builder(ProxyConfig {
         grpc: GrpcConfig {
             listen_addr: grpc_addr.to_string(),
@@ -336,7 +347,9 @@ async fn request_code_not_supported_over_remoting_integration_returns_compatible
         ..ProxyConfig::default()
     })
     .with_service_manager(service_manager)
-    .build();
+    .with_service_context(runtime_context.service_context("proxy-remoting-unsupported"))
+    .build()
+    .expect("the injected child context should build the proxy runtime");
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
     let server_task = tokio::spawn(async move {

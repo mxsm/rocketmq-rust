@@ -63,7 +63,7 @@ pub struct McpApp {
     config: McpConfig,
     guard: Guard,
     query: Arc<QueryFacade<AdminCoreSessionFactory>>,
-    runtime_context: Option<rocketmq_runtime::RuntimeContext>,
+    service_context: rocketmq_runtime::ChildServiceContext,
     telemetry: Arc<std::sync::Mutex<Option<rocketmq_observability::TelemetryRuntimeGuard>>>,
 }
 
@@ -74,7 +74,7 @@ impl std::fmt::Debug for McpApp {
             .field("config", &self.config)
             .field("guard", &self.guard)
             .field("query", &self.query)
-            .field("runtime_context", &self.runtime_context)
+            .field("service_context", &self.service_context)
             .field(
                 "telemetry_installed",
                 &self
@@ -88,7 +88,10 @@ impl std::fmt::Debug for McpApp {
 }
 
 impl McpApp {
-    pub fn new(config: McpConfig) -> Result<Self, crate::error::McpError> {
+    pub fn new(
+        config: McpConfig,
+        service_context: rocketmq_runtime::ChildServiceContext,
+    ) -> Result<Self, crate::error::McpError> {
         let guard = Guard::new(config.security.clone(), config.audit.clone(), &config.clusters)
             .map_err(|error| crate::error::McpError::InvalidConfig(error.to_string()))?;
         let query = Arc::new(QueryFacade::new(config.clone()).with_visibility_class("local"));
@@ -96,7 +99,7 @@ impl McpApp {
             config,
             guard,
             query,
-            runtime_context: None,
+            service_context,
             telemetry: Arc::new(std::sync::Mutex::new(None)),
         })
     }
@@ -111,9 +114,10 @@ impl McpApp {
     pub async fn bootstrap_typed(
         config: McpConfig,
         _validated_security: rocketmq_security_api::ValidatedSecurityBootstrap,
+        service_context: rocketmq_runtime::ChildServiceContext,
     ) -> Result<Self, crate::error::McpError> {
         let telemetry = init_tracing_typed(&config)?;
-        let mut app = Self::new(config)?;
+        let app = Self::new(config, service_context)?;
         *app.telemetry.lock().unwrap_or_else(|error| error.into_inner()) = Some(telemetry);
         app.start_background_services()?;
         Ok(app)
@@ -123,8 +127,9 @@ impl McpApp {
     pub async fn bootstrap(
         config: McpConfig,
         validated_security: rocketmq_security_api::ValidatedSecurityBootstrap,
+        service_context: rocketmq_runtime::ChildServiceContext,
     ) -> anyhow::Result<Self> {
-        Self::bootstrap_typed(config, validated_security)
+        Self::bootstrap_typed(config, validated_security, service_context)
             .await
             .map_err(anyhow::Error::new)
     }
@@ -151,15 +156,7 @@ impl McpApp {
         &self,
         lifecycle: &rocketmq_runtime::ServiceLifecycle,
     ) -> Result<(), crate::error::McpError> {
-        let service_context = self
-            .runtime_context
-            .as_ref()
-            .map(|runtime| runtime.service_context("rocketmq-mcp-lifecycle"))
-            .ok_or_else(|| {
-                crate::error::McpError::InvalidConfig(
-                    "MCP lifecycle requires an initialized runtime context".to_string(),
-                )
-            })?;
+        let service_context = self.service_context.child("rocketmq-mcp-lifecycle");
         lifecycle.start(&service_context).await.map_err(|error| {
             crate::error::McpError::InvalidConfig(format!("failed to start MCP lifecycle boundary: {error}"))
         })
@@ -169,15 +166,8 @@ impl McpApp {
     pub(crate) fn service_context(
         &self,
         name: &'static str,
-    ) -> Result<rocketmq_runtime::ServiceContext, crate::error::McpError> {
-        self.runtime_context
-            .as_ref()
-            .map(|runtime| runtime.service_context(name))
-            .ok_or_else(|| {
-                crate::error::McpError::InvalidConfig(
-                    "MCP transport requires an initialized runtime context".to_string(),
-                )
-            })
+    ) -> Result<rocketmq_runtime::ChildServiceContext, crate::error::McpError> {
+        Ok(self.service_context.child(name))
     }
 
     pub(crate) fn trace_cache_metrics(&self) {
@@ -230,11 +220,7 @@ impl McpApp {
     /// shutdown budget.
     pub async fn shutdown_with_deadline(&self, deadline: rocketmq_runtime::ShutdownDeadline) -> McpShutdownReport {
         let audit = self.guard.audit_log().close_and_drain(deadline).await;
-        let runtime = if let Some(runtime_context) = &self.runtime_context {
-            Some(runtime_context.shutdown_tasks_until(deadline).await)
-        } else {
-            None
-        };
+        let runtime = Some(self.service_context.task_group().shutdown_until(deadline).await);
         let telemetry = self
             .telemetry
             .lock()
@@ -248,16 +234,12 @@ impl McpApp {
         }
     }
 
-    fn start_background_services(&mut self) -> Result<(), crate::error::McpError> {
-        let runtime_context = rocketmq_runtime::RuntimeContext::try_from_current("rocketmq-mcp").map_err(|error| {
-            crate::error::McpError::InvalidConfig(format!("runtime initialization failed: {error}"))
-        })?;
-        let audit_service = runtime_context.service_context("rocketmq-mcp-audit");
+    fn start_background_services(&self) -> Result<(), crate::error::McpError> {
+        let audit_service = self.service_context.child("rocketmq-mcp-audit");
         self.guard
             .audit_log()
             .start(&self.config.audit, &audit_service)
             .map_err(|error| crate::error::McpError::InvalidConfig(error.to_string()))?;
-        self.runtime_context = Some(runtime_context);
         Ok(())
     }
 }

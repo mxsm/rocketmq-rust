@@ -22,19 +22,25 @@ use std::time::UNIX_EPOCH;
 use criterion::criterion_group;
 use criterion::criterion_main;
 use criterion::Criterion;
+use rocketmq_runtime::RuntimeConfig;
+use rocketmq_runtime::RuntimeOwner;
 use rocketmq_store::bench_support::run_store_local_file_scheduled_lifecycle_probe;
 use rocketmq_store::bench_support::StoreLocalFileScheduledLifecycleProbe;
 
 fn run_lifecycle_probe() -> StoreLocalFileScheduledLifecycleProbe {
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
-        .max_blocking_threads(4)
-        .thread_name("rocketmq-store-local-file-scheduled-bench")
-        .enable_all()
-        .build()
-        .expect("store local file scheduled benchmark runtime should start");
-
-    runtime.block_on(run_store_local_file_scheduled_lifecycle_probe())
+    let owner = RuntimeOwner::new(RuntimeConfig {
+        worker_threads: 2,
+        max_blocking_threads: 4,
+        thread_name: "rocketmq-store-local-file-scheduled-bench".to_string(),
+        ..RuntimeConfig::default()
+    })
+    .expect("store local file scheduled benchmark runtime should start");
+    let context = owner.root_context().child("store-local-file-scheduled-bench");
+    let output = owner.block_on(run_store_local_file_scheduled_lifecycle_probe(context));
+    owner
+        .shutdown_runtime_blocking()
+        .expect("store local file scheduled benchmark runtime should stop");
+    output
 }
 
 fn workspace_root() -> PathBuf {

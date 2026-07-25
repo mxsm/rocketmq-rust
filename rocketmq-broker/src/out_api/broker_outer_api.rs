@@ -90,6 +90,7 @@ use rocketmq_protocol::protocol::static_topic::topic_config_and_queue_mapping::T
 use rocketmq_protocol::protocol::DataVersion;
 use rocketmq_protocol::protocol::RemotingDeserializable;
 use rocketmq_protocol::protocol::RemotingSerializable;
+use rocketmq_runtime::ChildServiceContext;
 use rocketmq_store::timer::timer_checkpoint::TimerCheckpointSnapshot;
 use rocketmq_store::timer::timer_metrics::TimerMetricsSerializeWrapper;
 use rocketmq_transport::clients::rocketmq_tokio_client::RemotingClientShutdownReport;
@@ -119,10 +120,11 @@ pub struct BrokerOuterAPI {
 }
 
 impl BrokerOuterAPI {
-    pub fn new(tokio_client_config: Arc<TokioClientConfig>) -> Self {
+    pub fn new(tokio_client_config: Arc<TokioClientConfig>, service_context: ChildServiceContext) -> Self {
         let client = Arc::new(RocketmqDefaultClient::new(
             tokio_client_config,
             DefaultRemotingRequestProcessor,
+            service_context,
         ));
         let client_metadata = Arc::new(ClientMetadata::new());
         Self {
@@ -133,10 +135,15 @@ impl BrokerOuterAPI {
         }
     }
 
-    pub fn new_with_hook(tokio_client_config: Arc<TokioClientConfig>, rpc_hook: Option<Arc<dyn RPCHook>>) -> Self {
+    pub fn new_with_hook(
+        tokio_client_config: Arc<TokioClientConfig>,
+        rpc_hook: Option<Arc<dyn RPCHook>>,
+        service_context: ChildServiceContext,
+    ) -> Self {
         let client = Arc::new(RocketmqDefaultClient::new(
             tokio_client_config,
             DefaultRemotingRequestProcessor,
+            service_context,
         ));
         let client_metadata = Arc::new(ClientMetadata::new());
         if let Some(rpc_hook) = rpc_hook {
@@ -1666,7 +1673,11 @@ mod tests {
 
     #[test]
     fn cloned_outer_api_shares_the_remoting_client() {
-        let api = BrokerOuterAPI::new(Arc::new(TokioClientConfig::default()));
+        let runtime = rocketmq_runtime::RuntimeOwner::new(Default::default()).expect("test runtime");
+        let api = BrokerOuterAPI::new(
+            Arc::new(TokioClientConfig::default()),
+            runtime.root_context().child("broker-outer-api-test"),
+        );
         let cloned = api.clone();
 
         assert!(Arc::ptr_eq(&api.remoting_client, &cloned.remoting_client));

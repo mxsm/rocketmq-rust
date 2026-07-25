@@ -31,7 +31,7 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 
 use crate::error::Result;
-use rocketmq_runtime::TaskGroup;
+use rocketmq_runtime::BlockingExecutor;
 
 /// Storage backend configuration
 #[derive(Debug, Clone)]
@@ -153,31 +153,11 @@ pub trait StorageBackendExt: StorageBackend {
 impl<T: StorageBackend + ?Sized> StorageBackendExt for T {}
 
 /// Create a storage backend based on configuration
-pub async fn create_storage(config: StorageConfig) -> Result<SharedStorageBackend> {
-    create_storage_with_optional_task_group(config, None).await
-}
-
-/// Creates a storage backend whose blocking I/O is owned by the supplied controller task group.
-pub async fn create_storage_with_task_group(
-    config: StorageConfig,
-    parent_task_group: TaskGroup,
-) -> Result<SharedStorageBackend> {
-    create_storage_with_optional_task_group(config, Some(parent_task_group)).await
-}
-
-async fn create_storage_with_optional_task_group(
-    config: StorageConfig,
-    parent_task_group: Option<TaskGroup>,
-) -> Result<SharedStorageBackend> {
+pub async fn create_storage(config: StorageConfig, storage_io: BlockingExecutor) -> Result<SharedStorageBackend> {
     match config {
         #[cfg(feature = "storage-rocksdb")]
         StorageConfig::RocksDB { path } => {
-            let backend = match parent_task_group {
-                Some(parent_task_group) => {
-                    rocksdb_backend::RocksDBBackend::new_with_parent_task_group(path, parent_task_group).await?
-                }
-                None => rocksdb_backend::RocksDBBackend::new(path).await?,
-            };
+            let backend = rocksdb_backend::RocksDBBackend::new(path, storage_io).await?;
             Ok(Arc::new(backend))
         }
 
@@ -289,7 +269,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_memory_backend() {
-        let backend = create_storage(StorageConfig::Memory).await.unwrap();
+        let context = rocketmq_runtime::RuntimeContext::from_current("controller-memory-storage-test");
+        let backend = create_storage(
+            StorageConfig::Memory,
+            context.service_context("memory-storage").storage_io().clone(),
+        )
+        .await
+        .unwrap();
 
         // Test put and get
         backend.put("test_key", b"test_value").await.unwrap();
@@ -328,7 +314,13 @@ mod tests {
             name: String,
         }
 
-        let backend = create_storage(StorageConfig::Memory).await.unwrap();
+        let context = rocketmq_runtime::RuntimeContext::from_current("controller-json-storage-test");
+        let backend = create_storage(
+            StorageConfig::Memory,
+            context.service_context("json-storage").storage_io().clone(),
+        )
+        .await
+        .unwrap();
 
         let data = TestData {
             id: 123,

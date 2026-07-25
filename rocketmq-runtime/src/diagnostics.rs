@@ -18,7 +18,6 @@ use std::sync::Arc;
 
 use serde::Serialize;
 
-use crate::blocking::BlockingExecutor;
 use crate::blocking::BlockingExecutorSnapshot;
 use crate::handle::RuntimeHandle;
 use crate::task_group::TaskGroup;
@@ -42,7 +41,7 @@ pub struct RuntimeDiagnosticsSnapshot {
     pub lifecycle_state: TaskGroupLifecycleState,
     pub task_count: usize,
     pub child_count: usize,
-    pub blocking: BlockingExecutorSnapshot,
+    pub blocking_lanes: Vec<BlockingExecutorSnapshot>,
 }
 
 impl RuntimeDiagnostics {
@@ -62,7 +61,11 @@ impl RuntimeDiagnostics {
         &self.runtime_id
     }
 
-    pub fn snapshot(&self, root: &TaskGroup, blocking: &BlockingExecutor) -> RuntimeDiagnosticsSnapshot {
+    pub fn snapshot(
+        &self,
+        root: &TaskGroup,
+        blocking_lanes: Vec<BlockingExecutorSnapshot>,
+    ) -> RuntimeDiagnosticsSnapshot {
         RuntimeDiagnosticsSnapshot {
             runtime_id: self.runtime_id.to_string(),
             root_name: root.name().to_string(),
@@ -71,7 +74,7 @@ impl RuntimeDiagnostics {
             lifecycle_state: root.lifecycle_state(),
             task_count: root.task_count(),
             child_count: root.child_count(),
-            blocking: blocking.snapshot(),
+            blocking_lanes,
         }
     }
 }

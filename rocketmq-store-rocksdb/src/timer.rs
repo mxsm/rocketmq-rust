@@ -142,8 +142,14 @@ impl RocksDbTimerBuildService {
         }
     }
 
-    pub async fn flush_pending_blocking(self: Arc<Self>) -> Result<usize, RocketMQError> {
-        crate::runtime::spawn_io("rocksdb.timer.flush_pending", move || self.flush_pending()).await?
+    pub async fn flush_pending_blocking(
+        self: Arc<Self>,
+        runtime_scope: &crate::runtime::RocksDbRuntimeScope,
+    ) -> Result<usize, RocketMQError> {
+        crate::runtime::spawn_io(runtime_scope, "rocksdb.timer.flush_pending", move || {
+            self.flush_pending()
+        })
+        .await?
     }
 
     pub fn get_dispatch_from_queue_offset(&self) -> Result<Option<i64>, RocketMQError> {

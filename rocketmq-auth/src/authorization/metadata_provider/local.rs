@@ -796,6 +796,15 @@ mod tests {
     use crate::authorization::model::policy_entry::PolicyEntry;
     use crate::authorization::model::resource::Resource;
 
+    fn metadata_io_actor(name: &str) -> MetadataIoActor {
+        let context = rocketmq_runtime::RuntimeContext::try_from_current(name).unwrap();
+        MetadataIoActor::start(
+            &context.service_context("auth.authorization-metadata"),
+            rocketmq_runtime::MetadataIoConfig::default(),
+        )
+        .unwrap()
+    }
+
     #[tokio::test]
     async fn test_local_provider_initialization() {
         let mut provider = LocalAuthorizationMetadataProvider::new();
@@ -970,7 +979,8 @@ mod tests {
             ..AuthConfig::default()
         };
 
-        let mut provider = LocalAuthorizationMetadataProvider::new();
+        let metadata_io = metadata_io_actor("auth-authorization-persistence-test");
+        let mut provider = LocalAuthorizationMetadataProvider::with_metadata_io(metadata_io.clone());
         provider.initialize(config.clone(), None).unwrap();
         let acl = Acl::of(
             "alice",
@@ -984,7 +994,7 @@ mod tests {
         );
         provider.create_acl(acl).await.unwrap();
 
-        let mut restarted = LocalAuthorizationMetadataProvider::new();
+        let mut restarted = LocalAuthorizationMetadataProvider::with_metadata_io(metadata_io);
         restarted.initialize(config, None).unwrap();
         let user = User::of("alice");
         let restored = restarted.get_acl(&user).await.unwrap().unwrap();
@@ -1006,7 +1016,8 @@ mod tests {
             ..AuthConfig::default()
         };
 
-        let mut provider = LocalAuthorizationMetadataProvider::new();
+        let metadata_io = metadata_io_actor("auth-authorization-update-delete-test");
+        let mut provider = LocalAuthorizationMetadataProvider::with_metadata_io(metadata_io.clone());
         provider.initialize(config.clone(), None).unwrap();
         provider
             .create_acl(Acl::of(
@@ -1035,7 +1046,7 @@ mod tests {
             .await
             .unwrap();
 
-        let mut restarted = LocalAuthorizationMetadataProvider::new();
+        let mut restarted = LocalAuthorizationMetadataProvider::with_metadata_io(metadata_io.clone());
         restarted.initialize(config.clone(), None).unwrap();
         let user = User::of("alice");
         let restored = restarted.get_acl(&user).await.unwrap().unwrap();
@@ -1046,7 +1057,7 @@ mod tests {
 
         restarted.delete_acl(&user).await.unwrap();
 
-        let mut deleted_restart = LocalAuthorizationMetadataProvider::new();
+        let mut deleted_restart = LocalAuthorizationMetadataProvider::with_metadata_io(metadata_io);
         deleted_restart.initialize(config, None).unwrap();
         assert!(deleted_restart.get_acl(&user).await.unwrap().is_none());
     }

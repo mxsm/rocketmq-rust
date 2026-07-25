@@ -195,12 +195,20 @@ mod tests {
             route: Some(sample_topic_route_data()),
         });
 
-        let bootstrap = Builder::new()
+        let runtime = rocketmq_runtime::RuntimeContext::from_current("namesrv-cluster-test-processor");
+        let bootstrap = Builder::new(runtime.service_context("namesrv"))
             .set_name_server_config(namesrv_config)
             .set_cluster_test_route_lookup(mock_lookup)
             .build();
 
-        let harness = LocalRequestHarness::new().await.unwrap();
+        let harness = LocalRequestHarness::new(
+            runtime
+                .service_context("cluster-test-local-harness")
+                .task_group()
+                .clone(),
+        )
+        .await
+        .unwrap();
         let runtime = bootstrap.runtime_inner();
         let mut processor = ClusterTestRequestProcessor::new(NameServerRuntimeHandle::new(&runtime));
         let mut request = RemotingCommand::create_request_command(

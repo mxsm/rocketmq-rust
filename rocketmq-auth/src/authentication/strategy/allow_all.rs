@@ -22,8 +22,7 @@
 //! This strategy provides no security and should never be used in production
 //! environments. It is provided solely for development convenience and testing.
 
-use rocketmq_error::AuthError;
-
+use crate::authentication::strategy::AuthenticationFuture;
 use crate::authentication::strategy::AuthenticationStrategy;
 use crate::authorization::context::authentication_context::AuthenticationContext;
 
@@ -87,9 +86,8 @@ impl AuthenticationStrategy for AllowAllAuthenticationStrategy {
     /// # Returns
     ///
     /// Always returns `Ok(())` indicating successful authentication.
-    fn authenticate(&self, _context: &dyn AuthenticationContext) -> Result<(), AuthError> {
-        // Allow all authentication attempts
-        Ok(())
+    fn authenticate<'a>(&'a self, _context: &'a dyn AuthenticationContext) -> AuthenticationFuture<'a> {
+        Box::pin(async { Ok(()) })
     }
 }
 
@@ -100,48 +98,48 @@ mod tests {
     use cheetah_string::CheetahString;
     use std::sync::Arc;
 
-    #[test]
-    fn test_new_creates_strategy() {
+    #[tokio::test]
+    async fn test_new_creates_strategy() {
         let strategy = AllowAllAuthenticationStrategy::new();
         let context = DefaultAuthenticationContext::new();
-        assert!(strategy.authenticate(&context).is_ok());
+        assert!(strategy.authenticate(&context).await.is_ok());
     }
 
-    #[test]
-    fn test_default_creates_strategy() {
+    #[tokio::test]
+    async fn test_default_creates_strategy() {
         let strategy = AllowAllAuthenticationStrategy;
         let context = DefaultAuthenticationContext::new();
-        assert!(strategy.authenticate(&context).is_ok());
+        assert!(strategy.authenticate(&context).await.is_ok());
     }
 
-    #[test]
-    fn test_allows_empty_context() {
+    #[tokio::test]
+    async fn test_allows_empty_context() {
         let strategy = AllowAllAuthenticationStrategy::new();
         let context = DefaultAuthenticationContext::new();
 
-        let result = strategy.authenticate(&context);
+        let result = strategy.authenticate(&context).await;
         assert!(result.is_ok());
     }
 
-    #[test]
-    fn test_allows_context_with_credentials() {
+    #[tokio::test]
+    async fn test_allows_context_with_credentials() {
         let strategy = AllowAllAuthenticationStrategy::new();
         let mut context = DefaultAuthenticationContext::new();
         context.set_username(CheetahString::from("test_user"));
         context.set_signature(CheetahString::from("invalid_signature"));
 
-        let result = strategy.authenticate(&context);
+        let result = strategy.authenticate(&context).await;
         assert!(result.is_ok());
     }
 
-    #[test]
-    fn test_allows_context_with_invalid_data() {
+    #[tokio::test]
+    async fn test_allows_context_with_invalid_data() {
         let strategy = AllowAllAuthenticationStrategy::new();
         let mut context = DefaultAuthenticationContext::new();
         context.set_username(CheetahString::from(""));
         context.set_content(vec![]);
 
-        let result = strategy.authenticate(&context);
+        let result = strategy.authenticate(&context).await;
         assert!(result.is_ok());
     }
 
@@ -151,23 +149,23 @@ mod tests {
         assert_send_sync::<AllowAllAuthenticationStrategy>();
     }
 
-    #[test]
-    fn test_can_be_used_as_trait_object() {
+    #[tokio::test]
+    async fn test_can_be_used_as_trait_object() {
         let strategy: Arc<dyn AuthenticationStrategy> = Arc::new(AllowAllAuthenticationStrategy::new());
         let context = DefaultAuthenticationContext::new();
 
-        let result = strategy.authenticate(&context);
+        let result = strategy.authenticate(&context).await;
         assert!(result.is_ok());
     }
 
-    #[test]
-    fn test_clone_works() {
+    #[tokio::test]
+    async fn test_clone_works() {
         let strategy1 = AllowAllAuthenticationStrategy::new();
         let strategy2 = strategy1.clone();
 
         let context = DefaultAuthenticationContext::new();
-        assert!(strategy1.authenticate(&context).is_ok());
-        assert!(strategy2.authenticate(&context).is_ok());
+        assert!(strategy1.authenticate(&context).await.is_ok());
+        assert!(strategy2.authenticate(&context).await.is_ok());
     }
 
     #[test]

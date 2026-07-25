@@ -16,8 +16,11 @@ use std::future::Future;
 use std::sync::Arc;
 
 use crate::blocking::BlockingExecutor;
+use crate::blocking::BlockingLane;
+use crate::blocking::BlockingLanePolicies;
 use crate::diagnostics::RuntimeDiagnostics;
 use crate::diagnostics::RuntimeDiagnosticsSnapshot;
+use crate::error::RuntimeError;
 use crate::error::RuntimeResult;
 use crate::handle::RuntimeHandle;
 use crate::scheduled::ScheduledTaskGroup;
@@ -25,29 +28,216 @@ use crate::task_group::TaskGroup;
 use crate::task_group::TaskId;
 use crate::task_group::TaskKind;
 
+/// A validated, named position in the service ownership tree.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ScopeId(Arc<str>);
+
+impl ScopeId {
+    /// Creates a scope identifier.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeError::InvalidConfig`] when `name` is empty or only
+    /// contains whitespace.
+    pub fn new(name: impl Into<Arc<str>>) -> RuntimeResult<Self> {
+        let name = name.into();
+        if name.trim().is_empty() {
+            return Err(RuntimeError::InvalidConfig(
+                "service context scope name must not be empty".to_string(),
+            ));
+        }
+        Ok(Self(name))
+    }
+
+    /// Creates a statically named scope.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `name` is empty or only contains whitespace. Static scope
+    /// names are programmer-owned lifecycle invariants.
+    pub fn from_static(name: &'static str) -> Self {
+        Self::new(Arc::<str>::from(name)).expect("static service context scope name must be valid")
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    fn into_inner(self) -> Arc<str> {
+        self.0
+    }
+}
+
+impl From<&'static str> for ScopeId {
+    fn from(value: &'static str) -> Self {
+        Self::from_static(value)
+    }
+}
+
+impl From<String> for ScopeId {
+    fn from(value: String) -> Self {
+        Self::new(Arc::<str>::from(value)).expect("service context scope name must be valid")
+    }
+}
+
+impl From<Arc<str>> for ScopeId {
+    fn from(value: Arc<str>) -> Self {
+        Self::new(value).expect("service context scope name must be valid")
+    }
+}
+
 #[derive(Debug, Clone)]
-pub struct ServiceContext {
+struct BlockingLanes {
+    storage_io: BlockingExecutor,
+    metadata_io: BlockingExecutor,
+    cpu_crypto: BlockingExecutor,
+}
+
+impl BlockingLanes {
+    fn new(policies: BlockingLanePolicies, root_group: &TaskGroup) -> RuntimeResult<Self> {
+        Ok(Self {
+            storage_io: BlockingExecutor::new(
+                policies.storage_io,
+                root_group.child("runtime.blocking.storage-io.reaper"),
+            )?,
+            metadata_io: BlockingExecutor::new(
+                policies.metadata_io,
+                root_group.child("runtime.blocking.metadata-io.reaper"),
+            )?,
+            cpu_crypto: BlockingExecutor::new(
+                policies.cpu_crypto,
+                root_group.child("runtime.blocking.cpu-crypto.reaper"),
+            )?,
+        })
+    }
+
+    fn get(&self, lane: BlockingLane) -> &BlockingExecutor {
+        match lane {
+            BlockingLane::StorageIo => &self.storage_io,
+            BlockingLane::MetadataIo => &self.metadata_io,
+            BlockingLane::CpuCrypto => &self.cpu_crypto,
+        }
+    }
+
+    fn snapshots(&self) -> Vec<crate::blocking::BlockingExecutorSnapshot> {
+        vec![
+            self.storage_io.snapshot(),
+            self.metadata_io.snapshot(),
+            self.cpu_crypto.snapshot(),
+        ]
+    }
+}
+
+/// The unique, non-cloneable lifecycle root owned by [`crate::RuntimeOwner`].
+///
+/// The type has no public constructor and cannot be promoted from a child
+/// context. Composition roots only use it to derive the first named child.
+#[derive(Debug)]
+pub struct RootServiceContext {
     name: Arc<str>,
     runtime: RuntimeHandle,
     task_group: TaskGroup,
-    blocking: BlockingExecutor,
+    blocking_lanes: BlockingLanes,
     diagnostics: RuntimeDiagnostics,
+    _sealed: RootContextSeal,
 }
 
-impl ServiceContext {
-    pub fn new(
+#[derive(Debug)]
+struct RootContextSeal;
+
+impl RootServiceContext {
+    pub(crate) fn new(
         name: Arc<str>,
         runtime: RuntimeHandle,
         task_group: TaskGroup,
-        blocking: BlockingExecutor,
+        blocking_policies: BlockingLanePolicies,
         diagnostics: RuntimeDiagnostics,
-    ) -> Self {
-        Self {
+    ) -> RuntimeResult<Self> {
+        let blocking_lanes = BlockingLanes::new(blocking_policies, &task_group)?;
+        Ok(Self {
             name,
             runtime,
             task_group,
-            blocking,
+            blocking_lanes,
             diagnostics,
+            _sealed: RootContextSeal,
+        })
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn child(&self, scope: impl Into<ScopeId>) -> ChildServiceContext {
+        ChildServiceContext::new(
+            scope.into(),
+            self.runtime.clone(),
+            &self.task_group,
+            self.blocking_lanes.clone(),
+            self.diagnostics.clone(),
+        )
+    }
+
+    pub fn diagnostics_snapshot(&self) -> RuntimeDiagnosticsSnapshot {
+        self.diagnostics
+            .snapshot(&self.task_group, self.blocking_lanes.snapshots())
+    }
+
+    pub(crate) fn task_group(&self) -> &TaskGroup {
+        &self.task_group
+    }
+
+    pub(crate) fn runtime(&self) -> &RuntimeHandle {
+        &self.runtime
+    }
+
+    pub(crate) fn blocking(&self, lane: BlockingLane) -> &BlockingExecutor {
+        self.blocking_lanes.get(lane)
+    }
+
+    pub(crate) fn diagnostics(&self) -> &RuntimeDiagnostics {
+        &self.diagnostics
+    }
+
+    pub(crate) fn blocking_snapshots(&self) -> Vec<crate::blocking::BlockingExecutorSnapshot> {
+        self.blocking_lanes.snapshots()
+    }
+}
+
+/// A sealed, cloneable descendant of a [`RootServiceContext`].
+///
+/// Libraries receive this type or a capability derived from it. They cannot
+/// construct it from a Tokio handle, create a root task group, or promote it
+/// back to a root.
+#[derive(Debug, Clone)]
+pub struct ChildServiceContext {
+    name: Arc<str>,
+    runtime: RuntimeHandle,
+    task_group: TaskGroup,
+    blocking_lanes: BlockingLanes,
+    diagnostics: RuntimeDiagnostics,
+    _sealed: Arc<ChildContextSeal>,
+}
+
+#[derive(Debug)]
+struct ChildContextSeal;
+
+impl ChildServiceContext {
+    fn new(
+        scope: ScopeId,
+        runtime: RuntimeHandle,
+        parent_group: &TaskGroup,
+        blocking_lanes: BlockingLanes,
+        diagnostics: RuntimeDiagnostics,
+    ) -> Self {
+        let name = scope.into_inner();
+        Self {
+            name: name.clone(),
+            runtime,
+            task_group: parent_group.child(name),
+            blocking_lanes,
+            diagnostics,
+            _sealed: Arc::new(ChildContextSeal),
         }
     }
 
@@ -63,8 +253,20 @@ impl ServiceContext {
         &self.task_group
     }
 
-    pub fn blocking(&self) -> &BlockingExecutor {
-        &self.blocking
+    pub fn blocking(&self, lane: BlockingLane) -> &BlockingExecutor {
+        self.blocking_lanes.get(lane)
+    }
+
+    pub fn storage_io(&self) -> &BlockingExecutor {
+        self.blocking(BlockingLane::StorageIo)
+    }
+
+    pub fn metadata_io(&self) -> &BlockingExecutor {
+        self.blocking(BlockingLane::MetadataIo)
+    }
+
+    pub fn cpu_crypto(&self) -> &BlockingExecutor {
+        self.blocking(BlockingLane::CpuCrypto)
     }
 
     pub fn diagnostics(&self) -> &RuntimeDiagnostics {
@@ -72,22 +274,23 @@ impl ServiceContext {
     }
 
     pub fn diagnostics_snapshot(&self) -> RuntimeDiagnosticsSnapshot {
-        self.diagnostics.snapshot(&self.task_group, &self.blocking)
+        self.diagnostics
+            .snapshot(&self.task_group, self.blocking_lanes.snapshots())
     }
 
-    pub fn child(&self, name: impl Into<Arc<str>>) -> Self {
-        let name = name.into();
-        Self {
-            name: name.clone(),
-            runtime: self.runtime.clone(),
-            task_group: self.task_group.child(name),
-            blocking: self.blocking.clone(),
-            diagnostics: self.diagnostics.clone(),
-        }
+    pub fn child(&self, scope: impl Into<ScopeId>) -> Self {
+        Self::new(
+            scope.into(),
+            self.runtime.clone(),
+            &self.task_group,
+            self.blocking_lanes.clone(),
+            self.diagnostics.clone(),
+        )
     }
 
-    pub fn scheduled_tasks(&self, name: impl Into<Arc<str>>) -> ScheduledTaskGroup {
-        ScheduledTaskGroup::new(self.task_group.child(name))
+    pub fn scheduled_tasks(&self, scope: impl Into<ScopeId>) -> ScheduledTaskGroup {
+        let scope = scope.into().into_inner();
+        ScheduledTaskGroup::new(self.task_group.child(scope))
     }
 
     pub fn spawn<F>(&self, name: impl Into<Arc<str>>, kind: TaskKind, future: F) -> RuntimeResult<TaskId>

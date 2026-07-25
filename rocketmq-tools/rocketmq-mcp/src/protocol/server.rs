@@ -230,7 +230,14 @@ mod tests {
 
     #[test]
     fn server_info_declares_mvp_capabilities() {
-        let app = McpApp::new(McpConfig::load(example_config_path()).unwrap()).unwrap();
+        let owner =
+            rocketmq_runtime::RuntimeOwner::new(rocketmq_runtime::RuntimeConfig::server_default("mcp-protocol-test"))
+                .unwrap();
+        let app = McpApp::new(
+            McpConfig::load(example_config_path()).unwrap(),
+            owner.root_context().child("mcp-app"),
+        )
+        .unwrap();
         let server = RocketmqMcpServer::new(app);
 
         let info = server.get_info();

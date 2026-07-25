@@ -98,7 +98,7 @@ pub mod bench_support {
 
     use cheetah_string::CheetahString;
     use rocketmq_error::RocketMQResult;
-    use rocketmq_runtime::RuntimeHandle;
+    use rocketmq_runtime::ChildServiceContext;
     use rocketmq_runtime::ShutdownReport;
     use serde::Serialize;
 
@@ -107,44 +107,6 @@ pub mod bench_support {
     use crate::runtime::AuthRuntimeBuilder;
 
     static NEXT_ACL_WATCHER_PROBE_ID: AtomicU64 = AtomicU64::new(0);
-
-    #[derive(Clone, Copy, Debug, Default, Serialize)]
-    pub struct AuthSyncBridgeCounterSnapshot {
-        pub sync_bridge_calls: u64,
-        pub multi_thread_block_in_place: u64,
-        pub current_thread_handoffs: u64,
-        pub fallback_runtime_calls: u64,
-        pub shared_runtime_acquires: u64,
-        pub shared_runtime_created: u64,
-        pub shared_runtime_reused: u64,
-        pub shared_runtime_available: bool,
-        pub blocking_executor_creations: u64,
-        pub blocking_executor_shutdown_requests: u64,
-    }
-
-    #[derive(Clone, Copy, Debug, Default, Serialize)]
-    pub struct AuthSyncBridgeCounterDelta {
-        pub sync_bridge_calls: u64,
-        pub multi_thread_block_in_place: u64,
-        pub current_thread_handoffs: u64,
-        pub fallback_runtime_calls: u64,
-        pub shared_runtime_acquires: u64,
-        pub shared_runtime_created: u64,
-        pub shared_runtime_reused: u64,
-        pub blocking_executor_creations: u64,
-        pub blocking_executor_shutdown_requests: u64,
-    }
-
-    #[derive(Clone, Debug, Serialize)]
-    pub struct AuthSyncBridgeProbe {
-        pub case: &'static str,
-        pub call_count: usize,
-        pub elapsed_us: u128,
-        pub before: AuthSyncBridgeCounterSnapshot,
-        pub after: AuthSyncBridgeCounterSnapshot,
-        pub delta: AuthSyncBridgeCounterDelta,
-        pub healthy: bool,
-    }
 
     #[derive(Clone, Debug, Serialize)]
     pub struct AuthAclWatcherLifecycleProbe {
@@ -158,7 +120,9 @@ pub mod bench_support {
         pub healthy: bool,
     }
 
-    pub async fn run_auth_acl_watcher_lifecycle_probe() -> RocketMQResult<AuthAclWatcherLifecycleProbe> {
+    pub async fn run_auth_acl_watcher_lifecycle_probe(
+        service_context: ChildServiceContext,
+    ) -> RocketMQResult<AuthAclWatcherLifecycleProbe> {
         let root = unique_acl_watcher_probe_root();
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).map_err(|error| {
@@ -167,12 +131,15 @@ pub mod bench_support {
         let acl_file = root.join("plain_acl.yml");
         write_acl_file(&acl_file, "first")?;
 
-        let runtime = AuthRuntimeBuilder::new(AuthConfig {
-            acl_file: CheetahString::from(acl_file.to_string_lossy().as_ref()),
-            acl_file_watch_enabled: true,
-            acl_file_watch_interval_millis: 5,
-            ..AuthConfig::default()
-        })
+        let runtime = AuthRuntimeBuilder::new(
+            AuthConfig {
+                acl_file: CheetahString::from(acl_file.to_string_lossy().as_ref()),
+                acl_file_watch_enabled: true,
+                acl_file_watch_interval_millis: 5,
+                ..AuthConfig::default()
+            },
+            service_context,
+        )
         .build()
         .await?;
         let authn_provider = runtime.provider_registry().authentication_metadata_provider();
@@ -238,100 +205,6 @@ pub mod bench_support {
         })
     }
 
-    pub fn run_auth_sync_bridge_no_runtime_probe(call_count: usize) -> AuthSyncBridgeProbe {
-        run_probe("no_runtime_shared_fallback", call_count, || {
-            run_sync_bridge_calls(call_count);
-        })
-    }
-
-    pub fn run_auth_sync_bridge_current_thread_probe(call_count: usize) -> AuthSyncBridgeProbe {
-        run_probe("current_thread_handoff", call_count, || {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("auth sync bridge current-thread probe runtime should build");
-            let _guard = runtime.enter();
-            run_sync_bridge_calls(call_count);
-        })
-    }
-
-    pub fn run_auth_sync_bridge_multi_thread_probe(call_count: usize) -> AuthSyncBridgeProbe {
-        run_probe("multi_thread_block_in_place", call_count, || {
-            let runtime = tokio::runtime::Builder::new_multi_thread()
-                .worker_threads(2)
-                .enable_all()
-                .build()
-                .expect("auth sync bridge multi-thread probe runtime should build");
-            runtime.block_on(async move {
-                let runtime_handle = RuntimeHandle::new(tokio::runtime::Handle::current());
-                runtime_handle
-                    .spawn(async move {
-                        run_sync_bridge_calls(call_count);
-                    })
-                    .await
-                    .expect("auth sync bridge multi-thread probe task should join");
-            });
-        })
-    }
-
-    fn run_probe(case: &'static str, call_count: usize, run: impl FnOnce()) -> AuthSyncBridgeProbe {
-        let before = snapshot();
-        let started_at = Instant::now();
-        run();
-        let elapsed_us = started_at.elapsed().as_micros();
-        let after = snapshot();
-        let delta = after.delta_since(before);
-        let healthy = match case {
-            "no_runtime_shared_fallback" => {
-                delta.sync_bridge_calls == call_count as u64
-                    && delta.fallback_runtime_calls == call_count as u64
-                    && delta.shared_runtime_acquires == call_count as u64
-                    && delta.shared_runtime_created <= 1
-                    && after.shared_runtime_available
-            }
-            "current_thread_handoff" => {
-                delta.sync_bridge_calls == call_count as u64
-                    && delta.current_thread_handoffs == call_count as u64
-                    && delta.multi_thread_block_in_place == 0
-                    && delta.shared_runtime_acquires == call_count as u64
-                    && after.shared_runtime_available
-            }
-            "multi_thread_block_in_place" => {
-                delta.sync_bridge_calls == call_count as u64
-                    && delta.multi_thread_block_in_place == call_count as u64
-                    && delta.current_thread_handoffs == 0
-                    && delta.shared_runtime_acquires == 0
-            }
-            _ => false,
-        };
-
-        AuthSyncBridgeProbe {
-            case,
-            call_count,
-            elapsed_us,
-            before,
-            after,
-            delta,
-            healthy,
-        }
-    }
-
-    fn run_sync_bridge_calls(call_count: usize) {
-        for task_index in 0..call_count {
-            let value = crate::runtime_bridge::block_on_sync_bridge(
-                || async move { Ok::<usize, String>(task_index) },
-                |error| error,
-                || "auth sync bridge thread panicked".to_string(),
-            )
-            .expect("auth sync bridge probe call should complete");
-            assert_eq!(value, task_index);
-        }
-    }
-
-    fn snapshot() -> AuthSyncBridgeCounterSnapshot {
-        crate::runtime_bridge::auth_sync_bridge_snapshot().into()
-    }
-
     fn unique_acl_watcher_probe_root() -> PathBuf {
         let id = NEXT_ACL_WATCHER_PROBE_ID.fetch_add(1, Ordering::Relaxed);
         std::env::temp_dir().join(format!("rocketmq-auth-acl-watcher-{}-{id}", std::process::id()))
@@ -377,101 +250,20 @@ accounts:
         let _ = fs::remove_file(temp_file);
         Ok(())
     }
-
-    impl From<crate::runtime_bridge::AuthSyncBridgeSnapshot> for AuthSyncBridgeCounterSnapshot {
-        fn from(snapshot: crate::runtime_bridge::AuthSyncBridgeSnapshot) -> Self {
-            Self {
-                sync_bridge_calls: snapshot.sync_bridge_calls,
-                multi_thread_block_in_place: snapshot.multi_thread_block_in_place,
-                current_thread_handoffs: snapshot.current_thread_handoffs,
-                fallback_runtime_calls: snapshot.fallback_runtime_calls,
-                shared_runtime_acquires: snapshot.shared_runtime_acquires,
-                shared_runtime_created: snapshot.shared_runtime_created,
-                shared_runtime_reused: snapshot.shared_runtime_reused,
-                shared_runtime_available: snapshot.shared_runtime_available,
-                blocking_executor_creations: snapshot.blocking_executor_creations,
-                blocking_executor_shutdown_requests: snapshot.blocking_executor_shutdown_requests,
-            }
-        }
-    }
-
-    impl AuthSyncBridgeCounterSnapshot {
-        fn delta_since(self, before: Self) -> AuthSyncBridgeCounterDelta {
-            AuthSyncBridgeCounterDelta {
-                sync_bridge_calls: self.sync_bridge_calls.saturating_sub(before.sync_bridge_calls),
-                multi_thread_block_in_place: self
-                    .multi_thread_block_in_place
-                    .saturating_sub(before.multi_thread_block_in_place),
-                current_thread_handoffs: self
-                    .current_thread_handoffs
-                    .saturating_sub(before.current_thread_handoffs),
-                fallback_runtime_calls: self
-                    .fallback_runtime_calls
-                    .saturating_sub(before.fallback_runtime_calls),
-                shared_runtime_acquires: self
-                    .shared_runtime_acquires
-                    .saturating_sub(before.shared_runtime_acquires),
-                shared_runtime_created: self
-                    .shared_runtime_created
-                    .saturating_sub(before.shared_runtime_created),
-                shared_runtime_reused: self.shared_runtime_reused.saturating_sub(before.shared_runtime_reused),
-                blocking_executor_creations: self
-                    .blocking_executor_creations
-                    .saturating_sub(before.blocking_executor_creations),
-                blocking_executor_shutdown_requests: self
-                    .blocking_executor_shutdown_requests
-                    .saturating_sub(before.blocking_executor_shutdown_requests),
-            }
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn auth_sync_bridge_multi_thread_probe_is_healthy() {
-        let _guard = crate::runtime_bridge::auth_runtime_bridge_test_guard();
-        let probe = crate::bench_support::run_auth_sync_bridge_multi_thread_probe(8);
-        assert!(probe.healthy, "{probe:?}");
-        assert_eq!(probe.delta.multi_thread_block_in_place, 8);
-        assert_eq!(probe.delta.current_thread_handoffs, 0);
-        assert_eq!(probe.delta.shared_runtime_acquires, 0);
-    }
-
-    #[test]
-    fn auth_sync_bridge_counter_reset_clears_observable_counters() {
-        let _guard = crate::runtime_bridge::auth_runtime_bridge_test_guard();
-        crate::runtime_bridge::reset_auth_sync_bridge_counters_for_tests();
-
-        let value = crate::runtime_bridge::block_on_sync_bridge(
-            || async { Ok::<usize, String>(7) },
-            |error| error,
-            || "auth sync bridge thread panicked".to_string(),
-        )
-        .expect("auth sync bridge fallback call should complete");
-        assert_eq!(value, 7);
-        assert!(crate::runtime_bridge::auth_sync_bridge_snapshot().sync_bridge_calls > 0);
-
-        let snapshot = crate::runtime_bridge::reset_auth_sync_bridge_counters_for_tests();
-        assert_eq!(snapshot.sync_bridge_calls, 0);
-        assert_eq!(snapshot.multi_thread_block_in_place, 0);
-        assert_eq!(snapshot.current_thread_handoffs, 0);
-        assert_eq!(snapshot.fallback_runtime_calls, 0);
-        assert_eq!(snapshot.shared_runtime_acquires, 0);
-        assert_eq!(snapshot.shared_runtime_created, 0);
-        assert_eq!(snapshot.shared_runtime_reused, 0);
-        assert_eq!(snapshot.blocking_executor_creations, 0);
-        assert_eq!(snapshot.blocking_executor_shutdown_requests, 0);
-    }
 }
 
 #[cfg(test)]
 mod bench_support_tests {
+    use rocketmq_runtime::RuntimeContext;
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn auth_acl_watcher_probe_reports_clean_shutdown() {
-        let probe = super::bench_support::run_auth_acl_watcher_lifecycle_probe()
-            .await
-            .expect("auth ACL watcher lifecycle probe should run");
+        let runtime = RuntimeContext::from_current("auth-acl-watcher-probe-test");
+        let probe = super::bench_support::run_auth_acl_watcher_lifecycle_probe(
+            runtime.service_context("auth-acl-watcher-probe"),
+        )
+        .await
+        .expect("auth ACL watcher lifecycle probe should run");
 
         assert!(probe.healthy, "{probe:?}");
         assert!(probe.reload_success, "{probe:?}");

@@ -39,6 +39,7 @@ use crate::heartbeat::default_broker_heartbeat_manager::DefaultBrokerHeartbeatMa
 use crate::helper::broker_lifecycle_listener::BrokerLifecycleListener;
 use crate::typ::Node;
 use crate::typ::NodeId;
+use rocketmq_runtime::ChildServiceContext;
 
 /// Controller wrapper used by the rest of the controller stack.
 ///
@@ -50,9 +51,9 @@ pub struct RaftController {
 
 impl RaftController {
     /// Create a new OpenRaft-based controller
-    pub fn new_open_raft(config: ControllerConfigReader) -> Self {
+    pub fn new_open_raft(config: ControllerConfigReader, service_context: ChildServiceContext) -> Self {
         Self {
-            inner: Arc::new(OpenRaftController::new(config)),
+            inner: Arc::new(OpenRaftController::new(config, service_context)),
         }
     }
 
@@ -60,24 +61,13 @@ impl RaftController {
     pub fn new_open_raft_with_heartbeat(
         config: ControllerConfigReader,
         heartbeat_manager: Arc<DefaultBrokerHeartbeatManager>,
+        service_context: ChildServiceContext,
     ) -> Self {
         Self {
-            inner: Arc::new(OpenRaftController::new_with_heartbeat(config, heartbeat_manager)),
-        }
-    }
-
-    /// Create an OpenRaft controller whose networking, storage, and blocking work are owned by
-    /// the supplied controller task group.
-    pub fn new_open_raft_with_heartbeat_and_task_group(
-        config: ControllerConfigReader,
-        heartbeat_manager: Arc<DefaultBrokerHeartbeatManager>,
-        parent_task_group: rocketmq_runtime::TaskGroup,
-    ) -> Self {
-        Self {
-            inner: Arc::new(OpenRaftController::new_with_heartbeat_and_task_group(
+            inner: Arc::new(OpenRaftController::new_with_heartbeat(
                 config,
                 heartbeat_manager,
-                parent_task_group,
+                service_context,
             )),
         }
     }

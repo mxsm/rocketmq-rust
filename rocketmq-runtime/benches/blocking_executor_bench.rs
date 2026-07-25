@@ -54,14 +54,15 @@ struct TimeoutBlockingOutput {
 
 fn runtime_config(policy: BlockingPoolPolicy) -> RuntimeConfig {
     let max_blocking_threads = (policy.max_concurrency * 2).max(2);
-    RuntimeConfig {
+    let mut config = RuntimeConfig {
         worker_threads: 2,
         max_blocking_threads,
         shutdown_timeout: Duration::from_secs(5),
         thread_name: "rocketmq-blocking-bench".to_string(),
-        blocking_pool_policy: policy,
         ..RuntimeConfig::default()
-    }
+    };
+    config.blocking_lane_policies.storage_io = policy;
+    config
 }
 
 fn run_completed_blocking(
@@ -72,18 +73,19 @@ fn run_completed_blocking(
     let policy = BlockingPoolPolicy {
         name: "blocking-bench-completed".to_string(),
         max_concurrency,
+        max_queue_depth: task_count.max(1),
         queue_timeout: Duration::from_secs(2),
         task_timeout: Duration::from_secs(2),
         warn_after: Duration::from_secs(10),
     };
     let owner = RuntimeOwner::new(runtime_config(policy)).expect("runtime owner should start");
-    let context = owner.context().clone();
+    let context = owner.root_context().child("blocking-bench-completed");
 
     owner.block_on(async move {
         let active = Arc::new(AtomicUsize::new(0));
         let max_active = Arc::new(AtomicUsize::new(0));
         let started_at = Instant::now();
-        let executor = context.blocking().clone();
+        let executor = context.storage_io().clone();
         let runs = (0..task_count)
             .map(|task_index| {
                 let executor = executor.clone();
@@ -113,7 +115,7 @@ fn run_completed_blocking(
         assert!(snapshot.tasks.is_empty(), "{snapshot:?}");
         assert!(max_active.load(Ordering::SeqCst) <= max_concurrency);
 
-        let report = context.shutdown_tasks(Duration::from_secs(5)).await;
+        let report = context.task_group().shutdown(Duration::from_secs(5)).await;
         assert!(report.is_healthy(), "{}", report.to_json());
 
         CompletedBlockingOutput {
@@ -130,15 +132,16 @@ fn run_timeout_still_running() -> TimeoutBlockingOutput {
     let policy = BlockingPoolPolicy {
         name: "blocking-bench-timeout".to_string(),
         max_concurrency: 1,
+        max_queue_depth: 4,
         queue_timeout: Duration::from_secs(2),
         task_timeout: Duration::from_millis(20),
         warn_after: Duration::from_secs(10),
     };
     let owner = RuntimeOwner::new(runtime_config(policy)).expect("runtime owner should start");
-    let context = owner.context().clone();
+    let context = owner.root_context().child("blocking-bench-timeout");
 
     owner.block_on(async move {
-        let executor = context.blocking().clone();
+        let executor = context.storage_io().clone();
         let (started_tx, started_rx) = oneshot::channel();
         let (release_tx, release_rx) = std::sync::mpsc::channel();
         let run = {
@@ -180,7 +183,7 @@ fn run_timeout_still_running() -> TimeoutBlockingOutput {
         assert_eq!(cleaned_snapshot.blocking_still_running, 0, "{cleaned_snapshot:?}");
         assert!(cleaned_snapshot.tasks.is_empty(), "{cleaned_snapshot:?}");
 
-        let report = context.shutdown_tasks(Duration::from_secs(5)).await;
+        let report = context.task_group().shutdown(Duration::from_secs(5)).await;
         assert!(report.is_healthy(), "{}", report.to_json());
 
         TimeoutBlockingOutput {

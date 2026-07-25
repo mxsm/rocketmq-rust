@@ -46,8 +46,9 @@ use crate::producer::producer_impl::topic_publish_info::TopicPublishInfo;
 use crate::producer::send_callback::ArcSendCallback;
 use crate::producer::send_result::SendResult;
 use crate::producer::send_status::SendStatus;
-use crate::runtime::spawn_client_blocking_io;
+use crate::runtime::acquire_client_fallback_context;
 use crate::runtime::spawn_client_task;
+use crate::runtime::ClientSharedFallbackLease;
 use cheetah_string::CheetahString;
 
 use crate::base::validators::Validators;
@@ -347,6 +348,7 @@ pub struct MQClientAPIImpl {
     client_config: Arc<ClientConfig>,
     background_tasks: TaskTracker,
     background_shutdown: CancellationToken,
+    _runtime_lease: ClientSharedFallbackLease,
 }
 
 async fn update_cached_name_server_addr<F>(cache: &RwLock<Option<String>>, addrs: &str, update: F) -> bool
@@ -2125,8 +2127,14 @@ impl MQClientAPIImpl {
         remoting_config.use_tls = client_config.use_tls;
         remoting_config.tls_config = client_config.tls_config.clone();
         remoting_config.tls_config.enable = client_config.use_tls;
-        let default_client =
-            RocketmqDefaultClient::new_with_cl(Arc::new(remoting_config), client_remoting_processor, tx);
+        let (service_context, runtime_lease) = acquire_client_fallback_context("rocketmq-client.remoting-client")
+            .expect("client compatibility runtime must be available");
+        let default_client = RocketmqDefaultClient::new_with_cl(
+            Arc::new(remoting_config),
+            client_remoting_processor,
+            tx,
+            service_context,
+        );
         if let Some(hook) = rpc_hook {
             default_client.register_rpc_hook(hook);
         }
@@ -2142,6 +2150,7 @@ impl MQClientAPIImpl {
             client_config,
             background_tasks: TaskTracker::new(),
             background_shutdown: CancellationToken::new(),
+            _runtime_lease: runtime_lease,
         }
     }
 
@@ -2174,10 +2183,7 @@ impl MQClientAPIImpl {
     }
 
     pub async fn fetch_name_server_addr(&self) -> Option<String> {
-        let top_addressing = self.top_addressing.clone();
-        let addrs = spawn_client_blocking_io("client.fetch_name_server_addr", move || top_addressing.fetch_ns_addr())
-            .await
-            .unwrap_or_default();
+        let addrs = self.top_addressing.fetch_ns_addr().await;
 
         if let Some(addrs) = addrs.as_ref().filter(|addr| !addr.is_empty()) {
             if update_cached_name_server_addr(&self.name_srv_addr, addrs, |addrs| {

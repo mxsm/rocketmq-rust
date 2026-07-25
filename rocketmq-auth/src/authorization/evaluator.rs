@@ -164,7 +164,7 @@ where
     /// - Resource or subject not found
     /// - Source IP not allowed
     /// - Decision is DENY
-    pub fn evaluate(&self, contexts: &[DefaultAuthorizationContext]) -> EvaluatorResult<()> {
+    pub async fn evaluate(&self, contexts: &[DefaultAuthorizationContext]) -> EvaluatorResult<()> {
         // Early return on empty input
         if contexts.is_empty() {
             return Ok(());
@@ -172,7 +172,7 @@ where
 
         // Evaluate each context through the strategy
         for context in contexts {
-            self.authorization_strategy.evaluate(context)?;
+            self.authorization_strategy.evaluate(context).await?;
         }
 
         Ok(())
@@ -199,7 +199,7 @@ unsafe impl<S> Sync for AuthorizationEvaluator<S> where S: AuthorizationStrategy
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::authorization::strategy::abstract_authorization_strategy::StrategyResult;
+    use crate::authorization::strategy::abstract_authorization_strategy::AuthorizationFuture;
 
     // Mock strategy for testing
     struct MockStrategy {
@@ -207,50 +207,52 @@ mod tests {
     }
 
     impl AuthorizationStrategy for MockStrategy {
-        fn evaluate(&self, _context: &DefaultAuthorizationContext) -> StrategyResult<()> {
-            if self.should_fail {
-                Err(AuthorizationError::PermissionDenied {
-                    subject: "test".to_string(),
-                    resource: "test".to_string(),
-                    reason: "mock failure".to_string(),
-                })
-            } else {
-                Ok(())
-            }
+        fn evaluate<'a>(&'a self, _context: &'a DefaultAuthorizationContext) -> AuthorizationFuture<'a> {
+            Box::pin(async move {
+                if self.should_fail {
+                    Err(AuthorizationError::PermissionDenied {
+                        subject: "test".to_string(),
+                        resource: "test".to_string(),
+                        reason: "mock failure".to_string(),
+                    })
+                } else {
+                    Ok(())
+                }
+            })
         }
     }
 
-    #[test]
-    fn test_evaluator_empty_contexts() {
+    #[tokio::test]
+    async fn test_evaluator_empty_contexts() {
         let strategy = MockStrategy { should_fail: false };
         let evaluator = AuthorizationEvaluator::new(strategy);
 
-        let result = evaluator.evaluate(&[]);
+        let result = evaluator.evaluate(&[]).await;
         assert!(result.is_ok());
     }
 
-    #[test]
-    fn test_evaluator_success() {
+    #[tokio::test]
+    async fn test_evaluator_success() {
         let strategy = MockStrategy { should_fail: false };
         let evaluator = AuthorizationEvaluator::new(strategy);
 
         let context = DefaultAuthorizationContext::default();
-        let result = evaluator.evaluate(&[context]);
+        let result = evaluator.evaluate(&[context]).await;
         assert!(result.is_ok());
     }
 
-    #[test]
-    fn test_evaluator_failure() {
+    #[tokio::test]
+    async fn test_evaluator_failure() {
         let strategy = MockStrategy { should_fail: true };
         let evaluator = AuthorizationEvaluator::new(strategy);
 
         let context = DefaultAuthorizationContext::default();
-        let result = evaluator.evaluate(&[context]);
+        let result = evaluator.evaluate(&[context]).await;
         assert!(result.is_err());
     }
 
-    #[test]
-    fn test_evaluator_multiple_contexts_success() {
+    #[tokio::test]
+    async fn test_evaluator_multiple_contexts_success() {
         let strategy = MockStrategy { should_fail: false };
         let evaluator = AuthorizationEvaluator::new(strategy);
 
@@ -259,12 +261,12 @@ mod tests {
             DefaultAuthorizationContext::default(),
             DefaultAuthorizationContext::default(),
         ];
-        let result = evaluator.evaluate(&contexts);
+        let result = evaluator.evaluate(&contexts).await;
         assert!(result.is_ok());
     }
 
-    #[test]
-    fn test_evaluator_multiple_contexts_one_failure() {
+    #[tokio::test]
+    async fn test_evaluator_multiple_contexts_one_failure() {
         let strategy = MockStrategy { should_fail: true };
         let evaluator = AuthorizationEvaluator::new(strategy);
 
@@ -272,7 +274,7 @@ mod tests {
             DefaultAuthorizationContext::default(),
             DefaultAuthorizationContext::default(),
         ];
-        let result = evaluator.evaluate(&contexts);
+        let result = evaluator.evaluate(&contexts).await;
         assert!(result.is_err());
     }
 

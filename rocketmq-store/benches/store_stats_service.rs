@@ -18,18 +18,33 @@
 //! `cargo bench -p rocketmq-store --bench store_stats_service`
 
 use std::hint::black_box;
+use std::sync::OnceLock;
 
 use criterion::criterion_group;
 use criterion::criterion_main;
 use criterion::BenchmarkId;
 use criterion::Criterion;
+use rocketmq_runtime::ChildServiceContext;
+use rocketmq_runtime::RuntimeConfig;
+use rocketmq_runtime::RuntimeOwner;
 use rocketmq_store::base::store_stats_service::StoreStatsService;
+
+fn benchmark_service_context() -> ChildServiceContext {
+    static OWNER: OnceLock<RuntimeOwner> = OnceLock::new();
+    OWNER
+        .get_or_init(|| {
+            RuntimeOwner::new(RuntimeConfig::server_default("store-stats-service-bench"))
+                .expect("store stats benchmark runtime should start")
+        })
+        .root_context()
+        .child("store-stats-service")
+}
 
 fn bench_hot_path_updates(c: &mut Criterion) {
     let mut group = c.benchmark_group("store_stats_service_hot_path");
 
     for topic_count in [1usize, 16, 128] {
-        let stats = StoreStatsService::new(None);
+        let stats = StoreStatsService::new(None, benchmark_service_context());
         let topics = (0..topic_count)
             .map(|index| format!("topic-{index}"))
             .collect::<Vec<_>>();
@@ -49,7 +64,7 @@ fn bench_hot_path_updates(c: &mut Criterion) {
         );
     }
 
-    let stats = StoreStatsService::new(None);
+    let stats = StoreStatsService::new(None, benchmark_service_context());
     group.bench_function("put_latency_record", |b| {
         let mut value = 0u64;
         b.iter(|| {
@@ -62,7 +77,7 @@ fn bench_hot_path_updates(c: &mut Criterion) {
 }
 
 fn bench_runtime_info(c: &mut Criterion) {
-    let stats = StoreStatsService::new(None);
+    let stats = StoreStatsService::new(None, benchmark_service_context());
     for topic_index in 0..256 {
         let topic = format!("topic-{topic_index}");
         stats.add_single_put_message_topic_times_total(&topic, 10);

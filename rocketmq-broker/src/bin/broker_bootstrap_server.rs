@@ -29,9 +29,9 @@ use rocketmq_model::common::mq_version::CURRENT_VERSION;
 use rocketmq_model::utils::env_utils::EnvUtils;
 use rocketmq_protocol::protocol::remoting_command;
 use rocketmq_runtime::common::parse_config_file as config_file_parser;
+use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
-use rocketmq_runtime::ServiceContext;
 use rocketmq_runtime::ServiceLifecycle;
 use rocketmq_runtime::ShutdownReason;
 use rocketmq_security_api::SecurityBootstrapConfig;
@@ -58,7 +58,7 @@ const ENTRYPOINT_MAX_BLOCKING_THREADS: usize = 64;
 
 fn main() -> Result<()> {
     let owner = RuntimeOwner::new(broker_runtime_config()).context("failed to build broker runtime")?;
-    let service_context = owner.context().service_context("rocketmq-broker-runtime");
+    let service_context = owner.root_context().child("rocketmq-broker-runtime");
     let lifecycle = ServiceLifecycle::from_env("rocketmq-broker").context("invalid broker lifecycle configuration")?;
 
     let run_result = owner.block_on(run(service_context, lifecycle.clone()));
@@ -95,7 +95,7 @@ fn broker_runtime_config() -> RuntimeConfig {
     config
 }
 
-async fn run(service_context: ServiceContext, lifecycle: ServiceLifecycle) -> Result<()> {
+async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) -> Result<()> {
     // Set remoting version
     EnvUtils::put_property(
         remoting_command::REMOTING_VERSION_KEY,
@@ -171,10 +171,9 @@ async fn run(service_context: ServiceContext, lifecycle: ServiceLifecycle) -> Re
     }
 
     // Start broker
-    Builder::new()
+    Builder::new(service_context)
         .set_broker_config(broker_config)
         .set_message_store_config(message_store_config)
-        .set_service_context(service_context)
         .set_telemetry_runtime_guard(telemetry_guard)
         .build()
         .boot_with_lifecycle(lifecycle)

@@ -74,7 +74,7 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::CommandCustomHeader;
 use rocketmq_protocol::protocol::RemotingDeserializable;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
@@ -129,42 +129,22 @@ pub struct OpenRaftController {
     lifecycle_listeners: Arc<RwLock<Vec<Arc<dyn BrokerLifecycleListener>>>>,
     scheduling: Arc<AtomicBool>,
     first_received_heartbeat_time: Arc<AtomicU64>,
-    parent_task_group: Option<TaskGroup>,
+    service_context: ChildServiceContext,
 }
 
 impl OpenRaftController {
-    pub fn new(config: ControllerConfigReader) -> Self {
-        let heartbeat_manager = Arc::new(DefaultBrokerHeartbeatManager::new(config.clone()));
-        Self::new_with_heartbeat(config, heartbeat_manager)
-    }
-
-    pub fn new_with_task_group(config: ControllerConfigReader, parent_task_group: TaskGroup) -> Self {
-        let heartbeat_manager = Arc::new(DefaultBrokerHeartbeatManager::new_with_task_group(
+    pub fn new(config: ControllerConfigReader, service_context: ChildServiceContext) -> Self {
+        let heartbeat_manager = Arc::new(DefaultBrokerHeartbeatManager::new(
             config.clone(),
-            parent_task_group.clone(),
+            service_context.task_group().clone(),
         ));
-        Self::new_with_heartbeat_and_task_group(config, heartbeat_manager, parent_task_group)
+        Self::new_with_heartbeat(config, heartbeat_manager, service_context)
     }
 
     pub fn new_with_heartbeat(
         config: ControllerConfigReader,
         heartbeat_manager: Arc<DefaultBrokerHeartbeatManager>,
-    ) -> Self {
-        Self::new_with_heartbeat_and_optional_task_group(config, heartbeat_manager, None)
-    }
-
-    pub fn new_with_heartbeat_and_task_group(
-        config: ControllerConfigReader,
-        heartbeat_manager: Arc<DefaultBrokerHeartbeatManager>,
-        parent_task_group: TaskGroup,
-    ) -> Self {
-        Self::new_with_heartbeat_and_optional_task_group(config, heartbeat_manager, Some(parent_task_group))
-    }
-
-    fn new_with_heartbeat_and_optional_task_group(
-        config: ControllerConfigReader,
-        heartbeat_manager: Arc<DefaultBrokerHeartbeatManager>,
-        parent_task_group: Option<TaskGroup>,
+        service_context: ChildServiceContext,
     ) -> Self {
         Self {
             config,
@@ -177,7 +157,7 @@ impl OpenRaftController {
             lifecycle_listeners: Arc::new(RwLock::new(Vec::new())),
             scheduling: Arc::new(AtomicBool::new(false)),
             first_received_heartbeat_time: Arc::new(AtomicU64::new(0)),
-            parent_task_group,
+            service_context,
         }
     }
 
@@ -187,13 +167,7 @@ impl OpenRaftController {
             return Ok(task_group.clone());
         }
 
-        let task_group = if let Some(parent_task_group) = self.parent_task_group.as_ref() {
-            parent_task_group.child("rocketmq-controller.openraft")
-        } else {
-            let handle = tokio::runtime::Handle::try_current()
-                .map_err(|error| openraft_startup_failed("create task group", error))?;
-            TaskGroup::root("rocketmq-controller.openraft", RuntimeHandle::new(handle))
-        };
+        let task_group = self.service_context.task_group().child("rocketmq-controller.openraft");
         *guard = Some(task_group.clone());
         Ok(task_group)
     }
@@ -596,7 +570,7 @@ impl OpenRaftController {
         })?;
         let task_group = self.ensure_task_group()?;
         let node =
-            Arc::new(RaftNodeManager::new_with_parent_task_group(self.config.clone(), task_group.clone()).await?);
+            Arc::new(RaftNodeManager::new(self.config.clone(), self.service_context.storage_io().clone()).await?);
         let service = GrpcRaftService::new(node.raft());
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         let shutdown_token = task_group.cancellation_token();
@@ -1099,7 +1073,11 @@ mod tests {
             .with_node_info(1, addr)
             .with_raft_peers(vec![RaftPeer { id: 1, addr }])
             .with_storage_backend(crate::config::StorageBackendType::Memory);
-        let controller = Arc::new(OpenRaftController::new(ControllerConfigReader::new(config)));
+        let context = rocketmq_runtime::RuntimeContext::from_current("openraft-lifecycle-test");
+        let controller = Arc::new(OpenRaftController::new(
+            ControllerConfigReader::new(config),
+            context.service_context("openraft"),
+        ));
 
         let (first_start, second_start) = tokio::join!(controller.startup_shared(), controller.startup_shared());
         first_start.expect("start OpenRaft controller");

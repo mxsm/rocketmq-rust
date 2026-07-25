@@ -25,8 +25,7 @@ pub mod key;
 pub mod maintenance;
 pub mod message;
 pub mod options;
-#[cfg(test)]
-pub(crate) mod runtime;
+pub mod runtime;
 pub mod snapshot;
 pub mod store;
 pub mod timer;

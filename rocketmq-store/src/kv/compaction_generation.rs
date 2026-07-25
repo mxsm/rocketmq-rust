@@ -136,8 +136,11 @@ pub(crate) fn temporary_generation_path(root: &Path, generation: u64) -> PathBuf
     root.join("generations").join(format!("gen-{generation}.tmp"))
 }
 
-pub(crate) async fn read_current(root: PathBuf) -> Result<Option<CurrentPointer>, RocketMQError> {
-    crate::runtime::spawn_io("compaction-read-current", move || {
+pub(crate) async fn read_current(
+    runtime_scope: &crate::runtime::StoreRuntimeScope,
+    root: PathBuf,
+) -> Result<Option<CurrentPointer>, RocketMQError> {
+    crate::runtime::spawn_io(runtime_scope, "compaction-read-current", move || {
         let path = root.join("CURRENT");
         match std::fs::read(&path) {
             Ok(bytes) => decode_current(&bytes, &path).map(Some),
@@ -148,14 +151,18 @@ pub(crate) async fn read_current(root: PathBuf) -> Result<Option<CurrentPointer>
     .await?
 }
 
-pub(crate) async fn load_generation(root: PathBuf, generation: u64) -> Result<LoadedGeneration, RocketMQError> {
+pub(crate) async fn load_generation(
+    runtime_scope: &crate::runtime::StoreRuntimeScope,
+    root: PathBuf,
+    generation: u64,
+) -> Result<LoadedGeneration, RocketMQError> {
     if generation == 0 {
         return Ok(LoadedGeneration {
             metadata: empty_metadata(0),
             queues: CompactionQueues::new(),
         });
     }
-    crate::runtime::spawn_io("compaction-load-generation", move || {
+    crate::runtime::spawn_io(runtime_scope, "compaction-load-generation", move || {
         let directory = generation_path(&root, generation);
         let metadata_path = directory.join("GENERATION");
         let records_path = directory.join("records");
@@ -179,12 +186,13 @@ pub(crate) async fn load_generation(root: PathBuf, generation: u64) -> Result<Lo
 }
 
 pub(crate) async fn read_generation_payload(
+    runtime_scope: &crate::runtime::StoreRuntimeScope,
     root: PathBuf,
     generation: u64,
     position: u64,
     size: i32,
 ) -> Result<Bytes, RocketMQError> {
-    crate::runtime::spawn_io("compaction-read-generation-payload", move || {
+    crate::runtime::spawn_io(runtime_scope, "compaction-read-generation-payload", move || {
         if generation == 0 || size <= 0 {
             return Err(corrupted(&generation_path(&root, generation).join("records")));
         }
@@ -201,11 +209,12 @@ pub(crate) async fn read_generation_payload(
 }
 
 pub(crate) async fn write_temporary_generation(
+    runtime_scope: &crate::runtime::StoreRuntimeScope,
     root: PathBuf,
     generation: u64,
     queues: CompactionQueues,
 ) -> Result<GenerationMetadata, RocketMQError> {
-    crate::runtime::spawn_io("compaction-build-generation", move || {
+    crate::runtime::spawn_io(runtime_scope, "compaction-build-generation", move || {
         let directory = temporary_generation_path(&root, generation);
         remove_path_if_exists(&directory)?;
         std::fs::create_dir_all(&directory).map_err(|error| write_error(&directory, error))?;
@@ -218,8 +227,12 @@ pub(crate) async fn write_temporary_generation(
     .await?
 }
 
-pub(crate) async fn sync_temporary_generation(root: PathBuf, generation: u64) -> Result<(), RocketMQError> {
-    crate::runtime::spawn_io("compaction-sync-generation", move || {
+pub(crate) async fn sync_temporary_generation(
+    runtime_scope: &crate::runtime::StoreRuntimeScope,
+    root: PathBuf,
+    generation: u64,
+) -> Result<(), RocketMQError> {
+    crate::runtime::spawn_io(runtime_scope, "compaction-sync-generation", move || {
         let directory = temporary_generation_path(&root, generation);
         sync_file(&directory.join("records"))?;
         sync_file(&directory.join("GENERATION"))?;
@@ -229,11 +242,12 @@ pub(crate) async fn sync_temporary_generation(root: PathBuf, generation: u64) ->
 }
 
 pub(crate) async fn validate_temporary_generation(
+    runtime_scope: &crate::runtime::StoreRuntimeScope,
     root: PathBuf,
     generation: u64,
     expected: GenerationMetadata,
 ) -> Result<(), RocketMQError> {
-    crate::runtime::spawn_io("compaction-validate-generation", move || {
+    crate::runtime::spawn_io(runtime_scope, "compaction-validate-generation", move || {
         let directory = temporary_generation_path(&root, generation);
         let metadata_path = directory.join("GENERATION");
         let records_path = directory.join("records");
@@ -250,8 +264,12 @@ pub(crate) async fn validate_temporary_generation(
     .await?
 }
 
-pub(crate) async fn rename_generation(root: PathBuf, generation: u64) -> Result<(), RocketMQError> {
-    crate::runtime::spawn_io("compaction-rename-generation", move || {
+pub(crate) async fn rename_generation(
+    runtime_scope: &crate::runtime::StoreRuntimeScope,
+    root: PathBuf,
+    generation: u64,
+) -> Result<(), RocketMQError> {
+    crate::runtime::spawn_io(runtime_scope, "compaction-rename-generation", move || {
         let source = temporary_generation_path(&root, generation);
         let destination = generation_path(&root, generation);
         rename_path(&source, &destination).map_err(|error| write_error(&destination, error))?;
@@ -260,8 +278,12 @@ pub(crate) async fn rename_generation(root: PathBuf, generation: u64) -> Result<
     .await?
 }
 
-pub(crate) async fn write_current(root: PathBuf, pointer: CurrentPointer) -> Result<(), RocketMQError> {
-    crate::runtime::spawn_io("compaction-write-current", move || {
+pub(crate) async fn write_current(
+    runtime_scope: &crate::runtime::StoreRuntimeScope,
+    root: PathBuf,
+    pointer: CurrentPointer,
+) -> Result<(), RocketMQError> {
+    crate::runtime::spawn_io(runtime_scope, "compaction-write-current", move || {
         std::fs::create_dir_all(&root).map_err(|error| write_error(&root, error))?;
         let destination = root.join("CURRENT");
         let temporary = root.join("CURRENT.atomic.tmp");
@@ -273,8 +295,12 @@ pub(crate) async fn write_current(root: PathBuf, pointer: CurrentPointer) -> Res
     .await?
 }
 
-pub(crate) async fn delete_generation(root: PathBuf, generation: u64) -> Result<(), RocketMQError> {
-    crate::runtime::spawn_io("compaction-delete-generation", move || {
+pub(crate) async fn delete_generation(
+    runtime_scope: &crate::runtime::StoreRuntimeScope,
+    root: PathBuf,
+    generation: u64,
+) -> Result<(), RocketMQError> {
+    crate::runtime::spawn_io(runtime_scope, "compaction-delete-generation", move || {
         let path = generation_path(&root, generation);
         remove_path_if_exists(&path)?;
         sync_directory(&root.join("generations"))
@@ -282,8 +308,13 @@ pub(crate) async fn delete_generation(root: PathBuf, generation: u64) -> Result<
     .await?
 }
 
-pub(crate) async fn cleanup_orphans(root: PathBuf, current: u64, previous: Option<u64>) -> Result<(), RocketMQError> {
-    crate::runtime::spawn_io("compaction-cleanup-orphans", move || {
+pub(crate) async fn cleanup_orphans(
+    runtime_scope: &crate::runtime::StoreRuntimeScope,
+    root: PathBuf,
+    current: u64,
+    previous: Option<u64>,
+) -> Result<(), RocketMQError> {
+    crate::runtime::spawn_io(runtime_scope, "compaction-cleanup-orphans", move || {
         let generations = root.join("generations");
         let entries = match std::fs::read_dir(&generations) {
             Ok(entries) => entries,

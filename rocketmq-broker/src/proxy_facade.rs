@@ -25,6 +25,7 @@ use rocketmq_protocol::protocol::route::route_data_view::BrokerData;
 use rocketmq_protocol::protocol::route::route_data_view::QueueData;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
+use rocketmq_runtime::ChildServiceContext;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use rocketmq_transport::local::LocalRequestHarness;
 use rocketmq_transport::runtime::processor::RequestProcessor;
@@ -100,14 +101,25 @@ pub mod proxy_adapter_compat {
 
 pub struct ProxyBrokerFacade {
     runtime: BrokerRuntime,
+    service_context: ChildServiceContext,
 }
 
 impl ProxyBrokerFacade {
-    pub fn new(mut broker_config: BrokerConfig, message_store_config: MessageStoreConfig) -> Self {
+    pub fn new(
+        mut broker_config: BrokerConfig,
+        message_store_config: MessageStoreConfig,
+        service_context: ChildServiceContext,
+    ) -> Self {
         broker_config.transfer_msg_by_heap = true;
         broker_config.broker_server_config.listen_port = broker_config.listen_port;
+        let runtime_context = service_context.child("embedded-broker");
         Self {
-            runtime: BrokerRuntime::new(Arc::new(broker_config), Arc::new(message_store_config)),
+            runtime: BrokerRuntime::new_with_service_context(
+                Arc::new(broker_config),
+                Arc::new(message_store_config),
+                runtime_context,
+            ),
+            service_context,
         }
     }
 
@@ -168,7 +180,7 @@ impl ProxyBrokerFacade {
             .ok_or_else(embedded_broker_request_processor_not_ready)?;
 
         let opaque = request.opaque();
-        let mut harness = LocalRequestHarness::new().await?;
+        let mut harness = LocalRequestHarness::new(self.service_context.task_group().child("local-request")).await?;
         if let Some(mut response) = processor
             .process_request(harness.channel(), harness.context(), &mut request)
             .await?

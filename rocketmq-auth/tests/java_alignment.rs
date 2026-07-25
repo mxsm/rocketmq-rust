@@ -17,11 +17,25 @@ use rocketmq_auth::authorization::model::request_context::RequestContext;
 use rocketmq_auth::authorization::model::resource::Resource;
 use rocketmq_auth::config::AuthConfig;
 use rocketmq_auth::AuthRuntime;
-use rocketmq_auth::AuthRuntimeBuilder;
+use rocketmq_auth::AuthRuntimeBuilder as ProductionAuthRuntimeBuilder;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_runtime::RuntimeContext;
 use rocketmq_security_api::Action;
 use tempfile::TempDir;
+
+struct AuthRuntimeBuilder;
+
+impl AuthRuntimeBuilder {
+    #[allow(
+        clippy::new_ret_no_self,
+        reason = "test facade preserves concise existing builder call sites"
+    )]
+    fn new(config: AuthConfig) -> ProductionAuthRuntimeBuilder {
+        let runtime = RuntimeContext::from_current("auth-java-alignment-test");
+        ProductionAuthRuntimeBuilder::new(config, runtime.service_context("auth-java-alignment"))
+    }
+}
 
 fn temp_auth_config(temp: &TempDir) -> AuthConfig {
     AuthConfig {

@@ -27,6 +27,7 @@ use criterion::Criterion;
 use rocketmq_namesrv::bootstrap::Builder;
 use rocketmq_namesrv::bootstrap::NameServerShutdownReport;
 use rocketmq_namesrv::NamesrvConfig;
+use rocketmq_runtime::RuntimeContext;
 use rocketmq_transport::config::ServerConfig;
 
 #[derive(Debug)]
@@ -46,7 +47,8 @@ fn run_namesrv_shutdown_drain(shutdown_after: Duration) -> NameSrvShutdownOutput
 
     runtime.block_on(async move {
         let artifact_dir = benchmark_artifact_dir();
-        let bootstrap = Builder::new()
+        let context = RuntimeContext::from_current("namesrv-shutdown-bench");
+        let bootstrap = Builder::new(context.service_context("namesrv"))
             .set_name_server_config(namesrv_config(&artifact_dir))
             .set_server_config(server_config())
             .build();

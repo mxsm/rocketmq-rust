@@ -53,6 +53,7 @@ use rocketmq_protocol::protocol::body::acl_info::PolicyInfo;
 use rocketmq_protocol::protocol::body::user_info::UserInfo;
 use rocketmq_protocol::protocol::namespace_util::NamespaceUtil;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_runtime::ChildServiceContext;
 use rocketmq_security_api::Action;
 use rocketmq_transport::net::channel::Channel;
 use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
@@ -214,20 +215,24 @@ pub struct ProxyAuthRuntime {
 }
 
 impl ProxyAuthRuntime {
-    pub async fn from_proxy_config(config: &ProxyAuthConfig) -> ProxyResult<Option<Self>> {
-        Self::from_proxy_config_with_metadata_service(config, None).await
+    pub async fn from_proxy_config(
+        config: &ProxyAuthConfig,
+        service_context: &ChildServiceContext,
+    ) -> ProxyResult<Option<Self>> {
+        Self::from_proxy_config_with_metadata_service(config, None, service_context).await
     }
 
     pub async fn from_proxy_config_with_metadata_service(
         config: &ProxyAuthConfig,
         metadata_service: Option<Arc<dyn MetadataService>>,
+        service_context: &ChildServiceContext,
     ) -> ProxyResult<Option<Self>> {
         if !config.enabled() {
             return Ok(None);
         }
 
         let auth_config = config.to_auth_config();
-        let auth_runtime = AuthRuntimeBuilder::new(auth_config.clone())
+        let auth_runtime = AuthRuntimeBuilder::new(auth_config.clone(), service_context.child("proxy.auth.runtime"))
             .build()
             .await
             .map_err(ProxyError::from)?;
@@ -891,6 +896,28 @@ mod tests {
     use crate::service::SubscriptionGroupMetadata;
 
     use super::*;
+
+    struct ProxyAuthRuntime;
+
+    impl ProxyAuthRuntime {
+        async fn from_proxy_config(config: &ProxyAuthConfig) -> ProxyResult<Option<super::ProxyAuthRuntime>> {
+            let runtime = rocketmq_runtime::RuntimeContext::from_current("proxy-auth-test");
+            super::ProxyAuthRuntime::from_proxy_config(config, &runtime.service_context("proxy-auth")).await
+        }
+
+        async fn from_proxy_config_with_metadata_service(
+            config: &ProxyAuthConfig,
+            metadata_service: Option<Arc<dyn MetadataService>>,
+        ) -> ProxyResult<Option<super::ProxyAuthRuntime>> {
+            let runtime = rocketmq_runtime::RuntimeContext::from_current("proxy-auth-metadata-test");
+            super::ProxyAuthRuntime::from_proxy_config_with_metadata_service(
+                config,
+                metadata_service,
+                &runtime.service_context("proxy-auth-metadata"),
+            )
+            .await
+        }
+    }
 
     fn unique_test_dir(prefix: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("{prefix}-{}", uuid::Uuid::new_v4()));

@@ -80,6 +80,7 @@ use rocketmq_runtime::common::system_clock::SystemClock;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::common::util_all;
 use rocketmq_runtime::common::util_all::ensure_dir_ok;
+use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
@@ -164,6 +165,7 @@ use crate::queue::local_file_consume_queue_store::ConsumeQueueLookupHandle;
 use crate::queue::local_file_consume_queue_store::ConsumeQueueStore;
 use crate::queue::local_file_consume_queue_store::ConsumeQueueStoreContext;
 use crate::queue::ArcConsumeQueue;
+use crate::runtime::StoreRuntimeScope;
 use crate::stats::broker_stats_manager::BrokerStatsManager;
 use crate::store::running_flags::RunningFlags;
 use crate::store_error::StoreError;
@@ -611,6 +613,7 @@ impl TimerMessageWriteHandle {
 
 ///Using local files to store message data, which is also the default method.
 pub struct LocalFileMessageStore {
+    runtime_scope: StoreRuntimeScope,
     message_store_config: Arc<MessageStoreConfig>,
     store_runtime_state: Arc<StoreRuntimeState>,
     composition: LocalStoreComposition,
@@ -736,6 +739,7 @@ impl LocalFileMessageStore {
         topic_config_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>>,
         broker_stats_manager: Option<Arc<BrokerStatsManager>>,
         notify_message_arrive_in_batch: bool,
+        service_context: ChildServiceContext,
     ) -> Self {
         Self::try_new(
             message_store_config,
@@ -743,6 +747,7 @@ impl LocalFileMessageStore {
             topic_config_table,
             broker_stats_manager,
             notify_message_arrive_in_batch,
+            service_context,
         )
         .unwrap_or_else(|error| panic!("failed to create local file message store: {error}"))
     }
@@ -753,7 +758,9 @@ impl LocalFileMessageStore {
         topic_config_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>>,
         broker_stats_manager: Option<Arc<BrokerStatsManager>>,
         notify_message_arrive_in_batch: bool,
+        service_context: ChildServiceContext,
     ) -> Result<Self, StoreError> {
+        let runtime_scope = StoreRuntimeScope::new(service_context.clone());
         let local_backend_config = message_store_config.normalized_local_backend_config();
         let cleanup_policy = LocalCleanupPolicy::new(local_backend_config.cleanup);
         let (delay_level_table, max_delay_level) = parse_delay_level(message_store_config.message_delay_level.as_str());
@@ -761,7 +768,10 @@ impl LocalFileMessageStore {
         let running_flags = Arc::new(RunningFlags::new());
         let store_health_recorder = StoreHealthRecorder::new(running_flags.clone());
         let alive_replica_num_in_group = Arc::new(AtomicI32::new(1));
-        let store_stats_service = Arc::new(StoreStatsService::new(Some(broker_config.broker_identity.clone())));
+        let store_stats_service = Arc::new(StoreStatsService::new(
+            Some(broker_config.broker_identity.clone()),
+            service_context.child("store-stats"),
+        ));
         let store_checkpoint = Arc::new(
             StoreCheckpoint::new(get_store_checkpoint(message_store_config.store_path_root_dir.as_str())).map_err(
                 |error| {
@@ -773,6 +783,7 @@ impl LocalFileMessageStore {
             )?,
         );
         let index_service = IndexService::new(
+            runtime_scope.clone(),
             message_store_config.clone(),
             store_checkpoint.clone(),
             running_flags.clone(),
@@ -781,7 +792,11 @@ impl LocalFileMessageStore {
             index_service.clone(),
             message_store_config.clone(),
         ));
-        let consume_queue_store = ConsumeQueueStore::new(message_store_config.clone(), broker_config.clone());
+        let consume_queue_store = ConsumeQueueStore::new(
+            runtime_scope.clone(),
+            message_store_config.clone(),
+            broker_config.clone(),
+        );
         let build_consume_queue: Arc<dyn CommitLogDispatcher> =
             Arc::new(CommitLogDispatcherBuildConsumeQueue::new(consume_queue_store.clone()));
 
@@ -819,6 +834,7 @@ impl LocalFileMessageStore {
         );
         let store_runtime_state = Arc::new(StoreRuntimeState::new(message_store_config.as_ref()));
         let mut commit_log = CommitLog::new(
+            runtime_scope.clone(),
             message_store_config.clone(),
             Arc::clone(&store_runtime_state),
             broker_config.clone(),
@@ -834,6 +850,7 @@ impl LocalFileMessageStore {
         let commit_log_cleanup = commit_log.cleanup_handle();
         let compaction_store = Arc::new(CompactionStore::with_root(
             PathBuf::from(message_store_config.store_path_root_dir.as_str()).join("compaction"),
+            runtime_scope.clone(),
         ));
         if message_store_config.enable_compaction {
             dispatcher.add_dispatcher(Arc::new(CommitLogDispatcherCompaction::new(
@@ -864,11 +881,13 @@ impl LocalFileMessageStore {
 
         let compaction_service = message_store_config.enable_compaction.then(|| {
             CompactionService::new(
+                runtime_scope.clone(),
                 compaction_store.clone(),
                 message_store_config.compaction_schedule_internal,
             )
         });
         Ok(Self {
+            runtime_scope: runtime_scope.clone(),
             message_store_config: message_store_config.clone(),
             store_runtime_state,
             composition: LocalStoreComposition::new(local_backend_config),
@@ -935,6 +954,7 @@ impl LocalFileMessageStore {
             pending_ha_service: None,
             ha_service: None,
             flush_consume_queue_service: FlushConsumeQueueService::new(
+                runtime_scope.clone(),
                 message_store_config.clone(),
                 consume_queue_store.clone(),
                 store_checkpoint,
@@ -1087,6 +1107,7 @@ impl LocalFileMessageStore {
             let timer_message_store = Arc::new(TimerMessageStore::new_with_store_context(
                 self.timer_store_context(),
                 Arc::clone(&self.message_store_config),
+                self.runtime_scope.clone(),
             ));
             self.set_timer_message_store(timer_message_store);
         }
@@ -1097,12 +1118,13 @@ impl LocalFileMessageStore {
             self.pending_ha_service = Some(if self.message_store_config.enable_controller_mode {
                 PendingHAService::AutoSwitch(
                     crate::ha::auto_switch::auto_switch_ha_service::AutoSwitchHAService::new(
-                        crate::ha::default_ha_service::DefaultHAService::new(replica_store),
+                        crate::ha::default_ha_service::DefaultHAService::new(replica_store, self.runtime_scope.clone()),
                     ),
                 )
             } else {
                 PendingHAService::Default(Box::new(crate::ha::default_ha_service::DefaultHAService::new(
                     replica_store,
+                    self.runtime_scope.clone(),
                 )))
             });
         }
@@ -1698,19 +1720,14 @@ impl LocalFileMessageStore {
         };
 
         self.scheduled_task_shutdown = CancellationToken::new();
-        let task_group = match crate::runtime::task_group("rocketmq-store.local-file.scheduled") {
-            Ok(task_group) => task_group,
-            Err(error) => {
-                error!("scheduled store tasks not started: {error}");
-                return;
-            }
-        };
+        let task_group = crate::runtime::task_group(&self.runtime_scope, "rocketmq-store.local-file.scheduled");
         let scheduled_tasks = ScheduledTaskGroup::new(task_group.child("scheduled"));
 
         // clean files  Periodically
         let clean_commit_log_service_arc = self.clean_commit_log_service.clone();
         let clean_resource_interval = self.message_store_config.clean_resource_interval as u64;
         let clean_commit_log_active = Arc::new(AtomicBool::new(true));
+        let clean_commit_log_runtime_scope = self.runtime_scope.clone();
         if let Err(error) = scheduled_tasks.schedule_fixed_delay(
             ScheduledTaskConfig::fixed_delay(
                 "clean-commit-log-scheduler",
@@ -1719,11 +1736,12 @@ impl LocalFileMessageStore {
             move || {
                 let service = Arc::clone(&clean_commit_log_service_arc);
                 let active = Arc::clone(&clean_commit_log_active);
+                let runtime_scope = clean_commit_log_runtime_scope.clone();
                 async move {
                     if !active.load(Ordering::Acquire) {
                         return;
                     }
-                    if !run_blocking_scheduled_task("clean commit log", move || service.run()).await {
+                    if !run_blocking_scheduled_task(&runtime_scope, "clean commit log", move || service.run()).await {
                         active.store(false, Ordering::Release);
                     }
                 }
@@ -1736,17 +1754,19 @@ impl LocalFileMessageStore {
         }
 
         let store_self_check_active = Arc::new(AtomicBool::new(true));
+        let store_self_check_runtime_scope = self.runtime_scope.clone();
         if let Err(error) = scheduled_tasks.schedule_fixed_delay(
             ScheduledTaskConfig::fixed_delay("store-self-check-scheduler", Duration::from_secs(10 * 60)),
             move || {
                 let commit_log = self_check_commit_log.clone();
                 let consume_queue_store = self_check_consume_queue_store.clone();
                 let active = Arc::clone(&store_self_check_active);
+                let runtime_scope = store_self_check_runtime_scope.clone();
                 async move {
                     if !active.load(Ordering::Acquire) {
                         return;
                     }
-                    if !run_blocking_scheduled_task("store self check", move || {
+                    if !run_blocking_scheduled_task(&runtime_scope, "store self check", move || {
                         commit_log.check_self();
                         ConsumeQueueStoreTrait::check_self(&consume_queue_store);
                     })
@@ -1765,16 +1785,18 @@ impl LocalFileMessageStore {
 
         // store check point flush
         let checkpoint_flush_active = Arc::new(AtomicBool::new(true));
+        let checkpoint_flush_runtime_scope = self.runtime_scope.clone();
         if let Err(error) = scheduled_tasks.schedule_fixed_delay(
             ScheduledTaskConfig::fixed_delay("store-checkpoint-flush-scheduler", Duration::from_secs(1)),
             move || {
                 let checkpoint = Arc::clone(&store_checkpoint_arc);
                 let active = Arc::clone(&checkpoint_flush_active);
+                let runtime_scope = checkpoint_flush_runtime_scope.clone();
                 async move {
                     if !active.load(Ordering::Acquire) {
                         return;
                     }
-                    if !run_blocking_scheduled_task("store checkpoint flush", move || {
+                    if !run_blocking_scheduled_task(&runtime_scope, "store checkpoint flush", move || {
                         let _ = checkpoint.flush();
                     })
                     .await
@@ -1793,6 +1815,7 @@ impl LocalFileMessageStore {
         let correct_logic_offset_service_arc = self.correct_logic_offset_service.clone();
         let clean_consume_queue_service_arc = self.clean_consume_queue_service.clone();
         let clean_consume_queue_active = Arc::new(AtomicBool::new(true));
+        let clean_consume_queue_runtime_scope = self.runtime_scope.clone();
         if let Err(error) = scheduled_tasks.schedule_fixed_delay(
             ScheduledTaskConfig::fixed_delay(
                 "clean-consume-queue-scheduler",
@@ -1802,11 +1825,12 @@ impl LocalFileMessageStore {
                 let correct_service = Arc::clone(&correct_logic_offset_service_arc);
                 let clean_service = Arc::clone(&clean_consume_queue_service_arc);
                 let active = Arc::clone(&clean_consume_queue_active);
+                let runtime_scope = clean_consume_queue_runtime_scope.clone();
                 async move {
                     if !active.load(Ordering::Acquire) {
                         return;
                     }
-                    if !run_blocking_scheduled_task("clean consume queue", move || {
+                    if !run_blocking_scheduled_task(&runtime_scope, "clean consume queue", move || {
                         correct_service.run();
                         clean_service.run();
                     })
@@ -2288,6 +2312,7 @@ impl MessageStore for LocalFileMessageStore {
             self.ensure_root_dependencies_wired("start")?;
             let reput_runtime_context = self.reput_runtime_context();
             self.reput_message_service.start(
+                &self.runtime_scope,
                 self.commit_log.read_handle(),
                 self.composition.reput(),
                 self.dispatcher.handle(),
@@ -2298,6 +2323,7 @@ impl MessageStore for LocalFileMessageStore {
             self.flush_consume_queue_service.start();
             self.commit_log.start();
             self.background_index_rebuild_service.start(
+                &self.runtime_scope,
                 self.commit_log.read_handle(),
                 self.message_store_config.clone(),
                 self.index_service.clone(),
@@ -3637,13 +3663,10 @@ impl MessageStore for LocalFileMessageStore {
             let task_group = match self.ha_update_master_group.lock() {
                 Ok(mut task_group) => {
                     if task_group.is_none() {
-                        match crate::runtime::task_group("rocketmq-store.local-file.ha-master-update") {
-                            Ok(group) => *task_group = Some(group),
-                            Err(error) => {
-                                error!("failed to create HA master address update task group: {error}");
-                                return;
-                            }
-                        }
+                        *task_group = Some(crate::runtime::task_group(
+                            &self.runtime_scope,
+                            "rocketmq-store.local-file.ha-master-update",
+                        ));
                     }
                     task_group.as_ref().expect("task group must exist").clone()
                 }
@@ -4600,6 +4623,7 @@ impl BackgroundIndexRebuildService {
 
     fn start(
         &mut self,
+        runtime_scope: &StoreRuntimeScope,
         commit_log: CommitLogReadHandle,
         message_store_config: Arc<MessageStoreConfig>,
         index_service: IndexService,
@@ -4624,15 +4648,8 @@ impl BackgroundIndexRebuildService {
             return;
         }
 
-        let task_group = match crate::runtime::task_group("rocketmq-store.local-file.background-index-rebuild") {
-            Ok(task_group) => task_group,
-            Err(error) => {
-                self.progress.record_error(error.to_string());
-                self.progress.set_state(BackgroundIndexRebuildState::Failed);
-                error!("BackgroundIndexRebuildService not started: {error}");
-                return;
-            }
-        };
+        let task_group =
+            crate::runtime::task_group(runtime_scope, "rocketmq-store.local-file.background-index-rebuild");
 
         self.shutdown_token = CancellationToken::new();
         let batch_size = message_store_config.background_index_rebuild_batch_size.max(1);
@@ -4950,6 +4967,7 @@ impl ReputMessageService {
 
     pub fn start(
         &mut self,
+        runtime_scope: &StoreRuntimeScope,
         commit_log: CommitLogReadHandle,
         policy: ReputPolicy,
         dispatcher: CommitLogDispatchHandle,
@@ -4960,13 +4978,7 @@ impl ReputMessageService {
             return;
         }
 
-        let task_group = match crate::runtime::task_group("rocketmq-store.local-file.reput") {
-            Ok(task_group) => task_group,
-            Err(error) => {
-                error!("ReputMessageService not started: {error}");
-                return;
-            }
-        };
+        let task_group = crate::runtime::task_group(runtime_scope, "rocketmq-store.local-file.reput");
 
         // Create channel for decoupling read and dispatch
         let (dispatch_tx, mut dispatch_rx) = tokio::sync::mpsc::channel::<Vec<DispatchRequest>>(128);
@@ -5518,11 +5530,11 @@ impl ReputMessageServiceInner {
     }
 }
 
-async fn run_blocking_scheduled_task<F>(task_name: &'static str, task: F) -> bool
+async fn run_blocking_scheduled_task<F>(runtime_scope: &StoreRuntimeScope, task_name: &'static str, task: F) -> bool
 where
     F: FnOnce() + Send + 'static,
 {
-    match crate::runtime::spawn_io(task_name, task).await {
+    match crate::runtime::spawn_io(runtime_scope, task_name, task).await {
         Ok(()) => true,
         Err(error) => {
             error!("scheduled store task {task_name} failed: {error}");
@@ -5854,6 +5866,7 @@ impl CorrectLogicOffsetService {
     }
 }
 struct FlushConsumeQueueService {
+    runtime_scope: StoreRuntimeScope,
     message_store_config: Arc<MessageStoreConfig>,
     consume_queue_store: ConsumeQueueStore,
     store_checkpoint: Arc<StoreCheckpoint>,
@@ -5864,11 +5877,13 @@ struct FlushConsumeQueueService {
 
 impl FlushConsumeQueueService {
     fn new(
+        runtime_scope: StoreRuntimeScope,
         message_store_config: Arc<MessageStoreConfig>,
         consume_queue_store: ConsumeQueueStore,
         store_checkpoint: Arc<StoreCheckpoint>,
     ) -> Self {
         Self {
+            runtime_scope,
             message_store_config,
             consume_queue_store,
             store_checkpoint,
@@ -5897,11 +5912,12 @@ impl FlushConsumeQueueService {
     }
 
     async fn flush_once(
+        runtime_scope: StoreRuntimeScope,
         consume_queue_store: ConsumeQueueStore,
         store_checkpoint: Arc<StoreCheckpoint>,
         flush_least_pages: i32,
     ) {
-        if let Err(error) = crate::runtime::spawn_io("flush-consume-queue", move || {
+        if let Err(error) = crate::runtime::spawn_io(&runtime_scope, "flush-consume-queue", move || {
             Self::flush_once_blocking(&consume_queue_store, &store_checkpoint, flush_least_pages);
         })
         .await
@@ -5916,17 +5932,12 @@ impl FlushConsumeQueueService {
             return;
         }
 
-        let group = match crate::runtime::task_group("rocketmq-store.flush-consume-queue") {
-            Ok(group) => group,
-            Err(error) => {
-                error!("failed to start flush consume queue service: {error}");
-                return;
-            }
-        };
+        let group = crate::runtime::task_group(&self.runtime_scope, "rocketmq-store.flush-consume-queue");
 
         let message_store_config = self.message_store_config.clone();
         let consume_queue_store = self.consume_queue_store.clone();
         let store_checkpoint = self.store_checkpoint.clone();
+        let runtime_scope = self.runtime_scope.clone();
         let shutdown_token = CancellationToken::new();
         *self.shutdown_token.lock() = shutdown_token.clone();
         let wakeup = self.wakeup.clone();
@@ -5947,7 +5958,13 @@ impl FlushConsumeQueueService {
                         default_least_pages
                     };
 
-                Self::flush_once(consume_queue_store.clone(), store_checkpoint.clone(), flush_least_pages).await;
+                Self::flush_once(
+                    runtime_scope.clone(),
+                    consume_queue_store.clone(),
+                    store_checkpoint.clone(),
+                    flush_least_pages,
+                )
+                .await;
 
                 tokio::select! {
                     _ = shutdown_token.cancelled() => break,
@@ -5956,7 +5973,7 @@ impl FlushConsumeQueueService {
                 }
             }
 
-            Self::flush_once(consume_queue_store, store_checkpoint, 0).await;
+            Self::flush_once(runtime_scope, consume_queue_store, store_checkpoint, 0).await;
         }) {
             Ok(_) => {
                 *worker_group = Some(group);
@@ -6125,11 +6142,12 @@ mod tests {
 
     #[tokio::test]
     async fn scheduled_blocking_task_reports_completion_and_join_failure() {
+        let runtime_scope = crate::runtime::test_scope("scheduled-blocking-task-test");
         let completed = Arc::new(AtomicBool::new(false));
         let completed_task = Arc::clone(&completed);
 
         assert!(
-            run_blocking_scheduled_task("test scheduled success", move || {
+            run_blocking_scheduled_task(&runtime_scope, "test scheduled success", move || {
                 completed_task.store(true, Ordering::Release);
             })
             .await
@@ -6137,7 +6155,10 @@ mod tests {
         assert!(completed.load(Ordering::Acquire));
 
         assert!(
-            !run_blocking_scheduled_task("test scheduled panic", || panic!("scheduled task panic")).await,
+            !run_blocking_scheduled_task(&runtime_scope, "test scheduled panic", || panic!(
+                "scheduled task panic"
+            ))
+            .await,
             "panic in a scheduled blocking task should stop that scheduled loop"
         );
     }
@@ -6162,6 +6183,7 @@ mod tests {
             Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
             None,
             false,
+            crate::runtime::test_service_context("local-file-store-test"),
         );
         store
             .wire_owned_root_dependencies()
@@ -6181,6 +6203,7 @@ mod tests {
             Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
             None,
             false,
+            crate::runtime::test_service_context("configured-local-file-store-test"),
         );
         assert!(store.get_timer_message_store().is_none());
         store
@@ -6236,6 +6259,7 @@ mod tests {
             Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
             None,
             false,
+            crate::runtime::test_service_context("unwired-local-file-store-test"),
         )
     }
 
@@ -6275,6 +6299,7 @@ mod tests {
             Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
             None,
             false,
+            crate::runtime::test_service_context("owned-wiring-local-file-store-test"),
         )
     }
 
@@ -6740,7 +6765,8 @@ mod tests {
         assert!(wiring.contains("self.consume_queue_store.set_context(self.consume_queue_context());"));
         assert!(wiring.contains("TimerMessageStore::new_with_store_context("));
         assert!(wiring.contains("self.timer_store_context()"));
-        assert!(wiring.contains("DefaultHAService::new(replica_store)"));
+        assert!(wiring.contains("DefaultHAService::new("));
+        assert!(wiring.contains("self.runtime_scope.clone()"));
         assert!(wiring.contains("PendingHAService::AutoSwitch"));
         assert!(wiring.contains("PendingHAService::Default"));
         assert!(wiring.contains("PendingHAService::Default(Box::new("));
@@ -6854,9 +6880,14 @@ mod tests {
         let reput_policy = store.composition.reput();
         let dispatcher = store.dispatcher.handle();
         let runtime_context = store.reput_runtime_context();
-        store
-            .reput_message_service
-            .start(commit_log, reput_policy, dispatcher, false, runtime_context);
+        store.reput_message_service.start(
+            &store.runtime_scope,
+            commit_log,
+            reput_policy,
+            dispatcher,
+            false,
+            runtime_context,
+        );
 
         tokio::time::timeout(Duration::from_secs(1), async {
             loop {
@@ -7924,6 +7955,7 @@ mod tests {
         let max_delay_level = store.max_delay_level;
 
         store.background_index_rebuild_service.start(
+            &store.runtime_scope,
             commit_log,
             message_store_config,
             index_service,
@@ -7966,6 +7998,7 @@ mod tests {
         let delay_level_table = store.delay_level_table_ref().clone();
         let max_delay_level = store.max_delay_level;
         store.background_index_rebuild_service.start(
+            &store.runtime_scope,
             commit_log,
             message_store_config,
             index_service,
@@ -8035,6 +8068,7 @@ mod tests {
         let delay_level_table = store.delay_level_table_ref().clone();
         let max_delay_level = store.max_delay_level;
         store.background_index_rebuild_service.start(
+            &store.runtime_scope,
             commit_log,
             message_store_config,
             index_service,
@@ -8156,6 +8190,7 @@ mod tests {
         let delay_level_table = store.delay_level_table_ref().clone();
         let max_delay_level = store.max_delay_level;
         store.background_index_rebuild_service.start(
+            &store.runtime_scope,
             commit_log,
             message_store_config,
             index_service,
@@ -8344,6 +8379,7 @@ mod tests {
             Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
             None,
             false,
+            crate::runtime::test_service_context("master-local-file-store-test"),
         ));
 
         store.set_master_store_in_process(master_store.clone());
@@ -8476,11 +8512,7 @@ mod tests {
 
         assert!(store.is_mapped_files_empty());
 
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        let appended = runtime
+        let appended = crate::runtime::test_runtime_owner()
             .block_on(store.append_to_commit_log(0, payload, 0, payload.len() as i32))
             .unwrap();
 
@@ -8512,11 +8544,7 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let mut store = new_test_store(&temp_dir);
         let payload = b"pending-durable-message";
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        assert!(runtime
+        assert!(crate::runtime::test_runtime_owner()
             .block_on(store.append_to_commit_log(0, payload, 0, payload.len() as i32))
             .unwrap());
         let durable_before = store.get_flushed_where();
@@ -9200,11 +9228,7 @@ mod tests {
             ..DispatchRequest::default()
         });
 
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        runtime.block_on(store.reput_once());
+        crate::runtime::test_runtime_owner().block_on(store.reput_once());
 
         let reput_from_offset = store
             .reput_message_service

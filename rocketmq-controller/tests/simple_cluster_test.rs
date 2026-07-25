@@ -28,6 +28,13 @@ use rocketmq_controller::protobuf::openraft::open_raft_service_server::OpenRaftS
 use rocketmq_controller::typ::Node;
 use tonic::transport::Server;
 
+fn test_storage_io(name: &'static str) -> rocketmq_runtime::BlockingExecutor {
+    rocketmq_runtime::RuntimeContext::from_current(name)
+        .service_context("controller-test")
+        .storage_io()
+        .clone()
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_simple_cluster_setup() {
     println!("Starting simple cluster test...");
@@ -62,7 +69,14 @@ async fn test_simple_cluster_setup() {
             .with_storage_backend(StorageBackendType::Memory)
             .with_raft_peers(peers);
 
-        let node = Arc::new(RaftNodeManager::new(ControllerConfigReader::new(config)).await.unwrap());
+        let node = Arc::new(
+            RaftNodeManager::new(
+                ControllerConfigReader::new(config),
+                test_storage_io("simple-cluster-node"),
+            )
+            .await
+            .unwrap(),
+        );
 
         // Start gRPC server
         let service = GrpcRaftService::new(node.raft());

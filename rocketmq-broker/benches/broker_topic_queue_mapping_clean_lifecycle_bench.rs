@@ -24,6 +24,7 @@ use criterion::criterion_main;
 use criterion::Criterion;
 use rocketmq_broker::bench_support::run_broker_topic_queue_mapping_clean_lifecycle_probe;
 use rocketmq_broker::bench_support::BrokerTopicQueueMappingCleanLifecycleProbe;
+use rocketmq_runtime::RuntimeContext;
 
 fn run_lifecycle_probe() -> BrokerTopicQueueMappingCleanLifecycleProbe {
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -34,7 +35,10 @@ fn run_lifecycle_probe() -> BrokerTopicQueueMappingCleanLifecycleProbe {
         .build()
         .expect("broker topic clean benchmark runtime should start");
 
-    runtime.block_on(run_broker_topic_queue_mapping_clean_lifecycle_probe())
+    runtime.block_on(async {
+        let context = RuntimeContext::from_current("broker-topic-clean-bench");
+        run_broker_topic_queue_mapping_clean_lifecycle_probe(context.service_context("broker")).await
+    })
 }
 
 fn workspace_root() -> PathBuf {

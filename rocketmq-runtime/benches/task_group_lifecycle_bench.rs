@@ -39,10 +39,10 @@ fn runtime_config() -> RuntimeConfig {
 
 fn run_spawn_shutdown(task_count: usize) -> ShutdownReport {
     let owner = RuntimeOwner::new(runtime_config()).expect("runtime owner should start");
-    let context = owner.context().clone();
+    let context = owner.root_context().child("bench.task-group-root");
 
     let report = owner.block_on(async move {
-        let service = context.service_context(format!("bench.task-group.{task_count}"));
+        let service = context.child(format!("bench.task-group.{task_count}"));
         for task_index in 0..task_count {
             service
                 .spawn_service(format!("short-task-{task_index}"), async {})
@@ -52,7 +52,7 @@ fn run_spawn_shutdown(task_count: usize) -> ShutdownReport {
             }
         }
 
-        context.shutdown_tasks(Duration::from_secs(5)).await
+        context.task_group().shutdown(Duration::from_secs(5)).await
     });
 
     assert!(report.is_healthy(), "{}", report.to_json());

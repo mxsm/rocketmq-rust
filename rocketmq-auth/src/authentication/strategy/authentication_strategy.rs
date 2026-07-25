@@ -52,6 +52,9 @@
 //! }
 //! ```
 
+use std::future::Future;
+use std::pin::Pin;
+
 use rocketmq_error::AuthError;
 
 use crate::authorization::context::authentication_context::AuthenticationContext;
@@ -133,6 +136,8 @@ use crate::authorization::context::authentication_context::AuthenticationContext
 ///     }
 /// }
 /// ```
+pub type AuthenticationFuture<'a> = Pin<Box<dyn Future<Output = Result<(), AuthError>> + 'a>>;
+
 pub trait AuthenticationStrategy: Send + Sync {
     /// Authenticates a request based on the provided authentication context.
     ///
@@ -186,7 +191,7 @@ pub trait AuthenticationStrategy: Send + Sync {
     ///     Ok(())
     /// }
     /// ```
-    fn authenticate(&self, context: &dyn AuthenticationContext) -> Result<(), AuthError>;
+    fn authenticate<'a>(&'a self, context: &'a dyn AuthenticationContext) -> AuthenticationFuture<'a>;
 }
 
 #[cfg(test)]
@@ -199,8 +204,8 @@ mod tests {
     struct AllowAllAuthenticationStrategy;
 
     impl AuthenticationStrategy for AllowAllAuthenticationStrategy {
-        fn authenticate(&self, _context: &dyn AuthenticationContext) -> Result<(), AuthError> {
-            Ok(())
+        fn authenticate<'a>(&'a self, _context: &'a dyn AuthenticationContext) -> AuthenticationFuture<'a> {
+            Box::pin(async { Ok(()) })
         }
     }
 
@@ -208,26 +213,26 @@ mod tests {
     struct DenyAllAuthenticationStrategy;
 
     impl AuthenticationStrategy for DenyAllAuthenticationStrategy {
-        fn authenticate(&self, _context: &dyn AuthenticationContext) -> Result<(), AuthError> {
-            Err(AuthError::AuthenticationFailed("Denied by policy".to_string()))
+        fn authenticate<'a>(&'a self, _context: &'a dyn AuthenticationContext) -> AuthenticationFuture<'a> {
+            Box::pin(async { Err(AuthError::AuthenticationFailed("Denied by policy".to_string())) })
         }
     }
 
-    #[test]
-    fn test_allow_all_strategy_succeeds() {
+    #[tokio::test]
+    async fn test_allow_all_strategy_succeeds() {
         let strategy = AllowAllAuthenticationStrategy;
         let context = DefaultAuthenticationContext::new();
 
-        let result = strategy.authenticate(&context);
+        let result = strategy.authenticate(&context).await;
         assert!(result.is_ok());
     }
 
-    #[test]
-    fn test_deny_all_strategy_fails() {
+    #[tokio::test]
+    async fn test_deny_all_strategy_fails() {
         let strategy = DenyAllAuthenticationStrategy;
         let context = DefaultAuthenticationContext::new();
 
-        let result = strategy.authenticate(&context);
+        let result = strategy.authenticate(&context).await;
         assert!(result.is_err());
 
         if let Err(AuthError::AuthenticationFailed(msg)) = result {
@@ -237,12 +242,12 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_strategy_is_object_safe() {
+    #[tokio::test]
+    async fn test_strategy_is_object_safe() {
         let strategy: Arc<dyn AuthenticationStrategy> = Arc::new(AllowAllAuthenticationStrategy);
         let context = DefaultAuthenticationContext::new();
 
-        let result = strategy.authenticate(&context);
+        let result = strategy.authenticate(&context).await;
         assert!(result.is_ok());
     }
 
@@ -253,14 +258,14 @@ mod tests {
         assert_send_sync::<DenyAllAuthenticationStrategy>();
     }
 
-    #[test]
-    fn test_multiple_strategies_can_coexist() {
+    #[tokio::test]
+    async fn test_multiple_strategies_can_coexist() {
         let allow_strategy: Arc<dyn AuthenticationStrategy> = Arc::new(AllowAllAuthenticationStrategy);
         let deny_strategy: Arc<dyn AuthenticationStrategy> = Arc::new(DenyAllAuthenticationStrategy);
 
         let context = DefaultAuthenticationContext::new();
 
-        assert!(allow_strategy.authenticate(&context).is_ok());
-        assert!(deny_strategy.authenticate(&context).is_err());
+        assert!(allow_strategy.authenticate(&context).await.is_ok());
+        assert!(deny_strategy.authenticate(&context).await.is_err());
     }
 }

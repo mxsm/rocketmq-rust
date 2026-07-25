@@ -1,0 +1,47 @@
+error[E0624]: associated function `new` is private
+ --> tests/ui/service_context/root_raw_constructor_is_private.rs:4:25
+  |
+4 |       RootServiceContext::new()
+  |                           ^^^ private associated function
+  |
+ ::: src/service_context.rs
+  |
+  | /     pub(crate) fn new(
+  | |         name: Arc<str>,
+  | |         runtime: RuntimeHandle,
+  | |         task_group: TaskGroup,
+  | |         blocking_policies: BlockingLanePolicies,
+  | |         diagnostics: RuntimeDiagnostics,
+  | |     ) -> RuntimeResult<Self> {
+  | |____________________________- private associated function defined here
+
+error[E0061]: this function takes 5 arguments but 0 arguments were supplied
+ --> tests/ui/service_context/root_raw_constructor_is_private.rs:4:5
+  |
+4 |     RootServiceContext::new()
+  |     ^^^^^^^^^^^^^^^^^^^^^^^-- multiple arguments are missing
+  |
+note: associated function defined here
+ --> src/service_context.rs
+  |
+  |     pub(crate) fn new(
+  |                   ^^^
+help: provide the arguments
+  |
+4 |     RootServiceContext::new(/* Arc<str> */, /* RuntimeHandle */, /* TaskGroup */, /* BlockingLanePolicies */, /* RuntimeDiagnostics */)
+  |                             ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+error[E0308]: mismatched types
+ --> tests/ui/service_context/root_raw_constructor_is_private.rs:4:5
+  |
+3 | fn forge() -> RootServiceContext {
+  |               ------------------ expected `RootServiceContext` because of return type
+4 |     RootServiceContext::new()
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^ expected `RootServiceContext`, found `Result<RootServiceContext, RuntimeError>`
+  |
+  = note: expected struct `RootServiceContext`
+               found enum `Result<RootServiceContext, RuntimeError>`
+help: consider using `Result::expect` to unwrap the `Result<RootServiceContext, RuntimeError>` value, panicking if the value is a `Result::Err`
+  |
+4 |     RootServiceContext::new().expect("REASON")
+  |                              +++++++++++++++++

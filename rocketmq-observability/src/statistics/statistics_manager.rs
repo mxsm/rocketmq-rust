@@ -18,7 +18,6 @@ use std::time::Duration;
 
 use parking_lot::Mutex;
 use parking_lot::RwLock;
-use rocketmq_runtime::RuntimeHandle;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::TaskGroup;
@@ -61,41 +60,21 @@ pub struct StatisticsManager {
     stats_table: StatsTable,
     statistics_item_state_getter: Arc<RwLock<Option<Arc<dyn StatisticsItemStateGetter + Send + Sync>>>>,
     cleanup_task: Arc<Mutex<Option<CleanupTask>>>,
-    parent_task_group: Option<TaskGroup>,
-}
-
-impl Default for StatisticsManager {
-    fn default() -> Self {
-        Self::new()
-    }
+    parent_task_group: TaskGroup,
 }
 
 impl StatisticsManager {
     const MAX_IDLE_TIME: u64 = 10 * 60 * 1000;
 
-    pub fn new() -> Self {
-        Self::new_with_optional_kind_meta_and_task_group(HashMap::new(), None)
+    pub fn new(parent_task_group: TaskGroup) -> Self {
+        Self::with_kind_meta(HashMap::new(), parent_task_group)
     }
 
     pub fn new_with_task_group(parent_task_group: TaskGroup) -> Self {
-        Self::new_with_optional_kind_meta_and_task_group(HashMap::new(), Some(parent_task_group))
+        Self::new(parent_task_group)
     }
 
-    pub fn with_kind_meta(kind_meta: HashMap<String, Arc<StatisticsKindMeta>>) -> Self {
-        Self::new_with_optional_kind_meta_and_task_group(kind_meta, None)
-    }
-
-    pub fn with_kind_meta_and_task_group(
-        kind_meta: HashMap<String, Arc<StatisticsKindMeta>>,
-        parent_task_group: TaskGroup,
-    ) -> Self {
-        Self::new_with_optional_kind_meta_and_task_group(kind_meta, Some(parent_task_group))
-    }
-
-    fn new_with_optional_kind_meta_and_task_group(
-        kind_meta: HashMap<String, Arc<StatisticsKindMeta>>,
-        parent_task_group: Option<TaskGroup>,
-    ) -> Self {
+    pub fn with_kind_meta(kind_meta: HashMap<String, Arc<StatisticsKindMeta>>, parent_task_group: TaskGroup) -> Self {
         let manager = Self {
             kind_meta_map: Arc::new(RwLock::new(kind_meta)),
             brief_metas: None,
@@ -106,6 +85,13 @@ impl StatisticsManager {
         };
         manager.start();
         manager
+    }
+
+    pub fn with_kind_meta_and_task_group(
+        kind_meta: HashMap<String, Arc<StatisticsKindMeta>>,
+        parent_task_group: TaskGroup,
+    ) -> Self {
+        Self::with_kind_meta(kind_meta, parent_task_group)
     }
 
     pub fn add_statistics_kind_meta(&self, kind_meta: Arc<StatisticsKindMeta>) {
@@ -125,18 +111,7 @@ impl StatisticsManager {
             return;
         }
 
-        let task_group = if let Some(parent_task_group) = self.parent_task_group.as_ref() {
-            parent_task_group.child("rocketmq-observability.statistics")
-        } else {
-            let runtime = match tokio::runtime::Handle::try_current() {
-                Ok(handle) => RuntimeHandle::new(handle),
-                Err(error) => {
-                    tracing::debug!(%error, "StatisticsManager cleanup task deferred until a Tokio runtime is available");
-                    return;
-                }
-            };
-            TaskGroup::root("rocketmq-observability.statistics", runtime)
-        };
+        let task_group = self.parent_task_group.child("rocketmq-observability.statistics");
         let scheduled_tasks = ScheduledTaskGroup::new(task_group.child("scheduled"));
         let stats_table = self.stats_table.clone();
         let kind_meta_map = self.kind_meta_map.clone();
@@ -268,9 +243,16 @@ mod tests {
     use super::*;
     use crate::statistics::statistics_item_scheduled_printer::StatisticsItemScheduledPrinter;
 
+    fn test_parent(name: &'static str) -> TaskGroup {
+        RuntimeContext::from_current(name)
+            .service_context("statistics-service")
+            .task_group()
+            .clone()
+    }
+
     #[tokio::test]
     async fn inc_rejects_empty_item_names_without_panicking() {
-        let manager = StatisticsManager::new();
+        let manager = StatisticsManager::new(test_parent("statistics-invalid-item-test"));
         manager.add_statistics_kind_meta(Arc::new(StatisticsKindMeta::new(
             "kind".to_string(),
             Vec::new(),
@@ -282,7 +264,7 @@ mod tests {
 
     #[tokio::test]
     async fn shutdown_stops_idle_cleanup_task() {
-        let manager = StatisticsManager::new();
+        let manager = StatisticsManager::new(test_parent("statistics-shutdown-test"));
         assert!(
             manager.cleanup_task.lock().is_some(),
             "cleanup task should be running after manager creation"
@@ -320,38 +302,6 @@ mod tests {
     }
 
     #[test]
-    fn new_without_tokio_runtime_does_not_spawn_panic() {
-        let manager = StatisticsManager::new();
-        assert!(
-            manager.cleanup_task.lock().is_none(),
-            "cleanup task should not start without an ambient Tokio runtime"
-        );
-    }
-
-    #[test]
-    fn cleanup_task_starts_lazily_when_used_inside_runtime() {
-        let manager = StatisticsManager::new();
-        assert!(
-            manager.cleanup_task.lock().is_none(),
-            "cleanup task should not start without an ambient Tokio runtime"
-        );
-        manager.add_statistics_kind_meta(Arc::new(StatisticsKindMeta::new(
-            "kind".to_string(),
-            vec!["count".to_string()],
-            StatisticsItemScheduledPrinter,
-        )));
-
-        tokio::runtime::Runtime::new().unwrap().block_on(async {
-            assert!(manager.inc("kind", "key", vec![1]).await);
-            assert!(
-                manager.cleanup_task.lock().is_some(),
-                "cleanup task should start lazily once async use enters a Tokio runtime"
-            );
-            manager.shutdown().await;
-        });
-    }
-
-    #[test]
     fn expired_items_are_collected_without_holding_remove_lock() {
         let item = Arc::new(StatisticsItem::new("kind", "key", vec!["count"]).expect("valid statistics item"));
         let stats_table: StatsTable = Arc::new(RwLock::new(HashMap::from([(
@@ -385,10 +335,11 @@ mod tests {
     async fn cleanup_task_shutdown_cancels_worker_before_abort() {
         let observed_shutdown = Arc::new(AtomicBool::new(false));
         let observed_shutdown_in_task = observed_shutdown.clone();
-        let task_group = TaskGroup::root(
-            "statistics-cleanup-test",
-            RuntimeHandle::new(tokio::runtime::Handle::current()),
-        );
+        let context = RuntimeContext::from_current("statistics-cleanup-test");
+        let task_group = context
+            .service_context("statistics-cleanup-worker")
+            .task_group()
+            .clone();
         let shutdown_token = task_group.cancellation_token();
         task_group
             .spawn_service("statistics-cleanup-test-worker", async move {
@@ -406,7 +357,7 @@ mod tests {
     #[tokio::test]
     async fn drop_aborts_idle_cleanup_task_and_releases_state() {
         let stats_table = {
-            let manager = StatisticsManager::new();
+            let manager = StatisticsManager::new(test_parent("statistics-drop-test"));
             Arc::downgrade(&manager.stats_table)
         };
 

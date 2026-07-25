@@ -20,6 +20,9 @@ use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_protocol::protocol::body::acl_info::AclInfo;
 use rocketmq_protocol::protocol::body::user_info::UserInfo;
+use rocketmq_runtime::ChildServiceContext;
+use rocketmq_runtime::MetadataIoActor;
+use rocketmq_runtime::MetadataIoConfig;
 use rocketmq_security_api::Action;
 
 use crate::auth::acl_converter::AclConverter;
@@ -34,8 +37,15 @@ pub struct AuthAdminService {
 }
 
 impl AuthAdminService {
-    pub fn new(auth_config: AuthConfig) -> Result<Self, RocketMQError> {
-        let provider_registry = ProviderRegistry::local(&auth_config)?;
+    pub async fn new(auth_config: AuthConfig, service_context: ChildServiceContext) -> Result<Self, RocketMQError> {
+        let metadata_io = MetadataIoActor::start(
+            &service_context.child("auth-admin.metadata-io"),
+            MetadataIoConfig::default(),
+        )
+        .map_err(crate::runtime_to_rocketmq_error)?;
+        let provider_registry =
+            ProviderRegistry::load_with_metadata_io(&auth_config, metadata_io, service_context.metadata_io().clone())
+                .await?;
         Ok(Self::with_provider_registry_and_config(provider_registry, auth_config))
     }
 
@@ -466,7 +476,9 @@ mod tests {
 
     #[tokio::test]
     async fn create_get_list_update_delete_user_round_trip() {
-        let service = AuthAdminService::new(test_auth_config()).unwrap();
+        let service = AuthAdminService::new(test_auth_config(), crate::test_service_context("auth-admin"))
+            .await
+            .unwrap();
 
         let mut user = User::of_with_type("alice", "secret", UserType::Normal);
         user.set_user_status(UserStatus::Enable);
@@ -488,7 +500,9 @@ mod tests {
 
     #[tokio::test]
     async fn delete_acl_can_remove_single_resource() {
-        let service = AuthAdminService::new(test_auth_config()).unwrap();
+        let service = AuthAdminService::new(test_auth_config(), crate::test_service_context("auth-admin"))
+            .await
+            .unwrap();
         let mut user = User::of_with_type("alice", "secret", UserType::Normal);
         user.set_user_status(UserStatus::Enable);
         service.create_user(user).await.unwrap();
@@ -534,7 +548,9 @@ mod tests {
 
     #[tokio::test]
     async fn update_user_preserves_unset_fields_like_java() {
-        let service = AuthAdminService::new(test_auth_config()).unwrap();
+        let service = AuthAdminService::new(test_auth_config(), crate::test_service_context("auth-admin"))
+            .await
+            .unwrap();
         let mut user = User::of_with_type("alice", "secret", UserType::Normal);
         user.set_user_status(UserStatus::Enable);
         service.create_user(user).await.unwrap();
@@ -551,7 +567,9 @@ mod tests {
 
     #[tokio::test]
     async fn delete_acl_uses_requested_policy_type_only() {
-        let service = AuthAdminService::new(test_auth_config()).unwrap();
+        let service = AuthAdminService::new(test_auth_config(), crate::test_service_context("auth-admin"))
+            .await
+            .unwrap();
         let mut user = User::of_with_type("alice", "secret", UserType::Normal);
         user.set_user_status(UserStatus::Enable);
         service.create_user(user).await.unwrap();
@@ -592,7 +610,9 @@ mod tests {
 
     #[tokio::test]
     async fn list_acl_reads_live_provider_state() {
-        let service = AuthAdminService::new(test_auth_config()).unwrap();
+        let service = AuthAdminService::new(test_auth_config(), crate::test_service_context("auth-admin"))
+            .await
+            .unwrap();
         let acl = Acl::of(
             "alice",
             SubjectType::User,
@@ -652,7 +672,9 @@ mod tests {
 
     #[tokio::test]
     async fn create_update_and_get_acl_round_trip() {
-        let service = AuthAdminService::new(test_auth_config()).unwrap();
+        let service = AuthAdminService::new(test_auth_config(), crate::test_service_context("auth-admin"))
+            .await
+            .unwrap();
         let mut user = User::of_with_type("alice", "secret", UserType::Normal);
         user.set_user_status(UserStatus::Enable);
         service.create_user(user).await.unwrap();
@@ -711,7 +733,9 @@ mod tests {
 
     #[tokio::test]
     async fn update_global_white_remote_addresses_rejects_empty_values() {
-        let service = AuthAdminService::new(test_auth_config()).unwrap();
+        let service = AuthAdminService::new(test_auth_config(), crate::test_service_context("auth-admin"))
+            .await
+            .unwrap();
 
         let error = service
             .update_global_white_remote_addresses([" ", ""])

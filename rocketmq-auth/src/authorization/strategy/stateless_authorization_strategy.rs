@@ -24,9 +24,10 @@ use tracing::debug;
 
 use crate::authorization::context::default_authorization_context::DefaultAuthorizationContext;
 use crate::authorization::strategy::abstract_authorization_strategy::AbstractAuthorizationStrategy;
+use crate::authorization::strategy::abstract_authorization_strategy::AuthorizationFuture;
 use crate::authorization::strategy::abstract_authorization_strategy::AuthorizationStrategy;
 use crate::authorization::strategy::abstract_authorization_strategy::StrategyResult;
-use crate::authorization::strategy::block_on_base_authorization;
+use crate::authorization::strategy::evaluate_base_authorization;
 use crate::config::AuthConfig;
 
 /// Stateless authorization strategy.
@@ -129,13 +130,14 @@ impl AuthorizationStrategy for StatelessAuthorizationStrategy {
     /// let context = DefaultAuthorizationContext::of(subject, resource, action, ip);
     /// strategy.evaluate(&context)?;
     /// ```
-    fn evaluate(&self, context: &DefaultAuthorizationContext) -> StrategyResult<()> {
-        debug!(
-            "Stateless authorization evaluation for subject: {:?}",
-            context.subject().map(|s| s.subject_key())
-        );
-
-        block_on_base_authorization(&self.base, context)
+    fn evaluate<'a>(&'a self, context: &'a DefaultAuthorizationContext) -> AuthorizationFuture<'a> {
+        Box::pin(async move {
+            debug!(
+                "Stateless authorization evaluation for subject: {:?}",
+                context.subject().map(|s| s.subject_key())
+            );
+            evaluate_base_authorization(&self.base, context).await
+        })
     }
 }
 
@@ -199,33 +201,23 @@ mod tests {
         assert!(!strategy.base().is_whitelisted("12"));
     }
 
-    #[test]
-    fn test_stateless_evaluate_disabled() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let _guard = rt.enter();
-
+    #[tokio::test]
+    async fn test_stateless_evaluate_disabled() {
         let mut config = create_test_config();
         config.authorization_enabled = false;
 
         let strategy = StatelessAuthorizationStrategy::new(config, None).unwrap();
         let context = DefaultAuthorizationContext::default();
 
-        let result = strategy.evaluate(&context);
+        let result = strategy.evaluate(&context).await;
         assert!(result.is_ok());
     }
 
-    #[test]
-    fn evaluate_inside_current_thread_runtime_without_nested_block_on_panic() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn evaluate_inside_current_thread_runtime_without_nested_block_on_panic() {
         let config = create_test_config();
         let strategy = StatelessAuthorizationStrategy::new(config, None).unwrap();
         let context = DefaultAuthorizationContext::default();
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-
-        runtime.block_on(async {
-            assert!(strategy.evaluate(&context).is_ok());
-        });
+        assert!(strategy.evaluate(&context).await.is_ok());
     }
 }

@@ -1117,7 +1117,11 @@ mod tests {
         let tcp_stream = TcpStream::from_std(std_stream).expect("convert tcp stream");
         let connection = Connection::new(tcp_stream);
         let response_table = Arc::new(Mutex::new(HashMap::<i32, ResponseFuture>::new()));
-        let inner = Arc::new(ChannelInner::new(connection, response_table));
+        let inner = Arc::new(ChannelInner::new(
+            connection,
+            response_table,
+            crate::test_task_group("channel"),
+        ));
         Channel::new(inner, local_addr, local_addr)
     }
 

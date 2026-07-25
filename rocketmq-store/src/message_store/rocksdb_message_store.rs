@@ -33,6 +33,7 @@ use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_protocol::protocol::body::ha_runtime_info::HARuntimeInfo;
 use rocketmq_runtime::common::system_clock::SystemClock;
+use rocketmq_runtime::ChildServiceContext;
 use rocketmq_store_api::GetStatus as ApiGetStatus;
 use rocketmq_store_local::commit_log::read::LocalWalPort;
 use rocketmq_store_rocksdb::message_store::RocksDbDerivedStore;
@@ -146,6 +147,7 @@ impl RocksDBMessageStore {
         topic_config_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>>,
         broker_stats_manager: Option<Arc<BrokerStatsManager>>,
         notify_message_arrive_in_batch: bool,
+        service_context: ChildServiceContext,
     ) -> Result<Self, StoreError> {
         let message_store_config_for_index = Arc::clone(&message_store_config);
         let message_store_config_for_timer = Arc::clone(&message_store_config);
@@ -156,6 +158,7 @@ impl RocksDBMessageStore {
                 timer_enabled: message_store_config.timer_rocksdb_enable,
                 transaction_enabled: message_store_config.trans_rocksdb_enable,
             },
+            service_context.child("rocksdb-derived"),
         )
         .map_err(message_store_adapter_error)?;
         let consume_queue_store = derived.consume_queue_store().clone();
@@ -168,6 +171,7 @@ impl RocksDBMessageStore {
             topic_config_table,
             broker_stats_manager,
             notify_message_arrive_in_batch,
+            service_context.child("local-file"),
         )?);
         local_file_store.wire_owned_root_dependencies()?;
         let local_queue_offsets = local_file_store.consume_queue_store_mut().clone();

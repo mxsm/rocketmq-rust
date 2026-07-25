@@ -86,13 +86,11 @@ use std::time::Instant;
 
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
-use rocketmq_runtime::RuntimeError;
-use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::RuntimeResult;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
-use rocketmq_runtime::ServiceContext;
 use rocketmq_runtime::ShutdownAnnotation;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
@@ -589,30 +587,18 @@ impl<PR> ConnectionPool<PR> {
     /// # use std::time::Duration;
     /// # async fn example() {
     /// let pool = ConnectionPool::<()>::new(1000, Duration::from_secs(300));
-    /// let cleanup_task = pool.start_cleanup_task(Duration::from_secs(30));
+    /// let cleanup_task =
+    ///     pool.start_cleanup_task_with_service_context(&service_context, Duration::from_secs(30));
     ///
     /// // ... use pool ...
     ///
     /// cleanup_task.abort(); // Stop cleanup task
     /// # }
     /// ```
-    pub fn start_cleanup_task(&self, interval: Duration) -> ConnectionPoolCleanupTask
-    where
-        PR: Send + Sync + 'static,
-    {
-        match self.try_start_cleanup_task(interval) {
-            Ok(cleanup_task) => cleanup_task,
-            Err(error) => {
-                warn!(?error, "connection pool cleanup task not started");
-                ConnectionPoolCleanupTask::inactive()
-            }
-        }
-    }
-
     /// Start the background cleanup task under an injected service context.
     pub fn start_cleanup_task_with_service_context(
         &self,
-        context: &ServiceContext,
+        context: &ChildServiceContext,
         interval: Duration,
     ) -> ConnectionPoolCleanupTask
     where
@@ -627,23 +613,10 @@ impl<PR> ConnectionPool<PR> {
         }
     }
 
-    /// Try to start the background cleanup task.
-    ///
-    /// Unlike [`Self::start_cleanup_task`], this method returns an error when no
-    /// ambient Tokio runtime is available or when the task cannot be spawned.
-    pub fn try_start_cleanup_task(&self, interval: Duration) -> RuntimeResult<ConnectionPoolCleanupTask>
-    where
-        PR: Send + Sync + 'static,
-    {
-        let handle = tokio::runtime::Handle::try_current().map_err(|_error| RuntimeError::NoCurrentRuntime)?;
-        let task_group = TaskGroup::root("rocketmq-transport.connection-pool", RuntimeHandle::new(handle));
-        self.start_cleanup_task_with_group(interval, task_group)
-    }
-
     /// Try to start the background cleanup task under an injected service context.
     pub fn try_start_cleanup_task_with_service_context(
         &self,
-        context: &ServiceContext,
+        context: &ChildServiceContext,
         interval: Duration,
     ) -> RuntimeResult<ConnectionPoolCleanupTask>
     where
@@ -808,8 +781,10 @@ mod tests {
 
     #[tokio::test]
     async fn cleanup_task_shutdown_reports_healthy() {
+        let context = rocketmq_runtime::RuntimeContext::from_current("connection-pool-shutdown-test");
+        let service = context.service_context("connection-pool-service");
         let pool = ConnectionPool::<()>::new(100, Duration::from_millis(10));
-        let cleanup_task = pool.start_cleanup_task(Duration::from_millis(5));
+        let cleanup_task = pool.start_cleanup_task_with_service_context(&service, Duration::from_millis(5));
 
         assert!(cleanup_task.is_active());
         assert_eq!(cleanup_task.task_count(), 1);
@@ -845,27 +820,5 @@ mod tests {
             "{}",
             report.to_json()
         );
-    }
-
-    #[test]
-    fn start_cleanup_task_without_tokio_runtime_returns_inactive_task() {
-        let pool = ConnectionPool::<()>::new(100, Duration::from_millis(10));
-        let cleanup_task = pool.start_cleanup_task(Duration::from_millis(5));
-
-        assert!(!cleanup_task.is_active());
-        let report = futures::executor::block_on(cleanup_task.shutdown(Duration::from_secs(1)));
-        assert!(report.is_healthy(), "{}", report.to_json());
-        assert_eq!(report.name, "rocketmq-transport.connection-pool.inactive");
-    }
-
-    #[test]
-    fn try_start_cleanup_task_without_tokio_runtime_returns_error() {
-        let pool = ConnectionPool::<()>::new(100, Duration::from_millis(10));
-
-        let error = pool
-            .try_start_cleanup_task(Duration::from_millis(5))
-            .expect_err("try_start_cleanup_task should require an ambient runtime");
-
-        assert!(matches!(error, RuntimeError::NoCurrentRuntime));
     }
 }

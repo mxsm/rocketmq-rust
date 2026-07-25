@@ -22,7 +22,6 @@ use dashmap::DashMap;
 use parking_lot::Mutex;
 use parking_lot::RwLock;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_runtime::RuntimeHandle;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
@@ -88,7 +87,7 @@ pub struct DefaultBrokerHeartbeatManager {
     /// Scan interval in milliseconds
     scan_interval_ms: u64,
 
-    parent_task_group: Option<TaskGroup>,
+    parent_task_group: TaskGroup,
 }
 
 impl DefaultBrokerHeartbeatManager {
@@ -97,15 +96,7 @@ impl DefaultBrokerHeartbeatManager {
     /// # Arguments
     ///
     /// * `config` - Controller configuration
-    pub fn new(config: ControllerConfigReader) -> Self {
-        Self::new_with_optional_task_group(config, None)
-    }
-
-    pub fn new_with_task_group(config: ControllerConfigReader, parent_task_group: TaskGroup) -> Self {
-        Self::new_with_optional_task_group(config, Some(parent_task_group))
-    }
-
-    fn new_with_optional_task_group(config: ControllerConfigReader, parent_task_group: Option<TaskGroup>) -> Self {
+    pub fn new(config: ControllerConfigReader, parent_task_group: TaskGroup) -> Self {
         let scan_interval_ms = config.snapshot().scan_not_active_broker_interval.max(1);
         Self {
             broker_live_table: Arc::new(DashMap::with_capacity(256)),
@@ -257,21 +248,7 @@ impl DefaultBrokerHeartbeatManager {
         let broker_live_table = self.broker_live_table.clone();
         let listeners = self.lifecycle_listeners.clone();
         let scan_interval_ms = self.scan_interval_ms;
-        let task_group = if let Some(parent_task_group) = self.parent_task_group.as_ref() {
-            parent_task_group.child("rocketmq-controller.heartbeat")
-        } else {
-            let runtime = match tokio::runtime::Handle::try_current() {
-                Ok(handle) => RuntimeHandle::new(handle),
-                Err(error) => {
-                    warn!(
-                        ?error,
-                        "failed to start DefaultBrokerHeartbeatManager outside Tokio runtime"
-                    );
-                    return;
-                }
-            };
-            TaskGroup::root("rocketmq-controller.heartbeat", runtime)
-        };
+        let task_group = self.parent_task_group.child("rocketmq-controller.heartbeat");
         let scheduled_tasks = ScheduledTaskGroup::new(task_group.child("scheduled"));
         let mut config = ScheduledTaskConfig::fixed_delay(
             "controller.heartbeat.scan-not-active-broker",
@@ -503,7 +480,25 @@ impl Drop for DefaultBrokerHeartbeatManager {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::OnceLock;
+
+    use rocketmq_runtime::RuntimeConfig;
+    use rocketmq_runtime::RuntimeOwner;
+
     use super::*;
+
+    fn test_task_group(name: &'static str) -> TaskGroup {
+        static OWNER: OnceLock<RuntimeOwner> = OnceLock::new();
+        OWNER
+            .get_or_init(|| {
+                RuntimeOwner::new(RuntimeConfig::server_default("controller-heartbeat-tests"))
+                    .expect("controller heartbeat test runtime should start")
+            })
+            .root_context()
+            .child(name)
+            .task_group()
+            .clone()
+    }
 
     // Note: These tests are disabled because creating Channel instances requires
     // complex setup with Connection and ResponseTable. Once proper test infrastructure
@@ -538,7 +533,7 @@ mod tests {
     #[test]
     fn test_default_broker_heartbeat_manager_creation() {
         let config = ControllerConfigReader::new(ControllerConfig::test_config());
-        let manager = DefaultBrokerHeartbeatManager::new(config.clone());
+        let manager = DefaultBrokerHeartbeatManager::new(config.clone(), test_task_group("creation"));
         assert_eq!(
             manager.scan_interval_ms,
             config.snapshot().scan_not_active_broker_interval
@@ -546,19 +541,22 @@ mod tests {
     }
 
     #[test]
-    fn start_without_tokio_runtime_does_not_leave_scan_task_group() {
+    fn injected_runtime_allows_start_without_ambient_tokio_runtime() {
         let config = ControllerConfigReader::new(ControllerConfig::test_config());
-        let manager = DefaultBrokerHeartbeatManager::new(config);
+        let manager = DefaultBrokerHeartbeatManager::new(config, test_task_group("non-ambient-start"));
 
         manager.start_shared();
 
+        assert_eq!(manager.scan_task_count(), 1);
+        manager.shutdown_shared();
         assert_eq!(manager.scan_task_count(), 0);
     }
 
     #[tokio::test]
     async fn sync_shutdown_clears_scan_task_group() {
         let config = ControllerConfigReader::new(ControllerConfig::test_config());
-        let manager = DefaultBrokerHeartbeatManager::new(config).with_scan_interval_ms(1);
+        let manager =
+            DefaultBrokerHeartbeatManager::new(config, test_task_group("sync-shutdown")).with_scan_interval_ms(1);
 
         manager.start_shared();
         assert_eq!(manager.scan_task_count(), 1);
@@ -571,7 +569,10 @@ mod tests {
     #[tokio::test]
     async fn concurrent_start_and_shutdown_own_one_scan_lifecycle() {
         let config = ControllerConfigReader::new(ControllerConfig::test_config());
-        let manager = Arc::new(DefaultBrokerHeartbeatManager::new(config).with_scan_interval_ms(1));
+        let manager = Arc::new(
+            DefaultBrokerHeartbeatManager::new(config, test_task_group("concurrent-lifecycle"))
+                .with_scan_interval_ms(1),
+        );
 
         let first_manager = manager.clone();
         let first = tokio::spawn(async move { first_manager.start_shared() });

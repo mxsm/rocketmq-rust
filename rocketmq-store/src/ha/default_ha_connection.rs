@@ -128,6 +128,7 @@ pub(crate) fn decode_transfer_header(
 }
 
 pub struct DefaultHAConnection {
+    runtime_scope: crate::runtime::StoreRuntimeScope,
     connection_context: DefaultHAConnectionContext,
     socket_stream: Option<TcpStream>,
     client_address: String,
@@ -147,6 +148,7 @@ pub struct DefaultHAConnection {
 impl DefaultHAConnection {
     /// Create a new DefaultHAConnection
     pub(crate) async fn new(
+        runtime_scope: crate::runtime::StoreRuntimeScope,
         connection_context: DefaultHAConnectionContext,
         socket_stream: TcpStream,
         message_store_config: Arc<MessageStoreConfig>,
@@ -167,7 +169,10 @@ impl DefaultHAConnection {
         }
 
         let socket_stream = Some(socket_stream);
-        let flow_monitor = Arc::new(FlowMonitor::new(message_store_config.clone()));
+        let flow_monitor = Arc::new(FlowMonitor::new(
+            message_store_config.clone(),
+            runtime_scope.task_group("ha-connection-flow-monitor"),
+        ));
 
         // Increment connection count
         connection_context.get_connection_count().fetch_add(1, Ordering::SeqCst);
@@ -175,6 +180,7 @@ impl DefaultHAConnection {
         let (shutdown_sender, shutdown_receiver) = mpsc::channel::<()>(1);
 
         Ok(Self {
+            runtime_scope,
             connection_context,
             socket_stream,
             client_address,
@@ -271,8 +277,7 @@ impl HAConnection for DefaultHAConnection {
         )
         .await?;
 
-        let task_group = crate::runtime::task_group("rocketmq-store.ha.connection")
-            .map_err(|error| HAConnectionError::Service(error.to_string()))?;
+        let task_group = crate::runtime::task_group(&self.runtime_scope, "rocketmq-store.ha.connection");
         task_group
             .spawn_service("ha-read-socket-service", async move {
                 read_service.run(read_shutdown_rx).await;

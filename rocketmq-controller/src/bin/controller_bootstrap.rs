@@ -33,9 +33,9 @@ use rocketmq_model::common::mq_version::CURRENT_VERSION;
 use rocketmq_model::utils::env_utils::EnvUtils;
 use rocketmq_protocol::protocol::remoting_command;
 use rocketmq_runtime::common::parse_config_file;
+use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
-use rocketmq_runtime::ServiceContext;
 use rocketmq_runtime::ServiceLifecycle;
 use rocketmq_runtime::ServiceLifecycleState;
 use rocketmq_runtime::ShutdownReason;
@@ -78,7 +78,7 @@ const LOGO: &str = r#"
 pub fn main() -> Result<()> {
     let owner = RuntimeOwner::new(controller_runtime_config())
         .map_err(|error| ControllerError::Internal(format!("failed to build controller runtime: {error}")))?;
-    let service_context = owner.context().service_context("rocketmq-controller-runtime");
+    let service_context = owner.root_context().child("rocketmq-controller-runtime");
     let lifecycle = ServiceLifecycle::from_env("rocketmq-controller").map_err(|error| {
         ControllerError::ConfigError(format!("invalid Controller lifecycle configuration: {error}"))
     })?;
@@ -117,7 +117,7 @@ fn controller_runtime_config() -> RuntimeConfig {
     config
 }
 
-async fn run(service_context: ServiceContext, lifecycle: ServiceLifecycle) -> Result<()> {
+async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) -> Result<()> {
     // Set remoting version
     EnvUtils::put_property(
         remoting_command::REMOTING_VERSION_KEY,
@@ -235,12 +235,12 @@ fn log_security_bootstrap(validated: ValidatedSecurityBootstrap) {
 
 async fn run_controller(
     config: ControllerConfig,
-    service_context: ServiceContext,
+    service_context: ChildServiceContext,
     lifecycle: ServiceLifecycle,
 ) -> Result<()> {
     // Create controller manager
     info!("Creating Controller Manager...");
-    let controller_manager = ControllerManager::new_with_service_context(config, service_context).await?;
+    let controller_manager = ControllerManager::new(config, service_context).await?;
     let controller_manager = Arc::new(controller_manager);
     // Initialize controller
     info!("Initializing Controller...");

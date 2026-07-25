@@ -14,7 +14,7 @@
 
 use std::time::Duration;
 
-use crate::blocking::BlockingPoolPolicy;
+use crate::blocking::BlockingLanePolicies;
 use crate::error::RuntimeError;
 use crate::error::RuntimeResult;
 
@@ -26,7 +26,7 @@ pub struct RuntimeConfig {
     pub thread_stack_size: Option<usize>,
     pub thread_keep_alive: Duration,
     pub shutdown_timeout: Duration,
-    pub blocking_pool_policy: BlockingPoolPolicy,
+    pub blocking_lane_policies: BlockingLanePolicies,
     pub enable_io: bool,
     pub enable_time: bool,
 }
@@ -74,7 +74,7 @@ impl RuntimeConfig {
                 "thread_stack_size must be greater than zero when set".to_string(),
             ));
         }
-        self.blocking_pool_policy.validate()?;
+        self.blocking_lane_policies.validate()?;
         Ok(())
     }
 }
@@ -90,10 +90,7 @@ impl Default for RuntimeConfig {
             thread_stack_size: None,
             thread_keep_alive: Duration::from_secs(30),
             shutdown_timeout: Duration::from_secs(30),
-            blocking_pool_policy: BlockingPoolPolicy {
-                max_concurrency: parallelism * 4,
-                ..BlockingPoolPolicy::default()
-            },
+            blocking_lane_policies: BlockingLanePolicies::default(),
             enable_io: true,
             enable_time: true,
         }

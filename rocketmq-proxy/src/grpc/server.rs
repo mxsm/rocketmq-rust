@@ -19,7 +19,6 @@ use tokio_stream::wrappers::TcpListenerStream;
 use tonic::service::interceptor::InterceptedService;
 use tonic::transport::Server;
 
-use rocketmq_runtime::RuntimeHandle;
 use rocketmq_runtime::TaskGroup;
 
 use crate::config::ProxyConfig;
@@ -33,12 +32,19 @@ use crate::proto::v2::messaging_service_server::MessagingServiceServer;
 #[doc(hidden)]
 pub type ProxyGrpcServerShutdownReport = rocketmq_proxy_core::grpc::server::GrpcServerShutdownReport;
 
-pub async fn serve<P, F>(config: Arc<ProxyConfig>, service: ProxyGrpcService<P>, shutdown: F) -> ProxyResult<()>
+pub async fn serve<P, F>(
+    config: Arc<ProxyConfig>,
+    service: ProxyGrpcService<P>,
+    shutdown: F,
+    parent_task_group: TaskGroup,
+) -> ProxyResult<()>
 where
     P: MessagingProcessor + 'static,
     F: Future<Output = ()> + Send + 'static,
 {
-    serve_with_report(config, service, shutdown).await.map(|_| ())
+    serve_with_report(config, service, shutdown, parent_task_group)
+        .await
+        .map(|_| ())
 }
 
 #[doc(hidden)]
@@ -46,6 +52,7 @@ pub async fn serve_with_ready<P, F, R>(
     config: Arc<ProxyConfig>,
     service: ProxyGrpcService<P>,
     shutdown: F,
+    parent_task_group: TaskGroup,
     ready: R,
 ) -> ProxyResult<ProxyGrpcServerShutdownReport>
 where
@@ -53,7 +60,7 @@ where
     F: Future<Output = ()> + Send + 'static,
     R: FnOnce() -> ProxyResult<()> + Send + 'static,
 {
-    serve_with_report_with_optional_task_group(config, service, shutdown, None, Some(Box::new(ready))).await
+    serve_with_report_and_ready(config, service, shutdown, parent_task_group, Some(Box::new(ready))).await
 }
 
 #[doc(hidden)]
@@ -61,12 +68,13 @@ pub async fn serve_with_report<P, F>(
     config: Arc<ProxyConfig>,
     service: ProxyGrpcService<P>,
     shutdown: F,
+    parent_task_group: TaskGroup,
 ) -> ProxyResult<ProxyGrpcServerShutdownReport>
 where
     P: MessagingProcessor + 'static,
     F: Future<Output = ()> + Send + 'static,
 {
-    serve_with_report_with_optional_task_group(config, service, shutdown, None, None).await
+    serve_with_report_and_ready(config, service, shutdown, parent_task_group, None).await
 }
 
 #[doc(hidden)]
@@ -80,7 +88,7 @@ where
     P: MessagingProcessor + 'static,
     F: Future<Output = ()> + Send + 'static,
 {
-    serve_with_report_with_optional_task_group(config, service, shutdown, Some(parent_task_group), None).await
+    serve_with_report_and_ready(config, service, shutdown, parent_task_group, None).await
 }
 
 #[doc(hidden)]
@@ -96,35 +104,21 @@ where
     F: Future<Output = ()> + Send + 'static,
     R: FnOnce() -> ProxyResult<()> + Send + 'static,
 {
-    serve_with_report_with_optional_task_group(
-        config,
-        service,
-        shutdown,
-        Some(parent_task_group),
-        Some(Box::new(ready)),
-    )
-    .await
+    serve_with_report_and_ready(config, service, shutdown, parent_task_group, Some(Box::new(ready))).await
 }
 
-async fn serve_with_report_with_optional_task_group<P, F>(
+async fn serve_with_report_and_ready<P, F>(
     config: Arc<ProxyConfig>,
     service: ProxyGrpcService<P>,
     shutdown: F,
-    parent_task_group: Option<TaskGroup>,
+    parent_task_group: TaskGroup,
     ready: Option<Box<dyn FnOnce() -> ProxyResult<()> + Send>>,
 ) -> ProxyResult<ProxyGrpcServerShutdownReport>
 where
     P: MessagingProcessor + 'static,
     F: Future<Output = ()> + Send + 'static,
 {
-    let task_group = if let Some(parent_task_group) = parent_task_group {
-        parent_task_group.child("rocketmq-proxy.grpc-server")
-    } else {
-        let runtime = tokio::runtime::Handle::try_current().map_err(|error| ProxyError::Transport {
-            message: format!("proxy gRPC server has no Tokio runtime for housekeeping task: {error}"),
-        })?;
-        TaskGroup::root("rocketmq-proxy.grpc-server", RuntimeHandle::new(runtime))
-    };
+    let task_group = parent_task_group.child("rocketmq-proxy.grpc-server");
     let housekeeping_service = service.clone();
     let grpc_config = config.grpc.clone();
     let max_decoding_message_size = grpc_config.max_decoding_message_size;
@@ -318,10 +312,16 @@ mod tests {
             ..ProxyConfig::default()
         });
         let service = ProxyGrpcService::new(config.clone(), processor, ClientSessionRegistry::default());
+        let context = RuntimeContext::from_current("proxy-grpc-server-report-test");
 
-        let report = serve_with_report(config, service, async {})
-            .await
-            .expect("server should return a shutdown report");
+        let report = serve_with_report(
+            config,
+            service,
+            async {},
+            context.service_context("proxy").task_group().clone(),
+        )
+        .await
+        .expect("server should return a shutdown report");
 
         assert!(report.is_healthy(), "{report:?}");
         assert!(report.task_group.is_healthy(), "{}", report.task_group.to_json());
@@ -414,12 +414,19 @@ mod tests {
         });
         let service = ProxyGrpcService::new(config.clone(), processor, ClientSessionRegistry::default())
             .with_auth_runtime(Some(auth_runtime));
+        let context = RuntimeContext::from_current("proxy-grpc-server-ingress-test");
+        let server_task_group = context.service_context("proxy").task_group().clone();
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
         let server_handle = tokio::spawn(async move {
-            serve(config, service, async move {
-                let _ = shutdown_rx.await;
-            })
+            serve(
+                config,
+                service,
+                async move {
+                    let _ = shutdown_rx.await;
+                },
+                server_task_group,
+            )
             .await
         });
 
@@ -487,12 +494,16 @@ mod tests {
     }
 
     async fn test_auth_runtime(authentication_enabled: bool, authorization_enabled: bool) -> ProxyAuthRuntime {
-        ProxyAuthRuntime::from_proxy_config(&ProxyAuthConfig {
-            authentication_enabled,
-            authorization_enabled,
-            auth_config_path: format!("target/proxy-server-auth-tests-{}", uuid::Uuid::new_v4()),
-            ..ProxyAuthConfig::default()
-        })
+        let runtime = RuntimeContext::from_current("proxy-grpc-server-auth-test");
+        ProxyAuthRuntime::from_proxy_config(
+            &ProxyAuthConfig {
+                authentication_enabled,
+                authorization_enabled,
+                auth_config_path: format!("target/proxy-server-auth-tests-{}", uuid::Uuid::new_v4()),
+                ..ProxyAuthConfig::default()
+            },
+            &runtime.service_context("proxy-grpc-server-auth"),
+        )
         .await
         .expect("auth runtime should build")
         .expect("auth runtime should be enabled")

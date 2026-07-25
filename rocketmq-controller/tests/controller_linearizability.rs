@@ -55,7 +55,9 @@ async fn read_index_observes_the_preceding_committed_write() {
             .with_election_timeout_ms(100)
             .with_heartbeat_interval_ms(30),
     );
-    let node = RaftNodeManager::new(config).await.expect("create Raft node");
+    let node = RaftNodeManager::new(config, test_storage_io("controller-linearizability"))
+        .await
+        .expect("create Raft node");
     node.initialize_cluster(BTreeMap::from([(
         1,
         Node {
@@ -93,4 +95,10 @@ async fn read_index_observes_the_preceding_committed_write() {
     assert_eq!(next_broker_id, 2);
 
     node.shutdown().await.expect("shutdown Raft node");
+}
+fn test_storage_io(name: &'static str) -> rocketmq_runtime::BlockingExecutor {
+    rocketmq_runtime::RuntimeContext::from_current(name)
+        .service_context("controller-test")
+        .storage_io()
+        .clone()
 }

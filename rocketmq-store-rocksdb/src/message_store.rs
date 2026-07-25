@@ -32,6 +32,7 @@ use crate::index::RocksDbIndexBuildConfig;
 use crate::index::RocksDbIndexBuildService;
 use crate::maintenance::RocksDbMaintenanceService;
 use crate::message::MessageRocksDbStorage;
+use crate::runtime::RocksDbRuntimeScope;
 use crate::store::RocksDbStore;
 use crate::timer::RocksDbTimerBuildConfig;
 use crate::timer::RocksDbTimerBuildService;
@@ -135,6 +136,7 @@ pub struct RocksDbDerivedStore {
     rocksdb_trans_service: Option<Arc<RocksDbTransBuildService>>,
     rocksdb_maintenance_service: RocksDbMaintenanceService,
     message_rocksdb_maintenance_service: RocksDbMaintenanceService,
+    runtime_scope: RocksDbRuntimeScope,
 }
 
 impl RocksDbDerivedStore {
@@ -144,10 +146,15 @@ impl RocksDbDerivedStore {
     ///
     /// Returns a configuration error for an incompatible path or a backend error
     /// when native RocksDB cannot be opened.
-    pub fn open<S>(source: &S, options: RocksDbMessageStoreOptions) -> Result<Self, RocksDbMessageStoreError>
+    pub fn open<S>(
+        source: &S,
+        options: RocksDbMessageStoreOptions,
+        service_context: rocketmq_runtime::ChildServiceContext,
+    ) -> Result<Self, RocksDbMessageStoreError>
     where
         S: RocksDbConfigSource + ?Sized,
     {
+        let runtime_scope = RocksDbRuntimeScope::new(service_context);
         if !source.rocksdb_store_enabled() {
             return Err(RocksDbMessageStoreError::Config(
                 "RocksDBMessageStore requires store_type=RocksDB".to_string(),
@@ -169,10 +176,16 @@ impl RocksDbDerivedStore {
         let message_rocksdb_config = RocksDbConfig::message_from_message_store_config(source);
         message_rocksdb_config.validate()?;
         let message_rocksdb_storage = Arc::new(MessageRocksDbStorage::open(message_rocksdb_config.clone())?);
-        let rocksdb_maintenance_service =
-            RocksDbMaintenanceService::new(Arc::clone(&rocksdb_store), rocksdb_config.clone());
-        let message_rocksdb_maintenance_service =
-            RocksDbMaintenanceService::new(message_rocksdb_storage.store_arc(), message_rocksdb_config.clone());
+        let rocksdb_maintenance_service = RocksDbMaintenanceService::new(
+            Arc::clone(&rocksdb_store),
+            rocksdb_config.clone(),
+            runtime_scope.clone(),
+        );
+        let message_rocksdb_maintenance_service = RocksDbMaintenanceService::new(
+            message_rocksdb_storage.store_arc(),
+            message_rocksdb_config.clone(),
+            runtime_scope.clone(),
+        );
         let rocksdb_index_service = Arc::new(RocksDbIndexBuildService::new(
             Arc::clone(&message_rocksdb_storage),
             RocksDbIndexBuildConfig::default(),
@@ -203,6 +216,7 @@ impl RocksDbDerivedStore {
             rocksdb_trans_service,
             rocksdb_maintenance_service,
             message_rocksdb_maintenance_service,
+            runtime_scope,
         })
     }
 
@@ -373,7 +387,8 @@ impl RocksDbDerivedStore {
     }
 
     pub fn clean_expired(&self, min_physical_offset: i64) -> Result<(), RocksDbMessageStoreError> {
-        self.consume_queue_store.clean_expired_background(min_physical_offset)?;
+        self.consume_queue_store
+            .clean_expired_background(&self.runtime_scope, min_physical_offset)?;
         Ok(())
     }
 

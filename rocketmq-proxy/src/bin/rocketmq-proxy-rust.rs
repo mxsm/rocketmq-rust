@@ -27,9 +27,9 @@ use rocketmq_proxy::ProxyResult;
 use rocketmq_proxy::ProxyRuntime;
 #[cfg(test)]
 use rocketmq_proxy::RemotingConfig;
+use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
-use rocketmq_runtime::ServiceContext;
 use rocketmq_runtime::ServiceLifecycle;
 use rocketmq_runtime::ServiceLifecycleState;
 use rocketmq_runtime::ShutdownReason;
@@ -42,7 +42,7 @@ const ENTRYPOINT_MAX_BLOCKING_THREADS: usize = 64;
 
 fn main() -> ProxyResult<()> {
     let owner = RuntimeOwner::new(proxy_runtime_config()).map_err(proxy_runtime_error("build proxy runtime"))?;
-    let service_context = owner.context().service_context("rocketmq-proxy-runtime");
+    let service_context = owner.root_context().child("rocketmq-proxy-runtime");
     let lifecycle = ServiceLifecycle::from_env("rocketmq-proxy").map_err(|error| ProxyError::Transport {
         message: format!("invalid Proxy lifecycle configuration: {error}"),
     })?;
@@ -89,7 +89,7 @@ fn proxy_runtime_error(action: &'static str) -> impl FnOnce(rocketmq_runtime::Ru
     }
 }
 
-async fn run(service_context: ServiceContext, lifecycle: ServiceLifecycle) -> ProxyResult<()> {
+async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) -> ProxyResult<()> {
     let args = Args::parse()?;
     let mut config = match args.config_file {
         Some(ref path) => ProxyConfig::load_from_file(path)?,
@@ -148,7 +148,7 @@ async fn run(service_context: ServiceContext, lifecycle: ServiceLifecycle) -> Pr
     );
     let serve_result = ProxyRuntime::builder(config)
         .with_service_context(service_context)
-        .build()
+        .build()?
         .serve_with_lifecycle(lifecycle.clone())
         .await;
     if serve_result.is_err() {

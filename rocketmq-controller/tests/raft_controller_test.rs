@@ -22,6 +22,10 @@ use rocketmq_controller::typ::Node;
 use rocketmq_controller::Controller;
 use rocketmq_controller::RaftController;
 
+fn test_service_context(name: &'static str) -> rocketmq_runtime::ChildServiceContext {
+    rocketmq_runtime::RuntimeContext::from_current(name).service_context("controller-test")
+}
+
 fn test_config(port: u16) -> ControllerConfigReader {
     ControllerConfigReader::new(
         ControllerConfig::default()
@@ -35,7 +39,7 @@ fn test_config(port: u16) -> ControllerConfigReader {
 #[tokio::test]
 async fn test_open_raft_controller_lifecycle() {
     let config = test_config(60201);
-    let mut controller = RaftController::new_open_raft(config);
+    let mut controller = RaftController::new_open_raft(config, test_service_context("raft-controller-lifecycle"));
 
     assert!(controller.startup().await.is_ok());
     assert!(!controller.is_leader()); // Default is false
@@ -47,7 +51,7 @@ async fn test_raft_controller_wrapper_initializes_openraft_cluster() {
     let port = 60202;
     let config = test_config(port);
 
-    let mut controller = RaftController::new_open_raft(config);
+    let mut controller = RaftController::new_open_raft(config, test_service_context("raft-controller-cluster"));
     controller.startup().await.expect("start openraft controller");
 
     let mut nodes = BTreeMap::new();

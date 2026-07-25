@@ -35,6 +35,13 @@ use rocketmq_controller::typ::Node;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_runtime::common::time_utils::current_millis;
 
+fn test_storage_io(name: &'static str) -> rocketmq_runtime::BlockingExecutor {
+    rocketmq_runtime::RuntimeContext::from_current(name)
+        .service_context("controller-test")
+        .storage_io()
+        .clone()
+}
+
 fn test_config(port: u16) -> ControllerConfigReader {
     ControllerConfigReader::new(
         ControllerConfig::default()
@@ -82,13 +89,15 @@ fn broker_heartbeat_request(
 
 #[tokio::test]
 async fn test_node_creation() {
-    let node = RaftNodeManager::new(test_config(9876)).await;
+    let node = RaftNodeManager::new(test_config(9876), test_storage_io("openraft-create-node")).await;
     assert!(node.is_ok(), "Failed to create Raft node: {:?}", node.err());
 }
 
 #[tokio::test]
 async fn test_cluster_initialization() {
-    let node = RaftNodeManager::new(test_config(19876)).await.unwrap();
+    let node = RaftNodeManager::new(test_config(19876), test_storage_io("openraft-initialize"))
+        .await
+        .unwrap();
 
     let mut nodes = BTreeMap::new();
     nodes.insert(
@@ -162,7 +171,9 @@ async fn test_storage_operations() {
 
 #[tokio::test]
 async fn test_client_write_updates_replicas_info_manager() {
-    let node = RaftNodeManager::new(test_config(49876)).await.unwrap();
+    let node = RaftNodeManager::new(test_config(49876), test_storage_io("openraft-state-machine"))
+        .await
+        .unwrap();
 
     let mut nodes = BTreeMap::new();
     nodes.insert(
@@ -228,7 +239,9 @@ async fn test_single_node_restart_recovers_state_from_file_storage() {
     let storage_path = temp_root.path().join("controller-openraft-restart");
     let config = persistent_test_config(59876, &storage_path);
 
-    let node = RaftNodeManager::new(config.clone()).await.unwrap();
+    let node = RaftNodeManager::new(config.clone(), test_storage_io("openraft-persistence"))
+        .await
+        .unwrap();
 
     let mut nodes = BTreeMap::new();
     nodes.insert(
@@ -344,7 +357,9 @@ async fn test_single_node_restart_recovers_state_from_file_storage() {
 
     node.shutdown().await.expect("shutdown node before restart");
 
-    let restarted_node = RaftNodeManager::new(config).await.unwrap();
+    let restarted_node = RaftNodeManager::new(config, test_storage_io("openraft-restart"))
+        .await
+        .unwrap();
     let replicas_info_manager = restarted_node.store().state_machine.read_view();
 
     assert_eq!(

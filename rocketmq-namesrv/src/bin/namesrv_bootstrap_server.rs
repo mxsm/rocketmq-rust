@@ -36,9 +36,9 @@ use rocketmq_namesrv::NamesrvConfig;
 use rocketmq_observability::exporter_types::MetricsExporterType;
 use rocketmq_protocol::protocol::remoting_command;
 use rocketmq_runtime::common::parse_config_file;
+use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
-use rocketmq_runtime::ServiceContext;
 use rocketmq_runtime::ServiceLifecycle;
 use rocketmq_runtime::ServiceLifecycleState;
 use rocketmq_runtime::ShutdownReason;
@@ -62,7 +62,7 @@ const ENTRYPOINT_MAX_BLOCKING_THREADS: usize = 64;
 
 fn main() -> Result<()> {
     let owner = RuntimeOwner::new(namesrv_runtime_config()).context("failed to build namesrv runtime")?;
-    let service_context = owner.context().service_context("rocketmq-namesrv-runtime");
+    let service_context = owner.root_context().child("rocketmq-namesrv-runtime");
     let lifecycle =
         ServiceLifecycle::from_env("rocketmq-namesrv").context("invalid NameServer lifecycle configuration")?;
 
@@ -100,7 +100,7 @@ fn namesrv_runtime_config() -> RuntimeConfig {
     config
 }
 
-async fn run(service_context: ServiceContext, lifecycle: ServiceLifecycle) -> Result<()> {
+async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) -> Result<()> {
     // Parse command line arguments first
     let args = Args::parse();
 
@@ -182,11 +182,10 @@ async fn run(service_context: ServiceContext, lifecycle: ServiceLifecycle) -> Re
     info!("Config Store Path: {}", namesrv_config.config_store_path);
     info!("===============================================");
     // Start the name server
-    let boot_result = Builder::new()
+    let boot_result = Builder::new(service_context)
         .set_name_server_config(namesrv_config)
         .set_server_config(server_config)
         .set_controller_config_opt(controller_config)
-        .set_service_context(service_context)
         .build()
         .boot_with_lifecycle(lifecycle.clone())
         .await

@@ -74,6 +74,7 @@ use rocketmq_proxy::UpdateOffsetRequest;
 use rocketmq_proxy_core::ProxyContext;
 use rocketmq_proxy_core::ProxyMessage;
 use rocketmq_proxy_core::ProxyMessageExt;
+use rocketmq_runtime::RuntimeContext;
 use sha1::Sha1;
 use tokio::sync::oneshot;
 use tonic::metadata::MetadataValue;
@@ -285,13 +286,17 @@ accounts:
     )
     .expect("write proxy auth e2e acl file");
 
-    let auth_runtime = ProxyAuthRuntime::from_proxy_config(&ProxyAuthConfig {
-        auth_config_path: test_dir.join("auth-store").to_string_lossy().into_owned(),
-        acl_file: acl_file.to_string_lossy().into_owned(),
-        authentication_enabled: true,
-        authorization_enabled: true,
-        ..ProxyAuthConfig::default()
-    })
+    let runtime_context = RuntimeContext::from_current("proxy-grpc-auth-test");
+    let auth_runtime = ProxyAuthRuntime::from_proxy_config(
+        &ProxyAuthConfig {
+            auth_config_path: test_dir.join("auth-store").to_string_lossy().into_owned(),
+            acl_file: acl_file.to_string_lossy().into_owned(),
+            authentication_enabled: true,
+            authorization_enabled: true,
+            ..ProxyAuthConfig::default()
+        },
+        &runtime_context.service_context("proxy-grpc-auth-runtime"),
+    )
     .await
     .expect("proxy auth runtime should build")
     .expect("proxy auth runtime should be enabled");
@@ -315,7 +320,9 @@ accounts:
     })
     .with_service_manager(service_manager)
     .with_auth_runtime(auth_runtime)
-    .build();
+    .with_service_context(runtime_context.service_context("proxy-grpc-auth"))
+    .build()
+    .expect("the injected child context should build the proxy runtime");
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
     let mut server_task = tokio::spawn(async move {
@@ -653,14 +660,18 @@ accounts:
     )
     .expect("write initial proxy acl file");
 
-    let auth_runtime = ProxyAuthRuntime::from_proxy_config(&ProxyAuthConfig {
-        auth_config_path: test_dir.join("auth-store").to_string_lossy().into_owned(),
-        acl_file: acl_file.to_string_lossy().into_owned(),
-        acl_file_watch_enabled: true,
-        acl_file_watch_interval_millis: 20,
-        authentication_enabled: true,
-        ..ProxyAuthConfig::default()
-    })
+    let runtime_context = RuntimeContext::from_current("proxy-grpc-auth-watcher-test");
+    let auth_runtime = ProxyAuthRuntime::from_proxy_config(
+        &ProxyAuthConfig {
+            auth_config_path: test_dir.join("auth-store").to_string_lossy().into_owned(),
+            acl_file: acl_file.to_string_lossy().into_owned(),
+            acl_file_watch_enabled: true,
+            acl_file_watch_interval_millis: 20,
+            authentication_enabled: true,
+            ..ProxyAuthConfig::default()
+        },
+        &runtime_context.service_context("proxy-grpc-auth-watcher-runtime"),
+    )
     .await
     .expect("proxy auth runtime should build")
     .expect("proxy auth runtime should be enabled");
@@ -685,7 +696,9 @@ accounts:
     })
     .with_service_manager(service_manager)
     .with_auth_runtime(auth_runtime)
-    .build();
+    .with_service_context(runtime_context.service_context("proxy-grpc-auth-watcher"))
+    .build()
+    .expect("the injected child context should build the proxy runtime");
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
     let mut server_task = tokio::spawn(async move {
@@ -778,6 +791,7 @@ fn spawn_runtime_on_addr(
     oneshot::Sender<()>,
     tokio::task::JoinHandle<rocketmq_proxy::ProxyResult<()>>,
 ) {
+    let runtime_context = RuntimeContext::from_current("proxy-grpc-listener-test");
     let runtime = ProxyRuntime::builder(ProxyConfig {
         grpc: GrpcConfig {
             listen_addr: listen_addr.to_string(),
@@ -786,7 +800,9 @@ fn spawn_runtime_on_addr(
         ..ProxyConfig::default()
     })
     .with_service_manager(service_manager)
-    .build();
+    .with_service_context(runtime_context.service_context("proxy-grpc-listener"))
+    .build()
+    .expect("the injected child context should build the proxy runtime");
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
     let server_task = tokio::spawn(async move {

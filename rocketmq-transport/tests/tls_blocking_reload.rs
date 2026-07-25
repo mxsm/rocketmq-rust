@@ -37,9 +37,18 @@ async fn reload_filesystem_work_queues_through_the_injected_blocking_executor() 
     )
     .unwrap();
     let service = context.service_context("tls-service");
+    let tls = TlsServerRuntime::initialize_with_service_context(
+        TlsConfig {
+            test_mode_enable: true,
+            ..TlsConfig::default()
+        },
+        &service,
+    )
+    .await
+    .expect("TLS runtime should initialize");
     let (started_tx, started_rx) = std::sync::mpsc::channel();
     let (release_tx, release_rx) = std::sync::mpsc::channel();
-    let blocking = service.blocking().clone();
+    let blocking = service.metadata_io().clone();
     let occupying = tokio::spawn(async move {
         blocking
             .spawn_io("occupy-blocking-slot", move || {
@@ -53,16 +62,9 @@ async fn reload_filesystem_work_queues_through_the_injected_blocking_executor() 
         .await
         .unwrap();
 
-    let tls = TlsServerRuntime::new_with_service_context(
-        TlsConfig {
-            test_mode_enable: true,
-            ..TlsConfig::default()
-        },
-        &service,
-    );
     let reload = tokio::spawn(async move { tls.reload_now().await });
     tokio::time::timeout(Duration::from_secs(1), async {
-        while service.blocking().snapshot().queued == 0 {
+        while service.metadata_io().snapshot().queued == 0 {
             tokio::task::yield_now().await;
         }
     })
@@ -94,7 +96,7 @@ async fn initial_acceptor_build_queues_through_the_injected_blocking_executor() 
     let service = context.service_context("tls-service");
     let (started_tx, started_rx) = std::sync::mpsc::channel();
     let (release_tx, release_rx) = std::sync::mpsc::channel();
-    let blocking = service.blocking().clone();
+    let blocking = service.metadata_io().clone();
     let occupying = tokio::spawn(async move {
         blocking
             .spawn_io("occupy-blocking-slot", move || {
@@ -120,7 +122,7 @@ async fn initial_acceptor_build_queues_through_the_injected_blocking_executor() 
         .await
     });
     tokio::time::timeout(Duration::from_secs(1), async {
-        while service.blocking().snapshot().queued == 0 {
+        while service.metadata_io().snapshot().queued == 0 {
             tokio::task::yield_now().await;
         }
     })
@@ -131,6 +133,17 @@ async fn initial_acceptor_build_queues_through_the_injected_blocking_executor() 
     release_tx.send(()).unwrap();
     occupying.await.unwrap();
     initialize.await.unwrap().unwrap();
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            let snapshot = service.metadata_io().snapshot();
+            if snapshot.queued == 0 && snapshot.running == 0 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("TLS initialization and its first reload snapshot should drain");
     let report = context.shutdown_tasks(Duration::from_secs(1)).await;
     report.assert_no_task_leak().unwrap();
 }

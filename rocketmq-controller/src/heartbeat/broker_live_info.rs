@@ -182,6 +182,10 @@ mod tests {
         let inner = Arc::new(rocketmq_transport::net::channel::ChannelInner::new(
             connection,
             response_table,
+            rocketmq_runtime::RuntimeContext::from_current("broker-live-info-test")
+                .service_context("test-channel")
+                .task_group()
+                .clone(),
         ));
         Channel::new(inner, local_addr, local_addr)
     }

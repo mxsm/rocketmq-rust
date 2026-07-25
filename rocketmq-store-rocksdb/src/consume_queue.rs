@@ -697,15 +697,32 @@ impl RocksDbConsumeQueueStore {
         Ok(result)
     }
 
-    pub async fn clean_expired(&self, _min_phy_offset: i64) -> Result<(), RocketMQError> {
+    pub async fn clean_expired(
+        &self,
+        runtime_scope: &crate::runtime::RocksDbRuntimeScope,
+        _min_phy_offset: i64,
+    ) -> Result<(), RocketMQError> {
         self.store
-            .compact_range_cf_blocking(RocksDbColumnFamily::Default.name().to_string(), None, None)
+            .compact_range_cf_blocking(
+                runtime_scope,
+                RocksDbColumnFamily::Default.name().to_string(),
+                None,
+                None,
+            )
             .await
     }
 
-    pub fn clean_expired_background(&self, _min_phy_offset: i64) -> Result<(), RocketMQError> {
-        self.store
-            .compact_range_cf_background(RocksDbColumnFamily::Default.name().to_string(), None, None)
+    pub fn clean_expired_background(
+        &self,
+        runtime_scope: &crate::runtime::RocksDbRuntimeScope,
+        _min_phy_offset: i64,
+    ) -> Result<(), RocketMQError> {
+        self.store.compact_range_cf_background(
+            runtime_scope,
+            RocksDbColumnFamily::Default.name().to_string(),
+            None,
+            None,
+        )
     }
 }
 

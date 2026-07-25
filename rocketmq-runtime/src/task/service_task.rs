@@ -34,7 +34,7 @@ use tracing::warn;
 
 /// Service thread context that gets passed to the service
 /// This contains all the control mechanisms
-pub struct ServiceContext {
+pub struct ServiceTaskContext {
     /// Wait point for notifications
     wait_point: Arc<Notify>,
     /// Notification flag
@@ -43,7 +43,7 @@ pub struct ServiceContext {
     stopped: Arc<AtomicBool>,
 }
 
-impl ServiceContext {
+impl ServiceTaskContext {
     pub fn new(wait_point: Arc<Notify>, has_notified: Arc<AtomicBool>, stopped: Arc<AtomicBool>) -> Self {
         Self {
             wait_point,
@@ -98,7 +98,7 @@ pub trait ServiceTask: Sync + Send {
     fn get_service_name(&self) -> String;
 
     /// implement the service logic here
-    fn run(&self, context: &ServiceContext) -> impl ::core::future::Future<Output = ()> + Send;
+    fn run(&self, context: &ServiceTaskContext) -> impl ::core::future::Future<Output = ()> + Send;
 
     /// override for custom behavior
     fn on_wait_end(&self) -> impl ::core::future::Future<Output = ()> + Send {
@@ -408,7 +408,7 @@ impl<T: ServiceTask + 'static> ServiceManager<T> {
             *state_guard = ServiceLifecycle::Running;
         }
         // Create context for the service
-        let context = ServiceContext::new(wait_point.clone(), has_notified.clone(), stopped.clone());
+        let context = ServiceTaskContext::new(wait_point.clone(), has_notified.clone(), stopped.clone());
         // Run the service
         service.run(&context).await;
 
@@ -595,7 +595,7 @@ impl ServiceTask for LifecycleProbeService {
         "service-manager-lifecycle-probe".to_string()
     }
 
-    async fn run(&self, context: &ServiceContext) {
+    async fn run(&self, context: &ServiceTaskContext) {
         while !context.is_stopped() {
             context.wait_for_running(Duration::from_millis(1)).await;
         }
@@ -681,7 +681,7 @@ mod tests {
             "ExampleTransactionCheckService".to_string()
         }
 
-        async fn run(&self, context: &ServiceContext) {
+        async fn run(&self, context: &ServiceTaskContext) {
             info!("Start transaction check service thread!");
 
             while !context.is_stopped() {
@@ -743,7 +743,7 @@ mod tests {
             self.name.clone()
         }
 
-        async fn run(&self, context: &ServiceContext) {
+        async fn run(&self, context: &ServiceTaskContext) {
             println!("TestService {} starting {}", self.name, context.is_stopped());
 
             let mut counter = 0;
@@ -785,7 +785,7 @@ mod tests {
             "pending-service".to_string()
         }
 
-        async fn run(&self, _context: &ServiceContext) {
+        async fn run(&self, _context: &ServiceTaskContext) {
             let _marker = DropMarker {
                 dropped: Arc::clone(&self.dropped),
             };

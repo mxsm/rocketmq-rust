@@ -967,7 +967,11 @@ mod tests {
         let tcp_stream = tokio::net::TcpStream::from_std(std_stream).expect("convert tcp stream");
         let connection = Connection::new(tcp_stream);
         let response_table = std::sync::Arc::new(parking_lot::Mutex::new(HashMap::<i32, ResponseFuture>::new()));
-        let inner = std::sync::Arc::new(ChannelInner::new(connection, response_table));
+        let inner = std::sync::Arc::new(ChannelInner::new(
+            connection,
+            response_table,
+            crate::test_task_group("channel"),
+        ));
         Channel::new(inner, local_addr, local_addr)
     }
 
@@ -977,7 +981,7 @@ mod tests {
         let message_store_config = Arc::new(MessageStoreConfig::default());
         let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
 
-        let timer_message_store = TimerMessageStore::new_empty();
+        let timer_message_store = TimerMessageStore::new_empty(crate::test_service_context("timer-store"));
         timer_message_store
             .timer_metrics
             .add_timing_count(&CheetahString::from_static_str("TimerTopicA"), 2);
@@ -1004,7 +1008,10 @@ mod tests {
         });
         let mut runtime = BrokerRuntime::new(broker_config, message_store_config.clone());
 
-        let timer_message_store = TimerMessageStore::new_with_message_store_config(message_store_config);
+        let timer_message_store = TimerMessageStore::new_with_message_store_config(
+            message_store_config,
+            crate::test_service_context("timer-store"),
+        );
         assert!(timer_message_store.load());
         runtime.inner_for_test().set_timer_message_store(timer_message_store);
 

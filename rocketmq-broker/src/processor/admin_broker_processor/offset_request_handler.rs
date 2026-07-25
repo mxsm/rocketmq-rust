@@ -523,7 +523,11 @@ mod tests {
         let tcp_stream = tokio::net::TcpStream::from_std(std_stream).expect("convert tcp stream");
         let connection = Connection::new(tcp_stream);
         let response_table = std::sync::Arc::new(parking_lot::Mutex::new(HashMap::<i32, ResponseFuture>::new()));
-        let inner = std::sync::Arc::new(ChannelInner::new(connection, response_table));
+        let inner = std::sync::Arc::new(ChannelInner::new(
+            connection,
+            response_table,
+            crate::test_task_group("channel"),
+        ));
         Channel::new(inner, local_addr, local_addr)
     }
 

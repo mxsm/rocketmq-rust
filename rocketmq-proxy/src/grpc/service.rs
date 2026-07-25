@@ -20,7 +20,6 @@ use std::time::SystemTime;
 use futures::stream;
 use futures::Stream;
 use futures::StreamExt;
-use rocketmq_runtime::RuntimeHandle;
 use rocketmq_runtime::TaskGroup;
 use tokio::sync::mpsc;
 use tokio::sync::OwnedSemaphorePermit;
@@ -375,20 +374,26 @@ impl<P> ProxyGrpcService<P> {
         }
     }
 
-    pub async fn run_housekeeping_until<F>(&self, shutdown: F)
+    pub async fn run_housekeeping_until<F>(&self, shutdown: F, parent_task_group: TaskGroup)
     where
         F: std::future::Future<Output = ()> + Send,
         P: MessagingProcessor + 'static,
     {
-        let _ = self.run_housekeeping_until_with_report(shutdown).await;
+        let _ = self
+            .run_housekeeping_until_with_report(shutdown, parent_task_group)
+            .await;
     }
 
-    pub async fn run_housekeeping_until_with_report<F>(&self, shutdown: F) -> ProxyHousekeepingRunReport
+    pub async fn run_housekeeping_until_with_report<F>(
+        &self,
+        shutdown: F,
+        parent_task_group: TaskGroup,
+    ) -> ProxyHousekeepingRunReport
     where
         F: std::future::Future<Output = ()> + Send,
         P: MessagingProcessor + 'static,
     {
-        self.run_housekeeping_until_with_optional_task_group(shutdown, None)
+        self.run_housekeeping_until_with_task_group(shutdown, parent_task_group)
             .await
     }
 
@@ -401,28 +406,7 @@ impl<P> ProxyGrpcService<P> {
         F: std::future::Future<Output = ()> + Send,
         P: MessagingProcessor + 'static,
     {
-        self.run_housekeeping_until_with_optional_task_group(shutdown, Some(parent_task_group))
-            .await
-    }
-
-    async fn run_housekeeping_until_with_optional_task_group<F>(
-        &self,
-        shutdown: F,
-        parent_task_group: Option<TaskGroup>,
-    ) -> ProxyHousekeepingRunReport
-    where
-        F: std::future::Future<Output = ()> + Send,
-        P: MessagingProcessor + 'static,
-    {
-        let task_group = parent_task_group.map_or_else(
-            || {
-                TaskGroup::root(
-                    "rocketmq-proxy.grpc.housekeeping",
-                    RuntimeHandle::new(tokio::runtime::Handle::current()),
-                )
-            },
-            |parent_task_group| parent_task_group.child("rocketmq-proxy.grpc.housekeeping"),
-        );
+        let task_group = parent_task_group.child("rocketmq-proxy.grpc.housekeeping");
         let service = self.clone();
         housekeeping::run_housekeeping_until(self.housekeeping_interval(), shutdown, task_group, move || {
             let service = service.clone();
@@ -2043,12 +2027,16 @@ mod tests {
     const AUTH_TEST_DATETIME: &str = "20260322T010203Z";
 
     async fn test_auth_runtime(authentication_enabled: bool, authorization_enabled: bool) -> ProxyAuthRuntime {
-        ProxyAuthRuntime::from_proxy_config(&ProxyAuthConfig {
-            authentication_enabled,
-            authorization_enabled,
-            auth_config_path: format!("target/proxy-auth-tests-{}", uuid::Uuid::new_v4()),
-            ..ProxyAuthConfig::default()
-        })
+        let runtime = rocketmq_runtime::RuntimeContext::from_current("proxy-grpc-auth-test");
+        ProxyAuthRuntime::from_proxy_config(
+            &ProxyAuthConfig {
+                authentication_enabled,
+                authorization_enabled,
+                auth_config_path: format!("target/proxy-auth-tests-{}", uuid::Uuid::new_v4()),
+                ..ProxyAuthConfig::default()
+            },
+            &runtime.service_context("proxy-grpc-auth"),
+        )
         .await
         .expect("auth runtime should build")
         .expect("auth runtime should be enabled")

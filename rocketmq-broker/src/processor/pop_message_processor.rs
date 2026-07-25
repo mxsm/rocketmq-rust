@@ -56,7 +56,6 @@ use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_runtime::RuntimeHandle;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_store::base::get_message_result::GetMessageResult;
 use rocketmq_store::base::message_status_enum::GetMessageStatus;
@@ -1526,19 +1525,16 @@ pub struct QueueLockManager {
     shutdown: Arc<Notify>,
     running: Arc<AtomicBool>,
     task_group: Arc<Mutex<Option<TaskGroup>>>,
-    parent_task_group: Option<TaskGroup>,
+    parent_task_group: TaskGroup,
 }
 
 impl QueueLockManager {
+    #[cfg(test)]
     pub fn new() -> Self {
-        Self::new_with_optional_parent_task_group(None)
+        Self::new_with_parent_task_group(crate::test_task_group("pop-queue-lock"))
     }
 
     pub(crate) fn new_with_parent_task_group(parent_task_group: TaskGroup) -> Self {
-        Self::new_with_optional_parent_task_group(Some(parent_task_group))
-    }
-
-    fn new_with_optional_parent_task_group(parent_task_group: Option<TaskGroup>) -> Self {
         QueueLockManager {
             expired_local_cache: Arc::new(RwLock::new(HashMap::with_capacity(4096))),
             shutdown: Arc::new(Notify::new()),
@@ -1548,19 +1544,8 @@ impl QueueLockManager {
         }
     }
 
-    fn task_group_or_current(&self) -> Option<TaskGroup> {
-        if let Some(parent_task_group) = self.parent_task_group.as_ref() {
-            return Some(parent_task_group.child("rocketmq-broker.pop.queue-lock"));
-        }
-
-        let runtime = match tokio::runtime::Handle::try_current() {
-            Ok(handle) => RuntimeHandle::new(handle),
-            Err(error) => {
-                warn!(?error, "failed to start QueueLockManager outside Tokio runtime");
-                return None;
-            }
-        };
-        Some(TaskGroup::root("rocketmq-broker.pop.queue-lock", runtime))
+    fn task_group(&self) -> TaskGroup {
+        self.parent_task_group.child("rocketmq-broker.pop.queue-lock")
     }
 
     #[inline]
@@ -1619,10 +1604,7 @@ impl QueueLockManager {
             return;
         }
 
-        let Some(task_group) = self.task_group_or_current() else {
-            self.running.store(false, Ordering::Release);
-            return;
-        };
+        let task_group = self.task_group();
         let cancellation_token = task_group.cancellation_token();
         let this = self.clone();
         let mut lifecycle = self.task_group.lock();
@@ -1726,7 +1708,11 @@ mod tests {
         let tcp_stream = tokio::net::TcpStream::from_std(std_stream).expect("convert tcp stream");
         let connection = Connection::new(tcp_stream);
         let response_table = std::sync::Arc::new(parking_lot::Mutex::new(HashMap::<i32, ResponseFuture>::new()));
-        let inner = std::sync::Arc::new(ChannelInner::new(connection, response_table));
+        let inner = std::sync::Arc::new(ChannelInner::new(
+            connection,
+            response_table,
+            crate::test_task_group("channel"),
+        ));
         Channel::new(inner, local_addr, local_addr)
     }
 

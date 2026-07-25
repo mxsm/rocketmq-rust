@@ -64,7 +64,8 @@ async fn invalid_broker_address_returns_typed_initialization_error() {
     let (mut broker_config, message_store_config) = broker_configs(root.path(), normal_port);
     broker_config.broker_ip1 = "not-an-ip-address".into();
 
-    let initialization = Builder::new()
+    let runtime_context = RuntimeContext::from_current("broker-invalid-address-test");
+    let initialization = Builder::new(runtime_context.service_context("broker-under-test"))
         .set_broker_config(broker_config)
         .set_message_store_config(message_store_config)
         .build()
@@ -102,10 +103,9 @@ async fn listener_bind_failure_rolls_back_already_started_components() {
     let fast_port = normal_port - 2;
     let (broker_config, message_store_config) = broker_configs(root.path(), normal_port);
     let runtime_context = RuntimeContext::from_current("broker-transactional-startup-test");
-    let initialized = Builder::new()
+    let initialized = Builder::new(runtime_context.service_context("broker-under-test"))
         .set_broker_config(broker_config)
         .set_message_store_config(message_store_config)
-        .set_service_context(runtime_context.service_context("broker-under-test"))
         .build()
         .initialize()
         .await
@@ -151,10 +151,9 @@ async fn unsupported_cold_data_hold_capability_fails_before_listener_startup() {
     let (broker_config, mut message_store_config) = broker_configs(root.path(), normal_port);
     message_store_config.cold_data_flow_control_enable = true;
     let runtime_context = RuntimeContext::from_current("broker-unsupported-capability-test");
-    let initialized = Builder::new()
+    let initialized = Builder::new(runtime_context.service_context("broker-under-test"))
         .set_broker_config(broker_config)
         .set_message_store_config(message_store_config)
-        .set_service_context(runtime_context.service_context("broker-under-test"))
         .build()
         .initialize()
         .await
@@ -194,10 +193,9 @@ async fn configured_but_unreachable_name_server_prevents_readiness() {
     broker_config.namesrv_addr = Some(unavailable_namesrv_addr.to_string().into());
     broker_config.register_broker_timeout_mills = 250;
     let runtime_context = RuntimeContext::from_current("broker-registration-readiness-test");
-    let initialized = Builder::new()
+    let initialized = Builder::new(runtime_context.service_context("broker-under-test"))
         .set_broker_config(broker_config)
         .set_message_store_config(message_store_config)
-        .set_service_context(runtime_context.service_context("broker-under-test"))
         .build()
         .initialize()
         .await

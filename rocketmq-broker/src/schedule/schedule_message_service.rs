@@ -25,7 +25,6 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicU8;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::sync::OnceLock;
 use std::sync::Weak;
 use std::time::Duration;
 
@@ -53,13 +52,11 @@ use rocketmq_protocol::protocol::DataVersion;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::common::file_utils;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_runtime::schedule::simple_scheduler::ScheduledTaskManager;
 use rocketmq_runtime::BlockingExecutor;
-use rocketmq_runtime::BlockingPoolPolicy;
+use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
-use rocketmq_runtime::ServiceContext;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskGroupChildLease;
 use rocketmq_store::base::message_result::PutMessageResult;
@@ -310,8 +307,7 @@ pub struct ScheduleMessageService<MS: MessageStore> {
     broker_config: Arc<BrokerConfig>,
     message_store_config: Arc<MessageStoreConfig>,
     escape_bridge: Weak<EscapeBridge<MS>>,
-    runtime_capabilities: OnceLock<ScheduleRuntimeCapabilities>,
-    compatibility_scheduler: ScheduledTaskManager,
+    runtime_capabilities: ScheduleRuntimeCapabilities,
     lifecycle: Mutex<ScheduleLifecycle>,
     persistence_gate: Mutex<()>,
 }
@@ -357,19 +353,13 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
         broker_config: Arc<BrokerConfig>,
         message_store_config: Arc<MessageStoreConfig>,
         escape_bridge: Weak<EscapeBridge<MS>>,
-        service_context: Option<ServiceContext>,
-        compatibility_scheduler: ScheduledTaskManager,
+        service_context: ChildServiceContext,
     ) -> Self {
         let enable_async_deliver = message_store_config.enable_schedule_async_deliver;
-        let runtime_capabilities = OnceLock::new();
-        if let Some(service_context) = service_context {
-            runtime_capabilities
-                .set(ScheduleRuntimeCapabilities {
-                    task_group: service_context.task_group().clone(),
-                    blocking: service_context.blocking().clone(),
-                })
-                .unwrap_or_else(|_| unreachable!("new ScheduleMessageService capability cell must be empty"));
-        }
+        let runtime_capabilities = ScheduleRuntimeCapabilities {
+            task_group: service_context.task_group().clone(),
+            blocking: service_context.storage_io().clone(),
+        };
 
         Self {
             delay_level_config: ArcSwap::from_pointee(DelayLevelConfig::default()),
@@ -383,7 +373,6 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
             message_store_config,
             escape_bridge,
             runtime_capabilities,
-            compatibility_scheduler,
             lifecycle: Mutex::new(ScheduleLifecycle {
                 next_generation: 1,
                 run: None,
@@ -399,29 +388,8 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
             .expect("EscapeBridge owner must outlive ScheduleMessageService")
     }
 
-    fn runtime_capabilities(&self) -> Result<&ScheduleRuntimeCapabilities, String> {
-        if let Some(runtime_capabilities) = self.runtime_capabilities.get() {
-            return Ok(runtime_capabilities);
-        }
-
-        // Public Broker builder compatibility: reuse the already-audited legacy scheduler root
-        // rather than creating another current-runtime adapter in the Broker crate.
-        let task_group = self
-            .compatibility_scheduler
-            .compatibility_task_group()
-            .map_err(|error| error.to_string())?;
-        let blocking = BlockingExecutor::new(
-            BlockingPoolPolicy::default(),
-            task_group.child("schedule-message.blocking-reaper"),
-        )
-        .map_err(|error| error.to_string())?;
-        let _ = self
-            .runtime_capabilities
-            .set(ScheduleRuntimeCapabilities { task_group, blocking });
-
-        self.runtime_capabilities
-            .get()
-            .ok_or_else(|| "failed to install schedule runtime capabilities".to_string())
+    fn runtime_capabilities(&self) -> &ScheduleRuntimeCapabilities {
+        &self.runtime_capabilities
     }
 
     pub fn build_running_stats(&self, stats: &mut HashMap<String, String>) {
@@ -530,9 +498,7 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
             return Ok(());
         }
 
-        let runtime_capabilities = this
-            .runtime_capabilities()
-            .map_err(schedule_message_service_startup_failed)?;
+        let runtime_capabilities = this.runtime_capabilities();
         let generation = lifecycle.next_generation;
         lifecycle.next_generation = lifecycle.next_generation.checked_add(1).unwrap_or(1);
         let lease = runtime_capabilities
@@ -771,9 +737,7 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
     }
 
     async fn persist_current_locked(&self) -> RocketMQResult<()> {
-        let runtime_capabilities = self
-            .runtime_capabilities()
-            .map_err(schedule_message_service_shutdown_failed)?;
+        let runtime_capabilities = self.runtime_capabilities();
         let json = self.encode_pretty(true);
         let file_name = self.config_file_path();
         runtime_capabilities
@@ -977,9 +941,7 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
     }
 
     pub(crate) async fn load_async(&self) -> RocketMQResult<bool> {
-        let runtime_capabilities = self
-            .runtime_capabilities()
-            .map_err(schedule_message_service_startup_failed)?;
+        let runtime_capabilities = self.runtime_capabilities();
         let file_name = self.config_file_path();
         let load_result = runtime_capabilities
             .blocking
@@ -1014,9 +976,7 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
                 "peer delay-offset synchronization requires a stopped delivery generation",
             ));
         }
-        let runtime_capabilities = self
-            .runtime_capabilities()
-            .map_err(schedule_message_service_shutdown_failed)?;
+        let runtime_capabilities = self.runtime_capabilities();
         let _persist_guard = self.persistence_gate.lock().await;
         let file_name = self.config_file_path();
         let encoded_snapshot = encoded_snapshot.to_owned();
@@ -2237,8 +2197,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn legacy_runtime_constructor_installs_owned_schedule_context_on_first_start() {
-        let temp_dir = TempDir::new().expect("legacy schedule context temp dir should be created");
+    async fn broker_runtime_injects_schedule_context_before_first_start() {
+        let temp_dir = TempDir::new().expect("schedule context temp dir should be created");
         let root = temp_dir.path().to_string_lossy().into_owned();
         let broker_config = Arc::new(BrokerConfig {
             store_path_root_dir: root.clone().into(),
@@ -2254,17 +2214,14 @@ mod tests {
             .schedule_message_service_for_test()
             .expect("schedule message service should be configured")
             .clone();
-        assert!(service.runtime_capabilities.get().is_none());
-
         ScheduleMessageService::start_persist_task_for_probe(service.clone(), Duration::from_secs(60))
             .await
-            .expect("legacy schedule service should install a compatibility context");
-        assert!(service.runtime_capabilities.get().is_some());
+            .expect("schedule service should use its injected context");
 
         service
             .shutdown()
             .await
-            .expect("legacy compatibility context should shutdown cleanly");
+            .expect("injected schedule context should shutdown cleanly");
     }
 
     #[tokio::test]

@@ -15,18 +15,20 @@
 use std::future::Future;
 
 use crate::config::RuntimeConfig;
-use crate::context::RuntimeContext;
+use crate::diagnostics::RuntimeDiagnostics;
 use crate::error::RuntimeError;
 use crate::error::RuntimeResult;
 use crate::handle::RuntimeHandle;
+use crate::service_context::RootServiceContext;
 use crate::shutdown_deadline::ShutdownDeadline;
 use crate::shutdown_report::ShutdownReport;
+use crate::task_group::TaskGroup;
 use crate::task_group::TaskGroupLifecycleState;
 
 pub struct RuntimeOwner {
     config: RuntimeConfig,
     runtime: Option<tokio::runtime::Runtime>,
-    context: RuntimeContext,
+    root_context: RootServiceContext,
 }
 
 impl RuntimeOwner {
@@ -50,20 +52,25 @@ impl RuntimeOwner {
         }
 
         let runtime = builder.build()?;
-        let context = RuntimeContext::new_with_blocking_policy(
-            RuntimeHandle::new(runtime.handle().clone()),
-            config.thread_name.clone(),
-            config.blocking_pool_policy.clone(),
+        let runtime_handle = RuntimeHandle::new(runtime.handle().clone());
+        let root_group = TaskGroup::root(config.thread_name.clone(), runtime_handle.clone());
+        let diagnostics = RuntimeDiagnostics::new(runtime_handle.clone());
+        let root_context = RootServiceContext::new(
+            config.thread_name.clone().into(),
+            runtime_handle,
+            root_group,
+            config.blocking_lane_policies.clone(),
+            diagnostics,
         )?;
         Ok(Self {
             config,
             runtime: Some(runtime),
-            context,
+            root_context,
         })
     }
 
-    pub fn context(&self) -> &RuntimeContext {
-        &self.context
+    pub fn root_context(&self) -> &RootServiceContext {
+        &self.root_context
     }
 
     pub fn config(&self) -> &RuntimeConfig {
@@ -81,8 +88,7 @@ impl RuntimeOwner {
     }
 
     pub async fn shutdown_tasks(&self) -> ShutdownReport {
-        self.context
-            .shutdown_tasks_until(ShutdownDeadline::after(self.config.shutdown_timeout))
+        self.shutdown_tasks_until(ShutdownDeadline::after(self.config.shutdown_timeout))
             .await
     }
 
@@ -92,7 +98,7 @@ impl RuntimeOwner {
     }
 
     pub fn shutdown_background(mut self) -> ShutdownReport {
-        let report = self.context.shutdown_tasks_now();
+        let report = self.shutdown_tasks_now();
         report.log_if_unhealthy();
         if let Some(runtime) = self.runtime.take() {
             runtime.shutdown_background();
@@ -119,7 +125,7 @@ impl RuntimeOwner {
         }
 
         let runtime = self.runtime.take().expect("runtime owner must still own the runtime");
-        let report = runtime.block_on(self.context.shutdown_tasks_until(deadline));
+        let report = runtime.block_on(self.shutdown_tasks_until(deadline));
         report.log_if_unhealthy();
         runtime.shutdown_timeout(deadline.remaining());
         Ok(report)
@@ -129,8 +135,8 @@ impl RuntimeOwner {
 impl Drop for RuntimeOwner {
     fn drop(&mut self) {
         if let Some(runtime) = self.runtime.take() {
-            if self.context.root_group().lifecycle_state() != TaskGroupLifecycleState::ShutdownCompleted {
-                let report = self.context.shutdown_tasks_now();
+            if self.root_context.task_group().lifecycle_state() != TaskGroupLifecycleState::ShutdownCompleted {
+                let report = self.shutdown_tasks_now();
                 tracing::warn!(
                     report = %report.to_json(),
                     "RuntimeOwner dropped before root TaskGroup shutdown completed"
@@ -138,5 +144,27 @@ impl Drop for RuntimeOwner {
             }
             runtime.shutdown_background();
         }
+    }
+}
+
+impl RuntimeOwner {
+    /// Cancels and joins all owned tasks using an existing absolute deadline.
+    ///
+    /// This keeps nested lifecycle owners on the caller's single shutdown
+    /// budget without consuming or destroying the owned Tokio runtime.
+    pub async fn shutdown_tasks_until(&self, deadline: ShutdownDeadline) -> ShutdownReport {
+        let mut report = self.root_context.task_group().shutdown_until(deadline).await;
+        for snapshot in self.root_context.blocking_snapshots() {
+            report.merge_blocking(snapshot);
+        }
+        report
+    }
+
+    fn shutdown_tasks_now(&self) -> ShutdownReport {
+        let mut report = self.root_context.task_group().shutdown_now();
+        for snapshot in self.root_context.blocking_snapshots() {
+            report.merge_blocking(snapshot);
+        }
+        report
     }
 }
