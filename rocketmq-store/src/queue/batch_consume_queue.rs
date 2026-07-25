@@ -19,9 +19,9 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::attribute::cq_type::CQType;
-use rocketmq_common::common::boundary_type::BoundaryType;
-use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use rocketmq_model::common::attribute::cq_type::CQType;
+use rocketmq_model::common::boundary_type::BoundaryType;
+use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_store_local::consume_queue::batch::correct_batch_min_offsets;
 use rocketmq_store_local::consume_queue::batch::find_batch_record_in_files;
 use rocketmq_store_local::consume_queue::batch::find_first_batch_record;

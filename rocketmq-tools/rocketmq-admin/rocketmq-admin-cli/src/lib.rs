@@ -19,3 +19,9 @@ pub mod formatters;
 pub mod rocketmq_cli;
 pub mod ui;
 pub mod validators;
+
+pub(crate) fn runtime_to_rocketmq_error(
+    error: impl std::error::Error + Send + Sync + 'static,
+) -> rocketmq_error::RocketMQError {
+    rocketmq_error::RocketMQError::IO(std::io::Error::other(error))
+}

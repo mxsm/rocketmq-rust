@@ -35,16 +35,24 @@ rust-version.workspace = true
 
 [features]
 default        = []
-client-adapter = ["dep:rocketmq-client-rust", "dep:rocketmq-common"]
+client-adapter = [
+  "dep:rocketmq-client-rust",
+  "dep:rocketmq-observability",
+  "dep:rocketmq-runtime",
+  "dep:rocketmq-transport",
+]
 rocksdb-export = ["dep:rocksdb"]
 
 [dependencies]
 rocketmq-model        = { workspace = true }
+rocketmq-error        = { workspace = true }
 rocketmq-protocol     = { workspace = true }
 rocketmq-security-api = { workspace = true }
 
 rocketmq-client-rust = { workspace = true, optional = true }
-rocketmq-common      = { workspace = true, optional = true }
+rocketmq-observability = { workspace = true, optional = true }
+rocketmq-runtime     = { workspace = true, optional = true }
+rocketmq-transport   = { workspace = true, optional = true }
 
 serde.workspace      = true
 serde_json.workspace = true

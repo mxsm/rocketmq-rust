@@ -17,12 +17,12 @@ use std::collections::HashSet;
 use std::time::SystemTime;
 
 use cheetah_string::CheetahString;
-use rocketmq_client_rust::admin_adapter_compat::error::RocketMQError;
 use rocketmq_client_rust::MQAdminExt;
-use rocketmq_common::common::message::message_enum::MessageRequestMode;
+use rocketmq_error::RocketMQError;
+use rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere;
+use rocketmq_model::common::key_builder::KeyBuilder;
+use rocketmq_model::common::message::message_enum::MessageRequestMode;
 use rocketmq_model::topic::RETRY_GROUP_TOPIC_PREFIX;
-use rocketmq_protocol::common::consumer::consume_from_where::ConsumeFromWhere;
-use rocketmq_protocol::common::key_builder::KeyBuilder;
 use rocketmq_protocol::common::wire_constants::MASTER_ID;
 use rocketmq_protocol::protocol::admin::consume_stats::ConsumeStats;
 use rocketmq_protocol::protocol::body::broker_body::cluster_info::ClusterInfo;

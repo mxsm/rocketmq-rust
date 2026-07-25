@@ -43,14 +43,14 @@ use crate::processor::admin_broker_processor::update_global_white_addrs_config_r
 use crate::processor::admin_broker_processor::update_user_request_handler::UpdateUserRequestHandler;
 use rocketmq_error::AuthError;
 use rocketmq_error::RocketMQError;
-use rocketmq_remoting::code::request_code::RequestCode;
-use rocketmq_remoting::code::response_code::ResponseCode;
-use rocketmq_remoting::error_response;
-use rocketmq_remoting::net::channel::Channel;
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_remoting::runtime::processor::RequestProcessor;
+use rocketmq_protocol::code::request_code::RequestCode;
+use rocketmq_protocol::code::response_code::ResponseCode;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_store::base::message_store::MessageStore;
+use rocketmq_transport::error_response;
+use rocketmq_transport::net::channel::Channel;
+use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_transport::runtime::processor::RequestProcessor;
 use std::sync::Arc;
 use tracing::warn;
 
@@ -713,9 +713,9 @@ fn auth_admin_body_decode_error(operation: &'static str, error: RocketMQError) -
 #[cfg(test)]
 mod tests {
     use rocketmq_error::RocketMQError;
-    use rocketmq_remoting::code::request_code::RequestCode;
-    use rocketmq_remoting::code::response_code::ResponseCode;
-    use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+    use rocketmq_protocol::code::request_code::RequestCode;
+    use rocketmq_protocol::code::response_code::ResponseCode;
+    use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
     use super::get_legacy_acl_cmd_response;
     use super::map_auth_admin_error_response;

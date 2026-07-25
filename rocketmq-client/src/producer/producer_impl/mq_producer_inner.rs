@@ -20,8 +20,8 @@ use crate::producer::producer_impl::default_mq_producer_impl::DefaultMQProducerI
 use crate::producer::producer_impl::topic_publish_info::TopicPublishInfo;
 use crate::producer::transaction_listener::ArcTransactionListener;
 use cheetah_string::CheetahString;
-use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_remoting::protocol::header::check_transaction_state_request_header::CheckTransactionStateRequestHeader;
+use rocketmq_model::common::message::message_ext::MessageExt;
+use rocketmq_protocol::protocol::header::check_transaction_state_request_header::CheckTransactionStateRequestHeader;
 
 pub trait MQProducerInner: Send + Sync + 'static {
     fn get_publish_topic_list(&self) -> HashSet<CheetahString>;

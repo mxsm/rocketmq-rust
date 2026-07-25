@@ -14,8 +14,8 @@
 
 use super::*;
 
-use rocketmq_client_rust::admin_adapter_compat::message::MessageExt;
-use rocketmq_client_rust::admin_adapter_compat::message::MessageTrait;
+use rocketmq_model::common::message::message_ext::MessageExt;
+use rocketmq_model::common::message::MessageTrait;
 
 pub(super) fn query<'a>(
     session: &'a mut AdminSession,

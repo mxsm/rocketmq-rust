@@ -15,8 +15,8 @@
 use std::sync::LazyLock;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::message::message_enum::MessageType;
-use rocketmq_common::utils::util_all;
+use rocketmq_model::common::message::message_enum::MessageType;
+use rocketmq_runtime::common::util_all;
 
 use crate::producer::local_transaction_state::LocalTransactionState;
 

@@ -20,17 +20,17 @@ use std::sync::LazyLock;
 use std::sync::Weak;
 use std::time::Instant;
 
+use crate::config::broker_config::BrokerConfig;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use parking_lot::RwLock;
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
-use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_remoting::net::channel::Channel;
-use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
-use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
-use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
+use rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere;
+use rocketmq_protocol::protocol::heartbeat::consume_type::ConsumeType;
+use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
+use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
+use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
+use rocketmq_transport::net::channel::Channel;
 use tracing::info;
 use tracing::warn;
 
@@ -287,7 +287,7 @@ impl ConsumerManager {
         &self,
     ) -> Vec<(
         CheetahString,
-        rocketmq_remoting::protocol::LanguageCode,
+        rocketmq_protocol::protocol::LanguageCode,
         i32,
         ConsumeType,
         i64,
@@ -295,7 +295,7 @@ impl ConsumerManager {
         let mut counts: HashMap<
             (
                 CheetahString,
-                rocketmq_remoting::protocol::LanguageCode,
+                rocketmq_protocol::protocol::LanguageCode,
                 i32,
                 ConsumeType,
             ),
@@ -1097,11 +1097,11 @@ mod tests {
     use cheetah_string::CheetahString;
     use dashmap::DashMap;
     use parking_lot::Mutex;
-    use rocketmq_remoting::base::response_future::ResponseFuture;
-    use rocketmq_remoting::connection::Connection;
-    use rocketmq_remoting::net::channel::Channel;
-    use rocketmq_remoting::net::channel::ChannelInner;
-    use rocketmq_remoting::protocol::LanguageCode;
+    use rocketmq_protocol::protocol::LanguageCode;
+    use rocketmq_transport::base::response_future::ResponseFuture;
+    use rocketmq_transport::connection::Connection;
+    use rocketmq_transport::net::channel::Channel;
+    use rocketmq_transport::net::channel::ChannelInner;
     use tokio::net::TcpStream;
 
     use super::ConsumerAssignmentView;

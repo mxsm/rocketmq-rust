@@ -22,8 +22,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
-use rocketmq_client_rust::admin_adapter_compat::remoting::protocol::body::broker_body::cluster_info::ClusterInfo;
-use rocketmq_client_rust::admin_adapter_compat::remoting::protocol::route::topic_route_data::TopicRouteData;
+use rocketmq_protocol::protocol::body::broker_body::cluster_info::ClusterInfo;
+use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use tokio::sync::RwLock;
 
 /// Cache entry with expiration

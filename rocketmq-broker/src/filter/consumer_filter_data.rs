@@ -121,7 +121,7 @@ impl ConsumerFilterData {
 
     pub fn how_long_after_death(&self) -> Option<u64> {
         self.is_dead()
-            .then(|| rocketmq_common::TimeUtils::current_millis().saturating_sub(self.dead_time))
+            .then(|| rocketmq_runtime::common::time_utils::current_millis().saturating_sub(self.dead_time))
     }
 
     pub fn is_msg_in_live(&self, msg_store_time: u64) -> bool {

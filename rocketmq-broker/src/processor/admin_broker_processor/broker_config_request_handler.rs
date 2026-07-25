@@ -16,27 +16,27 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use crate::config::broker_config::BrokerConfig;
 use cheetah_string::CheetahString;
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
-use rocketmq_common::common::config::TopicConfig;
-use rocketmq_common::common::constant::file_readahead_mode::READ_AHEAD_MODE;
-use rocketmq_common::common::message::MessageConst;
-use rocketmq_common::common::mix_all;
-use rocketmq_common::common::mq_version::CURRENT_VERSION;
-use rocketmq_remoting::code::request_code::RequestCode;
-use rocketmq_remoting::code::response_code::ResponseCode;
-use rocketmq_remoting::error_response;
-use rocketmq_remoting::net::channel::Channel;
-use rocketmq_remoting::protocol::body::kv_table::KVTable;
-use rocketmq_remoting::protocol::header::export_rocksdb_config_to_json_request_header::ExportRocksdbConfigToJsonRequestHeader;
+use rocketmq_model::common::config::TopicConfig;
+use rocketmq_model::common::constant::file_readahead_mode::READ_AHEAD_MODE;
+use rocketmq_model::common::message::MessageConst;
+use rocketmq_model::common::mix_all;
+use rocketmq_model::common::mq_version::CURRENT_VERSION;
+use rocketmq_protocol::code::request_code::RequestCode;
+use rocketmq_protocol::code::response_code::ResponseCode;
+use rocketmq_protocol::protocol::body::kv_table::KVTable;
+use rocketmq_protocol::protocol::header::export_rocksdb_config_to_json_request_header::ExportRocksdbConfigToJsonRequestHeader;
 #[cfg(feature = "rocksdb_store")]
-use rocketmq_remoting::protocol::header::export_rocksdb_config_to_json_request_header::ExportRocksdbConfigType;
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_remoting::protocol::DataVersion;
-use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_protocol::protocol::header::export_rocksdb_config_to_json_request_header::ExportRocksdbConfigType;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::DataVersion;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::utils::ffi::MADV_NORMAL;
 use rocketmq_store::utils::ffi::MADV_RANDOM;
+use rocketmq_transport::error_response;
+use rocketmq_transport::net::channel::Channel;
+use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
 use sysinfo::Disks;
 
 use crate::auth::auth_admin_service::AuthAdminService;
@@ -882,26 +882,21 @@ mod tests {
     use std::sync::Arc;
     use std::time::SystemTime;
 
+    use crate::config::broker_config::BrokerConfig;
+    #[cfg(feature = "rocksdb_store")]
+    use crate::config::config_manager::ConfigManager;
     use cheetah_string::CheetahString;
-    use rocketmq_common::common::broker::broker_config::BrokerConfig;
     #[cfg(feature = "rocksdb_store")]
-    use rocketmq_common::common::config::TopicConfig;
+    use rocketmq_model::common::config::TopicConfig;
+    use rocketmq_model::common::constant::file_readahead_mode::READ_AHEAD_MODE;
+    use rocketmq_model::common::message::MessageConst;
+    use rocketmq_protocol::code::request_code::RequestCode;
+    use rocketmq_protocol::code::response_code::ResponseCode;
+    use rocketmq_protocol::protocol::header::export_rocksdb_config_to_json_request_header::ExportRocksdbConfigToJsonRequestHeader;
+    use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
     #[cfg(feature = "rocksdb_store")]
-    use rocketmq_common::common::config_manager::ConfigManager;
-    use rocketmq_common::common::constant::file_readahead_mode::READ_AHEAD_MODE;
-    use rocketmq_common::common::message::MessageConst;
-    use rocketmq_common::TimeUtils::current_millis;
-    use rocketmq_remoting::base::response_future::ResponseFuture;
-    use rocketmq_remoting::code::request_code::RequestCode;
-    use rocketmq_remoting::code::response_code::ResponseCode;
-    use rocketmq_remoting::connection::Connection;
-    use rocketmq_remoting::net::channel::Channel;
-    use rocketmq_remoting::net::channel::ChannelInner;
-    use rocketmq_remoting::protocol::header::export_rocksdb_config_to_json_request_header::ExportRocksdbConfigToJsonRequestHeader;
-    use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-    #[cfg(feature = "rocksdb_store")]
-    use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
-    use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
+    use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
+    use rocketmq_runtime::common::time_utils::current_millis;
     use rocketmq_store::base::message_store::MessageStore;
     #[cfg(feature = "rocksdb_store")]
     use rocketmq_store::base::store_enum::StoreType;
@@ -911,6 +906,11 @@ mod tests {
     use rocketmq_store::timer::timer_metrics::TimerMetricsSerializeWrapper;
     use rocketmq_store::utils::ffi::MADV_NORMAL;
     use rocketmq_store::utils::ffi::MADV_RANDOM;
+    use rocketmq_transport::base::response_future::ResponseFuture;
+    use rocketmq_transport::connection::Connection;
+    use rocketmq_transport::net::channel::Channel;
+    use rocketmq_transport::net::channel::ChannelInner;
+    use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
 
     use crate::broker_runtime::BrokerRuntime;
 

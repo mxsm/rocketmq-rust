@@ -14,7 +14,7 @@
 
 use std::sync::Arc;
 
-use rocketmq_common::common::message::message_ext::MessageExt;
+use rocketmq_model::common::message::message_ext::MessageExt;
 
 use crate::consumer::listener::consume_concurrently_context::ConsumeConcurrentlyContext;
 use crate::consumer::listener::consume_concurrently_status::ConsumeConcurrentlyStatus;
@@ -45,7 +45,7 @@ use crate::consumer::listener::consume_concurrently_status::ConsumeConcurrentlyS
 /// use rocketmq_client_rust::consumer::listener::ConsumeConcurrentlyContext;
 /// use rocketmq_client_rust::consumer::listener::ConsumeConcurrentlyStatus;
 /// use rocketmq_client_rust::consumer::listener::MessageListenerConcurrently;
-/// use rocketmq_common::common::message::message_ext::MessageExt;
+/// use rocketmq_model::common::message::message_ext::MessageExt;
 ///
 /// // Closures automatically implement MessageListenerConcurrently
 /// let listener = |msgs: &[&MessageExt],

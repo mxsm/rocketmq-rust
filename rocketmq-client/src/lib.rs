@@ -27,20 +27,20 @@ macro_rules! mq_client_err {
     ($response_code:expr, $fmt:expr, $($arg:expr),*) => {{
         let formatted_msg = format!($fmt, $($arg),*);
         let error_message = format!("CODE: {}  DESC: {}", $response_code as i32, formatted_msg);
-        let faq_msg = rocketmq_common::common::FAQUrl::attach_default_url(Some(error_message.as_str()));
+        let faq_msg = rocketmq_model::common::FAQUrl::attach_default_url(Some(error_message.as_str()));
         rocketmq_error::RocketMQError::illegal_argument(faq_msg)
     }};
 
     ($response_code:expr, $error_message:expr) => {{
         let error_message = format!("CODE: {}  DESC: {}", $response_code as i32, $error_message);
-        let faq_msg = rocketmq_common::common::FAQUrl::attach_default_url(Some(error_message.as_str()));
+        let faq_msg = rocketmq_model::common::FAQUrl::attach_default_url(Some(error_message.as_str()));
         rocketmq_error::RocketMQError::illegal_argument(faq_msg)
     }};
 
     // Handle errors without a ResponseCode, using only the error message (accepts both &str and String)
     ($error_message:expr) => {{
         let error_msg = format!("{}", $error_message);
-        let faq_msg = rocketmq_common::common::FAQUrl::attach_default_url(Some(error_msg.as_str()));
+        let faq_msg = rocketmq_model::common::FAQUrl::attach_default_url(Some(error_msg.as_str()));
         rocketmq_error::RocketMQError::illegal_argument(faq_msg)
     }};
 }
@@ -70,6 +70,7 @@ macro_rules! client_broker_err {
 pub mod admin;
 pub mod base;
 pub mod common;
+pub mod config_support;
 pub mod consumer;
 pub mod exception;
 pub mod factory;
@@ -105,22 +106,6 @@ pub use crate::common::admin_tools_result_code_enum::AdminToolsResultCodeEnum;
 pub use crate::common::nameserver_access_config::NameserverAccessConfig;
 pub use crate::common::session_credentials::SessionCredentials;
 
-/// Compatibility exports used by the admin adapter while legacy public
-/// signatures are retired. New consumers should depend on the canonical owner
-/// crates directly.
-#[doc(hidden)]
-pub mod admin_adapter_compat {
-    pub use rocketmq_error as error;
-    pub use rocketmq_remoting as remoting;
-    pub use rocketmq_rust as runtime;
-
-    pub mod message {
-        pub use rocketmq_common::common::message::message_ext::MessageExt;
-        pub use rocketmq_common::common::message::message_single::Message;
-        pub use rocketmq_common::common::message::MessageTrait;
-    }
-}
-
 /// Compatibility surface used by the Proxy Cluster adapter while Client
 /// runtime signatures are narrowed to canonical protocol contracts.
 #[doc(hidden)]
@@ -135,28 +120,28 @@ pub mod proxy_adapter_compat {
     use std::sync::Mutex;
 
     use cheetah_string::CheetahString;
-    use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-    use rocketmq_remoting::runtime::RPCHook;
+    use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
     use rocketmq_security_api::OutboundSigner;
     use rocketmq_security_api::SecurityRequestView;
+    use rocketmq_transport::runtime::RPCHook;
 
-    pub use rocketmq_common::common::attribute::topic_message_type::TopicMessageType;
-    pub use rocketmq_common::common::boundary_type::BoundaryType;
-    pub use rocketmq_common::common::filter::expression_type::ExpressionType;
-    pub use rocketmq_common::common::message::message_ext::MessageExt;
-    pub use rocketmq_common::common::message::message_id::MessageId;
-    pub use rocketmq_common::common::message::message_queue::MessageQueue;
-    pub use rocketmq_common::common::message::message_queue_assignment::MessageQueueAssignment;
-    pub use rocketmq_common::common::message::message_single::Message;
-    pub use rocketmq_common::common::message::MessageConst;
-    pub use rocketmq_common::common::message::MessageTrait;
-    pub use rocketmq_common::common::mix_all::LOGICAL_QUEUE_MOCK_BROKER_PREFIX;
-    pub use rocketmq_common::common::mix_all::MASTER_ID;
-    pub use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
-    pub use rocketmq_common::common::sys_flag::pull_sys_flag::PullSysFlag;
-    pub use rocketmq_common::MessageDecoder;
-    pub use rocketmq_common::TimeUtils::current_millis;
-    pub use rocketmq_remoting::protocol::route_facade::BrokerDataExt;
+    pub use rocketmq_model::common::attribute::topic_message_type::TopicMessageType;
+    pub use rocketmq_model::common::boundary_type::BoundaryType;
+    pub use rocketmq_model::common::filter::expression_type::ExpressionType;
+    pub use rocketmq_model::common::message::message_ext::MessageExt;
+    pub use rocketmq_model::common::message::message_id::MessageId;
+    pub use rocketmq_model::common::message::message_queue::MessageQueue;
+    pub use rocketmq_model::common::message::message_queue_assignment::MessageQueueAssignment;
+    pub use rocketmq_model::common::message::message_single::Message;
+    pub use rocketmq_model::common::message::MessageConst;
+    pub use rocketmq_model::common::message::MessageTrait;
+    pub use rocketmq_model::common::mix_all::LOGICAL_QUEUE_MOCK_BROKER_PREFIX;
+    pub use rocketmq_model::common::mix_all::MASTER_ID;
+    pub use rocketmq_model::common::sys_flag::message_sys_flag::MessageSysFlag;
+    pub use rocketmq_model::common::sys_flag::pull_sys_flag::PullSysFlag;
+    pub use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
+    pub use rocketmq_protocol::protocol::route_facade::BrokerDataExt;
+    pub use rocketmq_runtime::common::time_utils::current_millis;
 
     pub type ClientRpcHook = dyn RPCHook;
 
@@ -546,7 +531,7 @@ pub mod proxy_adapter_compat {
             broker_addr: &CheetahString,
             topic: CheetahString,
             timeout_millis: u64,
-        ) -> rocketmq_error::RocketMQResult<rocketmq_common::common::config::TopicConfig> {
+        ) -> rocketmq_error::RocketMQResult<rocketmq_model::common::config::TopicConfig> {
             let _operation = self.operation().await;
             self.inner.get_topic_config(broker_addr, topic, timeout_millis).await
         }

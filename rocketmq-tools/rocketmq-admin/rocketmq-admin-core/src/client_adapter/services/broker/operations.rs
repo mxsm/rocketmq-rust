@@ -17,7 +17,7 @@
 use cheetah_string::CheetahString;
 use regex::Regex;
 use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_client_rust::admin_adapter_compat::remoting::protocol::admin::consume_stats_list::ConsumeStatsList;
+use rocketmq_protocol::protocol::admin::consume_stats_list::ConsumeStatsList;
 use std::collections::HashMap;
 
 use super::types::validate_update_value;
@@ -1409,10 +1409,10 @@ mod tests {
 
     #[test]
     fn build_broker_consume_stats_result_filters_and_sorts_rows() {
-        use rocketmq_client_rust::admin_adapter_compat::remoting::protocol::admin::consume_stats::ConsumeStats;
-        use rocketmq_client_rust::admin_adapter_compat::remoting::protocol::admin::consume_stats_list::ConsumeStatsList;
-        use rocketmq_client_rust::admin_adapter_compat::remoting::protocol::admin::offset_wrapper::OffsetWrapper;
-        use rocketmq_common::common::message::message_queue::MessageQueue;
+        use rocketmq_model::common::message::message_queue::MessageQueue;
+        use rocketmq_protocol::protocol::admin::consume_stats::ConsumeStats;
+        use rocketmq_protocol::protocol::admin::consume_stats_list::ConsumeStatsList;
+        use rocketmq_protocol::protocol::admin::offset_wrapper::OffsetWrapper;
 
         let mut included = OffsetWrapper::new();
         included.set_broker_offset(120);

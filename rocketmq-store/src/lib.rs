@@ -74,14 +74,14 @@ pub mod bench_support {
     use std::time::Duration;
     use std::time::Instant;
 
+    use crate::config::store_runtime_config::StoreRuntimeConfig;
     use bytes::BufMut;
     use bytes::Bytes;
     use bytes::BytesMut;
     use cheetah_string::CheetahString;
     use dashmap::DashMap;
     use futures_util::future::join_all;
-    use rocketmq_common::common::broker::broker_config::BrokerConfig;
-    use rocketmq_common::common::config::TopicConfig;
+    use rocketmq_model::common::config::TopicConfig;
     use rocketmq_runtime::BlockingExecutorSnapshot;
     use rocketmq_runtime::ShutdownReport;
     use serde::Serialize;
@@ -1175,9 +1175,9 @@ pub mod bench_support {
         };
         let mut store = LocalFileMessageStore::new(
             Arc::new(config),
-            Arc::new(BrokerConfig {
+            Arc::new(StoreRuntimeConfig {
                 duplication_enable: true,
-                ..BrokerConfig::default()
+                ..StoreRuntimeConfig::default()
             }),
             Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
             None,

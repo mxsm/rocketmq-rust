@@ -17,58 +17,53 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::Instant;
 
+use crate::config::broker_config::BrokerConfig;
 use cheetah_string::CheetahString;
 use rand::RngExt;
-use rocketmq_common::common::attribute::cleanup_policy::CleanupPolicy;
-use rocketmq_common::common::attribute::topic_message_type::TopicMessageType;
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
-use rocketmq_common::common::broker::broker_role::BrokerRole;
-use rocketmq_common::common::constant::PermName;
-use rocketmq_common::common::key_builder::KeyBuilder;
-use rocketmq_common::common::message::message_batch::MessageExtBatch;
-use rocketmq_common::common::message::message_client_id_setter::MessageClientIDSetter;
-use rocketmq_common::common::message::message_enum::MessageType;
-use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
-use rocketmq_common::common::message::MessageConst;
-use rocketmq_common::common::message::MessageTrait;
-use rocketmq_common::common::mix_all;
-use rocketmq_common::common::mix_all::RETRY_GROUP_TOPIC_PREFIX;
-use rocketmq_common::common::mq_version::RocketMqVersion;
-use rocketmq_common::common::producer::HandleV1;
-use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
-use rocketmq_common::common::topic::TopicValidator;
-use rocketmq_common::common::FAQUrl;
-use rocketmq_common::common::TopicFilterType;
-use rocketmq_common::common::TopicSysFlag;
-use rocketmq_common::common::TopicSysFlag::build_sys_flag;
-use rocketmq_common::utils::queue_type_utils::QueueTypeUtils;
-use rocketmq_common::utils::util_all;
-use rocketmq_common::CleanupPolicyUtils;
-use rocketmq_common::MessageAccessor::MessageAccessor;
-use rocketmq_common::MessageDecoder;
-use rocketmq_common::MessageDecoder::message_properties_to_string;
-#[cfg(feature = "otel-traces")]
-use rocketmq_common::MessageDecoder::string_to_message_properties;
-use rocketmq_common::TimeUtils;
 use rocketmq_error::RocketMQError;
-use rocketmq_remoting::code::request_code::RequestCode;
-use rocketmq_remoting::code::response_code::RemotingSysResponseCode;
-use rocketmq_remoting::code::response_code::ResponseCode;
-use rocketmq_remoting::code::response_code::ResponseCode::SystemError;
-use rocketmq_remoting::error_response;
-use rocketmq_remoting::net::channel::Channel;
-use rocketmq_remoting::protocol::header::consumer_send_msg_back_request_header::ConsumerSendMsgBackRequestHeader;
-use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header::parse_request_header;
-use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
-use rocketmq_remoting::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
-use rocketmq_remoting::protocol::header::message_operation_header::TopicRequestHeaderTrait;
-use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_context::TopicQueueMappingContext;
-use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_remoting::runtime::processor::RejectRequestResponse;
-use rocketmq_remoting::runtime::processor::RequestProcessor;
+use rocketmq_model::common::attribute::cleanup_policy::CleanupPolicy;
+use rocketmq_model::common::attribute::topic_message_type::TopicMessageType;
+use rocketmq_model::common::broker::broker_role::BrokerRole;
+use rocketmq_model::common::constant::PermName;
+use rocketmq_model::common::key_builder::KeyBuilder;
+use rocketmq_model::common::message::message_accessor::MessageAccessor;
+use rocketmq_model::common::message::message_batch::MessageExtBatch;
+use rocketmq_model::common::message::message_client_id_setter::MessageClientIDSetter;
+use rocketmq_model::common::message::message_enum::MessageType;
+use rocketmq_model::common::message::message_ext::MessageExt;
+use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use rocketmq_model::common::message::MessageConst;
+use rocketmq_model::common::message::MessageTrait;
+use rocketmq_model::common::mix_all;
+use rocketmq_model::common::mix_all::RETRY_GROUP_TOPIC_PREFIX;
+use rocketmq_model::common::mq_version::RocketMqVersion;
+use rocketmq_model::common::producer::HandleV1;
+use rocketmq_model::common::sys_flag::message_sys_flag::MessageSysFlag;
+use rocketmq_model::common::topic::TopicValidator;
+use rocketmq_model::common::FAQUrl;
+use rocketmq_model::common::TopicFilterType;
+use rocketmq_model::common::TopicSysFlag;
+use rocketmq_model::common::TopicSysFlag::build_sys_flag;
+use rocketmq_model::utils::cleanup_policy_utils;
+use rocketmq_model::utils::queue_type_utils::QueueTypeUtils;
+use rocketmq_protocol::code::request_code::RequestCode;
+use rocketmq_protocol::code::response_code::RemotingSysResponseCode;
+use rocketmq_protocol::code::response_code::ResponseCode;
+use rocketmq_protocol::code::response_code::ResponseCode::SystemError;
+use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
+use rocketmq_protocol::common::message::message_decoder::message_properties_to_string;
+#[cfg(feature = "otel-traces")]
+use rocketmq_protocol::common::message::message_decoder::string_to_message_properties;
+use rocketmq_protocol::protocol::header::consumer_send_msg_back_request_header::ConsumerSendMsgBackRequestHeader;
+use rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header::parse_request_header;
+use rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
+use rocketmq_protocol::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
+use rocketmq_protocol::protocol::header::message_operation_header::TopicRequestHeaderTrait;
+use rocketmq_protocol::protocol::namespace_util::NamespaceUtil;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_context::TopicQueueMappingContext;
+use rocketmq_runtime::common::time_utils;
+use rocketmq_runtime::common::util_all;
 use rocketmq_store::base::flush_manager::SyncFlushRuntimeInfo;
 use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
@@ -80,6 +75,11 @@ use rocketmq_store::store_api_adapter::LegacyAppendReceipt;
 use rocketmq_store::store_api_adapter::LegacyStoreHealthSnapshot;
 use rocketmq_store_api::MessageAppender;
 use rocketmq_store_api::StoreHealth;
+use rocketmq_transport::error_response;
+use rocketmq_transport::net::channel::Channel;
+use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_transport::runtime::processor::RejectRequestResponse;
+use rocketmq_transport::runtime::processor::RequestProcessor;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
@@ -558,7 +558,7 @@ where
             .get(MessageConst::PROPERTY_TRANSACTION_PREPARED)
             .is_some_and(|tra_flag_inner| tra_flag_inner.parse().unwrap_or(false));
         message_ext.message_ext_inner.message.set_properties(ori_props);
-        let cleanup_policy = CleanupPolicyUtils::get_delete_policy(Some(&topic_config));
+        let cleanup_policy = cleanup_policy_utils::get_delete_policy(Some(&topic_config));
 
         if cleanup_policy == CleanupPolicy::COMPACTION {
             if let Some(value) = message_ext
@@ -1042,7 +1042,7 @@ where
         response: &mut RemotingCommand,
         request: &RemotingCommand,
         msg: &mut MessageExt,
-        topic_config: &mut Arc<rocketmq_common::common::config::TopicConfig>,
+        topic_config: &mut Arc<rocketmq_model::common::config::TopicConfig>,
         properties: &mut HashMap<CheetahString, CheetahString>,
     ) -> bool {
         let mut new_topic = request_header.topic();
@@ -1682,7 +1682,7 @@ where
         send_message_context.queue_id(Some(request_header.queue_id));
         send_message_context.broker_region_id(CheetahString::from_string(region_id.clone()));
         send_message_context.born_time_stamp(request_header.born_timestamp);
-        send_message_context.request_time_stamp(TimeUtils::current_millis() as i64);
+        send_message_context.request_time_stamp(time_utils::current_millis() as i64);
 
         if let Some(owner) = request.ext_fields() {
             if let Some(value) = owner.get(BrokerStatsManager::COMMERCIAL_OWNER) {
@@ -1851,10 +1851,10 @@ fn message_store_not_initialized() -> RocketMQError {
 mod tests {
     use std::future::Future;
 
-    use rocketmq_common::common::broker::broker_config::BrokerConfig;
-    use rocketmq_remoting::code::response_code::RemotingSysResponseCode;
-    use rocketmq_remoting::code::response_code::ResponseCode;
-    use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+    use crate::config::broker_config::BrokerConfig;
+    use rocketmq_protocol::code::response_code::RemotingSysResponseCode;
+    use rocketmq_protocol::code::response_code::ResponseCode;
+    use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
     use rocketmq_store::base::flush_manager::SyncFlushRuntimeInfo;
     use rocketmq_store::base::message_result::PutMessageResult;
     use rocketmq_store::base::message_status_enum::PutMessageStatus;

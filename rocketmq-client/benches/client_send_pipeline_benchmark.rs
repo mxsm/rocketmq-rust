@@ -38,16 +38,16 @@ use criterion::Criterion;
 use criterion::Throughput;
 use rocketmq_client_rust::producer::send_callback::ArcSendCallback;
 use rocketmq_client_rust::producer::send_result::SendResult;
-use rocketmq_common::common::message::message_client_id_setter::MessageClientIDSetter;
-use rocketmq_common::common::message::message_single::Message;
-use rocketmq_common::common::message::MessageTrait;
-use rocketmq_common::MessageAccessor::MessageAccessor;
-use rocketmq_common::MessageDecoder;
-use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQError;
-use rocketmq_remoting::code::request_code::RequestCode;
-use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+use rocketmq_model::common::message::message_accessor::MessageAccessor;
+use rocketmq_model::common::message::message_client_id_setter::MessageClientIDSetter;
+use rocketmq_model::common::message::message_single::Message;
+use rocketmq_model::common::message::MessageTrait;
+use rocketmq_protocol::code::request_code::RequestCode;
+use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
+use rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_runtime::common::time_utils::current_millis;
 use tokio::sync::Semaphore;
 
 #[derive(Debug)]

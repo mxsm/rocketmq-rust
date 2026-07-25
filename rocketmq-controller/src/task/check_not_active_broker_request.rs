@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_common::TimeUtils::current_millis;
+use rocketmq_runtime::common::time_utils::current_millis;
 use serde::Deserialize;
 use serde::Serialize;
 

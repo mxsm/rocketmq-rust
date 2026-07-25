@@ -14,7 +14,7 @@
 
 use clap::Parser;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::protocol::body::check_rocksdb_cqwrite_progress_response_body::CheckStatus;
+use rocketmq_protocol::protocol::body::check_rocksdb_cqwrite_progress_response_body::CheckStatus;
 
 use crate::commands::CommandExecute;
 use rocketmq_admin_core::client_adapter::services::queue::CheckRocksdbCqWriteProgressRequest;

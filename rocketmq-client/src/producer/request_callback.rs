@@ -14,9 +14,9 @@
 
 use std::sync::Arc;
 
-use rocketmq_common::common::message::message_single::Message;
-use rocketmq_common::common::message::MessageTrait;
 use rocketmq_error::RocketMQError;
+use rocketmq_model::common::message::message_single::Message;
+use rocketmq_model::common::message::MessageTrait;
 
 pub type RequestCallbackFn = Arc<dyn Fn(Option<&dyn MessageTrait>, Option<&RocketMQError>) + Send + Sync>;
 

@@ -408,7 +408,7 @@ mod tests {
     use std::collections::HashSet;
 
     use cheetah_string::CheetahString;
-    use rocketmq_common::common::TopicSysFlag;
+    use rocketmq_model::common::TopicSysFlag;
 
     use super::*;
 

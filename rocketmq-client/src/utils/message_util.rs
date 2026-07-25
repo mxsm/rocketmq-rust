@@ -16,10 +16,10 @@ use std::sync::LazyLock;
 
 use bytes::Bytes;
 use cheetah_string::CheetahString;
-use rocketmq_common::common::message::message_single::Message;
-use rocketmq_common::common::message::MessageConst;
-use rocketmq_common::common::mix_all;
-use rocketmq_common::MessageAccessor::MessageAccessor;
+use rocketmq_model::common::message::message_accessor::MessageAccessor;
+use rocketmq_model::common::message::message_single::Message;
+use rocketmq_model::common::message::MessageConst;
+use rocketmq_model::common::mix_all;
 
 use crate::common::client_error_code::ClientErrorCode;
 

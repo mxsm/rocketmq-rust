@@ -14,9 +14,9 @@
 
 use clap::ArgGroup;
 use clap::Parser;
-use rocketmq_common::utils::util_all::time_millis_to_human_string2;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
+use rocketmq_runtime::common::util_all::time_millis_to_human_string2;
 use serde_json::Value;
 
 use crate::commands::CommandExecute;

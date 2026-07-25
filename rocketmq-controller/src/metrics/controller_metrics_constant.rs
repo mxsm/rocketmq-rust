@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_remoting::code::request_code::RequestCode;
+use rocketmq_protocol::code::request_code::RequestCode;
 
 #[allow(unused_imports)]
 pub use rocketmq_observability::metrics::controller_constants::*;

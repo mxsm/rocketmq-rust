@@ -16,9 +16,9 @@ use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
-use rocketmq_common::common::attribute::cleanup_policy::CleanupPolicy;
-use rocketmq_common::common::config::TopicConfig;
-use rocketmq_common::CleanupPolicyUtils::get_delete_policy_arc_mut;
+use rocketmq_model::common::attribute::cleanup_policy::CleanupPolicy;
+use rocketmq_model::common::config::TopicConfig;
+use rocketmq_model::utils::cleanup_policy_utils::get_delete_policy_arc_mut;
 
 use crate::base::commit_log_dispatcher::CommitLogDispatcher;
 use crate::base::dispatch_request::DispatchRequest;

@@ -28,8 +28,6 @@ use std::time::Duration;
 
 use openraft::async_runtime::WatchReceiver;
 use openraft::ServerState;
-#[cfg(feature = "dev-single")]
-use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_controller::config::ControllerConfig;
 use rocketmq_controller::config::ControllerConfigReader;
 use rocketmq_controller::config::RaftPeer;
@@ -47,11 +45,13 @@ use rocketmq_controller::typ::ControllerResponseHeader;
 use rocketmq_controller::typ::Node;
 use rocketmq_controller::typ::RaftMetrics;
 #[cfg(feature = "dev-single")]
-use rocketmq_remoting::code::response_code::ResponseCode;
+use rocketmq_protocol::code::response_code::ResponseCode;
 #[cfg(feature = "dev-single")]
-use rocketmq_remoting::protocol::body::sync_state_set_body::SyncStateSet;
+use rocketmq_protocol::protocol::body::sync_state_set_body::SyncStateSet;
 #[cfg(feature = "dev-single")]
-use rocketmq_remoting::protocol::RemotingDeserializable;
+use rocketmq_protocol::protocol::RemotingDeserializable;
+#[cfg(feature = "dev-single")]
+use rocketmq_runtime::common::time_utils::current_millis;
 #[cfg(feature = "dev-single")]
 use tokio::sync::oneshot;
 #[cfg(feature = "dev-single")]
@@ -1092,7 +1092,7 @@ async fn test_three_node_cluster_re_elects_after_leader_shutdown() {
         .expect("pre-failover write should succeed");
     assert_eq!(
         pre_failover_write.data.response_code,
-        rocketmq_remoting::code::response_code::ResponseCode::Success as i32,
+        rocketmq_protocol::code::response_code::ResponseCode::Success as i32,
         "pre-failover controller write should succeed"
     );
 
@@ -1117,7 +1117,7 @@ async fn test_three_node_cluster_re_elects_after_leader_shutdown() {
         .expect("post-failover write should succeed");
     assert_eq!(
         post_failover_write.data.response_code,
-        rocketmq_remoting::code::response_code::ResponseCode::Success as i32,
+        rocketmq_protocol::code::response_code::ResponseCode::Success as i32,
         "post-failover controller write should succeed"
     );
 

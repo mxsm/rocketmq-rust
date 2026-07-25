@@ -28,7 +28,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use rocketmq_client::producer::default_mq_producer::DefaultMQProducer;
 use rocketmq_client::producer::default_mq_producer::ProducerConfig;
-use rocketmq_common::common::message::message_single::Message;
+use rocketmq_model::common::message::message_single::Message;
 use rocketmq_error::RocketMQResult;
 use tracing::{error, info};
 
@@ -36,7 +36,7 @@ const TOPIC: &str = "CallbackExample";
 const TAG: &str = "TagA";
 const NAME_SERVER: &str = "127.0.0.1:9876";
 
-#[rocketmq::main]
+#[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = rocketmq_observability::TelemetryBootstrapConfig::default();
     let telemetry_guard = rocketmq_observability::install_global(&config)?;

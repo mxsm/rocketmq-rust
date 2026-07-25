@@ -26,11 +26,25 @@ rust-version.workspace = true
 
 [features]
 default = []
+simd = ["dep:simd-json"]
 
 [dependencies]
+base64 = "0.22.1"
+byteorder = "1.5.0"
+bytes.workspace = true
 cheetah-string.workspace = true
-rocketmq-error.workspace = true
+chrono = "0.4.45"
+crc = "3.4.0"
+dashmap.workspace = true
+flate2 = { version = "1.1.9", features = ["zlib"], default-features = false }
+local-ip-address = "0.6.13"
+lz4_flex = { version = "0.13", default-features = false }
+rocketmq-error = { workspace = true, features = ["with_serde"] }
 serde.workspace = true
 serde_json.workspace = true
+simd-json = { version = "0.17.0", optional = true }
+thiserror.workspace = true
 tracing.workspace = true
+uuid.workspace = true
+zstd = "0.13"
 md-5 = "0.10"

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use clap::Parser;
-use rocketmq_common::UtilAll::time_millis_to_human_string2;
+use rocketmq_runtime::common::util_all::time_millis_to_human_string2;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;

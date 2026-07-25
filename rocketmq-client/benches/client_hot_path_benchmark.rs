@@ -42,15 +42,15 @@ use rocketmq_client_rust::producer::queue_selector::SelectMessageQueueByHash;
 use rocketmq_client_rust::producer::queue_selector::SelectMessageQueueByMachineRoom;
 use rocketmq_client_rust::producer::queue_selector::SelectMessageQueueByRandom;
 use rocketmq_client_rust::AclClientRPCHook;
-use rocketmq_common::common::constant::PermName;
-use rocketmq_common::common::message::message_batch::MessageBatch;
-use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_common::common::message::message_single::Message;
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_remoting::protocol::route::route_data_view::QueueData;
-use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
-use rocketmq_remoting::runtime::RPCHook;
+use rocketmq_model::common::constant::PermName;
+use rocketmq_model::common::message::message_batch::MessageBatch;
+use rocketmq_model::common::message::message_ext::MessageExt;
+use rocketmq_model::common::message::message_queue::MessageQueue;
+use rocketmq_model::common::message::message_single::Message;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::route::route_data_view::QueueData;
+use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
+use rocketmq_transport::runtime::RPCHook;
 
 fn build_acl_request(body_size: usize) -> RemotingCommand {
     let mut request = RemotingCommand::create_remoting_command(10).set_body(Bytes::from(vec![b'a'; body_size]));
@@ -257,7 +257,13 @@ fn bench_producer_batch_encode(c: &mut Criterion) {
         group.bench_with_input(
             BenchmarkId::new("encode", format!("{batch_size}x{body_size}")),
             &batch,
-            |b, batch| b.iter(|| black_box(batch.encode())),
+            |b, batch| {
+                b.iter(|| {
+                    black_box(rocketmq_protocol::common::message::message_decoder::encode_messages(
+                        &batch.messages,
+                    ))
+                })
+            },
         );
     }
 

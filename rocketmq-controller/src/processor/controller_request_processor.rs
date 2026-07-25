@@ -46,41 +46,9 @@
 //! This processor is designed to be used concurrently. All state modifications go through
 //! the Controller which ensures consistency via Raft consensus.
 //!
-//! ## Implementation Notes
-//!
-//! The following types and modules need to be implemented in rocketmq-rust:
-//!
-//! 1. **rocketmq-remoting additions**:
-//!    - `SyncStateSet` type in protocol::body
-//!    - `RoleChangeNotifyEntry` type in protocol::body
-//!    - Controller-specific request headers (AlterSyncStateSet, ElectMaster, etc.)
-//!    - `RemotingSerializable` trait for body serialization/deserialization
-//!
-//! 2. **Controller Manager methods**:
-//!    - `get_controller()` - returns Controller instance
-//!    - `get_heartbeat_manager()` - returns BrokerHeartbeatManager
-//!    - `get_controller_config()` - returns configuration
-//!    - `get_configuration()` - returns Configuration manager
-//!    - `notify_broker_role_changed()` - notifies brokers of role changes
-//!
-//! 3. **Controller methods** (all async, return `Result<RemotingCommand>`):
-//!    - `alter_sync_state_set(header, sync_state_set)`
-//!    - `elect_master(header)`
-//!    - `get_replica_info(header)`
-//!    - `get_controller_metadata()`
-//!    - `get_sync_state_data(broker_names)`
-//!    - `clean_broker_data(header)`
-//!    - `get_next_broker_id(header)`
-//!    - `apply_broker_id(header)`
-//!    - `register_broker(header)`
-//!
-//! 4. **Metrics**:
-//!    - `ControllerMetricsManager` for recording request metrics
-//!    - `RequestType` and `RequestHandleStatus` enums
-//!
-//! 5. **Configuration**:
-//!    - String property parsing utility (string2properties)
-//!    - Configuration update/get methods
+//! Protocol codes, headers, bodies, and serialization are owned by `rocketmq-protocol`.
+//! Network channels and processor context are owned by `rocketmq-transport`; controller
+//! orchestration and metrics remain local to this crate.
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -100,28 +68,21 @@ use crate::Controller;
 use cheetah_string::CheetahString;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::code::request_code::RequestCode;
-use rocketmq_remoting::code::response_code::ResponseCode;
-use rocketmq_remoting::net::channel::Channel;
-use rocketmq_remoting::protocol::header::controller::apply_broker_id_request_header::ApplyBrokerIdRequestHeader;
-use rocketmq_remoting::protocol::header::controller::clean_broker_data_request_header::CleanBrokerDataRequestHeader;
-use rocketmq_remoting::protocol::header::controller::elect_master_request_header::ElectMasterRequestHeader;
-use rocketmq_remoting::protocol::header::controller::get_next_broker_id_request_header::GetNextBrokerIdRequestHeader;
-use rocketmq_remoting::protocol::header::controller::register_broker_to_controller_request_header::RegisterBrokerToControllerRequestHeader;
-use rocketmq_remoting::protocol::header::namesrv::broker_request::BrokerHeartbeatRequestHeader;
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_remoting::protocol::RemotingDeserializable;
-use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_remoting::runtime::processor::RequestProcessor;
+use rocketmq_protocol::code::request_code::RequestCode;
+use rocketmq_protocol::code::response_code::ResponseCode;
+use rocketmq_protocol::protocol::header::controller::apply_broker_id_request_header::ApplyBrokerIdRequestHeader;
+use rocketmq_protocol::protocol::header::controller::clean_broker_data_request_header::CleanBrokerDataRequestHeader;
+use rocketmq_protocol::protocol::header::controller::elect_master_request_header::ElectMasterRequestHeader;
+use rocketmq_protocol::protocol::header::controller::get_next_broker_id_request_header::GetNextBrokerIdRequestHeader;
+use rocketmq_protocol::protocol::header::controller::register_broker_to_controller_request_header::RegisterBrokerToControllerRequestHeader;
+use rocketmq_protocol::protocol::header::namesrv::broker_request::BrokerHeartbeatRequestHeader;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::RemotingDeserializable;
+use rocketmq_transport::net::channel::Channel;
+use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_transport::runtime::processor::RequestProcessor;
 use tracing::info;
 use tracing::warn;
-// Note: These types need to be implemented in their respective modules
-// Placeholder imports that need actual implementation:
-// - SyncStateSet in rocketmq-remoting::protocol::body
-// - All controller request headers in rocketmq-remoting::protocol::header::controller
-// - BrokerHeartbeatManager in crate::heartbeat
-// - ControllerMetricsManager in crate::metrics
-
 /// Timeout for controller operations (in seconds)
 const WAIT_TIMEOUT_SECONDS: u64 = 5;
 
@@ -292,8 +253,8 @@ impl ControllerRequestProcessor {
         request: &mut RemotingCommand,
     ) -> RocketMQResult<Option<RemotingCommand>> {
         use rocketmq_error::RocketMQError;
-        use rocketmq_remoting::protocol::body::sync_state_set_body::SyncStateSet;
-        use rocketmq_remoting::protocol::header::controller::alter_sync_state_set_request_header::AlterSyncStateSetRequestHeader;
+        use rocketmq_protocol::protocol::body::sync_state_set_body::SyncStateSet;
+        use rocketmq_protocol::protocol::header::controller::alter_sync_state_set_request_header::AlterSyncStateSetRequestHeader;
 
         // Decode request header
         let request_header = request
@@ -384,7 +345,7 @@ impl ControllerRequestProcessor {
         _ctx: ConnectionHandlerContext,
         _request: &mut RemotingCommand,
     ) -> RocketMQResult<Option<RemotingCommand>> {
-        use rocketmq_remoting::protocol::header::controller::get_replica_info_request_header::GetReplicaInfoRequestHeader;
+        use rocketmq_protocol::protocol::header::controller::get_replica_info_request_header::GetReplicaInfoRequestHeader;
 
         let request_header = _request
             .decode_command_custom_header::<GetReplicaInfoRequestHeader>()

@@ -14,7 +14,7 @@
 
 use clap::Parser;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::protocol::body::query_consume_queue_response_body::QueryConsumeQueueResponseBody;
+use rocketmq_protocol::protocol::body::query_consume_queue_response_body::QueryConsumeQueueResponseBody;
 
 use crate::commands::CommandExecute;
 use rocketmq_admin_core::client_adapter::services::queue::QueryConsumeQueueRequest;

@@ -15,41 +15,41 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
-use rocketmq_common::common::broker::broker_role::BrokerRole;
-use rocketmq_common::common::config_manager::ConfigManager;
-use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_common::common::mq_version::RocketMqVersion;
-use rocketmq_common::MessageDecoder;
-use rocketmq_remoting::code::request_code::RequestCode;
-use rocketmq_remoting::code::response_code::ResponseCode;
-use rocketmq_remoting::net::channel::Channel;
-use rocketmq_remoting::protocol::admin::consume_stats::ConsumeStats;
-use rocketmq_remoting::protocol::admin::consume_stats_list::ConsumeStatsList;
-use rocketmq_remoting::protocol::admin::offset_wrapper::OffsetWrapper;
-use rocketmq_remoting::protocol::body::connection::Connection;
-use rocketmq_remoting::protocol::body::consumer_connection::ConsumerConnection;
-use rocketmq_remoting::protocol::body::message_request_mode_serialize_wrapper::MessageRequestModeSerializeWrapper;
-use rocketmq_remoting::protocol::body::query_consume_time_span_body::QueryConsumeTimeSpanBody;
-use rocketmq_remoting::protocol::body::query_correction_offset_body::QueryCorrectionOffsetBody;
-use rocketmq_remoting::protocol::body::query_subscription_response_body::QuerySubscriptionResponseBody;
-use rocketmq_remoting::protocol::body::queue_time_span::QueueTimeSpan;
-use rocketmq_remoting::protocol::body::response::reset_offset_body::ResetOffsetBody;
-use rocketmq_remoting::protocol::header::clone_group_offset_request_header::CloneGroupOffsetRequestHeader;
-use rocketmq_remoting::protocol::header::consume_message_directly_result_request_header::ConsumeMessageDirectlyResultRequestHeader;
-use rocketmq_remoting::protocol::header::get_consume_stats_in_broker_header::GetConsumeStatsInBrokerHeader;
-use rocketmq_remoting::protocol::header::get_consume_stats_request_header::GetConsumeStatsRequestHeader;
-use rocketmq_remoting::protocol::header::get_consumer_connection_list_request_header::GetConsumerConnectionListRequestHeader;
-use rocketmq_remoting::protocol::header::get_consumer_running_info_request_header::GetConsumerRunningInfoRequestHeader;
-use rocketmq_remoting::protocol::header::get_consumer_status_request_header::GetConsumerStatusRequestHeader;
-use rocketmq_remoting::protocol::header::query_consume_time_span_request_header::QueryConsumeTimeSpanRequestHeader;
-use rocketmq_remoting::protocol::header::query_correction_offset_header::QueryCorrectionOffsetHeader;
-use rocketmq_remoting::protocol::header::query_subscription_by_consumer_request_header::QuerySubscriptionByConsumerRequestHeader;
-use rocketmq_remoting::protocol::header::reset_offset_request_header::ResetOffsetRequestHeader;
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_remoting::protocol::LanguageCode;
-use rocketmq_remoting::protocol::RemotingSerializable;
-use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
+use crate::config::config_manager::ConfigManager;
+use rocketmq_model::common::broker::broker_role::BrokerRole;
+use rocketmq_model::common::message::message_queue::MessageQueue;
+use rocketmq_model::common::mq_version::RocketMqVersion;
+use rocketmq_protocol::code::request_code::RequestCode;
+use rocketmq_protocol::code::response_code::ResponseCode;
+use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
+use rocketmq_protocol::protocol::admin::consume_stats::ConsumeStats;
+use rocketmq_protocol::protocol::admin::consume_stats_list::ConsumeStatsList;
+use rocketmq_protocol::protocol::admin::offset_wrapper::OffsetWrapper;
+use rocketmq_protocol::protocol::body::connection::Connection;
+use rocketmq_protocol::protocol::body::consumer_connection::ConsumerConnection;
+use rocketmq_protocol::protocol::body::message_request_mode_serialize_wrapper::MessageRequestModeSerializeWrapper;
+use rocketmq_protocol::protocol::body::query_consume_time_span_body::QueryConsumeTimeSpanBody;
+use rocketmq_protocol::protocol::body::query_correction_offset_body::QueryCorrectionOffsetBody;
+use rocketmq_protocol::protocol::body::query_subscription_response_body::QuerySubscriptionResponseBody;
+use rocketmq_protocol::protocol::body::queue_time_span::QueueTimeSpan;
+use rocketmq_protocol::protocol::body::response::reset_offset_body::ResetOffsetBody;
+use rocketmq_protocol::protocol::header::clone_group_offset_request_header::CloneGroupOffsetRequestHeader;
+use rocketmq_protocol::protocol::header::consume_message_directly_result_request_header::ConsumeMessageDirectlyResultRequestHeader;
+use rocketmq_protocol::protocol::header::get_consume_stats_in_broker_header::GetConsumeStatsInBrokerHeader;
+use rocketmq_protocol::protocol::header::get_consume_stats_request_header::GetConsumeStatsRequestHeader;
+use rocketmq_protocol::protocol::header::get_consumer_connection_list_request_header::GetConsumerConnectionListRequestHeader;
+use rocketmq_protocol::protocol::header::get_consumer_running_info_request_header::GetConsumerRunningInfoRequestHeader;
+use rocketmq_protocol::protocol::header::get_consumer_status_request_header::GetConsumerStatusRequestHeader;
+use rocketmq_protocol::protocol::header::query_consume_time_span_request_header::QueryConsumeTimeSpanRequestHeader;
+use rocketmq_protocol::protocol::header::query_correction_offset_header::QueryCorrectionOffsetHeader;
+use rocketmq_protocol::protocol::header::query_subscription_by_consumer_request_header::QuerySubscriptionByConsumerRequestHeader;
+use rocketmq_protocol::protocol::header::reset_offset_request_header::ResetOffsetRequestHeader;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::LanguageCode;
+use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_store::base::message_store::MessageStore;
+use rocketmq_transport::net::channel::Channel;
+use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
 use tracing::warn;
 
 use crate::broker::broker_admin_runtime::BrokerAdminRuntime;
@@ -685,7 +685,7 @@ impl ConsumerRequestHandler {
             let delay_time = if consumer_offset >= 0 && consumer_offset < max_offset {
                 let next_time = message_store.get_message_store_timestamp(&topic, queue_id, consumer_offset);
                 if next_time > 0 {
-                    rocketmq_common::TimeUtils::current_millis() as i64 - next_time
+                    rocketmq_runtime::common::time_utils::current_millis() as i64 - next_time
                 } else {
                     0
                 }
@@ -998,44 +998,44 @@ mod tests {
     use std::sync::Arc;
     use std::time::SystemTime;
 
+    use crate::config::broker_config::BrokerConfig;
     use bytes::Bytes;
     use cheetah_string::CheetahString;
-    use rocketmq_common::common::broker::broker_config::BrokerConfig;
-    use rocketmq_common::common::config::TopicConfig;
-    use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
-    use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
-    use rocketmq_common::common::message::MessageTrait;
-    use rocketmq_remoting::base::response_future::ResponseFuture;
-    use rocketmq_remoting::code::request_code::RequestCode;
-    use rocketmq_remoting::code::response_code::ResponseCode;
-    use rocketmq_remoting::connection::Connection;
-    use rocketmq_remoting::net::channel::Channel;
-    use rocketmq_remoting::net::channel::ChannelInner;
-    use rocketmq_remoting::protocol::admin::consume_stats_list::ConsumeStatsList;
-    use rocketmq_remoting::protocol::body::message_request_mode_serialize_wrapper::MessageRequestModeSerializeWrapper;
-    use rocketmq_remoting::protocol::body::query_consume_time_span_body::QueryConsumeTimeSpanBody;
-    use rocketmq_remoting::protocol::body::query_correction_offset_body::QueryCorrectionOffsetBody;
-    use rocketmq_remoting::protocol::body::query_subscription_response_body::QuerySubscriptionResponseBody;
-    use rocketmq_remoting::protocol::body::response::reset_offset_body::ResetOffsetBody;
-    use rocketmq_remoting::protocol::body::set_message_request_mode_request_body::SetMessageRequestModeRequestBody;
-    use rocketmq_remoting::protocol::header::clone_group_offset_request_header::CloneGroupOffsetRequestHeader;
-    use rocketmq_remoting::protocol::header::consume_message_directly_result_request_header::ConsumeMessageDirectlyResultRequestHeader;
-    use rocketmq_remoting::protocol::header::empty_header::EmptyHeader;
-    use rocketmq_remoting::protocol::header::get_consume_stats_in_broker_header::GetConsumeStatsInBrokerHeader;
-    use rocketmq_remoting::protocol::header::get_consumer_status_request_header::GetConsumerStatusRequestHeader;
-    use rocketmq_remoting::protocol::header::query_consume_time_span_request_header::QueryConsumeTimeSpanRequestHeader;
-    use rocketmq_remoting::protocol::header::query_correction_offset_header::QueryCorrectionOffsetHeader;
-    use rocketmq_remoting::protocol::header::query_subscription_by_consumer_request_header::QuerySubscriptionByConsumerRequestHeader;
-    use rocketmq_remoting::protocol::header::reset_offset_request_header::ResetOffsetRequestHeader;
-    use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
-    use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
-    use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
-    use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-    use rocketmq_remoting::protocol::LanguageCode;
-    use rocketmq_remoting::protocol::RemotingDeserializable;
-    use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
+    use rocketmq_model::common::config::TopicConfig;
+    use rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere;
+    use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+    use rocketmq_model::common::message::MessageTrait;
+    use rocketmq_protocol::code::request_code::RequestCode;
+    use rocketmq_protocol::code::response_code::ResponseCode;
+    use rocketmq_protocol::protocol::admin::consume_stats_list::ConsumeStatsList;
+    use rocketmq_protocol::protocol::body::message_request_mode_serialize_wrapper::MessageRequestModeSerializeWrapper;
+    use rocketmq_protocol::protocol::body::query_consume_time_span_body::QueryConsumeTimeSpanBody;
+    use rocketmq_protocol::protocol::body::query_correction_offset_body::QueryCorrectionOffsetBody;
+    use rocketmq_protocol::protocol::body::query_subscription_response_body::QuerySubscriptionResponseBody;
+    use rocketmq_protocol::protocol::body::response::reset_offset_body::ResetOffsetBody;
+    use rocketmq_protocol::protocol::body::set_message_request_mode_request_body::SetMessageRequestModeRequestBody;
+    use rocketmq_protocol::protocol::header::clone_group_offset_request_header::CloneGroupOffsetRequestHeader;
+    use rocketmq_protocol::protocol::header::consume_message_directly_result_request_header::ConsumeMessageDirectlyResultRequestHeader;
+    use rocketmq_protocol::protocol::header::empty_header::EmptyHeader;
+    use rocketmq_protocol::protocol::header::get_consume_stats_in_broker_header::GetConsumeStatsInBrokerHeader;
+    use rocketmq_protocol::protocol::header::get_consumer_status_request_header::GetConsumerStatusRequestHeader;
+    use rocketmq_protocol::protocol::header::query_consume_time_span_request_header::QueryConsumeTimeSpanRequestHeader;
+    use rocketmq_protocol::protocol::header::query_correction_offset_header::QueryCorrectionOffsetHeader;
+    use rocketmq_protocol::protocol::header::query_subscription_by_consumer_request_header::QuerySubscriptionByConsumerRequestHeader;
+    use rocketmq_protocol::protocol::header::reset_offset_request_header::ResetOffsetRequestHeader;
+    use rocketmq_protocol::protocol::heartbeat::consume_type::ConsumeType;
+    use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
+    use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
+    use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+    use rocketmq_protocol::protocol::LanguageCode;
+    use rocketmq_protocol::protocol::RemotingDeserializable;
     use rocketmq_store::base::message_store::MessageStore;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
+    use rocketmq_transport::base::response_future::ResponseFuture;
+    use rocketmq_transport::connection::Connection;
+    use rocketmq_transport::net::channel::Channel;
+    use rocketmq_transport::net::channel::ChannelInner;
+    use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
 
     use super::ConsumerRequestHandler;
     use crate::broker_runtime::BrokerRuntime;
@@ -1158,7 +1158,7 @@ mod tests {
             .topic_config_manager()
             .update_topic_config(TopicConfig::with_queues("topic-a", 1, 1), 0);
         let mut group_config =
-            rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig::new(
+            rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig::new(
                 CheetahString::from_static_str("group-a"),
             );
         admin
@@ -1269,7 +1269,7 @@ mod tests {
             .topic_config_manager()
             .update_topic_config(TopicConfig::with_queues("topic-a", 1, 1), 0);
         let mut group_config =
-            rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig::new(
+            rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig::new(
                 CheetahString::from_static_str("group-a"),
             );
         admin
@@ -1318,7 +1318,7 @@ mod tests {
             .topic_config_manager()
             .update_topic_config(TopicConfig::with_queues("topic-a", 1, 1), 0);
         let mut group_config =
-            rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig::new(
+            rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig::new(
                 CheetahString::from_static_str("group-a"),
             );
         admin

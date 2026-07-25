@@ -15,7 +15,7 @@
 use std::any::Any;
 use std::collections::HashSet;
 
-use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
+use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 
 use crate::client::consumer_group_event::ConsumerGroupEvent;
 use crate::client::consumer_ids_change_listener::ConsumerIdsChangeListener;
@@ -61,9 +61,9 @@ mod tests {
     use std::collections::HashSet;
     use std::sync::Arc;
 
+    use crate::config::broker_config::BrokerConfig;
     use cheetah_string::CheetahString;
-    use rocketmq_common::common::broker::broker_config::BrokerConfig;
-    use rocketmq_common::common::filter::expression_type::ExpressionType;
+    use rocketmq_model::common::filter::expression_type::ExpressionType;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
 
     use super::*;

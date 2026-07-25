@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_common::common::action::Action;
+use rocketmq_security_api::Action;
 
 use super::environment::Environment;
 use super::policy_entry::PolicyEntry;
@@ -104,9 +104,9 @@ impl Policy {
 
 #[cfg(test)]
 mod tests {
-    use rocketmq_common::common::action::Action;
-    use rocketmq_common::common::resource::resource_pattern::ResourcePattern;
-    use rocketmq_common::common::resource::resource_type::ResourceType;
+    use rocketmq_security_api::Action;
+    use rocketmq_security_api::ResourcePattern;
+    use rocketmq_security_api::ResourceType;
 
     use super::*;
     use crate::authorization::enums::policy_type::PolicyType;

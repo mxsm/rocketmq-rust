@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 
 use crate::base::message_result::AppendMessageResult;
 use crate::base::message_status_enum::PutMessageStatus;

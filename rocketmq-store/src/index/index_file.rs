@@ -16,7 +16,7 @@ use std::io;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::hasher::string_hasher::JavaStringHasher;
+use rocketmq_model::common::hasher::string_hasher::JavaStringHasher;
 use rocketmq_store_local::index::codec::index_file_total_size as local_index_file_total_size;
 use rocketmq_store_local::index::codec::IndexLayoutError;
 use rocketmq_store_local::index::codec::INDEX_ENTRY_SIZE;

@@ -15,12 +15,12 @@
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
-use rocketmq_common::common::message::message_enum::MessageRequestMode;
-use rocketmq_common::common::mix_all;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
-use rocketmq_remoting::runtime::RPCHook;
+use rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere;
+use rocketmq_model::common::message::message_enum::MessageRequestMode;
+use rocketmq_model::common::mix_all;
+use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
+use rocketmq_transport::runtime::RPCHook;
 
 use crate::base::client_config::ClientConfig;
 use crate::consumer::allocate_message_queue_strategy::AllocateMessageQueueStrategy;
@@ -623,9 +623,9 @@ mod tests {
             .as_ref()
             .expect("Java LitePull default consume timestamp should be present");
 
-        assert!(rocketmq_common::utils::util_all::parse_date(
+        assert!(rocketmq_runtime::common::util_all::parse_date(
             timestamp,
-            rocketmq_common::utils::util_all::YYYYMMDDHHMMSS
+            rocketmq_runtime::common::util_all::YYYYMMDDHHMMSS
         )
         .is_some());
         let config = LitePullConsumerConfig::default();
@@ -633,9 +633,9 @@ mod tests {
             .consume_timestamp
             .as_ref()
             .expect("Java LitePull config default consume timestamp should be present");
-        assert!(rocketmq_common::utils::util_all::parse_date(
+        assert!(rocketmq_runtime::common::util_all::parse_date(
             config_timestamp,
-            rocketmq_common::utils::util_all::YYYYMMDDHHMMSS
+            rocketmq_runtime::common::util_all::YYYYMMDDHHMMSS
         )
         .is_some());
     }

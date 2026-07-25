@@ -19,18 +19,18 @@ use std::sync::RwLock as StdRwLock;
 
 use arc_swap::ArcSwap;
 use cheetah_string::CheetahString;
-use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
-use rocketmq_common::common::message::message_decoder;
-use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::protocol::body::consumer_running_info::ConsumerRunningInfo;
-use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
-use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
-use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
-use rocketmq_remoting::runtime::RPCHook;
+use rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere;
+use rocketmq_model::common::message::message_ext::MessageExt;
+use rocketmq_model::common::message::message_queue::MessageQueue;
+use rocketmq_model::common::topic::TopicValidator;
+use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
+use rocketmq_protocol::protocol::body::consumer_running_info::ConsumerRunningInfo;
+use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
+use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
+use rocketmq_protocol::protocol::namespace_util::NamespaceUtil;
+use rocketmq_transport::runtime::RPCHook;
 use tokio::sync::OnceCell;
 use tokio::sync::RwLock;
 
@@ -131,7 +131,7 @@ use crate::trace::trace_dispatcher::Type;
 /// ## Manual queue assignment (no rebalance)
 ///
 /// ```rust,ignore
-/// use rocketmq_common::common::message::message_queue::MessageQueue;
+/// use rocketmq_model::common::message::message_queue::MessageQueue;
 ///
 /// let mq1 = MessageQueue::from_parts("my_topic", "broker-a", 0);
 /// let mq2 = MessageQueue::from_parts("my_topic", "broker-a", 1);
@@ -766,7 +766,7 @@ impl DefaultLitePullConsumer {
     pub async fn view_message(&self, topic: &str, msg_id: &str) -> RocketMQResult<MessageExt> {
         let topic = self.with_namespace(topic);
         let impl_ = self.try_impl_()?;
-        if message_decoder::decode_message_id(msg_id).is_ok() {
+        if MessageDecoder::decode_message_id(msg_id).is_ok() {
             impl_.view_message(topic.as_str(), msg_id).await
         } else {
             impl_.query_message_by_uniq_key(topic.as_str(), msg_id).await
@@ -2549,10 +2549,10 @@ mod tests {
         assert!(!consumer.is_connect_broker_by_user().await);
         assert_eq!(
             consumer.default_broker_id().await,
-            rocketmq_common::common::mix_all::MASTER_ID
+            rocketmq_model::common::mix_all::MASTER_ID
         );
         assert!(!impl_.is_connect_broker_by_user());
-        assert_eq!(impl_.default_broker_id(), rocketmq_common::common::mix_all::MASTER_ID);
+        assert_eq!(impl_.default_broker_id(), rocketmq_model::common::mix_all::MASTER_ID);
 
         consumer.set_connect_broker_by_user(true).await;
         consumer.set_default_broker_id(3).await;

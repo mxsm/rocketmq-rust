@@ -38,7 +38,7 @@ observability    = ["otel-metrics", "otel-traces"]
 otel-metrics     = [
   "rocketmq-observability/otel-metrics",
   "rocketmq-store/observability",
-  "rocketmq-remoting/observability",
+  "rocketmq-transport/observability",
 ]
 otel-traces      = [
   "rocketmq-observability/otel-traces",
@@ -51,9 +51,6 @@ otlp-logs        = ["otel-logs", "rocketmq-observability/otlp-logs"]
 prometheus       = ["otel-metrics", "rocketmq-observability/prometheus"]
 
 [dependencies]
-rocketmq-rust        = { workspace = true }
-rocketmq-common      = { workspace = true }
-rocketmq-remoting    = { workspace = true }
 rocketmq-store       = { workspace = true }
 rocketmq-store-api   = { workspace = true }
 rocketmq-filter      = { workspace = true }
@@ -63,6 +60,8 @@ rocketmq-auth        = { workspace = true }
 rocketmq-security-api = { workspace = true }
 rocketmq-observability = { workspace = true }
 rocketmq-model = { workspace = true }
+rocketmq-protocol = { workspace = true }
+rocketmq-transport = { workspace = true }
 
 
 anyhow.workspace = true
@@ -86,6 +85,7 @@ rand = { workspace = true }
 #tools
 dirs.workspace = true
 dns-lookup     = "3.0"
+local-ip-address = "0.6.13"
 
 cfg-if         = { workspace = true }
 num_cpus       = { workspace = true }

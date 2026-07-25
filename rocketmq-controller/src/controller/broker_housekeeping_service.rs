@@ -17,8 +17,8 @@ use std::sync::Weak;
 
 use crate::controller::broker_heartbeat_manager::BrokerHeartbeatManager;
 use crate::ControllerManager;
-use rocketmq_remoting::base::channel_event_listener::ChannelEventListener;
-use rocketmq_remoting::net::channel::Channel;
+use rocketmq_transport::base::channel_event_listener::ChannelEventListener;
+use rocketmq_transport::net::channel::Channel;
 
 pub struct BrokerHousekeepingService {
     controller_manager: Option<Weak<ControllerManager>>,

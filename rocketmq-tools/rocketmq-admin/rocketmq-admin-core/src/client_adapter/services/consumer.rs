@@ -24,17 +24,17 @@ use std::time::UNIX_EPOCH;
 
 use cheetah_string::CheetahString;
 use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_client_rust::admin_adapter_compat::remoting::protocol::body::consumer_running_info::ConsumerRunningInfo;
-use rocketmq_client_rust::admin_adapter_compat::remoting::protocol::heartbeat::consume_type::ConsumeType;
-use rocketmq_client_rust::admin_adapter_compat::remoting::protocol::heartbeat::message_model::MessageModel;
-use rocketmq_client_rust::admin_adapter_compat::remoting::protocol::route_facade::BrokerDataExt;
-use rocketmq_client_rust::admin_adapter_compat::remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
-use rocketmq_common::common::key_builder::KeyBuilder;
-use rocketmq_common::common::message::message_enum::MessageRequestMode;
-use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_common::common::mix_all;
-use rocketmq_common::common::mix_all::get_dlq_topic;
-use rocketmq_common::common::mix_all::get_retry_topic;
+use rocketmq_model::common::key_builder::KeyBuilder;
+use rocketmq_model::common::message::message_enum::MessageRequestMode;
+use rocketmq_model::common::message::message_queue::MessageQueue;
+use rocketmq_model::common::mix_all;
+use rocketmq_model::common::mix_all::get_dlq_topic;
+use rocketmq_model::common::mix_all::get_retry_topic;
+use rocketmq_protocol::protocol::body::consumer_running_info::ConsumerRunningInfo;
+use rocketmq_protocol::protocol::heartbeat::consume_type::ConsumeType;
+use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
+use rocketmq_protocol::protocol::route_facade::BrokerDataExt;
+use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -879,7 +879,7 @@ impl ConsumerService {
             Some(
                 ConsumerRunningInfo::analyze_subscription_at(
                     cri_table.clone(),
-                    rocketmq_common::TimeUtils::current_millis(),
+                    rocketmq_runtime::common::time_utils::current_millis(),
                 )
                 .is_ok(),
             )
@@ -890,7 +890,7 @@ impl ConsumerService {
                 if let Ok(result) = ConsumerRunningInfo::analyze_process_queue_at(
                     client_id,
                     running_info,
-                    rocketmq_common::TimeUtils::current_millis(),
+                    rocketmq_runtime::common::time_utils::current_millis(),
                 ) {
                     if !result.is_empty() {
                         process_queue_analysis.push(result);

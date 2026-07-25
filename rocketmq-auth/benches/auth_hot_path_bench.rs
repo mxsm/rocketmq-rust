@@ -44,11 +44,11 @@ use rocketmq_auth::authorization::strategy::abstract_authorization_strategy::Aut
 use rocketmq_auth::authorization::strategy::StatefulAuthorizationStrategy;
 use rocketmq_auth::config::AuthConfig;
 use rocketmq_auth::SignatureAlgorithm;
-use rocketmq_common::common::action::Action;
-use rocketmq_common::common::resource::resource_pattern::ResourcePattern;
-use rocketmq_common::common::resource::resource_type::ResourceType;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_security_api::Action;
+use rocketmq_security_api::ResourcePattern;
+use rocketmq_security_api::ResourceType;
 
 fn bench_signature(c: &mut Criterion) {
     let mut group = c.benchmark_group("auth_signature");

@@ -29,3 +29,9 @@ mod namesrv_config_parse;
 pub mod processor;
 pub mod route;
 mod route_info;
+
+pub(crate) fn runtime_to_rocketmq_error(
+    error: impl std::error::Error + Send + Sync + 'static,
+) -> rocketmq_error::RocketMQError {
+    rocketmq_error::RocketMQError::IO(std::io::Error::other(error))
+}

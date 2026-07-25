@@ -16,20 +16,20 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::Weak;
 
+use crate::config::broker_config::BrokerConfig;
 use cheetah_string::CheetahString;
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
-use rocketmq_common::common::lite::to_lmq_name;
-use rocketmq_common::common::lite::LiteSubscriptionAction;
-use rocketmq_common::common::lite::OffsetOption;
-use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
-use rocketmq_remoting::code::response_code::ResponseCode;
-use rocketmq_remoting::net::channel::Channel;
-use rocketmq_remoting::protocol::body::lite_subscription_ctl_request_body::LiteSubscriptionCtlRequestBody;
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
-use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_remoting::runtime::processor::RequestProcessor;
+use rocketmq_model::common::lite::to_lmq_name;
+use rocketmq_model::common::lite::LiteSubscriptionAction;
+use rocketmq_model::common::lite::OffsetOption;
+use rocketmq_model::utils::serde_json_utils::SerdeJsonUtils;
+use rocketmq_protocol::code::response_code::ResponseCode;
+use rocketmq_protocol::protocol::body::lite_subscription_ctl_request_body::LiteSubscriptionCtlRequestBody;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 use rocketmq_store::base::message_store::MessageStore;
+use rocketmq_transport::net::channel::Channel;
+use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_transport::runtime::processor::RequestProcessor;
 use tracing::warn;
 
 use crate::lite::lite_event_dispatcher::LiteEventDispatcher;
@@ -388,18 +388,18 @@ impl<MS: MessageStore> LiteSubscriptionCtlProcessor<MS> {
 
         let current_offset = self.context.consumer_offset.query_offset(group, lmq_name);
         let target_offset = match offset_option.type_() {
-            rocketmq_common::common::lite::OffsetOptionType::Policy => match offset_option.value() {
+            rocketmq_model::common::lite::OffsetOptionType::Policy => match offset_option.value() {
                 value if value == OffsetOption::POLICY_MIN_VALUE => Some(0),
                 value if value == OffsetOption::POLICY_MAX_VALUE => {
                     Some(self.context.message_store.max_offset(lmq_name))
                 }
                 _ => None,
             },
-            rocketmq_common::common::lite::OffsetOptionType::Offset => Some(offset_option.value()),
-            rocketmq_common::common::lite::OffsetOptionType::TailN => {
+            rocketmq_model::common::lite::OffsetOptionType::Offset => Some(offset_option.value()),
+            rocketmq_model::common::lite::OffsetOptionType::TailN => {
                 (current_offset >= 0).then_some((current_offset - offset_option.value()).max(0))
             }
-            rocketmq_common::common::lite::OffsetOptionType::Timestamp => None,
+            rocketmq_model::common::lite::OffsetOptionType::Timestamp => None,
             _ => None,
         };
 
@@ -432,29 +432,29 @@ mod tests {
     use std::sync::Arc;
     use std::time::SystemTime;
 
+    use crate::config::broker_config::BrokerConfig;
     use bytes::Bytes;
     use cheetah_string::CheetahString;
-    use rocketmq_common::common::attribute::subscription_group_attributes::LITE_BIND_TOPIC_ATTRIBUTE_NAME;
-    use rocketmq_common::common::attribute::subscription_group_attributes::LITE_SUB_MODEL_ATTRIBUTE_NAME;
-    use rocketmq_common::common::attribute::subscription_group_attributes::LITE_SUB_RESET_OFFSET_EXCLUSIVE_ATTRIBUTE_NAME;
-    use rocketmq_common::common::attribute::subscription_group_attributes::LITE_SUB_RESET_OFFSET_UNSUBSCRIBE_ATTRIBUTE_NAME;
-    use rocketmq_common::common::broker::broker_config::BrokerConfig;
-    use rocketmq_common::common::lite::to_lmq_name;
-    use rocketmq_common::common::lite::LiteSubscriptionAction;
-    use rocketmq_common::common::lite::LiteSubscriptionDTO;
-    use rocketmq_common::common::lite::OffsetOption;
-    use rocketmq_remoting::base::response_future::ResponseFuture;
-    use rocketmq_remoting::code::request_code::RequestCode;
-    use rocketmq_remoting::code::response_code::ResponseCode;
-    use rocketmq_remoting::connection::Connection;
-    use rocketmq_remoting::net::channel::Channel;
-    use rocketmq_remoting::net::channel::ChannelInner;
-    use rocketmq_remoting::protocol::body::lite_subscription_ctl_request_body::LiteSubscriptionCtlRequestBody;
-    use rocketmq_remoting::protocol::header::empty_header::EmptyHeader;
-    use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-    use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
-    use rocketmq_remoting::runtime::processor::RequestProcessor;
+    use rocketmq_model::common::attribute::subscription_group_attributes::LITE_BIND_TOPIC_ATTRIBUTE_NAME;
+    use rocketmq_model::common::attribute::subscription_group_attributes::LITE_SUB_MODEL_ATTRIBUTE_NAME;
+    use rocketmq_model::common::attribute::subscription_group_attributes::LITE_SUB_RESET_OFFSET_EXCLUSIVE_ATTRIBUTE_NAME;
+    use rocketmq_model::common::attribute::subscription_group_attributes::LITE_SUB_RESET_OFFSET_UNSUBSCRIBE_ATTRIBUTE_NAME;
+    use rocketmq_model::common::lite::to_lmq_name;
+    use rocketmq_model::common::lite::LiteSubscriptionAction;
+    use rocketmq_model::common::lite::LiteSubscriptionDTO;
+    use rocketmq_model::common::lite::OffsetOption;
+    use rocketmq_protocol::code::request_code::RequestCode;
+    use rocketmq_protocol::code::response_code::ResponseCode;
+    use rocketmq_protocol::protocol::body::lite_subscription_ctl_request_body::LiteSubscriptionCtlRequestBody;
+    use rocketmq_protocol::protocol::header::empty_header::EmptyHeader;
+    use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
+    use rocketmq_transport::base::response_future::ResponseFuture;
+    use rocketmq_transport::connection::Connection;
+    use rocketmq_transport::net::channel::Channel;
+    use rocketmq_transport::net::channel::ChannelInner;
+    use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
+    use rocketmq_transport::runtime::processor::RequestProcessor;
 
     use super::LiteSubscriptionCtlContext;
     use super::LiteSubscriptionCtlPolicy;
@@ -532,7 +532,7 @@ mod tests {
 
     fn seed_group_config(runtime: &mut BrokerRuntime, group: &str, attributes: HashMap<CheetahString, CheetahString>) {
         let mut config =
-            rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig::new(
+            rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig::new(
                 CheetahString::from(group),
             );
         config.set_attributes(attributes);

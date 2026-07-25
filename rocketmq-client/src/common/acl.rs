@@ -14,7 +14,7 @@
 
 use std::collections::BTreeMap;
 
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
 /// Java-compatible ACL exception type.
 pub type AclException = rocketmq_error::AuthError;

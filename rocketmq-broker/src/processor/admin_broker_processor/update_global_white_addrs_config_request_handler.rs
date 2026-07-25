@@ -15,11 +15,11 @@
 use std::sync::Arc;
 
 use rocketmq_error::RocketMQError;
-use rocketmq_remoting::code::request_code::RequestCode;
-use rocketmq_remoting::code::response_code::ResponseCode;
-use rocketmq_remoting::net::channel::Channel;
-use rocketmq_remoting::protocol::header::update_global_white_addrs_config_request_header::UpdateGlobalWhiteAddrsConfigRequestHeader;
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::code::request_code::RequestCode;
+use rocketmq_protocol::code::response_code::ResponseCode;
+use rocketmq_protocol::protocol::header::update_global_white_addrs_config_request_header::UpdateGlobalWhiteAddrsConfigRequestHeader;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_transport::net::channel::Channel;
 
 use crate::auth::auth_admin_service::AuthAdminService;
 
@@ -36,7 +36,7 @@ impl UpdateGlobalWhiteAddrsConfigRequestHandler {
     pub async fn update_global_white_addrs_config(
         &mut self,
         _channel: Channel,
-        _ctx: rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext,
+        _ctx: rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -98,15 +98,15 @@ mod tests {
     use std::sync::Arc;
     use std::time::SystemTime;
 
+    use crate::config::broker_config::BrokerConfig;
     use cheetah_string::CheetahString;
     use rocketmq_auth::config::AuthConfig;
     use rocketmq_auth::ProviderRegistry;
-    use rocketmq_common::common::broker::broker_config::BrokerConfig;
-    use rocketmq_remoting::base::response_future::ResponseFuture;
-    use rocketmq_remoting::connection::Connection;
-    use rocketmq_remoting::net::channel::ChannelInner;
-    use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
+    use rocketmq_transport::base::response_future::ResponseFuture;
+    use rocketmq_transport::connection::Connection;
+    use rocketmq_transport::net::channel::ChannelInner;
+    use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
 
     use super::*;
     use crate::broker_runtime::BrokerRuntime;

@@ -15,8 +15,8 @@
 use std::collections::HashSet;
 use std::hash::Hash;
 
-use crate::common::consumer::consume_from_where::ConsumeFromWhere;
 use cheetah_string::CheetahString;
+use rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -50,8 +50,8 @@ impl Hash for ConsumerData {
 mod tests {
     use std::collections::HashSet;
 
-    use crate::common::consumer::consume_from_where::ConsumeFromWhere;
     use cheetah_string::CheetahString;
+    use rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere;
 
     use super::*;
     use crate::protocol::heartbeat::consume_type::ConsumeType;

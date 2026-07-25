@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::message::message_single::Message;
+use rocketmq_model::common::message::message_single::Message;
 
 use crate::producer::local_transaction_state::LocalTransactionState;
 

@@ -33,7 +33,7 @@ use rocketmq_client_rust::consumer::consumer_impl::process_queue::ProcessQueue;
 use rocketmq_client_rust::consumer::consumer_impl::pull_message_service::PullMessageService;
 use rocketmq_client_rust::consumer::consumer_impl::pull_request::PullRequest;
 use rocketmq_client_rust::factory::mq_client_instance::MQClientInstance;
-use rocketmq_common::common::message::message_queue::MessageQueue;
+use rocketmq_model::common::message::message_queue::MessageQueue;
 /// Creates a mock MQClientInstance for testing
 fn create_mock_client_instance() -> Arc<MQClientInstance> {
     let client_config = ClientConfig::default();

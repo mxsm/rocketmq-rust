@@ -14,10 +14,10 @@
 
 use std::collections::HashSet;
 
-use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_common::utils::util_all;
-use rocketmq_remoting::code::response_code::ResponseCode;
-use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
+use rocketmq_model::common::message::message_queue::MessageQueue;
+use rocketmq_protocol::code::response_code::ResponseCode;
+use rocketmq_protocol::protocol::heartbeat::consume_type::ConsumeType;
+use rocketmq_runtime::common::util_all;
 
 use crate::consumer::consumer_impl::pop_process_queue::PopProcessQueue;
 use crate::consumer::consumer_impl::pop_request::PopRequest;

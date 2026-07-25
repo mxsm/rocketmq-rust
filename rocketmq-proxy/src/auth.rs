@@ -39,24 +39,24 @@ use rocketmq_auth::AuthRuntime;
 use rocketmq_auth::AuthRuntimeBuilder;
 use rocketmq_auth::DefaultAuthenticationProvider;
 use rocketmq_auth::ProviderRegistry;
-use rocketmq_common::common::action::Action;
-use rocketmq_common::common::mix_all::ACL_CONF_TOOLS_FILE;
-use rocketmq_common::EnvUtils::EnvUtils;
 use rocketmq_error::AuthError;
 use rocketmq_error::RocketMQError;
-use rocketmq_remoting::net::channel::Channel;
+use rocketmq_model::common::mix_all::ACL_CONF_TOOLS_FILE;
+use rocketmq_model::utils::env_utils::EnvUtils;
 #[cfg(test)]
-use rocketmq_remoting::protocol::body::acl_info::AclInfo;
+use rocketmq_protocol::protocol::body::acl_info::AclInfo;
 #[cfg(test)]
-use rocketmq_remoting::protocol::body::acl_info::PolicyEntryInfo;
+use rocketmq_protocol::protocol::body::acl_info::PolicyEntryInfo;
 #[cfg(test)]
-use rocketmq_remoting::protocol::body::acl_info::PolicyInfo;
+use rocketmq_protocol::protocol::body::acl_info::PolicyInfo;
 #[cfg(test)]
-use rocketmq_remoting::protocol::body::user_info::UserInfo;
-use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
+use rocketmq_protocol::protocol::body::user_info::UserInfo;
+use rocketmq_protocol::protocol::namespace_util::NamespaceUtil;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_security_api::Action;
+use rocketmq_transport::net::channel::Channel;
+use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
 use tonic::Request;
 use tracing::warn;
 
@@ -884,8 +884,8 @@ mod tests {
     use rocketmq_auth::authorization::enums::decision::Decision;
     use rocketmq_auth::authorization::model::policy::Policy;
     use rocketmq_auth::authorization::model::resource::Resource;
-    use rocketmq_remoting::code::request_code::RequestCode;
-    use rocketmq_remoting::protocol::header::client_request_header::GetRouteInfoRequestHeader;
+    use rocketmq_protocol::code::request_code::RequestCode;
+    use rocketmq_protocol::protocol::header::client_request_header::GetRouteInfoRequestHeader;
 
     use crate::service::ProxyTopicMessageType;
     use crate::service::SubscriptionGroupMetadata;

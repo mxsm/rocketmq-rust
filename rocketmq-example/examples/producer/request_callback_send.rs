@@ -17,10 +17,9 @@
 use std::time::Duration;
 
 use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
-use rocketmq_common::common::message::message_single::Message;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
-use rocketmq_rust::rocketmq;
+use rocketmq_model::common::message::message_single::Message;
 use tokio::sync::mpsc;
 
 pub const PRODUCER_GROUP: &str = "producer_request_callback_send_group";
@@ -29,7 +28,7 @@ pub const TOPIC: &str = "RequestSendTestTopic";
 pub const TAG: &str = "RequestTag";
 pub const REQUEST_TIMEOUT_MS: u64 = 3000;
 
-#[rocketmq::main]
+#[tokio::main]
 pub async fn main() -> RocketMQResult<()> {
     let telemetry_guard =
         rocketmq_observability::install_global(&rocketmq_observability::TelemetryBootstrapConfig::default())

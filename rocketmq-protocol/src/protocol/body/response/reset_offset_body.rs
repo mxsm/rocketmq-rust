@@ -14,7 +14,7 @@
 
 use std::collections::HashMap;
 
-use crate::common::message::message_queue_for_c::MessageQueueForC;
+use rocketmq_model::common::message::message_queue_for_c::MessageQueueForC;
 use rocketmq_model::message::MessageQueue;
 use serde::Deserialize;
 use serde::Serialize;

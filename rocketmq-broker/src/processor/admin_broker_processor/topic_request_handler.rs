@@ -13,36 +13,36 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::attribute::attribute_parser::AttributeParser;
-use rocketmq_common::common::attribute::topic_message_type::TopicMessageType;
-use rocketmq_common::common::config::TopicConfig;
-use rocketmq_common::common::key_builder::KeyBuilder;
-use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_common::common::topic::TopicValidator;
-use rocketmq_common::common::TopicFilterType;
-use rocketmq_remoting::code::request_code::RequestCode;
-use rocketmq_remoting::code::response_code::ResponseCode;
-use rocketmq_remoting::net::channel::Channel;
-use rocketmq_remoting::protocol::admin::topic_offset::TopicOffset;
-use rocketmq_remoting::protocol::admin::topic_stats_table::TopicStatsTable;
-use rocketmq_remoting::protocol::body::create_topic_list_request_body::CreateTopicListRequestBody;
-use rocketmq_remoting::protocol::body::group_list::GroupList;
-use rocketmq_remoting::protocol::body::topic::topic_list::TopicList;
-use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
-use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigSerializeWrapper;
-use rocketmq_remoting::protocol::header::create_topic_request_header::CreateTopicRequestHeader;
-use rocketmq_remoting::protocol::header::delete_topic_request_header::DeleteTopicRequestHeader;
-use rocketmq_remoting::protocol::header::get_topic_config_request_header::GetTopicConfigRequestHeader;
-use rocketmq_remoting::protocol::header::get_topic_stats_request_header::GetTopicStatsRequestHeader;
-use rocketmq_remoting::protocol::header::query_topic_consume_by_who_request_header::QueryTopicConsumeByWhoRequestHeader;
-use rocketmq_remoting::protocol::header::query_topics_by_consumer_request_header::QueryTopicsByConsumerRequestHeader;
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_remoting::protocol::static_topic::topic_config_and_queue_mapping::TopicConfigAndQueueMapping;
-use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
-use rocketmq_remoting::protocol::RemotingDeserializable;
-use rocketmq_remoting::protocol::RemotingSerializable;
-use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_model::common::attribute::attribute_parser::AttributeParser;
+use rocketmq_model::common::attribute::topic_message_type::TopicMessageType;
+use rocketmq_model::common::config::TopicConfig;
+use rocketmq_model::common::key_builder::KeyBuilder;
+use rocketmq_model::common::message::message_queue::MessageQueue;
+use rocketmq_model::common::topic::TopicValidator;
+use rocketmq_model::common::TopicFilterType;
+use rocketmq_protocol::code::request_code::RequestCode;
+use rocketmq_protocol::code::response_code::ResponseCode;
+use rocketmq_protocol::protocol::admin::topic_offset::TopicOffset;
+use rocketmq_protocol::protocol::admin::topic_stats_table::TopicStatsTable;
+use rocketmq_protocol::protocol::body::create_topic_list_request_body::CreateTopicListRequestBody;
+use rocketmq_protocol::protocol::body::group_list::GroupList;
+use rocketmq_protocol::protocol::body::topic::topic_list::TopicList;
+use rocketmq_protocol::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
+use rocketmq_protocol::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigSerializeWrapper;
+use rocketmq_protocol::protocol::header::create_topic_request_header::CreateTopicRequestHeader;
+use rocketmq_protocol::protocol::header::delete_topic_request_header::DeleteTopicRequestHeader;
+use rocketmq_protocol::protocol::header::get_topic_config_request_header::GetTopicConfigRequestHeader;
+use rocketmq_protocol::protocol::header::get_topic_stats_request_header::GetTopicStatsRequestHeader;
+use rocketmq_protocol::protocol::header::query_topic_consume_by_who_request_header::QueryTopicConsumeByWhoRequestHeader;
+use rocketmq_protocol::protocol::header::query_topics_by_consumer_request_header::QueryTopicsByConsumerRequestHeader;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::static_topic::topic_config_and_queue_mapping::TopicConfigAndQueueMapping;
+use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
+use rocketmq_protocol::protocol::RemotingDeserializable;
+use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_store::base::message_store::MessageStore;
+use rocketmq_transport::net::channel::Channel;
+use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
 use std::collections::HashMap;
 use tracing::info;
 
@@ -735,21 +735,21 @@ mod tests {
     use std::sync::Arc;
     use std::time::SystemTime;
 
+    use crate::config::broker_config::BrokerConfig;
     use cheetah_string::CheetahString;
-    use rocketmq_common::common::broker::broker_config::BrokerConfig;
-    use rocketmq_common::common::mix_all::METADATA_SCOPE_GLOBAL;
-    use rocketmq_remoting::base::response_future::ResponseFuture;
-    use rocketmq_remoting::code::request_code::RequestCode;
-    use rocketmq_remoting::code::response_code::ResponseCode;
-    use rocketmq_remoting::connection::Connection;
-    use rocketmq_remoting::net::channel::Channel;
-    use rocketmq_remoting::net::channel::ChannelInner;
-    use rocketmq_remoting::protocol::header::create_topic_request_header::CreateTopicRequestHeader;
-    use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-    use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
-    use rocketmq_remoting::protocol::RemotingSerializable;
-    use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
+    use rocketmq_model::common::mix_all::METADATA_SCOPE_GLOBAL;
+    use rocketmq_protocol::code::request_code::RequestCode;
+    use rocketmq_protocol::code::response_code::ResponseCode;
+    use rocketmq_protocol::protocol::header::create_topic_request_header::CreateTopicRequestHeader;
+    use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+    use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
+    use rocketmq_protocol::protocol::RemotingSerializable;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
+    use rocketmq_transport::base::response_future::ResponseFuture;
+    use rocketmq_transport::connection::Connection;
+    use rocketmq_transport::net::channel::Channel;
+    use rocketmq_transport::net::channel::ChannelInner;
+    use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
 
     use super::decode_topic_queue_mapping_detail;
     use super::TopicRequestHandler;
@@ -833,7 +833,7 @@ mod tests {
 
         let detail = TopicQueueMappingDetail {
             topic_queue_mapping_info:
-                rocketmq_remoting::protocol::static_topic::topic_queue_mapping_info::TopicQueueMappingInfo {
+                rocketmq_protocol::protocol::static_topic::topic_queue_mapping_info::TopicQueueMappingInfo {
                     topic: Some(CheetahString::from_static_str("static-topic")),
                     scope: Some(CheetahString::from_static_str(METADATA_SCOPE_GLOBAL)),
                     total_queues: 1,

@@ -17,13 +17,13 @@ use std::sync::OnceLock;
 use std::sync::Weak;
 use std::time::Duration;
 
+use crate::config::config_manager::ConfigManager;
 use arc_swap::ArcSwapOption;
 use cheetah_string::CheetahString;
-use rocketmq_common::common::config_manager::ConfigManager;
-use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
-use rocketmq_common::FileUtils;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
+use rocketmq_model::utils::serde_json_utils::SerdeJsonUtils;
+use rocketmq_runtime::common::file_utils;
 use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::MetadataDeadline;
 use rocketmq_runtime::MetadataIoActor;
@@ -211,18 +211,19 @@ impl<MS: MessageStore> SlaveSynchronizeContext<MS> {
                     MetadataDeadline::after(Duration::from_secs(5)),
                 )
                 .await
-                .map_err(FileUtils::metadata_io_error)?;
+                .map_err(crate::runtime_to_rocketmq_error)?;
             return Ok(());
         }
         if let Some(blocking) = self.blocking.as_ref() {
             return blocking
                 .spawn_io(resource, move || {
-                    FileUtils::string_to_file(content.as_str(), path.as_str())
+                    file_utils::string_to_file(content.as_str(), path.as_str())
                 })
                 .await
-                .map_err(|error| RocketMQError::IO(std::io::Error::other(error)))?;
+                .map_err(crate::runtime_to_rocketmq_error)?
+                .map_err(crate::runtime_to_rocketmq_error);
         }
-        FileUtils::string_to_file(content.as_str(), path.as_str())
+        file_utils::string_to_file(content.as_str(), path.as_str()).map_err(crate::runtime_to_rocketmq_error)
     }
 
     async fn persist_config_manager<T>(&self, resource: &'static str, manager: Arc<T>) -> RocketMQResult<()>
@@ -557,7 +558,7 @@ where
                                 // Clear and update subscription table using DashMap
                                 subscription_table.clear();
                                 for (key, value) in new_subscription_table {
-                                    subscription_table.insert(key, value);
+                                    subscription_table.insert(key, Arc::new(value));
                                 }
                                 if let Err(error) = self
                                     .context
@@ -677,8 +678,8 @@ where
 mod tests {
     use std::sync::Arc;
 
+    use crate::config::broker_config::BrokerConfig;
     use cheetah_string::CheetahString;
-    use rocketmq_common::common::broker::broker_config::BrokerConfig;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
     use rocketmq_store::message_store::OwnedMessageStore;
 

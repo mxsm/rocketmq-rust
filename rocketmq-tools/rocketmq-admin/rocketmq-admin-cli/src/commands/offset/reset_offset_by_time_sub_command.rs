@@ -16,10 +16,10 @@ use chrono::Local;
 use chrono::NaiveDateTime;
 use chrono::TimeZone;
 use clap::Parser;
-use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::protocol::admin::rollback_stats::RollbackStats;
+use rocketmq_protocol::protocol::admin::rollback_stats::RollbackStats;
+use rocketmq_runtime::common::time_utils::current_millis;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;

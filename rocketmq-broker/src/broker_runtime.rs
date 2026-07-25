@@ -30,6 +30,8 @@ use std::sync::Weak;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::config::broker_config::BrokerConfig;
+use crate::config::config_manager::ConfigManager;
 use cheetah_string::CheetahString;
 use rocketmq_auth::authentication::AclClientRpcHook;
 use rocketmq_auth::config::AuthConfig;
@@ -37,22 +39,15 @@ use rocketmq_auth::AuthMetricsSnapshot;
 use rocketmq_auth::AuthRuntime;
 use rocketmq_auth::AuthRuntimeBuilder;
 use rocketmq_auth::SignatureAlgorithm;
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
-use rocketmq_common::common::broker::broker_role::BrokerRole;
-use rocketmq_common::common::config::TopicConfig;
-use rocketmq_common::common::config_manager::ConfigManager;
-use rocketmq_common::common::mix_all;
-use rocketmq_common::common::mix_all::MASTER_ID;
-use rocketmq_common::common::server::config::ServerConfig;
-use rocketmq_common::FileUtils;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_common::UtilAll::compute_next_morning_time_millis;
-use rocketmq_remoting::base::channel_event_listener::ChannelEventListener;
-use rocketmq_remoting::code::request_code::RequestCode;
-use rocketmq_remoting::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
-use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
-use rocketmq_remoting::remoting_server::rocketmq_tokio_server::RocketMQServer;
-use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
+use rocketmq_model::common::broker::broker_role::BrokerRole;
+use rocketmq_model::common::config::TopicConfig;
+use rocketmq_model::common::mix_all;
+use rocketmq_model::common::mix_all::MASTER_ID;
+use rocketmq_protocol::code::request_code::RequestCode;
+use rocketmq_protocol::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
+use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
+use rocketmq_runtime::common::time_utils::current_millis;
+use rocketmq_runtime::common::util_all::compute_next_morning_time_millis;
 use rocketmq_runtime::schedule::simple_scheduler::ScheduledTaskManager;
 use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::MetadataDeadline;
@@ -77,6 +72,10 @@ use rocketmq_store::stats::broker_stats::BrokerStats;
 use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
 use rocketmq_store::store_error::StoreError;
 use rocketmq_store::timer::timer_message_store::TimerMessageStore;
+use rocketmq_transport::base::channel_event_listener::ChannelEventListener;
+use rocketmq_transport::config::ServerConfig;
+use rocketmq_transport::remoting_server::rocketmq_tokio_server::RocketMQServer;
+use rocketmq_transport::runtime::config::client_config::TokioClientConfig;
 use tokio::sync::oneshot;
 use tokio::sync::Mutex;
 use tracing::error;
@@ -404,7 +403,7 @@ where
             metadata_io
                 .submit_next_durable(resource, manager.config_file_path(), content.into_bytes(), deadline)
                 .await
-                .map_err(FileUtils::metadata_io_error)?;
+                .map_err(crate::runtime_to_rocketmq_error)?;
             return Ok(());
         }
     }
@@ -491,16 +490,16 @@ fn build_broker_observability_config(broker_config: &BrokerConfig) -> rocketmq_o
     config.resource_attributes = parse_observability_key_values(&broker_config.observability_resource_attributes);
     config.metrics.enabled = metrics_enabled;
     config.metrics.exporter = match broker_config.metrics_exporter_type {
-        rocketmq_common::common::metrics::MetricsExporterType::Disable => {
+        rocketmq_observability::exporter_types::MetricsExporterType::Disable => {
             rocketmq_observability::config::MetricsExporter::Disable
         }
-        rocketmq_common::common::metrics::MetricsExporterType::OtlpGrpc => {
+        rocketmq_observability::exporter_types::MetricsExporterType::OtlpGrpc => {
             rocketmq_observability::config::MetricsExporter::OtlpGrpc
         }
-        rocketmq_common::common::metrics::MetricsExporterType::Prom => {
+        rocketmq_observability::exporter_types::MetricsExporterType::Prom => {
             rocketmq_observability::config::MetricsExporter::Prometheus
         }
-        rocketmq_common::common::metrics::MetricsExporterType::Log => {
+        rocketmq_observability::exporter_types::MetricsExporterType::Log => {
             rocketmq_observability::config::MetricsExporter::Log
         }
     };
@@ -518,13 +517,15 @@ fn build_broker_observability_config(broker_config: &BrokerConfig) -> rocketmq_o
     config.prometheus.path = broker_config.metrics_prom_exporter_path.to_string();
     config.traces.enabled = traces_enabled;
     config.traces.exporter = match broker_config.trace_exporter_type {
-        rocketmq_common::common::metrics::TraceExporterType::Disable => {
+        rocketmq_observability::exporter_types::TraceExporterType::Disable => {
             rocketmq_observability::config::TraceExporter::Disable
         }
-        rocketmq_common::common::metrics::TraceExporterType::OtlpGrpc => {
+        rocketmq_observability::exporter_types::TraceExporterType::OtlpGrpc => {
             rocketmq_observability::config::TraceExporter::OtlpGrpc
         }
-        rocketmq_common::common::metrics::TraceExporterType::Log => rocketmq_observability::config::TraceExporter::Log,
+        rocketmq_observability::exporter_types::TraceExporterType::Log => {
+            rocketmq_observability::config::TraceExporter::Log
+        }
     };
     config.traces.sample_ratio = broker_config.trace_sample_ratio;
     config.traces.propagate_context = broker_config.trace_propagate_context;
@@ -533,13 +534,15 @@ fn build_broker_observability_config(broker_config: &BrokerConfig) -> rocketmq_o
     config.traces.record_body_size = broker_config.trace_record_body_size;
     config.logs.enabled = logs_enabled;
     config.logs.exporter = match broker_config.log_exporter_type {
-        rocketmq_common::common::metrics::LogExporterType::Disable => {
+        rocketmq_observability::exporter_types::LogExporterType::Disable => {
             rocketmq_observability::config::LogsExporter::Disable
         }
-        rocketmq_common::common::metrics::LogExporterType::OtlpGrpc => {
+        rocketmq_observability::exporter_types::LogExporterType::OtlpGrpc => {
             rocketmq_observability::config::LogsExporter::OtlpGrpc
         }
-        rocketmq_common::common::metrics::LogExporterType::Log => rocketmq_observability::config::LogsExporter::Log,
+        rocketmq_observability::exporter_types::LogExporterType::Log => {
+            rocketmq_observability::config::LogsExporter::Log
+        }
     };
     config
 }
@@ -1284,8 +1287,9 @@ impl BrokerRuntime {
         });
         let broker_config_snapshot = inner.broker_config_arc();
         let message_store_config_snapshot = inner.message_store_config_arc();
+        let store_runtime_config = Arc::new(broker_config_snapshot.store_runtime_config());
         let mut stats_manager = BrokerStatsManager::new_with_scheduler(
-            Arc::clone(&broker_config_snapshot),
+            Arc::clone(&store_runtime_config),
             Some(Arc::new(scheduled_task_manager.clone())),
         );
         #[cfg(feature = "rocksdb_store")]
@@ -2493,12 +2497,13 @@ impl BrokerRuntime {
     async fn initialize_message_store(&mut self) -> bool {
         let mut flag = true;
         let broker_config = self.inner.broker_config_arc();
+        let store_runtime_config = Arc::new(broker_config.store_runtime_config());
         let message_store_config = self.inner.message_store_config_arc();
         if message_store_config.store_type == StoreType::LocalFile {
             info!("Use local file as message store");
             let mut local_file_store = match LocalFileMessageStore::try_new(
                 Arc::clone(&message_store_config),
-                Arc::clone(&broker_config),
+                Arc::clone(&store_runtime_config),
                 self.inner.topic_config_manager().topic_config_table(),
                 self.inner.broker_stats_manager.clone(),
                 false,
@@ -2541,7 +2546,7 @@ impl BrokerRuntime {
                 info!("Use RocksDB as consume queue store with local file commit log");
                 let rocksdb_message_store = match RocksDBMessageStore::try_new(
                     Arc::clone(&message_store_config),
-                    Arc::clone(&broker_config),
+                    Arc::clone(&store_runtime_config),
                     self.inner.topic_config_manager().topic_config_table(),
                     self.inner.broker_stats_manager.clone(),
                     false,
@@ -2893,7 +2898,7 @@ impl BrokerRuntime {
                     );
                 }
 
-                let remoting_meter = rocketmq_observability::meter(provider, "rocketmq-remoting");
+                let remoting_meter = rocketmq_observability::meter(provider, "rocketmq-transport");
                 let _ = rocketmq_observability::metrics::remoting::init_global(&remoting_meter);
             }
         }
@@ -5412,27 +5417,6 @@ mod tests {
     use bytes::Bytes;
     use bytes::BytesMut;
     use cheetah_string::CheetahString;
-    use rocketmq_common::common::attribute::subscription_group_attributes::LITE_BIND_TOPIC_ATTRIBUTE_NAME;
-    use rocketmq_common::common::attribute::Attribute;
-    use rocketmq_common::common::boundary_type::BoundaryType;
-    use rocketmq_common::common::config::TopicConfig;
-    use rocketmq_common::common::constant::file_readahead_mode::READ_AHEAD_MODE;
-    use rocketmq_common::common::constant::PermName;
-    use rocketmq_common::common::entity::ClientGroup;
-    use rocketmq_common::common::lite::to_lmq_name;
-    use rocketmq_common::common::message::message_batch::MessageExtBatch;
-    use rocketmq_common::common::message::message_decoder;
-    use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
-    use rocketmq_common::common::message::message_queue::MessageQueue;
-    use rocketmq_common::common::message::MessageConst;
-    use rocketmq_common::common::message::MessageTrait;
-    use rocketmq_common::common::mix_all;
-    use rocketmq_common::common::mix_all::MASTER_ID;
-    use rocketmq_common::common::server::config::ServerConfig;
-    use rocketmq_common::common::topic::TopicValidator;
-    use rocketmq_common::CRC32Utils::crc32;
-    use rocketmq_common::TimeUtils::current_millis;
-    use rocketmq_common::TopicAttributes;
     use rocketmq_controller::config::RaftPeer;
     use rocketmq_controller::config::StorageBackendType;
     use rocketmq_controller::controller::broker_heartbeat_manager::BrokerHeartbeatManager;
@@ -5440,78 +5424,86 @@ mod tests {
     use rocketmq_controller::Controller;
     use rocketmq_controller::ControllerConfig as TestControllerConfig;
     use rocketmq_controller::ControllerManager as TestControllerManager;
+    use rocketmq_model::common::attribute::subscription_group_attributes::LITE_BIND_TOPIC_ATTRIBUTE_NAME;
+    use rocketmq_model::common::attribute::topic_attributes;
+    use rocketmq_model::common::attribute::Attribute;
+    use rocketmq_model::common::boundary_type::BoundaryType;
+    use rocketmq_model::common::config::TopicConfig;
+    use rocketmq_model::common::constant::file_readahead_mode::READ_AHEAD_MODE;
+    use rocketmq_model::common::constant::PermName;
+    use rocketmq_model::common::entity::ClientGroup;
+    use rocketmq_model::common::lite::to_lmq_name;
+    use rocketmq_model::common::message::message_batch::MessageExtBatch;
+    use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+    use rocketmq_model::common::message::message_queue::MessageQueue;
+    use rocketmq_model::common::message::MessageConst;
+    use rocketmq_model::common::message::MessageTrait;
+    use rocketmq_model::common::mix_all;
+    use rocketmq_model::common::mix_all::MASTER_ID;
+    use rocketmq_model::common::topic::TopicValidator;
+    use rocketmq_model::utils::crc32_utils::crc32;
     use rocketmq_namesrv::bootstrap::Builder as NameServerBuilder;
     use rocketmq_namesrv::NamesrvConfig;
-    use rocketmq_remoting::base::response_future::ResponseFuture;
-    use rocketmq_remoting::clients::rocketmq_tokio_client::RocketmqDefaultClient;
-    use rocketmq_remoting::clients::RemotingClient;
-    use rocketmq_remoting::code::request_code::RequestCode;
-    use rocketmq_remoting::code::response_code::ResponseCode;
-    use rocketmq_remoting::connection::Connection;
-    use rocketmq_remoting::local::LocalRequestHarness;
-    use rocketmq_remoting::net::channel::Channel;
-    use rocketmq_remoting::net::channel::ChannelInner;
-    use rocketmq_remoting::protocol::admin::consume_stats::ConsumeStats;
-    use rocketmq_remoting::protocol::admin::topic_stats_table::TopicStatsTable;
-    use rocketmq_remoting::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
-    use rocketmq_remoting::protocol::body::broker_body::broker_member_group::GetBrokerMemberGroupResponseBody;
-    use rocketmq_remoting::protocol::body::get_broker_lite_info_response_body::GetBrokerLiteInfoResponseBody;
-    use rocketmq_remoting::protocol::body::get_lite_client_info_response_body::GetLiteClientInfoResponseBody;
-    use rocketmq_remoting::protocol::body::get_lite_group_info_response_body::GetLiteGroupInfoResponseBody;
-    use rocketmq_remoting::protocol::body::get_lite_topic_info_response_body::GetLiteTopicInfoResponseBody;
-    use rocketmq_remoting::protocol::body::get_parent_topic_info_response_body::GetParentTopicInfoResponseBody;
-    use rocketmq_remoting::protocol::body::kv_table::KVTable;
-    use rocketmq_remoting::protocol::body::query_consume_queue_response_body::QueryConsumeQueueResponseBody;
-    use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
-    use rocketmq_remoting::protocol::body::user_info::UserInfo;
-    use rocketmq_remoting::protocol::header::add_broker_request_header::AddBrokerRequestHeader;
-    use rocketmq_remoting::protocol::header::consumer_send_msg_back_request_header::ConsumerSendMsgBackRequestHeader;
-    use rocketmq_remoting::protocol::header::controller::apply_broker_id_request_header::ApplyBrokerIdRequestHeader;
-    use rocketmq_remoting::protocol::header::create_user_request_header::CreateUserRequestHeader;
-    use rocketmq_remoting::protocol::header::delete_subscription_group_request_header::DeleteSubscriptionGroupRequestHeader;
-    use rocketmq_remoting::protocol::header::delete_user_request_header::DeleteUserRequestHeader;
-    use rocketmq_remoting::protocol::header::empty_header::EmptyHeader;
-    use rocketmq_remoting::protocol::header::get_consume_stats_request_header::GetConsumeStatsRequestHeader;
-    use rocketmq_remoting::protocol::header::get_consumer_connection_list_request_header::GetConsumerConnectionListRequestHeader;
-    use rocketmq_remoting::protocol::header::get_earliest_msg_storetime_request_header::GetEarliestMsgStoretimeRequestHeader;
-    use rocketmq_remoting::protocol::header::get_earliest_msg_storetime_response_header::GetEarliestMsgStoretimeResponseHeader;
-    use rocketmq_remoting::protocol::header::get_lite_client_info_request_header::GetLiteClientInfoRequestHeader;
-    use rocketmq_remoting::protocol::header::get_lite_group_info_request_header::GetLiteGroupInfoRequestHeader;
-    use rocketmq_remoting::protocol::header::get_lite_topic_info_request_header::GetLiteTopicInfoRequestHeader;
-    use rocketmq_remoting::protocol::header::get_max_offset_request_header::GetMaxOffsetRequestHeader;
-    use rocketmq_remoting::protocol::header::get_max_offset_response_header::GetMaxOffsetResponseHeader;
-    use rocketmq_remoting::protocol::header::get_min_offset_request_header::GetMinOffsetRequestHeader;
-    use rocketmq_remoting::protocol::header::get_min_offset_response_header::GetMinOffsetResponseHeader;
-    use rocketmq_remoting::protocol::header::get_parent_topic_info_request_header::GetParentTopicInfoRequestHeader;
-    use rocketmq_remoting::protocol::header::get_producer_connection_list_request_header::GetProducerConnectionListRequestHeader;
-    use rocketmq_remoting::protocol::header::get_subscription_group_config_request_header::GetSubscriptionGroupConfigRequestHeader;
-    use rocketmq_remoting::protocol::header::get_topic_config_request_header::GetTopicConfigRequestHeader;
-    use rocketmq_remoting::protocol::header::get_topic_stats_request_header::GetTopicStatsRequestHeader;
-    use rocketmq_remoting::protocol::header::get_user_request_headers::GetUserRequestHeader;
-    use rocketmq_remoting::protocol::header::list_users_request_header::ListUsersRequestHeader;
-    use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
-    use rocketmq_remoting::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
-    use rocketmq_remoting::protocol::header::namesrv::broker_request::GetBrokerMemberGroupRequestHeader;
-    use rocketmq_remoting::protocol::header::pop_lite_message_request_header::PopLiteMessageRequestHeader;
-    use rocketmq_remoting::protocol::header::pop_lite_message_response_header::PopLiteMessageResponseHeader;
-    use rocketmq_remoting::protocol::header::query_consume_queue_request_header::QueryConsumeQueueRequestHeader;
-    use rocketmq_remoting::protocol::header::query_consumer_offset_request_header::QueryConsumerOffsetRequestHeader;
-    use rocketmq_remoting::protocol::header::query_consumer_offset_response_header::QueryConsumerOffsetResponseHeader;
-    use rocketmq_remoting::protocol::header::remove_broker_request_header::RemoveBrokerRequestHeader;
-    use rocketmq_remoting::protocol::header::search_offset_request_header::SearchOffsetRequestHeader;
-    use rocketmq_remoting::protocol::header::search_offset_response_header::SearchOffsetResponseHeader;
-    use rocketmq_remoting::protocol::header::trigger_lite_dispatch_request_header::TriggerLiteDispatchRequestHeader;
-    use rocketmq_remoting::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader;
-    use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-    use rocketmq_remoting::protocol::static_topic::topic_config_and_queue_mapping::TopicConfigAndQueueMapping;
-    use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
-    use rocketmq_remoting::protocol::RemotingDeserializable;
-    use rocketmq_remoting::protocol::RemotingSerializable;
-    use rocketmq_remoting::remoting::RemotingService;
-    use rocketmq_remoting::request_processor::default_request_processor::DefaultRemotingRequestProcessor;
-    use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
-    use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
-    use rocketmq_remoting::runtime::processor::RequestProcessor;
+    use rocketmq_protocol::code::request_code::RequestCode;
+    use rocketmq_protocol::code::response_code::ResponseCode;
+    use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
+    use rocketmq_protocol::protocol::admin::consume_stats::ConsumeStats;
+    use rocketmq_protocol::protocol::admin::topic_stats_table::TopicStatsTable;
+    use rocketmq_protocol::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
+    use rocketmq_protocol::protocol::body::broker_body::broker_member_group::GetBrokerMemberGroupResponseBody;
+    use rocketmq_protocol::protocol::body::get_broker_lite_info_response_body::GetBrokerLiteInfoResponseBody;
+    use rocketmq_protocol::protocol::body::get_lite_client_info_response_body::GetLiteClientInfoResponseBody;
+    use rocketmq_protocol::protocol::body::get_lite_group_info_response_body::GetLiteGroupInfoResponseBody;
+    use rocketmq_protocol::protocol::body::get_lite_topic_info_response_body::GetLiteTopicInfoResponseBody;
+    use rocketmq_protocol::protocol::body::get_parent_topic_info_response_body::GetParentTopicInfoResponseBody;
+    use rocketmq_protocol::protocol::body::kv_table::KVTable;
+    use rocketmq_protocol::protocol::body::query_consume_queue_response_body::QueryConsumeQueueResponseBody;
+    use rocketmq_protocol::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
+    use rocketmq_protocol::protocol::body::user_info::UserInfo;
+    use rocketmq_protocol::protocol::header::add_broker_request_header::AddBrokerRequestHeader;
+    use rocketmq_protocol::protocol::header::consumer_send_msg_back_request_header::ConsumerSendMsgBackRequestHeader;
+    use rocketmq_protocol::protocol::header::controller::apply_broker_id_request_header::ApplyBrokerIdRequestHeader;
+    use rocketmq_protocol::protocol::header::create_user_request_header::CreateUserRequestHeader;
+    use rocketmq_protocol::protocol::header::delete_subscription_group_request_header::DeleteSubscriptionGroupRequestHeader;
+    use rocketmq_protocol::protocol::header::delete_user_request_header::DeleteUserRequestHeader;
+    use rocketmq_protocol::protocol::header::empty_header::EmptyHeader;
+    use rocketmq_protocol::protocol::header::get_consume_stats_request_header::GetConsumeStatsRequestHeader;
+    use rocketmq_protocol::protocol::header::get_consumer_connection_list_request_header::GetConsumerConnectionListRequestHeader;
+    use rocketmq_protocol::protocol::header::get_earliest_msg_storetime_request_header::GetEarliestMsgStoretimeRequestHeader;
+    use rocketmq_protocol::protocol::header::get_earliest_msg_storetime_response_header::GetEarliestMsgStoretimeResponseHeader;
+    use rocketmq_protocol::protocol::header::get_lite_client_info_request_header::GetLiteClientInfoRequestHeader;
+    use rocketmq_protocol::protocol::header::get_lite_group_info_request_header::GetLiteGroupInfoRequestHeader;
+    use rocketmq_protocol::protocol::header::get_lite_topic_info_request_header::GetLiteTopicInfoRequestHeader;
+    use rocketmq_protocol::protocol::header::get_max_offset_request_header::GetMaxOffsetRequestHeader;
+    use rocketmq_protocol::protocol::header::get_max_offset_response_header::GetMaxOffsetResponseHeader;
+    use rocketmq_protocol::protocol::header::get_min_offset_request_header::GetMinOffsetRequestHeader;
+    use rocketmq_protocol::protocol::header::get_min_offset_response_header::GetMinOffsetResponseHeader;
+    use rocketmq_protocol::protocol::header::get_parent_topic_info_request_header::GetParentTopicInfoRequestHeader;
+    use rocketmq_protocol::protocol::header::get_producer_connection_list_request_header::GetProducerConnectionListRequestHeader;
+    use rocketmq_protocol::protocol::header::get_subscription_group_config_request_header::GetSubscriptionGroupConfigRequestHeader;
+    use rocketmq_protocol::protocol::header::get_topic_config_request_header::GetTopicConfigRequestHeader;
+    use rocketmq_protocol::protocol::header::get_topic_stats_request_header::GetTopicStatsRequestHeader;
+    use rocketmq_protocol::protocol::header::get_user_request_headers::GetUserRequestHeader;
+    use rocketmq_protocol::protocol::header::list_users_request_header::ListUsersRequestHeader;
+    use rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
+    use rocketmq_protocol::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
+    use rocketmq_protocol::protocol::header::namesrv::broker_request::GetBrokerMemberGroupRequestHeader;
+    use rocketmq_protocol::protocol::header::pop_lite_message_request_header::PopLiteMessageRequestHeader;
+    use rocketmq_protocol::protocol::header::pop_lite_message_response_header::PopLiteMessageResponseHeader;
+    use rocketmq_protocol::protocol::header::query_consume_queue_request_header::QueryConsumeQueueRequestHeader;
+    use rocketmq_protocol::protocol::header::query_consumer_offset_request_header::QueryConsumerOffsetRequestHeader;
+    use rocketmq_protocol::protocol::header::query_consumer_offset_response_header::QueryConsumerOffsetResponseHeader;
+    use rocketmq_protocol::protocol::header::remove_broker_request_header::RemoveBrokerRequestHeader;
+    use rocketmq_protocol::protocol::header::search_offset_request_header::SearchOffsetRequestHeader;
+    use rocketmq_protocol::protocol::header::search_offset_response_header::SearchOffsetResponseHeader;
+    use rocketmq_protocol::protocol::header::trigger_lite_dispatch_request_header::TriggerLiteDispatchRequestHeader;
+    use rocketmq_protocol::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader;
+    use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+    use rocketmq_protocol::protocol::static_topic::topic_config_and_queue_mapping::TopicConfigAndQueueMapping;
+    use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
+    use rocketmq_protocol::protocol::RemotingDeserializable;
+    use rocketmq_protocol::protocol::RemotingSerializable;
+    use rocketmq_runtime::common::time_utils::current_millis;
     use rocketmq_runtime::RuntimeContext;
     use rocketmq_store::base::message_status_enum::GetMessageStatus;
     use rocketmq_store::base::message_store::MessageStore;
@@ -5522,6 +5514,19 @@ mod tests {
     use rocketmq_store::timer::timer_checkpoint::TimerCheckpointSnapshot;
     use rocketmq_store::timer::timer_message_store::TimerMessageStore;
     use rocketmq_store::utils::ffi::MADV_NORMAL;
+    use rocketmq_transport::base::response_future::ResponseFuture;
+    use rocketmq_transport::clients::rocketmq_tokio_client::RocketmqDefaultClient;
+    use rocketmq_transport::clients::RemotingClient;
+    use rocketmq_transport::config::ServerConfig;
+    use rocketmq_transport::connection::Connection;
+    use rocketmq_transport::local::LocalRequestHarness;
+    use rocketmq_transport::net::channel::Channel;
+    use rocketmq_transport::net::channel::ChannelInner;
+    use rocketmq_transport::remoting::RemotingService;
+    use rocketmq_transport::request_processor::default_request_processor::DefaultRemotingRequestProcessor;
+    use rocketmq_transport::runtime::config::client_config::TokioClientConfig;
+    use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
+    use rocketmq_transport::runtime::processor::RequestProcessor;
     use tokio::sync::oneshot;
     use tokio::task::JoinHandle;
     use tokio::time::sleep;
@@ -5563,6 +5568,7 @@ mod tests {
     }
     static NEXT_CONTROLLER_TEST_PORT_BLOCK: AtomicU16 = AtomicU16::new(0);
     static NEXT_CONTROLLER_TEST_TEMP_ID: AtomicU64 = AtomicU64::new(0);
+    static CONTROLLER_INTEGRATION_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
     #[test]
     fn background_tasks_capture_narrow_capabilities() {
@@ -5593,9 +5599,9 @@ mod tests {
     #[test]
     fn build_broker_observability_config_maps_otlp_settings() {
         let broker_config = BrokerConfig {
-            metrics_exporter_type: rocketmq_common::common::metrics::MetricsExporterType::OtlpGrpc,
-            trace_exporter_type: rocketmq_common::common::metrics::TraceExporterType::OtlpGrpc,
-            log_exporter_type: rocketmq_common::common::metrics::LogExporterType::OtlpGrpc,
+            metrics_exporter_type: rocketmq_observability::exporter_types::MetricsExporterType::OtlpGrpc,
+            trace_exporter_type: rocketmq_observability::exporter_types::TraceExporterType::OtlpGrpc,
+            log_exporter_type: rocketmq_observability::exporter_types::LogExporterType::OtlpGrpc,
             observability_environment: "prod".into(),
             observability_service_instance_id: "broker-a-0".into(),
             observability_resource_attributes: "zone:az-a,rack:rack-1".into(),
@@ -5646,7 +5652,7 @@ mod tests {
     fn build_broker_observability_config_maps_logging_bootstrap_defaults() {
         let broker_config = BrokerConfig {
             store_path_root_dir: "target/broker-telemetry-bootstrap".into(),
-            log_exporter_type: rocketmq_common::common::metrics::LogExporterType::Log,
+            log_exporter_type: rocketmq_observability::exporter_types::LogExporterType::Log,
             ..Default::default()
         };
 
@@ -5943,6 +5949,7 @@ mod tests {
                 "topic_route",
                 "consumer_offset",
                 "subscription_group",
+                "metadata_io",
                 "shutdown_deadline",
             ]
         );
@@ -6782,7 +6789,7 @@ accounts:
         topic_config.attributes.insert(
             CheetahString::from_string(format!(
                 "+{}",
-                TopicAttributes::TopicAttributes::topic_message_type_attribute().name()
+                topic_attributes::TopicAttributes::topic_message_type_attribute().name()
             )),
             CheetahString::from_static_str("LITE"),
         );
@@ -6847,12 +6854,13 @@ accounts:
             .select_topic_config(&CheetahString::from_static_str("parent-topic"))
             .expect("parent topic should exist");
         let mut replacement = topic_config.as_ref().clone();
-        replacement.attributes.insert(
-            TopicAttributes::TopicAttributes::topic_message_type_attribute()
-                .name()
-                .clone(),
+        replacement.attributes = HashMap::from([(
+            CheetahString::from_string(format!(
+                "+{}",
+                topic_attributes::TopicAttributes::topic_message_type_attribute().name()
+            )),
             CheetahString::from_string(message_type.to_string()),
-        );
+        )]);
         runtime
             .inner_for_test()
             .topic_config_manager()
@@ -6866,12 +6874,13 @@ accounts:
             .select_topic_config(&CheetahString::from_static_str("parent-topic"))
             .expect("parent topic should exist");
         let mut replacement = topic_config.as_ref().clone();
-        replacement.attributes.insert(
-            TopicAttributes::TopicAttributes::lite_topic_expiration_attribute()
-                .name()
-                .clone(),
+        replacement.attributes = HashMap::from([(
+            CheetahString::from_string(format!(
+                "+{}",
+                topic_attributes::TopicAttributes::lite_topic_expiration_attribute().name()
+            )),
             CheetahString::from_string(expiration.to_string()),
-        );
+        )]);
         runtime
             .inner_for_test()
             .topic_config_manager()
@@ -7314,7 +7323,7 @@ accounts:
         std::fs::create_dir_all(&store_root).expect("create broker store root");
 
         let broker_config = Arc::new(BrokerConfig {
-            broker_identity: rocketmq_common::common::broker::broker_config::BrokerIdentity {
+            broker_identity: rocketmq_model::common::broker::broker_identity::BrokerIdentity {
                 broker_name: CheetahString::from_string(broker_name.to_owned()),
                 broker_cluster_name: CheetahString::from_static_str("controller-test-cluster"),
                 broker_id: mix_all::MASTER_ID,
@@ -9894,7 +9903,7 @@ accounts:
             .take_body()
             .expect("pop lite success response should contain a body");
         let mut bytes = body;
-        let message = message_decoder::decode(&mut bytes, true, false, false, false, false)
+        let message = MessageDecoder::decode(&mut bytes, true, false, false, false, false)
             .expect("decode pop lite response message");
         assert_eq!(message.topic(), &CheetahString::from_static_str("parent-topic"));
         assert_eq!(
@@ -10406,6 +10415,7 @@ accounts:
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn three_controller_two_broker_controller_mode_bootstrap() {
+        let _controller_test_guard = CONTROLLER_INTEGRATION_TEST_LOCK.lock().await;
         let base_port = allocate_controller_test_base_port();
         let root = controller_cluster_root("controller-mode-integration");
 
@@ -10589,6 +10599,7 @@ accounts:
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn three_controller_two_broker_controller_mode_failover_and_rejoin() {
+        let _controller_test_guard = CONTROLLER_INTEGRATION_TEST_LOCK.lock().await;
         let base_port = allocate_controller_test_base_port();
         let root = controller_cluster_root("controller-mode-failover");
 
@@ -10839,6 +10850,7 @@ accounts:
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn three_controller_two_broker_controller_mode_failover_reregisters_namesrv_and_updates_store_ha() {
+        let _controller_test_guard = CONTROLLER_INTEGRATION_TEST_LOCK.lock().await;
         let base_port = allocate_controller_test_base_port();
         let root = controller_cluster_root("controller-mode-namesrv-ha");
         let mut namesrv = start_namesrv(base_port + 90, &root).await;
@@ -11138,6 +11150,7 @@ accounts:
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn three_controller_two_broker_controller_leader_failover_keeps_broker_view_consistent() {
+        let _controller_test_guard = CONTROLLER_INTEGRATION_TEST_LOCK.lock().await;
         let base_port = allocate_controller_test_base_port();
         let root = controller_cluster_root("controller-leader-failover");
 

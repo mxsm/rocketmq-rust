@@ -13,9 +13,9 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_remoting::net::channel::Channel;
-use rocketmq_remoting::protocol::LanguageCode;
+use rocketmq_protocol::protocol::LanguageCode;
+use rocketmq_runtime::common::time_utils::current_millis;
+use rocketmq_transport::net::channel::Channel;
 
 #[derive(Clone, Hash, PartialEq)]
 pub struct ClientChannelInfo {

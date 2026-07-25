@@ -2,14 +2,14 @@
 
 use cheetah_string::CheetahString;
 use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_client_rust::admin_adapter_compat::remoting::protocol::body::get_broker_lite_info_response_body::GetBrokerLiteInfoResponseBody;
-use rocketmq_client_rust::admin_adapter_compat::remoting::protocol::body::get_lite_client_info_response_body::GetLiteClientInfoResponseBody;
-use rocketmq_client_rust::admin_adapter_compat::remoting::protocol::body::get_lite_group_info_response_body::GetLiteGroupInfoResponseBody;
-use rocketmq_client_rust::admin_adapter_compat::remoting::protocol::body::get_lite_topic_info_response_body::GetLiteTopicInfoResponseBody;
-use rocketmq_client_rust::admin_adapter_compat::remoting::protocol::body::get_parent_topic_info_response_body::GetParentTopicInfoResponseBody;
-use rocketmq_client_rust::admin_adapter_compat::remoting::protocol::body::lite_lag_info::LiteLagInfo;
-use rocketmq_client_rust::admin_adapter_compat::remoting::protocol::route_facade::BrokerDataExt;
-use rocketmq_common::TimeUtils::current_millis;
+use rocketmq_protocol::protocol::body::get_broker_lite_info_response_body::GetBrokerLiteInfoResponseBody;
+use rocketmq_protocol::protocol::body::get_lite_client_info_response_body::GetLiteClientInfoResponseBody;
+use rocketmq_protocol::protocol::body::get_lite_group_info_response_body::GetLiteGroupInfoResponseBody;
+use rocketmq_protocol::protocol::body::get_lite_topic_info_response_body::GetLiteTopicInfoResponseBody;
+use rocketmq_protocol::protocol::body::get_parent_topic_info_response_body::GetParentTopicInfoResponseBody;
+use rocketmq_protocol::protocol::body::lite_lag_info::LiteLagInfo;
+use rocketmq_protocol::protocol::route_facade::BrokerDataExt;
+use rocketmq_runtime::common::time_utils::current_millis;
 use serde::Deserialize;
 use serde::Serialize;
 

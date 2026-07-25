@@ -22,9 +22,6 @@ use std::time::Duration;
 use anyhow::bail;
 use anyhow::Context;
 use anyhow::Result;
-use rocketmq_common::common::mq_version::CURRENT_VERSION;
-use rocketmq_common::EnvUtils::EnvUtils;
-use rocketmq_common::ParseConfigFile;
 use rocketmq_controller::parse_command_line;
 use rocketmq_controller::resolve_controller_raft_bind_addr;
 use rocketmq_controller::typ::Node;
@@ -32,7 +29,10 @@ use rocketmq_controller::ControllerCli;
 use rocketmq_controller::ControllerConfig;
 use rocketmq_controller::ControllerManager;
 use rocketmq_error::ControllerError;
-use rocketmq_remoting::protocol::remoting_command;
+use rocketmq_model::common::mq_version::CURRENT_VERSION;
+use rocketmq_model::utils::env_utils::EnvUtils;
+use rocketmq_protocol::protocol::remoting_command;
+use rocketmq_runtime::common::parse_config_file;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 use rocketmq_runtime::ServiceContext;
@@ -362,7 +362,7 @@ fn log_telemetry_bootstrap(
 
 fn load_logging_overrides(config_file: Option<&std::path::Path>) -> Result<rocketmq_observability::LoggingOverrides> {
     match config_file {
-        Some(path) => ParseConfigFile::parse_config_file(path.to_path_buf())
+        Some(path) => parse_config_file::parse_config_file(path.to_path_buf())
             .with_context(|| format!("failed to parse logging configuration from {}", path.display())),
         None => Ok(rocketmq_observability::LoggingOverrides::default()),
     }

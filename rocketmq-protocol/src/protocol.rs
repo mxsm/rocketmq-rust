@@ -29,26 +29,37 @@ use serde::Serializer;
 use self::rocketmq_serializable::RocketMQSerializable;
 
 pub mod admin;
+pub mod bodies;
 pub mod body;
 pub mod broker_sync_info;
 pub mod command_custom_header;
 pub mod filter;
 pub mod forbidden_type;
 pub mod header;
+pub mod header_facade;
+pub mod headers;
 pub mod heartbeat;
+pub mod heartbeat_facade;
+pub mod namespace_util;
 pub mod namesrv;
 pub mod remoting_command;
+pub mod remoting_command_compat;
 pub mod request_source;
 pub mod request_type;
 pub mod rocketmq_serializable;
 pub mod route;
+pub mod route_facade;
 pub mod static_topic;
 pub mod subscription;
 pub mod topic;
 
 pub use command_custom_header::CommandCustomHeader;
 pub use command_custom_header::FromMap;
+pub use data_version_compat as data_version_facade;
 pub use remoting_command::RemotingCommand;
+pub use remoting_command_compat as remoting_command_facade;
+
+pub mod data_version_compat;
 
 #[derive(Debug)]
 pub struct DataVersion {

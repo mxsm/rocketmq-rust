@@ -1,7 +1,7 @@
 use cheetah_string::CheetahString;
 use rocketmq_admin_core::client_adapter::services::topic::TopicTarget;
 use rocketmq_admin_core::client_adapter::services::topic::UpdateTopicListRequest;
-use rocketmq_common::common::config::TopicConfig as RocketMQTopicConfig;
+use rocketmq_model::common::config::TopicConfig as RocketMQTopicConfig;
 
 #[test]
 fn update_topic_list_request_accepts_broker_target_and_topic_configs() {

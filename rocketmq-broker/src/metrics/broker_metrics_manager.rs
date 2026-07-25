@@ -14,9 +14,9 @@
 
 use std::collections::HashMap;
 
-use rocketmq_common::common::attribute::topic_message_type::TopicMessageType;
-use rocketmq_common::common::message::message_decoder;
-use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
+use rocketmq_model::common::attribute::topic_message_type::TopicMessageType;
+use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
+use rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
 
 #[cfg(feature = "otel-metrics")]
 #[path = "broker_metrics_manager_impl.rs"]
@@ -27,7 +27,7 @@ pub(crate) use owner_manager::*;
 /// Get message type from send message request header.
 pub(crate) fn get_message_type(request_header: &SendMessageRequestHeader) -> TopicMessageType {
     let properties = if let Some(props) = &request_header.properties {
-        message_decoder::string_to_message_properties(Some(props))
+        MessageDecoder::string_to_message_properties(Some(props))
     } else {
         HashMap::new()
     };

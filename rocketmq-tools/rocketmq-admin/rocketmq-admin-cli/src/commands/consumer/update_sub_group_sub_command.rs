@@ -16,11 +16,11 @@ use std::collections::HashMap;
 
 use cheetah_string::CheetahString;
 use clap::Parser;
-use rocketmq_common::common::attribute::attribute_parser::AttributeParser;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::protocol::subscription::group_retry_policy::GroupRetryPolicy;
-use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
+use rocketmq_model::common::attribute::attribute_parser::AttributeParser;
+use rocketmq_protocol::protocol::subscription::group_retry_policy::GroupRetryPolicy;
+use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 
 use crate::commands::CommandExecute;
 use rocketmq_admin_core::client_adapter::services::consumer::ConsumerOperationResult;

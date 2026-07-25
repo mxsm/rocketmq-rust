@@ -18,8 +18,8 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use cheetah_string::CheetahString;
-use rocketmq_common::common::boundary_type::BoundaryType;
-use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use rocketmq_model::common::boundary_type::BoundaryType;
+use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 
 use crate::base::dispatch_request::DispatchRequest;
 use crate::queue::consume_queue::ConsumeQueueTrait;

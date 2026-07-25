@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::common::boundary_type::BoundaryType;
 use cheetah_string::CheetahString;
 use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_model::boundary_type::BoundaryType;
 use serde::Deserialize;
 use serde::Serialize;
 

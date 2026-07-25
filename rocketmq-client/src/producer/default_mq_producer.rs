@@ -20,25 +20,25 @@ use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use parking_lot::RwLock;
-use rocketmq_common::common::compression::compression_type::CompressionType;
-use rocketmq_common::common::compression::compressor::Compressor;
-use rocketmq_common::common::compression::compressor_factory::CompressorFactory;
-use rocketmq_common::common::message::message_batch::MessageBatch;
-use rocketmq_common::common::message::message_client_id_setter::MessageClientIDSetter;
-use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_common::common::message::message_single::Message;
-use rocketmq_common::common::message::MessageConst;
-use rocketmq_common::common::message::MessageTrait;
-use rocketmq_common::common::mix_all;
-use rocketmq_common::common::mix_all::MESSAGE_COMPRESS_LEVEL;
-use rocketmq_common::common::mix_all::MESSAGE_COMPRESS_TYPE;
-use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_error::RocketMQError;
-use rocketmq_remoting::code::response_code::ResponseCode;
-use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_remoting::runtime::RPCHook;
+use rocketmq_model::common::compression::compression_type::CompressionType;
+use rocketmq_model::common::message::message_batch::MessageBatch;
+use rocketmq_model::common::message::message_client_id_setter::MessageClientIDSetter;
+use rocketmq_model::common::message::message_ext::MessageExt;
+use rocketmq_model::common::message::message_queue::MessageQueue;
+use rocketmq_model::common::message::message_single::Message;
+use rocketmq_model::common::message::MessageConst;
+use rocketmq_model::common::message::MessageTrait;
+use rocketmq_model::common::mix_all;
+use rocketmq_model::common::mix_all::MESSAGE_COMPRESS_LEVEL;
+use rocketmq_model::common::mix_all::MESSAGE_COMPRESS_TYPE;
+use rocketmq_model::common::topic::TopicValidator;
+use rocketmq_protocol::code::response_code::ResponseCode;
+use rocketmq_protocol::common::compression::compressor::Compressor;
+use rocketmq_protocol::common::compression::compressor_factory::CompressorFactory;
+use rocketmq_protocol::protocol::namespace_util::NamespaceUtil;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_transport::runtime::RPCHook;
 use tracing::error;
 
 use crate::base::client_config::ClientConfig;
@@ -1583,7 +1583,9 @@ impl DefaultMQProducer {
             message.set_topic(self.with_namespace(message.topic()));
         }
         MessageClientIDSetter::set_uniq_id(&mut msg_batch.final_message);
-        msg_batch.set_body(msg_batch.encode());
+        msg_batch.set_body(rocketmq_protocol::common::message::message_decoder::encode_messages(
+            &msg_batch.messages,
+        ));
         msg_batch.set_topic(self.with_namespace(msg_batch.topic()));
         Ok(msg_batch)
     }
@@ -2505,11 +2507,11 @@ mod facade_tests {
     use std::sync::Arc;
 
     use bytes::Bytes;
-    use rocketmq_common::common::message::message_queue::MessageQueue;
-    use rocketmq_common::common::message::message_single::Message;
-    use rocketmq_common::common::message::MessageTrait;
     use rocketmq_error::RocketMQError;
     use rocketmq_error::RocketMQResult;
+    use rocketmq_model::common::message::message_queue::MessageQueue;
+    use rocketmq_model::common::message::message_single::Message;
+    use rocketmq_model::common::message::MessageTrait;
 
     use super::DefaultMQProducer;
     use super::ProducerConfig;
@@ -2682,8 +2684,8 @@ mod facade_tests {
 mod tests {
     use super::*;
     use bytes::Bytes;
-    use rocketmq_common::common::message::message_single::Message;
     use rocketmq_error::RocketMQResult;
+    use rocketmq_model::common::message::message_single::Message;
     #[tokio::test]
     async fn request_with_callback_not_initialized() {
         // Arrange

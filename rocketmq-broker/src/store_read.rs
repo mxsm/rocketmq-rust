@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_common::common::message::message_decoder;
-use rocketmq_common::common::message::message_ext::MessageExt;
+use rocketmq_model::common::message::message_ext::MessageExt;
+use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
 use rocketmq_store::base::get_message_result::GetMessageResult;
 use rocketmq_store::store_api_adapter::get_result_from_legacy;
 use rocketmq_store_api::GetStatus;
@@ -35,7 +35,7 @@ pub(crate) fn decode_read_outcome(result: GetMessageResult, decompress_body: boo
         let mut decoded = Vec::with_capacity(canonical.records.len());
         for (index, selected) in canonical.records.iter().enumerate() {
             let mut bytes = selected.data().bytes().clone();
-            if let Some(message) = message_decoder::decode(&mut bytes, true, decompress_body, false, false, false) {
+            if let Some(message) = MessageDecoder::decode(&mut bytes, true, decompress_body, false, false, false) {
                 decoded.push(message);
             } else {
                 error!(

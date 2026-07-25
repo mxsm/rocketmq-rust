@@ -23,7 +23,7 @@ use std::time::Duration;
 use bytes::Bytes;
 use bytes::BytesMut;
 use futures_util::StreamExt;
-use rocketmq_common::TimeUtils::current_millis;
+use rocketmq_runtime::common::time_utils::current_millis;
 use tokio::io::AsyncWrite;
 use tokio::net::tcp::OwnedReadHalf;
 use tokio::net::tcp::OwnedWriteHalf;

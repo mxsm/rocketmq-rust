@@ -16,8 +16,8 @@ use std::collections::HashMap;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 
-use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_remoting::protocol::RemotingDeserializable;
+use rocketmq_model::common::message::message_queue::MessageQueue;
+use rocketmq_protocol::protocol::RemotingDeserializable;
 use serde::Deserialize;
 use serde::Serialize;
 use tracing::warn;

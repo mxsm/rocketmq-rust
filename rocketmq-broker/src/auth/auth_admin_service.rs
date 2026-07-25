@@ -16,11 +16,11 @@ use rocketmq_auth::authorization::model::resource::Resource;
 use rocketmq_auth::authorization::provider::AuthorizationError;
 use rocketmq_auth::config::AuthConfig;
 use rocketmq_auth::ProviderRegistry;
-use rocketmq_common::common::action::Action;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::protocol::body::acl_info::AclInfo;
-use rocketmq_remoting::protocol::body::user_info::UserInfo;
+use rocketmq_protocol::protocol::body::acl_info::AclInfo;
+use rocketmq_protocol::protocol::body::user_info::UserInfo;
+use rocketmq_security_api::Action;
 
 use crate::auth::acl_converter::AclConverter;
 use crate::auth::user_converter::UserConverter;
@@ -432,7 +432,7 @@ mod tests {
     use rocketmq_auth::authorization::enums::decision::Decision;
     use rocketmq_auth::authorization::model::acl::Acl;
     use rocketmq_auth::authorization::model::policy::Policy;
-    use rocketmq_common::common::action::Action;
+    use rocketmq_security_api::Action;
     use std::sync::atomic::AtomicU64;
     use std::sync::atomic::Ordering;
 

@@ -27,14 +27,14 @@ use std::sync::Mutex as StdMutex;
 use bytes::Bytes;
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
-use rocketmq_common::common::boundary_type::BoundaryType;
-use rocketmq_common::common::broker::broker_role::BrokerRole;
-use rocketmq_common::common::message::message_batch::MessageExtBatch;
-use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
-use rocketmq_common::common::system_clock::SystemClock;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
+use rocketmq_model::common::boundary_type::BoundaryType;
+use rocketmq_model::common::broker::broker_role::BrokerRole;
+use rocketmq_model::common::message::message_batch::MessageExtBatch;
+use rocketmq_model::common::message::message_ext::MessageExt;
+use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use rocketmq_protocol::protocol::body::ha_runtime_info::HARuntimeInfo;
+use rocketmq_runtime::common::system_clock::SystemClock;
+use rocketmq_runtime::common::time_utils::current_millis;
 
 use crate::base::allocate_mapped_file_service::AllocateMappedFileService;
 use crate::base::commit_log_dispatcher::CommitLogDispatcher;
@@ -862,7 +862,7 @@ mod tests {
     use std::sync::atomic::Ordering;
     use std::sync::Arc;
 
-    use rocketmq_common::TimeUtils::current_millis;
+    use rocketmq_runtime::common::time_utils::current_millis;
 
     use super::PutMessagePreflight;
     use super::StateMachineVersionView;

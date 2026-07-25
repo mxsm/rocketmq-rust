@@ -15,7 +15,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use rocketmq_common::common::message::message_queue::MessageQueue;
+use rocketmq_model::common::message::message_queue::MessageQueue;
 
 /// A listener that is notified when message queue allocation changes during consumer rebalancing.
 ///
@@ -31,7 +31,7 @@ use rocketmq_common::common::message::message_queue::MessageQueue;
 ///
 /// ```ignore
 /// use std::collections::HashSet;
-/// use rocketmq_common::common::message::message_queue::MessageQueue;
+/// use rocketmq_model::common::message::message_queue::MessageQueue;
 /// use crate::consumer::message_queue_listener::MessageQueueListener;
 ///
 /// struct MyQueueListener;
@@ -85,8 +85,8 @@ pub trait MessageQueueListener: Send + Sync {
 ///     fn message_queue_changed(
 ///         &self,
 ///         _topic: &str,
-///         _mq_all: &std::collections::HashSet<rocketmq_common::common::message::message_queue::MessageQueue>,
-///         _mq_assigned: &std::collections::HashSet<rocketmq_common::common::message::message_queue::MessageQueue>,
+///         _mq_all: &std::collections::HashSet<rocketmq_model::common::message::message_queue::MessageQueue>,
+///         _mq_assigned: &std::collections::HashSet<rocketmq_model::common::message::message_queue::MessageQueue>,
 ///     ) {}
 /// }
 ///

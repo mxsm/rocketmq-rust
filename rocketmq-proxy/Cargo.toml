@@ -32,22 +32,22 @@ default = []
 observability = [
   "rocketmq-observability/otel-metrics",
   "rocketmq-proxy-local/observability",
-  "rocketmq-remoting/observability",
+  "rocketmq-transport/observability",
 ]
 tieredstore = ["rocketmq-proxy-local/tieredstore"]
 
 [dependencies]
-rocketmq-common      = { workspace = true }
 rocketmq-error       = { workspace = true }
 rocketmq-model       = { workspace = true }
+rocketmq-protocol    = { workspace = true }
 rocketmq-proxy-core  = { workspace = true }
 rocketmq-proxy-cluster = { workspace = true }
 rocketmq-proxy-local = { workspace = true }
-rocketmq-remoting    = { workspace = true }
 rocketmq-auth        = { workspace = true, features = ["grpc"] }
 rocketmq-observability = { workspace = true }
 rocketmq-runtime     = { workspace = true }
 rocketmq-security-api = { workspace = true }
+rocketmq-transport   = { workspace = true }
 
 tokio        = { workspace = true }
 tokio-stream = { workspace = true }

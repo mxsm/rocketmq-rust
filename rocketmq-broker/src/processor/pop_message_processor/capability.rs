@@ -17,14 +17,14 @@ use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use std::sync::Weak;
 
+use crate::config::broker_config::BrokerConfig;
 use arc_swap::ArcSwap;
 use cheetah_string::CheetahString;
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
-use rocketmq_common::common::broker::broker_role::BrokerRole;
-use rocketmq_common::common::config::TopicConfig;
-use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
-use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
-use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
+use rocketmq_model::common::broker::broker_role::BrokerRole;
+use rocketmq_model::common::config::TopicConfig;
+use rocketmq_protocol::protocol::heartbeat::consume_type::ConsumeType;
+use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
+use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_store::base::get_message_result::GetMessageResult;
 use rocketmq_store::base::message_result::PutMessageResult;
@@ -349,14 +349,14 @@ impl<MS: MessageStore> PopStoreCapability<MS> {
 
     pub(crate) async fn put_local(
         &self,
-        message: rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner,
+        message: rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner,
     ) -> Result<PutMessageResult, MessageStoreUnavailable> {
         self.provider()?.put_message_to_local_store(message).await
     }
 
     pub(crate) async fn put_specific(
         &self,
-        message: rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner,
+        message: rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner,
     ) -> Result<PutMessageResult, MessageStoreUnavailable> {
         Ok(self.provider()?.put_message_to_specific_queue(message).await)
     }
@@ -377,7 +377,7 @@ impl<MS: MessageStore> PopStoreCapability<MS> {
         broker_name: &CheetahString,
         de_compress_body: bool,
     ) -> (
-        Option<rocketmq_common::common::message::message_ext::MessageExt>,
+        Option<rocketmq_model::common::message::message_ext::MessageExt>,
         String,
         bool,
     ) {
@@ -536,8 +536,8 @@ impl<MS: MessageStore> PopReviveContext<MS> {
 mod tests {
     use std::sync::Weak;
 
-    use rocketmq_common::common::broker::broker_config::BrokerConfig;
-    use rocketmq_common::common::broker::broker_role::BrokerRole;
+    use crate::config::broker_config::BrokerConfig;
+    use rocketmq_model::common::broker::broker_role::BrokerRole;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
     use rocketmq_store::message_store::OwnedMessageStore;
 

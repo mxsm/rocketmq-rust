@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::mix_all;
-use rocketmq_common::common::mix_all::MASTER_ID;
+use rocketmq_model::common::mix_all;
+use rocketmq_model::common::mix_all::MASTER_ID;
 use rocketmq_model::version::RocketMqVersion;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
@@ -23,7 +23,7 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::route::route_data_view::BrokerData;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_protocol::protocol::RemotingSerializable;
-use rocketmq_remoting::runtime::RPCHook;
+use rocketmq_transport::runtime::RPCHook;
 
 pub struct ZoneRouteRPCHook;
 

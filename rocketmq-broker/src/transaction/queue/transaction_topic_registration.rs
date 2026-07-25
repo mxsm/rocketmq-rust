@@ -18,13 +18,13 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Instant;
 
+use crate::config::broker_config::BrokerConfig;
 use cheetah_string::CheetahString;
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
-use rocketmq_common::common::config::TopicConfig;
-use rocketmq_common::common::constant::PermName;
-use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
-use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigSerializeWrapper;
-use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
+use rocketmq_model::common::config::TopicConfig;
+use rocketmq_model::common::constant::PermName;
+use rocketmq_protocol::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
+use rocketmq_protocol::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigSerializeWrapper;
+use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
 use rocketmq_store::base::message_store::MessageStore;
 use tracing::debug;
 use tracing::info;
@@ -253,7 +253,7 @@ where
 
     async fn handle_register_result(
         &self,
-        register_broker_result: Vec<rocketmq_remoting::protocol::namesrv::RegisterBrokerResult>,
+        register_broker_result: Vec<rocketmq_protocol::protocol::namesrv::RegisterBrokerResult>,
     ) {
         let Some(result) = register_broker_result.into_iter().next() else {
             return;

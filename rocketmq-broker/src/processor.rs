@@ -16,16 +16,16 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use rocketmq_auth::AuthRuntime;
-use rocketmq_remoting::code::request_code::RequestCode;
-use rocketmq_remoting::error_response;
-use rocketmq_remoting::net::channel::Channel;
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_remoting::runtime::processor::RejectRequestResponse;
-use rocketmq_remoting::runtime::processor::RequestProcessor;
+use rocketmq_protocol::code::request_code::RequestCode;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskKind;
 use rocketmq_store::base::message_store::MessageStore;
+use rocketmq_transport::error_response;
+use rocketmq_transport::net::channel::Channel;
+use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_transport::runtime::processor::RejectRequestResponse;
+use rocketmq_transport::runtime::processor::RequestProcessor;
 use tokio::sync::Mutex;
 use tracing::warn;
 
@@ -605,9 +605,9 @@ mod tests {
     use super::*;
     use rocketmq_auth::config::AuthConfig;
     use rocketmq_auth::AuthRuntimeBuilder;
-    use rocketmq_remoting::code::response_code::ResponseCode;
-    use rocketmq_remoting::local::LocalRequestHarness;
+    use rocketmq_protocol::code::response_code::ResponseCode;
     use rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore;
+    use rocketmq_transport::local::LocalRequestHarness;
 
     use crate::transaction::queue::default_transactional_message_service::DefaultTransactionalMessageService;
 

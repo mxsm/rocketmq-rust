@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use parking_lot::Mutex;
-use rocketmq_common::TimeUtils::current_millis;
+use rocketmq_runtime::common::time_utils::current_millis;
 
 const TOPIC_GROUP_SEPARATOR: &str = "@";
 const BROADCAST_GROUP_SUFFIX: &str = "broadcast";

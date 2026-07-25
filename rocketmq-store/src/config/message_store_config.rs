@@ -19,8 +19,8 @@ use std::path::PathBuf;
 use std::sync::LazyLock;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::broker::broker_role::BrokerRole;
-use rocketmq_common::common::mix_all;
+use rocketmq_model::common::broker::broker_role::BrokerRole;
+use rocketmq_model::common::mix_all;
 use rocketmq_store_local::config::backend::LocalBackendConfig;
 use rocketmq_store_local::config::backend::LocalCleanupConfig;
 use rocketmq_store_local::config::backend::LocalQueryConfig;

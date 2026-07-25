@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_common::common::message::message_queue::MessageQueue;
+use rocketmq_model::common::message::message_queue::MessageQueue;
 
 /// A trait for filtering message queues.
 ///
@@ -53,7 +53,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use rocketmq_common::common::message::message_queue::MessageQueue;
+    use rocketmq_model::common::message::message_queue::MessageQueue;
 
     use super::*;
 

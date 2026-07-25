@@ -196,8 +196,8 @@ class ArchitectureDependencyGuardTests(unittest.TestCase):
     def test_foundation_must_not_depend_on_facade(self) -> None:
         fixture = metadata(
             [
-                package("rocketmq-model", [dependency("rocketmq-remoting")]),
-                package("rocketmq-remoting"),
+                package("rocketmq-model", [dependency("rocketmq-store")]),
+                package("rocketmq-store"),
             ]
         )
         self.assert_rule(self.run_guard(fixture), "foundation-no-facade")
@@ -251,8 +251,8 @@ class ArchitectureDependencyGuardTests(unittest.TestCase):
         fixture = metadata(
             [
                 package("rocketmq-transport", [dependency("rocketmq-observability")]),
-                package("rocketmq-observability", [dependency("rocketmq-common")]),
-                package("rocketmq-common"),
+                package("rocketmq-observability", [dependency("rocketmq-store")]),
+                package("rocketmq-store"),
             ]
         )
         self.assert_rule(self.run_guard(fixture), "transitive-forbidden-reachability")
@@ -261,8 +261,8 @@ class ArchitectureDependencyGuardTests(unittest.TestCase):
         fixture = metadata(
             [
                 package("rocketmq-transport", [dependency("rocketmq-observability")]),
-                package("rocketmq-observability", [dependency("rocketmq-common", kind="dev")]),
-                package("rocketmq-common"),
+                package("rocketmq-observability", [dependency("rocketmq-store", kind="dev")]),
+                package("rocketmq-store"),
             ]
         )
         result = self.run_guard(fixture)
@@ -285,8 +285,6 @@ class ArchitectureDependencyGuardTests(unittest.TestCase):
             "rocketmq-namesrv",
             "rocketmq-proxy-core",
             "rocketmq-proxy-local",
-            "rocketmq-common",
-            "rocketmq-remoting",
         ]
         fixture = metadata(
             [package(caller, [dependency("rocketmq-admin-core")]) for caller in forbidden_callers]
@@ -638,8 +636,8 @@ use rocketmq_client_rust::producer::Producer;
             package(
                 "rocketmq-broker",
                 [
-                    dependency("rocketmq-common"),
-                    dependency("rocketmq-common", kind="dev", rename="common_test"),
+                    dependency("rocketmq-store"),
+                    dependency("rocketmq-store", kind="dev", rename="store_test"),
                 ],
                 manifest_path="rocketmq-broker/Cargo.toml",
             )
@@ -654,10 +652,10 @@ use rocketmq_client_rust::producer::Producer;
             [
                 package(
                     "rocketmq-broker",
-                    [dependency("rocketmq-common")],
+                    [dependency("rocketmq-store")],
                     manifest_path="rocketmq-broker/Cargo.toml",
                 ),
-                package("rocketmq-common"),
+                package("rocketmq-store"),
             ]
         )
         accepted = self.run_guard(exact)
@@ -665,8 +663,8 @@ use rocketmq_client_rust::producer::Producer;
         self.assertIn("TARGET_COMPATIBILITY_LEDGER", accepted.stdout)
 
         for label, changed_dependency in (
-            ("renamed", dependency("rocketmq-common", rename="legacy_common")),
-            ("kind", dependency("rocketmq-common", kind="dev")),
+            ("renamed", dependency("rocketmq-store", rename="store_facade")),
+            ("kind", dependency("rocketmq-store", kind="dev")),
         ):
             with self.subTest(label=label):
                 changed = metadata(
@@ -676,26 +674,24 @@ use rocketmq_client_rust::producer::Producer;
                             [changed_dependency],
                             manifest_path="rocketmq-broker/Cargo.toml",
                         ),
-                        package("rocketmq-common"),
+                        package("rocketmq-store"),
                     ]
                 )
                 result = self.run_guard(changed)
-                self.assert_rule(result, "target-dag-direct-dependency")
-                self.assertIn("rule=compatibility-manifest-target-growth", result.stdout)
+                self.assert_rule(result, "compatibility-manifest-target-growth")
 
         duplicate = metadata(
             [
                 package(
                     "rocketmq-broker",
-                    [dependency("rocketmq-common"), dependency("rocketmq-common")],
+                    [dependency("rocketmq-store"), dependency("rocketmq-store")],
                     manifest_path="rocketmq-broker/Cargo.toml",
                 ),
-                package("rocketmq-common"),
+                package("rocketmq-store"),
             ]
         )
         result = self.run_guard(duplicate)
-        self.assert_rule(result, "target-dag-direct-dependency")
-        self.assertIn("rule=compatibility-manifest-target-growth", result.stdout)
+        self.assert_rule(result, "compatibility-manifest-target-growth")
 
     def test_test_dependency_allowlist_cannot_promote_to_normal(self) -> None:
         accepted = metadata(
@@ -734,15 +730,15 @@ use rocketmq_client_rust::producer::Producer;
 name = "rocketmq-example"
 version = "0.1.0"
 [dev-dependencies]
-rocketmq-common = { path = "../rocketmq-common" }
+rocketmq-store = { path = "../rocketmq-store" }
 [build-dependencies]
-renamed-common = { package = "rocketmq-common", path = "../rocketmq-common" }
+renamed-store = { package = "rocketmq-store", path = "../rocketmq-store" }
 """,
             },
         )
         self.assert_rule(result, "compatibility-manifest-baseline-growth")
         self.assertIn("kind=build", result.stdout)
-        self.assertIn("alias=renamed_common", result.stdout)
+        self.assertIn("alias=renamed_store", result.stdout)
 
     def test_standalone_workspace_inherited_rename_resolves_for_all_kinds(self) -> None:
         result = self.run_guard(
@@ -753,9 +749,9 @@ renamed-common = { package = "rocketmq-common", path = "../rocketmq-common" }
 [workspace]
 members = []
 [workspace.dependencies]
-legacy-normal = { package = "rocketmq-common", path = "rocketmq-common" }
-legacy-build = { package = "rocketmq-common", path = "rocketmq-common" }
-legacy-dev = { package = "rocketmq-common", path = "rocketmq-common" }
+legacy-normal = { package = "rocketmq-store", path = "rocketmq-store" }
+legacy-build = { package = "rocketmq-store", path = "rocketmq-store" }
+legacy-dev = { package = "rocketmq-store", path = "rocketmq-store" }
 """,
                 "rocketmq-example/Cargo.toml": """
 [package]
@@ -786,7 +782,7 @@ legacy-dev = { workspace = true }
                 any(f"kind={kind}" in line and f"alias={alias}" in line for line in findings),
                 result.stdout,
             )
-        self.assertTrue(all("target=rocketmq-common" in line for line in findings), result.stdout)
+        self.assertTrue(all("target=rocketmq-store" in line for line in findings), result.stdout)
 
     def test_missing_workspace_inherited_dependency_is_input_error(self) -> None:
         result = self.run_guard(
@@ -806,12 +802,7 @@ missing-alias = { workspace = true }
         self.assertEqual(2, result.returncode)
         self.assertIn("workspace dependency missing-alias", result.stderr)
 
-    def test_baseline_allows_planned_package_but_rejects_unknown_package(self) -> None:
-        planned = self.run_guard(
-            metadata(self.baseline_packages([package("rocketmq-protocol")])),
-            mode="baseline",
-        )
-        self.assertEqual(0, planned.returncode, planned.stdout + planned.stderr)
+    def test_baseline_rejects_unknown_package(self) -> None:
         unknown = self.run_guard(
             metadata(self.baseline_packages([package("rocketmq-unplanned")])),
             mode="baseline",
@@ -819,10 +810,11 @@ missing-alias = { workspace = true }
         self.assertEqual(2, unknown.returncode)
         self.assertIn("unplanned workspace packages", unknown.stderr)
 
-    def test_baseline_enforces_target_rules_on_added_planned_package(self) -> None:
-        values = self.baseline_packages(
-            [package("rocketmq-protocol", [dependency("rocketmq-common")])]
-        )
+    def test_baseline_enforces_rules_on_current_packages(self) -> None:
+        values = [
+            item for item in self.baseline_packages() if item["name"] != "rocketmq-model"
+        ]
+        values.append(package("rocketmq-model", [dependency("rocketmq-store")]))
         self.assert_rule(self.run_guard(metadata(values), mode="baseline"), "foundation-no-facade")
 
     def test_all_standalone_cargo_roots_are_scanned(self) -> None:
@@ -873,20 +865,17 @@ rocketmq-client-rust = { path = "../../rocketmq-client" }
         ):
             self.assertIn(key, baseline)
 
-    def test_policy_encodes_all_32_target_packages(self) -> None:
+    def test_policy_encodes_all_29_target_packages(self) -> None:
         policy = json.loads(POLICY.read_text(encoding="utf-8"))
         baseline = json.loads(BASELINE.read_text(encoding="utf-8"))
         expected = set(baseline["workspace_packages"]) | set(policy["planned_packages"])
         self.assertEqual(expected, set(policy["target_dag"]))
-        self.assertEqual(32, len(policy["target_dag"]))
+        self.assertEqual(29, len(policy["target_dag"]))
 
     def test_target_dag_rejects_cluster_edges_outside_its_boundary(self) -> None:
         for target in (
             "rocketmq-auth",
             "rocketmq-broker",
-            "rocketmq-common",
-            "rocketmq-remoting",
-            "rocketmq-rust",
             "rocketmq-store",
         ):
             with self.subTest(target=target):

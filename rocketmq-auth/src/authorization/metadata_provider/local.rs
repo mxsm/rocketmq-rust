@@ -27,9 +27,9 @@ use std::sync::RwLockReadGuard;
 use std::sync::RwLockWriteGuard;
 use std::time::Duration;
 
-use rocketmq_common::common::action::Action;
 use rocketmq_runtime::MetadataDeadline;
 use rocketmq_runtime::MetadataIoActor;
+use rocketmq_security_api::Action;
 use serde::Deserialize;
 use serde::Serialize;
 use tracing::debug;
@@ -783,7 +783,7 @@ mod tests {
     use std::fs;
 
     use cheetah_string::CheetahString;
-    use rocketmq_common::common::action::Action;
+    use rocketmq_security_api::Action;
     use tempfile::TempDir;
 
     use super::*;

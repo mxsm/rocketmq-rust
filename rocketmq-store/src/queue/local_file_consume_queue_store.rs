@@ -23,6 +23,7 @@ use std::sync::Arc;
 use std::sync::Weak;
 use std::time::Instant;
 
+use crate::config::store_runtime_config::StoreRuntimeConfig;
 use bytes::BufMut;
 use bytes::Bytes;
 use bytes::BytesMut;
@@ -30,13 +31,12 @@ use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use futures_util::future::join_all;
 use parking_lot::RwLock;
-use rocketmq_common::common::attribute::cq_type::CQType;
-use rocketmq_common::common::boundary_type::BoundaryType;
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
-use rocketmq_common::common::config::TopicConfig;
-use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
-use rocketmq_common::common::topic::TopicValidator;
-use rocketmq_common::utils::queue_type_utils::QueueTypeUtils;
+use rocketmq_model::common::attribute::cq_type::CQType;
+use rocketmq_model::common::boundary_type::BoundaryType;
+use rocketmq_model::common::config::TopicConfig;
+use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use rocketmq_model::common::topic::TopicValidator;
+use rocketmq_model::utils::queue_type_utils::QueueTypeUtils;
 use rocketmq_store_local::consume_queue::root::clamp_consume_queue_offset;
 use rocketmq_store_local::consume_queue::root::find_or_create_consume_queue as drive_find_or_create_consume_queue;
 use rocketmq_store_local::consume_queue::root::ConsumeQueueStoreRoot;
@@ -155,7 +155,7 @@ impl ConsumeQueueRecoverySummary {
 struct Inner {
     pub(crate) context: RwLock<Option<ConsumeQueueStoreContext>>,
     pub(crate) message_store_config: Arc<MessageStoreConfig>,
-    pub(crate) broker_config: Arc<BrokerConfig>,
+    pub(crate) broker_config: Arc<StoreRuntimeConfig>,
     pub(crate) queue_offset_operator: QueueOffsetOperator,
     pub(crate) consume_queue_table: Arc<ConsumeQueueTable>,
 }
@@ -555,7 +555,7 @@ impl ConsumeQueueStore {
     }
 
     #[inline]
-    pub fn new(message_store_config: Arc<MessageStoreConfig>, broker_config: Arc<BrokerConfig>) -> Self {
+    pub fn new(message_store_config: Arc<MessageStoreConfig>, broker_config: Arc<StoreRuntimeConfig>) -> Self {
         Self {
             inner: ConsumeQueueStoreRoot::new(Arc::new(Inner {
                 context: RwLock::new(None),
@@ -1176,13 +1176,13 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
+    use crate::config::store_runtime_config::StoreRuntimeConfig;
     use bytes::Buf;
     use cheetah_string::CheetahString;
     use dashmap::DashMap;
-    use rocketmq_common::common::attribute::Attribute;
-    use rocketmq_common::common::broker::broker_config::BrokerConfig;
-    use rocketmq_common::common::config::TopicConfig;
-    use rocketmq_common::TopicAttributes::TopicAttributes;
+    use rocketmq_model::common::attribute::topic_attributes::TopicAttributes;
+    use rocketmq_model::common::attribute::Attribute;
+    use rocketmq_model::common::config::TopicConfig;
     use tempfile::tempdir;
 
     use super::*;
@@ -1452,7 +1452,7 @@ mod tests {
     ) -> (ConsumeQueueStore, Vec<Arc<TrackingQueueState>>) {
         let store = ConsumeQueueStore::new(
             Arc::new(MessageStoreConfig::default()),
-            Arc::new(BrokerConfig::default()),
+            Arc::new(StoreRuntimeConfig::default()),
         );
         let mut states = Vec::new();
         let active_recoveries = Arc::new(AtomicUsize::new(0));
@@ -1580,7 +1580,7 @@ mod tests {
             store_path_root_dir: root.path().to_string_lossy().to_string().into(),
             ..MessageStoreConfig::default()
         });
-        let broker_config = Arc::new(BrokerConfig::default());
+        let broker_config = Arc::new(StoreRuntimeConfig::default());
         let topic_config_table = Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new());
         topic_config_table.insert(topic.clone(), Arc::new(TopicConfig::new(topic.clone())));
         let message_store = LocalFileMessageStore::new(
@@ -1609,7 +1609,7 @@ mod tests {
             store_type: StoreType::RocksDB,
             ..MessageStoreConfig::default()
         });
-        let broker_config = Arc::new(BrokerConfig::default());
+        let broker_config = Arc::new(StoreRuntimeConfig::default());
         let topic_config_table = Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new());
         let mut topic_config = TopicConfig::new(topic.clone());
         topic_config.attributes.insert(
@@ -1647,7 +1647,7 @@ mod tests {
             store_type: StoreType::RocksDB,
             ..MessageStoreConfig::default()
         });
-        let broker_config = Arc::new(BrokerConfig::default());
+        let broker_config = Arc::new(StoreRuntimeConfig::default());
         let topic_config_table = Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new());
         let message_store = LocalFileMessageStore::new(
             message_store_config.clone(),
@@ -1672,7 +1672,7 @@ mod tests {
     #[test]
     fn batch_consume_queue_store_get_returns_full_batch_unit() {
         let message_store_config = Arc::new(MessageStoreConfig::default());
-        let broker_config = Arc::new(BrokerConfig::default());
+        let broker_config = Arc::new(StoreRuntimeConfig::default());
         let store = ConsumeQueueStore::new(message_store_config.clone(), broker_config);
         let root = tempdir().expect("tempdir");
         let store_path = CheetahString::from_string(root.path().join("batch-cq").to_string_lossy().to_string());

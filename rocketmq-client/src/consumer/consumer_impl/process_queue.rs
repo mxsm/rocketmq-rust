@@ -21,13 +21,13 @@ use std::sync::Arc;
 use std::sync::LazyLock;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_common::common::message::message_single::Message;
-use rocketmq_common::common::message::MessageConst;
-use rocketmq_common::common::message::MessageTrait;
-use rocketmq_common::MessageAccessor::MessageAccessor;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_remoting::protocol::body::process_queue_info::ProcessQueueInfo;
+use rocketmq_model::common::message::message_accessor::MessageAccessor;
+use rocketmq_model::common::message::message_ext::MessageExt;
+use rocketmq_model::common::message::message_single::Message;
+use rocketmq_model::common::message::MessageConst;
+use rocketmq_model::common::message::MessageTrait;
+use rocketmq_protocol::protocol::body::process_queue_info::ProcessQueueInfo;
+use rocketmq_runtime::common::time_utils::current_millis;
 use serde::Serialize;
 use tokio::sync::RwLock;
 use tracing::info;
@@ -724,7 +724,7 @@ mod tests {
     use super::*;
     use bytes::Bytes;
     use cheetah_string::CheetahString;
-    use rocketmq_common::common::message::MessageTrait;
+    use rocketmq_model::common::message::MessageTrait;
 
     fn create_test_messages(count: usize) -> Vec<Arc<MessageExt>> {
         let mut messages = Vec::with_capacity(count);

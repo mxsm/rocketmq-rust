@@ -21,7 +21,7 @@ use rocketmq_admin_core::client_adapter::services::auth::GetUserRequest;
 use rocketmq_admin_core::client_adapter::services::auth::GetUserResult;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::protocol::body::user_info::UserInfo;
+use rocketmq_protocol::protocol::body::user_info::UserInfo;
 
 use crate::commands::CommandExecute;
 

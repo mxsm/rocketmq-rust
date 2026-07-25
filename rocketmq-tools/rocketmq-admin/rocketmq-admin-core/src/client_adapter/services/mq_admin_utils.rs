@@ -17,14 +17,14 @@ use std::collections::HashSet;
 
 use cheetah_string::CheetahString;
 use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_client_rust::admin_adapter_compat::error::RocketMQResult;
-use rocketmq_client_rust::admin_adapter_compat::remoting::protocol::static_topic::logic_queue_mapping_item::LogicQueueMappingItem;
-use rocketmq_client_rust::admin_adapter_compat::remoting::protocol::static_topic::topic_config_and_queue_mapping::TopicConfigAndQueueMapping;
-use rocketmq_client_rust::admin_adapter_compat::remoting::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
-use rocketmq_client_rust::admin_adapter_compat::remoting::protocol::static_topic::topic_queue_mapping_info::TopicQueueMappingInfo;
-use rocketmq_client_rust::admin_adapter_compat::remoting::protocol::static_topic::topic_queue_mapping_utils::TopicQueueMappingUtils;
-use rocketmq_client_rust::admin_adapter_compat::remoting::rpc::client_metadata::ClientMetadata;
-use rocketmq_common::common::config::TopicConfig;
+use rocketmq_error::RocketMQResult;
+use rocketmq_model::common::config::TopicConfig;
+use rocketmq_protocol::protocol::static_topic::logic_queue_mapping_item::LogicQueueMappingItem;
+use rocketmq_protocol::protocol::static_topic::topic_config_and_queue_mapping::TopicConfigAndQueueMapping;
+use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
+use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_info::TopicQueueMappingInfo;
+use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_utils::TopicQueueMappingUtils;
+use rocketmq_transport::rpc::client_metadata::ClientMetadata;
 
 use crate::client_adapter::services::errors;
 use rocketmq_client_rust::DefaultMQAdminExt;
@@ -262,7 +262,7 @@ impl MQAdminUtils {
                                     let old_queue_id = old_leader.queue_id;
 
                                     let topic_offset = offset_table.get(
-                                        &rocketmq_common::common::message::message_queue::MessageQueue::from_parts(
+                                        &rocketmq_model::common::message::message_queue::MessageQueue::from_parts(
                                             topic.clone(),
                                             old_broker_name.clone(),
                                             old_queue_id,

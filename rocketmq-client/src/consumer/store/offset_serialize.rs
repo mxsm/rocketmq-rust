@@ -15,7 +15,7 @@
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 
-use rocketmq_remoting::protocol::RemotingSerializable;
+use rocketmq_protocol::protocol::RemotingSerializable;
 use serde::Deserialize;
 use serde::Serialize;
 use tracing::warn;

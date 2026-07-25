@@ -17,16 +17,16 @@ use std::collections::HashSet;
 use std::time::Duration;
 
 use bytes::Bytes;
-use rocketmq_remoting::code::request_code::RequestCode;
-use rocketmq_remoting::net::channel::Channel;
-use rocketmq_remoting::protocol::body::request::lock_batch_request_body::LockBatchRequestBody;
-use rocketmq_remoting::protocol::body::response::lock_batch_response_body::LockBatchResponseBody;
-use rocketmq_remoting::protocol::body::unlock_batch_request_body::UnlockBatchRequestBody;
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_remoting::protocol::RemotingDeserializable;
-use rocketmq_remoting::protocol::RemotingSerializable;
-use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_protocol::code::request_code::RequestCode;
+use rocketmq_protocol::protocol::body::request::lock_batch_request_body::LockBatchRequestBody;
+use rocketmq_protocol::protocol::body::response::lock_batch_response_body::LockBatchResponseBody;
+use rocketmq_protocol::protocol::body::unlock_batch_request_body::UnlockBatchRequestBody;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::RemotingDeserializable;
+use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_store::base::message_store::MessageStore;
+use rocketmq_transport::net::channel::Channel;
+use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
 use tokio::time::timeout;
 use tracing::warn;
 

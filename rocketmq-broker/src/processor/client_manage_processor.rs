@@ -15,27 +15,27 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::config::broker_config::BrokerConfig;
 use cheetah_string::CheetahString;
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
-use rocketmq_common::common::filter::expression_type::ExpressionType;
-use rocketmq_common::common::mix_all;
-use rocketmq_common::common::mix_all::IS_SUB_CHANGE;
-use rocketmq_common::common::mix_all::IS_SUPPORT_HEART_BEAT_V2;
-use rocketmq_common::common::sys_flag::topic_sys_flag;
-use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_filter::filter::FilterFactory;
-use rocketmq_remoting::code::request_code::RequestCode;
-use rocketmq_remoting::code::response_code::ResponseCode;
-use rocketmq_remoting::error_response;
-use rocketmq_remoting::net::channel::Channel;
-use rocketmq_remoting::protocol::body::check_client_request_body::CheckClientRequestBody;
-use rocketmq_remoting::protocol::header::unregister_client_request_header::UnregisterClientRequestHeader;
-use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
-use rocketmq_remoting::protocol::heartbeat::heartbeat_data::HeartbeatData;
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_remoting::runtime::processor::RequestProcessor;
+use rocketmq_model::common::filter::expression_type::ExpressionType;
+use rocketmq_model::common::mix_all;
+use rocketmq_model::common::mix_all::IS_SUB_CHANGE;
+use rocketmq_model::common::mix_all::IS_SUPPORT_HEART_BEAT_V2;
+use rocketmq_model::common::sys_flag::topic_sys_flag;
+use rocketmq_model::utils::serde_json_utils::SerdeJsonUtils;
+use rocketmq_protocol::code::request_code::RequestCode;
+use rocketmq_protocol::code::response_code::ResponseCode;
+use rocketmq_protocol::protocol::body::check_client_request_body::CheckClientRequestBody;
+use rocketmq_protocol::protocol::header::unregister_client_request_header::UnregisterClientRequestHeader;
+use rocketmq_protocol::protocol::heartbeat::consume_type::ConsumeType;
+use rocketmq_protocol::protocol::heartbeat::heartbeat_data::HeartbeatData;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_store::base::message_store::MessageStore;
+use rocketmq_transport::error_response;
+use rocketmq_transport::net::channel::Channel;
+use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_transport::runtime::processor::RequestProcessor;
 use tracing::info;
 use tracing::warn;
 
@@ -441,25 +441,25 @@ mod tests {
     use std::collections::HashSet;
     use std::path::PathBuf;
 
+    use crate::config::broker_config::BrokerConfig;
     use bytes::Bytes;
-    use rocketmq_common::common::broker::broker_config::BrokerConfig;
-    use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
-    use rocketmq_common::common::filter::expression_type::ExpressionType;
-    use rocketmq_remoting::protocol::header::empty_header::EmptyHeader;
-    use rocketmq_remoting::protocol::heartbeat::consumer_data::ConsumerData;
-    use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
-    use rocketmq_remoting::protocol::heartbeat::producer_data::ProducerData;
-    use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
+    use rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere;
+    use rocketmq_model::common::filter::expression_type::ExpressionType;
+    use rocketmq_protocol::protocol::header::empty_header::EmptyHeader;
+    use rocketmq_protocol::protocol::heartbeat::consumer_data::ConsumerData;
+    use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
+    use rocketmq_protocol::protocol::heartbeat::producer_data::ProducerData;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
+    use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
     use tokio::net::TcpStream;
 
     use super::*;
     use crate::broker_runtime::BrokerRuntime;
-    use rocketmq_remoting::base::response_future::ResponseFuture;
-    use rocketmq_remoting::code::response_code::ResponseCode as RemotingResponseCode;
-    use rocketmq_remoting::connection::Connection;
-    use rocketmq_remoting::net::channel::ChannelInner;
-    use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
+    use rocketmq_protocol::code::response_code::ResponseCode as RemotingResponseCode;
+    use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
+    use rocketmq_transport::base::response_future::ResponseFuture;
+    use rocketmq_transport::connection::Connection;
+    use rocketmq_transport::net::channel::ChannelInner;
 
     #[test]
     fn production_processor_has_no_complete_runtime_owner() {

@@ -15,7 +15,7 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use rocketmq_common::common::controller::ControllerConfig;
+use rocketmq_controller::config::ControllerConfig;
 use rocketmq_controller::config::ControllerConfigReader;
 use rocketmq_controller::config::StorageBackendType;
 use rocketmq_controller::typ::Node;

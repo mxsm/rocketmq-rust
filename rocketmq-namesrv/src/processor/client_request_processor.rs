@@ -16,19 +16,19 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::FAQUrl;
-use rocketmq_common::TimeUtils;
+use rocketmq_model::common::FAQUrl;
 use rocketmq_model::version::RocketMqVersion;
-use rocketmq_remoting::code::request_code::RequestCode;
-use rocketmq_remoting::code::response_code::ResponseCode;
-use rocketmq_remoting::error_response;
-use rocketmq_remoting::net::channel::Channel;
-use rocketmq_remoting::protocol::header::client_request_header::GetRouteInfoRequestHeader;
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
-use rocketmq_remoting::protocol::RemotingSerializable;
-use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_remoting::runtime::processor::RequestProcessor;
+use rocketmq_protocol::code::request_code::RequestCode;
+use rocketmq_protocol::code::response_code::ResponseCode;
+use rocketmq_protocol::protocol::header::client_request_header::GetRouteInfoRequestHeader;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
+use rocketmq_protocol::protocol::RemotingSerializable;
+use rocketmq_runtime::common::time_utils;
+use rocketmq_transport::error_response;
+use rocketmq_transport::net::channel::Channel;
+use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_transport::runtime::processor::RequestProcessor;
 use tracing::debug;
 use tracing::warn;
 
@@ -83,7 +83,7 @@ impl ClientRequestProcessor {
 
         Self {
             need_check_namesrv_ready: AtomicBool::new(true),
-            startup_time_millis: TimeUtils::current_millis(),
+            startup_time_millis: time_utils::current_millis(),
             wait_seconds_millis,
             need_wait_for_service,
             order_message_enable,
@@ -101,7 +101,7 @@ impl ClientRequestProcessor {
 
         // Early return: Check if nameserver is ready (using cached config)
         if self.need_wait_for_service {
-            let elapsed_millis = TimeUtils::current_millis().saturating_sub(self.startup_time_millis);
+            let elapsed_millis = time_utils::current_millis().saturating_sub(self.startup_time_millis);
             let namesrv_ready =
                 !self.need_check_namesrv_ready.load(Ordering::Relaxed) || elapsed_millis >= self.wait_seconds_millis;
 
@@ -181,8 +181,8 @@ pub(crate) fn should_use_standard_json(request_version: i32, accept_standard_jso
 mod tests {
     use std::collections::HashMap;
 
-    use rocketmq_remoting::protocol::route::route_data_view::BrokerData;
-    use rocketmq_remoting::protocol::route::route_data_view::QueueData;
+    use rocketmq_protocol::protocol::route::route_data_view::BrokerData;
+    use rocketmq_protocol::protocol::route::route_data_view::QueueData;
 
     use super::*;
 

@@ -40,7 +40,7 @@ pub mod rebalance_strategy;
 pub mod store;
 pub mod topic_message_queue_change_listener;
 
-pub use rocketmq_common::common::consistenthash::HashFunction;
+pub use rocketmq_model::common::consistenthash::HashFunction;
 
 pub use ack_callback::AckCallback;
 pub use ack_callback::AckCallbackFn;

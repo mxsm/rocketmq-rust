@@ -14,7 +14,7 @@
 
 use std::collections::HashSet;
 
-use crate::common::message::message_queue_assignment::MessageQueueAssignment;
+use rocketmq_model::common::message::message_queue_assignment::MessageQueueAssignment;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -27,10 +27,10 @@ pub struct QueryAssignmentResponseBody {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::message::message_enum::MessageRequestMode;
     use crate::protocol::RemotingDeserializable;
     use crate::protocol::RemotingSerializable;
     use cheetah_string::CheetahString;
+    use rocketmq_model::common::message::message_enum::MessageRequestMode;
     use rocketmq_model::message::MessageQueue;
     use std::collections::HashMap;
 

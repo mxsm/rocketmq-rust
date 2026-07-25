@@ -19,15 +19,15 @@ use std::sync::Arc;
 use std::sync::Weak;
 use std::time::Duration;
 
+use crate::config::broker_config::BrokerConfig;
 use cheetah_string::CheetahString;
 use crossbeam_skiplist::SkipSet;
 use dashmap::DashMap;
 use parking_lot::Mutex;
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskKind;
+use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
 use tokio::select;
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::sync::Mutex as AsyncMutex;
@@ -43,7 +43,7 @@ use crate::long_polling::pop_request::PopRequest;
 pub(crate) trait LocalPopLiteLongPollingRequestProcessor {
     async fn process_request_when_wakeup(
         &self,
-        channel: rocketmq_remoting::net::channel::Channel,
+        channel: rocketmq_transport::net::channel::Channel,
         ctx: ConnectionHandlerContext,
         request: RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>>;

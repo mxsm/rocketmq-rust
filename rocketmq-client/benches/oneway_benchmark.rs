@@ -26,7 +26,7 @@ use criterion::criterion_main;
 use criterion::BenchmarkId;
 use criterion::Criterion;
 use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
-use rocketmq_common::common::message::message_single::Message;
+use rocketmq_model::common::message::message_single::Message;
 
 /// Benchmark single send_oneway call latency
 ///

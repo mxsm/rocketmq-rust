@@ -337,7 +337,7 @@ pub async fn run_request_future_holder_scan_probe(
     for index in 0..pending_requests {
         let callback_count = Arc::clone(&callbacks);
         let callback = Arc::new(
-            move |_response: Option<&dyn rocketmq_common::common::message::MessageTrait>,
+            move |_response: Option<&dyn rocketmq_model::common::message::MessageTrait>,
                   _error: Option<&rocketmq_error::RocketMQError>| {
                 callback_count.fetch_add(1, Ordering::Relaxed);
             },
@@ -377,7 +377,7 @@ mod tests {
     use std::sync::atomic::Ordering;
     use std::time::Instant;
 
-    use rocketmq_common::common::message::MessageTrait;
+    use rocketmq_model::common::message::MessageTrait;
 
     use super::*;
 

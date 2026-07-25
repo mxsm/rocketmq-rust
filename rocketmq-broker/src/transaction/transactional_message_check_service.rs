@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
+use crate::config::broker_config::BrokerConfig;
 use rocketmq_runtime::task::service_task::ServiceContext;
 use rocketmq_runtime::task::service_task::ServiceTask;
 use rocketmq_runtime::task::ServiceManager;

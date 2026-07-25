@@ -22,8 +22,8 @@ use std::sync::atomic::Ordering::Acquire;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
 
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_remoting::protocol::body::pop_process_queue_info::PopProcessQueueInfo;
+use rocketmq_protocol::protocol::body::pop_process_queue_info::PopProcessQueueInfo;
+use rocketmq_runtime::common::time_utils::current_millis;
 
 use crate::consumer::consumer_impl::PULL_MAX_IDLE_TIME;
 

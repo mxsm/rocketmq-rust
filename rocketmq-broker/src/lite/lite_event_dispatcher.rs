@@ -21,7 +21,7 @@ use std::sync::Mutex;
 
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
-use rocketmq_common::TimeUtils::current_millis;
+use rocketmq_runtime::common::time_utils::current_millis;
 use tokio::sync::mpsc::UnboundedSender;
 
 #[derive(Debug, Clone)]

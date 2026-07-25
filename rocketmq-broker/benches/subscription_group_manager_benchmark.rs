@@ -32,7 +32,7 @@ use criterion::Criterion;
 use criterion::Throughput;
 use dashmap::DashMap;
 use parking_lot::Mutex;
-use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
+use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 
 // Simulate the old Mutex-based approach for comparison
 struct MutexBasedManager {

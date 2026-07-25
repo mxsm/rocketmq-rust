@@ -18,9 +18,9 @@ use rocketmq_auth::authorization::model::resource::Resource;
 use rocketmq_auth::config::AuthConfig;
 use rocketmq_auth::AuthRuntime;
 use rocketmq_auth::AuthRuntimeBuilder;
-use rocketmq_common::common::action::Action;
-use rocketmq_remoting::code::request_code::RequestCode;
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::code::request_code::RequestCode;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_security_api::Action;
 use tempfile::TempDir;
 
 fn temp_auth_config(temp: &TempDir) -> AuthConfig {

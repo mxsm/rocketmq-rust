@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use cheetah_string::CheetahString;
-use rocketmq_remoting::code::response_code::ResponseCode;
+use rocketmq_protocol::code::response_code::ResponseCode;
 
 use crate::event::event_message::EventMessage;
 

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
+use rocketmq_model::common::sys_flag::message_sys_flag::MessageSysFlag;
 use rocketmq_store_local::consume_queue::root::ConsumeQueueDispatchRoot;
 
 use crate::base::commit_log_dispatcher::CommitLogDispatcher;
@@ -54,7 +54,7 @@ impl CommitLogDispatcher for CommitLogDispatcherBuildConsumeQueue {
 mod tests {
     use std::sync::Arc;
 
-    use rocketmq_common::common::broker::broker_config::BrokerConfig;
+    use crate::config::store_runtime_config::StoreRuntimeConfig;
 
     use super::*;
     use crate::config::message_store_config::MessageStoreConfig;
@@ -63,7 +63,7 @@ mod tests {
     fn prepared_and_rollback_transactions_skip_consume_queue_dispatch() {
         let store = ConsumeQueueStore::new(
             Arc::new(MessageStoreConfig::default()),
-            Arc::new(BrokerConfig::default()),
+            Arc::new(StoreRuntimeConfig::default()),
         );
         let dispatcher = CommitLogDispatcherBuildConsumeQueue::new(store);
 

@@ -22,10 +22,10 @@ use openraft::storage::RaftStateMachine;
 use openraft::EntryPayload;
 use openraft::OptionalSend;
 use openraft::RaftSnapshotBuilder;
-use rocketmq_common::utils::crc32_utils::crc32;
-use rocketmq_remoting::code::response_code::ResponseCode;
-use rocketmq_remoting::protocol::header::controller::get_next_broker_id_response_header::GetNextBrokerIdResponseHeader;
-use rocketmq_remoting::protocol::header::controller::get_replica_info_response_header::GetReplicaInfoResponseHeader;
+use rocketmq_model::utils::crc32_utils::crc32;
+use rocketmq_protocol::code::response_code::ResponseCode;
+use rocketmq_protocol::protocol::header::controller::get_next_broker_id_response_header::GetNextBrokerIdResponseHeader;
+use rocketmq_protocol::protocol::header::controller::get_replica_info_response_header::GetReplicaInfoResponseHeader;
 use serde::de::DeserializeOwned;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
@@ -445,7 +445,7 @@ impl StateMachine {
             } => {
                 replicas_info_manager.on_broker_heartbeat(broker_identity.clone(), broker_live_info.clone());
                 ControllerResponse::new(
-                    rocketmq_remoting::code::response_code::ResponseCode::Success.into(),
+                    rocketmq_protocol::code::response_code::ResponseCode::Success.into(),
                     Some("Heart beat success".to_string()),
                     None,
                     None,
@@ -459,7 +459,7 @@ impl StateMachine {
                 let inactive_brokers = replicas_info_manager.check_not_active_broker(*check_time_millis);
                 let body = serde_json::to_vec(&inactive_brokers).ok();
                 ControllerResponse::new(
-                    rocketmq_remoting::code::response_code::ResponseCode::Success.into(),
+                    rocketmq_protocol::code::response_code::ResponseCode::Success.into(),
                     None,
                     None,
                     body,
@@ -770,7 +770,7 @@ mod tests {
     use crate::config::ControllerConfig;
     use crate::typ::BrokerIdentityInfoSnapshot;
     use crate::typ::BrokerLiveInfoSnapshot;
-    use rocketmq_remoting::code::response_code::ResponseCode;
+    use rocketmq_protocol::code::response_code::ResponseCode;
 
     fn new_state_machine() -> StateMachine {
         let config = ControllerConfigReader::new(

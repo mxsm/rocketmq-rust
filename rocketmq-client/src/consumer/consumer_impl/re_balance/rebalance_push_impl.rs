@@ -22,16 +22,16 @@ use std::time::Duration;
 use arc_swap::ArcSwap;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
-use rocketmq_common::common::constant::consume_init_mode::ConsumeInitMode;
-use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
-use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_common::common::mix_all;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_remoting::code::response_code::ResponseCode;
-use rocketmq_remoting::protocol::body::unlock_batch_request_body::UnlockBatchRequestBody;
-use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
-use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
-use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
+use rocketmq_model::common::constant::consume_init_mode::ConsumeInitMode;
+use rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere;
+use rocketmq_model::common::message::message_queue::MessageQueue;
+use rocketmq_model::common::mix_all;
+use rocketmq_protocol::code::response_code::ResponseCode;
+use rocketmq_protocol::protocol::body::unlock_batch_request_body::UnlockBatchRequestBody;
+use rocketmq_protocol::protocol::heartbeat::consume_type::ConsumeType;
+use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
+use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
+use rocketmq_runtime::common::time_utils::current_millis;
 use std::sync::LazyLock;
 use tokio::sync::RwLock;
 use tracing::error;
@@ -626,7 +626,7 @@ async fn lock_all_impl(
     consumer_group: Option<CheetahString>,
     client_instance: Arc<MQClientInstance>,
 ) {
-    use rocketmq_remoting::protocol::body::request::lock_batch_request_body::LockBatchRequestBody;
+    use rocketmq_protocol::protocol::body::request::lock_batch_request_body::LockBatchRequestBody;
 
     let map = broker_mqs
         .into_iter()
@@ -763,8 +763,8 @@ mod tests {
     use std::sync::Arc;
 
     use cheetah_string::CheetahString;
-    use rocketmq_common::common::message::message_queue::MessageQueue;
-    use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
+    use rocketmq_model::common::message::message_queue::MessageQueue;
+    use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 
     use super::RebalancePushImpl;
     use crate::base::client_config::ClientConfig;

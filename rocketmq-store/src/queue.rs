@@ -104,9 +104,9 @@ impl CqUnit {
 }
 
 pub(crate) mod multi_dispatch_utils {
-    use rocketmq_common::common::message::MessageConst;
-    use rocketmq_common::common::mix_all;
-    use rocketmq_common::common::topic::TopicValidator;
+    use rocketmq_model::common::message::MessageConst;
+    use rocketmq_model::common::mix_all;
+    use rocketmq_model::common::topic::TopicValidator;
 
     use crate::base::dispatch_request::DispatchRequest;
     use crate::config::message_store_config::MessageStoreConfig;
@@ -142,8 +142,8 @@ pub(crate) mod multi_dispatch_utils {
 
 #[cfg(test)]
 mod tests {
-    use rocketmq_common::common::message::MessageConst;
-    use rocketmq_common::common::topic::TopicValidator;
+    use rocketmq_model::common::message::MessageConst;
+    use rocketmq_model::common::topic::TopicValidator;
 
     use super::*;
     use crate::base::dispatch_request::DispatchRequest;

@@ -15,30 +15,30 @@
 use std::sync::Arc;
 use std::sync::Weak;
 
+use crate::config::broker_config::BrokerConfig;
 use cheetah_string::CheetahString;
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
-use rocketmq_common::common::message::message_decoder;
-use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
-use rocketmq_common::common::message::MessageConst;
-use rocketmq_common::common::message::MessageTrait;
-use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
-use rocketmq_common::common::TopicFilterType;
-use rocketmq_common::MessageAccessor::MessageAccessor;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_remoting::code::request_code::RequestCode;
-use rocketmq_remoting::code::response_code::ResponseCode;
-use rocketmq_remoting::error_response;
-use rocketmq_remoting::net::channel::Channel;
-use rocketmq_remoting::protocol::header::end_transaction_request_header::EndTransactionRequestHeader;
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_remoting::runtime::processor::RequestProcessor;
+use rocketmq_model::common::message::message_accessor::MessageAccessor;
+use rocketmq_model::common::message::message_ext::MessageExt;
+use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use rocketmq_model::common::message::MessageConst;
+use rocketmq_model::common::message::MessageTrait;
+use rocketmq_model::common::sys_flag::message_sys_flag::MessageSysFlag;
+use rocketmq_model::common::TopicFilterType;
+use rocketmq_protocol::code::request_code::RequestCode;
+use rocketmq_protocol::code::response_code::ResponseCode;
+use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
+use rocketmq_protocol::protocol::header::end_transaction_request_header::EndTransactionRequestHeader;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
+use rocketmq_transport::error_response;
+use rocketmq_transport::net::channel::Channel;
+use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_transport::runtime::processor::RequestProcessor;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
@@ -638,7 +638,7 @@ fn end_message_transaction(msg_ext: &mut MessageExt) -> MessageExtBrokerInner {
     };
     msg_inner.tags_code = tags_code_value;
     MessageAccessor::set_properties(&mut msg_inner, msg_ext.get_properties().clone());
-    msg_inner.properties_string = message_decoder::message_properties_to_string(msg_ext.get_properties());
+    msg_inner.properties_string = MessageDecoder::message_properties_to_string(msg_ext.get_properties());
     MessageAccessor::clear_property(&mut msg_inner, MessageConst::PROPERTY_REAL_TOPIC);
     MessageAccessor::clear_property(&mut msg_inner, MessageConst::PROPERTY_REAL_QUEUE_ID);
     msg_inner
@@ -686,7 +686,7 @@ mod tests {
         assert_eq!(msg_inner.get_properties(), msg_ext.get_properties());
         assert_eq!(
             msg_inner.properties_string,
-            message_decoder::message_properties_to_string(msg_ext.get_properties())
+            MessageDecoder::message_properties_to_string(msg_ext.get_properties())
         );
     }
 
@@ -762,7 +762,9 @@ mod tests {
             timer_max_delay_sec: 88,
             timer_wheel_enable: false,
         };
-        let broker_stats_manager = BrokerStatsManager::new(Arc::new(BrokerConfig::default()));
+        let broker_stats_manager = BrokerStatsManager::new(Arc::new(
+            rocketmq_store::config::store_runtime_config::StoreRuntimeConfig::default(),
+        ));
         let topic = CheetahString::from_static_str("transaction-topic");
 
         let illegal = build_put_message_response(

@@ -16,23 +16,23 @@ use std::any::Any;
 use std::collections::HashMap;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::action::Action;
-use rocketmq_common::common::resource::resource_pattern::ResourcePattern;
-use rocketmq_common::common::resource::resource_type::ResourceType;
-use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
-use rocketmq_remoting::code::request_code::RequestCode;
-use rocketmq_remoting::net::channel::Channel;
-use rocketmq_remoting::protocol::body::request::lock_batch_request_body::LockBatchRequestBody;
-use rocketmq_remoting::protocol::body::unlock_batch_request_body::UnlockBatchRequestBody;
-use rocketmq_remoting::protocol::header::get_consumer_listby_group_request_header::GetConsumerListByGroupRequestHeader;
-use rocketmq_remoting::protocol::header::query_consumer_offset_request_header::QueryConsumerOffsetRequestHeader;
-use rocketmq_remoting::protocol::header::unregister_client_request_header::UnregisterClientRequestHeader;
-use rocketmq_remoting::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader;
-use rocketmq_remoting::protocol::heartbeat::heartbeat_data::HeartbeatData;
-use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
+use rocketmq_model::utils::serde_json_utils::SerdeJsonUtils;
+use rocketmq_protocol::code::request_code::RequestCode;
+use rocketmq_protocol::protocol::body::request::lock_batch_request_body::LockBatchRequestBody;
+use rocketmq_protocol::protocol::body::unlock_batch_request_body::UnlockBatchRequestBody;
+use rocketmq_protocol::protocol::header::get_consumer_listby_group_request_header::GetConsumerListByGroupRequestHeader;
+use rocketmq_protocol::protocol::header::query_consumer_offset_request_header::QueryConsumerOffsetRequestHeader;
+use rocketmq_protocol::protocol::header::unregister_client_request_header::UnregisterClientRequestHeader;
+use rocketmq_protocol::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader;
+use rocketmq_protocol::protocol::heartbeat::heartbeat_data::HeartbeatData;
+use rocketmq_protocol::protocol::namespace_util::NamespaceUtil;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_security_api::Action;
+use rocketmq_security_api::ResourcePattern;
+use rocketmq_security_api::ResourceType;
+use rocketmq_transport::net::channel::Channel;
+use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
 
 use crate::authentication::enums::subject_type::SubjectType;
 use crate::authorization::builder::AuthorizationContextBuilder;
@@ -767,8 +767,8 @@ mod tests {
     use std::collections::HashMap;
     use std::collections::HashSet;
 
-    use rocketmq_common::common::message::message_queue::MessageQueue;
-    use rocketmq_remoting::code::request_code::RequestCode;
+    use rocketmq_model::common::message::message_queue::MessageQueue;
+    use rocketmq_protocol::code::request_code::RequestCode;
 
     use super::*;
     use crate::config::AuthConfig;
@@ -821,11 +821,11 @@ mod tests {
         ext_fields.insert(CheetahString::from("AccessKey"), CheetahString::from("alice"));
 
         let mut heartbeat = HeartbeatData::default();
-        let mut consumer = rocketmq_remoting::protocol::heartbeat::consumer_data::ConsumerData {
+        let mut consumer = rocketmq_protocol::protocol::heartbeat::consumer_data::ConsumerData {
             group_name: CheetahString::from("group-a"),
             ..Default::default()
         };
-        let subscription = rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData {
+        let subscription = rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData {
             topic: CheetahString::from("topic-a"),
             ..Default::default()
         };

@@ -18,8 +18,8 @@ use std::collections::HashMap;
 use cheetah_string::CheetahString;
 use clap::Parser;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::protocol::RemotingSerializable;
-use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
+use rocketmq_protocol::protocol::RemotingSerializable;
+use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;

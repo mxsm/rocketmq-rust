@@ -19,8 +19,8 @@ use std::ops::DerefMut;
 use std::sync::Arc;
 use std::time::Duration;
 
-use rocketmq_client_rust::admin_adapter_compat::error::RocketMQError;
 use rocketmq_client_rust::DefaultMQAdminExt;
+use rocketmq_error::RocketMQError;
 
 use crate::core::clock::Clock;
 use crate::core::AdminError;

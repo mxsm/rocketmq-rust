@@ -26,10 +26,12 @@
 
 pub mod actor;
 pub mod blocking;
+pub mod common;
 pub mod config;
 pub mod context;
 pub mod diagnostics;
 pub mod error;
+pub mod executor_service;
 pub mod handle;
 pub mod legacy;
 pub mod metadata_io;
@@ -44,6 +46,7 @@ pub mod shutdown_report;
 pub mod signal;
 pub mod task;
 pub mod task_group;
+pub mod tokio_lock;
 
 pub use actor::ActorRuntime;
 pub use blocking::BlockingExecutor;
@@ -57,6 +60,10 @@ pub use diagnostics::RuntimeDiagnostics;
 pub use diagnostics::RuntimeDiagnosticsSnapshot;
 pub use error::RuntimeError;
 pub use error::RuntimeResult;
+pub use executor_service::FuturesExecutorService;
+pub use executor_service::FuturesExecutorServiceBuilder;
+pub use executor_service::ScheduledExecutorService;
+pub use executor_service::TokioExecutorService;
 pub use handle::RuntimeHandle;
 #[allow(deprecated)]
 pub use legacy::RocketMQRuntime;

@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use cheetah_string::CheetahString;
-use rocketmq_client_rust::admin_adapter_compat::error::RocketMQResult;
-use rocketmq_client_rust::admin_adapter_compat::remoting::protocol::body::broker_body::cluster_info::ClusterInfo;
+use rocketmq_error::RocketMQResult;
+use rocketmq_protocol::protocol::body::broker_body::cluster_info::ClusterInfo;
 
 use crate::client_adapter::services::errors;
 
@@ -172,8 +172,8 @@ mod tests {
     use std::collections::HashMap;
     use std::collections::HashSet;
 
-    use rocketmq_client_rust::admin_adapter_compat::error::ErrorKind;
-    use rocketmq_client_rust::admin_adapter_compat::remoting::protocol::route::route_data_view::BrokerData;
+    use rocketmq_error::ErrorKind;
+    use rocketmq_protocol::protocol::route::route_data_view::BrokerData;
 
     use super::*;
 

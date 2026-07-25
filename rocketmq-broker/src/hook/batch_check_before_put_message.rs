@@ -16,9 +16,9 @@ use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
-use rocketmq_common::common::config::TopicConfig;
-use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
-use rocketmq_common::common::message::MessageTrait;
+use rocketmq_model::common::config::TopicConfig;
+use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use rocketmq_model::common::message::MessageTrait;
 use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::hook::put_message_hook::PutMessageHook;
 use tracing::warn;

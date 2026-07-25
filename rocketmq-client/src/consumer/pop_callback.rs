@@ -16,11 +16,11 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_common::common::mix_all;
 use rocketmq_error::RocketMQError;
-use rocketmq_remoting::code::response_code::ResponseCode;
-use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
+use rocketmq_model::common::message::message_queue::MessageQueue;
+use rocketmq_model::common::mix_all;
+use rocketmq_protocol::code::response_code::ResponseCode;
+use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 use tracing::warn;
 
 use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
@@ -200,7 +200,7 @@ impl PopCallback for DefaultPopCallback {
 #[cfg(test)]
 mod tests {
     use cheetah_string::CheetahString;
-    use rocketmq_common::common::message::message_ext::MessageExt;
+    use rocketmq_model::common::message::message_ext::MessageExt;
 
     use super::*;
     use crate::base::client_config::ClientConfig;

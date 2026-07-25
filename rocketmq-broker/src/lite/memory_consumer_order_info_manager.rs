@@ -16,8 +16,8 @@ use std::collections::HashMap;
 
 use cheetah_string::CheetahString;
 use parking_lot::Mutex;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_remoting::protocol::header::extra_info_util::ExtraInfoUtil;
+use rocketmq_protocol::protocol::header::extra_info_util::ExtraInfoUtil;
+use rocketmq_runtime::common::time_utils::current_millis;
 
 use crate::offset::manager::consumer_order_info_manager::OrderInfo;
 

@@ -18,13 +18,12 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::sync::Weak;
 
+use crate::config::broker_config::BrokerConfig;
 use cheetah_string::CheetahString;
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
-use rocketmq_common::common::config::TopicConfig;
-use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
-use rocketmq_common::common::server::config::ServerConfig;
-use rocketmq_remoting::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
-use rocketmq_remoting::protocol::DataVersion;
+use rocketmq_model::common::config::TopicConfig;
+use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use rocketmq_protocol::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
+use rocketmq_protocol::protocol::DataVersion;
 use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
@@ -33,6 +32,7 @@ use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
 use rocketmq_store::store_error::StoreError;
 use rocketmq_store::timer::timer_message_store::TimerMessageStore;
 use rocketmq_store::utils::ffi::MADV_NORMAL;
+use rocketmq_transport::config::ServerConfig;
 use tracing::warn;
 
 use crate::broker::broker_control_plane::BrokerControllerRuntime;

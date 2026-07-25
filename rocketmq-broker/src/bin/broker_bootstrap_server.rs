@@ -23,14 +23,12 @@ use anyhow::Result;
 use clap::Parser;
 use rocketmq_broker::build_broker_telemetry_bootstrap_config;
 use rocketmq_broker::command::Args;
+use rocketmq_broker::config::broker_config::BrokerConfig;
 use rocketmq_broker::Builder;
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
-use rocketmq_common::common::mq_version::CURRENT_VERSION;
-#[cfg(test)]
-use rocketmq_common::common::server::config::ServerConfig;
-use rocketmq_common::EnvUtils::EnvUtils;
-use rocketmq_common::ParseConfigFile;
-use rocketmq_remoting::protocol::remoting_command;
+use rocketmq_model::common::mq_version::CURRENT_VERSION;
+use rocketmq_model::utils::env_utils::EnvUtils;
+use rocketmq_protocol::protocol::remoting_command;
+use rocketmq_runtime::common::parse_config_file as config_file_parser;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 use rocketmq_runtime::ServiceContext;
@@ -42,6 +40,8 @@ use rocketmq_security_api::ValidatedSecurityBootstrap;
 #[cfg(feature = "tieredstore")]
 use rocketmq_store::base::store_enum::StoreType;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
+#[cfg(test)]
+use rocketmq_transport::config::ServerConfig;
 use tracing::info;
 use tracing::warn;
 
@@ -209,7 +209,7 @@ fn validate_broker_security(
             u16::try_from(message_store_config.ha_listen_port).context("broker haListenPort must fit a TCP port")?;
         listeners.push(SocketAddr::new(message_store_config.ha_listen_address, ha_listen_port));
     }
-    if broker_config.metrics_exporter_type == rocketmq_common::common::metrics::MetricsExporterType::Prom {
+    if broker_config.metrics_exporter_type == rocketmq_observability::exporter_types::MetricsExporterType::Prom {
         let metrics_ip = broker_config
             .metrics_prom_exporter_host
             .parse::<IpAddr>()
@@ -290,14 +290,14 @@ fn parse_config_file(
     if let Some(config_file) = args.get_config_file() {
         info!("Loading configuration from: {}", config_file.display());
 
-        let mut broker_config = ParseConfigFile::parse_config_file::<BrokerConfig>(config_file.clone())
+        let mut broker_config = config_file_parser::parse_config_file::<BrokerConfig>(config_file.clone())
             .with_context(|| format!("Failed to parse BrokerConfig from {:?}", config_file))?;
         apply_tls_properties_from_file(&mut broker_config, config_file.clone())?;
 
-        let message_store_config = ParseConfigFile::parse_config_file::<MessageStoreConfig>(config_file.clone())
+        let message_store_config = config_file_parser::parse_config_file::<MessageStoreConfig>(config_file.clone())
             .with_context(|| format!("Failed to parse MessageStoreConfig from {:?}", config_file))?;
         let logging_overrides =
-            ParseConfigFile::parse_config_file::<rocketmq_observability::LoggingOverrides>(config_file.clone())
+            config_file_parser::parse_config_file::<rocketmq_observability::LoggingOverrides>(config_file.clone())
                 .with_context(|| format!("Failed to parse logging configuration from {:?}", config_file))?;
 
         Ok((broker_config, message_store_config, logging_overrides))
@@ -636,10 +636,10 @@ mod tests {
         assert!(validate_broker_security(&security, &broker, &store, None).is_err());
         store.ha_listen_address = IpAddr::from([127, 0, 0, 1]);
 
-        broker.metrics_exporter_type = rocketmq_common::common::metrics::MetricsExporterType::Prom;
+        broker.metrics_exporter_type = rocketmq_observability::exporter_types::MetricsExporterType::Prom;
         broker.metrics_prom_exporter_host = "0.0.0.0".into();
         assert!(validate_broker_security(&security, &broker, &store, None).is_err());
-        broker.metrics_exporter_type = rocketmq_common::common::metrics::MetricsExporterType::Disable;
+        broker.metrics_exporter_type = rocketmq_observability::exporter_types::MetricsExporterType::Disable;
 
         broker.broker_server_config.bind_address = "0.0.0.0".to_string();
         assert!(validate_broker_security(&security, &broker, &store, None).is_err());
@@ -759,7 +759,7 @@ brokerId = 0
         assert!(broker_config.broker_server_config.tls_config.enable);
         assert_eq!(
             broker_config.broker_server_config.tls_config.server.mode,
-            rocketmq_common::common::tls_config::TlsMode::Enforcing
+            rocketmq_transport::config::TlsMode::Enforcing
         );
         assert_eq!(
             broker_config

@@ -4,8 +4,8 @@ use std::fmt::Formatter;
 use std::net::SocketAddr;
 
 use cheetah_string::CheetahString;
-use rocketmq_remoting::net::channel::ChannelId;
-use rocketmq_remoting::protocol::DataVersion;
+use rocketmq_protocol::protocol::DataVersion;
+use rocketmq_transport::net::channel::ChannelId;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -156,7 +156,7 @@ mod tests {
     use std::net::Ipv4Addr;
     use std::net::SocketAddr;
 
-    use rocketmq_common::utils::correlation_id_util::CorrelationIdUtil;
+    use rocketmq_model::utils::correlation_id_util::CorrelationIdUtil;
 
     use super::*;
 
@@ -183,7 +183,7 @@ mod tests {
 
     #[test]
     fn broker_live_info_properties() {
-        let data_version = rocketmq_remoting::protocol::data_version_facade::new_data_version();
+        let data_version = rocketmq_protocol::protocol::data_version_facade::new_data_version();
         let broker_live_info = BrokerLiveInfo::new(
             1000,
             2000,

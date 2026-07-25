@@ -28,7 +28,7 @@ use std::time::Instant;
 
 use cheetah_string::CheetahString;
 use rocketmq_namesrv::route::tables::TopicQueueTable;
-use rocketmq_remoting::protocol::route::route_data_view::QueueData;
+use rocketmq_protocol::protocol::route::route_data_view::QueueData;
 
 const TOPIC_COUNT: usize = 20_000;
 const BROKER_COUNT: usize = 128;

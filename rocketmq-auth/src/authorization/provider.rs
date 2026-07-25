@@ -22,7 +22,7 @@ use std::sync::Arc;
 use rocketmq_error::AuthError;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::SerializationError;
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::MetadataIoError;
 
 use crate::authentication::provider::LocalAuthenticationMetadataProvider;
@@ -838,7 +838,7 @@ mod tests {
         let mut context = DefaultAuthorizationContext::default();
         context.set_subject("alice", SubjectType::User);
         context.set_resource(Resource::of_topic("test-topic"));
-        context.set_actions(vec![rocketmq_common::common::action::Action::Pub]);
+        context.set_actions(vec![rocketmq_security_api::Action::Pub]);
         context.set_source_ip("127.0.0.1");
 
         assert!(provider.authorize(&context).await.is_ok());
@@ -868,7 +868,7 @@ mod tests {
         let mut context = DefaultAuthorizationContext::default();
         context.set_subject("persisted", SubjectType::User);
         context.set_resource(Resource::of_topic("test-topic"));
-        context.set_actions(vec![rocketmq_common::common::action::Action::Pub]);
+        context.set_actions(vec![rocketmq_security_api::Action::Pub]);
         context.set_source_ip("127.0.0.1");
 
         assert!(provider.authorize(&context).await.is_ok());
@@ -898,7 +898,7 @@ mod tests {
             SubjectType::User,
             Policy::of(
                 vec![resource.clone()],
-                vec![rocketmq_common::common::action::Action::Pub],
+                vec![rocketmq_security_api::Action::Pub],
                 None,
                 Decision::Allow,
             ),
@@ -908,7 +908,7 @@ mod tests {
         let mut context = DefaultAuthorizationContext::default();
         context.set_subject("alice", SubjectType::User);
         context.set_resource(resource);
-        context.set_actions(vec![rocketmq_common::common::action::Action::Pub]);
+        context.set_actions(vec![rocketmq_security_api::Action::Pub]);
         context.set_source_ip("127.0.0.1");
 
         assert!(provider.authorize(&context).await.is_ok());

@@ -18,34 +18,33 @@ use crate::load_balance::message_request_mode_manager::MessageRequestModeManager
 
 use crate::topic::manager::topic_route_info_manager::TopicRouteInfoManager;
 
+use crate::config::broker_config::BrokerConfig;
+use crate::config::config_manager::ConfigManager;
 use cheetah_string::CheetahString;
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
-use rocketmq_common::common::config_manager::ConfigManager;
-use rocketmq_common::common::message::message_enum::MessageRequestMode;
-use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_common::common::message::message_queue_assignment::MessageQueueAssignment;
-use rocketmq_common::common::mix_all;
-use rocketmq_common::common::mix_all::RETRY_GROUP_TOPIC_PREFIX;
-use rocketmq_common::FileUtils;
 use rocketmq_model::allocation::AllocateMessageQueueAveragely;
 use rocketmq_model::allocation::AllocateMessageQueueAveragelyByCircle;
 use rocketmq_model::allocation::AllocateMessageQueueStrategy;
-use rocketmq_remoting::code::request_code::RequestCode;
-use rocketmq_remoting::code::response_code::ResponseCode;
-use rocketmq_remoting::error_response;
-use rocketmq_remoting::net::channel::Channel;
-use rocketmq_remoting::protocol::body::query_assignment_request_body::QueryAssignmentRequestBody;
-use rocketmq_remoting::protocol::body::query_assignment_response_body::QueryAssignmentResponseBody;
-use rocketmq_remoting::protocol::body::set_message_request_mode_request_body::SetMessageRequestModeRequestBody;
-use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_remoting::protocol::RemotingDeserializable;
-use rocketmq_remoting::protocol::RemotingSerializable;
-use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_remoting::runtime::processor::RequestProcessor;
+use rocketmq_model::common::message::message_enum::MessageRequestMode;
+use rocketmq_model::common::message::message_queue::MessageQueue;
+use rocketmq_model::common::message::message_queue_assignment::MessageQueueAssignment;
+use rocketmq_model::common::mix_all;
+use rocketmq_model::common::mix_all::RETRY_GROUP_TOPIC_PREFIX;
+use rocketmq_protocol::code::request_code::RequestCode;
+use rocketmq_protocol::code::response_code::ResponseCode;
+use rocketmq_protocol::protocol::body::query_assignment_request_body::QueryAssignmentRequestBody;
+use rocketmq_protocol::protocol::body::query_assignment_response_body::QueryAssignmentResponseBody;
+use rocketmq_protocol::protocol::body::set_message_request_mode_request_body::SetMessageRequestModeRequestBody;
+use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::RemotingDeserializable;
+use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::MetadataDeadline;
 use rocketmq_runtime::MetadataIoActor;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
+use rocketmq_transport::error_response;
+use rocketmq_transport::net::channel::Channel;
+use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_transport::runtime::processor::RequestProcessor;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -514,7 +513,7 @@ impl QueryAssignmentProcessor {
                     MetadataDeadline::after(Duration::from_secs(5)),
                 )
                 .await
-                .map_err(FileUtils::metadata_io_error)?;
+                .map_err(crate::runtime_to_rocketmq_error)?;
         } else {
             self.message_request_mode_manager.persist()?;
         }
@@ -565,10 +564,10 @@ mod tests {
     use std::sync::Arc;
 
     use cheetah_string::CheetahString;
-    use rocketmq_common::common::message::message_queue::MessageQueue;
     use rocketmq_model::allocation::AllocateMessageQueueAveragely;
     use rocketmq_model::allocation::AllocateMessageQueueAveragelyByCircle;
     use rocketmq_model::allocation::AllocateMessageQueueStrategy;
+    use rocketmq_model::common::message::message_queue::MessageQueue;
 
     use super::allocate;
 

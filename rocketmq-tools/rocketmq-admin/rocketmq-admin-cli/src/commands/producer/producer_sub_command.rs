@@ -14,7 +14,7 @@
 
 use clap::Parser;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::protocol::body::producer_table_info::ProducerTableInfo;
+use rocketmq_protocol::protocol::body::producer_table_info::ProducerTableInfo;
 
 use crate::commands::CommandExecute;
 use rocketmq_admin_core::client_adapter::services::producer::ProducerInfoQueryRequest;

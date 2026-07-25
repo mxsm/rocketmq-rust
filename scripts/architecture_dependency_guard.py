@@ -108,8 +108,8 @@ def validate_policy(policy: dict[str, Any]) -> None:
     counts = policy["package_counts"]
     baseline_count = counts.get("baseline")
     target_count = counts.get("target")
-    if not isinstance(baseline_count, int) or not isinstance(target_count, int) or target_count != 32:
-        raise InputError("policy package_counts must track an integer milestone baseline and target=32")
+    if not isinstance(baseline_count, int) or not isinstance(target_count, int) or target_count != 29:
+        raise InputError("policy package_counts must track an integer milestone baseline and target=29")
     planned_count = target_count - baseline_count
     if planned_count < 0 or len(policy["planned_packages"]) != planned_count:
         raise InputError("policy planned_packages must exactly cover target minus milestone baseline")
@@ -118,7 +118,7 @@ def validate_policy(policy: dict[str, Any]) -> None:
     if set(policy["planned_packages"]) - set(policy["target_dag"]):
         raise InputError("every planned package must have a target_dag entry")
     if len(policy["target_dag"]) != policy["package_counts"]["target"]:
-        raise InputError("target_dag must encode all 32 target workspace packages")
+        raise InputError("target_dag must encode all 29 target workspace packages")
 
     client_policy = policy["client_policy"]
     require_keys(

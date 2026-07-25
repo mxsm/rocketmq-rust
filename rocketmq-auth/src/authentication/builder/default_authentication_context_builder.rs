@@ -24,10 +24,10 @@ use base64::Engine;
 use cheetah_string::CheetahString;
 use chrono::DateTime;
 use chrono::NaiveDateTime;
-use rocketmq_common::common::mix_all::UNIQUE_MSG_QUERY_FLAG;
-use rocketmq_common::common::mq_version::RocketMqVersion;
 use rocketmq_error::AuthError;
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+use rocketmq_model::common::mix_all::UNIQUE_MSG_QUERY_FLAG;
+use rocketmq_model::common::mq_version::RocketMqVersion;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use tracing::warn;
 
 use crate::authentication::builder::AuthenticationContextBuilder;
@@ -428,7 +428,7 @@ mod tests {
 
     #[test]
     fn test_build_from_remoting_no_ext_fields() {
-        use rocketmq_remoting::protocol::command_custom_header::CommandCustomHeader;
+        use rocketmq_protocol::protocol::command_custom_header::CommandCustomHeader;
 
         #[derive(Debug, Clone)]
         struct EmptyHeader;

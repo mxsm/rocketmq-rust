@@ -22,10 +22,10 @@ use std::collections::HashSet;
 
 use cheetah_string::CheetahString;
 use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_client_rust::admin_adapter_compat::remoting::protocol::route_facade::BrokerDataExt;
-use rocketmq_common::common::config::TopicConfig as RocketMQTopicConfig;
-use rocketmq_common::common::mix_all::DLQ_GROUP_TOPIC_PREFIX;
-use rocketmq_common::common::mix_all::RETRY_GROUP_TOPIC_PREFIX;
+use rocketmq_model::common::config::TopicConfig as RocketMQTopicConfig;
+use rocketmq_model::common::mix_all::DLQ_GROUP_TOPIC_PREFIX;
+use rocketmq_model::common::mix_all::RETRY_GROUP_TOPIC_PREFIX;
+use rocketmq_protocol::protocol::route_facade::BrokerDataExt;
 
 use super::types::AllocateMqQueryRequest;
 use super::types::AllocatedMqQueryResult;
@@ -102,9 +102,7 @@ impl TopicService {
     /// Query topic route through a complete core request lifecycle.
     pub async fn query_topic_route(
         request: TopicRouteQueryRequest,
-    ) -> RocketMQResult<
-        Option<rocketmq_client_rust::admin_adapter_compat::remoting::protocol::route::topic_route_data::TopicRouteData>,
-    > {
+    ) -> RocketMQResult<Option<rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData>> {
         let mut admin = request.admin_builder().build_and_start().await?;
         let result = Self::get_topic_route(&mut admin, request.topic().clone()).await;
         admin.shutdown().await;
@@ -114,15 +112,14 @@ impl TopicService {
     /// Query topic status through a complete core request lifecycle.
     pub async fn query_topic_status(
         request: TopicStatusQueryRequest,
-    ) -> RocketMQResult<
-        rocketmq_client_rust::admin_adapter_compat::remoting::protocol::admin::topic_stats_table::TopicStatsTable,
-    > {
+    ) -> RocketMQResult<rocketmq_protocol::protocol::admin::topic_stats_table::TopicStatsTable> {
         let mut admin = request.admin_builder().build_and_start().await?;
         let topic = request.topic().clone();
         let result = async {
             if let Some(cluster) = request.cluster_name() {
                 let topic_route_data = admin.examine_topic_route_info(cluster.clone()).await?;
-                let mut topic_stats_table = rocketmq_client_rust::admin_adapter_compat::remoting::protocol::admin::topic_stats_table::TopicStatsTable::new();
+                let mut topic_stats_table =
+                    rocketmq_protocol::protocol::admin::topic_stats_table::TopicStatsTable::new();
                 if let Some(route_data) = &topic_route_data {
                     let mut total_offset_table = HashMap::new();
                     let mut topic_put_tps = 0.0;
@@ -259,9 +256,7 @@ impl TopicService {
     pub async fn get_topic_route(
         admin: &mut DefaultMQAdminExt,
         topic: impl Into<CheetahString>,
-    ) -> RocketMQResult<
-        Option<rocketmq_client_rust::admin_adapter_compat::remoting::protocol::route::topic_route_data::TopicRouteData>,
-    > {
+    ) -> RocketMQResult<Option<rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData>> {
         let topic = topic.into();
         Ok(admin
             .examine_topic_route_info(topic.clone())
@@ -307,7 +302,7 @@ impl TopicService {
         config: super::types::TopicConfig,
         target: super::types::TopicTarget,
     ) -> RocketMQResult<()> {
-        use rocketmq_common::common::TopicFilterType;
+        use rocketmq_model::common::TopicFilterType;
 
         // Convert to internal TopicConfig
         let internal_config = RocketMQTopicConfig {
@@ -502,8 +497,8 @@ impl TopicService {
     }
 
     fn topic_route_belongs_to_cluster(
-        route: &rocketmq_client_rust::admin_adapter_compat::remoting::protocol::route::topic_route_data::TopicRouteData,
-        cluster_info: &rocketmq_client_rust::admin_adapter_compat::remoting::protocol::body::broker_body::cluster_info::ClusterInfo,
+        route: &rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData,
+        cluster_info: &rocketmq_protocol::protocol::body::broker_body::cluster_info::ClusterInfo,
         cluster_name: &CheetahString,
     ) -> bool {
         let Some(cluster_table) = cluster_info.cluster_addr_table.as_ref() else {
@@ -532,9 +527,7 @@ impl TopicService {
         admin: &mut DefaultMQAdminExt,
         topic: impl Into<CheetahString>,
         broker_addr: Option<CheetahString>,
-    ) -> RocketMQResult<
-        rocketmq_client_rust::admin_adapter_compat::remoting::protocol::admin::topic_stats_table::TopicStatsTable,
-    > {
+    ) -> RocketMQResult<rocketmq_protocol::protocol::admin::topic_stats_table::TopicStatsTable> {
         admin
             .examine_topic_stats(topic.into(), broker_addr)
             .await
@@ -557,7 +550,7 @@ impl TopicService {
         perm: i32,
         target: super::types::TopicTarget,
     ) -> RocketMQResult<()> {
-        use rocketmq_common::common::config::TopicConfig as RocketMQTopicConfig;
+        use rocketmq_model::common::config::TopicConfig as RocketMQTopicConfig;
 
         let topic = topic.into();
 

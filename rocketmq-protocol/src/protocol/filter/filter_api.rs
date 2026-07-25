@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::common::filter::expression_type::ExpressionType;
-use crate::common::hasher::string_hasher::JavaStringHasher;
 use cheetah_string::CheetahString;
+use rocketmq_model::common::filter::expression_type::ExpressionType;
+use rocketmq_model::common::hasher::string_hasher::JavaStringHasher;
 
 use crate::protocol::heartbeat::subscription_data::SubscriptionData;
 

@@ -8,10 +8,10 @@ use criterion::criterion_main;
 use criterion::BenchmarkId;
 use criterion::Criterion;
 use criterion::Throughput;
-use rocketmq_common::common::message::MessageConst;
-use rocketmq_common::utils::message_utils;
-use rocketmq_common::MessageDecoder::message_properties_to_string;
-use rocketmq_common::MessageDecoder::string_to_message_properties;
+use rocketmq_model::common::message::MessageConst;
+use rocketmq_model::utils::message_utils;
+use rocketmq_protocol::common::message::message_decoder::message_properties_to_string;
+use rocketmq_protocol::common::message::message_decoder::string_to_message_properties;
 
 fn encoded_properties(property_count: usize) -> CheetahString {
     let mut properties = HashMap::new();

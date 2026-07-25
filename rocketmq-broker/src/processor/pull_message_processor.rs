@@ -23,35 +23,27 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::broker::broker_role::BrokerRole;
-use rocketmq_common::common::constant::PermName;
-use rocketmq_common::common::filter::expression_type::ExpressionType;
-use rocketmq_common::common::sys_flag::pull_sys_flag::PullSysFlag;
-use rocketmq_common::common::FAQUrl;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_remoting::code::request_code::RequestCode;
-use rocketmq_remoting::code::response_code::RemotingSysResponseCode;
-use rocketmq_remoting::code::response_code::ResponseCode;
-use rocketmq_remoting::error_response;
-use rocketmq_remoting::net::channel::Channel;
-use rocketmq_remoting::protocol::filter::filter_api::FilterAPI;
-use rocketmq_remoting::protocol::forbidden_type::ForbiddenType;
-use rocketmq_remoting::protocol::header::pull_message_request_header::PullMessageRequestHeader;
-use rocketmq_remoting::protocol::header::pull_message_response_header::PullMessageResponseHeader;
-use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
-use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_remoting::protocol::request_source::RequestSource;
-use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_context::TopicQueueMappingContext;
-use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
-use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_utils::TopicQueueMappingUtils;
-use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
-use rocketmq_remoting::rpc::rpc_client::RpcClient;
-use rocketmq_remoting::rpc::rpc_client_utils::RpcClientUtils;
-use rocketmq_remoting::rpc::rpc_request::RpcRequest;
-use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_remoting::runtime::processor::RejectRequestResponse;
-use rocketmq_remoting::runtime::processor::RequestProcessor;
+use rocketmq_model::common::broker::broker_role::BrokerRole;
+use rocketmq_model::common::constant::PermName;
+use rocketmq_model::common::filter::expression_type::ExpressionType;
+use rocketmq_model::common::sys_flag::pull_sys_flag::PullSysFlag;
+use rocketmq_model::common::FAQUrl;
+use rocketmq_protocol::code::request_code::RequestCode;
+use rocketmq_protocol::code::response_code::RemotingSysResponseCode;
+use rocketmq_protocol::code::response_code::ResponseCode;
+use rocketmq_protocol::protocol::filter::filter_api::FilterAPI;
+use rocketmq_protocol::protocol::forbidden_type::ForbiddenType;
+use rocketmq_protocol::protocol::header::pull_message_request_header::PullMessageRequestHeader;
+use rocketmq_protocol::protocol::header::pull_message_response_header::PullMessageResponseHeader;
+use rocketmq_protocol::protocol::heartbeat::consume_type::ConsumeType;
+use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::request_source::RequestSource;
+use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_context::TopicQueueMappingContext;
+use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
+use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_utils::TopicQueueMappingUtils;
+use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
+use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskKind;
 use rocketmq_store::base::get_message_result::GetMessageResult;
@@ -59,6 +51,14 @@ use rocketmq_store::base::message_status_enum::GetMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::filter::ArcMessageFilter;
 use rocketmq_store::log_file::MAX_PULL_MSG_SIZE;
+use rocketmq_transport::error_response;
+use rocketmq_transport::net::channel::Channel;
+use rocketmq_transport::rpc::rpc_client::RpcClient;
+use rocketmq_transport::rpc::rpc_client_utils::RpcClientUtils;
+use rocketmq_transport::rpc::rpc_request::RpcRequest;
+use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_transport::runtime::processor::RejectRequestResponse;
+use rocketmq_transport::runtime::processor::RequestProcessor;
 use tokio::sync::Mutex;
 use tracing::error;
 use tracing::info;
@@ -191,7 +191,7 @@ where
 
 /// Result of subscription data retrieval operation.
 struct SubscriptionDataResult {
-    subscription_data: rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData,
+    subscription_data: rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData,
     consumer_filter_data: Option<ConsumerFilterData>,
 }
 
@@ -510,7 +510,7 @@ where
     /// Builds the message filter based on broker configuration and subscription data.
     fn build_message_filter(
         &self,
-        subscription_data: &rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData,
+        subscription_data: &rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData,
         consumer_filter_data: Option<ConsumerFilterData>,
     ) -> ArcMessageFilter {
         // TODO: Consider optimizing consumer_filter_manager clone - Arc wrapper might be better
@@ -1099,27 +1099,27 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use rocketmq_common::common::broker::broker_config::BrokerConfig;
-    use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
-    use rocketmq_common::common::filter::expression_type::ExpressionType;
-    use rocketmq_common::common::sys_flag::pull_sys_flag::PullSysFlag;
-    use rocketmq_remoting::code::response_code::ResponseCode;
-    use rocketmq_remoting::connection::Connection;
-    use rocketmq_remoting::net::channel::Channel;
-    use rocketmq_remoting::net::channel::ChannelInner;
-    use rocketmq_remoting::protocol::header::pull_message_request_header::PullMessageRequestHeader;
-    use rocketmq_remoting::protocol::header::pull_message_response_header::PullMessageResponseHeader;
-    use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
-    use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
-    use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
-    use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-    use rocketmq_remoting::protocol::request_source::RequestSource;
-    use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
-    use rocketmq_remoting::protocol::LanguageCode;
+    use crate::config::broker_config::BrokerConfig;
+    use rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere;
+    use rocketmq_model::common::filter::expression_type::ExpressionType;
+    use rocketmq_model::common::sys_flag::pull_sys_flag::PullSysFlag;
+    use rocketmq_protocol::code::response_code::ResponseCode;
+    use rocketmq_protocol::protocol::header::pull_message_request_header::PullMessageRequestHeader;
+    use rocketmq_protocol::protocol::header::pull_message_response_header::PullMessageResponseHeader;
+    use rocketmq_protocol::protocol::heartbeat::consume_type::ConsumeType;
+    use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
+    use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
+    use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+    use rocketmq_protocol::protocol::request_source::RequestSource;
+    use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
+    use rocketmq_protocol::protocol::LanguageCode;
     use rocketmq_runtime::TaskGroup;
     use rocketmq_store::base::message_store::MessageStore;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
     use rocketmq_store::log_file::MAX_PULL_MSG_SIZE;
+    use rocketmq_transport::connection::Connection;
+    use rocketmq_transport::net::channel::Channel;
+    use rocketmq_transport::net::channel::ChannelInner;
 
     use super::consumer_compensation_for_request_source;
     use super::is_broadcast;

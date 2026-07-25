@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_common::common::action::Action;
+use rocketmq_security_api::Action;
 
 use super::environment::Environment;
 use super::resource::Resource;
@@ -121,8 +121,8 @@ impl PolicyEntry {
 
 #[cfg(test)]
 mod tests {
-    use rocketmq_common::common::action::Action;
-    use rocketmq_common::common::resource::resource_type::ResourceType;
+    use rocketmq_security_api::Action;
+    use rocketmq_security_api::ResourceType;
 
     use super::*;
     use crate::authorization::enums::decision::Decision;
@@ -133,7 +133,7 @@ mod tests {
         let r = Resource::of(
             ResourceType::Topic,
             Some("foo".to_string()),
-            rocketmq_common::common::resource::resource_pattern::ResourcePattern::Literal,
+            rocketmq_security_api::ResourcePattern::Literal,
         );
         let p = PolicyEntry::of(r.clone(), vec![Action::Pub, Action::Sub], None, Decision::Allow);
         assert_eq!(p.to_resource_str(), Some("Topic:foo".to_string()));
@@ -146,7 +146,7 @@ mod tests {
         let r = Resource::of(
             ResourceType::Topic,
             Some("x".to_string()),
-            rocketmq_common::common::resource::resource_pattern::ResourcePattern::Literal,
+            rocketmq_security_api::ResourcePattern::Literal,
         );
         let p = PolicyEntry::of(r, vec![Action::Pub, Action::Sub], None, Decision::Allow);
         assert!(p.is_match_action(&[Action::Pub]));
@@ -159,7 +159,7 @@ mod tests {
         let r2 = Resource::of(
             ResourceType::Topic,
             Some("x".to_string()),
-            rocketmq_common::common::resource::resource_pattern::ResourcePattern::Literal,
+            rocketmq_security_api::ResourcePattern::Literal,
         );
         let p2 = PolicyEntry::of(r2, vec![Action::All], None, Decision::Allow);
         assert!(p2.is_match_action(&[Action::Create]));
@@ -171,7 +171,7 @@ mod tests {
             Resource::of(
                 ResourceType::Topic,
                 Some("pre".to_string()),
-                rocketmq_common::common::resource::resource_pattern::ResourcePattern::Prefixed,
+                rocketmq_security_api::ResourcePattern::Prefixed,
             ),
             vec![Action::Pub],
             Some(crate::authorization::model::environment::Environment::of("1.2.3.4").unwrap()),
@@ -181,7 +181,7 @@ mod tests {
         let res = Resource::of(
             ResourceType::Topic,
             Some("prefix_val".to_string()),
-            rocketmq_common::common::resource::resource_pattern::ResourcePattern::Literal,
+            rocketmq_security_api::ResourcePattern::Literal,
         );
         assert!(rule.is_match_resource(&res));
         assert!(

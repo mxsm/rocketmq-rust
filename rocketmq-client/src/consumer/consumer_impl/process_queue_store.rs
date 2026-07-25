@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use rocketmq_common::common::message::message_ext::MessageExt;
+use rocketmq_model::common::message::message_ext::MessageExt;
 
 pub(crate) struct ProcessQueueMessageStore {
     inner: PendingMessageStore,

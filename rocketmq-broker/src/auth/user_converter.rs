@@ -16,7 +16,7 @@ use cheetah_string::CheetahString;
 use rocketmq_auth::authentication::enums::user_status::UserStatus;
 use rocketmq_auth::authentication::enums::user_type::UserType;
 use rocketmq_auth::authentication::model::user::User;
-use rocketmq_remoting::protocol::body::user_info::UserInfo;
+use rocketmq_protocol::protocol::body::user_info::UserInfo;
 
 pub struct UserConverter {}
 

@@ -16,16 +16,16 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::Weak;
 
+use crate::config::broker_config::BrokerConfig;
 use arc_swap::ArcSwap;
 use cheetah_string::CheetahString;
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
-use rocketmq_common::common::broker::broker_role::BrokerRole;
-use rocketmq_remoting::rpc::rpc_client_impl::RpcClientImpl;
+use rocketmq_model::common::broker::broker_role::BrokerRole;
 use rocketmq_store::base::get_message_result::GetMessageResult;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use rocketmq_store::filter::ArcMessageFilter;
 use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
+use rocketmq_transport::rpc::rpc_client_impl::RpcClientImpl;
 
 use crate::broker::broker_pre_online_capability::BrokerOnlineRoleState;
 use crate::client::manager::consumer_manager::ConsumerManager;
@@ -394,9 +394,9 @@ impl<MS: MessageStore> PullMessageProcessorContext<MS> {
 mod tests {
     use std::sync::Weak;
 
+    use crate::config::broker_config::BrokerConfig;
     use cheetah_string::CheetahString;
-    use rocketmq_common::common::broker::broker_config::BrokerConfig;
-    use rocketmq_common::common::broker::broker_role::BrokerRole;
+    use rocketmq_model::common::broker::broker_role::BrokerRole;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
     use rocketmq_store::message_store::OwnedMessageStore;
 

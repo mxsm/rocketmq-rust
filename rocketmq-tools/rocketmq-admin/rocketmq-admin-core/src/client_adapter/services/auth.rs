@@ -16,11 +16,11 @@
 
 use cheetah_string::CheetahString;
 use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_client_rust::admin_adapter_compat::error::REDACTED;
-use rocketmq_client_rust::admin_adapter_compat::remoting::protocol::body::acl_info::AclInfo;
-use rocketmq_client_rust::admin_adapter_compat::remoting::protocol::body::acl_info::PolicyEntryInfo;
-use rocketmq_client_rust::admin_adapter_compat::remoting::protocol::body::acl_info::PolicyInfo;
-use rocketmq_client_rust::admin_adapter_compat::remoting::protocol::body::user_info::UserInfo;
+use rocketmq_error::REDACTED;
+use rocketmq_protocol::protocol::body::acl_info::AclInfo;
+use rocketmq_protocol::protocol::body::acl_info::PolicyEntryInfo;
+use rocketmq_protocol::protocol::body::acl_info::PolicyInfo;
+use rocketmq_protocol::protocol::body::user_info::UserInfo;
 use serde::Deserialize;
 use serde::Serialize;
 use std::fmt;

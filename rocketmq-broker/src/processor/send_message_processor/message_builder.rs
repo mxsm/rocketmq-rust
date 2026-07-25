@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
-use rocketmq_common::common::message::MessageConst;
-use rocketmq_common::MessageDecoder::message_properties_to_string;
-use rocketmq_common::MessageDecoder::string_to_message_properties;
-use rocketmq_common::TimeUtils;
-use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
+use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use rocketmq_model::common::message::MessageConst;
+use rocketmq_protocol::common::message::message_decoder::message_properties_to_string;
+use rocketmq_protocol::common::message::message_decoder::string_to_message_properties;
+use rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
+use rocketmq_runtime::common::time_utils;
 use rocketmq_store::timer::timer_message_store::TIMER_TOPIC;
 
 pub(super) fn recall_handle_topic_and_timestamp(
@@ -26,7 +26,7 @@ pub(super) fn recall_handle_topic_and_timestamp(
         return None;
     }
 
-    let now = TimeUtils::current_millis();
+    let now = time_utils::current_millis();
     let deliver_ms = if let Some(delay_sec) = message.property(MessageConst::PROPERTY_TIMER_DELAY_SEC) {
         now.checked_add(delay_sec.parse::<u64>().ok()?.checked_mul(1000)?)?
     } else if let Some(delay_ms) = message.property(MessageConst::PROPERTY_TIMER_DELAY_MS) {
@@ -133,7 +133,7 @@ mod tests {
 
     #[test]
     fn recall_handle_timestamp_uses_absolute_deliver_time_before_store_transform() {
-        let now = TimeUtils::current_millis();
+        let now = time_utils::current_millis();
         let deliver_ms = ((now + 60_000) / 1000) * 1000;
         let mut message = message_with_topic("RecallTopic");
         message.message_ext_inner.message.properties_mut().as_map_mut().insert(
@@ -155,12 +155,12 @@ mod tests {
             CheetahString::from_static_str("60000"),
         );
 
-        let now = TimeUtils::current_millis();
+        let now = time_utils::current_millis();
         let (topic, timestamp) = recall_handle_topic_and_timestamp_with_defaults(&message).expect("recall data");
 
         assert_eq!(topic, "RecallTopic");
         let min_expected = i64::try_from(((now + 60_000) / 1000) * 1000).unwrap();
-        let max_expected = i64::try_from(((TimeUtils::current_millis() + 60_000) / 1000) * 1000).unwrap() + 1;
+        let max_expected = i64::try_from(((time_utils::current_millis() + 60_000) / 1000) * 1000).unwrap() + 1;
         assert!(
             (min_expected..=max_expected).contains(&timestamp),
             "timestamp {timestamp} should be derived from timer delay ms"
@@ -175,12 +175,12 @@ mod tests {
             CheetahString::from_static_str("60"),
         );
 
-        let now = TimeUtils::current_millis();
+        let now = time_utils::current_millis();
         let (topic, timestamp) = recall_handle_topic_and_timestamp_with_defaults(&message).expect("recall data");
 
         assert_eq!(topic, "RecallTopic");
         let min_expected = i64::try_from(((now + 60_000) / 1000) * 1000).unwrap();
-        let max_expected = i64::try_from(((TimeUtils::current_millis() + 60_000) / 1000) * 1000).unwrap() + 1;
+        let max_expected = i64::try_from(((time_utils::current_millis() + 60_000) / 1000) * 1000).unwrap() + 1;
         assert!(
             (min_expected..=max_expected).contains(&timestamp),
             "timestamp {timestamp} should be derived from timer delay sec"

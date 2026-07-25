@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
-use rocketmq_common::common::mix_all::FIRST_BROKER_CONTROLLER_ID;
+use rocketmq_model::common::mix_all::FIRST_BROKER_CONTROLLER_ID;
 use serde::Deserialize;
 use serde::Serialize;
 

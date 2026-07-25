@@ -14,7 +14,7 @@
 
 use std::collections::HashMap;
 
-use rocketmq_remoting::protocol::DataVersion;
+use rocketmq_protocol::protocol::DataVersion;
 use serde::Deserialize;
 use serde::Serialize;
 

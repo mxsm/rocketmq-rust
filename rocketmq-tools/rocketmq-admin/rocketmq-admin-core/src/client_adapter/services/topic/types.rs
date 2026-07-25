@@ -502,14 +502,14 @@ pub enum TopicTarget {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UpdateTopicListRequest {
     target: TopicTarget,
-    topic_configs: Vec<rocketmq_common::common::config::TopicConfig>,
+    topic_configs: Vec<rocketmq_model::common::config::TopicConfig>,
     namesrv_addr: Option<String>,
 }
 
 impl UpdateTopicListRequest {
     pub fn try_new(
         target: TopicTarget,
-        topic_configs: Vec<rocketmq_common::common::config::TopicConfig>,
+        topic_configs: Vec<rocketmq_model::common::config::TopicConfig>,
     ) -> RocketMQResult<Self> {
         if topic_configs.is_empty() {
             return Err(ToolsError::validation_error("topicConfigs", "topicConfigs must not be empty").into());
@@ -531,7 +531,7 @@ impl UpdateTopicListRequest {
         &self.target
     }
 
-    pub fn topic_configs(&self) -> &[rocketmq_common::common::config::TopicConfig] {
+    pub fn topic_configs(&self) -> &[rocketmq_model::common::config::TopicConfig] {
         &self.topic_configs
     }
 
@@ -584,7 +584,7 @@ impl UpdateTopicRequest {
         }
 
         let topic_sys_flag =
-            rocketmq_common::common::TopicSysFlag::build_sys_flag(unit.unwrap_or(false), has_unit_sub.unwrap_or(false));
+            rocketmq_model::common::TopicSysFlag::build_sys_flag(unit.unwrap_or(false), has_unit_sub.unwrap_or(false));
 
         Ok(Self {
             config: TopicConfig {

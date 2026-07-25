@@ -17,14 +17,14 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 
+use crate::config::broker_config::BrokerConfig;
 use cheetah_string::CheetahString;
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
-use rocketmq_common::common::broker::broker_role::BrokerRole;
-use rocketmq_common::common::mix_all::MASTER_ID;
-use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::protocol::body::epoch_entry_cache::EpochEntry;
+use rocketmq_model::common::broker::broker_role::BrokerRole;
+use rocketmq_model::common::mix_all::MASTER_ID;
+use rocketmq_protocol::protocol::body::epoch_entry_cache::EpochEntry;
+use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use serde::Deserialize;
 use serde::Serialize;
@@ -542,7 +542,7 @@ impl ReplicasManager {
     pub fn replica_sync_error_followup(&self, response_code: Option<i32>) -> ControllerReplicaSyncFollowup {
         if matches!(
             response_code,
-            Some(code) if code == rocketmq_remoting::code::response_code::ResponseCode::ControllerBrokerMetadataNotExist.to_i32()
+            Some(code) if code == rocketmq_protocol::code::response_code::ResponseCode::ControllerBrokerMetadataNotExist.to_i32()
         ) {
             ControllerReplicaSyncFollowup::Bootstrap
         } else {
@@ -1170,13 +1170,13 @@ mod tests {
         );
         assert_eq!(
             manager.replica_sync_error_followup(Some(
-                rocketmq_remoting::code::response_code::ResponseCode::ControllerBrokerMetadataNotExist.to_i32()
+                rocketmq_protocol::code::response_code::ResponseCode::ControllerBrokerMetadataNotExist.to_i32()
             )),
             ControllerReplicaSyncFollowup::Bootstrap
         );
         assert_eq!(
             manager.replica_sync_error_followup(Some(
-                rocketmq_remoting::code::response_code::ResponseCode::SystemError.to_i32()
+                rocketmq_protocol::code::response_code::ResponseCode::SystemError.to_i32()
             )),
             ControllerReplicaSyncFollowup::ApplyRoleChange
         );

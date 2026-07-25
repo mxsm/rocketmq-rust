@@ -15,13 +15,13 @@
 use std::sync::Arc;
 
 use rocketmq_error::RocketMQError;
-use rocketmq_remoting::code::request_code::RequestCode;
-use rocketmq_remoting::code::response_code::ResponseCode;
-use rocketmq_remoting::net::channel::Channel;
-use rocketmq_remoting::protocol::body::acl_info::AclInfo;
-use rocketmq_remoting::protocol::header::update_acl_request_header::UpdateAclRequestHeader;
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_remoting::protocol::RemotingDeserializable;
+use rocketmq_protocol::code::request_code::RequestCode;
+use rocketmq_protocol::code::response_code::ResponseCode;
+use rocketmq_protocol::protocol::body::acl_info::AclInfo;
+use rocketmq_protocol::protocol::header::update_acl_request_header::UpdateAclRequestHeader;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::RemotingDeserializable;
+use rocketmq_transport::net::channel::Channel;
 
 use crate::auth::acl_converter::AclConverter;
 use crate::auth::auth_admin_service::AuthAdminService;
@@ -39,7 +39,7 @@ impl UpdateAclRequestHandler {
     pub async fn update_acl(
         &mut self,
         _channel: Channel,
-        _ctx: rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext,
+        _ctx: rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {

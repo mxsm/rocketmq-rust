@@ -16,9 +16,9 @@ use std::collections::HashSet;
 use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
 
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_remoting::protocol::body::ha_connection_runtime_info::HAConnectionRuntimeInfo;
-use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
+use rocketmq_protocol::protocol::body::ha_connection_runtime_info::HAConnectionRuntimeInfo;
+use rocketmq_protocol::protocol::body::ha_runtime_info::HARuntimeInfo;
+use rocketmq_runtime::common::time_utils::current_millis;
 use tokio::sync::Notify;
 
 use crate::ha::auto_switch::auto_switch_ha_client::AutoSwitchHAClient;
@@ -45,7 +45,7 @@ pub struct AutoSwitchHAService {
 impl AutoSwitchHAService {
     pub fn new(delegate: DefaultHAService) -> Self {
         let is_master = delegate.replica_store().message_store_config_ref().broker_role
-            != rocketmq_common::common::broker::broker_role::BrokerRole::Slave;
+            != rocketmq_model::common::broker::broker_role::BrokerRole::Slave;
         Self {
             delegate: Box::new(delegate),
             replication: Arc::new(ReplicationStateRoot::new(is_master)),
@@ -377,9 +377,9 @@ mod tests {
     use std::collections::HashSet;
     use std::time::Duration;
 
-    use rocketmq_common::TimeUtils::current_millis;
-    use rocketmq_remoting::protocol::body::ha_client_runtime_info::HAClientRuntimeInfo;
-    use rocketmq_remoting::protocol::body::ha_connection_runtime_info::HAConnectionRuntimeInfo;
+    use rocketmq_protocol::protocol::body::ha_client_runtime_info::HAClientRuntimeInfo;
+    use rocketmq_protocol::protocol::body::ha_connection_runtime_info::HAConnectionRuntimeInfo;
+    use rocketmq_runtime::common::time_utils::current_millis;
 
     use super::*;
     use crate::base::message_store::MessageStore;

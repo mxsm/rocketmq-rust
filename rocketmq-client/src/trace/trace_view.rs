@@ -13,9 +13,9 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::message::message_enum::MessageType;
-use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_common::utils::util_all;
+use rocketmq_model::common::message::message_enum::MessageType;
+use rocketmq_model::common::message::message_ext::MessageExt;
+use rocketmq_runtime::common::util_all;
 
 use crate::trace::trace_data_encoder::TraceDataEncoder;
 
@@ -104,8 +104,8 @@ impl TraceView {
 mod tests {
     use bytes::Bytes;
     use cheetah_string::CheetahString;
-    use rocketmq_common::common::message::message_ext::MessageExt;
-    use rocketmq_common::common::message::MessageTrait;
+    use rocketmq_model::common::message::message_ext::MessageExt;
+    use rocketmq_model::common::message::MessageTrait;
 
     use super::*;
     use crate::trace::trace_bean::TraceBean;

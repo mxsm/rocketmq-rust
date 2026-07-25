@@ -1,6 +1,6 @@
-use rocketmq_client_rust::admin_adapter_compat::error::RocketMQError;
-use rocketmq_client_rust::admin_adapter_compat::error::SerializationError;
-use rocketmq_client_rust::admin_adapter_compat::error::ToolsError;
+use rocketmq_error::RocketMQError;
+use rocketmq_error::SerializationError;
+use rocketmq_error::ToolsError;
 
 pub(crate) fn cluster_metadata_unavailable(reason: impl Into<String>) -> RocketMQError {
     RocketMQError::Tools(ToolsError::ClusterInvalid { reason: reason.into() })

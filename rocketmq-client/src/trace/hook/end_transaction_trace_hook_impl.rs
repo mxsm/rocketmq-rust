@@ -13,12 +13,12 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::message::message_enum::MessageType;
-use rocketmq_common::common::message::MessageConst;
-use rocketmq_common::common::message::MessageTrait;
-use rocketmq_common::common::mix_all;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
+use rocketmq_model::common::message::message_enum::MessageType;
+use rocketmq_model::common::message::MessageConst;
+use rocketmq_model::common::message::MessageTrait;
+use rocketmq_model::common::mix_all;
+use rocketmq_protocol::protocol::namespace_util::NamespaceUtil;
+use rocketmq_runtime::common::time_utils::current_millis;
 
 use crate::hook::end_transaction_context::EndTransactionContext;
 use crate::hook::end_transaction_hook::EndTransactionHook;
@@ -91,7 +91,7 @@ mod tests {
     use std::sync::Arc;
     use std::sync::Mutex;
 
-    use rocketmq_common::common::message::message_single::Message;
+    use rocketmq_model::common::message::message_single::Message;
 
     use super::*;
     use crate::base::access_channel::AccessChannel;

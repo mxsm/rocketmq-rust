@@ -21,12 +21,12 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
-use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_observability::LogFilterHandle;
 use rocketmq_observability::LogFilterInputs;
 use rocketmq_observability::LogFilterReloadRequest;
 use rocketmq_observability::LogFilterResolver;
 use rocketmq_observability::ResolvedLogFilter;
+use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::ServiceContext;
 use serde::Serialize;

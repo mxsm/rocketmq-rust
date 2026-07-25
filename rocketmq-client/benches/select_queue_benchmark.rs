@@ -4,8 +4,8 @@ use criterion::Criterion;
 use rocketmq_client_rust::producer::message_queue_selector::MessageQueueSelector;
 use rocketmq_client_rust::producer::queue_selector::SelectMessageQueueByHash;
 use rocketmq_client_rust::producer::queue_selector::SelectMessageQueueByRandom;
-use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_common::common::message::message_single::Message;
+use rocketmq_model::common::message::message_queue::MessageQueue;
+use rocketmq_model::common::message::message_single::Message;
 use std::cell::RefCell;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::Hash;
@@ -21,7 +21,7 @@ struct SelectMessageQueueByHashCached;
 
 impl<M, A> MessageQueueSelector<M, A> for SelectMessageQueueByHashCached
 where
-    M: rocketmq_common::common::message::MessageTrait,
+    M: rocketmq_model::common::message::MessageTrait,
     A: Hash,
 {
     #[inline]

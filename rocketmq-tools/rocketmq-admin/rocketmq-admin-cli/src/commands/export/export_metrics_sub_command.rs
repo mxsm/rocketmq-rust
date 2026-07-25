@@ -57,7 +57,8 @@ impl CommandExecute for ExportMetricsSubCommand {
         let output_path = self.output_path();
         let json_content = serde_json::to_string_pretty(&result)
             .map_err(|error| RocketMQError::Internal(format!("ExportMetricsSubCommand: {error}")))?;
-        rocketmq_common::FileUtils::string_to_file(&json_content, &output_path)?;
+        rocketmq_runtime::common::file_utils::string_to_file(&json_content, &output_path)
+            .map_err(crate::runtime_to_rocketmq_error)?;
         println!("export {} success", output_path);
         Ok(())
     }

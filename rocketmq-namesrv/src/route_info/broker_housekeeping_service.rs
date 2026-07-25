@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_remoting::base::channel_event_listener::ChannelEventListener;
-use rocketmq_remoting::net::channel::Channel;
+use rocketmq_transport::base::channel_event_listener::ChannelEventListener;
+use rocketmq_transport::net::channel::Channel;
 
 use crate::bootstrap::NameServerRuntimeHandle;
 

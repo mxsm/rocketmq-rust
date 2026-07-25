@@ -15,7 +15,7 @@
 use criterion::criterion_group;
 use criterion::criterion_main;
 use criterion::Criterion;
-use rocketmq_common::TimeUtils::current_millis;
+use rocketmq_runtime::common::time_utils::current_millis;
 
 pub static A: std::sync::LazyLock<Vec<i32>> = std::sync::LazyLock::new(|| vec![1; 64]);
 

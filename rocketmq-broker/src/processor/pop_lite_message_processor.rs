@@ -16,25 +16,25 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::Weak;
 
+use crate::config::broker_config::BrokerConfig;
 use bytes::Bytes;
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
-use rocketmq_common::common::attribute::topic_message_type::TopicMessageType;
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
-use rocketmq_common::common::constant::PermName;
-use rocketmq_common::common::key_builder::POP_ORDER_REVIVE_QUEUE;
-use rocketmq_common::common::message::MessageConst;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_remoting::code::response_code::ResponseCode;
-use rocketmq_remoting::net::channel::Channel;
-use rocketmq_remoting::protocol::header::pop_lite_message_request_header::PopLiteMessageRequestHeader;
-use rocketmq_remoting::protocol::header::pop_lite_message_response_header::PopLiteMessageResponseHeader;
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_remoting::runtime::processor::RequestProcessor;
+use rocketmq_model::common::attribute::topic_message_type::TopicMessageType;
+use rocketmq_model::common::constant::PermName;
+use rocketmq_model::common::key_builder::POP_ORDER_REVIVE_QUEUE;
+use rocketmq_model::common::message::MessageConst;
+use rocketmq_protocol::code::response_code::ResponseCode;
+use rocketmq_protocol::protocol::header::pop_lite_message_request_header::PopLiteMessageRequestHeader;
+use rocketmq_protocol::protocol::header::pop_lite_message_response_header::PopLiteMessageResponseHeader;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store::base::get_message_result::GetMessageResult;
 use rocketmq_store::base::message_status_enum::GetMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
+use rocketmq_transport::net::channel::Channel;
+use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_transport::runtime::processor::RequestProcessor;
 use tokio::sync::Mutex as AsyncMutex;
 
 use crate::failover::escape_bridge::EscapeBridge;
@@ -276,7 +276,7 @@ impl<MS: MessageStore> PopLiteMessageProcessor<MS> {
                 CheetahString::from_static_str("topic is blank."),
             ));
         }
-        if request_header.is_timeout_too_much_at(rocketmq_common::TimeUtils::current_millis() as i64) {
+        if request_header.is_timeout_too_much_at(rocketmq_runtime::common::time_utils::current_millis() as i64) {
             return Some((
                 ResponseCode::PollingTimeout,
                 CheetahString::from_string(format!(
@@ -692,8 +692,8 @@ mod tests {
     use std::sync::Weak;
     use std::time::Duration;
 
+    use crate::config::broker_config::BrokerConfig;
     use cheetah_string::CheetahString;
-    use rocketmq_common::common::broker::broker_config::BrokerConfig;
     use rocketmq_runtime::RuntimeContext;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
     use rocketmq_store::message_store::OwnedMessageStore;

@@ -63,11 +63,10 @@ use bytes::Bytes;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use futures_util::future::join_all;
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
-use rocketmq_common::common::config::TopicConfig;
-use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
-use rocketmq_common::common::message::message_single::Message;
+use rocketmq_model::common::config::TopicConfig;
+use rocketmq_model::common::message::message_ext::MessageExt;
+use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use rocketmq_model::common::message::message_single::Message;
 use rocketmq_store::base::get_message_result::GetMessageResult;
 use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::base::message_status_enum::GetMessageStatus;
@@ -77,6 +76,7 @@ use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::base::store_enum::StoreType;
 use rocketmq_store::config::flush_disk_type::FlushDiskType;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
+use rocketmq_store::config::store_runtime_config::StoreRuntimeConfig;
 use rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore;
 #[cfg(feature = "rocksdb_store")]
 use rocketmq_store::message_store::rocksdb_message_store::RocksDBMessageStore;
@@ -1296,7 +1296,7 @@ fn new_collector_store(scenario: Scenario) -> Result<CollectorStore> {
         message_store_config.trans_rocksdb_enable = false;
         let store = RocksDBMessageStore::try_new(
             Arc::new(message_store_config),
-            Arc::new(BrokerConfig::default()),
+            Arc::new(StoreRuntimeConfig::default()),
             Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
             None,
             false,
@@ -1310,7 +1310,7 @@ fn new_collector_store(scenario: Scenario) -> Result<CollectorStore> {
 
     let mut store = LocalFileMessageStore::new(
         Arc::new(message_store_config),
-        Arc::new(BrokerConfig::default()),
+        Arc::new(StoreRuntimeConfig::default()),
         Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
         None,
         false,

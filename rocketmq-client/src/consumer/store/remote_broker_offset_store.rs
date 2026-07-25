@@ -17,12 +17,12 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_common::common::mix_all;
-use rocketmq_remoting::protocol::header::namesrv::topic_operation_header::TopicRequestHeader;
-use rocketmq_remoting::protocol::header::query_consumer_offset_request_header::QueryConsumerOffsetRequestHeader;
-use rocketmq_remoting::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader;
-use rocketmq_remoting::rpc::rpc_request_header::RpcRequestHeader;
+use rocketmq_model::common::message::message_queue::MessageQueue;
+use rocketmq_model::common::mix_all;
+use rocketmq_protocol::protocol::header::namesrv::topic_operation_header::TopicRequestHeader;
+use rocketmq_protocol::protocol::header::query_consumer_offset_request_header::QueryConsumerOffsetRequestHeader;
+use rocketmq_protocol::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader;
+use rocketmq_transport::rpc::rpc_request_header::RpcRequestHeader;
 use tokio::sync::Mutex;
 use tracing::error;
 use tracing::info;
@@ -157,7 +157,7 @@ impl OffsetStoreTrait for RemoteBrokerOffsetStore {
                     }
                     Err(e) => match e {
                         rocketmq_error::RocketMQError::BrokerOperationFailed { code, .. }
-                            if code == rocketmq_remoting::code::response_code::ResponseCode::QueryNotFound as i32 =>
+                            if code == rocketmq_protocol::code::response_code::ResponseCode::QueryNotFound as i32 =>
                         {
                             -1
                         }
@@ -175,7 +175,7 @@ impl OffsetStoreTrait for RemoteBrokerOffsetStore {
                 }
                 Err(e) => match e {
                     rocketmq_error::RocketMQError::BrokerOperationFailed { code, .. }
-                        if code == rocketmq_remoting::code::response_code::ResponseCode::QueryNotFound as i32 =>
+                        if code == rocketmq_protocol::code::response_code::ResponseCode::QueryNotFound as i32 =>
                     {
                         -1
                     }

@@ -20,8 +20,8 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::AuthError;
+use rocketmq_runtime::common::time_utils::current_millis;
 
 use crate::authentication::chain::acl_signer;
 use crate::authentication::chain::acl_signer::SignatureAlgorithm;

@@ -18,18 +18,18 @@ use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
-use rocketmq_common::common::broker::broker_role::BrokerRole;
-use rocketmq_common::common::config::TopicConfig;
-use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
-use rocketmq_common::common::message::MessageConst;
-use rocketmq_common::common::message::MessageTrait;
-use rocketmq_common::common::mix_all::RETRY_GROUP_TOPIC_PREFIX;
-use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
-use rocketmq_common::common::topic::TopicValidator;
-use rocketmq_common::utils::queue_type_utils::QueueTypeUtils;
-use rocketmq_common::MessageDecoder::message_properties_to_string;
-use rocketmq_common::TimeUtils::current_millis;
+use rocketmq_model::common::broker::broker_role::BrokerRole;
+use rocketmq_model::common::config::TopicConfig;
+use rocketmq_model::common::message::message_ext::MessageExt;
+use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use rocketmq_model::common::message::MessageConst;
+use rocketmq_model::common::message::MessageTrait;
+use rocketmq_model::common::mix_all::RETRY_GROUP_TOPIC_PREFIX;
+use rocketmq_model::common::sys_flag::message_sys_flag::MessageSysFlag;
+use rocketmq_model::common::topic::TopicValidator;
+use rocketmq_model::utils::queue_type_utils::QueueTypeUtils;
+use rocketmq_protocol::common::message::message_decoder::message_properties_to_string;
+use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::base::message_store::PutMessagePreflight;
@@ -349,10 +349,10 @@ impl HookUtils {
 mod tests {
     use std::sync::Arc;
 
-    use rocketmq_common::common::config::TopicConfig;
-    use rocketmq_common::common::message::message_ext::MessageExt;
-    use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
-    use rocketmq_common::common::message::MessageTrait;
+    use rocketmq_model::common::config::TopicConfig;
+    use rocketmq_model::common::message::message_ext::MessageExt;
+    use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+    use rocketmq_model::common::message::MessageTrait;
     use rocketmq_store::base::message_status_enum::PutMessageStatus;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
     use rocketmq_store::timer::timer_message_store::TIMER_TOPIC;

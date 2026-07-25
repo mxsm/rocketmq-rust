@@ -31,10 +31,10 @@ use criterion::Criterion;
 use criterion::Throughput;
 use dashmap::DashMap;
 use rocketmq_broker::bench_support::ConsumerGroupInfo;
-use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
-use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
-use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
-use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
+use rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere;
+use rocketmq_protocol::protocol::heartbeat::consume_type::ConsumeType;
+use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
+use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 
 /// Simulate the old O(n) traversal approach for query_topic_consume_by_who
 struct OldQuerySimulation {

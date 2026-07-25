@@ -16,8 +16,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use rocketmq_model::common::message::message_queue_assignment::MessageQueueAssignment;
 use rocketmq_model::result::SendResult;
-use rocketmq_protocol::common::message::message_queue_assignment::MessageQueueAssignment;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 
 use crate::context::ProxyContext;

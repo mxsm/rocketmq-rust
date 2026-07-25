@@ -1633,12 +1633,12 @@ mod tests {
     use rocketmq_auth::authorization::model::acl::Acl;
     use rocketmq_auth::authorization::model::policy::Policy;
     use rocketmq_auth::authorization::model::resource::Resource;
-    use rocketmq_common::common::action::Action;
     use rocketmq_model::result::SendResult;
     use rocketmq_model::result::SendStatus;
-    use rocketmq_remoting::protocol::route::route_data_view::BrokerData;
-    use rocketmq_remoting::protocol::route::route_data_view::QueueData;
-    use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
+    use rocketmq_protocol::protocol::route::route_data_view::BrokerData;
+    use rocketmq_protocol::protocol::route::route_data_view::QueueData;
+    use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
+    use rocketmq_security_api::Action;
     use sha1::Sha1;
     use tokio::sync::mpsc;
     use tonic::metadata::MetadataValue;

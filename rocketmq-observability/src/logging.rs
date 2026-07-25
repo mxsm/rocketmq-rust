@@ -544,7 +544,7 @@ mod tests {
     #[test]
     fn env_filter_accepts_target_directives() {
         let filter =
-            build_env_filter("rocketmq_store=debug,rocketmq_remoting=warn").expect("target directives should parse");
+            build_env_filter("rocketmq_store=debug,rocketmq_transport=warn").expect("target directives should parse");
 
         assert!(filter.to_string().contains("rocketmq_store=debug"));
     }

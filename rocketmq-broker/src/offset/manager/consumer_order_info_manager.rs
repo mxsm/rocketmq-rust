@@ -17,12 +17,12 @@ use std::collections::HashSet;
 use std::fmt::Display;
 use std::sync::Arc;
 
+use crate::config::config_manager::ConfigManager;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
-use rocketmq_common::common::config_manager::ConfigManager;
-use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
+use rocketmq_model::utils::serde_json_utils::SerdeJsonUtils;
+use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
+use rocketmq_runtime::common::time_utils::current_millis;
 use serde::Deserialize;
 use serde::Serialize;
 use tracing::error;
@@ -321,7 +321,7 @@ impl ConsumerOrderInfoManager {
 
         let mut min_consumed_times = i32::MAX;
         for (offset, consumed_times) in &order_info.offset_consumed_count {
-            rocketmq_remoting::protocol::header::extra_info_util::ExtraInfoUtil::build_queue_offset_order_count_info(
+            rocketmq_protocol::protocol::header::extra_info_util::ExtraInfoUtil::build_queue_offset_order_count_info(
                 order_info_builder,
                 topic.as_str(),
                 queue_id as i64,
@@ -336,7 +336,7 @@ impl ConsumerOrderInfoManager {
         if min_consumed_times == i32::MAX {
             min_consumed_times = 0;
         }
-        rocketmq_remoting::protocol::header::extra_info_util::ExtraInfoUtil::build_queue_id_order_count_info(
+        rocketmq_protocol::protocol::header::extra_info_util::ExtraInfoUtil::build_queue_id_order_count_info(
             order_info_builder,
             topic.as_str(),
             queue_id,
@@ -616,8 +616,8 @@ impl OrderInfo {
 mod tests {
     use std::collections::HashMap;
 
-    use rocketmq_common::common::broker::broker_config::BrokerConfig;
-    use rocketmq_common::common::config::TopicConfig;
+    use crate::config::broker_config::BrokerConfig;
+    use rocketmq_model::common::config::TopicConfig;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
 
     use super::*;

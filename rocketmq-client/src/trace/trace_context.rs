@@ -15,8 +15,8 @@
 use std::cmp::Ordering;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::message::message_client_id_setter::MessageClientIDSetter;
-use rocketmq_common::TimeUtils::current_millis;
+use rocketmq_model::common::message::message_client_id_setter::MessageClientIDSetter;
+use rocketmq_runtime::common::time_utils::current_millis;
 
 use crate::base::access_channel::AccessChannel;
 use crate::trace::trace_bean::TraceBean;
@@ -102,8 +102,8 @@ impl std::fmt::Display for TraceContext {
 #[cfg(test)]
 mod tests {
     use cheetah_string::CheetahString;
-    use rocketmq_common::common::message::message_client_id_setter::MessageClientIDSetter;
-    use rocketmq_common::TimeUtils::current_millis;
+    use rocketmq_model::common::message::message_client_id_setter::MessageClientIDSetter;
+    use rocketmq_runtime::common::time_utils::current_millis;
 
     use super::*;
 

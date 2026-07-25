@@ -14,8 +14,13 @@
 
 //! Runtime-neutral security contracts.
 
+pub mod resource_pattern;
+pub mod resource_type;
 pub mod secret_provider;
 pub mod secure_deployment;
+
+pub use resource_pattern::ResourcePattern;
+pub use resource_type::ResourceType;
 
 pub use secret_provider::SecretAccess;
 pub use secret_provider::SecretIdentifierError;
@@ -231,15 +236,102 @@ impl Resource {
 }
 
 /// Security-relevant operation requested on a resource.
+///
+/// Values `0..=9` preserve the RocketMQ ACL wire codes. The semantic
+/// `Publish`, `Subscribe`, `Describe`, and `Manage` variants are policy-level
+/// operations and intentionally have distinct codes.
+#[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Action {
-    Publish,
-    Subscribe,
-    Create,
-    Update,
-    Delete,
-    Describe,
-    Manage,
+    Unknown = 0,
+    All = 1,
+    Any = 2,
+    Pub = 3,
+    Sub = 4,
+    Create = 5,
+    Update = 6,
+    Delete = 7,
+    Get = 8,
+    List = 9,
+    Publish = 10,
+    Subscribe = 11,
+    Describe = 12,
+    Manage = 13,
+}
+
+impl Action {
+    pub const fn code(self) -> u8 {
+        self as u8
+    }
+
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Unknown => "Unknown",
+            Self::All => "All",
+            Self::Any => "Any",
+            Self::Pub => "Pub",
+            Self::Sub => "Sub",
+            Self::Create => "Create",
+            Self::Update => "Update",
+            Self::Delete => "Delete",
+            Self::Get => "Get",
+            Self::List => "List",
+            Self::Publish => "Publish",
+            Self::Subscribe => "Subscribe",
+            Self::Describe => "Describe",
+            Self::Manage => "Manage",
+        }
+    }
+
+    pub fn get_by_name(name: &str) -> Option<Self> {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "unknown" => Some(Self::Unknown),
+            "all" => Some(Self::All),
+            "any" => Some(Self::Any),
+            "pub" => Some(Self::Pub),
+            "sub" => Some(Self::Sub),
+            "create" => Some(Self::Create),
+            "update" => Some(Self::Update),
+            "delete" => Some(Self::Delete),
+            "get" => Some(Self::Get),
+            "list" => Some(Self::List),
+            "publish" => Some(Self::Publish),
+            "subscribe" => Some(Self::Subscribe),
+            "describe" => Some(Self::Describe),
+            "manage" => Some(Self::Manage),
+            _ => None,
+        }
+    }
+}
+
+impl TryFrom<u8> for Action {
+    type Error = ();
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::Unknown),
+            1 => Ok(Self::All),
+            2 => Ok(Self::Any),
+            3 => Ok(Self::Pub),
+            4 => Ok(Self::Sub),
+            5 => Ok(Self::Create),
+            6 => Ok(Self::Update),
+            7 => Ok(Self::Delete),
+            8 => Ok(Self::Get),
+            9 => Ok(Self::List),
+            10 => Ok(Self::Publish),
+            11 => Ok(Self::Subscribe),
+            12 => Ok(Self::Describe),
+            13 => Ok(Self::Manage),
+            _ => Err(()),
+        }
+    }
+}
+
+impl fmt::Display for Action {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.name())
+    }
 }
 
 /// Final authorization decision.

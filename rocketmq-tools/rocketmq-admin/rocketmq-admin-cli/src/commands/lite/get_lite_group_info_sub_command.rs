@@ -14,11 +14,11 @@
 
 use cheetah_string::CheetahString;
 use clap::Parser;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_common::utils::util_all::time_millis_to_human_string2;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::protocol::admin::offset_wrapper::OffsetWrapper;
-use rocketmq_remoting::protocol::body::lite_lag_info::LiteLagInfo;
+use rocketmq_protocol::protocol::admin::offset_wrapper::OffsetWrapper;
+use rocketmq_protocol::protocol::body::lite_lag_info::LiteLagInfo;
+use rocketmq_runtime::common::time_utils::current_millis;
+use rocketmq_runtime::common::util_all::time_millis_to_human_string2;
 
 use crate::commands::CommandExecute;
 use rocketmq_admin_core::client_adapter::services::lite::LiteGroupInfoQueryRequest;

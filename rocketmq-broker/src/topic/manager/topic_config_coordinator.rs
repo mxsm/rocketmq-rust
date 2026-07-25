@@ -20,8 +20,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
-use rocketmq_common::common::config_manager::ConfigManager;
-use rocketmq_common::FileUtils;
+use crate::config::config_manager::ConfigManager;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_runtime::schedule::simple_scheduler::ScheduledTaskManager;
@@ -490,7 +489,7 @@ async fn persist_stable(
                         MetadataDeadline::after(Duration::from_secs(30)),
                     )
                     .await
-                    .map_err(FileUtils::metadata_io_error)?;
+                    .map_err(crate::runtime_to_rocketmq_error)?;
                 version
             } else {
                 let manager_for_write = Arc::clone(manager);
@@ -525,8 +524,8 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use rocketmq_common::common::broker::broker_config::BrokerConfig;
-    use rocketmq_common::common::config::TopicConfig;
+    use crate::config::broker_config::BrokerConfig;
+    use rocketmq_model::common::config::TopicConfig;
     use rocketmq_runtime::schedule::simple_scheduler::ScheduledTaskManager;
     use rocketmq_runtime::ShutdownDeadline;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;

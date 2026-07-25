@@ -24,16 +24,16 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::Weak;
 
+use crate::config::broker_config::BrokerConfig;
+use crate::config::config_manager::ConfigManager;
 use arc_swap::ArcSwap;
 use cheetah_string::CheetahBuilder;
 use cheetah_string::CheetahString;
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
-use rocketmq_common::common::config_manager::ConfigManager;
-use rocketmq_common::utils::file_utils;
-use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
-use rocketmq_remoting::protocol::data_version_facade::DataVersionExt;
-use rocketmq_remoting::protocol::DataVersion;
-use rocketmq_remoting::protocol::RemotingSerializable;
+use rocketmq_model::utils::serde_json_utils::SerdeJsonUtils;
+use rocketmq_protocol::protocol::data_version_facade::DataVersionExt;
+use rocketmq_protocol::protocol::DataVersion;
+use rocketmq_protocol::protocol::RemotingSerializable;
+use rocketmq_runtime::common::file_utils;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use serde::de;
@@ -779,7 +779,7 @@ where
         let json = self.encode_pretty(true);
         if !json.is_empty() {
             let file_name = self.config_file_path();
-            file_utils::string_to_file(json.as_str(), file_name.as_str())?;
+            file_utils::string_to_file(json.as_str(), file_name.as_str()).map_err(crate::runtime_to_rocketmq_error)?;
         }
         Ok(())
     }
@@ -1001,10 +1001,10 @@ mod tests {
     use std::sync::Arc;
     use std::sync::Barrier;
 
+    use crate::config::broker_config::BrokerConfig;
+    use crate::config::config_manager::ConfigManager;
     use cheetah_string::CheetahString;
-    use rocketmq_common::common::broker::broker_config::BrokerConfig;
-    use rocketmq_common::common::config_manager::ConfigManager;
-    use rocketmq_remoting::protocol::DataVersion;
+    use rocketmq_protocol::protocol::DataVersion;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
     use rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore;
 

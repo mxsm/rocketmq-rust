@@ -17,8 +17,9 @@ use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
-use rocketmq_common::common::lite::LiteSubscription;
-use rocketmq_remoting::net::channel::Channel;
+use rocketmq_model::common::lite::LiteSubscription;
+use rocketmq_runtime::common::time_utils::current_millis;
+use rocketmq_transport::net::channel::Channel;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct LiteSubscriptionKey {
@@ -65,18 +66,19 @@ impl LiteSubscriptionRegistry {
         topic: &CheetahString,
         lmq_name_set: &HashSet<CheetahString>,
     ) -> LiteSubscription {
+        let update_time = current_millis() as i64;
         let key = LiteSubscriptionKey::new(client_id.clone(), group.clone(), topic.clone());
         if lmq_name_set.is_empty() {
             return self
                 .lite_subscription(client_id, group, topic)
-                .unwrap_or_else(|| LiteSubscription::new(group.clone(), topic.clone()));
+                .unwrap_or_else(|| LiteSubscription::new(group.clone(), topic.clone(), update_time));
         }
 
         let mut entry = self
             .subscriptions
             .entry(key)
-            .or_insert_with(|| LiteSubscription::new(group.clone(), topic.clone()));
-        entry.add_lite_topic_set(lmq_name_set);
+            .or_insert_with(|| LiteSubscription::new(group.clone(), topic.clone(), update_time));
+        entry.add_lite_topic_set(lmq_name_set, update_time);
         entry.clone()
     }
 
@@ -87,9 +89,10 @@ impl LiteSubscriptionRegistry {
         topic: &CheetahString,
         lmq_name_set: &HashSet<CheetahString>,
     ) -> Option<LiteSubscription> {
+        let update_time = current_millis() as i64;
         let key = LiteSubscriptionKey::new(client_id.clone(), group.clone(), topic.clone());
         let mut entry = self.subscriptions.get_mut(&key)?;
-        entry.remove_lite_topic_set(lmq_name_set);
+        entry.remove_lite_topic_set(lmq_name_set, update_time);
         let snapshot = entry.clone();
         let empty = entry.lite_topic_set().is_empty();
         drop(entry);
@@ -111,6 +114,7 @@ impl LiteSubscriptionRegistry {
         lmq_name_set: &HashSet<CheetahString>,
         version: i64,
     ) -> LiteSubscription {
+        let update_time = current_millis() as i64;
         let key = LiteSubscriptionKey::new(client_id.clone(), group.clone(), topic.clone());
         if let Some(existing) = self.subscriptions.get(&key) {
             if version < existing.version() {
@@ -118,8 +122,8 @@ impl LiteSubscriptionRegistry {
             }
         }
 
-        let mut subscription = LiteSubscription::new(group.clone(), topic.clone());
-        subscription.set_lite_topic_set(lmq_name_set.clone());
+        let mut subscription = LiteSubscription::new(group.clone(), topic.clone(), update_time);
+        subscription.set_lite_topic_set(lmq_name_set.clone(), update_time);
         subscription.set_version(version);
 
         if lmq_name_set.is_empty() {
@@ -196,7 +200,7 @@ impl LiteSubscriptionRegistry {
 
 #[cfg(test)]
 mod tests {
-    use rocketmq_common::common::lite::to_lmq_name;
+    use rocketmq_model::common::lite::to_lmq_name;
 
     use super::*;
 

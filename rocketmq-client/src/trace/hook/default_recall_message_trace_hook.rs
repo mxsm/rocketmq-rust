@@ -15,14 +15,14 @@
 use std::net::SocketAddr;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::message::MessageConst;
-use rocketmq_common::RecallMessageHandle;
-use rocketmq_remoting::code::request_code::RequestCode;
-use rocketmq_remoting::code::response_code::ResponseCode;
-use rocketmq_remoting::protocol::header::recall_message_request_header::RecallMessageRequestHeader;
-use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_remoting::runtime::RPCHook;
+use rocketmq_model::common::message::MessageConst;
+use rocketmq_model::common::producer::RecallMessageHandle;
+use rocketmq_protocol::code::request_code::RequestCode;
+use rocketmq_protocol::code::response_code::ResponseCode;
+use rocketmq_protocol::protocol::header::recall_message_request_header::RecallMessageRequestHeader;
+use rocketmq_protocol::protocol::namespace_util::NamespaceUtil;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_transport::runtime::RPCHook;
 
 use crate::trace::trace_bean::TraceBean;
 use crate::trace::trace_context::TraceContext;
@@ -129,8 +129,8 @@ mod tests {
     use std::sync::Arc;
     use std::sync::Mutex;
 
-    use rocketmq_common::common::producer::recall_message_handle::HandleV1;
-    use rocketmq_remoting::protocol::header::recall_message_response_header::RecallMessageResponseHeader;
+    use rocketmq_model::common::producer::recall_message_handle::HandleV1;
+    use rocketmq_protocol::protocol::header::recall_message_response_header::RecallMessageResponseHeader;
 
     use super::*;
     use crate::base::access_channel::AccessChannel;

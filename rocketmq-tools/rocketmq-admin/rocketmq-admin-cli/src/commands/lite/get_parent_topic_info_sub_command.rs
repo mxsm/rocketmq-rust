@@ -15,7 +15,7 @@
 use cheetah_string::CheetahString;
 use clap::Parser;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::protocol::body::get_parent_topic_info_response_body::GetParentTopicInfoResponseBody;
+use rocketmq_protocol::protocol::body::get_parent_topic_info_response_body::GetParentTopicInfoResponseBody;
 
 use crate::commands::CommandExecute;
 use rocketmq_admin_core::client_adapter::services::lite::LiteService;

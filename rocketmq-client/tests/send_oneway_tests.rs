@@ -18,8 +18,8 @@
 
 use cheetah_string::CheetahString;
 use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
-use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_common::common::message::message_single::Message;
+use rocketmq_model::common::message::message_queue::MessageQueue;
+use rocketmq_model::common::message::message_single::Message;
 
 #[tokio::test]
 async fn test_send_oneway_compiles() {
@@ -29,7 +29,7 @@ async fn test_send_oneway_compiles() {
         .name_server_addr(CheetahString::from_static_str("127.0.0.1:9876"))
         .build();
 
-    let msg = rocketmq_common::common::message::message_single::Message::builder()
+    let msg = rocketmq_model::common::message::message_single::Message::builder()
         .topic(CheetahString::from_static_str("TestTopic"))
         .tags(CheetahString::from_static_str("TestTag"))
         .body(b"TestBody".to_vec())
@@ -47,7 +47,7 @@ async fn test_send_oneway_with_message_queue_compiles() {
         .name_server_addr(CheetahString::from_static_str("127.0.0.1:9876"))
         .build();
 
-    let msg = rocketmq_common::common::message::message_single::Message::builder()
+    let msg = rocketmq_model::common::message::message_single::Message::builder()
         .topic(CheetahString::from_static_str("TestTopic"))
         .tags(CheetahString::from_static_str("TestTag"))
         .body(b"TestBody".to_vec())
@@ -66,7 +66,7 @@ async fn test_send_oneway_with_selector_compiles() {
         .name_server_addr(CheetahString::from_static_str("127.0.0.1:9876"))
         .build();
 
-    let msg = rocketmq_common::common::message::message_single::Message::builder()
+    let msg = rocketmq_model::common::message::message_single::Message::builder()
         .topic(CheetahString::from_static_str("TestTopic"))
         .tags(CheetahString::from_static_str("TestTag"))
         .body(b"TestBody".to_vec())
@@ -85,7 +85,7 @@ fn test_api_signatures_exist() {
 
     fn _check_api(_producer: &mut DefaultMQProducer) {
         // send_oneway exists
-        let _msg = rocketmq_common::common::message::message_single::Message::builder()
+        let _msg = rocketmq_model::common::message::message_single::Message::builder()
             .topic(CheetahString::from_static_str("TestTopic"))
             .tags(CheetahString::from_static_str("Tag"))
             .body(b"Body".to_vec())

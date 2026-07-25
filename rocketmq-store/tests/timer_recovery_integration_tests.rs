@@ -24,15 +24,15 @@ use std::sync::Arc;
 use bytes::Bytes;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
-use rocketmq_common::common::config::TopicConfig;
-use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
-use rocketmq_common::common::message::MessageConst;
-use rocketmq_common::common::message::MessageTrait;
-use rocketmq_common::MessageDecoder::message_properties_to_string;
-use rocketmq_common::TimeUtils::current_millis;
+use rocketmq_model::common::config::TopicConfig;
+use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use rocketmq_model::common::message::MessageConst;
+use rocketmq_model::common::message::MessageTrait;
+use rocketmq_protocol::common::message::message_decoder::message_properties_to_string;
+use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
+use rocketmq_store::config::store_runtime_config::StoreRuntimeConfig;
 use rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore;
 use rocketmq_store::store_path_config_helper::get_timer_check_path;
 use rocketmq_store::timer::timer_checkpoint::TimerCheckpoint;
@@ -54,7 +54,7 @@ fn timer_store_config(temp_dir: &TempDir) -> MessageStoreConfig {
 
 fn new_test_store(temp_dir: &TempDir) -> LocalFileMessageStore {
     let real_topic = CheetahString::from_static_str("phase6-timer-real-topic");
-    let broker_config = Arc::new(BrokerConfig::default());
+    let broker_config = Arc::new(StoreRuntimeConfig::default());
     let topic_config_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>> = Arc::new(DashMap::new());
     topic_config_table.insert(real_topic, Arc::new(TopicConfig::default()));
     topic_config_table.insert(

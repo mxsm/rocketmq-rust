@@ -332,7 +332,7 @@ mod tests {
 
         fn new_context_from_command(
             &self,
-            _command: &rocketmq_remoting::protocol::remoting_command::RemotingCommand,
+            _command: &rocketmq_protocol::protocol::remoting_command::RemotingCommand,
         ) -> Self::Context {
             DefaultAuthenticationContext::new()
         }

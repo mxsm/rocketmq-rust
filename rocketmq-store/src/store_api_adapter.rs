@@ -18,8 +18,8 @@ use std::future::Future;
 
 use bytes::Bytes;
 use cheetah_string::CheetahString;
-use rocketmq_common::common::message::message_batch::MessageExtBatch;
-use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use rocketmq_model::common::message::message_batch::MessageExtBatch;
+use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_store_api::AppendReceipt;
 use rocketmq_store_api::AppendReceiptError;
 use rocketmq_store_api::AppendStatus;

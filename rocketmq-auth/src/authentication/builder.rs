@@ -21,7 +21,7 @@ pub mod default_authentication_context_builder;
 
 pub use default_authentication_context_builder::DefaultAuthenticationContextBuilder;
 use rocketmq_error::AuthError;
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
 /// Authentication context builder trait.
 ///

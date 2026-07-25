@@ -19,7 +19,7 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use rocketmq_common::common::action::Action;
+use rocketmq_security_api::Action;
 
 use crate::authentication::enums::subject_type::SubjectType;
 use crate::authorization::model::resource::Resource;
@@ -311,7 +311,7 @@ impl DefaultAuthorizationContextBuilder {
 
 #[cfg(test)]
 mod tests {
-    use rocketmq_common::common::action::Action;
+    use rocketmq_security_api::Action;
 
     use super::*;
 

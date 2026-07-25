@@ -15,8 +15,8 @@
 use std::sync::Arc;
 use std::sync::Weak;
 
-use rocketmq_common::common::message::MessageConst;
-use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
+use rocketmq_model::common::message::MessageConst;
+use rocketmq_model::common::sys_flag::message_sys_flag::MessageSysFlag;
 use tracing::warn;
 
 use crate::base::commit_log_dispatcher::CommitLogDispatcher;

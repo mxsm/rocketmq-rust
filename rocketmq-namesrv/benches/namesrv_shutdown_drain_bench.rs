@@ -24,10 +24,10 @@ use std::time::UNIX_EPOCH;
 use criterion::criterion_group;
 use criterion::criterion_main;
 use criterion::Criterion;
-use rocketmq_common::common::server::config::ServerConfig;
 use rocketmq_namesrv::bootstrap::Builder;
 use rocketmq_namesrv::bootstrap::NameServerShutdownReport;
 use rocketmq_namesrv::NamesrvConfig;
+use rocketmq_transport::config::ServerConfig;
 
 #[derive(Debug)]
 struct NameSrvShutdownOutput {

@@ -18,21 +18,28 @@ use std::path::Path;
 use std::path::PathBuf;
 
 const WORKSPACE_CRATE_DIRS: &[&str] = &[
-    "rocketmq",
     "rocketmq-auth",
     "rocketmq-broker",
     "rocketmq-client",
-    "rocketmq-common",
     "rocketmq-controller",
     "rocketmq-error",
     "rocketmq-filter",
     "rocketmq-macros",
+    "rocketmq-model",
     "rocketmq-namesrv",
+    "rocketmq-protocol",
     "rocketmq-proxy",
-    "rocketmq-remoting",
+    "rocketmq-proxy-cluster",
+    "rocketmq-proxy-core",
+    "rocketmq-proxy-local",
     "rocketmq-runtime",
+    "rocketmq-security-api",
     "rocketmq-store",
+    "rocketmq-store-api",
+    "rocketmq-store-local",
+    "rocketmq-store-rocksdb",
     "rocketmq-tieredstore",
+    "rocketmq-transport",
     "rocketmq-dashboard/rocketmq-dashboard-common",
     "rocketmq-tools/rocketmq-admin/rocketmq-admin-cli",
     "rocketmq-tools/rocketmq-admin/rocketmq-admin-core",
@@ -87,8 +94,8 @@ const SUBSCRIBER_INSTALL_PATTERNS: &[&str] = &[
 ];
 
 const SUBSCRIBER_INSTALL_ALLOWLIST: &[&str] = &[
-    // Deprecated compatibility wrapper. It must not grow new runtime behavior, but existing callers still compile.
-    "rocketmq-common/src/log.rs",
+    // Deprecated logging compatibility entrypoints remain owned and contained by Observability.
+    "rocketmq-observability/src/legacy_logging.rs",
     // Legacy observability entrypoint retained for source compatibility while production entries use logging.rs.
     "rocketmq-observability/src/init.rs",
     // Unified logging and telemetry bootstrap owns the new production subscriber installation path.
@@ -157,7 +164,7 @@ fn business_crates_do_not_add_direct_opentelemetry_usage() {
 }
 
 #[test]
-fn observability_dependency_closure_excludes_common_and_transport_crates() {
+fn observability_dependency_closure_excludes_deleted_facades_and_transport() {
     let workspace_root = workspace_root();
     let manifest = fs::read_to_string(workspace_root.join("rocketmq-observability/Cargo.toml"))
         .expect("observability manifest should be readable");
@@ -172,7 +179,7 @@ fn observability_dependency_closure_excludes_common_and_transport_crates() {
     for file in workspace_src_files(&workspace_root, &["rocketmq-observability"]) {
         let source =
             fs::read_to_string(&file).unwrap_or_else(|error| panic!("failed to read {}: {error}", file.display()));
-        if source.contains("rocketmq_common::") || source.contains("rocketmq_remoting::") {
+        if source.contains("rocketmq_common::") || source.contains("rocketmq_transport::") {
             forbidden_sources.insert(relative_slash_path(&workspace_root, &file));
         }
     }

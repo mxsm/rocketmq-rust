@@ -15,12 +15,12 @@
 use std::collections::HashMap;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::config::TopicConfig;
-use rocketmq_common::common::constant::PermName;
-use rocketmq_common::common::message::MessageConst;
-use rocketmq_common::common::message::MessageTrait;
-use rocketmq_common::common::topic::TopicValidator;
-use rocketmq_remoting::code::response_code::ResponseCode;
+use rocketmq_model::common::config::TopicConfig;
+use rocketmq_model::common::constant::PermName;
+use rocketmq_model::common::message::MessageConst;
+use rocketmq_model::common::message::MessageTrait;
+use rocketmq_model::common::topic::TopicValidator;
+use rocketmq_protocol::code::response_code::ResponseCode;
 
 use crate::producer::default_mq_producer::ProducerConfig;
 
@@ -182,7 +182,7 @@ impl Validators {
 mod tests {
     use std::collections::HashMap;
 
-    use rocketmq_common::common::config::TopicConfig;
+    use rocketmq_model::common::config::TopicConfig;
 
     use super::*;
 

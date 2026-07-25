@@ -25,11 +25,10 @@ use std::sync::Arc;
 use bytes::Bytes;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
-use rocketmq_common::common::boundary_type::BoundaryType;
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
-use rocketmq_common::common::config::TopicConfig;
-use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
-use rocketmq_common::common::message::MessageTrait;
+use rocketmq_model::common::boundary_type::BoundaryType;
+use rocketmq_model::common::config::TopicConfig;
+use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use rocketmq_model::common::message::MessageTrait;
 use rocketmq_store::base::dispatch_request::DispatchRequest;
 use rocketmq_store::base::message_status_enum::GetMessageStatus;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
@@ -37,6 +36,7 @@ use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::base::store_enum::StoreType;
 use rocketmq_store::config::flush_disk_type::FlushDiskType;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
+use rocketmq_store::config::store_runtime_config::StoreRuntimeConfig;
 use rocketmq_store::message_store::rocksdb_message_store::RocksDBMessageStore;
 use rocketmq_store::message_store::OwnedMessageStore;
 use rocketmq_store::store_error::StoreErrorKind;
@@ -62,7 +62,7 @@ fn rocksdb_store_config_with_maintenance(temp_dir: &TempDir) -> MessageStoreConf
 }
 
 fn new_owned_test_store(temp_dir: &TempDir) -> RocksDBMessageStore {
-    let broker_config = Arc::new(BrokerConfig::default());
+    let broker_config = Arc::new(StoreRuntimeConfig::default());
     let topic_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>> = Arc::new(DashMap::new());
 
     RocksDBMessageStore::try_new(
@@ -76,7 +76,7 @@ fn new_owned_test_store(temp_dir: &TempDir) -> RocksDBMessageStore {
 }
 
 fn new_owned_test_store_with_config(config: MessageStoreConfig) -> RocksDBMessageStore {
-    let broker_config = Arc::new(BrokerConfig::default());
+    let broker_config = Arc::new(StoreRuntimeConfig::default());
     let topic_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>> = Arc::new(DashMap::new());
 
     RocksDBMessageStore::try_new(Arc::new(config), broker_config, topic_table, None, false)
@@ -263,7 +263,7 @@ async fn rocksdb_query_message_after_dispatch() {
         .message_rocksdb_storage()
         .query_offsets_for_index(
             topic.as_str(),
-            rocketmq_common::common::message::MessageConst::INDEX_KEY_TYPE,
+            rocketmq_model::common::message::MessageConst::INDEX_KEY_TYPE,
             key.as_str(),
             append_result.store_timestamp,
             append_result.store_timestamp,

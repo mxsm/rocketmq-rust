@@ -14,8 +14,8 @@
 
 use std::collections::HashSet;
 
-use crate::common::hasher::string_hasher::JavaStringHasher;
 use cheetah_string::CheetahString;
+use rocketmq_model::common::hasher::string_hasher::JavaStringHasher;
 use serde::Deserialize;
 use serde::Serialize;
 

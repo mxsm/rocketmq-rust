@@ -15,11 +15,9 @@
 
 [workspace]
 members = [
-  "rocketmq",
   "rocketmq-auth",
   "rocketmq-broker",
   "rocketmq-client",
-  "rocketmq-common",
   "rocketmq-controller",
   "rocketmq-error",
   "rocketmq-filter",
@@ -32,7 +30,6 @@ members = [
   "rocketmq-proxy-cluster",
   "rocketmq-proxy-core",
   "rocketmq-proxy-local",
-  "rocketmq-remoting",
   "rocketmq-runtime",
   "rocketmq-security-api",
   "rocketmq-store-api",
@@ -71,13 +68,10 @@ Unofficial Rust implementation of Apache RocketMQ
 """
 rust-version = "1.95.0"
 [workspace.dependencies]
-rocketmq-common      = { version = "1.0.0", path = "./rocketmq-common" }
 rocketmq-runtime     = { version = "1.0.0", path = "./rocketmq-runtime" }
 rocketmq-macros      = { version = "1.0.0", path = "./rocketmq-macros" }
-rocketmq-rust        = { version = "1.0.0", path = "./rocketmq" }
 rocketmq-filter      = { version = "1.0.0", path = "./rocketmq-filter" }
 rocketmq-store       = { version = "1.0.0", path = "./rocketmq-store", default-features = true }
-rocketmq-remoting    = { version = "1.0.0", path = "./rocketmq-remoting" }
 rocketmq-client-rust = { version = "1.0.0", path = "./rocketmq-client" }
 rocketmq-broker      = { version = "1.0.0", path = "./rocketmq-broker" }
 rocketmq-error       = { version = "1.0.0", path = "./rocketmq-error" }

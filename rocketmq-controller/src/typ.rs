@@ -22,12 +22,12 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::protobuf;
-use rocketmq_remoting::code::response_code::ResponseCode;
-use rocketmq_remoting::protocol::header::controller::alter_sync_state_set_response_header::AlterSyncStateSetResponseHeader;
-use rocketmq_remoting::protocol::header::controller::apply_broker_id_response_header::ApplyBrokerIdResponseHeader;
-use rocketmq_remoting::protocol::header::controller::register_broker_to_controller_response_header::RegisterBrokerToControllerResponseHeader;
-use rocketmq_remoting::protocol::header::elect_master_response_header::ElectMasterResponseHeader;
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::code::response_code::ResponseCode;
+use rocketmq_protocol::protocol::header::controller::alter_sync_state_set_response_header::AlterSyncStateSetResponseHeader;
+use rocketmq_protocol::protocol::header::controller::apply_broker_id_response_header::ApplyBrokerIdResponseHeader;
+use rocketmq_protocol::protocol::header::controller::register_broker_to_controller_response_header::RegisterBrokerToControllerResponseHeader;
+use rocketmq_protocol::protocol::header::elect_master_response_header::ElectMasterResponseHeader;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
 /// Node ID type - represents a unique identifier for a controller node.
 pub type NodeId = u64;

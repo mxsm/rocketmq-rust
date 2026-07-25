@@ -25,20 +25,20 @@ use std::time::Instant;
 use bytes::Bytes;
 use cheetah_string::CheetahString;
 use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_client_rust::admin_adapter_compat::remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
-use rocketmq_client_rust::admin_adapter_compat::remoting::protocol::route_facade::BrokerDataExt;
 use rocketmq_client_rust::consumer::pull_status::PullStatus;
 use rocketmq_client_rust::TraceDataEncoder;
-use rocketmq_common::common::message::message_decoder;
-use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_common::common::message::MessageConst;
+use rocketmq_model::common::message::message_ext::MessageExt;
+use rocketmq_model::common::message::message_queue::MessageQueue;
+use rocketmq_model::common::message::MessageConst;
 #[allow(deprecated)]
-use rocketmq_common::common::tools::message_track::MessageTrack;
-use rocketmq_common::common::topic::TopicValidator;
-use rocketmq_common::MessageDecoder::decode_message_id;
-use rocketmq_common::MessageDecoder::validate_message_id;
-use rocketmq_common::TimeUtils::current_millis;
+use rocketmq_model::common::tools::message_track::MessageTrack;
+use rocketmq_model::common::topic::TopicValidator;
+use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
+use rocketmq_protocol::common::message::message_decoder::decode_message_id;
+use rocketmq_protocol::common::message::message_decoder::validate_message_id;
+use rocketmq_protocol::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
+use rocketmq_protocol::protocol::route_facade::BrokerDataExt;
+use rocketmq_runtime::common::time_utils::current_millis;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -107,7 +107,7 @@ fn decode_compaction_log_messages(data: Vec<u8>) -> Vec<MessageExt> {
         }
 
         let mut msg_bytes = buf.split_to(size as usize);
-        let Some(message_ext) = message_decoder::decode(&mut msg_bytes, false, false, false, false, false) else {
+        let Some(message_ext) = MessageDecoder::decode(&mut msg_bytes, false, false, false, false, false) else {
             break;
         };
 
@@ -145,7 +145,7 @@ fn build_consume_admin(
 }
 
 fn route_topic_queues(
-    topic_route: &rocketmq_client_rust::admin_adapter_compat::remoting::protocol::route::topic_route_data::TopicRouteData,
+    topic_route: &rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData,
     topic: &str,
 ) -> Vec<(MessageQueue, CheetahString)> {
     let mut broker_addr_map: HashMap<String, CheetahString> = HashMap::new();
@@ -2142,7 +2142,7 @@ mod tests {
     fn message_track_rows_convert_track_type_to_display_text() {
         let rows = message_track_rows(vec![MessageTrack {
             consumer_group: "GroupA".to_string(),
-            track_type: Some(rocketmq_common::common::tools::track_type::TrackType::Consumed),
+            track_type: Some(rocketmq_model::common::tools::track_type::TrackType::Consumed),
             exception_desc: String::new(),
         }]);
 

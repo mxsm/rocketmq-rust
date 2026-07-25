@@ -18,8 +18,8 @@ use std::net::SocketAddr;
 use std::str::FromStr;
 use std::time::Duration;
 
-use rocketmq_protocol::common::filter::expression_type::ExpressionType;
-use rocketmq_protocol::common::message::message_queue_assignment::MessageQueueAssignment;
+use rocketmq_model::common::filter::expression_type::ExpressionType;
+use rocketmq_model::common::message::message_queue_assignment::MessageQueueAssignment;
 use rocketmq_protocol::common::wire_constants::KEY_SEPARATOR;
 use rocketmq_protocol::common::wire_constants::MASTER_ID;
 use rocketmq_protocol::protocol::route::route_data_view::QueueData;

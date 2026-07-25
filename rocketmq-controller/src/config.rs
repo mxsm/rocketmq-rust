@@ -20,14 +20,11 @@ use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use tokio::sync::Mutex;
 
-// Re-export the shared ControllerConfig from rocketmq-common so downstream code in
-// this crate and tests can continue to refer to `crate::config::ControllerConfig`.
-// Re-export common RaftPeer and StorageBackendType (from the controller_config module)
-// so examples/tests using `rocketmq_controller::config::RaftPeer` or
-// `StorageBackendType` keep working.
-pub use rocketmq_common::common::controller::controller_config::RaftPeer;
-pub use rocketmq_common::common::controller::controller_config::StorageBackendType;
-pub use rocketmq_common::common::controller::ControllerConfig;
+mod controller_config;
+
+pub use controller_config::ControllerConfig;
+pub use controller_config::RaftPeer;
+pub use controller_config::StorageBackendType;
 
 /// Shared owner for immutable controller configuration snapshots.
 ///
@@ -99,14 +96,6 @@ impl ControllerConfigHandle {
         Ok(())
     }
 }
-
-// Controller node-specific configuration is now carried by the shared
-// `rocketmq_common::common::controller::ControllerConfig` type. Use that type
-// in the controller crate where node-local fields are required.
-
-// NOTE: crate-local node tests should construct node-aware configs via
-// `rocketmq_common::common::controller::ControllerConfig::new_node(...)` or
-// `::test_config()` helpers.
 
 #[cfg(test)]
 mod tests {

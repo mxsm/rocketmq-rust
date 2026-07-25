@@ -587,8 +587,8 @@ mod tests {
 
     #[test]
     fn end_transaction_request_header_from_map_transaction_state_values() {
-        use crate::common::sys_flag::message_sys_flag::MessageSysFlag;
         use crate::protocol::command_custom_header::FromMap;
+        use rocketmq_model::common::sys_flag::message_sys_flag::MessageSysFlag;
         use std::collections::HashMap;
 
         struct TestCase {
@@ -656,9 +656,9 @@ mod tests {
 
     #[test]
     fn end_transaction_request_header_roundtrip() {
-        use crate::common::sys_flag::message_sys_flag::MessageSysFlag;
         use crate::protocol::command_custom_header::CommandCustomHeader;
         use crate::protocol::command_custom_header::FromMap;
+        use rocketmq_model::common::sys_flag::message_sys_flag::MessageSysFlag;
 
         let original = EndTransactionRequestHeader {
             topic: CheetahString::from("topic1"),
@@ -688,9 +688,9 @@ mod tests {
     #[test]
     fn end_transaction_request_header_via_remoting_command() {
         use crate::code::request_code::RequestCode;
-        use crate::common::sys_flag::message_sys_flag::MessageSysFlag;
         use crate::protocol::remoting_command::RemotingCommand;
         use bytes::BytesMut;
+        use rocketmq_model::common::sys_flag::message_sys_flag::MessageSysFlag;
 
         let original = EndTransactionRequestHeader {
             topic: CheetahString::from("topic1"),

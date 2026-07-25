@@ -15,18 +15,17 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
-use crate::common::wire_constants::MASTER_ID;
 use cheetah_string::CheetahString;
-
-const LITE_BIND_TOPIC_ATTRIBUTE_NAME: &str = "liteBindTopic";
-const LITE_SUB_CLIENT_MAX_EVENT_COUNT_ATTRIBUTE_NAME: &str = "liteSubClientMaxEventCount";
-const LITE_SUB_CLIENT_QUOTA_ATTRIBUTE_NAME: &str = "liteSubClientQuota";
-const LITE_SUB_MODEL_ATTRIBUTE_NAME: &str = "liteSubModel";
-const LITE_SUB_RESET_OFFSET_EXCLUSIVE_ATTRIBUTE_NAME: &str = "liteSubResetOffsetExclusive";
-const LITE_SUB_RESET_OFFSET_UNSUBSCRIBE_ATTRIBUTE_NAME: &str = "liteSubResetOffsetUnsubscribe";
+use rocketmq_model::common::attribute::subscription_group_attributes::LITE_BIND_TOPIC_ATTRIBUTE_NAME;
+use rocketmq_model::common::attribute::subscription_group_attributes::LITE_SUB_CLIENT_MAX_EVENT_COUNT_ATTRIBUTE_NAME;
+use rocketmq_model::common::attribute::subscription_group_attributes::LITE_SUB_CLIENT_QUOTA_ATTRIBUTE_NAME;
+use rocketmq_model::common::attribute::subscription_group_attributes::LITE_SUB_MODEL_ATTRIBUTE_NAME;
+use rocketmq_model::common::attribute::subscription_group_attributes::LITE_SUB_RESET_OFFSET_EXCLUSIVE_ATTRIBUTE_NAME;
+use rocketmq_model::common::attribute::subscription_group_attributes::LITE_SUB_RESET_OFFSET_UNSUBSCRIBE_ATTRIBUTE_NAME;
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::common::wire_constants::MASTER_ID;
 use crate::protocol::subscription::group_retry_policy::GroupRetryPolicy;
 use crate::protocol::subscription::simple_subscription_data::SimpleSubscriptionData;
 

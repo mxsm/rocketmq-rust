@@ -17,16 +17,16 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwap;
 use cheetah_string::CheetahString;
-use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
-use rocketmq_common::common::message::message_decoder;
-use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_common::utils::util_all;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_remoting::protocol::body::consumer_running_info::ConsumerRunningInfo;
-use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
-use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
-use rocketmq_remoting::runtime::RPCHook;
+use rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere;
+use rocketmq_model::common::message::message_ext::MessageExt;
+use rocketmq_model::common::message::message_queue::MessageQueue;
+use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
+use rocketmq_protocol::protocol::body::consumer_running_info::ConsumerRunningInfo;
+use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
+use rocketmq_protocol::protocol::namespace_util::NamespaceUtil;
+use rocketmq_runtime::common::time_utils::current_millis;
+use rocketmq_runtime::common::util_all;
+use rocketmq_transport::runtime::RPCHook;
 
 use crate::base::client_config::ClientConfig;
 use crate::base::query_result::QueryResult;
@@ -561,7 +561,7 @@ impl MQConsumer for DefaultMQPushConsumer {
             .default_mqpush_consumer_impl
             .as_mut()
             .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("DefaultMQPushConsumerImpl"))?;
-        if message_decoder::decode_message_id(msg_id).is_ok() {
+        if MessageDecoder::decode_message_id(msg_id).is_ok() {
             consumer_impl.view_message(topic.as_str(), msg_id).await
         } else {
             consumer_impl.query_message_by_uniq_key(topic.as_str(), msg_id).await

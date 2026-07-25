@@ -16,9 +16,9 @@ use clap::Parser;
 use rocketmq_admin_core::client_adapter::services::connection::ConnectionService;
 use rocketmq_admin_core::client_adapter::services::connection::ProducerConnectionQueryRequest;
 use rocketmq_admin_core::client_adapter::services::connection::ProducerConnectionQueryResult;
-use rocketmq_common::common::mq_version::RocketMqVersion;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::protocol::body::producer_connection::ProducerConnection;
+use rocketmq_model::common::mq_version::RocketMqVersion;
+use rocketmq_protocol::protocol::body::producer_connection::ProducerConnection;
 
 use crate::commands::CommandExecute;
 

@@ -13,9 +13,9 @@
 // limitations under the License.
 
 use clap::Parser;
-use rocketmq_common::FileUtils::string_to_file;
-use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQResult;
+use rocketmq_runtime::common::file_utils::string_to_file;
+use rocketmq_runtime::common::time_utils::current_millis;
 
 use crate::commands::CommandExecute;
 use rocketmq_admin_core::client_adapter::services::consumer::ConsumerRunningInfoRequest;
@@ -73,7 +73,8 @@ impl ConsumerStatusSubCommand {
         println!("#Index #ClientId #Version #ConsumerRunningInfoFile");
         for (index, item) in result.items.iter().enumerate() {
             let file_path = format!("{}/{}", now, item.client_id);
-            string_to_file(&format!("{}", item.running_info), file_path.clone())?;
+            string_to_file(&format!("{}", item.running_info), file_path.clone())
+                .map_err(crate::runtime_to_rocketmq_error)?;
             println!(
                 "{} {} version:{} {}",
                 index + 1,

@@ -16,10 +16,10 @@ use std::fs;
 use std::path::PathBuf;
 
 use clap::Parser;
-use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_common::utils::util_all::time_millis_to_human_string2;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
+use rocketmq_model::common::message::message_ext::MessageExt;
+use rocketmq_runtime::common::util_all::time_millis_to_human_string2;
 
 use crate::commands::CommandExecute;
 use rocketmq_admin_core::client_adapter::services::message::MessageService;

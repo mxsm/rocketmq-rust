@@ -15,12 +15,12 @@
 use std::collections::HashMap;
 use std::vec::Vec;
 
-use crate::common::key_builder;
-use crate::common::key_builder::KeyBuilder;
 use crate::common::wire_constants::KEY_SEPARATOR;
 use crate::common::wire_constants::RETRY_GROUP_TOPIC_PREFIX;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
+use rocketmq_model::common::key_builder;
+use rocketmq_model::common::key_builder::KeyBuilder;
 
 pub struct ExtraInfoUtil;
 
@@ -452,7 +452,7 @@ impl ExtraInfoUtil {
 
 #[cfg(test)]
 mod tests {
-    use crate::common::key_builder::KeyBuilder;
+    use rocketmq_model::common::key_builder::KeyBuilder;
 
     use super::*;
 

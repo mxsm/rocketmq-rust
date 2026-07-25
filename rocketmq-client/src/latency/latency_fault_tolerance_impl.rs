@@ -322,7 +322,7 @@ where
 }
 
 use cheetah_string::CheetahString;
-use rocketmq_common::TimeUtils::current_millis;
+use rocketmq_runtime::common::time_utils::current_millis;
 use std::cmp::Ordering;
 use std::hash::Hash;
 use tracing::error;

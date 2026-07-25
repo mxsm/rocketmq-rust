@@ -41,8 +41,8 @@ use std::time::Instant;
 use cheetah_string::CheetahString;
 use parking_lot::RwLock;
 use rocketmq_namesrv::route::segmented_lock::SegmentedLock;
-use rocketmq_remoting::protocol::route::route_data_view::BrokerData;
-use rocketmq_remoting::protocol::route::route_data_view::QueueData;
+use rocketmq_protocol::protocol::route::route_data_view::BrokerData;
+use rocketmq_protocol::protocol::route::route_data_view::QueueData;
 
 // ============================================================================
 // Benchmark Data Structures

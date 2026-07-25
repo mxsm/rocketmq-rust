@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::common::lite::LiteSubscriptionDTO;
+use rocketmq_model::common::lite::LiteSubscriptionDTO;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -41,7 +41,7 @@ impl LiteSubscriptionCtlRequestBody {
 
 #[cfg(test)]
 mod tests {
-    use crate::common::lite::LiteSubscriptionAction;
+    use rocketmq_model::common::lite::LiteSubscriptionAction;
 
     use super::*;
 

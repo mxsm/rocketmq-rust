@@ -15,7 +15,7 @@
 use std::fmt;
 
 use cheetah_string::CheetahString;
-use rocketmq_remoting::net::channel::Channel;
+use rocketmq_transport::net::channel::Channel;
 
 pub trait RemotingChannel: Send + Sync {}
 
@@ -165,7 +165,7 @@ mod tests {
     use std::net::SocketAddr;
     use std::sync::Arc;
 
-    use rocketmq_remoting::connection::Connection;
+    use rocketmq_transport::connection::Connection;
 
     use super::*;
 
@@ -179,7 +179,7 @@ mod tests {
         let tcp_stream = tokio::net::TcpStream::from_std(std_stream).unwrap();
         let connection = Connection::new(tcp_stream);
         let response_table = Arc::new(parking_lot::Mutex::new(HashMap::new()));
-        let inner = Arc::new(rocketmq_remoting::net::channel::ChannelInner::new(
+        let inner = Arc::new(rocketmq_transport::net::channel::ChannelInner::new(
             connection,
             response_table,
         ));

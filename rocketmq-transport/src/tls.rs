@@ -49,7 +49,7 @@ use crate::connection::Connection;
 const TLS_HANDSHAKE_MAGIC_CODE: u8 = 0x16;
 #[cfg(feature = "tls")]
 const TLS_RELOAD_POLL_INTERVAL: Duration = Duration::from_secs(5);
-pub const TLS_DISABLED_ERROR_REASON: &str = "rocketmq-remoting was compiled without the tls feature";
+pub const TLS_DISABLED_ERROR_REASON: &str = "rocketmq-transport was compiled without the tls feature";
 
 /// A canonical connection paired with the result of TLS negotiation.
 pub struct NegotiatedConnection {
@@ -468,7 +468,7 @@ impl TlsServerRuntime {
 
     #[cfg(not(feature = "tls"))]
     async fn accept_tls(&self, _stream: TcpStream, remote_addr: SocketAddr) -> Option<Connection> {
-        warn!("client {remote_addr} attempted TLS but rocketmq-remoting was compiled without TLS support");
+        warn!("client {remote_addr} attempted TLS but rocketmq-transport was compiled without TLS support");
         None
     }
 

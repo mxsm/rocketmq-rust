@@ -14,7 +14,7 @@
 
 use std::sync::Arc;
 
-use rocketmq_common::common::message::message_ext::MessageExt;
+use rocketmq_model::common::message::message_ext::MessageExt;
 
 use crate::consumer::listener::consume_orderly_context::ConsumeOrderlyContext;
 use crate::consumer::listener::consume_orderly_status::ConsumeOrderlyStatus;
@@ -50,7 +50,7 @@ use crate::consumer::listener::consume_orderly_status::ConsumeOrderlyStatus;
 /// use rocketmq_client_rust::consumer::listener::ConsumeOrderlyContext;
 /// use rocketmq_client_rust::consumer::listener::ConsumeOrderlyStatus;
 /// use rocketmq_client_rust::consumer::listener::MessageListenerOrderly;
-/// use rocketmq_common::common::message::message_ext::MessageExt;
+/// use rocketmq_model::common::message::message_ext::MessageExt;
 ///
 /// // Closures automatically implement MessageListenerOrderly
 /// let listener = |msgs: &[&MessageExt],

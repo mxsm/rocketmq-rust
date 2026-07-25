@@ -18,7 +18,7 @@ use std::sync::Arc;
 use std::collections::HashMap;
 
 #[cfg(feature = "metrics")]
-use rocketmq_common::common::controller::ControllerConfig;
+use crate::config::ControllerConfig;
 
 use crate::config::ControllerConfigReader;
 
@@ -47,10 +47,10 @@ pub(crate) fn controller_metrics_config(config: &ControllerConfig) -> Controller
         controller_type: config.controller_type.clone(),
         node_id: config.node_id.to_string(),
         metrics_exporter_type: match config.metrics_exporter_type {
-            rocketmq_common::common::metrics::MetricsExporterType::Disable => MetricsExporter::Disable,
-            rocketmq_common::common::metrics::MetricsExporterType::OtlpGrpc => MetricsExporter::OtlpGrpc,
-            rocketmq_common::common::metrics::MetricsExporterType::Prom => MetricsExporter::Prometheus,
-            rocketmq_common::common::metrics::MetricsExporterType::Log => MetricsExporter::Log,
+            rocketmq_observability::exporter_types::MetricsExporterType::Disable => MetricsExporter::Disable,
+            rocketmq_observability::exporter_types::MetricsExporterType::OtlpGrpc => MetricsExporter::OtlpGrpc,
+            rocketmq_observability::exporter_types::MetricsExporterType::Prom => MetricsExporter::Prometheus,
+            rocketmq_observability::exporter_types::MetricsExporterType::Log => MetricsExporter::Log,
         },
         metric_logging_exporter_interval_in_mills: config.metric_logging_exporter_interval_in_mills,
         metric_grpc_exporter_interval_in_mills: config.metric_grpc_exporter_interval_in_mills,

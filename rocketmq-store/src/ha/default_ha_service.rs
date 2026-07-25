@@ -20,10 +20,10 @@ use std::sync::OnceLock;
 use std::sync::Weak;
 use std::time::Duration;
 
-use rocketmq_common::common::broker::broker_role::BrokerRole;
-use rocketmq_remoting::protocol::body::ha_client_runtime_info::HAClientRuntimeInfo;
-use rocketmq_remoting::protocol::body::ha_connection_runtime_info::HAConnectionRuntimeInfo;
-use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
+use rocketmq_model::common::broker::broker_role::BrokerRole;
+use rocketmq_protocol::protocol::body::ha_client_runtime_info::HAClientRuntimeInfo;
+use rocketmq_protocol::protocol::body::ha_connection_runtime_info::HAConnectionRuntimeInfo;
+use rocketmq_protocol::protocol::body::ha_runtime_info::HARuntimeInfo;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::select;
@@ -248,7 +248,7 @@ impl DefaultHAConnectionContext {
             return;
         };
 
-        replication.record_caught_up(slave_broker_id, rocketmq_common::TimeUtils::current_millis());
+        replication.record_caught_up(slave_broker_id, rocketmq_runtime::common::time_utils::current_millis());
         if slave_ack_offset >= 0 {
             self.handle_auto_switch_connection_ack(replication, Some(slave_broker_id), slave_ack_offset);
         }
@@ -264,7 +264,7 @@ impl DefaultHAConnectionContext {
             return;
         };
 
-        replication.record_caught_up(slave_broker_id, rocketmq_common::TimeUtils::current_millis());
+        replication.record_caught_up(slave_broker_id, rocketmq_runtime::common::time_utils::current_millis());
         let current_confirm_offset = self.inner.replica_store.get_confirm_offset_directly();
         let _ = replication.maybe_expand_sync_state_set(slave_broker_id, slave_ack_offset, current_confirm_offset);
         if replication.local_sync_state_set().contains(&slave_broker_id) {
@@ -525,7 +525,7 @@ impl DefaultHAService {
 
     fn handle_auto_switch_connection_caught_up(replication: &AutoSwitchReplicationState, slave_broker_id: Option<i64>) {
         if let Some(slave_broker_id) = slave_broker_id {
-            replication.record_caught_up(slave_broker_id, rocketmq_common::TimeUtils::current_millis());
+            replication.record_caught_up(slave_broker_id, rocketmq_runtime::common::time_utils::current_millis());
         }
     }
 
@@ -877,7 +877,7 @@ mod tests {
     use std::path::Path;
     use std::sync::atomic::Ordering;
 
-    use rocketmq_common::TimeUtils::current_millis;
+    use rocketmq_runtime::common::time_utils::current_millis;
     use tokio::io::AsyncWriteExt;
 
     use super::*;

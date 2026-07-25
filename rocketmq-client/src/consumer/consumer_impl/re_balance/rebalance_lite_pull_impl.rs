@@ -34,12 +34,12 @@ use arc_swap::ArcSwap;
 use arc_swap::ArcSwapOption;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
-use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
-use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_common::common::mix_all;
-use rocketmq_remoting::code::response_code::ResponseCode;
-use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
-use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
+use rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere;
+use rocketmq_model::common::message::message_queue::MessageQueue;
+use rocketmq_model::common::mix_all;
+use rocketmq_protocol::code::response_code::ResponseCode;
+use rocketmq_protocol::protocol::heartbeat::consume_type::ConsumeType;
+use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -106,7 +106,7 @@ impl RebalanceLitePullImpl {
     /// Sets the message model (Clustering / Broadcasting) on the underlying rebalance core.
     pub fn set_message_model(
         &self,
-        message_model: rocketmq_remoting::protocol::heartbeat::message_model::MessageModel,
+        message_model: rocketmq_protocol::protocol::heartbeat::message_model::MessageModel,
     ) {
         self.rebalance_impl_inner.set_message_model(message_model);
         self.update_consumer_config(|config| config.message_model = message_model);
@@ -149,7 +149,7 @@ impl RebalanceLitePullImpl {
     pub fn set_mq_client_factory(
         &self,
         consumer_group: CheetahString,
-        message_model: rocketmq_remoting::protocol::heartbeat::message_model::MessageModel,
+        message_model: rocketmq_protocol::protocol::heartbeat::message_model::MessageModel,
         strategy: Arc<dyn crate::consumer::allocate_message_queue_strategy::AllocateMessageQueueStrategy>,
         client_instance: Arc<MQClientInstance>,
     ) {

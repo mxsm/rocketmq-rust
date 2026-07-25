@@ -596,7 +596,7 @@ impl AuthorizationMetadataManagerImpl {
         }
 
         // Check for Action::ANY (should not be allowed in ACL entries)
-        use rocketmq_common::common::action::Action;
+        use rocketmq_security_api::Action;
         if entry.actions().contains(&Action::Any) {
             return Err(AuthorizationError::InvalidContext(
                 "The actions can not be Any.".to_string(),
@@ -764,7 +764,7 @@ impl Subject for SubjectWrapper {
 
 #[cfg(test)]
 mod tests {
-    use rocketmq_common::common::action::Action;
+    use rocketmq_security_api::Action;
 
     use crate::authentication::enums::user_status::UserStatus;
     use crate::authentication::enums::user_type::UserType;

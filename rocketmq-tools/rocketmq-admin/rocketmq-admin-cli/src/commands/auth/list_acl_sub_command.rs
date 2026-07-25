@@ -22,7 +22,7 @@ use rocketmq_admin_core::client_adapter::services::auth::ListAclRequest;
 use rocketmq_admin_core::client_adapter::services::auth::ListAclResult;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::protocol::body::acl_info::AclInfo;
+use rocketmq_protocol::protocol::body::acl_info::AclInfo;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;

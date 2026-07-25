@@ -19,7 +19,7 @@ use std::collections::HashMap;
 
 use cheetah_string::CheetahString;
 use regex::Regex;
-use rocketmq_common::common::message::MessageConst;
+use rocketmq_model::common::message::MessageConst;
 use serde::Deserialize;
 use serde::Serialize;
 

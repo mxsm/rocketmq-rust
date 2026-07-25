@@ -16,14 +16,14 @@ use std::sync::Arc;
 use std::sync::Weak;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::message::message_client_ext::MessageClientExt;
-use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
+use rocketmq_model::common::message::message_client_ext::MessageClientExt;
+use rocketmq_model::common::message::message_ext::MessageExt;
+use rocketmq_model::common::message::message_queue::MessageQueue;
+use rocketmq_protocol::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
 
 use crate::consumer::consumer_impl::pop_process_queue::PopProcessQueue;
 use crate::consumer::consumer_impl::process_queue::ProcessQueue;
-use rocketmq_remoting::protocol::body::cm_result::CMResult;
+use rocketmq_protocol::protocol::body::cm_result::CMResult;
 
 pub struct ConsumeMessageServiceGeneral<T, K> {
     consume_message_concurrently_service: Option<Arc<T>>,
