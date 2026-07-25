@@ -15,9 +15,9 @@
 use std::collections::BTreeMap;
 
 use cheetah_string::CheetahString;
-use rocketmq_client_rust::admin_adapter_compat::error::RocketMQError;
 use rocketmq_client_rust::MQAdminExt;
 use rocketmq_client_rust::TraceDataEncoder;
+use rocketmq_error::RocketMQError;
 use rocketmq_model::message::MessageQueue;
 use rocketmq_model::result::PullStatus;
 use rocketmq_model::topic::DLQ_GROUP_TOPIC_PREFIX;
@@ -415,7 +415,7 @@ pub(super) async fn find_raw_message(
     session: &mut AdminSession,
     topic: &str,
     message_id: &str,
-) -> Result<rocketmq_client_rust::admin_adapter_compat::message::MessageExt, AdminError> {
+) -> Result<rocketmq_model::common::message::message_ext::MessageExt, AdminError> {
     match session
         .inner
         .query_message_by_unique_key(None, topic.into(), message_id.into(), 32, 0, i64::MAX)

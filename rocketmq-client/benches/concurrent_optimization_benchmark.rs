@@ -46,7 +46,7 @@ use criterion::BenchmarkId;
 use criterion::Criterion;
 use criterion::Throughput;
 use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
-use rocketmq_common::common::message::message_single::Message;
+use rocketmq_model::common::message::message_single::Message;
 
 /// Benchmark 1: Concurrent Producer Access (DashMap verification)
 ///

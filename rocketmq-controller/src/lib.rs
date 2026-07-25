@@ -117,7 +117,7 @@ pub mod bench_support {
     use std::time::Duration;
     use std::time::Instant;
 
-    use rocketmq_common::common::controller::controller_config::RaftPeer;
+    use crate::config::RaftPeer;
     use rocketmq_runtime::ShutdownReport;
     use serde::Serialize;
 

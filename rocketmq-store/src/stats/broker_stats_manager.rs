@@ -14,23 +14,23 @@
 
 use std::sync::Arc;
 
+use crate::config::store_runtime_config::StoreRuntimeConfig;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use parking_lot::Mutex;
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
-use rocketmq_common::common::statistics::state_getter::StateGetter;
-use rocketmq_common::common::statistics::statistics_item::StatisticsItem;
-use rocketmq_common::common::statistics::statistics_item_formatter::StatisticsItemFormatter;
-use rocketmq_common::common::statistics::statistics_item_printer::StatisticsItemPrinter;
-use rocketmq_common::common::statistics::statistics_item_scheduled_printer::StatisticsItemScheduledPrinter;
-use rocketmq_common::common::statistics::statistics_item_state_getter::StatisticsItemStateGetter;
-use rocketmq_common::common::statistics::statistics_kind_meta::StatisticsKindMeta;
-use rocketmq_common::common::statistics::statistics_manager::StatisticsManager;
-use rocketmq_common::common::stats::moment_stats_item_set::MomentStatsItemSet;
-use rocketmq_common::common::stats::stats_item::StatsItem;
-use rocketmq_common::common::stats::stats_item_set::StatsItemSet;
-use rocketmq_common::common::stats::Stats;
-use rocketmq_common::common::topic::TopicValidator;
+use rocketmq_model::common::topic::TopicValidator;
+use rocketmq_observability::statistics::state_getter::StateGetter;
+use rocketmq_observability::statistics::statistics_item::StatisticsItem;
+use rocketmq_observability::statistics::statistics_item_formatter::StatisticsItemFormatter;
+use rocketmq_observability::statistics::statistics_item_printer::StatisticsItemPrinter;
+use rocketmq_observability::statistics::statistics_item_scheduled_printer::StatisticsItemScheduledPrinter;
+use rocketmq_observability::statistics::statistics_item_state_getter::StatisticsItemStateGetter;
+use rocketmq_observability::statistics::statistics_kind_meta::StatisticsKindMeta;
+use rocketmq_observability::statistics::statistics_manager::StatisticsManager;
+use rocketmq_observability::stats::moment_stats_item_set::MomentStatsItemSet;
+use rocketmq_observability::stats::stats_item::StatsItem;
+use rocketmq_observability::stats::stats_item_set::StatsItemSet;
+use rocketmq_observability::stats::Stats;
 use rocketmq_runtime::schedule::simple_scheduler::ScheduledTaskManager;
 use rocketmq_runtime::RuntimeResult;
 use tokio::time::Duration;
@@ -49,7 +49,7 @@ pub struct BrokerStatsManager {
     account_stat_manager: StatisticsManager,
     producer_state_getter: Option<Arc<dyn StateGetter>>,
     consumer_state_getter: Option<Arc<dyn StateGetter>>,
-    broker_config: Option<Arc<BrokerConfig>>,
+    broker_config: Option<Arc<StoreRuntimeConfig>>,
     scheduler: Option<Arc<ScheduledTaskManager>>,
     task_ids: Arc<Mutex<Vec<TaskId>>>,
 }
@@ -196,12 +196,15 @@ impl BrokerStatsManager {
     }
 
     #[inline]
-    pub fn new(broker_config: Arc<BrokerConfig>) -> Self {
+    pub fn new(broker_config: Arc<StoreRuntimeConfig>) -> Self {
         Self::new_with_scheduler(broker_config, None)
     }
 
     #[inline]
-    pub fn new_with_scheduler(broker_config: Arc<BrokerConfig>, scheduler: Option<Arc<ScheduledTaskManager>>) -> Self {
+    pub fn new_with_scheduler(
+        broker_config: Arc<StoreRuntimeConfig>,
+        scheduler: Option<Arc<ScheduledTaskManager>>,
+    ) -> Self {
         let stats_table = Arc::new(DashMap::new());
         let enable_queue_stat = broker_config.enable_detail_stat;
         let cluster_name = broker_config.broker_identity.broker_cluster_name.to_string();
@@ -223,7 +226,11 @@ impl BrokerStatsManager {
     }
 
     #[inline]
-    pub fn new_with_name(broker_config: Arc<BrokerConfig>, cluster_name: String, enable_queue_stat: bool) -> Self {
+    pub fn new_with_name(
+        broker_config: Arc<StoreRuntimeConfig>,
+        cluster_name: String,
+        enable_queue_stat: bool,
+    ) -> Self {
         let stats_table = Arc::new(DashMap::new());
         let mut broker_stats_manager = BrokerStatsManager {
             stats_table,
@@ -1036,7 +1043,7 @@ pub fn create_statistics_kind_meta(
     item_names: Vec<&str>,
     formatter: &StatisticsItemFormatter,
     interval: u64,
-    broker_config: &Arc<BrokerConfig>,
+    broker_config: &Arc<StoreRuntimeConfig>,
 ) -> Arc<StatisticsKindMeta> {
     let printer = StatisticsItemPrinter::new(formatter);
     let scheduled_printer = StatisticsItemScheduledPrinter;
@@ -1145,7 +1152,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_broker_stats_manager_initialization() {
-        let broker_config = Arc::new(BrokerConfig::default());
+        let broker_config = Arc::new(StoreRuntimeConfig::default());
         let manager = BrokerStatsManager::new(broker_config);
 
         assert_eq!(manager.get_cluster_name(), "DefaultCluster");
@@ -1154,7 +1161,7 @@ mod tests {
 
     #[tokio::test]
     async fn sampling_helpers_populate_java_compatible_stats_windows() {
-        let broker_config = Arc::new(BrokerConfig::default());
+        let broker_config = Arc::new(StoreRuntimeConfig::default());
         let manager = BrokerStatsManager::new(broker_config);
 
         manager.inc_topic_put_nums("TestTopic", 100, 1);
@@ -1192,7 +1199,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_inc_topic_put_nums() {
-        let broker_config = Arc::new(BrokerConfig::default());
+        let broker_config = Arc::new(StoreRuntimeConfig::default());
         let manager = BrokerStatsManager::new(broker_config);
 
         manager.inc_topic_put_nums("TestTopic", 100, 1);
@@ -1211,7 +1218,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_inc_group_get_nums() {
-        let broker_config = Arc::new(BrokerConfig::default());
+        let broker_config = Arc::new(StoreRuntimeConfig::default());
         let manager = BrokerStatsManager::new(broker_config);
 
         manager.inc_group_get_nums("TestGroup", "TestTopic", 50);
@@ -1231,7 +1238,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_inc_broker_put_nums_excludes_system_topic() {
-        let broker_config = Arc::new(BrokerConfig::default());
+        let broker_config = Arc::new(StoreRuntimeConfig::default());
         let manager = BrokerStatsManager::new(broker_config);
 
         manager.inc_broker_put_nums("UserTopic", 100);
@@ -1249,7 +1256,7 @@ mod tests {
 
     #[tokio::test]
     async fn broker_num_getters_return_current_totals_before_sampling() {
-        let broker_config = Arc::new(BrokerConfig::default());
+        let broker_config = Arc::new(StoreRuntimeConfig::default());
         let manager = BrokerStatsManager::new(broker_config);
 
         manager.inc_broker_put_nums("UserTopic", 500);
@@ -1265,7 +1272,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_inc_send_back_nums() {
-        let broker_config = Arc::new(BrokerConfig::default());
+        let broker_config = Arc::new(StoreRuntimeConfig::default());
         let manager = BrokerStatsManager::new(broker_config);
 
         manager.inc_send_back_nums("TestGroup", "TestTopic");
@@ -1281,7 +1288,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_inc_commercial_value() {
-        let broker_config = Arc::new(BrokerConfig::default());
+        let broker_config = Arc::new(StoreRuntimeConfig::default());
         let manager = BrokerStatsManager::new(broker_config);
 
         manager.inc_commercial_value(
@@ -1302,7 +1309,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_inc_disk_stats() {
-        let broker_config = Arc::new(BrokerConfig::default());
+        let broker_config = Arc::new(StoreRuntimeConfig::default());
         let manager = BrokerStatsManager::new(broker_config);
 
         manager.inc_group_get_from_disk_nums("TestGroup", "TestTopic", 10);
@@ -1325,7 +1332,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_query_interfaces() {
-        let broker_config = Arc::new(BrokerConfig::default());
+        let broker_config = Arc::new(StoreRuntimeConfig::default());
         let manager = BrokerStatsManager::new(broker_config);
 
         manager.inc_broker_put_nums("UserTopic", 500);
@@ -1346,7 +1353,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_stats_item() {
-        let broker_config = Arc::new(BrokerConfig::default());
+        let broker_config = Arc::new(StoreRuntimeConfig::default());
         let manager = BrokerStatsManager::new(broker_config);
 
         manager.inc_topic_put_nums("TestTopic", 100, 1);
@@ -1360,7 +1367,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_inc_producer_consumer_register_time() {
-        let broker_config = Arc::new(BrokerConfig::default());
+        let broker_config = Arc::new(StoreRuntimeConfig::default());
         let manager = BrokerStatsManager::new(broker_config);
 
         manager.inc_producer_register_time(100);
@@ -1382,7 +1389,7 @@ mod tests {
     async fn test_concurrent_increments() {
         use std::thread;
 
-        let broker_config = Arc::new(BrokerConfig::default());
+        let broker_config = Arc::new(StoreRuntimeConfig::default());
         let manager = Arc::new(BrokerStatsManager::new(broker_config));
 
         let mut handles = vec![];
@@ -1412,7 +1419,7 @@ mod tests {
     async fn test_concurrent_different_topics() {
         use std::thread;
 
-        let broker_config = Arc::new(BrokerConfig::default());
+        let broker_config = Arc::new(StoreRuntimeConfig::default());
         let manager = Arc::new(BrokerStatsManager::new(broker_config));
 
         let mut handles = vec![];
@@ -1444,7 +1451,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_start_with_scheduler() {
-        let broker_config = Arc::new(BrokerConfig::default());
+        let broker_config = Arc::new(StoreRuntimeConfig::default());
         let scheduler = Arc::new(ScheduledTaskManager::new_legacy_compatibility());
         let manager = BrokerStatsManager::new_with_scheduler(broker_config, Some(scheduler.clone()));
 
@@ -1455,7 +1462,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_shutdown_cancels_tasks() {
-        let broker_config = Arc::new(BrokerConfig::default());
+        let broker_config = Arc::new(StoreRuntimeConfig::default());
         let scheduler = Arc::new(ScheduledTaskManager::new_legacy_compatibility());
         let manager = BrokerStatsManager::new_with_scheduler(broker_config, Some(scheduler.clone()));
 
@@ -1471,7 +1478,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_on_topic_deleted() {
-        let broker_config = Arc::new(BrokerConfig::default());
+        let broker_config = Arc::new(StoreRuntimeConfig::default());
         let manager = BrokerStatsManager::new(broker_config);
 
         manager.inc_topic_put_nums("DeletedTopic", 100, 1);
@@ -1487,7 +1494,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_on_group_deleted() {
-        let broker_config = Arc::new(BrokerConfig::default());
+        let broker_config = Arc::new(StoreRuntimeConfig::default());
         let manager = BrokerStatsManager::new(broker_config);
 
         manager.inc_group_get_nums("DeletedGroup", "TestTopic", 50);

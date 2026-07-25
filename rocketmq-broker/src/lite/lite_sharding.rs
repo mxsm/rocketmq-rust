@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
-use rocketmq_common::common::lite::get_lite_topic;
+use rocketmq_model::common::lite::get_lite_topic;
 
 use crate::topic::manager::topic_route_info_manager::TopicRouteInfoManager;
 use crate::topic::route::BrokerPublishRoute;

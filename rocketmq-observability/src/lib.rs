@@ -16,7 +16,9 @@ pub mod attributes;
 pub mod config;
 pub mod error;
 pub mod exporter;
+pub mod exporter_types;
 pub mod init;
+pub mod legacy_logging;
 pub mod log_filter;
 pub mod logging;
 pub mod logs;
@@ -26,6 +28,8 @@ pub mod propagation;
 pub mod resource;
 pub mod sampling;
 pub mod semantic;
+pub mod statistics;
+pub mod stats;
 pub mod trace;
 
 pub use config::ConsoleLogConfig;

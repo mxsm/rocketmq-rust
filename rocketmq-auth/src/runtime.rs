@@ -6,14 +6,9 @@ use std::sync::RwLock;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::resource::resource_pattern::ResourcePattern;
-use rocketmq_common::common::resource::resource_type::ResourceType;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::net::channel::Channel;
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::MetadataIoActor;
 use rocketmq_runtime::RuntimeHandle;
 use rocketmq_runtime::ScheduledTaskConfig;
@@ -21,6 +16,11 @@ use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
+use rocketmq_security_api::ResourcePattern;
+use rocketmq_security_api::ResourceType;
+use rocketmq_transport::net::channel::Channel;
+use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
@@ -999,8 +999,8 @@ mod tests {
     use std::time::Instant;
 
     use cheetah_string::CheetahString;
-    use rocketmq_common::common::action::Action;
-    use rocketmq_remoting::code::request_code::RequestCode;
+    use rocketmq_protocol::code::request_code::RequestCode;
+    use rocketmq_security_api::Action;
     use tempfile::TempDir;
     use tokio::time::sleep;
 

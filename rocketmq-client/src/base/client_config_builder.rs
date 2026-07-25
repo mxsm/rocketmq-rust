@@ -18,9 +18,9 @@
 //! making configuration more readable and allowing for validation before building.
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::tls_config::TlsConfig;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::protocol::LanguageCode;
+use rocketmq_protocol::protocol::LanguageCode;
+use rocketmq_transport::config::TlsConfig;
 
 use super::access_channel::AccessChannel;
 use super::client_config::ClientConfig;

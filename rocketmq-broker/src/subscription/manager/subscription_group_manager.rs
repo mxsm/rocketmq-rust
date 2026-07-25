@@ -19,19 +19,19 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::config::broker_config::BrokerConfig;
+use crate::config::config_manager::ConfigManager;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
-use rocketmq_common::common::attribute::attribute_util::AttributeUtil;
-use rocketmq_common::common::attribute::subscription_group_attributes::SubscriptionGroupAttributes;
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
-use rocketmq_common::common::config_manager::ConfigManager;
-use rocketmq_common::common::mix_all::is_sys_consumer_group;
-use rocketmq_common::common::topic::TopicValidator;
-use rocketmq_common::utils::file_utils;
-use rocketmq_remoting::protocol::data_version_facade::DataVersionExt;
-use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
-use rocketmq_remoting::protocol::DataVersion;
-use rocketmq_remoting::protocol::RemotingSerializable;
+use rocketmq_model::common::attribute::attribute_util::AttributeUtil;
+use rocketmq_model::common::attribute::subscription_group_attributes::SubscriptionGroupAttributes;
+use rocketmq_model::common::mix_all::is_sys_consumer_group;
+use rocketmq_model::common::topic::TopicValidator;
+use rocketmq_protocol::protocol::data_version_facade::DataVersionExt;
+use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
+use rocketmq_protocol::protocol::DataVersion;
+use rocketmq_protocol::protocol::RemotingSerializable;
+use rocketmq_runtime::common::file_utils;
 use rocketmq_runtime::MetadataDeadline;
 use rocketmq_runtime::MetadataIoActor;
 use rocketmq_store::base::message_store::StateMachineVersionView;
@@ -121,7 +121,7 @@ impl SubscriptionGroupManager {
             subscription_group_table: Arc::new(DashMap::new()),
             forbidden_table: Arc::new(DashMap::new()),
             data_version: Arc::new(parking_lot::RwLock::new(
-                rocketmq_remoting::protocol::data_version_facade::new_data_version(),
+                rocketmq_protocol::protocol::data_version_facade::new_data_version(),
             )),
             config,
             state_machine_version,
@@ -199,7 +199,7 @@ impl SubscriptionGroupManager {
 
     /// Initialize system default consumer groups
     fn init(&mut self) {
-        use rocketmq_common::common::mix_all;
+        use rocketmq_model::common::mix_all;
 
         let system_groups = [
             (mix_all::TOOLS_CONSUMER_GROUP, false),
@@ -640,7 +640,7 @@ impl ConfigManager for SubscriptionGroupManager {
         let json = self.encode_pretty(true);
         if !json.is_empty() {
             let file_name = self.config_file_path();
-            file_utils::string_to_file(json.as_str(), file_name.as_str())?;
+            file_utils::string_to_file(json.as_str(), file_name.as_str()).map_err(crate::runtime_to_rocketmq_error)?;
         }
         Ok(())
     }
@@ -1268,7 +1268,7 @@ mod tests {
     #[cfg(feature = "rocksdb_store")]
     #[tokio::test]
     async fn subscription_group_manager_persists_group_and_forbidden_to_rocksdb() {
-        use rocketmq_common::common::broker::broker_config::BrokerConfig;
+        use crate::config::broker_config::BrokerConfig;
         use rocketmq_store::config::message_store_config::MessageStoreConfig;
 
         use crate::config::rocksdb_manager::RocksDbBrokerConfigManager;
@@ -1322,7 +1322,7 @@ mod tests {
     #[cfg(feature = "rocksdb_store")]
     #[tokio::test]
     async fn subscription_group_manager_delete_removes_group_and_forbidden_from_rocksdb() {
-        use rocketmq_common::common::broker::broker_config::BrokerConfig;
+        use crate::config::broker_config::BrokerConfig;
         use rocketmq_store::config::message_store_config::MessageStoreConfig;
 
         use crate::config::rocksdb_manager::RocksDbBrokerConfigManager;
@@ -1679,8 +1679,8 @@ mod tests {
     #[test]
     fn test_data_version_comparison() {
         // Test DataVersion equality for pagination consistency
-        let version1 = rocketmq_remoting::protocol::data_version_facade::new_data_version();
-        let mut version2 = rocketmq_remoting::protocol::data_version_facade::new_data_version();
+        let version1 = rocketmq_protocol::protocol::data_version_facade::new_data_version();
+        let mut version2 = rocketmq_protocol::protocol::data_version_facade::new_data_version();
 
         // Initially different (timestamps differ)
         // In real use, we'd set them to same values

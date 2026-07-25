@@ -5,7 +5,7 @@ use std::pin::Pin;
 use rocketmq_admin_core::client_adapter::services::topic::TopicTarget;
 use rocketmq_admin_core::client_adapter::services::RocketMQError;
 use rocketmq_admin_core::client_adapter::services::RocketMQResult;
-use rocketmq_common::common::message::message_enum::MessageRequestMode;
+use rocketmq_model::common::message::message_enum::MessageRequestMode;
 use serde::Serialize;
 
 use super::CommandSpec;

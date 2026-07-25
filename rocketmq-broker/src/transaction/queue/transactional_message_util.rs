@@ -13,15 +13,15 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
-use rocketmq_common::common::message::MessageConst;
-use rocketmq_common::common::message::MessageTrait;
-use rocketmq_common::common::mix_all;
-use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
-use rocketmq_common::common::topic::TopicValidator;
-use rocketmq_common::MessageAccessor::MessageAccessor;
-use rocketmq_common::MessageDecoder;
+use rocketmq_model::common::message::message_accessor::MessageAccessor;
+use rocketmq_model::common::message::message_ext::MessageExt;
+use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use rocketmq_model::common::message::MessageConst;
+use rocketmq_model::common::message::MessageTrait;
+use rocketmq_model::common::mix_all;
+use rocketmq_model::common::sys_flag::message_sys_flag::MessageSysFlag;
+use rocketmq_model::common::topic::TopicValidator;
+use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
 
 pub struct TransactionalMessageUtil;
 

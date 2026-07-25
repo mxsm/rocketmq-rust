@@ -16,8 +16,8 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use cheetah_string::CheetahString;
-use rocketmq_common::common::boundary_type::BoundaryType;
 use rocketmq_error::RocketMQError;
+use rocketmq_model::common::boundary_type::BoundaryType;
 use rocketmq_observability::metrics::tiered_store::TieredStoreMetrics;
 use rocketmq_store_api::DerivedRecordId;
 use rocketmq_tieredstore::dispatcher::DefaultTieredDispatcher;

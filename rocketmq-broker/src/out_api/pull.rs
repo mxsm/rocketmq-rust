@@ -13,25 +13,25 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::filter::expression_type::ExpressionType;
-use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_common::common::message::MessageConst;
-use rocketmq_common::common::message::MessageTrait;
-use rocketmq_common::common::sys_flag::pull_sys_flag::PullSysFlag;
-use rocketmq_common::MessageAccessor::MessageAccessor;
-use rocketmq_common::MessageDecoder;
-use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQError;
+use rocketmq_model::common::filter::expression_type::ExpressionType;
+use rocketmq_model::common::message::message_accessor::MessageAccessor;
+use rocketmq_model::common::message::message_ext::MessageExt;
+use rocketmq_model::common::message::MessageConst;
+use rocketmq_model::common::message::MessageTrait;
+use rocketmq_model::common::sys_flag::pull_sys_flag::PullSysFlag;
 use rocketmq_model::result::PullOutcome;
 use rocketmq_model::result::PullStatus;
-use rocketmq_remoting::code::request_code::RequestCode;
-use rocketmq_remoting::code::response_code::ResponseCode;
-use rocketmq_remoting::protocol::header::namesrv::topic_operation_header::TopicRequestHeader;
-use rocketmq_remoting::protocol::header::pull_message_request_header::PullMessageRequestHeader;
-use rocketmq_remoting::protocol::header::pull_message_response_header::PullMessageResponseHeader;
-use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_remoting::rpc::rpc_request_header::RpcRequestHeader;
+use rocketmq_protocol::code::request_code::RequestCode;
+use rocketmq_protocol::code::response_code::ResponseCode;
+use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
+use rocketmq_protocol::protocol::header::namesrv::topic_operation_header::TopicRequestHeader;
+use rocketmq_protocol::protocol::header::pull_message_request_header::PullMessageRequestHeader;
+use rocketmq_protocol::protocol::header::pull_message_response_header::PullMessageResponseHeader;
+use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_runtime::common::time_utils::current_millis;
+use rocketmq_transport::rpc::rpc_request_header::RpcRequestHeader;
 
 use crate::out_api::result::BrokerPullResponse;
 

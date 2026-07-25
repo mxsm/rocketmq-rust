@@ -27,9 +27,9 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use rocketmq_common::common::resource::resource_pattern::ResourcePattern;
-use rocketmq_common::common::resource::resource_type::ResourceType;
 use rocketmq_error::RocketMQError;
+use rocketmq_security_api::ResourcePattern;
+use rocketmq_security_api::ResourceType;
 
 use super::handler::AuthorizationHandler;
 use crate::authorization::context::default_authorization_context::DefaultAuthorizationContext;
@@ -315,9 +315,9 @@ impl<P: AuthorizationMetadataProvider + 'static> AuthorizationHandler for AclAut
 mod tests {
     use std::sync::Arc;
 
-    use rocketmq_common::common::action::Action;
-    use rocketmq_common::common::resource::resource_pattern::ResourcePattern;
-    use rocketmq_common::common::resource::resource_type::ResourceType;
+    use rocketmq_security_api::Action;
+    use rocketmq_security_api::ResourcePattern;
+    use rocketmq_security_api::ResourceType;
 
     use super::*;
     use crate::authentication::enums::subject_type::SubjectType;

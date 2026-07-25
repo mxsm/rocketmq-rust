@@ -20,7 +20,6 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::FileUtils;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_runtime::MetadataDeadline;
@@ -274,7 +273,7 @@ impl<MS: MessageStore> BrokerControllerRuntime<MS> {
                 MetadataDeadline::after(Duration::from_secs(10)),
             )
             .await
-            .map_err(FileUtils::metadata_io_error)?;
+            .map_err(crate::runtime_to_rocketmq_error)?;
         Ok(())
     }
 
@@ -540,8 +539,8 @@ impl<MS: MessageStore> BrokerControllerRuntime<MS> {
         broker_name: CheetahString,
     ) -> rocketmq_error::RocketMQResult<(
         CheetahString,
-        rocketmq_remoting::protocol::header::controller::get_replica_info_response_header::GetReplicaInfoResponseHeader,
-        rocketmq_remoting::protocol::body::sync_state_set_body::SyncStateSet,
+        rocketmq_protocol::protocol::header::controller::get_replica_info_response_header::GetReplicaInfoResponseHeader,
+        rocketmq_protocol::protocol::body::sync_state_set_body::SyncStateSet,
     )> {
         match self
             .broker_outer_api

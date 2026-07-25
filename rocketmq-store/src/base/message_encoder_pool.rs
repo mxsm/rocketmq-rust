@@ -30,8 +30,8 @@ use std::cell::RefCell;
 use std::sync::Arc;
 
 use bytes::BytesMut;
-use rocketmq_common::common::message::message_batch::MessageExtBatch;
-use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use rocketmq_model::common::message::message_batch::MessageExtBatch;
+use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 
 use crate::base::message_result::PutMessageResult;
 use crate::base::put_message_context::PutMessageContext;

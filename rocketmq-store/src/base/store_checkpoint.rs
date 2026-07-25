@@ -20,7 +20,7 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
 use memmap2::MmapMut;
-use rocketmq_common::UtilAll::ensure_dir_ok;
+use rocketmq_runtime::common::util_all::ensure_dir_ok;
 use tracing::info;
 
 use crate::log_file::mapped_file::default_mapped_file_impl::OS_PAGE_SIZE;

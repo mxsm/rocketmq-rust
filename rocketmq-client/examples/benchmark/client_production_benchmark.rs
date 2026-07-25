@@ -27,12 +27,11 @@ use rocketmq_client_rust::producer::send_status::SendStatus;
 use rocketmq_client_rust::AclClientRPCHook;
 use rocketmq_client_rust::DefaultLitePullConsumer;
 use rocketmq_client_rust::SessionCredentials;
-use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_common::common::message::message_single::Message;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
-use rocketmq_rust::rocketmq;
+use rocketmq_model::common::message::message_ext::MessageExt;
+use rocketmq_model::common::message::message_queue::MessageQueue;
+use rocketmq_model::common::message::message_single::Message;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Scenario {
@@ -112,7 +111,7 @@ struct Stats {
     max_rt_ms: u128,
 }
 
-#[rocketmq::main]
+#[tokio::main]
 pub async fn main() -> RocketMQResult<()> {
     let config = Config::parse()?;
     let body = vec![b'a'; config.message_size];

@@ -14,10 +14,10 @@
 
 use clap::ArgAction;
 use clap::Parser;
-use rocketmq_common::UtilAll::YYYY_MM_DD_HH_MM_SS_SSS;
-use rocketmq_common::UtilAll::parse_date;
-use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_error::RocketMQResult;
+use rocketmq_model::common::message::message_ext::MessageExt;
+use rocketmq_runtime::common::util_all::YYYY_MM_DD_HH_MM_SS_SSS;
+use rocketmq_runtime::common::util_all::parse_date;
 
 use crate::commands::CommandExecute;
 use rocketmq_admin_core::client_adapter::services::message::MessagePullEvent;

@@ -32,11 +32,10 @@ rocketmq-admin-core = { version = "1.0.0", path = "../rocketmq-admin-core", feat
   "client-adapter",
   "rocksdb-export",
 ] }
-rocketmq-common     = { workspace = true }
 rocketmq-error      = { workspace = true }
-rocketmq-remoting   = { workspace = true }
+rocketmq-model      = { workspace = true }
+rocketmq-protocol   = { workspace = true }
 rocketmq-runtime    = { workspace = true }
-rocketmq-rust       = { workspace = true }
 
 bytes = { workspace = true }
 cheetah-string = { workspace = true }

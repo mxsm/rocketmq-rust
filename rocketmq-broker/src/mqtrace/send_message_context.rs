@@ -16,7 +16,7 @@ use std::any::Any;
 use std::collections::HashMap;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::message::message_enum::MessageType;
+use rocketmq_model::common::message::message_enum::MessageType;
 use rocketmq_store::stats::stats_type::StatsType;
 
 #[derive(Debug, Default)]

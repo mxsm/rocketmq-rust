@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_protocol::common::hasher::string_hasher::JavaStringHasher;
-use rocketmq_protocol::common::key_builder::KeyBuilder;
-use rocketmq_protocol::common::sys_flag::message_sys_flag::MessageSysFlag;
-use rocketmq_protocol::common::sys_flag::topic_sys_flag;
+use rocketmq_model::common::hasher::string_hasher::JavaStringHasher;
+use rocketmq_model::common::key_builder::KeyBuilder;
+use rocketmq_model::common::sys_flag::message_sys_flag::MessageSysFlag;
+use rocketmq_model::common::sys_flag::topic_sys_flag;
 use rocketmq_protocol::version::RocketMqVersion;
 
 #[test]

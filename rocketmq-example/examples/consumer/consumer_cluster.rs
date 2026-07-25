@@ -29,12 +29,11 @@ use rocketmq_client_rust::consumer::listener::consume_concurrently_context::Cons
 use rocketmq_client_rust::consumer::listener::consume_concurrently_status::ConsumeConcurrentlyStatus;
 use rocketmq_client_rust::consumer::listener::message_listener_concurrently::MessageListenerConcurrently;
 use rocketmq_client_rust::consumer::mq_push_consumer::MQPushConsumer;
-use rocketmq_common::common::message::MessageTrait;
-use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
-use rocketmq_rust::rocketmq;
-use rocketmq_rust::wait_for_signal;
+use rocketmq_model::common::message::MessageTrait;
+use rocketmq_model::common::message::message_ext::MessageExt;
+use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
+use rocketmq_runtime::wait_for_signal;
 use tracing::info;
 
 pub const CONSUMER_GROUP: &str = "ClusterConsumerGroup";
@@ -59,7 +58,7 @@ const USE_CLOSURE: bool = false;
 /// 1. Start multiple instances of this consumer (with the same consumer group)
 /// 2. Send messages to the topic using a producer
 /// 3. Observe that messages are distributed among the consumer instances
-#[rocketmq::main]
+#[tokio::main]
 pub async fn main() -> RocketMQResult<()> {
     // Initialize logger
     let telemetry_guard =

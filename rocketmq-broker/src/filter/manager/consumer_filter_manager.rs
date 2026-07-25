@@ -19,18 +19,18 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
+use crate::config::broker_config::BrokerConfig;
+use crate::config::config_manager::ConfigManager;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
-use rocketmq_common::common::config_manager::ConfigManager;
-use rocketmq_common::common::filter::expression_type::ExpressionType;
-use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_filter::expression::Expression;
 use rocketmq_filter::filter::FilterFactory;
 use rocketmq_filter::utils::bloom_filter::BloomFilter;
 use rocketmq_filter::utils::bloom_filter_data::BloomFilterData;
-use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
-use rocketmq_remoting::protocol::RemotingSerializable;
+use rocketmq_model::common::filter::expression_type::ExpressionType;
+use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
+use rocketmq_protocol::protocol::RemotingSerializable;
+use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 
 use crate::broker_path_config_helper::get_consumer_filter_path;
@@ -756,7 +756,7 @@ mod tests {
     use std::sync::atomic::Ordering;
 
     use super::*;
-    use rocketmq_common::common::config_manager::ConfigManager;
+    use crate::config::config_manager::ConfigManager;
     use rocketmq_filter::expression::EvaluationContext;
     use rocketmq_filter::expression::EvaluationError;
     use rocketmq_filter::expression::Expression;

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::consumer::pull_status::PullStatus;
-use rocketmq_common::common::message::message_ext::MessageExt;
+use rocketmq_model::common::message::message_ext::MessageExt;
 
 /// Owned, runtime-neutral pull result used across crate boundaries.
 pub type PullOutcome = rocketmq_model::result::PullOutcome<MessageExt>;

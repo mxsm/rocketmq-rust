@@ -14,10 +14,10 @@
 
 use std::fmt;
 
-use rocketmq_common::common::mix_all;
-use rocketmq_common::common::resource::resource_pattern::ResourcePattern;
-use rocketmq_common::common::resource::resource_type::ResourceType;
-use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
+use rocketmq_model::common::mix_all;
+use rocketmq_protocol::protocol::namespace_util::NamespaceUtil;
+use rocketmq_security_api::ResourcePattern;
+use rocketmq_security_api::ResourceType;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Resource {

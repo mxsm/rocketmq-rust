@@ -15,12 +15,12 @@
 use std::sync::Arc;
 
 use rocketmq_error::RocketMQError;
-use rocketmq_remoting::code::request_code::RequestCode;
-use rocketmq_remoting::code::response_code::ResponseCode;
-use rocketmq_remoting::net::channel::Channel;
-use rocketmq_remoting::protocol::header::get_acl_request_header::GetAclRequestHeader;
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_remoting::protocol::RemotingSerializable;
+use rocketmq_protocol::code::request_code::RequestCode;
+use rocketmq_protocol::code::response_code::ResponseCode;
+use rocketmq_protocol::protocol::header::get_acl_request_header::GetAclRequestHeader;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::RemotingSerializable;
+use rocketmq_transport::net::channel::Channel;
 
 use crate::auth::auth_admin_service::AuthAdminService;
 
@@ -37,7 +37,7 @@ impl GetAclRequestHandler {
     pub async fn get_acl(
         &mut self,
         _channel: Channel,
-        _ctx: rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext,
+        _ctx: rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -73,6 +73,7 @@ mod tests {
     use std::sync::Arc;
     use std::time::SystemTime;
 
+    use crate::config::broker_config::BrokerConfig;
     use cheetah_string::CheetahString;
     use rocketmq_auth::authentication::enums::user_status::UserStatus;
     use rocketmq_auth::authentication::enums::user_type::UserType;
@@ -82,27 +83,26 @@ mod tests {
     use rocketmq_auth::authorization::model::policy::Policy;
     use rocketmq_auth::authorization::model::resource::Resource;
     use rocketmq_auth::config::AuthConfig;
-    use rocketmq_common::common::action::Action;
-    use rocketmq_common::common::broker::broker_config::BrokerConfig;
-    use rocketmq_remoting::base::response_future::ResponseFuture;
-    use rocketmq_remoting::connection::Connection;
-    use rocketmq_remoting::net::channel::Channel;
-    use rocketmq_remoting::net::channel::ChannelInner;
-    use rocketmq_remoting::protocol::body::acl_info::AclInfo;
-    use rocketmq_remoting::protocol::body::acl_info::PolicyEntryInfo;
-    use rocketmq_remoting::protocol::body::acl_info::PolicyInfo;
-    use rocketmq_remoting::protocol::body::user_info::UserInfo;
-    use rocketmq_remoting::protocol::header::create_acl_request_header::CreateAclRequestHeader;
-    use rocketmq_remoting::protocol::header::create_user_request_header::CreateUserRequestHeader;
-    use rocketmq_remoting::protocol::header::delete_acl_request_header::DeleteAclRequestHeader;
-    use rocketmq_remoting::protocol::header::list_acl_request_header::ListAclRequestHeader;
-    use rocketmq_remoting::protocol::header::list_users_request_header::ListUsersRequestHeader;
-    use rocketmq_remoting::protocol::header::update_acl_request_header::UpdateAclRequestHeader;
-    use rocketmq_remoting::protocol::header::update_user_request_header::UpdateUserRequestHeader;
-    use rocketmq_remoting::protocol::RemotingDeserializable;
-    use rocketmq_remoting::protocol::RemotingSerializable;
-    use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
+    use rocketmq_protocol::protocol::body::acl_info::AclInfo;
+    use rocketmq_protocol::protocol::body::acl_info::PolicyEntryInfo;
+    use rocketmq_protocol::protocol::body::acl_info::PolicyInfo;
+    use rocketmq_protocol::protocol::body::user_info::UserInfo;
+    use rocketmq_protocol::protocol::header::create_acl_request_header::CreateAclRequestHeader;
+    use rocketmq_protocol::protocol::header::create_user_request_header::CreateUserRequestHeader;
+    use rocketmq_protocol::protocol::header::delete_acl_request_header::DeleteAclRequestHeader;
+    use rocketmq_protocol::protocol::header::list_acl_request_header::ListAclRequestHeader;
+    use rocketmq_protocol::protocol::header::list_users_request_header::ListUsersRequestHeader;
+    use rocketmq_protocol::protocol::header::update_acl_request_header::UpdateAclRequestHeader;
+    use rocketmq_protocol::protocol::header::update_user_request_header::UpdateUserRequestHeader;
+    use rocketmq_protocol::protocol::RemotingDeserializable;
+    use rocketmq_protocol::protocol::RemotingSerializable;
+    use rocketmq_security_api::Action;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
+    use rocketmq_transport::base::response_future::ResponseFuture;
+    use rocketmq_transport::connection::Connection;
+    use rocketmq_transport::net::channel::Channel;
+    use rocketmq_transport::net::channel::ChannelInner;
+    use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
 
     use super::*;
     use crate::auth::auth_admin_service::AuthAdminService;

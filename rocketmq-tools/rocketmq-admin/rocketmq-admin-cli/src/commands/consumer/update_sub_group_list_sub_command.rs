@@ -18,7 +18,7 @@ use clap::ArgGroup;
 use clap::Parser;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
+use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
 

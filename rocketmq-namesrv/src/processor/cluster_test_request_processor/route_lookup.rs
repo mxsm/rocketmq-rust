@@ -20,11 +20,10 @@ use std::time::Duration;
 
 use cheetah_string::CheetahString;
 use parking_lot::RwLock;
-use rocketmq_common::common::mix_all;
-use rocketmq_common::common::namesrv::default_top_addressing::DefaultTopAddressing;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_error::RpcClientError;
+use rocketmq_model::common::mix_all;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::header::client_request_header::GetRouteInfoRequestHeader;
@@ -37,6 +36,7 @@ use rocketmq_transport::admission::AdmissionController;
 use rocketmq_transport::admission::AdmissionLimits;
 use rocketmq_transport::client::TransportClient;
 use rocketmq_transport::deadline::RequestDeadline;
+use rocketmq_transport::discovery::default_top_addressing::DefaultTopAddressing;
 
 const ROUTE_LOOKUP_TIMEOUT: Duration = Duration::from_secs(3);
 const ROUTE_LOOKUP_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);

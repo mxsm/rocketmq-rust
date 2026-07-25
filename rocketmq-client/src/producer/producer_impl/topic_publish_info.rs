@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
+use rocketmq_model::common::message::message_queue::MessageQueue;
+use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 
 use crate::common::thread_local_index::ThreadLocalIndex;
 use crate::producer::producer_impl::queue_filter::QueueFilter;

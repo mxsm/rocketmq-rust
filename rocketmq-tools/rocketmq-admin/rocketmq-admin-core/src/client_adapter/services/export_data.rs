@@ -2,19 +2,19 @@
 
 use cheetah_string::CheetahString;
 use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_client_rust::admin_adapter_compat::remoting::protocol::body::broker_body::cluster_info::ClusterInfo;
-use rocketmq_client_rust::admin_adapter_compat::remoting::protocol::body::kv_table::KVTable;
-use rocketmq_client_rust::admin_adapter_compat::remoting::protocol::body::subscription_group_wrapper::SubscriptionGroupWrapper;
-use rocketmq_client_rust::admin_adapter_compat::remoting::protocol::body::topic_info_wrapper::TopicConfigSerializeWrapper;
-use rocketmq_client_rust::admin_adapter_compat::remoting::protocol::subscription::broker_stats_data::BrokerStatsData;
-use rocketmq_client_rust::admin_adapter_compat::remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
-use rocketmq_common::common::config::TopicConfig;
-use rocketmq_common::common::mix_all;
-use rocketmq_common::common::mq_version::RocketMqVersion;
-use rocketmq_common::common::mq_version::CURRENT_VERSION;
-use rocketmq_common::common::stats::Stats;
-use rocketmq_common::common::topic::TopicValidator;
-use rocketmq_common::TimeUtils::current_millis;
+use rocketmq_model::common::config::TopicConfig;
+use rocketmq_model::common::mix_all;
+use rocketmq_model::common::mq_version::RocketMqVersion;
+use rocketmq_model::common::mq_version::CURRENT_VERSION;
+use rocketmq_model::common::topic::TopicValidator;
+use rocketmq_observability::stats::Stats;
+use rocketmq_protocol::protocol::body::broker_body::cluster_info::ClusterInfo;
+use rocketmq_protocol::protocol::body::kv_table::KVTable;
+use rocketmq_protocol::protocol::body::subscription_group_wrapper::SubscriptionGroupWrapper;
+use rocketmq_protocol::protocol::body::topic_info_wrapper::TopicConfigSerializeWrapper;
+use rocketmq_protocol::protocol::subscription::broker_stats_data::BrokerStatsData;
+use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
+use rocketmq_runtime::common::time_utils::current_millis;
 #[cfg(feature = "rocksdb-export")]
 use rocksdb::Options;
 #[cfg(feature = "rocksdb-export")]
@@ -1382,8 +1382,7 @@ async fn collect_export_metrics_client_info(
     subscription_group_wrapper: &SubscriptionGroupWrapper,
 ) -> Vec<String> {
     let mut client_info = BTreeSet::new();
-    for group in subscription_group_wrapper.get_subscription_group_table() {
-        let group = group.value();
+    for group in subscription_group_wrapper.get_subscription_group_table().values() {
         let group_name = group.group_name().clone();
         let Ok(connection) = admin.examine_consumer_connection_info(group_name, None).await else {
             continue;
@@ -1505,15 +1504,14 @@ fn merge_subscription_groups(
     target: &mut HashMap<CheetahString, SubscriptionGroupConfig>,
     source: &SubscriptionGroupWrapper,
 ) {
-    for entry in source.get_subscription_group_table().iter() {
-        let key = entry.key().clone();
-        let value = entry.value();
+    for (key, value) in source.get_subscription_group_table() {
+        let key = key.clone();
         if let Some(existing) = target.get(&key) {
-            let mut merged = (**value).clone();
+            let mut merged = value.clone();
             merged.set_retry_queue_nums(existing.retry_queue_nums() + value.retry_queue_nums());
             target.insert(key, merged);
         } else {
-            target.insert(key, (**value).clone());
+            target.insert(key, value.clone());
         }
     }
 }

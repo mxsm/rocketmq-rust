@@ -34,8 +34,9 @@
 use std::path::PathBuf;
 
 use clap::Parser;
-use rocketmq_common::utils::parse_config_file::parse_config_file;
+use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
+use rocketmq_runtime::common::parse_config_file::parse_config_file;
 use tracing::info;
 
 use crate::config::ControllerConfig;
@@ -128,7 +129,7 @@ impl ControllerCli {
 
     /// Load configuration from file
     ///
-    /// Uses `parse_config_file` from rocketmq-common which supports multiple formats:
+    /// Uses the controller-owned `parse_config_file` helper, which supports multiple formats:
     /// - TOML (.toml)
     /// - JSON (.json)
     /// - YAML (.yaml, .yml)
@@ -154,8 +155,8 @@ impl ControllerCli {
         if let Some(ref config_path) = self.config_file {
             info!("Loading configuration from file: {}", config_path.display());
 
-            // Use parse_config_file utility from rocketmq-common
-            let loaded_config = parse_config_file(config_path.clone())?;
+            let loaded_config = parse_config_file(config_path.clone())
+                .map_err(|error| RocketMQError::IO(std::io::Error::other(error)))?;
 
             println!("Loaded configuration from file: {}", config_path.display());
 

@@ -17,23 +17,23 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Duration;
 
+use crate::config::broker_config::BrokerConfig;
+use crate::config::config_manager::ConfigManager;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
-use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_error::UnifiedServiceError;
-use rocketmq_remoting::code::response_code::ResponseCode;
-use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_queue_wrapper::TopicQueueMappingSerializeWrapper;
-use rocketmq_remoting::protocol::data_version_facade::DataVersionExt;
-use rocketmq_remoting::protocol::header::message_operation_header::TopicRequestHeaderTrait;
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_remoting::protocol::static_topic::logic_queue_mapping_item::LogicQueueMappingItem;
-use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_context::TopicQueueMappingContext;
-use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
-use rocketmq_remoting::protocol::DataVersion;
-use rocketmq_remoting::protocol::RemotingSerializable;
+use rocketmq_protocol::code::response_code::ResponseCode;
+use rocketmq_protocol::protocol::body::topic_info_wrapper::topic_queue_wrapper::TopicQueueMappingSerializeWrapper;
+use rocketmq_protocol::protocol::data_version_facade::DataVersionExt;
+use rocketmq_protocol::protocol::header::message_operation_header::TopicRequestHeaderTrait;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::static_topic::logic_queue_mapping_item::LogicQueueMappingItem;
+use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_context::TopicQueueMappingContext;
+use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
+use rocketmq_protocol::protocol::DataVersion;
+use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::BlockingPoolPolicy;
 use rocketmq_runtime::MetadataDeadline;
@@ -385,16 +385,17 @@ impl TopicQueueMappingManager {
                     MetadataDeadline::after(Duration::from_secs(5)),
                 )
                 .await
-                .map_err(rocketmq_common::FileUtils::metadata_io_error)?;
+                .map_err(crate::runtime_to_rocketmq_error)?;
             return Ok(());
         }
         let error_path = file_name.clone();
         self.blocking_executor()?
             .spawn_io("broker.topic_queue_mapping.persist_clean_result", move || {
-                rocketmq_common::FileUtils::string_to_file(json.as_str(), file_name.as_str())
+                rocketmq_runtime::common::file_utils::string_to_file(json.as_str(), file_name.as_str())
             })
             .await
             .map_err(|err| topic_queue_mapping_persist_failed(error_path.as_str(), err))?
+            .map_err(crate::runtime_to_rocketmq_error)
     }
 
     pub fn delete(&self, topic: &CheetahString) {
@@ -508,7 +509,7 @@ impl ConfigManager for TopicQueueMappingManager {
 mod tests {
     use std::sync::Arc;
 
-    use rocketmq_common::common::broker::broker_config::BrokerConfig;
+    use crate::config::broker_config::BrokerConfig;
     use rocketmq_error::ErrorKind;
     use rocketmq_runtime::RuntimeContext;
 
@@ -653,7 +654,7 @@ mod tests {
             topic.clone(),
             Arc::new(TopicQueueMappingDetail {
                 topic_queue_mapping_info:
-                    rocketmq_remoting::protocol::static_topic::topic_queue_mapping_info::TopicQueueMappingInfo {
+                    rocketmq_protocol::protocol::static_topic::topic_queue_mapping_info::TopicQueueMappingInfo {
                         topic: Some(topic.clone()),
                         bname: Some(broker_name.clone()),
                         epoch: 1,
@@ -723,7 +724,7 @@ mod tests {
             topic.clone(),
             Arc::new(TopicQueueMappingDetail {
                 topic_queue_mapping_info:
-                    rocketmq_remoting::protocol::static_topic::topic_queue_mapping_info::TopicQueueMappingInfo {
+                    rocketmq_protocol::protocol::static_topic::topic_queue_mapping_info::TopicQueueMappingInfo {
                         topic: Some(topic.clone()),
                         bname: Some(broker_name.clone()),
                         epoch: 1,
@@ -770,7 +771,7 @@ mod tests {
             topic.clone(),
             Arc::new(TopicQueueMappingDetail {
                 topic_queue_mapping_info:
-                    rocketmq_remoting::protocol::static_topic::topic_queue_mapping_info::TopicQueueMappingInfo {
+                    rocketmq_protocol::protocol::static_topic::topic_queue_mapping_info::TopicQueueMappingInfo {
                         topic: Some(topic.clone()),
                         bname: Some(broker_name.clone()),
                         epoch: 7,
@@ -823,7 +824,7 @@ mod tests {
             topic.clone(),
             Arc::new(TopicQueueMappingDetail {
                 topic_queue_mapping_info:
-                    rocketmq_remoting::protocol::static_topic::topic_queue_mapping_info::TopicQueueMappingInfo {
+                    rocketmq_protocol::protocol::static_topic::topic_queue_mapping_info::TopicQueueMappingInfo {
                         topic: Some(topic.clone()),
                         bname: Some(broker_name.clone()),
                         epoch: 1,

@@ -13,9 +13,9 @@
 // limitations under the License.
 
 use rocketmq_admin_cli::rocketmq_cli::RocketMQCli;
-use rocketmq_common::EnvUtils::EnvUtils;
-use rocketmq_common::common::mq_version::CURRENT_VERSION;
-use rocketmq_remoting::protocol::remoting_command;
+use rocketmq_model::common::mq_version::CURRENT_VERSION;
+use rocketmq_model::utils::env_utils::EnvUtils;
+use rocketmq_protocol::protocol::remoting_command;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 

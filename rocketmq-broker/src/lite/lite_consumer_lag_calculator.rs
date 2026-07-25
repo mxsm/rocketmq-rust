@@ -15,10 +15,10 @@
 use std::collections::HashMap;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::lite::get_lite_topic;
-use rocketmq_common::common::lite::get_parent_topic;
-use rocketmq_common::common::lite::is_lite_topic_queue;
-use rocketmq_remoting::protocol::body::lite_lag_info::LiteLagInfo;
+use rocketmq_model::common::lite::get_lite_topic;
+use rocketmq_model::common::lite::get_parent_topic;
+use rocketmq_model::common::lite::is_lite_topic_queue;
+use rocketmq_protocol::protocol::body::lite_lag_info::LiteLagInfo;
 
 use crate::offset::manager::consumer_offset_manager::TOPIC_GROUP_SEPARATOR;
 

@@ -27,11 +27,19 @@ readme                 = "README.md"
 description.workspace  = true
 rust-version.workspace = true
 
+[features]
+default = []
+async_fs = ["tokio/fs"]
+
 [dependencies]
+cheetah-string.workspace = true
 chrono = { version = "0.4", features = ["serde"] }
+config.workspace = true
 cron = "0.17"
 dashmap.workspace = true
-futures.workspace = true
+futures = { version = "0.3", features = ["default", "thread-pool"] }
+local-ip-address = "0.6.13"
+num_cpus.workspace = true
 parking_lot.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -39,10 +47,12 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util.workspace = true
 tracing.workspace = true
+trait-variant.workspace = true
 uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
 criterion = { version = "0.8.2", features = ["html_reports"] }
+loom = "0.7.2"
 tempfile = "3.27.0"
 tokio = { workspace = true, features = ["test-util"] }
 

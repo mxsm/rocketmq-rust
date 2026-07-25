@@ -16,34 +16,34 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::Weak;
 
+use crate::config::broker_config::BrokerConfig;
 use bytes::Bytes;
 use cheetah_string::CheetahString;
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
-use rocketmq_common::common::constant::PermName;
-use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
-use rocketmq_common::common::message::message_single::Message;
-use rocketmq_common::common::message::MessageConst;
-use rocketmq_common::common::message::MessageTrait;
-use rocketmq_common::common::producer::recall_message_handle::RecallMessageHandle;
-use rocketmq_common::MessageDecoder;
-use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQError;
-use rocketmq_remoting::code::request_code::RequestCode;
-use rocketmq_remoting::code::response_code::ResponseCode;
-use rocketmq_remoting::error_response;
-use rocketmq_remoting::net::channel::Channel;
-use rocketmq_remoting::protocol::header::recall_message_request_header::RecallMessageRequestHeader;
-use rocketmq_remoting::protocol::header::recall_message_response_header::RecallMessageResponseHeader;
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_remoting::runtime::processor::RequestProcessor;
+use rocketmq_model::common::constant::PermName;
+use rocketmq_model::common::message::message_ext::MessageExt;
+use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use rocketmq_model::common::message::message_single::Message;
+use rocketmq_model::common::message::MessageConst;
+use rocketmq_model::common::message::MessageTrait;
+use rocketmq_model::common::producer::recall_message_handle::RecallMessageHandle;
+use rocketmq_protocol::code::request_code::RequestCode;
+use rocketmq_protocol::code::response_code::ResponseCode;
+use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
+use rocketmq_protocol::protocol::header::recall_message_request_header::RecallMessageRequestHeader;
+use rocketmq_protocol::protocol::header::recall_message_response_header::RecallMessageResponseHeader;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
 use rocketmq_store::timer::timer_message_store::build_delete_key;
+use rocketmq_transport::error_response;
+use rocketmq_transport::net::channel::Channel;
+use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_transport::runtime::processor::RequestProcessor;
 use tracing::info;
 use tracing::warn;
 
@@ -363,7 +363,7 @@ where
         let body = Bytes::from_static(b"0");
 
         let tags_code =
-            rocketmq_common::common::hasher::string_hasher::JavaStringHasher::hash_str(RECALL_MESSAGE_TAG) as i64;
+            rocketmq_model::common::hasher::string_hasher::JavaStringHasher::hash_str(RECALL_MESSAGE_TAG) as i64;
 
         let mut properties = std::collections::HashMap::new();
         properties.insert(

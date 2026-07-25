@@ -19,34 +19,33 @@ use std::sync::Arc;
 use std::sync::Weak;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::compression::compressor_factory::CompressorFactory;
-use rocketmq_common::common::message::message_decoder;
-use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_common::common::message::MessageConst;
-use rocketmq_common::common::message::MessageTrait;
-use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
-use rocketmq_common::MessageAccessor::MessageAccessor;
-use rocketmq_common::MessageDecoder;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_remoting::code::request_code::RequestCode;
-use rocketmq_remoting::code::response_code::ResponseCode;
-use rocketmq_remoting::net::channel::Channel;
-use rocketmq_remoting::protocol::body::response::get_consumer_status_body::GetConsumerStatusBody;
-use rocketmq_remoting::protocol::body::response::reset_offset_body::ResetOffsetBody;
-use rocketmq_remoting::protocol::header::check_transaction_state_request_header::CheckTransactionStateRequestHeader;
-use rocketmq_remoting::protocol::header::consume_message_directly_result_request_header::ConsumeMessageDirectlyResultRequestHeader;
-use rocketmq_remoting::protocol::header::get_consumer_running_info_request_header::GetConsumerRunningInfoRequestHeader;
-use rocketmq_remoting::protocol::header::get_consumer_status_request_header::GetConsumerStatusRequestHeader;
-use rocketmq_remoting::protocol::header::notify_consumer_ids_changed_request_header::NotifyConsumerIdsChangedRequestHeader;
-use rocketmq_remoting::protocol::header::notify_unsubscribe_lite_request_header::NotifyUnsubscribeLiteRequestHeader;
-use rocketmq_remoting::protocol::header::reply_message_request_header::ReplyMessageRequestHeader;
-use rocketmq_remoting::protocol::header::reset_offset_request_header::ResetOffsetRequestHeader;
-use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_remoting::protocol::RemotingSerializable;
-use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_remoting::runtime::processor::RejectRequestResponse;
-use rocketmq_remoting::runtime::processor::RequestProcessor;
+use rocketmq_model::common::message::message_accessor::MessageAccessor;
+use rocketmq_model::common::message::message_ext::MessageExt;
+use rocketmq_model::common::message::MessageConst;
+use rocketmq_model::common::message::MessageTrait;
+use rocketmq_model::common::sys_flag::message_sys_flag::MessageSysFlag;
+use rocketmq_protocol::code::request_code::RequestCode;
+use rocketmq_protocol::code::response_code::ResponseCode;
+use rocketmq_protocol::common::compression::compressor_factory::CompressorFactory;
+use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
+use rocketmq_protocol::protocol::body::response::get_consumer_status_body::GetConsumerStatusBody;
+use rocketmq_protocol::protocol::body::response::reset_offset_body::ResetOffsetBody;
+use rocketmq_protocol::protocol::header::check_transaction_state_request_header::CheckTransactionStateRequestHeader;
+use rocketmq_protocol::protocol::header::consume_message_directly_result_request_header::ConsumeMessageDirectlyResultRequestHeader;
+use rocketmq_protocol::protocol::header::get_consumer_running_info_request_header::GetConsumerRunningInfoRequestHeader;
+use rocketmq_protocol::protocol::header::get_consumer_status_request_header::GetConsumerStatusRequestHeader;
+use rocketmq_protocol::protocol::header::notify_consumer_ids_changed_request_header::NotifyConsumerIdsChangedRequestHeader;
+use rocketmq_protocol::protocol::header::notify_unsubscribe_lite_request_header::NotifyUnsubscribeLiteRequestHeader;
+use rocketmq_protocol::protocol::header::reply_message_request_header::ReplyMessageRequestHeader;
+use rocketmq_protocol::protocol::header::reset_offset_request_header::ResetOffsetRequestHeader;
+use rocketmq_protocol::protocol::namespace_util::NamespaceUtil;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::RemotingSerializable;
+use rocketmq_runtime::common::time_utils::current_millis;
+use rocketmq_transport::net::channel::Channel;
+use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_transport::runtime::processor::RejectRequestResponse;
+use rocketmq_transport::runtime::processor::RequestProcessor;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
@@ -507,7 +506,7 @@ impl ClientRemotingProcessor {
                     .set_remark("consumeMessageDirectly request body is empty"),
             ));
         };
-        let Some(msg) = message_decoder::decode(body, true, true, false, false, false) else {
+        let Some(msg) = MessageDecoder::decode(body, true, true, false, false, false) else {
             warn!(
                 "decode ConsumeMessageDirectly message body failed from {}; group={}",
                 channel.remote_address(),
@@ -557,8 +556,8 @@ mod tests {
     use std::sync::Arc;
 
     use bytes::Bytes;
-    use rocketmq_common::common::message::message_queue::MessageQueue;
-    use rocketmq_remoting::local::LocalRequestHarness;
+    use rocketmq_model::common::message::message_queue::MessageQueue;
+    use rocketmq_transport::local::LocalRequestHarness;
 
     use super::*;
     use crate::base::client_config::ClientConfig;
@@ -633,7 +632,7 @@ mod tests {
                 CheetahString::from_static_str(MessageConst::PROPERTY_CORRELATION_ID),
                 correlation_id,
             );
-            message_decoder::message_properties_to_string(&properties)
+            MessageDecoder::message_properties_to_string(&properties)
         });
 
         ReplyMessageRequestHeader {
@@ -1217,11 +1216,11 @@ mod tests {
 
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
         let body = response.body().expect("consumer running info should have body");
-        let info = rocketmq_remoting::protocol::body::consumer_running_info::ConsumerRunningInfo::decode(body)
+        let info = rocketmq_protocol::protocol::body::consumer_running_info::ConsumerRunningInfo::decode(body)
             .expect("consumer running info should decode");
         assert_eq!(
             info.properties
-                .get(rocketmq_remoting::protocol::body::consumer_running_info::ConsumerRunningInfo::PROP_CONSUME_TYPE)
+                .get(rocketmq_protocol::protocol::body::consumer_running_info::ConsumerRunningInfo::PROP_CONSUME_TYPE)
                 .map(String::as_str),
             Some("CONSUME_PASSIVELY")
         );

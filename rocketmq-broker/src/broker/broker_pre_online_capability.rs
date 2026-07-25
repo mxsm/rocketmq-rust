@@ -20,16 +20,14 @@ use std::sync::Arc;
 use std::sync::Weak;
 use std::time::Duration;
 
+use crate::config::broker_config::BrokerConfig;
+use crate::config::config_manager::ConfigManager;
 use cheetah_string::CheetahString;
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
-use rocketmq_common::common::config::TopicConfig;
-use rocketmq_common::common::config_manager::ConfigManager;
-use rocketmq_common::common::constant::PermName;
-use rocketmq_common::FileUtils;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::common::remoting_helper::RemotingHelper;
-use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
+use rocketmq_model::common::config::TopicConfig;
+use rocketmq_model::common::constant::PermName;
+use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
 use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::MetadataDeadline;
 use rocketmq_runtime::MetadataIoActor;
@@ -37,6 +35,7 @@ use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use rocketmq_store::ha::ha_connection_state_notification_request::HAConnectionStateNotificationRequest;
 use rocketmq_store::timer::timer_message_store::TimerMessageStore;
+use rocketmq_transport::common::remoting_helper::RemotingHelper;
 use tokio::sync::Mutex;
 use tracing::error;
 use tracing::info;
@@ -467,7 +466,7 @@ impl BrokerRegistrationCapability {
 
     async fn register_wrapper(
         &self,
-        wrapper: rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper,
+        wrapper: rocketmq_protocol::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper,
     ) {
         self.broker_outer_api
             .register_broker_all(
@@ -625,7 +624,7 @@ impl<MS: MessageStore> BrokerPreOnlineContext<MS> {
                         MetadataDeadline::after(Duration::from_secs(5)),
                     )
                     .await
-                    .map_err(FileUtils::metadata_io_error)?;
+                    .map_err(crate::runtime_to_rocketmq_error)?;
                 return Ok(());
             }
         }

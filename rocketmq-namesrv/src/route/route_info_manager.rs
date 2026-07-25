@@ -23,9 +23,8 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::constant::PermName;
-use rocketmq_common::common::mix_all;
-use rocketmq_common::TimeUtils::current_millis;
+use rocketmq_model::common::constant::PermName;
+use rocketmq_model::common::mix_all;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
 use rocketmq_protocol::protocol::body::broker_body::cluster_info::ClusterInfo;
@@ -39,8 +38,9 @@ use rocketmq_protocol::protocol::route::route_data_view::BrokerData;
 use rocketmq_protocol::protocol::route::route_data_view::QueueData;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_protocol::protocol::DataVersion;
-use rocketmq_remoting::clients::RemotingClient;
-use rocketmq_remoting::net::channel::Channel;
+use rocketmq_runtime::common::time_utils::current_millis;
+use rocketmq_transport::clients::RemotingClient;
+use rocketmq_transport::net::channel::Channel;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
@@ -564,7 +564,7 @@ impl RouteInfoManager {
     ) -> RouteResult<()> {
         use std::collections::HashSet;
 
-        use rocketmq_common::common::constant::PermName;
+        use rocketmq_model::common::constant::PermName;
 
         let topic_config_table = topic_config_wrapper
             .topic_config_serialize_wrapper()
@@ -1324,8 +1324,8 @@ impl RouteInfoManager {
     /// concurrent writes (broker registration/unregistration) from causing
     /// inconsistent state.
     pub fn pickup_topic_route_data(&self, topic: &str) -> RouteResult<TopicRouteData> {
-        use rocketmq_common::common::constant::PermName;
-        use rocketmq_common::common::topic::TopicValidator;
+        use rocketmq_model::common::constant::PermName;
+        use rocketmq_model::common::topic::TopicValidator;
 
         // ===================================================================
         // SEGMENTED LOCK ACQUISITION
@@ -1749,7 +1749,7 @@ impl RouteInfoManager {
     /// # Returns
     /// Number of topics whose queue data was updated
     pub fn wipe_write_perm_of_broker_by_lock(&self, broker_name: String) -> i32 {
-        use rocketmq_common::common::constant::PermName;
+        use rocketmq_model::common::constant::PermName;
 
         // Acquire write lock for this broker segment
         // This ensures no concurrent modifications to topics containing this broker
@@ -1781,7 +1781,7 @@ impl RouteInfoManager {
     /// # Returns
     /// Number of topics whose queue data was updated
     pub fn add_write_perm_of_broker_by_lock(&self, broker_name: String) -> i32 {
-        use rocketmq_common::common::constant::PermName;
+        use rocketmq_model::common::constant::PermName;
 
         // Acquire write lock for this broker segment
         // This ensures no concurrent modifications to topics containing this broker
@@ -1819,7 +1819,7 @@ impl RouteInfoManager {
     /// Returns topics marked with the Unit flag (FLAG_UNIT = 0x1).
     /// These are pure unit topics that support unit-based message routing.
     pub fn get_unit_topics(&self) -> TopicList {
-        use rocketmq_common::common::TopicSysFlag;
+        use rocketmq_model::common::TopicSysFlag;
 
         let topics = self
             .topic_queue_table
@@ -1836,7 +1836,7 @@ impl RouteInfoManager {
     /// Returns topics marked with the Unit Subscription flag (FLAG_UNIT_SUB = 0x2).
     /// These topics have consumers that support unit-based subscription.
     pub fn get_has_unit_sub_topic_list(&self) -> TopicList {
-        use rocketmq_common::common::TopicSysFlag;
+        use rocketmq_model::common::TopicSysFlag;
 
         let topics = self
             .topic_queue_table
@@ -1856,7 +1856,7 @@ impl RouteInfoManager {
     ///
     /// These are non-unit topics whose consumers support unit-based subscription.
     pub fn get_has_unit_sub_ununit_topic_list(&self) -> TopicList {
-        use rocketmq_common::common::TopicSysFlag;
+        use rocketmq_model::common::TopicSysFlag;
 
         let topics = self.topic_queue_table.filter_topics_by_first_queue(|queue_data| {
             let sys_flag = queue_data.topic_sys_flag();

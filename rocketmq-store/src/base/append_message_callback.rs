@@ -24,14 +24,14 @@ use rocketmq_store_local::commit_log::append_frame::HostWidth;
 use rocketmq_store_local::commit_log::append_frame::SegmentAppendDecision;
 use rocketmq_store_local::commit_log::append_frame::BLANK_MARKER_LENGTH;
 
-use rocketmq_common::common::config::TopicConfig;
-use rocketmq_common::common::message::message_batch::MessageExtBatch;
-use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
-use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
-use rocketmq_common::utils::message_utils;
-use rocketmq_common::CRC32Utils::crc32;
-use rocketmq_common::MessageDecoder::create_crc32;
-use rocketmq_common::MessageUtils::build_batch_message_id;
+use rocketmq_model::common::config::TopicConfig;
+use rocketmq_model::common::message::message_batch::MessageExtBatch;
+use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use rocketmq_model::common::sys_flag::message_sys_flag::MessageSysFlag;
+use rocketmq_model::utils::crc32_utils::crc32;
+use rocketmq_model::utils::message_utils;
+use rocketmq_model::utils::message_utils::build_batch_message_id;
+use rocketmq_protocol::common::message::message_decoder::create_crc32;
 use tracing::error;
 
 use crate::base::message_result::AppendMessageResult;
@@ -384,9 +384,9 @@ mod tests {
     use bytes::Buf;
     use bytes::BufMut;
     use bytes::Bytes;
-    use rocketmq_common::common::message::MessageTrait;
-    use rocketmq_common::common::message::MessageVersion;
-    use rocketmq_common::UtilAll::offset_to_file_name;
+    use rocketmq_model::common::message::MessageTrait;
+    use rocketmq_model::common::message::MessageVersion;
+    use rocketmq_runtime::common::util_all::offset_to_file_name;
     use tempfile::tempdir;
 
     use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;

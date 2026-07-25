@@ -16,8 +16,8 @@
  */
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::message::message_enum::MessageType;
-use rocketmq_common::common::message::MessageConst;
+use rocketmq_model::common::message::message_enum::MessageType;
+use rocketmq_model::common::message::MessageConst;
 
 use crate::base::access_channel::AccessChannel;
 use crate::producer::local_transaction_state::LocalTransactionState;
@@ -539,7 +539,7 @@ impl TraceDataEncoder {
 #[cfg(test)]
 mod tests {
     use cheetah_string::CheetahString;
-    use rocketmq_common::common::message::message_enum::MessageType;
+    use rocketmq_model::common::message::message_enum::MessageType;
 
     use crate::base::access_channel::AccessChannel;
     use crate::producer::local_transaction_state::LocalTransactionState;

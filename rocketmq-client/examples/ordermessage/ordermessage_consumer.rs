@@ -24,11 +24,10 @@ use rocketmq_client_rust::consumer::listener::consume_orderly_context::ConsumeOr
 use rocketmq_client_rust::consumer::listener::consume_orderly_status::ConsumeOrderlyStatus;
 use rocketmq_client_rust::consumer::listener::message_listener_orderly::MessageListenerOrderly;
 use rocketmq_client_rust::consumer::mq_push_consumer::MQPushConsumer;
-use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
-use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
-use rocketmq_rust::rocketmq;
+use rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere;
+use rocketmq_model::common::message::message_ext::MessageExt;
+use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
 use tracing::info;
 
 pub const MESSAGE_COUNT: usize = 1;
@@ -37,7 +36,7 @@ pub const DEFAULT_NAMESRVADDR: &str = "127.0.0.1:9876";
 pub const TOPIC: &str = "TopicTest";
 pub const TAG: &str = "*";
 
-#[rocketmq::main]
+#[tokio::main]
 pub async fn main() -> RocketMQResult<()> {
     let telemetry_guard =
         rocketmq_observability::install_global(&rocketmq_observability::TelemetryBootstrapConfig::default())

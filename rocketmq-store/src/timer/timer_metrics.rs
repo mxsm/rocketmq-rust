@@ -17,12 +17,11 @@ use std::fs;
 
 use cheetah_string::CheetahString;
 use parking_lot::Mutex;
-use rocketmq_common::common::config_manager::ConfigManager;
-use rocketmq_common::FileUtils;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::protocol::data_version_facade::DataVersionExt;
-use rocketmq_remoting::protocol::DataVersion;
+use rocketmq_protocol::protocol::data_version_facade::DataVersionExt;
+use rocketmq_protocol::protocol::DataVersion;
+use rocketmq_runtime::common::file_utils;
+use rocketmq_runtime::common::time_utils::current_millis;
+use rocketmq_runtime::RuntimeResult;
 use rocketmq_store_local::timer::metrics::default_timer_dist;
 use rocketmq_store_local::timer::metrics::TimerMetric;
 use rocketmq_store_local::timer::metrics::TimerMetricsState;
@@ -52,8 +51,8 @@ impl Default for TimerMetrics {
     }
 }
 
-impl ConfigManager for TimerMetrics {
-    fn load(&self) -> bool {
+impl TimerMetrics {
+    pub(crate) fn load(&self) -> bool {
         let Some(config_path) = self.config_path.lock().clone() else {
             return true;
         };
@@ -69,18 +68,22 @@ impl ConfigManager for TimerMetrics {
         }
     }
 
-    fn persist(&self) -> RocketMQResult<()> {
+    pub(crate) fn persist(&self) -> RuntimeResult<()> {
         let Some(config_path) = self.config_path.lock().clone() else {
             return Ok(());
         };
-        FileUtils::string_to_file(&self.encode_pretty(true), config_path)
+        file_utils::string_to_file(&self.encode_pretty(true), config_path)
     }
 
-    fn config_file_path(&self) -> String {
+    pub(crate) fn encode(&self) -> String {
+        self.encode_pretty(false)
+    }
+
+    pub fn config_file_path(&self) -> String {
         self.config_path.lock().clone().unwrap_or_default()
     }
 
-    fn encode_pretty(&self, pretty_format: bool) -> String {
+    pub fn encode_pretty(&self, pretty_format: bool) -> String {
         let (timing_count, timing_distribution, timer_dist) = self.state.export();
         let wrapper = TimerMetricsSerializeWrapper {
             timing_count,
@@ -110,7 +113,7 @@ impl TimerMetrics {
         Self {
             config_path: Mutex::new(config_path),
             state: TimerMetricsState::default(),
-            data_version: Mutex::new(rocketmq_remoting::protocol::data_version_facade::new_data_version()),
+            data_version: Mutex::new(rocketmq_protocol::protocol::data_version_facade::new_data_version()),
         }
     }
 

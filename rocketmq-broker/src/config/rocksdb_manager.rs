@@ -18,8 +18,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use rocketmq_error::RocketMQError;
-use rocketmq_remoting::protocol::data_version_facade::DataVersionExt;
-use rocketmq_remoting::protocol::DataVersion;
+use rocketmq_protocol::protocol::data_version_facade::DataVersionExt;
+use rocketmq_protocol::protocol::DataVersion;
 use rocketmq_store::rocksdb::batch::RocksDbWriteBatch;
 use rocketmq_store::rocksdb::config::RocksDbColumnFamilyConfig;
 use rocketmq_store::rocksdb::config::RocksDbConfig;
@@ -169,7 +169,7 @@ impl RocksDbBrokerConfigManager {
             block_cache_size: config.block_cache_size,
             write_buffer_size: config.write_buffer_size,
             kv_data_version: parking_lot::Mutex::new(
-                rocketmq_remoting::protocol::data_version_facade::new_data_version(),
+                rocketmq_protocol::protocol::data_version_facade::new_data_version(),
             ),
             core,
         }

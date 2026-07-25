@@ -14,10 +14,10 @@
 
 //! Authentication handler chain implementation.
 //!
-//! # Note on rocketmq-common::HandlerChain
+//! # Relationship to the canonical model handler chain
 //!
 //! This module provides an authentication-specific handler chain that differs from
-//! `rocketmq_common::common::chain::HandlerChain<T, R>` in the following ways:
+//! `rocketmq_model::common::chain::HandlerChain<T, R>` in the following ways:
 //!
 //! - **Async execution**: Supports async handlers with `.await`
 //! - **Fail-fast semantics**: Stops at first error instead of using `Option<R>`
@@ -37,7 +37,8 @@ use crate::authentication::context::default_authentication_context::DefaultAuthe
 /// Authentication handler chain.
 ///
 /// Manages a sequence of authentication handlers and executes them in order.
-/// Unlike `rocketmq_common::HandlerChain`, this is async-first with fail-fast semantics.
+/// Unlike `rocketmq_model::common::chain::HandlerChain`, this is async-first with fail-fast
+/// semantics.
 pub struct AuthenticationHandlerChain {
     handlers: Vec<Arc<dyn AuthenticationHandler>>,
 }

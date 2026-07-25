@@ -65,13 +65,13 @@ pub(super) async fn collect_consumer_group_meta(
                 continue;
             }
         };
-        for entry in wrapper.get_subscription_group_table().iter() {
+        for (group_name, group_config) in wrapper.get_subscription_group_table() {
             let meta = group_map
-                .entry(entry.key().to_string())
+                .entry(group_name.to_string())
                 .or_insert_with(ConsumerGroupMeta::default);
             meta.broker_names.insert(broker_name.clone());
             meta.broker_addresses.insert(broker_addr.to_string());
-            meta.orderly_flags.push(entry.value().consume_message_orderly());
+            meta.orderly_flags.push(group_config.consume_message_orderly());
         }
     }
 

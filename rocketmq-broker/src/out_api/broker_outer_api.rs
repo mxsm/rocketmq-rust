@@ -23,88 +23,88 @@ use crate::out_api::send::process_send_response;
 use bytes::Bytes;
 use cheetah_string::CheetahString;
 use dns_lookup::lookup_host;
-use rocketmq_common::common::broker::broker_config::BrokerIdentity;
-use rocketmq_common::common::config::TopicConfig;
-use rocketmq_common::common::message::message_client_id_setter::MessageClientIDSetter;
-use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_common::common::mix_all;
-use rocketmq_common::common::topic::TopicValidator;
-use rocketmq_common::utils::crc32_utils;
-use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_error::RocketMQError;
+use rocketmq_model::common::broker::broker_identity::BrokerIdentity;
+use rocketmq_model::common::config::TopicConfig;
+use rocketmq_model::common::message::message_client_id_setter::MessageClientIDSetter;
+use rocketmq_model::common::message::message_ext::MessageExt;
+use rocketmq_model::common::message::message_queue::MessageQueue;
+use rocketmq_model::common::mix_all;
+use rocketmq_model::common::topic::TopicValidator;
 use rocketmq_model::result::PullOutcome;
 use rocketmq_model::result::SendResult;
-use rocketmq_remoting::clients::rocketmq_tokio_client::RemotingClientShutdownReport;
-use rocketmq_remoting::clients::rocketmq_tokio_client::RocketmqDefaultClient;
-use rocketmq_remoting::clients::RemotingClient;
-use rocketmq_remoting::code::request_code::RequestCode;
-use rocketmq_remoting::code::response_code::ResponseCode;
-use rocketmq_remoting::protocol::admin::topic_stats_table::TopicStatsTable;
-use rocketmq_remoting::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
-use rocketmq_remoting::protocol::body::broker_body::broker_member_group::GetBrokerMemberGroupResponseBody;
-use rocketmq_remoting::protocol::body::broker_body::register_broker_body::RegisterBrokerBody;
-use rocketmq_remoting::protocol::body::consumer_offset_serialize_wrapper::ConsumerOffsetSerializeWrapper;
-use rocketmq_remoting::protocol::body::elect_master_response_body::ElectMasterResponseBody;
-use rocketmq_remoting::protocol::body::kv_table::KVTable;
-use rocketmq_remoting::protocol::body::message_request_mode_serialize_wrapper::MessageRequestModeSerializeWrapper;
-use rocketmq_remoting::protocol::body::response::lock_batch_response_body::LockBatchResponseBody;
-use rocketmq_remoting::protocol::body::subscription_group_wrapper::SubscriptionGroupWrapper;
-use rocketmq_remoting::protocol::body::sync_state_set_body::SyncStateSet;
-use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
-use rocketmq_remoting::protocol::broker_sync_info::BrokerSyncInfo;
-use rocketmq_remoting::protocol::header::client_request_header::GetRouteInfoRequestHeader;
-use rocketmq_remoting::protocol::header::controller::alter_sync_state_set_request_header::AlterSyncStateSetRequestHeader;
-use rocketmq_remoting::protocol::header::controller::apply_broker_id_request_header::ApplyBrokerIdRequestHeader;
-use rocketmq_remoting::protocol::header::controller::apply_broker_id_response_header::ApplyBrokerIdResponseHeader;
-use rocketmq_remoting::protocol::header::controller::elect_master_request_header::ElectMasterRequestHeader;
-use rocketmq_remoting::protocol::header::controller::get_next_broker_id_request_header::GetNextBrokerIdRequestHeader;
-use rocketmq_remoting::protocol::header::controller::get_next_broker_id_response_header::GetNextBrokerIdResponseHeader;
-use rocketmq_remoting::protocol::header::controller::get_replica_info_request_header::GetReplicaInfoRequestHeader;
-use rocketmq_remoting::protocol::header::controller::get_replica_info_response_header::GetReplicaInfoResponseHeader;
-use rocketmq_remoting::protocol::header::controller::register_broker_to_controller_request_header::RegisterBrokerToControllerRequestHeader;
-use rocketmq_remoting::protocol::header::controller::register_broker_to_controller_response_header::RegisterBrokerToControllerResponseHeader;
-use rocketmq_remoting::protocol::header::elect_master_response_header::ElectMasterResponseHeader;
-use rocketmq_remoting::protocol::header::exchange_ha_info_request_header::ExchangeHAInfoRequestHeader;
-use rocketmq_remoting::protocol::header::exchange_ha_info_response_header::ExchangeHaInfoResponseHeader;
-use rocketmq_remoting::protocol::header::get_max_offset_request_header::GetMaxOffsetRequestHeader;
-use rocketmq_remoting::protocol::header::get_max_offset_response_header::GetMaxOffsetResponseHeader;
-use rocketmq_remoting::protocol::header::get_meta_data_response_header::GetMetaDataResponseHeader;
-use rocketmq_remoting::protocol::header::get_min_offset_request_header::GetMinOffsetRequestHeader;
-use rocketmq_remoting::protocol::header::get_min_offset_response_header::GetMinOffsetResponseHeader;
-use rocketmq_remoting::protocol::header::get_topic_config_request_header::GetTopicConfigRequestHeader;
-use rocketmq_remoting::protocol::header::get_topic_stats_info_request_header::GetTopicStatsInfoRequestHeader;
-use rocketmq_remoting::protocol::header::lock_batch_mq_request_header::LockBatchMqRequestHeader;
-use rocketmq_remoting::protocol::header::namesrv::broker_request::BrokerHeartbeatRequestHeader;
-use rocketmq_remoting::protocol::header::namesrv::broker_request::GetBrokerMemberGroupRequestHeader;
-use rocketmq_remoting::protocol::header::namesrv::broker_request::UnRegisterBrokerRequestHeader;
-use rocketmq_remoting::protocol::header::namesrv::query_data_version_header::QueryDataVersionRequestHeader;
-use rocketmq_remoting::protocol::header::namesrv::query_data_version_header::QueryDataVersionResponseHeader;
-use rocketmq_remoting::protocol::header::namesrv::register_broker_header::RegisterBrokerRequestHeader;
-use rocketmq_remoting::protocol::header::namesrv::register_broker_header::RegisterBrokerResponseHeader;
-use rocketmq_remoting::protocol::header::namesrv::topic_operation_header::RegisterTopicRequestHeader;
-use rocketmq_remoting::protocol::header::namesrv::topic_operation_header::TopicRequestHeader;
-use rocketmq_remoting::protocol::header::unlock_batch_mq_request_header::UnlockBatchMqRequestHeader;
-use rocketmq_remoting::protocol::namesrv::RegisterBrokerResult;
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_remoting::protocol::route::route_data_view::QueueData;
-use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
-use rocketmq_remoting::protocol::static_topic::topic_config_and_queue_mapping::TopicConfigAndQueueMapping;
-use rocketmq_remoting::protocol::DataVersion;
-use rocketmq_remoting::protocol::RemotingDeserializable;
-use rocketmq_remoting::protocol::RemotingSerializable;
-use rocketmq_remoting::remoting::RemotingService;
-use rocketmq_remoting::request_processor::default_request_processor::DefaultRemotingRequestProcessor;
-use rocketmq_remoting::rpc::client_metadata::ClientMetadata;
-use rocketmq_remoting::rpc::rpc_client::RpcClient;
-use rocketmq_remoting::rpc::rpc_client_impl::RpcClientImpl;
-use rocketmq_remoting::rpc::rpc_request::RpcRequest;
-use rocketmq_remoting::rpc::rpc_request_header::RpcRequestHeader;
-use rocketmq_remoting::rpc::topic_request_header::TopicRequestHeader as RpcTopicRequestHeader;
-use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
-use rocketmq_remoting::runtime::RPCHook;
+use rocketmq_model::utils::crc32_utils;
+use rocketmq_model::utils::serde_json_utils::SerdeJsonUtils;
+use rocketmq_protocol::code::request_code::RequestCode;
+use rocketmq_protocol::code::response_code::ResponseCode;
+use rocketmq_protocol::protocol::admin::topic_stats_table::TopicStatsTable;
+use rocketmq_protocol::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
+use rocketmq_protocol::protocol::body::broker_body::broker_member_group::GetBrokerMemberGroupResponseBody;
+use rocketmq_protocol::protocol::body::broker_body::register_broker_body::RegisterBrokerBody;
+use rocketmq_protocol::protocol::body::consumer_offset_serialize_wrapper::ConsumerOffsetSerializeWrapper;
+use rocketmq_protocol::protocol::body::elect_master_response_body::ElectMasterResponseBody;
+use rocketmq_protocol::protocol::body::kv_table::KVTable;
+use rocketmq_protocol::protocol::body::message_request_mode_serialize_wrapper::MessageRequestModeSerializeWrapper;
+use rocketmq_protocol::protocol::body::response::lock_batch_response_body::LockBatchResponseBody;
+use rocketmq_protocol::protocol::body::subscription_group_wrapper::SubscriptionGroupWrapper;
+use rocketmq_protocol::protocol::body::sync_state_set_body::SyncStateSet;
+use rocketmq_protocol::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
+use rocketmq_protocol::protocol::broker_sync_info::BrokerSyncInfo;
+use rocketmq_protocol::protocol::header::client_request_header::GetRouteInfoRequestHeader;
+use rocketmq_protocol::protocol::header::controller::alter_sync_state_set_request_header::AlterSyncStateSetRequestHeader;
+use rocketmq_protocol::protocol::header::controller::apply_broker_id_request_header::ApplyBrokerIdRequestHeader;
+use rocketmq_protocol::protocol::header::controller::apply_broker_id_response_header::ApplyBrokerIdResponseHeader;
+use rocketmq_protocol::protocol::header::controller::elect_master_request_header::ElectMasterRequestHeader;
+use rocketmq_protocol::protocol::header::controller::get_next_broker_id_request_header::GetNextBrokerIdRequestHeader;
+use rocketmq_protocol::protocol::header::controller::get_next_broker_id_response_header::GetNextBrokerIdResponseHeader;
+use rocketmq_protocol::protocol::header::controller::get_replica_info_request_header::GetReplicaInfoRequestHeader;
+use rocketmq_protocol::protocol::header::controller::get_replica_info_response_header::GetReplicaInfoResponseHeader;
+use rocketmq_protocol::protocol::header::controller::register_broker_to_controller_request_header::RegisterBrokerToControllerRequestHeader;
+use rocketmq_protocol::protocol::header::controller::register_broker_to_controller_response_header::RegisterBrokerToControllerResponseHeader;
+use rocketmq_protocol::protocol::header::elect_master_response_header::ElectMasterResponseHeader;
+use rocketmq_protocol::protocol::header::exchange_ha_info_request_header::ExchangeHAInfoRequestHeader;
+use rocketmq_protocol::protocol::header::exchange_ha_info_response_header::ExchangeHaInfoResponseHeader;
+use rocketmq_protocol::protocol::header::get_max_offset_request_header::GetMaxOffsetRequestHeader;
+use rocketmq_protocol::protocol::header::get_max_offset_response_header::GetMaxOffsetResponseHeader;
+use rocketmq_protocol::protocol::header::get_meta_data_response_header::GetMetaDataResponseHeader;
+use rocketmq_protocol::protocol::header::get_min_offset_request_header::GetMinOffsetRequestHeader;
+use rocketmq_protocol::protocol::header::get_min_offset_response_header::GetMinOffsetResponseHeader;
+use rocketmq_protocol::protocol::header::get_topic_config_request_header::GetTopicConfigRequestHeader;
+use rocketmq_protocol::protocol::header::get_topic_stats_info_request_header::GetTopicStatsInfoRequestHeader;
+use rocketmq_protocol::protocol::header::lock_batch_mq_request_header::LockBatchMqRequestHeader;
+use rocketmq_protocol::protocol::header::namesrv::broker_request::BrokerHeartbeatRequestHeader;
+use rocketmq_protocol::protocol::header::namesrv::broker_request::GetBrokerMemberGroupRequestHeader;
+use rocketmq_protocol::protocol::header::namesrv::broker_request::UnRegisterBrokerRequestHeader;
+use rocketmq_protocol::protocol::header::namesrv::query_data_version_header::QueryDataVersionRequestHeader;
+use rocketmq_protocol::protocol::header::namesrv::query_data_version_header::QueryDataVersionResponseHeader;
+use rocketmq_protocol::protocol::header::namesrv::register_broker_header::RegisterBrokerRequestHeader;
+use rocketmq_protocol::protocol::header::namesrv::register_broker_header::RegisterBrokerResponseHeader;
+use rocketmq_protocol::protocol::header::namesrv::topic_operation_header::RegisterTopicRequestHeader;
+use rocketmq_protocol::protocol::header::namesrv::topic_operation_header::TopicRequestHeader;
+use rocketmq_protocol::protocol::header::unlock_batch_mq_request_header::UnlockBatchMqRequestHeader;
+use rocketmq_protocol::protocol::namesrv::RegisterBrokerResult;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::route::route_data_view::QueueData;
+use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
+use rocketmq_protocol::protocol::static_topic::topic_config_and_queue_mapping::TopicConfigAndQueueMapping;
+use rocketmq_protocol::protocol::DataVersion;
+use rocketmq_protocol::protocol::RemotingDeserializable;
+use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_store::timer::timer_checkpoint::TimerCheckpointSnapshot;
 use rocketmq_store::timer::timer_metrics::TimerMetricsSerializeWrapper;
+use rocketmq_transport::clients::rocketmq_tokio_client::RemotingClientShutdownReport;
+use rocketmq_transport::clients::rocketmq_tokio_client::RocketmqDefaultClient;
+use rocketmq_transport::clients::RemotingClient;
+use rocketmq_transport::remoting::RemotingService;
+use rocketmq_transport::request_processor::default_request_processor::DefaultRemotingRequestProcessor;
+use rocketmq_transport::rpc::client_metadata::ClientMetadata;
+use rocketmq_transport::rpc::rpc_client::RpcClient;
+use rocketmq_transport::rpc::rpc_client_impl::RpcClientImpl;
+use rocketmq_transport::rpc::rpc_request::RpcRequest;
+use rocketmq_transport::rpc::rpc_request_header::RpcRequestHeader;
+use rocketmq_transport::rpc::topic_request_header::TopicRequestHeader as RpcTopicRequestHeader;
+use rocketmq_transport::runtime::config::client_config::TokioClientConfig;
+use rocketmq_transport::runtime::RPCHook;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
@@ -781,7 +781,7 @@ impl BrokerOuterAPI {
     }
 
     fn rpc_response_body_as_bytes(
-        response: rocketmq_remoting::rpc::rpc_response::RpcResponse,
+        response: rocketmq_transport::rpc::rpc_response::RpcResponse,
         operation: &'static str,
     ) -> rocketmq_error::RocketMQResult<Bytes> {
         if let Some(exception) = response.exception {
@@ -1660,7 +1660,7 @@ fn broker_member_group_from_route_data(
 mod tests {
     use std::collections::HashMap;
 
-    use rocketmq_remoting::protocol::route::route_data_view::BrokerData;
+    use rocketmq_protocol::protocol::route::route_data_view::BrokerData;
 
     use super::*;
 
@@ -1771,7 +1771,7 @@ mod tests {
             let decoded = RegisterBrokerBody::decode(
                 &Bytes::from(parts.body),
                 parts.header.compressed,
-                rocketmq_common::common::mq_version::RocketMqVersion::V5_0_0,
+                rocketmq_model::common::mq_version::RocketMqVersion::V5_0_0,
             )
             .expect("register broker body should decode with matching compression header");
 

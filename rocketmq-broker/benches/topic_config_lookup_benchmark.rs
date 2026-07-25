@@ -11,7 +11,7 @@ use criterion::BenchmarkId;
 use criterion::Criterion;
 use criterion::Throughput;
 use dashmap::DashMap;
-use rocketmq_common::common::config::TopicConfig;
+use rocketmq_model::common::config::TopicConfig;
 type TopicConfigMap = DashMap<CheetahString, Arc<TopicConfig>>;
 type TopicConfigSnapshot = ArcSwap<HashMap<CheetahString, Arc<TopicConfig>>>;
 

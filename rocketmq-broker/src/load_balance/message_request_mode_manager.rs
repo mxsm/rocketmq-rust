@@ -15,11 +15,11 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::config::config_manager::ConfigManager;
 use cheetah_string::CheetahString;
-use rocketmq_common::common::config_manager::ConfigManager;
-use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
-use rocketmq_remoting::protocol::body::message_request_mode_serialize_wrapper::MessageRequestModeMap;
-use rocketmq_remoting::protocol::body::set_message_request_mode_request_body::SetMessageRequestModeRequestBody;
+use rocketmq_model::utils::serde_json_utils::SerdeJsonUtils;
+use rocketmq_protocol::protocol::body::message_request_mode_serialize_wrapper::MessageRequestModeMap;
+use rocketmq_protocol::protocol::body::set_message_request_mode_request_body::SetMessageRequestModeRequestBody;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use tracing::info;
 
@@ -101,8 +101,8 @@ mod tests {
     use std::sync::Arc;
 
     use cheetah_string::CheetahString;
-    use rocketmq_common::common::message::message_enum::MessageRequestMode;
-    use rocketmq_remoting::protocol::body::set_message_request_mode_request_body::SetMessageRequestModeRequestBody;
+    use rocketmq_model::common::message::message_enum::MessageRequestMode;
+    use rocketmq_protocol::protocol::body::set_message_request_mode_request_body::SetMessageRequestModeRequestBody;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
 
     use super::*;

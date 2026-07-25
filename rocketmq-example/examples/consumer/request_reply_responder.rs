@@ -23,12 +23,11 @@ use rocketmq_client_rust::consumer::listener::message_listener_concurrently::Mes
 use rocketmq_client_rust::consumer::mq_push_consumer::MQPushConsumer;
 use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
 use rocketmq_client_rust::utils::message_util::MessageUtil;
-use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
-use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
-use rocketmq_rust::rocketmq;
-use rocketmq_rust::wait_for_signal;
+use rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere;
+use rocketmq_model::common::message::message_ext::MessageExt;
+use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
+use rocketmq_runtime::wait_for_signal;
 use tracing::error;
 use tracing::info;
 
@@ -39,7 +38,7 @@ pub const TOPIC: &str = "RequestSendTestTopic";
 pub const TAG: &str = "*";
 pub const REPLY_TIMEOUT_MS: u64 = 3000;
 
-#[rocketmq::main]
+#[tokio::main]
 pub async fn main() -> RocketMQResult<()> {
     let telemetry_guard =
         rocketmq_observability::install_global(&rocketmq_observability::TelemetryBootstrapConfig::default())

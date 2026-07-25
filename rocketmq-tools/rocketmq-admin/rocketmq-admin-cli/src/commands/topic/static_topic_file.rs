@@ -17,14 +17,14 @@
 use std::path::Path;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::EnvUtils::EnvUtils;
-use rocketmq_common::FileUtils::file_to_string;
-use rocketmq_common::FileUtils::string_to_file;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::protocol::RemotingSerializable;
-use rocketmq_remoting::protocol::static_topic::topic_remapping_detail_wrapper;
-use rocketmq_remoting::protocol::static_topic::topic_remapping_detail_wrapper::TopicRemappingDetailWrapper;
+use rocketmq_model::utils::env_utils::EnvUtils;
+use rocketmq_protocol::protocol::RemotingSerializable;
+use rocketmq_protocol::protocol::static_topic::topic_remapping_detail_wrapper;
+use rocketmq_protocol::protocol::static_topic::topic_remapping_detail_wrapper::TopicRemappingDetailWrapper;
+use rocketmq_runtime::common::file_utils::file_to_string;
+use rocketmq_runtime::common::file_utils::string_to_file;
 
 pub fn read_mapping(path: impl AsRef<Path>) -> Option<TopicRemappingDetailWrapper> {
     file_to_string(path)
@@ -51,7 +51,7 @@ fn write_mapping_to_dir(
     let file_name = temp_dir
         .as_ref()
         .join(format!("{}-{}{}", wrapper.topic(), wrapper.get_epoch(), suffix));
-    string_to_file(&wrapper.serialize_json()?, &file_name)?;
+    string_to_file(&wrapper.serialize_json()?, &file_name).map_err(crate::runtime_to_rocketmq_error)?;
     Ok(file_name.to_string_lossy().into_owned().into())
 }
 

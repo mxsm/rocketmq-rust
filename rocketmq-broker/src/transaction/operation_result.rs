@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_remoting::code::response_code::ResponseCode;
+use rocketmq_model::common::message::message_ext::MessageExt;
+use rocketmq_protocol::code::response_code::ResponseCode;
 
 #[derive(Debug, Clone)]
 pub(crate) struct OperationResult {
@@ -34,8 +34,8 @@ impl Default for OperationResult {
 
 #[cfg(test)]
 mod tests {
-    use rocketmq_common::common::message::message_ext::MessageExt;
-    use rocketmq_remoting::code::response_code::ResponseCode;
+    use rocketmq_model::common::message::message_ext::MessageExt;
+    use rocketmq_protocol::code::response_code::ResponseCode;
 
     use super::*;
 

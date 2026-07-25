@@ -17,37 +17,37 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::Weak;
 
+use crate::config::broker_config::BrokerConfig;
 use cheetah_string::CheetahString;
 use futures::future::join_all;
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
-use rocketmq_common::common::key_builder::POP_ORDER_REVIVE_QUEUE;
-use rocketmq_common::common::message::message_decoder;
-use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
-use rocketmq_common::common::message::MessageConst;
-use rocketmq_common::common::message::MessageTrait;
-use rocketmq_common::common::pop_ack_constants::PopAckConstants;
-use rocketmq_common::common::FAQUrl;
-use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::code::request_code::RequestCode;
-use rocketmq_remoting::code::response_code::ResponseCode;
-use rocketmq_remoting::error_response;
-use rocketmq_remoting::net::channel::Channel;
-use rocketmq_remoting::protocol::body::batch_ack::BatchAck;
-use rocketmq_remoting::protocol::body::batch_ack_message_request_body::BatchAckMessageRequestBody;
-use rocketmq_remoting::protocol::header::ack_message_request_header::AckMessageRequestHeader;
-use rocketmq_remoting::protocol::header::extra_info_util::ExtraInfoUtil;
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_remoting::protocol::RemotingDeserializable;
-use rocketmq_remoting::protocol::RemotingSerializable;
-use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_remoting::runtime::processor::RequestProcessor;
+use rocketmq_model::common::key_builder::POP_ORDER_REVIVE_QUEUE;
+use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use rocketmq_model::common::message::MessageConst;
+use rocketmq_model::common::message::MessageTrait;
+use rocketmq_model::common::pop_ack_constants::PopAckConstants;
+use rocketmq_model::common::FAQUrl;
+use rocketmq_protocol::code::request_code::RequestCode;
+use rocketmq_protocol::code::response_code::ResponseCode;
+use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
+use rocketmq_protocol::protocol::body::batch_ack::BatchAck;
+use rocketmq_protocol::protocol::body::batch_ack_message_request_body::BatchAckMessageRequestBody;
+use rocketmq_protocol::protocol::header::ack_message_request_header::AckMessageRequestHeader;
+use rocketmq_protocol::protocol::header::extra_info_util::ExtraInfoUtil;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::RemotingDeserializable;
+use rocketmq_protocol::protocol::RemotingSerializable;
+use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::pop::ack_msg::AckMsg;
 use rocketmq_store::pop::batch_ack_msg::BatchAckMsg;
 use rocketmq_store::pop::AckMessage;
+use rocketmq_transport::error_response;
+use rocketmq_transport::net::channel::Channel;
+use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_transport::runtime::processor::RequestProcessor;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -649,7 +649,7 @@ where
             CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
             CheetahString::from(PopMessageProcessor::<MS>::gen_ack_unique_id(ack_msg.as_ref())),
         );
-        inner.properties_string = message_decoder::message_properties_to_string(inner.get_properties());
+        inner.properties_string = MessageDecoder::message_properties_to_string(inner.get_properties());
         let put_message_result = match self.context.message_store.put_message(inner).await {
             Ok(result) => result,
             Err(MessageStoreUnavailable) => {

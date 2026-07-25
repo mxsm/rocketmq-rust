@@ -21,14 +21,14 @@ use std::time::Duration;
 use dashmap::DashMap;
 use parking_lot::Mutex;
 use parking_lot::RwLock;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_remoting::net::channel::Channel;
+use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::RuntimeHandle;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
+use rocketmq_transport::net::channel::Channel;
 use tracing::info;
 use tracing::warn;
 

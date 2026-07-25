@@ -25,20 +25,20 @@ use cheetah_string::CheetahString;
 use futures::future::join_all;
 use futures::FutureExt;
 use parking_lot::Mutex;
-use rocketmq_common::common::config::TopicConfig;
-use rocketmq_common::common::key_builder::KeyBuilder;
-use rocketmq_common::common::message::message_decoder;
-use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
-use rocketmq_common::common::message::MessageConst;
-use rocketmq_common::common::message::MessageTrait;
-use rocketmq_common::common::mix_all;
-use rocketmq_common::common::pop_ack_constants::PopAckConstants;
-use rocketmq_common::common::TopicFilterType;
-use rocketmq_common::utils::data_converter::DataConverter;
-use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
-use rocketmq_common::MessageAccessor::MessageAccessor;
-use rocketmq_common::TimeUtils::current_millis;
+use rocketmq_model::common::config::TopicConfig;
+use rocketmq_model::common::key_builder::KeyBuilder;
+use rocketmq_model::common::message::message_accessor::MessageAccessor;
+use rocketmq_model::common::message::message_ext::MessageExt;
+use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use rocketmq_model::common::message::MessageConst;
+use rocketmq_model::common::message::MessageTrait;
+use rocketmq_model::common::mix_all;
+use rocketmq_model::common::pop_ack_constants::PopAckConstants;
+use rocketmq_model::common::TopicFilterType;
+use rocketmq_model::utils::data_converter::DataConverter;
+use rocketmq_model::utils::serde_json_utils::SerdeJsonUtils;
+use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
+use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_store::base::message_status_enum::AppendMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
@@ -143,7 +143,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
                 CheetahString::from(pop_check_point.pop_time.to_string()),
             );
         }
-        msg_inner.properties_string = message_decoder::message_properties_to_string(msg_inner.get_properties());
+        msg_inner.properties_string = MessageDecoder::message_properties_to_string(msg_inner.get_properties());
         let retry_topic = msg_inner.get_topic().clone();
         self.add_retry_topic_if_not_exist(&retry_topic, &pop_check_point.cid)
             .await;
@@ -1068,10 +1068,10 @@ mod tests {
     use std::sync::atomic::Ordering;
 
     use cheetah_string::CheetahString;
-    use rocketmq_common::common::key_builder::KeyBuilder;
-    use rocketmq_common::common::mix_all;
-    use rocketmq_common::common::pop_ack_constants::PopAckConstants;
-    use rocketmq_common::TimeUtils::current_millis;
+    use rocketmq_model::common::key_builder::KeyBuilder;
+    use rocketmq_model::common::mix_all;
+    use rocketmq_model::common::pop_ack_constants::PopAckConstants;
+    use rocketmq_runtime::common::time_utils::current_millis;
     use rocketmq_store::pop::ack_msg::AckMsg;
     use rocketmq_store::pop::pop_check_point::PopCheckPoint;
 
@@ -1214,7 +1214,7 @@ mod tests {
         // Case 2: Invalid JSON should fail gracefully
         let invalid_json = b"{ this is not valid json }";
         let result: Result<PopCheckPoint, _> =
-            rocketmq_common::utils::serde_json_utils::SerdeJsonUtils::from_json_bytes(invalid_json);
+            rocketmq_model::utils::serde_json_utils::SerdeJsonUtils::from_json_bytes(invalid_json);
         assert!(result.is_err(), "Invalid JSON should return error, not panic");
 
         // Case 3: Valid JSON but missing optional fields, empty required fields
@@ -1222,7 +1222,7 @@ mod tests {
         // bm=bit_map, n=num, q=queue_id, t=topic, c=cid, ro=revive_offset, d=queue_offset_diff
         let incomplete_ck = r#"{"so":0,"pt":0,"it":0,"bm":0,"n":0,"q":0,"t":"","c":"","ro":0,"d":[]}"#;
         let ck: PopCheckPoint =
-            rocketmq_common::utils::serde_json_utils::SerdeJsonUtils::from_json_str(incomplete_ck).unwrap();
+            rocketmq_model::utils::serde_json_utils::SerdeJsonUtils::from_json_str(incomplete_ck).unwrap();
 
         // Rust code checks: if topic.is_empty() || cid.is_empty() { continue; }
         assert!(

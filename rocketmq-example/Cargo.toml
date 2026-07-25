@@ -42,11 +42,11 @@ resolver = "3"
 cheetah-string       = { version = "2.1.0", features = ["serde", "bytes", "simd"] }
 rand                 = "0.8"
 rocketmq-client-rust = { path = "../rocketmq-client" }
-rocketmq-common      = { path = "../rocketmq-common" }
 rocketmq-error       = { path = "../rocketmq-error" }
+rocketmq-model       = { path = "../rocketmq-model" }
 rocketmq-observability = { path = "../rocketmq-observability" }
-rocketmq-remoting    = { path = "../rocketmq-remoting" }
-rocketmq-rust        = { path = "../rocketmq" }
+rocketmq-protocol    = { path = "../rocketmq-protocol" }
+rocketmq-runtime     = { path = "../rocketmq-runtime" }
 rocketmq-tools       = { path = "../rocketmq-tools/rocketmq-admin/rocketmq-admin-core", package = "rocketmq-admin-core", default-features = false, features = ["client-adapter"] }
 tokio                = { version = "1.49", features = ["full"] }
 tracing              = "0.1.44"

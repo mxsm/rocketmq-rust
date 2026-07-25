@@ -14,9 +14,9 @@
 
 //! Authentication handler trait for Chain of Responsibility pattern.
 //!
-//! # Note on rocketmq-common::Handler
+//! # Relationship to the canonical model handler
 //!
-//! While `rocketmq_common::common::chain::Handler<T, R>` provides a general-purpose
+//! While `rocketmq_model::common::chain::Handler<T, R>` provides a general-purpose
 //! synchronous chain implementation, this module provides an authentication-specific
 //! async handler optimized for the following requirements:
 //!
@@ -38,7 +38,7 @@ use crate::authentication::context::default_authentication_context::DefaultAuthe
 /// Authentication handler trait.
 ///
 /// This trait defines the interface for handlers in the authentication chain.
-/// Unlike `rocketmq_common::Handler`, this is async-first and designed for
+/// Unlike `rocketmq_model::common::chain::Handler`, this is async-first and designed for
 /// fail-fast error propagation in authentication scenarios.
 ///
 /// # Design Pattern

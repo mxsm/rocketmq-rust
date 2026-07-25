@@ -35,6 +35,12 @@ pub mod send_message_constants;
 
 mod lifecycle;
 
+pub(crate) fn runtime_to_rocketmq_error(
+    error: impl std::error::Error + Send + Sync + 'static,
+) -> rocketmq_error::RocketMQError {
+    rocketmq_error::RocketMQError::IO(std::io::Error::other(error))
+}
+
 // Re-export types needed for benchmarking
 #[doc(hidden)]
 pub mod bench_support {
@@ -45,9 +51,9 @@ pub mod bench_support {
     use std::time::Duration;
     use std::time::Instant;
 
+    use crate::config::broker_config::BrokerConfig;
     use cheetah_string::CheetahString;
-    use rocketmq_common::common::broker::broker_config::BrokerConfig;
-    use rocketmq_common::common::filter::expression_type::ExpressionType;
+    use rocketmq_model::common::filter::expression_type::ExpressionType;
     use rocketmq_runtime::schedule::simple_scheduler::ScheduledShutdownReport;
     use rocketmq_runtime::RuntimeContext;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
@@ -271,7 +277,13 @@ pub mod bench_support {
             store_path_root_dir: root.to_string_lossy().into_owned().into(),
             ..MessageStoreConfig::default()
         });
-        let mut runtime = crate::broker_runtime::BrokerRuntime::new(broker_config, message_store_config);
+        let runtime_context = RuntimeContext::from_current("broker-runtime-lifecycle-probe");
+        let service_context = runtime_context.service_context("broker");
+        let mut runtime = crate::broker_runtime::BrokerRuntime::new_with_service_context(
+            broker_config,
+            message_store_config,
+            service_context,
+        );
 
         let started = Arc::new(AtomicUsize::new(0));
         let dropped = Arc::new(AtomicUsize::new(0));
@@ -665,7 +677,7 @@ mod bench_support_tests {
     async fn broker_schedule_persistence_lifecycle_probe_reports_clean_shutdown() {
         let root = std::env::temp_dir().join(format!(
             "rocketmq-rust-broker-schedule-persist-probe-{}",
-            rocketmq_common::TimeUtils::current_millis()
+            rocketmq_runtime::common::time_utils::current_millis()
         ));
         let probe = super::bench_support::run_broker_schedule_persistence_lifecycle_probe(root).await;
 
@@ -680,7 +692,7 @@ mod bench_support_tests {
     async fn broker_runtime_lifecycle_probe_reports_remoting_shutdown() {
         let root = std::env::temp_dir().join(format!(
             "rocketmq-rust-broker-runtime-probe-{}",
-            rocketmq_common::TimeUtils::current_millis()
+            rocketmq_runtime::common::time_utils::current_millis()
         ));
         let probe = super::bench_support::run_broker_runtime_lifecycle_probe(root, 1).await;
 
@@ -715,7 +727,7 @@ pub(crate) mod broker_path_config_helper;
 pub(crate) mod broker_runtime;
 pub(crate) mod client;
 pub(crate) mod coldctr;
-pub(crate) mod config;
+pub mod config;
 pub(crate) mod controller;
 pub(crate) mod failover;
 pub(crate) mod filter;

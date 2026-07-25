@@ -24,23 +24,23 @@ use crate::factory::mq_client_instance;
 use crate::factory::mq_client_instance::MQClientInstance;
 use crate::implementation::mq_client_api_impl::MQClientAPIImpl;
 use cheetah_string::CheetahString;
-use rocketmq_common::common::attribute::attribute_parser::AttributeParser;
-use rocketmq_common::common::boundary_type::BoundaryType;
-use rocketmq_common::common::constant::PermName;
-use rocketmq_common::common::message::message_client_id_setter::MessageClientIDSetter;
-use rocketmq_common::common::message::message_decoder;
-use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_common::common::message::MessageConst;
-use rocketmq_common::common::message::MessageTrait;
-use rocketmq_common::common::mix_all;
-use rocketmq_common::common::TopicFilterType;
 use rocketmq_error::RocketMQError;
-use rocketmq_remoting::protocol::header::create_topic_request_header::CreateTopicRequestHeader;
-use rocketmq_remoting::protocol::header::query_message_request_header::QueryMessageRequestHeader;
-use rocketmq_remoting::protocol::header::view_message_request_header::ViewMessageRequestHeader;
-use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
-use rocketmq_remoting::protocol::route_facade::BrokerDataExt;
+use rocketmq_model::common::attribute::attribute_parser::AttributeParser;
+use rocketmq_model::common::boundary_type::BoundaryType;
+use rocketmq_model::common::constant::PermName;
+use rocketmq_model::common::message::message_client_id_setter::MessageClientIDSetter;
+use rocketmq_model::common::message::message_ext::MessageExt;
+use rocketmq_model::common::message::message_queue::MessageQueue;
+use rocketmq_model::common::message::MessageConst;
+use rocketmq_model::common::message::MessageTrait;
+use rocketmq_model::common::mix_all;
+use rocketmq_model::common::TopicFilterType;
+use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
+use rocketmq_protocol::protocol::header::create_topic_request_header::CreateTopicRequestHeader;
+use rocketmq_protocol::protocol::header::query_message_request_header::QueryMessageRequestHeader;
+use rocketmq_protocol::protocol::header::view_message_request_header::ViewMessageRequestHeader;
+use rocketmq_protocol::protocol::namespace_util::NamespaceUtil;
+use rocketmq_protocol::protocol::route_facade::BrokerDataExt;
 
 pub struct MQAdminImpl {
     timeout_millis: u64,
@@ -379,9 +379,9 @@ impl MQAdminImpl {
     }
 
     pub async fn view_message(&self, topic: &str, msg_id: &str) -> rocketmq_error::RocketMQResult<MessageExt> {
-        let message_id = message_decoder::decode_message_id(msg_id).map_err(|_| {
+        let message_id = MessageDecoder::decode_message_id(msg_id).map_err(|_| {
             mq_client_err!(
-                rocketmq_remoting::code::response_code::ResponseCode::NoMessage as i32,
+                rocketmq_protocol::code::response_code::ResponseCode::NoMessage as i32,
                 "query message by id finished, but no message."
             )
         })?;
@@ -430,7 +430,7 @@ impl MQAdminImpl {
             .await?
             .ok_or_else(|| {
                 mq_client_err!(
-                    rocketmq_remoting::code::response_code::ResponseCode::TopicNotExist as i32,
+                    rocketmq_protocol::code::response_code::ResponseCode::TopicNotExist as i32,
                     format!("The topic[{topic}] not matched route info")
                 )
             })?;
@@ -469,7 +469,7 @@ impl MQAdminImpl {
                     )?;
                     index_last_update_timestamp = index_last_update_timestamp.max(timestamp);
                     if let Some(mut body) = body {
-                        for mut msg in message_decoder::decodes_batch(&mut body, true, true) {
+                        for mut msg in MessageDecoder::decodes_batch(&mut body, true, true) {
                             if Self::message_matches_query(&query_topic, &query_key, &msg, unique_key_flag) {
                                 Self::strip_namespace_from_message(&client.client_config, &mut msg);
                                 message_list.push(msg);
@@ -491,7 +491,7 @@ impl MQAdminImpl {
 
         if message_list.is_empty() {
             return Err(mq_client_err!(
-                rocketmq_remoting::code::response_code::ResponseCode::NoMessage as i32,
+                rocketmq_protocol::code::response_code::ResponseCode::NoMessage as i32,
                 "query message by key finished, but no message."
             ));
         }
@@ -503,7 +503,7 @@ impl MQAdminImpl {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rocketmq_remoting::protocol::command_custom_header::CommandCustomHeader;
+    use rocketmq_protocol::protocol::command_custom_header::CommandCustomHeader;
 
     #[test]
     fn client_binding_is_one_time_and_shared() {

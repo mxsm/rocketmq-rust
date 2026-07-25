@@ -15,20 +15,20 @@
 use std::sync::Arc;
 use std::sync::Weak;
 
-use rocketmq_common::common::constant::PermName;
-use rocketmq_common::common::key_builder::KeyBuilder;
-use rocketmq_common::common::FAQUrl;
-use rocketmq_remoting::code::response_code::ResponseCode;
-use rocketmq_remoting::net::channel::Channel;
-use rocketmq_remoting::protocol::header::polling_info_request_header::PollingInfoRequestHeader;
-use rocketmq_remoting::protocol::header::polling_info_response_header::PollingInfoResponseHeader;
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_remoting::runtime::processor::RequestProcessor;
+use rocketmq_model::common::constant::PermName;
+use rocketmq_model::common::key_builder::KeyBuilder;
+use rocketmq_model::common::FAQUrl;
+use rocketmq_protocol::code::response_code::ResponseCode;
+use rocketmq_protocol::protocol::header::polling_info_request_header::PollingInfoRequestHeader;
+use rocketmq_protocol::protocol::header::polling_info_response_header::PollingInfoResponseHeader;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_transport::net::channel::Channel;
+use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_transport::runtime::processor::RequestProcessor;
 use tracing::error;
 use tracing::warn;
 
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
+use crate::config::broker_config::BrokerConfig;
 
 use crate::long_polling::long_polling_service::pop_long_polling_service::PollingCountProvider;
 use crate::subscription::manager::subscription_group_manager::SubscriptionGroupConfigLookup;
@@ -230,9 +230,9 @@ impl PollingInfoProcessor {
 mod tests {
     use std::sync::Arc;
 
+    use crate::config::broker_config::BrokerConfig;
     use cheetah_string::CheetahString;
-    use rocketmq_common::common::broker::broker_config::BrokerConfig;
-    use rocketmq_common::common::key_builder::KeyBuilder;
+    use rocketmq_model::common::key_builder::KeyBuilder;
     use rocketmq_store::base::message_store::StateMachineVersionView;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
 

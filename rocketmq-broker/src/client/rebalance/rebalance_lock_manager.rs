@@ -19,8 +19,8 @@ use std::sync::Arc;
 use std::sync::LazyLock;
 
 use parking_lot::RwLock;
-use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_common::TimeUtils::current_millis;
+use rocketmq_model::common::message::message_queue::MessageQueue;
+use rocketmq_runtime::common::time_utils::current_millis;
 use tracing::info;
 use tracing::warn;
 
@@ -244,7 +244,7 @@ impl LockEntry {
 
 #[cfg(test)]
 mod rebalance_lock_manager_tests {
-    use rocketmq_common::common::message::message_queue::MessageQueue;
+    use rocketmq_model::common::message::message_queue::MessageQueue;
 
     use super::*;
 

@@ -19,7 +19,7 @@ use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use rocketmq_common::common::message::message_queue::MessageQueue;
+use rocketmq_model::common::message::message_queue::MessageQueue;
 use tokio::sync::RwLock;
 
 use crate::consumer::consumer_impl::process_queue::ProcessQueue;
@@ -270,7 +270,7 @@ impl Default for AssignedMessageQueue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rocketmq_common::common::message::message_queue::MessageQueue;
+    use rocketmq_model::common::message::message_queue::MessageQueue;
 
     fn mock_mq(topic: &str, queue_id: i32) -> MessageQueue {
         MessageQueue::from_parts(topic, "mock_broker", queue_id)

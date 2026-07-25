@@ -12,14 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod boundary_type;
 pub mod compression;
-pub mod consumer;
-pub mod entity;
-pub mod filter;
-pub mod hasher;
-pub mod key_builder;
-pub mod lite;
 pub mod message;
 pub mod wire_constants {
     pub const KEY_SEPARATOR: &str = " ";
@@ -27,4 +20,3 @@ pub mod wire_constants {
     pub const METADATA_SCOPE_GLOBAL: &str = "__global__";
     pub const RETRY_GROUP_TOPIC_PREFIX: &str = "%RETRY%";
 }
-pub mod sys_flag;

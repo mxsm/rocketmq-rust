@@ -89,9 +89,9 @@ pub mod metrics {
     pub const ROCKSDB_TIMES_COMPRESSED: &str = "rocketmq_rocksdb_times_compressed";
     pub const ROCKSDB_READ_AMPLIFICATION_BYTES: &str = "rocketmq_rocksdb_read_amplification_bytes";
     pub const ROCKSDB_TIMES_READ: &str = "rocketmq_rocksdb_times_read";
-    pub const REMOTING_REQUESTS_TOTAL: &str = "rocketmq_remoting_requests_total";
-    pub const REMOTING_REQUEST_LATENCY: &str = "rocketmq_remoting_request_latency";
-    pub const REMOTING_NETWORK_BYTES: &str = "rocketmq_remoting_network_bytes";
+    pub const TRANSPORT_REQUESTS_TOTAL: &str = "rocketmq_transport_requests_total";
+    pub const TRANSPORT_REQUEST_LATENCY: &str = "rocketmq_transport_request_latency";
+    pub const TRANSPORT_NETWORK_BYTES: &str = "rocketmq_transport_network_bytes";
     pub const RPC_LATENCY: &str = "rocketmq_rpc_latency";
     pub const TIERED_STORE_MESSAGES_DISPATCH_TOTAL: &str = "rocketmq_tiered_store_messages_dispatch_total";
     pub const TIERED_STORE_MESSAGES_OUT_TOTAL: &str = "rocketmq_tiered_store_messages_out_total";

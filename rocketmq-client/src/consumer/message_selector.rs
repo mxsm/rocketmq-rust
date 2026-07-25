@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::filter::expression_type::ExpressionType;
+use rocketmq_model::common::filter::expression_type::ExpressionType;
 
 /// Selects messages at the server side based on filter expressions.
 ///

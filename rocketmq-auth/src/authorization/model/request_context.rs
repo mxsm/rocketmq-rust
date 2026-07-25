@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_common::common::action::Action;
+use rocketmq_security_api::Action;
 
 use crate::authentication::model::subject::Subject;
 use crate::authorization::context::default_authorization_context::SubjectWrapper;

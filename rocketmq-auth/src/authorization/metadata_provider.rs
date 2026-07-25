@@ -332,7 +332,7 @@ impl AuthorizationMetadataProvider for NoopMetadataProvider {
 
 #[cfg(test)]
 mod tests {
-    use rocketmq_common::common::action::Action;
+    use rocketmq_security_api::Action;
 
     use super::*;
     use crate::authentication::enums::subject_type::SubjectType;

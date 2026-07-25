@@ -27,8 +27,8 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use dashmap::DashMap;
-use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
+use rocketmq_model::common::message::message_queue::MessageQueue;
+use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use serde::Serialize;
 
 use crate::admin::mq_admin_ext_async_inner::MQAdminExtInnerImpl;

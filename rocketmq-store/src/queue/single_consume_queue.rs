@@ -18,14 +18,14 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::attribute::cq_type::CQType;
-use rocketmq_common::common::boundary_type::BoundaryType;
-use rocketmq_common::common::broker::broker_role::BrokerRole;
-use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
-use rocketmq_common::common::message::MessageConst;
-use rocketmq_common::common::mix_all::is_lmq;
-use rocketmq_common::common::mix_all::LMQ_QUEUE_ID;
-use rocketmq_common::common::mix_all::MULTI_DISPATCH_QUEUE_SPLITTER;
+use rocketmq_model::common::attribute::cq_type::CQType;
+use rocketmq_model::common::boundary_type::BoundaryType;
+use rocketmq_model::common::broker::broker_role::BrokerRole;
+use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use rocketmq_model::common::message::MessageConst;
+use rocketmq_model::common::mix_all::is_lmq;
+use rocketmq_model::common::mix_all::LMQ_QUEUE_ID;
+use rocketmq_model::common::mix_all::MULTI_DISPATCH_QUEUE_SPLITTER;
 use rocketmq_store_local::consume_queue::record::ConsumeQueueRecord;
 pub use rocketmq_store_local::consume_queue::record::CQ_STORE_UNIT_SIZE;
 pub use rocketmq_store_local::consume_queue::record::MSG_TAG_OFFSET_INDEX;
@@ -1014,10 +1014,10 @@ mod tests {
     use std::ops::DerefMut;
     use std::sync::Arc;
 
+    use crate::config::store_runtime_config::StoreRuntimeConfig;
     use cheetah_string::CheetahString;
     use dashmap::DashMap;
-    use rocketmq_common::common::broker::broker_config::BrokerConfig;
-    use rocketmq_common::common::config::TopicConfig;
+    use rocketmq_model::common::config::TopicConfig;
     use tempfile::tempdir;
 
     use super::*;
@@ -1064,7 +1064,7 @@ mod tests {
         config.store_path_root_dir = temp_dir.path().to_string_lossy().to_string().into();
         LocalFileMessageStore::new(
             Arc::new(config),
-            Arc::new(BrokerConfig::default()),
+            Arc::new(StoreRuntimeConfig::default()),
             Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
             None,
             false,

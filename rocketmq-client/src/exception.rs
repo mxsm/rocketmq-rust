@@ -14,8 +14,8 @@
 
 use std::fmt;
 
-use rocketmq_common::common::FAQUrl;
 use rocketmq_error::RocketMQError;
+use rocketmq_model::common::FAQUrl;
 
 const DEFAULT_RESPONSE_CODE: i32 = -1;
 const DEFAULT_BROKER_RESPONSE_CODE: i32 = 0;

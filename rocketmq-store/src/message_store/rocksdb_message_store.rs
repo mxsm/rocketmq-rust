@@ -20,19 +20,19 @@ use std::ops::Deref;
 use std::ops::DerefMut;
 use std::sync::Arc;
 
+use crate::config::store_runtime_config::StoreRuntimeConfig;
 use bytes::Bytes;
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
-use rocketmq_common::common::boundary_type::BoundaryType;
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
-use rocketmq_common::common::broker::broker_role::BrokerRole;
-use rocketmq_common::common::config::TopicConfig;
-use rocketmq_common::common::message::message_batch::MessageExtBatch;
-use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
-use rocketmq_common::common::system_clock::SystemClock;
-use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
+use rocketmq_model::common::boundary_type::BoundaryType;
+use rocketmq_model::common::broker::broker_role::BrokerRole;
+use rocketmq_model::common::config::TopicConfig;
+use rocketmq_model::common::message::message_batch::MessageExtBatch;
+use rocketmq_model::common::message::message_ext::MessageExt;
+use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use rocketmq_protocol::protocol::body::ha_runtime_info::HARuntimeInfo;
+use rocketmq_runtime::common::system_clock::SystemClock;
 use rocketmq_store_api::GetStatus as ApiGetStatus;
 use rocketmq_store_local::commit_log::read::LocalWalPort;
 use rocketmq_store_rocksdb::message_store::RocksDbDerivedStore;
@@ -142,7 +142,7 @@ impl fmt::Debug for RocksDBMessageStore {
 impl RocksDBMessageStore {
     pub fn try_new(
         message_store_config: Arc<MessageStoreConfig>,
-        broker_config: Arc<BrokerConfig>,
+        broker_config: Arc<StoreRuntimeConfig>,
         topic_config_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>>,
         broker_stats_manager: Option<Arc<BrokerStatsManager>>,
         notify_message_arrive_in_batch: bool,

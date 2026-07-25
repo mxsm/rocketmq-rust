@@ -16,8 +16,8 @@ use std::collections::BTreeSet;
 use std::hash::Hash;
 use std::hash::Hasher;
 
-use crate::common::filter::expression_type::ExpressionType;
 use cheetah_string::CheetahString;
+use rocketmq_model::common::filter::expression_type::ExpressionType;
 use serde::Deserialize;
 use serde::Serialize;
 

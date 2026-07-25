@@ -14,7 +14,7 @@
 
 use clap::Parser;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::protocol::body::broker_replicas_info::BrokerReplicasInfo;
+use rocketmq_protocol::protocol::body::broker_replicas_info::BrokerReplicasInfo;
 
 use crate::commands::CommandExecute;
 use rocketmq_admin_core::client_adapter::services::ha::HaService;

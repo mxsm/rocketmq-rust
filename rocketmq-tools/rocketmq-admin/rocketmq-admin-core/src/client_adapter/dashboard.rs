@@ -19,8 +19,8 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 
 use cheetah_string::CheetahString;
-use rocketmq_client_rust::admin_adapter_compat::error::RocketMQError;
 use rocketmq_client_rust::MQAdminExt;
+use rocketmq_error::RocketMQError;
 use rocketmq_model::message::MessageQueue;
 use rocketmq_model::result::PullStatus;
 use rocketmq_model::topic::TopicConfig;
@@ -231,8 +231,8 @@ impl dashboard::DashboardAdmin for AdminSession {
                     .get_all_subscription_group(CheetahString::from(address.as_str()), 5_000)
                     .await
                 {
-                    for entry in wrapper.get_subscription_group_table().iter() {
-                        groups.insert(entry.key().to_string());
+                    for group_name in wrapper.get_subscription_group_table().keys() {
+                        groups.insert(group_name.to_string());
                     }
                 }
             }

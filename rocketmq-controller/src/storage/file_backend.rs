@@ -26,7 +26,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use parking_lot::RwLock;
-use rocketmq_common::utils::crc32_utils::crc32;
+use rocketmq_model::utils::crc32_utils::crc32;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::fs;

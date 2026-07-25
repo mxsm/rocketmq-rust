@@ -12,23 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_common::common::constant::PermName;
-use rocketmq_common::common::topic::TopicValidator;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_remoting::code::request_code::RequestCode;
-use rocketmq_remoting::code::response_code::ResponseCode;
-use rocketmq_remoting::net::channel::Channel;
-use rocketmq_remoting::protocol::body::subscription_group_list::SubscriptionGroupList;
-use rocketmq_remoting::protocol::header::delete_subscription_group_request_header::DeleteSubscriptionGroupRequestHeader;
-use rocketmq_remoting::protocol::header::get_subscription_group_config_request_header::GetSubscriptionGroupConfigRequestHeader;
-use rocketmq_remoting::protocol::header::update_group_forbidden_request_header::UpdateGroupForbiddenRequestHeader;
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_remoting::protocol::subscription::group_forbidden::GroupForbidden;
-use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
-use rocketmq_remoting::protocol::RemotingDeserializable;
-use rocketmq_remoting::protocol::RemotingSerializable;
-use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_model::common::constant::PermName;
+use rocketmq_model::common::topic::TopicValidator;
+use rocketmq_protocol::code::request_code::RequestCode;
+use rocketmq_protocol::code::response_code::ResponseCode;
+use rocketmq_protocol::protocol::body::subscription_group_list::SubscriptionGroupList;
+use rocketmq_protocol::protocol::header::delete_subscription_group_request_header::DeleteSubscriptionGroupRequestHeader;
+use rocketmq_protocol::protocol::header::get_subscription_group_config_request_header::GetSubscriptionGroupConfigRequestHeader;
+use rocketmq_protocol::protocol::header::update_group_forbidden_request_header::UpdateGroupForbiddenRequestHeader;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::subscription::group_forbidden::GroupForbidden;
+use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
+use rocketmq_protocol::protocol::RemotingDeserializable;
+use rocketmq_protocol::protocol::RemotingSerializable;
+use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store::base::message_store::MessageStore;
+use rocketmq_transport::net::channel::Channel;
+use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
 use tracing::info;
 
 use crate::broker::broker_admin_runtime::BrokerAdminRuntime;
@@ -260,22 +260,22 @@ mod tests {
     use std::sync::Arc;
     use std::time::SystemTime;
 
+    use crate::config::broker_config::BrokerConfig;
     use cheetah_string::CheetahString;
-    use rocketmq_common::common::broker::broker_config::BrokerConfig;
-    use rocketmq_remoting::base::response_future::ResponseFuture;
-    use rocketmq_remoting::code::request_code::RequestCode;
-    use rocketmq_remoting::code::response_code::ResponseCode;
-    use rocketmq_remoting::connection::Connection;
-    use rocketmq_remoting::net::channel::Channel;
-    use rocketmq_remoting::net::channel::ChannelInner;
-    use rocketmq_remoting::protocol::body::subscription_group_list::SubscriptionGroupList;
-    use rocketmq_remoting::protocol::header::delete_subscription_group_request_header::DeleteSubscriptionGroupRequestHeader;
-    use rocketmq_remoting::protocol::header::empty_header::EmptyHeader;
-    use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-    use rocketmq_remoting::protocol::subscription::group_forbidden::GroupForbidden;
-    use rocketmq_remoting::protocol::RemotingSerializable;
-    use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
+    use rocketmq_protocol::code::request_code::RequestCode;
+    use rocketmq_protocol::code::response_code::ResponseCode;
+    use rocketmq_protocol::protocol::body::subscription_group_list::SubscriptionGroupList;
+    use rocketmq_protocol::protocol::header::delete_subscription_group_request_header::DeleteSubscriptionGroupRequestHeader;
+    use rocketmq_protocol::protocol::header::empty_header::EmptyHeader;
+    use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+    use rocketmq_protocol::protocol::subscription::group_forbidden::GroupForbidden;
+    use rocketmq_protocol::protocol::RemotingSerializable;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
+    use rocketmq_transport::base::response_future::ResponseFuture;
+    use rocketmq_transport::connection::Connection;
+    use rocketmq_transport::net::channel::Channel;
+    use rocketmq_transport::net::channel::ChannelInner;
+    use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
 
     use super::*;
     use crate::broker_runtime::BrokerRuntime;

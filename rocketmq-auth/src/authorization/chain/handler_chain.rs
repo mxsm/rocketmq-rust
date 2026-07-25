@@ -118,8 +118,8 @@ mod tests {
     use std::sync::atomic::Ordering;
     use std::sync::Arc;
 
-    use rocketmq_common::common::action::Action;
     use rocketmq_error::RocketMQError;
+    use rocketmq_security_api::Action;
 
     use super::*;
     use crate::authentication::enums::subject_type::SubjectType;

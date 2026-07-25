@@ -21,8 +21,8 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use parking_lot::Mutex;
-use rocketmq_remoting::protocol::data_version_facade::DataVersionExt;
-use rocketmq_remoting::protocol::DataVersion;
+use rocketmq_protocol::protocol::data_version_facade::DataVersionExt;
+use rocketmq_protocol::protocol::DataVersion;
 use rocketmq_store_local::timer::checkpoint::TimerCheckpointRecord;
 use rocketmq_store_local::timer::checkpoint::TimerCheckpointState;
 use rocketmq_store_local::timer::checkpoint::TimerCheckpointVersion;
@@ -62,7 +62,7 @@ impl TimerCheckpoint {
         let mut checkpoint = Self {
             path,
             state: TimerCheckpointState::default(),
-            data_version: Mutex::new(rocketmq_remoting::protocol::data_version_facade::new_data_version()),
+            data_version: Mutex::new(rocketmq_protocol::protocol::data_version_facade::new_data_version()),
         };
         checkpoint.load_from_disk()?;
         Ok(checkpoint)
@@ -238,7 +238,7 @@ fn version_record(data_version: &DataVersion) -> TimerCheckpointVersion {
 }
 
 fn data_version_from_record(version: TimerCheckpointVersion) -> DataVersion {
-    let mut data_version = rocketmq_remoting::protocol::data_version_facade::new_data_version();
+    let mut data_version = rocketmq_protocol::protocol::data_version_facade::new_data_version();
     data_version.set_state_version(version.state_version);
     data_version.set_timestamp(version.timestamp);
     data_version.set_counter(version.counter);

@@ -51,8 +51,8 @@ use rocketmq_admin_core::client_adapter::services::producer::SendMessageStatusRe
 use rocketmq_admin_core::client_adapter::services::queue::CheckRocksdbCqWriteProgressResult;
 use rocketmq_admin_core::client_adapter::services::queue::QueryConsumeQueueResult;
 use rocketmq_admin_core::client_adapter::services::stats::StatsAllQueryResult;
-use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_common::common::message::MessageConst;
+use rocketmq_model::common::message::message_ext::MessageExt;
+use rocketmq_model::common::message::MessageConst;
 use serde::Serialize;
 
 use super::CommandResultViewModel;

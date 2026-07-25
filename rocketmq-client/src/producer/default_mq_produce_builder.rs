@@ -16,9 +16,9 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::compression::compression_type::CompressionType;
-use rocketmq_common::common::compression::compressor::Compressor;
-use rocketmq_remoting::runtime::RPCHook;
+use rocketmq_model::common::compression::compression_type::CompressionType;
+use rocketmq_protocol::common::compression::compressor::Compressor;
+use rocketmq_transport::runtime::RPCHook;
 
 use crate::base::client_config::ClientConfig;
 use crate::producer::default_mq_producer::DefaultMQProducer;

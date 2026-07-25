@@ -16,9 +16,9 @@
 
 use cheetah_string::CheetahString;
 use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_client_rust::admin_adapter_compat::remoting::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
-use rocketmq_client_rust::admin_adapter_compat::remoting::protocol::header::elect_master_response_header::ElectMasterResponseHeader;
-use rocketmq_client_rust::admin_adapter_compat::remoting::protocol::header::get_meta_data_response_header::GetMetaDataResponseHeader;
+use rocketmq_protocol::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
+use rocketmq_protocol::protocol::header::elect_master_response_header::ElectMasterResponseHeader;
+use rocketmq_protocol::protocol::header::get_meta_data_response_header::GetMetaDataResponseHeader;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;

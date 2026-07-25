@@ -21,10 +21,10 @@ use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
-use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_protocol::protocol::DataVersion;
-use rocketmq_remoting::net::channel::Channel;
-use rocketmq_remoting::net::channel::ChannelId;
+use rocketmq_runtime::common::time_utils::current_millis;
+use rocketmq_transport::net::channel::Channel;
+use rocketmq_transport::net::channel::ChannelId;
 
 use crate::route_info::broker_addr_info::BrokerAddrInfo;
 

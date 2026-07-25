@@ -20,10 +20,10 @@ use std::sync::Arc;
 use std::sync::RwLock as StdRwLock;
 use std::time::Duration;
 
-use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_error::UnifiedServiceError;
+use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::Shutdown;
 use serde::Serialize;
 use tokio::select;

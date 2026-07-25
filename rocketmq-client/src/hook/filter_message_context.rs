@@ -14,8 +14,8 @@
 
 use std::fmt;
 
-use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_common::common::message::message_queue::MessageQueue;
+use rocketmq_model::common::message::message_ext::MessageExt;
+use rocketmq_model::common::message::message_queue::MessageQueue;
 
 #[derive(Default)]
 pub struct FilterMessageContext<'a> {

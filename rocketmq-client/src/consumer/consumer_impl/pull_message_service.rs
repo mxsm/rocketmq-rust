@@ -28,9 +28,9 @@ use std::time::Duration;
 use std::time::Instant;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::message::message_enum::MessageRequestMode;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::UnifiedServiceError;
+use rocketmq_model::common::message::message_enum::MessageRequestMode;
 use rocketmq_runtime::Shutdown;
 use serde::Serialize;
 use tokio::sync::mpsc;

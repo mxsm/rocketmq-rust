@@ -15,8 +15,8 @@
 use std::fmt::Display;
 
 use cheetah_string::CheetahString;
-use rocketmq_remoting::protocol::header::notification_request_header::NotificationRequestHeader;
-use rocketmq_remoting::protocol::header::pop_message_request_header::PopMessageRequestHeader;
+use rocketmq_protocol::protocol::header::notification_request_header::NotificationRequestHeader;
+use rocketmq_protocol::protocol::header::pop_message_request_header::PopMessageRequestHeader;
 
 #[derive(Clone, Debug)]
 pub struct PollingHeader {
@@ -82,8 +82,8 @@ impl PollingHeader {
 #[cfg(test)]
 mod tests {
     use cheetah_string::CheetahString;
-    use rocketmq_remoting::protocol::header::notification_request_header::NotificationRequestHeader;
-    use rocketmq_remoting::protocol::header::pop_message_request_header::PopMessageRequestHeader;
+    use rocketmq_protocol::protocol::header::notification_request_header::NotificationRequestHeader;
+    use rocketmq_protocol::protocol::header::pop_message_request_header::PopMessageRequestHeader;
 
     use super::*;
 

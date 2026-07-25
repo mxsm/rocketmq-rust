@@ -19,7 +19,6 @@ use std::collections::HashSet;
 #[cfg(feature = "dev-single")]
 use std::path::Path;
 
-use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_controller::config::ControllerConfig;
 use rocketmq_controller::config::ControllerConfigReader;
 use rocketmq_controller::config::StorageBackendType;
@@ -33,7 +32,8 @@ use rocketmq_controller::typ::ControllerRequest;
 use rocketmq_controller::typ::ControllerResponseHeader;
 use rocketmq_controller::typ::Node;
 #[cfg(feature = "dev-single")]
-use rocketmq_remoting::code::response_code::ResponseCode;
+use rocketmq_protocol::code::response_code::ResponseCode;
+use rocketmq_runtime::common::time_utils::current_millis;
 
 fn test_config(port: u16) -> ControllerConfigReader {
     ControllerConfigReader::new(

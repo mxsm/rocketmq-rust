@@ -20,69 +20,69 @@ use std::sync::Arc;
 use bytes::Bytes;
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
-use rocketmq_common::common::entity::ClientGroup;
-use rocketmq_common::common::filter::expression_type::ExpressionType;
-use rocketmq_common::common::message::message_decoder;
-use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_common::common::message::message_single::Message;
-use rocketmq_common::common::message::MessageConst;
-use rocketmq_common::common::message::MessageTrait;
-use rocketmq_common::common::mix_all::IS_SUB_CHANGE;
-use rocketmq_common::common::mix_all::IS_SUPPORT_HEART_BEAT_V2;
-use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_error::RocketMQError;
+use rocketmq_model::common::entity::ClientGroup;
+use rocketmq_model::common::filter::expression_type::ExpressionType;
+use rocketmq_model::common::message::message_ext::MessageExt;
+use rocketmq_model::common::message::message_single::Message;
+use rocketmq_model::common::message::MessageConst;
+use rocketmq_model::common::message::MessageTrait;
+use rocketmq_model::common::mix_all::IS_SUB_CHANGE;
+use rocketmq_model::common::mix_all::IS_SUPPORT_HEART_BEAT_V2;
 use rocketmq_model::result::SendResult;
+use rocketmq_model::utils::serde_json_utils::SerdeJsonUtils;
+use rocketmq_protocol::code::request_code::RequestCode;
+use rocketmq_protocol::code::response_code::ResponseCode;
+use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
+use rocketmq_protocol::protocol::body::get_broker_lite_info_response_body::GetBrokerLiteInfoResponseBody;
+use rocketmq_protocol::protocol::body::get_consumer_list_by_group_response_body::GetConsumerListByGroupResponseBody;
+use rocketmq_protocol::protocol::body::get_lite_group_info_response_body::GetLiteGroupInfoResponseBody;
+use rocketmq_protocol::protocol::body::get_lite_topic_info_response_body::GetLiteTopicInfoResponseBody;
+use rocketmq_protocol::protocol::body::get_parent_topic_info_response_body::GetParentTopicInfoResponseBody;
+use rocketmq_protocol::protocol::body::query_assignment_request_body::QueryAssignmentRequestBody;
+use rocketmq_protocol::protocol::body::query_assignment_response_body::QueryAssignmentResponseBody;
+use rocketmq_protocol::protocol::command_custom_header::CommandCustomHeader;
+use rocketmq_protocol::protocol::header::client_request_header::GetRouteInfoRequestHeader;
+use rocketmq_protocol::protocol::header::get_consumer_listby_group_request_header::GetConsumerListByGroupRequestHeader;
+use rocketmq_protocol::protocol::header::get_lite_group_info_request_header::GetLiteGroupInfoRequestHeader;
+use rocketmq_protocol::protocol::header::get_lite_topic_info_request_header::GetLiteTopicInfoRequestHeader;
+use rocketmq_protocol::protocol::header::get_max_offset_request_header::GetMaxOffsetRequestHeader;
+use rocketmq_protocol::protocol::header::get_max_offset_response_header::GetMaxOffsetResponseHeader;
+use rocketmq_protocol::protocol::header::get_min_offset_request_header::GetMinOffsetRequestHeader;
+use rocketmq_protocol::protocol::header::get_min_offset_response_header::GetMinOffsetResponseHeader;
+use rocketmq_protocol::protocol::header::get_parent_topic_info_request_header::GetParentTopicInfoRequestHeader;
+use rocketmq_protocol::protocol::header::heartbeat_request_header::HeartbeatRequestHeader;
+use rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header::parse_request_header;
+use rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
+use rocketmq_protocol::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
+use rocketmq_protocol::protocol::header::message_operation_header::TopicRequestHeaderTrait;
+use rocketmq_protocol::protocol::header::notify_consumer_ids_changed_request_header::NotifyConsumerIdsChangedRequestHeader;
+use rocketmq_protocol::protocol::header::notify_unsubscribe_lite_request_header::NotifyUnsubscribeLiteRequestHeader;
+use rocketmq_protocol::protocol::header::pull_message_request_header::PullMessageRequestHeader;
+use rocketmq_protocol::protocol::header::pull_message_response_header::PullMessageResponseHeader;
+use rocketmq_protocol::protocol::header::query_consumer_offset_request_header::QueryConsumerOffsetRequestHeader;
+use rocketmq_protocol::protocol::header::query_consumer_offset_response_header::QueryConsumerOffsetResponseHeader;
+use rocketmq_protocol::protocol::header::search_offset_request_header::SearchOffsetRequestHeader;
+use rocketmq_protocol::protocol::header::search_offset_response_header::SearchOffsetResponseHeader;
+use rocketmq_protocol::protocol::header::unregister_client_request_header::UnregisterClientRequestHeader;
+use rocketmq_protocol::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader;
+use rocketmq_protocol::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetResponseHeader;
+use rocketmq_protocol::protocol::heartbeat::heartbeat_data::HeartbeatData;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_proxy_core::identity::ResourceIdentity;
 pub use rocketmq_proxy_core::remoting::ProxyRemotingBackend;
 use rocketmq_proxy_core::remoting::RemotingIngressDispatcher;
 use rocketmq_proxy_core::remoting::RemotingIngressRoute;
 use rocketmq_proxy_core::remoting::RemotingStatusMapper;
-use rocketmq_remoting::code::request_code::RequestCode;
-use rocketmq_remoting::code::response_code::ResponseCode;
-use rocketmq_remoting::net::channel::Channel;
-use rocketmq_remoting::prelude::RemotingDeserializable;
-use rocketmq_remoting::protocol::body::get_broker_lite_info_response_body::GetBrokerLiteInfoResponseBody;
-use rocketmq_remoting::protocol::body::get_consumer_list_by_group_response_body::GetConsumerListByGroupResponseBody;
-use rocketmq_remoting::protocol::body::get_lite_group_info_response_body::GetLiteGroupInfoResponseBody;
-use rocketmq_remoting::protocol::body::get_lite_topic_info_response_body::GetLiteTopicInfoResponseBody;
-use rocketmq_remoting::protocol::body::get_parent_topic_info_response_body::GetParentTopicInfoResponseBody;
-use rocketmq_remoting::protocol::body::query_assignment_request_body::QueryAssignmentRequestBody;
-use rocketmq_remoting::protocol::body::query_assignment_response_body::QueryAssignmentResponseBody;
-use rocketmq_remoting::protocol::command_custom_header::CommandCustomHeader;
-use rocketmq_remoting::protocol::header::client_request_header::GetRouteInfoRequestHeader;
-use rocketmq_remoting::protocol::header::get_consumer_listby_group_request_header::GetConsumerListByGroupRequestHeader;
-use rocketmq_remoting::protocol::header::get_lite_group_info_request_header::GetLiteGroupInfoRequestHeader;
-use rocketmq_remoting::protocol::header::get_lite_topic_info_request_header::GetLiteTopicInfoRequestHeader;
-use rocketmq_remoting::protocol::header::get_max_offset_request_header::GetMaxOffsetRequestHeader;
-use rocketmq_remoting::protocol::header::get_max_offset_response_header::GetMaxOffsetResponseHeader;
-use rocketmq_remoting::protocol::header::get_min_offset_request_header::GetMinOffsetRequestHeader;
-use rocketmq_remoting::protocol::header::get_min_offset_response_header::GetMinOffsetResponseHeader;
-use rocketmq_remoting::protocol::header::get_parent_topic_info_request_header::GetParentTopicInfoRequestHeader;
-use rocketmq_remoting::protocol::header::heartbeat_request_header::HeartbeatRequestHeader;
-use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header::parse_request_header;
-use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
-use rocketmq_remoting::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
-use rocketmq_remoting::protocol::header::message_operation_header::TopicRequestHeaderTrait;
-use rocketmq_remoting::protocol::header::notify_consumer_ids_changed_request_header::NotifyConsumerIdsChangedRequestHeader;
-use rocketmq_remoting::protocol::header::notify_unsubscribe_lite_request_header::NotifyUnsubscribeLiteRequestHeader;
-use rocketmq_remoting::protocol::header::pull_message_request_header::PullMessageRequestHeader;
-use rocketmq_remoting::protocol::header::pull_message_response_header::PullMessageResponseHeader;
-use rocketmq_remoting::protocol::header::query_consumer_offset_request_header::QueryConsumerOffsetRequestHeader;
-use rocketmq_remoting::protocol::header::query_consumer_offset_response_header::QueryConsumerOffsetResponseHeader;
-use rocketmq_remoting::protocol::header::search_offset_request_header::SearchOffsetRequestHeader;
-use rocketmq_remoting::protocol::header::search_offset_response_header::SearchOffsetResponseHeader;
-use rocketmq_remoting::protocol::header::unregister_client_request_header::UnregisterClientRequestHeader;
-use rocketmq_remoting::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader;
-use rocketmq_remoting::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetResponseHeader;
-use rocketmq_remoting::protocol::heartbeat::heartbeat_data::HeartbeatData;
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_remoting::protocol::RemotingSerializable;
-use rocketmq_remoting::remoting_server::rocketmq_tokio_server;
-use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_remoting::runtime::processor::RejectRequestResponse;
-use rocketmq_remoting::runtime::processor::RequestProcessor;
 use rocketmq_runtime::ServiceContext;
 use rocketmq_runtime::ShutdownReport;
+use rocketmq_transport::net::channel::Channel;
+use rocketmq_transport::prelude::RemotingDeserializable;
+use rocketmq_transport::remoting_server::rocketmq_tokio_server;
+use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_transport::runtime::processor::RejectRequestResponse;
+use rocketmq_transport::runtime::processor::RequestProcessor;
 use tokio::net::TcpListener;
 use tracing::warn;
 
@@ -1177,7 +1177,7 @@ fn build_send_message_request(
 
     if header.is_batch() {
         let mut batch_body = body;
-        let messages = message_decoder::decode_messages(&mut batch_body);
+        let messages = MessageDecoder::decode_messages(&mut batch_body);
         if messages.is_empty() {
             return Err(RocketMQError::request_body_invalid(
                 "sendBatchMessage",
@@ -1220,7 +1220,7 @@ fn build_send_message_request(
         .body(body)
         .flag_bits(header.flag)
         .build_unchecked();
-    let properties = message_decoder::string_to_message_properties(header.properties.as_ref());
+    let properties = MessageDecoder::string_to_message_properties(header.properties.as_ref());
     message.set_properties(properties.clone());
     attach_transaction_producer_group(&mut message, header.producer_group.as_str());
 
@@ -1340,7 +1340,7 @@ fn build_send_message_response_header(send_result: &SendResult, fallback_queue_i
 fn encode_message_ext_batch(messages: &[MessageExt]) -> crate::error::ProxyResult<Bytes> {
     let mut encoded = BytesMut::new();
     for message in messages {
-        let body = message_decoder::encode(message, false)?;
+        let body = MessageDecoder::encode(message, false)?;
         encoded.extend_from_slice(body.as_ref());
     }
     Ok(encoded.freeze())
@@ -1457,58 +1457,57 @@ mod tests {
     use rocketmq_auth::authorization::model::acl::Acl;
     use rocketmq_auth::authorization::model::policy::Policy;
     use rocketmq_auth::authorization::model::resource::Resource;
-    use rocketmq_common::common::action::Action;
-    use rocketmq_common::common::boundary_type::BoundaryType;
-    use rocketmq_common::common::entity::ClientGroup;
-    use rocketmq_common::common::message::message_decoder;
-    use rocketmq_common::common::message::message_enum::MessageRequestMode;
-    use rocketmq_common::common::message::message_queue::MessageQueue;
-    use rocketmq_common::common::message::message_queue_assignment::MessageQueueAssignment;
-    use rocketmq_common::common::message::message_single::Message;
-    use rocketmq_common::common::message::MessageConst;
-    use rocketmq_common::MessageDecoder;
     use rocketmq_error::RocketMQError;
+    use rocketmq_model::common::boundary_type::BoundaryType;
+    use rocketmq_model::common::entity::ClientGroup;
+    use rocketmq_model::common::message::message_enum::MessageRequestMode;
+    use rocketmq_model::common::message::message_queue::MessageQueue;
+    use rocketmq_model::common::message::message_queue_assignment::MessageQueueAssignment;
+    use rocketmq_model::common::message::message_single::Message;
+    use rocketmq_model::common::message::MessageConst;
     use rocketmq_model::result::SendResult;
     use rocketmq_model::result::SendStatus;
-    use rocketmq_remoting::code::request_code::RequestCode;
-    use rocketmq_remoting::code::response_code::ResponseCode;
-    use rocketmq_remoting::local::LocalRequestHarness;
-    use rocketmq_remoting::prelude::RemotingDeserializable;
-    use rocketmq_remoting::prelude::RemotingSerializable;
-    use rocketmq_remoting::protocol::body::query_assignment_request_body::QueryAssignmentRequestBody;
-    use rocketmq_remoting::protocol::body::query_assignment_response_body::QueryAssignmentResponseBody;
-    use rocketmq_remoting::protocol::body::request::lock_batch_request_body::LockBatchRequestBody;
-    use rocketmq_remoting::protocol::body::unlock_batch_request_body::UnlockBatchRequestBody;
-    use rocketmq_remoting::protocol::header::client_request_header::GetRouteInfoRequestHeader;
-    use rocketmq_remoting::protocol::header::get_consumer_listby_group_request_header::GetConsumerListByGroupRequestHeader;
-    use rocketmq_remoting::protocol::header::get_lite_group_info_request_header::GetLiteGroupInfoRequestHeader;
-    use rocketmq_remoting::protocol::header::get_lite_topic_info_request_header::GetLiteTopicInfoRequestHeader;
-    use rocketmq_remoting::protocol::header::get_max_offset_request_header::GetMaxOffsetRequestHeader;
-    use rocketmq_remoting::protocol::header::get_max_offset_response_header::GetMaxOffsetResponseHeader;
-    use rocketmq_remoting::protocol::header::get_parent_topic_info_request_header::GetParentTopicInfoRequestHeader;
-    use rocketmq_remoting::protocol::header::heartbeat_request_header::HeartbeatRequestHeader;
-    use rocketmq_remoting::protocol::header::lock_batch_mq_request_header::LockBatchMqRequestHeader;
-    use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
-    use rocketmq_remoting::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
-    use rocketmq_remoting::protocol::header::notify_consumer_ids_changed_request_header::NotifyConsumerIdsChangedRequestHeader;
-    use rocketmq_remoting::protocol::header::notify_unsubscribe_lite_request_header::NotifyUnsubscribeLiteRequestHeader;
-    use rocketmq_remoting::protocol::header::pull_message_request_header::PullMessageRequestHeader;
-    use rocketmq_remoting::protocol::header::pull_message_response_header::PullMessageResponseHeader;
-    use rocketmq_remoting::protocol::header::query_consumer_offset_request_header::QueryConsumerOffsetRequestHeader;
-    use rocketmq_remoting::protocol::header::query_consumer_offset_response_header::QueryConsumerOffsetResponseHeader;
-    use rocketmq_remoting::protocol::header::search_offset_request_header::SearchOffsetRequestHeader;
-    use rocketmq_remoting::protocol::header::search_offset_response_header::SearchOffsetResponseHeader;
-    use rocketmq_remoting::protocol::header::unlock_batch_mq_request_header::UnlockBatchMqRequestHeader;
-    use rocketmq_remoting::protocol::header::unregister_client_request_header::UnregisterClientRequestHeader;
-    use rocketmq_remoting::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader;
-    use rocketmq_remoting::protocol::heartbeat::consumer_data::ConsumerData;
-    use rocketmq_remoting::protocol::heartbeat::heartbeat_data::HeartbeatData;
-    use rocketmq_remoting::protocol::heartbeat::producer_data::ProducerData;
-    use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-    use rocketmq_remoting::protocol::route::route_data_view::BrokerData;
-    use rocketmq_remoting::protocol::route::route_data_view::QueueData;
-    use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
-    use rocketmq_remoting::runtime::processor::RequestProcessor;
+    use rocketmq_protocol::code::request_code::RequestCode;
+    use rocketmq_protocol::code::response_code::ResponseCode;
+    use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
+    use rocketmq_protocol::protocol::body::query_assignment_request_body::QueryAssignmentRequestBody;
+    use rocketmq_protocol::protocol::body::query_assignment_response_body::QueryAssignmentResponseBody;
+    use rocketmq_protocol::protocol::body::request::lock_batch_request_body::LockBatchRequestBody;
+    use rocketmq_protocol::protocol::body::unlock_batch_request_body::UnlockBatchRequestBody;
+    use rocketmq_protocol::protocol::header::client_request_header::GetRouteInfoRequestHeader;
+    use rocketmq_protocol::protocol::header::get_consumer_listby_group_request_header::GetConsumerListByGroupRequestHeader;
+    use rocketmq_protocol::protocol::header::get_lite_group_info_request_header::GetLiteGroupInfoRequestHeader;
+    use rocketmq_protocol::protocol::header::get_lite_topic_info_request_header::GetLiteTopicInfoRequestHeader;
+    use rocketmq_protocol::protocol::header::get_max_offset_request_header::GetMaxOffsetRequestHeader;
+    use rocketmq_protocol::protocol::header::get_max_offset_response_header::GetMaxOffsetResponseHeader;
+    use rocketmq_protocol::protocol::header::get_parent_topic_info_request_header::GetParentTopicInfoRequestHeader;
+    use rocketmq_protocol::protocol::header::heartbeat_request_header::HeartbeatRequestHeader;
+    use rocketmq_protocol::protocol::header::lock_batch_mq_request_header::LockBatchMqRequestHeader;
+    use rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
+    use rocketmq_protocol::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
+    use rocketmq_protocol::protocol::header::notify_consumer_ids_changed_request_header::NotifyConsumerIdsChangedRequestHeader;
+    use rocketmq_protocol::protocol::header::notify_unsubscribe_lite_request_header::NotifyUnsubscribeLiteRequestHeader;
+    use rocketmq_protocol::protocol::header::pull_message_request_header::PullMessageRequestHeader;
+    use rocketmq_protocol::protocol::header::pull_message_response_header::PullMessageResponseHeader;
+    use rocketmq_protocol::protocol::header::query_consumer_offset_request_header::QueryConsumerOffsetRequestHeader;
+    use rocketmq_protocol::protocol::header::query_consumer_offset_response_header::QueryConsumerOffsetResponseHeader;
+    use rocketmq_protocol::protocol::header::search_offset_request_header::SearchOffsetRequestHeader;
+    use rocketmq_protocol::protocol::header::search_offset_response_header::SearchOffsetResponseHeader;
+    use rocketmq_protocol::protocol::header::unlock_batch_mq_request_header::UnlockBatchMqRequestHeader;
+    use rocketmq_protocol::protocol::header::unregister_client_request_header::UnregisterClientRequestHeader;
+    use rocketmq_protocol::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader;
+    use rocketmq_protocol::protocol::heartbeat::consumer_data::ConsumerData;
+    use rocketmq_protocol::protocol::heartbeat::heartbeat_data::HeartbeatData;
+    use rocketmq_protocol::protocol::heartbeat::producer_data::ProducerData;
+    use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+    use rocketmq_protocol::protocol::route::route_data_view::BrokerData;
+    use rocketmq_protocol::protocol::route::route_data_view::QueueData;
+    use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
+    use rocketmq_security_api::Action;
+    use rocketmq_transport::local::LocalRequestHarness;
+    use rocketmq_transport::prelude::RemotingDeserializable;
+    use rocketmq_transport::prelude::RemotingSerializable;
+    use rocketmq_transport::runtime::processor::RequestProcessor;
     use tokio::time::timeout;
 
     use super::ProxyRemotingBackend;
@@ -1762,7 +1761,7 @@ mod tests {
             consumer_group: CheetahString::from("GroupA"),
             client_id: CheetahString::from("client-a"),
             strategy_name: CheetahString::from("AVG"),
-            message_model: rocketmq_remoting::protocol::heartbeat::message_model::MessageModel::Clustering,
+            message_model: rocketmq_protocol::protocol::heartbeat::message_model::MessageModel::Clustering,
         }
         .encode()
         .expect("assignment request body should encode");
@@ -1831,13 +1830,13 @@ mod tests {
             .topic("TopicA")
             .body_slice(b"hello-1")
             .build_unchecked();
-        first.set_properties(message_decoder::string_to_message_properties(Some(&properties)));
+        first.set_properties(MessageDecoder::string_to_message_properties(Some(&properties)));
         let second = Message::builder()
             .topic("TopicA")
             .body_slice(b"hello-2")
             .build_unchecked();
         let batch =
-            rocketmq_common::common::message::message_batch::MessageBatch::generate_from_vec(vec![first, second])
+            rocketmq_model::common::message::message_batch::MessageBatch::generate_from_vec(vec![first, second])
                 .expect("message batch should build");
         let mut request = RemotingCommand::create_request_command(
             RequestCode::SendBatchMessage,
@@ -1858,7 +1857,7 @@ mod tests {
                 topic_request_header: None,
             },
         )
-        .set_body(batch.encode());
+        .set_body(MessageDecoder::encode_messages(&batch.messages));
         request.make_custom_header_to_net();
 
         let response = dispatcher.dispatch(&test_context(), &request).await;
@@ -1926,7 +1925,7 @@ mod tests {
 
         let response = dispatcher.dispatch(&test_context(), &get_request).await;
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
-        let decoded = rocketmq_remoting::protocol::body::get_consumer_list_by_group_response_body::GetConsumerListByGroupResponseBody::decode(
+        let decoded = rocketmq_protocol::protocol::body::get_consumer_list_by_group_response_body::GetConsumerListByGroupResponseBody::decode(
             response.body().expect("consumer list body should exist").as_ref(),
         )
         .expect("consumer list body should decode");
@@ -2480,7 +2479,7 @@ mod tests {
         lite_topic_request.make_custom_header_to_net();
         let lite_topic_response = dispatcher.dispatch(&context, &lite_topic_request).await;
         let lite_topic_body =
-            rocketmq_remoting::protocol::body::get_lite_topic_info_response_body::GetLiteTopicInfoResponseBody::decode(
+            rocketmq_protocol::protocol::body::get_lite_topic_info_response_body::GetLiteTopicInfoResponseBody::decode(
                 lite_topic_response
                     .body()
                     .expect("lite topic body should exist")
@@ -2506,7 +2505,7 @@ mod tests {
         lite_group_request.make_custom_header_to_net();
         let lite_group_response = dispatcher.dispatch(&context, &lite_group_request).await;
         let lite_group_body =
-            rocketmq_remoting::protocol::body::get_lite_group_info_response_body::GetLiteGroupInfoResponseBody::decode(
+            rocketmq_protocol::protocol::body::get_lite_group_info_response_body::GetLiteGroupInfoResponseBody::decode(
                 lite_group_response
                     .body()
                     .expect("lite group body should exist")

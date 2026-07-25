@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_common::common::message::MessageTrait;
+use rocketmq_model::common::message::MessageTrait;
 
 use crate::base::message_result::PutMessageResult;
 

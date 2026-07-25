@@ -146,7 +146,7 @@ impl BoundaryErrorView {
 
 /// Remoting response-code primitive.
 ///
-/// This mirrors stable wire numbers without depending on `rocketmq-remoting`.
+/// This mirrors stable wire numbers without depending on the protocol or transport crates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(i32)]
 pub enum RemotingResponseCode {

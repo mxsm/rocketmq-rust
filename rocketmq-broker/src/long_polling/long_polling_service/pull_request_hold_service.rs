@@ -23,13 +23,13 @@ use std::time::Duration;
 
 use cheetah_string::CheetahString;
 use parking_lot::Mutex;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_remoting::net::channel::Channel;
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::consume_queue::cq_ext_unit::CqExtUnit;
+use rocketmq_transport::net::channel::Channel;
+use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::sync::Notify;
 use tokio::time::Instant;

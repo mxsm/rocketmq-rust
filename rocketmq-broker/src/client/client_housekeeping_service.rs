@@ -18,8 +18,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use parking_lot::Mutex;
-use rocketmq_remoting::base::channel_event_listener::ChannelEventListener;
-use rocketmq_remoting::net::channel::Channel;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
@@ -27,6 +25,8 @@ use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskGroupLifecycleState;
 use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
+use rocketmq_transport::base::channel_event_listener::ChannelEventListener;
+use rocketmq_transport::net::channel::Channel;
 use tokio::sync::Notify;
 use tracing::debug;
 use tracing::warn;
@@ -218,7 +218,7 @@ impl ChannelEventListener for ClientHousekeepingService {
 mod tests {
     use std::sync::Arc;
 
-    use rocketmq_common::common::broker::broker_config::BrokerConfig;
+    use crate::config::broker_config::BrokerConfig;
     use rocketmq_runtime::RuntimeContext;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
 

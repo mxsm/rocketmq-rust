@@ -16,7 +16,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU8;
 use std::sync::atomic::Ordering;
 
-use rocketmq_common::common::broker::broker_role::BrokerRole;
+use rocketmq_model::common::broker::broker_role::BrokerRole;
 
 use crate::config::message_store_config::MessageStoreConfig;
 

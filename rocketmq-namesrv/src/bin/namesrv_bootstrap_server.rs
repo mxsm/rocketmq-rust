@@ -23,20 +23,19 @@ use anyhow::Context;
 use anyhow::Result;
 use clap::Parser;
 use config::Config;
-use rocketmq_common::common::controller::controller_config::RaftPeer;
-use rocketmq_common::common::controller::controller_config::StorageBackendType;
-use rocketmq_common::common::metrics::MetricsExporterType;
-use rocketmq_common::common::server::config::ServerConfig;
-use rocketmq_common::EnvUtils::EnvUtils;
-use rocketmq_common::ParseConfigFile;
+use rocketmq_controller::config::RaftPeer;
+use rocketmq_controller::config::StorageBackendType;
 use rocketmq_controller::resolve_controller_raft_bind_addr;
 use rocketmq_controller::ControllerCli;
 use rocketmq_controller::ControllerConfig;
+use rocketmq_model::utils::env_utils::EnvUtils;
 use rocketmq_model::version::CURRENT_VERSION;
 use rocketmq_namesrv::bootstrap::Builder;
 use rocketmq_namesrv::parse_command_and_config_file;
 use rocketmq_namesrv::NamesrvConfig;
-use rocketmq_remoting::protocol::remoting_command;
+use rocketmq_observability::exporter_types::MetricsExporterType;
+use rocketmq_protocol::protocol::remoting_command;
+use rocketmq_runtime::common::parse_config_file;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 use rocketmq_runtime::ServiceContext;
@@ -46,6 +45,7 @@ use rocketmq_runtime::ShutdownReason;
 use rocketmq_security_api::SecurityBootstrapConfig;
 use rocketmq_security_api::SecurityBootstrapProfile;
 use rocketmq_security_api::ValidatedSecurityBootstrap;
+use rocketmq_transport::config::ServerConfig;
 use serde::Deserialize;
 use tracing::info;
 
@@ -350,7 +350,7 @@ fn parse_and_merge_config(
 
     let logging_overrides = match args.config_file.clone() {
         Some(config_file) => {
-            ParseConfigFile::parse_config_file::<rocketmq_observability::LoggingOverrides>(config_file)
+            parse_config_file::parse_config_file::<rocketmq_observability::LoggingOverrides>(config_file)
                 .context("failed to parse namesrv logging configuration")?
         }
         None => rocketmq_observability::LoggingOverrides::default(),

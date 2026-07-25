@@ -24,13 +24,13 @@ use std::sync::Arc;
 use cheetah_string::CheetahString;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_remoting::runtime::RPCHook;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_security_api::OutboundSigner;
 use rocketmq_security_api::Secret;
 use rocketmq_security_api::SecurityRequestView;
 use rocketmq_security_api::Signature;
 use rocketmq_security_api::SigningError;
+use rocketmq_transport::runtime::RPCHook;
 use serde::Deserialize;
 
 use crate::authentication::builder::DefaultAuthenticationContextBuilder;
@@ -260,7 +260,7 @@ mod tests {
     use std::collections::HashMap;
     use std::net::SocketAddr;
 
-    use rocketmq_remoting::protocol::header::empty_header::EmptyHeader;
+    use rocketmq_protocol::protocol::header::empty_header::EmptyHeader;
 
     use super::*;
 

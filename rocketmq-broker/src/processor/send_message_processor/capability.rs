@@ -19,20 +19,20 @@ use std::sync::Arc;
 use std::sync::Weak;
 use std::time::Instant;
 
+use crate::config::broker_config::BrokerConfig;
 use arc_swap::ArcSwap;
 use cheetah_string::CheetahString;
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
-use rocketmq_common::common::broker::broker_role::BrokerRole;
-use rocketmq_common::common::config::TopicConfig;
-use rocketmq_common::common::constant::PermName;
-use rocketmq_common::common::message::message_batch::MessageExtBatch;
-use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
-use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
-use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigSerializeWrapper;
-use rocketmq_remoting::protocol::header::message_operation_header::TopicRequestHeaderTrait;
-use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_context::TopicQueueMappingContext;
-use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
+use rocketmq_model::common::broker::broker_role::BrokerRole;
+use rocketmq_model::common::config::TopicConfig;
+use rocketmq_model::common::constant::PermName;
+use rocketmq_model::common::message::message_batch::MessageExtBatch;
+use rocketmq_model::common::message::message_ext::MessageExt;
+use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use rocketmq_protocol::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
+use rocketmq_protocol::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigSerializeWrapper;
+use rocketmq_protocol::protocol::header::message_operation_header::TopicRequestHeaderTrait;
+use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_context::TopicQueueMappingContext;
+use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
 use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
@@ -556,7 +556,7 @@ where
 
     async fn handle_register_result(
         &self,
-        register_broker_result: Vec<rocketmq_remoting::protocol::namesrv::RegisterBrokerResult>,
+        register_broker_result: Vec<rocketmq_protocol::protocol::namesrv::RegisterBrokerResult>,
     ) {
         let Some(result) = register_broker_result.into_iter().next() else {
             return;
@@ -630,9 +630,9 @@ mod tests {
     use std::net::Ipv4Addr;
     use std::net::SocketAddr;
 
+    use crate::config::broker_config::BrokerConfig;
     use cheetah_string::CheetahString;
-    use rocketmq_common::common::broker::broker_config::BrokerConfig;
-    use rocketmq_common::common::broker::broker_role::BrokerRole;
+    use rocketmq_model::common::broker::broker_role::BrokerRole;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
 
     use super::SendMessagePolicyState;

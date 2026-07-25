@@ -15,10 +15,10 @@
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_common::common::message::MessageConst;
-use rocketmq_common::common::mix_all;
-use rocketmq_common::TimeUtils::current_millis;
+use rocketmq_model::common::message::message_ext::MessageExt;
+use rocketmq_model::common::message::MessageConst;
+use rocketmq_model::common::mix_all;
+use rocketmq_runtime::common::time_utils::current_millis;
 
 use crate::consumer::listener::consume_return_type::ConsumeReturnType;
 use crate::hook::consume_message_context::ConsumeMessageContext;
@@ -178,7 +178,7 @@ impl ConsumeMessageHook for ConsumeMessageTraceHookImpl {
             cost_time: 0,
             is_success: true,
             request_id: CheetahString::from_string(
-                rocketmq_common::common::message::message_client_id_setter::MessageClientIDSetter::create_uniq_id(),
+                rocketmq_model::common::message::message_client_id_setter::MessageClientIDSetter::create_uniq_id(),
             ),
             context_code: 0,
             access_channel: None,
@@ -269,8 +269,8 @@ mod tests {
     use std::sync::Arc;
     use std::sync::Mutex;
 
-    use rocketmq_common::common::message::message_ext::MessageExt;
-    use rocketmq_common::common::message::MessageTrait;
+    use rocketmq_model::common::message::message_ext::MessageExt;
+    use rocketmq_model::common::message::MessageTrait;
 
     use super::*;
     use crate::base::access_channel::AccessChannel;

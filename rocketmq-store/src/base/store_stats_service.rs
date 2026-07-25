@@ -20,7 +20,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use parking_lot::Mutex;
-use rocketmq_common::common::broker::broker_config::BrokerIdentity;
+use rocketmq_model::common::broker::broker_identity::BrokerIdentity;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;

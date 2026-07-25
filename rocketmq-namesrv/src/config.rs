@@ -16,11 +16,11 @@ use std::collections::HashMap;
 use std::env;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::mix_all::ROCKETMQ_HOME_ENV;
-use rocketmq_common::common::mix_all::ROCKETMQ_HOME_PROPERTY;
-use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
+use rocketmq_model::common::mix_all::ROCKETMQ_HOME_ENV;
+use rocketmq_model::common::mix_all::ROCKETMQ_HOME_PROPERTY;
+use rocketmq_model::utils::serde_json_utils::SerdeJsonUtils;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -437,8 +437,8 @@ mod tests {
     use std::env;
 
     use super::*;
-    use rocketmq_common::common::mix_all::ROCKETMQ_HOME_ENV;
-    use rocketmq_common::common::mix_all::ROCKETMQ_HOME_PROPERTY;
+    use rocketmq_model::common::mix_all::ROCKETMQ_HOME_ENV;
+    use rocketmq_model::common::mix_all::ROCKETMQ_HOME_PROPERTY;
 
     #[test]
     fn test_namesrv_config() {

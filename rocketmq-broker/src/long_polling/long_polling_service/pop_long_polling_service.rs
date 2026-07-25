@@ -22,21 +22,21 @@ use std::sync::Arc;
 use std::sync::Weak;
 use std::time::Duration;
 
+use crate::config::broker_config::BrokerConfig;
 use cheetah_string::CheetahString;
 use crossbeam_skiplist::SkipSet;
 use dashmap::DashMap;
 use parking_lot::Mutex;
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
-use rocketmq_common::common::key_builder::KeyBuilder;
-use rocketmq_common::common::pop_ack_constants::PopAckConstants;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_model::common::key_builder::KeyBuilder;
+use rocketmq_model::common::pop_ack_constants::PopAckConstants;
+use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskKind;
 use rocketmq_store::consume_queue::cq_ext_unit::CqExtUnit;
 use rocketmq_store::filter::ArcMessageFilter;
+use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
 use tokio::select;
 use tokio::sync::Mutex as AsyncMutex;
 use tracing::error;
@@ -112,7 +112,7 @@ pub(crate) struct PopLongPollingService<RP> {
 pub(crate) trait LocalPopLongPollingRequestProcessor {
     async fn process_request_when_wakeup(
         &self,
-        channel: rocketmq_remoting::net::channel::Channel,
+        channel: rocketmq_transport::net::channel::Channel,
         ctx: ConnectionHandlerContext,
         request: RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>>;

@@ -16,9 +16,9 @@ use std::path::PathBuf;
 
 use cheetah_string::CheetahString;
 use clap::Parser;
-use rocketmq_common::common::config::TopicConfig;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
+use rocketmq_model::common::config::TopicConfig;
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
 

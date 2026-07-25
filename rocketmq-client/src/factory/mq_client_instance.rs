@@ -29,46 +29,46 @@ use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use futures::future;
 use rand::seq::IndexedRandom;
-use rocketmq_common::common::base::service_state::ServiceState;
-use rocketmq_common::common::boundary_type::BoundaryType;
-use rocketmq_common::common::config::TopicConfig;
-use rocketmq_common::common::constant::PermName;
-use rocketmq_common::common::filter::expression_type::ExpressionType;
-use rocketmq_common::common::message::message_decoder;
-use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_common::common::message::message_queue_assignment::MessageQueueAssignment;
-use rocketmq_common::common::message::message_single::Message;
-use rocketmq_common::common::mix_all;
-use rocketmq_common::common::mq_version::CURRENT_VERSION;
-use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_error::UnifiedServiceError;
-use rocketmq_remoting::base::connection_net_event::ConnectionNetEvent;
-use rocketmq_remoting::protocol::body::acl_info::AclInfo;
-use rocketmq_remoting::protocol::body::broker_body::cluster_info::ClusterInfo;
-use rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
-use rocketmq_remoting::protocol::body::consumer_running_info::ConsumerRunningInfo;
-use rocketmq_remoting::protocol::body::user_info::UserInfo;
-use rocketmq_remoting::protocol::header::get_topic_config_request_header::GetTopicConfigRequestHeader;
-use rocketmq_remoting::protocol::header::pull_message_request_header::PullMessageRequestHeader;
-use rocketmq_remoting::protocol::header::query_consumer_offset_request_header::QueryConsumerOffsetRequestHeader;
-use rocketmq_remoting::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader;
-use rocketmq_remoting::protocol::heartbeat::consumer_data::ConsumerData;
-use rocketmq_remoting::protocol::heartbeat::heartbeat_data::HeartbeatData;
-use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
-use rocketmq_remoting::protocol::heartbeat::producer_data::ProducerData;
-use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
-use rocketmq_remoting::protocol::route::route_data_view::BrokerData;
-use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
-use rocketmq_remoting::protocol::route_facade::BrokerDataExt;
-use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
-use rocketmq_remoting::rpc::client_metadata::ClientMetadata;
-use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
-use rocketmq_remoting::runtime::RPCHook;
+use rocketmq_model::common::base::service_state::ServiceState;
+use rocketmq_model::common::boundary_type::BoundaryType;
+use rocketmq_model::common::config::TopicConfig;
+use rocketmq_model::common::constant::PermName;
+use rocketmq_model::common::filter::expression_type::ExpressionType;
+use rocketmq_model::common::message::message_ext::MessageExt;
+use rocketmq_model::common::message::message_queue::MessageQueue;
+use rocketmq_model::common::message::message_queue_assignment::MessageQueueAssignment;
+use rocketmq_model::common::message::message_single::Message;
+use rocketmq_model::common::mix_all;
+use rocketmq_model::common::mq_version::CURRENT_VERSION;
+use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
+use rocketmq_protocol::protocol::body::acl_info::AclInfo;
+use rocketmq_protocol::protocol::body::broker_body::cluster_info::ClusterInfo;
+use rocketmq_protocol::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
+use rocketmq_protocol::protocol::body::consumer_running_info::ConsumerRunningInfo;
+use rocketmq_protocol::protocol::body::user_info::UserInfo;
+use rocketmq_protocol::protocol::header::get_topic_config_request_header::GetTopicConfigRequestHeader;
+use rocketmq_protocol::protocol::header::pull_message_request_header::PullMessageRequestHeader;
+use rocketmq_protocol::protocol::header::query_consumer_offset_request_header::QueryConsumerOffsetRequestHeader;
+use rocketmq_protocol::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader;
+use rocketmq_protocol::protocol::heartbeat::consumer_data::ConsumerData;
+use rocketmq_protocol::protocol::heartbeat::heartbeat_data::HeartbeatData;
+use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
+use rocketmq_protocol::protocol::heartbeat::producer_data::ProducerData;
+use rocketmq_protocol::protocol::namespace_util::NamespaceUtil;
+use rocketmq_protocol::protocol::route::route_data_view::BrokerData;
+use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
+use rocketmq_protocol::protocol::route_facade::BrokerDataExt;
+use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
+use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::schedule::simple_scheduler::ScheduledTaskManager;
-use rocketmq_rust::RocketMQTokioMutex;
+use rocketmq_runtime::tokio_lock::RocketMQTokioMutex;
+use rocketmq_transport::base::connection_net_event::ConnectionNetEvent;
+use rocketmq_transport::rpc::client_metadata::ClientMetadata;
+use rocketmq_transport::runtime::config::client_config::TokioClientConfig;
+use rocketmq_transport::runtime::RPCHook;
 use serde::Serialize;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
@@ -125,7 +125,7 @@ fn get_topic_config_request_header(topic: CheetahString) -> GetTopicConfigReques
         topic,
         topic_request_header: None,
     };
-    rocketmq_remoting::protocol::header::message_operation_header::TopicRequestHeaderTrait::set_lo(
+    rocketmq_protocol::protocol::header::message_operation_header::TopicRequestHeaderTrait::set_lo(
         &mut request_header,
         Some(true),
     );
@@ -1451,7 +1451,7 @@ impl MQClientInstance {
 
         if result.pull_result.pull_status == PullStatus::Found {
             if let Some(mut message_binary) = result.message_binary.take() {
-                let messages = message_decoder::decodes_batch(&mut message_binary, true, true);
+                let messages = MessageDecoder::decodes_batch(&mut message_binary, true, true);
                 result.pull_result.set_msg_found_list(Some(messages));
             }
         }
@@ -2064,7 +2064,7 @@ impl MQClientInstance {
                 let support_v2 = response.and_then(|resp| {
                     resp.ext_fields().and_then(|fields| {
                         fields
-                            .get(rocketmq_common::common::mix_all::IS_SUPPORT_HEART_BEAT_V2)
+                            .get(rocketmq_model::common::mix_all::IS_SUPPORT_HEART_BEAT_V2)
                             .and_then(|v| v.parse::<bool>().ok())
                     })
                 });
@@ -2321,13 +2321,13 @@ impl MQClientInstance {
         info.set_property(
             ConsumerRunningInfo::PROP_CONSUME_TYPE,
             match consumer.consume_type() {
-                rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType::ConsumeActively => {
+                rocketmq_protocol::protocol::heartbeat::consume_type::ConsumeType::ConsumeActively => {
                     "CONSUME_ACTIVELY"
                 }
-                rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType::ConsumePassively => {
+                rocketmq_protocol::protocol::heartbeat::consume_type::ConsumeType::ConsumePassively => {
                     "CONSUME_PASSIVELY"
                 }
-                rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType::ConsumePop => "CONSUME_POP",
+                rocketmq_protocol::protocol::heartbeat::consume_type::ConsumeType::ConsumePop => "CONSUME_POP",
             },
         );
         info.set_property(ConsumerRunningInfo::PROP_CLIENT_VERSION, CURRENT_VERSION.name());
@@ -2839,9 +2839,9 @@ mod tests {
     use futures::FutureExt;
     use rocketmq_error::ErrorKind;
     use rocketmq_error::RocketMQError;
-    use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
-    use rocketmq_remoting::protocol::route::route_data_view::BrokerData;
-    use rocketmq_remoting::protocol::route::route_data_view::QueueData;
+    use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
+    use rocketmq_protocol::protocol::route::route_data_view::BrokerData;
+    use rocketmq_protocol::protocol::route::route_data_view::QueueData;
 
     use super::*;
     use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
@@ -3435,7 +3435,7 @@ mod tests {
     #[test]
     fn default_topic_route_queue_nums_are_capped_like_broker_auto_create() {
         let mut route = TopicRouteData {
-            queue_datas: vec![rocketmq_remoting::protocol::route::route_data_view::QueueData {
+            queue_datas: vec![rocketmq_protocol::protocol::route::route_data_view::QueueData {
                 broker_name: CheetahString::from("broker-a"),
                 read_queue_nums: 8,
                 write_queue_nums: 8,
@@ -3470,7 +3470,7 @@ mod tests {
     #[test]
     fn java_named_topic_subscribe_info_alias_delegates_to_route_converter() {
         let route = TopicRouteData {
-            queue_datas: vec![rocketmq_remoting::protocol::route::route_data_view::QueueData {
+            queue_datas: vec![rocketmq_protocol::protocol::route::route_data_view::QueueData {
                 broker_name: CheetahString::from("broker-a"),
                 read_queue_nums: 2,
                 perm: PermName::PERM_READ,
@@ -3569,11 +3569,11 @@ mod tests {
         let header = get_topic_config_request_header(CheetahString::from("TopicTest"));
 
         assert_eq!(
-            rocketmq_remoting::protocol::header::message_operation_header::TopicRequestHeaderTrait::topic(&header),
+            rocketmq_protocol::protocol::header::message_operation_header::TopicRequestHeaderTrait::topic(&header),
             "TopicTest"
         );
         assert_eq!(
-            rocketmq_remoting::protocol::header::message_operation_header::TopicRequestHeaderTrait::lo(&header),
+            rocketmq_protocol::protocol::header::message_operation_header::TopicRequestHeaderTrait::lo(&header),
             Some(true)
         );
     }

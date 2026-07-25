@@ -31,34 +31,31 @@ use bytes::BytesMut;
 use cheetah_string::CheetahString;
 use parking_lot::Mutex;
 use rand::RngExt;
-use rocketmq_common::common::config::TopicConfig;
-use rocketmq_common::common::constant::consume_init_mode::ConsumeInitMode;
-use rocketmq_common::common::constant::PermName;
-use rocketmq_common::common::filter::expression_type::ExpressionType;
-use rocketmq_common::common::key_builder::KeyBuilder;
-use rocketmq_common::common::key_builder::POP_ORDER_REVIVE_QUEUE;
-use rocketmq_common::common::message::message_decoder;
-use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
-use rocketmq_common::common::message::MessageConst;
-use rocketmq_common::common::message::MessageTrait;
-use rocketmq_common::common::mix_all;
-use rocketmq_common::common::pop_ack_constants::PopAckConstants;
-use rocketmq_common::common::FAQUrl;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_remoting::code::request_code::RequestCode;
-use rocketmq_remoting::code::response_code::ResponseCode;
-use rocketmq_remoting::net::channel::Channel;
-use rocketmq_remoting::protocol::filter::filter_api::FilterAPI;
-use rocketmq_remoting::protocol::header::extra_info_util::ExtraInfoUtil;
-use rocketmq_remoting::protocol::header::pop_message_request_header::PopMessageRequestHeader;
-use rocketmq_remoting::protocol::header::pop_message_response_header::PopMessageResponseHeader;
-use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
-use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
-use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_remoting::protocol::RemotingSerializable;
-use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_remoting::runtime::processor::RequestProcessor;
+use rocketmq_model::common::config::TopicConfig;
+use rocketmq_model::common::constant::consume_init_mode::ConsumeInitMode;
+use rocketmq_model::common::constant::PermName;
+use rocketmq_model::common::filter::expression_type::ExpressionType;
+use rocketmq_model::common::key_builder::KeyBuilder;
+use rocketmq_model::common::key_builder::POP_ORDER_REVIVE_QUEUE;
+use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use rocketmq_model::common::message::MessageConst;
+use rocketmq_model::common::message::MessageTrait;
+use rocketmq_model::common::mix_all;
+use rocketmq_model::common::pop_ack_constants::PopAckConstants;
+use rocketmq_model::common::FAQUrl;
+use rocketmq_protocol::code::request_code::RequestCode;
+use rocketmq_protocol::code::response_code::ResponseCode;
+use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
+use rocketmq_protocol::protocol::filter::filter_api::FilterAPI;
+use rocketmq_protocol::protocol::header::extra_info_util::ExtraInfoUtil;
+use rocketmq_protocol::protocol::header::pop_message_request_header::PopMessageRequestHeader;
+use rocketmq_protocol::protocol::header::pop_message_response_header::PopMessageResponseHeader;
+use rocketmq_protocol::protocol::heartbeat::consume_type::ConsumeType;
+use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
+use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::RemotingSerializable;
+use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::RuntimeHandle;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_store::base::get_message_result::GetMessageResult;
@@ -71,6 +68,9 @@ use rocketmq_store::filter::ArcMessageFilter;
 use rocketmq_store::pop::batch_ack_msg::BatchAckMsg;
 use rocketmq_store::pop::pop_check_point::PopCheckPoint;
 use rocketmq_store::pop::AckMessage;
+use rocketmq_transport::net::channel::Channel;
+use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_transport::runtime::processor::RequestProcessor;
 use tokio::select;
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::sync::Notify;
@@ -265,7 +265,7 @@ where
             MessageModel::Clustering,
         );
 
-        if request_header.is_timeout_too_much_at(rocketmq_common::TimeUtils::current_millis() as i64) {
+        if request_header.is_timeout_too_much_at(rocketmq_runtime::common::time_utils::current_millis() as i64) {
             return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
                 ResponseCode::PollingTimeout,
                 format!("the broker[{}] pop message is timeout too much", policy.broker_ip),
@@ -1127,7 +1127,7 @@ where
                         get_message_result.add_message_inner(maped_buffer);
                     } else {
                         let mut bytes = maped_buffer.get_bytes().unwrap_or_default();
-                        let message_ext_list = message_decoder::decodes_batch(&mut bytes, true, false);
+                        let message_ext_list = MessageDecoder::decodes_batch(&mut bytes, true, false);
                         //maped_buffer.release();
                         for mut message_ext in message_ext_list {
                             let ck_info = ExtraInfoUtil::build_extra_info_with_offset(
@@ -1150,7 +1150,7 @@ where
                             message_ext.set_topic(request_header.topic.clone());
                             message_ext.set_store_size(0);
 
-                            let encode = message_decoder::encode(&message_ext, false).unwrap();
+                            let encode = MessageDecoder::encode(&message_ext, false).unwrap();
                             let tmp_result = SelectMappedBufferResult {
                                 start_offset: maped_buffer.start_offset,
                                 size: encode.len() as i32,
@@ -1476,7 +1476,7 @@ impl<MS: MessageStore> PopMessageProcessor<MS> {
             CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
             CheetahString::from_string(PopMessageProcessor::<MS>::gen_ck_unique_id(ck)),
         );
-        msg.properties_string = message_decoder::message_properties_to_string(msg.get_properties());
+        msg.properties_string = MessageDecoder::message_properties_to_string(msg.get_properties());
         msg
     }
 }
@@ -1677,18 +1677,18 @@ mod tests {
     use std::collections::HashMap;
     use std::path::PathBuf;
 
+    use crate::config::broker_config::BrokerConfig;
     use cheetah_string::CheetahString;
-    use rocketmq_common::common::broker::broker_config::BrokerConfig;
-    use rocketmq_remoting::base::response_future::ResponseFuture;
-    use rocketmq_remoting::code::request_code::RequestCode;
-    use rocketmq_remoting::code::response_code::ResponseCode;
-    use rocketmq_remoting::connection::Connection;
-    use rocketmq_remoting::net::channel::ChannelInner;
-    use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
+    use rocketmq_protocol::code::request_code::RequestCode;
+    use rocketmq_protocol::code::response_code::ResponseCode;
     use rocketmq_runtime::RuntimeContext;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
     use rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore;
     use rocketmq_store::pop::ack_msg::AckMsg;
+    use rocketmq_transport::base::response_future::ResponseFuture;
+    use rocketmq_transport::connection::Connection;
+    use rocketmq_transport::net::channel::ChannelInner;
+    use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
 
     use super::*;
     use crate::broker_runtime::BrokerRuntime;

@@ -14,9 +14,9 @@
 
 use std::sync::Arc;
 
+use crate::config::broker_config::BrokerConfig;
 use arc_swap::ArcSwap;
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
-use rocketmq_common::common::broker::broker_role::BrokerRole;
+use rocketmq_model::common::broker::broker_role::BrokerRole;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 
 /// An atomically published broker and message-store configuration generation.
@@ -117,8 +117,8 @@ mod tests {
     use std::sync::Arc;
     use std::sync::Barrier;
 
-    use rocketmq_common::common::broker::broker_config::BrokerConfig;
-    use rocketmq_common::common::broker::broker_role::BrokerRole;
+    use crate::config::broker_config::BrokerConfig;
+    use rocketmq_model::common::broker::broker_role::BrokerRole;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
 
     use super::BrokerRuntimeConfigState;

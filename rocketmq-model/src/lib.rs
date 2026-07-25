@@ -16,9 +16,20 @@
 
 pub mod allocation;
 pub mod boundary_type;
+pub mod codec;
+pub mod common;
 pub mod consistent_hash;
 pub mod lite;
 pub mod message;
 pub mod result;
+pub mod time;
 pub mod topic;
+pub mod utils;
 pub mod version;
+
+pub use common::attribute::topic_attributes as TopicAttributes;
+pub use common::message::message_accessor as MessageAccessor;
+pub use rocketmq_error::RocketMQError;
+pub use rocketmq_error::RocketMQResult;
+pub use utils::crc32_utils as CRC32Utils;
+pub use utils::message_utils as MessageUtils;

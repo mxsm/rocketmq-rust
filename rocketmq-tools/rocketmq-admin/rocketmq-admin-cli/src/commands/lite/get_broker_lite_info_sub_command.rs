@@ -15,7 +15,7 @@
 use clap::ArgGroup;
 use clap::Parser;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::protocol::body::get_broker_lite_info_response_body::GetBrokerLiteInfoResponseBody;
+use rocketmq_protocol::protocol::body::get_broker_lite_info_response_body::GetBrokerLiteInfoResponseBody;
 
 use crate::commands::CommandExecute;
 use rocketmq_admin_core::client_adapter::services::lite::BrokerLiteInfoQueryRequest;

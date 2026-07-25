@@ -22,7 +22,7 @@ use rocketmq_auth::authorization::evaluator::AuthorizationEvaluator;
 use rocketmq_auth::authorization::model::resource::Resource;
 use rocketmq_auth::authorization::strategy::stateless_authorization_strategy::StatelessAuthorizationStrategy;
 use rocketmq_auth::config::AuthConfig;
-use rocketmq_common::common::action::Action;
+use rocketmq_security_api::Action;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create configuration

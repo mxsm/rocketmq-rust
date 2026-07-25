@@ -13,10 +13,10 @@
 // limitations under the License.
 
 use clap::Parser;
-use rocketmq_common::common::mq_version::RocketMqVersion;
-use rocketmq_common::utils::util_all;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
+use rocketmq_model::common::mq_version::RocketMqVersion;
+use rocketmq_protocol::protocol::heartbeat::consume_type::ConsumeType;
+use rocketmq_runtime::common::util_all;
 
 use crate::commands::CommandExecute;
 use rocketmq_admin_core::client_adapter::services::consumer::ConsumerProgressRequest;
@@ -202,7 +202,7 @@ fn version_desc(info: &GroupConsumeInfo) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
+    use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
 
     #[test]
     fn test_consume_type_desc() {

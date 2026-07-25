@@ -18,8 +18,8 @@ use std::fmt;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_common::common::message::message_queue::MessageQueue;
+use rocketmq_model::common::message::message_ext::MessageExt;
+use rocketmq_model::common::message::message_queue::MessageQueue;
 
 use crate::base::access_channel::AccessChannel;
 

@@ -14,7 +14,7 @@
 
 use clap::Parser;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
+use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 
 use crate::commands::CommandExecute;
 use rocketmq_admin_core::client_adapter::services::consumer::ConsumerConfigQueryRequest;

@@ -404,7 +404,7 @@ mod tests {
     #[test]
     fn logging_config_serde_roundtrip_preserves_enums() {
         let config = LoggingConfig {
-            filter: "rocketmq_store=debug,rocketmq_remoting=warn".to_string(),
+            filter: "rocketmq_store=debug,rocketmq_transport=warn".to_string(),
             console: ConsoleLogConfig {
                 format: LogFormat::Pretty,
                 ..ConsoleLogConfig::default()

@@ -17,46 +17,46 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::mix_all;
-use rocketmq_common::common::mix_all::string_to_properties;
-use rocketmq_common::CRC32Utils;
+use rocketmq_model::common::mix_all;
+use rocketmq_model::common::mix_all::string_to_properties;
+use rocketmq_model::utils::crc32_utils;
 use rocketmq_model::version::RocketMqVersion;
-use rocketmq_remoting::code::request_code::RequestCode;
-use rocketmq_remoting::code::response_code::RemotingSysResponseCode;
-use rocketmq_remoting::error_response;
-use rocketmq_remoting::net::channel::Channel;
-use rocketmq_remoting::protocol::body::broker_body::broker_member_group::GetBrokerMemberGroupResponseBody;
-use rocketmq_remoting::protocol::body::broker_body::register_broker_body::RegisterBrokerBody;
-use rocketmq_remoting::protocol::body::topic::topic_list::TopicList;
-use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
-use rocketmq_remoting::protocol::header::namesrv::broker_request::BrokerHeartbeatRequestHeader;
-use rocketmq_remoting::protocol::header::namesrv::broker_request::GetBrokerMemberGroupRequestHeader;
-use rocketmq_remoting::protocol::header::namesrv::broker_request::UnRegisterBrokerRequestHeader;
-use rocketmq_remoting::protocol::header::namesrv::config_header::GetNamesrvConfigRequestHeader;
-use rocketmq_remoting::protocol::header::namesrv::kv_config_header::DeleteKVConfigRequestHeader;
-use rocketmq_remoting::protocol::header::namesrv::kv_config_header::GetKVConfigRequestHeader;
-use rocketmq_remoting::protocol::header::namesrv::kv_config_header::GetKVConfigResponseHeader;
-use rocketmq_remoting::protocol::header::namesrv::kv_config_header::GetKVListByNamespaceRequestHeader;
-use rocketmq_remoting::protocol::header::namesrv::kv_config_header::PutKVConfigRequestHeader;
-use rocketmq_remoting::protocol::header::namesrv::perm_broker_header::AddWritePermOfBrokerRequestHeader;
-use rocketmq_remoting::protocol::header::namesrv::perm_broker_header::AddWritePermOfBrokerResponseHeader;
-use rocketmq_remoting::protocol::header::namesrv::perm_broker_header::WipeWritePermOfBrokerRequestHeader;
-use rocketmq_remoting::protocol::header::namesrv::perm_broker_header::WipeWritePermOfBrokerResponseHeader;
-use rocketmq_remoting::protocol::header::namesrv::query_data_version_header::QueryDataVersionRequestHeader;
-use rocketmq_remoting::protocol::header::namesrv::query_data_version_header::QueryDataVersionResponseHeader;
-use rocketmq_remoting::protocol::header::namesrv::register_broker_header::RegisterBrokerRequestHeader;
-use rocketmq_remoting::protocol::header::namesrv::register_broker_header::RegisterBrokerResponseHeader;
-use rocketmq_remoting::protocol::header::namesrv::topic_operation_header::DeleteTopicFromNamesrvRequestHeader;
-use rocketmq_remoting::protocol::header::namesrv::topic_operation_header::GetTopicsByClusterRequestHeader;
-use rocketmq_remoting::protocol::header::namesrv::topic_operation_header::RegisterTopicRequestHeader;
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
-use rocketmq_remoting::protocol::DataVersion;
-use rocketmq_remoting::protocol::RemotingDeserializable;
-use rocketmq_remoting::protocol::RemotingSerializable;
-use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_remoting::runtime::processor::RequestProcessor;
+use rocketmq_protocol::code::request_code::RequestCode;
+use rocketmq_protocol::code::response_code::RemotingSysResponseCode;
+use rocketmq_protocol::protocol::body::broker_body::broker_member_group::GetBrokerMemberGroupResponseBody;
+use rocketmq_protocol::protocol::body::broker_body::register_broker_body::RegisterBrokerBody;
+use rocketmq_protocol::protocol::body::topic::topic_list::TopicList;
+use rocketmq_protocol::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
+use rocketmq_protocol::protocol::header::namesrv::broker_request::BrokerHeartbeatRequestHeader;
+use rocketmq_protocol::protocol::header::namesrv::broker_request::GetBrokerMemberGroupRequestHeader;
+use rocketmq_protocol::protocol::header::namesrv::broker_request::UnRegisterBrokerRequestHeader;
+use rocketmq_protocol::protocol::header::namesrv::config_header::GetNamesrvConfigRequestHeader;
+use rocketmq_protocol::protocol::header::namesrv::kv_config_header::DeleteKVConfigRequestHeader;
+use rocketmq_protocol::protocol::header::namesrv::kv_config_header::GetKVConfigRequestHeader;
+use rocketmq_protocol::protocol::header::namesrv::kv_config_header::GetKVConfigResponseHeader;
+use rocketmq_protocol::protocol::header::namesrv::kv_config_header::GetKVListByNamespaceRequestHeader;
+use rocketmq_protocol::protocol::header::namesrv::kv_config_header::PutKVConfigRequestHeader;
+use rocketmq_protocol::protocol::header::namesrv::perm_broker_header::AddWritePermOfBrokerRequestHeader;
+use rocketmq_protocol::protocol::header::namesrv::perm_broker_header::AddWritePermOfBrokerResponseHeader;
+use rocketmq_protocol::protocol::header::namesrv::perm_broker_header::WipeWritePermOfBrokerRequestHeader;
+use rocketmq_protocol::protocol::header::namesrv::perm_broker_header::WipeWritePermOfBrokerResponseHeader;
+use rocketmq_protocol::protocol::header::namesrv::query_data_version_header::QueryDataVersionRequestHeader;
+use rocketmq_protocol::protocol::header::namesrv::query_data_version_header::QueryDataVersionResponseHeader;
+use rocketmq_protocol::protocol::header::namesrv::register_broker_header::RegisterBrokerRequestHeader;
+use rocketmq_protocol::protocol::header::namesrv::register_broker_header::RegisterBrokerResponseHeader;
+use rocketmq_protocol::protocol::header::namesrv::topic_operation_header::DeleteTopicFromNamesrvRequestHeader;
+use rocketmq_protocol::protocol::header::namesrv::topic_operation_header::GetTopicsByClusterRequestHeader;
+use rocketmq_protocol::protocol::header::namesrv::topic_operation_header::RegisterTopicRequestHeader;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
+use rocketmq_protocol::protocol::DataVersion;
+use rocketmq_protocol::protocol::RemotingDeserializable;
+use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::MetadataDeadline;
+use rocketmq_transport::error_response;
+use rocketmq_transport::net::channel::Channel;
+use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_transport::runtime::processor::RequestProcessor;
 use tracing::info;
 use tracing::warn;
 
@@ -650,7 +650,7 @@ fn extract_register_broker_body_from_request(
 
 fn check_sum_crc32(request: &RemotingCommand, request_header: &RegisterBrokerRequestHeader) -> bool {
     if request_header.body_crc32 != 0 {
-        let crc_32 = CRC32Utils::crc32_bytes(request.get_body());
+        let crc_32 = crc32_utils::crc32_bytes(request.get_body());
         if crc_32 != request_header.body_crc32 {
             warn!(
                 "receive registerBroker request,crc32 not match,origin:{}, cal:{}",
@@ -719,10 +719,10 @@ fn create_namesrv_config_success_response(body: Option<Vec<u8>>) -> RemotingComm
 
 #[cfg(test)]
 mod tests {
-    use rocketmq_remoting::code::request_code::RequestCode;
-    use rocketmq_remoting::code::response_code::ResponseCode;
-    use rocketmq_remoting::protocol::header::namesrv::config_header::GetNamesrvConfigRequestHeader;
-    use rocketmq_remoting::protocol::header::namesrv::register_broker_header::RegisterBrokerRequestHeader;
+    use rocketmq_protocol::code::request_code::RequestCode;
+    use rocketmq_protocol::code::response_code::ResponseCode;
+    use rocketmq_protocol::protocol::header::namesrv::config_header::GetNamesrvConfigRequestHeader;
+    use rocketmq_protocol::protocol::header::namesrv::register_broker_header::RegisterBrokerRequestHeader;
 
     use super::*;
 
@@ -817,7 +817,7 @@ mod tests {
     #[test]
     fn check_sum_crc32_valid_crc() {
         let body = vec![/* some valid data */];
-        let crc32 = CRC32Utils::crc32(&body);
+        let crc32 = crc32_utils::crc32(&body);
         let request = RemotingCommand::new_request(0, body);
         let request_header = RegisterBrokerRequestHeader {
             body_crc32: crc32,

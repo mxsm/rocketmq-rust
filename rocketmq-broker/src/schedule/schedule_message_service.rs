@@ -29,30 +29,30 @@ use std::sync::OnceLock;
 use std::sync::Weak;
 use std::time::Duration;
 
+use crate::config::broker_config::BrokerConfig;
+use crate::config::config_manager::ConfigManager;
 use arc_swap::ArcSwap;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use parking_lot::Mutex as ParkingMutex;
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
-use rocketmq_common::common::config_manager::ConfigManager;
-use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
-use rocketmq_common::common::message::message_single;
-use rocketmq_common::common::message::MessageConst;
-use rocketmq_common::common::message::MessageTrait;
-use rocketmq_common::common::running::running_stats::RunningStats;
-use rocketmq_common::common::topic::TopicValidator;
-use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
-use rocketmq_common::FileUtils;
-use rocketmq_common::MessageAccessor::MessageAccessor;
-use rocketmq_common::MessageDecoder;
-use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_error::UnifiedServiceError;
-use rocketmq_remoting::protocol::data_version_facade::DataVersionExt;
-use rocketmq_remoting::protocol::DataVersion;
-use rocketmq_remoting::protocol::RemotingSerializable;
+use rocketmq_model::common::message::message_accessor::MessageAccessor;
+use rocketmq_model::common::message::message_ext::MessageExt;
+use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use rocketmq_model::common::message::message_single;
+use rocketmq_model::common::message::MessageConst;
+use rocketmq_model::common::message::MessageTrait;
+use rocketmq_model::common::running::running_stats::RunningStats;
+use rocketmq_model::common::topic::TopicValidator;
+use rocketmq_model::utils::serde_json_utils::SerdeJsonUtils;
+use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
+use rocketmq_protocol::protocol::data_version_facade::DataVersionExt;
+use rocketmq_protocol::protocol::DataVersion;
+use rocketmq_protocol::protocol::RemotingSerializable;
+use rocketmq_runtime::common::file_utils;
+use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::schedule::simple_scheduler::ScheduledTaskManager;
 use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::BlockingPoolPolicy;
@@ -184,7 +184,7 @@ impl ScheduleOffsetState {
                 offset_table: HashMap::new(),
                 version_change_counter: 0,
             }),
-            data_version: ArcSwap::from_pointee(rocketmq_remoting::protocol::data_version_facade::new_data_version()),
+            data_version: ArcSwap::from_pointee(rocketmq_protocol::protocol::data_version_facade::new_data_version()),
         }
     }
 
@@ -779,7 +779,7 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
         runtime_capabilities
             .blocking
             .spawn_io("broker.schedule.persist-delay-offset", move || {
-                FileUtils::string_to_file(json.as_str(), file_name.as_str())
+                file_utils::string_to_file(json.as_str(), file_name.as_str())
             })
             .await
             .map_err(schedule_message_service_shutdown_failed)?
@@ -985,9 +985,9 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
             .blocking
             .spawn_io(
                 "broker.schedule.load-delay-offset",
-                move || match FileUtils::file_to_string(file_name.as_str()) {
+                move || match file_utils::file_to_string(file_name.as_str()) {
                     Ok(content) if !content.is_empty() => (true, Some(content)),
-                    Ok(_) | Err(_) => match FileUtils::file_to_string(format!("{file_name}.bak").as_str()) {
+                    Ok(_) | Err(_) => match file_utils::file_to_string(format!("{file_name}.bak").as_str()) {
                         Ok(content) if !content.is_empty() => (true, Some(content)),
                         Ok(_) => (true, None),
                         Err(_) => (false, None),
@@ -1023,7 +1023,7 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
         runtime_capabilities
             .blocking
             .spawn_io("broker.schedule.persist-peer-delay-offset", move || {
-                FileUtils::string_to_file(encoded_snapshot.as_str(), file_name.as_str())
+                file_utils::string_to_file(encoded_snapshot.as_str(), file_name.as_str())
             })
             .await
             .map_err(schedule_message_service_shutdown_failed)?
@@ -1048,7 +1048,7 @@ impl<MS: MessageStore> ConfigManager for ScheduleMessageService<MS> {
     fn load(&self) -> bool {
         let result = {
             let file_name = self.config_file_path();
-            let result = FileUtils::file_to_string(file_name.as_str());
+            let result = file_utils::file_to_string(file_name.as_str());
             match result {
                 Ok(ref content) => {
                     if content.is_empty() {
@@ -2071,8 +2071,8 @@ mod tests {
     use std::sync::Barrier;
     use std::thread;
 
-    use rocketmq_common::common::broker::broker_config::BrokerConfig;
-    use rocketmq_remoting::protocol::DataVersion;
+    use crate::config::broker_config::BrokerConfig;
+    use rocketmq_protocol::protocol::DataVersion;
     use rocketmq_runtime::RuntimeContext;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
     use tempfile::TempDir;

@@ -27,14 +27,13 @@ keywords             = ["rocketmq", "controller", "raft", "distributed", "messag
 categories           = ["network-programming", "asynchronous"]
 
 [dependencies]
-# Internal dependencies (rocketmq-rust modules)
-rocketmq-common   = { workspace = true }
 rocketmq-error    = { workspace = true }
-rocketmq-remoting = { workspace = true }
+rocketmq-model    = { workspace = true }
+rocketmq-protocol = { workspace = true }
 rocketmq-runtime  = { workspace = true }
-rocketmq-rust     = { workspace = true }
 rocketmq-security-api = { workspace = true }
 rocketmq-observability = { workspace = true }
+rocketmq-transport = { workspace = true }
 
 # Core async runtime
 tokio      = { workspace = true }
@@ -64,6 +63,7 @@ cheetah-string = { workspace = true }
 
 clap   = { version = "4.6.1", features = ["derive"] }
 config = { workspace = true }
+dirs   = { workspace = true }
 
 
 # Concurrent data structures

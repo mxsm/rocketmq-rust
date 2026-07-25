@@ -14,9 +14,9 @@
 
 use std::net::TcpListener;
 
+use rocketmq_broker::config::broker_config::BrokerConfig;
 use rocketmq_broker::BrokerStartupError;
 use rocketmq_broker::Builder;
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_runtime::RuntimeContext;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 

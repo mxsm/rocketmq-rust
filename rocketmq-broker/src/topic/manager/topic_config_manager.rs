@@ -21,29 +21,29 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Instant;
 
+use crate::config::broker_config::BrokerConfig;
+use crate::config::config_manager::ConfigManager;
 use arc_swap::ArcSwap;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
-use rocketmq_common::common::attribute::attribute_util::AttributeUtil;
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
-use rocketmq_common::common::config::TopicConfig;
-use rocketmq_common::common::config_manager::ConfigManager;
-use rocketmq_common::common::constant::PermName;
-use rocketmq_common::common::mix_all;
-use rocketmq_common::common::pop_ack_constants::PopAckConstants;
-use rocketmq_common::common::topic::TopicValidator;
-use rocketmq_common::common::TopicSysFlag;
-use rocketmq_common::utils::file_utils;
-use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
-use rocketmq_common::TopicAttributes::TopicAttributes;
-use rocketmq_remoting::protocol::body::kv_table::KVTable;
-use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
-use rocketmq_remoting::protocol::body::topic_info_wrapper::TopicConfigSerializeWrapper;
-use rocketmq_remoting::protocol::data_version_facade::DataVersionExt;
-use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_info::TopicQueueMappingInfo;
-use rocketmq_remoting::protocol::DataVersion;
-use rocketmq_remoting::protocol::RemotingDeserializable;
-use rocketmq_remoting::protocol::RemotingSerializable;
+use rocketmq_model::common::attribute::attribute_util::AttributeUtil;
+use rocketmq_model::common::attribute::topic_attributes::TopicAttributes;
+use rocketmq_model::common::config::TopicConfig;
+use rocketmq_model::common::constant::PermName;
+use rocketmq_model::common::mix_all;
+use rocketmq_model::common::pop_ack_constants::PopAckConstants;
+use rocketmq_model::common::topic::TopicValidator;
+use rocketmq_model::common::TopicSysFlag;
+use rocketmq_model::utils::serde_json_utils::SerdeJsonUtils;
+use rocketmq_protocol::protocol::body::kv_table::KVTable;
+use rocketmq_protocol::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
+use rocketmq_protocol::protocol::body::topic_info_wrapper::TopicConfigSerializeWrapper;
+use rocketmq_protocol::protocol::data_version_facade::DataVersionExt;
+use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_info::TopicQueueMappingInfo;
+use rocketmq_protocol::protocol::DataVersion;
+use rocketmq_protocol::protocol::RemotingDeserializable;
+use rocketmq_protocol::protocol::RemotingSerializable;
+use rocketmq_runtime::common::file_utils;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use rocketmq_store::timer::timer_message_store;
 use tracing::error;
@@ -350,7 +350,7 @@ impl TopicConfigManager {
         data_version: DataVersion,
     ) -> TopicConfigAndMappingSerializeWrapper {
         TopicConfigAndMappingSerializeWrapper {
-            topic_config_serialize_wrapper: rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigSerializeWrapper {
+            topic_config_serialize_wrapper: rocketmq_protocol::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigSerializeWrapper {
                 topic_config_table,
                 data_version,
             },
@@ -1219,12 +1219,12 @@ mod tests {
     use std::sync::Arc;
     use std::sync::Barrier;
 
+    use crate::config::broker_config::BrokerConfig;
+    use crate::config::config_manager::ConfigManager;
     use cheetah_string::CheetahString;
-    use rocketmq_common::common::broker::broker_config::BrokerConfig;
-    use rocketmq_common::common::config::TopicConfig;
-    use rocketmq_common::common::config_manager::ConfigManager;
-    use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_info::TopicQueueMappingInfo;
-    use rocketmq_remoting::protocol::DataVersion;
+    use rocketmq_model::common::config::TopicConfig;
+    use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_info::TopicQueueMappingInfo;
+    use rocketmq_protocol::protocol::DataVersion;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
     use tempfile::TempDir;
 
@@ -1438,10 +1438,10 @@ mod tests {
 mod rocksdb_config_tests {
     use std::sync::Arc;
 
+    use crate::config::broker_config::BrokerConfig;
+    use crate::config::config_manager::ConfigManager;
     use cheetah_string::CheetahString;
-    use rocketmq_common::common::broker::broker_config::BrokerConfig;
-    use rocketmq_common::common::config::TopicConfig;
-    use rocketmq_common::common::config_manager::ConfigManager;
+    use rocketmq_model::common::config::TopicConfig;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
     use tempfile::TempDir;
 

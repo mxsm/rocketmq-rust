@@ -18,15 +18,15 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::config_support::name_server_address_utils::NameServerAddressUtils;
 use cheetah_string::CheetahString;
-use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_common::common::tls_config::TlsConfig;
-use rocketmq_common::utils::name_server_address_utils::NameServerAddressUtils;
-use rocketmq_common::utils::network_util::NetworkUtil;
-use rocketmq_common::TimeUtils::current_nano;
-use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
-use rocketmq_remoting::protocol::request_type::RequestType;
-use rocketmq_remoting::protocol::LanguageCode;
+use rocketmq_model::common::message::message_queue::MessageQueue;
+use rocketmq_protocol::protocol::namespace_util::NamespaceUtil;
+use rocketmq_protocol::protocol::request_type::RequestType;
+use rocketmq_protocol::protocol::LanguageCode;
+use rocketmq_runtime::common::time_utils::current_nano;
+use rocketmq_transport::config::TlsConfig;
+use rocketmq_transport::config_support::network_util::NetworkUtil;
 
 use crate::base::access_channel::AccessChannel;
 

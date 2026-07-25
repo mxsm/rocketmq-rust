@@ -27,11 +27,10 @@
 
 use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
 use rocketmq_client_rust::producer::send_result::SendResult;
-use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_common::common::message::message_single::Message;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
-use rocketmq_rust::rocketmq;
+use rocketmq_model::common::message::message_queue::MessageQueue;
+use rocketmq_model::common::message::message_single::Message;
 
 pub const PRODUCER_GROUP: &str = "producer_batch_send";
 pub const DEFAULT_NAMESRVADDR: &str = "127.0.0.1:9876";
@@ -39,7 +38,7 @@ pub const TOPIC: &str = "BatchSendTestTopic";
 pub const TAG: &str = "BatchTag";
 pub const TIMEOUT_MS: u64 = 3000;
 
-#[rocketmq::main]
+#[tokio::main]
 pub async fn main() -> RocketMQResult<()> {
     let telemetry_guard =
         rocketmq_observability::install_global(&rocketmq_observability::TelemetryBootstrapConfig::default())

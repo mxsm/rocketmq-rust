@@ -16,7 +16,7 @@ pub mod default_authorization_context_builder;
 
 use std::any::Any;
 
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
 use crate::authorization::context::default_authorization_context::DefaultAuthorizationContext;
 use crate::authorization::provider::AuthorizationResult;

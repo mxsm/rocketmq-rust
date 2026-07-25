@@ -18,7 +18,7 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::Weak;
 
-use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
+use rocketmq_protocol::protocol::body::ha_runtime_info::HARuntimeInfo;
 use tokio::sync::Notify;
 
 use crate::ha::auto_switch::auto_switch_ha_service::AutoSwitchHAService;

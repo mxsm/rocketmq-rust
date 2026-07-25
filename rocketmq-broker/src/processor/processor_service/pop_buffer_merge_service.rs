@@ -28,21 +28,21 @@ use bytes::Bytes;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use parking_lot::Mutex;
-use rocketmq_common::common::broker::broker_role::BrokerRole;
-use rocketmq_common::common::key_builder::KeyBuilder;
-use rocketmq_common::common::message::message_decoder;
-use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
-use rocketmq_common::common::message::MessageConst;
-use rocketmq_common::common::message::MessageTrait;
-#[cfg(feature = "rocksdb_store")]
-use rocketmq_common::common::mix_all;
-use rocketmq_common::common::pop_ack_constants::PopAckConstants;
-use rocketmq_common::utils::data_converter::DataConverter;
-use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_error::UnifiedServiceError;
-use rocketmq_remoting::protocol::RemotingSerializable;
+use rocketmq_model::common::broker::broker_role::BrokerRole;
+use rocketmq_model::common::key_builder::KeyBuilder;
+use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use rocketmq_model::common::message::MessageConst;
+use rocketmq_model::common::message::MessageTrait;
+#[cfg(feature = "rocksdb_store")]
+use rocketmq_model::common::mix_all;
+use rocketmq_model::common::pop_ack_constants::PopAckConstants;
+use rocketmq_model::utils::data_converter::DataConverter;
+use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
+use rocketmq_protocol::protocol::RemotingSerializable;
+use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
@@ -1010,7 +1010,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
             CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
             CheetahString::from_string(PopMessageProcessor::<MS>::gen_batch_ack_unique_id(&batch_ack_msg)),
         );
-        msg.properties_string = message_decoder::message_properties_to_string(msg.get_properties());
+        msg.properties_string = MessageDecoder::message_properties_to_string(msg.get_properties());
 
         let Ok(put_message_result) = self.context.store.put_specific(msg).await else {
             return false;
@@ -1048,7 +1048,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
             CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
             CheetahString::from_string(PopMessageProcessor::<MS>::gen_ack_unique_id(&ack_msg)),
         );
-        msg.properties_string = message_decoder::message_properties_to_string(msg.get_properties());
+        msg.properties_string = MessageDecoder::message_properties_to_string(msg.get_properties());
 
         let Ok(put_message_result) = self.context.store.put_specific(msg).await else {
             return false;

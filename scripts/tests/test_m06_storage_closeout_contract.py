@@ -99,9 +99,9 @@ class StorageCloseoutContractTests(unittest.TestCase):
         members = root["workspace"]["members"]
         policy = json.loads(POLICY_PATH.read_text(encoding="utf-8"))
 
-        self.assertEqual(32, len(members))
+        self.assertEqual(29, len(members))
         self.assertTrue(STORAGE_PACKAGES.issubset(set(members)))
-        self.assertEqual(32, policy["package_counts"]["target"])
+        self.assertEqual(29, policy["package_counts"]["target"])
         self.assertEqual(set(), set(policy["planned_packages"]) - set(members))
 
         dependencies = root["workspace"]["dependencies"]
@@ -182,7 +182,13 @@ class StorageCloseoutContractTests(unittest.TestCase):
         )
         self.assertEqual(
             (STORAGE_PACKAGES - {"rocketmq-store"})
-            | {"rocketmq-runtime", "rocketmq-error", "rocketmq-observability"},
+            | {
+                "rocketmq-model",
+                "rocketmq-protocol",
+                "rocketmq-runtime",
+                "rocketmq-error",
+                "rocketmq-observability",
+            },
             set(policy["target_dag"]["rocketmq-store"]),
         )
 
@@ -252,7 +258,10 @@ class StorageCloseoutContractTests(unittest.TestCase):
         }
         self.assertEqual(
             {
+                "rocketmq-broker/src/failover/escape_bridge.rs",
+                "rocketmq-broker/src/failover/escape_bridge_capability.rs",
                 "rocketmq-broker/src/processor/processor_service/pop_revive_service.rs",
+                "rocketmq-broker/src/processor/send_message_processor/capability.rs",
                 "rocketmq-broker/src/processor/send_message_processor.rs",
                 "rocketmq-broker/src/store_read.rs",
                 "rocketmq-broker/src/transaction/queue/default_transactional_message_service.rs",

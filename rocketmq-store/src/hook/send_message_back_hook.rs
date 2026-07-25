@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::message::message_ext::MessageExt;
+use rocketmq_model::common::message::message_ext::MessageExt;
 
 pub trait SendMessageBackHook: Send + Sync {
     fn execute_send_message_back(
@@ -27,7 +27,7 @@ pub trait SendMessageBackHook: Send + Sync {
 #[cfg(test)]
 mod tests {
     use cheetah_string::CheetahString;
-    use rocketmq_common::common::message::message_ext::MessageExt;
+    use rocketmq_model::common::message::message_ext::MessageExt;
 
     use super::*;
 

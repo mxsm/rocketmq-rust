@@ -16,13 +16,12 @@
 
 use rocketmq_client_rust::consumer::default_lite_pull_consumer::DefaultLitePullConsumer;
 use rocketmq_client_rust::consumer::message_selector::MessageSelector;
-use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
-use rocketmq_common::common::message::MessageTrait;
-use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
-use rocketmq_rust::rocketmq;
-use rocketmq_rust::wait_for_signal;
+use rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere;
+use rocketmq_model::common::message::MessageTrait;
+use rocketmq_model::common::message::message_ext::MessageExt;
+use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
+use rocketmq_runtime::wait_for_signal;
 use tracing::info;
 
 pub const CONSUMER_GROUP: &str = "consumer_lite_pull_group";
@@ -31,7 +30,7 @@ pub const TOPIC: &str = "LitePullConsumerTestTopic";
 pub const TAG_EXPRESSION: &str = "LitePullTag";
 pub const POLL_TIMEOUT_MS: u64 = 1000;
 
-#[rocketmq::main]
+#[tokio::main]
 pub async fn main() -> RocketMQResult<()> {
     let telemetry_guard =
         rocketmq_observability::install_global(&rocketmq_observability::TelemetryBootstrapConfig::default())

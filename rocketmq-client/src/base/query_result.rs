@@ -14,6 +14,6 @@
 
 //! Compatibility path for a query result containing client message values.
 
-use rocketmq_common::common::message::message_ext::MessageExt;
+use rocketmq_model::common::message::message_ext::MessageExt;
 
 pub type QueryResult = rocketmq_model::result::QueryResult<MessageExt>;

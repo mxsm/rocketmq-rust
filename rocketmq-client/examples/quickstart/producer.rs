@@ -13,9 +13,8 @@
 // limitations under the License.
 
 use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
-use rocketmq_common::common::message::message_single::Message;
 use rocketmq_error::RocketMQResult;
-use rocketmq_rust::rocketmq;
+use rocketmq_model::common::message::message_single::Message;
 
 pub const MESSAGE_COUNT: usize = 1;
 pub const PRODUCER_GROUP: &str = "please_rename_unique_group_name";
@@ -23,7 +22,7 @@ pub const DEFAULT_NAMESRVADDR: &str = "127.0.0.1:9876";
 pub const TOPIC: &str = "TopicTest";
 pub const TAG: &str = "TagA";
 
-#[rocketmq::main]
+#[tokio::main]
 pub async fn main() -> RocketMQResult<()> {
     let telemetry_guard =
         rocketmq_observability::install_global(&rocketmq_observability::TelemetryBootstrapConfig::default())

@@ -19,7 +19,7 @@ use std::sync::LazyLock;
 
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
-use rocketmq_remoting::runtime::RPCHook;
+use rocketmq_transport::runtime::RPCHook;
 use tracing::info;
 
 use crate::base::client_config::ClientConfig;

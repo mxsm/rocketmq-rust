@@ -13,9 +13,9 @@
 // limitations under the License.
 
 use clap::Parser;
-use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
+use rocketmq_model::common::topic::TopicValidator;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;

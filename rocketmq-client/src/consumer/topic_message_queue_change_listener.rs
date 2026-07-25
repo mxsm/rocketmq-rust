@@ -14,7 +14,7 @@
 
 use std::collections::HashSet;
 
-use rocketmq_common::common::message::message_queue::MessageQueue;
+use rocketmq_model::common::message::message_queue::MessageQueue;
 
 /// A trait for listening to changes in the message queues of a specific topic.
 pub trait TopicMessageQueueChangeListener: Send + Sync {

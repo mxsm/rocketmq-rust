@@ -15,8 +15,8 @@
 use super::local_file_message_store::LocalFileMessageStore;
 #[cfg(feature = "rocksdb_store")]
 use super::rocksdb_message_store::RocksDBMessageStore;
-use rocketmq_common::common::message::message_batch::MessageExtBatch;
-use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use rocketmq_model::common::message::message_batch::MessageExtBatch;
+use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 
 use crate::base::message_result::PutMessageResult;
 

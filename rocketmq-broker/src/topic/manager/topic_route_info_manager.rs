@@ -22,13 +22,13 @@ use std::time::Duration;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use parking_lot::Mutex;
-use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_common::common::mix_all;
-use rocketmq_remoting::code::response_code::ResponseCode;
-use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
-use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
+use rocketmq_model::common::message::message_queue::MessageQueue;
+use rocketmq_model::common::mix_all;
+use rocketmq_protocol::code::response_code::ResponseCode;
+use rocketmq_protocol::protocol::namespace_util::NamespaceUtil;
+use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
+use rocketmq_runtime::tokio_lock::RocketMQTokioMutex;
 use rocketmq_runtime::TaskGroup;
-use rocketmq_rust::RocketMQTokioMutex;
 use tracing::info;
 use tracing::warn;
 
@@ -384,10 +384,10 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
+    use crate::config::broker_config::BrokerConfig;
     use cheetah_string::CheetahString;
-    use rocketmq_common::common::broker::broker_config::BrokerConfig;
-    use rocketmq_common::common::message::message_queue::MessageQueue;
-    use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
+    use rocketmq_model::common::message::message_queue::MessageQueue;
+    use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
     use rocketmq_runtime::RuntimeContext;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
 

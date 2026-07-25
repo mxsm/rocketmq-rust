@@ -13,10 +13,10 @@
 // limitations under the License.
 
 use clap::Parser;
-use rocketmq_common::FileUtils::string_to_file;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_common::common::mq_version::RocketMqVersion;
 use rocketmq_error::RocketMQResult;
+use rocketmq_model::common::mq_version::RocketMqVersion;
+use rocketmq_runtime::common::file_utils::string_to_file;
+use rocketmq_runtime::common::time_utils::current_millis;
 
 use crate::commands::CommandExecute;
 use rocketmq_admin_core::client_adapter::services::consumer::ConsumerRunningInfoRequest;

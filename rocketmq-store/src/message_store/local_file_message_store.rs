@@ -43,6 +43,7 @@ use std::sync::RwLock as StdRwLock;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::config::store_runtime_config::StoreRuntimeConfig;
 use arc_swap::ArcSwap;
 use bytes::Buf;
 use bytes::Bytes;
@@ -50,36 +51,35 @@ use bytes::BytesMut;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use fs2::FileExt;
-use rocketmq_common::common::attribute::cleanup_policy::CleanupPolicy;
-use rocketmq_common::common::boundary_type::BoundaryType;
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
-use rocketmq_common::common::broker::broker_role::BrokerRole;
-use rocketmq_common::common::config::TopicConfig;
-use rocketmq_common::common::message::message_batch::MessageExtBatch;
-use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
-use rocketmq_common::common::message::MessageConst;
-use rocketmq_common::common::message::MessageTrait;
-use rocketmq_common::common::mix_all;
-use rocketmq_common::common::mix_all::is_lmq;
-use rocketmq_common::common::mix_all::is_sys_consumer_group_for_no_cold_read_limit;
-use rocketmq_common::common::mix_all::LMQ_QUEUE_ID;
-use rocketmq_common::common::mix_all::MULTI_DISPATCH_QUEUE_SPLITTER;
-use rocketmq_common::common::mix_all::RETRY_GROUP_TOPIC_PREFIX;
-use rocketmq_common::common::running::running_stats::RunningStats;
-use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
-use rocketmq_common::common::system_clock::SystemClock;
-use rocketmq_common::common::topic::TopicValidator;
-use rocketmq_common::utils::queue_type_utils::QueueTypeUtils;
-use rocketmq_common::utils::util_all;
-use rocketmq_common::CleanupPolicyUtils::get_delete_policy;
-use rocketmq_common::CleanupPolicyUtils::get_delete_policy_arc_mut;
-use rocketmq_common::FileUtils::string_to_file;
-use rocketmq_common::MessageDecoder;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_common::UtilAll::ensure_dir_ok;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
+use rocketmq_model::common::attribute::cleanup_policy::CleanupPolicy;
+use rocketmq_model::common::boundary_type::BoundaryType;
+use rocketmq_model::common::broker::broker_role::BrokerRole;
+use rocketmq_model::common::config::TopicConfig;
+use rocketmq_model::common::message::message_batch::MessageExtBatch;
+use rocketmq_model::common::message::message_ext::MessageExt;
+use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use rocketmq_model::common::message::MessageConst;
+use rocketmq_model::common::message::MessageTrait;
+use rocketmq_model::common::mix_all;
+use rocketmq_model::common::mix_all::is_lmq;
+use rocketmq_model::common::mix_all::is_sys_consumer_group_for_no_cold_read_limit;
+use rocketmq_model::common::mix_all::LMQ_QUEUE_ID;
+use rocketmq_model::common::mix_all::MULTI_DISPATCH_QUEUE_SPLITTER;
+use rocketmq_model::common::mix_all::RETRY_GROUP_TOPIC_PREFIX;
+use rocketmq_model::common::running::running_stats::RunningStats;
+use rocketmq_model::common::sys_flag::message_sys_flag::MessageSysFlag;
+use rocketmq_model::common::topic::TopicValidator;
+use rocketmq_model::utils::cleanup_policy_utils::get_delete_policy;
+use rocketmq_model::utils::cleanup_policy_utils::get_delete_policy_arc_mut;
+use rocketmq_model::utils::queue_type_utils::QueueTypeUtils;
+use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
+use rocketmq_protocol::protocol::body::ha_runtime_info::HARuntimeInfo;
+use rocketmq_runtime::common::file_utils::string_to_file;
+use rocketmq_runtime::common::system_clock::SystemClock;
+use rocketmq_runtime::common::time_utils::current_millis;
+use rocketmq_runtime::common::util_all;
+use rocketmq_runtime::common::util_all::ensure_dir_ok;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
@@ -614,7 +614,7 @@ pub struct LocalFileMessageStore {
     message_store_config: Arc<MessageStoreConfig>,
     store_runtime_state: Arc<StoreRuntimeState>,
     composition: LocalStoreComposition,
-    broker_config: Arc<BrokerConfig>,
+    broker_config: Arc<StoreRuntimeConfig>,
     put_message_hook_list: HookRegistry<dyn PutMessageHook + Send + Sync>,
     topic_config_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>>,
     commit_log: CommitLog,
@@ -732,7 +732,7 @@ impl LocalFileMessageStore {
 
     pub fn new(
         message_store_config: Arc<MessageStoreConfig>,
-        broker_config: Arc<BrokerConfig>,
+        broker_config: Arc<StoreRuntimeConfig>,
         topic_config_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>>,
         broker_stats_manager: Option<Arc<BrokerStatsManager>>,
         notify_message_arrive_in_batch: bool,
@@ -749,7 +749,7 @@ impl LocalFileMessageStore {
 
     pub fn try_new(
         message_store_config: Arc<MessageStoreConfig>,
-        broker_config: Arc<BrokerConfig>,
+        broker_config: Arc<StoreRuntimeConfig>,
         topic_config_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>>,
         broker_stats_manager: Option<Arc<BrokerStatsManager>>,
         notify_message_arrive_in_batch: bool,
@@ -6030,29 +6030,29 @@ mod tests {
     use std::time::Duration;
     use std::time::Instant;
 
+    use crate::config::store_runtime_config::StoreRuntimeConfig;
     use bytes::BufMut;
     use bytes::Bytes;
     use bytes::BytesMut;
     use cheetah_string::CheetahString;
     use dashmap::DashMap;
-    use rocketmq_common::common::attribute::cleanup_policy::CleanupPolicy;
-    use rocketmq_common::common::attribute::cq_type::CQType;
-    use rocketmq_common::common::attribute::Attribute;
-    use rocketmq_common::common::boundary_type::BoundaryType;
-    use rocketmq_common::common::broker::broker_config::BrokerConfig;
-    use rocketmq_common::common::broker::broker_role::BrokerRole;
-    use rocketmq_common::common::config::TopicConfig;
-    use rocketmq_common::common::message::message_batch::MessageExtBatch;
-    use rocketmq_common::common::message::message_ext::MessageExt;
-    use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
-    use rocketmq_common::common::message::MessageConst;
-    use rocketmq_common::common::message::MessageTrait;
-    use rocketmq_common::common::message::MessageVersion;
-    use rocketmq_common::common::mix_all;
-    use rocketmq_common::common::running::running_stats::RunningStats;
-    use rocketmq_common::common::topic::TopicValidator;
-    use rocketmq_common::CRC32Utils::crc32;
-    use rocketmq_common::TopicAttributes::TopicAttributes;
+    use rocketmq_model::common::attribute::cleanup_policy::CleanupPolicy;
+    use rocketmq_model::common::attribute::cq_type::CQType;
+    use rocketmq_model::common::attribute::topic_attributes::TopicAttributes;
+    use rocketmq_model::common::attribute::Attribute;
+    use rocketmq_model::common::boundary_type::BoundaryType;
+    use rocketmq_model::common::broker::broker_role::BrokerRole;
+    use rocketmq_model::common::config::TopicConfig;
+    use rocketmq_model::common::message::message_batch::MessageExtBatch;
+    use rocketmq_model::common::message::message_ext::MessageExt;
+    use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+    use rocketmq_model::common::message::MessageConst;
+    use rocketmq_model::common::message::MessageTrait;
+    use rocketmq_model::common::message::MessageVersion;
+    use rocketmq_model::common::mix_all;
+    use rocketmq_model::common::running::running_stats::RunningStats;
+    use rocketmq_model::common::topic::TopicValidator;
+    use rocketmq_model::utils::crc32_utils::crc32;
     #[cfg(feature = "tieredstore")]
     use rocketmq_tieredstore::fetcher::TieredGetMessageStatus;
     #[cfg(feature = "tieredstore")]
@@ -6146,13 +6146,13 @@ mod tests {
         temp_dir: &tempfile::TempDir,
         message_store_config: MessageStoreConfig,
     ) -> LocalFileMessageStore {
-        new_owned_test_store_with_broker(temp_dir, message_store_config, BrokerConfig::default())
+        new_owned_test_store_with_broker(temp_dir, message_store_config, StoreRuntimeConfig::default())
     }
 
     fn new_owned_test_store_with_broker(
         temp_dir: &tempfile::TempDir,
         mut message_store_config: MessageStoreConfig,
-        broker_config: BrokerConfig,
+        broker_config: StoreRuntimeConfig,
     ) -> LocalFileMessageStore {
         message_store_config.store_path_root_dir = temp_dir.path().to_string_lossy().to_string().into();
         message_store_config.timer_wheel_enable = false;
@@ -6172,7 +6172,7 @@ mod tests {
     fn new_configured_test_store_with_broker(
         temp_dir: &tempfile::TempDir,
         mut message_store_config: MessageStoreConfig,
-        broker_config: BrokerConfig,
+        broker_config: StoreRuntimeConfig,
     ) -> LocalFileMessageStore {
         message_store_config.store_path_root_dir = temp_dir.path().to_string_lossy().to_string().into();
         let mut store = LocalFileMessageStore::new(
@@ -6197,9 +6197,9 @@ mod tests {
         new_owned_test_store_with_broker(
             temp_dir,
             message_store_config,
-            BrokerConfig {
+            StoreRuntimeConfig {
                 enable_controller_mode: true,
-                ..BrokerConfig::default()
+                ..StoreRuntimeConfig::default()
             },
         )
     }
@@ -6232,7 +6232,7 @@ mod tests {
         };
         LocalFileMessageStore::new(
             Arc::new(message_store_config),
-            Arc::new(BrokerConfig::default()),
+            Arc::new(StoreRuntimeConfig::default()),
             Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
             None,
             false,
@@ -6266,7 +6266,7 @@ mod tests {
     fn new_owned_wiring_test_store(
         temp_dir: &tempfile::TempDir,
         mut message_store_config: MessageStoreConfig,
-        broker_config: BrokerConfig,
+        broker_config: StoreRuntimeConfig,
     ) -> LocalFileMessageStore {
         message_store_config.store_path_root_dir = temp_dir.path().to_string_lossy().to_string().into();
         LocalFileMessageStore::new(
@@ -6287,7 +6287,7 @@ mod tests {
                 timer_wheel_enable: false,
                 ..MessageStoreConfig::default()
             },
-            BrokerConfig::default(),
+            StoreRuntimeConfig::default(),
         );
 
         store
@@ -6308,9 +6308,9 @@ mod tests {
                 timer_wheel_enable: true,
                 ..MessageStoreConfig::default()
             },
-            BrokerConfig {
+            StoreRuntimeConfig {
                 duplication_enable: true,
-                ..BrokerConfig::default()
+                ..StoreRuntimeConfig::default()
             },
         );
 
@@ -6332,9 +6332,9 @@ mod tests {
                 timer_wheel_enable: false,
                 ..MessageStoreConfig::default()
             },
-            BrokerConfig {
+            StoreRuntimeConfig {
                 duplication_enable: true,
-                ..BrokerConfig::default()
+                ..StoreRuntimeConfig::default()
             },
         );
 
@@ -6355,9 +6355,9 @@ mod tests {
                 timer_wheel_enable: false,
                 ..MessageStoreConfig::default()
             },
-            BrokerConfig {
+            StoreRuntimeConfig {
                 duplication_enable: true,
-                ..BrokerConfig::default()
+                ..StoreRuntimeConfig::default()
             },
         );
         let handle = store.ha_replica_store_handle();
@@ -6382,9 +6382,9 @@ mod tests {
                 timer_wheel_enable: false,
                 ..MessageStoreConfig::default()
             },
-            BrokerConfig {
+            StoreRuntimeConfig {
                 duplication_enable: true,
-                ..BrokerConfig::default()
+                ..StoreRuntimeConfig::default()
             },
         );
         let handle = store.ha_replica_store_handle();
@@ -6999,7 +6999,7 @@ mod tests {
                 timer_wheel_enable: true,
                 ..MessageStoreConfig::default()
             },
-            BrokerConfig::default(),
+            StoreRuntimeConfig::default(),
         );
 
         assert!(store.root_dependencies_wired);
@@ -7719,7 +7719,7 @@ mod tests {
                 timer_wheel_enable: true,
                 ..MessageStoreConfig::default()
             },
-            BrokerConfig::default(),
+            StoreRuntimeConfig::default(),
         );
 
         store.init().await.expect("init store");
@@ -7884,9 +7884,9 @@ mod tests {
         let mut store = new_owned_test_store_with_broker(
             &temp_dir,
             MessageStoreConfig::default(),
-            BrokerConfig {
+            StoreRuntimeConfig {
                 duplication_enable: true,
-                ..BrokerConfig::default()
+                ..StoreRuntimeConfig::default()
             },
         );
         let checkpoint = store.store_checkpoint.as_ref().expect("checkpoint");
@@ -8143,9 +8143,9 @@ mod tests {
                 background_index_rebuild_max_retries: 1,
                 ..MessageStoreConfig::default()
             },
-            BrokerConfig {
+            StoreRuntimeConfig {
                 duplication_enable: true,
-                ..BrokerConfig::default()
+                ..StoreRuntimeConfig::default()
             },
         );
         store.set_confirm_offset(128);
@@ -8212,7 +8212,7 @@ mod tests {
                 local_file_consume_queue_recovery_parallelism: 2,
                 ..Default::default()
             },
-            BrokerConfig {
+            StoreRuntimeConfig {
                 recover_concurrently: true,
                 ..Default::default()
             },
@@ -8258,7 +8258,7 @@ mod tests {
                 timer_wheel_enable: true,
                 ..MessageStoreConfig::default()
             },
-            BrokerConfig::default(),
+            StoreRuntimeConfig::default(),
         );
 
         let timer_message_store = store
@@ -8340,7 +8340,7 @@ mod tests {
                     .into(),
                 ..MessageStoreConfig::default()
             }),
-            Arc::new(BrokerConfig::default()),
+            Arc::new(StoreRuntimeConfig::default()),
             Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
             None,
             false,

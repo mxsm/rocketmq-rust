@@ -28,6 +28,12 @@ pub enum RuntimeError {
     #[error("failed to build tokio runtime: {0}")]
     BuildRuntime(#[from] std::io::Error),
 
+    #[error("runtime I/O failed: {0}")]
+    Io(std::io::Error),
+
+    #[error("runtime configuration loading failed: {0}")]
+    Configuration(String),
+
     #[error("no current Tokio runtime is available")]
     NoCurrentRuntime,
 

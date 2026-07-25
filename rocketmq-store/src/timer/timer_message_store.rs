@@ -22,17 +22,16 @@ use std::time::Duration;
 
 use cheetah_string::CheetahString;
 use parking_lot::Mutex;
-use rocketmq_common::common::config_manager::ConfigManager;
-use rocketmq_common::common::message::message_accessor::MessageAccessor;
-use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
-use rocketmq_common::common::message::message_single;
-use rocketmq_common::common::message::MessageConst;
-use rocketmq_common::common::message::MessageTrait;
-use rocketmq_common::common::system_clock::SystemClock;
-use rocketmq_common::MessageDecoder;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_common::UtilAll::is_it_time_to_do;
+use rocketmq_model::common::message::message_accessor::MessageAccessor;
+use rocketmq_model::common::message::message_ext::MessageExt;
+use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use rocketmq_model::common::message::message_single;
+use rocketmq_model::common::message::MessageConst;
+use rocketmq_model::common::message::MessageTrait;
+use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
+use rocketmq_runtime::common::system_clock::SystemClock;
+use rocketmq_runtime::common::time_utils::current_millis;
+use rocketmq_runtime::common::util_all::is_it_time_to_do;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
@@ -1340,16 +1339,16 @@ mod tests {
     use std::path::Path;
     use std::sync::Arc;
 
+    use crate::config::store_runtime_config::StoreRuntimeConfig;
     use bytes::Bytes;
     use cheetah_string::CheetahString;
     use dashmap::DashMap;
-    use rocketmq_common::common::broker::broker_config::BrokerConfig;
-    use rocketmq_common::common::config::TopicConfig;
-    use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
-    use rocketmq_common::common::message::MessageConst;
-    use rocketmq_common::common::message::MessageTrait;
-    use rocketmq_common::MessageDecoder::message_properties_to_string;
-    use rocketmq_remoting::protocol::data_version_facade::DataVersionExt;
+    use rocketmq_model::common::config::TopicConfig;
+    use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+    use rocketmq_model::common::message::MessageConst;
+    use rocketmq_model::common::message::MessageTrait;
+    use rocketmq_protocol::common::message::message_decoder::message_properties_to_string;
+    use rocketmq_protocol::protocol::data_version_facade::DataVersionExt;
     use tempfile::tempdir;
 
     use super::build_delete_key;
@@ -1459,7 +1458,7 @@ mod tests {
     fn build_store_with_timer_and_config(
         config: Arc<MessageStoreConfig>,
     ) -> (LocalFileMessageStore, Arc<TimerMessageStore>, CheetahString) {
-        let broker_config = Arc::new(BrokerConfig::default());
+        let broker_config = Arc::new(StoreRuntimeConfig::default());
         let real_topic = CheetahString::from_static_str("phase3_topic");
         let topic_config_table = Arc::new(DashMap::new());
         topic_config_table.insert(real_topic.clone(), Arc::new(TopicConfig::default()));
@@ -1687,7 +1686,7 @@ mod tests {
         assert!(timer_message_store.load());
         let local_read_time = timer_message_store.curr_read_time_ms.load(Ordering::Relaxed);
 
-        let mut data_version = rocketmq_remoting::protocol::data_version_facade::new_data_version();
+        let mut data_version = rocketmq_protocol::protocol::data_version_facade::new_data_version();
         data_version.next_version_with(88);
         let snapshot = TimerCheckpointSnapshot::new(12_000, 34, 56, 78, data_version.clone());
 
@@ -1721,7 +1720,7 @@ mod tests {
         let deliver_time_ms = (local_read_time as u64).saturating_add(60_000);
         let master_read_time_ms = local_read_time + 120_000;
 
-        let mut data_version = rocketmq_remoting::protocol::data_version_facade::new_data_version();
+        let mut data_version = rocketmq_protocol::protocol::data_version_facade::new_data_version();
         data_version.next_version_with(99);
         let snapshot = TimerCheckpointSnapshot::new(master_read_time_ms, 0, 0, 10, data_version);
 

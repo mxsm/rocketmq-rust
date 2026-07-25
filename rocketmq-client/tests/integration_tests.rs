@@ -28,9 +28,9 @@ use std::time::Duration;
 use cheetah_string::CheetahString;
 use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
 use rocketmq_client_rust::producer::producer_impl::topic_publish_info::TopicPublishInfo;
-use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_remoting::protocol::route::route_data_view::QueueData;
-use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
+use rocketmq_model::common::message::message_queue::MessageQueue;
+use rocketmq_protocol::protocol::route::route_data_view::QueueData;
+use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 
 #[test]
 fn test_producer_creation() {
@@ -106,7 +106,7 @@ fn test_performance_baseline_concurrent_reads() {
 #[test]
 fn test_message_creation() {
     // Test: Verify basic message creation works
-    use rocketmq_common::common::message::message_single::Message;
+    use rocketmq_model::common::message::message_single::Message;
 
     let msg = Message::builder()
         .topic("test_topic")

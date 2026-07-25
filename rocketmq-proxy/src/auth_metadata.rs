@@ -24,13 +24,13 @@ use rocketmq_auth::authorization::model::environment::Environment;
 use rocketmq_auth::authorization::model::policy::Policy;
 use rocketmq_auth::authorization::model::policy_entry::PolicyEntry;
 use rocketmq_auth::authorization::model::resource::Resource;
-use rocketmq_common::common::action::Action;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::protocol::body::acl_info::AclInfo;
-use rocketmq_remoting::protocol::body::acl_info::PolicyEntryInfo;
-use rocketmq_remoting::protocol::body::acl_info::PolicyInfo;
-use rocketmq_remoting::protocol::body::user_info::UserInfo;
+use rocketmq_protocol::protocol::body::acl_info::AclInfo;
+use rocketmq_protocol::protocol::body::acl_info::PolicyEntryInfo;
+use rocketmq_protocol::protocol::body::acl_info::PolicyInfo;
+use rocketmq_protocol::protocol::body::user_info::UserInfo;
+use rocketmq_security_api::Action;
 
 pub(crate) fn user_from_info(user_info: &UserInfo) -> Option<User> {
     let username = user_info.username.as_ref()?.trim();

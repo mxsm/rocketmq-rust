@@ -16,9 +16,9 @@ use clap::Parser;
 use rocketmq_admin_core::client_adapter::services::connection::ConnectionService;
 use rocketmq_admin_core::client_adapter::services::connection::ConsumerConnectionQueryRequest;
 use rocketmq_admin_core::client_adapter::services::connection::ConsumerConnectionQueryResult;
-use rocketmq_common::common::mq_version::RocketMqVersion;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::protocol::body::consumer_connection::ConsumerConnection;
+use rocketmq_model::common::mq_version::RocketMqVersion;
+use rocketmq_protocol::protocol::body::consumer_connection::ConsumerConnection;
 
 use crate::commands::CommandExecute;
 
@@ -74,9 +74,9 @@ fn print_consumer_connection(cc: &ConsumerConnection) {
     println!();
     if let Some(consume_type) = cc.get_consume_type() {
         let consume_type_str = match consume_type {
-            rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType::ConsumeActively => "CONSUME_ACTIVELY",
-            rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType::ConsumePassively => "CONSUME_PASSIVELY",
-            rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType::ConsumePop => "CONSUME_POP",
+            rocketmq_protocol::protocol::heartbeat::consume_type::ConsumeType::ConsumeActively => "CONSUME_ACTIVELY",
+            rocketmq_protocol::protocol::heartbeat::consume_type::ConsumeType::ConsumePassively => "CONSUME_PASSIVELY",
+            rocketmq_protocol::protocol::heartbeat::consume_type::ConsumeType::ConsumePop => "CONSUME_POP",
         };
         println!("ConsumeType: {}", consume_type_str);
     }

@@ -22,11 +22,11 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::config::broker_config::BrokerConfig;
 use parking_lot::Mutex;
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_remoting::code::response_code::ResponseCode;
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::code::response_code::ResponseCode;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;

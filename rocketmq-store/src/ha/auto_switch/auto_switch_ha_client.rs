@@ -146,11 +146,11 @@ mod tests {
     use std::path::Path;
     use std::sync::Arc;
 
+    use crate::config::store_runtime_config::StoreRuntimeConfig;
     use cheetah_string::CheetahString;
     use dashmap::DashMap;
-    use rocketmq_common::common::broker::broker_config::BrokerConfig;
-    use rocketmq_common::common::config::TopicConfig;
-    use rocketmq_common::TimeUtils::current_millis;
+    use rocketmq_model::common::config::TopicConfig;
+    use rocketmq_runtime::common::time_utils::current_millis;
 
     use super::*;
     use crate::config::message_store_config::MessageStoreConfig;
@@ -158,10 +158,10 @@ mod tests {
     fn new_test_message_store(root: &Path) -> crate::message_store::local_file_message_store::LocalFileMessageStore {
         std::fs::create_dir_all(root).expect("create temp root dir");
 
-        let broker_config = BrokerConfig {
+        let broker_config = StoreRuntimeConfig {
             duplication_enable: true,
             enable_controller_mode: true,
-            ..BrokerConfig::default()
+            ..StoreRuntimeConfig::default()
         };
 
         let message_store_config = MessageStoreConfig {

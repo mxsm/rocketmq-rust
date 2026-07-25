@@ -15,8 +15,8 @@
 use std::collections::HashMap;
 
 use crate::base::query_result::QueryResult;
-use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_common::common::message::message_queue::MessageQueue;
+use rocketmq_model::common::message::message_ext::MessageExt;
+use rocketmq_model::common::message::message_queue::MessageQueue;
 
 fn unsupported_mq_admin_operation(operation: &'static str) -> rocketmq_error::RocketMQError {
     rocketmq_error::RocketMQError::illegal_argument(format!(

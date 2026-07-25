@@ -20,7 +20,7 @@ use std::sync::OnceLock;
 
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
 use crate::authorization::builder::default_authorization_context_builder::DefaultAuthorizationContextBuilder;
 use crate::authorization::builder::AuthorizationContextBuilder;
@@ -222,9 +222,9 @@ fn new_initialized_default_authorization_provider(
 #[cfg(test)]
 mod tests {
     use cheetah_string::CheetahString;
-    use rocketmq_common::common::action::Action;
-    use rocketmq_remoting::code::request_code::RequestCode;
-    use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+    use rocketmq_protocol::code::request_code::RequestCode;
+    use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+    use rocketmq_security_api::Action;
 
     use super::*;
 

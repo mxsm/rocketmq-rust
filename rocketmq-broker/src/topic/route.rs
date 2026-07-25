@@ -18,11 +18,11 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::constant::PermName;
-use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_common::common::mix_all;
-use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
-use rocketmq_remoting::rpc::client_metadata::ClientMetadata;
+use rocketmq_model::common::constant::PermName;
+use rocketmq_model::common::message::message_queue::MessageQueue;
+use rocketmq_model::common::mix_all;
+use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
+use rocketmq_transport::rpc::client_metadata::ClientMetadata;
 use tracing::warn;
 
 /// Broker-owned publish route containing only queue projection and selection state.
@@ -170,8 +170,8 @@ pub(crate) fn topic_route_to_subscribe_queues(topic: &str, route: &TopicRouteDat
 mod tests {
     use std::collections::HashMap;
 
-    use rocketmq_remoting::protocol::route::route_data_view::BrokerData;
-    use rocketmq_remoting::protocol::route::route_data_view::QueueData;
+    use rocketmq_protocol::protocol::route::route_data_view::BrokerData;
+    use rocketmq_protocol::protocol::route::route_data_view::QueueData;
 
     use super::*;
 

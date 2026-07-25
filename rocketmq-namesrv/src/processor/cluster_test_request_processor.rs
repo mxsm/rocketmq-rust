@@ -13,15 +13,15 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::FAQUrl;
-use rocketmq_remoting::code::request_code::RequestCode;
-use rocketmq_remoting::code::response_code::ResponseCode;
-use rocketmq_remoting::net::channel::Channel;
-use rocketmq_remoting::protocol::header::client_request_header::GetRouteInfoRequestHeader;
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_remoting::protocol::RemotingSerializable;
-use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_remoting::runtime::processor::RequestProcessor;
+use rocketmq_model::common::FAQUrl;
+use rocketmq_protocol::code::request_code::RequestCode;
+use rocketmq_protocol::code::response_code::ResponseCode;
+use rocketmq_protocol::protocol::header::client_request_header::GetRouteInfoRequestHeader;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::RemotingSerializable;
+use rocketmq_transport::net::channel::Channel;
+use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_transport::runtime::processor::RequestProcessor;
 use tracing::debug;
 use tracing::info;
 
@@ -140,11 +140,11 @@ mod tests {
     use crate::bootstrap::Builder;
     use crate::bootstrap::NameServerRuntimeHandle;
     use crate::NamesrvConfig;
-    use rocketmq_remoting::local::LocalRequestHarness;
-    use rocketmq_remoting::protocol::route::route_data_view::BrokerData;
-    use rocketmq_remoting::protocol::route::route_data_view::QueueData;
-    use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
-    use rocketmq_remoting::runtime::processor::RequestProcessor;
+    use rocketmq_protocol::protocol::route::route_data_view::BrokerData;
+    use rocketmq_protocol::protocol::route::route_data_view::QueueData;
+    use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
+    use rocketmq_transport::local::LocalRequestHarness;
+    use rocketmq_transport::runtime::processor::RequestProcessor;
 
     use super::route_lookup::ClusterTestLookupFuture;
 

@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::common::message::message_enum::MessageRequestMode;
 use cheetah_string::CheetahString;
+use rocketmq_model::common::message::message_enum::MessageRequestMode;
 use serde::Deserialize;
 use serde::Serialize;
 

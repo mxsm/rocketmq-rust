@@ -22,6 +22,7 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
+use crate::config::store_runtime_config::StoreRuntimeConfig;
 use arc_swap::ArcSwapOption;
 use bytes::Buf;
 use bytes::Bytes;
@@ -29,28 +30,27 @@ use bytes::BytesMut;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use parking_lot::Mutex as ParkingMutex;
-use rocketmq_common::common::attribute::cq_type::CQType;
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
-use rocketmq_common::common::broker::broker_role::BrokerRole;
-use rocketmq_common::common::config::TopicConfig;
-use rocketmq_common::common::message::message_batch::MessageExtBatch;
-use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
-use rocketmq_common::common::message::message_single::tags_string2tags_code;
-use rocketmq_common::common::message::MessageConst;
-use rocketmq_common::common::message::MessageTrait;
-use rocketmq_common::common::message::MessageVersion;
-use rocketmq_common::common::mix_all;
-use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
-use rocketmq_common::common::system_clock::SystemClock;
-use rocketmq_common::common::topic::TopicValidator;
-use rocketmq_common::utils::queue_type_utils::QueueTypeUtils;
-use rocketmq_common::utils::time_utils;
-use rocketmq_common::CRC32Utils::crc32;
-use rocketmq_common::CRC32Utils::crc32_bytes;
-use rocketmq_common::MessageDecoder::cheetah_from_utf8_lossy;
-use rocketmq_common::MessageDecoder::string_to_message_properties;
-use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQResult;
+use rocketmq_model::common::attribute::cq_type::CQType;
+use rocketmq_model::common::broker::broker_role::BrokerRole;
+use rocketmq_model::common::config::TopicConfig;
+use rocketmq_model::common::message::message_batch::MessageExtBatch;
+use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use rocketmq_model::common::message::message_single::tags_string2tags_code;
+use rocketmq_model::common::message::MessageConst;
+use rocketmq_model::common::message::MessageTrait;
+use rocketmq_model::common::message::MessageVersion;
+use rocketmq_model::common::mix_all;
+use rocketmq_model::common::sys_flag::message_sys_flag::MessageSysFlag;
+use rocketmq_model::common::topic::TopicValidator;
+use rocketmq_model::utils::crc32_utils::crc32;
+use rocketmq_model::utils::crc32_utils::crc32_bytes;
+use rocketmq_model::utils::queue_type_utils::QueueTypeUtils;
+use rocketmq_protocol::common::message::message_decoder::cheetah_from_utf8_lossy;
+use rocketmq_protocol::common::message::message_decoder::string_to_message_properties;
+use rocketmq_runtime::common::system_clock::SystemClock;
+use rocketmq_runtime::common::time_utils;
+use rocketmq_runtime::common::time_utils::current_millis;
 use tokio::time::Instant;
 use tracing::error;
 use tracing::info;
@@ -421,7 +421,7 @@ pub(crate) struct CommitLogReadHandle {
     mapped_file_queue: MappedFileQueueReadHandle,
     message_store_config: Arc<MessageStoreConfig>,
     store_runtime_state: Arc<StoreRuntimeState>,
-    broker_config: Arc<BrokerConfig>,
+    broker_config: Arc<StoreRuntimeConfig>,
     store_context: CommitLogStoreContext,
     runtime_state: Arc<CommitLogRuntimeState>,
 }
@@ -850,7 +850,7 @@ fn publish_confirm_offset(runtime_state: &CommitLogRuntimeState, store_checkpoin
 fn resolve_commit_log_confirm_offset(
     message_store_config: &MessageStoreConfig,
     broker_role: BrokerRole,
-    broker_config: &BrokerConfig,
+    broker_config: &StoreRuntimeConfig,
     store_context: &CommitLogStoreContext,
     stored_confirm_offset: i64,
     max_phy_offset: i64,
@@ -890,7 +890,7 @@ mod adapter {
         pub(super) mapped_file_queue: super::MappedFileQueue,
         pub(super) message_store_config: super::Arc<super::MessageStoreConfig>,
         pub(super) store_runtime_state: super::Arc<super::StoreRuntimeState>,
-        pub(super) broker_config: super::Arc<super::BrokerConfig>,
+        pub(super) broker_config: super::Arc<super::StoreRuntimeConfig>,
         pub(super) enabled_append_prop_crc: bool,
         pub(super) store_context: super::CommitLogStoreContext,
         pub(super) dispatcher: super::CommitLogDispatchHandle,
@@ -927,7 +927,7 @@ impl CommitLog {
     pub(crate) fn new(
         message_store_config: Arc<MessageStoreConfig>,
         store_runtime_state: Arc<StoreRuntimeState>,
-        broker_config: Arc<BrokerConfig>,
+        broker_config: Arc<StoreRuntimeConfig>,
         store_context: CommitLogStoreContext,
         dispatcher: CommitLogDispatchHandle,
         store_checkpoint: Arc<StoreCheckpoint>,
@@ -3415,6 +3415,7 @@ mod tests {
     use crate::config::message_store_config::LinuxMemoryLockMode;
     use crate::config::message_store_config::LinuxStorageProfile;
     use crate::config::message_store_config::MessageStoreConfig;
+    use crate::config::store_runtime_config::StoreRuntimeConfig;
     use crate::message_encoder::message_ext_encoder::MessageExtEncoder;
     use crate::message_store::local_file_message_store::LocalFileMessageStore;
     use bytes::BufMut;
@@ -3422,12 +3423,11 @@ mod tests {
     use bytes::BytesMut;
     use cheetah_string::CheetahString;
     use dashmap::DashMap;
-    use rocketmq_common::common::broker::broker_config::BrokerConfig;
-    use rocketmq_common::common::config::TopicConfig;
-    use rocketmq_common::common::message::MessageTrait;
-    use rocketmq_common::CRC32Utils::crc32;
-    use rocketmq_common::MessageDecoder::create_crc32;
-    use rocketmq_common::TimeUtils::current_millis;
+    use rocketmq_model::common::config::TopicConfig;
+    use rocketmq_model::common::message::MessageTrait;
+    use rocketmq_model::utils::crc32_utils::crc32;
+    use rocketmq_protocol::common::message::message_decoder::create_crc32;
+    use rocketmq_runtime::common::time_utils::current_millis;
 
     #[test]
     fn put_message_lock_stats_records_totals_and_maxes() {
@@ -3464,9 +3464,9 @@ mod tests {
         all_ack_in_sync_state_set: bool,
     ) -> LocalFileMessageStore {
         std::fs::create_dir_all(root).expect("create temp store dir");
-        let broker_config = Arc::new(BrokerConfig {
+        let broker_config = Arc::new(StoreRuntimeConfig {
             enable_controller_mode: true,
-            ..BrokerConfig::default()
+            ..StoreRuntimeConfig::default()
         });
         message_store_config.enable_controller_mode = true;
         message_store_config.broker_role = broker_role;

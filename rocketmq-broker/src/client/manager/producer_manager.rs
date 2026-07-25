@@ -17,18 +17,18 @@ use std::collections::HashSet;
 use std::sync::atomic::AtomicI32;
 use std::sync::Arc;
 
+use crate::config::broker_config::BrokerConfig;
 use arc_swap::ArcSwap;
 use arc_swap::ArcSwapOption;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_remoting::connection::ConnectionState;
-use rocketmq_remoting::net::channel::Channel;
-use rocketmq_remoting::protocol::body::producer_info::ProducerInfo;
-use rocketmq_remoting::protocol::body::producer_table_info::ProducerTableInfo;
-use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_protocol::protocol::body::producer_info::ProducerInfo;
+use rocketmq_protocol::protocol::body::producer_table_info::ProducerTableInfo;
+use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
+use rocketmq_transport::connection::ConnectionState;
+use rocketmq_transport::net::channel::Channel;
+use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
 use tracing::info;
 use tracing::warn;
 
@@ -305,8 +305,8 @@ impl ProducerManager {
     }
 
     /// Returns connected producer counts grouped by client language and version.
-    pub fn connection_count_by_client_attrs(&self) -> Vec<(rocketmq_remoting::protocol::LanguageCode, i32, i64)> {
-        let mut counts: HashMap<(rocketmq_remoting::protocol::LanguageCode, i32), i64> = HashMap::new();
+    pub fn connection_count_by_client_attrs(&self) -> Vec<(rocketmq_protocol::protocol::LanguageCode, i32, i64)> {
+        let mut counts: HashMap<(rocketmq_protocol::protocol::LanguageCode, i32), i64> = HashMap::new();
         for group_entry in self.group_channel_table.iter() {
             for channel_entry in group_entry.value().iter() {
                 let client = channel_entry.value();
@@ -821,10 +821,10 @@ mod tests {
     use std::sync::Arc;
 
     use parking_lot::Mutex;
-    use rocketmq_remoting::base::response_future::ResponseFuture;
-    use rocketmq_remoting::connection::Connection;
-    use rocketmq_remoting::net::channel::ChannelInner;
-    use rocketmq_remoting::protocol::LanguageCode;
+    use rocketmq_protocol::protocol::LanguageCode;
+    use rocketmq_transport::base::response_future::ResponseFuture;
+    use rocketmq_transport::connection::Connection;
+    use rocketmq_transport::net::channel::ChannelInner;
     use tokio::net::TcpStream;
 
     use super::*;

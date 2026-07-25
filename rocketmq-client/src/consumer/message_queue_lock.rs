@@ -15,7 +15,7 @@
 use std::sync::Arc;
 
 use dashmap::DashMap;
-use rocketmq_common::common::message::message_queue::MessageQueue;
+use rocketmq_model::common::message::message_queue::MessageQueue;
 use tokio::sync::Mutex;
 
 type LockObject = Arc<Mutex<()>>;

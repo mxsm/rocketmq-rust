@@ -34,13 +34,11 @@ observability-metrics = ["rocketmq-observability/otel-metrics"]
 otlp-traces = ["observability", "rocketmq-observability/otlp-traces"]
 
 [dependencies]
-rocketmq-rust            = { workspace = true }
-rocketmq-common          = { workspace = true }
 rocketmq-model           = { workspace = true }
-rocketmq-remoting        = { workspace = true }
 rocketmq-protocol        = { workspace = true }
 rocketmq-runtime         = { workspace = true }
 rocketmq-security-api    = { workspace = true }
+rocketmq-transport       = { workspace = true }
 rocketmq-error.workspace = true
 rocketmq-auth.workspace  = true
 rocketmq-observability   = { workspace = true }

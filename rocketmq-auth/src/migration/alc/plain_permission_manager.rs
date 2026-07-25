@@ -19,10 +19,10 @@ use std::io::Read;
 use std::path::Path;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::mix_all::ACL_CONF_TOOLS_FILE;
-use rocketmq_common::utils::env_utils::EnvUtils;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
+use rocketmq_model::common::mix_all::ACL_CONF_TOOLS_FILE;
+use rocketmq_model::utils::env_utils::EnvUtils;
 use serde_yaml;
 
 use crate::migration::alc::acl_config::AclConfig;

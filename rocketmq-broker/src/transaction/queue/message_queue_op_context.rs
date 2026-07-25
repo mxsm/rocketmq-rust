@@ -6,7 +6,7 @@ use std::sync::Arc;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_error::UnifiedServiceError;
-use rocketmq_remoting::code::response_code::ResponseCode;
+use rocketmq_protocol::code::response_code::ResponseCode;
 use tokio::sync::mpsc;
 use tokio::time;
 

@@ -131,11 +131,11 @@ for term in "${REQUIRED_ROOT_TERMS[@]}"; do
 done
 
 REQUIRED_SHARED_PATHS=(
-  "rocketmq"
-  "rocketmq-common"
+  "rocketmq-model"
+  "rocketmq-protocol"
   "rocketmq-runtime"
   "rocketmq-client"
-  "rocketmq-remoting"
+  "rocketmq-transport"
   "rocketmq-macros"
   "rocketmq-error"
   "rocketmq-observability"

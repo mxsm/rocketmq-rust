@@ -164,7 +164,8 @@ impl ExportMetadataSubCommand {
             }
         };
 
-        rocketmq_common::FileUtils::string_to_file(&json_content, &export_path)?;
+        rocketmq_runtime::common::file_utils::string_to_file(&json_content, &export_path)
+            .map_err(crate::runtime_to_rocketmq_error)?;
         println!("export {} success", export_path);
 
         Ok(())

@@ -16,7 +16,7 @@
 
 use std::fmt;
 
-use rocketmq_common::common::action::Action;
+use rocketmq_security_api::Action;
 use serde::Deserialize;
 use serde::Serialize;
 

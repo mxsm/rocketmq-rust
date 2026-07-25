@@ -15,8 +15,8 @@
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::statistics::state_getter::StateGetter;
-use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
+use rocketmq_observability::statistics::state_getter::StateGetter;
+use rocketmq_protocol::protocol::namespace_util::NamespaceUtil;
 
 use crate::client::manager::consumer_manager::ConsumerManager;
 use crate::client::manager::producer_manager::ProducerManager;

@@ -69,7 +69,7 @@ fn legacy_generated_client_and_session_registry_keep_type_identity() {
     accept_legacy_client(canonical_client);
 
     fn accept_legacy_registry(_: rocketmq_proxy::ClientSessionRegistry) {}
-    let canonical_registry: rocketmq_proxy_core::ClientSessionRegistry<rocketmq_remoting::net::channel::Channel> =
+    let canonical_registry: rocketmq_proxy_core::ClientSessionRegistry<rocketmq_transport::net::channel::Channel> =
         Default::default();
     accept_legacy_registry(canonical_registry);
 }
@@ -83,7 +83,7 @@ fn legacy_cluster_paths_and_rpc_hook_constructors_keep_type_identity() {
     let canonical_client = rocketmq_proxy_cluster::RocketmqClusterClient::new(Default::default());
     let _: rocketmq_proxy::RocketmqClusterClient = canonical_client;
 
-    type RpcHook = dyn rocketmq_remoting::runtime::RPCHook;
+    type RpcHook = dyn rocketmq_transport::runtime::RPCHook;
     let _: fn(rocketmq_proxy::ClusterConfig, Option<std::sync::Arc<RpcHook>>) -> rocketmq_proxy::RocketmqClusterClient =
         rocketmq_proxy::RocketmqClusterClient::with_rpc_hook;
     let _: fn(

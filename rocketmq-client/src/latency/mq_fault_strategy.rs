@@ -17,7 +17,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::message::message_queue::MessageQueue;
+use rocketmq_model::common::message::message_queue::MessageQueue;
 
 use crate::base::client_config::ClientConfig;
 use crate::latency::latency_fault_tolerance::LatencyFaultTolerance;

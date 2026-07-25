@@ -133,11 +133,11 @@ cargo clippy --all-targets --all-features -- -D warnings
 | Changed area | Run from | Required final validation | Additional validation or scope |
 |---|---|---|---|
 | Root workspace Rust crates and `rocketmq-dashboard/rocketmq-dashboard-common/` | Repository root | Root workspace Rust profile plus applicable focused tests for behavior changes | Apply every matching specialized gate below |
-| `rocketmq-example/` | `rocketmq-example/` | Follow `rocketmq-example/AGENTS.md` | Revalidate when any repository path dependency in its `Cargo.toml` changes, especially `rocketmq`, client, common, remoting, error, observability, or admin-core |
+| `rocketmq-example/` | `rocketmq-example/` | Follow `rocketmq-example/AGENTS.md` | Revalidate when any repository path dependency in its `Cargo.toml` changes, especially client, model, protocol, transport, runtime, error, observability, or admin-core |
 | `rocketmq-dashboard/rocketmq-dashboard-gpui/` | Its project root | Follow its `AGENTS.md` | Revalidate for `rocketmq-dashboard-common/` or shared dashboard behavior changes |
 | `rocketmq-dashboard/rocketmq-dashboard-tauri/` frontend | Its project root | Follow its `AGENTS.md`; CI uses `npm ci` and `npm run build` | Include shared frontend config, shell behavior, and package metadata changes |
 | `rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/` | Its Cargo root | Follow its `AGENTS.md` | Revalidate when a root path dependency used by the backend changes |
-| `rocketmq-dashboard/rocketmq-dashboard-web/backend/` | Its Cargo root | Follow its `AGENTS.md` | Include dashboard-common, admin-core, client/common/remoting/error, and API contract changes |
+| `rocketmq-dashboard/rocketmq-dashboard-web/backend/` | Its Cargo root | Follow its `AGENTS.md` | Include dashboard-common, admin-core, client/model/protocol/transport/error, and API contract changes |
 | `rocketmq-dashboard/rocketmq-dashboard-web/frontend/` | Its project root | Follow its `AGENTS.md`; CI uses `npm ci` and `npm run build` | Include API contract, routing, shared UI, and package metadata changes |
 | `rocketmq-website/` | Its project root | Follow `rocketmq-website/AGENTS.md`; CI uses `npm ci` and `npm run build` | Include Docusaurus config, navigation, generated-doc commands, and package metadata changes |
 | `AGENTS.md`, `**/AGENTS.md`, `**/Cargo.toml`, `**/package.json`, `.github/workflows/**` | Repository root | AGENTS routing drift control below plus `git diff --check` | This row is additive; also run the owning project profile when build configuration or behavior changes |
@@ -222,20 +222,20 @@ stdio writes protocol frames only to stdout; and sensitive output remains saniti
 Examples:
 
 ```bash
-cargo test -p rocketmq-common
+cargo test -p rocketmq-model
 cargo test -p rocketmq-client-rust --lib
-cargo test -p rocketmq-remoting some_test_name
+cargo test -p rocketmq-transport some_test_name
 ```
 
 ## Shared code and cross-project validation
 
 If a shared crate changes, inspect standalone `Cargo.toml` path dependencies and validate every affected consumer. Common shared paths include:
 
-- `rocketmq`
-- `rocketmq-common`
+- `rocketmq-model`
+- `rocketmq-protocol`
 - `rocketmq-runtime`
 - `rocketmq-client`
-- `rocketmq-remoting`
+- `rocketmq-transport`
 - `rocketmq-macros`
 - `rocketmq-error`
 - `rocketmq-observability`

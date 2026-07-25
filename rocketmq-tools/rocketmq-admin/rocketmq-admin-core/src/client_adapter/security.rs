@@ -48,7 +48,7 @@ fn admin_acl_rpc_hook(
 
 pub(crate) fn rpc_hook_from_credentials(
     credentials: &AdminCredentials,
-) -> std::sync::Arc<dyn rocketmq_client_rust::admin_adapter_compat::remoting::runtime::RPCHook> {
+) -> std::sync::Arc<dyn rocketmq_transport::runtime::RPCHook> {
     std::sync::Arc::new(admin_acl_rpc_hook(
         credentials.access_key(),
         credentials.secret_key(),

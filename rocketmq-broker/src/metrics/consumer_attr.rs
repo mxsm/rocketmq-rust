@@ -16,8 +16,8 @@ use std::fmt::Display;
 use std::hash::Hash;
 use std::hash::Hasher;
 
-use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
-use rocketmq_remoting::protocol::LanguageCode;
+use rocketmq_protocol::protocol::heartbeat::consume_type::ConsumeType;
+use rocketmq_protocol::protocol::LanguageCode;
 use serde::Deserialize;
 use serde::Serialize;
 

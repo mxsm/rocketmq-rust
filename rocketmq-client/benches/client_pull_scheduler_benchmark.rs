@@ -32,7 +32,7 @@ use rocketmq_client_rust::consumer::consumer_impl::pull_message_service::PullMes
 use rocketmq_client_rust::consumer::consumer_impl::pull_message_service::PullMessageServiceShardSnapshot;
 use rocketmq_client_rust::consumer::consumer_impl::pull_request::PullRequest;
 use rocketmq_client_rust::factory::mq_client_instance::MQClientInstance;
-use rocketmq_common::common::message::message_queue::MessageQueue;
+use rocketmq_model::common::message::message_queue::MessageQueue;
 use serde::Serialize;
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc;

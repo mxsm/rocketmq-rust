@@ -204,7 +204,7 @@ fn is_mapped_file_matched_recover(
     mapped_file: &Arc<DefaultMappedFile>,
     store_checkpoint: &StoreCheckpoint,
 ) -> bool {
-    use rocketmq_common::UtilAll::time_millis_to_human_string;
+    use rocketmq_runtime::common::util_all::time_millis_to_human_string;
 
     let Some(store_timestamp) = rocketmq_store_local::commit_log::header::probe_store_timestamp(|offset, len| {
         mapped_file.get_bytes(offset, len)

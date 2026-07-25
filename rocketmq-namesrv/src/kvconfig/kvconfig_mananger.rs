@@ -18,11 +18,11 @@ use std::time::Duration;
 use std::time::Instant;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::FileUtils;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::protocol::body::kv_table::KVTable;
-use rocketmq_remoting::protocol::RemotingDeserializable;
-use rocketmq_remoting::protocol::RemotingSerializable;
+use rocketmq_protocol::protocol::body::kv_table::KVTable;
+use rocketmq_protocol::protocol::RemotingDeserializable;
+use rocketmq_protocol::protocol::RemotingSerializable;
+use rocketmq_runtime::common::file_utils;
 use rocketmq_runtime::MetadataDeadline;
 use rocketmq_runtime::MetadataIoActor;
 use rocketmq_runtime::MetadataIoError;
@@ -138,7 +138,7 @@ impl KVConfigManager {
         let namesrv_config = self.name_server_runtime_inner.name_server_config();
         let config_path = namesrv_config.kv_config_path.as_str();
 
-        let content = match FileUtils::file_to_string(config_path) {
+        let content = match file_utils::file_to_string(config_path) {
             Ok(content) if !content.is_empty() => content,
             Ok(_) => {
                 debug!("KV config file is empty, skipping load");
@@ -219,14 +219,14 @@ impl KVConfigManager {
                 metadata_io
                     .submit_next_durable("namesrv.kv-config", &config_path, content.into_bytes(), deadline)
                     .await
-                    .map_err(FileUtils::metadata_io_error)?;
+                    .map_err(crate::runtime_to_rocketmq_error)?;
             }
-            Some(Err(error)) => return Err(FileUtils::metadata_io_error(error.clone())),
+            Some(Err(error)) => return Err(crate::runtime_to_rocketmq_error(error.clone())),
             None => {
                 // Legacy builders without ServiceContext retain a synchronous
                 // compatibility path. Production builders always install the
                 // actor above.
-                FileUtils::string_to_file(content.as_str(), &config_path)?;
+                file_utils::string_to_file(content.as_str(), &config_path).map_err(crate::runtime_to_rocketmq_error)?;
             }
         }
 

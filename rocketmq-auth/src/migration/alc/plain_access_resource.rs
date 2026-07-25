@@ -15,8 +15,8 @@ use std::collections::HashMap;
 use std::fmt;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::key_builder::KeyBuilder;
-use rocketmq_common::common::mix_all;
+use rocketmq_model::common::key_builder::KeyBuilder;
+use rocketmq_model::common::mix_all;
 
 #[derive(Clone, Default)]
 pub struct PlainAccessResource {

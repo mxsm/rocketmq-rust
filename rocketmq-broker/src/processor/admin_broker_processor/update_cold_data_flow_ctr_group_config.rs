@@ -15,12 +15,12 @@
 use std::sync::Arc;
 
 use crate::coldctr::cold_data_cg_ctr_service::ColdDataCgCtrService;
-use rocketmq_common::common::mix_all;
-use rocketmq_remoting::code::request_code::RequestCode;
-use rocketmq_remoting::code::response_code::ResponseCode;
-use rocketmq_remoting::net::channel::Channel;
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_model::common::mix_all;
+use rocketmq_protocol::code::request_code::RequestCode;
+use rocketmq_protocol::code::response_code::ResponseCode;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_transport::net::channel::Channel;
+use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
 
 #[derive(Clone)]
 pub struct UpdateColdDataFlowCtrGroupConfigRequestHandler {
@@ -127,14 +127,14 @@ mod tests {
     use std::sync::Arc;
     use std::time::SystemTime;
 
-    use rocketmq_common::common::broker::broker_config::BrokerConfig;
-    use rocketmq_remoting::base::response_future::ResponseFuture;
-    use rocketmq_remoting::code::response_code::ResponseCode;
-    use rocketmq_remoting::connection::Connection;
-    use rocketmq_remoting::net::channel::ChannelInner;
-    use rocketmq_remoting::protocol::header::empty_header::EmptyHeader;
-    use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
+    use crate::config::broker_config::BrokerConfig;
+    use rocketmq_protocol::code::response_code::ResponseCode;
+    use rocketmq_protocol::protocol::header::empty_header::EmptyHeader;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
+    use rocketmq_transport::base::response_future::ResponseFuture;
+    use rocketmq_transport::connection::Connection;
+    use rocketmq_transport::net::channel::ChannelInner;
+    use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
 
     use super::*;
     use crate::broker_runtime::BrokerRuntime;

@@ -31,18 +31,18 @@ use std::sync::Arc;
 use bytes::Bytes;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
-use rocketmq_common::common::broker::broker_config::BrokerConfig as RuntimeBrokerConfig;
-use rocketmq_common::common::broker::broker_role::BrokerRole;
-use rocketmq_common::common::config::TopicConfig;
-use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
-use rocketmq_common::common::message::MessageConst;
-use rocketmq_common::common::message::MessageTrait;
+use rocketmq_model::common::broker::broker_role::BrokerRole;
+use rocketmq_model::common::config::TopicConfig;
+use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use rocketmq_model::common::message::MessageConst;
+use rocketmq_model::common::message::MessageTrait;
 use rocketmq_store::base::message_status_enum::GetMessageStatus;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::base::store_enum::StoreType;
 use rocketmq_store::config::flush_disk_type::FlushDiskType;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
+use rocketmq_store::config::store_runtime_config::StoreRuntimeConfig as RuntimeBrokerConfig;
 use rocketmq_store::log_file::commit_log_recovery::RecoveryContext;
 use rocketmq_store::log_file::commit_log_recovery::RecoveryStatistics;
 use rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore;
@@ -57,7 +57,7 @@ static FIRST_RECOVERY_BODY: [u8; 120] = [0x41; 120];
 fn new_test_store(temp_dir: &TempDir, mut message_store_config: MessageStoreConfig) -> LocalFileMessageStore {
     message_store_config.store_path_root_dir = temp_dir.path().to_string_lossy().to_string().into();
     message_store_config.timer_wheel_enable = false;
-    let broker_config = Arc::new(BrokerConfig::default());
+    let broker_config = Arc::new(StoreRuntimeConfig::default());
     let topic_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>> = Arc::new(DashMap::new());
 
     let mut store = LocalFileMessageStore::new(Arc::new(message_store_config), broker_config, topic_table, None, false);
@@ -73,9 +73,9 @@ thread_local! {
     };
 }
 
-struct BrokerConfig;
+struct StoreRuntimeConfig;
 
-impl BrokerConfig {
+impl StoreRuntimeConfig {
     fn default() -> RuntimeBrokerConfig {
         NEXT_BROKER_CONFIG.with(|slot| slot.borrow_mut().take().unwrap_or_default())
     }
@@ -604,6 +604,7 @@ async fn collect_restart_snapshot(store_type: StoreType, topic: &CheetahString) 
     let key = CheetahString::from_static_str("phase6-store-parity-key");
     let mut config = phase6_store_config();
     config.store_type = store_type;
+    config.rocksdb_cq_double_write_enable = store_type == StoreType::RocksDB;
 
     let mut writer = new_test_store(&temp_dir, config.clone());
     writer.init().await.expect("init writer");
@@ -845,13 +846,13 @@ async fn load_clears_stale_consume_queue_when_commitlog_is_missing() {
 }
 
 #[tokio::test]
-async fn file_store_vs_rocksdb_behavior_parity_after_restart() {
+async fn local_file_and_rocksdb_double_write_compatibility_match_after_restart() {
     let topic = CheetahString::from_static_str("phase6-store-parity-topic");
 
     let local_snapshot = collect_restart_snapshot(StoreType::LocalFile, &topic).await;
-    let rocksdb_snapshot = collect_restart_snapshot(StoreType::RocksDB, &topic).await;
+    let rocksdb_compat_snapshot = collect_restart_snapshot(StoreType::RocksDB, &topic).await;
 
-    assert_eq!(local_snapshot, rocksdb_snapshot);
+    assert_eq!(local_snapshot, rocksdb_compat_snapshot);
     assert_eq!(local_snapshot.get_status, Some(GetMessageStatus::Found));
     assert_eq!(local_snapshot.get_message_count, 2);
     assert_eq!(local_snapshot.query_message_count, 2);

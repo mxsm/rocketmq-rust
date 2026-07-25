@@ -14,7 +14,7 @@
 
 //! Stable views for Client SDK errors returned by command services.
 
-use rocketmq_client_rust::admin_adapter_compat::error::RocketMQError;
+use rocketmq_error::RocketMQError;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -54,7 +54,7 @@ pub fn stable_error_message(error: &RocketMQError) -> String {
 #[cfg(test)]
 mod tests {
     use super::AdminErrorView;
-    use rocketmq_client_rust::admin_adapter_compat::error::RocketMQError;
+    use rocketmq_error::RocketMQError;
 
     #[test]
     fn admin_error_view_uses_stable_code_and_redacted_context() {

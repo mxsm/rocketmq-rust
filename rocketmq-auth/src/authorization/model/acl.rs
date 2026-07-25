@@ -141,9 +141,9 @@ impl fmt::Display for Acl {
 
 #[cfg(test)]
 mod tests {
-    use rocketmq_common::common::action::Action;
-    use rocketmq_common::common::resource::resource_pattern::ResourcePattern;
-    use rocketmq_common::common::resource::resource_type::ResourceType;
+    use rocketmq_security_api::Action;
+    use rocketmq_security_api::ResourcePattern;
+    use rocketmq_security_api::ResourceType;
 
     use super::*;
     use crate::authentication::model::user::User;

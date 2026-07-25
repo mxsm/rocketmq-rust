@@ -13,9 +13,9 @@
 // limitations under the License.
 
 use clap::Parser;
-use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
+use rocketmq_model::common::message::message_ext::MessageExt;
 
 use crate::commands::CommandExecute;
 use rocketmq_admin_core::client_adapter::services::message::MessageService;

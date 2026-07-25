@@ -2,11 +2,11 @@
 
 use cheetah_string::CheetahString;
 use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_client_rust::admin_adapter_compat::remoting::protocol::subscription::broker_stats_data::BrokerStatsData;
-use rocketmq_common::common::mix_all;
-use rocketmq_common::common::mix_all::DLQ_GROUP_TOPIC_PREFIX;
-use rocketmq_common::common::mix_all::RETRY_GROUP_TOPIC_PREFIX;
-use rocketmq_common::common::stats::Stats;
+use rocketmq_model::common::mix_all;
+use rocketmq_model::common::mix_all::DLQ_GROUP_TOPIC_PREFIX;
+use rocketmq_model::common::mix_all::RETRY_GROUP_TOPIC_PREFIX;
+use rocketmq_observability::stats::Stats;
+use rocketmq_protocol::protocol::subscription::broker_stats_data::BrokerStatsData;
 use serde::Deserialize;
 use serde::Serialize;
 

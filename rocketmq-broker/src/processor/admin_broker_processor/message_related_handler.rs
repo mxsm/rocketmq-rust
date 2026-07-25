@@ -13,32 +13,32 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
-use rocketmq_common::common::message::MessageConst;
-use rocketmq_common::common::message::MessageTrait;
-use rocketmq_common::MessageAccessor::MessageAccessor;
-use rocketmq_common::MessageDecoder;
 use rocketmq_filter::utils::bits_array::BitsArray;
-use rocketmq_remoting::code::request_code::RequestCode;
-use rocketmq_remoting::code::response_code::ResponseCode;
-use rocketmq_remoting::net::channel::Channel;
-use rocketmq_remoting::protocol::body::consume_queue_data::ConsumeQueueData;
-use rocketmq_remoting::protocol::body::query_consume_queue_response_body::QueryConsumeQueueResponseBody;
-use rocketmq_remoting::protocol::header::message_operation_header::TopicRequestHeaderTrait;
-use rocketmq_remoting::protocol::header::query_consume_queue_request_header::QueryConsumeQueueRequestHeader;
-use rocketmq_remoting::protocol::header::resume_check_half_message_request_header::ResumeCheckHalfMessageRequestHeader;
-use rocketmq_remoting::protocol::header::search_offset_request_header::SearchOffsetRequestHeader;
-use rocketmq_remoting::protocol::header::search_offset_response_header::SearchOffsetResponseHeader;
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_context::TopicQueueMappingContext;
-use rocketmq_remoting::protocol::RemotingSerializable;
-use rocketmq_remoting::rpc::rpc_client::RpcClient;
-use rocketmq_remoting::rpc::rpc_request::RpcRequest;
-use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_model::common::message::message_accessor::MessageAccessor;
+use rocketmq_model::common::message::message_ext::MessageExt;
+use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use rocketmq_model::common::message::MessageConst;
+use rocketmq_model::common::message::MessageTrait;
+use rocketmq_protocol::code::request_code::RequestCode;
+use rocketmq_protocol::code::response_code::ResponseCode;
+use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
+use rocketmq_protocol::protocol::body::consume_queue_data::ConsumeQueueData;
+use rocketmq_protocol::protocol::body::query_consume_queue_response_body::QueryConsumeQueueResponseBody;
+use rocketmq_protocol::protocol::header::message_operation_header::TopicRequestHeaderTrait;
+use rocketmq_protocol::protocol::header::query_consume_queue_request_header::QueryConsumeQueueRequestHeader;
+use rocketmq_protocol::protocol::header::resume_check_half_message_request_header::ResumeCheckHalfMessageRequestHeader;
+use rocketmq_protocol::protocol::header::search_offset_request_header::SearchOffsetRequestHeader;
+use rocketmq_protocol::protocol::header::search_offset_response_header::SearchOffsetResponseHeader;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_context::TopicQueueMappingContext;
+use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::filter::MessageFilter;
+use rocketmq_transport::net::channel::Channel;
+use rocketmq_transport::rpc::rpc_client::RpcClient;
+use rocketmq_transport::rpc::rpc_request::RpcRequest;
+use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
 use serde::Serialize;
 use std::time::Duration;
 
@@ -501,34 +501,34 @@ mod tests {
     use std::sync::Arc;
     use std::time::SystemTime;
 
+    use crate::config::broker_config::BrokerConfig;
     use bytes::Bytes;
     use cheetah_string::CheetahString;
-    use rocketmq_common::common::broker::broker_config::BrokerConfig;
-    use rocketmq_common::common::config::TopicConfig;
-    use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
-    use rocketmq_common::common::message::MessageConst;
-    use rocketmq_common::common::message::MessageTrait;
     use rocketmq_error::ErrorKind;
-    use rocketmq_remoting::base::response_future::ResponseFuture;
-    use rocketmq_remoting::code::request_code::RequestCode;
-    use rocketmq_remoting::code::response_code::ResponseCode;
-    use rocketmq_remoting::connection::Connection;
-    use rocketmq_remoting::net::channel::Channel;
-    use rocketmq_remoting::net::channel::ChannelInner;
-    use rocketmq_remoting::protocol::body::query_consume_queue_response_body::QueryConsumeQueueResponseBody;
-    use rocketmq_remoting::protocol::header::empty_header::EmptyHeader;
-    use rocketmq_remoting::protocol::header::query_consume_queue_request_header::QueryConsumeQueueRequestHeader;
-    use rocketmq_remoting::protocol::header::resume_check_half_message_request_header::ResumeCheckHalfMessageRequestHeader;
-    use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
-    use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
-    use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
-    use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-    use rocketmq_remoting::protocol::LanguageCode;
-    use rocketmq_remoting::protocol::RemotingDeserializable;
-    use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
+    use rocketmq_model::common::config::TopicConfig;
+    use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+    use rocketmq_model::common::message::MessageConst;
+    use rocketmq_model::common::message::MessageTrait;
+    use rocketmq_protocol::code::request_code::RequestCode;
+    use rocketmq_protocol::code::response_code::ResponseCode;
+    use rocketmq_protocol::protocol::body::query_consume_queue_response_body::QueryConsumeQueueResponseBody;
+    use rocketmq_protocol::protocol::header::empty_header::EmptyHeader;
+    use rocketmq_protocol::protocol::header::query_consume_queue_request_header::QueryConsumeQueueRequestHeader;
+    use rocketmq_protocol::protocol::header::resume_check_half_message_request_header::ResumeCheckHalfMessageRequestHeader;
+    use rocketmq_protocol::protocol::heartbeat::consume_type::ConsumeType;
+    use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
+    use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
+    use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+    use rocketmq_protocol::protocol::LanguageCode;
+    use rocketmq_protocol::protocol::RemotingDeserializable;
     use rocketmq_store::base::dispatch_request::DispatchRequest;
     use rocketmq_store::base::message_store::MessageStore;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
+    use rocketmq_transport::base::response_future::ResponseFuture;
+    use rocketmq_transport::connection::Connection;
+    use rocketmq_transport::net::channel::Channel;
+    use rocketmq_transport::net::channel::ChannelInner;
+    use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
 
     use super::cq_ext_unit_response_serialize_error;
     use super::MessageRelatedHandler;
@@ -665,7 +665,7 @@ mod tests {
             client_channel_info,
             ConsumeType::ConsumePassively,
             MessageModel::Clustering,
-            rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere::ConsumeFromLastOffset,
+            rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere::ConsumeFromLastOffset,
             std::collections::HashSet::from([SubscriptionData {
                 topic: CheetahString::from_static_str("topic-a"),
                 sub_string: CheetahString::from_static_str("*"),
@@ -751,7 +751,7 @@ mod tests {
                 0,
                 1,
                 60_000,
-                rocketmq_common::TimeUtils::current_millis() as u64,
+                rocketmq_runtime::common::time_utils::current_millis() as u64,
                 0,
                 1,
                 admin.broker_config().broker_name().clone(),

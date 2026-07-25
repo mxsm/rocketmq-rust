@@ -18,18 +18,18 @@ use bytes::Bytes;
 use cheetah_string::CheetahString;
 use futures::future::BoxFuture;
 use futures::FutureExt;
-use rocketmq_common::common::hasher::string_hasher::JavaStringHasher;
-use rocketmq_common::common::message::message_batch::MessageExtBatch;
-use rocketmq_common::common::message::message_decoder;
-use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
-use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_common::common::message::MessageConst;
-use rocketmq_common::common::message::MessageTrait;
-use rocketmq_common::common::mix_all;
+use rocketmq_model::common::hasher::string_hasher::JavaStringHasher;
+use rocketmq_model::common::message::message_batch::MessageExtBatch;
+use rocketmq_model::common::message::message_ext::MessageExt;
+use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use rocketmq_model::common::message::message_queue::MessageQueue;
+use rocketmq_model::common::message::MessageConst;
+use rocketmq_model::common::message::MessageTrait;
+use rocketmq_model::common::mix_all;
 use rocketmq_model::result::PullStatus;
 use rocketmq_model::result::SendResult;
 use rocketmq_model::result::SendStatus;
+use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
 use rocketmq_store::base::get_message_result::GetMessageResult;
 use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::base::message_status_enum::GetMessageStatus;
@@ -354,7 +354,7 @@ impl<MS: MessageStore> EscapeBridge<MS> {
     }
 
     pub(crate) fn is_message_store_slave(&self) -> bool {
-        self.policy_state.snapshot().broker_role == rocketmq_common::common::broker::broker_role::BrokerRole::Slave
+        self.policy_state.snapshot().broker_role == rocketmq_model::common::broker::broker_role::BrokerRole::Slave
     }
 
     pub(crate) fn check_in_mem_by_consume_offset(
@@ -716,7 +716,7 @@ fn decode_msg_list(get_message_result: GetMessageResult, de_compress_body: bool)
     let mut found_list = Vec::new();
     for bb in get_message_result.message_mapped_list() {
         let mut bytes = Bytes::copy_from_slice(bb.get_buffer());
-        let msg_ext = message_decoder::decode(&mut bytes, true, de_compress_body, false, false, false);
+        let msg_ext = MessageDecoder::decode(&mut bytes, true, de_compress_body, false, false, false);
         if let Some(msg_ext) = msg_ext {
             found_list.push(msg_ext);
         }
@@ -751,6 +751,10 @@ mod tests {
             include_str!("escape_bridge.rs"),
             include_str!("../offset/manager/consumer_offset_manager.rs"),
         ] {
+            let source = source
+                .split("#[cfg(test)]")
+                .next()
+                .expect("production source should precede tests");
             assert!(!source.contains(concat!("Arc", "Mut")));
             assert!(!source.contains(concat!("BrokerRuntime", "Inner")));
             assert!(!source.contains(concat!("mut", "_from_ref")));

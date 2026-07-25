@@ -44,7 +44,7 @@ impl Display for TransactionSendResult {
 #[cfg(test)]
 mod tests {
     use cheetah_string::CheetahString;
-    use rocketmq_common::common::message::message_queue::MessageQueue;
+    use rocketmq_model::common::message::message_queue::MessageQueue;
 
     use super::*;
     use crate::producer::send_status::SendStatus;

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_common::common::message::message_ext::MessageExt;
+use rocketmq_model::common::message::message_ext::MessageExt;
 
 /// Trait defining the listener for transactional message checks.
 #[trait_variant::make(TransactionalMessageCheckListener: Send)]

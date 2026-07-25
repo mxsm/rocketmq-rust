@@ -202,9 +202,9 @@ use rocketmq_admin_core::client_adapter::services::topic::UpdateTopicRequest;
 use rocketmq_admin_core::client_adapter::services::topic::UpdateTopicResult;
 use rocketmq_admin_core::client_adapter::services::RocketMQError;
 use rocketmq_admin_core::client_adapter::services::RocketMQResult;
-use rocketmq_common::common::message::message_enum::MessageRequestMode;
-use rocketmq_remoting::protocol::admin::rollback_stats::RollbackStats;
-use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
+use rocketmq_model::common::message::message_enum::MessageRequestMode;
+use rocketmq_protocol::protocol::admin::rollback_stats::RollbackStats;
+use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 use serde::Serialize;
 
 use super::MessagePullCapture;

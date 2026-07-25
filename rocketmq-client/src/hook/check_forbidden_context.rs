@@ -15,9 +15,9 @@
 use std::fmt;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_common::common::message::MessageTrait;
 use rocketmq_error::RocketMQError;
+use rocketmq_model::common::message::message_queue::MessageQueue;
+use rocketmq_model::common::message::MessageTrait;
 
 use crate::implementation::communication_mode::CommunicationMode;
 use crate::producer::send_result::SendResult;

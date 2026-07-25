@@ -64,9 +64,9 @@ use rocketmq_client_rust::TraceDispatcherOperation;
 use rocketmq_client_rust::TraceDispatcherType;
 use rocketmq_client_rust::TraceType;
 use rocketmq_client_rust::TransactionMQProducer;
-use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_common::common::message::message_single::Message;
 use rocketmq_error::RocketMQError;
+use rocketmq_model::common::message::message_queue::MessageQueue;
+use rocketmq_model::common::message::message_single::Message;
 
 struct CustomOrderKey(i32);
 

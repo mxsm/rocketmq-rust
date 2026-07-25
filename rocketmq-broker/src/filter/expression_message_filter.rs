@@ -17,9 +17,9 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use cheetah_string::CheetahString;
-use rocketmq_common::common::filter::expression_type::ExpressionType;
-use rocketmq_common::common::message::message_decoder;
-use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
+use rocketmq_model::common::filter::expression_type::ExpressionType;
+use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
+use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_store::consume_queue::cq_ext_unit::CqExtUnit;
 use rocketmq_store::filter::MessageFilter;
 
@@ -147,7 +147,7 @@ impl MessageFilter for ExpressionMessageFilter {
         let decoded_properties = match (properties, msg_buffer) {
             (None, Some(bytes)) => {
                 let mut bytes_ = Bytes::copy_from_slice(bytes);
-                message_decoder::decode_properties(&mut bytes_)
+                MessageDecoder::decode_properties(&mut bytes_)
             }
             _ => None,
         };
@@ -173,15 +173,15 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+    use crate::config::broker_config::BrokerConfig;
     use bytes::Bytes;
     use cheetah_string::CheetahString;
     use dashmap::DashMap;
-    use rocketmq_common::common::broker::broker_config::BrokerConfig;
-    use rocketmq_common::common::config::TopicConfig;
-    use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
-    use rocketmq_common::common::message::MessageTrait;
-    use rocketmq_common::MessageDecoder::message_properties_to_string;
-    use rocketmq_remoting::protocol::filter::filter_api::FilterAPI;
+    use rocketmq_model::common::config::TopicConfig;
+    use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+    use rocketmq_model::common::message::MessageTrait;
+    use rocketmq_protocol::common::message::message_decoder::message_properties_to_string;
+    use rocketmq_protocol::protocol::filter::filter_api::FilterAPI;
     use rocketmq_store::base::message_status_enum::GetMessageStatus;
     use rocketmq_store::base::message_status_enum::PutMessageStatus;
     use rocketmq_store::base::message_store::MessageStore;
@@ -231,7 +231,7 @@ mod tests {
                 timer_wheel_enable: false,
                 ..MessageStoreConfig::default()
             }),
-            Arc::new(BrokerConfig::default()),
+            Arc::new(rocketmq_store::config::store_runtime_config::StoreRuntimeConfig::default()),
             topic_table,
             None,
             false,

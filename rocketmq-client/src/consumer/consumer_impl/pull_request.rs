@@ -17,8 +17,8 @@ use std::hash::Hasher;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::message::message_enum::MessageRequestMode;
-use rocketmq_common::common::message::message_queue::MessageQueue;
+use rocketmq_model::common::message::message_enum::MessageRequestMode;
+use rocketmq_model::common::message::message_queue::MessageQueue;
 
 use crate::consumer::consumer_impl::message_request::MessageRequest;
 use crate::consumer::consumer_impl::process_queue::ProcessQueue;

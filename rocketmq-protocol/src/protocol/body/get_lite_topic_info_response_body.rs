@@ -18,8 +18,8 @@ use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::common::entity::client_group::ClientGroup;
 use crate::protocol::admin::topic_offset::TopicOffset;
+use rocketmq_model::common::entity::ClientGroup;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

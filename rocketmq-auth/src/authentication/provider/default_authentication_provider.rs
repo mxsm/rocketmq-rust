@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use rocketmq_error::AuthError;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use tracing::debug;
 use tracing::info;
 

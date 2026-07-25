@@ -19,7 +19,7 @@ use std::sync::atomic::Ordering;
 use std::time::SystemTime;
 
 use parking_lot::RwLock;
-use rocketmq_common::common::mix_all;
+use rocketmq_model::common::mix_all;
 use serde::Serialize;
 use tracing::error;
 

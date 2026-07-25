@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
 use crate::authorization::context::authentication_context::AuthenticationContext;
 use crate::config::AuthConfig;

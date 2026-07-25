@@ -22,21 +22,21 @@ use std::time::Instant;
 
 use cheetah_string::CheetahString;
 use parking_lot::Mutex;
-use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_common::common::mix_all::LOGICAL_QUEUE_MOCK_BROKER_PREFIX;
-use rocketmq_common::common::mix_all::METADATA_SCOPE_GLOBAL;
-use rocketmq_common::UtilAll::is_it_time_to_do;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::protocol::admin::topic_offset::TopicOffset;
-use rocketmq_remoting::protocol::static_topic::logic_queue_mapping_item::LogicQueueMappingItem;
-use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
-use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_utils::TopicQueueMappingUtils;
-use rocketmq_remoting::rpc::client_metadata::ClientMetadata;
+use rocketmq_model::common::message::message_queue::MessageQueue;
+use rocketmq_model::common::mix_all::LOGICAL_QUEUE_MOCK_BROKER_PREFIX;
+use rocketmq_model::common::mix_all::METADATA_SCOPE_GLOBAL;
+use rocketmq_protocol::protocol::admin::topic_offset::TopicOffset;
+use rocketmq_protocol::protocol::static_topic::logic_queue_mapping_item::LogicQueueMappingItem;
+use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
+use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_utils::TopicQueueMappingUtils;
+use rocketmq_runtime::common::util_all::is_it_time_to_do;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
+use rocketmq_transport::rpc::client_metadata::ClientMetadata;
 use tracing::info;
 use tracing::warn;
 
@@ -553,7 +553,7 @@ impl TopicQueueMappingCleanService {
 mod tests {
     use std::sync::Arc;
 
-    use rocketmq_common::common::broker::broker_config::BrokerConfig;
+    use crate::config::broker_config::BrokerConfig;
     use rocketmq_runtime::RuntimeContext;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
 

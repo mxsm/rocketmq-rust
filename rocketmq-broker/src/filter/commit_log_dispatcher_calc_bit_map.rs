@@ -15,7 +15,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
+use crate::config::broker_config::BrokerConfig;
 use rocketmq_filter::utils::bits_array::BitsArray;
 use rocketmq_store::base::commit_log_dispatcher::CommitLogDispatcher;
 use rocketmq_store::base::dispatch_request::DispatchRequest;
@@ -106,8 +106,8 @@ mod tests {
     use std::collections::HashSet;
 
     use cheetah_string::CheetahString;
-    use rocketmq_common::common::filter::expression_type::ExpressionType;
-    use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
+    use rocketmq_model::common::filter::expression_type::ExpressionType;
+    use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
     use rocketmq_store::base::dispatch_request::DispatchRequest;
 
     use super::*;

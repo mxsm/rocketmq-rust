@@ -132,13 +132,13 @@ impl<MS: MessageStore> BrokerStats<MS> {
 
 #[cfg(test)]
 mod tests {
-    use rocketmq_common::common::broker::broker_config::BrokerConfig;
+    use crate::config::store_runtime_config::StoreRuntimeConfig;
 
     use super::*;
 
     #[test]
     fn records_snapshots_from_injected_stats_manager() {
-        let manager = Arc::new(BrokerStatsManager::new(Arc::new(BrokerConfig::default())));
+        let manager = Arc::new(BrokerStatsManager::new(Arc::new(StoreRuntimeConfig::default())));
         let stats = BrokerStats::<()>::from_manager(Some(Arc::clone(&manager)));
 
         manager.inc_broker_put_nums("UserTopic", 10);

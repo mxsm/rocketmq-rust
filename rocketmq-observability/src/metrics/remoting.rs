@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub use crate::semantic::metrics::REMOTING_NETWORK_BYTES;
-pub use crate::semantic::metrics::REMOTING_REQUESTS_TOTAL;
-pub use crate::semantic::metrics::REMOTING_REQUEST_LATENCY;
 pub use crate::semantic::metrics::RPC_LATENCY;
+pub use crate::semantic::metrics::TRANSPORT_NETWORK_BYTES;
+pub use crate::semantic::metrics::TRANSPORT_REQUESTS_TOTAL;
+pub use crate::semantic::metrics::TRANSPORT_REQUEST_LATENCY;
 
 use std::time::Instant;
 
@@ -195,19 +195,19 @@ pub struct RemotingMetrics {
 impl RemotingMetrics {
     pub fn new(meter: &opentelemetry::metrics::Meter) -> Self {
         let requests_total = meter
-            .u64_counter(REMOTING_REQUESTS_TOTAL)
+            .u64_counter(TRANSPORT_REQUESTS_TOTAL)
             .with_description("Total number of remoting requests")
             .with_unit("{request}")
             .build();
 
         let request_latency = meter
-            .u64_histogram(REMOTING_REQUEST_LATENCY)
+            .u64_histogram(TRANSPORT_REQUEST_LATENCY)
             .with_description("Remoting request latency")
             .with_unit("ms")
             .build();
 
         let network_bytes = meter
-            .u64_counter(REMOTING_NETWORK_BYTES)
+            .u64_counter(TRANSPORT_NETWORK_BYTES)
             .with_description("Total network bytes processed by remoting")
             .with_unit("By")
             .build();

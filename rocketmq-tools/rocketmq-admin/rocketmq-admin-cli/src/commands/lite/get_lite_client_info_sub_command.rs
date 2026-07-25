@@ -13,9 +13,9 @@
 // limitations under the License.
 
 use clap::Parser;
-use rocketmq_common::UtilAll::time_millis_to_human_string2;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::protocol::body::get_lite_client_info_response_body::GetLiteClientInfoResponseBody;
+use rocketmq_protocol::protocol::body::get_lite_client_info_response_body::GetLiteClientInfoResponseBody;
+use rocketmq_runtime::common::util_all::time_millis_to_human_string2;
 
 use crate::commands::CommandExecute;
 use rocketmq_admin_core::client_adapter::services::lite::LiteClientInfoQueryRequest;

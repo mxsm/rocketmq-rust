@@ -16,12 +16,12 @@ use cheetah_string::CheetahString;
 use chrono::Local;
 use chrono::TimeZone;
 use clap::Parser;
-use rocketmq_common::MessageDecoder::validate_message_id;
-use rocketmq_common::UtilAll::YYYY_MM_DD_HH_MM_SS_SSS;
-use rocketmq_common::common::message::MessageConst;
-use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
+use rocketmq_model::common::message::MessageConst;
+use rocketmq_model::common::message::message_ext::MessageExt;
+use rocketmq_protocol::common::message::message_decoder::validate_message_id;
+use rocketmq_runtime::common::util_all::YYYY_MM_DD_HH_MM_SS_SSS;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
@@ -408,7 +408,7 @@ impl CommandExecute for QueryMsgByIdSubCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rocketmq_common::common::message::message_single::Message;
+    use rocketmq_model::common::message::message_single::Message;
 
     #[allow(dead_code)]
     fn create_test_command() -> QueryMsgByIdSubCommand {

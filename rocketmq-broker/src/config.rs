@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod broker_config;
+pub mod config_manager;
+
 #[cfg(feature = "rocksdb_store")]
 pub(crate) mod rocksdb_manager;
 
@@ -22,8 +25,8 @@ mod tests {
     use std::time::SystemTime;
     use std::time::UNIX_EPOCH;
 
-    use rocketmq_remoting::protocol::data_version_facade::DataVersionExt;
-    use rocketmq_remoting::protocol::DataVersion;
+    use rocketmq_protocol::protocol::data_version_facade::DataVersionExt;
+    use rocketmq_protocol::protocol::DataVersion;
     use rocketmq_store::rocksdb::config::RocksDbWalRecoveryMode;
 
     use super::rocksdb_manager::RocksDbBrokerConfigManager;

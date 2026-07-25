@@ -19,9 +19,9 @@ use std::ops::DerefMut;
 use std::sync::Arc;
 use std::time::Duration;
 
-use rocketmq_client_rust::admin_adapter_compat::remoting::runtime::RPCHook;
 use rocketmq_client_rust::DefaultMQAdminExt;
-use rocketmq_common::TimeUtils::current_millis;
+use rocketmq_runtime::common::time_utils::current_millis;
+use rocketmq_transport::runtime::RPCHook;
 
 use crate::client_adapter::lifecycle::AdminSession;
 use crate::client_adapter::security::rpc_hook_from_credentials;

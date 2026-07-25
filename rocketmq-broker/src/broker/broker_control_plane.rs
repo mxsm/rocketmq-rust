@@ -21,8 +21,8 @@ use parking_lot::lock_api::MappedRwLockWriteGuard;
 use parking_lot::Mutex;
 use parking_lot::RawRwLock;
 use parking_lot::RwLock;
-use rocketmq_common::common::mix_all::MASTER_ID;
-use rocketmq_remoting::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
+use rocketmq_model::common::mix_all::MASTER_ID;
+use rocketmq_protocol::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
 use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::MetadataIoActor;
 use rocketmq_store::base::message_store::MessageStore;
@@ -411,9 +411,9 @@ impl<MS: MessageStore> BrokerControllerRuntime<MS> {
 
 #[cfg(test)]
 mod tests {
+    use crate::config::broker_config::BrokerConfig;
     use cheetah_string::CheetahString;
-    use rocketmq_common::common::broker::broker_config::BrokerConfig;
-    use rocketmq_remoting::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
+    use rocketmq_protocol::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
 
     use super::BrokerControllerState;

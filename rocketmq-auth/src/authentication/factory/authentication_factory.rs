@@ -40,7 +40,7 @@ use std::sync::OnceLock;
 
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
 use crate::authentication::context::default_authentication_context::DefaultAuthenticationContext;
 use crate::authentication::evaluator::AuthenticationEvaluator;

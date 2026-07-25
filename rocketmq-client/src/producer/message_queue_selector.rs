@@ -14,8 +14,8 @@
 
 use std::sync::Arc;
 
-use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_common::common::message::MessageTrait;
+use rocketmq_model::common::message::message_queue::MessageQueue;
+use rocketmq_model::common::message::MessageTrait;
 
 /// A trait for selecting a message queue from a list of available queues.
 ///
@@ -39,8 +39,8 @@ use rocketmq_common::common::message::MessageTrait;
 ///
 /// ```no_run
 /// use rocketmq_client_rust::producer::message_queue_selector::MessageQueueSelector;
-/// use rocketmq_common::common::message::message_queue::MessageQueue;
-/// use rocketmq_common::common::message::message_single::Message;
+/// use rocketmq_model::common::message::message_queue::MessageQueue;
+/// use rocketmq_model::common::message::message_single::Message;
 ///
 /// // Closures automatically implement MessageQueueSelector
 /// let selector = |mqs: &[MessageQueue], _msg: &Message, order_id: &i64| {

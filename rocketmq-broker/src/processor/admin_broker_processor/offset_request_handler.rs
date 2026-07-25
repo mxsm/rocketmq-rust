@@ -12,26 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_common::common::config_manager::ConfigManager;
-use rocketmq_remoting::code::request_code::RequestCode;
-use rocketmq_remoting::code::response_code::ResponseCode;
-use rocketmq_remoting::error_response;
-use rocketmq_remoting::net::channel::Channel;
-use rocketmq_remoting::protocol::header::check_rocksdb_cq_write_progress_request_header::CheckRocksdbCqWriteProgressRequestHeader;
-use rocketmq_remoting::protocol::header::get_earliest_msg_storetime_request_header::GetEarliestMsgStoretimeRequestHeader;
-use rocketmq_remoting::protocol::header::get_earliest_msg_storetime_response_header::GetEarliestMsgStoretimeResponseHeader;
-use rocketmq_remoting::protocol::header::get_max_offset_request_header::GetMaxOffsetRequestHeader;
-use rocketmq_remoting::protocol::header::get_max_offset_response_header::GetMaxOffsetResponseHeader;
-use rocketmq_remoting::protocol::header::get_min_offset_request_header::GetMinOffsetRequestHeader;
-use rocketmq_remoting::protocol::header::get_min_offset_response_header::GetMinOffsetResponseHeader;
-use rocketmq_remoting::protocol::header::message_operation_header::TopicRequestHeaderTrait;
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_context::TopicQueueMappingContext;
-use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_utils::TopicQueueMappingUtils;
-use rocketmq_remoting::rpc::rpc_client::RpcClient;
-use rocketmq_remoting::rpc::rpc_request::RpcRequest;
-use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
+use crate::config::config_manager::ConfigManager;
+use rocketmq_protocol::code::request_code::RequestCode;
+use rocketmq_protocol::code::response_code::ResponseCode;
+use rocketmq_protocol::protocol::header::check_rocksdb_cq_write_progress_request_header::CheckRocksdbCqWriteProgressRequestHeader;
+use rocketmq_protocol::protocol::header::get_earliest_msg_storetime_request_header::GetEarliestMsgStoretimeRequestHeader;
+use rocketmq_protocol::protocol::header::get_earliest_msg_storetime_response_header::GetEarliestMsgStoretimeResponseHeader;
+use rocketmq_protocol::protocol::header::get_max_offset_request_header::GetMaxOffsetRequestHeader;
+use rocketmq_protocol::protocol::header::get_max_offset_response_header::GetMaxOffsetResponseHeader;
+use rocketmq_protocol::protocol::header::get_min_offset_request_header::GetMinOffsetRequestHeader;
+use rocketmq_protocol::protocol::header::get_min_offset_response_header::GetMinOffsetResponseHeader;
+use rocketmq_protocol::protocol::header::message_operation_header::TopicRequestHeaderTrait;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_context::TopicQueueMappingContext;
+use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_utils::TopicQueueMappingUtils;
 use rocketmq_store::base::message_store::MessageStore;
+use rocketmq_transport::error_response;
+use rocketmq_transport::net::channel::Channel;
+use rocketmq_transport::rpc::rpc_client::RpcClient;
+use rocketmq_transport::rpc::rpc_request::RpcRequest;
+use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
 use tracing::error;
 
 use crate::broker::broker_admin_runtime::BrokerAdminRuntime;
@@ -467,23 +467,23 @@ mod tests {
     use std::sync::Arc;
     use std::time::SystemTime;
 
+    use crate::config::broker_config::BrokerConfig;
     use cheetah_string::CheetahString;
-    use rocketmq_common::common::broker::broker_config::BrokerConfig;
-    use rocketmq_common::common::config::TopicConfig;
-    use rocketmq_remoting::base::response_future::ResponseFuture;
-    use rocketmq_remoting::code::request_code::RequestCode;
-    use rocketmq_remoting::code::response_code::ResponseCode;
-    use rocketmq_remoting::connection::Connection;
-    use rocketmq_remoting::net::channel::Channel;
-    use rocketmq_remoting::net::channel::ChannelInner;
-    use rocketmq_remoting::protocol::header::check_rocksdb_cq_write_progress_request_header::CheckRocksdbCqWriteProgressRequestHeader;
-    use rocketmq_remoting::protocol::header::empty_header::EmptyHeader;
-    use rocketmq_remoting::protocol::header::get_earliest_msg_storetime_request_header::GetEarliestMsgStoretimeRequestHeader;
-    use rocketmq_remoting::protocol::header::get_earliest_msg_storetime_response_header::GetEarliestMsgStoretimeResponseHeader;
-    use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-    use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
+    use rocketmq_model::common::config::TopicConfig;
+    use rocketmq_protocol::code::request_code::RequestCode;
+    use rocketmq_protocol::code::response_code::ResponseCode;
+    use rocketmq_protocol::protocol::header::check_rocksdb_cq_write_progress_request_header::CheckRocksdbCqWriteProgressRequestHeader;
+    use rocketmq_protocol::protocol::header::empty_header::EmptyHeader;
+    use rocketmq_protocol::protocol::header::get_earliest_msg_storetime_request_header::GetEarliestMsgStoretimeRequestHeader;
+    use rocketmq_protocol::protocol::header::get_earliest_msg_storetime_response_header::GetEarliestMsgStoretimeResponseHeader;
+    use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
     use rocketmq_store::base::message_store::MessageStore;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
+    use rocketmq_transport::base::response_future::ResponseFuture;
+    use rocketmq_transport::connection::Connection;
+    use rocketmq_transport::net::channel::Channel;
+    use rocketmq_transport::net::channel::ChannelInner;
+    use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
 
     use super::static_topic_offset_broker_name_missing;
     use super::static_topic_offset_mapping_missing;

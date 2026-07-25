@@ -15,16 +15,15 @@
 //! Demonstrates ordered sends by routing the same order id to the same queue.
 
 use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
-use rocketmq_common::common::message::message_single::Message;
 use rocketmq_error::RocketMQResult;
-use rocketmq_rust::rocketmq;
+use rocketmq_model::common::message::message_single::Message;
 
 pub const PRODUCER_GROUP: &str = "producer_order_send_group";
 pub const DEFAULT_NAMESRVADDR: &str = "127.0.0.1:9876";
 pub const TOPIC: &str = "OrderSendTestTopic";
 pub const TAG: &str = "OrderTag";
 
-#[rocketmq::main]
+#[tokio::main]
 pub async fn main() -> RocketMQResult<()> {
     let telemetry_guard =
         rocketmq_observability::install_global(&rocketmq_observability::TelemetryBootstrapConfig::default())

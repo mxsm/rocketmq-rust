@@ -23,12 +23,12 @@ use criterion::BenchmarkId;
 use criterion::Criterion;
 use criterion::Throughput;
 use rocketmq_client_rust::utils::message_util::MessageUtil;
-use rocketmq_common::common::message::message_decoder::NAME_VALUE_SEPARATOR;
-use rocketmq_common::common::message::message_decoder::PROPERTY_SEPARATOR;
-use rocketmq_common::common::message::message_single::Message;
-use rocketmq_common::common::message::MessageConst;
-use rocketmq_common::MessageAccessor::MessageAccessor;
-use rocketmq_common::MessageDecoder;
+use rocketmq_model::common::message::message_accessor::MessageAccessor;
+use rocketmq_model::common::message::message_single::Message;
+use rocketmq_model::common::message::MessageConst;
+use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
+use rocketmq_protocol::common::message::message_decoder::NAME_VALUE_SEPARATOR;
+use rocketmq_protocol::common::message::message_decoder::PROPERTY_SEPARATOR;
 
 // ============================================================================
 // Helper functions to create test messages

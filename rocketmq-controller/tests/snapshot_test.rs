@@ -20,7 +20,6 @@ use std::collections::HashSet;
 
 use openraft::storage::RaftStateMachine;
 use openraft::RaftSnapshotBuilder;
-use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_controller::config::ControllerConfig;
 use rocketmq_controller::config::ControllerConfigReader;
 use rocketmq_controller::config::StorageBackendType;
@@ -35,8 +34,9 @@ use rocketmq_controller::typ::LogEntry;
 use rocketmq_controller::typ::LogId;
 use rocketmq_controller::typ::Node;
 use rocketmq_controller::typ::Vote;
-use rocketmq_remoting::code::response_code::ResponseCode;
-use rocketmq_remoting::protocol::body::sync_state_set_body::SyncStateSet;
+use rocketmq_protocol::code::response_code::ResponseCode;
+use rocketmq_protocol::protocol::body::sync_state_set_body::SyncStateSet;
+use rocketmq_runtime::common::time_utils::current_millis;
 
 fn test_config(port: u16) -> ControllerConfigReader {
     ControllerConfigReader::new(

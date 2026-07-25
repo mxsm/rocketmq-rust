@@ -25,9 +25,9 @@ use std::time::Duration;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use parking_lot::Mutex;
-use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_remoting::protocol::RemotingDeserializable;
-use rocketmq_remoting::protocol::RemotingSerializable;
+use rocketmq_model::common::message::message_queue::MessageQueue;
+use rocketmq_protocol::protocol::RemotingDeserializable;
+use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::ScheduledTaskSnapshot;
 use serde::Serialize;
 use std::sync::LazyLock;
@@ -667,7 +667,7 @@ pub async fn run_local_file_offset_store_lifecycle_probe() -> LocalFileOffsetSto
 
     let root = std::env::temp_dir().join(format!(
         "rocketmq-rust-local-offset-store-probe-{}",
-        rocketmq_common::TimeUtils::current_millis()
+        rocketmq_runtime::common::time_utils::current_millis()
     ));
     let store_path = root.join("offsets.json").to_string_lossy().to_string();
     if let Some(parent) = Path::new(&store_path).parent() {
@@ -764,9 +764,9 @@ mod tests {
     use cheetah_string::CheetahString;
     use dashmap::DashMap;
     use parking_lot::Mutex;
-    use rocketmq_common::common::message::message_queue::MessageQueue;
-    use rocketmq_remoting::protocol::RemotingDeserializable;
-    use rocketmq_remoting::protocol::RemotingSerializable;
+    use rocketmq_model::common::message::message_queue::MessageQueue;
+    use rocketmq_protocol::protocol::RemotingDeserializable;
+    use rocketmq_protocol::protocol::RemotingSerializable;
     use tokio::sync::mpsc;
 
     use super::PersistTaskHandle;

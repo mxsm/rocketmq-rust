@@ -27,15 +27,15 @@ use std::time::Instant;
 use cheetah_string::CheetahString;
 use dashmap::DashSet;
 use parking_lot::Mutex;
-use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_common::common::message::MessageConst;
-use rocketmq_common::common::message::MessageTrait;
-use rocketmq_common::MessageAccessor::MessageAccessor;
-use rocketmq_remoting::protocol::body::cm_result::CMResult;
-use rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
-use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
-use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
+use rocketmq_model::common::message::message_accessor::MessageAccessor;
+use rocketmq_model::common::message::message_ext::MessageExt;
+use rocketmq_model::common::message::message_queue::MessageQueue;
+use rocketmq_model::common::message::MessageConst;
+use rocketmq_model::common::message::MessageTrait;
+use rocketmq_protocol::protocol::body::cm_result::CMResult;
+use rocketmq_protocol::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
+use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
+use rocketmq_protocol::protocol::namespace_util::NamespaceUtil;
 use rocketmq_runtime::ScheduledTaskControl;
 use rocketmq_runtime::ScheduledTaskSnapshot;
 use serde::Serialize;
@@ -435,7 +435,7 @@ impl ConsumeMessagePopOrderlyService {
     }
 
     async fn send_message_back(&self, msg: &MessageExt) -> bool {
-        use rocketmq_common::common::message::message_single::Message;
+        use rocketmq_model::common::message::message_single::Message;
 
         let retry_topic = format!("%RETRY%{}", self.consumer_group);
 

@@ -17,7 +17,7 @@ use std::ops::DerefMut;
 use std::sync::Arc;
 use std::time::Duration;
 
-use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_store_local::flush::group_commit::run_group_commit_worker;
 use rocketmq_store_local::flush::group_commit::GroupCommitStatus;
@@ -710,7 +710,7 @@ mod tests {
     use super::*;
 
     use futures_util::FutureExt;
-    use rocketmq_common::TimeUtils::current_millis;
+    use rocketmq_runtime::common::time_utils::current_millis;
     use rocketmq_store_local::flush::group_commit::complete_group_commit_batch;
     use rocketmq_store_local::flush::group_commit::complete_group_commit_batch_error;
     use tempfile::tempdir;

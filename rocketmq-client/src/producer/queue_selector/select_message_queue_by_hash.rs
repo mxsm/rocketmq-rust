@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_common::common::message::MessageTrait;
+use rocketmq_model::common::message::message_queue::MessageQueue;
+use rocketmq_model::common::message::MessageTrait;
 
 use crate::producer::message_queue_selector::MessageQueueSelector;
 
@@ -162,8 +162,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    use rocketmq_common::common::message::message_queue::MessageQueue;
-    use rocketmq_common::common::message::message_single::Message;
+    use rocketmq_model::common::message::message_queue::MessageQueue;
+    use rocketmq_model::common::message::message_single::Message;
 
     use super::*;
 

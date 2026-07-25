@@ -20,9 +20,9 @@ use std::time::Duration;
 use std::time::Instant;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::message::message_single::Message;
-use rocketmq_common::common::message::MessageTrait;
 use rocketmq_error::RocketMQError;
+use rocketmq_model::common::message::message_single::Message;
+use rocketmq_model::common::message::MessageTrait;
 use tokio::sync::Notify;
 
 use crate::producer::request_callback::RequestCallbackFn;

@@ -19,12 +19,12 @@ use std::sync::Mutex;
 
 use cheetah_string::CheetahString;
 use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_client_rust::admin_adapter_compat::remoting::protocol::body::producer_table_info::ProducerTableInfo;
 use rocketmq_client_rust::base::client_config::ClientConfig;
 use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
-use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_common::common::message::message_single::Message;
-use rocketmq_common::TimeUtils::current_millis;
+use rocketmq_model::common::message::message_queue::MessageQueue;
+use rocketmq_model::common::message::message_single::Message;
+use rocketmq_protocol::protocol::body::producer_table_info::ProducerTableInfo;
+use rocketmq_runtime::common::time_utils::current_millis;
 use serde::Deserialize;
 use serde::Serialize;
 

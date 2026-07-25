@@ -19,12 +19,12 @@ use std::sync::Weak;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::mix_all;
-use rocketmq_common::common::mix_all::MASTER_ID;
-use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
-use rocketmq_remoting::protocol::DataVersion;
+use rocketmq_model::common::mix_all;
+use rocketmq_model::common::mix_all::MASTER_ID;
+use rocketmq_model::utils::serde_json_utils::SerdeJsonUtils;
+use rocketmq_protocol::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
+use rocketmq_protocol::protocol::DataVersion;
 use rocketmq_runtime::task::service_task::ServiceContext;
 use rocketmq_runtime::task::service_task::ServiceTask;
 use rocketmq_runtime::task::ServiceManager;
@@ -492,12 +492,12 @@ mod tests {
 
     #[test]
     fn should_sync_from_peer_accepts_newer_version() {
-        let mut local = rocketmq_remoting::protocol::data_version_facade::new_data_version();
+        let mut local = rocketmq_protocol::protocol::data_version_facade::new_data_version();
         local.set_state_version(1);
         local.set_timestamp(10);
         local.set_counter(1);
 
-        let mut remote = rocketmq_remoting::protocol::data_version_facade::new_data_version();
+        let mut remote = rocketmq_protocol::protocol::data_version_facade::new_data_version();
         remote.set_state_version(2);
         remote.set_timestamp(20);
         remote.set_counter(2);
@@ -507,12 +507,12 @@ mod tests {
 
     #[test]
     fn should_sync_from_peer_rejects_older_version() {
-        let mut local = rocketmq_remoting::protocol::data_version_facade::new_data_version();
+        let mut local = rocketmq_protocol::protocol::data_version_facade::new_data_version();
         local.set_state_version(2);
         local.set_timestamp(20);
         local.set_counter(2);
 
-        let mut remote = rocketmq_remoting::protocol::data_version_facade::new_data_version();
+        let mut remote = rocketmq_protocol::protocol::data_version_facade::new_data_version();
         remote.set_state_version(1);
         remote.set_timestamp(10);
         remote.set_counter(1);
@@ -523,7 +523,7 @@ mod tests {
     #[test]
     fn should_sync_from_peer_accepts_missing_version() {
         assert!(should_sync_from_peer(
-            &rocketmq_remoting::protocol::data_version_facade::new_data_version(),
+            &rocketmq_protocol::protocol::data_version_facade::new_data_version(),
             None,
         ));
     }

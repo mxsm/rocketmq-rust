@@ -14,7 +14,7 @@
 
 use std::sync::atomic::AtomicU32;
 
-use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
+use rocketmq_protocol::protocol::body::ha_runtime_info::HARuntimeInfo;
 use tokio::sync::Notify;
 
 use crate::ha::general_ha_client::GeneralHAClient;

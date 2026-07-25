@@ -29,24 +29,24 @@ use std::time::Instant;
 
 use arc_swap::ArcSwap;
 use cheetah_string::CheetahString;
-use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
-use rocketmq_common::common::filter::expression_type::ExpressionType;
-use rocketmq_common::common::message::message_decoder;
-use rocketmq_common::common::message::message_enum::MessageRequestMode;
-use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_common::common::mix_all;
-use rocketmq_common::common::sys_flag::pull_sys_flag::PullSysFlag;
-use rocketmq_common::utils::util_all;
-use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::protocol::body::process_queue_info::ProcessQueueInfo;
-use rocketmq_remoting::protocol::filter::filter_api::FilterAPI;
-use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
-use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
-use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
-use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
-use rocketmq_remoting::runtime::RPCHook;
+use rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere;
+use rocketmq_model::common::filter::expression_type::ExpressionType;
+use rocketmq_model::common::message::message_enum::MessageRequestMode;
+use rocketmq_model::common::message::message_ext::MessageExt;
+use rocketmq_model::common::message::message_queue::MessageQueue;
+use rocketmq_model::common::mix_all;
+use rocketmq_model::common::sys_flag::pull_sys_flag::PullSysFlag;
+use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
+use rocketmq_protocol::protocol::body::process_queue_info::ProcessQueueInfo;
+use rocketmq_protocol::protocol::filter::filter_api::FilterAPI;
+use rocketmq_protocol::protocol::heartbeat::consume_type::ConsumeType;
+use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
+use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
+use rocketmq_protocol::protocol::namespace_util::NamespaceUtil;
+use rocketmq_runtime::common::time_utils::current_millis;
+use rocketmq_runtime::common::util_all;
+use rocketmq_transport::runtime::RPCHook;
 use serde::Serialize;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
@@ -608,7 +608,7 @@ impl DefaultLitePullConsumerImpl {
             return Err(crate::mq_client_err!(format!(
                 "The lite pull consumer service state not OK, {:?}, {}",
                 service_state,
-                rocketmq_common::common::FAQUrl::suggest_todo(rocketmq_common::common::FAQUrl::CLIENT_SERVICE_NOT_OK)
+                rocketmq_model::common::FAQUrl::suggest_todo(rocketmq_model::common::FAQUrl::CLIENT_SERVICE_NOT_OK)
             )));
         }
         Ok(())
@@ -736,8 +736,8 @@ impl DefaultLitePullConsumerImpl {
             return Err(crate::mq_client_err!(format!(
                 "consumerGroup can not equal {}, please specify another one.{}",
                 mix_all::DEFAULT_CONSUMER_GROUP,
-                rocketmq_common::common::FAQUrl::suggest_todo(
-                    rocketmq_common::common::FAQUrl::CLIENT_PARAMETER_CHECK_URL
+                rocketmq_model::common::FAQUrl::suggest_todo(
+                    rocketmq_model::common::FAQUrl::CLIENT_PARAMETER_CHECK_URL
                 )
             )));
         }
@@ -1089,8 +1089,8 @@ impl DefaultLitePullConsumerImpl {
                     return Err(crate::mq_client_err!(format!(
                         "The consumer group[{}] has been created before, specify another name please.{}",
                         consumer_config.consumer_group,
-                        rocketmq_common::common::FAQUrl::suggest_todo(
-                            rocketmq_common::common::FAQUrl::GROUP_NAME_DUPLICATE_URL
+                        rocketmq_model::common::FAQUrl::suggest_todo(
+                            rocketmq_model::common::FAQUrl::GROUP_NAME_DUPLICATE_URL
                         )
                     )));
                 }
@@ -2501,7 +2501,7 @@ impl DefaultLitePullConsumerImpl {
             .component_snapshot(&self.client_instance)
             .ok_or_else(|| crate::mq_client_err!("Client instance not initialized"))?;
 
-        if message_decoder::decode_message_id(msg_id).is_ok() {
+        if MessageDecoder::decode_message_id(msg_id).is_ok() {
             client_instance.mq_admin_impl.view_message(topic, msg_id).await
         } else {
             self.query_message_by_uniq_key(topic, msg_id).await
@@ -3021,8 +3021,8 @@ impl MQConsumerInner for DefaultLitePullConsumerImpl {
 
     async fn consumer_running_info(
         &self,
-    ) -> rocketmq_remoting::protocol::body::consumer_running_info::ConsumerRunningInfo {
-        let mut info = rocketmq_remoting::protocol::body::consumer_running_info::ConsumerRunningInfo::new();
+    ) -> rocketmq_protocol::protocol::body::consumer_running_info::ConsumerRunningInfo {
+        let mut info = rocketmq_protocol::protocol::body::consumer_running_info::ConsumerRunningInfo::new();
         info.consume_type = self.consume_type();
         info.consume_orderly = false;
         info.prop_consumer_start_timestamp = self.consumer_start_timestamp.load(Ordering::Acquire) as u64;
@@ -3223,8 +3223,10 @@ mod tests {
 
         fn consume_message_after(&self, _context: &mut ConsumeMessageContext) {
             std::thread::sleep(Duration::from_millis(15));
-            self.after_timestamp
-                .store(rocketmq_common::TimeUtils::current_millis(), AtomicOrdering::SeqCst);
+            self.after_timestamp.store(
+                rocketmq_runtime::common::time_utils::current_millis(),
+                AtomicOrdering::SeqCst,
+            );
         }
     }
 

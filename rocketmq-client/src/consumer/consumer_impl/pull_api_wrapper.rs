@@ -21,23 +21,23 @@ use arc_swap::ArcSwap;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use rand::RngExt;
-use rocketmq_common::common::filter::expression_type::ExpressionType;
-use rocketmq_common::common::message::message_decoder;
-use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_common::common::message::MessageConst;
-use rocketmq_common::common::message::MessageTrait;
-use rocketmq_common::common::mix_all;
-use rocketmq_common::common::mq_version::RocketMqVersion;
-use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
-use rocketmq_common::common::sys_flag::pull_sys_flag::PullSysFlag;
-use rocketmq_common::MessageAccessor::MessageAccessor;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_remoting::protocol::header::namesrv::topic_operation_header::TopicRequestHeader;
-use rocketmq_remoting::protocol::header::pop_message_request_header::PopMessageRequestHeader;
-use rocketmq_remoting::protocol::header::pull_message_request_header::PullMessageRequestHeader;
-use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
-use rocketmq_remoting::rpc::rpc_request_header::RpcRequestHeader;
+use rocketmq_model::common::filter::expression_type::ExpressionType;
+use rocketmq_model::common::message::message_accessor::MessageAccessor;
+use rocketmq_model::common::message::message_ext::MessageExt;
+use rocketmq_model::common::message::message_queue::MessageQueue;
+use rocketmq_model::common::message::MessageConst;
+use rocketmq_model::common::message::MessageTrait;
+use rocketmq_model::common::mix_all;
+use rocketmq_model::common::mq_version::RocketMqVersion;
+use rocketmq_model::common::sys_flag::message_sys_flag::MessageSysFlag;
+use rocketmq_model::common::sys_flag::pull_sys_flag::PullSysFlag;
+use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
+use rocketmq_protocol::protocol::header::namesrv::topic_operation_header::TopicRequestHeader;
+use rocketmq_protocol::protocol::header::pop_message_request_header::PopMessageRequestHeader;
+use rocketmq_protocol::protocol::header::pull_message_request_header::PullMessageRequestHeader;
+use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
+use rocketmq_runtime::common::time_utils::current_millis;
+use rocketmq_transport::rpc::rpc_request_header::RpcRequestHeader;
 
 use crate::consumer::consumer_impl::pull_request_ext::PullResultExt;
 use crate::consumer::pop_callback::PopCallback;
@@ -79,11 +79,11 @@ fn decode_pull_messages(
     subscription_data: &SubscriptionData,
 ) -> Vec<MessageExt> {
     if should_filter_by_tag(subscription_data) {
-        message_decoder::decodes_batch_with_metadata_filter(message_binary, read_body, decompress_body, |metadata| {
+        MessageDecoder::decodes_batch_with_metadata_filter(message_binary, read_body, decompress_body, |metadata| {
             should_decode_pull_message_body(metadata, subscription_data)
         })
     } else {
-        message_decoder::decodes_batch(message_binary, read_body, decompress_body)
+        MessageDecoder::decodes_batch(message_binary, read_body, decompress_body)
     }
 }
 
@@ -164,7 +164,7 @@ impl PullAPIWrapper {
                 let mut inner_msg_vec = Vec::with_capacity(msg_vec.len());
                 for msg in msg_vec {
                     if is_inner_batch_message(&msg) {
-                        message_decoder::decode_messages_from(msg, &mut inner_msg_vec);
+                        MessageDecoder::decode_messages_from(msg, &mut inner_msg_vec);
                     } else {
                         inner_msg_vec.push(msg);
                     }
@@ -572,15 +572,15 @@ mod tests {
     use bytes::BufMut;
     use bytes::Bytes;
     use bytes::BytesMut;
-    use rocketmq_common::common::filter::expression_type::ExpressionType;
-    use rocketmq_common::common::message::message_decoder;
-    use rocketmq_common::common::message::message_ext::MessageExt;
-    use rocketmq_common::common::message::message_queue::MessageQueue;
-    use rocketmq_common::common::message::message_single::Message;
-    use rocketmq_common::common::message::MessageConst;
-    use rocketmq_common::common::message::MessageTrait;
-    use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
-    use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
+    use rocketmq_model::common::filter::expression_type::ExpressionType;
+    use rocketmq_model::common::message::message_ext::MessageExt;
+    use rocketmq_model::common::message::message_queue::MessageQueue;
+    use rocketmq_model::common::message::message_single::Message;
+    use rocketmq_model::common::message::MessageConst;
+    use rocketmq_model::common::message::MessageTrait;
+    use rocketmq_model::common::sys_flag::message_sys_flag::MessageSysFlag;
+    use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
+    use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 
     use super::*;
     use crate::base::client_config::ClientConfig;
@@ -644,7 +644,7 @@ mod tests {
     }
 
     fn inner_batch_message(queue_offset: i64, inner: &[Message]) -> MessageExt {
-        let mut message_ext = message(queue_offset, None, message_decoder::encode_messages(inner));
+        let mut message_ext = message(queue_offset, None, MessageDecoder::encode_messages(inner));
         message_ext.set_sys_flag(MessageSysFlag::INNER_BATCH_FLAG | MessageSysFlag::NEED_UNWRAP_FLAG);
         message_ext
     }
@@ -652,7 +652,7 @@ mod tests {
     fn encoded_payload(messages: &[MessageExt]) -> Bytes {
         let mut payload = BytesMut::new();
         for message in messages {
-            payload.put_slice(&message_decoder::encode(message, false).expect("test message should encode"));
+            payload.put_slice(&MessageDecoder::encode(message, false).expect("test message should encode"));
         }
         payload.freeze()
     }

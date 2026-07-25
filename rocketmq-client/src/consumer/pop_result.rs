@@ -14,7 +14,7 @@
 
 use std::fmt::Display;
 
-use rocketmq_common::common::message::message_ext::MessageExt;
+use rocketmq_model::common::message::message_ext::MessageExt;
 
 use crate::consumer::pop_status::PopStatus;
 
@@ -41,7 +41,7 @@ impl Display for PopResult {
 
 #[cfg(test)]
 mod tests {
-    use rocketmq_common::common::message::message_ext::MessageExt;
+    use rocketmq_model::common::message::message_ext::MessageExt;
 
     use super::*;
     use crate::consumer::pop_status::PopStatus;

@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
-use rocketmq_common::common::mix_all::is_lmq;
+use rocketmq_model::common::mix_all::is_lmq;
 use tracing::info;
 
 use crate::queue::multi_dispatch_utils::lmq_queue_key;

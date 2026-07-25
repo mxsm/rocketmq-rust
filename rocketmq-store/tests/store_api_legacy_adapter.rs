@@ -264,11 +264,11 @@ fn assert_adapter_contract<MS>()
 where
     MS: MessageStore,
     for<'a> LegacyMessageStoreAdapter<'a, MS>: MessageAppender<
-            rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner,
+            rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner,
             Receipt = LegacyAppendReceipt,
             Error = StoreError,
         > + MessageAppender<
-            rocketmq_common::common::message::message_batch::MessageExtBatch,
+            rocketmq_model::common::message::message_batch::MessageExtBatch,
             Receipt = LegacyAppendReceipt,
             Error = StoreError,
         > + StoreHealth<Snapshot = LegacyStoreHealthSnapshot>,

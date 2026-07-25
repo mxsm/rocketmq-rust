@@ -25,7 +25,7 @@ fn core_has_no_client_common_or_remoting_source_edge() {
         for forbidden in [
             "rocketmq_client_rust::",
             "rocketmq_common::",
-            "rocketmq_remoting::",
+            "rocketmq_transport::",
             "MQAdminExt",
             "DefaultMQAdminExt",
             "DefaultMQProducer",
@@ -57,7 +57,7 @@ fn direct_sdk_imports_are_adapter_only() {
         if !is_adapter
             && (source.contains("rocketmq_client_rust::")
                 || source.contains("rocketmq_common::")
-                || source.contains("rocketmq_remoting::"))
+                || source.contains("rocketmq_transport::"))
         {
             violations.push(path.display().to_string());
         }
@@ -74,7 +74,16 @@ fn direct_sdk_imports_are_adapter_only() {
 fn client_adapter_feature_owns_all_sdk_dependencies() {
     let manifest = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml")).unwrap();
     assert!(manifest.contains("default        = []"));
-    assert!(manifest.contains("client-adapter = [\"dep:rocketmq-client-rust\", \"dep:rocketmq-common\"]"));
+    assert!(manifest.contains("client-adapter = ["));
+    for dependency in [
+        "dep:rocketmq-client-rust",
+        "dep:rocketmq-observability",
+        "dep:rocketmq-runtime",
+        "dep:rocketmq-transport",
+    ] {
+        assert!(manifest.contains(dependency), "missing adapter dependency {dependency}");
+    }
+    assert!(!manifest.contains("dep:rocketmq-common"));
     assert!(!manifest.contains("legacy-common-compat"));
 }
 

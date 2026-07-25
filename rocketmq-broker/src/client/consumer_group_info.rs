@@ -17,12 +17,12 @@ use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
-use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_remoting::net::channel::Channel;
-use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
-use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
-use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
+use rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere;
+use rocketmq_protocol::protocol::heartbeat::consume_type::ConsumeType;
+use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
+use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
+use rocketmq_runtime::common::time_utils::current_millis;
+use rocketmq_transport::net::channel::Channel;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -274,10 +274,10 @@ impl ConsumerGroupInfo {
 mod tests {
     use std::collections::HashSet;
 
-    use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
-    use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
-    use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
-    use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
+    use rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere;
+    use rocketmq_protocol::protocol::heartbeat::consume_type::ConsumeType;
+    use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
+    use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 
     use super::*;
 

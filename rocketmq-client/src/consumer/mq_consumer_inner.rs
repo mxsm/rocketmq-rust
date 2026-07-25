@@ -17,14 +17,14 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
-use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
-use rocketmq_remoting::protocol::body::consumer_running_info::ConsumerRunningInfo;
-use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
-use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
-use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
+use rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere;
+use rocketmq_model::common::message::message_ext::MessageExt;
+use rocketmq_model::common::message::message_queue::MessageQueue;
+use rocketmq_protocol::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
+use rocketmq_protocol::protocol::body::consumer_running_info::ConsumerRunningInfo;
+use rocketmq_protocol::protocol::heartbeat::consume_type::ConsumeType;
+use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
+use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 
 use crate::consumer::consumer_impl::default_lite_pull_consumer_impl::DefaultLitePullConsumerImpl;
 use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
@@ -316,7 +316,7 @@ impl MQConsumerInner for MQConsumerInnerImpl {
 
 #[cfg(test)]
 mod tests {
-    use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
+    use rocketmq_protocol::protocol::heartbeat::consume_type::ConsumeType;
 
     use super::*;
     use crate::base::client_config::ClientConfig;

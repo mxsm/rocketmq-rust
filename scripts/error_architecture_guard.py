@@ -51,9 +51,7 @@ INTERNAL_ERROR_ALLOWLIST = (
     "rocketmq-controller/src/",
     "rocketmq-namesrv/src/",
     "rocketmq-proxy/src/",
-    "rocketmq-remoting/src/",
-    "rocketmq-remoting/src/protocol/body/consumer_running_info.rs",
-    "rocketmq-remoting/src/protocol/static_topic/",
+    "rocketmq-transport/src/error_response.rs",
     "rocketmq-tieredstore/src/",
     "rocketmq-tools/rocketmq-admin/rocketmq-admin-cli/src/commands/",
     "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/src/admin/",
@@ -63,6 +61,7 @@ INTERNAL_ERROR_ALLOWLIST = (
 
 ANYHOW_RESULT_ALLOWLIST: dict[str, str] = {
     "rocketmq-dashboard/rocketmq-dashboard-gpui/build.rs": "build script boundary",
+    "rocketmq-dashboard/rocketmq-dashboard-gpui/src/main.rs": "standalone GPUI process boundary",
     "rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/src/nameserver/db.rs": "standalone Tauri boundary pending dashboard alignment",
     "rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/src/nameserver/runtime.rs": "standalone Tauri boundary pending dashboard alignment",
     "rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/src/nameserver/service.rs": "standalone Tauri boundary pending dashboard alignment",
@@ -125,8 +124,11 @@ SOURCE_STRINGIFICATION_ALLOWLIST: dict[str, str] = {
     "rocketmq-auth/src/runtime.rs": "auth runtime composes provider failures into public authentication errors",
     "rocketmq-auth/src/runtime_bridge.rs": "runtime bridge exports string diagnostics across a trait boundary",
     "rocketmq-broker/src/command.rs": "broker CLI argument parser stores address parse detail in command error text",
+    "rocketmq-broker/src/broker/broker_registration_runtime.rs": "broker registration reports coordinator domain failures through its compatibility diagnostic enum",
+    "rocketmq-broker/src/broker/log_filter_control.rs": "log filter control translates scheduler, reload, and audit boundary errors into its typed control error",
     "rocketmq-broker/src/processor/admin_broker_processor.rs": "admin remoting parser keeps Java-compatible request body remarks",
     "rocketmq-broker/src/processor/admin_broker_processor/message_related_handler.rs": "message admin remoting path keeps decode detail as protocol remark",
+    "rocketmq-broker/src/schedule/schedule_message_service.rs": "legacy schedule compatibility constructs local runtime capabilities through a string-result facade",
     "rocketmq-broker/src/topic/manager/topic_queue_mapping_manager.rs": "topic queue mapping persistence currently reports executor/persist failures as broker internal diagnostics",
     "rocketmq-controller/src/controller/open_raft_controller.rs": "OpenRaft controller startup and scheduler runtime boundaries report task and bind failures as typed controller diagnostics",
     "rocketmq-controller/src/processor/controller_request_processor.rs": "controller config remoting endpoint maps UTF-8 parser detail into request validation text",
@@ -264,17 +266,17 @@ def scan_forbidden_terms(paths: Iterable[Path], forbidden: dict[str, str]) -> li
     return findings
 
 
-def check_error_and_common_public_surface() -> list[Finding]:
+def check_error_and_model_public_surface() -> list[Finding]:
     forbidden = {
         "RocketmqError": "legacy RocketmqError must not re-enter core public error code",
         "RocketMqError": "legacy RocketMqError spelling must not re-enter core public error code",
         "rocketmq_error::Result": "old rocketmq_error::Result alias must not be used",
-        "anyhow::Result": "rocketmq-error/common must not expose public anyhow Result",
-        "anyhow::Error": "rocketmq-error/common must not expose anyhow Error",
-        "pub type Result": "rocketmq-error/common must use typed crate-local aliases, not generic public Result",
+        "anyhow::Result": "rocketmq-error/model must not expose public anyhow Result",
+        "anyhow::Error": "rocketmq-error/model must not expose anyhow Error",
+        "pub type Result": "rocketmq-error/model must use typed crate-local aliases, not generic public Result",
     }
     return scan_forbidden_terms(
-        [*rust_files_under("rocketmq-error", "src"), *rust_files_under("rocketmq-common", "src")],
+        [*rust_files_under("rocketmq-error", "src"), *rust_files_under("rocketmq-model", "src")],
         forbidden,
     )
 
@@ -407,7 +409,7 @@ def check_processor_generic_response_allowlist() -> list[Finding]:
 
 def check_required_mapping_adapters() -> list[Finding]:
     checks = {
-        ROOT / "rocketmq-remoting" / "src" / "error_response.rs": [
+        ROOT / "rocketmq-transport" / "src" / "error_response.rs": [
             "error.boundary_view()",
             "apply_error_to_response",
             "invalid_parameter_with_remark",
@@ -454,7 +456,8 @@ def check_required_mapping_adapters() -> list[Finding]:
         / "rocketmq-admin"
         / "rocketmq-admin-core"
         / "src"
-        / "core"
+        / "client_adapter"
+        / "services"
         / "error_view.rs": [
             "error.spec().code.as_str()",
             "error.public_message()",
@@ -479,7 +482,7 @@ def check_required_mapping_adapters() -> list[Finding]:
         for needle in needles:
             if needle not in text:
                 findings.append(Finding(path, 1, f"required mapping adapter token missing: {needle}"))
-        if path == ROOT / "rocketmq-remoting" / "src" / "error_response.rs":
+        if path == ROOT / "rocketmq-transport" / "src" / "error_response.rs":
             for line_number, line in enumerate(text.splitlines(), start=1):
                 if "command_from_error_with_remark(error, error.to_string())" in line:
                     findings.append(
@@ -600,8 +603,8 @@ def check_client_retry_boundary() -> list[Finding]:
         / "producer"
         / "producer_impl"
         / "default_mq_producer_impl.rs": [
-            "producer_send_retry_decision(error, self.producer_config.retry_response_codes())",
-            "producer_send_fault_decision(error, self.mq_fault_strategy.is_start_detector_enable())",
+            "producer_send_retry_decision(error, runtime.producer_config.retry_response_codes())",
+            "producer_send_fault_decision(error, detector_enabled)",
         ],
     }
     findings: list[Finding] = []
@@ -796,7 +799,7 @@ def check_redaction_guards() -> list[Finding]:
             "token=<redacted>",
             "error_context_redacts_sensitive_fields",
         ],
-        ROOT / "rocketmq-common" / "src" / "common" / "base" / "plain_access_config.rs": [
+        ROOT / "rocketmq-model" / "src" / "common" / "base" / "plain_access_config.rs": [
             "debug_and_display_redact_secret_key",
             "<redacted>",
         ],
@@ -873,9 +876,10 @@ def check_redaction_guards() -> list[Finding]:
     debug_field_pattern = re.compile(r'\.field\("([^"]+)",')
     redaction_paths = [
         *rust_files_under("rocketmq-error", "src"),
-        *rust_files_under("rocketmq-common", "src"),
+        *rust_files_under("rocketmq-model", "src"),
         *rust_files_under("rocketmq-client", "src"),
-        *rust_files_under("rocketmq-remoting", "src"),
+        *rust_files_under("rocketmq-protocol", "src"),
+        *rust_files_under("rocketmq-transport", "src"),
         *rust_files_under("rocketmq-auth", "src"),
         *rust_files_under("rocketmq-tools", "rocketmq-admin"),
         *rust_files_under("rocketmq-dashboard", "rocketmq-dashboard-web", "backend", "src"),
@@ -956,7 +960,7 @@ def check_error_governance_artifacts() -> list[Finding]:
 
 def run() -> int:
     checks = [
-        ("core public surface", check_error_and_common_public_surface),
+        ("core public surface", check_error_and_model_public_surface),
         ("processor boundary mappings", check_processor_boundary_mappings),
         ("processor generic response allowlist", check_processor_generic_response_allowlist),
         ("required mapping adapters", check_required_mapping_adapters),

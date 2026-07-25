@@ -14,7 +14,7 @@
 
 use std::any::Any;
 
-use rocketmq_common::common::message::message_enum::MessageRequestMode;
+use rocketmq_model::common::message::message_enum::MessageRequestMode;
 
 pub trait MessageRequest: MessageRequestAny {
     fn get_message_request_mode(&self) -> MessageRequestMode;

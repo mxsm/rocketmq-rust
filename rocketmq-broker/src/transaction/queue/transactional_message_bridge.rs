@@ -19,20 +19,19 @@ use std::sync::Arc;
 use std::sync::Weak;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::config::TopicConfig;
-use rocketmq_common::common::message::message_client_id_setter::MessageClientIDSetter;
-use rocketmq_common::common::message::message_decoder;
-use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
-use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_common::common::message::message_single::Message;
-use rocketmq_common::common::message::MessageConst;
-use rocketmq_common::common::message::MessageTrait;
-use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
-use rocketmq_common::MessageAccessor::MessageAccessor;
-use rocketmq_common::MessageDecoder;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
+use rocketmq_model::common::config::TopicConfig;
+use rocketmq_model::common::message::message_accessor::MessageAccessor;
+use rocketmq_model::common::message::message_client_id_setter::MessageClientIDSetter;
+use rocketmq_model::common::message::message_ext::MessageExt;
+use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use rocketmq_model::common::message::message_queue::MessageQueue;
+use rocketmq_model::common::message::message_single::Message;
+use rocketmq_model::common::message::MessageConst;
+use rocketmq_model::common::message::MessageTrait;
+use rocketmq_model::common::sys_flag::message_sys_flag::MessageSysFlag;
+use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
+use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
+use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
@@ -236,7 +235,7 @@ where
         //TopicValidator::RMQ_SYS_TRANS_HALF_TOPIC topic is a special topic for half messages
         // write queue number is always 1, read queue number is always 1
         message.message_ext_inner.queue_id = 0;
-        let properties_to_string = message_decoder::message_properties_to_string(message.get_properties());
+        let properties_to_string = MessageDecoder::message_properties_to_string(message.get_properties());
         message.properties_string = properties_to_string;
     }
 
@@ -258,7 +257,7 @@ where
                 CheetahString::from_string(msg_ext.queue_offset.to_string()),
             );
         }
-        let properties_to_string = message_decoder::message_properties_to_string(message_inner.get_properties());
+        let properties_to_string = MessageDecoder::message_properties_to_string(message_inner.get_properties());
         message_inner.properties_string = properties_to_string;
         message_inner
     }
@@ -267,7 +266,7 @@ where
     pub fn renew_half_message_inner(msg_ext: &MessageExt) -> MessageExtBrokerInner {
         let mut inner = MessageExtBrokerInner {
             message_ext_inner: msg_ext.clone(),
-            properties_string: message_decoder::message_properties_to_string(msg_ext.get_properties()),
+            properties_string: MessageDecoder::message_properties_to_string(msg_ext.get_properties()),
             tags_code: MessageExtBrokerInner::tags_string_to_tags_code(msg_ext.tags().unwrap_or_default().as_str()),
             encoded_buff: None,
             encode_completed: false,

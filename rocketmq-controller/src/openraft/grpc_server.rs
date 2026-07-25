@@ -22,7 +22,7 @@ use tonic::Status;
 use tracing::debug;
 use tracing::error;
 
-use rocketmq_common::utils::crc32_utils::crc32;
+use rocketmq_model::utils::crc32_utils::crc32;
 
 use crate::openraft::SNAPSHOT_CHUNK_BYTES;
 use crate::openraft::SNAPSHOT_MAX_BYTES;
