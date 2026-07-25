@@ -35,12 +35,18 @@ pub const DEFAULT_NAMESRVADDR: &str = "127.0.0.1:9876";
 pub const TOPIC: &str = "TransactionSendTestTopic";
 pub const TAG: &str = "TransactionTag";
 
-#[tokio::main]
-pub async fn main() -> RocketMQResult<()> {
+#[path = "../support/mod.rs"]
+mod support;
+
+pub fn main() -> RocketMQResult<()> {
+    support::run(run)
+}
+
+async fn run(client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>) -> RocketMQResult<()> {
     let telemetry_guard =
         rocketmq_observability::install_global(&rocketmq_observability::TelemetryBootstrapConfig::default())
             .expect("telemetry logging bootstrap should initialize");
-    let mut producer = TransactionMQProducer::builder()
+    let mut producer = TransactionMQProducer::builder(client_runtime.clone())
         .producer_group(PRODUCER_GROUP)
         .name_server_addr(DEFAULT_NAMESRVADDR)
         .topics(vec![TOPIC])

@@ -17,10 +17,16 @@
 mod broker;
 mod consumer;
 mod dashboard;
-pub(crate) mod lifecycle;
+mod lifecycle;
 mod lite;
 mod message;
 mod security;
 pub mod services;
 mod static_topic;
 mod topic;
+
+pub use lifecycle::AdminBuilder;
+pub use lifecycle::AdminGuard;
+pub use lifecycle::AdminSession;
+pub use rocketmq_client_rust::ClientRuntime;
+pub use rocketmq_client_rust::ClientRuntimeConfig;

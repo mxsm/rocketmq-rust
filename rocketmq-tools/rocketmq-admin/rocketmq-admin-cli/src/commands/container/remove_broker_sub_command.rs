@@ -47,8 +47,14 @@ impl CommandExecute for RemoveBrokerSubCommand {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
-        let result = ContainerService::remove_broker_by_request_with_credentials(self.request()?, credentials).await?;
+        let result = ContainerService::remove_broker_by_request_with_credentials(
+            self.request()?,
+            credentials,
+            client_runtime.clone(),
+        )
+        .await?;
         println!("remove broker from {} success", result.broker_container_addr);
         Ok(())
     }

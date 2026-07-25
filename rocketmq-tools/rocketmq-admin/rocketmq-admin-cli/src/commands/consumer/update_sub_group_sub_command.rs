@@ -222,11 +222,16 @@ impl CommandExecute for UpdateSubGroupSubCommand {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
         let request = self.request()?;
         let config = request.config().clone();
-        let result =
-            ConsumerService::update_subscription_group_by_request_with_credentials(request, credentials).await?;
+        let result = ConsumerService::update_subscription_group_by_request_with_credentials(
+            request,
+            credentials,
+            client_runtime.clone(),
+        )
+        .await?;
         Self::print_result(&config, result)
     }
 }

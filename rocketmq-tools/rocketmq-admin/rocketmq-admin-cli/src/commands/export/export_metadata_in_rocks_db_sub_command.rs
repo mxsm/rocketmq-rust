@@ -105,7 +105,8 @@ impl ExportMetadataInRocksDBSubCommand {
 impl CommandExecute for ExportMetadataInRocksDBSubCommand {
     async fn execute(
         &self,
-        _rpc_hook: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        _credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        _client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
         let result = ExportService::export_metadata_in_rocksdb_by_request(&self.request())?;
         Self::print_result(&result)

@@ -18,8 +18,6 @@ use std::sync::Arc;
 use cheetah_string::CheetahString;
 use rocketmq_model::common::compression::compression_type::CompressionType;
 use rocketmq_protocol::common::compression::compressor::Compressor;
-#[allow(deprecated)]
-use rocketmq_runtime::RocketMQRuntime;
 use rocketmq_transport::runtime::RPCHook;
 
 use crate::base::client_config::ClientConfig;
@@ -30,11 +28,11 @@ use crate::producer::transaction_listener::ArcTransactionListener;
 use crate::producer::transaction_listener::TransactionListener;
 use crate::producer::transaction_mq_producer::TransactionMQProducer;
 use crate::producer::transaction_mq_producer::TransactionProducerConfig;
+use crate::runtime::ClientRuntime;
 use crate::trace::trace_dispatcher::ArcTraceDispatcher;
 
-#[derive(Default)]
-#[allow(deprecated)]
 pub struct TransactionMQProducerBuilder {
+    client_runtime: Arc<ClientRuntime>,
     client_config: Option<ClientConfig>,
     default_mqproducer_impl: Option<DefaultMQProducerImpl>,
     retry_response_codes: Option<HashSet<i32>>,
@@ -62,12 +60,12 @@ pub struct TransactionMQProducerBuilder {
     check_thread_pool_min_size: Option<u32>,
     check_thread_pool_max_size: Option<u32>,
     check_request_hold_max: Option<u32>,
-    check_runtime: Option<Arc<RocketMQRuntime>>,
 }
 
 impl TransactionMQProducerBuilder {
-    pub fn new() -> Self {
+    pub fn new(client_runtime: Arc<ClientRuntime>) -> Self {
         Self {
+            client_runtime,
             client_config: Some(Default::default()),
             default_mqproducer_impl: None,
             retry_response_codes: None,
@@ -95,7 +93,6 @@ impl TransactionMQProducerBuilder {
             check_thread_pool_min_size: None,
             check_thread_pool_max_size: None,
             check_request_hold_max: None,
-            check_runtime: None,
         }
     }
 
@@ -263,7 +260,7 @@ impl TransactionMQProducerBuilder {
     }
 
     pub fn build(self) -> TransactionMQProducer {
-        let mut mq_producer = DefaultMQProducer::default();
+        let mut mq_producer = DefaultMQProducer::unbound();
         if let Some(client_config) = self.client_config {
             mq_producer.set_client_config(client_config);
         }
@@ -338,6 +335,7 @@ impl TransactionMQProducerBuilder {
             mq_producer.set_default_mqproducer_impl(default_mqproducer_impl);
         } else {
             let producer_impl = DefaultMQProducerImpl::new(
+                self.client_runtime,
                 mq_producer.client_config().clone(),
                 mq_producer.producer_config().clone(),
                 mq_producer.rpc_hook().clone(),
@@ -347,16 +345,10 @@ impl TransactionMQProducerBuilder {
         let transaction_producer_config = TransactionProducerConfig {
             transaction_listener: self.transaction_listener,
             transaction_check_listener: None,
-            executor_service: None,
             check_thread_pool_min_size: self.check_thread_pool_min_size.unwrap_or(1),
             check_thread_pool_max_size: self.check_thread_pool_max_size.unwrap_or(1),
             check_request_hold_max: self.check_request_hold_max.unwrap_or(2000),
         };
         TransactionMQProducer::new(transaction_producer_config, mq_producer)
-    }
-
-    #[allow(deprecated)]
-    pub fn check_runtime(&mut self, check_runtime: RocketMQRuntime) {
-        self.check_runtime = Some(Arc::new(check_runtime));
     }
 }

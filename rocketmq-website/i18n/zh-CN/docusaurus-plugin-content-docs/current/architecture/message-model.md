@@ -2,6 +2,8 @@
 sidebar_position: 2
 title: 消息模型
 ---
+
+> Runtime 所有权：示例中的 `client_runtime` 是应用持有的 `Arc<ClientRuntime>`，它从 `RuntimeOwner` 的 child scope 创建，并在进程边界显式关闭。
 # 消息模型
 
 理解 RocketMQ 的消息模型，是设计高质量消息应用的关键。
@@ -124,7 +126,7 @@ producer
 use rocketmq_client_rust::producer::mq_producer::MQProducer;
 use rocketmq_client_rust::producer::transaction_mq_producer::TransactionMQProducer;
 
-let mut transaction_producer = TransactionMQProducer::builder()
+let mut transaction_producer = TransactionMQProducer::builder(client_runtime.clone())
     .producer_group("tx_group")
     .name_server_addr("localhost:9876")
     .topics(vec!["OrderEvents"])

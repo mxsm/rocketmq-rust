@@ -107,6 +107,7 @@ impl CommandExecute for ConsumeMessageSubCommand {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
         let begin_timestamp = self
             .begin_timestamp
@@ -125,7 +126,7 @@ impl CommandExecute for ConsumeMessageSubCommand {
             self.message_number,
         )?;
 
-        MessageService::consume_messages_by_request_with_credentials(request, credentials, |event| {
+        MessageService::consume_messages_by_request_with_credentials(request, credentials, client_runtime, |event| {
             match event {
                 MessagePullEvent::ConsumeOk => println!("Consume ok"),
                 MessagePullEvent::Messages { messages } => Self::print_messages(&messages),

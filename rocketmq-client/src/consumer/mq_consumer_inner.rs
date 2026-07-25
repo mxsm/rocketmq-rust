@@ -330,6 +330,7 @@ mod tests {
             ..Default::default()
         });
         let impl_ = Arc::new(DefaultLitePullConsumerImpl::new(
+            crate::runtime::test_client_runtime("mq-consumer-inner-test"),
             Arc::new(ClientConfig::default()),
             consumer_config,
         ));

@@ -8,6 +8,7 @@ use super::ArgKind;
 use super::CommandCategory;
 use super::ResultViewKind;
 use super::RiskLevel;
+use crate::admin_facade::test_client_runtime;
 use crate::admin_facade::TuiAdminFacade;
 use crate::state::CommandFormState;
 
@@ -102,7 +103,7 @@ fn command_ids_are_unique() {
 fn executor_dispatch_future_stays_boxed_to_avoid_stack_growth() {
     let catalog = command_catalog();
     let command = catalog.iter().find(|command| command.id == "topic.list").unwrap();
-    let facade = TuiAdminFacade::default();
+    let facade = TuiAdminFacade::new(test_client_runtime());
     let form = CommandFormState::for_command(command);
 
     let future = execute_command_with_progress(&facade, command, &form, |_| {});

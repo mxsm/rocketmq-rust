@@ -91,13 +91,14 @@ impl CommandExecute for OffsetCommands {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
         match self {
-            OffsetCommands::CloneGroupOffset(cmd) => cmd.execute(credentials).await,
-            OffsetCommands::GetConsumerStatus(cmd) => cmd.execute(credentials).await,
-            OffsetCommands::ResetOffsetByTime(cmd) => cmd.execute(credentials).await,
-            OffsetCommands::ResetOffsetByTimeOld(cmd) => cmd.execute(credentials).await,
-            OffsetCommands::SkipAccumulatedMessage(cmd) => cmd.execute(credentials).await,
+            OffsetCommands::CloneGroupOffset(cmd) => cmd.execute(credentials, client_runtime.clone()).await,
+            OffsetCommands::GetConsumerStatus(cmd) => cmd.execute(credentials, client_runtime.clone()).await,
+            OffsetCommands::ResetOffsetByTime(cmd) => cmd.execute(credentials, client_runtime.clone()).await,
+            OffsetCommands::ResetOffsetByTimeOld(cmd) => cmd.execute(credentials, client_runtime.clone()).await,
+            OffsetCommands::SkipAccumulatedMessage(cmd) => cmd.execute(credentials, client_runtime.clone()).await,
         }
     }
 }

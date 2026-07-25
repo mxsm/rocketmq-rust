@@ -131,11 +131,13 @@ impl CommandExecute for UpdateBrokerConfigSubCommand {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
         let request = self.request()?;
         let plan = BrokerService::build_broker_config_update_plan_by_request_with_credentials(
             request.clone(),
             credentials.clone(),
+            client_runtime.clone(),
         )
         .await?;
 
@@ -150,9 +152,13 @@ impl CommandExecute for UpdateBrokerConfigSubCommand {
             return Ok(());
         }
 
-        let apply_result =
-            BrokerService::apply_broker_config_update_plan_by_request_with_credentials(&request, &plan, credentials)
-                .await?;
+        let apply_result = BrokerService::apply_broker_config_update_plan_by_request_with_credentials(
+            &request,
+            &plan,
+            credentials,
+            client_runtime.clone(),
+        )
+        .await?;
         print_apply_result(&apply_result, plan.changed_broker_count());
         Ok(())
     }

@@ -14,8 +14,8 @@
 
 use std::sync::Arc;
 
+use rocketmq_admin_core::client_adapter::AdminSession;
 use rocketmq_admin_core::core::AdminError;
-use rocketmq_admin_core::core::admin::AdminSession;
 use rocketmq_admin_core::core::topic::DeleteTopicAdminRequest;
 use rocketmq_admin_core::core::topic::GetTopicConfigRequest as AdminGetTopicConfigRequest;
 use rocketmq_admin_core::core::topic::GetTopicRouteRequest;

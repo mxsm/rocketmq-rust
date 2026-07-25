@@ -18,7 +18,7 @@ use crate::nameserver::runtime::NameServerRuntimeState;
 use crate::nameserver::types::NameServerHomePageView;
 use crate::nameserver::types::NameServerStatusItem;
 use anyhow::Result;
-use rocketmq_admin_core::core::admin::AdminBuilder;
+use rocketmq_admin_core::client_adapter::AdminBuilder;
 use rocketmq_dashboard_common::NameServerConfigSnapshot;
 use rocketmq_dashboard_common::NameServerMutationResult;
 use rocketmq_dashboard_common::NameServerService;
@@ -37,7 +37,9 @@ pub(crate) trait NameServerProbe: Send + Sync {
     ) -> Pin<Box<dyn Future<Output = bool> + Send + 'a>>;
 }
 
-struct DefaultNameServerProbe;
+struct DefaultNameServerProbe {
+    client_runtime: Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
+}
 
 impl NameServerProbe for DefaultNameServerProbe {
     fn probe<'a>(
@@ -46,7 +48,7 @@ impl NameServerProbe for DefaultNameServerProbe {
         address: &'a str,
     ) -> Pin<Box<dyn Future<Output = bool> + Send + 'a>> {
         Box::pin(async move {
-            let mut admin = match AdminBuilder::new()
+            let mut admin = match AdminBuilder::new(Arc::clone(&self.client_runtime))
                 .admin_group(format!("dashboard-nameserver-probe-{}", Uuid::new_v4()))
                 .namesrv_addr(address)
                 .timeout_millis(NAMESERVER_PROBE_TIMEOUT_MILLIS)
@@ -87,7 +89,10 @@ pub(crate) struct NameServerManager {
 
 impl NameServerManager {
     pub(crate) fn new(db: NameServerDb, runtime: Arc<NameServerRuntimeState>) -> Result<Self> {
-        Self::with_probe(db, runtime, Arc::new(DefaultNameServerProbe))
+        let probe = Arc::new(DefaultNameServerProbe {
+            client_runtime: runtime.client_runtime(),
+        });
+        Self::with_probe(db, runtime, probe)
     }
 
     pub(crate) fn with_probe(
@@ -171,6 +176,7 @@ mod tests {
     use crate::nameserver::db::NameServerDb;
     use crate::nameserver::db::SqliteNameServerStore;
     use crate::nameserver::runtime::NameServerRuntimeState;
+    use crate::nameserver::runtime::test_client_runtime;
     use crate::nameserver::types::NameServerHomePageView;
     use rocketmq_dashboard_common::NameServerConfigSnapshot;
     use rocketmq_dashboard_common::NameServerConfigStore;
@@ -226,6 +232,7 @@ mod tests {
                 db,
                 Arc::new(NameServerRuntimeState::new(
                     store.load_snapshot().expect("snapshot should load"),
+                    test_client_runtime(),
                 )),
             )
             .expect("manager should initialize"),
@@ -278,6 +285,7 @@ mod tests {
                 db,
                 Arc::new(NameServerRuntimeState::new(
                     store.load_snapshot().expect("snapshot should load"),
+                    test_client_runtime(),
                 )),
                 Arc::new(ProbeSpy::with_statuses(statuses)),
             )

@@ -29,6 +29,7 @@ use crate::consumer::consumer_impl::default_lite_pull_consumer_impl::validate_li
 use crate::consumer::consumer_impl::default_lite_pull_consumer_impl::LitePullConsumerConfig;
 use crate::consumer::default_lite_pull_consumer::DefaultLitePullConsumer;
 use crate::consumer::rebalance_strategy::allocate_message_queue_averagely::AllocateMessageQueueAveragely;
+use crate::runtime::ClientRuntime;
 use crate::trace::trace_dispatcher::TraceDispatcher;
 
 pub(crate) const MIN_AUTOCOMMIT_INTERVAL_MILLIS: u64 = 1000;
@@ -40,7 +41,7 @@ pub(crate) const MIN_AUTOCOMMIT_INTERVAL_MILLIS: u64 = 1000;
 /// ```rust,ignore
 /// use rocketmq_client::consumer::default_lite_pull_consumer::DefaultLitePullConsumer;
 ///
-/// let consumer = DefaultLitePullConsumer::builder()
+/// let consumer = DefaultLitePullConsumer::builder(client_runtime.clone())
 ///     .consumer_group("my_consumer_group")
 ///     .name_server_addr("127.0.0.1:9876")
 ///     .pull_batch_size(32)
@@ -48,6 +49,7 @@ pub(crate) const MIN_AUTOCOMMIT_INTERVAL_MILLIS: u64 = 1000;
 ///     .build()?;
 /// ```
 pub struct DefaultLitePullConsumerBuilder {
+    client_runtime: Arc<ClientRuntime>,
     // Client configuration
     name_server_addr: Option<CheetahString>,
     client_ip: Option<CheetahString>,
@@ -102,16 +104,11 @@ pub struct DefaultLitePullConsumerBuilder {
     custom_trace_topic: Option<CheetahString>,
 }
 
-impl Default for DefaultLitePullConsumerBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl DefaultLitePullConsumerBuilder {
     /// Creates a new builder with default configuration.
-    pub fn new() -> Self {
+    pub fn new(client_runtime: Arc<ClientRuntime>) -> Self {
         Self {
+            client_runtime,
             name_server_addr: None,
             client_ip: None,
             instance_name: None,
@@ -428,6 +425,7 @@ impl DefaultLitePullConsumerBuilder {
         };
 
         Ok(DefaultLitePullConsumer::new(
+            self.client_runtime,
             client_config,
             consumer_config,
             self.rpc_hook,
@@ -442,9 +440,13 @@ impl DefaultLitePullConsumerBuilder {
 mod tests {
     use super::*;
 
+    fn test_runtime() -> Arc<ClientRuntime> {
+        crate::runtime::test_client_runtime("lite-pull-consumer-builder-test")
+    }
+
     #[test]
     fn build_without_consumer_group_returns_error() {
-        let result = DefaultLitePullConsumerBuilder::new().build();
+        let result = DefaultLitePullConsumerBuilder::new(test_runtime()).build();
         match result {
             Ok(_) => panic!("builder should reject missing consumer group"),
             Err(error) => assert!(error.to_string().contains("consumer_group is required")),
@@ -453,7 +455,7 @@ mod tests {
 
     #[test]
     fn build_without_name_server_addr_uses_default_client_config() {
-        let consumer = DefaultLitePullConsumerBuilder::new()
+        let consumer = DefaultLitePullConsumerBuilder::new(test_runtime())
             .consumer_group("lite_pull_group")
             .build()
             .expect("builder should use default client config");
@@ -463,7 +465,7 @@ mod tests {
 
     #[test]
     fn build_enables_stream_request_type_like_java_lite_pull_constructor() {
-        let consumer = DefaultLitePullConsumerBuilder::new()
+        let consumer = DefaultLitePullConsumerBuilder::new(test_runtime())
             .consumer_group("lite_pull_group")
             .build()
             .expect("builder should use Java LitePull client id mode");
@@ -474,7 +476,7 @@ mod tests {
 
     #[test]
     fn build_use_tls_initializes_client_config_like_java_client_config() {
-        let consumer = DefaultLitePullConsumerBuilder::new()
+        let consumer = DefaultLitePullConsumerBuilder::new(test_runtime())
             .consumer_group("lite_pull_tls_group")
             .use_tls(true)
             .build()
@@ -487,7 +489,7 @@ mod tests {
     #[test]
     #[allow(deprecated)]
     fn build_rejects_unsupported_consume_from_where_like_java_lite_pull() {
-        let result = DefaultLitePullConsumerBuilder::new()
+        let result = DefaultLitePullConsumerBuilder::new(test_runtime())
             .consumer_group("lite_pull_group")
             .consume_from_where(ConsumeFromWhere::ConsumeFromMinOffset)
             .build();
@@ -500,7 +502,7 @@ mod tests {
 
     #[test]
     fn default_pull_threshold_for_all_matches_java() {
-        let consumer = DefaultLitePullConsumerBuilder::new()
+        let consumer = DefaultLitePullConsumerBuilder::new(test_runtime())
             .consumer_group("lite_pull_group")
             .build()
             .expect("builder should use Java default pull threshold");
@@ -511,7 +513,7 @@ mod tests {
 
     #[test]
     fn pull_thread_nums_defaults_and_overrides_match_java_lite_pull() {
-        let default_consumer = DefaultLitePullConsumerBuilder::new()
+        let default_consumer = DefaultLitePullConsumerBuilder::new(test_runtime())
             .consumer_group("lite_pull_group")
             .build()
             .expect("builder should use Java default pull thread count");
@@ -519,7 +521,7 @@ mod tests {
         assert_eq!(default_consumer.consumer_config().pull_thread_nums, 20);
         assert_eq!(LitePullConsumerConfig::default().pull_thread_nums, 20);
 
-        let custom_consumer = DefaultLitePullConsumerBuilder::new()
+        let custom_consumer = DefaultLitePullConsumerBuilder::new(test_runtime())
             .consumer_group("lite_pull_group")
             .pull_thread_nums(7)
             .build()
@@ -530,7 +532,7 @@ mod tests {
 
     #[tokio::test]
     async fn broker_selection_defaults_and_overrides_match_java_lite_pull() {
-        let default_consumer = DefaultLitePullConsumerBuilder::new()
+        let default_consumer = DefaultLitePullConsumerBuilder::new(test_runtime())
             .consumer_group("lite_pull_group")
             .build()
             .expect("builder should use Java default broker selection");
@@ -540,7 +542,7 @@ mod tests {
         assert!(!LitePullConsumerConfig::default().connect_broker_by_user);
         assert_eq!(LitePullConsumerConfig::default().default_broker_id, mix_all::MASTER_ID);
 
-        let custom_consumer = DefaultLitePullConsumerBuilder::new()
+        let custom_consumer = DefaultLitePullConsumerBuilder::new(test_runtime())
             .consumer_group("lite_pull_group")
             .connect_broker_by_user(true)
             .default_broker_id(2)
@@ -553,7 +555,7 @@ mod tests {
 
     #[tokio::test]
     async fn unit_mode_defaults_and_overrides_match_java_lite_pull() {
-        let default_consumer = DefaultLitePullConsumerBuilder::new()
+        let default_consumer = DefaultLitePullConsumerBuilder::new(test_runtime())
             .consumer_group("lite_pull_group")
             .build()
             .expect("builder should use Java default unit mode");
@@ -562,7 +564,7 @@ mod tests {
         assert!(!default_consumer.consumer_config().unit_mode);
         assert!(!LitePullConsumerConfig::default().unit_mode);
 
-        let custom_consumer = DefaultLitePullConsumerBuilder::new()
+        let custom_consumer = DefaultLitePullConsumerBuilder::new(test_runtime())
             .consumer_group("lite_pull_group")
             .unit_mode(true)
             .build()
@@ -574,7 +576,7 @@ mod tests {
 
     #[test]
     fn long_polling_timeout_defaults_and_overrides_match_java_lite_pull() {
-        let default_consumer = DefaultLitePullConsumerBuilder::new()
+        let default_consumer = DefaultLitePullConsumerBuilder::new(test_runtime())
             .consumer_group("lite_pull_group")
             .build()
             .expect("builder should use Java default long polling timeouts");
@@ -595,7 +597,7 @@ mod tests {
         );
         assert_eq!(LitePullConsumerConfig::default().consumer_pull_timeout_millis, 10_000);
 
-        let custom_consumer = DefaultLitePullConsumerBuilder::new()
+        let custom_consumer = DefaultLitePullConsumerBuilder::new(test_runtime())
             .consumer_group("lite_pull_group")
             .broker_suspend_max_time_millis(12_345)
             .consumer_timeout_millis_when_suspend(23_456)
@@ -613,7 +615,7 @@ mod tests {
 
     #[test]
     fn default_consume_timestamp_matches_java_shape() {
-        let consumer = DefaultLitePullConsumerBuilder::new()
+        let consumer = DefaultLitePullConsumerBuilder::new(test_runtime())
             .consumer_group("lite_pull_group")
             .build()
             .expect("builder should use Java default consume timestamp");
@@ -642,7 +644,7 @@ mod tests {
 
     #[test]
     fn auto_commit_interval_below_java_minimum_keeps_default() {
-        let consumer = DefaultLitePullConsumerBuilder::new()
+        let consumer = DefaultLitePullConsumerBuilder::new(test_runtime())
             .consumer_group("lite_pull_group")
             .auto_commit_interval_millis(MIN_AUTOCOMMIT_INTERVAL_MILLIS - 1)
             .build()
@@ -653,7 +655,7 @@ mod tests {
 
     #[test]
     fn auto_commit_interval_below_java_minimum_keeps_previous_valid_value() {
-        let consumer = DefaultLitePullConsumerBuilder::new()
+        let consumer = DefaultLitePullConsumerBuilder::new(test_runtime())
             .consumer_group("lite_pull_group")
             .auto_commit_interval_millis(2000)
             .auto_commit_interval_millis(MIN_AUTOCOMMIT_INTERVAL_MILLIS - 1)

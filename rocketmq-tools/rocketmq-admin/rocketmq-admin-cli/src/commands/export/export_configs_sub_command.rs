@@ -58,9 +58,15 @@ impl CommandExecute for ExportConfigsSubCommand {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
         let file_path = self.file_path.trim();
-        let result = ExportService::export_configs_by_request_with_credentials(self.request()?, credentials).await?;
+        let result = ExportService::export_configs_by_request_with_credentials(
+            self.request()?,
+            credentials,
+            client_runtime.clone(),
+        )
+        .await?;
 
         Self::write_result(&result, file_path)
     }

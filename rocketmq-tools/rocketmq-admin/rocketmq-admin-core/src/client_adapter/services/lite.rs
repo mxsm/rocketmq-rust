@@ -435,8 +435,9 @@ impl LiteService {
     pub async fn query_broker_lite_info_by_request_with_credentials(
         request: BrokerLiteInfoQueryRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<BrokerLiteInfoQueryResult> {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials)
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
         let result = Self::query_broker_lite_info_with_admin(&admin, &request).await;
@@ -486,8 +487,9 @@ impl LiteService {
     pub async fn query_parent_topic_info_by_request_with_credentials(
         request: ParentTopicInfoQueryRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<ParentTopicInfoQueryResult> {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials)
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
         let result = Self::query_parent_topic_info_with_admin(&admin, &request).await;
@@ -541,8 +543,9 @@ impl LiteService {
     pub async fn query_lite_topic_info_by_request_with_credentials(
         request: LiteTopicInfoQueryRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<LiteTopicInfoQueryResult> {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials)
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
         let result = Self::query_lite_topic_info_with_admin(&admin, &request).await;
@@ -601,8 +604,9 @@ impl LiteService {
     pub async fn query_lite_group_info_by_request_with_credentials(
         request: LiteGroupInfoQueryRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<LiteGroupInfoQueryResult> {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials)
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
         let result = Self::query_lite_group_info_with_admin(&admin, &request).await;
@@ -683,8 +687,9 @@ impl LiteService {
     pub async fn query_lite_client_info_by_request_with_credentials(
         request: LiteClientInfoQueryRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<LiteClientInfoQueryResult> {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials)
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
         let result = Self::query_lite_client_info_with_admin(&admin, &request).await;
@@ -745,8 +750,9 @@ impl LiteService {
     pub async fn trigger_lite_dispatch_by_request_with_credentials(
         request: TriggerLiteDispatchRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<TriggerLiteDispatchResult> {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials)
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
         let result = Self::trigger_lite_dispatch_with_admin(&admin, &request).await;
@@ -826,7 +832,9 @@ fn trim_required_cheetah(field: &'static str, value: impl Into<String>) -> Rocke
 fn admin_builder_with_credentials(
     builder: AdminBuilder,
     credentials: Option<crate::core::security::AdminCredentials>,
+    client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
 ) -> AdminBuilder {
+    let builder = builder.client_runtime(client_runtime);
     match credentials {
         Some(hook) => builder.credentials(hook),
         None => builder,

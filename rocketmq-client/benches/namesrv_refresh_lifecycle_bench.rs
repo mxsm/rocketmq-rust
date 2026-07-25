@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[path = "support/mod.rs"]
+mod support;
+
 use std::fs;
 use std::hint::black_box;
 use std::path::PathBuf;
@@ -28,19 +31,17 @@ use rocketmq_client_rust::NamesrvRefreshLifecycleProbe;
 use rocketmq_client_rust::RouteRefreshShardProbe;
 
 fn run_lifecycle_probe() -> NamesrvRefreshLifecycleProbe {
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
-        .max_blocking_threads(4)
-        .thread_name("rocketmq-client-namesrv-refresh-bench")
-        .enable_all()
-        .build()
-        .expect("namesrv refresh benchmark runtime should start");
-
-    runtime.block_on(run_namesrv_refresh_lifecycle_probe())
+    let runtime = support::BenchClientRuntime::new("namesrv-refresh");
+    let output = runtime.block_on(run_namesrv_refresh_lifecycle_probe(runtime.child("namesrv-refresh")));
+    runtime.shutdown();
+    output
 }
 
 fn run_route_refresh_probe(topic_count: usize) -> RouteRefreshShardProbe {
-    run_route_refresh_shard_probe(topic_count)
+    let runtime = support::BenchClientRuntime::new("route-refresh");
+    let output = run_route_refresh_shard_probe(runtime.client_runtime(), topic_count);
+    runtime.shutdown();
+    output
 }
 
 fn workspace_root() -> PathBuf {

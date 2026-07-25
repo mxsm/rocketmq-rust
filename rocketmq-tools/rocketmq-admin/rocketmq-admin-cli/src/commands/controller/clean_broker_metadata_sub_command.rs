@@ -67,10 +67,16 @@ impl CommandExecute for CleanBrokerMetadataSubCommand {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
         let request = self.request()?;
         let broker_name = request.broker_name().to_string();
-        ControllerService::clean_controller_metadata_by_request_with_credentials(request, credentials).await?;
+        ControllerService::clean_controller_metadata_by_request_with_credentials(
+            request,
+            credentials,
+            client_runtime.clone(),
+        )
+        .await?;
         println!("clear broker {} metadata from controller success!", broker_name);
         Ok(())
     }

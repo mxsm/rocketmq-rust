@@ -51,6 +51,7 @@ impl CommandExecute for UpdateUserSubCommand {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
         let request = UpdateUserRequest::try_new(
             self.broker_addr.clone(),
@@ -60,7 +61,8 @@ impl CommandExecute for UpdateUserSubCommand {
             self.user_type.clone(),
             self.user_status.clone(),
         )?;
-        let result = AuthService::update_user_by_request_with_credentials(request, credentials).await?;
+        let result =
+            AuthService::update_user_by_request_with_credentials(request, credentials, client_runtime.clone()).await?;
         for broker_addr in result.broker_addrs {
             println!("update user to {} success.", broker_addr);
         }

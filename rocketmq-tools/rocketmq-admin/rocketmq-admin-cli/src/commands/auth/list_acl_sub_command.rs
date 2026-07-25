@@ -59,6 +59,7 @@ impl CommandExecute for ListAclSubCommand {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
         let request = ListAclRequest::try_new(
             self.broker_addr.clone(),
@@ -66,7 +67,8 @@ impl CommandExecute for ListAclSubCommand {
             self.subject.clone(),
         )?
         .with_optional_namesrv_addr(self.common_args.namesrv_addr.clone());
-        let result = AuthService::list_acl_by_request_with_credentials(request, credentials).await?;
+        let result =
+            AuthService::list_acl_by_request_with_credentials(request, credentials, client_runtime.clone()).await?;
         render_list_acl_result(result)
     }
 }

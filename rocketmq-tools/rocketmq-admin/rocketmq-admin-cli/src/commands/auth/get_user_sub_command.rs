@@ -64,6 +64,7 @@ impl CommandExecute for GetUserSubCommand {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
         let command = ParseGetUserSubCommand::new(self)?;
         let request = GetUserRequest::try_new(
@@ -71,7 +72,8 @@ impl CommandExecute for GetUserSubCommand {
             self.cluster_name.clone(),
             command.username.clone().to_string(),
         )?;
-        let result = AuthService::get_user_by_request_with_credentials(request, credentials).await?;
+        let result =
+            AuthService::get_user_by_request_with_credentials(request, credentials, client_runtime.clone()).await?;
         render_get_user_result(&command, result, self.broker_addr.is_some())
     }
 }

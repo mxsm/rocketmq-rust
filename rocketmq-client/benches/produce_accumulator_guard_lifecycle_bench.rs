@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[path = "support/mod.rs"]
+mod support;
+
 use std::fs;
 use std::hint::black_box;
 use std::path::PathBuf;
@@ -26,15 +29,12 @@ use rocketmq_client_rust::run_produce_accumulator_guard_lifecycle_probe;
 use rocketmq_client_rust::ProduceAccumulatorGuardLifecycleProbe;
 
 fn run_lifecycle_probe() -> ProduceAccumulatorGuardLifecycleProbe {
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
-        .max_blocking_threads(4)
-        .thread_name("rocketmq-client-produce-accumulator-guard-bench")
-        .enable_all()
-        .build()
-        .expect("produce accumulator guard benchmark runtime should start");
-
-    runtime.block_on(run_produce_accumulator_guard_lifecycle_probe())
+    let runtime = support::BenchClientRuntime::new("produce-accumulator-guard");
+    let output = runtime.block_on(run_produce_accumulator_guard_lifecycle_probe(
+        runtime.child("produce-accumulator"),
+    ));
+    runtime.shutdown();
+    output
 }
 
 fn workspace_root() -> PathBuf {

@@ -56,7 +56,8 @@ impl GetBrokerConfigSubCommand {
 impl CommandExecute for GetBrokerConfigSubCommand {
     async fn execute(
         &self,
-        _rpc_hook: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        _credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        _client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
         let result = BrokerService::query_broker_config_by_request(self.request()?).await?;
         print_broker_config_result(&result);

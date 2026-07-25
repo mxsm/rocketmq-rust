@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[path = "support/mod.rs"]
+mod support;
+
 use std::hint::black_box;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -31,7 +34,7 @@ use rocketmq_client_rust::consumer::consumer_impl::process_queue::ProcessQueue;
 use rocketmq_client_rust::consumer::consumer_impl::pull_message_service::PullMessageService;
 use rocketmq_client_rust::consumer::consumer_impl::pull_message_service::PullMessageServiceShardSnapshot;
 use rocketmq_client_rust::consumer::consumer_impl::pull_request::PullRequest;
-use rocketmq_client_rust::factory::mq_client_instance::MQClientInstance;
+use rocketmq_client_rust::ClientRuntime;
 use rocketmq_model::common::message::message_queue::MessageQueue;
 use serde::Serialize;
 use tokio::runtime::Runtime;
@@ -167,13 +170,21 @@ async fn wait_for_sharded_pull_requests(
     }
 }
 
-async fn run_sharded_pull_workers(request_count: usize, shard_count: usize) -> ShardedPullSchedulerBenchOutput {
+async fn run_sharded_pull_workers(
+    client_runtime: Arc<ClientRuntime>,
+    request_count: usize,
+    shard_count: usize,
+) -> ShardedPullSchedulerBenchOutput {
     let client_config = ClientConfig {
         namesrv_addr: None,
         pull_message_service_shards: shard_count,
         ..Default::default()
     };
-    let instance = MQClientInstance::new_arc(client_config, 0, "client-pull-scheduler-sharded-bench", None);
+    let (instance, token) = client_runtime
+        .pool()
+        .get_or_create(client_config, None)
+        .expect("benchmark client instance should be created")
+        .into_parts();
     let service = PullMessageService::with_capacity_and_shards(request_count.next_power_of_two(), shard_count);
     service
         .start(instance.clone())
@@ -193,7 +204,7 @@ async fn run_sharded_pull_workers(request_count: usize, shard_count: usize) -> S
         .shutdown(1_000)
         .await
         .expect("sharded pull scheduler benchmark service should shutdown");
-    instance.shutdown().await;
+    assert!(client_runtime.pool().release(token).await);
 
     ShardedPullSchedulerBenchOutput {
         request_count,
@@ -218,12 +229,12 @@ fn benchmark_artifact_dir() -> PathBuf {
     workspace_root().join("target/runtime-baseline/prototype")
 }
 
-fn write_pull_scheduler_report_artifact(runtime: &Runtime) {
+fn write_pull_scheduler_report_artifact(runtime: &Runtime, client_runtime: Arc<ClientRuntime>) {
     let request_count = 1000usize;
     let delay = Duration::from_millis(20);
     let one_shot = runtime.block_on(run_one_shot_sleep_tasks(request_count, delay));
     let shared_scheduler = runtime.block_on(run_shared_scheduler_tasks(request_count, delay));
-    let sharded_pull_workers = runtime.block_on(run_sharded_pull_workers(request_count, 4));
+    let sharded_pull_workers = runtime.block_on(run_sharded_pull_workers(client_runtime, request_count, 4));
     let output_dir = benchmark_artifact_dir();
     std::fs::create_dir_all(&output_dir).expect("pull scheduler benchmark artifact directory should be created");
 
@@ -248,7 +259,9 @@ fn write_pull_scheduler_report_artifact(runtime: &Runtime) {
 
 fn bench_pull_scheduler(c: &mut Criterion) {
     let runtime = Runtime::new().expect("pull scheduler benchmark runtime should start");
-    write_pull_scheduler_report_artifact(&runtime);
+    let runtime_owner = support::BenchClientRuntime::new("pull-scheduler");
+    let client_runtime = runtime_owner.client_runtime();
+    write_pull_scheduler_report_artifact(&runtime, client_runtime.clone());
 
     let mut group = c.benchmark_group("client_pull_scheduler/delayed_1000");
     let request_count = 1000usize;
@@ -278,17 +291,22 @@ fn bench_pull_scheduler(c: &mut Criterion) {
         BenchmarkId::new("ShardedPullWorkers", request_count),
         &request_count,
         |bencher, &request_count| {
-            bencher.to_async(&runtime).iter(|| async move {
-                let output = run_sharded_pull_workers(request_count, 4).await;
-                assert_eq!(output.request_count, request_count);
-                assert_eq!(output.processed_count, request_count as u64);
-                black_box(output.worker_task_count);
-                black_box(output.elapsed_us);
+            let client_runtime = client_runtime.clone();
+            bencher.to_async(&runtime).iter(|| {
+                let client_runtime = client_runtime.clone();
+                async move {
+                    let output = run_sharded_pull_workers(client_runtime, request_count, 4).await;
+                    assert_eq!(output.request_count, request_count);
+                    assert_eq!(output.processed_count, request_count as u64);
+                    black_box(output.worker_task_count);
+                    black_box(output.elapsed_us);
+                }
             });
         },
     );
 
     group.finish();
+    runtime_owner.shutdown();
 }
 
 criterion_group! {

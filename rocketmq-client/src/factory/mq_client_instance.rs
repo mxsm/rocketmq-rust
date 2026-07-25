@@ -65,6 +65,7 @@ use rocketmq_protocol::protocol::subscription::subscription_group_config::Subscr
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::schedule::simple_scheduler::ScheduledTaskManager;
 use rocketmq_runtime::tokio_lock::RocketMQTokioMutex;
+use rocketmq_runtime::ChildServiceContext;
 use rocketmq_transport::base::connection_net_event::ConnectionNetEvent;
 use rocketmq_transport::rpc::client_metadata::ClientMetadata;
 use rocketmq_transport::runtime::config::client_config::TokioClientConfig;
@@ -97,9 +98,11 @@ use crate::producer::default_mq_producer::DefaultMQProducer;
 use crate::producer::default_mq_producer::ProducerConfig;
 use crate::producer::producer_impl::mq_producer_inner::MQProducerInnerImpl;
 use crate::producer::producer_impl::topic_publish_info::TopicPublishInfo;
+use crate::producer::request_future_holder::RequestFutureHolder;
 use crate::producer::send_result::SendResult;
-use crate::runtime::spawn_client_task;
-use crate::runtime::spawn_client_tracked_task;
+use crate::runtime::spawn_client_task_with_context;
+use crate::runtime::spawn_client_tracked_task_with_context;
+use crate::runtime::ClientRuntime;
 use crate::runtime::ClientTrackedTaskHandle;
 use crate::stat::consumer_stats_manager::ConsumerStatsManager;
 
@@ -173,11 +176,13 @@ async fn run_connection_net_event_listener(
 }
 
 fn spawn_connection_net_event_listener(
+    service_context: &ChildServiceContext,
     rx: tokio::sync::broadcast::Receiver<ConnectionNetEvent>,
     weak_instance: Weak<MQClientInstance>,
     shutdown_token: CancellationToken,
 ) -> Option<ClientTrackedTaskHandle> {
-    match spawn_client_tracked_task(
+    match spawn_client_tracked_task_with_context(
+        service_context,
         "rocketmq-client-connection-events",
         run_connection_net_event_listener(rx, weak_instance, shutdown_token),
     ) {
@@ -193,6 +198,7 @@ fn spawn_connection_net_event_listener(
 }
 
 fn schedule_rebalance_wakeup(
+    service_context: &ChildServiceContext,
     service: RebalanceService,
     delay: Duration,
     tracker: &TaskTracker,
@@ -220,12 +226,14 @@ fn schedule_rebalance_wakeup(
         }
     });
 
-    if let Err(error) = spawn_client_task("rocketmq-client-rebalance-delay", task) {
+    if let Err(error) = spawn_client_task_with_context(service_context, "rocketmq-client-rebalance-delay", task) {
         error!("Failed to spawn delayed rebalance wakeup task: {}", error);
     }
 }
 
 pub struct MQClientInstance {
+    service_context: ChildServiceContext,
+    request_future_holder: Arc<RequestFutureHolder>,
     pub(crate) client_config: Arc<ClientConfig>,
     pub(crate) client_id: CheetahString,
     boot_timestamp: u64,
@@ -328,9 +336,11 @@ enum TopicRouteApplyOutcome {
 impl MQClientInstance {
     pub fn new_arc(
         client_config: ClientConfig,
-        _instance_index: i32,
+        _instance_generation: u64,
         client_id: impl Into<CheetahString>,
         rpc_hook: Option<Arc<dyn RPCHook>>,
+        service_context: ChildServiceContext,
+        request_future_holder: Arc<RequestFutureHolder>,
     ) -> Arc<MQClientInstance> {
         let client_id = client_id.into();
         let shared_config = Arc::new(client_config.clone());
@@ -345,13 +355,21 @@ impl MQClientInstance {
         let broker_heartbeat_fingerprint_table = Arc::new(DashMap::default());
         let broker_support_v2_heartbeat_set = Arc::new(DashMap::default());
 
-        let default_producer = Mutex::new(
-            DefaultMQProducer::builder()
-                .producer_group(mix_all::CLIENT_INNER_PRODUCER_GROUP)
-                .client_config(client_config.clone())
-                .build(),
+        let mut default_producer = DefaultMQProducer::unbound();
+        default_producer.set_client_config(client_config.clone());
+        default_producer.set_producer_group(mix_all::CLIENT_INNER_PRODUCER_GROUP);
+        default_producer.set_default_mqproducer_impl(
+            crate::producer::producer_impl::default_mq_producer_impl::DefaultMQProducerImpl::new_internal(
+                service_context.child("default-producer"),
+                default_producer.client_config().clone(),
+                default_producer.producer_config().clone(),
+                None,
+            ),
         );
+        let default_producer = Mutex::new(default_producer);
         let instance = Arc::new(MQClientInstance {
+            service_context: service_context.clone(),
+            request_future_holder,
             client_config: shared_config,
             client_id,
             boot_timestamp: current_millis(),
@@ -380,7 +398,7 @@ impl MQClientInstance {
             broker_heartbeat_fingerprint_table,
             broker_support_v2_heartbeat_set,
             route_refresh_state: TopicRouteRefreshState::default(),
-            consumer_stats_manager: ConsumerStatsManager::new(),
+            consumer_stats_manager: ConsumerStatsManager::new(service_context.child("consumer-stats")),
             connection_event_shutdown: CancellationToken::new(),
             connection_event_task_handle: StdMutex::new(None),
             rebalance_delay_tasks: TaskTracker::new(),
@@ -389,6 +407,13 @@ impl MQClientInstance {
 
         let client_bound = instance.mq_admin_impl.set_client(&instance);
         debug_assert!(client_bound, "MQAdminImpl client must only be bound once");
+        if let Ok(default_producer) = instance.default_producer.try_lock() {
+            if let Some(producer_impl) = default_producer.default_mqproducer_impl.as_ref() {
+                producer_impl
+                    .bind_client_instance(&instance)
+                    .expect("internal producer must bind to its owning MQClientInstance");
+            }
+        }
 
         let (tx, rx) = tokio::sync::broadcast::channel::<ConnectionNetEvent>(16);
 
@@ -398,6 +423,7 @@ impl MQClientInstance {
             rpc_hook,
             Arc::new(client_config.clone()),
             Some(tx),
+            service_context.child("remoting"),
         ));
 
         if let Some(namesrv_addr) = client_config.namesrv_addr.as_deref() {
@@ -412,9 +438,21 @@ impl MQClientInstance {
         *instance
             .connection_event_task_handle
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) =
-            spawn_connection_net_event_listener(rx, weak_instance, connection_event_shutdown);
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = spawn_connection_net_event_listener(
+            &service_context.child("connection-events"),
+            rx,
+            weak_instance,
+            connection_event_shutdown,
+        );
         instance
+    }
+
+    pub fn service_context(&self) -> &ChildServiceContext {
+        &self.service_context
+    }
+
+    pub(crate) fn request_future_holder(&self) -> Arc<RequestFutureHolder> {
+        Arc::clone(&self.request_future_holder)
     }
 
     fn service_state(&self) -> ServiceState {
@@ -511,6 +549,7 @@ impl MQClientInstance {
 
     pub fn re_balance_later(&self, delay_millis: Duration) {
         schedule_rebalance_wakeup(
+            &self.service_context,
             self.rebalance_service.clone(),
             delay_millis,
             &self.rebalance_delay_tasks,
@@ -2203,6 +2242,7 @@ impl MQClientInstance {
 
     pub fn rebalance_later(&self, delay_millis: u64) {
         schedule_rebalance_wakeup(
+            &self.service_context,
             self.rebalance_service.clone(),
             Duration::from_millis(delay_millis),
             &self.rebalance_delay_tasks,
@@ -2649,13 +2689,30 @@ pub fn topic_route_data2_topic_subscribe_info(topic: &str, route: &TopicRouteDat
     topic_route_data2topic_subscribe_info(topic, route)
 }
 
+fn new_probe_client_instance(
+    client_runtime: &Arc<ClientRuntime>,
+    client_config: ClientConfig,
+    scope: &'static str,
+) -> Arc<MQClientInstance> {
+    MQClientInstance::new_arc(
+        client_config,
+        0,
+        scope,
+        None,
+        client_runtime.child(scope),
+        client_runtime.pool().request_future_holder(),
+    )
+}
+
 #[doc(hidden)]
-pub async fn run_connection_event_listener_lifecycle_probe() -> ConnectionEventListenerLifecycleProbe {
+pub async fn run_connection_event_listener_lifecycle_probe(
+    client_runtime: Arc<ClientRuntime>,
+) -> ConnectionEventListenerLifecycleProbe {
     let client_config = ClientConfig {
         namesrv_addr: None,
         ..Default::default()
     };
-    let instance = MQClientInstance::new_arc(client_config, 0, "connection-event-listener-probe", None);
+    let instance = new_probe_client_instance(&client_runtime, client_config, "connection-event-listener-probe");
     let task_count_before_shutdown = instance.connection_event_task_count();
 
     let shutdown_started = Instant::now();
@@ -2680,12 +2737,12 @@ fn route_refresh_probe_topics(topic_count: usize) -> Vec<CheetahString> {
 }
 
 #[doc(hidden)]
-pub fn run_route_refresh_shard_probe(topic_count: usize) -> RouteRefreshShardProbe {
+pub fn run_route_refresh_shard_probe(client_runtime: Arc<ClientRuntime>, topic_count: usize) -> RouteRefreshShardProbe {
     let client_config = ClientConfig {
         namesrv_addr: None,
         ..Default::default()
     };
-    let instance = MQClientInstance::new_arc(client_config, 0, "route-refresh-shard-probe", None);
+    let instance = new_probe_client_instance(&client_runtime, client_config, "route-refresh-shard-probe");
     let topics = route_refresh_probe_topics(topic_count);
     let started = Instant::now();
     let (selected, skipped_topics) = instance.select_periodic_route_refresh_batch(&topics);
@@ -2707,12 +2764,14 @@ pub fn run_route_refresh_shard_probe(topic_count: usize) -> RouteRefreshShardPro
 }
 
 #[doc(hidden)]
-pub async fn run_route_refresh_concurrent_stale_guard_probe() -> RouteRefreshConcurrentProbe {
+pub async fn run_route_refresh_concurrent_stale_guard_probe(
+    client_runtime: Arc<ClientRuntime>,
+) -> RouteRefreshConcurrentProbe {
     let client_config = ClientConfig {
         namesrv_addr: None,
         ..Default::default()
     };
-    let instance = MQClientInstance::new_arc(client_config, 0, "route-refresh-concurrent-probe", None);
+    let instance = new_probe_client_instance(&client_runtime, client_config, "route-refresh-concurrent-probe");
     let topic = CheetahString::from_static_str("route-refresh-concurrent-topic");
     let current_route = TopicRouteData {
         order_topic_conf: Some(CheetahString::from_static_str("broker-new:1")),
@@ -2749,6 +2808,7 @@ pub async fn run_route_refresh_concurrent_stale_guard_probe() -> RouteRefreshCon
 
 #[doc(hidden)]
 pub fn run_heartbeat_route_index_probe(
+    client_runtime: Arc<ClientRuntime>,
     topic_count: usize,
     broker_count: usize,
     lookup_count: usize,
@@ -2757,7 +2817,7 @@ pub fn run_heartbeat_route_index_probe(
         namesrv_addr: None,
         ..Default::default()
     };
-    let instance = MQClientInstance::new_arc(client_config, 0, "heartbeat-route-index-probe", None);
+    let instance = new_probe_client_instance(&client_runtime, client_config, "heartbeat-route-index-probe");
     let broker_count = broker_count.max(1);
 
     for topic_index in 0..topic_count {
@@ -2850,6 +2910,18 @@ mod tests {
     use crate::producer::producer_impl::default_mq_producer_impl::DefaultMQProducerImpl;
     use crate::producer::producer_impl::mq_producer_inner::MQProducerInner;
 
+    fn test_instance(client_config: ClientConfig, client_id: &'static str) -> Arc<MQClientInstance> {
+        let runtime = crate::runtime::test_client_runtime("mq-client-instance-test");
+        MQClientInstance::new_arc(
+            client_config,
+            0,
+            client_id,
+            None,
+            runtime.child(client_id),
+            runtime.pool().request_future_holder(),
+        )
+    }
+
     #[test]
     fn client_scheduled_task_startup_failed_uses_service_error_kind() {
         let error = client_scheduled_task_startup_failed("fetchNameServerAddr", "scheduler closed");
@@ -2870,7 +2942,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_mq_client_api_impl_returns_client_not_started_instead_of_panicking() {
-        let instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "test-client", None);
+        let instance = test_instance(ClientConfig::default(), "test-client");
         instance.mq_client_api_impl.store(None);
 
         let result = instance.get_mq_client_api_impl();
@@ -2880,7 +2952,7 @@ mod tests {
 
     #[tokio::test]
     async fn standard_weak_callbacks_do_not_keep_client_root_alive() {
-        let instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "weak-client-root", None);
+        let instance = test_instance(ClientConfig::default(), "weak-client-root");
         let weak = Arc::downgrade(&instance);
 
         assert!(weak.upgrade().is_some());
@@ -2890,8 +2962,9 @@ mod tests {
 
     #[tokio::test]
     async fn same_live_producer_registration_is_idempotent_and_rejects_different_root() {
-        let instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "producer-idempotent", None);
+        let instance = test_instance(ClientConfig::default(), "producer-idempotent");
         let producer = Arc::new(DefaultMQProducerImpl::new(
+            crate::runtime::test_client_runtime("mq-client-instance-producer-test"),
             ClientConfig::default(),
             ProducerConfig::default(),
             None,
@@ -2899,6 +2972,7 @@ mod tests {
         let same = MQProducerInnerImpl::new(Arc::downgrade(&producer));
         let same_again = MQProducerInnerImpl::new(Arc::downgrade(&producer));
         let other_producer = Arc::new(DefaultMQProducerImpl::new(
+            crate::runtime::test_client_runtime("mq-client-instance-producer-test"),
             ClientConfig::default(),
             ProducerConfig::default(),
             None,
@@ -2919,8 +2993,9 @@ mod tests {
 
     #[tokio::test]
     async fn producer_registration_waits_for_registry_transition() {
-        let instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "producer-transition", None);
+        let instance = test_instance(ClientConfig::default(), "producer-transition");
         let producer = Arc::new(DefaultMQProducerImpl::new(
+            crate::runtime::test_client_runtime("mq-client-instance-producer-test"),
             ClientConfig::default(),
             ProducerConfig::default(),
             None,
@@ -2940,8 +3015,9 @@ mod tests {
 
     #[tokio::test]
     async fn dead_producer_registration_is_pruned_and_atomically_replaced() {
-        let instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "producer-replace", None);
+        let instance = test_instance(ClientConfig::default(), "producer-replace");
         let producer = Arc::new(DefaultMQProducerImpl::new(
+            crate::runtime::test_client_runtime("mq-client-instance-producer-test"),
             ClientConfig::default(),
             ProducerConfig::default(),
             None,
@@ -2951,6 +3027,7 @@ mod tests {
 
         drop(producer);
         let replacement_root = Arc::new(DefaultMQProducerImpl::new(
+            crate::runtime::test_client_runtime("mq-client-instance-producer-test"),
             ClientConfig::default(),
             ProducerConfig::default(),
             None,
@@ -2976,8 +3053,9 @@ mod tests {
 
     #[tokio::test]
     async fn late_owner_aware_unregister_does_not_remove_replacement() {
-        let instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "producer-owner-guard", None);
+        let instance = test_instance(ClientConfig::default(), "producer-owner-guard");
         let old_root = Arc::new(DefaultMQProducerImpl::new(
+            crate::runtime::test_client_runtime("mq-client-instance-producer-test"),
             ClientConfig::default(),
             ProducerConfig::default(),
             None,
@@ -2993,6 +3071,7 @@ mod tests {
 
         drop(old_root);
         let replacement_root = Arc::new(DefaultMQProducerImpl::new(
+            crate::runtime::test_client_runtime("mq-client-instance-producer-test"),
             ClientConfig::default(),
             ProducerConfig::default(),
             None,
@@ -3014,9 +3093,10 @@ mod tests {
 
     #[tokio::test]
     async fn producer_registration_remains_open_during_start_transition() {
-        let instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "producer-start-admission", None);
+        let instance = test_instance(ClientConfig::default(), "producer-start-admission");
         let _transition = instance.lifecycle_transition.lock().await;
         let producer = Arc::new(DefaultMQProducerImpl::new(
+            crate::runtime::test_client_runtime("mq-client-instance-producer-test"),
             ClientConfig::default(),
             ProducerConfig::default(),
             None,
@@ -3028,11 +3108,12 @@ mod tests {
 
     #[tokio::test]
     async fn shutdown_closes_producer_registration_and_prevents_later_start() {
-        let instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "producer-shutdown-admission", None);
+        let instance = test_instance(ClientConfig::default(), "producer-shutdown-admission");
 
         instance.shutdown().await;
 
         let producer = Arc::new(DefaultMQProducerImpl::new(
+            crate::runtime::test_client_runtime("mq-client-instance-producer-test"),
             ClientConfig::default(),
             ProducerConfig::default(),
             None,
@@ -3055,7 +3136,7 @@ mod tests {
         client_config.set_use_tls(true);
         client_config.set_tls_client_trust_cert_path("/certs/ca.pem");
 
-        let instance = MQClientInstance::new_arc(client_config, 0, "test-client-tls", None);
+        let instance = test_instance(client_config, "test-client-tls");
         let api_impl: Arc<MQClientAPIImpl> = instance
             .get_mq_client_api_impl()
             .expect("MQClientInstance should initialize MQClientAPIImpl");
@@ -3085,7 +3166,7 @@ mod tests {
                 ..Default::default()
             };
 
-            let instance = MQClientInstance::new_arc(client_config, 0, "current-thread-namesrv-test", None);
+            let instance = test_instance(client_config, "current-thread-namesrv-test");
             let api_impl = instance
                 .get_mq_client_api_impl()
                 .expect("MQClientInstance should initialize MQClientAPIImpl");
@@ -3104,7 +3185,7 @@ mod tests {
             ..Default::default()
         };
 
-        let instance = MQClientInstance::new_arc(client_config, 0, "no-runtime-client-test", None);
+        let instance = test_instance(client_config, "explicit-runtime-client-test");
 
         assert!(instance.get_mq_client_api_impl().is_ok());
     }
@@ -3115,7 +3196,7 @@ mod tests {
             namesrv_addr: None,
             ..Default::default()
         };
-        let instance = MQClientInstance::new_arc(client_config, 0, "no-runtime-rebalance-test", None);
+        let instance = test_instance(client_config, "explicit-runtime-rebalance-test");
 
         instance.re_balance_later(Duration::from_millis(1));
         instance.rebalance_later(1);
@@ -3129,7 +3210,7 @@ mod tests {
             namesrv_addr: None,
             ..Default::default()
         };
-        let instance = MQClientInstance::new_arc(client_config, 0, "scheduled-shutdown-test", None);
+        let instance = test_instance(client_config, "scheduled-shutdown-test");
         instance.set_service_state(ServiceState::Running);
         assert!(instance.connection_event_task_count() > 0);
         instance
@@ -3154,7 +3235,7 @@ mod tests {
             namesrv_addr: None,
             ..Default::default()
         };
-        let instance = MQClientInstance::new_arc(client_config, 0, "pre-start-shutdown-test", None);
+        let instance = test_instance(client_config, "pre-start-shutdown-test");
 
         assert_eq!(instance.service_state(), ServiceState::CreateJust);
         assert!(instance.connection_event_task_count() > 0);
@@ -3174,7 +3255,10 @@ mod tests {
 
     #[tokio::test]
     async fn connection_event_listener_lifecycle_probe_reports_clean_shutdown() {
-        let probe = run_connection_event_listener_lifecycle_probe().await;
+        let probe = run_connection_event_listener_lifecycle_probe(crate::runtime::test_client_runtime(
+            "connection-event-probe-test",
+        ))
+        .await;
 
         assert!(probe.healthy, "{probe:?}");
         assert_eq!(probe.task_count_before_shutdown, 1);
@@ -3187,7 +3271,7 @@ mod tests {
             namesrv_addr: None,
             ..Default::default()
         };
-        let instance = MQClientInstance::new_arc(client_config, 0, "route-refresh-batch-test", None);
+        let instance = test_instance(client_config, "route-refresh-batch-test");
         let topics = route_refresh_probe_topics(1_000);
 
         let (first_batch, first_skipped) = instance.select_periodic_route_refresh_batch(&topics);
@@ -3207,7 +3291,10 @@ mod tests {
 
     #[test]
     fn route_refresh_shard_probe_reports_peak_topic_reduction() {
-        let probe = run_route_refresh_shard_probe(1_000);
+        let probe = run_route_refresh_shard_probe(
+            crate::runtime::test_client_runtime("route-refresh-shard-probe-test"),
+            1_000,
+        );
 
         assert_eq!(probe.batch_size, ROUTE_REFRESH_MAX_TOPICS_PER_ROUND);
         assert_eq!(probe.selected_topics, ROUTE_REFRESH_MAX_TOPICS_PER_ROUND);
@@ -3216,7 +3303,10 @@ mod tests {
 
     #[tokio::test]
     async fn stale_route_snapshot_does_not_overwrite_current_route() {
-        let probe = run_route_refresh_concurrent_stale_guard_probe().await;
+        let probe = run_route_refresh_concurrent_stale_guard_probe(crate::runtime::test_client_runtime(
+            "route-refresh-stale-probe-test",
+        ))
+        .await;
 
         assert!(probe.healthy, "{probe:?}");
         assert!(probe.stale_skipped);
@@ -3229,10 +3319,11 @@ mod tests {
             namesrv_addr: None,
             ..Default::default()
         };
-        let instance = MQClientInstance::new_arc(client_config, 0, "route-refresh-apply-test", None);
+        let instance = test_instance(client_config, "route-refresh-apply-test");
         let topic = CheetahString::from_static_str("route-refresh-topic");
 
         let producer = Arc::new(DefaultMQProducerImpl::new(
+            crate::runtime::test_client_runtime("route-refresh-producer-test"),
             ClientConfig::default(),
             ProducerConfig::default(),
             None,
@@ -3247,6 +3338,7 @@ mod tests {
 
         let consumer_group = CheetahString::from_static_str("route-refresh-consumer");
         let consumer = Arc::new(DefaultMQPushConsumerImpl::new(
+            crate::runtime::test_client_runtime("route-refresh-consumer-test"),
             ClientConfig::default(),
             ConsumerConfig {
                 consumer_group: consumer_group.clone(),
@@ -3316,7 +3408,7 @@ mod tests {
             namesrv_addr: None,
             ..Default::default()
         };
-        let instance = MQClientInstance::new_arc(client_config, 0, "heartbeat-route-index-test", None);
+        let instance = test_instance(client_config, "heartbeat-route-index-test");
         let topic = CheetahString::from_static_str("heartbeat-route-index-topic");
         let mut first_route = heartbeat_route_with_addr("broker-a", "127.0.0.1:10911");
         let mut second_route = heartbeat_route_with_addr("broker-b", "127.0.0.2:10911");
@@ -3340,7 +3432,7 @@ mod tests {
             namesrv_addr: None,
             ..Default::default()
         };
-        let instance = MQClientInstance::new_arc(client_config, 0, "heartbeat-route-refcount-test", None);
+        let instance = test_instance(client_config, "heartbeat-route-refcount-test");
         let topic_a = CheetahString::from_static_str("heartbeat-route-refcount-a");
         let topic_b = CheetahString::from_static_str("heartbeat-route-refcount-b");
         let mut shared_a = heartbeat_route_with_addr("broker-shared", "127.0.0.9:10911");
@@ -3371,7 +3463,7 @@ mod tests {
             namesrv_addr: None,
             ..Default::default()
         };
-        let instance = MQClientInstance::new_arc(client_config, 0, "heartbeat-clean-index-test", None);
+        let instance = test_instance(client_config, "heartbeat-clean-index-test");
         let broker_name = CheetahString::from_static_str("heartbeat-offline-broker");
         let broker_addr = CheetahString::from_static_str("127.0.0.12:10911");
         let mut broker_addrs = HashMap::new();
@@ -3394,7 +3486,12 @@ mod tests {
 
     #[test]
     fn heartbeat_route_index_probe_matches_scan_baseline() {
-        let probe = run_heartbeat_route_index_probe(1_000, 256, 512);
+        let probe = run_heartbeat_route_index_probe(
+            crate::runtime::test_client_runtime("heartbeat-route-index-probe-test"),
+            1_000,
+            256,
+            512,
+        );
 
         assert_eq!(probe.scan_found_count, probe.index_found_count);
         assert!(probe.index_elapsed_us <= probe.scan_elapsed_us, "{probe:?}");
@@ -3406,7 +3503,7 @@ mod tests {
             namesrv_addr: None,
             ..Default::default()
         };
-        let instance = MQClientInstance::new_arc(client_config, 0, "channel-event-test", None);
+        let instance = test_instance(client_config, "channel-event-test");
 
         instance.on_channel_connect("127.0.0.1:10911");
         instance.on_channel_close("127.0.0.1:10911");
@@ -3492,7 +3589,7 @@ mod tests {
             namesrv_addr: None,
             ..Default::default()
         };
-        let instance = MQClientInstance::new_arc(client_config, 0, "rebalance-alias-test", None);
+        let instance = test_instance(client_config, "rebalance-alias-test");
 
         instance.rebalance_immediately();
     }
@@ -3503,7 +3600,7 @@ mod tests {
             namesrv_addr: None,
             ..Default::default()
         };
-        let instance = MQClientInstance::new_arc(client_config, 0, "parse-offset-test", None);
+        let instance = test_instance(client_config, "parse-offset-test");
         let mut offsets = HashMap::new();
         offsets.insert(MessageQueue::from_parts("ns%topic-a", "broker-a", 0), 42);
 
@@ -3522,7 +3619,7 @@ mod tests {
             namesrv_addr: None,
             ..Default::default()
         };
-        let instance = MQClientInstance::new_arc(client_config, 0, "admin-broker-test", None);
+        let instance = test_instance(client_config, "admin-broker-test");
         let broker_name = CheetahString::from_static_str("broker-a");
         let broker_addr = CheetahString::from_static_str("127.0.0.1:10912");
         let mut addrs = HashMap::new();
@@ -3548,7 +3645,7 @@ mod tests {
             namesrv_addr: None,
             ..Default::default()
         };
-        let instance = MQClientInstance::new_arc(client_config, 0, "query-route-test", None);
+        let instance = test_instance(client_config, "query-route-test");
         let topic = CheetahString::from_static_str("topic-a");
         let route = TopicRouteData {
             order_topic_conf: Some(CheetahString::from_static_str("broker-a:1")),
@@ -3584,7 +3681,7 @@ mod tests {
             namesrv_addr: Some(CheetahString::from_static_str("127.0.0.1:9876")),
             ..Default::default()
         };
-        let instance = MQClientInstance::new_arc(client_config, 0, "partial-start-shutdown", None);
+        let instance = test_instance(client_config, "partial-start-shutdown");
         instance.set_service_state(ServiceState::StartFailed);
 
         instance.shutdown().await;

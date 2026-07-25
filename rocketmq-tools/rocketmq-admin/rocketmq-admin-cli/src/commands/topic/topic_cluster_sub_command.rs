@@ -49,7 +49,8 @@ impl TopicClusterSubCommand {
 impl CommandExecute for TopicClusterSubCommand {
     async fn execute(
         &self,
-        _rpc_hook: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        _credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        _client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> rocketmq_error::RocketMQResult<()> {
         let clusters = self.get_topic_clusters().await?;
         self.print_clusters(&clusters);

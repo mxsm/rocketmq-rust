@@ -35,10 +35,15 @@ impl CommandExecute for ProducerConnectionSubCommand {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
         let request = ProducerConnectionQueryRequest::try_new(self.producer_group.clone(), self.topic.clone())?;
-        let result =
-            ConnectionService::query_producer_connection_by_request_with_credentials(request, credentials).await?;
+        let result = ConnectionService::query_producer_connection_by_request_with_credentials(
+            request,
+            credentials,
+            client_runtime.clone(),
+        )
+        .await?;
         render_producer_connection_result(result);
         Ok(())
     }

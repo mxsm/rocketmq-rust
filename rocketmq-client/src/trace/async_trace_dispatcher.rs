@@ -37,6 +37,7 @@ use rocketmq_error::UnifiedServiceError;
 use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_model::common::message::message_single::Message;
 use rocketmq_model::common::topic::TopicValidator;
+use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_transport::runtime::RPCHook;
 use serde::Serialize;
@@ -50,7 +51,8 @@ use tracing::warn;
 use crate::base::access_channel::AccessChannel;
 use crate::base::client_config::ClientConfig;
 use crate::producer::default_mq_producer::DefaultMQProducer;
-use crate::runtime::spawn_client_tracked_task;
+use crate::runtime::spawn_client_tracked_task_with_context;
+use crate::runtime::ClientRuntime;
 use crate::runtime::ClientTrackedTaskHandle;
 use crate::trace::trace_constants::TraceConstants;
 use crate::trace::trace_context::TraceContext;
@@ -209,13 +211,15 @@ pub struct TraceWorkerLifecycleProbe {
 /// Uses a `tokio::mpsc::channel` with a capacity of 2048 for queuing trace contexts and flush
 /// commands. A single worker task periodically flushes batches based on count, time thresholds, or
 /// explicit flush requests. The worker is submitted through the client runtime helper, which uses
-/// the current Tokio runtime when available and the shared client fallback runtime otherwise.
+/// the explicitly injected client runtime.
 ///
 /// # Discard Policy
 ///
 /// When the internal queue is full, new trace contexts are discarded and the
 /// discard counter is incremented. This prevents blocking the caller.
 pub struct AsyncTraceDispatcher {
+    client_runtime: Arc<ClientRuntime>,
+    service_context: ChildServiceContext,
     config: TraceDispatcherConfig,
     state: Arc<DispatcherState>,
     use_tls: AtomicBool,
@@ -240,6 +244,7 @@ impl AsyncTraceDispatcher {
     /// * `trace_topic_name` - Destination topic for trace messages (uses system default if empty)
     /// * `rpc_hook` - Optional RPC hook applied to the internal trace producer
     pub fn new(
+        client_runtime: Arc<ClientRuntime>,
         group: &str,
         type_: Type,
         batch_num: usize,
@@ -265,6 +270,8 @@ impl AsyncTraceDispatcher {
         };
 
         Self {
+            service_context: client_runtime.child("trace-dispatcher"),
+            client_runtime,
             config,
             state: Arc::new(DispatcherState::new()),
             use_tls: AtomicBool::new(false),
@@ -456,7 +463,7 @@ impl TraceDispatcher for AsyncTraceDispatcher {
         client_config.set_vip_channel_enabled(false); // Disable VIP channel (matches Java implementation)
         client_config.set_use_tls(self.use_tls.load(Ordering::Acquire));
 
-        let mut builder = DefaultMQProducer::builder()
+        let mut builder = DefaultMQProducer::builder(Arc::clone(&self.client_runtime))
             .producer_group(&producer_group)
             .client_config(client_config)
             .send_msg_timeout(5000)
@@ -492,7 +499,7 @@ impl TraceDispatcher for AsyncTraceDispatcher {
         let state = self.state.clone();
         let config = self.config.clone();
 
-        let handle = match spawn_trace_task("rocketmq-client-trace-worker", async move {
+        let handle = match spawn_trace_task(&self.service_context, "rocketmq-client-trace-worker", async move {
             if let Err(e) = worker_loop(rx, state, producer, config).await {
                 error!("Worker loop failed: {:?}", e);
             }
@@ -660,11 +667,15 @@ impl Drop for AsyncTraceDispatcher {
     }
 }
 
-fn spawn_trace_task<F>(thread_name: &'static str, task: F) -> RocketMQResult<TraceTaskHandle>
+fn spawn_trace_task<F>(
+    service_context: &ChildServiceContext,
+    thread_name: &'static str,
+    task: F,
+) -> RocketMQResult<TraceTaskHandle>
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    spawn_client_tracked_task(thread_name, task)
+    spawn_client_tracked_task_with_context(service_context, thread_name, task)
         .map(TraceTaskHandle::Tracked)
         .map_err(|error| trace_dispatcher_startup_failed(thread_name, error))
 }
@@ -1007,8 +1018,15 @@ async fn send_trace_message(
 }
 
 #[doc(hidden)]
-pub fn run_trace_queue_depth_accounting_probe(queued_count: usize) -> usize {
-    let dispatcher = AsyncTraceDispatcher::new("TraceProbeGroup", Type::Produce, 20, "TRACE_TOPIC", None);
+pub fn run_trace_queue_depth_accounting_probe(client_runtime: Arc<ClientRuntime>, queued_count: usize) -> usize {
+    let dispatcher = AsyncTraceDispatcher::new(
+        client_runtime,
+        "TraceProbeGroup",
+        Type::Produce,
+        20,
+        "TRACE_TOPIC",
+        None,
+    );
     let context = TraceContext::default();
 
     for _ in 0..queued_count {
@@ -1019,13 +1037,13 @@ pub fn run_trace_queue_depth_accounting_probe(queued_count: usize) -> usize {
 }
 
 #[doc(hidden)]
-pub async fn run_trace_worker_lifecycle_probe() -> TraceWorkerLifecycleProbe {
+pub async fn run_trace_worker_lifecycle_probe(service_context: ChildServiceContext) -> TraceWorkerLifecycleProbe {
     let started = Arc::new(AtomicBool::new(false));
     let stopped = Arc::new(AtomicBool::new(false));
     let started_in_task = started.clone();
     let stopped_in_task = stopped.clone();
 
-    let handle = spawn_trace_task("rocketmq-client-trace-worker-probe", async move {
+    let handle = spawn_trace_task(&service_context, "rocketmq-client-trace-worker-probe", async move {
         started_in_task.store(true, Ordering::Release);
         while !stopped_in_task.load(Ordering::Acquire) {
             tokio::time::sleep(Duration::from_millis(1)).await;
@@ -1068,6 +1086,14 @@ mod tests {
     use super::*;
     use rocketmq_error::ErrorKind;
 
+    fn test_runtime() -> Arc<ClientRuntime> {
+        crate::runtime::test_client_runtime("async-trace-dispatcher-test")
+    }
+
+    fn test_context() -> ChildServiceContext {
+        crate::runtime::test_service_context("async-trace-dispatcher-task-test")
+    }
+
     #[test]
     fn trace_dispatcher_interrupted_uses_service_error_kind() {
         let error = trace_dispatcher_interrupted("worker is stopped");
@@ -1092,26 +1118,26 @@ mod tests {
     }
 
     #[test]
-    fn spawn_trace_task_without_tokio_runtime_runs_on_fallback_thread() {
+    fn spawn_trace_task_uses_injected_runtime_context() {
         let (tx, rx) = std::sync::mpsc::channel();
 
-        let handle = spawn_trace_task("rocketmq-client-trace-test", async move {
+        let handle = spawn_trace_task(&test_context(), "rocketmq-client-trace-test", async move {
             tx.send(std::thread::current().name().unwrap_or_default().to_string())
                 .expect("test receiver should be alive");
         })
-        .expect("fallback trace runtime should start");
+        .expect("trace task should start on the injected runtime");
 
         let thread_name = rx
             .recv_timeout(Duration::from_secs(2))
-            .expect("trace task should run on fallback runtime");
-        assert_eq!(thread_name, "rocketmq-client-fallback");
+            .expect("trace task should run on the injected runtime");
+        assert_eq!(thread_name, "rocketmq-client-unit-test");
         assert!(handle.shutdown(Duration::from_secs(1)));
     }
 
     #[test]
     fn trace_task_shutdown_waits_for_completed_worker() {
-        let handle = spawn_trace_task("rocketmq-client-trace-complete-test", async move {})
-            .expect("fallback trace runtime should start");
+        let handle = spawn_trace_task(&test_context(), "rocketmq-client-trace-complete-test", async move {})
+            .expect("trace task should start on the injected runtime");
 
         assert!(handle.shutdown(Duration::from_secs(1)));
     }
@@ -1119,11 +1145,11 @@ mod tests {
     #[test]
     fn trace_task_shutdown_aborts_worker_after_timeout() {
         let (tx, rx) = std::sync::mpsc::channel();
-        let handle = spawn_trace_task("rocketmq-client-trace-timeout-test", async move {
+        let handle = spawn_trace_task(&test_context(), "rocketmq-client-trace-timeout-test", async move {
             tx.send(()).expect("test receiver should be alive");
             std::future::pending::<()>().await;
         })
-        .expect("fallback trace runtime should start");
+        .expect("trace task should start on the injected runtime");
 
         rx.recv_timeout(Duration::from_secs(2))
             .expect("trace task should start");
@@ -1145,11 +1171,15 @@ mod tests {
         let dropped = Arc::new(AtomicBool::new(false));
         let started_in_task = started.clone();
         let dropped_in_task = dropped.clone();
-        let handle = spawn_trace_task("rocketmq-client-trace-timeout-async-test", async move {
-            let _drop_flag = DropFlag(dropped_in_task);
-            started_in_task.store(true, Ordering::Release);
-            std::future::pending::<()>().await;
-        })
+        let handle = spawn_trace_task(
+            &test_context(),
+            "rocketmq-client-trace-timeout-async-test",
+            async move {
+                let _drop_flag = DropFlag(dropped_in_task);
+                started_in_task.store(true, Ordering::Release);
+                std::future::pending::<()>().await;
+            },
+        )
         .expect("trace task should spawn");
 
         tokio::time::timeout(Duration::from_secs(1), async {
@@ -1166,7 +1196,7 @@ mod tests {
 
     #[tokio::test]
     async fn trace_worker_lifecycle_probe_reports_clean_shutdown() {
-        let probe = run_trace_worker_lifecycle_probe().await;
+        let probe = run_trace_worker_lifecycle_probe(test_context()).await;
 
         assert!(probe.healthy, "{probe:?}");
         assert_eq!(probe.remaining_tasks_after_shutdown, 0, "{probe:?}");
@@ -1176,7 +1206,7 @@ mod tests {
 
     #[test]
     fn test_new_dispatcher() {
-        let dispatcher = AsyncTraceDispatcher::new("TestGroup", Type::Produce, 20, "TRACE_TOPIC", None);
+        let dispatcher = AsyncTraceDispatcher::new(test_runtime(), "TestGroup", Type::Produce, 20, "TRACE_TOPIC", None);
 
         assert!(!dispatcher.is_started());
         assert!(!dispatcher.is_stopped());
@@ -1186,7 +1216,7 @@ mod tests {
 
     #[test]
     fn queue_size_tracks_accepted_trace_contexts() {
-        let dispatcher = AsyncTraceDispatcher::new("TestGroup", Type::Produce, 20, "TRACE_TOPIC", None);
+        let dispatcher = AsyncTraceDispatcher::new(test_runtime(), "TestGroup", Type::Produce, 20, "TRACE_TOPIC", None);
 
         let ctx = TraceContext::default();
 
@@ -1196,7 +1226,7 @@ mod tests {
 
     #[test]
     fn queue_size_ignores_rejected_context_types() {
-        let dispatcher = AsyncTraceDispatcher::new("TestGroup", Type::Produce, 20, "TRACE_TOPIC", None);
+        let dispatcher = AsyncTraceDispatcher::new(test_runtime(), "TestGroup", Type::Produce, 20, "TRACE_TOPIC", None);
 
         assert!(!dispatcher.append(&"not a trace context"));
         assert_eq!(dispatcher.queue_size(), 0);
@@ -1216,7 +1246,7 @@ mod tests {
 
     #[test]
     fn test_gen_group_name() {
-        let dispatcher = AsyncTraceDispatcher::new("TestGroup", Type::Produce, 20, "TRACE_TOPIC", None);
+        let dispatcher = AsyncTraceDispatcher::new(test_runtime(), "TestGroup", Type::Produce, 20, "TRACE_TOPIC", None);
 
         let name1 = dispatcher.gen_group_name();
         let name2 = dispatcher.gen_group_name();
@@ -1228,7 +1258,7 @@ mod tests {
 
     #[test]
     fn test_append_before_start() {
-        let dispatcher = AsyncTraceDispatcher::new("TestGroup", Type::Produce, 20, "TRACE_TOPIC", None);
+        let dispatcher = AsyncTraceDispatcher::new(test_runtime(), "TestGroup", Type::Produce, 20, "TRACE_TOPIC", None);
 
         let ctx = TraceContext::default();
 
@@ -1242,6 +1272,7 @@ mod tests {
     fn test_batch_num_capping() {
         // Test that batch_num is capped at 20
         let dispatcher = AsyncTraceDispatcher::new(
+            test_runtime(),
             "TestGroup",
             Type::Produce,
             100, // Request 100
@@ -1256,6 +1287,7 @@ mod tests {
     fn test_default_trace_topic() {
         // Test default topic when empty string provided
         let dispatcher = AsyncTraceDispatcher::new(
+            test_runtime(),
             "TestGroup",
             Type::Produce,
             20,
@@ -1268,7 +1300,8 @@ mod tests {
 
     #[test]
     fn test_config_values() {
-        let dispatcher = AsyncTraceDispatcher::new("TestGroup", Type::Consume, 15, "CUSTOM_TOPIC", None);
+        let dispatcher =
+            AsyncTraceDispatcher::new(test_runtime(), "TestGroup", Type::Consume, 15, "CUSTOM_TOPIC", None);
 
         assert_eq!(dispatcher.config.group, "TestGroup");
         assert_eq!(dispatcher.config.type_, Type::Consume);
@@ -1280,7 +1313,7 @@ mod tests {
 
     #[test]
     fn test_set_client_host() {
-        let dispatcher = AsyncTraceDispatcher::new("TestGroup", Type::Produce, 20, "TRACE_TOPIC", None);
+        let dispatcher = AsyncTraceDispatcher::new(test_runtime(), "TestGroup", Type::Produce, 20, "TRACE_TOPIC", None);
 
         assert!(dispatcher.trace_client_host().is_none());
 
@@ -1294,7 +1327,7 @@ mod tests {
 
     #[test]
     fn test_set_namespace_v2() {
-        let dispatcher = AsyncTraceDispatcher::new("TestGroup", Type::Produce, 20, "TRACE_TOPIC", None);
+        let dispatcher = AsyncTraceDispatcher::new(test_runtime(), "TestGroup", Type::Produce, 20, "TRACE_TOPIC", None);
 
         dispatcher.set_namespace_v2(Some(CheetahString::from_static_str("test-namespace")));
 
@@ -1305,7 +1338,7 @@ mod tests {
 
     #[test]
     fn test_flush_before_start() {
-        let dispatcher = AsyncTraceDispatcher::new("TestGroup", Type::Produce, 20, "TRACE_TOPIC", None);
+        let dispatcher = AsyncTraceDispatcher::new(test_runtime(), "TestGroup", Type::Produce, 20, "TRACE_TOPIC", None);
 
         // Should return error since not started
         let result = dispatcher.flush();
@@ -1314,7 +1347,7 @@ mod tests {
 
     #[test]
     fn java_shutdown_hook_aliases_are_noop_under_drop_based_shutdown() {
-        let dispatcher = AsyncTraceDispatcher::new("TestGroup", Type::Produce, 20, "TRACE_TOPIC", None);
+        let dispatcher = AsyncTraceDispatcher::new(test_runtime(), "TestGroup", Type::Produce, 20, "TRACE_TOPIC", None);
 
         dispatcher.register_shutdown_hook();
         dispatcher.register_shut_down_hook();
@@ -1327,7 +1360,9 @@ mod tests {
     #[tokio::test]
     async fn flush_buffer_empty_records_completion_time() {
         let state = Arc::new(DispatcherState::new());
-        let producer = Arc::new(tokio::sync::Mutex::new(DefaultMQProducer::builder().build()));
+        let producer = Arc::new(tokio::sync::Mutex::new(
+            DefaultMQProducer::builder(test_runtime()).build(),
+        ));
         let config = TraceDispatcherConfig {
             group: "Test".to_string(),
             type_: Type::Produce,
@@ -1356,7 +1391,9 @@ mod tests {
 
         let (tx, rx) = mpsc::channel(10);
         let state = Arc::new(DispatcherState::new());
-        let producer = Arc::new(tokio::sync::Mutex::new(DefaultMQProducer::builder().build()));
+        let producer = Arc::new(tokio::sync::Mutex::new(
+            DefaultMQProducer::builder(test_runtime()).build(),
+        ));
         let config = TraceDispatcherConfig {
             group: "Test".to_string(),
             type_: Type::Produce,

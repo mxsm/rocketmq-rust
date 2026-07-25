@@ -3,6 +3,8 @@ sidebar_position: 1
 title: 生产者概览
 ---
 
+> Runtime 所有权：示例中的 `client_runtime` 是应用持有的 `Arc<ClientRuntime>`，它从 `RuntimeOwner` 的 child scope 创建，并在进程边界显式关闭。
+
 # 生产者概览
 
 RocketMQ-Rust 生产端基于 `DefaultMQProducer` 和 `MQProducer` trait，支持同步发送、异步回调发送、单向发送、队列选择发送、批量发送以及事务消息。
@@ -16,7 +18,7 @@ use rocketmq_error::RocketMQResult;
 
 #[tokio::main]
 async fn main() -> RocketMQResult<()> {
-    let mut producer = DefaultMQProducer::builder()
+    let mut producer = DefaultMQProducer::builder(client_runtime.clone())
         .producer_group("my_producer_group")
         .name_server_addr("localhost:9876")
         .build();
@@ -33,7 +35,7 @@ async fn main() -> RocketMQResult<()> {
 ### 基础配置
 
 ```rust
-let mut producer = DefaultMQProducer::builder()
+let mut producer = DefaultMQProducer::builder(client_runtime.clone())
     .producer_group("producer_group")
     .name_server_addr("localhost:9876")
     .send_msg_timeout(3_000)
@@ -46,7 +48,7 @@ let mut producer = DefaultMQProducer::builder()
 ### 高级配置
 
 ```rust
-let mut producer = DefaultMQProducer::builder()
+let mut producer = DefaultMQProducer::builder(client_runtime.clone())
     .producer_group("producer_group")
     .name_server_addr("localhost:9876")
     .retry_times_when_send_failed(3)
@@ -163,7 +165,7 @@ producer.send_batch(messages).await?;
 ### 压缩
 
 ```rust
-let mut producer = DefaultMQProducer::builder()
+let mut producer = DefaultMQProducer::builder(client_runtime.clone())
     .producer_group("producer_group")
     .name_server_addr("localhost:9876")
     .compress_msg_body_over_howmuch(4 * 1024)

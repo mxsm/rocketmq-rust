@@ -62,6 +62,7 @@ impl CommandExecute for DeleteAclSubCommand {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
         let request = DeleteAclRequest::try_new(
             self.broker_addr.clone(),
@@ -69,7 +70,8 @@ impl CommandExecute for DeleteAclSubCommand {
             self.subject.clone(),
             self.resources.clone(),
         )?;
-        let result = AuthService::delete_acl_by_request_with_credentials(request, credentials).await?;
+        let result =
+            AuthService::delete_acl_by_request_with_credentials(request, credentials, client_runtime.clone()).await?;
         for broker_addr in result.broker_addrs {
             println!("delete acl to {} success.", broker_addr);
         }

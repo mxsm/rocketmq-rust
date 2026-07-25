@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[path = "support/mod.rs"]
+mod support;
+
 use std::fs;
 use std::hint::black_box;
 use std::path::PathBuf;
@@ -28,15 +31,12 @@ use rocketmq_client_rust::run_request_future_holder_scan_probe;
 use rocketmq_client_rust::RequestFutureHolderLifecycleProbe;
 
 fn run_lifecycle_probe() -> RequestFutureHolderLifecycleProbe {
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
-        .max_blocking_threads(4)
-        .thread_name("rocketmq-client-request-future-bench")
-        .enable_all()
-        .build()
-        .expect("request future holder benchmark runtime should start");
-
-    runtime.block_on(run_request_future_holder_lifecycle_probe())
+    let runtime = support::BenchClientRuntime::new("request-future-holder");
+    let output = runtime.block_on(run_request_future_holder_lifecycle_probe(
+        runtime.child("request-futures"),
+    ));
+    runtime.shutdown();
+    output
 }
 
 fn workspace_root() -> PathBuf {
@@ -92,13 +92,7 @@ fn bench_request_future_holder_lifecycle(criterion: &mut Criterion) {
 
     let mut group = criterion.benchmark_group("client_request_future_holder_lifecycle/deadline_scan");
     group.sample_size(10);
-    let scan_runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
-        .max_blocking_threads(4)
-        .thread_name("rocketmq-client-request-future-scan-bench")
-        .enable_all()
-        .build()
-        .expect("request future holder scan benchmark runtime should start");
+    let scan_runtime = support::BenchClientRuntime::new("request-future-scan");
 
     for pending_requests in [1_000usize, 10_000, 100_000] {
         for expired_percent in [1usize, 10, 100] {
@@ -109,8 +103,11 @@ fn bench_request_future_holder_lifecycle(criterion: &mut Criterion) {
                     bencher.iter_custom(|iters| {
                         let mut total = Duration::ZERO;
                         for _ in 0..iters {
-                            let output = scan_runtime
-                                .block_on(run_request_future_holder_scan_probe(pending_requests, expired_percent));
+                            let output = scan_runtime.block_on(run_request_future_holder_scan_probe(
+                                scan_runtime.child("scan"),
+                                pending_requests,
+                                expired_percent,
+                            ));
                             assert_eq!(output.pending_requests, pending_requests);
                             assert_eq!(output.callbacks, output.expired_requests);
                             assert_eq!(output.remaining_requests, pending_requests - output.expired_requests);
@@ -125,6 +122,7 @@ fn bench_request_future_holder_lifecycle(criterion: &mut Criterion) {
         }
     }
     group.finish();
+    scan_runtime.shutdown();
 }
 
 criterion_group! {

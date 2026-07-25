@@ -31,6 +31,7 @@ use crate::producer::transaction_listener::ArcTransactionListener;
 use crate::producer::transaction_listener::TransactionListener;
 use crate::producer::transaction_mq_produce_builder::TransactionMQProducerBuilder;
 use crate::producer::transaction_send_result::TransactionSendResult;
+use crate::runtime::ClientRuntime;
 
 /// Configuration for transaction message producer
 ///
@@ -43,25 +44,14 @@ pub struct TransactionProducerConfig {
     /// Deprecated Java-style transaction check listener facade.
     pub transaction_check_listener: Option<ArcTransactionListener>,
 
-    /// Optional Tokio runtime handle used for broker transaction check execution.
-    pub executor_service: Option<tokio::runtime::Handle>,
-
     /// Minimum size of transaction check thread pool (corresponds to Java checkThreadPoolMinSize)
     ///
-    /// Note: When using spawn_blocking with default Tokio Runtime, this serves as a reference.
-    /// Default: 1
+    /// This controls concurrency admitted to the injected client runtime's blocking lane.
     pub check_thread_pool_min_size: u32,
 
     /// Maximum size of transaction check thread pool (corresponds to Java checkThreadPoolMaxSize)
     ///
-    /// Note: When using spawn_blocking with default Tokio Runtime, this serves as a reference.
-    /// To control actual thread count, configure the Runtime:
-    /// ```ignore
-    /// tokio::runtime::Builder::new_multi_thread()
-    ///     .max_blocking_threads(100)
-    ///     .build()
-    /// ```
-    /// Default: 1
+    /// This controls concurrency admitted to the injected client runtime's blocking lane.
     pub check_thread_pool_max_size: u32,
 
     /// Maximum capacity of transaction check request queue (corresponds to Java
@@ -77,7 +67,6 @@ impl Default for TransactionProducerConfig {
         Self {
             transaction_listener: None,
             transaction_check_listener: None,
-            executor_service: None,
             check_thread_pool_min_size: 1,
             check_thread_pool_max_size: 1,
             check_request_hold_max: 2000,
@@ -85,15 +74,14 @@ impl Default for TransactionProducerConfig {
     }
 }
 
-#[derive(Default)]
 pub struct TransactionMQProducer {
     default_producer: DefaultMQProducer,
     transaction_producer_config: TransactionProducerConfig,
 }
 
 impl TransactionMQProducer {
-    pub fn builder() -> TransactionMQProducerBuilder {
-        TransactionMQProducerBuilder::new()
+    pub fn builder(client_runtime: Arc<ClientRuntime>) -> TransactionMQProducerBuilder {
+        TransactionMQProducerBuilder::new(client_runtime)
     }
 
     pub(crate) fn new(
@@ -199,21 +187,6 @@ impl TransactionMQProducer {
         self.transaction_producer_config.check_request_hold_max = check_request_hold_max;
     }
 
-    pub fn executor_service(&self) -> Option<&tokio::runtime::Handle> {
-        self.transaction_producer_config.executor_service.as_ref()
-    }
-
-    pub fn get_executor_service(&self) -> Option<&tokio::runtime::Handle> {
-        self.executor_service()
-    }
-
-    pub fn set_executor_service(&mut self, executor_service: tokio::runtime::Handle) {
-        self.transaction_producer_config.executor_service = Some(executor_service.clone());
-        if let Some(default_mqproducer_impl) = self.default_producer.default_mqproducer_impl.as_ref() {
-            default_mqproducer_impl.set_transaction_executor_service(Some(executor_service));
-        }
-    }
-
     #[inline]
     pub fn is_use_tls(&self) -> bool {
         self.default_producer.is_use_tls()
@@ -238,8 +211,6 @@ impl MQProducer for TransactionMQProducer {
         if let Some(transaction_listener) = transaction_listener {
             default_mqproducer_impl.set_transaction_listener(transaction_listener);
         }
-        default_mqproducer_impl
-            .set_transaction_executor_service(self.transaction_producer_config.executor_service.clone());
         default_mqproducer_impl.init_transaction_env(
             self.transaction_producer_config.check_thread_pool_min_size,
             self.transaction_producer_config.check_thread_pool_max_size,
@@ -731,26 +702,20 @@ mod tests {
 
     #[test]
     fn java_getter_aliases_delegate_to_transaction_config() {
-        let mut producer = TransactionMQProducer::default();
+        let producer =
+            TransactionMQProducer::builder(crate::runtime::test_client_runtime("transaction-producer-getter-test"))
+                .build();
 
         assert!(producer.get_transaction_listener().is_none());
-        assert!(producer.get_executor_service().is_none());
-
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("test runtime should build");
-        producer.set_executor_service(runtime.handle().clone());
-
-        assert!(producer.get_executor_service().is_some());
     }
 
     #[test]
     fn use_tls_facade_and_builder_delegate_to_default_producer_like_java_client_config() {
-        let mut producer = TransactionMQProducer::builder()
-            .producer_group("transaction_tls_group")
-            .use_tls(true)
-            .build();
+        let mut producer =
+            TransactionMQProducer::builder(crate::runtime::test_client_runtime("transaction-producer-test"))
+                .producer_group("transaction_tls_group")
+                .use_tls(true)
+                .build();
 
         assert!(producer.is_use_tls());
         assert!(producer.default_producer.is_use_tls());

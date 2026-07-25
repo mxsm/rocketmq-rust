@@ -601,7 +601,15 @@ mod tests {
     }
 
     fn wrapper() -> PullAPIWrapper {
-        let client_instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "pull-wrapper-test", None);
+        let runtime = crate::runtime::test_client_runtime("pull-api-wrapper-test");
+        let client_instance = MQClientInstance::new_arc(
+            ClientConfig::default(),
+            0,
+            "pull-wrapper-test",
+            None,
+            runtime.child("instance"),
+            runtime.pool().request_future_holder(),
+        );
         PullAPIWrapper::new(client_instance, CheetahString::from_static_str("test-group"), false)
     }
 

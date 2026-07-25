@@ -42,13 +42,15 @@ impl CommandExecute for GetAclSubCommand {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
         let request = GetAclRequest::try_new(
             self.broker_addr.clone(),
             self.cluster_name.clone(),
             self.subject.clone(),
         )?;
-        let result = AuthService::get_acl_by_request_with_credentials(request, credentials).await?;
+        let result =
+            AuthService::get_acl_by_request_with_credentials(request, credentials, client_runtime.clone()).await?;
         render_get_acl_result(result, self.subject.trim(), self.broker_addr.is_some())
     }
 }

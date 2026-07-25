@@ -21,7 +21,7 @@ use crate::cluster::types::ClusterHomePageResponse;
 use crate::cluster::types::ClusterOverviewSummary;
 use crate::cluster::types::ClusterResult;
 use crate::nameserver::NameServerRuntimeState;
-use rocketmq_admin_core::core::admin::AdminSession;
+use rocketmq_admin_core::client_adapter::AdminSession;
 use rocketmq_admin_core::core::dashboard::DashboardAdmin;
 use rocketmq_admin_core::core::dashboard::DashboardBrokerInfo;
 use rocketmq_admin_core::core::dashboard::DashboardBrokerTarget;

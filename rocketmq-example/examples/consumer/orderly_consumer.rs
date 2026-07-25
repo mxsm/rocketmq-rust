@@ -34,12 +34,18 @@ pub const DEFAULT_NAMESRVADDR: &str = "127.0.0.1:9876";
 pub const TOPIC: &str = "OrderSendTestTopic";
 pub const TAG: &str = "*";
 
-#[tokio::main]
-pub async fn main() -> RocketMQResult<()> {
+#[path = "../support/mod.rs"]
+mod support;
+
+pub fn main() -> RocketMQResult<()> {
+    support::run(run)
+}
+
+async fn run(client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>) -> RocketMQResult<()> {
     let telemetry_guard =
         rocketmq_observability::install_global(&rocketmq_observability::TelemetryBootstrapConfig::default())
             .expect("telemetry logging bootstrap should initialize");
-    let mut consumer = DefaultMQPushConsumer::builder()
+    let mut consumer = DefaultMQPushConsumer::builder(client_runtime.clone())
         .consumer_group(CONSUMER_GROUP)
         .name_server_addr(DEFAULT_NAMESRVADDR)
         .message_model(MessageModel::Clustering)

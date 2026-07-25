@@ -28,10 +28,12 @@ use tokio::time::Instant;
 
 use crate::common::nameserver_access_config::NameserverAccessConfig;
 use crate::implementation::mq_client_api_impl::MQClientAPIImpl;
-use crate::runtime::spawn_client_tracked_task;
+use crate::runtime::spawn_client_tracked_task_with_context;
 use crate::runtime::ClientTrackedTaskHandle;
+use rocketmq_runtime::ChildServiceContext;
 
 pub struct MQClientAPIFactory {
+    service_context: ChildServiceContext,
     nameserver_access_config: NameserverAccessConfig,
     name_prefix: CheetahString,
     clients: Vec<Arc<MQClientAPIImpl>>,
@@ -95,6 +97,7 @@ impl MQClientAPIFactory {
     const NAMESRV_REFRESH_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
     pub fn new(
+        service_context: ChildServiceContext,
         nameserver_access_config: NameserverAccessConfig,
         name_prefix: impl Into<CheetahString>,
         clients: Vec<Arc<MQClientAPIImpl>>,
@@ -107,6 +110,7 @@ impl MQClientAPIFactory {
         }
 
         Ok(Self {
+            service_context,
             nameserver_access_config,
             name_prefix: name_prefix.into(),
             clients,
@@ -146,11 +150,12 @@ impl MQClientAPIFactory {
     }
 
     pub async fn create_and_start(
+        service_context: ChildServiceContext,
         nameserver_access_config: NameserverAccessConfig,
         name_prefix: impl Into<CheetahString>,
         clients: Vec<Arc<MQClientAPIImpl>>,
     ) -> RocketMQResult<Self> {
-        let mut factory = Self::new(nameserver_access_config, name_prefix, clients)?;
+        let mut factory = Self::new(service_context, nameserver_access_config, name_prefix, clients)?;
         factory.start().await?;
         Ok(factory)
     }
@@ -206,6 +211,7 @@ impl MQClientAPIFactory {
         let stop_signal = Arc::new(AtomicBool::new(false));
         let stop_notify = Arc::new(Notify::new());
         self.namesrv_refresh_task = spawn_namesrv_refresh_task(
+            &self.service_context,
             "rocketmq-client-namesrv-refresh",
             stop_signal.clone(),
             stop_notify.clone(),
@@ -253,6 +259,7 @@ fn validate_nameserver_access_config(config: &NameserverAccessConfig) -> RocketM
 }
 
 fn spawn_namesrv_refresh_task<F>(
+    service_context: &ChildServiceContext,
     thread_name: &'static str,
     stop_signal: Arc<AtomicBool>,
     stop_notify: Arc<Notify>,
@@ -261,7 +268,7 @@ fn spawn_namesrv_refresh_task<F>(
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    match spawn_client_tracked_task(thread_name, task) {
+    match spawn_client_tracked_task_with_context(service_context, thread_name, task) {
         Ok(handle) => Some(NamesrvRefreshTaskHandle::Tracked {
             stop_signal,
             stop_notify,
@@ -283,8 +290,9 @@ async fn sleep_or_stop(stop_signal: &Arc<AtomicBool>, stop_notify: &Arc<Notify>,
 }
 
 #[doc(hidden)]
-pub async fn run_namesrv_refresh_lifecycle_probe() -> NamesrvRefreshLifecycleProbe {
+pub async fn run_namesrv_refresh_lifecycle_probe(service_context: ChildServiceContext) -> NamesrvRefreshLifecycleProbe {
     let mut factory = MQClientAPIFactory {
+        service_context,
         nameserver_access_config: NameserverAccessConfig::new("", "example.com", "default"),
         name_prefix: CheetahString::from_static_str("factory-lifecycle-probe"),
         clients: Vec::new(),
@@ -320,6 +328,10 @@ mod tests {
         }
     }
 
+    fn test_context() -> ChildServiceContext {
+        crate::runtime::test_service_context("mq-client-api-factory-test")
+    }
+
     #[test]
     fn factory_rejects_missing_nameserver_like_java() {
         let error = validate_nameserver_access_config(&NameserverAccessConfig::default())
@@ -343,6 +355,7 @@ mod tests {
     #[tokio::test]
     async fn create_and_start_validates_before_starting() {
         let result = MQClientAPIFactory::create_and_start(
+            test_context(),
             NameserverAccessConfig::new("127.0.0.1:9876", "", ""),
             "factory-test",
             Vec::new(),
@@ -359,6 +372,7 @@ mod tests {
     #[tokio::test]
     async fn domain_nameserver_config_starts_periodic_refresh_like_java() {
         let mut factory = MQClientAPIFactory {
+            service_context: test_context(),
             nameserver_access_config: NameserverAccessConfig::new("", "example.com", "default"),
             name_prefix: CheetahString::from_static_str("factory-test"),
             clients: Vec::new(),
@@ -380,6 +394,7 @@ mod tests {
     #[tokio::test]
     async fn static_nameserver_config_does_not_start_periodic_refresh() {
         let mut factory = MQClientAPIFactory {
+            service_context: test_context(),
             nameserver_access_config: NameserverAccessConfig::new("127.0.0.1:9876", "", ""),
             name_prefix: CheetahString::from_static_str("factory-test"),
             clients: Vec::new(),
@@ -400,6 +415,7 @@ mod tests {
         let stop_signal_in_task = stop_signal.clone();
         let stop_notify_in_task = stop_notify.clone();
         let task = spawn_namesrv_refresh_task(
+            &test_context(),
             "rocketmq-client-namesrv-refresh-test",
             stop_signal.clone(),
             stop_notify.clone(),
@@ -421,6 +437,7 @@ mod tests {
         let dropped = Arc::new(AtomicBool::new(false));
         let dropped_in_task = dropped.clone();
         let task = spawn_namesrv_refresh_task(
+            &test_context(),
             "rocketmq-client-namesrv-refresh-test",
             stop_signal,
             stop_notify,
@@ -462,7 +479,7 @@ mod tests {
 
     #[tokio::test]
     async fn namesrv_refresh_lifecycle_probe_reports_clean_shutdown() {
-        let probe = run_namesrv_refresh_lifecycle_probe().await;
+        let probe = run_namesrv_refresh_lifecycle_probe(test_context()).await;
 
         assert!(probe.healthy, "{probe:?}");
         assert_eq!(probe.task_count_before_shutdown, 1);
@@ -470,8 +487,9 @@ mod tests {
     }
 
     #[test]
-    fn domain_refresh_without_tokio_runtime_does_not_panic() {
+    fn domain_refresh_uses_injected_runtime_context() {
         let mut factory = MQClientAPIFactory {
+            service_context: test_context(),
             nameserver_access_config: NameserverAccessConfig::new("", "example.com", "default"),
             name_prefix: CheetahString::from_static_str("factory-test"),
             clients: Vec::new(),

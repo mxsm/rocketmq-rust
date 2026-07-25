@@ -1,5 +1,7 @@
 # rocketmq-client-rust
 
+> Runtime 所有权：示例中的 `client_runtime` 是应用持有的 `Arc<ClientRuntime>`，它从 `RuntimeOwner` 的 child scope 创建，并在进程边界显式关闭。
+
 [English](README.md) | [简体中文](README-zh_cn.md)
 
 [RocketMQ-Rust](../README-zh_cn.md) 的异步 producer、consumer、admin、路由、ACL 和 trace 支持 crate。
@@ -90,7 +92,7 @@ use rocketmq_rust::rocketmq;
 async fn main() -> RocketMQResult<()> {
     rocketmq_common::log::init_logger()?;
 
-    let mut producer = DefaultMQProducer::builder()
+    let mut producer = DefaultMQProducer::builder(client_runtime.clone())
         .producer_group("example_producer_group")
         .name_server_addr("127.0.0.1:9876")
         .build();
@@ -127,7 +129,7 @@ use rocketmq_rust::rocketmq;
 async fn main() -> RocketMQResult<()> {
     rocketmq_common::log::init_logger()?;
 
-    let mut consumer = DefaultMQPushConsumer::builder()
+    let mut consumer = DefaultMQPushConsumer::builder(client_runtime.clone())
         .consumer_group("example_consumer_group")
         .name_server_addr("127.0.0.1:9876")
         .build();
@@ -165,7 +167,7 @@ impl MessageListenerConcurrently for PrintListener {
 use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
 use rocketmq_common::common::message::message_single::Message;
 
-let mut producer = DefaultMQProducer::builder()
+let mut producer = DefaultMQProducer::builder(client_runtime.clone())
     .producer_group("batch_producer_group")
     .name_server_addr("127.0.0.1:9876")
     .build();
@@ -208,7 +210,7 @@ impl TransactionListener for TxListener {
     }
 }
 
-let mut producer = TransactionMQProducer::builder()
+let mut producer = TransactionMQProducer::builder(client_runtime.clone())
     .producer_group("transaction_producer_group")
     .name_server_addr("127.0.0.1:9876")
     .transaction_listener(TxListener)
@@ -232,7 +234,7 @@ println!("transaction result: {}", result);
 use rocketmq_client_rust::consumer::default_lite_pull_consumer::DefaultLitePullConsumer;
 use rocketmq_client_rust::consumer::lite_pull_consumer::LitePullConsumer;
 
-let consumer = DefaultLitePullConsumer::builder()
+let consumer = DefaultLitePullConsumer::builder(client_runtime.clone())
     .consumer_group("lite_pull_group")
     .name_server_addr("127.0.0.1:9876")
     .pull_batch_size(32)
@@ -264,7 +266,7 @@ use std::sync::Arc;
 let credentials = SessionCredentials::with_token("access-key", "secret-key", "security-token");
 let rpc_hook = Arc::new(AclClientRPCHook::new(credentials));
 
-let producer = DefaultMQProducer::builder()
+let producer = DefaultMQProducer::builder(client_runtime.clone())
     .producer_group("acl_producer_group")
     .name_server_addr("127.0.0.1:9876")
     .rpc_hook(rpc_hook)

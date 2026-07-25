@@ -79,14 +79,15 @@ impl CommandExecute for LiteCommands {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
         match self {
-            LiteCommands::GetBrokerLiteInfo(cmd) => cmd.execute(credentials).await,
-            LiteCommands::GetLiteClientInfo(cmd) => cmd.execute(credentials).await,
-            LiteCommands::GetLiteGroupInfo(cmd) => cmd.execute(credentials).await,
-            LiteCommands::GetLiteTopicInfo(cmd) => cmd.execute(credentials).await,
-            LiteCommands::GetParentTopicInfo(cmd) => cmd.execute(credentials).await,
-            LiteCommands::TriggerLiteDispatch(cmd) => cmd.execute(credentials).await,
+            LiteCommands::GetBrokerLiteInfo(cmd) => cmd.execute(credentials, client_runtime.clone()).await,
+            LiteCommands::GetLiteClientInfo(cmd) => cmd.execute(credentials, client_runtime.clone()).await,
+            LiteCommands::GetLiteGroupInfo(cmd) => cmd.execute(credentials, client_runtime.clone()).await,
+            LiteCommands::GetLiteTopicInfo(cmd) => cmd.execute(credentials, client_runtime.clone()).await,
+            LiteCommands::GetParentTopicInfo(cmd) => cmd.execute(credentials, client_runtime.clone()).await,
+            LiteCommands::TriggerLiteDispatch(cmd) => cmd.execute(credentials, client_runtime.clone()).await,
         }
     }
 }

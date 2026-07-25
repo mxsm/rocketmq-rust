@@ -3,6 +3,8 @@ sidebar_position: 1
 title: 概述
 ---
 
+> Runtime 所有权：示例中的 `client_runtime` 是应用持有的 `Arc<ClientRuntime>`，它从 `RuntimeOwner` 的 child scope 创建，并在进程边界显式关闭。
+
 # 贡献指南概述
 
 欢迎来到 RocketMQ-Rust 社区！🎉
@@ -185,7 +187,7 @@ use crate::model::Message;
 /// use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// let mut producer = DefaultMQProducer::builder()
+/// let mut producer = DefaultMQProducer::builder(client_runtime.clone())
 ///     .producer_group("example_group")
 ///     .name_server_addr("localhost:9876")
 ///     .build();
@@ -248,7 +250,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_send_message() {
-        let mut producer = DefaultMQProducer::builder()
+        let mut producer = DefaultMQProducer::builder(client_runtime.clone())
             .producer_group("example_group")
             .name_server_addr("localhost:9876")
             .build();
@@ -288,7 +290,7 @@ cargo doc --no-deps --open
 /// use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
 /// use rocketmq_common::common::message::message_single::Message;
 ///
-/// let mut producer = DefaultMQProducer::builder()
+/// let mut producer = DefaultMQProducer::builder(client_runtime.clone())
 ///     .producer_group("example_group")
 ///     .name_server_addr("localhost:9876")
 ///     .build();

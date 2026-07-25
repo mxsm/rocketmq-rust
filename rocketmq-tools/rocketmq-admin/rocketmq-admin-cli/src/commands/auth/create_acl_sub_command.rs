@@ -86,6 +86,7 @@ impl CommandExecute for CreateAclSubCommand {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
         let request = CreateAclRequest::try_new(
             self.broker_addr.clone(),
@@ -96,7 +97,8 @@ impl CommandExecute for CreateAclSubCommand {
             self.decision.clone(),
             self.source_ip.clone(),
         )?;
-        let result = AuthService::create_acl_by_request_with_credentials(request, credentials).await?;
+        let result =
+            AuthService::create_acl_by_request_with_credentials(request, credentials, client_runtime.clone()).await?;
         for broker_addr in result.broker_addrs {
             println!("create acl to {} success.", broker_addr);
         }

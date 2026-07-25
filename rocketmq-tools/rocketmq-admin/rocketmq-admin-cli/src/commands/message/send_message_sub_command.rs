@@ -89,13 +89,19 @@ impl CommandExecute for SendMessageSubCommand {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
         if self.queue_id.is_some() && self.broker_name.is_none() {
             println!("Broker name must be set if the queue is chosen!");
             return Ok(());
         }
 
-        let result = ProducerService::send_message_by_request_with_credentials(self.request()?, credentials).await?;
+        let result = ProducerService::send_message_by_request_with_credentials(
+            self.request()?,
+            credentials,
+            client_runtime.clone(),
+        )
+        .await?;
         Self::print_result(&result);
         Ok(())
     }

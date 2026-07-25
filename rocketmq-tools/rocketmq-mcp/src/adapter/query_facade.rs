@@ -566,8 +566,11 @@ where
 }
 
 impl QueryFacade<AdminCoreSessionFactory> {
-    pub(crate) fn new(config: McpConfig) -> Self {
-        Self::with_factory(config, AdminCoreSessionFactory)
+    pub(crate) fn new(
+        config: McpConfig,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
+    ) -> Self {
+        Self::with_factory(config, AdminCoreSessionFactory::new(client_runtime))
     }
 }
 
@@ -1058,7 +1061,18 @@ mod tests {
 
     #[test]
     fn production_query_facade_uses_the_admin_core_session_factory() {
-        let _: QueryFacade<AdminCoreSessionFactory> = QueryFacade::new(example_config());
+        static OWNER: std::sync::LazyLock<rocketmq_runtime::RuntimeOwner> = std::sync::LazyLock::new(|| {
+            rocketmq_runtime::RuntimeOwner::new(rocketmq_runtime::RuntimeConfig {
+                thread_name: "rocketmq-mcp-query-test".to_string(),
+                ..Default::default()
+            })
+            .expect("MCP query test runtime should start")
+        });
+        let client_runtime = rocketmq_admin_core::client_adapter::ClientRuntime::new(
+            OWNER.root_context().child("client"),
+            rocketmq_admin_core::client_adapter::ClientRuntimeConfig::default(),
+        );
+        let _: QueryFacade<AdminCoreSessionFactory> = QueryFacade::new(example_config(), client_runtime);
     }
 
     #[tokio::test]

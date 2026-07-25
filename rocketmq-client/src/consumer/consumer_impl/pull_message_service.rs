@@ -47,9 +47,11 @@ use crate::consumer::consumer_impl::message_request::MessageRequest;
 use crate::consumer::consumer_impl::pop_request::PopRequest;
 use crate::consumer::consumer_impl::pull_request::PullRequest;
 use crate::factory::mq_client_instance::MQClientInstance;
-use crate::runtime::spawn_client_task;
-use crate::runtime::spawn_client_tracked_task;
+use crate::runtime::spawn_client_task_with_context;
+use crate::runtime::spawn_client_tracked_task_with_context;
+use crate::runtime::ClientRuntime;
 use crate::runtime::ClientTrackedTaskHandle;
+use rocketmq_runtime::ChildServiceContext;
 
 /// Default queue capacity for message requests
 const DEFAULT_QUEUE_CAPACITY: usize = 4096;
@@ -71,8 +73,8 @@ type MessageRequestSender = tokio::sync::mpsc::Sender<BoxedMessageRequest>;
 /// - Manages lifecycle of background pull tasks
 ///
 /// # Thread Model
-/// - Main loop: Single Tokio task when a runtime is available
-/// - Delayed tasks: Tokio tasks, with a current-thread runtime fallback for synchronous callers
+/// - Main loop: Single task on the injected client runtime
+/// - Delayed tasks: Tracked tasks on the same injected runtime
 ///
 /// # Shutdown Semantics
 /// - `shutdown()` sends stop signal and waits for graceful termination
@@ -80,6 +82,7 @@ type MessageRequestSender = tokio::sync::mpsc::Sender<BoxedMessageRequest>;
 /// - Delayed tasks check `is_stopped()` before execution
 #[derive(Clone)]
 pub struct PullMessageService {
+    service_context: Arc<StdRwLock<Option<ChildServiceContext>>>,
     lifecycle_transition: Arc<Mutex<()>>,
 
     /// Message request channel sender
@@ -535,6 +538,7 @@ impl PullMessageService {
             .collect();
 
         PullMessageService {
+            service_context: Arc::new(StdRwLock::new(None)),
             lifecycle_transition: Arc::new(Mutex::new(())),
             tx: Arc::new(StdRwLock::new(None)),
             tx_shutdown: Arc::new(StdRwLock::new(None)),
@@ -598,27 +602,36 @@ impl PullMessageService {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<Box<dyn MessageRequest + Send + 'static>>(self.queue_capacity);
         let (mut shutdown, tx_shutdown) = Shutdown::new(1);
         let pop_instance = instance.clone();
+        let service_context = instance.service_context().child("pull-message-service");
+        *self
+            .service_context
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(service_context.clone());
 
-        let handle = spawn_client_tracked_task("rocketmq-client-pull-message-service", async move {
-            info!("{} service started", "PullMessageService");
+        let handle = spawn_client_tracked_task_with_context(
+            &service_context,
+            "rocketmq-client-pull-message-service",
+            async move {
+                info!("{} service started", "PullMessageService");
 
-            loop {
-                tokio::select! {
-                    _ = shutdown.recv() => {
-                        info!("{} received shutdown signal", "PullMessageService");
-                        break;
-                    }
-                    Some(request) = rx.recv() => {
-                        // Process request with exception handling
-                        if let Err(e) = Self::process_request(request, pop_instance.as_ref()).await {
-                            error!("{} failed to process request: {:?}", "PullMessageService", e);
+                loop {
+                    tokio::select! {
+                        _ = shutdown.recv() => {
+                            info!("{} received shutdown signal", "PullMessageService");
+                            break;
+                        }
+                        Some(request) = rx.recv() => {
+                            // Process request with exception handling
+                            if let Err(e) = Self::process_request(request, pop_instance.as_ref()).await {
+                                error!("{} failed to process request: {:?}", "PullMessageService", e);
+                            }
                         }
                     }
                 }
-            }
 
-            info!("{} service end", "PullMessageService");
-        })
+                info!("{} service end", "PullMessageService");
+            },
+        )
         .map_err(|error| pull_message_service_startup_failed("spawn main loop", error))?;
 
         let mut pull_shards = Vec::with_capacity(self.shard_count);
@@ -628,7 +641,8 @@ impl PullMessageService {
             let metrics = self.pull_shard_metrics[index].clone();
             let worker_instance = instance.clone();
             let shutdown_rx = tx_shutdown.subscribe();
-            let handle = spawn_client_tracked_task(
+            let handle = spawn_client_tracked_task_with_context(
+                &service_context,
                 "rocketmq-client-pull-message-service-shard",
                 run_pull_request_shard_worker(index, shard_rx, shutdown_rx, worker_instance, metrics.clone()),
             )
@@ -759,7 +773,12 @@ impl PullMessageService {
             self.delayed_scheduler_metrics.clone(),
         ));
 
-        match spawn_client_task("rocketmq-client-pull-delayed-scheduler", tracked_task) {
+        let service_context = self
+            .service_context
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()?;
+        match spawn_client_task_with_context(&service_context, "rocketmq-client-pull-delayed-scheduler", tracked_task) {
             Ok(_) => {
                 *guard = Some(tx.clone());
                 Some(tx)
@@ -930,6 +949,10 @@ impl PullMessageService {
         }
 
         spawn_scheduled_pull_message_task(
+            self.service_context
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .as_ref(),
             "rocketmq-client-pull-task",
             &self.scheduled_task_tracker,
             &self.scheduled_task_shutdown,
@@ -1037,9 +1060,18 @@ impl Default for PullMessageService {
 }
 
 #[doc(hidden)]
-pub async fn run_pull_message_service_lifecycle_probe() -> PullMessageServiceLifecycleProbe {
+pub async fn run_pull_message_service_lifecycle_probe(
+    client_runtime: Arc<ClientRuntime>,
+) -> PullMessageServiceLifecycleProbe {
     let service = PullMessageService::new();
-    let instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "pull-message-service-probe", None);
+    let instance = MQClientInstance::new_arc(
+        ClientConfig::default(),
+        0,
+        "pull-message-service-probe",
+        None,
+        client_runtime.child("pull-message-service-probe"),
+        client_runtime.pool().request_future_holder(),
+    );
 
     let start_result = service.start(instance.clone()).await;
     let task_count_before_shutdown = service.main_task_count().await;
@@ -1068,6 +1100,7 @@ pub async fn run_pull_message_service_lifecycle_probe() -> PullMessageServiceLif
 }
 
 fn spawn_scheduled_pull_message_task<F>(
+    service_context: Option<&ChildServiceContext>,
     thread_name: &'static str,
     tracker: &TaskTracker,
     shutdown_token: &CancellationToken,
@@ -1078,6 +1111,13 @@ fn spawn_scheduled_pull_message_task<F>(
     if shutdown_token.is_cancelled() {
         return;
     }
+    let Some(service_context) = service_context else {
+        error!(
+            "Failed to spawn {} background task: ClientRuntime context is not bound",
+            thread_name
+        );
+        return;
+    };
 
     let shutdown_token = shutdown_token.clone();
     let tracked_task = tracker.track_future(async move {
@@ -1088,7 +1128,7 @@ fn spawn_scheduled_pull_message_task<F>(
         }
     });
 
-    if let Err(error) = spawn_client_task(thread_name, tracked_task) {
+    if let Err(error) = spawn_client_task_with_context(service_context, thread_name, tracked_task) {
         error!("Failed to spawn {} background task: {}", thread_name, error);
     }
 }
@@ -1118,6 +1158,15 @@ mod tests {
     use super::*;
     use rocketmq_error::ErrorKind;
 
+    fn service_with_context(scope: &'static str) -> PullMessageService {
+        let service = PullMessageService::new();
+        *service
+            .service_context
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(crate::runtime::test_service_context(scope));
+        service
+    }
+
     #[test]
     fn pull_message_service_startup_failed_uses_service_error_kind() {
         let error = pull_message_service_startup_failed("spawn test worker", "task group closed");
@@ -1145,7 +1194,15 @@ mod tests {
     }
 
     async fn process_mismatched_request(mode: MessageRequestMode) -> RocketMQError {
-        let instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "pull-message-mismatch-test", None);
+        let runtime = crate::runtime::test_client_runtime("pull-message-mismatch-test");
+        let instance = MQClientInstance::new_arc(
+            ClientConfig::default(),
+            0,
+            "pull-message-mismatch-test",
+            None,
+            runtime.child("instance"),
+            runtime.pool().request_future_holder(),
+        );
 
         match PullMessageService::process_request(Box::new(MismatchedMessageRequest { mode }), instance.as_ref()).await
         {
@@ -1171,8 +1228,8 @@ mod tests {
     }
 
     #[test]
-    fn execute_task_without_tokio_runtime_does_not_spawn_panic() {
-        let service = PullMessageService::new();
+    fn execute_task_uses_bound_context_without_current_tokio_runtime() {
+        let service = service_with_context("pull-message-immediate-task-test");
         let ran = Arc::new(AtomicBool::new(false));
         let ran_clone = ran.clone();
 
@@ -1183,8 +1240,8 @@ mod tests {
     }
 
     #[test]
-    fn execute_task_later_without_tokio_runtime_does_not_spawn_panic() {
-        let service = PullMessageService::new();
+    fn execute_task_later_uses_bound_context_without_current_tokio_runtime() {
+        let service = service_with_context("pull-message-delayed-task-test");
         let ran = Arc::new(AtomicBool::new(false));
         let ran_clone = ran.clone();
 
@@ -1196,7 +1253,7 @@ mod tests {
 
     #[tokio::test]
     async fn execute_task_is_tracked_until_completion() {
-        let service = PullMessageService::new();
+        let service = service_with_context("pull-message-tracked-task-test");
         let ran = Arc::new(AtomicBool::new(false));
         let ran_clone = ran.clone();
 
@@ -1248,7 +1305,8 @@ mod tests {
 
     #[tokio::test]
     async fn pull_message_service_lifecycle_probe_reports_clean_shutdown() {
-        let probe = run_pull_message_service_lifecycle_probe().await;
+        let probe =
+            run_pull_message_service_lifecycle_probe(crate::runtime::test_client_runtime("pull-message-probe")).await;
 
         assert!(probe.healthy, "{probe:?}");
         assert_eq!(probe.task_count_before_shutdown, probe.shards.shard_count + 1);

@@ -19,6 +19,9 @@
 //! cargo bench --bench oneway_benchmark
 //! ```
 
+#[path = "support/mod.rs"]
+mod support;
+
 use bytes::Bytes;
 use cheetah_string::CheetahString;
 use criterion::criterion_group;
@@ -34,10 +37,13 @@ use rocketmq_model::common::message::message_single::Message;
 /// Measures: Time from call to return (not including background send)
 fn bench_send_oneway_latency(c: &mut Criterion) {
     let rt = tokio::runtime::Runtime::new().unwrap();
+    let runtime_owner = support::BenchClientRuntime::new("oneway-latency");
+    let client_runtime = runtime_owner.client_runtime();
 
     c.bench_function("send_oneway_latency", |b| {
+        let client_runtime = client_runtime.clone();
         b.to_async(&rt).iter(|| async {
-            let mut producer = DefaultMQProducer::builder()
+            let mut producer = DefaultMQProducer::builder(client_runtime.clone())
                 .producer_group("bench_group".to_string())
                 .name_server_addr("127.0.0.1:9876".to_string())
                 .build();
@@ -52,6 +58,7 @@ fn bench_send_oneway_latency(c: &mut Criterion) {
             let _ = producer.send_oneway(msg).await;
         });
     });
+    runtime_owner.shutdown();
 }
 
 /// Benchmark send_oneway_batch throughput
@@ -65,6 +72,8 @@ fn bench_send_oneway_latency(c: &mut Criterion) {
 fn bench_send_oneway_batch_throughput(c: &mut Criterion) {
     let mut group = c.benchmark_group("batch_throughput");
     let rt = tokio::runtime::Runtime::new().unwrap();
+    let runtime_owner = support::BenchClientRuntime::new("oneway-batch");
+    let client_runtime = runtime_owner.client_runtime();
 
     for batch_size in [100, 1000, 10000].iter() {
         group.bench_with_input(BenchmarkId::new("messages", batch_size), batch_size, |b, &size| {
@@ -80,7 +89,7 @@ fn bench_send_oneway_batch_throughput(c: &mut Criterion) {
                 .collect();
 
             b.to_async(&rt).iter(|| async {
-                let producer = DefaultMQProducer::builder()
+                let producer = DefaultMQProducer::builder(client_runtime.clone())
                     .producer_group("bench_group".to_string())
                     .name_server_addr("127.0.0.1:9876".to_string())
                     .build();
@@ -94,6 +103,7 @@ fn bench_send_oneway_batch_throughput(c: &mut Criterion) {
     }
 
     group.finish();
+    runtime_owner.shutdown();
 }
 
 /// Benchmark zero-copy overhead
@@ -125,39 +135,47 @@ fn bench_zero_copy(c: &mut Criterion) {
 fn bench_concurrent_oneway(c: &mut Criterion) {
     let mut group = c.benchmark_group("concurrent");
     let rt = tokio::runtime::Runtime::new().unwrap();
+    let runtime_owner = support::BenchClientRuntime::new("oneway-concurrent");
+    let client_runtime = runtime_owner.client_runtime();
 
     for concurrency in [1, 10, 100, 1000].iter() {
         group.bench_with_input(BenchmarkId::new("tasks", concurrency), concurrency, |b, &conc| {
-            b.to_async(&rt).iter(|| async move {
-                let mut handles = vec![];
+            let client_runtime = client_runtime.clone();
+            b.to_async(&rt).iter(|| {
+                let client_runtime = client_runtime.clone();
+                async move {
+                    let mut handles = vec![];
 
-                for i in 0..conc {
-                    let handle = tokio::spawn(async move {
-                        let mut producer = DefaultMQProducer::builder()
-                            .producer_group("bench_group".to_string())
-                            .name_server_addr("127.0.0.1:9876".to_string())
-                            .build();
+                    for i in 0..conc {
+                        let client_runtime = client_runtime.clone();
+                        let handle = tokio::spawn(async move {
+                            let mut producer = DefaultMQProducer::builder(client_runtime)
+                                .producer_group("bench_group".to_string())
+                                .name_server_addr("127.0.0.1:9876".to_string())
+                                .build();
 
-                        let msg = Message::builder()
-                            .topic(CheetahString::from_static_str("BenchTopic"))
-                            .tags(CheetahString::from_string(format!("Tag{}", i)))
-                            .body(format!("Body{}", i).as_bytes().to_vec())
-                            .build()
-                            .unwrap();
+                            let msg = Message::builder()
+                                .topic(CheetahString::from_static_str("BenchTopic"))
+                                .tags(CheetahString::from_string(format!("Tag{}", i)))
+                                .body(format!("Body{}", i).as_bytes().to_vec())
+                                .build()
+                                .unwrap();
 
-                        let _ = producer.send_oneway(msg).await;
-                    });
-                    handles.push(handle);
-                }
+                            let _ = producer.send_oneway(msg).await;
+                        });
+                        handles.push(handle);
+                    }
 
-                for handle in handles {
-                    let _ = handle.await;
+                    for handle in handles {
+                        let _ = handle.await;
+                    }
                 }
             });
         });
     }
 
     group.finish();
+    runtime_owner.shutdown();
 }
 
 criterion_group!(

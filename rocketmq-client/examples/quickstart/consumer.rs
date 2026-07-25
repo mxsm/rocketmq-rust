@@ -14,6 +14,9 @@
 
 #![recursion_limit = "512"]
 
+#[path = "../support/mod.rs"]
+mod support;
+
 use rocketmq_client_rust::consumer::default_mq_push_consumer::DefaultMQPushConsumer;
 use rocketmq_client_rust::consumer::listener::consume_concurrently_context::ConsumeConcurrentlyContext;
 use rocketmq_client_rust::consumer::listener::consume_concurrently_status::ConsumeConcurrentlyStatus;
@@ -31,11 +34,13 @@ pub const TAG: &str = "*";
 
 #[tokio::main]
 pub async fn main() -> RocketMQResult<()> {
+    let example_runtime = support::ExampleClientRuntime::new("consumer");
+    let client_runtime = example_runtime.client_runtime();
     let telemetry_guard =
         rocketmq_observability::install_global(&rocketmq_observability::TelemetryBootstrapConfig::default())
             .expect("telemetry logging bootstrap should initialize");
     // create a producer builder with default configuration
-    let builder = DefaultMQPushConsumer::builder();
+    let builder = DefaultMQPushConsumer::builder(client_runtime.clone());
 
     let mut consumer = builder
         .consumer_group(CONSUMER_GROUP.to_string())
@@ -49,6 +54,8 @@ pub async fn main() -> RocketMQResult<()> {
         .shutdown()
         .into_result()
         .expect("telemetry logging shutdown should succeed");
+
+    example_runtime.shutdown().await;
 
     Ok(())
 }

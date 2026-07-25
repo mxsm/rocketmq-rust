@@ -68,6 +68,7 @@ cheetah-string = { workspace = true }
 
 [dev-dependencies]
 criterion = { version = "0.8.2", features = ["async_tokio"] }
+trybuild  = "1.0.116"
 
 [[bench]]
 name    = "produce_accumulator_benchmark"

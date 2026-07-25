@@ -3,6 +3,8 @@ sidebar_position: 2
 title: 开发指南
 ---
 
+> Runtime 所有权：示例中的 `client_runtime` 是应用持有的 `Arc<ClientRuntime>`，它从 `RuntimeOwner` 的 child scope 创建，并在进程边界显式关闭。
+
 # 开发指南
 
 RocketMQ-Rust 详细开发指南。
@@ -223,7 +225,7 @@ mod tests {
 // tests/integration_test.rs
 #[tokio::test]
 async fn test_producer_send() {
-  let mut producer = DefaultMQProducer::builder()
+  let mut producer = DefaultMQProducer::builder(client_runtime.clone())
     .producer_group("example_group")
     .name_server_addr("localhost:9876")
     .build();
@@ -266,7 +268,7 @@ proptest! {
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 
 fn bench_send_message(c: &mut Criterion) {
-  let mut producer = DefaultMQProducer::builder()
+  let mut producer = DefaultMQProducer::builder(client_runtime.clone())
     .producer_group("bench_group")
     .name_server_addr("localhost:9876")
     .build();
@@ -313,7 +315,7 @@ criterion_main!(benches);
 /// use rocketmq_common::common::message::message_single::Message;
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// let mut producer = DefaultMQProducer::builder()
+/// let mut producer = DefaultMQProducer::builder(client_runtime.clone())
 ///     .producer_group("example_group")
 ///     .name_server_addr("localhost:9876")
 ///     .build();

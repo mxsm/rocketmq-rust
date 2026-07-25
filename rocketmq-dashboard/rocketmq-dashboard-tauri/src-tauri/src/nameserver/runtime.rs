@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use rocketmq_admin_core::client_adapter::ClientRuntime;
 use rocketmq_dashboard_common::DashboardCommonResult;
 use rocketmq_dashboard_common::NameServerConfigSnapshot;
 use rocketmq_dashboard_common::NameServerRuntimeAdapter;
@@ -37,22 +38,32 @@ struct RuntimeState {
 
 pub(crate) struct NameServerRuntimeState {
     state: Mutex<RuntimeState>,
+    client_runtime: Arc<ClientRuntime>,
     reset_hook: Arc<dyn ClientResetHook>,
 }
 
 impl NameServerRuntimeState {
-    pub(crate) fn new(snapshot: NameServerConfigSnapshot) -> Self {
-        Self::with_reset_hook(snapshot, Arc::new(NoopClientResetHook))
+    pub(crate) fn new(snapshot: NameServerConfigSnapshot, client_runtime: Arc<ClientRuntime>) -> Self {
+        Self::with_reset_hook(snapshot, client_runtime, Arc::new(NoopClientResetHook))
     }
 
-    pub(crate) fn with_reset_hook(snapshot: NameServerConfigSnapshot, reset_hook: Arc<dyn ClientResetHook>) -> Self {
+    pub(crate) fn with_reset_hook(
+        snapshot: NameServerConfigSnapshot,
+        client_runtime: Arc<ClientRuntime>,
+        reset_hook: Arc<dyn ClientResetHook>,
+    ) -> Self {
         Self {
             state: Mutex::new(RuntimeState {
                 snapshot,
                 generation: 0,
             }),
+            client_runtime,
             reset_hook,
         }
+    }
+
+    pub(crate) fn client_runtime(&self) -> Arc<ClientRuntime> {
+        Arc::clone(&self.client_runtime)
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -92,6 +103,22 @@ impl NameServerRuntimeAdapter for NameServerRuntimeState {
 }
 
 #[cfg(test)]
+pub(crate) fn test_client_runtime() -> Arc<ClientRuntime> {
+    use std::sync::LazyLock;
+
+    use rocketmq_admin_core::client_adapter::ClientRuntimeConfig;
+    use rocketmq_runtime::RuntimeConfig;
+    use rocketmq_runtime::RuntimeOwner;
+
+    static OWNER: LazyLock<RuntimeOwner> = LazyLock::new(|| {
+        RuntimeOwner::new(RuntimeConfig::server_default("rocketmq-dashboard-tauri-test"))
+            .expect("dashboard Tauri test runtime should start")
+    });
+
+    ClientRuntime::new(OWNER.root_context().child("client"), ClientRuntimeConfig::default())
+}
+
+#[cfg(test)]
 mod tests {
     use super::ClientResetHook;
     use super::NameServerRuntimeState;
@@ -99,6 +126,8 @@ mod tests {
     use rocketmq_dashboard_common::NameServerRuntimeAdapter;
     use std::sync::Arc;
     use std::sync::Mutex;
+
+    use crate::nameserver::runtime::test_client_runtime;
 
     #[derive(Default)]
     struct ResetSpy {
@@ -128,6 +157,7 @@ mod tests {
                 use_vip_channel: true,
                 use_tls: false,
             },
+            test_client_runtime(),
             reset_spy.clone(),
         );
 

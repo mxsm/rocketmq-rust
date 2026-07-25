@@ -507,7 +507,15 @@ mod tests {
 
     #[test]
     fn client_binding_is_one_time_and_shared() {
-        let instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "admin-client-binding", None);
+        let runtime = crate::runtime::test_client_runtime("mq-admin-impl-test");
+        let instance = MQClientInstance::new_arc(
+            ClientConfig::default(),
+            0,
+            "admin-client-binding",
+            None,
+            runtime.child("instance"),
+            runtime.pool().request_future_holder(),
+        );
         let admin = MQAdminImpl::new();
 
         assert!(admin.set_client(&instance));

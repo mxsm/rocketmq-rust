@@ -12,9 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[path = "../support/mod.rs"]
+mod support;
+
 use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
+use rocketmq_client_rust::ClientRuntime;
 use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::message::message_single::Message;
+use std::sync::Arc;
 
 pub const MESSAGE_COUNT: usize = 1;
 pub const PRODUCER_GROUP: &str = "please_rename_unique_group_name";
@@ -24,20 +29,24 @@ pub const TAG: &str = "TagA";
 
 #[tokio::main]
 pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let example_runtime = support::ExampleClientRuntime::new("simple-producer");
+    let client_runtime = example_runtime.client_runtime();
     let config = rocketmq_observability::TelemetryBootstrapConfig::default();
     let telemetry_guard = rocketmq_observability::install_global(&config)?;
 
-    let run_result = run().await;
+    let run_result = run(client_runtime).await;
     let shutdown_result = telemetry_guard.shutdown().into_result();
 
     run_result?;
     shutdown_result?;
+    example_runtime.shutdown().await;
+
     Ok(())
 }
 
-async fn run() -> RocketMQResult<()> {
+async fn run(client_runtime: Arc<ClientRuntime>) -> RocketMQResult<()> {
     // create a producer builder with default configuration
-    let builder = DefaultMQProducer::builder();
+    let builder = DefaultMQProducer::builder(client_runtime.clone());
 
     let mut producer = builder
         .producer_group(PRODUCER_GROUP.to_string())

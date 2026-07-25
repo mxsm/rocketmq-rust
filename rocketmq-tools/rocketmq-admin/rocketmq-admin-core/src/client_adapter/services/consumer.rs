@@ -618,8 +618,9 @@ impl ConsumerService {
     pub async fn delete_subscription_group_by_request_with_credentials(
         request: DeleteSubscriptionGroupRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<ConsumerOperationResult> {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials)
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
         let result = Self::delete_subscription_group_with_admin(&mut admin, &request).await;
@@ -667,8 +668,9 @@ impl ConsumerService {
     pub async fn query_consumer_config_by_request_with_credentials(
         request: ConsumerConfigQueryRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<ConsumerConfigQueryResult> {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials)
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
         let result = Self::query_consumer_config_with_admin(&admin, &request).await;
@@ -711,8 +713,9 @@ impl ConsumerService {
     pub async fn set_consume_mode_by_request_with_credentials(
         request: SetConsumeModeRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<ConsumerOperationResult> {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials)
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
         let result = Self::set_consume_mode_with_admin(&admin, &request).await;
@@ -750,8 +753,9 @@ impl ConsumerService {
     pub async fn update_subscription_group_by_request_with_credentials(
         request: UpdateSubscriptionGroupRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<ConsumerOperationResult> {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials)
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
         let result = Self::update_subscription_group_with_admin(&admin, &request).await;
@@ -782,8 +786,9 @@ impl ConsumerService {
     pub async fn update_subscription_group_list_by_request_with_credentials(
         request: UpdateSubscriptionGroupListRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<ConsumerOperationResult> {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials)
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
         let result = Self::update_subscription_group_list_with_admin(&admin, &request).await;
@@ -817,8 +822,9 @@ impl ConsumerService {
     pub async fn query_consumer_running_info_by_request_with_credentials(
         request: ConsumerRunningInfoRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<ConsumerRunningInfoResult> {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials)
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
         let result = Self::query_consumer_running_info_with_admin(&admin, &request).await;
@@ -909,8 +915,9 @@ impl ConsumerService {
     pub async fn query_consumer_progress_by_request_with_credentials(
         request: ConsumerProgressRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<ConsumerProgressResult> {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials)
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
         let result = Self::query_consumer_progress_with_admin(&admin, &request).await;
@@ -1014,19 +1021,24 @@ impl ConsumerService {
     pub async fn start_monitoring_by_request_with_credentials(
         request: StartMonitoringRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<MonitoringResult> {
-        Self::start_monitoring_with_event_sink_by_request_with_credentials(request, credentials, |_| Ok(())).await
+        Self::start_monitoring_with_event_sink_by_request_with_credentials(request, credentials, client_runtime, |_| {
+            Ok(())
+        })
+        .await
     }
 
     pub async fn start_monitoring_with_event_sink_by_request_with_credentials<F>(
         request: StartMonitoringRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
         mut event_sink: F,
     ) -> RocketMQResult<MonitoringResult>
     where
         F: FnMut(&MonitoringEvent) -> RocketMQResult<()>,
     {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials)
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
         let result = Self::start_monitoring_with_admin(&admin, &request, &mut event_sink).await;
@@ -1326,7 +1338,9 @@ fn builder_with_namesrv(namesrv_addr: Option<&str>) -> AdminBuilder {
 fn admin_builder_with_credentials(
     builder: AdminBuilder,
     credentials: Option<crate::core::security::AdminCredentials>,
+    client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
 ) -> AdminBuilder {
+    let builder = builder.client_runtime(client_runtime);
     match credentials {
         Some(hook) => builder.credentials(hook),
         None => builder,

@@ -64,10 +64,13 @@ impl CommandExecute for QueryCqSubCommand {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
         let request = self.request()?;
         let index = request.index();
-        let result = QueueService::query_consume_queue_by_request_with_credentials(request, credentials).await?;
+        let result =
+            QueueService::query_consume_queue_by_request_with_credentials(request, credentials, client_runtime.clone())
+                .await?;
         print_query_consume_queue_response(&result.response_body, index);
         Ok(())
     }

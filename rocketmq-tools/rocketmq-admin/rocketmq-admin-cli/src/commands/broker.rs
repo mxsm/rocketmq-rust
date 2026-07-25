@@ -160,23 +160,30 @@ impl CommandExecute for BrokerCommands {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
         match self {
-            BrokerCommands::BrokerConsumeStats(value) => value.execute(credentials).await,
-            BrokerCommands::BrokerStatus(cmd) => cmd.execute(credentials).await,
-            BrokerCommands::CleanExpiredCQ(value) => value.execute(credentials).await,
-            BrokerCommands::CleanUnusedTopic(value) => value.execute(credentials).await,
-            BrokerCommands::DeleteExpiredCommitLog(value) => value.execute(credentials).await,
-            BrokerCommands::GetBrokerConfig(cmd) => cmd.execute(credentials).await,
-            BrokerCommands::GetBrokerEpoch(cmd) => cmd.execute(credentials).await,
-            BrokerCommands::GetColdDataFlowCtrInfo(value) => value.execute(credentials).await,
-            BrokerCommands::RemoveColdDataFlowCtrGroupConfig(value) => value.execute(credentials).await,
-            BrokerCommands::ResetMasterFlushOffset(value) => value.execute(credentials).await,
-            BrokerCommands::SendMsgStatus(value) => value.execute(credentials).await,
-            BrokerCommands::SwitchTimerEngine(value) => value.execute(credentials).await,
-            BrokerCommands::UpdateColdDataFlowCtrGroupConfig(value) => value.execute(credentials).await,
-            BrokerCommands::UpdateBrokerConfigSubCommand(cmd) => cmd.execute(credentials).await,
-            BrokerCommands::CommitLogSetReadAheadSubCommand(cmd) => cmd.execute(credentials).await,
+            BrokerCommands::BrokerConsumeStats(value) => value.execute(credentials, client_runtime.clone()).await,
+            BrokerCommands::BrokerStatus(cmd) => cmd.execute(credentials, client_runtime.clone()).await,
+            BrokerCommands::CleanExpiredCQ(value) => value.execute(credentials, client_runtime.clone()).await,
+            BrokerCommands::CleanUnusedTopic(value) => value.execute(credentials, client_runtime.clone()).await,
+            BrokerCommands::DeleteExpiredCommitLog(value) => value.execute(credentials, client_runtime.clone()).await,
+            BrokerCommands::GetBrokerConfig(cmd) => cmd.execute(credentials, client_runtime.clone()).await,
+            BrokerCommands::GetBrokerEpoch(cmd) => cmd.execute(credentials, client_runtime.clone()).await,
+            BrokerCommands::GetColdDataFlowCtrInfo(value) => value.execute(credentials, client_runtime.clone()).await,
+            BrokerCommands::RemoveColdDataFlowCtrGroupConfig(value) => {
+                value.execute(credentials, client_runtime.clone()).await
+            }
+            BrokerCommands::ResetMasterFlushOffset(value) => value.execute(credentials, client_runtime.clone()).await,
+            BrokerCommands::SendMsgStatus(value) => value.execute(credentials, client_runtime.clone()).await,
+            BrokerCommands::SwitchTimerEngine(value) => value.execute(credentials, client_runtime.clone()).await,
+            BrokerCommands::UpdateColdDataFlowCtrGroupConfig(value) => {
+                value.execute(credentials, client_runtime.clone()).await
+            }
+            BrokerCommands::UpdateBrokerConfigSubCommand(cmd) => cmd.execute(credentials, client_runtime.clone()).await,
+            BrokerCommands::CommitLogSetReadAheadSubCommand(cmd) => {
+                cmd.execute(credentials, client_runtime.clone()).await
+            }
         }
     }
 }

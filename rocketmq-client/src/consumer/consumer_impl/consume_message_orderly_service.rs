@@ -58,10 +58,11 @@ use crate::consumer::listener::message_listener_orderly::ArcMessageListenerOrder
 use crate::consumer::message_queue_lock::MessageQueueLock;
 use crate::consumer::mq_consumer_inner::MQConsumerInnerLocal;
 use crate::hook::consume_message_context::ConsumeMessageContext;
-use crate::runtime::schedule_client_fixed_delay_task;
-use crate::runtime::spawn_client_blocking_io;
-use crate::runtime::spawn_client_task;
+use crate::runtime::schedule_client_fixed_delay_task_with_context;
+use crate::runtime::spawn_client_blocking_io_with_context;
+use crate::runtime::spawn_client_task_with_context;
 use crate::runtime::ClientScheduledTaskHandle;
+use rocketmq_runtime::ChildServiceContext;
 
 static MAX_TIME_CONSUME_CONTINUOUSLY: LazyLock<u64> = LazyLock::new(|| {
     std::env::var("rocketmq.client.maxTimeConsumeContinuously")
@@ -71,6 +72,7 @@ static MAX_TIME_CONSUME_CONTINUOUSLY: LazyLock<u64> = LazyLock::new(|| {
 });
 
 pub struct ConsumeMessageOrderlyService {
+    service_context: ChildServiceContext,
     pub(crate) default_mqpush_consumer_impl: Option<Weak<DefaultMQPushConsumerImpl>>,
     pub(crate) client_config: Arc<ClientConfig>,
     pub(crate) consumer_config: Arc<ConsumerConfig>,
@@ -134,6 +136,7 @@ pub struct OrderlyLockPeriodicLifecycleProbe {
 }
 
 fn spawn_tracked_orderly_task<F>(
+    service_context: &ChildServiceContext,
     thread_name: &'static str,
     tracker: &TaskTracker,
     force_stop_token: &CancellationToken,
@@ -153,7 +156,7 @@ fn spawn_tracked_orderly_task<F>(
         }
     });
 
-    if let Err(error) = spawn_client_task(thread_name, tracked_task) {
+    if let Err(error) = spawn_client_task_with_context(service_context, thread_name, tracked_task) {
         warn!("Failed to spawn {} background task: {}", thread_name, error);
         warn!("Failed to track {} background task", thread_name);
     }
@@ -161,6 +164,7 @@ fn spawn_tracked_orderly_task<F>(
 
 impl ConsumeMessageOrderlyService {
     pub fn new(
+        service_context: ChildServiceContext,
         client_config: Arc<ClientConfig>,
         consumer_config: Arc<ConsumerConfig>,
         consumer_group: CheetahString,
@@ -169,6 +173,7 @@ impl ConsumeMessageOrderlyService {
     ) -> Self {
         let core_pool_size = consumer_config.consume_thread_min as usize;
         Self {
+            service_context,
             default_mqpush_consumer_impl,
             client_config,
             consumer_config,
@@ -234,7 +239,8 @@ impl ConsumeMessageOrderlyService {
     fn start_lock_periodic_with_schedule(&self, this: Arc<Self>, initial_delay: Duration, period: Duration) {
         let lock_handle = self.lock_periodic_task_handle.clone();
         let stopped = self.stopped.clone();
-        let handle = schedule_client_fixed_delay_task(
+        let handle = schedule_client_fixed_delay_task_with_context(
+            &self.service_context,
             "rocketmq-client-orderly-lock-periodic",
             initial_delay,
             period,
@@ -316,6 +322,7 @@ impl ConsumeMessageOrderlyService {
         let consume_message_orderly_service_cloned = consume_message_orderly_service.clone();
         let message_queue = message_queue.clone();
         spawn_tracked_orderly_task(
+            &self.service_context,
             "rocketmq-client-orderly-lock-reconsume",
             &self.orderly_task_tracker,
             &self.force_stop_token,
@@ -379,6 +386,7 @@ impl ConsumeMessageOrderlyService {
         let stopped = self.stopped.clone();
 
         spawn_tracked_orderly_task(
+            &self.service_context,
             "rocketmq-client-orderly-consume-delay",
             &self.orderly_task_tracker,
             &self.force_stop_token,
@@ -806,6 +814,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessageOrderlyService {
         let limiter = self.concurrency_limiter.clone();
         let stopped = self.stopped.clone();
         spawn_tracked_orderly_task(
+            &self.service_context,
             "rocketmq-client-orderly-consume",
             &self.orderly_task_tracker,
             &self.force_stop_token,
@@ -994,8 +1003,10 @@ impl ConsumeRequest {
                 let listener = consume_message_orderly_service_inner.message_listener.clone();
                 let mq_for_spawn = self.message_queue.clone();
                 let consumer_group_for_span = self.consumer_group.clone();
-                let (consume_result, context, process_span) =
-                    spawn_client_blocking_io("client.orderly.consume", move || {
+                let (consume_result, context, process_span) = spawn_client_blocking_io_with_context(
+                    &consume_message_orderly_service_inner.service_context,
+                    "client.orderly.consume",
+                    move || {
                         let process_span = crate::consumer::consumer_impl::observability::consumer_process_span(
                             msgs_owned.first(),
                             msgs_owned.len(),
@@ -1010,23 +1021,24 @@ impl ConsumeRequest {
                             listener.consume_message(&vec, &mut ctx)
                         };
                         (result, ctx, process_span)
-                    })
-                    .await
-                    .unwrap_or_else(|e| {
-                        (
-                            Err(rocketmq_error::RocketMQError::InvalidProperty(format!(
-                                "orderly consume task panicked: {e}"
-                            ))),
-                            ConsumeOrderlyContext::new(self.message_queue.clone()),
-                            crate::consumer::consumer_impl::observability::consumer_process_span(
-                                msgs.first().map(|msg| msg.as_ref()),
-                                msgs.len(),
-                                self.consumer_group.as_str(),
-                                &self.message_queue,
-                                "orderly",
-                            ),
-                        )
-                    });
+                    },
+                )
+                .await
+                .unwrap_or_else(|e| {
+                    (
+                        Err(rocketmq_error::RocketMQError::InvalidProperty(format!(
+                            "orderly consume task panicked: {e}"
+                        ))),
+                        ConsumeOrderlyContext::new(self.message_queue.clone()),
+                        crate::consumer::consumer_impl::observability::consumer_process_span(
+                            msgs.first().map(|msg| msg.as_ref()),
+                            msgs.len(),
+                            self.consumer_group.as_str(),
+                            &self.message_queue,
+                            "orderly",
+                        ),
+                    )
+                });
                 drop(consume_lock);
                 match consume_result {
                     Ok(value) => {
@@ -1167,7 +1179,9 @@ impl ConsumeRequest {
 }
 
 #[doc(hidden)]
-pub async fn run_orderly_lock_periodic_lifecycle_probe() -> OrderlyLockPeriodicLifecycleProbe {
+pub async fn run_orderly_lock_periodic_lifecycle_probe(
+    service_context: ChildServiceContext,
+) -> OrderlyLockPeriodicLifecycleProbe {
     let consumer_config = ConsumerConfig {
         message_model: MessageModel::Clustering,
         ..Default::default()
@@ -1175,6 +1189,7 @@ pub async fn run_orderly_lock_periodic_lifecycle_probe() -> OrderlyLockPeriodicL
     let listener: ArcMessageListenerOrderly =
         Arc::new(|_msgs: &[&MessageExt], _context: &mut ConsumeOrderlyContext| Ok(ConsumeOrderlyStatus::Success));
     let service = Arc::new(ConsumeMessageOrderlyService::new(
+        service_context,
         Arc::new(ClientConfig::default()),
         Arc::new(consumer_config),
         CheetahString::from_static_str("orderly_lock_periodic_probe_group"),
@@ -1249,8 +1264,13 @@ mod tests {
         CheetahString::from_static_str("group")
     }
 
+    fn test_context() -> ChildServiceContext {
+        crate::runtime::test_service_context("consume-message-orderly-test")
+    }
+
     fn new_service(default_impl: Option<Arc<DefaultMQPushConsumerImpl>>) -> ConsumeMessageOrderlyService {
         ConsumeMessageOrderlyService::new(
+            test_context(),
             Arc::new(ClientConfig::default()),
             Arc::new(ConsumerConfig::default()),
             consumer_group(),
@@ -1261,6 +1281,7 @@ mod tests {
 
     fn new_service_with_config(consumer_config: ConsumerConfig) -> ConsumeMessageOrderlyService {
         ConsumeMessageOrderlyService::new(
+            test_context(),
             Arc::new(ClientConfig::default()),
             Arc::new(consumer_config),
             consumer_group(),
@@ -1271,6 +1292,7 @@ mod tests {
 
     fn new_service_with_client_config(client_config: ClientConfig) -> ConsumeMessageOrderlyService {
         ConsumeMessageOrderlyService::new(
+            test_context(),
             Arc::new(client_config),
             Arc::new(ConsumerConfig::default()),
             consumer_group(),
@@ -1282,6 +1304,7 @@ mod tests {
     fn new_default_impl() -> Arc<DefaultMQPushConsumerImpl> {
         let consumer_config = ConsumerConfig::default();
         let consumer = Arc::new(DefaultMQPushConsumerImpl::new(
+            crate::runtime::test_client_runtime("orderly-consumer-impl-test"),
             ClientConfig::default(),
             consumer_config,
             None,
@@ -1336,6 +1359,7 @@ mod tests {
         let completed_in_task = completed.clone();
 
         spawn_tracked_orderly_task(
+            &test_context(),
             "rocketmq-client-orderly-tracker-test",
             &tracker,
             &token,
@@ -1363,6 +1387,7 @@ mod tests {
         let dropped_in_task = dropped.clone();
 
         spawn_tracked_orderly_task(
+            &test_context(),
             "rocketmq-client-orderly-tracker-test",
             &tracker,
             &token,
@@ -1390,7 +1415,7 @@ mod tests {
 
     #[tokio::test]
     async fn orderly_lock_periodic_lifecycle_probe_reports_clean_shutdown() {
-        let probe = run_orderly_lock_periodic_lifecycle_probe().await;
+        let probe = run_orderly_lock_periodic_lifecycle_probe(test_context()).await;
 
         assert!(probe.healthy, "{probe:?}");
         assert_eq!(probe.task_count_after_shutdown, 0, "{probe:?}");

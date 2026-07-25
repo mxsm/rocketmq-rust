@@ -70,7 +70,8 @@ impl AllocateMQSubCommand {
 impl CommandExecute for AllocateMQSubCommand {
     async fn execute(
         &self,
-        _rpc_hook: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        _credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        _client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
         let result = TopicService::query_allocated_mq_by_request(self.request()?).await?;
         Self::print_result(result);

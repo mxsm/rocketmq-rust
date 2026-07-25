@@ -44,7 +44,6 @@ use tracing::error;
 use crate::base::client_config::ClientConfig;
 use crate::base::query_result::QueryResult;
 use crate::base::validators::Validators;
-use crate::implementation::mq_client_manager::MQClientManager;
 use crate::latency::mq_fault_strategy::MQFaultStrategy;
 use crate::producer::default_mq_produce_builder::DefaultMQProducerBuilder;
 use crate::producer::mq_producer::MQProducer;
@@ -53,6 +52,7 @@ use crate::producer::producer_impl::default_mq_producer_impl::DefaultMQProducerI
 use crate::producer::send_callback::ArcSendCallback;
 use crate::producer::send_result::SendResult;
 use crate::producer::transaction_send_result::TransactionSendResult;
+use crate::runtime::ClientRuntime;
 use crate::trace::async_trace_dispatcher::AsyncTraceDispatcher;
 use crate::trace::hook::default_recall_message_trace_hook::DefaultRecallMessageTraceHook;
 use crate::trace::hook::end_transaction_trace_hook_impl::EndTransactionTraceHookImpl;
@@ -214,8 +214,6 @@ pub struct ProducerConfig {
     compress_level: i32,
     compress_type: CompressionType,
     compressor: Option<&'static (dyn Compressor + Send + Sync)>,
-    callback_executor: Option<tokio::runtime::Handle>,
-    async_sender_executor: Option<tokio::runtime::Handle>,
     latency_max: Vec<u64>,
     not_available_duration: Vec<u64>,
 }
@@ -394,22 +392,6 @@ impl ProducerConfig {
         self.compressor
     }
 
-    pub fn callback_executor(&self) -> Option<&tokio::runtime::Handle> {
-        self.callback_executor.as_ref()
-    }
-
-    pub fn async_sender_executor(&self) -> Option<&tokio::runtime::Handle> {
-        self.async_sender_executor.as_ref()
-    }
-
-    pub(crate) fn set_callback_executor(&mut self, callback_executor: tokio::runtime::Handle) {
-        self.callback_executor = Some(callback_executor);
-    }
-
-    pub(crate) fn set_async_sender_executor(&mut self, async_sender_executor: tokio::runtime::Handle) {
-        self.async_sender_executor = Some(async_sender_executor);
-    }
-
     pub(crate) fn latency_max(&self) -> &[u64] {
         &self.latency_max
     }
@@ -469,15 +451,13 @@ impl Default for ProducerConfig {
                 .unwrap_or(5),
             compress_type: compression_type,
             compressor: Some(CompressorFactory::get_compressor(compression_type)),
-            callback_executor: None,
-            async_sender_executor: None,
             latency_max: MQFaultStrategy::DEFAULT_LATENCY_MAX.to_vec(),
             not_available_duration: MQFaultStrategy::DEFAULT_NOT_AVAILABLE_DURATION.to_vec(),
         }
     }
 }
 
-#[derive(Default, Clone)]
+#[derive(Clone)]
 pub struct DefaultMQProducer {
     client_config: StableConfig<ClientConfig>,
     producer_config: StableConfig<ProducerConfig>,
@@ -485,12 +465,22 @@ pub struct DefaultMQProducer {
 }
 
 impl DefaultMQProducer {
-    #[inline]
-    pub fn builder() -> DefaultMQProducerBuilder {
-        DefaultMQProducerBuilder::new()
+    pub(crate) fn unbound() -> Self {
+        Self {
+            client_config: StableConfig::default(),
+            producer_config: StableConfig::default(),
+            default_mqproducer_impl: None,
+        }
     }
-    pub fn new() -> Self {
-        Self::builder().build()
+}
+
+impl DefaultMQProducer {
+    #[inline]
+    pub fn builder(client_runtime: Arc<ClientRuntime>) -> DefaultMQProducerBuilder {
+        DefaultMQProducerBuilder::new(client_runtime)
+    }
+    pub fn new(client_runtime: Arc<ClientRuntime>) -> Self {
+        Self::builder(client_runtime).build()
     }
 
     pub async fn start(&mut self) -> rocketmq_error::RocketMQResult<()> {
@@ -1189,14 +1179,6 @@ impl DefaultMQProducer {
         self.compressor()
     }
 
-    pub fn callback_executor(&self) -> Option<&tokio::runtime::Handle> {
-        self.producer_config.callback_executor()
-    }
-
-    pub fn async_sender_executor(&self) -> Option<&tokio::runtime::Handle> {
-        self.producer_config.async_sender_executor()
-    }
-
     #[inline]
     pub fn is_use_tls(&self) -> bool {
         self.client_config.is_use_tls()
@@ -1373,24 +1355,6 @@ impl DefaultMQProducer {
         self.update_producer_config(|config| config.compressor = compressor);
     }
 
-    pub fn set_callback_executor(&mut self, callback_executor: tokio::runtime::Handle) {
-        self.producer_config
-            .update(|config| config.set_callback_executor(callback_executor.clone()));
-        if let Some(default_mqproducer_impl) = self.default_mqproducer_impl.as_ref() {
-            default_mqproducer_impl.set_callback_executor(callback_executor);
-        }
-        self.sync_producer_config_to_impl();
-    }
-
-    pub fn set_async_sender_executor(&mut self, async_sender_executor: tokio::runtime::Handle) {
-        self.producer_config
-            .update(|config| config.set_async_sender_executor(async_sender_executor.clone()));
-        if let Some(default_mqproducer_impl) = self.default_mqproducer_impl.as_ref() {
-            default_mqproducer_impl.set_async_sender_executor(async_sender_executor);
-        }
-        self.sync_producer_config_to_impl();
-    }
-
     #[inline]
     pub fn set_send_msg_max_timeout_per_request(&mut self, timeout: u32) {
         self.update_producer_config(|config| config.send_msg_max_timeout_per_request = Some(timeout));
@@ -1543,8 +1507,17 @@ impl DefaultMQProducer {
     }
 
     pub fn init_produce_accumulator(&mut self) {
-        let produce_accumulator =
-            MQClientManager::get_instance().get_or_create_produce_accumulator(self.client_config.snapshot());
+        let Some(producer_impl) = self.default_mqproducer_impl.as_ref() else {
+            error!("cannot initialize produce accumulator without a ClientRuntime-bound producer");
+            return;
+        };
+        let Some(produce_accumulator) = producer_impl
+            .client_pool()
+            .get_or_create_produce_accumulator(self.client_config.snapshot())
+        else {
+            error!("cannot initialize produce accumulator after ClientRuntime shutdown");
+            return;
+        };
         self.apply_batch_config_to_accumulator(&produce_accumulator);
         self.update_producer_config(|config| config.produce_accumulator = Some(produce_accumulator));
     }
@@ -1717,6 +1690,9 @@ impl DefaultMQProducer {
                         .map(|topic| topic.as_str())
                         .unwrap_or_default();
                     let dispatcher = AsyncTraceDispatcher::new(
+                        default_mqproducer_impl
+                            .client_runtime()
+                            .expect("public producer implementation must retain its explicit ClientRuntime"),
                         producer_config.producer_group.as_str(),
                         Type::Produce,
                         client_config.trace_msg_batch_num,
@@ -2519,6 +2495,10 @@ mod facade_tests {
     use crate::base::client_config::ClientConfig;
     use crate::producer::send_result::SendResult;
 
+    fn test_runtime() -> Arc<crate::runtime::ClientRuntime> {
+        crate::runtime::test_client_runtime("default-producer-facade-test")
+    }
+
     fn unstarted_producer() -> DefaultMQProducer {
         DefaultMQProducer {
             client_config: StableConfig::new(ClientConfig::default()),
@@ -2529,7 +2509,7 @@ mod facade_tests {
 
     #[test]
     fn cloned_facades_share_standard_impl_root_without_self_cycle() {
-        let producer = DefaultMQProducer::builder()
+        let producer = DefaultMQProducer::builder(test_runtime())
             .producer_group("facade_standard_arc_root")
             .build();
         let producer_clone = producer.clone();
@@ -2564,7 +2544,7 @@ mod facade_tests {
 
     #[test]
     fn cloned_facades_publish_updates_from_the_latest_shared_config_generation() {
-        let mut first = DefaultMQProducer::builder()
+        let mut first = DefaultMQProducer::builder(test_runtime())
             .producer_group("facade_shared_config")
             .build();
         let mut second = first.clone();
@@ -2589,7 +2569,7 @@ mod facade_tests {
 
     #[test]
     fn borrowed_config_generation_remains_valid_after_clone_updates() {
-        let first = DefaultMQProducer::builder()
+        let first = DefaultMQProducer::builder(test_runtime())
             .producer_group("facade_stable_borrow")
             .build();
         let mut second = first.clone();
@@ -2686,6 +2666,10 @@ mod tests {
     use bytes::Bytes;
     use rocketmq_error::RocketMQResult;
     use rocketmq_model::common::message::message_single::Message;
+
+    fn test_runtime() -> Arc<ClientRuntime> {
+        crate::runtime::test_client_runtime("default-producer-test")
+    }
     #[tokio::test]
     async fn request_with_callback_not_initialized() {
         // Arrange
@@ -2916,7 +2900,7 @@ mod tests {
         let mut client_config = ClientConfig::default();
         client_config.set_enable_trace(true);
         client_config.set_trace_msg_batch_num(7);
-        let producer = DefaultMQProducer::builder()
+        let producer = DefaultMQProducer::builder(test_runtime())
             .client_config(client_config)
             .producer_group("producer_trace_batch_group")
             .build();
@@ -2939,10 +2923,11 @@ mod tests {
 
     #[test]
     fn producer_use_tls_facade_updates_impl_and_trace_dispatcher_like_java_client_config() {
-        let mut producer = DefaultMQProducer::builder()
+        let mut producer = DefaultMQProducer::builder(test_runtime())
             .producer_group("producer_tls_group")
             .build();
         let dispatcher = Arc::new(AsyncTraceDispatcher::new(
+            test_runtime(),
             "producer_tls_group",
             Type::Produce,
             1,
@@ -2973,7 +2958,7 @@ mod tests {
 
     #[test]
     fn producer_builder_use_tls_initializes_facade_and_impl_config() {
-        let producer = DefaultMQProducer::builder()
+        let producer = DefaultMQProducer::builder(test_runtime())
             .producer_group("producer_tls_builder_group")
             .use_tls(true)
             .build();
@@ -2990,7 +2975,7 @@ mod tests {
     fn test_builder_with_batch_fields() {
         use crate::producer::default_mq_produce_builder::DefaultMQProducerBuilder;
 
-        let producer = DefaultMQProducerBuilder::new()
+        let producer = DefaultMQProducerBuilder::new(test_runtime())
             .producer_group("test_group")
             .send_msg_max_timeout_per_request(5000)
             .batch_max_delay_ms(100)
@@ -3009,7 +2994,9 @@ mod tests {
     fn test_builder_default_batch_values() {
         use crate::producer::default_mq_produce_builder::DefaultMQProducerBuilder;
 
-        let producer = DefaultMQProducerBuilder::new().producer_group("test_group").build();
+        let producer = DefaultMQProducerBuilder::new(test_runtime())
+            .producer_group("test_group")
+            .build();
 
         // Verify default values are None for batch fields
         assert_eq!(producer.send_msg_max_timeout_per_request(), None);
@@ -3042,7 +3029,7 @@ mod tests {
 
     #[test]
     fn set_compress_type_updates_compressor_like_java() {
-        let mut producer = DefaultMQProducer::default();
+        let mut producer = DefaultMQProducer::unbound();
 
         producer.set_compress_type(CompressionType::LZ4);
 
@@ -3054,7 +3041,7 @@ mod tests {
     fn builder_compress_type_updates_compressor_like_java() {
         use crate::producer::default_mq_produce_builder::DefaultMQProducerBuilder;
 
-        let producer = DefaultMQProducerBuilder::new()
+        let producer = DefaultMQProducerBuilder::new(test_runtime())
             .producer_group("test_group")
             .compress_type(CompressionType::Zstd)
             .build();
@@ -3065,12 +3052,15 @@ mod tests {
 
     #[test]
     fn produce_accumulator_inherits_preconfigured_batch_settings_like_java_init() {
-        let mut producer = DefaultMQProducer::default();
+        let mut producer = DefaultMQProducer::unbound();
         producer.set_batch_max_delay_ms(25);
         producer.set_batch_max_bytes(64 * 1024);
         producer.set_total_batch_max_bytes(8 * 1024 * 1024);
 
-        producer.set_produce_accumulator(ProduceAccumulator::new("producer-accumulator"));
+        producer.set_produce_accumulator(ProduceAccumulator::new(
+            crate::runtime::test_service_context("producer-accumulator-test"),
+            "producer-accumulator",
+        ));
 
         let accumulator = producer
             .produce_accumulator()
@@ -3082,8 +3072,11 @@ mod tests {
 
     #[test]
     fn batch_setting_updates_existing_produce_accumulator_like_java_runtime_setters() {
-        let mut producer = DefaultMQProducer::default();
-        producer.set_produce_accumulator(ProduceAccumulator::new("producer-accumulator"));
+        let mut producer = DefaultMQProducer::unbound();
+        producer.set_produce_accumulator(ProduceAccumulator::new(
+            crate::runtime::test_service_context("producer-accumulator-test"),
+            "producer-accumulator",
+        ));
 
         producer.set_batch_max_delay_ms(20);
         producer.set_batch_max_bytes(128 * 1024);
@@ -3099,7 +3092,7 @@ mod tests {
 
     #[test]
     fn backpressure_runtime_setters_sync_impl_and_clamp_like_java() {
-        let mut producer = DefaultMQProducer::builder()
+        let mut producer = DefaultMQProducer::builder(test_runtime())
             .producer_group("backpressure_group")
             .build();
 
@@ -3142,7 +3135,9 @@ mod tests {
 
     #[test]
     fn runtime_producer_config_setters_sync_impl_like_java_facade_reference() {
-        let mut producer = DefaultMQProducer::builder().producer_group("initial_group").build();
+        let mut producer = DefaultMQProducer::builder(test_runtime())
+            .producer_group("initial_group")
+            .build();
 
         producer.set_producer_group("updated_group");
         producer.set_send_msg_timeout(4321);
@@ -3178,19 +3173,12 @@ mod tests {
 
     #[test]
     fn producer_java_facade_accessors_sync_impl_without_panic() {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime should build");
-        let handle = runtime.handle().clone();
-        let mut producer = DefaultMQProducer::builder()
+        let mut producer = DefaultMQProducer::builder(test_runtime())
             .producer_group("producer_java_facade_group")
             .build();
 
         assert!(producer.default_mq_producer_impl().is_some());
 
-        producer.set_callback_executor(handle.clone());
-        producer.set_async_sender_executor(handle);
         producer.set_latency_max(vec![10, 20, 30]);
         producer.set_not_available_duration(vec![0, 100, 200]);
         producer.set_back_pressure_for_async_send_num_inside_adjust(1);
@@ -3200,8 +3188,6 @@ mod tests {
         producer.acquire_back_pressure_for_async_send_size_lock();
         producer.release_back_pressure_for_async_send_size_lock();
 
-        assert!(producer.callback_executor().is_some());
-        assert!(producer.async_sender_executor().is_some());
         assert_eq!(producer.latency_max(), &[10, 20, 30]);
         assert_eq!(producer.not_available_duration(), &[0, 100, 200]);
         assert_eq!(
@@ -3217,15 +3203,13 @@ mod tests {
             .default_mq_producer_impl()
             .expect("producer impl should be initialized");
         let impl_config = producer_impl.producer_config();
-        assert!(impl_config.callback_executor().is_some());
-        assert!(impl_config.async_sender_executor().is_some());
         assert_eq!(producer_impl.latency_max(), &[10, 20, 30]);
         assert_eq!(producer_impl.not_available_duration(), &[0, 100, 200]);
     }
 
     #[test]
     fn test_producer_config_getters_setters_batch_fields() {
-        let mut producer = DefaultMQProducer::default();
+        let mut producer = DefaultMQProducer::unbound();
 
         // Test send_msg_max_timeout_per_request
         producer.set_send_msg_max_timeout_per_request(3000);

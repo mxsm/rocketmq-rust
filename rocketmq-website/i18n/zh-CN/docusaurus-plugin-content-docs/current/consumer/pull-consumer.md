@@ -3,6 +3,8 @@ sidebar_position: 3
 title: 拉取消费者
 ---
 
+> Runtime 所有权：示例中的 `client_runtime` 是应用持有的 `Arc<ClientRuntime>`，它从 `RuntimeOwner` 的 child scope 创建，并在进程边界显式关闭。
+
 # 拉取消费者
 
 RocketMQ-Rust 中的拉取模式由 `DefaultLitePullConsumer` 提供。它支持按需轮询、手动分配队列和显式管理消费位点。
@@ -16,7 +18,7 @@ use rocketmq_error::RocketMQResult;
 
 #[tokio::main]
 async fn main() -> RocketMQResult<()> {
-    let consumer = DefaultLitePullConsumer::builder()
+    let consumer = DefaultLitePullConsumer::builder(client_runtime.clone())
         .consumer_group("my_consumer_group")
         .name_server_addr("localhost:9876")
         .auto_commit(true)
@@ -50,7 +52,7 @@ loop {
 use rocketmq_client_rust::consumer::default_lite_pull_consumer::DefaultLitePullConsumer;
 use rocketmq_client_rust::consumer::lite_pull_consumer::LitePullConsumer;
 
-let consumer = DefaultLitePullConsumer::builder()
+let consumer = DefaultLitePullConsumer::builder(client_runtime.clone())
     .consumer_group("manual_commit_group")
     .name_server_addr("localhost:9876")
     .auto_commit(false)

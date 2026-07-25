@@ -100,6 +100,7 @@ impl CommandExecute for RocksDBConfigToJsonSubCommand {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
         match self.mode()? {
             RocksDBConfigToJsonMode::Local { request, export_file } => {
@@ -109,8 +110,12 @@ impl CommandExecute for RocksDBConfigToJsonSubCommand {
             }
             RocksDBConfigToJsonMode::Rpc(request) => {
                 println!("Use [rpc mode] call broker(s) to export to json file");
-                let result =
-                    ExportService::export_rocksdb_config_rpc_by_request_with_credentials(request, credentials).await?;
+                let result = ExportService::export_rocksdb_config_rpc_by_request_with_credentials(
+                    request,
+                    credentials,
+                    client_runtime.clone(),
+                )
+                .await?;
                 Self::print_rpc_result(&result);
                 Ok(())
             }

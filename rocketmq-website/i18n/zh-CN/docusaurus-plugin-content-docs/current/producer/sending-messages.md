@@ -3,6 +3,8 @@ sidebar_position: 2
 title: 发送消息
 ---
 
+> Runtime 所有权：示例中的 `client_runtime` 是应用持有的 `Arc<ClientRuntime>`，它从 `RuntimeOwner` 的 child scope 创建，并在进程边界显式关闭。
+
 # 发送消息
 
 本章介绍基于 `DefaultMQProducer` 与 `MQProducer` 的常见发送模式。
@@ -100,7 +102,7 @@ producer.send(message).await?;
 ### 大消息
 
 ```rust
-let mut producer = DefaultMQProducer::builder()
+let mut producer = DefaultMQProducer::builder(client_runtime.clone())
     .producer_group("my_group")
     .name_server_addr("localhost:9876")
     .compress_msg_body_over_howmuch(4 * 1024)

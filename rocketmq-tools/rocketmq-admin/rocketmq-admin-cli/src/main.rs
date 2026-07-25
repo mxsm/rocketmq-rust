@@ -13,6 +13,8 @@
 // limitations under the License.
 
 use rocketmq_admin_cli::rocketmq_cli::RocketMQCli;
+use rocketmq_admin_core::client_adapter::ClientRuntime;
+use rocketmq_admin_core::client_adapter::ClientRuntimeConfig;
 use rocketmq_model::common::mq_version::CURRENT_VERSION;
 use rocketmq_model::utils::env_utils::EnvUtils;
 use rocketmq_protocol::protocol::remoting_command;
@@ -28,7 +30,18 @@ fn main() {
         .spawn(|| {
             let owner =
                 RuntimeOwner::new(admin_cli_runtime_config()).expect("failed to build rocketmq-admin-cli runtime");
-            let exit_code = owner.block_on(async_main());
+            let client_runtime = ClientRuntime::new(
+                owner.root_context().child("rocketmq-admin-client"),
+                ClientRuntimeConfig::default(),
+            );
+            let exit_code = owner.block_on(async_main(client_runtime.clone()));
+            let client_report = owner.block_on(client_runtime.shutdown());
+            if !client_report.is_healthy() {
+                tracing::warn!(
+                    report = %client_report.to_json(),
+                    "rocketmq-admin client runtime shutdown report is unhealthy"
+                );
+            }
             let report = owner
                 .shutdown_runtime_blocking()
                 .expect("failed to shutdown rocketmq-admin-cli runtime");
@@ -57,12 +70,12 @@ fn admin_cli_runtime_config() -> RuntimeConfig {
     config
 }
 
-async fn async_main() -> i32 {
+async fn async_main(client_runtime: std::sync::Arc<ClientRuntime>) -> i32 {
     EnvUtils::put_property(
         remoting_command::REMOTING_VERSION_KEY,
         (CURRENT_VERSION as u32).to_string(),
     );
 
     let cli = RocketMQCli::parse_from_java_compatible_args();
-    cli.handle().await
+    cli.handle(client_runtime).await
 }

@@ -224,6 +224,7 @@ mod tests {
     fn new_callback() -> DefaultPopCallback {
         let consumer_config = ConsumerConfig::default();
         let push_consumer_impl = Arc::new(DefaultMQPushConsumerImpl::new(
+            crate::runtime::test_client_runtime("pop-callback-test"),
             ClientConfig::default(),
             consumer_config,
             None,

@@ -20,6 +20,8 @@ use crate::config::McpConfig;
 use crate::config::TransportKind;
 use crate::guard::audit::AuditDrainReport;
 use crate::guard::Guard;
+use rocketmq_admin_core::client_adapter::ClientRuntime;
+use rocketmq_admin_core::client_adapter::ClientRuntimeConfig;
 
 static LEGACY_TELEMETRY_GUARD: std::sync::OnceLock<
     std::sync::Mutex<Option<rocketmq_observability::TelemetryRuntimeGuard>>,
@@ -63,6 +65,7 @@ pub struct McpApp {
     config: McpConfig,
     guard: Guard,
     query: Arc<QueryFacade<AdminCoreSessionFactory>>,
+    client_runtime: Arc<ClientRuntime>,
     service_context: rocketmq_runtime::ChildServiceContext,
     telemetry: Arc<std::sync::Mutex<Option<rocketmq_observability::TelemetryRuntimeGuard>>>,
 }
@@ -94,11 +97,16 @@ impl McpApp {
     ) -> Result<Self, crate::error::McpError> {
         let guard = Guard::new(config.security.clone(), config.audit.clone(), &config.clusters)
             .map_err(|error| crate::error::McpError::InvalidConfig(error.to_string()))?;
-        let query = Arc::new(QueryFacade::new(config.clone()).with_visibility_class("local"));
+        let client_runtime = ClientRuntime::new(
+            service_context.child("rocketmq-mcp-client"),
+            ClientRuntimeConfig::default(),
+        );
+        let query = Arc::new(QueryFacade::new(config.clone(), client_runtime.clone()).with_visibility_class("local"));
         Ok(Self {
             config,
             guard,
             query,
+            client_runtime,
             service_context,
             telemetry: Arc::new(std::sync::Mutex::new(None)),
         })
@@ -220,6 +228,8 @@ impl McpApp {
     /// shutdown budget.
     pub async fn shutdown_with_deadline(&self, deadline: rocketmq_runtime::ShutdownDeadline) -> McpShutdownReport {
         let audit = self.guard.audit_log().close_and_drain(deadline).await;
+        let client_report = self.client_runtime.shutdown_until(deadline).await;
+        client_report.log_if_unhealthy();
         let runtime = Some(self.service_context.task_group().shutdown_until(deadline).await);
         let telemetry = self
             .telemetry

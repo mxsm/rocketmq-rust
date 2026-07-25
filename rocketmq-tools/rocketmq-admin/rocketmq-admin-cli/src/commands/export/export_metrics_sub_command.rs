@@ -52,8 +52,14 @@ impl CommandExecute for ExportMetricsSubCommand {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
-        let result = ExportService::export_metrics_by_request_with_credentials(self.request()?, credentials).await?;
+        let result = ExportService::export_metrics_by_request_with_credentials(
+            self.request()?,
+            credentials,
+            client_runtime.clone(),
+        )
+        .await?;
         let output_path = self.output_path();
         let json_content = serde_json::to_string_pretty(&result)
             .map_err(|error| RocketMQError::Internal(format!("ExportMetricsSubCommand: {error}")))?;

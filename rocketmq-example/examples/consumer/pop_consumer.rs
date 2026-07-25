@@ -22,7 +22,7 @@ use rocketmq_client_rust::consumer::mq_push_consumer::MQPushConsumer;
 use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_runtime::wait_for_signal;
-use rocketmq_tools::core::admin::AdminBuilder;
+use rocketmq_tools::client_adapter::AdminBuilder;
 use rocketmq_tools::core::consumer::ConsumerAdmin;
 use rocketmq_tools::core::consumer::ConsumerRequestMode;
 use rocketmq_tools::core::consumer::SetConsumerRequestModeRequest;
@@ -33,15 +33,21 @@ pub const DEFAULT_NAMESRVADDR: &str = "127.0.0.1:9876";
 pub const TOPIC: &str = "TopicTest";
 pub const TAG: &str = "*";
 
-#[tokio::main]
-pub async fn main() -> RocketMQResult<()> {
+#[path = "../support/mod.rs"]
+mod support;
+
+pub fn main() -> RocketMQResult<()> {
+    support::run(run)
+}
+
+async fn run(client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>) -> RocketMQResult<()> {
     let telemetry_guard =
         rocketmq_observability::install_global(&rocketmq_observability::TelemetryBootstrapConfig::default())
             .expect("telemetry logging bootstrap should initialize");
-    switch_pop_consumer().await?;
+    switch_pop_consumer(client_runtime.clone()).await?;
 
     // create a producer builder with default configuration
-    let builder = DefaultMQPushConsumer::builder();
+    let builder = DefaultMQPushConsumer::builder(client_runtime.clone());
 
     let mut consumer = builder
         .consumer_group(CONSUMER_GROUP.to_string())
@@ -61,8 +67,10 @@ pub async fn main() -> RocketMQResult<()> {
     Ok(())
 }
 
-async fn switch_pop_consumer() -> RocketMQResult<()> {
-    let mut admin = AdminBuilder::new()
+async fn switch_pop_consumer(
+    client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
+) -> RocketMQResult<()> {
+    let mut admin = AdminBuilder::new(client_runtime)
         .namesrv_addr(DEFAULT_NAMESRVADDR)
         .build_and_start()
         .await

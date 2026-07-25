@@ -44,9 +44,14 @@ impl CommandExecute for DeleteExpiredCommitLogSubCommand {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
-        let result =
-            BrokerService::delete_expired_commit_log_by_request_with_credentials(self.request()?, credentials).await?;
+        let result = BrokerService::delete_expired_commit_log_by_request_with_credentials(
+            self.request()?,
+            credentials,
+            client_runtime.clone(),
+        )
+        .await?;
         print_result(&result);
         Ok(())
     }

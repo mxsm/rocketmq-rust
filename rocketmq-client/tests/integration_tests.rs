@@ -32,10 +32,12 @@ use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_protocol::protocol::route::route_data_view::QueueData;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 
+mod support;
+
 #[test]
 fn test_producer_creation() {
     // Test: Basic producer creation
-    let producer = DefaultMQProducer::new();
+    let producer = DefaultMQProducer::new(support::client_runtime("integration-producer-creation"));
 
     // Producer should be created successfully with empty group (can be set later)
     assert_eq!(producer.producer_config().producer_group().as_str(), "");
@@ -46,7 +48,9 @@ fn test_concurrent_producer_access() {
     // Test: Verify concurrent access to producer doesn't deadlock
     // This validates the DashMap migration
 
-    let producer = Arc::new(DefaultMQProducer::new());
+    let producer = Arc::new(DefaultMQProducer::new(support::client_runtime(
+        "integration-producer-concurrent",
+    )));
     let mut handles = vec![];
 
     for _i in 0..10 {
@@ -70,7 +74,9 @@ fn test_performance_baseline_concurrent_reads() {
     // Performance baseline test: Establish metrics for Phase 2
     use std::time::Instant;
 
-    let producer = Arc::new(DefaultMQProducer::new());
+    let producer = Arc::new(DefaultMQProducer::new(support::client_runtime(
+        "integration-producer-performance",
+    )));
 
     // Benchmark concurrent reads
     let start = Instant::now();
@@ -118,7 +124,7 @@ fn test_message_creation() {
 #[tokio::test]
 async fn test_producer_async_context() {
     // Test: Verify producer works in async context
-    let producer = DefaultMQProducer::new();
+    let producer = DefaultMQProducer::new(support::client_runtime("integration-producer-async"));
 
     // Should be accessible in async context
     let group = producer.producer_config().producer_group();

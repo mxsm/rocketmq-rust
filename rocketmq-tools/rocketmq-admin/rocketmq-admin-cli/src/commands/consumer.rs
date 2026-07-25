@@ -107,17 +107,18 @@ impl CommandExecute for ConsumerCommands {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
         match self {
-            ConsumerCommands::ConsumerStatus(cmd) => cmd.execute(credentials).await,
-            ConsumerCommands::Consumer(cmd) => cmd.execute(credentials).await,
-            ConsumerCommands::DeleteSubscriptionGroup(cmd) => cmd.execute(credentials).await,
-            ConsumerCommands::GetConsumerConfig(cmd) => cmd.execute(credentials).await,
-            ConsumerCommands::SetConsumeMode(cmd) => cmd.execute(credentials).await,
-            ConsumerCommands::StartMonitoring(cmd) => cmd.execute(credentials).await,
-            ConsumerCommands::UpdateSubGroupList(cmd) => cmd.execute(credentials).await,
-            ConsumerCommands::UpdateSubGroup(value) => value.execute(credentials).await,
-            ConsumerCommands::QueryConsumer(value) => value.execute(credentials).await,
+            ConsumerCommands::ConsumerStatus(cmd) => cmd.execute(credentials, client_runtime.clone()).await,
+            ConsumerCommands::Consumer(cmd) => cmd.execute(credentials, client_runtime.clone()).await,
+            ConsumerCommands::DeleteSubscriptionGroup(cmd) => cmd.execute(credentials, client_runtime.clone()).await,
+            ConsumerCommands::GetConsumerConfig(cmd) => cmd.execute(credentials, client_runtime.clone()).await,
+            ConsumerCommands::SetConsumeMode(cmd) => cmd.execute(credentials, client_runtime.clone()).await,
+            ConsumerCommands::StartMonitoring(cmd) => cmd.execute(credentials, client_runtime.clone()).await,
+            ConsumerCommands::UpdateSubGroupList(cmd) => cmd.execute(credentials, client_runtime.clone()).await,
+            ConsumerCommands::UpdateSubGroup(value) => value.execute(credentials, client_runtime.clone()).await,
+            ConsumerCommands::QueryConsumer(value) => value.execute(credentials, client_runtime.clone()).await,
         }
     }
 }

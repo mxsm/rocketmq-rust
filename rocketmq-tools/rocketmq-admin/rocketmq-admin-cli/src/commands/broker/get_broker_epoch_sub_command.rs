@@ -69,6 +69,7 @@ impl CommandExecute for GetBrokerEpochSubCommand {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
         let request = self.request()?;
         if let Some(interval) = self.interval {
@@ -77,6 +78,7 @@ impl CommandExecute for GetBrokerEpochSubCommand {
                 match BrokerService::query_broker_epoch_by_request_with_credentials(
                     request.clone(),
                     credentials.clone(),
+                    client_runtime.clone(),
                 )
                 .await
                 {
@@ -86,7 +88,12 @@ impl CommandExecute for GetBrokerEpochSubCommand {
                 tokio::time::sleep(tokio::time::Duration::from_secs(flush_second)).await;
             }
         } else {
-            let result = BrokerService::query_broker_epoch_by_request_with_credentials(request, credentials).await?;
+            let result = BrokerService::query_broker_epoch_by_request_with_credentials(
+                request,
+                credentials,
+                client_runtime.clone(),
+            )
+            .await?;
             Self::print_result(result);
             Ok(())
         }

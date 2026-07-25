@@ -98,7 +98,8 @@ impl UpdateTopicPermSubCommand {
 impl CommandExecute for UpdateTopicPermSubCommand {
     async fn execute(
         &self,
-        _rpc_hook: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        _credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        _client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
         let validation_result = TopicValidator::validate_topic(&self.topic);
         if !validation_result.valid() {
@@ -158,7 +159,7 @@ mod tests {
             perm: "6".to_string(),
         };
 
-        let result = command.execute(None).await;
+        let result = command.execute(None, crate::commands::test_client_runtime()).await;
         assert!(result.is_err());
         assert!(
             result
@@ -181,7 +182,7 @@ mod tests {
             perm: "6".to_string(),
         };
 
-        let result = command.execute(None).await;
+        let result = command.execute(None, crate::commands::test_client_runtime()).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Invalid topic name"));
     }

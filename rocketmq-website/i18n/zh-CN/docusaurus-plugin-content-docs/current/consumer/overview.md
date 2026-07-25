@@ -3,6 +3,8 @@ sidebar_position: 1
 title: 消费者概览
 ---
 
+> Runtime 所有权：示例中的 `client_runtime` 是应用持有的 `Arc<ClientRuntime>`，它从 `RuntimeOwner` 的 child scope 创建，并在进程边界显式关闭。
+
 # 消费者概览
 
 RocketMQ-Rust 提供两种消费方式：
@@ -18,7 +20,7 @@ RocketMQ-Rust 提供两种消费方式：
 use rocketmq_client_rust::consumer::default_mq_push_consumer::DefaultMQPushConsumer;
 use rocketmq_client_rust::consumer::mq_push_consumer::MQPushConsumer;
 
-let mut consumer = DefaultMQPushConsumer::builder()
+let mut consumer = DefaultMQPushConsumer::builder(client_runtime.clone())
     .consumer_group("push_group")
     .name_server_addr("localhost:9876")
     .build();
@@ -33,7 +35,7 @@ consumer.start().await?;
 use rocketmq_client_rust::consumer::default_lite_pull_consumer::DefaultLitePullConsumer;
 use rocketmq_client_rust::consumer::lite_pull_consumer::LitePullConsumer;
 
-let consumer = DefaultLitePullConsumer::builder()
+let consumer = DefaultLitePullConsumer::builder(client_runtime.clone())
     .consumer_group("pull_group")
     .name_server_addr("localhost:9876")
     .auto_commit(true)
@@ -78,7 +80,7 @@ impl MessageListenerConcurrently for MyListener {
 
 #[tokio::main]
 async fn main() -> RocketMQResult<()> {
-    let mut consumer = DefaultMQPushConsumer::builder()
+    let mut consumer = DefaultMQPushConsumer::builder(client_runtime.clone())
         .consumer_group("my_consumer_group")
         .name_server_addr("localhost:9876")
         .consume_thread_min(2)
@@ -103,7 +105,7 @@ async fn main() -> RocketMQResult<()> {
 use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 
-let mut consumer = DefaultMQPushConsumer::builder()
+let mut consumer = DefaultMQPushConsumer::builder(client_runtime.clone())
     .consumer_group("my_consumer_group")
     .name_server_addr("localhost:9876")
     .consume_thread_min(2)
@@ -119,7 +121,7 @@ let mut consumer = DefaultMQPushConsumer::builder()
 ### 拉模式配置
 
 ```rust
-let consumer = DefaultLitePullConsumer::builder()
+let consumer = DefaultLitePullConsumer::builder(client_runtime.clone())
     .consumer_group("my_pull_group")
     .name_server_addr("localhost:9876")
     .pull_batch_size(32)
@@ -178,7 +180,7 @@ impl MessageListenerConcurrently for MyListener {
 ## 性能调优
 
 ```rust
-let mut consumer = DefaultMQPushConsumer::builder()
+let mut consumer = DefaultMQPushConsumer::builder(client_runtime.clone())
     .consumer_group("perf_group")
     .name_server_addr("localhost:9876")
     .consume_thread_min(4)

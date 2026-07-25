@@ -115,6 +115,7 @@ impl CommandExecute for PrintMessageSubCommand {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
         let begin_timestamp = self.begin_timestamp.as_deref().map(str::trim).map(timestamp_format);
         let end_timestamp = self.end_timestamp.as_deref().map(str::trim).map(timestamp_format);
@@ -128,7 +129,7 @@ impl CommandExecute for PrintMessageSubCommand {
         let charset_name = self.charset_name.trim().to_string();
         let print_body = self.print_body;
 
-        MessageService::print_messages_by_request_with_credentials(request, credentials, |event| {
+        MessageService::print_messages_by_request_with_credentials(request, credentials, client_runtime, |event| {
             match event {
                 MessagePullEvent::QueueRange {
                     mq,

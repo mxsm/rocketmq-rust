@@ -71,13 +71,18 @@ impl CommandExecute for ControllerCommands {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
         match self {
-            ControllerCommands::CleanBrokerMetadata(cmd) => cmd.execute(credentials).await,
-            ControllerCommands::ElectMaster(value) => value.execute(credentials).await,
-            ControllerCommands::GetControllerConfig(value) => value.execute(credentials).await,
-            ControllerCommands::GetControllerMetadata(value) => value.execute(credentials).await,
-            ControllerCommands::UpdateControllerConfig(value) => value.execute(credentials).await,
+            ControllerCommands::CleanBrokerMetadata(cmd) => cmd.execute(credentials, client_runtime.clone()).await,
+            ControllerCommands::ElectMaster(value) => value.execute(credentials, client_runtime.clone()).await,
+            ControllerCommands::GetControllerConfig(value) => value.execute(credentials, client_runtime.clone()).await,
+            ControllerCommands::GetControllerMetadata(value) => {
+                value.execute(credentials, client_runtime.clone()).await
+            }
+            ControllerCommands::UpdateControllerConfig(value) => {
+                value.execute(credentials, client_runtime.clone()).await
+            }
         }
     }
 }

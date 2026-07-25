@@ -19,6 +19,7 @@ use std::ops::DerefMut;
 use std::sync::Arc;
 use std::time::Duration;
 
+use rocketmq_client_rust::ClientRuntime;
 use rocketmq_client_rust::DefaultMQAdminExt;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_transport::runtime::RPCHook;
@@ -31,6 +32,7 @@ use crate::core::security::AdminCredentials;
 
 #[derive(Clone, Default)]
 pub(crate) struct AdminBuilder {
+    client_runtime: Option<Arc<ClientRuntime>>,
     namesrv_addr: Option<String>,
     timeout_millis: Option<u64>,
     rpc_hook: Option<Arc<dyn RPCHook>>,
@@ -40,6 +42,7 @@ impl std::fmt::Debug for AdminBuilder {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("AdminBuilder")
+            .field("client_runtime", &self.client_runtime.is_some())
             .field("namesrv_addr", &self.namesrv_addr)
             .field("timeout_millis", &self.timeout_millis)
             .field("rpc_hook", &self.rpc_hook.is_some())
@@ -54,6 +57,11 @@ impl AdminBuilder {
 
     pub(crate) fn namesrv_addr(mut self, addr: impl Into<String>) -> Self {
         self.namesrv_addr = Some(addr.into());
+        self
+    }
+
+    pub(crate) fn client_runtime(mut self, client_runtime: Arc<ClientRuntime>) -> Self {
+        self.client_runtime = Some(client_runtime);
         self
     }
 
@@ -72,12 +80,15 @@ impl AdminBuilder {
     }
 
     pub(crate) async fn build_and_start(self) -> RocketMQResult<ServiceAdminSession> {
+        let client_runtime = self.client_runtime.ok_or_else(|| {
+            rocketmq_error::RocketMQError::illegal_argument("AdminBuilder requires an explicit ClientRuntime")
+        })?;
         let timeout = self.timeout_millis.map(Duration::from_millis);
         let mut admin = match (self.rpc_hook, timeout) {
-            (Some(hook), Some(timeout)) => DefaultMQAdminExt::with_rpc_hook_and_timeout(hook, timeout),
-            (Some(hook), None) => DefaultMQAdminExt::with_rpc_hook(hook),
-            (None, Some(timeout)) => DefaultMQAdminExt::with_timeout(timeout),
-            (None, None) => DefaultMQAdminExt::new(),
+            (Some(hook), Some(timeout)) => DefaultMQAdminExt::with_rpc_hook_and_timeout(client_runtime, hook, timeout),
+            (Some(hook), None) => DefaultMQAdminExt::with_rpc_hook(client_runtime, hook),
+            (None, Some(timeout)) => DefaultMQAdminExt::with_timeout(client_runtime, timeout),
+            (None, None) => DefaultMQAdminExt::new(client_runtime),
         };
 
         if let Some(addr) = self.namesrv_addr {

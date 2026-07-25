@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[path = "support/mod.rs"]
+mod support;
+
 use std::fs;
 use std::hint::black_box;
 use std::path::PathBuf;
@@ -26,15 +29,10 @@ use rocketmq_client_rust::run_rebalance_service_lifecycle_probe;
 use rocketmq_client_rust::RebalanceServiceLifecycleProbe;
 
 fn run_lifecycle_probe() -> RebalanceServiceLifecycleProbe {
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
-        .max_blocking_threads(4)
-        .thread_name("rocketmq-client-rebalance-service-bench")
-        .enable_all()
-        .build()
-        .expect("rebalance service benchmark runtime should start");
-
-    runtime.block_on(run_rebalance_service_lifecycle_probe())
+    let runtime = support::BenchClientRuntime::new("rebalance-service");
+    let output = runtime.block_on(run_rebalance_service_lifecycle_probe(runtime.client_runtime()));
+    runtime.shutdown();
+    output
 }
 
 fn workspace_root() -> PathBuf {

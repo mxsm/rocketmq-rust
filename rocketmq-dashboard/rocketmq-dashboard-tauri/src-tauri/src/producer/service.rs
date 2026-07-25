@@ -19,7 +19,7 @@ use crate::producer::types::ProducerConnectionView;
 use crate::producer::types::ProducerError;
 use crate::producer::types::ProducerResult;
 use crate::producer::types::ProducerTopicOptionsView;
-use rocketmq_admin_core::core::admin::AdminSession;
+use rocketmq_admin_core::client_adapter::AdminSession;
 use rocketmq_admin_core::core::dashboard::DashboardAdmin;
 use rocketmq_admin_core::core::dashboard::DashboardProducerConnections;
 use rocketmq_dashboard_common::NameServerConfigSnapshot;

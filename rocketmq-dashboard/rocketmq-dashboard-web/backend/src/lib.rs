@@ -25,6 +25,7 @@ pub mod state;
 use crate::api::build_router;
 use crate::config::AppConfig;
 use crate::state::AppState;
+use rocketmq_admin_core::client_adapter::ClientRuntime;
 use std::future::IntoFuture;
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -34,9 +35,9 @@ use tokio::time::Instant;
 
 const APPLICATION_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 
-pub async fn run(config: AppConfig) -> anyhow::Result<()> {
+pub async fn run(config: AppConfig, client_runtime: std::sync::Arc<ClientRuntime>) -> anyhow::Result<()> {
     let addr: SocketAddr = format!("{}:{}", config.server.host, config.server.port).parse()?;
-    let state = AppState::try_new(config).await?;
+    let state = AppState::try_new(config, client_runtime).await?;
     let admin_client = state.admin_client.clone();
     let app = build_router(state);
     let listener = TcpListener::bind(addr).await?;

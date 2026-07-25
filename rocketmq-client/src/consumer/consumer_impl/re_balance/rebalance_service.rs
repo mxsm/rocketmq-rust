@@ -35,14 +35,16 @@ use tracing::info;
 use tracing::warn;
 
 use crate::factory::mq_client_instance::MQClientInstance;
-use crate::runtime::spawn_client_tracked_task;
+use crate::runtime::spawn_client_tracked_task_with_context;
+use crate::runtime::ClientRuntime;
 use crate::runtime::ClientTrackedTaskHandle;
+use rocketmq_runtime::ChildServiceContext;
 
-fn spawn_rebalance_task<F>(task: F) -> std::io::Result<ClientTrackedTaskHandle>
+fn spawn_rebalance_task<F>(service_context: &ChildServiceContext, task: F) -> std::io::Result<ClientTrackedTaskHandle>
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    spawn_client_tracked_task("rocketmq-client-rebalance-service", task)
+    spawn_client_tracked_task_with_context(service_context, "rocketmq-client-rebalance-service", task)
 }
 
 fn rebalance_service_startup_failed(error: impl std::fmt::Display) -> RocketMQError {
@@ -263,7 +265,8 @@ impl RebalanceService {
         // Clone config for use in spawned task
         let config = self.config.clone();
 
-        let task_handle = match spawn_rebalance_task(async move {
+        let service_context = instance.service_context().child("rebalance-service");
+        let task_handle = match spawn_rebalance_task(&service_context, async move {
             let mut last_rebalance_timestamp = tokio::time::Instant::now();
             let min_interval = config.min_interval();
             let mut real_wait_interval = config.wait_interval();
@@ -488,7 +491,9 @@ impl RebalanceService {
 }
 
 #[doc(hidden)]
-pub async fn run_rebalance_service_lifecycle_probe() -> RebalanceServiceLifecycleProbe {
+pub async fn run_rebalance_service_lifecycle_probe(
+    client_runtime: Arc<ClientRuntime>,
+) -> RebalanceServiceLifecycleProbe {
     let config = RebalanceConfig {
         wait_interval_ms: 60_000,
         min_interval_ms: 1,
@@ -500,6 +505,8 @@ pub async fn run_rebalance_service_lifecycle_probe() -> RebalanceServiceLifecycl
         0,
         "rebalance-service-probe",
         None,
+        client_runtime.child("rebalance-service-probe"),
+        client_runtime.pool().request_future_holder(),
     );
 
     let start_result = service.start(instance.clone()).await;
@@ -526,6 +533,18 @@ pub async fn run_rebalance_service_lifecycle_probe() -> RebalanceServiceLifecycl
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_instance(client_id: &'static str) -> Arc<MQClientInstance> {
+        let runtime = crate::runtime::test_client_runtime("rebalance-service-test");
+        MQClientInstance::new_arc(
+            ClientConfig::default(),
+            0,
+            client_id,
+            None,
+            runtime.child(client_id),
+            runtime.pool().request_future_holder(),
+        )
+    }
     use crate::base::client_config::ClientConfig;
 
     #[test]
@@ -634,14 +653,14 @@ mod tests {
     }
 
     #[test]
-    fn start_without_tokio_runtime_does_not_spawn_panic() {
+    fn start_uses_injected_runtime_without_current_tokio_context() {
         let config = RebalanceConfig {
             wait_interval_ms: 60_000,
             min_interval_ms: 1,
             enable_dynamic_interval: true,
         };
         let service = RebalanceService::with_config(config);
-        let instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "rebalance-no-runtime-client", None);
+        let instance = test_instance("rebalance-explicit-runtime-client");
 
         futures::executor::block_on(service.start(instance))
             .expect("rebalance service should start without a Tokio runtime");
@@ -665,7 +684,7 @@ mod tests {
 
         assert!(
             !service.is_running(),
-            "fallback rebalance task did not observe shutdown"
+            "injected rebalance task did not observe shutdown"
         );
     }
 
@@ -703,7 +722,7 @@ mod tests {
             enable_dynamic_interval: true,
         };
         let service = RebalanceService::with_config(config);
-        let instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "rebalance-join-client", None);
+        let instance = test_instance("rebalance-join-client");
 
         service.start(instance).await.expect("rebalance service should start");
         assert!(service.task_handle.lock().await.is_some());
@@ -719,7 +738,9 @@ mod tests {
 
     #[tokio::test]
     async fn rebalance_service_lifecycle_probe_reports_clean_shutdown() {
-        let probe = run_rebalance_service_lifecycle_probe().await;
+        let probe =
+            run_rebalance_service_lifecycle_probe(crate::runtime::test_client_runtime("rebalance-service-probe-test"))
+                .await;
 
         assert!(probe.healthy, "{probe:?}");
         assert_eq!(probe.task_count_before_shutdown, 1);

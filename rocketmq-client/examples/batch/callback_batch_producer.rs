@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[path = "../support/mod.rs"]
+mod support;
+
 use std::sync::atomic::AtomicI32;
 use std::sync::Arc;
 use std::thread::sleep;
@@ -28,11 +31,13 @@ pub const TAG: &str = "TagA";
 
 #[tokio::main]
 pub async fn main() -> RocketMQResult<()> {
+    let example_runtime = support::ExampleClientRuntime::new("callback-batch-producer");
+    let client_runtime = example_runtime.client_runtime();
     let telemetry_guard =
         rocketmq_observability::install_global(&rocketmq_observability::TelemetryBootstrapConfig::default())
             .expect("telemetry logging bootstrap should initialize");
     // create a producer builder with default configuration
-    let builder = DefaultMQProducer::builder();
+    let builder = DefaultMQProducer::builder(client_runtime.clone());
 
     let mut producer = builder
         .producer_group(PRODUCER_GROUP.to_string())
@@ -122,6 +127,8 @@ pub async fn main() -> RocketMQResult<()> {
         .shutdown()
         .into_result()
         .expect("telemetry logging shutdown should succeed");
+
+    example_runtime.shutdown().await;
 
     Ok(())
 }

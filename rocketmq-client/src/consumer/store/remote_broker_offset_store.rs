@@ -344,8 +344,15 @@ mod tests {
     use crate::base::client_config::ClientConfig;
 
     fn new_store() -> RemoteBrokerOffsetStore {
-        let client_instance =
-            MQClientInstance::new_arc(ClientConfig::default(), 0, "remote-offset-coalescing-test", None);
+        let runtime = crate::runtime::test_client_runtime("remote-broker-offset-store-test");
+        let client_instance = MQClientInstance::new_arc(
+            ClientConfig::default(),
+            0,
+            "remote-offset-coalescing-test",
+            None,
+            runtime.child("instance"),
+            runtime.pool().request_future_holder(),
+        );
         RemoteBrokerOffsetStore::new(client_instance, CheetahString::from_static_str("group-a"))
     }
 

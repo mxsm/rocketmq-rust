@@ -9,6 +9,8 @@ toc: false
 classes: wide
 ---
 
+> Runtime 所有权：示例中的 `client_runtime` 是应用持有的 `Arc<ClientRuntime>`，它从 `RuntimeOwner` 的 child scope 创建，并在进程边界显式关闭。
+
 ![Architecture](/assets/images/transaction-message-flow.png)
 
 ## ⚙️ RocketMQ 事务消息模型原理
@@ -82,7 +84,7 @@ pub async fn main() -> RocketMQResult<()> {
     rocketmq_common::log::init_logger()?;
 
     // create a producer builder with default configuration
-    let builder = TransactionMQProducer::builder();
+    let builder = TransactionMQProducer::builder(client_runtime.clone());
 
     let mut producer = builder
         .producer_group(PRODUCER_GROUP.to_string())

@@ -60,6 +60,7 @@ use rocketmq_protocol::protocol::header::recall_message_request_header::RecallMe
 use rocketmq_protocol::protocol::namespace_util::NamespaceUtil;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::common::time_utils::current_millis;
+use rocketmq_runtime::ChildServiceContext;
 use rocketmq_transport::rpc::rpc_request_header::RpcRequestHeader;
 use rocketmq_transport::rpc::topic_request_header::TopicRequestHeader;
 use rocketmq_transport::runtime::RPCHook;
@@ -86,7 +87,8 @@ use crate::hook::send_message_context::SendMessageContext;
 use crate::hook::send_message_context::SendMessageTraceSnapshot;
 use crate::hook::send_message_hook::SendMessageHook;
 use crate::implementation::communication_mode::CommunicationMode;
-use crate::implementation::mq_client_manager::MQClientManager;
+use crate::implementation::mq_client_manager::ClientPool;
+use crate::implementation::mq_client_manager::ClientPoolToken;
 use crate::latency::mq_fault_strategy::MQFaultStrategy;
 use crate::latency::resolver::Resolver;
 use crate::latency::service_detector::ServiceDetector;
@@ -98,15 +100,16 @@ use crate::producer::producer_impl::mq_producer_inner::MQProducerInner;
 use crate::producer::producer_impl::mq_producer_inner::MQProducerInnerImpl;
 use crate::producer::producer_impl::topic_publish_info::TopicPublishInfo;
 use crate::producer::request_callback::RequestCallbackFn;
-use crate::producer::request_future_holder::REQUEST_FUTURE_HOLDER;
+use crate::producer::request_future_holder::RequestFutureHolder;
 use crate::producer::request_response_future::RequestResponseFuture;
 use crate::producer::send_callback::ArcSendCallback;
 use crate::producer::send_result::SendResult;
 use crate::producer::send_status::SendStatus;
 use crate::producer::transaction_listener::ArcTransactionListener;
 use crate::producer::transaction_send_result::TransactionSendResult;
-use crate::runtime::spawn_client_blocking_io;
-use crate::runtime::spawn_client_task_on;
+use crate::runtime::spawn_client_blocking_io_with_context;
+use crate::runtime::spawn_client_task_with_context;
+use crate::runtime::ClientRuntime;
 
 type Topic = CheetahString;
 type TopicPublishInfoSnapshot = Arc<TopicPublishInfo>;
@@ -196,12 +199,11 @@ impl ProducerRuntimeSnapshot {
 #[derive(Clone, Default)]
 struct TransactionRuntime {
     listener: Option<ArcTransactionListener>,
-    executor: Option<tokio::runtime::Handle>,
     check_env: Option<TransactionCheckEnv>,
 }
 
 fn spawn_producer_task<F>(
-    executor: Option<&tokio::runtime::Handle>,
+    service_context: &ChildServiceContext,
     thread_name: &'static str,
     tracker: &TaskTracker,
     shutdown_token: &CancellationToken,
@@ -227,7 +229,11 @@ where
         }
     });
 
-    drop(spawn_client_task_on(thread_name, executor, tracked_task)?);
+    drop(spawn_client_task_with_context(
+        service_context,
+        thread_name,
+        tracked_task,
+    )?);
     Ok(())
 }
 
@@ -329,6 +335,11 @@ impl RetryState {
 }
 
 pub struct DefaultMQProducerImpl {
+    client_runtime: Option<Arc<ClientRuntime>>,
+    service_context: ChildServiceContext,
+    client_pool: Option<ClientPool>,
+    client_pool_token: ParkingLotMutex<Option<ClientPoolToken>>,
+    request_future_holder: Arc<RequestFutureHolder>,
     // ===== Immutable configuration =====
     runtime: ArcSwap<ProducerRuntimeSnapshot>,
     config_update: ParkingLotMutex<()>,
@@ -370,6 +381,36 @@ pub struct DefaultMQProducerImpl {
 #[allow(unused_assignments)]
 impl DefaultMQProducerImpl {
     pub fn new(
+        client_runtime: Arc<ClientRuntime>,
+        client_config: ClientConfig,
+        producer_config: ProducerConfig,
+        rpc_hook: Option<Arc<dyn RPCHook>>,
+    ) -> Self {
+        let service_context = client_runtime.child(format!("producer-{}", producer_config.producer_group()));
+        let client_pool = client_runtime.pool().clone();
+        Self::new_with_runtime(
+            Some(client_runtime),
+            Some(client_pool),
+            service_context,
+            client_config,
+            producer_config,
+            rpc_hook,
+        )
+    }
+
+    pub(crate) fn new_internal(
+        service_context: ChildServiceContext,
+        client_config: ClientConfig,
+        producer_config: ProducerConfig,
+        rpc_hook: Option<Arc<dyn RPCHook>>,
+    ) -> Self {
+        Self::new_with_runtime(None, None, service_context, client_config, producer_config, rpc_hook)
+    }
+
+    fn new_with_runtime(
+        client_runtime: Option<Arc<ClientRuntime>>,
+        client_pool: Option<ClientPool>,
+        service_context: ChildServiceContext,
         client_config: ClientConfig,
         producer_config: ProducerConfig,
         rpc_hook: Option<Arc<dyn RPCHook>>,
@@ -387,10 +428,19 @@ impl DefaultMQProducerImpl {
         let topic_publish_info_table = Arc::new(DashMap::new());
         let (state_changes, _) = watch::channel(ProducerState::Created);
         let runtime = ProducerRuntimeSnapshot::new(client_config.clone(), producer_config);
-        let mut mq_fault_strategy = MQFaultStrategy::new(&client_config);
+        let mut mq_fault_strategy = MQFaultStrategy::new(service_context.child("fault-detector"), &client_config);
         mq_fault_strategy.set_latency_max(runtime.producer_config.latency_max().to_vec());
         mq_fault_strategy.set_not_available_duration(runtime.producer_config.not_available_duration().to_vec());
+        let request_future_holder = client_pool
+            .as_ref()
+            .map(ClientPool::request_future_holder)
+            .unwrap_or_else(|| Arc::new(RequestFutureHolder::new(service_context.child("request-futures"))));
         DefaultMQProducerImpl {
+            client_runtime,
+            service_context,
+            client_pool,
+            client_pool_token: ParkingLotMutex::new(None),
+            request_future_holder,
             runtime: ArcSwap::from_pointee(runtime),
             config_update: ParkingLotMutex::new(()),
             state: AtomicU8::new(ProducerState::Created as u8),
@@ -415,6 +465,39 @@ impl DefaultMQProducerImpl {
             producer_task_shutdown: CancellationToken::new(),
             task_admission: ParkingLotMutex::new(()),
             compressor_missing_logged: AtomicBool::new(false),
+        }
+    }
+
+    pub(crate) fn client_runtime(&self) -> Option<Arc<ClientRuntime>> {
+        self.client_runtime.clone()
+    }
+
+    pub(crate) fn client_pool(&self) -> &ClientPool {
+        self.client_pool
+            .as_ref()
+            .expect("public producer builders always bind a ClientRuntime")
+    }
+
+    pub(crate) fn bind_client_instance(
+        &self,
+        client_instance: &Arc<MQClientInstance>,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        let candidate = Arc::downgrade(client_instance);
+        if let Some(current) = self.client_instance.get() {
+            if current.ptr_eq(&candidate) {
+                return Ok(());
+            }
+            return Err(mq_client_err!("producer is already bound to another MQClientInstance"));
+        }
+        self.client_instance
+            .set(candidate)
+            .map_err(|_| mq_client_err!("MQClientInstance initialization raced"))
+    }
+
+    async fn release_client_pool_lease(&self) {
+        let token = self.client_pool_token.lock().take();
+        if let (Some(pool), Some(token)) = (self.client_pool.as_ref(), token) {
+            pool.release(token).await;
         }
     }
 
@@ -506,12 +589,7 @@ impl DefaultMQProducerImpl {
         Ok(MQProducerInnerImpl::new(Arc::downgrade(&self.self_reference()?)))
     }
 
-    fn spawn_tracked_task<F>(
-        &self,
-        executor: Option<&tokio::runtime::Handle>,
-        thread_name: &'static str,
-        task: F,
-    ) -> std::io::Result<()>
+    fn spawn_tracked_task<F>(&self, thread_name: &'static str, task: F) -> std::io::Result<()>
     where
         F: Future<Output = ()> + Send + 'static,
     {
@@ -523,7 +601,7 @@ impl DefaultMQProducerImpl {
             ));
         }
         spawn_producer_task(
-            executor,
+            &self.service_context,
             thread_name,
             &self.producer_task_tracker,
             &self.producer_task_shutdown,
@@ -1024,11 +1102,7 @@ impl DefaultMQProducerImpl {
                 Err(e) => tracing::debug!("Oneway batch send skipped: {:?}", e),
             }
         };
-        if let Err(error) = self.spawn_tracked_task(
-            runtime.producer_config.async_sender_executor(),
-            "rocketmq-client-producer-oneway-batch",
-            task,
-        ) {
+        if let Err(error) = self.spawn_tracked_task("rocketmq-client-producer-oneway-batch", task) {
             warn!("Failed to spawn batch oneway send task: {}", error);
         }
     }
@@ -1400,11 +1474,7 @@ impl DefaultMQProducerImpl {
             let _acquire_value_size = acquire_value_size;
             f.await;
         };
-        if let Err(error) = self.spawn_tracked_task(
-            runtime.producer_config.async_sender_executor(),
-            "rocketmq-client-producer-async-send",
-            task,
-        ) {
+        if let Err(error) = self.spawn_tracked_task("rocketmq-client-producer-async-send", task) {
             Self::notify_callback_exception(
                 &send_callback,
                 &mq_client_err!(format!("failed to spawn async send task: {error}")),
@@ -2386,7 +2456,7 @@ impl DefaultMQProducerImpl {
         let cost = begin_timestamp.elapsed().as_millis() as u64;
         let remaining_timeout = Self::remaining_request_timeout(timeout, cost)?;
         let request_response_future = Arc::new(RequestResponseFuture::new(correlation_id.clone(), timeout, None));
-        REQUEST_FUTURE_HOLDER
+        self.request_future_holder
             .put_request(correlation_id.to_string(), request_response_future.clone())
             .await;
         let request_response_future_inner = request_response_future.clone();
@@ -2413,14 +2483,14 @@ impl DefaultMQProducerImpl {
             )
             .await;
         if let Err(error) = send_result {
-            REQUEST_FUTURE_HOLDER.remove_request(correlation_id.as_str()).await;
+            self.request_future_holder.remove_request(correlation_id.as_str()).await;
             return Err(error);
         }
         let result = self
             .wait_response(&topic, timeout, request_response_future, remaining_timeout)
             .await;
 
-        REQUEST_FUTURE_HOLDER.remove_request(correlation_id.as_str()).await;
+        self.request_future_holder.remove_request(correlation_id.as_str()).await;
         result
     }
 
@@ -2447,9 +2517,10 @@ impl DefaultMQProducerImpl {
             timeout,
             Some(request_callback.clone()),
         ));
-        REQUEST_FUTURE_HOLDER
+        self.request_future_holder
             .put_request(correlation_id.to_string(), request_response_future.clone())
             .await;
+        let request_future_holder = Arc::clone(&self.request_future_holder);
         let send_callback = move |result: Option<&SendResult>, err: Option<&RocketMQError>| {
             if result.is_some() {
                 request_response_future.set_send_request_ok(true);
@@ -2457,7 +2528,7 @@ impl DefaultMQProducerImpl {
             }
             if let Some(error) = err {
                 request_response_future.set_cause(Self::request_cause_from_error(error));
-                Self::request_fail(correlation_id.as_str());
+                request_future_holder.fail_request(correlation_id.to_string());
             }
         };
         let _ = self
@@ -2488,7 +2559,7 @@ impl DefaultMQProducerImpl {
         let cost = begin_timestamp.elapsed().as_millis() as u64;
         let remaining_timeout = Self::remaining_request_timeout(timeout, cost)?;
         let request_response_future = Arc::new(RequestResponseFuture::new(correlation_id.clone(), timeout, None));
-        REQUEST_FUTURE_HOLDER
+        self.request_future_holder
             .put_request(correlation_id.to_string(), request_response_future.clone())
             .await;
         let request_response_future_inner = request_response_future.clone();
@@ -2515,14 +2586,14 @@ impl DefaultMQProducerImpl {
             )
             .await;
         if let Err(error) = send_result {
-            REQUEST_FUTURE_HOLDER.remove_request(correlation_id.as_str()).await;
+            self.request_future_holder.remove_request(correlation_id.as_str()).await;
             return Err(error);
         }
         let result = self
             .wait_response(&topic, timeout, request_response_future, remaining_timeout)
             .await;
 
-        REQUEST_FUTURE_HOLDER.remove_request(correlation_id.as_str()).await;
+        self.request_future_holder.remove_request(correlation_id.as_str()).await;
         result
     }
 
@@ -2546,9 +2617,10 @@ impl DefaultMQProducerImpl {
             timeout,
             Some(request_callback.clone()),
         ));
-        REQUEST_FUTURE_HOLDER
+        self.request_future_holder
             .put_request(correlation_id.to_string(), request_response_future.clone())
             .await;
+        let request_future_holder = Arc::clone(&self.request_future_holder);
         let send_callback = move |result: Option<&SendResult>, err: Option<&RocketMQError>| {
             if result.is_some() {
                 request_response_future.set_send_request_ok(true);
@@ -2556,7 +2628,7 @@ impl DefaultMQProducerImpl {
             }
             if let Some(error) = err {
                 request_response_future.set_cause(Self::request_cause_from_error(error));
-                Self::request_fail(correlation_id.as_str());
+                request_future_holder.fail_request(correlation_id.to_string());
             }
         };
         let _ = self
@@ -2591,9 +2663,10 @@ impl DefaultMQProducerImpl {
             timeout,
             Some(request_callback.clone()),
         ));
-        REQUEST_FUTURE_HOLDER
+        self.request_future_holder
             .put_request(correlation_id.to_string(), request_response_future.clone())
             .await;
+        let request_future_holder = Arc::clone(&self.request_future_holder);
         let send_callback = move |result: Option<&SendResult>, err: Option<&RocketMQError>| {
             if result.is_some() {
                 request_response_future.set_send_request_ok(true);
@@ -2602,7 +2675,7 @@ impl DefaultMQProducerImpl {
             }
             if let Some(error) = err {
                 request_response_future.set_cause(Self::request_cause_from_error(error));
-                Self::request_fail(correlation_id.as_str());
+                request_future_holder.fail_request(correlation_id.to_string());
             }
         };
         self.send_default_impl(
@@ -2613,15 +2686,6 @@ impl DefaultMQProducerImpl {
         )
         .await?;
         Ok(())
-    }
-
-    async fn request_fail(correlation_id: &str) {
-        let request_response_future = REQUEST_FUTURE_HOLDER.remove_request_and_get(correlation_id).await;
-        if let Some(request_response_future) = request_response_future {
-            request_response_future.set_send_request_ok(false);
-            request_response_future.put_response_message(None);
-            request_response_future.execute_request_callback();
-        }
     }
 
     pub async fn request<M>(
@@ -2639,7 +2703,7 @@ impl DefaultMQProducerImpl {
         let cost = begin_timestamp.elapsed().as_millis() as u64;
         let remaining_timeout = Self::remaining_request_timeout(timeout, cost)?;
         let request_response_future = Arc::new(RequestResponseFuture::new(correlation_id.clone(), timeout, None));
-        REQUEST_FUTURE_HOLDER
+        self.request_future_holder
             .put_request(correlation_id.to_string(), request_response_future.clone())
             .await;
         let request_response_future_inner = request_response_future.clone();
@@ -2663,7 +2727,7 @@ impl DefaultMQProducerImpl {
             )
             .await;
         if let Err(error) = send_result {
-            REQUEST_FUTURE_HOLDER.remove_request(correlation_id.as_str()).await;
+            self.request_future_holder.remove_request(correlation_id.as_str()).await;
             return Err(error);
         }
 
@@ -2671,7 +2735,7 @@ impl DefaultMQProducerImpl {
             .wait_response(&topic, timeout, request_response_future, remaining_timeout)
             .await;
 
-        REQUEST_FUTURE_HOLDER.remove_request(correlation_id.as_str()).await;
+        self.request_future_holder.remove_request(correlation_id.as_str()).await;
         result
     }
 
@@ -3091,8 +3155,7 @@ impl MQProducerInner for DefaultMQProducerImpl {
             return;
         };
         let worker_slots = transaction_check_env.worker_slots.clone();
-        let executor_service = transaction_runtime.executor;
-        let task_executor = executor_service.clone();
+        let service_context = self.service_context.clone();
         let group_for_spawn_error = group.clone();
 
         let task = async move {
@@ -3105,8 +3168,7 @@ impl MQProducerInner for DefaultMQProducerImpl {
                 return;
             };
 
-            // Use spawn_blocking to avoid blocking Tokio worker threads (matches Java's
-            // ExecutorService behavior)
+            // Route synchronous listener work through the client runtime's blocking lane.
             let check_group = group.clone();
             let check_task = move || {
                 let unique_key = msg
@@ -3132,16 +3194,10 @@ impl MQProducerInner for DefaultMQProducerImpl {
 
                 (msg, unique_key, transaction_state)
             };
-            let check_result = if let Some(executor) = task_executor {
-                executor
-                    .spawn_blocking(check_task)
+            let check_result =
+                spawn_client_blocking_io_with_context(&service_context, "client.transaction.check", check_task)
                     .await
-                    .map_err(|error| error.to_string())
-            } else {
-                spawn_client_blocking_io("client.transaction.check", check_task)
-                    .await
-                    .map_err(|error| error.to_string())
-            };
+                    .map_err(|error| error.to_string());
 
             let Ok((msg, unique_key, transaction_state)) = check_result else {
                 tracing::error!("Transaction check task join failed for producer group {}", group);
@@ -3183,11 +3239,7 @@ impl MQProducerInner for DefaultMQProducerImpl {
                 tracing::error!("endTransactionOneway exception: {:?}", e);
             }
         };
-        if let Err(error) = self.spawn_tracked_task(
-            executor_service.as_ref(),
-            "rocketmq-client-producer-transaction-check",
-            task,
-        ) {
+        if let Err(error) = self.spawn_tracked_task("rocketmq-client-producer-transaction-check", task) {
             warn!(
                 "Failed to spawn transaction check task for producer group {}: {}",
                 group_for_spawn_error, error
@@ -3253,19 +3305,24 @@ impl DefaultMQProducerImpl {
             return Err(error);
         }
 
-        let client_config = runtime.client_config.clone();
         let producer_config = Arc::clone(&runtime.producer_config);
-        let rpc_hook = self.rpc_hook.read().clone();
-        let client_instance = MQClientManager::get_instance().get_or_create_mq_client_instance(client_config, rpc_hook);
+        let client_instance = if let Ok(instance) = self.client_instance() {
+            instance
+        } else {
+            let client_pool = self
+                .client_pool
+                .as_ref()
+                .ok_or_else(|| mq_client_err!("internal producer must be pre-bound to its MQClientInstance"))?;
+            let pooled = client_pool.get_or_create(runtime.client_config.clone(), self.rpc_hook.read().clone())?;
+            let (instance, token) = pooled.into_parts();
+            *self.client_pool_token.lock() = Some(token);
+            instance
+        };
         let weak_client = Arc::downgrade(&client_instance);
-        if let Some(existing) = self.client_instance.get() {
-            if !existing.ptr_eq(&weak_client) {
-                self.store_state(ProducerState::StartFailed, Ordering::SeqCst);
-                return Err(mq_client_err!("Producer is already bound to another MQClientInstance"));
-            }
-        } else if self.client_instance.set(weak_client.clone()).is_err() {
+        if let Err(error) = self.bind_client_instance(&client_instance) {
             self.store_state(ProducerState::StartFailed, Ordering::SeqCst);
-            return Err(mq_client_err!("MQClientInstance initialization raced"));
+            self.release_client_pool_lease().await;
+            return Err(error);
         }
 
         let service_detector = DefaultServiceDetector {
@@ -3292,6 +3349,7 @@ impl DefaultMQProducerImpl {
             .register_producer(producer_config.producer_group(), registry_owner.clone())
             .await;
         if !register_ok {
+            self.release_client_pool_lease().await;
             self.set_service_state(ServiceState::CreateJust);
             self.store_state(ProducerState::Created, Ordering::SeqCst);
             return Err(mq_client_err!(format!(
@@ -3305,6 +3363,7 @@ impl DefaultMQProducerImpl {
                 client_instance
                     .unregister_producer_if_owner(producer_config.producer_group(), &registry_owner)
                     .await;
+                self.release_client_pool_lease().await;
                 self.store_state(ProducerState::StartFailed, Ordering::SeqCst);
                 return Err(error);
             }
@@ -3313,7 +3372,8 @@ impl DefaultMQProducerImpl {
         self.init_topic_route(&runtime).await;
         self.mq_fault_strategy.read().start_detector();
         self.complete_start_after(
-            REQUEST_FUTURE_HOLDER.start_scheduled_task(producer_config.producer_group().to_string()),
+            self.request_future_holder
+                .start_scheduled_task(producer_config.producer_group().to_string()),
         )
         .await;
         tracing::info!("Producer [{}] started successfully", producer_config.producer_group());
@@ -3450,10 +3510,10 @@ impl DefaultMQProducerImpl {
                     .await;
             }
             if shutdown_factory {
-                client_instance.shutdown().await;
+                self.release_client_pool_lease().await;
             }
         }
-        REQUEST_FUTURE_HOLDER
+        self.request_future_holder
             .shutdown(runtime.producer_config.producer_group())
             .await;
         let strategy = self.mq_fault_strategy.read().clone();
@@ -3477,7 +3537,7 @@ impl DefaultMQProducerImpl {
             }
         }
 
-        REQUEST_FUTURE_HOLDER.shutdown(producer_group.as_str()).await;
+        self.request_future_holder.shutdown(producer_group.as_str()).await;
 
         // 2. Stop fault strategy detector
         let strategy = self.mq_fault_strategy.read().clone();
@@ -3490,9 +3550,7 @@ impl DefaultMQProducerImpl {
 
         // 3. Shutdown client factory if requested
         if shutdown_factory {
-            if let Ok(client_instance) = self.client_instance() {
-                client_instance.shutdown().await;
-            }
+            self.release_client_pool_lease().await;
         }
 
         Ok(())
@@ -3675,29 +3733,6 @@ impl DefaultMQProducerImpl {
             .write()
             .set_not_available_duration(not_available_duration);
         self.store_runtime_config(runtime.client_config.clone(), producer_config);
-    }
-
-    #[inline]
-    pub fn set_callback_executor(&self, callback_executor: tokio::runtime::Handle) {
-        let _update = self.config_update.lock();
-        let runtime = self.runtime_snapshot();
-        let mut producer_config = runtime.producer_config.as_ref().clone();
-        producer_config.set_callback_executor(callback_executor);
-        self.store_runtime_config(runtime.client_config.clone(), producer_config);
-    }
-
-    #[inline]
-    pub fn set_async_sender_executor(&self, async_sender_executor: tokio::runtime::Handle) {
-        let _update = self.config_update.lock();
-        let runtime = self.runtime_snapshot();
-        let mut producer_config = runtime.producer_config.as_ref().clone();
-        producer_config.set_async_sender_executor(async_sender_executor);
-        self.store_runtime_config(runtime.client_config.clone(), producer_config);
-    }
-
-    #[inline]
-    pub fn set_transaction_executor_service(&self, executor_service: Option<tokio::runtime::Handle>) {
-        self.transaction_runtime.write().executor = executor_service;
     }
 
     /// Ensure transactional messages do not support delayed delivery
@@ -3961,8 +3996,25 @@ mod tests {
         calls: AtomicUsize::new(0),
     };
 
+    fn test_runtime() -> Arc<ClientRuntime> {
+        crate::runtime::test_client_runtime("default-producer-impl-test")
+    }
+
+    fn test_client_instance(client_config: ClientConfig, client_id: &'static str) -> Arc<MQClientInstance> {
+        let runtime = test_runtime();
+        MQClientInstance::new_arc(
+            client_config,
+            0,
+            client_id,
+            None,
+            runtime.child(client_id),
+            runtime.pool().request_future_holder(),
+        )
+    }
+
     fn running_producer_without_client() -> DefaultMQProducerImpl {
-        let producer = DefaultMQProducerImpl::new(ClientConfig::default(), ProducerConfig::default(), None);
+        let producer =
+            DefaultMQProducerImpl::new(test_runtime(), ClientConfig::default(), ProducerConfig::default(), None);
         producer.store_state(ProducerState::Running, Ordering::SeqCst);
         producer.set_service_state(ServiceState::Running);
         producer
@@ -3979,6 +4031,7 @@ mod tests {
     #[test]
     fn standard_weak_self_reference_is_idempotent_and_does_not_retain_root() {
         let producer = Arc::new(DefaultMQProducerImpl::new(
+            test_runtime(),
             ClientConfig::default(),
             ProducerConfig::default(),
             None,
@@ -3993,6 +4046,7 @@ mod tests {
         assert_eq!(Arc::strong_count(&producer), 1);
 
         let other = Arc::new(DefaultMQProducerImpl::new(
+            test_runtime(),
             ClientConfig::default(),
             ProducerConfig::default(),
             None,
@@ -4004,7 +4058,7 @@ mod tests {
 
     #[tokio::test]
     async fn resolver_and_detector_back_references_do_not_retain_client() {
-        let client = MQClientInstance::new_arc(ClientConfig::default(), 0, "weak-client", None);
+        let client = test_client_instance(ClientConfig::default(), "weak-client");
         let weak = Arc::downgrade(&client);
         let resolver = DefaultResolver {
             client_instance: weak.clone(),
@@ -4030,14 +4084,15 @@ mod tests {
             .expect("running producer should begin shutdown");
 
         let error = producer
-            .spawn_tracked_task(None, "rocketmq-client-producer-rejected-test", async {})
+            .spawn_tracked_task("rocketmq-client-producer-rejected-test", async {})
             .expect_err("stopping producer must reject new tasks");
         assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe);
     }
 
     #[tokio::test]
     async fn cancelled_starting_state_is_recovered_before_retry() {
-        let producer = DefaultMQProducerImpl::new(ClientConfig::default(), ProducerConfig::default(), None);
+        let producer =
+            DefaultMQProducerImpl::new(test_runtime(), ClientConfig::default(), ProducerConfig::default(), None);
         producer.store_state(ProducerState::Starting, Ordering::SeqCst);
 
         let result = tokio::time::timeout(Duration::from_secs(1), producer.start())
@@ -4050,11 +4105,12 @@ mod tests {
     #[test]
     fn start_runtime_publish_reloads_config_under_update_lock() {
         let producer = Arc::new(DefaultMQProducerImpl::new(
+            test_runtime(),
             ClientConfig::default(),
             ProducerConfig::default(),
             None,
         ));
-        let configured = DefaultMQProducer::builder()
+        let configured = DefaultMQProducer::builder(test_runtime())
             .producer_group("start-runtime-group")
             .send_msg_timeout(1_234)
             .build();
@@ -4081,7 +4137,8 @@ mod tests {
 
     #[tokio::test]
     async fn running_is_published_only_after_async_start_initialization() {
-        let producer = DefaultMQProducerImpl::new(ClientConfig::default(), ProducerConfig::default(), None);
+        let producer =
+            DefaultMQProducerImpl::new(test_runtime(), ClientConfig::default(), ProducerConfig::default(), None);
         producer.store_state(ProducerState::Starting, Ordering::SeqCst);
         producer.set_service_state(ServiceState::StartFailed);
         let initialization_started = Arc::new(tokio::sync::Notify::new());
@@ -4123,13 +4180,13 @@ mod tests {
     }
 
     #[test]
-    fn spawn_producer_task_without_tokio_runtime_runs_on_fallback_thread() {
+    fn spawn_producer_task_uses_injected_service_context() {
         let (tx, rx) = std::sync::mpsc::channel();
         let tracker = TaskTracker::new();
         let shutdown_token = CancellationToken::new();
 
         spawn_producer_task(
-            None,
+            &crate::runtime::test_service_context("producer-task-test"),
             "rocketmq-client-producer-test",
             &tracker,
             &shutdown_token,
@@ -4139,67 +4196,48 @@ mod tests {
                 tx.send(thread_name).expect("test receiver should still be open");
             },
         )
-        .expect("producer task should spawn without an ambient Tokio runtime");
+        .expect("producer task should spawn through the injected runtime");
 
         let thread_name = rx
             .recv_timeout(Duration::from_secs(1))
-            .expect("fallback producer task should complete");
-        assert_eq!(thread_name, "rocketmq-client-fallback");
+            .expect("injected producer task should complete");
+        assert_eq!(thread_name, "rocketmq-client-unit-test");
     }
 
-    #[test]
-    fn execute_async_message_send_uses_configured_async_sender_executor() {
-        let async_sender_runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(1)
-            .thread_name("rocketmq-producer-async-sender")
-            .enable_all()
-            .build()
-            .expect("async sender runtime should build");
-        let caller_runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("caller runtime should build");
+    #[tokio::test]
+    async fn execute_async_message_send_uses_injected_client_runtime() {
         let (tx, rx) = std::sync::mpsc::channel();
         let producer = running_producer_without_client();
-        producer.set_async_sender_executor(async_sender_runtime.handle().clone());
 
-        caller_runtime.block_on(async {
-            producer
-                .execute_async_message_send(
-                    async move {
-                        let current_thread = std::thread::current();
-                        let thread_name = current_thread.name().unwrap_or_default().to_string();
-                        tx.send(thread_name).expect("test receiver should still be open");
-                    },
-                    None,
-                    1000,
-                    Instant::now(),
-                    1,
-                )
-                .await
-                .expect("async send should spawn on configured runtime");
-        });
+        producer
+            .execute_async_message_send(
+                async move {
+                    let current_thread = std::thread::current();
+                    let thread_name = current_thread.name().unwrap_or_default().to_string();
+                    tx.send(thread_name).expect("test receiver should still be open");
+                },
+                None,
+                1000,
+                Instant::now(),
+                1,
+            )
+            .await
+            .expect("async send should spawn on the injected runtime");
 
         let thread_name = rx
             .recv_timeout(Duration::from_secs(1))
-            .expect("configured producer task should complete");
-        assert_eq!(thread_name, "rocketmq-producer-async-sender");
+            .expect("injected producer task should complete");
+        assert_eq!(thread_name, "rocketmq-client-unit-test");
     }
 
     #[test]
-    fn spawn_producer_task_uses_explicit_executor() {
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(1)
-            .thread_name("rocketmq-producer-explicit-executor")
-            .enable_all()
-            .build()
-            .expect("producer task runtime should build");
+    fn spawn_producer_task_uses_explicit_client_runtime() {
         let (tx, rx) = std::sync::mpsc::channel();
         let tracker = TaskTracker::new();
         let shutdown_token = CancellationToken::new();
 
         spawn_producer_task(
-            Some(runtime.handle()),
+            &crate::runtime::test_service_context("producer-explicit-runtime-test"),
             "rocketmq-client-producer-test",
             &tracker,
             &shutdown_token,
@@ -4214,7 +4252,7 @@ mod tests {
         let thread_name = rx
             .recv_timeout(Duration::from_secs(1))
             .expect("configured producer task should complete");
-        assert_eq!(thread_name, "rocketmq-producer-explicit-executor");
+        assert_eq!(thread_name, "rocketmq-client-unit-test");
     }
 
     #[tokio::test]
@@ -4235,7 +4273,7 @@ mod tests {
         let dropped_in_task = dropped.clone();
 
         spawn_producer_task(
-            None,
+            &crate::runtime::test_service_context("producer-tracked-task-test"),
             "rocketmq-client-producer-tracked-test",
             &tracker,
             &shutdown_token,
@@ -4349,7 +4387,8 @@ mod tests {
 
     #[tokio::test]
     async fn start_failure_enters_start_failed_and_shutdown_noops_like_java() {
-        let producer = DefaultMQProducerImpl::new(ClientConfig::default(), ProducerConfig::default(), None);
+        let producer =
+            DefaultMQProducerImpl::new(test_runtime(), ClientConfig::default(), ProducerConfig::default(), None);
 
         let start_result = producer.start().await;
         assert!(start_result.is_err());
@@ -4373,7 +4412,8 @@ mod tests {
     #[tokio::test]
     async fn owned_partial_start_shutdown_cleans_starting_and_failed_states() {
         for state in [ProducerState::Starting, ProducerState::StartFailed] {
-            let producer = DefaultMQProducerImpl::new(ClientConfig::default(), ProducerConfig::default(), None);
+            let producer =
+                DefaultMQProducerImpl::new(test_runtime(), ClientConfig::default(), ProducerConfig::default(), None);
             producer.set_service_state(ServiceState::StartFailed);
             producer.store_state(state, Ordering::SeqCst);
 
@@ -4389,7 +4429,8 @@ mod tests {
 
     #[tokio::test]
     async fn producer_state_wait_uses_state_change_notification() {
-        let producer = DefaultMQProducerImpl::new(ClientConfig::default(), ProducerConfig::default(), None);
+        let producer =
+            DefaultMQProducerImpl::new(test_runtime(), ClientConfig::default(), ProducerConfig::default(), None);
         producer.store_state(ProducerState::Starting, Ordering::SeqCst);
 
         let wait_for_running = async {
@@ -4428,8 +4469,10 @@ mod tests {
 
     #[tokio::test]
     async fn request_fail_removes_future_and_executes_callback_once_like_java() {
+        let producer = running_producer_without_client();
+        let request_future_holder = Arc::clone(&producer.request_future_holder);
         let correlation_id = format!("request-fail-{}", current_millis());
-        REQUEST_FUTURE_HOLDER.remove_request(correlation_id.as_str()).await;
+        request_future_holder.remove_request(correlation_id.as_str()).await;
 
         let calls = Arc::new(AtomicUsize::new(0));
         let calls_inner = Arc::clone(&calls);
@@ -4443,12 +4486,18 @@ mod tests {
             3_000,
             Some(callback),
         ));
-        REQUEST_FUTURE_HOLDER.put_request(correlation_id.clone(), future).await;
+        request_future_holder.put_request(correlation_id.clone(), future).await;
 
-        DefaultMQProducerImpl::request_fail(correlation_id.as_str()).await;
-        DefaultMQProducerImpl::request_fail(correlation_id.as_str()).await;
+        request_future_holder.fail_request(correlation_id.clone());
+        request_future_holder.fail_request(correlation_id.clone());
+        for _ in 0..100 {
+            if calls.load(Ordering::SeqCst) == 1 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
 
-        assert!(REQUEST_FUTURE_HOLDER
+        assert!(request_future_holder
             .get_request(correlation_id.as_str())
             .await
             .is_none());
@@ -4511,7 +4560,7 @@ mod tests {
     #[test]
     fn send_timeout_for_attempt_caps_only_retryable_attempts_like_java() {
         let producer = running_producer_without_client();
-        let configured = DefaultMQProducer::builder()
+        let configured = DefaultMQProducer::builder(test_runtime())
             .producer_group("retry-timeout-group")
             .send_msg_max_timeout_per_request(500)
             .build();
@@ -4710,8 +4759,9 @@ mod tests {
     async fn invoke_selector_uses_user_message_and_returns_namespaced_queue_like_java() {
         let mut client_config = ClientConfig::default();
         client_config.set_namespace(CheetahString::from_static_str("ns-a"));
-        let client_instance = MQClientInstance::new_arc(client_config.clone(), 0, "selector-namespace-client", None);
-        let producer = DefaultMQProducerImpl::new(client_config.clone(), ProducerConfig::default(), None);
+        let client_instance = test_client_instance(client_config.clone(), "selector-namespace-client");
+        let producer =
+            DefaultMQProducerImpl::new(test_runtime(), client_config.clone(), ProducerConfig::default(), None);
         producer.store_state(ProducerState::Running, Ordering::SeqCst);
         producer.set_service_state(ServiceState::Running);
         producer
@@ -4757,7 +4807,8 @@ mod tests {
     #[tokio::test]
     async fn cached_topic_publish_info_is_returned_as_shared_snapshot() {
         let topic = CheetahString::from_static_str("TopicTest");
-        let producer = DefaultMQProducerImpl::new(ClientConfig::default(), ProducerConfig::default(), None);
+        let producer =
+            DefaultMQProducerImpl::new(test_runtime(), ClientConfig::default(), ProducerConfig::default(), None);
         let info = Arc::new(TopicPublishInfo {
             have_topic_router_info: true,
             message_queue_list: (0..256)
@@ -4782,8 +4833,9 @@ mod tests {
 
     #[test]
     fn replace_producer_config_refreshes_send_config_snapshot() {
-        let producer = DefaultMQProducerImpl::new(ClientConfig::default(), ProducerConfig::default(), None);
-        let configured = DefaultMQProducer::builder()
+        let producer =
+            DefaultMQProducerImpl::new(test_runtime(), ClientConfig::default(), ProducerConfig::default(), None);
+        let configured = DefaultMQProducer::builder(test_runtime())
             .producer_group("snapshot-group")
             .create_topic_key("SnapshotTopic")
             .default_topic_queue_nums(12)
@@ -4821,12 +4873,17 @@ mod tests {
     #[test]
     fn compression_below_threshold_does_not_access_compressor() {
         COUNTING_COMPRESSOR.calls.store(0, Ordering::Relaxed);
-        let configured = DefaultMQProducer::builder()
+        let configured = DefaultMQProducer::builder(test_runtime())
             .producer_group("compress-threshold-group")
             .compress_msg_body_over_howmuch(1024)
             .compressor(&COUNTING_COMPRESSOR)
             .build();
-        let producer = DefaultMQProducerImpl::new(ClientConfig::default(), configured.producer_config().clone(), None);
+        let producer = DefaultMQProducerImpl::new(
+            test_runtime(),
+            ClientConfig::default(),
+            configured.producer_config().clone(),
+            None,
+        );
         let mut msg = Message::builder()
             .topic("TopicTest")
             .body(vec![b'a'; 128])

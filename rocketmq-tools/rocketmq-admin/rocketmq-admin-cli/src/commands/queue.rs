@@ -43,10 +43,11 @@ impl CommandExecute for QueueCommands {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
         match self {
-            QueueCommands::CheckRocksdbCqWriteProgress(cmd) => cmd.execute(credentials).await,
-            QueueCommands::QueryCq(cmd) => cmd.execute(credentials).await,
+            QueueCommands::CheckRocksdbCqWriteProgress(cmd) => cmd.execute(credentials, client_runtime.clone()).await,
+            QueueCommands::QueryCq(cmd) => cmd.execute(credentials, client_runtime.clone()).await,
         }
     }
 }

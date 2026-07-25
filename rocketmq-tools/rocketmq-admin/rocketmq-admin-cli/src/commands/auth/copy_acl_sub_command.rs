@@ -51,11 +51,13 @@ impl CommandExecute for CopyAclSubCommand {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
         let request = CopyAclRequest::try_new(self.from_broker.clone(), self.to_broker.clone(), self.subjects.clone())?;
         let from_broker = request.from_broker().clone();
         let to_broker = request.to_broker().clone();
-        let result = AuthService::copy_acl_by_request_with_credentials(request, credentials).await?;
+        let result =
+            AuthService::copy_acl_by_request_with_credentials(request, credentials, client_runtime.clone()).await?;
         render_copy_acl_result(result, from_broker.as_str(), to_broker.as_str());
         Ok(())
     }

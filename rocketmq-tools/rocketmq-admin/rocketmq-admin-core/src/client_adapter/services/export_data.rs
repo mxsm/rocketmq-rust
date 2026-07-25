@@ -788,8 +788,9 @@ impl ExportService {
     pub async fn export_configs_by_request_with_credentials(
         request: ExportConfigsRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<ExportConfigsResult> {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials)
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
         let result = Self::export_configs_with_admin(&admin, &request).await;
@@ -849,8 +850,9 @@ impl ExportService {
     pub async fn export_metrics_by_request_with_credentials(
         request: ExportMetricsRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<ExportMetricsResult> {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials)
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
         let result = Self::export_metrics_with_admin(&admin, &request).await;
@@ -984,8 +986,9 @@ impl ExportService {
     pub async fn export_metadata_by_request_with_credentials(
         request: ExportMetadataRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<ExportMetadataResult> {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials)
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
         let result = Self::export_metadata_with_admin(&admin, &request).await;
@@ -1052,8 +1055,9 @@ impl ExportService {
     pub async fn export_rocksdb_config_rpc_by_request_with_credentials(
         request: ExportRocksDbConfigRpcRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<ExportRocksDbConfigRpcResult> {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials)
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
         let result = Self::export_rocksdb_config_rpc_with_admin(&admin, &request).await;
@@ -1104,8 +1108,9 @@ impl ExportService {
     pub async fn export_pop_records_by_request_with_credentials(
         request: ExportPopRecordRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<ExportPopRecordResult> {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials)
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
         let result = Self::export_pop_records_with_admin(&admin, &request).await;
@@ -1519,7 +1524,9 @@ fn merge_subscription_groups(
 fn admin_builder_with_credentials(
     builder: AdminBuilder,
     credentials: Option<crate::core::security::AdminCredentials>,
+    client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
 ) -> AdminBuilder {
+    let builder = builder.client_runtime(client_runtime);
     match credentials {
         Some(hook) => builder.credentials(hook),
         None => builder,

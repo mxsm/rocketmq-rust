@@ -58,14 +58,20 @@ const USE_CLOSURE: bool = false;
 /// 1. Start multiple instances of this consumer (with the same consumer group)
 /// 2. Send messages to the topic using a producer
 /// 3. Observe that messages are distributed among the consumer instances
-#[tokio::main]
-pub async fn main() -> RocketMQResult<()> {
+#[path = "../support/mod.rs"]
+mod support;
+
+pub fn main() -> RocketMQResult<()> {
+    support::run(run)
+}
+
+async fn run(client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>) -> RocketMQResult<()> {
     // Initialize logger
     let telemetry_guard =
         rocketmq_observability::install_global(&rocketmq_observability::TelemetryBootstrapConfig::default())
             .expect("telemetry logging bootstrap should initialize");
     // Create a push consumer with cluster mode
-    let builder = DefaultMQPushConsumer::builder();
+    let builder = DefaultMQPushConsumer::builder(client_runtime.clone());
 
     let mut consumer = builder
         .consumer_group(CONSUMER_GROUP.to_string())

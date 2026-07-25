@@ -50,6 +50,7 @@ use crate::consumer::mq_consumer::MQConsumer;
 use crate::consumer::mq_consumer_inner::MQConsumerInner;
 use crate::consumer::store::offset_store::OffsetStore;
 use crate::consumer::topic_message_queue_change_listener::TopicMessageQueueChangeListener;
+use crate::runtime::ClientRuntime;
 use crate::trace::async_trace_dispatcher::AsyncTraceDispatcher;
 use crate::trace::hook::consume_message_trace_hook_impl::ConsumeMessageTraceHookImpl;
 use crate::trace::trace_dispatcher::TraceDispatcher;
@@ -87,7 +88,7 @@ use crate::trace::trace_dispatcher::Type;
 /// ```rust,ignore
 /// use rocketmq_client::consumer::default_lite_pull_consumer::DefaultLitePullConsumer;
 ///
-/// let consumer = DefaultLitePullConsumer::builder()
+/// let consumer = DefaultLitePullConsumer::builder(client_runtime.clone())
 ///     .consumer_group("my_consumer_group")
 ///     .name_server_addr("127.0.0.1:9876")
 ///     .auto_commit(true)
@@ -108,7 +109,7 @@ use crate::trace::trace_dispatcher::Type;
 /// ## Manual offset control
 ///
 /// ```rust,ignore
-/// let consumer = DefaultLitePullConsumer::builder()
+/// let consumer = DefaultLitePullConsumer::builder(client_runtime.clone())
 ///     .consumer_group("my_consumer_group")
 ///     .name_server_addr("127.0.0.1:9876")
 ///     .auto_commit(false)  // Disable auto-commit
@@ -143,6 +144,7 @@ use crate::trace::trace_dispatcher::Type;
 /// ```
 #[derive(Clone)]
 pub struct DefaultLitePullConsumer {
+    client_runtime: Arc<ClientRuntime>,
     /// Client configuration (network, instance name, etc.)
     client_config: Arc<ArcSwap<ClientConfig>>,
 
@@ -176,6 +178,7 @@ impl DefaultLitePullConsumer {
     ///
     /// Most users should use [`builder()`](Self::builder) instead.
     pub fn new(
+        client_runtime: Arc<ClientRuntime>,
         client_config: ClientConfig,
         consumer_config: LitePullConsumerConfig,
         rpc_hook: Option<Arc<dyn RPCHook>>,
@@ -184,6 +187,7 @@ impl DefaultLitePullConsumer {
         custom_trace_topic: Option<CheetahString>,
     ) -> Self {
         Self {
+            client_runtime,
             client_config: Arc::new(ArcSwap::from_pointee(client_config)),
             consumer_config: Arc::new(ArcSwap::from_pointee(consumer_config)),
             default_lite_pull_consumer_impl: Arc::new(OnceCell::new()),
@@ -225,14 +229,14 @@ impl DefaultLitePullConsumer {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// let consumer = DefaultLitePullConsumer::builder()
+    /// let consumer = DefaultLitePullConsumer::builder(client_runtime.clone())
     ///     .consumer_group("my_group")
     ///     .name_server_addr("127.0.0.1:9876")
     ///     .pull_batch_size(32)
     ///     .build()?;
     /// ```
-    pub fn builder() -> DefaultLitePullConsumerBuilder {
-        DefaultLitePullConsumerBuilder::new()
+    pub fn builder(client_runtime: Arc<ClientRuntime>) -> DefaultLitePullConsumerBuilder {
+        DefaultLitePullConsumerBuilder::new(client_runtime)
     }
 
     /// Starts the consumer.
@@ -987,6 +991,7 @@ impl DefaultLitePullConsumer {
                     .unwrap_or(TopicValidator::RMQ_SYS_TRACE_TOPIC);
 
                 let dispatcher = AsyncTraceDispatcher::new(
+                    Arc::clone(&self.client_runtime),
                     consumer_config.consumer_group.as_str(),
                     Type::Consume,
                     client_config.trace_msg_batch_num,
@@ -1047,6 +1052,7 @@ impl DefaultLitePullConsumer {
         self.default_lite_pull_consumer_impl
             .get_or_try_init(|| async {
                 let impl_ = Arc::new(DefaultLitePullConsumerImpl::new(
+                    Arc::clone(&self.client_runtime),
                     self.client_config_snapshot(),
                     self.consumer_config_snapshot(),
                 ));
@@ -1782,6 +1788,10 @@ mod tests {
     use crate::consumer::rebalance_strategy::allocate_message_queue_averagely_by_circle::AllocateMessageQueueAveragelyByCircle;
     use crate::consumer::store::read_offset_type::ReadOffsetType;
 
+    fn test_runtime() -> Arc<ClientRuntime> {
+        crate::runtime::test_client_runtime("default-lite-pull-consumer-test")
+    }
+
     #[derive(Default)]
     struct CapturingTraceDispatcher {
         start_count: AtomicUsize,
@@ -1834,19 +1844,21 @@ mod tests {
     }
 
     fn new_unstarted_consumer() -> DefaultLitePullConsumer {
-        DefaultLitePullConsumer::builder()
+        DefaultLitePullConsumer::builder(test_runtime())
             .consumer_group("lite_pull_group")
             .build()
             .expect("builder should create consumer")
     }
 
     fn new_namespaced_consumer_with_impl() -> (DefaultLitePullConsumer, Arc<DefaultLitePullConsumerImpl>) {
-        let consumer = DefaultLitePullConsumer::builder()
+        let client_runtime = test_runtime();
+        let consumer = DefaultLitePullConsumer::builder(Arc::clone(&client_runtime))
             .consumer_group("lite_pull_namespace_group")
             .namespace("ns")
             .build()
             .expect("builder should create namespaced consumer");
         let impl_ = Arc::new(DefaultLitePullConsumerImpl::new(
+            client_runtime,
             consumer.client_config_snapshot(),
             consumer.consumer_config_snapshot(),
         ));
@@ -1884,7 +1896,7 @@ mod tests {
 
     #[tokio::test]
     async fn subscribe_before_start_initializes_impl_and_records_subscription_like_java() {
-        let consumer = DefaultLitePullConsumer::builder()
+        let consumer = DefaultLitePullConsumer::builder(test_runtime())
             .consumer_group("lite_pull_pre_start_subscribe_group")
             .namespace("ns")
             .build()
@@ -1914,7 +1926,7 @@ mod tests {
             "access_key",
             "secret_key",
         )));
-        let consumer = DefaultLitePullConsumer::builder()
+        let consumer = DefaultLitePullConsumer::builder(test_runtime())
             .consumer_group("lite_pull_rpc_hook_group")
             .rpc_hook(rpc_hook)
             .build()
@@ -2616,6 +2628,7 @@ mod tests {
     #[tokio::test]
     async fn lite_pull_use_tls_facade_updates_async_trace_dispatcher() {
         let dispatcher = Arc::new(AsyncTraceDispatcher::new(
+            test_runtime(),
             "lite_pull_tls_trace_group",
             Type::Consume,
             1,
@@ -2623,6 +2636,7 @@ mod tests {
             None,
         ));
         let consumer = DefaultLitePullConsumer::new(
+            test_runtime(),
             ClientConfig::default(),
             LitePullConsumerConfig {
                 consumer_group: CheetahString::from_static_str("lite_pull_tls_trace_group"),
@@ -2645,9 +2659,11 @@ mod tests {
 
     #[tokio::test]
     async fn trace_init_uses_configured_batch_num_like_java() {
+        let client_runtime = test_runtime();
         let mut client_config = ClientConfig::default();
         client_config.set_trace_msg_batch_num(6);
         let consumer = DefaultLitePullConsumer::new(
+            Arc::clone(&client_runtime),
             client_config,
             LitePullConsumerConfig {
                 consumer_group: CheetahString::from_static_str("lite_pull_trace_batch_group"),
@@ -2659,6 +2675,7 @@ mod tests {
             None,
         );
         let impl_ = Arc::new(DefaultLitePullConsumerImpl::new(
+            client_runtime,
             consumer.client_config_snapshot(),
             consumer.consumer_config_snapshot(),
         ));
@@ -2684,12 +2701,14 @@ mod tests {
 
     #[tokio::test]
     async fn trace_init_registers_custom_dispatcher_and_starts_with_client_config() {
+        let client_runtime = test_runtime();
         let dispatcher = Arc::new(CapturingTraceDispatcher::default());
         let mut client_config = ClientConfig::default();
         client_config.set_namesrv_addr(CheetahString::from_static_str("127.0.0.1:9876"));
         client_config.set_access_channel(AccessChannel::Cloud);
 
         let consumer = DefaultLitePullConsumer::new(
+            Arc::clone(&client_runtime),
             client_config,
             LitePullConsumerConfig {
                 consumer_group: CheetahString::from_static_str("lite_pull_trace_group"),
@@ -2701,6 +2720,7 @@ mod tests {
             None,
         );
         let impl_ = Arc::new(DefaultLitePullConsumerImpl::new(
+            client_runtime,
             consumer.client_config_snapshot(),
             consumer.consumer_config_snapshot(),
         ));

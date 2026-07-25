@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::ffi::OsString;
+use std::sync::Arc;
 
 use clap::CommandFactory;
 use clap::Parser;
@@ -20,6 +21,7 @@ use clap_complete::generate;
 use clap_complete::shells::Bash;
 use clap_complete::shells::Fish;
 use clap_complete::shells::Zsh;
+use rocketmq_admin_core::client_adapter::ClientRuntime;
 use rocketmq_admin_core::core::security::AdminCredentials;
 use rocketmq_error::CliErrorView;
 use rocketmq_error::RocketMQError;
@@ -52,7 +54,7 @@ impl RocketMQCli {
         Self::parse_from(normalize_java_compatible_args(std::env::args_os()))
     }
 
-    pub async fn handle(&self) -> i32 {
+    pub async fn handle(&self, client_runtime: Arc<ClientRuntime>) -> i32 {
         if let Some(shell) = &self.completion {
             let mut cmd = RocketMQCli::command();
             let bin_name = "rocketmq-admin-cli";
@@ -82,7 +84,7 @@ impl RocketMQCli {
                 Ok(credentials) => credentials,
                 Err(error) => return render_cli_error(&error),
             };
-            if let Err(e) = commands.execute(credentials).await {
+            if let Err(e) = commands.execute(credentials, client_runtime).await {
                 return render_cli_error(&e);
             }
             0
@@ -189,14 +191,20 @@ mod tests {
     async fn handle_returns_usage_exit_for_missing_command() {
         let cli = RocketMQCli::try_parse_from(["rocketmq-admin-cli"]).unwrap();
 
-        assert_eq!(cli.handle().await, CliExitCode::USAGE.as_i32());
+        assert_eq!(
+            cli.handle(crate::commands::test_client_runtime()).await,
+            CliExitCode::USAGE.as_i32()
+        );
     }
 
     #[tokio::test]
     async fn handle_returns_usage_exit_for_unsupported_completion_shell() {
         let cli = RocketMQCli::try_parse_from(["rocketmq-admin-cli", "--generate-completion", "powershell"]).unwrap();
 
-        assert_eq!(cli.handle().await, CliExitCode::USAGE.as_i32());
+        assert_eq!(
+            cli.handle(crate::commands::test_client_runtime()).await,
+            CliExitCode::USAGE.as_i32()
+        );
     }
 
     #[test]

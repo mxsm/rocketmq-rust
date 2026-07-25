@@ -51,10 +51,14 @@ impl CommandExecute for CheckRocksdbCqWriteProgressSubCommand {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
-        let result =
-            QueueService::check_rocksdb_cq_write_progress_by_request_with_credentials(self.request()?, credentials)
-                .await?;
+        let result = QueueService::check_rocksdb_cq_write_progress_by_request_with_credentials(
+            self.request()?,
+            credentials,
+            client_runtime.clone(),
+        )
+        .await?;
         print_check_rocksdb_cq_write_progress_result(&result);
         Ok(())
     }

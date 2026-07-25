@@ -84,9 +84,14 @@ impl CommandExecute for BrokerConsumeStatsSubCommand {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
-        let result =
-            BrokerService::query_broker_consume_stats_by_request_with_credentials(self.request()?, credentials).await?;
+        let result = BrokerService::query_broker_consume_stats_by_request_with_credentials(
+            self.request()?,
+            credentials,
+            client_runtime.clone(),
+        )
+        .await?;
         print_broker_consume_stats_result(&result);
         Ok(())
     }

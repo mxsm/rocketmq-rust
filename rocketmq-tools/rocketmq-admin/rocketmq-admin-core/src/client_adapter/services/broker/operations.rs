@@ -89,8 +89,9 @@ impl BrokerService {
     pub async fn delete_expired_commit_log_by_request_with_credentials(
         request: BrokerOptionalTarget,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<BrokerBooleanOperationResult> {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials)
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
         let result = admin
@@ -105,8 +106,9 @@ impl BrokerService {
     pub async fn clean_unused_topic_by_request_with_credentials(
         request: BrokerOptionalTarget,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<BrokerBooleanOperationResult> {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials)
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
         let result = admin
@@ -121,8 +123,9 @@ impl BrokerService {
     pub async fn reset_master_flush_offset_by_request_with_credentials(
         request: ResetMasterFlushOffsetRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<()> {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials)
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
         let result = admin
@@ -145,8 +148,9 @@ impl BrokerService {
     pub async fn switch_timer_engine_by_request_with_credentials(
         request: SwitchTimerEngineRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<BrokerOperationResult> {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials)
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
         let result = Self::switch_timer_engine_with_admin(&admin, &request).await;
@@ -181,8 +185,9 @@ impl BrokerService {
     pub async fn update_cold_data_flow_ctr_group_config_by_request_with_credentials(
         request: ColdDataFlowCtrGroupConfigUpdateRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<BrokerOperationResult> {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials)
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
         let result = Self::update_cold_data_flow_ctr_group_config_with_admin(&admin, &request).await;
@@ -219,8 +224,9 @@ impl BrokerService {
     pub async fn remove_cold_data_flow_ctr_group_config_by_request_with_credentials(
         request: ColdDataFlowCtrGroupConfigRemoveRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<BrokerOperationResult> {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials)
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
         let result = Self::remove_cold_data_flow_ctr_group_config_with_admin(&admin, &request).await;
@@ -255,8 +261,9 @@ impl BrokerService {
     pub async fn query_cold_data_flow_ctr_info_by_request_with_credentials(
         request: ColdDataFlowCtrInfoQueryRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<ColdDataFlowCtrInfoQueryResult> {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials)
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
         let result = Self::query_cold_data_flow_ctr_info_with_admin(&admin, &request).await;
@@ -328,8 +335,9 @@ impl BrokerService {
     pub async fn query_broker_epoch_by_request_with_credentials(
         request: BrokerEpochQueryRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<BrokerEpochQueryResult> {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials)
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
         let result = Self::query_broker_epoch_with_admin(&admin, &request).await;
@@ -370,8 +378,9 @@ impl BrokerService {
     pub async fn clean_expired_consume_queue_by_request_with_credentials(
         request: CleanExpiredConsumeQueueRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<CleanExpiredConsumeQueueReport> {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials)
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
         let result = Self::clean_expired_consume_queue_with_admin(&admin, &request).await;
@@ -460,8 +469,9 @@ impl BrokerService {
     pub async fn set_commit_log_read_ahead_by_request_with_credentials(
         request: CommitLogReadAheadRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<CommitLogReadAheadResult> {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials)
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
         let result = Self::set_commit_log_read_ahead_with_admin(&admin, &request).await;
@@ -508,8 +518,9 @@ impl BrokerService {
     pub async fn query_broker_consume_stats_by_request_with_credentials(
         request: BrokerConsumeStatsQueryRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<BrokerConsumeStatsResult> {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials)
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
         let result = Self::query_broker_consume_stats_with_admin(&admin, &request).await;
@@ -548,8 +559,9 @@ impl BrokerService {
     pub async fn query_broker_runtime_stats_by_request_with_credentials(
         request: BrokerRuntimeStatsQueryRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<BrokerRuntimeStatsResult> {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials)
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
         let result = Self::query_broker_runtime_stats_with_admin(&admin, &request).await;
@@ -673,8 +685,9 @@ impl BrokerService {
     pub async fn build_broker_config_update_plan_by_request_with_credentials(
         request: BrokerConfigUpdateRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<BrokerConfigUpdatePlanResult> {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials)
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
         let result = Self::build_broker_config_update_plan_with_admin(&mut admin, &request).await;
@@ -728,8 +741,9 @@ impl BrokerService {
         request: &BrokerConfigUpdateRequest,
         plan_result: &BrokerConfigUpdatePlanResult,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<BrokerConfigUpdateApplyResult> {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials)
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
         let result =
@@ -1323,7 +1337,9 @@ fn join_cheetah_strings(values: &[CheetahString]) -> String {
 fn admin_builder_with_credentials(
     builder: AdminBuilder,
     credentials: Option<crate::core::security::AdminCredentials>,
+    client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
 ) -> AdminBuilder {
+    let builder = builder.client_runtime(client_runtime);
     match credentials {
         Some(hook) => builder.credentials(hook),
         None => builder,

@@ -129,10 +129,15 @@ impl CommandExecute for CommitLogSetReadAheadSubCommand {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
         let request = self.request()?;
-        let result =
-            BrokerService::set_commit_log_read_ahead_by_request_with_credentials(request.clone(), credentials).await?;
+        let result = BrokerService::set_commit_log_read_ahead_by_request_with_credentials(
+            request.clone(),
+            credentials,
+            client_runtime.clone(),
+        )
+        .await?;
         Self::print_result(&request, result)
     }
 }

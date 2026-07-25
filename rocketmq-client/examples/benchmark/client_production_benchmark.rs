@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[path = "../support/mod.rs"]
+mod support;
+
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
@@ -25,6 +28,7 @@ use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
 use rocketmq_client_rust::producer::send_result::SendResult;
 use rocketmq_client_rust::producer::send_status::SendStatus;
 use rocketmq_client_rust::AclClientRPCHook;
+use rocketmq_client_rust::ClientRuntime;
 use rocketmq_client_rust::DefaultLitePullConsumer;
 use rocketmq_client_rust::SessionCredentials;
 use rocketmq_error::RocketMQError;
@@ -113,6 +117,8 @@ struct Stats {
 
 #[tokio::main]
 pub async fn main() -> RocketMQResult<()> {
+    let example_runtime = support::ExampleClientRuntime::new("client-production-benchmark");
+    let client_runtime = example_runtime.client_runtime();
     let config = Config::parse()?;
     let body = vec![b'a'; config.message_size];
 
@@ -132,7 +138,7 @@ pub async fn main() -> RocketMQResult<()> {
     let start = Instant::now();
     let (stats, elapsed) = match config.scenario {
         Scenario::Sync | Scenario::Async | Scenario::Batch => {
-            let mut producer = build_producer(&config)?;
+            let mut producer = build_producer(client_runtime.clone(), &config)?;
             producer.start().await?;
             let stats = match config.scenario {
                 Scenario::Sync => run_sync(&mut producer, &config, &body).await,
@@ -144,15 +150,17 @@ pub async fn main() -> RocketMQResult<()> {
             producer.shutdown().await;
             (stats?, elapsed)
         }
-        Scenario::LitePull => run_lite_pull(&config, &body).await?,
+        Scenario::LitePull => run_lite_pull(client_runtime, &config, &body).await?,
     };
 
     print_complete_summary(stats, elapsed, config.scenario.operation());
+    example_runtime.shutdown().await;
+
     Ok(())
 }
 
-fn build_producer(config: &Config) -> RocketMQResult<DefaultMQProducer> {
-    let mut builder = DefaultMQProducer::builder()
+fn build_producer(client_runtime: Arc<ClientRuntime>, config: &Config) -> RocketMQResult<DefaultMQProducer> {
+    let mut builder = DefaultMQProducer::builder(client_runtime.clone())
         .producer_group(config.producer_group.clone())
         .name_server_addr(config.namesrv_addr.clone())
         .send_msg_timeout(config.timeout_ms as u32)
@@ -171,8 +179,11 @@ fn build_producer(config: &Config) -> RocketMQResult<DefaultMQProducer> {
     Ok(builder.build())
 }
 
-fn build_lite_pull_consumer(config: &Config) -> RocketMQResult<DefaultLitePullConsumer> {
-    let mut builder = DefaultLitePullConsumer::builder()
+fn build_lite_pull_consumer(
+    client_runtime: Arc<ClientRuntime>,
+    config: &Config,
+) -> RocketMQResult<DefaultLitePullConsumer> {
+    let mut builder = DefaultLitePullConsumer::builder(client_runtime.clone())
         .consumer_group(unique_consumer_group())
         .name_server_addr(config.namesrv_addr.clone())
         .pull_batch_size(config.batch_size.min(i32::MAX as usize) as i32)
@@ -319,11 +330,15 @@ async fn run_batch(producer: &mut DefaultMQProducer, config: &Config, body: &[u8
     Ok(stats)
 }
 
-async fn run_lite_pull(config: &Config, body: &[u8]) -> RocketMQResult<(Stats, Duration)> {
+async fn run_lite_pull(
+    client_runtime: Arc<ClientRuntime>,
+    config: &Config,
+    body: &[u8],
+) -> RocketMQResult<(Stats, Duration)> {
     const TAG: &str = "RustLitePullBenchmark";
 
-    let mut producer = build_producer(config)?;
-    let consumer = build_lite_pull_consumer(config)?;
+    let mut producer = build_producer(client_runtime.clone(), config)?;
+    let consumer = build_lite_pull_consumer(client_runtime, config)?;
 
     producer.start().await?;
     consumer.set_sub_expression_for_assign(&config.topic, TAG).await?;

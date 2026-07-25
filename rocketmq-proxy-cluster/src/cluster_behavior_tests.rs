@@ -432,6 +432,7 @@ struct CapturingClientFactory {
 impl ClusterClientFactory for CapturingClientFactory {
     fn get_or_create(
         &self,
+        _client_runtime: &ClientRuntime,
         domain_id: u64,
         _client_config: RocketmqClientConfig,
         rpc_hook: Option<Arc<ClientRpcHook>>,
@@ -445,6 +446,7 @@ impl ClusterClientFactory for CapturingClientFactory {
 impl ClusterProducerFactory for ScriptedProducerFactory {
     fn create(
         &self,
+        _client_runtime: Arc<ClientRuntime>,
         _domain_id: u64,
         _config: &ClusterConfig,
         producer_group: &str,
@@ -821,6 +823,7 @@ async fn worker_passes_the_outbound_signer_hook_to_the_client_transport_factory(
     });
     let domain_id = 71_010;
     let state = ClusterWorkerState::with_test_factories(
+        test_client_runtime(),
         domain_id,
         Some(rpc_hook_from_outbound_signer(Arc::new(EmptySigner))),
         client_factory,

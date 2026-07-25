@@ -53,7 +53,23 @@ pub trait CommandExecute {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()>;
+}
+
+#[cfg(test)]
+pub(crate) fn test_client_runtime() -> std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime> {
+    static OWNER: std::sync::LazyLock<rocketmq_runtime::RuntimeOwner> = std::sync::LazyLock::new(|| {
+        rocketmq_runtime::RuntimeOwner::new(rocketmq_runtime::RuntimeConfig {
+            thread_name: "rocketmq-admin-cli-test".to_string(),
+            ..Default::default()
+        })
+        .expect("admin CLI test runtime should start")
+    });
+    rocketmq_admin_core::client_adapter::ClientRuntime::new(
+        OWNER.root_context().child("client"),
+        rocketmq_admin_core::client_adapter::ClientRuntimeConfig::default(),
+    )
 }
 
 #[derive(Debug, Parser, Clone)]
@@ -171,26 +187,27 @@ impl CommandExecute for Commands {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
         match self {
-            Commands::Auth(value) => value.execute(credentials).await,
-            Commands::Broker(value) => value.execute(credentials).await,
-            Commands::Cluster(value) => value.execute(credentials).await,
-            Commands::Connection(value) => value.execute(credentials).await,
-            Commands::Consumer(value) => value.execute(credentials).await,
-            Commands::Container(value) => value.execute(credentials).await,
-            Commands::Controller(value) => value.execute(credentials).await,
-            Commands::Export(value) => value.execute(credentials).await,
-            Commands::HA(value) => value.execute(credentials).await,
-            Commands::Lite(value) => value.execute(credentials).await,
-            Commands::Message(value) => value.execute(credentials).await,
-            Commands::NameServer(value) => value.execute(credentials).await,
-            Commands::Offset(value) => value.execute(credentials).await,
-            Commands::Producer(value) => value.execute(credentials).await,
-            Commands::Queue(value) => value.execute(credentials).await,
-            Commands::Stats(value) => value.execute(credentials).await,
-            Commands::Topic(value) => value.execute(credentials).await,
-            Commands::Show(value) => value.execute(credentials).await,
+            Commands::Auth(value) => value.execute(credentials, client_runtime.clone()).await,
+            Commands::Broker(value) => value.execute(credentials, client_runtime.clone()).await,
+            Commands::Cluster(value) => value.execute(credentials, client_runtime.clone()).await,
+            Commands::Connection(value) => value.execute(credentials, client_runtime.clone()).await,
+            Commands::Consumer(value) => value.execute(credentials, client_runtime.clone()).await,
+            Commands::Container(value) => value.execute(credentials, client_runtime.clone()).await,
+            Commands::Controller(value) => value.execute(credentials, client_runtime.clone()).await,
+            Commands::Export(value) => value.execute(credentials, client_runtime.clone()).await,
+            Commands::HA(value) => value.execute(credentials, client_runtime.clone()).await,
+            Commands::Lite(value) => value.execute(credentials, client_runtime.clone()).await,
+            Commands::Message(value) => value.execute(credentials, client_runtime.clone()).await,
+            Commands::NameServer(value) => value.execute(credentials, client_runtime.clone()).await,
+            Commands::Offset(value) => value.execute(credentials, client_runtime.clone()).await,
+            Commands::Producer(value) => value.execute(credentials, client_runtime.clone()).await,
+            Commands::Queue(value) => value.execute(credentials, client_runtime.clone()).await,
+            Commands::Stats(value) => value.execute(credentials, client_runtime.clone()).await,
+            Commands::Topic(value) => value.execute(credentials, client_runtime.clone()).await,
+            Commands::Show(value) => value.execute(credentials, client_runtime.clone()).await,
         }
     }
 }
@@ -214,7 +231,8 @@ pub struct ClassificationTablePrint;
 impl CommandExecute for ClassificationTablePrint {
     async fn execute(
         &self,
-        _rpc_hook: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        _credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        _client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
         let commands: Vec<Command> = vec![
             Command {

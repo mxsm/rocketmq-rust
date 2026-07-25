@@ -3,6 +3,8 @@ sidebar_position: 3
 title: 事务消息
 ---
 
+> Runtime 所有权：示例中的 `client_runtime` 是应用持有的 `Arc<ClientRuntime>`，它从 `RuntimeOwner` 的 child scope 创建，并在进程边界显式关闭。
+
 # 事务消息
 
 事务消息用于保证“本地业务状态”与“消息可见性”最终一致。
@@ -49,7 +51,7 @@ use rocketmq_error::RocketMQResult;
 
 #[tokio::main]
 async fn main() -> RocketMQResult<()> {
-    let mut producer = TransactionMQProducer::builder()
+    let mut producer = TransactionMQProducer::builder(client_runtime.clone())
         .producer_group("transaction_producer_group")
         .name_server_addr("localhost:9876")
         .topics(vec!["OrderEvents"])
@@ -130,10 +132,10 @@ check_local_transaction(message):
 
 ## 配置
 
-当前 `TransactionMQProducer::builder()` 暴露了事务回查线程池与请求队列相关参数：
+当前 `TransactionMQProducer::builder(client_runtime.clone())` 暴露了事务回查线程池与请求队列相关参数：
 
 ```rust
-let mut producer = TransactionMQProducer::builder()
+let mut producer = TransactionMQProducer::builder(client_runtime.clone())
     .producer_group("transaction_producer_group")
     .name_server_addr("localhost:9876")
     .topics(vec!["OrderEvents"])

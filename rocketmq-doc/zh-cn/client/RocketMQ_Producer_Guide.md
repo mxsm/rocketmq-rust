@@ -1,5 +1,7 @@
 # RocketMQ Producer 实现指南
 
+> Runtime 所有权：示例中的 `client_runtime` 是应用持有的 `Arc<ClientRuntime>`，它从 `RuntimeOwner` 的 child scope 创建，并在进程边界显式关闭。
+
 本文档解释了 RocketMQ Rust 版本的 `DefaultMQProducer` 和 `TransactionMQProducer` 的实现状态和使用方法。
 
 ## 目录
@@ -44,7 +46,7 @@
 // 使用示例
 use rocketmq_client_rust::producer::DefaultMQProducer;
 
-let mut producer = DefaultMQProducer::builder()
+let mut producer = DefaultMQProducer::builder(client_runtime.clone())
     .producer_group("my_producer_group")
     .namesrv_addr("localhost:9876")
     .build()
@@ -276,7 +278,7 @@ impl TransactionListener for MyTransactionListener {
 }
 
 // 2. 构建 TransactionMQProducer
-let mut producer = TransactionMQProducer::builder()
+let mut producer = TransactionMQProducer::builder(client_runtime.clone())
     .producer_group("my_transaction_producer_group")
     .namesrv_addr("localhost:9876")
     .transaction_listener(MyTransactionListener)

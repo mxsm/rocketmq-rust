@@ -119,6 +119,7 @@ impl CommandExecute for QueryMsgByUniqueKeySubCommand {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
         let start_time = self
             .start_time
@@ -152,7 +153,13 @@ impl CommandExecute for QueryMsgByUniqueKeySubCommand {
             end_time,
         )?;
 
-        match MessageService::query_message_by_unique_key_by_request_with_credentials(request, credentials).await? {
+        match MessageService::query_message_by_unique_key_by_request_with_credentials(
+            request,
+            credentials,
+            client_runtime.clone(),
+        )
+        .await?
+        {
             QueryMessageByUniqueKeyResult::Messages(messages) => {
                 for (index, msg) in messages.iter().enumerate() {
                     Self::show_message(msg, index)?;

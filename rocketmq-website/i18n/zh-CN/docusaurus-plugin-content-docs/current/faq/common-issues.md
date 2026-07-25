@@ -3,6 +3,8 @@ sidebar_position: 1
 title: 常见问题
 ---
 
+> Runtime 所有权：示例中的 `client_runtime` 是应用持有的 `Arc<ClientRuntime>`，它从 `RuntimeOwner` 的 child scope 创建，并在进程边界显式关闭。
+
 # 常见问题
 
 本页汇总 RocketMQ-Rust 使用过程中的高频问题与快速解决方案。
@@ -30,7 +32,7 @@ title: 常见问题
     ```rust
     use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
 
-    let producer = DefaultMQProducer::builder()
+    let producer = DefaultMQProducer::builder(client_runtime.clone())
         .producer_group("check_group")
         .name_server_addr("localhost:9876")
         .build();
