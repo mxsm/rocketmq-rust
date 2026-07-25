@@ -349,8 +349,9 @@ impl OffsetService {
     pub async fn clone_group_offset_by_request_with_credentials(
         request: CloneGroupOffsetRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<()> {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials)
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
         let result = admin
@@ -369,8 +370,9 @@ impl OffsetService {
     pub async fn query_consumer_status_by_request_with_credentials(
         request: ConsumerStatusQueryRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<ConsumerStatusResult> {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials)
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
         let result = Self::query_consumer_status_with_admin(&admin, &request).await;
@@ -413,8 +415,9 @@ impl OffsetService {
     pub async fn skip_accumulated_message_by_request_with_credentials(
         request: SkipAccumulatedMessageRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<SkipAccumulatedMessageResult> {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials)
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
         let result = Self::skip_accumulated_message_with_admin(&mut admin, &request).await;
@@ -463,8 +466,9 @@ impl OffsetService {
     pub async fn reset_offset_by_time_by_request_with_credentials(
         request: ResetOffsetByTimeRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<ResetOffsetByTimeResult> {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials)
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
         let result = Self::reset_offset_by_time_with_admin(&mut admin, &request).await;
@@ -509,8 +513,9 @@ impl OffsetService {
     pub async fn reset_offset_by_time_old_by_request_with_credentials(
         request: ResetOffsetByTimeOldRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<Vec<RollbackStats>> {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials)
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
         let result = Self::reset_offset_by_time_old_with_admin(&admin, &request).await;
@@ -537,7 +542,9 @@ impl OffsetService {
 fn admin_builder_with_credentials(
     builder: AdminBuilder,
     credentials: Option<crate::core::security::AdminCredentials>,
+    client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
 ) -> AdminBuilder {
+    let builder = builder.client_runtime(client_runtime);
     match credentials {
         Some(hook) => builder.credentials(hook),
         None => builder,

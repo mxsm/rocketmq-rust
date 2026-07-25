@@ -44,7 +44,8 @@ impl GetNamesrvConfigSubCommand {
 impl CommandExecute for GetNamesrvConfigSubCommand {
     async fn execute(
         &self,
-        _rpc_hook: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        _credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        _client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
         let request = match self.request() {
             Ok(request) => request,

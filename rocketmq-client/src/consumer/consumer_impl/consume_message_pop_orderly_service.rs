@@ -57,12 +57,15 @@ use crate::consumer::listener::consume_orderly_context::ConsumeOrderlyContext;
 use crate::consumer::listener::consume_orderly_status::ConsumeOrderlyStatus;
 use crate::consumer::listener::message_listener_orderly::ArcMessageListenerOrderly;
 use crate::consumer::message_queue_lock::MessageQueueLock;
-use crate::runtime::schedule_client_fixed_delay_controlled_task;
-use crate::runtime::spawn_client_blocking_io;
-use crate::runtime::spawn_client_task;
+use crate::runtime::schedule_client_fixed_delay_controlled_task_with_context;
+use crate::runtime::spawn_client_blocking_io_with_context;
+use crate::runtime::spawn_client_task_with_context;
+use crate::runtime::ClientRuntime;
 use crate::runtime::ClientScheduledTaskHandle;
+use rocketmq_runtime::ChildServiceContext;
 
 pub struct ConsumeMessagePopOrderlyService {
+    service_context: ChildServiceContext,
     pub(crate) default_mqpush_consumer_impl: Option<Weak<DefaultMQPushConsumerImpl>>,
     pub(crate) client_config: Arc<ClientConfig>,
     pub(crate) consumer_config: Arc<ConsumerConfig>,
@@ -127,6 +130,7 @@ pub struct PopOrderlyLockRefreshLifecycleProbe {
 }
 
 fn spawn_tracked_pop_orderly_task<F>(
+    service_context: &ChildServiceContext,
     thread_name: &'static str,
     tracker: &TaskTracker,
     force_stop_token: &CancellationToken,
@@ -145,7 +149,7 @@ fn spawn_tracked_pop_orderly_task<F>(
         }
     });
 
-    if let Err(error) = spawn_client_task(thread_name, tracked_task) {
+    if let Err(error) = spawn_client_task_with_context(service_context, thread_name, tracked_task) {
         warn!("Failed to spawn {} background task: {}", thread_name, error);
         warn!("Failed to track {} background task", thread_name);
     }
@@ -198,6 +202,7 @@ fn record_orderly_process_event<E>(
 
 impl ConsumeMessagePopOrderlyService {
     pub fn new(
+        service_context: ChildServiceContext,
         client_config: Arc<ClientConfig>,
         consumer_config: Arc<ConsumerConfig>,
         consumer_group: CheetahString,
@@ -206,6 +211,7 @@ impl ConsumeMessagePopOrderlyService {
     ) -> Self {
         let consume_thread = consumer_config.consume_thread_min;
         Self {
+            service_context,
             default_mqpush_consumer_impl,
             client_config,
             consumer_config,
@@ -256,7 +262,8 @@ impl ConsumeMessagePopOrderlyService {
             None => return,
         };
 
-        let handle = schedule_client_fixed_delay_controlled_task(
+        let handle = schedule_client_fixed_delay_controlled_task_with_context(
+            &self.service_context,
             "rocketmq-client-pop-orderly-lock-refresh",
             initial_delay,
             period,
@@ -342,6 +349,7 @@ impl ConsumeMessagePopOrderlyService {
         let concurrency_limiter = self.concurrency_limiter.clone();
 
         spawn_tracked_pop_orderly_task(
+            &self.service_context,
             "rocketmq-client-pop-orderly-consume",
             &self.pop_orderly_task_tracker,
             &self.force_stop_token,
@@ -378,6 +386,7 @@ impl ConsumeMessagePopOrderlyService {
         let consume_request_set = self.consume_request_set.clone();
 
         spawn_tracked_pop_orderly_task(
+            &self.service_context,
             "rocketmq-client-pop-orderly-consume-delay",
             &self.pop_orderly_task_tracker,
             &self.force_stop_token,
@@ -695,21 +704,25 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopOrderlyService {
         let listener = self.message_listener.clone();
         let msgs_cloned: Vec<MessageExt> = msgs.iter().map(|m| m.as_ref().clone()).collect();
         let group_for_span = self.consumer_group.clone();
-        let blocking_result = spawn_client_blocking_io("client.pop_orderly.consume_direct", move || {
-            let msg_refs: Vec<&MessageExt> = msgs_cloned.iter().collect();
-            let mut ctx = ConsumeOrderlyContext::new(mq);
-            let process_span = crate::consumer::consumer_impl::observability::consumer_process_span(
-                msg_refs.first().copied(),
-                msg_refs.len(),
-                group_for_span.as_str(),
-                ctx.get_message_queue(),
-                "pop_orderly_direct",
-            );
-            let _entered = process_span.enter();
-            let result = listener.consume_message(&msg_refs, &mut ctx);
-            record_orderly_process_event(&process_span, &result, msg_refs.len());
-            (result, ctx)
-        })
+        let blocking_result = spawn_client_blocking_io_with_context(
+            &self.service_context,
+            "client.pop_orderly.consume_direct",
+            move || {
+                let msg_refs: Vec<&MessageExt> = msgs_cloned.iter().collect();
+                let mut ctx = ConsumeOrderlyContext::new(mq);
+                let process_span = crate::consumer::consumer_impl::observability::consumer_process_span(
+                    msg_refs.first().copied(),
+                    msg_refs.len(),
+                    group_for_span.as_str(),
+                    ctx.get_message_queue(),
+                    "pop_orderly_direct",
+                );
+                let _entered = process_span.enter();
+                let result = listener.consume_message(&msg_refs, &mut ctx);
+                record_orderly_process_event(&process_span, &result, msg_refs.len());
+                (result, ctx)
+            },
+        )
         .await;
 
         let consume_rt = begin_timestamp.elapsed().as_millis() as u64;
@@ -857,13 +870,17 @@ impl ConsumeRequest {
         let mq = self.message_queue.clone();
         let mq_for_fallback = self.message_queue.clone();
         let process_span_for_blocking = process_span.clone();
-        let blocking_result = spawn_client_blocking_io("client.pop_orderly.consume", move || {
-            let _entered = process_span_for_blocking.enter();
-            let msg_refs: Vec<&MessageExt> = msgs_cloned.iter().collect();
-            let mut ctx = ConsumeOrderlyContext::new(mq);
-            let result = listener.consume_message(&msg_refs, &mut ctx);
-            (result, ctx)
-        })
+        let blocking_result = spawn_client_blocking_io_with_context(
+            &consume_message_pop_orderly_service.service_context,
+            "client.pop_orderly.consume",
+            move || {
+                let _entered = process_span_for_blocking.enter();
+                let msg_refs: Vec<&MessageExt> = msgs_cloned.iter().collect();
+                let mut ctx = ConsumeOrderlyContext::new(mq);
+                let result = listener.consume_message(&msg_refs, &mut ctx);
+                (result, ctx)
+            },
+        )
         .await;
         let (status, context) = match blocking_result {
             Ok(pair) => pair,
@@ -936,8 +953,11 @@ impl Hash for ConsumeRequest {
 }
 
 #[doc(hidden)]
-pub async fn run_pop_orderly_lock_refresh_lifecycle_probe() -> PopOrderlyLockRefreshLifecycleProbe {
+pub async fn run_pop_orderly_lock_refresh_lifecycle_probe(
+    client_runtime: Arc<ClientRuntime>,
+) -> PopOrderlyLockRefreshLifecycleProbe {
     let default_impl = Arc::new(DefaultMQPushConsumerImpl::new(
+        Arc::clone(&client_runtime),
         ClientConfig::default(),
         ConsumerConfig {
             message_model: MessageModel::Clustering,
@@ -949,6 +969,7 @@ pub async fn run_pop_orderly_lock_refresh_lifecycle_probe() -> PopOrderlyLockRef
     let listener: ArcMessageListenerOrderly =
         Arc::new(|_msgs: &[&MessageExt], _context: &mut ConsumeOrderlyContext| Ok(ConsumeOrderlyStatus::Success));
     let service = Arc::new(ConsumeMessagePopOrderlyService::new(
+        client_runtime.child("pop-orderly-probe"),
         Arc::new(ClientConfig::default()),
         Arc::new(ConsumerConfig {
             message_model: MessageModel::Clustering,
@@ -1031,8 +1052,13 @@ mod tests {
         Arc::new(|_msgs: &[&MessageExt], _context: &mut ConsumeOrderlyContext| Ok(ConsumeOrderlyStatus::Success))
     }
 
+    fn test_context() -> ChildServiceContext {
+        crate::runtime::test_service_context("consume-message-pop-orderly-test")
+    }
+
     fn new_service(default_impl: Option<Arc<DefaultMQPushConsumerImpl>>) -> ConsumeMessagePopOrderlyService {
         ConsumeMessagePopOrderlyService::new(
+            test_context(),
             Arc::new(ClientConfig::default()),
             Arc::new(ConsumerConfig::default()),
             CheetahString::from_static_str("group"),
@@ -1043,6 +1069,7 @@ mod tests {
 
     fn new_service_with_config(consumer_config: ConsumerConfig) -> ConsumeMessagePopOrderlyService {
         ConsumeMessagePopOrderlyService::new(
+            test_context(),
             Arc::new(ClientConfig::default()),
             Arc::new(consumer_config),
             CheetahString::from_static_str("group"),
@@ -1053,6 +1080,7 @@ mod tests {
 
     fn new_service_with_client_config(client_config: ClientConfig) -> ConsumeMessagePopOrderlyService {
         ConsumeMessagePopOrderlyService::new(
+            test_context(),
             Arc::new(client_config),
             Arc::new(ConsumerConfig::default()),
             CheetahString::from_static_str("group"),
@@ -1064,6 +1092,7 @@ mod tests {
     fn new_default_impl() -> Arc<DefaultMQPushConsumerImpl> {
         let consumer_config = ConsumerConfig::default();
         let consumer = Arc::new(DefaultMQPushConsumerImpl::new(
+            crate::runtime::test_client_runtime("pop-orderly-consumer-impl-test"),
             ClientConfig::default(),
             consumer_config,
             None,
@@ -1116,6 +1145,7 @@ mod tests {
         let completed_in_task = completed.clone();
 
         spawn_tracked_pop_orderly_task(
+            &test_context(),
             "rocketmq-client-pop-orderly-tracker-test",
             &tracker,
             &token,
@@ -1143,6 +1173,7 @@ mod tests {
         let dropped_in_task = dropped.clone();
 
         spawn_tracked_pop_orderly_task(
+            &test_context(),
             "rocketmq-client-pop-orderly-tracker-test",
             &tracker,
             &token,
@@ -1170,7 +1201,9 @@ mod tests {
 
     #[tokio::test]
     async fn pop_orderly_lock_refresh_lifecycle_probe_reports_self_stop() {
-        let probe = run_pop_orderly_lock_refresh_lifecycle_probe().await;
+        let probe =
+            run_pop_orderly_lock_refresh_lifecycle_probe(crate::runtime::test_client_runtime("pop-orderly-probe"))
+                .await;
 
         assert!(probe.healthy, "{probe:?}");
         assert_eq!(probe.task_count_after_self_stop, 0, "{probe:?}");

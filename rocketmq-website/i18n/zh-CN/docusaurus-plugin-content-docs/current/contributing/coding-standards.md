@@ -3,6 +3,8 @@ sidebar_position: 3
 title: 编码标准
 ---
 
+> Runtime 所有权：示例中的 `client_runtime` 是应用持有的 `Arc<ClientRuntime>`，它从 `RuntimeOwner` 的 child scope 创建，并在进程边界显式关闭。
+
 # 编码标准
 
 欢迎来到 RocketMQ-Rust 的编码标准！📝
@@ -179,7 +181,7 @@ pub async fn send_good(&self, msg: Message) -> Result<SendResult> {
 /// use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// let mut producer = DefaultMQProducer::builder()
+/// let mut producer = DefaultMQProducer::builder(client_runtime.clone())
 ///     .producer_group("example_group")
 ///     .name_server_addr("localhost:9876")
 ///     .build();
@@ -215,7 +217,7 @@ pub struct Producer { }
 //! use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! let mut producer = DefaultMQProducer::builder()
+//! let mut producer = DefaultMQProducer::builder(client_runtime.clone())
 //!     .producer_group("example_group")
 //!     .name_server_addr("localhost:9876")
 //!     .build();
@@ -262,13 +264,13 @@ mod tests {
 // tests/integration_test.rs
 #[tokio::test]
 async fn test_producer_consumer() {
-    let mut producer = DefaultMQProducer::builder()
+    let mut producer = DefaultMQProducer::builder(client_runtime.clone())
         .producer_group("example_group")
         .name_server_addr("localhost:9876")
         .build();
     producer.start().await.unwrap();
 
-    let mut consumer = DefaultMQPushConsumer::builder()
+    let mut consumer = DefaultMQPushConsumer::builder(client_runtime.clone())
         .consumer_group("example_group")
         .name_server_addr("localhost:9876")
         .build();

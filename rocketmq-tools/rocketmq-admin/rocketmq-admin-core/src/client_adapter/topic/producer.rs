@@ -12,6 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::Arc;
+
+use rocketmq_client_rust::ClientRuntime;
+
 use super::*;
 
 pub(super) fn is_consumer_not_online_error(error: &RocketMQError) -> bool {
@@ -43,12 +47,13 @@ pub(super) fn build_send_message(request: &TopicSendRequest) -> Message {
 }
 
 pub(super) async fn send_normal_message(
+    client_runtime: Arc<ClientRuntime>,
     mut client_config: rocketmq_client_rust::base::client_config::ClientConfig,
     producer_group: String,
     request: &TopicSendRequest,
 ) -> Result<TopicSendResult, AdminError> {
     client_config.set_instance_name(producer_group.clone().into());
-    let mut producer = DefaultMQProducer::builder()
+    let mut producer = DefaultMQProducer::builder(client_runtime)
         .producer_group(producer_group)
         .client_config(client_config)
         .build();
@@ -72,12 +77,13 @@ pub(super) async fn send_normal_message(
 }
 
 pub(super) async fn send_transaction_message(
+    client_runtime: Arc<ClientRuntime>,
     mut client_config: rocketmq_client_rust::base::client_config::ClientConfig,
     producer_group: String,
     request: &TopicSendRequest,
 ) -> Result<TopicSendResult, AdminError> {
     client_config.set_instance_name(producer_group.clone().into());
-    let mut producer = TransactionMQProducer::builder()
+    let mut producer = TransactionMQProducer::builder(client_runtime)
         .producer_group(producer_group)
         .client_config(client_config)
         .transaction_listener(CommitTransactionListener)

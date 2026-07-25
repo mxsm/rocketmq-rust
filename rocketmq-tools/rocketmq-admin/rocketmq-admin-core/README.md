@@ -1,5 +1,7 @@
 # rocketmq-admin-core
 
+> Runtime ownership: `client_runtime` in the examples is an application-owned `Arc<ClientRuntime>` created from a `RuntimeOwner` child scope and shut down at the process boundary.
+
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](../../../LICENSE-APACHE)
 
 `rocketmq-admin-core` is the presentation-independent administration boundary
@@ -58,12 +60,12 @@ dropping a session never starts detached cleanup work.
 
 ```rust
 use rocketmq_admin_core::core::AdminResult;
-use rocketmq_admin_core::core::admin::AdminBuilder;
+use rocketmq_admin_core::client_adapter::AdminBuilder;
 use rocketmq_admin_core::core::topic::ListTopicsRequest;
 use rocketmq_admin_core::core::topic::TopicAdmin;
 
 async fn list_topics() -> AdminResult<()> {
-    let mut session = AdminBuilder::new()
+    let mut session = AdminBuilder::new(client_runtime.clone())
         .namesrv_addr("127.0.0.1:9876")
         .instance_name("admin-core-example")
         .build_and_start()

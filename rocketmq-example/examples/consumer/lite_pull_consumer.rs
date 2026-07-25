@@ -30,12 +30,18 @@ pub const TOPIC: &str = "LitePullConsumerTestTopic";
 pub const TAG_EXPRESSION: &str = "LitePullTag";
 pub const POLL_TIMEOUT_MS: u64 = 1000;
 
-#[tokio::main]
-pub async fn main() -> RocketMQResult<()> {
+#[path = "../support/mod.rs"]
+mod support;
+
+pub fn main() -> RocketMQResult<()> {
+    support::run(run)
+}
+
+async fn run(client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>) -> RocketMQResult<()> {
     let telemetry_guard =
         rocketmq_observability::install_global(&rocketmq_observability::TelemetryBootstrapConfig::default())
             .expect("telemetry logging bootstrap should initialize");
-    let consumer = DefaultLitePullConsumer::builder()
+    let consumer = DefaultLitePullConsumer::builder(client_runtime.clone())
         .consumer_group(CONSUMER_GROUP)
         .name_server_addr(DEFAULT_NAMESRVADDR)
         .message_model(MessageModel::Clustering)

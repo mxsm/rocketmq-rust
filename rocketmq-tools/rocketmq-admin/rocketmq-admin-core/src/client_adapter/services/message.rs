@@ -83,7 +83,9 @@ fn builder_with_namesrv(namesrv_addr: Option<&str>) -> AdminBuilder {
 fn admin_builder_with_credentials(
     builder: AdminBuilder,
     credentials: Option<crate::core::security::AdminCredentials>,
+    client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
 ) -> AdminBuilder {
+    let builder = builder.client_runtime(client_runtime);
     match credentials {
         Some(hook) => builder.credentials(hook),
         None => builder,
@@ -125,15 +127,18 @@ fn deal_time_to_hour_stamps(timestamp: i64) -> i64 {
 
 fn build_consume_admin(
     credentials: Option<crate::core::security::AdminCredentials>,
+    client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     consumer_group: Option<&CheetahString>,
     namesrv_addr: Option<&str>,
 ) -> DefaultMQAdminExt {
     let rpc_hook = credentials.as_ref().map(rpc_hook_from_credentials);
     let mut admin = match (rpc_hook, consumer_group) {
-        (Some(hook), Some(group)) => DefaultMQAdminExt::with_admin_ext_group_and_rpc_hook(group.clone(), hook),
-        (Some(hook), None) => DefaultMQAdminExt::with_rpc_hook(hook),
-        (None, Some(group)) => DefaultMQAdminExt::with_admin_ext_group(group.clone()),
-        (None, None) => DefaultMQAdminExt::new(),
+        (Some(hook), Some(group)) => {
+            DefaultMQAdminExt::with_admin_ext_group_and_rpc_hook(client_runtime, group.clone(), hook)
+        }
+        (Some(hook), None) => DefaultMQAdminExt::with_rpc_hook(client_runtime, hook),
+        (None, Some(group)) => DefaultMQAdminExt::with_admin_ext_group(client_runtime, group.clone()),
+        (None, None) => DefaultMQAdminExt::new(client_runtime),
     };
     if let Some(addr) = namesrv_addr.map(str::trim).filter(|addr| !addr.is_empty()) {
         admin.set_namesrv_addr(addr);
@@ -1112,8 +1117,9 @@ impl MessageService {
     pub async fn query_message_by_key_by_request_with_credentials(
         request: QueryMessageByKeyRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<QueryMessageByKeyResult> {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials)
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
         let result = Self::query_message_by_key_with_admin(&admin, &request).await;
@@ -1173,8 +1179,9 @@ impl MessageService {
     pub async fn query_message_by_id_by_request_with_credentials(
         request: QueryMessageByIdRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<QueryMessageByIdResult> {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials)
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
         let result = Self::query_message_by_id_with_admin(&admin, &request).await;
@@ -1260,8 +1267,9 @@ impl MessageService {
     pub async fn query_message_by_offset_by_request_with_credentials(
         request: QueryMessageByOffsetRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<QueryMessageByOffsetResult> {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials)
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
         let result = Self::query_message_by_offset_with_admin(&admin, &request).await;
@@ -1305,8 +1313,9 @@ impl MessageService {
     pub async fn query_message_by_unique_key_by_request_with_credentials(
         request: QueryMessageByUniqueKeyRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<QueryMessageByUniqueKeyResult> {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials)
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
         let result = Self::query_message_by_unique_key_with_admin(&admin, &request).await;
@@ -1369,8 +1378,9 @@ impl MessageService {
     pub async fn direct_consume_message_by_request_with_credentials(
         request: DirectConsumeMessageRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<DirectConsumeMessageResult> {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials)
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
         let result = Self::direct_consume_message_with_admin(&admin, &request).await;
@@ -1433,8 +1443,9 @@ impl MessageService {
     pub async fn message_track_by_request_with_credentials(
         request: MessageTrackRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<MessageTrackResult> {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials)
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
         let result = Self::message_track_with_admin(&admin, &request).await;
@@ -1497,8 +1508,9 @@ impl MessageService {
     pub async fn query_message_trace_by_id_by_request_with_credentials(
         request: QueryMessageTraceByIdRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<Vec<MessageTraceView>> {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials)
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
         let result = Self::query_message_trace_by_id_with_admin(&admin, &request).await;
@@ -1580,12 +1592,13 @@ impl MessageService {
     pub async fn print_messages_by_request_with_credentials<F>(
         request: PrintMessagesRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
         sink: F,
     ) -> RocketMQResult<()>
     where
         F: FnMut(MessagePullEvent) -> RocketMQResult<()>,
     {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials)
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
         let result = Self::print_messages_with_admin(&admin, &request, sink).await;
@@ -1712,12 +1725,13 @@ impl MessageService {
     pub async fn print_messages_by_queue_by_request_with_credentials<F>(
         request: PrintMessagesByQueueRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
         sink: F,
     ) -> RocketMQResult<()>
     where
         F: FnMut(MessagePullEvent) -> RocketMQResult<()>,
     {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials)
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
         let result = Self::print_messages_by_queue_with_admin(&admin, &request, sink).await;
@@ -1837,12 +1851,18 @@ impl MessageService {
     pub async fn consume_messages_by_request_with_credentials<F>(
         request: ConsumeMessagesRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
         sink: F,
     ) -> RocketMQResult<()>
     where
         F: FnMut(MessagePullEvent) -> RocketMQResult<()>,
     {
-        let mut client = build_consume_admin(credentials, request.consumer_group.as_ref(), request.namesrv_addr());
+        let mut client = build_consume_admin(
+            credentials,
+            client_runtime,
+            request.consumer_group.as_ref(),
+            request.namesrv_addr(),
+        );
         client.start().await?;
         let mut admin = ServiceAdminSession::from_started(client);
         let result = Self::consume_messages_with_admin(&admin, &request, sink).await;

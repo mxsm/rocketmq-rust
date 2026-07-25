@@ -154,6 +154,7 @@ impl CommandExecute for QueryMsgTraceByIdSubCommand {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
         let request = QueryMessageTraceByIdRequest::try_new(
             self.msg_id.clone(),
@@ -164,8 +165,12 @@ impl CommandExecute for QueryMsgTraceByIdSubCommand {
         )?
         .with_optional_namesrv_addr(self.common_args.namesrv_addr.clone());
 
-        let trace_views =
-            MessageService::query_message_trace_by_id_by_request_with_credentials(request, credentials).await?;
+        let trace_views = MessageService::query_message_trace_by_id_by_request_with_credentials(
+            request,
+            credentials,
+            client_runtime.clone(),
+        )
+        .await?;
         Self::print_message_trace(trace_views);
         Ok(())
     }

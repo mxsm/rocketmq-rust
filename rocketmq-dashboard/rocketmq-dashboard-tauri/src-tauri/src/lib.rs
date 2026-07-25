@@ -24,7 +24,11 @@ mod producer;
 mod proxy;
 mod topic;
 
+use rocketmq_admin_core::client_adapter::ClientRuntime;
+use rocketmq_admin_core::client_adapter::ClientRuntimeConfig;
 use rocketmq_dashboard_common::NameServerConfigStore;
+use rocketmq_runtime::RuntimeConfig;
+use rocketmq_runtime::RuntimeOwner;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -53,6 +57,19 @@ impl DashboardAdminLifecycle {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let client_runtime_owner = match RuntimeOwner::new(RuntimeConfig::server_default("rocketmq-dashboard-tauri-client"))
+    {
+        Ok(owner) => owner,
+        Err(error) => {
+            eprintln!("Failed to create dashboard client runtime: {error}");
+            return;
+        }
+    };
+    let client_runtime = ClientRuntime::new(
+        client_runtime_owner.root_context().child("rocketmq-admin-client"),
+        ClientRuntimeConfig::default(),
+    );
+    let setup_client_runtime = client_runtime.clone();
     let admin_lifecycle = Arc::new(OnceLock::new());
     let setup_lifecycle = admin_lifecycle.clone();
     let app = tauri::Builder::default()
@@ -93,6 +110,7 @@ pub fn run() {
             let nameserver_store = nameserver::SqliteNameServerStore::new(nameserver_db.clone());
             let nameserver_runtime = Arc::new(nameserver::NameServerRuntimeState::new(
                 nameserver_store.load_snapshot()?,
+                setup_client_runtime.clone(),
             ));
             let nameserver_manager = nameserver::NameServerManager::new(nameserver_db, nameserver_runtime.clone())?;
             let cluster_manager = cluster::ClusterManager::new(nameserver_runtime.clone());
@@ -207,6 +225,11 @@ pub fn run() {
                     ADMIN_SHUTDOWN_TIMEOUT.as_secs()
                 );
             }
+        }
+        let client_report = client_runtime_owner.block_on(client_runtime.shutdown());
+        client_report.log_if_unhealthy();
+        if let Err(error) = client_runtime_owner.shutdown_runtime_blocking() {
+            log::error!("Failed to shut down dashboard client runtime: {error}");
         }
         std::process::exit(exit_code);
     }

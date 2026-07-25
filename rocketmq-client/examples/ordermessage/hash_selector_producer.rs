@@ -18,6 +18,9 @@
 //! with the same key (e.g., order ID) are always sent to the same queue, maintaining
 //! ordering guarantees.
 
+#[path = "../support/mod.rs"]
+mod support;
+
 use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
 use rocketmq_client_rust::producer::message_queue_selector::MessageQueueSelector;
 use rocketmq_client_rust::producer::queue_selector::SelectMessageQueueByHash;
@@ -25,7 +28,9 @@ use rocketmq_model::common::message::message_single::Message;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut producer = DefaultMQProducer::builder()
+    let example_runtime = support::ExampleClientRuntime::new("hash-selector-producer");
+    let client_runtime = example_runtime.client_runtime();
+    let mut producer = DefaultMQProducer::builder(client_runtime.clone())
         .producer_group("order_producer_group")
         .name_server_addr("127.0.0.1:9876")
         .build();
@@ -62,6 +67,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     producer.shutdown().await;
     println!("Producer shutdown");
+
+    example_runtime.shutdown().await;
 
     Ok(())
 }

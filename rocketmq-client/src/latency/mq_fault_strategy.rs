@@ -18,6 +18,7 @@ use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use rocketmq_model::common::message::message_queue::MessageQueue;
+use rocketmq_runtime::ChildServiceContext;
 
 use crate::base::client_config::ClientConfig;
 use crate::latency::latency_fault_tolerance::LatencyFaultTolerance;
@@ -42,8 +43,8 @@ impl MQFaultStrategy {
     /// Latency penalty applied when a broker is isolated (10 seconds).
     const ISOLATION_LATENCY_MS: u64 = 10_000;
 
-    pub fn new(client_config: &ClientConfig) -> Self {
-        let tolerance_impl = LatencyFaultToleranceImpl::new();
+    pub fn new(service_context: ChildServiceContext, client_config: &ClientConfig) -> Self {
+        let tolerance_impl = LatencyFaultToleranceImpl::new(service_context);
         tolerance_impl.set_detect_interval(client_config.detect_interval);
         tolerance_impl.set_detect_timeout(client_config.detect_timeout);
         tolerance_impl.set_start_detector_enable(client_config.start_detector_enable);
@@ -283,7 +284,10 @@ mod tests {
         client_config.set_detect_timeout(321);
         client_config.set_start_detector_enable(true);
 
-        let strategy = MQFaultStrategy::new(&client_config);
+        let strategy = MQFaultStrategy::new(
+            crate::runtime::test_service_context("mq-fault-strategy-test"),
+            &client_config,
+        );
         let (detect_interval, detect_timeout) = strategy.latency_fault_tolerance.detector_config_for_test();
 
         assert_eq!(detect_interval, 12_345);
@@ -294,7 +298,10 @@ mod tests {
 
     #[test]
     fn cloned_strategy_shares_runtime_switches_and_snapshots_thresholds() {
-        let mut strategy = MQFaultStrategy::new(&ClientConfig::default());
+        let mut strategy = MQFaultStrategy::new(
+            crate::runtime::test_service_context("mq-fault-strategy-clone-test"),
+            &ClientConfig::default(),
+        );
         strategy.set_latency_max(vec![10, 20, 30]);
         strategy.set_not_available_duration(vec![0, 100, 200]);
         strategy.set_send_latency_fault_enable(true);

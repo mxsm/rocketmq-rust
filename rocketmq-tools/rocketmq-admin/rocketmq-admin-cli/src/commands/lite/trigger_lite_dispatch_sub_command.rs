@@ -39,9 +39,14 @@ impl CommandExecute for TriggerLiteDispatchSubCommand {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
-        let result =
-            LiteService::trigger_lite_dispatch_by_request_with_credentials(self.request()?, credentials).await?;
+        let result = LiteService::trigger_lite_dispatch_by_request_with_credentials(
+            self.request()?,
+            credentials,
+            client_runtime.clone(),
+        )
+        .await?;
         Self::print_result(&result);
         Ok(())
     }

@@ -132,6 +132,7 @@ mod tests {
     #[test]
     fn weak_registry_entry_does_not_keep_producer_root_alive() {
         let producer = Arc::new(DefaultMQProducerImpl::new(
+            crate::runtime::test_client_runtime("mq-producer-inner-test"),
             ClientConfig::default(),
             ProducerConfig::default(),
             None,
@@ -148,6 +149,7 @@ mod tests {
     #[test]
     fn weak_registry_entries_preserve_root_identity() {
         let producer = Arc::new(DefaultMQProducerImpl::new(
+            crate::runtime::test_client_runtime("mq-producer-inner-test"),
             ClientConfig::default(),
             ProducerConfig::default(),
             None,
@@ -155,6 +157,7 @@ mod tests {
         let same = MQProducerInnerImpl::new(Arc::downgrade(&producer));
         let same_clone = same.clone();
         let other_producer = Arc::new(DefaultMQProducerImpl::new(
+            crate::runtime::test_client_runtime("mq-producer-inner-test"),
             ClientConfig::default(),
             ProducerConfig::default(),
             None,

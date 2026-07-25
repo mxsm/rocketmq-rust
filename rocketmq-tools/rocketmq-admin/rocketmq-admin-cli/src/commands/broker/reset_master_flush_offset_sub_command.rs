@@ -38,9 +38,15 @@ impl CommandExecute for ResetMasterFlushOffsetSubCommand {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
         let request = self.request()?;
-        BrokerService::reset_master_flush_offset_by_request_with_credentials(request.clone(), credentials).await?;
+        BrokerService::reset_master_flush_offset_by_request_with_credentials(
+            request.clone(),
+            credentials,
+            client_runtime.clone(),
+        )
+        .await?;
         println!("reset master flush offset to {} success", request.master_flush_offset());
         Ok(())
     }

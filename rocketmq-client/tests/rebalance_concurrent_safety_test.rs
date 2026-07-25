@@ -32,6 +32,8 @@ use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 use tokio::sync::RwLock;
 use tokio::time::sleep;
 
+mod support;
+
 /// Mock ProcessQueue for testing
 #[derive(Clone)]
 struct MockProcessQueue {
@@ -509,7 +511,8 @@ async fn test_high_concurrency_stress() {
 
 #[tokio::test]
 async fn test_route_refresh_stale_snapshot_does_not_overwrite_current_route() {
-    let probe = run_route_refresh_concurrent_stale_guard_probe().await;
+    let probe =
+        run_route_refresh_concurrent_stale_guard_probe(support::client_runtime("route-refresh-stale-guard")).await;
 
     assert!(probe.healthy, "{probe:?}");
     assert!(probe.stale_skipped);

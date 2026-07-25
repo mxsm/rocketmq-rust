@@ -147,8 +147,9 @@ impl ContainerService {
     pub async fn add_broker_by_request_with_credentials(
         request: ContainerAddBrokerRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<ContainerOperationResult> {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials)
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
         let result = Self::add_broker_with_admin(&admin, &request).await;
@@ -176,8 +177,9 @@ impl ContainerService {
     pub async fn remove_broker_by_request_with_credentials(
         request: ContainerRemoveBrokerRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<ContainerOperationResult> {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials)
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
         let result = Self::remove_broker_with_admin(&admin, &request).await;
@@ -231,7 +233,9 @@ fn builder_with_namesrv(namesrv_addr: Option<&str>) -> AdminBuilder {
 fn admin_builder_with_credentials(
     builder: AdminBuilder,
     credentials: Option<crate::core::security::AdminCredentials>,
+    client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
 ) -> AdminBuilder {
+    let builder = builder.client_runtime(client_runtime);
     match credentials {
         Some(hook) => builder.credentials(hook),
         None => builder,

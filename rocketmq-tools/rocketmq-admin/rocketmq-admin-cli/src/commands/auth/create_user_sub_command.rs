@@ -70,6 +70,7 @@ impl CommandExecute for CreateUserSubCommand {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
         let request = CreateUserRequest::try_new(
             self.broker_addr.clone(),
@@ -78,7 +79,8 @@ impl CommandExecute for CreateUserSubCommand {
             self.password.clone(),
             self.user_type.clone(),
         )?;
-        let result = AuthService::create_user_by_request_with_credentials(request, credentials).await?;
+        let result =
+            AuthService::create_user_by_request_with_credentials(request, credentials, client_runtime.clone()).await?;
         for broker_addr in result.broker_addrs {
             println!("create user to {} success.", broker_addr);
         }

@@ -47,6 +47,8 @@ use rocketmq_client_rust::proxy_adapter_compat::PullSysFlag;
 use rocketmq_client_rust::proxy_adapter_compat::TopicMessageType;
 use rocketmq_client_rust::proxy_adapter_compat::LOGICAL_QUEUE_MOCK_BROKER_PREFIX;
 use rocketmq_client_rust::proxy_adapter_compat::MASTER_ID;
+use rocketmq_client_rust::ClientRuntime;
+use rocketmq_client_rust::ClientRuntimeConfig;
 use rocketmq_error::RocketMQError;
 use rocketmq_model::result::PullStatus;
 use rocketmq_model::result::SendResult;
@@ -380,6 +382,7 @@ trait ClusterClientIo: Send + Sync {
 trait ClusterClientFactory: Send + Sync {
     fn get_or_create(
         &self,
+        client_runtime: &ClientRuntime,
         domain_id: u64,
         client_config: RocketmqClientConfig,
         rpc_hook: Option<Arc<ClientRpcHook>>,
@@ -391,11 +394,12 @@ struct DefaultClusterClientFactory;
 impl ClusterClientFactory for DefaultClusterClientFactory {
     fn get_or_create(
         &self,
+        client_runtime: &ClientRuntime,
         domain_id: u64,
         client_config: RocketmqClientConfig,
         rpc_hook: Option<Arc<ClientRpcHook>>,
     ) -> Result<Arc<dyn ClusterClientIo>, RocketMQError> {
-        ClientInstanceHandle::get_or_create(domain_id, client_config, rpc_hook)
+        ClientInstanceHandle::get_or_create(client_runtime, domain_id, client_config, rpc_hook)
             .map(|client| Arc::new(client) as Arc<dyn ClusterClientIo>)
     }
 }
@@ -409,6 +413,7 @@ struct StaticClusterClientFactory {
 impl ClusterClientFactory for StaticClusterClientFactory {
     fn get_or_create(
         &self,
+        _client_runtime: &ClientRuntime,
         _domain_id: u64,
         _client_config: RocketmqClientConfig,
         _rpc_hook: Option<Arc<ClientRpcHook>>,
@@ -738,6 +743,7 @@ impl ClusterProducerIo for DefaultMQProducer {
 trait ClusterProducerFactory: Send + Sync {
     fn create(
         &self,
+        client_runtime: Arc<ClientRuntime>,
         domain_id: u64,
         config: &ClusterConfig,
         producer_group: &str,
@@ -751,6 +757,7 @@ struct DefaultClusterProducerFactory;
 impl ClusterProducerFactory for DefaultClusterProducerFactory {
     fn create(
         &self,
+        client_runtime: Arc<ClientRuntime>,
         domain_id: u64,
         config: &ClusterConfig,
         producer_group: &str,
@@ -758,6 +765,7 @@ impl ClusterProducerFactory for DefaultClusterProducerFactory {
         rpc_hook: Option<Arc<ClientRpcHook>>,
     ) -> Box<dyn ClusterProducerIo> {
         Box::new(build_send_producer(
+            client_runtime,
             domain_id,
             config,
             producer_group,
@@ -1096,7 +1104,20 @@ impl<T> CachedValue<T> {
     }
 }
 
+#[cfg(test)]
+fn test_client_runtime() -> Arc<ClientRuntime> {
+    static OWNER: std::sync::LazyLock<rocketmq_runtime::RuntimeOwner> = std::sync::LazyLock::new(|| {
+        rocketmq_runtime::RuntimeOwner::new(rocketmq_runtime::RuntimeConfig {
+            thread_name: "rocketmq-proxy-cluster-test".to_string(),
+            ..Default::default()
+        })
+        .expect("proxy cluster test runtime should start")
+    });
+    ClientRuntime::new(OWNER.root_context().child("client"), ClientRuntimeConfig::default())
+}
+
 struct ClusterWorkerState {
+    client_runtime: Arc<ClientRuntime>,
     domain_id: u64,
     rpc_hook: Option<Arc<ClientRpcHook>>,
     client: Option<Arc<dyn ClusterClientIo>>,
@@ -1113,11 +1134,12 @@ struct ClusterWorkerState {
 impl ClusterWorkerState {
     #[cfg(test)]
     fn new() -> Self {
-        Self::with_rpc_hook(0, None)
+        Self::with_rpc_hook(test_client_runtime(), 0, None)
     }
 
-    fn with_rpc_hook(domain_id: u64, rpc_hook: Option<Arc<ClientRpcHook>>) -> Self {
+    fn with_rpc_hook(client_runtime: Arc<ClientRuntime>, domain_id: u64, rpc_hook: Option<Arc<ClientRpcHook>>) -> Self {
         Self {
+            client_runtime,
             domain_id,
             rpc_hook,
             client: None,
@@ -1135,6 +1157,7 @@ impl ClusterWorkerState {
     #[cfg(test)]
     fn with_test_runtime(client: Arc<dyn ClusterClientIo>, producer_factory: Arc<dyn ClusterProducerFactory>) -> Self {
         Self::with_test_factories(
+            test_client_runtime(),
             0,
             None,
             Arc::new(StaticClusterClientFactory { client }),
@@ -1144,12 +1167,14 @@ impl ClusterWorkerState {
 
     #[cfg(test)]
     fn with_test_factories(
+        client_runtime: Arc<ClientRuntime>,
         domain_id: u64,
         rpc_hook: Option<Arc<ClientRpcHook>>,
         client_factory: Arc<dyn ClusterClientFactory>,
         producer_factory: Arc<dyn ClusterProducerFactory>,
     ) -> Self {
         Self {
+            client_runtime,
             domain_id,
             rpc_hook,
             client: None,
@@ -1171,9 +1196,12 @@ impl ClusterWorkerState {
     async fn client(&mut self, config: &ClusterConfig) -> ProxyResult<Arc<dyn ClusterClientIo>> {
         if self.client.is_none() {
             let client_config = cluster_client_config(config);
-            let client = self
-                .client_factory
-                .get_or_create(self.domain_id, client_config, self.rpc_hook())?;
+            let client = self.client_factory.get_or_create(
+                &self.client_runtime,
+                self.domain_id,
+                client_config,
+                self.rpc_hook(),
+            )?;
             self.client = Some(client.clone());
             let start_result = self
                 .client
@@ -1278,11 +1306,13 @@ impl ClusterTaskExecutor {
             // adapters. The child group also makes that ownership visible in
             // the runtime lifecycle tree.
             let worker_context = service_context.child("proxy.cluster.adapter");
+            let client_runtime =
+                ClientRuntime::new(worker_context.child("client-runtime"), ClientRuntimeConfig::default());
             let cancellation = worker_context.task_group().cancellation_token();
             let domain_id = worker_context.task_group().id().as_u64();
             worker_context
                 .spawn_service("proxy.cluster.worker", async move {
-                    run_cluster_worker(config, domain_id, rpc_hook, receiver, cancellation).await;
+                    run_cluster_worker(config, client_runtime, domain_id, rpc_hook, receiver, cancellation).await;
                 })
                 .err()
                 .map(|error| Arc::<str>::from(format!("failed to spawn proxy cluster worker: {error}")))
@@ -1524,12 +1554,13 @@ impl ClusterTaskExecutor {
 
 async fn run_cluster_worker(
     config: ClusterConfig,
+    client_runtime: Arc<ClientRuntime>,
     domain_id: u64,
     rpc_hook: Option<Arc<ClientRpcHook>>,
     receiver: mpsc::Receiver<ClusterCommand>,
     cancellation: tokio_util::sync::CancellationToken,
 ) {
-    let state = ClusterWorkerState::with_rpc_hook(domain_id, rpc_hook);
+    let state = ClusterWorkerState::with_rpc_hook(client_runtime, domain_id, rpc_hook);
     run_cluster_worker_with_state(config, state, receiver, cancellation).await;
 }
 
@@ -1575,6 +1606,7 @@ async fn run_cluster_worker_with_state(
             tracing::warn!("proxy cluster Client shutdown exceeded the shared deadline");
         }
     }
+    let _ = state.client_runtime.shutdown_until(shutdown_deadline).await;
 }
 
 fn cluster_client_config(config: &ClusterConfig) -> RocketmqClientConfig {
@@ -2037,10 +2069,14 @@ async fn acquire_send_producer<'a>(
         // Every producer is registered with the worker-owned Client instance so
         // shutdown has one factory owner and one manager entry to remove.
         let _ = state.client(config).await?;
-        let mut producer =
-            state
-                .producer_factory
-                .create(state.domain_id, config, producer_group, timeout_ms, state.rpc_hook());
+        let mut producer = state.producer_factory.create(
+            state.client_runtime.clone(),
+            state.domain_id,
+            config,
+            producer_group,
+            timeout_ms,
+            state.rpc_hook(),
+        );
         producer.set_topics(topics.clone());
         state.send_producers.insert(producer_group.to_owned(), producer);
         let start_result = state
@@ -2920,6 +2956,7 @@ async fn resolve_subscription_broker_name(
 }
 
 fn build_send_producer(
+    client_runtime: Arc<ClientRuntime>,
     domain_id: u64,
     config: &ClusterConfig,
     producer_group: &str,
@@ -2928,7 +2965,7 @@ fn build_send_producer(
 ) -> DefaultMQProducer {
     let client_config = client_config_for_managed_domain(domain_id, cluster_client_config(config));
 
-    let mut builder = DefaultMQProducer::builder()
+    let mut builder = DefaultMQProducer::builder(client_runtime)
         .client_config(client_config)
         .producer_group(producer_group)
         .send_msg_timeout(timeout_ms as u32);
@@ -3145,6 +3182,7 @@ mod tests {
     use super::select_auth_metadata_broker_addr;
     use super::select_master_broker_addr;
     use super::single_broker_and_topic;
+    use super::test_client_runtime;
     use super::CachedValue;
     use super::ClusterClient;
     use super::ClusterTaskExecutor;
@@ -3180,7 +3218,7 @@ mod tests {
     fn producer_uses_the_same_isolated_client_domain_as_its_worker() {
         let config = ClusterConfig::default();
         let domain_id = 71_011;
-        let producer = build_send_producer(domain_id, &config, "GroupA", 3_000, None);
+        let producer = build_send_producer(test_client_runtime(), domain_id, &config, "GroupA", 3_000, None);
         let expected = rocketmq_client_rust::proxy_adapter_compat::client_config_for_managed_domain(
             domain_id,
             cluster_client_config(&config),

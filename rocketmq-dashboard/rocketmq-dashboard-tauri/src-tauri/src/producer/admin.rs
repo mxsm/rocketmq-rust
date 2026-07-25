@@ -15,8 +15,8 @@
 use crate::nameserver::NameServerRuntimeState;
 use crate::producer::types::ProducerError;
 use crate::producer::types::ProducerResult;
-use rocketmq_admin_core::core::admin::AdminBuilder;
-use rocketmq_admin_core::core::admin::AdminSession;
+use rocketmq_admin_core::client_adapter::AdminBuilder;
+use rocketmq_admin_core::client_adapter::AdminSession;
 use rocketmq_dashboard_common::NameServerConfigSnapshot;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -36,7 +36,7 @@ impl ManagedProducerAdmin {
             )
         })?;
 
-        let admin = AdminBuilder::new()
+        let admin = AdminBuilder::new(runtime.client_runtime())
             .admin_group(format!("dashboard-producer-admin-{}", Uuid::new_v4()))
             .namesrv_addr(current_namesrv)
             .timeout_millis(5_000)

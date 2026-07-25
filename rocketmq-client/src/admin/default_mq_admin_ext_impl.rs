@@ -32,7 +32,9 @@ use crate::consumer::pull_status::PullStatus;
 use crate::factory::mq_client_instance::MQClientInstance;
 use crate::implementation::communication_mode::CommunicationMode;
 use crate::implementation::mq_client_api_impl::MQClientAPIImpl;
-use crate::implementation::mq_client_manager::MQClientManager;
+use crate::implementation::mq_client_manager::ClientPool;
+use crate::implementation::mq_client_manager::ClientPoolToken;
+use crate::runtime::ClientRuntime;
 use cheetah_string::CheetahString;
 use rand::seq::IndexedRandom;
 use rocketmq_error::RocketMQError;
@@ -525,6 +527,8 @@ fn lite_pull_topic_config(
 }
 
 pub struct DefaultMQAdminExtImpl {
+    client_pool: ClientPool,
+    client_pool_token: Option<ClientPoolToken>,
     service_state: ServiceState,
     client_instance: Option<Arc<MQClientInstance>>,
     rpc_hook: Option<Arc<dyn RPCHook>>,
@@ -536,12 +540,15 @@ pub struct DefaultMQAdminExtImpl {
 
 impl DefaultMQAdminExtImpl {
     pub fn new(
+        client_runtime: Arc<ClientRuntime>,
         rpc_hook: Option<Arc<dyn RPCHook>>,
         timeout_millis: Duration,
         client_config: ClientConfig,
         admin_ext_group: CheetahString,
     ) -> Self {
         DefaultMQAdminExtImpl {
+            client_pool: client_runtime.pool().clone(),
+            client_pool_token: None,
             service_state: ServiceState::CreateJust,
             client_instance: None,
             rpc_hook,
@@ -907,10 +914,12 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
                     self.client_config.socks_proxy_config =
                         env::var(SOCKS_PROXY_JSON).unwrap_or_else(|_| "{}".to_string()).into();
                 }
-                self.client_instance = Some(
-                    MQClientManager::get_instance()
-                        .get_or_create_mq_client_instance(self.client_config.clone(), self.rpc_hook.clone()),
-                );
+                let pooled = self
+                    .client_pool
+                    .get_or_create(self.client_config.clone(), self.rpc_hook.clone())?;
+                let (client_instance, token) = pooled.into_parts();
+                self.client_instance = Some(client_instance);
+                self.client_pool_token = Some(token);
 
                 let group = &self.admin_ext_group.clone();
                 let register_ok = self
@@ -920,6 +929,9 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
                     .register_admin_ext(group, MQAdminExtInnerImpl)
                     .await;
                 if !register_ok {
+                    if let Some(token) = self.client_pool_token.take() {
+                        self.client_pool.release(token).await;
+                    }
                     self.service_state = ServiceState::StartFailed;
                     return Err(rocketmq_error::RocketMQError::illegal_argument(format!(
                         "The adminExt group[{}] has created already, specified another name please.{}",
@@ -931,11 +943,18 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
                     .client_instance
                     .clone()
                     .ok_or(rocketmq_error::RocketMQError::ClientNotStarted)?;
-                self.client_instance
+                if let Err(error) = self
+                    .client_instance
                     .as_mut()
                     .ok_or(rocketmq_error::RocketMQError::ClientNotStarted)?
                     .start()
-                    .await?;
+                    .await
+                {
+                    if let Some(token) = self.client_pool_token.take() {
+                        self.client_pool.release(token).await;
+                    }
+                    return Err(error);
+                }
                 self.service_state = ServiceState::Running;
                 info!("the adminExt [{}] start OK", self.admin_ext_group);
                 Ok(())
@@ -954,7 +973,9 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
             ServiceState::Running => {
                 if let Some(instance) = self.client_instance.as_mut() {
                     instance.unregister_admin_ext(&self.admin_ext_group).await;
-                    instance.shutdown().await;
+                }
+                if let Some(token) = self.client_pool_token.take() {
+                    self.client_pool.release(token).await;
                 }
                 self.service_state = ServiceState::ShutdownAlready;
             }
@@ -4018,6 +4039,7 @@ mod tests {
 
     fn new_unstarted_admin() -> DefaultMQAdminExtImpl {
         DefaultMQAdminExtImpl::new(
+            crate::runtime::test_client_runtime("default-admin-ext-impl-test"),
             None,
             Duration::from_secs(3),
             ClientConfig::default(),

@@ -76,6 +76,7 @@ impl CommandExecute for UpdateOrderConfSubCommand {
     async fn execute(
         &self,
         _credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        _client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> rocketmq_error::RocketMQResult<()> {
         let result = TopicService::apply_order_conf(self.request()?).await?;
         Self::print_result(result);

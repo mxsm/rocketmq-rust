@@ -59,6 +59,7 @@ impl CommandExecute for DeleteTopicSubCommand {
     async fn execute(
         &self,
         _credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        _client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> rocketmq_error::RocketMQResult<()> {
         if self.cluster_name.is_none() {
             return Err(RocketMQError::IllegalArgument(

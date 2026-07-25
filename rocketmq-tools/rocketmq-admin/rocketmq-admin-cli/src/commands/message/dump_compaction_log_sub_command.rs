@@ -34,7 +34,8 @@ impl DumpCompactionLogSubCommand {
 impl CommandExecute for DumpCompactionLogSubCommand {
     async fn execute(
         &self,
-        _rpc_hook: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        _credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        _client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
         let result = MessageService::dump_compaction_log_by_request(&self.request())?;
         if result.missing_file_name {

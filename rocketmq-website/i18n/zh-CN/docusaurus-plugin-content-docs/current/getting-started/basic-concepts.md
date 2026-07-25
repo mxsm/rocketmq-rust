@@ -3,6 +3,8 @@ sidebar_position: 3
 title: 基本概念
 ---
 
+> Runtime 所有权：示例中的 `client_runtime` 是应用持有的 `Arc<ClientRuntime>`，它从 `RuntimeOwner` 的 child scope 创建，并在进程边界显式关闭。
+
 # 基本概念
 
 理解 RocketMQ-Rust 的核心概念，是构建高效消息应用的基础。
@@ -59,7 +61,7 @@ Topic: OrderEvents
 use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
 use rocketmq_client_rust::producer::mq_producer::MQProducer;
 
-let mut producer = DefaultMQProducer::builder()
+let mut producer = DefaultMQProducer::builder(client_runtime.clone())
     .producer_group("example_group")
     .name_server_addr("localhost:9876")
     .build();
@@ -80,7 +82,7 @@ producer.send(message).await?;
 use rocketmq_client_rust::consumer::default_mq_push_consumer::DefaultMQPushConsumer;
 use rocketmq_client_rust::consumer::mq_push_consumer::MQPushConsumer;
 
-let mut consumer = DefaultMQPushConsumer::builder()
+let mut consumer = DefaultMQPushConsumer::builder(client_runtime.clone())
     .consumer_group("example_group")
     .name_server_addr("localhost:9876")
     .build();
@@ -181,7 +183,7 @@ graph LR
 - 每个消费组维护独立的消费位点
 
 ```rust
-let mut consumer = DefaultMQPushConsumer::builder()
+let mut consumer = DefaultMQPushConsumer::builder(client_runtime.clone())
     .consumer_group("my_consumer_group")
     .name_server_addr("localhost:9876")
     .build();

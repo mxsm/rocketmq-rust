@@ -43,9 +43,14 @@ impl CommandExecute for GetBrokerLiteInfoSubCommand {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
-        let result =
-            LiteService::query_broker_lite_info_by_request_with_credentials(self.request()?, credentials).await?;
+        let result = LiteService::query_broker_lite_info_by_request_with_credentials(
+            self.request()?,
+            credentials,
+            client_runtime.clone(),
+        )
+        .await?;
         Self::print_result(&result, self.show_detail);
         Ok(())
     }

@@ -21,6 +21,7 @@ use crate::service::DashboardHistoryStore;
 use crate::service::DashboardTaskManager;
 use crate::service::MonitorStore;
 use crate::service::spawn_dashboard_history_collector;
+use rocketmq_admin_core::client_adapter::ClientRuntime;
 use rocketmq_dashboard_common::DashboardAdminFacade;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -39,7 +40,7 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub async fn try_new(config: AppConfig) -> Result<Self, DashboardError> {
+    pub async fn try_new(config: AppConfig, client_runtime: Arc<ClientRuntime>) -> Result<Self, DashboardError> {
         let config_store = Arc::new(ConfigStore::new(&config.storage)?);
         let auth_state = Arc::new(AuthState::new(config.auth));
         let monitor_store = Arc::new(MonitorStore::new(config.monitor_store_path));
@@ -47,7 +48,7 @@ impl AppState {
         let dashboard_tasks = DashboardTaskManager::default();
         let dashboard_config = config_store.load_or_init(&config.initial_config)?;
         let dashboard_config = Arc::new(RwLock::new(dashboard_config));
-        let admin_client = DashboardAdminClient::new(dashboard_config.clone());
+        let admin_client = DashboardAdminClient::new(dashboard_config.clone(), client_runtime);
         if config.dashboard_history_interval_secs > 0 {
             spawn_dashboard_history_collector(
                 &dashboard_tasks,

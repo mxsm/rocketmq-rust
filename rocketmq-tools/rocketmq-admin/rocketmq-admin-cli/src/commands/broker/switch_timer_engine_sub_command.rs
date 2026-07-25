@@ -56,6 +56,7 @@ impl CommandExecute for SwitchTimerEngineSubCommand {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
         let request = match self.request() {
             Ok(request) => request,
@@ -67,7 +68,12 @@ impl CommandExecute for SwitchTimerEngineSubCommand {
         };
 
         let engine_name = request.engine_name().clone();
-        let result = BrokerService::switch_timer_engine_by_request_with_credentials(request, credentials).await?;
+        let result = BrokerService::switch_timer_engine_by_request_with_credentials(
+            request,
+            credentials,
+            client_runtime.clone(),
+        )
+        .await?;
         print_switch_timer_engine_result(engine_name.as_str(), &result);
         Ok(())
     }

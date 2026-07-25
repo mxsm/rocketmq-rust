@@ -24,6 +24,8 @@ mod view_model;
 use crate::rocketmq_tui_app::RocketmqTuiApp;
 
 use anyhow::Context;
+use rocketmq_admin_core::client_adapter::ClientRuntime;
+use rocketmq_admin_core::client_adapter::ClientRuntimeConfig;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 
@@ -31,7 +33,21 @@ const ENTRYPOINT_MAX_BLOCKING_THREADS: usize = 64;
 
 fn main() -> anyhow::Result<()> {
     let owner = RuntimeOwner::new(admin_tui_runtime_config()).context("failed to build rocketmq-admin-tui runtime")?;
-    let run_result = owner.block_on(run());
+    let client_runtime = ClientRuntime::new(
+        owner.root_context().child("rocketmq-admin-client"),
+        ClientRuntimeConfig::default(),
+    );
+    let run_result = owner.block_on(async {
+        let run_result = run(client_runtime.clone()).await;
+        let report = client_runtime.shutdown().await;
+        if !report.is_healthy() {
+            tracing::warn!(
+                report = %report.to_json(),
+                "rocketmq-admin-tui client runtime shutdown report is unhealthy"
+            );
+        }
+        run_result
+    });
     let shutdown_result = owner
         .shutdown_runtime_blocking()
         .context("failed to shutdown rocketmq-admin-tui runtime");
@@ -57,23 +73,24 @@ fn admin_tui_runtime_config() -> RuntimeConfig {
     config
 }
 
-async fn run() -> anyhow::Result<()> {
+async fn run(client_runtime: std::sync::Arc<ClientRuntime>) -> anyhow::Result<()> {
     let terminal = ratatui::try_init()?;
     let local = tokio::task::LocalSet::new();
-    let result = local.run_until(RocketmqTuiApp::default().run(terminal)).await;
+    let result = local.run_until(RocketmqTuiApp::new(client_runtime).run(terminal)).await;
     ratatui::try_restore()?;
     result
 }
 
 #[cfg(test)]
 mod tests {
-    use rocketmq_admin_core::core::admin::AdminBuilder;
+    use rocketmq_admin_core::client_adapter::AdminBuilder;
 
+    use crate::admin_facade::test_client_runtime;
     use crate::admin_facade::TuiAdminFacade;
 
     #[test]
     fn admin_facade_builds_core_admin_builder() {
-        let facade = TuiAdminFacade::with_namesrv_addr("127.0.0.1:9876");
+        let facade = TuiAdminFacade::with_namesrv_addr(test_client_runtime(), "127.0.0.1:9876");
 
         assert_eq!(facade.namesrv_addr(), Some("127.0.0.1:9876"));
 

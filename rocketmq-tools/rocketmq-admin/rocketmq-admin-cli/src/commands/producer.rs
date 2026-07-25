@@ -34,9 +34,10 @@ impl CommandExecute for ProducerCommands {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
         match self {
-            ProducerCommands::Producer(cmd) => cmd.execute(credentials).await,
+            ProducerCommands::Producer(cmd) => cmd.execute(credentials, client_runtime.clone()).await,
         }
     }
 }

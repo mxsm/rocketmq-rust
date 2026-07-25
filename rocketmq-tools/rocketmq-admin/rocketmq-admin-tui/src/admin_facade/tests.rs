@@ -1,10 +1,11 @@
+use super::test_client_runtime;
 use super::TuiAdminFacade;
 use rocketmq_admin_core::client_adapter::services::consumer::MonitoringEvent;
 use rocketmq_admin_core::client_adapter::services::message::MessagePullEvent;
 
 #[test]
 fn facade_builds_topic_cluster_request_without_cli_types() {
-    let facade = TuiAdminFacade::with_namesrv_addr(" 127.0.0.1:9876 ");
+    let facade = TuiAdminFacade::with_namesrv_addr(test_client_runtime(), " 127.0.0.1:9876 ");
     let request = facade.topic_cluster_request(" TestTopic ").unwrap();
 
     assert_eq!(request.topic().as_str(), "TestTopic");
@@ -13,7 +14,7 @@ fn facade_builds_topic_cluster_request_without_cli_types() {
 
 #[test]
 fn facade_builds_topic_route_request_without_cli_types() {
-    let facade = TuiAdminFacade::with_namesrv_addr("127.0.0.1:9876");
+    let facade = TuiAdminFacade::with_namesrv_addr(test_client_runtime(), "127.0.0.1:9876");
     let request = facade.topic_route_request(" RouteTopic ").unwrap();
 
     assert_eq!(request.topic().as_str(), "RouteTopic");
@@ -22,7 +23,7 @@ fn facade_builds_topic_route_request_without_cli_types() {
 
 #[test]
 fn facade_builds_topic_status_request_without_cli_types() {
-    let facade = TuiAdminFacade::with_namesrv_addr("127.0.0.1:9876");
+    let facade = TuiAdminFacade::with_namesrv_addr(test_client_runtime(), "127.0.0.1:9876");
     let request = facade
         .topic_status_request(" StatusTopic ", Some(" DefaultCluster ".to_string()))
         .unwrap();
@@ -37,7 +38,7 @@ fn facade_builds_topic_status_request_without_cli_types() {
 
 #[test]
 fn facade_builds_additional_topic_requests_without_cli_types() {
-    let facade = TuiAdminFacade::with_namesrv_addr("127.0.0.1:9876");
+    let facade = TuiAdminFacade::with_namesrv_addr(test_client_runtime(), "127.0.0.1:9876");
 
     assert_eq!(
         facade
@@ -73,7 +74,7 @@ fn facade_builds_additional_topic_requests_without_cli_types() {
 
 #[test]
 fn facade_builds_update_topic_requests_without_cli_types() {
-    let facade = TuiAdminFacade::with_namesrv_addr("127.0.0.1:9876");
+    let facade = TuiAdminFacade::with_namesrv_addr(test_client_runtime(), "127.0.0.1:9876");
 
     let update_topic = facade
         .update_topic_request(
@@ -101,7 +102,7 @@ fn facade_builds_update_topic_requests_without_cli_types() {
 
 #[test]
 fn facade_builds_namesrv_requests_without_cli_types() {
-    let facade = TuiAdminFacade::with_namesrv_addr(" 127.0.0.1:9876;127.0.0.2:9876 ");
+    let facade = TuiAdminFacade::with_namesrv_addr(test_client_runtime(), " 127.0.0.1:9876;127.0.0.2:9876 ");
 
     assert_eq!(facade.namesrv_config_query_request().unwrap().namesrv_addrs().len(), 2);
     let update_config = facade.namesrv_config_update_request(" deleteWhen ", " 04 ").unwrap();
@@ -129,7 +130,7 @@ fn facade_builds_namesrv_requests_without_cli_types() {
 
 #[test]
 fn facade_builds_broker_config_request_without_cli_types() {
-    let facade = TuiAdminFacade::with_namesrv_addr(" 127.0.0.1:9876 ");
+    let facade = TuiAdminFacade::with_namesrv_addr(test_client_runtime(), " 127.0.0.1:9876 ");
     let request = facade
         .broker_config_query_request(
             None,
@@ -160,7 +161,7 @@ fn facade_builds_broker_config_request_without_cli_types() {
 
 #[test]
 fn facade_builds_broker_runtime_stats_request_without_cli_types() {
-    let facade = TuiAdminFacade::with_namesrv_addr(" 127.0.0.1:9876 ");
+    let facade = TuiAdminFacade::with_namesrv_addr(test_client_runtime(), " 127.0.0.1:9876 ");
     let request = facade
         .broker_runtime_stats_request(None, Some(" DefaultCluster ".to_string()))
         .unwrap();
@@ -174,7 +175,7 @@ fn facade_builds_broker_runtime_stats_request_without_cli_types() {
 
 #[test]
 fn facade_builds_broker_consume_stats_request_without_cli_types() {
-    let facade = TuiAdminFacade::with_namesrv_addr(" 127.0.0.1:9876 ");
+    let facade = TuiAdminFacade::with_namesrv_addr(test_client_runtime(), " 127.0.0.1:9876 ");
     let request = facade
         .broker_consume_stats_request(" 127.0.0.1:10911 ", 3_000, 42, true)
         .unwrap();
@@ -188,7 +189,7 @@ fn facade_builds_broker_consume_stats_request_without_cli_types() {
 
 #[test]
 fn facade_exposes_topic_service_futures_without_cli_types() {
-    let facade = TuiAdminFacade::with_namesrv_addr("127.0.0.1:9876");
+    let facade = TuiAdminFacade::with_namesrv_addr(test_client_runtime(), "127.0.0.1:9876");
 
     std::mem::drop(facade.query_topic_clusters("TestTopic"));
     std::mem::drop(facade.query_topic_route("TestTopic"));
@@ -224,7 +225,7 @@ fn facade_exposes_topic_service_futures_without_cli_types() {
 
 #[test]
 fn facade_exposes_namesrv_service_futures_without_cli_types() {
-    let facade = TuiAdminFacade::with_namesrv_addr("127.0.0.1:9876");
+    let facade = TuiAdminFacade::with_namesrv_addr(test_client_runtime(), "127.0.0.1:9876");
 
     std::mem::drop(facade.query_namesrv_config());
     std::mem::drop(facade.update_namesrv_config("deleteWhen", "04"));
@@ -236,7 +237,7 @@ fn facade_exposes_namesrv_service_futures_without_cli_types() {
 
 #[test]
 fn facade_exposes_broker_service_futures_without_cli_types() {
-    let facade = TuiAdminFacade::with_namesrv_addr("127.0.0.1:9876");
+    let facade = TuiAdminFacade::with_namesrv_addr(test_client_runtime(), "127.0.0.1:9876");
 
     std::mem::drop(facade.query_broker_config(None, Some("DefaultCluster".to_string()), Some("^flush.*".to_string())));
     std::mem::drop(facade.query_broker_runtime_stats(None, Some("DefaultCluster".to_string())));
@@ -253,7 +254,7 @@ fn facade_exposes_broker_service_futures_without_cli_types() {
 
 #[test]
 fn facade_builds_operational_requests_without_cli_types() {
-    let facade = TuiAdminFacade::with_namesrv_addr(" 127.0.0.1:9876 ");
+    let facade = TuiAdminFacade::with_namesrv_addr(test_client_runtime(), " 127.0.0.1:9876 ");
 
     let cluster_list = facade.cluster_list_request(true, Some(" DefaultCluster ".to_string()));
     assert_eq!(cluster_list.namesrv_addr(), Some("127.0.0.1:9876"));
@@ -340,7 +341,7 @@ fn facade_builds_operational_requests_without_cli_types() {
 
 #[test]
 fn facade_exposes_operational_service_futures_without_cli_types() {
-    let facade = TuiAdminFacade::with_namesrv_addr("127.0.0.1:9876");
+    let facade = TuiAdminFacade::with_namesrv_addr(test_client_runtime(), "127.0.0.1:9876");
 
     std::mem::drop(facade.query_cluster_list(false, Some("DefaultCluster".to_string())));
     std::mem::drop(facade.query_cluster_broker_names(Some("DefaultCluster".to_string())));
@@ -400,7 +401,7 @@ fn facade_exposes_operational_service_futures_without_cli_types() {
 
 #[test]
 fn facade_builds_phase_three_mutating_requests_without_cli_types() {
-    let facade = TuiAdminFacade::with_namesrv_addr(" 127.0.0.1:9876 ");
+    let facade = TuiAdminFacade::with_namesrv_addr(test_client_runtime(), " 127.0.0.1:9876 ");
 
     let create_user = facade
         .auth_create_user_request(
@@ -579,7 +580,7 @@ fn facade_builds_phase_three_mutating_requests_without_cli_types() {
 
 #[test]
 fn facade_exposes_phase_three_service_futures_without_cli_types() {
-    let facade = TuiAdminFacade::with_namesrv_addr("127.0.0.1:9876");
+    let facade = TuiAdminFacade::with_namesrv_addr(test_client_runtime(), "127.0.0.1:9876");
 
     std::mem::drop(facade.create_auth_user(
         Some("127.0.0.1:10911".to_string()),
@@ -704,7 +705,7 @@ fn facade_exposes_phase_three_service_futures_without_cli_types() {
 
 #[test]
 fn facade_builds_phase_four_complex_workflow_requests_without_cli_types() {
-    let facade = TuiAdminFacade::with_namesrv_addr(" 127.0.0.1:9876 ");
+    let facade = TuiAdminFacade::with_namesrv_addr(test_client_runtime(), " 127.0.0.1:9876 ");
 
     let export_configs = facade.export_configs_request(" DefaultCluster ").unwrap();
     assert_eq!(export_configs.cluster_name().as_str(), "DefaultCluster");
@@ -777,7 +778,7 @@ fn facade_builds_phase_four_complex_workflow_requests_without_cli_types() {
 
 #[test]
 fn facade_exposes_phase_four_service_futures_without_cli_types() {
-    let facade = TuiAdminFacade::with_namesrv_addr("127.0.0.1:9876");
+    let facade = TuiAdminFacade::with_namesrv_addr(test_client_runtime(), "127.0.0.1:9876");
 
     std::mem::drop(facade.export_configs("DefaultCluster"));
     std::mem::drop(facade.export_metrics("DefaultCluster", Some(5000)));
@@ -829,7 +830,7 @@ fn phase_five_monitoring_progress_messages_include_event_context() {
 
 #[test]
 fn facade_builds_phase_one_read_only_requests_without_cli_types() {
-    let facade = TuiAdminFacade::with_namesrv_addr(" 127.0.0.1:9876 ");
+    let facade = TuiAdminFacade::with_namesrv_addr(test_client_runtime(), " 127.0.0.1:9876 ");
 
     let get_user = facade
         .auth_get_user_request(Some(" 127.0.0.1:10911 ".to_string()), None, " admin ")
@@ -908,7 +909,7 @@ fn facade_builds_phase_one_read_only_requests_without_cli_types() {
 
 #[test]
 fn facade_exposes_phase_one_read_only_service_futures_without_cli_types() {
-    let facade = TuiAdminFacade::with_namesrv_addr("127.0.0.1:9876");
+    let facade = TuiAdminFacade::with_namesrv_addr(test_client_runtime(), "127.0.0.1:9876");
 
     std::mem::drop(facade.query_auth_user(Some("127.0.0.1:10911".to_string()), None, "admin"));
     std::mem::drop(facade.list_auth_users(None, Some("DefaultCluster".to_string()), Some("admin".to_string())));

@@ -3,6 +3,8 @@ sidebar_position: 3
 title: 性能调优
 ---
 
+> Runtime 所有权：示例中的 `client_runtime` 是应用持有的 `Arc<ClientRuntime>`，它从 `RuntimeOwner` 的 child scope 创建，并在进程边界显式关闭。
+
 # 性能调优
 
 本章介绍如何对 RocketMQ-Rust 进行系统化调优，以获得更高吞吐和更低延迟。
@@ -53,7 +55,7 @@ flushCommitLogLeastPages = 0
 use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
 
 // 增大消息上限（按实际需求设置）
-let mut producer = DefaultMQProducer::builder()
+let mut producer = DefaultMQProducer::builder(client_runtime.clone())
     .producer_group("perf_group")
     .name_server_addr("localhost:9876")
     .max_message_size(4 * 1024 * 1024) // 4MB
@@ -77,7 +79,7 @@ producer.set_compress_msg_body_over_howmuch(4 * 1024);
 // 调整请求超时与异步回压参数
 use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
 
-let mut producer = DefaultMQProducer::builder()
+let mut producer = DefaultMQProducer::builder(client_runtime.clone())
     .producer_group("perf_group")
     .name_server_addr("localhost:9876")
     .send_msg_max_timeout_per_request(5_000)
@@ -95,7 +97,7 @@ let mut producer = DefaultMQProducer::builder()
 use rocketmq_client_rust::consumer::default_mq_push_consumer::DefaultMQPushConsumer;
 
 // CPU 密集型处理
-let mut cpu_consumer = DefaultMQPushConsumer::builder()
+let mut cpu_consumer = DefaultMQPushConsumer::builder(client_runtime.clone())
     .consumer_group("cpu_group")
     .name_server_addr("localhost:9876")
     .consume_thread_min(num_cpus::get() as u32)
@@ -103,7 +105,7 @@ let mut cpu_consumer = DefaultMQPushConsumer::builder()
     .build();
 
 // I/O 密集型处理
-let mut io_consumer = DefaultMQPushConsumer::builder()
+let mut io_consumer = DefaultMQPushConsumer::builder(client_runtime.clone())
     .consumer_group("io_group")
     .name_server_addr("localhost:9876")
     .consume_thread_min((num_cpus::get() as u32) * 2)

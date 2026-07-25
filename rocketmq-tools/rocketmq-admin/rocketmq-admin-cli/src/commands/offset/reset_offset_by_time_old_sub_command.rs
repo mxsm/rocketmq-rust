@@ -133,13 +133,18 @@ impl CommandExecute for ResetOffsetByTimeOldSubCommand {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
         let Some(request) = self.request()? else {
             return Ok(());
         };
 
-        let rollback_stats =
-            OffsetService::reset_offset_by_time_old_by_request_with_credentials(request.clone(), credentials).await?;
+        let rollback_stats = OffsetService::reset_offset_by_time_old_by_request_with_credentials(
+            request.clone(),
+            credentials,
+            client_runtime.clone(),
+        )
+        .await?;
         Self::print_result(&request, self.timestamp.trim(), rollback_stats);
         Ok(())
     }

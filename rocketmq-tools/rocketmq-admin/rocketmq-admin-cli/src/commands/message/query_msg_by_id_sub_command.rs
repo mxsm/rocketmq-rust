@@ -333,6 +333,7 @@ impl CommandExecute for QueryMsgByIdSubCommand {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
         if self.message_ids.is_empty() {
             return Err(RocketMQError::IllegalArgument(
@@ -353,7 +354,12 @@ impl CommandExecute for QueryMsgByIdSubCommand {
 
         let request = QueryMessageByIdRequest::try_new(self.message_ids.clone(), self.topic.clone(), self.timeout)?
             .with_optional_namesrv_addr(self.common_args.namesrv_addr.clone());
-        let result = MessageService::query_message_by_id_by_request_with_credentials(request, credentials).await?;
+        let result = MessageService::query_message_by_id_by_request_with_credentials(
+            request,
+            credentials,
+            client_runtime.clone(),
+        )
+        .await?;
 
         let total_count = result.entries.len();
         for (index, entry) in result.entries.iter().enumerate() {

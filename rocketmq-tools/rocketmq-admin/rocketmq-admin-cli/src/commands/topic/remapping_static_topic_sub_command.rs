@@ -79,6 +79,7 @@ impl RemappingStaticTopicSubCommand {
         &self,
         map_file_name: &str,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
         let map_file_name = map_file_name.trim();
         if let Some(wrapper) = static_topic_file::read_mapping(map_file_name) {
@@ -86,6 +87,7 @@ impl RemappingStaticTopicSubCommand {
                 self.mapping_file_request()?,
                 wrapper,
                 credentials,
+                client_runtime,
             )
             .await?;
         }
@@ -108,14 +110,18 @@ impl CommandExecute for RemappingStaticTopicSubCommand {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
         if let Some(f_name) = &self.mapping_file {
-            return self.execute_from_file(f_name, credentials).await;
+            return self
+                .execute_from_file(f_name, credentials, client_runtime.clone())
+                .await;
         }
 
         let plan = StaticTopicService::remapping_static_topic_by_request_with_credentials(
             self.remapping_request()?,
             credentials,
+            client_runtime,
         )
         .await?;
         Self::write_mapping_plan(&plan)?;

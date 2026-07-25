@@ -27,66 +27,71 @@ use rocketmq_client_rust::run_rebalance_service_lifecycle_probe;
 use rocketmq_client_rust::run_request_future_holder_lifecycle_probe;
 use rocketmq_client_rust::run_trace_worker_lifecycle_probe;
 
+mod support;
+
 #[tokio::test]
 async fn client_service_lifecycle_probes_report_clean_shutdown() {
-    let connection_events = run_connection_event_listener_lifecycle_probe().await;
+    let runtime = support::client_runtime("client-lifecycle-probes");
+    let connection_events = run_connection_event_listener_lifecycle_probe(runtime.clone()).await;
     assert!(connection_events.healthy, "{connection_events:?}");
     assert_eq!(connection_events.task_count_after_shutdown, 0);
 
-    let namesrv_refresh = run_namesrv_refresh_lifecycle_probe().await;
+    let namesrv_refresh = run_namesrv_refresh_lifecycle_probe(runtime.child("namesrv-refresh")).await;
     assert!(namesrv_refresh.healthy, "{namesrv_refresh:?}");
     assert_eq!(namesrv_refresh.task_count_after_shutdown, 0);
 
-    let consumer_stats = run_consumer_stats_manager_lifecycle_probe().await;
+    let consumer_stats = run_consumer_stats_manager_lifecycle_probe(runtime.child("consumer-stats")).await;
     assert!(consumer_stats.healthy, "{consumer_stats:?}");
     assert_eq!(consumer_stats.task_count_after_shutdown, 0);
 
-    let latency_fault_detector = run_latency_fault_detector_lifecycle_probe().await;
+    let latency_fault_detector =
+        run_latency_fault_detector_lifecycle_probe(runtime.child("latency-fault-detector")).await;
     assert!(latency_fault_detector.healthy, "{latency_fault_detector:?}");
     assert_eq!(latency_fault_detector.task_count_after_shutdown, 0);
     assert_eq!(latency_fault_detector.scheduled_failures, 0);
 
-    let concurrent_clean_expire = run_concurrent_clean_expire_lifecycle_probe().await;
+    let concurrent_clean_expire =
+        run_concurrent_clean_expire_lifecycle_probe(runtime.child("concurrent-clean-expire")).await;
     assert!(concurrent_clean_expire.healthy, "{concurrent_clean_expire:?}");
     assert_eq!(concurrent_clean_expire.task_count_after_shutdown, 0);
 
-    let orderly_lock = run_orderly_lock_periodic_lifecycle_probe().await;
+    let orderly_lock = run_orderly_lock_periodic_lifecycle_probe(runtime.child("orderly-lock")).await;
     assert!(orderly_lock.healthy, "{orderly_lock:?}");
     assert_eq!(orderly_lock.task_count_after_shutdown, 0);
     assert_eq!(orderly_lock.scheduled_failures, 0);
 
-    let pop_orderly_lock = run_pop_orderly_lock_refresh_lifecycle_probe().await;
+    let pop_orderly_lock = run_pop_orderly_lock_refresh_lifecycle_probe(runtime.clone()).await;
     assert!(pop_orderly_lock.healthy, "{pop_orderly_lock:?}");
     assert_eq!(pop_orderly_lock.task_count_after_shutdown, 0);
     assert_eq!(pop_orderly_lock.scheduled_failures, 0);
 
-    let lite_pull = run_lite_pull_task_lifecycle_probe().await;
+    let lite_pull = run_lite_pull_task_lifecycle_probe(runtime.child("lite-pull")).await;
     assert!(lite_pull.healthy, "{lite_pull:?}");
     assert_eq!(lite_pull.task_count_after_shutdown, 0);
 
-    let pull_message = run_pull_message_service_lifecycle_probe().await;
+    let pull_message = run_pull_message_service_lifecycle_probe(runtime.clone()).await;
     assert!(pull_message.healthy, "{pull_message:?}");
     assert_eq!(pull_message.task_count_after_shutdown, 0);
 
-    let rebalance = run_rebalance_service_lifecycle_probe().await;
+    let rebalance = run_rebalance_service_lifecycle_probe(runtime.clone()).await;
     assert!(rebalance.healthy, "{rebalance:?}");
     assert_eq!(rebalance.task_count_after_shutdown, 0);
 
-    let local_offset_store = run_local_file_offset_store_lifecycle_probe().await;
+    let local_offset_store = run_local_file_offset_store_lifecycle_probe(runtime.clone()).await;
     assert!(local_offset_store.healthy, "{local_offset_store:?}");
     assert_eq!(local_offset_store.task_count_after_shutdown, 0);
     assert_eq!(local_offset_store.scheduled_failures, 0);
 
-    let produce_accumulator = run_produce_accumulator_guard_lifecycle_probe().await;
+    let produce_accumulator = run_produce_accumulator_guard_lifecycle_probe(runtime.child("produce-accumulator")).await;
     assert!(produce_accumulator.healthy, "{produce_accumulator:?}");
     assert_eq!(produce_accumulator.task_count_after_shutdown, 0);
 
-    let request_future_holder = run_request_future_holder_lifecycle_probe().await;
+    let request_future_holder = run_request_future_holder_lifecycle_probe(runtime.child("request-future-holder")).await;
     assert!(request_future_holder.healthy, "{request_future_holder:?}");
     assert_eq!(request_future_holder.task_count_after_shutdown, 0);
     assert_eq!(request_future_holder.scheduled_failures, 0);
 
-    let trace_worker = run_trace_worker_lifecycle_probe().await;
+    let trace_worker = run_trace_worker_lifecycle_probe(runtime.child("trace-worker")).await;
     assert!(trace_worker.healthy, "{trace_worker:?}");
     assert_eq!(trace_worker.remaining_tasks_after_shutdown, 0);
     assert_eq!(trace_worker.timed_out, 0);

@@ -17,9 +17,10 @@ use std::sync::Arc;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
-use rocketmq_admin_core::core::admin::AdminBuilder;
-use rocketmq_admin_core::core::admin::AdminGuard;
-use rocketmq_admin_core::core::admin::AdminSession;
+use rocketmq_admin_core::client_adapter::AdminBuilder;
+use rocketmq_admin_core::client_adapter::AdminGuard;
+use rocketmq_admin_core::client_adapter::AdminSession;
+use rocketmq_admin_core::client_adapter::ClientRuntime;
 use rocketmq_admin_core::core::dashboard as core;
 use rocketmq_admin_core::core::dashboard::DashboardAdmin;
 use tokio::sync::Mutex;
@@ -75,6 +76,7 @@ use self::mapping::*;
 #[derive(Clone)]
 pub struct DashboardAdminClient {
     config: Arc<RwLock<DashboardConfigView>>,
+    client_runtime: Arc<ClientRuntime>,
     admin_session: Arc<Mutex<Option<ManagedAdminSession>>>,
 }
 
@@ -91,9 +93,10 @@ struct AdminConfigSnapshot {
 }
 
 impl DashboardAdminClient {
-    pub fn new(config: Arc<RwLock<DashboardConfigView>>) -> Self {
+    pub fn new(config: Arc<RwLock<DashboardConfigView>>, client_runtime: Arc<ClientRuntime>) -> Self {
         Self {
             config,
+            client_runtime,
             admin_session: Arc::new(Mutex::new(None)),
         }
     }
@@ -698,7 +701,7 @@ impl DashboardAdminClient {
             session.guard.shutdown().await;
         }
 
-        let guard = AdminBuilder::new()
+        let guard = AdminBuilder::new(Arc::clone(&self.client_runtime))
             .namesrv_addr(snapshot.namesrv_addr.clone())
             .admin_group(unique_admin_group())
             .timeout_millis(5_000)

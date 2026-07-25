@@ -193,8 +193,9 @@ impl StaticTopicService {
     pub async fn update_static_topic_by_request_with_credentials(
         request: UpdateStaticTopicRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<StaticTopicMappingPlan> {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials)
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
         let result = Self::update_static_topic_with_admin(&admin, &request).await;
@@ -264,8 +265,9 @@ impl StaticTopicService {
         request: StaticTopicMappingFileRequest,
         wrapper: TopicRemappingDetailWrapper,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<()> {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials)
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
         let result = Self::update_static_topic_from_mapping_with_admin(&admin, &request, wrapper).await;
@@ -291,8 +293,9 @@ impl StaticTopicService {
     pub async fn remapping_static_topic_by_request_with_credentials(
         request: RemappingStaticTopicRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<StaticTopicMappingPlan> {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials)
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
         let result = Self::remapping_static_topic_with_admin(&admin, &request).await;
@@ -376,8 +379,9 @@ impl StaticTopicService {
         request: StaticTopicMappingFileRequest,
         mut wrapper: TopicRemappingDetailWrapper,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<()> {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials)
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
         let result = Self::remapping_static_topic_from_mapping_with_admin(&admin, &request, &mut wrapper).await;
@@ -460,7 +464,9 @@ fn builder_with_namesrv(namesrv_addr: Option<&str>) -> AdminBuilder {
 fn admin_builder_with_credentials(
     builder: AdminBuilder,
     credentials: Option<crate::core::security::AdminCredentials>,
+    client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
 ) -> AdminBuilder {
+    let builder = builder.client_runtime(client_runtime);
     match credentials {
         Some(hook) => builder.credentials(hook),
         None => builder,

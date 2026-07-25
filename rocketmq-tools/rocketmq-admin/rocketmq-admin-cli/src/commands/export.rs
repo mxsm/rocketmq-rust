@@ -79,14 +79,15 @@ impl CommandExecute for ExportCommands {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
         match self {
-            ExportCommands::ExportConfigs(cmd) => cmd.execute(credentials).await,
-            ExportCommands::ExportMetrics(cmd) => cmd.execute(credentials).await,
-            ExportCommands::ExportMetadataInRocksDB(cmd) => cmd.execute(credentials).await,
-            ExportCommands::ExportMetadata(cmd) => cmd.execute(credentials).await,
-            ExportCommands::ExportPopRecord(cmd) => cmd.execute(credentials).await,
-            ExportCommands::RocksDBConfigToJson(cmd) => cmd.execute(credentials).await,
+            ExportCommands::ExportConfigs(cmd) => cmd.execute(credentials, client_runtime.clone()).await,
+            ExportCommands::ExportMetrics(cmd) => cmd.execute(credentials, client_runtime.clone()).await,
+            ExportCommands::ExportMetadataInRocksDB(cmd) => cmd.execute(credentials, client_runtime.clone()).await,
+            ExportCommands::ExportMetadata(cmd) => cmd.execute(credentials, client_runtime.clone()).await,
+            ExportCommands::ExportPopRecord(cmd) => cmd.execute(credentials, client_runtime.clone()).await,
+            ExportCommands::RocksDBConfigToJson(cmd) => cmd.execute(credentials, client_runtime.clone()).await,
         }
     }
 }

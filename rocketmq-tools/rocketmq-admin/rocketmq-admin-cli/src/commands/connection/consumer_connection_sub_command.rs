@@ -35,10 +35,15 @@ impl CommandExecute for ConsumerConnectionSubCommand {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
         let request = ConsumerConnectionQueryRequest::try_new(self.consumer_group.clone(), self.broker_addr.clone())?;
-        let result =
-            ConnectionService::query_consumer_connection_by_request_with_credentials(request, credentials).await?;
+        let result = ConnectionService::query_consumer_connection_by_request_with_credentials(
+            request,
+            credentials,
+            client_runtime.clone(),
+        )
+        .await?;
         render_consumer_connection_result(result);
         Ok(())
     }

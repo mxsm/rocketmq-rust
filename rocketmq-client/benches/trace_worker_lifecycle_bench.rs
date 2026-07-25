@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[path = "support/mod.rs"]
+mod support;
+
 use std::fs;
 use std::hint::black_box;
 use std::path::PathBuf;
@@ -28,15 +31,17 @@ use rocketmq_client_rust::run_trace_worker_lifecycle_probe;
 use rocketmq_client_rust::TraceWorkerLifecycleProbe;
 
 fn run_lifecycle_probe() -> TraceWorkerLifecycleProbe {
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
-        .max_blocking_threads(4)
-        .thread_name("rocketmq-client-trace-worker-bench")
-        .enable_all()
-        .build()
-        .expect("trace worker benchmark runtime should start");
+    let runtime = support::BenchClientRuntime::new("trace-worker");
+    let output = runtime.block_on(run_trace_worker_lifecycle_probe(runtime.child("trace-worker")));
+    runtime.shutdown();
+    output
+}
 
-    runtime.block_on(run_trace_worker_lifecycle_probe())
+fn run_queue_depth_probe(queued_count: usize) -> usize {
+    let runtime = support::BenchClientRuntime::new("trace-queue-depth");
+    let output = run_trace_queue_depth_accounting_probe(runtime.client_runtime(), queued_count);
+    runtime.shutdown();
+    output
 }
 
 fn workspace_root() -> PathBuf {
@@ -93,7 +98,7 @@ fn bench_trace_worker_lifecycle(criterion: &mut Criterion) {
             |bencher| {
                 bencher.iter_batched(
                     || queued_count,
-                    |queued_count| black_box(run_trace_queue_depth_accounting_probe(queued_count)),
+                    |queued_count| black_box(run_queue_depth_probe(queued_count)),
                     BatchSize::SmallInput,
                 );
             },

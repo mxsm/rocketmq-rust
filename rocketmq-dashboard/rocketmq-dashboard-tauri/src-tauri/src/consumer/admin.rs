@@ -15,8 +15,8 @@
 use crate::consumer::types::ConsumerError;
 use crate::consumer::types::ConsumerResult;
 use crate::nameserver::NameServerRuntimeState;
-use rocketmq_admin_core::core::admin::AdminBuilder;
-use rocketmq_admin_core::core::admin::AdminSession;
+use rocketmq_admin_core::client_adapter::AdminBuilder;
+use rocketmq_admin_core::client_adapter::AdminSession;
 use rocketmq_dashboard_common::NameServerConfigSnapshot;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -36,7 +36,7 @@ impl ManagedConsumerAdmin {
             )
         })?;
 
-        let admin = AdminBuilder::new()
+        let admin = AdminBuilder::new(runtime.client_runtime())
             .admin_group(format!("dashboard-consumer-admin-{}", Uuid::new_v4()))
             .namesrv_addr(current_namesrv)
             .timeout_millis(5_000)

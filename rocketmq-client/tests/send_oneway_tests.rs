@@ -21,10 +21,12 @@ use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
 use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_model::common::message::message_single::Message;
 
+mod support;
+
 #[tokio::test]
 async fn test_send_oneway_compiles() {
     // Test: Verify send_oneway compiles
-    let mut producer = DefaultMQProducer::builder()
+    let mut producer = DefaultMQProducer::builder(support::client_runtime("send-oneway"))
         .producer_group(CheetahString::from_static_str("test_group"))
         .name_server_addr(CheetahString::from_static_str("127.0.0.1:9876"))
         .build();
@@ -42,7 +44,7 @@ async fn test_send_oneway_compiles() {
 #[tokio::test]
 async fn test_send_oneway_with_message_queue_compiles() {
     // Test: Verify send_oneway_with_message_queue compiles
-    let mut producer = DefaultMQProducer::builder()
+    let mut producer = DefaultMQProducer::builder(support::client_runtime("send-oneway-to-queue"))
         .producer_group(CheetahString::from_static_str("test_group"))
         .name_server_addr(CheetahString::from_static_str("127.0.0.1:9876"))
         .build();
@@ -61,7 +63,7 @@ async fn test_send_oneway_with_message_queue_compiles() {
 #[tokio::test]
 async fn test_send_oneway_with_selector_compiles() {
     // Test: Verify send_oneway_with_selector compiles
-    let mut producer = DefaultMQProducer::builder()
+    let mut producer = DefaultMQProducer::builder(support::client_runtime("send-oneway-selector"))
         .producer_group(CheetahString::from_static_str("test_group"))
         .name_server_addr(CheetahString::from_static_str("127.0.0.1:9876"))
         .build();

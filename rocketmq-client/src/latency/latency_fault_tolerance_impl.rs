@@ -22,13 +22,14 @@ use std::time::Duration;
 use dashmap::DashMap;
 use parking_lot::Mutex;
 use parking_lot::RwLock;
+use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ScheduledTaskSnapshot;
 use serde::Serialize;
 
 use crate::latency::latency_fault_tolerance::LatencyFaultTolerance;
 use crate::latency::resolver::Resolver;
 use crate::latency::service_detector::ServiceDetector;
-use crate::runtime::schedule_client_fixed_delay_task;
+use crate::runtime::schedule_client_fixed_delay_task_with_context;
 use crate::runtime::ClientScheduledTaskHandle;
 
 const DETECTOR_TASK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
@@ -36,6 +37,7 @@ const DETECTOR_SCAN_INITIAL_DELAY: Duration = Duration::from_secs(3);
 const DETECTOR_SCAN_INTERVAL: Duration = Duration::from_secs(3);
 
 pub struct LatencyFaultToleranceImpl<R, S> {
+    service_context: ChildServiceContext,
     fault_item_table: DashMap<CheetahString, FaultItem>,
     detect_timeout: AtomicU32,
     detect_interval: AtomicU32,
@@ -107,8 +109,9 @@ pub struct LatencyFaultDetectorLifecycleProbe {
 }
 
 impl<R, S> LatencyFaultToleranceImpl<R, S> {
-    pub fn new() -> Self {
+    pub fn new(service_context: ChildServiceContext) -> Self {
         Self {
+            service_context,
             resolver: RwLock::new(None),
             service_detector: RwLock::new(None),
             fault_item_table: Default::default(),
@@ -237,7 +240,12 @@ where
             return;
         }
 
-        if let Some(handle) = spawn_detector_loop(this.clone(), DETECTOR_SCAN_INITIAL_DELAY, DETECTOR_SCAN_INTERVAL) {
+        if let Some(handle) = spawn_detector_loop(
+            &this.service_context,
+            this.clone(),
+            DETECTOR_SCAN_INITIAL_DELAY,
+            DETECTOR_SCAN_INTERVAL,
+        ) {
             lifecycle.task = Some(handle);
         }
     }
@@ -329,6 +337,7 @@ use tracing::error;
 use tracing::info;
 
 fn spawn_detector_loop<R, S>(
+    service_context: &ChildServiceContext,
     this: Arc<LatencyFaultToleranceImpl<R, S>>,
     initial_delay: Duration,
     scan_interval: Duration,
@@ -337,7 +346,8 @@ where
     R: Resolver,
     S: ServiceDetector,
 {
-    match schedule_client_fixed_delay_task(
+    match schedule_client_fixed_delay_task_with_context(
+        service_context,
         "rocketmq-client-fault-detector",
         initial_delay,
         scan_interval,
@@ -363,11 +373,20 @@ where
 }
 
 #[doc(hidden)]
-pub async fn run_latency_fault_detector_lifecycle_probe() -> LatencyFaultDetectorLifecycleProbe {
-    let detector = Arc::new(LatencyFaultToleranceImpl::<ProbeResolver, ProbeServiceDetector>::new());
+pub async fn run_latency_fault_detector_lifecycle_probe(
+    service_context: ChildServiceContext,
+) -> LatencyFaultDetectorLifecycleProbe {
+    let detector = Arc::new(LatencyFaultToleranceImpl::<ProbeResolver, ProbeServiceDetector>::new(
+        service_context.child("detector"),
+    ));
     detector.set_start_detector_enable(true);
-    let handle = spawn_detector_loop(detector.clone(), Duration::ZERO, Duration::from_millis(1))
-        .expect("latency fault detector probe task should start");
+    let handle = spawn_detector_loop(
+        &service_context,
+        detector.clone(),
+        Duration::ZERO,
+        Duration::from_millis(1),
+    )
+    .expect("latency fault detector probe task should start");
     detector.detector_lifecycle.lock().task = Some(handle);
 
     let mut snapshots = detector.detector_schedule_snapshot();
@@ -587,6 +606,10 @@ mod tests {
 
     use super::*;
 
+    fn test_context() -> ChildServiceContext {
+        crate::runtime::test_service_context("latency-fault-tolerance-test")
+    }
+
     struct DropFlag(Arc<AtomicBool>);
 
     impl Drop for DropFlag {
@@ -645,7 +668,8 @@ mod tests {
 
     #[tokio::test]
     async fn shared_detector_dependency_and_config_snapshots_drive_one_round() {
-        let detector = Arc::new(LatencyFaultToleranceImpl::<StaticResolver, RecordingServiceDetector>::new());
+        let detector =
+            Arc::new(LatencyFaultToleranceImpl::<StaticResolver, RecordingServiceDetector>::new(test_context()));
         let timeout_millis = Arc::new(AtomicU64::new(0));
         detector.set_resolver(StaticResolver);
         detector.set_service_detector(RecordingServiceDetector {
@@ -664,8 +688,10 @@ mod tests {
     }
 
     #[test]
-    fn start_detector_without_tokio_runtime_does_not_spawn_panic() {
-        let detector = Arc::new(LatencyFaultToleranceImpl::<NoopResolver, NoopServiceDetector>::new());
+    fn start_detector_uses_injected_runtime_context() {
+        let detector = Arc::new(LatencyFaultToleranceImpl::<NoopResolver, NoopServiceDetector>::new(
+            test_context(),
+        ));
 
         LatencyFaultTolerance::start_detector(detector.clone());
         detector.shutdown();
@@ -675,12 +701,13 @@ mod tests {
 
     #[tokio::test]
     async fn sync_shutdown_aborts_and_drains_detector_task() {
-        let detector = LatencyFaultToleranceImpl::<NoopResolver, NoopServiceDetector>::new();
+        let detector = LatencyFaultToleranceImpl::<NoopResolver, NoopServiceDetector>::new(test_context());
         let started = Arc::new(AtomicBool::new(false));
         let dropped = Arc::new(AtomicBool::new(false));
         let started_in_task = started.clone();
         let dropped_in_task = dropped.clone();
-        let handle = schedule_client_fixed_delay_task(
+        let handle = schedule_client_fixed_delay_task_with_context(
+            &test_context(),
             "latency-fault-detector-sync-shutdown-test",
             Duration::ZERO,
             Duration::from_secs(60),
@@ -723,7 +750,8 @@ mod tests {
         let completed = Arc::new(AtomicBool::new(false));
         let completed_in_task = completed.clone();
         let handle = FaultDetectorTaskHandle {
-            handle: schedule_client_fixed_delay_task(
+            handle: schedule_client_fixed_delay_task_with_context(
+                &test_context(),
                 "latency-fault-detector-clean-shutdown-test",
                 Duration::ZERO,
                 Duration::from_secs(60),
@@ -756,7 +784,8 @@ mod tests {
         let dropped_in_task = dropped.clone();
         let started_in_task = started.clone();
         let handle = FaultDetectorTaskHandle {
-            handle: schedule_client_fixed_delay_task(
+            handle: schedule_client_fixed_delay_task_with_context(
+                &test_context(),
                 "latency-fault-detector-timeout-shutdown-test",
                 Duration::ZERO,
                 Duration::from_secs(60),
@@ -787,7 +816,9 @@ mod tests {
 
     #[tokio::test]
     async fn shutdown_detector_waits_for_started_detector_task() {
-        let detector = Arc::new(LatencyFaultToleranceImpl::<NoopResolver, NoopServiceDetector>::new());
+        let detector = Arc::new(LatencyFaultToleranceImpl::<NoopResolver, NoopServiceDetector>::new(
+            test_context(),
+        ));
 
         LatencyFaultTolerance::start_detector(detector.clone());
 
@@ -798,7 +829,9 @@ mod tests {
 
     #[tokio::test]
     async fn concurrent_detector_start_publishes_one_owned_task() {
-        let detector = Arc::new(LatencyFaultToleranceImpl::<NoopResolver, NoopServiceDetector>::new());
+        let detector = Arc::new(LatencyFaultToleranceImpl::<NoopResolver, NoopServiceDetector>::new(
+            test_context(),
+        ));
         let starts = (0..8)
             .map(|_| {
                 let detector = detector.clone();
@@ -819,7 +852,7 @@ mod tests {
 
     #[tokio::test]
     async fn latency_fault_detector_lifecycle_probe_reports_clean_shutdown() {
-        let probe = run_latency_fault_detector_lifecycle_probe().await;
+        let probe = run_latency_fault_detector_lifecycle_probe(test_context()).await;
 
         assert!(probe.healthy, "{probe:?}");
         assert_eq!(probe.task_count_after_shutdown, 0, "{probe:?}");

@@ -39,8 +39,14 @@ impl CommandExecute for StartMonitoringSubCommand {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> rocketmq_error::RocketMQResult<()> {
-        let result = ConsumerService::start_monitoring_by_request_with_credentials(self.request(), credentials).await?;
+        let result = ConsumerService::start_monitoring_by_request_with_credentials(
+            self.request(),
+            credentials,
+            client_runtime.clone(),
+        )
+        .await?;
         for event in result.events {
             println!("{event:?}");
         }

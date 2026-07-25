@@ -13,11 +13,24 @@
 // limitations under the License.
 
 use rocketmq_admin_core::client_adapter::services::message::MessagePullEvent;
-use rocketmq_admin_core::core::admin::AdminBuilder;
+use std::sync::Arc;
 
-#[derive(Debug, Clone, Default)]
+use rocketmq_admin_core::client_adapter::AdminBuilder;
+use rocketmq_admin_core::client_adapter::ClientRuntime;
+
+#[derive(Clone)]
 pub struct TuiAdminFacade {
+    client_runtime: Arc<ClientRuntime>,
     namesrv_addr: Option<String>,
+}
+
+impl std::fmt::Debug for TuiAdminFacade {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("TuiAdminFacade")
+            .field("namesrv_addr", &self.namesrv_addr)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -28,9 +41,17 @@ pub struct MessagePullCapture {
 }
 
 impl TuiAdminFacade {
-    #[allow(dead_code)]
-    pub fn with_namesrv_addr(addr: impl Into<String>) -> Self {
+    pub fn new(client_runtime: Arc<ClientRuntime>) -> Self {
         Self {
+            client_runtime,
+            namesrv_addr: None,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn with_namesrv_addr(client_runtime: Arc<ClientRuntime>, addr: impl Into<String>) -> Self {
+        Self {
+            client_runtime,
             namesrv_addr: Some(addr.into()),
         }
     }
@@ -45,12 +66,32 @@ impl TuiAdminFacade {
 
     #[allow(dead_code)]
     pub fn admin_builder(&self) -> AdminBuilder {
-        let builder = AdminBuilder::new();
+        let builder = AdminBuilder::new(Arc::clone(&self.client_runtime));
         match &self.namesrv_addr {
             Some(addr) => builder.namesrv_addr(addr),
             None => builder,
         }
     }
+
+    pub(crate) fn client_runtime(&self) -> Arc<ClientRuntime> {
+        Arc::clone(&self.client_runtime)
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_client_runtime() -> Arc<ClientRuntime> {
+    use std::sync::LazyLock;
+
+    use rocketmq_admin_core::client_adapter::ClientRuntimeConfig;
+    use rocketmq_runtime::RuntimeConfig;
+    use rocketmq_runtime::RuntimeOwner;
+
+    static OWNER: LazyLock<RuntimeOwner> = LazyLock::new(|| {
+        RuntimeOwner::new(RuntimeConfig::server_default("rocketmq-admin-tui-test"))
+            .expect("admin TUI test runtime should start")
+    });
+
+    ClientRuntime::new(OWNER.root_context().child("client"), ClientRuntimeConfig::default())
 }
 
 mod operations;

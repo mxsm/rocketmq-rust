@@ -24,26 +24,25 @@ use std::sync::Weak;
 use std::time::Duration;
 use std::time::Instant;
 
+use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ScheduledTaskSnapshot;
 use serde::Serialize;
-use std::sync::LazyLock;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tracing::error;
 use tracing::warn;
 
 use crate::producer::request_response_future::RequestResponseFuture;
-use crate::runtime::schedule_client_fixed_delay_task;
+use crate::runtime::schedule_client_fixed_delay_task_with_context;
+use crate::runtime::spawn_client_task_with_context;
 use crate::runtime::ClientScheduledTaskHandle;
 
 const REQUEST_SCAN_INITIAL_DELAY: Duration = Duration::from_millis(3_000);
 const REQUEST_SCAN_INTERVAL: Duration = Duration::from_millis(1_000);
 const REQUEST_SCAN_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
-pub static REQUEST_FUTURE_HOLDER: LazyLock<Arc<RequestFutureHolder>> =
-    LazyLock::new(|| Arc::new(RequestFutureHolder::new()));
-
 pub struct RequestFutureHolder {
+    service_context: ChildServiceContext,
     request_future_table: Arc<RwLock<HashMap<String, Arc<RequestResponseFuture>>>>,
     deadline_queue: Arc<Mutex<BinaryHeap<DeadlineEntry>>>,
     deadline_sequence: AtomicU64,
@@ -104,8 +103,9 @@ pub struct RequestFutureHolderScanProbe {
 }
 
 impl RequestFutureHolder {
-    fn new() -> Self {
+    pub(crate) fn new(service_context: ChildServiceContext) -> Self {
         Self {
+            service_context,
             request_future_table: Arc::new(RwLock::new(HashMap::new())),
             deadline_queue: Arc::new(Mutex::new(BinaryHeap::new())),
             deadline_sequence: AtomicU64::new(0),
@@ -170,7 +170,8 @@ impl RequestFutureHolder {
         }
 
         let holder = Arc::clone(self);
-        let handle = match schedule_client_fixed_delay_task(
+        let handle = match schedule_client_fixed_delay_task_with_context(
+            &self.service_context,
             "rocketmq-client-request-future-scan",
             initial_delay,
             scan_interval.max(Duration::from_millis(1)),
@@ -237,6 +238,20 @@ impl RequestFutureHolder {
         table.remove(correlation_id)
     }
 
+    pub(crate) fn fail_request(self: &Arc<Self>, correlation_id: String) {
+        let holder = Arc::clone(self);
+        if let Err(error) =
+            spawn_client_task_with_context(&self.service_context, "rocketmq-client-request-failure", async move {
+                if let Some(request) = holder.remove_request_and_get(&correlation_id).await {
+                    request.set_send_request_ok(false);
+                    request.execute_request_callback();
+                }
+            })
+        {
+            error!(%error, "failed to schedule request failure callback");
+        }
+    }
+
     pub async fn get_request(&self, correlation_id: &str) -> Option<Arc<RequestResponseFuture>> {
         let table = self.request_future_table.read().await;
         table.get(correlation_id).cloned()
@@ -280,8 +295,10 @@ fn request_deadline(request: &RequestResponseFuture) -> Instant {
 }
 
 #[doc(hidden)]
-pub async fn run_request_future_holder_lifecycle_probe() -> RequestFutureHolderLifecycleProbe {
-    let holder = Arc::new(RequestFutureHolder::new());
+pub async fn run_request_future_holder_lifecycle_probe(
+    service_context: ChildServiceContext,
+) -> RequestFutureHolderLifecycleProbe {
+    let holder = Arc::new(RequestFutureHolder::new(service_context));
     holder
         .start_scheduled_task_with_schedule("producer-a", Duration::ZERO, Duration::from_millis(1))
         .await;
@@ -327,10 +344,11 @@ pub async fn run_request_future_holder_lifecycle_probe() -> RequestFutureHolderL
 
 #[doc(hidden)]
 pub async fn run_request_future_holder_scan_probe(
+    service_context: ChildServiceContext,
     pending_requests: usize,
     expired_percent: usize,
 ) -> RequestFutureHolderScanProbe {
-    let holder = RequestFutureHolder::new();
+    let holder = RequestFutureHolder::new(service_context);
     let expired_requests = pending_requests.saturating_mul(expired_percent.min(100)) / 100;
     let callbacks = Arc::new(AtomicUsize::new(0));
 
@@ -401,7 +419,9 @@ mod tests {
 
     #[tokio::test]
     async fn scheduled_task_lifecycle_matches_java_reference_counting() {
-        let holder = Arc::new(RequestFutureHolder::new());
+        let holder = Arc::new(RequestFutureHolder::new(crate::runtime::test_service_context(
+            "request-future-holder-test",
+        )));
 
         holder.start_scheduled_task("producer-a").await;
         assert_eq!(holder.producer_count().await, 1);
@@ -426,7 +446,9 @@ mod tests {
 
     #[tokio::test]
     async fn scheduled_task_shutdown_interrupts_initial_delay() {
-        let holder = Arc::new(RequestFutureHolder::new());
+        let holder = Arc::new(RequestFutureHolder::new(crate::runtime::test_service_context(
+            "request-future-holder-test",
+        )));
 
         holder.start_scheduled_task("producer-a").await;
         assert!(holder.scheduled_task_active().await);
@@ -443,7 +465,7 @@ mod tests {
 
     #[tokio::test]
     async fn scan_expired_request_removes_future_and_executes_timeout_callback() {
-        let holder = RequestFutureHolder::new();
+        let holder = RequestFutureHolder::new(crate::runtime::test_service_context("request-future-holder-test"));
         let callback_called = Arc::new(AtomicBool::new(false));
         let callback_called_inner = Arc::clone(&callback_called);
         let callback = Arc::new(
@@ -472,7 +494,7 @@ mod tests {
 
     #[tokio::test]
     async fn scan_expired_request_skips_removed_lazy_deadline_entry() {
-        let holder = RequestFutureHolder::new();
+        let holder = RequestFutureHolder::new(crate::runtime::test_service_context("request-future-holder-test"));
         let callback_count = Arc::new(AtomicUsize::new(0));
         let callback_count_inner = Arc::clone(&callback_count);
         let callback = Arc::new(
@@ -493,7 +515,7 @@ mod tests {
 
     #[tokio::test]
     async fn scan_expired_request_skips_stale_deadline_after_replace() {
-        let holder = RequestFutureHolder::new();
+        let holder = RequestFutureHolder::new(crate::runtime::test_service_context("request-future-holder-test"));
         let callback_count = Arc::new(AtomicUsize::new(0));
         let callback_count_inner = Arc::clone(&callback_count);
         let old_callback = Arc::new(
@@ -525,7 +547,7 @@ mod tests {
 
     #[tokio::test]
     async fn duplicate_deadline_entries_execute_timeout_callback_once() {
-        let holder = RequestFutureHolder::new();
+        let holder = RequestFutureHolder::new(crate::runtime::test_service_context("request-future-holder-test"));
         let callback_count = Arc::new(AtomicUsize::new(0));
         let callback_count_inner = Arc::clone(&callback_count);
         let callback = Arc::new(
@@ -548,7 +570,7 @@ mod tests {
 
     #[tokio::test]
     async fn remove_request_and_get_returns_and_removes_future() {
-        let holder = RequestFutureHolder::new();
+        let holder = RequestFutureHolder::new(crate::runtime::test_service_context("request-future-holder-test"));
         let request = Arc::new(RequestResponseFuture::new("corr-remove".into(), 3_000, None));
 
         holder.put_request("corr-remove".to_string(), request.clone()).await;
@@ -564,7 +586,10 @@ mod tests {
 
     #[tokio::test]
     async fn request_future_holder_lifecycle_probe_reports_clean_shutdown() {
-        let probe = run_request_future_holder_lifecycle_probe().await;
+        let probe = run_request_future_holder_lifecycle_probe(crate::runtime::test_service_context(
+            "request-future-holder-probe",
+        ))
+        .await;
 
         assert!(probe.healthy, "{probe:?}");
         assert_eq!(probe.task_count_after_shutdown, 0, "{probe:?}");

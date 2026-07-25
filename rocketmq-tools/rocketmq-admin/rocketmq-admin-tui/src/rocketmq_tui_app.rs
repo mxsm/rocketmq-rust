@@ -35,15 +35,9 @@ struct RunningCommandTask {
     abort_handle: AbortHandle,
 }
 
-impl Default for RocketmqTuiApp {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl RocketmqTuiApp {
-    pub fn new() -> Self {
-        Self::with_admin_facade(TuiAdminFacade::default())
+    pub fn new(client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>) -> Self {
+        Self::with_admin_facade(TuiAdminFacade::new(client_runtime))
     }
 
     pub fn with_admin_facade(admin_facade: TuiAdminFacade) -> Self {
@@ -611,11 +605,12 @@ mod tests {
     use ratatui::crossterm::event::KeyModifiers;
 
     use super::*;
+    use crate::admin_facade::test_client_runtime;
     use crate::admin_facade::TuiAdminFacade;
 
     #[test]
     fn app_can_be_constructed_with_admin_facade() {
-        let facade = TuiAdminFacade::with_namesrv_addr("127.0.0.1:9876");
+        let facade = TuiAdminFacade::with_namesrv_addr(test_client_runtime(), "127.0.0.1:9876");
         let app = RocketmqTuiApp::with_admin_facade(facade);
 
         assert_eq!(app.admin_facade().namesrv_addr(), Some("127.0.0.1:9876"));
@@ -623,7 +618,7 @@ mod tests {
 
     #[test]
     fn namesrv_action_updates_facade_and_state() {
-        let mut app = RocketmqTuiApp::new();
+        let mut app = RocketmqTuiApp::new(test_client_runtime());
 
         app.apply_action(Action::NamesrvChanged(" 127.0.0.1:9876 ".to_string()));
 
@@ -633,7 +628,7 @@ mod tests {
 
     #[test]
     fn enter_in_namesrv_input_commits_address_without_executing_command() {
-        let mut app = RocketmqTuiApp::new();
+        let mut app = RocketmqTuiApp::new(test_client_runtime());
 
         app.apply_action(Action::FocusNamesrv);
         app.apply_action(Action::NamesrvChanged(" 127.0.0.1:9876 ".to_string()));
@@ -649,7 +644,7 @@ mod tests {
 
     #[test]
     fn enter_in_search_input_returns_to_command_tree_without_executing_command() {
-        let mut app = RocketmqTuiApp::new();
+        let mut app = RocketmqTuiApp::new(test_client_runtime());
 
         app.apply_action(Action::FocusSearch);
         app.apply_action(Action::SearchChanged("topic.cluster".to_string()));
@@ -663,7 +658,7 @@ mod tests {
 
     #[test]
     fn execution_requires_valid_args() {
-        let mut app = RocketmqTuiApp::new();
+        let mut app = RocketmqTuiApp::new(test_client_runtime());
         app.apply_action(Action::SearchChanged("topic.cluster".to_string()));
         app.state.select_next_tree_item();
         app.apply_action(Action::ExecuteRequested);
@@ -677,7 +672,7 @@ mod tests {
         let local = tokio::task::LocalSet::new();
 
         local.block_on(&tokio::runtime::Builder::new_current_thread().build().unwrap(), async {
-            let mut app = RocketmqTuiApp::new();
+            let mut app = RocketmqTuiApp::new(test_client_runtime());
             app.apply_action(Action::SearchChanged("message.decode_id".to_string()));
             app.apply_action(Action::CommandSelected("message.decode_id".to_string()));
             app.state.reset_form_for_selected_command();
@@ -705,7 +700,7 @@ mod tests {
             let abort_handle = command_task.abort_handle();
             drop(command_task);
 
-            let mut app = RocketmqTuiApp::new();
+            let mut app = RocketmqTuiApp::new(test_client_runtime());
             app.running_task = Some(RunningCommandTask {
                 execution_id: 7,
                 abort_handle,

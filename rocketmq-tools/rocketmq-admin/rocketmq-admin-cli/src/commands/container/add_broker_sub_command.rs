@@ -41,8 +41,14 @@ impl CommandExecute for AddBrokerSubCommand {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
-        let result = ContainerService::add_broker_by_request_with_credentials(self.request()?, credentials).await?;
+        let result = ContainerService::add_broker_by_request_with_credentials(
+            self.request()?,
+            credentials,
+            client_runtime.clone(),
+        )
+        .await?;
         println!("add broker to {} success", result.broker_container_addr);
         Ok(())
     }

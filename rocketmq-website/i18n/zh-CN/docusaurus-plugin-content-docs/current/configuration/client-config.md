@@ -3,6 +3,8 @@ sidebar_position: 2
 title: 客户端配置
 ---
 
+> Runtime 所有权：示例中的 `client_runtime` 是应用持有的 `Arc<ClientRuntime>`，它从 `RuntimeOwner` 的 child scope 创建，并在进程边界显式关闭。
+
 # 客户端配置
 
 本页介绍当前 RocketMQ-Rust 中 Producer 与 Consumer 的 builder 配置方式。
@@ -14,7 +16,7 @@ title: 客户端配置
 ```rust
 use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
 
-let mut producer = DefaultMQProducer::builder()
+let mut producer = DefaultMQProducer::builder(client_runtime.clone())
     .producer_group("my_producer_group")
     .name_server_addr("localhost:9876")
     .send_msg_timeout(3_000)
@@ -26,7 +28,7 @@ let mut producer = DefaultMQProducer::builder()
 ### 生产者高级配置
 
 ```rust
-let mut producer = DefaultMQProducer::builder()
+let mut producer = DefaultMQProducer::builder(client_runtime.clone())
     .producer_group("my_producer_group")
     .name_server_addr("localhost:9876")
     .compress_msg_body_over_howmuch(4 * 1024)
@@ -50,7 +52,7 @@ let mut producer = DefaultMQProducer::builder()
 ```rust
 use rocketmq_client_rust::consumer::default_mq_push_consumer::DefaultMQPushConsumer;
 
-let mut consumer = DefaultMQPushConsumer::builder()
+let mut consumer = DefaultMQPushConsumer::builder(client_runtime.clone())
     .consumer_group("my_consumer_group")
     .name_server_addr("localhost:9876")
     .consume_thread_min(2)
@@ -64,7 +66,7 @@ let mut consumer = DefaultMQPushConsumer::builder()
 use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 
-let mut consumer = DefaultMQPushConsumer::builder()
+let mut consumer = DefaultMQPushConsumer::builder(client_runtime.clone())
     .consumer_group("my_consumer_group")
     .name_server_addr("localhost:9876")
     .consume_from_where(ConsumeFromWhere::ConsumeFromLastOffset)
@@ -82,7 +84,7 @@ let mut consumer = DefaultMQPushConsumer::builder()
 ```rust
 use rocketmq_client_rust::consumer::default_lite_pull_consumer::DefaultLitePullConsumer;
 
-let consumer = DefaultLitePullConsumer::builder()
+let consumer = DefaultLitePullConsumer::builder(client_runtime.clone())
     .consumer_group("my_pull_group")
     .name_server_addr("localhost:9876")
     .pull_batch_size(32)
@@ -166,7 +168,7 @@ let name_server = env::var("ROCKETMQ_NAME_SERVER")
 let producer_group = env::var("ROCKETMQ_PRODUCER_GROUP")
     .unwrap_or_else(|_| "default_producer_group".to_string());
 
-let mut producer = DefaultMQProducer::builder()
+let mut producer = DefaultMQProducer::builder(client_runtime.clone())
     .producer_group(producer_group)
     .name_server_addr(name_server)
     .build();

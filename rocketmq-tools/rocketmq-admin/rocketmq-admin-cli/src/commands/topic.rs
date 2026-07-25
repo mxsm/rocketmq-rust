@@ -135,20 +135,21 @@ impl CommandExecute for TopicCommands {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
         match self {
-            TopicCommands::AllocateMQ(cmd) => cmd.execute(credentials).await,
-            TopicCommands::DeleteTopic(cmd) => cmd.execute(credentials).await,
-            TopicCommands::RemappingStaticTopic(cmd) => cmd.execute(credentials).await,
-            TopicCommands::TopicCluster(cmd) => cmd.execute(credentials).await,
-            TopicCommands::TopicList(cmd) => cmd.execute(credentials).await,
-            TopicCommands::TopicRoute(cmd) => cmd.execute(credentials).await,
-            TopicCommands::TopicStatus(cmd) => cmd.execute(credentials).await,
-            TopicCommands::UpdateOrderConf(cmd) => cmd.execute(credentials).await,
-            TopicCommands::UpdateStaticTopic(cmd) => cmd.execute(credentials).await,
-            TopicCommands::UpdateTopicList(cmd) => cmd.execute(credentials).await,
-            TopicCommands::UpdateTopicPerm(cmd) => cmd.execute(credentials).await,
-            TopicCommands::UpdateTopic(cmd) => cmd.execute(credentials).await,
+            TopicCommands::AllocateMQ(cmd) => cmd.execute(credentials, client_runtime.clone()).await,
+            TopicCommands::DeleteTopic(cmd) => cmd.execute(credentials, client_runtime.clone()).await,
+            TopicCommands::RemappingStaticTopic(cmd) => cmd.execute(credentials, client_runtime.clone()).await,
+            TopicCommands::TopicCluster(cmd) => cmd.execute(credentials, client_runtime.clone()).await,
+            TopicCommands::TopicList(cmd) => cmd.execute(credentials, client_runtime.clone()).await,
+            TopicCommands::TopicRoute(cmd) => cmd.execute(credentials, client_runtime.clone()).await,
+            TopicCommands::TopicStatus(cmd) => cmd.execute(credentials, client_runtime.clone()).await,
+            TopicCommands::UpdateOrderConf(cmd) => cmd.execute(credentials, client_runtime.clone()).await,
+            TopicCommands::UpdateStaticTopic(cmd) => cmd.execute(credentials, client_runtime.clone()).await,
+            TopicCommands::UpdateTopicList(cmd) => cmd.execute(credentials, client_runtime.clone()).await,
+            TopicCommands::UpdateTopicPerm(cmd) => cmd.execute(credentials, client_runtime.clone()).await,
+            TopicCommands::UpdateTopic(cmd) => cmd.execute(credentials, client_runtime.clone()).await,
         }
     }
 }

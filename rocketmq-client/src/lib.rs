@@ -112,11 +112,7 @@ pub use crate::common::session_credentials::SessionCredentials;
 pub mod proxy_adapter_compat {
     use std::collections::HashMap;
     use std::net::SocketAddr;
-    use std::sync::atomic::AtomicBool;
-    use std::sync::atomic::AtomicUsize;
-    use std::sync::atomic::Ordering;
     use std::sync::Arc;
-    use std::sync::LazyLock;
     use std::sync::Mutex;
 
     use cheetah_string::CheetahString;
@@ -152,39 +148,12 @@ pub mod proxy_adapter_compat {
     /// can only use the instance API and keeps cloned handles on its managed worker.
     pub struct ClientInstanceHandle {
         inner: Arc<crate::factory::mq_client_instance::MQClientInstance>,
-        owner: ManagedClientOwner,
-    }
-
-    #[derive(Clone, Eq, Hash, PartialEq)]
-    struct ManagedClientKey {
-        client_id: CheetahString,
-    }
-
-    #[derive(Eq, PartialEq)]
-    struct ManagedClientIdentity {
-        namesrv_addr: Option<CheetahString>,
-        use_tls: bool,
-        vip_channel_enabled: bool,
-        api_timeout_millis: u64,
-        rpc_hook_identity: Option<usize>,
-    }
-
-    struct ManagedClientEntry {
-        identity: ManagedClientIdentity,
-        owners: AtomicUsize,
+        pool: crate::implementation::mq_client_manager::ClientPool,
+        token: Mutex<Option<crate::implementation::mq_client_manager::ClientPoolToken>>,
         operation_gate: Arc<tokio::sync::Mutex<()>>,
     }
 
-    struct ManagedClientOwner {
-        key: ManagedClientKey,
-        entry: Arc<ManagedClientEntry>,
-        released: AtomicBool,
-    }
-
-    static MANAGED_CLIENTS: LazyLock<dashmap::DashMap<ManagedClientKey, Arc<ManagedClientEntry>>> =
-        LazyLock::new(dashmap::DashMap::new);
-
-    /// Isolates a managed Client owner in the global Client manager while
+    /// Isolates a managed Client owner in its injected [`crate::ClientPool`] while
     /// preserving the caller-provided instance name as a readable prefix.
     pub fn client_config_for_managed_domain(
         domain_id: u64,
@@ -199,49 +168,19 @@ pub mod proxy_adapter_compat {
 
     impl ClientInstanceHandle {
         pub fn get_or_create(
+            client_runtime: &crate::runtime::ClientRuntime,
             domain_id: u64,
             client_config: crate::base::client_config::ClientConfig,
             rpc_hook: Option<Arc<ClientRpcHook>>,
         ) -> rocketmq_error::RocketMQResult<Self> {
             let client_config = client_config_for_managed_domain(domain_id, client_config);
-            let client_id = CheetahString::from_string(client_config.build_mq_client_id());
-            let key = ManagedClientKey { client_id };
-            let identity = ManagedClientIdentity {
-                namesrv_addr: client_config.namesrv_addr.clone(),
-                use_tls: client_config.use_tls,
-                vip_channel_enabled: client_config.vip_channel_enabled,
-                api_timeout_millis: client_config.mq_client_api_timeout,
-                rpc_hook_identity: rpc_hook.as_ref().map(|hook| Arc::as_ptr(hook).cast::<()>() as usize),
-            };
-            let entry = match MANAGED_CLIENTS.entry(key.clone()) {
-                dashmap::mapref::entry::Entry::Occupied(entry) => {
-                    if entry.get().identity != identity {
-                        return Err(rocketmq_error::RocketMQError::IllegalArgument(
-                            "managed Client instance configuration conflicts with an existing owner".to_owned(),
-                        ));
-                    }
-                    entry.get().owners.fetch_add(1, Ordering::AcqRel);
-                    entry.get().clone()
-                }
-                dashmap::mapref::entry::Entry::Vacant(entry) => {
-                    let managed = Arc::new(ManagedClientEntry {
-                        identity,
-                        owners: AtomicUsize::new(1),
-                        operation_gate: Arc::new(tokio::sync::Mutex::new(())),
-                    });
-                    entry.insert(managed.clone());
-                    managed
-                }
-            };
-            let inner = crate::implementation::mq_client_manager::MQClientManager::get_instance()
-                .get_or_create_mq_client_instance(client_config, rpc_hook);
+            let pool = client_runtime.pool().clone();
+            let (inner, token) = pool.get_or_create(client_config, rpc_hook)?.into_parts();
             Ok(Self {
                 inner,
-                owner: ManagedClientOwner {
-                    key,
-                    entry,
-                    released: AtomicBool::new(false),
-                },
+                pool,
+                token: Mutex::new(Some(token)),
+                operation_gate: Arc::new(tokio::sync::Mutex::new(())),
             })
         }
 
@@ -580,49 +519,33 @@ pub mod proxy_adapter_compat {
         }
 
         pub async fn shutdown_owned(&self) {
-            if !self.release_managed() {
+            let token = self
+                .token
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .take();
+            let Some(token) = token else {
                 return;
-            }
-            let _operation = self.operation().await;
-            self.inner.shutdown().await;
-        }
-
-        fn release_managed(&self) -> bool {
-            if self.owner.released.swap(true, Ordering::AcqRel) {
-                return false;
-            }
-            let dashmap::mapref::entry::Entry::Occupied(entry) = MANAGED_CLIENTS.entry(self.owner.key.clone()) else {
-                return false;
             };
-            if !Arc::ptr_eq(entry.get(), &self.owner.entry) {
-                return false;
-            }
-            let owners = entry.get().owners.load(Ordering::Acquire);
-            if owners == 0 {
-                return false;
-            }
-            entry.get().owners.store(owners - 1, Ordering::Release);
-            if owners != 1 {
-                return false;
-            }
-
-            let expected = Arc::as_ptr(&self.inner).cast::<()>();
-            crate::implementation::mq_client_manager::MQClientManager::get_instance()
-                .remove_client_factory_if_same(&self.owner.key.client_id, expected);
-            entry.remove();
-            true
+            let _operation = self.operation().await;
+            self.pool.release(token).await;
         }
 
         async fn operation(&self) -> tokio::sync::OwnedMutexGuard<()> {
-            self.owner.entry.operation_gate.clone().lock_owned().await
+            self.operation_gate.clone().lock_owned().await
         }
     }
 
     impl Drop for ClientInstanceHandle {
         fn drop(&mut self) {
-            if self.release_managed() {
+            if self
+                .token
+                .get_mut()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .is_some()
+            {
                 tracing::warn!(
-                    client_id = %self.owner.key.client_id,
+                    client_id = %self.inner.client_id,
                     "managed Client handle dropped before asynchronous shutdown completed"
                 );
             }
@@ -741,15 +664,12 @@ pub mod proxy_adapter_compat {
     mod tests {
         use std::sync::Arc;
 
-        use super::client_config_for_managed_domain;
         use super::rpc_hook_from_outbound_signer;
         use super::CheetahString;
         use super::ClientInstanceHandle;
-        use super::ManagedClientKey;
         use super::OutboundSigner;
         use super::RemotingCommand;
         use super::SecurityRequestView;
-        use super::MANAGED_CLIENTS;
         use rocketmq_protocol::code::request_code::RequestCode;
         use rocketmq_protocol::protocol::header::client_request_header::GetRouteInfoRequestHeader;
         use rocketmq_security_api::Secret;
@@ -819,43 +739,27 @@ pub mod proxy_adapter_compat {
 
         #[tokio::test]
         async fn managed_client_is_shared_until_the_last_owner_releases_it() {
+            let runtime = crate::runtime::test_client_runtime("managed-client-shared-test");
             let domain_id = 71_001;
             let mut config = crate::base::client_config::ClientConfig::default();
             config.set_instance_name("managed-client-shared".into());
-            let client_id = client_config_for_managed_domain(domain_id, config.clone())
-                .build_mq_client_id()
-                .into();
-            let key = ManagedClientKey { client_id };
 
-            let first = ClientInstanceHandle::get_or_create(domain_id, config.clone(), None).unwrap();
-            let second = ClientInstanceHandle::get_or_create(domain_id, config, None).unwrap();
+            let first = ClientInstanceHandle::get_or_create(&runtime, domain_id, config.clone(), None).unwrap();
+            let second = ClientInstanceHandle::get_or_create(&runtime, domain_id, config, None).unwrap();
 
             assert!(Arc::ptr_eq(&first.inner, &second.inner));
-            assert_eq!(
-                MANAGED_CLIENTS
-                    .get(&key)
-                    .unwrap()
-                    .owners
-                    .load(std::sync::atomic::Ordering::Acquire),
-                2
-            );
+            assert_eq!(runtime.pool().instance_count(), 1);
 
             first.shutdown_owned().await;
-            assert_eq!(
-                MANAGED_CLIENTS
-                    .get(&key)
-                    .unwrap()
-                    .owners
-                    .load(std::sync::atomic::Ordering::Acquire),
-                1
-            );
+            assert_eq!(runtime.pool().instance_count(), 1);
 
             second.shutdown_owned().await;
-            assert!(!MANAGED_CLIENTS.contains_key(&key));
+            assert_eq!(runtime.pool().instance_count(), 0);
         }
 
         #[tokio::test]
         async fn managed_client_rejects_conflicting_configuration_for_the_same_identity() {
+            let runtime = crate::runtime::test_client_runtime("managed-client-conflict-test");
             let domain_id = 71_002;
             let mut first_config = crate::base::client_config::ClientConfig::default();
             first_config.set_instance_name("managed-client-conflict".into());
@@ -863,8 +767,8 @@ pub mod proxy_adapter_compat {
             let mut second_config = first_config.clone();
             second_config.set_namesrv_addr("127.0.0.2:9876".into());
 
-            let first = ClientInstanceHandle::get_or_create(domain_id, first_config, None).unwrap();
-            let error = ClientInstanceHandle::get_or_create(domain_id, second_config, None)
+            let first = ClientInstanceHandle::get_or_create(&runtime, domain_id, first_config, None).unwrap();
+            let error = ClientInstanceHandle::get_or_create(&runtime, domain_id, second_config, None)
                 .err()
                 .expect("conflicting managed configuration must fail closed");
 
@@ -876,79 +780,31 @@ pub mod proxy_adapter_compat {
         async fn managed_client_isolated_across_runtime_domains() {
             let mut config = crate::base::client_config::ClientConfig::default();
             config.set_instance_name("managed-client-cross-domain".into());
-            let first_domain = 71_004;
-            let second_domain = 71_005;
-            let first_key = ManagedClientKey {
-                client_id: client_config_for_managed_domain(first_domain, config.clone())
-                    .build_mq_client_id()
-                    .into(),
-            };
-            let second_key = ManagedClientKey {
-                client_id: client_config_for_managed_domain(second_domain, config.clone())
-                    .build_mq_client_id()
-                    .into(),
-            };
-            let first = ClientInstanceHandle::get_or_create(first_domain, config.clone(), None).unwrap();
-            let second = ClientInstanceHandle::get_or_create(second_domain, config, None).unwrap();
+            let first_runtime = crate::runtime::test_client_runtime("managed-client-domain-a");
+            let second_runtime = crate::runtime::test_client_runtime("managed-client-domain-b");
+            let first = ClientInstanceHandle::get_or_create(&first_runtime, 71_004, config.clone(), None).unwrap();
+            let second = ClientInstanceHandle::get_or_create(&second_runtime, 71_004, config, None).unwrap();
 
             assert!(!Arc::ptr_eq(&first.inner, &second.inner));
-            assert_eq!(
-                MANAGED_CLIENTS
-                    .get(&first_key)
-                    .unwrap()
-                    .owners
-                    .load(std::sync::atomic::Ordering::Acquire),
-                1
-            );
-            assert_eq!(
-                MANAGED_CLIENTS
-                    .get(&second_key)
-                    .unwrap()
-                    .owners
-                    .load(std::sync::atomic::Ordering::Acquire),
-                1
-            );
+            assert_eq!(first_runtime.pool().instance_count(), 1);
+            assert_eq!(second_runtime.pool().instance_count(), 1);
 
             first.shutdown_owned().await;
-            assert!(!MANAGED_CLIENTS.contains_key(&first_key));
-            assert!(MANAGED_CLIENTS.contains_key(&second_key));
+            assert_eq!(first_runtime.pool().instance_count(), 0);
+            assert_eq!(second_runtime.pool().instance_count(), 1);
             second.shutdown_owned().await;
-            assert!(!MANAGED_CLIENTS.contains_key(&second_key));
-        }
-
-        #[test]
-        fn dropping_managed_handles_releases_the_global_lease() {
-            let domain_id = 71_006;
-            let mut config = crate::base::client_config::ClientConfig::default();
-            config.set_instance_name("managed-client-drop-release".into());
-            let client_id = client_config_for_managed_domain(domain_id, config.clone())
-                .build_mq_client_id()
-                .into();
-            let key = ManagedClientKey { client_id };
-            let first = ClientInstanceHandle::get_or_create(domain_id, config.clone(), None).unwrap();
-            let second = ClientInstanceHandle::get_or_create(domain_id, config, None).unwrap();
-
-            drop(first);
-            assert_eq!(
-                MANAGED_CLIENTS
-                    .get(&key)
-                    .unwrap()
-                    .owners
-                    .load(std::sync::atomic::Ordering::Acquire),
-                1
-            );
-            drop(second);
-            assert!(!MANAGED_CLIENTS.contains_key(&key));
+            assert_eq!(second_runtime.pool().instance_count(), 0);
         }
 
         #[tokio::test]
         async fn releasing_the_last_lease_prevents_manager_aba_reuse() {
+            let runtime = crate::runtime::test_client_runtime("managed-client-aba-test");
             let mut config = crate::base::client_config::ClientConfig::default();
             config.set_instance_name("managed-client-aba".into());
-            let first = ClientInstanceHandle::get_or_create(71_008, config.clone(), None).unwrap();
+            let first = ClientInstanceHandle::get_or_create(&runtime, 71_008, config.clone(), None).unwrap();
             first.shutdown_owned().await;
 
-            let second = ClientInstanceHandle::get_or_create(71_008, config, None).unwrap();
+            let second = ClientInstanceHandle::get_or_create(&runtime, 71_008, config, None).unwrap();
             assert!(!Arc::ptr_eq(&first.inner, &second.inner));
             second.shutdown_owned().await;
         }
@@ -1062,18 +918,9 @@ pub use crate::implementation::mq_client_api_factory::run_namesrv_refresh_lifecy
 pub use crate::implementation::mq_client_api_factory::MQClientAPIFactory;
 #[doc(hidden)]
 pub use crate::implementation::mq_client_api_factory::NamesrvRefreshLifecycleProbe;
-#[doc(hidden)]
-pub use crate::runtime::client_runtime_fallback_snapshot;
-#[doc(hidden)]
-pub use crate::runtime::reset_client_runtime_fallback_for_diagnostics;
-#[doc(hidden)]
-pub use crate::runtime::spawn_client_runtime_probe_task;
-#[doc(hidden)]
-pub use crate::runtime::ClientRuntimeTaskHandle;
-#[doc(hidden)]
-pub use crate::runtime::ClientSharedFallbackLifecycleState;
-#[doc(hidden)]
-pub use crate::runtime::ClientSharedFallbackSnapshot;
+pub use crate::implementation::mq_client_manager::ClientPool;
+pub use crate::runtime::ClientRuntime;
+pub use crate::runtime::ClientRuntimeConfig;
 #[doc(hidden)]
 pub use crate::stat::consumer_stats_manager::run_consumer_stats_manager_lifecycle_probe;
 #[doc(hidden)]

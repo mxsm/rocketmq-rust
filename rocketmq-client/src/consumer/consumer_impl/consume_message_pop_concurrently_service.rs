@@ -53,10 +53,12 @@ use crate::consumer::listener::consume_concurrently_status::ConsumeConcurrentlyS
 use crate::consumer::listener::consume_return_type::ConsumeReturnType;
 use crate::consumer::listener::message_listener_concurrently::ArcMessageListenerConcurrently;
 use crate::hook::consume_message_context::ConsumeMessageContext;
-use crate::runtime::spawn_client_blocking_io;
-use crate::runtime::spawn_client_task;
+use crate::runtime::spawn_client_blocking_io_with_context;
+use crate::runtime::spawn_client_task_with_context;
+use rocketmq_runtime::ChildServiceContext;
 
 fn spawn_tracked_pop_concurrent_task<F>(
+    service_context: &ChildServiceContext,
     thread_name: &'static str,
     tracker: &TaskTracker,
     force_stop_token: &CancellationToken,
@@ -75,12 +77,13 @@ fn spawn_tracked_pop_concurrent_task<F>(
         }
     });
 
-    if let Err(error) = spawn_client_task(thread_name, tracked_task) {
+    if let Err(error) = spawn_client_task_with_context(service_context, thread_name, tracked_task) {
         warn!("Failed to spawn {} background task: {}", thread_name, error);
     }
 }
 
 pub struct ConsumeMessagePopConcurrentlyService {
+    service_context: ChildServiceContext,
     pub(crate) default_mqpush_consumer_impl: Option<Weak<DefaultMQPushConsumerImpl>>,
     pub(crate) client_config: Arc<ClientConfig>,
     pub(crate) consumer_config: Arc<ConsumerConfig>,
@@ -97,6 +100,7 @@ pub struct ConsumeMessagePopConcurrentlyService {
 
 impl ConsumeMessagePopConcurrentlyService {
     pub fn new(
+        service_context: ChildServiceContext,
         client_config: Arc<ClientConfig>,
         consumer_config: Arc<ConsumerConfig>,
         consumer_group: CheetahString,
@@ -105,6 +109,7 @@ impl ConsumeMessagePopConcurrentlyService {
     ) -> Self {
         let consume_thread = consumer_config.consume_thread_min;
         Self {
+            service_context,
             default_mqpush_consumer_impl,
             client_config,
             consumer_config,
@@ -230,45 +235,49 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopConcurrentlyService {
         let listener = self.message_listener.clone();
         let msgs_cloned: Vec<MessageExt> = msgs.iter().map(|m| m.as_ref().clone()).collect();
         let group_for_span = self.consumer_group.clone();
-        let status_result = spawn_client_blocking_io("client.pop_concurrent.consume_direct", move || {
-            let msgs_refs: Vec<&MessageExt> = msgs_cloned.iter().collect();
-            let process_span = crate::consumer::consumer_impl::observability::consumer_process_span(
-                msgs_refs.first().copied(),
-                msgs_refs.len(),
-                group_for_span.as_str(),
-                &context.message_queue,
-                "pop_concurrent_direct",
-            );
-            let _entered = process_span.enter();
-            let result = listener.consume_message(&msgs_refs, &context);
-            match &result {
-                Ok(ConsumeConcurrentlyStatus::ConsumeSuccess) => {
-                    crate::consumer::consumer_impl::observability::record_process_event(
-                        &process_span,
-                        "RocketMQ CONSUMER ACK",
-                        "success",
-                        msgs_refs.len(),
-                    );
+        let status_result = spawn_client_blocking_io_with_context(
+            &self.service_context,
+            "client.pop_concurrent.consume_direct",
+            move || {
+                let msgs_refs: Vec<&MessageExt> = msgs_cloned.iter().collect();
+                let process_span = crate::consumer::consumer_impl::observability::consumer_process_span(
+                    msgs_refs.first().copied(),
+                    msgs_refs.len(),
+                    group_for_span.as_str(),
+                    &context.message_queue,
+                    "pop_concurrent_direct",
+                );
+                let _entered = process_span.enter();
+                let result = listener.consume_message(&msgs_refs, &context);
+                match &result {
+                    Ok(ConsumeConcurrentlyStatus::ConsumeSuccess) => {
+                        crate::consumer::consumer_impl::observability::record_process_event(
+                            &process_span,
+                            "RocketMQ CONSUMER ACK",
+                            "success",
+                            msgs_refs.len(),
+                        );
+                    }
+                    Ok(ConsumeConcurrentlyStatus::ReconsumeLater) => {
+                        crate::consumer::consumer_impl::observability::record_process_event(
+                            &process_span,
+                            "RocketMQ CONSUMER RETRY",
+                            "reconsume_later",
+                            msgs_refs.len(),
+                        );
+                    }
+                    Err(_) => {
+                        crate::consumer::consumer_impl::observability::record_process_event(
+                            &process_span,
+                            "RocketMQ CONSUMER RETRY",
+                            "exception",
+                            msgs_refs.len(),
+                        );
+                    }
                 }
-                Ok(ConsumeConcurrentlyStatus::ReconsumeLater) => {
-                    crate::consumer::consumer_impl::observability::record_process_event(
-                        &process_span,
-                        "RocketMQ CONSUMER RETRY",
-                        "reconsume_later",
-                        msgs_refs.len(),
-                    );
-                }
-                Err(_) => {
-                    crate::consumer::consumer_impl::observability::record_process_event(
-                        &process_span,
-                        "RocketMQ CONSUMER RETRY",
-                        "exception",
-                        msgs_refs.len(),
-                    );
-                }
-            }
-            result
-        })
+                result
+            },
+        )
         .await;
         let consume_rt = begin_timestamp.elapsed().as_millis() as u64;
         rocketmq_observability::metrics::client::record_consume(1, consume_rt);
@@ -332,6 +341,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopConcurrentlyService {
             let limiter = self.concurrency_limiter.clone();
             let stopped = self.stopped.clone();
             spawn_tracked_pop_concurrent_task(
+                &self.service_context,
                 "rocketmq-client-pop-concurrent-consume",
                 &self.pop_task_tracker,
                 &self.force_stop_token,
@@ -374,6 +384,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopConcurrentlyService {
                     let limiter_clone = limiter.clone();
                     let stopped_clone = stopped.clone();
                     spawn_tracked_pop_concurrent_task(
+                        &self.service_context,
                         "rocketmq-client-pop-concurrent-consume",
                         &self.pop_task_tracker,
                         &self.force_stop_token,
@@ -412,6 +423,7 @@ impl ConsumeMessagePopConcurrentlyService {
         let stopped = self.stopped.clone();
 
         spawn_tracked_pop_concurrent_task(
+            &self.service_context,
             "rocketmq-client-pop-concurrent-consume-delay",
             &self.pop_task_tracker,
             &self.force_stop_token,
@@ -746,12 +758,16 @@ impl ConsumeRequest {
             ack_index: i32::MAX,
         };
         let process_span_for_blocking = process_span.clone();
-        let blocking_result = spawn_client_blocking_io("client.pop_concurrent.consume", move || {
-            let _entered = process_span_for_blocking.enter();
-            let msgs_refs: Vec<&MessageExt> = msgs_cloned.iter().collect();
-            let result = listener.consume_message(&msgs_refs, &context);
-            (result, context)
-        })
+        let blocking_result = spawn_client_blocking_io_with_context(
+            &consume_message_concurrently_service.service_context,
+            "client.pop_concurrent.consume",
+            move || {
+                let _entered = process_span_for_blocking.enter();
+                let msgs_refs: Vec<&MessageExt> = msgs_cloned.iter().collect();
+                let result = listener.consume_message(&msgs_refs, &context);
+                (result, context)
+            },
+        )
         .await;
         let context = match blocking_result {
             Ok((Ok(value), ctx)) => {
@@ -936,8 +952,13 @@ mod tests {
         CheetahString::from_static_str("group")
     }
 
+    fn test_context() -> ChildServiceContext {
+        crate::runtime::test_service_context("consume-message-pop-concurrent-test")
+    }
+
     fn new_service(default_impl: Option<Arc<DefaultMQPushConsumerImpl>>) -> ConsumeMessagePopConcurrentlyService {
         ConsumeMessagePopConcurrentlyService::new(
+            test_context(),
             Arc::new(ClientConfig::default()),
             Arc::new(ConsumerConfig::default()),
             consumer_group(),
@@ -948,6 +969,7 @@ mod tests {
 
     fn new_service_with_config(consumer_config: ConsumerConfig) -> ConsumeMessagePopConcurrentlyService {
         ConsumeMessagePopConcurrentlyService::new(
+            test_context(),
             Arc::new(ClientConfig::default()),
             Arc::new(consumer_config),
             consumer_group(),
@@ -959,6 +981,7 @@ mod tests {
     fn new_default_impl() -> Arc<DefaultMQPushConsumerImpl> {
         let consumer_config = ConsumerConfig::default();
         let consumer = Arc::new(DefaultMQPushConsumerImpl::new(
+            crate::runtime::test_client_runtime("pop-concurrent-consumer-impl-test"),
             ClientConfig::default(),
             consumer_config,
             None,
@@ -1198,6 +1221,7 @@ mod tests {
         let completed_in_task = completed.clone();
 
         spawn_tracked_pop_concurrent_task(
+            &test_context(),
             "rocketmq-client-pop-concurrent-tracker-test",
             &tracker,
             &token,
@@ -1225,6 +1249,7 @@ mod tests {
         let dropped_in_task = dropped.clone();
 
         spawn_tracked_pop_concurrent_task(
+            &test_context(),
             "rocketmq-client-pop-concurrent-tracker-test",
             &tracker,
             &token,

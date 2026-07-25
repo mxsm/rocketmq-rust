@@ -118,8 +118,9 @@ impl ConnectionService {
     pub async fn query_consumer_connection_by_request_with_credentials(
         request: ConsumerConnectionQueryRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<ConsumerConnectionQueryResult> {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials)
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
         let result = Self::query_consumer_connection_with_admin(&admin, &request).await;
@@ -140,8 +141,9 @@ impl ConnectionService {
     pub async fn query_producer_connection_by_request_with_credentials(
         request: ProducerConnectionQueryRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<ProducerConnectionQueryResult> {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials)
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
         let result = Self::query_producer_connection_with_admin(&admin, &request).await;
@@ -186,7 +188,9 @@ fn builder_with_namesrv(namesrv_addr: Option<&str>) -> AdminBuilder {
 fn admin_builder_with_credentials(
     builder: AdminBuilder,
     credentials: Option<crate::core::security::AdminCredentials>,
+    client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
 ) -> AdminBuilder {
+    let builder = builder.client_runtime(client_runtime);
     match credentials {
         Some(hook) => builder.credentials(hook),
         None => builder,

@@ -3,6 +3,8 @@ sidebar_position: 3
 title: 故障排查
 ---
 
+> Runtime 所有权：示例中的 `client_runtime` 是应用持有的 `Arc<ClientRuntime>`，它从 `RuntimeOwner` 的 child scope 创建，并在进程边界显式关闭。
+
 # 故障排查
 
 本页介绍 RocketMQ-Rust 的高级调试与诊断方法。
@@ -275,7 +277,7 @@ grep "ERROR" ~/logs/rocketmqfiles/consumer.log | tail -100
 当前 API 中，追踪配置与具体实现相关。
 
 示例（Lite Pull Consumer）：
-DefaultLitePullConsumer::builder()
+DefaultLitePullConsumer::builder(client_runtime.clone())
     .enable_msg_trace()
     .build();
 

@@ -40,6 +40,7 @@ impl CommandExecute for TopicStatusSubCommand {
     async fn execute(
         &self,
         _credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        _client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> rocketmq_error::RocketMQResult<()> {
         let request = TopicStatusQueryRequest::try_new(self.topic.clone())?
             .with_optional_namesrv_addr(self.common_args.namesrv_addr.clone())

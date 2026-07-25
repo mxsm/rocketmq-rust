@@ -43,10 +43,12 @@ impl CommandExecute for ListUsersSubCommand {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
         let request =
             ListUsersRequest::try_new(self.broker_addr.clone(), self.cluster_name.clone(), self.filter.clone())?;
-        let result = AuthService::list_users_by_request_with_credentials(request, credentials).await?;
+        let result =
+            AuthService::list_users_by_request_with_credentials(request, credentials, client_runtime.clone()).await?;
         render_list_users_result(result)
     }
 }

@@ -3,6 +3,8 @@ sidebar_position: 2
 title: 性能 FAQ
 ---
 
+> Runtime 所有权：示例中的 `client_runtime` 是应用持有的 `Arc<ClientRuntime>`，它从 `RuntimeOwner` 的 child scope 创建，并在进程边界显式关闭。
+
 # 性能 FAQ
 
 本页汇总 RocketMQ-Rust 常见性能问题与优化建议。
@@ -38,13 +40,13 @@ title: 性能 FAQ
 1. **增大批量参数**：
 
     ```rust
-    let mut producer = DefaultMQProducer::builder()
+    let mut producer = DefaultMQProducer::builder(client_runtime.clone())
         .producer_group("perf_group")
         .name_server_addr("localhost:9876")
         .max_message_size(4 * 1024 * 1024)
         .build();
 
-    let mut consumer = DefaultMQPushConsumer::builder()
+    let mut consumer = DefaultMQPushConsumer::builder(client_runtime.clone())
         .consumer_group("perf_group")
         .name_server_addr("localhost:9876")
         .pull_batch_size(64)

@@ -13,9 +13,11 @@
 // limitations under the License.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
-use rocketmq_admin_core::core::admin::AdminBuilder;
-use rocketmq_admin_core::core::admin::AdminGuard;
+use rocketmq_admin_core::client_adapter::AdminBuilder;
+use rocketmq_admin_core::client_adapter::AdminGuard;
+use rocketmq_admin_core::client_adapter::ClientRuntime;
 use rocketmq_admin_core::core::broker::BrokerAdmin;
 use rocketmq_admin_core::core::broker::ListBrokersRequest;
 use rocketmq_admin_core::core::broker::ProbeBrokerRuntimeRequest;
@@ -83,15 +85,32 @@ pub(crate) trait AdminSessionFactory: Clone + Send + Sync + 'static {
     async fn start(&self, cluster: ResolvedCluster) -> Result<Self::Session, ToolExecutionError>;
 }
 
-#[derive(Debug, Clone, Copy, Default)]
-pub(crate) struct AdminCoreSessionFactory;
+#[derive(Clone)]
+pub(crate) struct AdminCoreSessionFactory {
+    client_runtime: Arc<ClientRuntime>,
+}
+
+impl std::fmt::Debug for AdminCoreSessionFactory {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AdminCoreSessionFactory")
+            .field("client_runtime", &"explicit")
+            .finish()
+    }
+}
+
+impl AdminCoreSessionFactory {
+    pub(crate) fn new(client_runtime: Arc<ClientRuntime>) -> Self {
+        Self { client_runtime }
+    }
+}
 
 #[async_trait::async_trait]
 impl AdminSessionFactory for AdminCoreSessionFactory {
     type Session = AdminCoreSession;
 
     async fn start(&self, cluster: ResolvedCluster) -> Result<Self::Session, ToolExecutionError> {
-        let admin = AdminBuilder::new()
+        let admin = AdminBuilder::new(self.client_runtime.clone())
             .namesrv_addr(cluster.namesrv_addr.clone())
             .build_with_guard()
             .await

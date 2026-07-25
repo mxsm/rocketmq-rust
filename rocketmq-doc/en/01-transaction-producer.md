@@ -9,6 +9,8 @@ toc: false
 classes: wide
 ---
 
+> Runtime ownership: `client_runtime` in the examples is an application-owned `Arc<ClientRuntime>` created from a `RuntimeOwner` child scope and shut down at the process boundary.
+
 ![Architecture](/assets/images/transaction-message-flow.png)
 
 ## ⚙️ Principle of RocketMQ Transaction Message Model
@@ -82,7 +84,7 @@ pub async fn main() -> RocketMQResult<()> {
     rocketmq_common::log::init_logger()?;
 
     // create a producer builder with default configuration
-    let builder = TransactionMQProducer::builder();
+    let builder = TransactionMQProducer::builder(client_runtime.clone());
 
     let mut producer = builder
         .producer_group(PRODUCER_GROUP.to_string())

@@ -45,10 +45,12 @@ use crate::consumer::store::offset_serialize_wrapper::OffsetSerializeWrapper;
 use crate::consumer::store::offset_store::OffsetStoreTrait;
 use crate::consumer::store::read_offset_type::ReadOffsetType;
 use crate::factory::mq_client_instance::MQClientInstance;
-use crate::runtime::schedule_client_fixed_delay_task;
-use crate::runtime::spawn_client_tracked_task;
+use crate::runtime::schedule_client_fixed_delay_task_with_context;
+use crate::runtime::spawn_client_tracked_task_with_context;
+use crate::runtime::ClientRuntime;
 use crate::runtime::ClientScheduledTaskHandle;
 use crate::runtime::ClientTrackedTaskHandle;
+use rocketmq_runtime::ChildServiceContext;
 
 const PERSIST_TASK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 const PERIODIC_PERSIST_INTERVAL: Duration = Duration::from_secs(5);
@@ -203,7 +205,11 @@ pub struct LocalFileOffsetStoreLifecycleProbe {
 }
 
 impl LocalFileOffsetStore {
-    pub fn new(client_instance: Arc<MQClientInstance>, group_name: CheetahString) -> Self {
+    pub fn new(
+        service_context: ChildServiceContext,
+        client_instance: Arc<MQClientInstance>,
+        group_name: CheetahString,
+    ) -> Self {
         let store_path = LOCAL_OFFSET_STORE_DIR
             .clone()
             .join(client_instance.client_id.as_str())
@@ -222,6 +228,7 @@ impl LocalFileOffsetStore {
         let store_path_clone = store_path.clone();
 
         let persist_handle = Self::spawn_background_persist_task_with_interval(
+            &service_context,
             offset_table_clone,
             dirty_flag_clone,
             store_path_clone,
@@ -241,12 +248,14 @@ impl LocalFileOffsetStore {
     }
 
     fn spawn_background_persist_task(
+        service_context: &ChildServiceContext,
         offset_table: Arc<DashMap<MessageQueue, ControllableOffset>>,
         dirty_flag: Arc<AtomicBool>,
         store_path: String,
         persist_rx: mpsc::UnboundedReceiver<PersistCommand>,
     ) -> PersistTaskHandle {
         Self::spawn_background_persist_task_with_interval(
+            service_context,
             offset_table,
             dirty_flag,
             store_path,
@@ -256,6 +265,7 @@ impl LocalFileOffsetStore {
     }
 
     fn spawn_background_persist_task_with_interval(
+        service_context: &ChildServiceContext,
         offset_table: Arc<DashMap<MessageQueue, ControllableOffset>>,
         dirty_flag: Arc<AtomicBool>,
         store_path: String,
@@ -278,18 +288,20 @@ impl LocalFileOffsetStore {
             .await;
         };
 
-        let command_handle = match spawn_client_tracked_task("rocketmq-client-local-offset-store", task) {
-            Ok(handle) => handle,
-            Err(error) => {
-                error!("Failed to spawn LocalFileOffsetStore background task: {}", error);
-                return PersistTaskHandle::NotStarted;
-            }
-        };
+        let command_handle =
+            match spawn_client_tracked_task_with_context(service_context, "rocketmq-client-local-offset-store", task) {
+                Ok(handle) => handle,
+                Err(error) => {
+                    error!("Failed to spawn LocalFileOffsetStore background task: {}", error);
+                    return PersistTaskHandle::NotStarted;
+                }
+            };
 
         let scheduled_offset_table = offset_table;
         let scheduled_dirty_flag = dirty_flag;
         let scheduled_store_path = store_path;
-        let scheduled_handle = match schedule_client_fixed_delay_task(
+        let scheduled_handle = match schedule_client_fixed_delay_task_with_context(
+            service_context,
             "rocketmq-client-local-offset-store-periodic",
             persist_interval,
             persist_interval,
@@ -662,7 +674,9 @@ impl Drop for LocalFileOffsetStore {
 }
 
 #[doc(hidden)]
-pub async fn run_local_file_offset_store_lifecycle_probe() -> LocalFileOffsetStoreLifecycleProbe {
+pub async fn run_local_file_offset_store_lifecycle_probe(
+    client_runtime: Arc<ClientRuntime>,
+) -> LocalFileOffsetStoreLifecycleProbe {
     use crate::base::client_config::ClientConfig;
 
     let root = std::env::temp_dir().join(format!(
@@ -681,11 +695,14 @@ pub async fn run_local_file_offset_store_lifecycle_probe() -> LocalFileOffsetSto
         0,
         format!("local-offset-store-probe-{}", std::process::id()),
         None,
+        client_runtime.child("local-offset-store-probe"),
+        client_runtime.pool().request_future_holder(),
     );
     let offset_table = Arc::new(DashMap::<MessageQueue, ControllableOffset>::new());
     let dirty_flag = Arc::new(AtomicBool::new(false));
     let (persist_tx, persist_rx) = mpsc::unbounded_channel();
     let persist_handle = LocalFileOffsetStore::spawn_background_persist_task_with_interval(
+        &client_runtime.child("local-offset-persist-probe"),
         offset_table.clone(),
         dirty_flag.clone(),
         store_path.clone(),
@@ -777,7 +794,7 @@ mod tests {
     use crate::consumer::store::offset_store::OffsetStoreTrait;
     use crate::consumer::store::read_offset_type::ReadOffsetType;
     use crate::factory::mq_client_instance::MQClientInstance;
-    use crate::runtime::spawn_client_tracked_task;
+    use crate::runtime::spawn_client_tracked_task_with_context;
 
     struct DropFlag(Arc<AtomicBool>);
 
@@ -787,11 +804,28 @@ mod tests {
         }
     }
 
+    fn test_runtime() -> Arc<crate::runtime::ClientRuntime> {
+        crate::runtime::test_client_runtime("local-file-offset-store-test")
+    }
+
+    fn test_client_instance(client_id: impl Into<CheetahString>) -> Arc<MQClientInstance> {
+        let runtime = test_runtime();
+        MQClientInstance::new_arc(
+            ClientConfig::default(),
+            0,
+            client_id,
+            None,
+            runtime.child("client-instance"),
+            runtime.pool().request_future_holder(),
+        )
+    }
+
     #[test]
-    fn new_without_tokio_runtime_does_not_spawn_panic() {
-        let client_instance =
-            MQClientInstance::new_arc(ClientConfig::default(), 0, "local-offset-store-no-runtime-test", None);
+    fn new_with_explicit_runtime_does_not_spawn_during_construction() {
+        let runtime = test_runtime();
+        let client_instance = test_client_instance("local-offset-store-construction-test");
         let store = LocalFileOffsetStore::new(
+            runtime.child("construction"),
             client_instance,
             CheetahString::from_static_str("local_offset_store_no_runtime_group"),
         );
@@ -804,7 +838,8 @@ mod tests {
     async fn memory_first_then_store_reads_local_file_on_memory_miss_like_java() {
         let client_id = format!("local-offset-store-read-fallback-test-{}", std::process::id());
         let group = CheetahString::from(format!("local_offset_store_read_fallback_group_{}", std::process::id()));
-        let client_instance = MQClientInstance::new_arc(ClientConfig::default(), 0, client_id, None);
+        let runtime = test_runtime();
+        let client_instance = test_client_instance(client_id);
         let store_dir = std::env::current_dir()
             .unwrap()
             .join("target")
@@ -815,6 +850,7 @@ mod tests {
         let dirty_flag = Arc::new(AtomicBool::new(false));
         let (persist_tx, persist_rx) = mpsc::unbounded_channel();
         let persist_handle = LocalFileOffsetStore::spawn_background_persist_task(
+            &runtime.child("read-fallback-persist"),
             offset_table.clone(),
             dirty_flag.clone(),
             store_path.clone(),
@@ -854,7 +890,8 @@ mod tests {
     async fn shutdown_waits_for_final_persist() {
         let client_id = format!("local-offset-store-shutdown-test-{}", std::process::id());
         let group = CheetahString::from(format!("local_offset_store_shutdown_group_{}", std::process::id()));
-        let client_instance = MQClientInstance::new_arc(ClientConfig::default(), 0, client_id, None);
+        let runtime = test_runtime();
+        let client_instance = test_client_instance(client_id);
         let store_dir = std::env::current_dir()
             .unwrap()
             .join("target")
@@ -865,6 +902,7 @@ mod tests {
         let dirty_flag = Arc::new(AtomicBool::new(false));
         let (persist_tx, persist_rx) = mpsc::unbounded_channel();
         let persist_handle = LocalFileOffsetStore::spawn_background_persist_task(
+            &runtime.child("shutdown-persist"),
             offset_table.clone(),
             dirty_flag.clone(),
             store_path.clone(),
@@ -904,10 +942,14 @@ mod tests {
     async fn persist_task_shutdown_aborts_after_timeout() {
         let dropped = Arc::new(AtomicBool::new(false));
         let dropped_in_task = dropped.clone();
-        let handle = spawn_client_tracked_task("rocketmq-client-local-offset-store-timeout-test", async move {
-            let _drop_flag = DropFlag(dropped_in_task);
-            pending::<()>().await;
-        })
+        let handle = spawn_client_tracked_task_with_context(
+            &crate::runtime::test_service_context("local-offset-store-timeout-test"),
+            "rocketmq-client-local-offset-store-timeout-test",
+            async move {
+                let _drop_flag = DropFlag(dropped_in_task);
+                pending::<()>().await;
+            },
+        )
         .expect("timeout test command task should spawn");
         let handle = PersistTaskHandle::Tokio {
             command_handle: handle,
@@ -921,7 +963,7 @@ mod tests {
 
     #[tokio::test]
     async fn local_file_offset_store_lifecycle_probe_reports_clean_shutdown() {
-        let probe = super::run_local_file_offset_store_lifecycle_probe().await;
+        let probe = super::run_local_file_offset_store_lifecycle_probe(test_runtime()).await;
 
         assert!(probe.healthy, "{probe:?}");
         assert!(probe.persisted_offset_file, "{probe:?}");

@@ -11,11 +11,19 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+use rocketmq_admin_core::client_adapter::ClientRuntime;
+use rocketmq_admin_core::client_adapter::ClientRuntimeConfig;
 use rocketmq_dashboard_web_backend::config::AppConfig;
 use rocketmq_dashboard_web_backend::run;
+use rocketmq_runtime::RuntimeConfig;
+use rocketmq_runtime::RuntimeOwner;
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
+    let owner = RuntimeOwner::new(RuntimeConfig::server_default("rocketmq-dashboard-web-backend"))?;
+    let client_runtime = ClientRuntime::new(
+        owner.root_context().child("rocketmq-admin-client"),
+        ClientRuntimeConfig::default(),
+    );
     let config = AppConfig::load()?;
     let environment_filter = rocketmq_observability::read_rust_log()?;
     let resolved_filter =
@@ -39,9 +47,17 @@ async fn main() -> anyhow::Result<()> {
         "Dashboard Web telemetry bootstrap initialized"
     );
 
-    let run_result = run(config).await;
-    let shutdown_result = telemetry_guard.shutdown().into_result();
+    let run_result = owner.block_on(async {
+        let run_result = run(config, client_runtime.clone()).await;
+        let report = client_runtime.shutdown().await;
+        report.log_if_unhealthy();
+        run_result
+    });
+    let telemetry_shutdown_result = telemetry_guard.shutdown().into_result();
+    let runtime_shutdown_result = owner.shutdown_runtime_blocking();
+
     run_result?;
-    shutdown_result?;
+    telemetry_shutdown_result?;
+    runtime_shutdown_result?;
     Ok(())
 }

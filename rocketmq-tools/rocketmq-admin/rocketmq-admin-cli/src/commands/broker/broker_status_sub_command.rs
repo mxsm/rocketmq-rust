@@ -45,11 +45,16 @@ impl CommandExecute for BrokerStatusSubCommand {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
         let request = self.request()?;
         let print_broker = matches!(request.target(), BrokerTarget::ClusterName(_));
-        let result =
-            BrokerService::query_broker_runtime_stats_by_request_with_credentials(request, credentials).await?;
+        let result = BrokerService::query_broker_runtime_stats_by_request_with_credentials(
+            request,
+            credentials,
+            client_runtime.clone(),
+        )
+        .await?;
         print_runtime_stats_result(&result, print_broker);
         Ok(())
     }

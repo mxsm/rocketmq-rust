@@ -79,14 +79,15 @@ impl CommandExecute for NameServerCommands {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
         match self {
-            NameServerCommands::AddWritePerm(value) => value.execute(credentials).await,
-            NameServerCommands::DeleteKvConfig(value) => value.execute(credentials).await,
-            NameServerCommands::GetNamesrvConfig(value) => value.execute(credentials).await,
-            NameServerCommands::UpdateKvConfig(value) => value.execute(credentials).await,
-            NameServerCommands::UpdateNamesrvConfig(value) => value.execute(credentials).await,
-            NameServerCommands::WipeWritePerm(value) => value.execute(credentials).await,
+            NameServerCommands::AddWritePerm(value) => value.execute(credentials, client_runtime.clone()).await,
+            NameServerCommands::DeleteKvConfig(value) => value.execute(credentials, client_runtime.clone()).await,
+            NameServerCommands::GetNamesrvConfig(value) => value.execute(credentials, client_runtime.clone()).await,
+            NameServerCommands::UpdateKvConfig(value) => value.execute(credentials, client_runtime.clone()).await,
+            NameServerCommands::UpdateNamesrvConfig(value) => value.execute(credentials, client_runtime.clone()).await,
+            NameServerCommands::WipeWritePerm(value) => value.execute(credentials, client_runtime.clone()).await,
         }
     }
 }

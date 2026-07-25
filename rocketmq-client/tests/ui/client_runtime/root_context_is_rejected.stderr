@@ -1,0 +1,13 @@
+error[E0308]: mismatched types
+ --> tests/ui/client_runtime/root_context_is_rejected.rs:8:32
+  |
+8 |     let _ = ClientRuntime::new(owner.root_context(), ClientRuntimeConfig::default());
+  |             ------------------ ^^^^^^^^^^^^^^^^^^^^ expected `ChildServiceContext`, found `&RootServiceContext`
+  |             |
+  |             arguments to this function are incorrect
+  |
+note: associated function defined here
+ --> src/runtime.rs
+  |
+  |     pub fn new(service_context: ChildServiceContext, config: ClientRuntimeConfig) -> Arc<Self> {
+  |            ^^^

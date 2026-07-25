@@ -77,6 +77,7 @@ impl CommandExecute for QueryMsgByKeySubCommand {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
         let request = QueryMessageByKeyRequest::try_new(
             self.topic.clone(),
@@ -89,9 +90,13 @@ impl CommandExecute for QueryMsgByKeySubCommand {
             self.last_key.clone(),
         )?;
 
-        let query_result = MessageService::query_message_by_key_by_request_with_credentials(request, credentials)
-            .await
-            .map_err(|e| RocketMQError::Internal(format!("Failed to query message by key: {}", e)))?;
+        let query_result = MessageService::query_message_by_key_by_request_with_credentials(
+            request,
+            credentials,
+            client_runtime.clone(),
+        )
+        .await
+        .map_err(|e| RocketMQError::Internal(format!("Failed to query message by key: {}", e)))?;
 
         println!(
             "{:<50} {:>4} {:>40} {:<200}",

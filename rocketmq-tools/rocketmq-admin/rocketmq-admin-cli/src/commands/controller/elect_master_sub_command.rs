@@ -64,8 +64,14 @@ impl CommandExecute for ElectMasterSubCommand {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
-        let result = ControllerService::elect_master_by_request_with_credentials(self.request()?, credentials).await?;
+        let result = ControllerService::elect_master_by_request_with_credentials(
+            self.request()?,
+            credentials,
+            client_runtime.clone(),
+        )
+        .await?;
         Self::print_result(&result);
         Ok(())
     }

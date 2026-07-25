@@ -1493,6 +1493,7 @@ impl TuiAdminFacade {
         AuthService::get_user_by_request_with_credentials(
             self.auth_get_user_request(broker_addr, cluster_name, username)?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -1508,6 +1509,7 @@ impl TuiAdminFacade {
         AuthService::create_user_by_request_with_credentials(
             self.auth_create_user_request(broker_addr, cluster_name, username, password, user_type)?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -1524,6 +1526,7 @@ impl TuiAdminFacade {
         AuthService::update_user_by_request_with_credentials(
             self.auth_update_user_request(broker_addr, cluster_name, username, password, user_type, user_status)?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -1537,6 +1540,7 @@ impl TuiAdminFacade {
         AuthService::delete_user_by_request_with_credentials(
             self.auth_delete_user_request(broker_addr, cluster_name, username)?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -1550,6 +1554,7 @@ impl TuiAdminFacade {
         AuthService::copy_users_by_request_with_credentials(
             self.auth_copy_users_request(from_broker, to_broker, usernames)?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -1563,6 +1568,7 @@ impl TuiAdminFacade {
         AuthService::list_users_by_request_with_credentials(
             self.auth_list_users_request(broker_addr, cluster_name, filter)?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -1576,6 +1582,7 @@ impl TuiAdminFacade {
         AuthService::get_acl_by_request_with_credentials(
             self.auth_get_acl_request(broker_addr, cluster_name, subject)?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -1602,6 +1609,7 @@ impl TuiAdminFacade {
                 source_ip,
             )?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -1628,6 +1636,7 @@ impl TuiAdminFacade {
                 source_ip,
             )?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -1642,6 +1651,7 @@ impl TuiAdminFacade {
         AuthService::delete_acl_by_request_with_credentials(
             self.auth_delete_acl_request(broker_addr, cluster_name, subject, resource)?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -1655,6 +1665,7 @@ impl TuiAdminFacade {
         AuthService::copy_acl_by_request_with_credentials(
             self.auth_copy_acl_request(from_broker, to_broker, subjects)?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -1669,6 +1680,7 @@ impl TuiAdminFacade {
         AuthService::list_acl_by_request_with_credentials(
             self.auth_list_acl_request(broker_addr, cluster_name, subject_filter, resource_filter)?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -1680,6 +1692,7 @@ impl TuiAdminFacade {
         ControllerService::query_controller_config_by_request_with_credentials(
             self.controller_config_query_request(controller_address)?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -1693,6 +1706,7 @@ impl TuiAdminFacade {
         ControllerService::update_controller_config_by_request_with_credentials(
             self.controller_config_update_request(controller_address, key, value)?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -1704,6 +1718,7 @@ impl TuiAdminFacade {
         ControllerService::query_controller_metadata_by_request_with_credentials(
             self.controller_metadata_query_request(controller_address)?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -1718,6 +1733,7 @@ impl TuiAdminFacade {
         ControllerService::elect_master_by_request_with_credentials(
             self.controller_elect_master_request(controller_address, cluster_name, broker_name, broker_id)?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -1739,6 +1755,7 @@ impl TuiAdminFacade {
                 clean_living_broker,
             )?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -1751,6 +1768,7 @@ impl TuiAdminFacade {
         ContainerService::add_broker_by_request_with_credentials(
             self.container_add_broker_request(broker_container_addr, broker_config_path)?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -1765,6 +1783,7 @@ impl TuiAdminFacade {
         ContainerService::remove_broker_by_request_with_credentials(
             self.container_remove_broker_request(broker_container_addr, cluster_name, broker_name, broker_id)?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -1869,6 +1888,7 @@ impl TuiAdminFacade {
         BrokerService::query_broker_epoch_by_request_with_credentials(
             self.broker_epoch_request(broker_name, cluster_name)?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -1881,6 +1901,7 @@ impl TuiAdminFacade {
         BrokerService::query_cold_data_flow_ctr_info_by_request_with_credentials(
             self.cold_data_flow_ctr_info_request(broker_addr, cluster_name)?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -1895,6 +1916,7 @@ impl TuiAdminFacade {
         BrokerService::clean_expired_consume_queue_by_request_with_credentials(
             self.clean_expired_consume_queue_request(broker_addr, cluster_name, topic, dry_run)?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -1907,6 +1929,7 @@ impl TuiAdminFacade {
         BrokerService::delete_expired_commit_log_by_request_with_credentials(
             self.broker_optional_target_request(broker_addr, cluster_name)?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -1919,6 +1942,7 @@ impl TuiAdminFacade {
         BrokerService::clean_unused_topic_by_request_with_credentials(
             self.broker_optional_target_request(broker_addr, cluster_name)?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -1931,6 +1955,7 @@ impl TuiAdminFacade {
         BrokerService::reset_master_flush_offset_by_request_with_credentials(
             self.reset_master_flush_offset_request(broker_addr, offset)?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -1945,6 +1970,7 @@ impl TuiAdminFacade {
         BrokerService::update_cold_data_flow_ctr_group_config_by_request_with_credentials(
             self.cold_data_flow_ctr_group_config_update_request(broker_addr, cluster_name, consumer_group, threshold)?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -1958,6 +1984,7 @@ impl TuiAdminFacade {
         BrokerService::remove_cold_data_flow_ctr_group_config_by_request_with_credentials(
             self.cold_data_flow_ctr_group_config_remove_request(broker_addr, cluster_name, consumer_group)?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -1986,6 +2013,7 @@ impl TuiAdminFacade {
                 show_only,
             )?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -1999,6 +2027,7 @@ impl TuiAdminFacade {
         BrokerService::switch_timer_engine_by_request_with_credentials(
             self.switch_timer_engine_request(broker_addr, cluster_name, engine_type)?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -2011,6 +2040,7 @@ impl TuiAdminFacade {
         ClusterService::query_cluster_list_by_request_with_credentials(
             self.cluster_list_request(more_stats, cluster_name),
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -2022,6 +2052,7 @@ impl TuiAdminFacade {
         ClusterService::query_cluster_broker_names_by_request_with_credentials(
             self.cluster_broker_names_request(cluster_name),
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -2035,6 +2066,7 @@ impl TuiAdminFacade {
         ClusterService::send_message_rt_by_request_with_credentials(
             self.cluster_send_message_rt_request(amount, size, cluster_name)?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -2047,6 +2079,7 @@ impl TuiAdminFacade {
         ConnectionService::query_consumer_connection_by_request_with_credentials(
             self.consumer_connection_request(consumer_group, broker_addr)?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -2059,6 +2092,7 @@ impl TuiAdminFacade {
         ConnectionService::query_producer_connection_by_request_with_credentials(
             self.producer_connection_request(producer_group, topic)?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -2070,6 +2104,7 @@ impl TuiAdminFacade {
         ConsumerService::query_consumer_config_by_request_with_credentials(
             self.consumer_config_request(group_name)?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -2084,6 +2119,7 @@ impl TuiAdminFacade {
         ConsumerService::delete_subscription_group_by_request_with_credentials(
             self.delete_subscription_group_request(broker_addr, cluster_name, group_name, remove_offset)?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -2107,6 +2143,7 @@ impl TuiAdminFacade {
                 pop_share_queue_num,
             )?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -2147,6 +2184,7 @@ impl TuiAdminFacade {
                 consume_timeout_minute,
             )?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -2187,6 +2225,7 @@ impl TuiAdminFacade {
                 consume_timeout_minute,
             )?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -2201,6 +2240,7 @@ impl TuiAdminFacade {
         ConsumerService::query_consumer_running_info_by_request_with_credentials(
             self.consumer_running_info_request(group_name, client_id, broker_addr, jstack)?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -2215,6 +2255,7 @@ impl TuiAdminFacade {
         ConsumerService::query_consumer_progress_by_request_with_credentials(
             self.consumer_progress_request(consumer_group, topic_name, show_client_ip, cluster)?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -2239,11 +2280,16 @@ impl TuiAdminFacade {
             Some(max_events),
         )?;
         let mut event_count = 0usize;
-        ConsumerService::start_monitoring_with_event_sink_by_request_with_credentials(request, None, |event| {
-            event_count += 1;
-            progress(monitoring_progress_message(event_count, event));
-            Ok(())
-        })
+        ConsumerService::start_monitoring_with_event_sink_by_request_with_credentials(
+            request,
+            None,
+            self.client_runtime(),
+            |event| {
+                event_count += 1;
+                progress(monitoring_progress_message(event_count, event));
+                Ok(())
+            },
+        )
         .await
     }
 
@@ -2257,6 +2303,7 @@ impl TuiAdminFacade {
         OffsetService::clone_group_offset_by_request_with_credentials(
             self.clone_group_offset_request(src_group, dest_group, topic, offline)?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -2270,6 +2317,7 @@ impl TuiAdminFacade {
         OffsetService::query_consumer_status_by_request_with_credentials(
             self.consumer_status_request(group, topic, origin_client_id)?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -2284,6 +2332,7 @@ impl TuiAdminFacade {
         OffsetService::skip_accumulated_message_by_request_with_credentials(
             self.skip_accumulated_message_request(group, topic, cluster, force)?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -2297,6 +2346,7 @@ impl TuiAdminFacade {
         OffsetService::reset_offset_by_time_by_request_with_credentials(
             self.reset_offset_by_time_request(group, topic, timestamp)?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -2312,6 +2362,7 @@ impl TuiAdminFacade {
         OffsetService::reset_offset_by_time_old_by_request_with_credentials(
             self.reset_offset_by_time_old_request(group, topic, timestamp, force, cluster)?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -2328,6 +2379,7 @@ impl TuiAdminFacade {
         QueueService::query_consume_queue_by_request_with_credentials(
             self.query_consume_queue_request(topic, queue_id, index, count, broker_addr, consumer_group)?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -2341,6 +2393,7 @@ impl TuiAdminFacade {
         QueueService::check_rocksdb_cq_write_progress_by_request_with_credentials(
             self.check_rocksdb_cq_write_progress_request(cluster_name, topic, check_from)?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -2350,8 +2403,12 @@ impl TuiAdminFacade {
         broker_addr: Option<String>,
         cluster_name: Option<String>,
     ) -> RocketMQResult<HaStatusQueryResult> {
-        HaService::query_ha_status_by_request_with_credentials(self.ha_status_request(broker_addr, cluster_name)?, None)
-            .await
+        HaService::query_ha_status_by_request_with_credentials(
+            self.ha_status_request(broker_addr, cluster_name)?,
+            None,
+            self.client_runtime(),
+        )
+        .await
     }
 
     pub async fn query_sync_state_set(
@@ -2363,6 +2420,7 @@ impl TuiAdminFacade {
         HaService::query_sync_state_set_by_request_with_credentials(
             self.sync_state_set_request(controller_address, broker_name, cluster_name)?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -2372,13 +2430,21 @@ impl TuiAdminFacade {
         active_topic: bool,
         topic: Option<String>,
     ) -> RocketMQResult<StatsAllQueryResult> {
-        StatsService::query_stats_all_by_request_with_credentials(self.stats_all_request(active_topic, topic), None)
-            .await
+        StatsService::query_stats_all_by_request_with_credentials(
+            self.stats_all_request(active_topic, topic),
+            None,
+            self.client_runtime(),
+        )
+        .await
     }
 
     pub async fn query_producer_info(&self, broker_addr: impl Into<String>) -> RocketMQResult<ProducerInfoQueryResult> {
-        ProducerService::query_producer_info_by_request_with_credentials(self.producer_info_request(broker_addr)?, None)
-            .await
+        ProducerService::query_producer_info_by_request_with_credentials(
+            self.producer_info_request(broker_addr)?,
+            None,
+            self.client_runtime(),
+        )
+        .await
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2395,6 +2461,7 @@ impl TuiAdminFacade {
         ProducerService::send_message_by_request_with_credentials(
             self.send_message_request(topic, body, keys, tags, broker_name, queue_id, msg_trace_enable)?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -2408,6 +2475,7 @@ impl TuiAdminFacade {
         ProducerService::send_message_status_by_request_with_credentials(
             self.send_message_status_request(broker_name, message_size, count)?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -2421,6 +2489,7 @@ impl TuiAdminFacade {
         ProducerService::check_message_send_rt_by_request_with_credentials(
             self.check_message_send_rt_request(topic, amount, size)?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -2433,6 +2502,7 @@ impl TuiAdminFacade {
         LiteService::query_broker_lite_info_by_request_with_credentials(
             self.broker_lite_info_request(broker_addr, cluster_name)?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -2444,6 +2514,7 @@ impl TuiAdminFacade {
         LiteService::query_parent_topic_info_by_request_with_credentials(
             self.parent_topic_info_request(parent_topic)?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -2456,6 +2527,7 @@ impl TuiAdminFacade {
         LiteService::query_lite_topic_info_by_request_with_credentials(
             self.lite_topic_info_request(parent_topic, lite_topic)?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -2470,6 +2542,7 @@ impl TuiAdminFacade {
         LiteService::query_lite_group_info_by_request_with_credentials(
             self.lite_group_info_request(parent_topic, group, lite_topic, top_k)?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -2483,6 +2556,7 @@ impl TuiAdminFacade {
         LiteService::query_lite_client_info_by_request_with_credentials(
             self.lite_client_info_request(parent_topic, group, client_id)?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -2497,6 +2571,7 @@ impl TuiAdminFacade {
         LiteService::trigger_lite_dispatch_by_request_with_credentials(
             self.trigger_lite_dispatch_request(parent_topic, group, client_id, broker_name)?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -2511,6 +2586,7 @@ impl TuiAdminFacade {
         StaticTopicService::update_static_topic_by_request_with_credentials(
             self.update_static_topic_request(topic, broker_names, queue_num, cluster_names)?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -2525,6 +2601,7 @@ impl TuiAdminFacade {
         StaticTopicService::remapping_static_topic_by_request_with_credentials(
             self.remapping_static_topic_request(topic, broker_names, cluster_names, force_replace)?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -2543,6 +2620,7 @@ impl TuiAdminFacade {
         MessageService::query_message_by_id_by_request_with_credentials(
             self.query_message_by_id_request(message_ids, topic, timeout_millis)?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -2571,6 +2649,7 @@ impl TuiAdminFacade {
                 last_key,
             )?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -2586,6 +2665,7 @@ impl TuiAdminFacade {
         MessageService::query_message_by_offset_by_request_with_credentials(
             self.query_message_by_offset_request(topic, broker_name, queue_id, offset, route_topic)?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -2614,6 +2694,7 @@ impl TuiAdminFacade {
                 end_time,
             )?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -2629,6 +2710,7 @@ impl TuiAdminFacade {
         MessageService::direct_consume_message_by_request_with_credentials(
             self.direct_consume_message_request(topic, msg_id, consumer_group, client_id, cluster)?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -2643,6 +2725,7 @@ impl TuiAdminFacade {
         MessageService::message_track_by_request_with_credentials(
             self.message_track_request(message_ids, topic, cluster, timeout_millis)?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -2658,6 +2741,7 @@ impl TuiAdminFacade {
         MessageService::query_message_trace_by_id_by_request_with_credentials(
             self.query_message_trace_by_id_request(msg_id, trace_topic, begin_timestamp, end_timestamp, max_num)?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -2668,8 +2752,12 @@ impl TuiAdminFacade {
     }
 
     pub async fn export_configs(&self, cluster_name: impl Into<String>) -> RocketMQResult<ExportConfigsResult> {
-        ExportService::export_configs_by_request_with_credentials(self.export_configs_request(cluster_name)?, None)
-            .await
+        ExportService::export_configs_by_request_with_credentials(
+            self.export_configs_request(cluster_name)?,
+            None,
+            self.client_runtime(),
+        )
+        .await
     }
 
     pub async fn export_metrics(
@@ -2680,6 +2768,7 @@ impl TuiAdminFacade {
         ExportService::export_metrics_by_request_with_credentials(
             self.export_metrics_request(cluster_name, timeout_millis)?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -2701,6 +2790,7 @@ impl TuiAdminFacade {
                 special_topic,
             )?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -2725,6 +2815,7 @@ impl TuiAdminFacade {
         ExportService::export_rocksdb_config_rpc_by_request_with_credentials(
             self.export_rocksdb_config_rpc_request(cluster_name, broker_addr, config_types, timeout_millis)?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -2739,6 +2830,7 @@ impl TuiAdminFacade {
         ExportService::export_pop_records_by_request_with_credentials(
             self.export_pop_record_request(cluster_name, broker_addr, dry_run, timeout_millis)?,
             None,
+            self.client_runtime(),
         )
         .await
     }
@@ -2774,12 +2866,13 @@ impl TuiAdminFacade {
             self.print_messages_request(topic, sub_expression, begin_timestamp, end_timestamp, lmq_parent_topic)?;
         let mut events = Vec::new();
         let mut event_count = 0usize;
-        let result = MessageService::print_messages_by_request_with_credentials(request, None, |event| {
-            event_count += 1;
-            progress(message_pull_progress_message(event_count, &event));
-            capture_message_pull_event(&mut events, max_events, event)
-        })
-        .await;
+        let result =
+            MessageService::print_messages_by_request_with_credentials(request, None, self.client_runtime(), |event| {
+                event_count += 1;
+                progress(message_pull_progress_message(event_count, &event));
+                capture_message_pull_event(&mut events, max_events, event)
+            })
+            .await;
         message_pull_capture_from_result(events, max_events, result)
     }
 
@@ -2812,11 +2905,16 @@ impl TuiAdminFacade {
         )?;
         let mut events = Vec::new();
         let mut event_count = 0usize;
-        let result = MessageService::print_messages_by_queue_by_request_with_credentials(request, None, |event| {
-            event_count += 1;
-            progress(message_pull_progress_message(event_count, &event));
-            capture_message_pull_event(&mut events, max_events, event)
-        })
+        let result = MessageService::print_messages_by_queue_by_request_with_credentials(
+            request,
+            None,
+            self.client_runtime(),
+            |event| {
+                event_count += 1;
+                progress(message_pull_progress_message(event_count, &event));
+                capture_message_pull_event(&mut events, max_events, event)
+            },
+        )
         .await;
         message_pull_capture_from_result(events, max_events, result)
     }
@@ -2850,11 +2948,16 @@ impl TuiAdminFacade {
         )?;
         let mut events = Vec::new();
         let mut event_count = 0usize;
-        let result = MessageService::consume_messages_by_request_with_credentials(request, None, |event| {
-            event_count += 1;
-            progress(message_pull_progress_message(event_count, &event));
-            capture_message_pull_event(&mut events, max_events, event)
-        })
+        let result = MessageService::consume_messages_by_request_with_credentials(
+            request,
+            None,
+            self.client_runtime(),
+            |event| {
+                event_count += 1;
+                progress(message_pull_progress_message(event_count, &event));
+                capture_message_pull_event(&mut events, max_events, event)
+            },
+        )
         .await;
         message_pull_capture_from_result(events, max_events, result)
     }

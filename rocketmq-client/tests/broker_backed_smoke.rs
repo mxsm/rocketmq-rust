@@ -68,6 +68,8 @@ use rocketmq_model::common::message::MessageTrait;
 use rocketmq_model::common::topic::TopicValidator;
 use rocketmq_transport::runtime::RPCHook;
 
+mod support;
+
 static GROUP_COUNTER: AtomicUsize = AtomicUsize::new(0);
 const REQUIRE_BROKER_BACKED_SMOKE: &str = "ROCKETMQ_REQUIRE_BROKER_BACKED_SMOKE";
 
@@ -286,11 +288,13 @@ macro_rules! maybe_with_acl_push_rpc_hook {
 }
 
 async fn ensure_topic_route(namesrv_addr: &str, topic: &str) -> RocketMQResult<()> {
-    let mut producer = maybe_with_acl_rpc_hook!(DefaultMQProducer::builder())
-        .producer_group(unique_group("route-bootstrap-producer"))
-        .name_server_addr(namesrv_addr)
-        .send_msg_timeout(5_000)
-        .build();
+    let mut producer = maybe_with_acl_rpc_hook!(DefaultMQProducer::builder(support::client_runtime(
+        "broker-backed-producer"
+    )))
+    .producer_group(unique_group("route-bootstrap-producer"))
+    .name_server_addr(namesrv_addr)
+    .send_msg_timeout(5_000)
+    .build();
 
     producer.start().await?;
     let create_result = producer
@@ -356,11 +360,13 @@ async fn broker_backed_producer_sync_oneway_batch_smoke() -> RocketMQResult<()> 
         return Ok(());
     };
 
-    let mut producer = maybe_with_acl_rpc_hook!(DefaultMQProducer::builder())
-        .producer_group(env.producer_group)
-        .name_server_addr(env.namesrv_addr)
-        .send_msg_timeout(5_000)
-        .build();
+    let mut producer = maybe_with_acl_rpc_hook!(DefaultMQProducer::builder(support::client_runtime(
+        "broker-backed-producer"
+    )))
+    .producer_group(env.producer_group)
+    .name_server_addr(env.namesrv_addr)
+    .send_msg_timeout(5_000)
+    .build();
 
     producer.start().await?;
 
@@ -397,11 +403,13 @@ async fn broker_backed_producer_mq_admin_offsets_smoke() -> RocketMQResult<()> {
     };
 
     let topic = env.topic.clone();
-    let mut producer = maybe_with_acl_rpc_hook!(DefaultMQProducer::builder())
-        .producer_group(unique_group("admin-producer"))
-        .name_server_addr(env.namesrv_addr.clone())
-        .send_msg_timeout(5_000)
-        .build();
+    let mut producer = maybe_with_acl_rpc_hook!(DefaultMQProducer::builder(support::client_runtime(
+        "broker-backed-producer"
+    )))
+    .producer_group(unique_group("admin-producer"))
+    .name_server_addr(env.namesrv_addr.clone())
+    .send_msg_timeout(5_000)
+    .build();
 
     trace_smoke_step("mqadmin_offsets: producer.start begin");
     smoke_timeout("mqadmin_producer.start", Duration::from_secs(30), producer.start()).await?;
@@ -575,10 +583,12 @@ async fn broker_backed_producer_mq_admin_offsets_smoke() -> RocketMQResult<()> {
         };
     trace_smoke_step("mqadmin_offsets: producer view by unique id done");
 
-    let mut push_admin = maybe_with_acl_push_rpc_hook!(DefaultMQPushConsumer::builder())
-        .consumer_group(unique_group("admin-push"))
-        .name_server_addr(env.namesrv_addr)
-        .build();
+    let mut push_admin = maybe_with_acl_push_rpc_hook!(DefaultMQPushConsumer::builder(support::client_runtime(
+        "broker-backed-push-consumer"
+    )))
+    .consumer_group(unique_group("admin-push"))
+    .name_server_addr(env.namesrv_addr)
+    .build();
     push_admin.subscribe(&topic, "*").await?;
     push_admin.register_message_listener_concurrently(
         |_msgs: &[&MessageExt], _context: &ConsumeConcurrentlyContext| Ok(ConsumeConcurrentlyStatus::ConsumeSuccess),
@@ -734,11 +744,13 @@ async fn broker_backed_producer_create_topic_smoke() -> RocketMQResult<()> {
     }
 
     let new_topic = format!("rocketmq-rust-smoke-topic-{}", unique_group("topic"));
-    let mut producer = maybe_with_acl_rpc_hook!(DefaultMQProducer::builder())
-        .producer_group(unique_group("create-topic-producer"))
-        .name_server_addr(env.namesrv_addr)
-        .send_msg_timeout(5_000)
-        .build();
+    let mut producer = maybe_with_acl_rpc_hook!(DefaultMQProducer::builder(support::client_runtime(
+        "broker-backed-producer"
+    )))
+    .producer_group(unique_group("create-topic-producer"))
+    .name_server_addr(env.namesrv_addr)
+    .send_msg_timeout(5_000)
+    .build();
 
     producer.start().await?;
     producer
@@ -768,11 +780,13 @@ async fn broker_backed_producer_async_callback_smoke() -> RocketMQResult<()> {
         return Ok(());
     };
 
-    let mut producer = maybe_with_acl_rpc_hook!(DefaultMQProducer::builder())
-        .producer_group(unique_group("async-producer"))
-        .name_server_addr(env.namesrv_addr)
-        .send_msg_timeout(5_000)
-        .build();
+    let mut producer = maybe_with_acl_rpc_hook!(DefaultMQProducer::builder(support::client_runtime(
+        "broker-backed-producer"
+    )))
+    .producer_group(unique_group("async-producer"))
+    .name_server_addr(env.namesrv_addr)
+    .send_msg_timeout(5_000)
+    .build();
 
     producer.start().await?;
 
@@ -826,12 +840,14 @@ async fn broker_backed_acl_producer_send_smoke() -> RocketMQResult<()> {
         return Ok(());
     };
 
-    let mut producer = maybe_with_acl_rpc_hook!(DefaultMQProducer::builder())
-        .producer_group(unique_group("acl-producer"))
-        .name_server_addr(env.namesrv_addr)
-        .send_msg_timeout(5_000)
-        .rpc_hook(acl_hook)
-        .build();
+    let mut producer = maybe_with_acl_rpc_hook!(DefaultMQProducer::builder(support::client_runtime(
+        "broker-backed-producer"
+    )))
+    .producer_group(unique_group("acl-producer"))
+    .name_server_addr(env.namesrv_addr)
+    .send_msg_timeout(5_000)
+    .rpc_hook(acl_hook)
+    .build();
 
     producer.start().await?;
     let send_result = producer
@@ -860,11 +876,13 @@ async fn broker_backed_tls_producer_send_smoke() -> RocketMQResult<()> {
     }
 
     let client_config = tls_smoke_client_config(&env)?;
-    let mut producer = maybe_with_acl_rpc_hook!(DefaultMQProducer::builder())
-        .client_config(client_config)
-        .producer_group(unique_group("tls-producer"))
-        .send_msg_timeout(5_000)
-        .build();
+    let mut producer = maybe_with_acl_rpc_hook!(DefaultMQProducer::builder(support::client_runtime(
+        "broker-backed-producer"
+    )))
+    .client_config(client_config)
+    .producer_group(unique_group("tls-producer"))
+    .send_msg_timeout(5_000)
+    .build();
 
     producer.start().await?;
     let send_result = producer
@@ -898,13 +916,15 @@ async fn broker_backed_trace_producer_send_smoke() -> RocketMQResult<()> {
     let trace_message_key = format!("rocketmq-rust-trace-key-{}", unique_group("key"));
     let trace_message_body = format!("rocketmq-rust-trace-smoke-{trace_message_key}");
 
-    let trace_consumer = maybe_with_acl_rpc_hook!(DefaultLitePullConsumer::builder())
-        .consumer_group(unique_group("trace-lite-pull"))
-        .name_server_addr(env.namesrv_addr.clone())
-        .pull_batch_size(8)
-        .poll_timeout_millis(500)
-        .auto_commit(true)
-        .build()?;
+    let trace_consumer = maybe_with_acl_rpc_hook!(DefaultLitePullConsumer::builder(support::client_runtime(
+        "broker-backed-lite-pull"
+    )))
+    .consumer_group(unique_group("trace-lite-pull"))
+    .name_server_addr(env.namesrv_addr.clone())
+    .pull_batch_size(8)
+    .poll_timeout_millis(500)
+    .auto_commit(true)
+    .build()?;
     trace_consumer.subscribe_with_expression(&trace_topic, "*").await?;
     smoke_timeout("trace_consumer.start", Duration::from_secs(30), trace_consumer.start()).await?;
 
@@ -914,11 +934,13 @@ async fn broker_backed_trace_producer_send_smoke() -> RocketMQResult<()> {
         .trace_msg_batch_num(1);
     client_config_builder = client_config_builder.trace_topic(trace_topic.clone());
     let client_config = client_config_builder.build()?;
-    let mut producer = maybe_with_acl_rpc_hook!(DefaultMQProducer::builder())
-        .client_config(client_config)
-        .producer_group(unique_group("trace-producer"))
-        .send_msg_timeout(5_000)
-        .build();
+    let mut producer = maybe_with_acl_rpc_hook!(DefaultMQProducer::builder(support::client_runtime(
+        "broker-backed-producer"
+    )))
+    .client_config(client_config)
+    .producer_group(unique_group("trace-producer"))
+    .send_msg_timeout(5_000)
+    .build();
 
     smoke_timeout("trace_producer.start", Duration::from_secs(30), producer.start()).await?;
     let trace_message = Message::builder()
@@ -989,11 +1011,13 @@ async fn broker_backed_producer_request_reply_smoke() -> RocketMQResult<()> {
 
     let reply_namesrv_addr = env.namesrv_addr.clone();
     let reply_task = tokio::spawn(async move {
-        let mut reply_producer = maybe_with_acl_rpc_hook!(DefaultMQProducer::builder())
-            .producer_group(unique_group("reply-producer"))
-            .name_server_addr(reply_namesrv_addr)
-            .send_msg_timeout(5_000)
-            .build();
+        let mut reply_producer = maybe_with_acl_rpc_hook!(DefaultMQProducer::builder(support::client_runtime(
+            "broker-backed-producer"
+        )))
+        .producer_group(unique_group("reply-producer"))
+        .name_server_addr(reply_namesrv_addr)
+        .send_msg_timeout(5_000)
+        .build();
 
         reply_producer.start().await?;
         let Some(reply_message) = reply_rx.recv().await else {
@@ -1020,14 +1044,16 @@ async fn broker_backed_producer_request_reply_smoke() -> RocketMQResult<()> {
     let expected_request_body = request_body.clone();
     let reply_body_for_listener = reply_body.clone();
     let reply_tx_for_listener = reply_tx.clone();
-    let mut responder = maybe_with_acl_push_rpc_hook!(DefaultMQPushConsumer::builder())
-        .consumer_group(unique_group("request-responder"))
-        .name_server_addr(env.namesrv_addr.clone())
-        .consume_thread_min(1)
-        .consume_thread_max(2)
-        .consume_message_batch_max_size(1)
-        .pull_batch_size(4)
-        .build();
+    let mut responder = maybe_with_acl_push_rpc_hook!(DefaultMQPushConsumer::builder(support::client_runtime(
+        "broker-backed-push-consumer"
+    )))
+    .consumer_group(unique_group("request-responder"))
+    .name_server_addr(env.namesrv_addr.clone())
+    .consume_thread_min(1)
+    .consume_thread_max(2)
+    .consume_message_batch_max_size(1)
+    .pull_batch_size(4)
+    .build();
 
     responder.subscribe(&env.topic, tag).await?;
     responder.register_message_listener_concurrently(
@@ -1054,11 +1080,13 @@ async fn broker_backed_producer_request_reply_smoke() -> RocketMQResult<()> {
 
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
-    let mut requester = maybe_with_acl_rpc_hook!(DefaultMQProducer::builder())
-        .producer_group(unique_group("request-producer"))
-        .name_server_addr(env.namesrv_addr)
-        .send_msg_timeout(5_000)
-        .build();
+    let mut requester = maybe_with_acl_rpc_hook!(DefaultMQProducer::builder(support::client_runtime(
+        "broker-backed-producer"
+    )))
+    .producer_group(unique_group("request-producer"))
+    .name_server_addr(env.namesrv_addr)
+    .send_msg_timeout(5_000)
+    .build();
 
     requester.start().await?;
     let response = requester
@@ -1091,11 +1119,13 @@ async fn broker_backed_producer_recall_smoke() -> RocketMQResult<()> {
         return Ok(());
     }
 
-    let mut producer = maybe_with_acl_rpc_hook!(DefaultMQProducer::builder())
-        .producer_group(unique_group("recall-producer"))
-        .name_server_addr(env.namesrv_addr)
-        .send_msg_timeout(5_000)
-        .build();
+    let mut producer = maybe_with_acl_rpc_hook!(DefaultMQProducer::builder(support::client_runtime(
+        "broker-backed-producer"
+    )))
+    .producer_group(unique_group("recall-producer"))
+    .name_server_addr(env.namesrv_addr)
+    .send_msg_timeout(5_000)
+    .build();
 
     producer.start().await?;
 
@@ -1135,12 +1165,14 @@ async fn broker_backed_transaction_producer_smoke() -> RocketMQResult<()> {
         return Ok(());
     };
 
-    let mut producer = maybe_with_acl_rpc_hook!(TransactionMQProducer::builder())
-        .producer_group(unique_group("transaction-producer"))
-        .name_server_addr(env.namesrv_addr)
-        .send_msg_timeout(5_000)
-        .transaction_listener(CommitTransactionListener)
-        .build();
+    let mut producer = maybe_with_acl_rpc_hook!(TransactionMQProducer::builder(support::client_runtime(
+        "broker-backed-transaction-producer"
+    )))
+    .producer_group(unique_group("transaction-producer"))
+    .name_server_addr(env.namesrv_addr)
+    .send_msg_timeout(5_000)
+    .transaction_listener(CommitTransactionListener)
+    .build();
 
     producer.start().await?;
 
@@ -1177,13 +1209,15 @@ async fn broker_backed_lite_pull_assign_offset_smoke() -> RocketMQResult<()> {
     };
     ensure_topic_route(&env.namesrv_addr, &env.topic).await?;
 
-    let consumer = maybe_with_acl_rpc_hook!(DefaultLitePullConsumer::builder())
-        .consumer_group(unique_group("lite-pull"))
-        .name_server_addr(env.namesrv_addr)
-        .pull_batch_size(4)
-        .poll_timeout_millis(500)
-        .auto_commit(false)
-        .build()?;
+    let consumer = maybe_with_acl_rpc_hook!(DefaultLitePullConsumer::builder(support::client_runtime(
+        "broker-backed-lite-pull"
+    )))
+    .consumer_group(unique_group("lite-pull"))
+    .name_server_addr(env.namesrv_addr)
+    .pull_batch_size(4)
+    .poll_timeout_millis(500)
+    .auto_commit(false)
+    .build()?;
 
     consumer.set_sub_expression_for_assign(&env.topic, "*").await?;
     smoke_timeout("lite_pull_assign.start", Duration::from_secs(30), consumer.start()).await?;
@@ -1262,14 +1296,16 @@ async fn broker_backed_push_consumer_concurrent_smoke() -> RocketMQResult<()> {
     let received_notify_inner = Arc::clone(&received_notify);
     let expected_body = body.clone();
 
-    let mut consumer = maybe_with_acl_push_rpc_hook!(DefaultMQPushConsumer::builder())
-        .consumer_group(unique_group("push"))
-        .name_server_addr(env.namesrv_addr.clone())
-        .consume_thread_min(1)
-        .consume_thread_max(2)
-        .consume_message_batch_max_size(1)
-        .pull_batch_size(4)
-        .build();
+    let mut consumer = maybe_with_acl_push_rpc_hook!(DefaultMQPushConsumer::builder(support::client_runtime(
+        "broker-backed-push-consumer"
+    )))
+    .consumer_group(unique_group("push"))
+    .name_server_addr(env.namesrv_addr.clone())
+    .consume_thread_min(1)
+    .consume_thread_max(2)
+    .consume_message_batch_max_size(1)
+    .pull_batch_size(4)
+    .build();
 
     consumer.subscribe(&env.topic, tag).await?;
     consumer.register_message_listener_concurrently(
@@ -1295,11 +1331,13 @@ async fn broker_backed_push_consumer_concurrent_smoke() -> RocketMQResult<()> {
 
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
-    let mut producer = maybe_with_acl_rpc_hook!(DefaultMQProducer::builder())
-        .producer_group(unique_group("push-producer"))
-        .name_server_addr(env.namesrv_addr)
-        .send_msg_timeout(5_000)
-        .build();
+    let mut producer = maybe_with_acl_rpc_hook!(DefaultMQProducer::builder(support::client_runtime(
+        "broker-backed-producer"
+    )))
+    .producer_group(unique_group("push-producer"))
+    .name_server_addr(env.namesrv_addr)
+    .send_msg_timeout(5_000)
+    .build();
 
     trace_smoke_step("push_concurrent: producer.start begin");
     smoke_timeout("push_producer.start", Duration::from_secs(30), producer.start()).await?;
@@ -1362,14 +1400,16 @@ async fn broker_backed_push_consumer_retry_smoke() -> RocketMQResult<()> {
     let retry_notify_inner = Arc::clone(&retry_notify);
     let expected_body = body.clone();
 
-    let mut consumer = maybe_with_acl_push_rpc_hook!(DefaultMQPushConsumer::builder())
-        .consumer_group(unique_group("push-retry"))
-        .name_server_addr(env.namesrv_addr.clone())
-        .consume_thread_min(1)
-        .consume_thread_max(2)
-        .consume_message_batch_max_size(1)
-        .pull_batch_size(4)
-        .build();
+    let mut consumer = maybe_with_acl_push_rpc_hook!(DefaultMQPushConsumer::builder(support::client_runtime(
+        "broker-backed-push-consumer"
+    )))
+    .consumer_group(unique_group("push-retry"))
+    .name_server_addr(env.namesrv_addr.clone())
+    .consume_thread_min(1)
+    .consume_thread_max(2)
+    .consume_message_batch_max_size(1)
+    .pull_batch_size(4)
+    .build();
 
     consumer.subscribe(&topic, tag).await?;
     consumer.register_message_listener_concurrently(
@@ -1397,11 +1437,13 @@ async fn broker_backed_push_consumer_retry_smoke() -> RocketMQResult<()> {
 
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
-    let mut producer = maybe_with_acl_rpc_hook!(DefaultMQProducer::builder())
-        .producer_group(unique_group("push-retry-producer"))
-        .name_server_addr(env.namesrv_addr)
-        .send_msg_timeout(5_000)
-        .build();
+    let mut producer = maybe_with_acl_rpc_hook!(DefaultMQProducer::builder(support::client_runtime(
+        "broker-backed-producer"
+    )))
+    .producer_group(unique_group("push-retry-producer"))
+    .name_server_addr(env.namesrv_addr)
+    .send_msg_timeout(5_000)
+    .build();
 
     trace_smoke_step("push_retry: producer.start begin");
     smoke_timeout("push_retry_producer.start", Duration::from_secs(30), producer.start()).await?;
@@ -1461,14 +1503,16 @@ async fn broker_backed_push_consumer_orderly_smoke() -> RocketMQResult<()> {
     let received_notify_inner = Arc::clone(&received_notify);
     let prefix_for_listener = body_prefix.clone();
 
-    let mut consumer = maybe_with_acl_push_rpc_hook!(DefaultMQPushConsumer::builder())
-        .consumer_group(unique_group("push-orderly"))
-        .name_server_addr(env.namesrv_addr.clone())
-        .consume_thread_min(1)
-        .consume_thread_max(2)
-        .consume_message_batch_max_size(1)
-        .pull_batch_size(4)
-        .build();
+    let mut consumer = maybe_with_acl_push_rpc_hook!(DefaultMQPushConsumer::builder(support::client_runtime(
+        "broker-backed-push-consumer"
+    )))
+    .consumer_group(unique_group("push-orderly"))
+    .name_server_addr(env.namesrv_addr.clone())
+    .consume_thread_min(1)
+    .consume_thread_max(2)
+    .consume_message_batch_max_size(1)
+    .pull_batch_size(4)
+    .build();
 
     consumer.subscribe(&env.topic, tag).await?;
     consumer.register_message_listener_orderly(move |msgs: &[&MessageExt], context: &mut ConsumeOrderlyContext| {
@@ -1501,11 +1545,13 @@ async fn broker_backed_push_consumer_orderly_smoke() -> RocketMQResult<()> {
 
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
-    let mut producer = maybe_with_acl_rpc_hook!(DefaultMQProducer::builder())
-        .producer_group(unique_group("push-orderly-producer"))
-        .name_server_addr(env.namesrv_addr)
-        .send_msg_timeout(5_000)
-        .build();
+    let mut producer = maybe_with_acl_rpc_hook!(DefaultMQProducer::builder(support::client_runtime(
+        "broker-backed-producer"
+    )))
+    .producer_group(unique_group("push-orderly-producer"))
+    .name_server_addr(env.namesrv_addr)
+    .send_msg_timeout(5_000)
+    .build();
 
     trace_smoke_step("push_orderly: producer.start begin");
     smoke_timeout("push_orderly_producer.start", Duration::from_secs(30), producer.start()).await?;
@@ -1572,11 +1618,13 @@ async fn broker_backed_lite_pull_subscribe_poll_smoke() -> RocketMQResult<()> {
     let topic = unique_group("lite-pull-subscribe-topic");
     ensure_topic_route(&env.namesrv_addr, &topic).await?;
     let body = format!("rocketmq-rust-lite-pull-subscribe-smoke-{}", unique_group("body"));
-    let mut producer = maybe_with_acl_rpc_hook!(DefaultMQProducer::builder())
-        .producer_group(unique_group("lite-pull-subscribe-producer"))
-        .name_server_addr(env.namesrv_addr.clone())
-        .send_msg_timeout(5_000)
-        .build();
+    let mut producer = maybe_with_acl_rpc_hook!(DefaultMQProducer::builder(support::client_runtime(
+        "broker-backed-producer"
+    )))
+    .producer_group(unique_group("lite-pull-subscribe-producer"))
+    .name_server_addr(env.namesrv_addr.clone())
+    .send_msg_timeout(5_000)
+    .build();
 
     producer.start().await?;
     producer
@@ -1586,13 +1634,15 @@ async fn broker_backed_lite_pull_subscribe_poll_smoke() -> RocketMQResult<()> {
         )
         .await?;
 
-    let consumer = maybe_with_acl_rpc_hook!(DefaultLitePullConsumer::builder())
-        .consumer_group(unique_group("lite-pull-subscribe"))
-        .name_server_addr(env.namesrv_addr.clone())
-        .pull_batch_size(4)
-        .poll_timeout_millis(500)
-        .auto_commit(true)
-        .build()?;
+    let consumer = maybe_with_acl_rpc_hook!(DefaultLitePullConsumer::builder(support::client_runtime(
+        "broker-backed-lite-pull"
+    )))
+    .consumer_group(unique_group("lite-pull-subscribe"))
+    .name_server_addr(env.namesrv_addr.clone())
+    .pull_batch_size(4)
+    .poll_timeout_millis(500)
+    .auto_commit(true)
+    .build()?;
 
     consumer.subscribe_with_expression(&topic, tag).await?;
     consumer.start().await?;

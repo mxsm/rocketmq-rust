@@ -33,6 +33,9 @@
 //!
 //! Run with: cargo bench --bench concurrent_optimization_benchmark
 
+#[path = "support/mod.rs"]
+mod support;
+
 use std::hint::black_box;
 use std::sync::Arc;
 use std::thread;
@@ -54,6 +57,8 @@ use rocketmq_model::common::message::message_single::Message;
 /// Expected: No regression, should maintain ~56.7ns/op latency
 fn bench_concurrent_producer_access(c: &mut Criterion) {
     let mut group = c.benchmark_group("concurrent_producer_access");
+    let runtime_owner = support::BenchClientRuntime::new("concurrent-producer-access");
+    let client_runtime = runtime_owner.client_runtime();
 
     for thread_count in [1, 2, 4, 8, 16, 32].iter() {
         group.throughput(Throughput::Elements((*thread_count * 1000) as u64));
@@ -64,7 +69,7 @@ fn bench_concurrent_producer_access(c: &mut Criterion) {
             |b, &thread_count| {
                 b.iter(|| {
                     // Create producer
-                    let producer = DefaultMQProducer::new();
+                    let producer = DefaultMQProducer::new(client_runtime.clone());
 
                     let producer_arc = Arc::new(producer);
 
@@ -90,6 +95,7 @@ fn bench_concurrent_producer_access(c: &mut Criterion) {
     }
 
     group.finish();
+    runtime_owner.shutdown();
 }
 
 /// Benchmark 2: Message Creation and Validation
@@ -111,12 +117,15 @@ fn bench_message_creation(c: &mut Criterion) {
 ///
 /// Measures the cost of creating a new producer instance.
 fn bench_producer_initialization(c: &mut Criterion) {
+    let runtime_owner = support::BenchClientRuntime::new("producer-initialization");
+    let client_runtime = runtime_owner.client_runtime();
     c.bench_function("producer_initialization", |b| {
         b.iter(|| {
-            let producer = DefaultMQProducer::new();
+            let producer = DefaultMQProducer::new(client_runtime.clone());
             black_box(producer);
         });
     });
+    runtime_owner.shutdown();
 }
 
 /// Benchmark 4: Concurrent Message Preparation
@@ -157,6 +166,8 @@ fn bench_concurrent_message_preparation(c: &mut Criterion) {
 /// Target: ≤ 2.4ms (15% improvement)
 fn bench_performance_baseline(c: &mut Criterion) {
     let mut group = c.benchmark_group("performance_baseline");
+    let runtime_owner = support::BenchClientRuntime::new("performance-baseline");
+    let client_runtime = runtime_owner.client_runtime();
 
     // Use same parameters as original baseline test
     let thread_count = 50;
@@ -167,7 +178,7 @@ fn bench_performance_baseline(c: &mut Criterion) {
 
     group.bench_function("concurrent_config_reads_50k", |b| {
         b.iter(|| {
-            let producer = DefaultMQProducer::new();
+            let producer = DefaultMQProducer::new(client_runtime.clone());
 
             let producer_arc = Arc::new(producer);
 
@@ -194,6 +205,7 @@ fn bench_performance_baseline(c: &mut Criterion) {
     });
 
     group.finish();
+    runtime_owner.shutdown();
 }
 
 criterion_group!(

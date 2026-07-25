@@ -59,9 +59,15 @@ impl CommandExecute for CloneGroupOffsetSubCommand {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
         let request = self.request()?;
-        OffsetService::clone_group_offset_by_request_with_credentials(request.clone(), credentials).await?;
+        OffsetService::clone_group_offset_by_request_with_credentials(
+            request.clone(),
+            credentials,
+            client_runtime.clone(),
+        )
+        .await?;
         println!(
             "clone group offset success. srcGroup[{}], destGroup=[{}], topic[{}]",
             request.src_group(),

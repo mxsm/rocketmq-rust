@@ -4001,6 +4001,7 @@ dependencies = [
  "rand_core 0.6.4",
  "rocketmq-admin-core",
  "rocketmq-dashboard-common",
+ "rocketmq-runtime",
  "rusqlite",
  "serde",
  "serde_json",

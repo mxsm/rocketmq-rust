@@ -46,9 +46,7 @@ use crate::producer::producer_impl::topic_publish_info::TopicPublishInfo;
 use crate::producer::send_callback::ArcSendCallback;
 use crate::producer::send_result::SendResult;
 use crate::producer::send_status::SendStatus;
-use crate::runtime::acquire_client_fallback_context;
-use crate::runtime::spawn_client_task;
-use crate::runtime::ClientSharedFallbackLease;
+use crate::runtime::spawn_client_task_with_context;
 use cheetah_string::CheetahString;
 
 use crate::base::validators::Validators;
@@ -244,6 +242,7 @@ use rocketmq_protocol::protocol::subscription::subscription_group_config::Subscr
 use rocketmq_protocol::protocol::LanguageCode;
 use rocketmq_protocol::protocol::RemotingDeserializable;
 use rocketmq_protocol::protocol::RemotingSerializable;
+use rocketmq_runtime::ChildServiceContext;
 use rocketmq_transport::remoting::RemotingService;
 use rocketmq_transport::rpc::rpc_request_header::RpcRequestHeader;
 use rocketmq_transport::rpc::topic_request_header::TopicRequestHeader;
@@ -342,13 +341,13 @@ impl AsyncRetryRequest {
 }
 
 pub struct MQClientAPIImpl {
+    service_context: ChildServiceContext,
     remoting_client: Arc<RocketmqDefaultClient<ClientRemotingProcessor>>,
     top_addressing: Arc<Box<dyn TopAddressing>>,
     name_srv_addr: RwLock<Option<String>>,
     client_config: Arc<ClientConfig>,
     background_tasks: TaskTracker,
     background_shutdown: CancellationToken,
-    _runtime_lease: ClientSharedFallbackLease,
 }
 
 async fn update_cached_name_server_addr<F>(cache: &RwLock<Option<String>>, addrs: &str, update: F) -> bool
@@ -2120,6 +2119,7 @@ impl MQClientAPIImpl {
         rpc_hook: Option<Arc<dyn RPCHook>>,
         client_config: Arc<ClientConfig>,
         tx: Option<tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
+        service_context: ChildServiceContext,
     ) -> Self {
         Self::init_remoting_version();
 
@@ -2127,19 +2127,18 @@ impl MQClientAPIImpl {
         remoting_config.use_tls = client_config.use_tls;
         remoting_config.tls_config = client_config.tls_config.clone();
         remoting_config.tls_config.enable = client_config.use_tls;
-        let (service_context, runtime_lease) = acquire_client_fallback_context("rocketmq-client.remoting-client")
-            .expect("client compatibility runtime must be available");
         let default_client = RocketmqDefaultClient::new_with_cl(
             Arc::new(remoting_config),
             client_remoting_processor,
             tx,
-            service_context,
+            service_context.child("transport"),
         );
         if let Some(hook) = rpc_hook {
             default_client.register_rpc_hook(hook);
         }
 
         MQClientAPIImpl {
+            service_context,
             remoting_client: Arc::new(default_client),
             top_addressing: Arc::new(Box::new(DefaultTopAddressing::new(
                 mix_all::get_ws_addr().into(),
@@ -2150,7 +2149,6 @@ impl MQClientAPIImpl {
             client_config,
             background_tasks: TaskTracker::new(),
             background_shutdown: CancellationToken::new(),
-            _runtime_lease: runtime_lease,
         }
     }
 
@@ -2555,8 +2553,6 @@ impl MQClientAPIImpl {
         let topic_publish_info_cloned = topic_publish_info.cloned();
         let instance_cloned = instance.clone();
         let mq_fault_strategy = producer.fault_strategy_snapshot();
-        let callback_executor = producer.producer_config().callback_executor().cloned();
-
         // Snapshot only the immutable hook capability and context data needed by the callback.
         let context_data = context.as_ref().map(|c| AsyncSendHookContext {
             producer_group: c.producer_group.as_ref().cloned(),
@@ -2588,7 +2584,6 @@ impl MQClientAPIImpl {
             instance_cloned,
             retry_times_when_send_failed,
             context_data,
-            callback_executor,
         )
         .await;
     }
@@ -2611,7 +2606,6 @@ impl MQClientAPIImpl {
         instance: Option<Arc<MQClientInstance>>,
         retry_times_when_send_failed: u32,
         context_data: Option<AsyncSendHookContext>,
-        callback_executor: Option<tokio::runtime::Handle>,
     ) {
         let begin_start_time_all = Instant::now();
         let mut retry_count = 0_u32;
@@ -2625,7 +2619,7 @@ impl MQClientAPIImpl {
                     timeout_ms: timeout_millis,
                 };
                 Self::execute_async_send_hook_after(&context_data, None, Some(Self::context_error(err.to_string())));
-                Self::notify_send_callback_exception(&send_callback, &callback_executor, &err);
+                Self::notify_send_callback_exception(&send_callback, &err);
                 return;
             }
 
@@ -2661,7 +2655,7 @@ impl MQClientAPIImpl {
                                 None,
                                 Some(Self::context_error(err_obj.to_string())),
                             );
-                            Self::notify_send_callback_exception(&send_callback, &callback_executor, &err_obj);
+                            Self::notify_send_callback_exception(&send_callback, &err_obj);
                             return;
                         }
                     };
@@ -2701,7 +2695,7 @@ impl MQClientAPIImpl {
                                         None,
                                         Some(Self::context_error(err_obj.to_string())),
                                     );
-                                    Self::notify_send_callback_exception(&send_callback, &callback_executor, &err_obj);
+                                    Self::notify_send_callback_exception(&send_callback, &err_obj);
                                     return;
                                 }
                             };
@@ -2724,7 +2718,7 @@ impl MQClientAPIImpl {
                                 .update_fault_item(current_broker_name.clone(), cost, false, true)
                                 .await;
                             Self::execute_async_send_hook_after(&context_data, Some(&send_result), None);
-                            Self::notify_send_callback_success(&send_callback, &callback_executor, &send_result);
+                            Self::notify_send_callback_success(&send_callback, &send_result);
                             return;
                         }
                         Err(_) => {
@@ -2737,7 +2731,7 @@ impl MQClientAPIImpl {
                                 None,
                                 Some(Self::context_error(err_obj.to_string())),
                             );
-                            Self::notify_send_callback_exception(&send_callback, &callback_executor, &err_obj);
+                            Self::notify_send_callback_exception(&send_callback, &err_obj);
                             return;
                         }
                     }
@@ -2775,7 +2769,7 @@ impl MQClientAPIImpl {
                     }
 
                     Self::execute_async_send_hook_after(&context_data, None, Some(Self::context_error(e.to_string())));
-                    Self::notify_send_callback_exception(&send_callback, &callback_executor, &e);
+                    Self::notify_send_callback_exception(&send_callback, &e);
                     return;
                 }
             }
@@ -2852,6 +2846,7 @@ impl MQClientAPIImpl {
     }
 
     fn spawn_api_background_task<F>(
+        service_context: &ChildServiceContext,
         thread_name: &'static str,
         tracker: &TaskTracker,
         shutdown_token: &CancellationToken,
@@ -2872,48 +2867,25 @@ impl MQClientAPIImpl {
             }
         });
 
-        if let Err(error) = spawn_client_task(thread_name, tracked_task) {
+        if let Err(error) = spawn_client_task_with_context(service_context, thread_name, tracked_task) {
             warn!("Failed to spawn {} background task: {}", thread_name, error);
         }
     }
 
-    fn notify_send_callback_success(
-        send_callback: &Option<ArcSendCallback>,
-        callback_executor: &Option<tokio::runtime::Handle>,
-        send_result: &SendResult,
-    ) {
+    fn notify_send_callback_success(send_callback: &Option<ArcSendCallback>, send_result: &SendResult) {
         let Some(callback) = send_callback.as_ref().cloned() else {
             return;
         };
 
-        if let Some(executor) = callback_executor.as_ref() {
-            let send_result = send_result.clone();
-            executor.spawn(async move {
-                callback.on_success(&send_result);
-            });
-        } else {
-            callback.on_success(send_result);
-        }
+        callback.on_success(send_result);
     }
 
-    fn notify_send_callback_exception(
-        send_callback: &Option<ArcSendCallback>,
-        callback_executor: &Option<tokio::runtime::Handle>,
-        error: &RocketMQError,
-    ) {
+    fn notify_send_callback_exception(send_callback: &Option<ArcSendCallback>, error: &RocketMQError) {
         let Some(callback) = send_callback.as_ref().cloned() else {
             return;
         };
 
-        if let Some(executor) = callback_executor.as_ref() {
-            let message = error.to_string();
-            executor.spawn(async move {
-                let error = RocketMQError::response_process_failed("send_callback", message);
-                callback.on_exception(&error);
-            });
-        } else {
-            callback.on_exception(error);
-        }
+        callback.on_exception(error);
     }
 
     fn process_send_response<T>(
@@ -3600,7 +3572,9 @@ impl MQClientAPIImpl {
             CommunicationMode::Async => {
                 let tracker = this.background_tasks.clone();
                 let shutdown_token = this.background_shutdown.clone();
+                let service_context = this.service_context.clone();
                 Self::spawn_api_background_task(
+                    &service_context,
                     "rocketmq-client-pull-message-async",
                     &tracker,
                     &shutdown_token,
@@ -6568,7 +6542,10 @@ mod tests {
     use super::*;
 
     fn retry_strategy() -> MQFaultStrategy {
-        MQFaultStrategy::new(&ClientConfig::default())
+        MQFaultStrategy::new(
+            crate::runtime::test_service_context("mq-client-api-retry-test"),
+            &ClientConfig::default(),
+        )
     }
 
     fn topic_publish_info() -> TopicPublishInfo {
@@ -7136,67 +7113,40 @@ mod tests {
     }
 
     #[test]
-    fn async_send_callback_success_uses_configured_callback_executor_like_java() {
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(1)
-            .thread_name("rocketmq-callback-success")
-            .enable_all()
-            .build()
-            .expect("callback runtime should build");
+    fn async_send_callback_success_runs_in_owned_send_task() {
         let (tx, rx) = std::sync::mpsc::channel();
         let callback: ArcSendCallback = Arc::new(move |result: Option<&SendResult>, error: Option<&RocketMQError>| {
-            tx.send((
-                std::thread::current().name().unwrap_or_default().to_string(),
-                result.is_some(),
-                error.is_some(),
-            ))
-            .expect("test receiver should be alive");
+            tx.send((result.is_some(), error.is_some()))
+                .expect("test receiver should be alive");
         });
 
-        MQClientAPIImpl::notify_send_callback_success(
-            &Some(callback),
-            &Some(runtime.handle().clone()),
-            &SendResult::default(),
-        );
+        MQClientAPIImpl::notify_send_callback_success(&Some(callback), &SendResult::default());
 
-        let (thread_name, has_result, has_error) = rx
+        let (has_result, has_error) = rx
             .recv_timeout(Duration::from_secs(2))
-            .expect("callback should execute on configured runtime");
-        assert_eq!(thread_name, "rocketmq-callback-success");
+            .expect("callback should execute in the owned send task");
         assert!(has_result);
         assert!(!has_error);
     }
 
     #[test]
-    fn async_send_callback_exception_uses_configured_callback_executor_like_java() {
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(1)
-            .thread_name("rocketmq-callback-error")
-            .enable_all()
-            .build()
-            .expect("callback runtime should build");
+    fn async_send_callback_exception_runs_in_owned_send_task() {
         let (tx, rx) = std::sync::mpsc::channel();
         let callback: ArcSendCallback = Arc::new(move |result: Option<&SendResult>, error: Option<&RocketMQError>| {
-            tx.send((
-                std::thread::current().name().unwrap_or_default().to_string(),
-                result.is_some(),
-                error.map(ToString::to_string),
-            ))
-            .expect("test receiver should be alive");
+            tx.send((result.is_some(), error.map(ToString::to_string)))
+                .expect("test receiver should be alive");
         });
         let error = RocketMQError::network_request_failed("broker-a", "callback failure");
 
-        MQClientAPIImpl::notify_send_callback_exception(&Some(callback), &Some(runtime.handle().clone()), &error);
+        MQClientAPIImpl::notify_send_callback_exception(&Some(callback), &error);
 
-        let (thread_name, has_result, error) = rx
+        let (has_result, error) = rx
             .recv_timeout(Duration::from_secs(2))
-            .expect("callback should execute on configured runtime");
-        assert_eq!(thread_name, "rocketmq-callback-error");
+            .expect("callback should execute in the owned send task");
         assert!(!has_result);
-        assert_eq!(
-            error.as_deref(),
-            Some("Response send_callback failed: Send failed to broker-a: callback failure")
-        );
+        assert!(error
+            .as_deref()
+            .is_some_and(|message| message.contains("callback failure")));
     }
 
     #[tokio::test]
@@ -7236,6 +7186,7 @@ mod tests {
         let completed_in_task = completed.clone();
 
         MQClientAPIImpl::spawn_api_background_task(
+            &crate::runtime::test_service_context("client-api-background-test").child("api-background"),
             "rocketmq-client-api-background-test",
             &tracker,
             &token,
@@ -7260,6 +7211,7 @@ mod tests {
         let dropped_in_task = dropped.clone();
 
         MQClientAPIImpl::spawn_api_background_task(
+            &crate::runtime::test_service_context("client-api-background-cancel-test").child("api-background"),
             "rocketmq-client-api-background-test",
             &tracker,
             &token,

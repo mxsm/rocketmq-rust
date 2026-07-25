@@ -19,11 +19,6 @@ use std::sync::Arc;
 use crate::core::clock::Clock;
 use crate::core::clock::SystemClock;
 
-#[cfg(feature = "client-adapter")]
-pub use crate::client_adapter::lifecycle::AdminGuard;
-#[cfg(feature = "client-adapter")]
-pub use crate::client_adapter::lifecycle::AdminSession;
-
 #[derive(Clone)]
 pub struct AdminBuilder {
     namesrv_addr: Option<String>,
@@ -38,6 +33,12 @@ pub struct AdminBuilder {
 
 impl Default for AdminBuilder {
     fn default() -> Self {
+        Self::base()
+    }
+}
+
+impl AdminBuilder {
+    fn base() -> Self {
         Self {
             namesrv_addr: None,
             admin_group: None,
@@ -48,6 +49,10 @@ impl Default for AdminBuilder {
             use_tls: false,
             clock: Arc::new(SystemClock),
         }
+    }
+
+    pub fn new() -> Self {
+        Self::base()
     }
 }
 
@@ -68,10 +73,6 @@ impl std::fmt::Debug for AdminBuilder {
 }
 
 impl AdminBuilder {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     pub fn namesrv_addr(mut self, addr: impl Into<String>) -> Self {
         self.namesrv_addr = Some(addr.into());
         self

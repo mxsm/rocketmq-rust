@@ -276,8 +276,9 @@ impl ProducerService {
     pub async fn query_producer_info_by_request_with_credentials(
         request: ProducerInfoQueryRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<ProducerInfoQueryResult> {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials)
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
         let result = Self::query_producer_info_with_admin(&admin, &request).await;
@@ -296,8 +297,9 @@ impl ProducerService {
     pub async fn send_message_by_request_with_credentials(
         request: SendMessageRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<SendMessageResult> {
-        let mut builder = DefaultMQProducer::builder().producer_group(current_millis().to_string());
+        let mut builder = DefaultMQProducer::builder(client_runtime).producer_group(current_millis().to_string());
         if let Some(namesrv_addr) = request.namesrv_addr() {
             builder = builder.name_server_addr(namesrv_addr);
         }
@@ -363,12 +365,13 @@ impl ProducerService {
     pub async fn send_message_status_by_request_with_credentials(
         request: SendMessageStatusRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<SendMessageStatusResult> {
         let instance_name = format!("{SEND_MESSAGE_STATUS_PRODUCER_GROUP}_{}", current_millis());
         let mut client_config = ClientConfig::default();
         client_config.set_instance_name(instance_name.into());
 
-        let mut builder = DefaultMQProducer::builder()
+        let mut builder = DefaultMQProducer::builder(client_runtime)
             .producer_group(SEND_MESSAGE_STATUS_PRODUCER_GROUP.to_string())
             .client_config(client_config);
         if let Some(credentials) = credentials {
@@ -420,8 +423,9 @@ impl ProducerService {
     pub async fn check_message_send_rt_by_request_with_credentials(
         request: CheckMessageSendRtRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<CheckMessageSendRtResult> {
-        let mut builder = DefaultMQProducer::builder().producer_group(current_millis().to_string());
+        let mut builder = DefaultMQProducer::builder(client_runtime).producer_group(current_millis().to_string());
         if let Some(credentials) = credentials {
             builder = builder.rpc_hook(crate::client_adapter::security::rpc_hook_from_credentials(&credentials));
         }
@@ -535,7 +539,9 @@ fn builder_with_namesrv(namesrv_addr: Option<&str>) -> AdminBuilder {
 fn admin_builder_with_credentials(
     builder: AdminBuilder,
     credentials: Option<crate::core::security::AdminCredentials>,
+    client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
 ) -> AdminBuilder {
+    let builder = builder.client_runtime(client_runtime);
     match credentials {
         Some(hook) => builder.credentials(hook),
         None => builder,

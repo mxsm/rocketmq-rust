@@ -2,6 +2,8 @@
 sidebar_position: 2
 title: 快速开始
 ---
+
+> Runtime 所有权：示例中的 `client_runtime` 是应用持有的 `Arc<ClientRuntime>`，它从 `RuntimeOwner` 的 child scope 创建，并在进程边界显式关闭。
 # 快速开始
 
 本指南将帮助你在几分钟内创建第一个 RocketMQ-Rust 生产者与消费者。
@@ -50,7 +52,7 @@ use rocketmq_error::RocketMQResult;
 
 #[tokio::main]
 async fn main() -> RocketMQResult<()> {
-    let mut producer = DefaultMQProducer::builder()
+    let mut producer = DefaultMQProducer::builder(client_runtime.clone())
         .producer_group("producer_group_1")
         .name_server_addr("localhost:9876")
         .build();
@@ -118,7 +120,7 @@ impl MessageListenerConcurrently for MyListener {
 
 #[tokio::main]
 async fn main() -> RocketMQResult<()> {
-    let mut consumer = DefaultMQPushConsumer::builder()
+    let mut consumer = DefaultMQPushConsumer::builder(client_runtime.clone())
         .consumer_group("consumer_group_1")
         .name_server_addr("localhost:9876")
         .consume_thread_min(1)

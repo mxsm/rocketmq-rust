@@ -223,8 +223,9 @@ impl ClusterService {
     pub async fn query_cluster_list_by_request_with_credentials(
         request: ClusterListQueryRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<ClusterListQueryResult> {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials)
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
         let result = Self::query_cluster_list_with_admin(&admin, &request).await;
@@ -260,8 +261,9 @@ impl ClusterService {
     pub async fn query_cluster_broker_names_by_request_with_credentials(
         request: ClusterBrokerNameQueryRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<ClusterBrokerNameQueryResult> {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials)
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
         let result = Self::query_cluster_broker_names_with_admin(&admin, &request).await;
@@ -280,17 +282,19 @@ impl ClusterService {
     pub async fn send_message_rt_by_request_with_credentials(
         request: ClusterSendMessageRtRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<ClusterSendMessageRtResult> {
         let broker_names = Self::query_cluster_broker_names_by_request_with_credentials(
             request.broker_name_query_request(),
             credentials.clone(),
+            client_runtime.clone(),
         )
         .await?;
 
         let instance_name = format!("PID_ClusterRTCommand_{}", current_millis());
         let mut client_config = ClientConfig::default();
         client_config.set_instance_name(instance_name.into());
-        let mut builder = DefaultMQProducer::builder()
+        let mut builder = DefaultMQProducer::builder(client_runtime)
             .producer_group(current_millis().to_string())
             .client_config(client_config);
         if let Some(credentials) = credentials {
@@ -692,7 +696,9 @@ fn builder_with_namesrv(namesrv_addr: Option<&str>) -> AdminBuilder {
 fn admin_builder_with_credentials(
     builder: AdminBuilder,
     credentials: Option<crate::core::security::AdminCredentials>,
+    client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
 ) -> AdminBuilder {
+    let builder = builder.client_runtime(client_runtime);
     match credentials {
         Some(hook) => builder.credentials(hook),
         None => builder,

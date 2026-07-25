@@ -23,10 +23,11 @@ use rocketmq_transport::runtime::RPCHook;
 use crate::base::client_config::ClientConfig;
 use crate::producer::default_mq_producer::DefaultMQProducer;
 use crate::producer::produce_accumulator::ProduceAccumulator;
+use crate::runtime::ClientRuntime;
 use crate::trace::trace_dispatcher::ArcTraceDispatcher;
 
-#[derive(Default)]
 pub struct DefaultMQProducerBuilder {
+    client_runtime: Arc<ClientRuntime>,
     client_config: ClientConfig,
     retry_response_codes: Option<HashSet<i32>>,
     producer_group: Option<CheetahString>,
@@ -57,8 +58,36 @@ pub struct DefaultMQProducerBuilder {
 
 impl DefaultMQProducerBuilder {
     #[must_use]
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(client_runtime: Arc<ClientRuntime>) -> Self {
+        Self {
+            client_runtime,
+            client_config: ClientConfig::default(),
+            retry_response_codes: None,
+            producer_group: None,
+            topics: None,
+            create_topic_key: None,
+            default_topic_queue_nums: None,
+            send_msg_timeout: None,
+            send_msg_max_timeout_per_request: None,
+            compress_msg_body_over_howmuch: None,
+            retry_times_when_send_failed: None,
+            retry_times_when_send_async_failed: None,
+            retry_another_broker_when_not_store_ok: None,
+            max_message_size: None,
+            trace_dispatcher: None,
+            auto_batch: None,
+            batch_max_delay_ms: None,
+            batch_max_bytes: None,
+            total_batch_max_bytes: None,
+            produce_accumulator: None,
+            enable_backpressure_for_async_mode: None,
+            back_pressure_for_async_send_num: None,
+            back_pressure_for_async_send_size: None,
+            rpc_hook: None,
+            compress_level: None,
+            compress_type: None,
+            compressor: None,
+        }
     }
 
     #[inline]
@@ -241,7 +270,7 @@ impl DefaultMQProducerBuilder {
     }
 
     pub fn build(self) -> DefaultMQProducer {
-        let mut mq_producer = DefaultMQProducer::default();
+        let mut mq_producer = DefaultMQProducer::unbound();
         mq_producer.set_client_config(self.client_config);
 
         // Set optional fields
@@ -323,6 +352,7 @@ impl DefaultMQProducerBuilder {
 
         // Create and set the producer implementation
         let producer_impl = crate::producer::producer_impl::default_mq_producer_impl::DefaultMQProducerImpl::new(
+            self.client_runtime,
             mq_producer.client_config().clone(),
             mq_producer.producer_config().clone(),
             mq_producer.rpc_hook().clone(),

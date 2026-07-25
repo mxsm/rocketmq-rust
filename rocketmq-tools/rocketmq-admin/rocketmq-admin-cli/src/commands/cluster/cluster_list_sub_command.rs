@@ -48,6 +48,7 @@ impl CommandExecute for ClusterListSubCommand {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
         let print_interval = self.interval.map(|i| i * 1000);
         let mut iteration = 0u64;
@@ -59,9 +60,12 @@ impl CommandExecute for ClusterListSubCommand {
             }
             iteration += 1;
 
-            let result =
-                ClusterService::query_cluster_list_by_request_with_credentials(self.request(), credentials.clone())
-                    .await?;
+            let result = ClusterService::query_cluster_list_by_request_with_credentials(
+                self.request(),
+                credentials.clone(),
+                client_runtime.clone(),
+            )
+            .await?;
             Self::print_result(&result);
 
             if print_interval.is_none() {

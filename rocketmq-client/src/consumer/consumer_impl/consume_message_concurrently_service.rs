@@ -52,12 +52,14 @@ use crate::consumer::listener::consume_concurrently_status::ConsumeConcurrentlyS
 use crate::consumer::listener::consume_return_type::ConsumeReturnType;
 use crate::consumer::listener::message_listener_concurrently::ArcMessageListenerConcurrently;
 use crate::hook::consume_message_context::ConsumeMessageContext;
-use crate::runtime::spawn_client_blocking_io;
-use crate::runtime::spawn_client_task;
-use crate::runtime::spawn_client_tracked_task;
+use crate::runtime::spawn_client_blocking_io_with_context;
+use crate::runtime::spawn_client_task_with_context;
+use crate::runtime::spawn_client_tracked_task_with_context;
 use crate::runtime::ClientTrackedTaskHandle;
+use rocketmq_runtime::ChildServiceContext;
 
 pub struct ConsumeMessageConcurrentlyService {
+    service_context: ChildServiceContext,
     pub(crate) default_mqpush_consumer_impl: RwLock<Option<Weak<DefaultMQPushConsumerImpl>>>,
     pub(crate) client_config: Arc<ClientConfig>,
     pub(crate) consumer_config: Arc<ConsumerConfig>,
@@ -128,11 +130,15 @@ pub struct ConcurrentCleanExpireLifecycleProbe {
     pub shutdown_elapsed_us: u128,
 }
 
-fn spawn_concurrent_lifecycle_task<F>(thread_name: &'static str, task: F) -> Option<ConcurrentTaskHandle>
+fn spawn_concurrent_lifecycle_task<F>(
+    service_context: &ChildServiceContext,
+    thread_name: &'static str,
+    task: F,
+) -> Option<ConcurrentTaskHandle>
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    match spawn_client_tracked_task(thread_name, task) {
+    match spawn_client_tracked_task_with_context(service_context, thread_name, task) {
         Ok(handle) => Some(ConcurrentTaskHandle::Tracked(handle)),
         Err(error) => {
             warn!("Failed to spawn {} background task: {}", thread_name, error);
@@ -142,6 +148,7 @@ where
 }
 
 fn spawn_tracked_concurrent_task<F>(
+    service_context: &ChildServiceContext,
     thread_name: &'static str,
     tracker: &TaskTracker,
     force_stop_token: &CancellationToken,
@@ -161,7 +168,7 @@ fn spawn_tracked_concurrent_task<F>(
         }
     });
 
-    if let Err(error) = spawn_client_task(thread_name, tracked_task) {
+    if let Err(error) = spawn_client_task_with_context(service_context, thread_name, tracked_task) {
         warn!("Failed to spawn {} background task: {}", thread_name, error);
         warn!("Failed to track {} background task", thread_name);
     }
@@ -169,6 +176,7 @@ fn spawn_tracked_concurrent_task<F>(
 
 impl ConsumeMessageConcurrentlyService {
     pub fn new(
+        service_context: ChildServiceContext,
         client_config: Arc<ClientConfig>,
         consumer_config: Arc<ConsumerConfig>,
         consumer_group: CheetahString,
@@ -177,6 +185,7 @@ impl ConsumeMessageConcurrentlyService {
     ) -> Self {
         let core_pool_size = consumer_config.consume_thread_min as usize;
         Self {
+            service_context,
             default_mqpush_consumer_impl: RwLock::new(default_mqpush_consumer_impl),
             client_config,
             consumer_config,
@@ -365,6 +374,7 @@ impl ConsumeMessageConcurrentlyService {
     ) {
         let shutdown_token = self.shutdown_token.clone();
         spawn_tracked_concurrent_task(
+            &self.service_context,
             "rocketmq-client-concurrent-consume-delay",
             &self.consume_task_tracker,
             &self.force_stop_token,
@@ -406,20 +416,25 @@ impl ConsumeMessageConcurrentlyService {
 impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
     fn start(&self, this: Arc<Self>) {
         let shutdown_token = self.shutdown_token.clone();
-        let handle = spawn_concurrent_lifecycle_task("rocketmq-client-concurrent-clean-expire", async move {
-            let timeout = this.consumer_config.consume_timeout;
-            let interval = Duration::from_secs(timeout.saturating_mul(60));
-            loop {
-                tokio::select! {
-                    _ = shutdown_token.cancelled() => break,
-                    _ = tokio::time::sleep(interval) => {}
+        let service_context = this.service_context.clone();
+        let handle = spawn_concurrent_lifecycle_task(
+            &service_context,
+            "rocketmq-client-concurrent-clean-expire",
+            async move {
+                let timeout = this.consumer_config.consume_timeout;
+                let interval = Duration::from_secs(timeout.saturating_mul(60));
+                loop {
+                    tokio::select! {
+                        _ = shutdown_token.cancelled() => break,
+                        _ = tokio::time::sleep(interval) => {}
+                    }
+                    if shutdown_token.is_cancelled() {
+                        break;
+                    }
+                    this.clean_expire_msg().await;
                 }
-                if shutdown_token.is_cancelled() {
-                    break;
-                }
-                this.clean_expire_msg().await;
-            }
-        });
+            },
+        );
         *self.clean_expire_task_handle.lock() = handle;
     }
 
@@ -496,46 +511,50 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
 
         let listener = self.message_listener.clone();
         let group_for_span = self.consumer_group.clone();
-        let status = spawn_client_blocking_io("client.concurrent.consume_direct", move || {
-            let context = ConsumeConcurrentlyContext::new(mq);
-            let msgs_refs: Vec<&MessageExt> = msgs.iter().map(|m| m.as_ref()).collect();
-            let process_span = crate::consumer::consumer_impl::observability::consumer_process_span(
-                msgs_refs.first().copied(),
-                msgs_refs.len(),
-                group_for_span.as_str(),
-                &context.message_queue,
-                "concurrent_direct",
-            );
-            let _entered = process_span.enter();
-            let result = listener.consume_message(&msgs_refs, &context);
-            match &result {
-                Ok(ConsumeConcurrentlyStatus::ConsumeSuccess) => {
-                    crate::consumer::consumer_impl::observability::record_process_event(
-                        &process_span,
-                        "RocketMQ CONSUMER ACK",
-                        "success",
-                        msgs_refs.len(),
-                    );
+        let status = spawn_client_blocking_io_with_context(
+            &self.service_context,
+            "client.concurrent.consume_direct",
+            move || {
+                let context = ConsumeConcurrentlyContext::new(mq);
+                let msgs_refs: Vec<&MessageExt> = msgs.iter().map(|m| m.as_ref()).collect();
+                let process_span = crate::consumer::consumer_impl::observability::consumer_process_span(
+                    msgs_refs.first().copied(),
+                    msgs_refs.len(),
+                    group_for_span.as_str(),
+                    &context.message_queue,
+                    "concurrent_direct",
+                );
+                let _entered = process_span.enter();
+                let result = listener.consume_message(&msgs_refs, &context);
+                match &result {
+                    Ok(ConsumeConcurrentlyStatus::ConsumeSuccess) => {
+                        crate::consumer::consumer_impl::observability::record_process_event(
+                            &process_span,
+                            "RocketMQ CONSUMER ACK",
+                            "success",
+                            msgs_refs.len(),
+                        );
+                    }
+                    Ok(ConsumeConcurrentlyStatus::ReconsumeLater) => {
+                        crate::consumer::consumer_impl::observability::record_process_event(
+                            &process_span,
+                            "RocketMQ CONSUMER RETRY",
+                            "reconsume_later",
+                            msgs_refs.len(),
+                        );
+                    }
+                    Err(_) => {
+                        crate::consumer::consumer_impl::observability::record_process_event(
+                            &process_span,
+                            "RocketMQ CONSUMER RETRY",
+                            "exception",
+                            msgs_refs.len(),
+                        );
+                    }
                 }
-                Ok(ConsumeConcurrentlyStatus::ReconsumeLater) => {
-                    crate::consumer::consumer_impl::observability::record_process_event(
-                        &process_span,
-                        "RocketMQ CONSUMER RETRY",
-                        "reconsume_later",
-                        msgs_refs.len(),
-                    );
-                }
-                Err(_) => {
-                    crate::consumer::consumer_impl::observability::record_process_event(
-                        &process_span,
-                        "RocketMQ CONSUMER RETRY",
-                        "exception",
-                        msgs_refs.len(),
-                    );
-                }
-            }
-            result
-        })
+                result
+            },
+        )
         .await
         .unwrap_or_else(|join_err| {
             error!("consume_message_directly task panicked: {:?}", join_err);
@@ -643,6 +662,7 @@ impl ConsumeMessageConcurrentlyService {
                     default_mqpush_consumer_impl: self.consumer_impl(),
                 };
                 spawn_tracked_concurrent_task(
+                    &self.service_context,
                     "rocketmq-client-concurrent-consume",
                     &self.consume_task_tracker,
                     &self.force_stop_token,
@@ -748,8 +768,10 @@ impl ConsumeRequest {
             let group_for_err = self.consumer_group.clone();
             let process_span_for_blocking = process_span.clone();
 
-            let (blocking_status, blocking_has_exception, returned_context) =
-                spawn_client_blocking_io("client.concurrent.consume", move || {
+            let (blocking_status, blocking_has_exception, returned_context) = spawn_client_blocking_io_with_context(
+                &consume_message_concurrently_service.service_context,
+                "client.concurrent.consume",
+                move || {
                     let _entered = process_span_for_blocking.enter();
                     let msgs_refs: Vec<&MessageExt> = msgs_for_blocking.iter().map(|m| m.as_ref()).collect();
                     match listener.consume_message(&msgs_refs, &context) {
@@ -765,20 +787,21 @@ impl ConsumeRequest {
                             (None, true, context)
                         }
                     }
-                })
-                .await
-                .unwrap_or_else(|join_err| {
-                    error!(
-                        "consume_message task panicked: {:?}, Group: {}, MQ: {}",
-                        join_err, self.consumer_group, self.message_queue
-                    );
-                    let fallback = ConsumeConcurrentlyContext {
-                        message_queue: self.message_queue.clone(),
-                        delay_level_when_next_consume: 0,
-                        ack_index: i32::MAX,
-                    };
-                    (None, true, fallback)
-                });
+                },
+            )
+            .await
+            .unwrap_or_else(|join_err| {
+                error!(
+                    "consume_message task panicked: {:?}, Group: {}, MQ: {}",
+                    join_err, self.consumer_group, self.message_queue
+                );
+                let fallback = ConsumeConcurrentlyContext {
+                    message_queue: self.message_queue.clone(),
+                    delay_level_when_next_consume: 0,
+                    ack_index: i32::MAX,
+                };
+                (None, true, fallback)
+            });
             context = returned_context;
             status = blocking_status;
             has_exception = blocking_has_exception;
@@ -918,12 +941,15 @@ fn classify_concurrent_consume_return_type(
 }
 
 #[doc(hidden)]
-pub async fn run_concurrent_clean_expire_lifecycle_probe() -> ConcurrentCleanExpireLifecycleProbe {
+pub async fn run_concurrent_clean_expire_lifecycle_probe(
+    service_context: ChildServiceContext,
+) -> ConcurrentCleanExpireLifecycleProbe {
     let listener: ArcMessageListenerConcurrently =
         Arc::new(|_msgs: &[&MessageExt], _context: &ConsumeConcurrentlyContext| {
             Ok(ConsumeConcurrentlyStatus::ConsumeSuccess)
         });
     let service = ConsumeMessageConcurrentlyService::new(
+        service_context.child("service"),
         Arc::new(ClientConfig::default()),
         Arc::new(ConsumerConfig::default()),
         CheetahString::from_static_str("concurrent-clean-expire-probe"),
@@ -931,6 +957,7 @@ pub async fn run_concurrent_clean_expire_lifecycle_probe() -> ConcurrentCleanExp
         None,
     );
     let this = Arc::new(ConsumeMessageConcurrentlyService::new(
+        service_context.child("runner"),
         Arc::new(ClientConfig::default()),
         Arc::new(ConsumerConfig::default()),
         CheetahString::from_static_str("concurrent-clean-expire-probe"),
@@ -983,8 +1010,13 @@ mod tests {
         CheetahString::from_static_str("group")
     }
 
+    fn test_context() -> ChildServiceContext {
+        crate::runtime::test_service_context("consume-message-concurrently-test")
+    }
+
     fn new_service(default_impl: Option<Arc<DefaultMQPushConsumerImpl>>) -> ConsumeMessageConcurrentlyService {
         ConsumeMessageConcurrentlyService::new(
+            test_context(),
             Arc::new(ClientConfig::default()),
             Arc::new(ConsumerConfig::default()),
             consumer_group(),
@@ -995,6 +1027,7 @@ mod tests {
 
     fn new_service_with_config(consumer_config: ConsumerConfig) -> ConsumeMessageConcurrentlyService {
         ConsumeMessageConcurrentlyService::new(
+            test_context(),
             Arc::new(ClientConfig::default()),
             Arc::new(consumer_config),
             consumer_group(),
@@ -1008,6 +1041,7 @@ mod tests {
         let client_config = Arc::new(ClientConfig::default());
         let consumer_config = Arc::new(ConsumerConfig::default());
         let service = ConsumeMessageConcurrentlyService::new(
+            test_context(),
             client_config.clone(),
             consumer_config.clone(),
             consumer_group(),
@@ -1022,6 +1056,7 @@ mod tests {
     fn new_default_impl() -> Arc<DefaultMQPushConsumerImpl> {
         let consumer_config = ConsumerConfig::default();
         let consumer = Arc::new(DefaultMQPushConsumerImpl::new(
+            crate::runtime::test_client_runtime("concurrent-consumer-impl-test"),
             ClientConfig::default(),
             consumer_config,
             None,
@@ -1175,10 +1210,11 @@ mod tests {
     async fn concurrent_task_shutdown_waits_for_worker_completion() {
         let completed = Arc::new(AtomicBool::new(false));
         let completed_in_task = completed.clone();
-        let handle = spawn_concurrent_lifecycle_task("rocketmq-client-concurrent-task-test", async move {
-            completed_in_task.store(true, Ordering::Release);
-        })
-        .expect("test task should spawn");
+        let handle =
+            spawn_concurrent_lifecycle_task(&test_context(), "rocketmq-client-concurrent-task-test", async move {
+                completed_in_task.store(true, Ordering::Release);
+            })
+            .expect("test task should spawn");
 
         assert!(handle.shutdown(Duration::from_secs(1)).await);
         assert!(completed.load(Ordering::Acquire));
@@ -1188,19 +1224,26 @@ mod tests {
     async fn concurrent_task_shutdown_aborts_after_timeout() {
         let dropped = Arc::new(AtomicBool::new(false));
         let dropped_in_task = dropped.clone();
-        let handle = spawn_concurrent_lifecycle_task("rocketmq-client-concurrent-task-test", async move {
-            let _drop_flag = DropFlag(dropped_in_task);
-            pending::<()>().await;
-        })
-        .expect("test task should spawn");
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let handle =
+            spawn_concurrent_lifecycle_task(&test_context(), "rocketmq-client-concurrent-task-test", async move {
+                let _drop_flag = DropFlag(dropped_in_task);
+                let _ = started_tx.send(());
+                pending::<()>().await;
+            })
+            .expect("test task should spawn");
 
+        tokio::time::timeout(Duration::from_secs(1), started_rx)
+            .await
+            .expect("test task should start")
+            .expect("test task should report startup");
         assert!(!handle.shutdown(Duration::from_millis(20)).await);
         assert!(dropped.load(Ordering::Acquire));
     }
 
     #[tokio::test]
     async fn concurrent_clean_expire_lifecycle_probe_reports_clean_shutdown() {
-        let probe = run_concurrent_clean_expire_lifecycle_probe().await;
+        let probe = run_concurrent_clean_expire_lifecycle_probe(test_context()).await;
 
         assert!(probe.healthy, "{probe:?}");
         assert_eq!(probe.task_count_before_shutdown, 1);
@@ -1216,6 +1259,7 @@ mod tests {
         let completed_in_task = completed.clone();
 
         spawn_tracked_concurrent_task(
+            &test_context(),
             "rocketmq-client-concurrent-tracker-test",
             &tracker,
             &token,
@@ -1243,6 +1287,7 @@ mod tests {
         let dropped_in_task = dropped.clone();
 
         spawn_tracked_concurrent_task(
+            &test_context(),
             "rocketmq-client-concurrent-tracker-test",
             &tracker,
             &token,

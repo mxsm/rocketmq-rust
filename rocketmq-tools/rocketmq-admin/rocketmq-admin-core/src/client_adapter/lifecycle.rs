@@ -19,6 +19,7 @@ use std::ops::DerefMut;
 use std::sync::Arc;
 use std::time::Duration;
 
+use rocketmq_client_rust::ClientRuntime;
 use rocketmq_client_rust::DefaultMQAdminExt;
 use rocketmq_error::RocketMQError;
 
@@ -26,17 +27,86 @@ use crate::core::clock::Clock;
 use crate::core::AdminError;
 use crate::core::AdminResult;
 
+/// Builds an SDK-backed admin session within an explicitly owned client runtime.
+#[derive(Clone)]
+pub struct AdminBuilder {
+    client_runtime: Arc<ClientRuntime>,
+    config: crate::core::admin::AdminBuilder,
+}
+
+impl std::fmt::Debug for AdminBuilder {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AdminBuilder")
+            .field("client_runtime", &"explicit")
+            .field("config", &self.config)
+            .finish()
+    }
+}
+
+impl AdminBuilder {
+    pub fn new(client_runtime: Arc<ClientRuntime>) -> Self {
+        Self {
+            client_runtime,
+            config: crate::core::admin::AdminBuilder::new(),
+        }
+    }
+
+    pub fn namesrv_addr(mut self, addr: impl Into<String>) -> Self {
+        self.config = self.config.namesrv_addr(addr);
+        self
+    }
+
+    pub fn admin_group(mut self, group: impl Into<String>) -> Self {
+        self.config = self.config.admin_group(group);
+        self
+    }
+
+    pub fn instance_name(mut self, name: impl Into<String>) -> Self {
+        self.config = self.config.instance_name(name);
+        self
+    }
+
+    pub fn timeout_millis(mut self, timeout_millis: u64) -> Self {
+        self.config = self.config.timeout_millis(timeout_millis);
+        self
+    }
+
+    pub fn unit_name(mut self, name: impl Into<String>) -> Self {
+        self.config = self.config.unit_name(name);
+        self
+    }
+
+    pub fn vip_channel_enabled(mut self, enabled: bool) -> Self {
+        self.config = self.config.vip_channel_enabled(enabled);
+        self
+    }
+
+    pub fn use_tls(mut self, use_tls: bool) -> Self {
+        self.config = self.config.use_tls(use_tls);
+        self
+    }
+
+    pub fn clock(mut self, clock: Arc<dyn Clock>) -> Self {
+        self.config = self.config.clock(clock);
+        self
+    }
+}
+
 #[must_use = "a started admin session must be explicitly shut down"]
 pub struct AdminSession {
     pub(crate) inner: DefaultMQAdminExt,
+    client_runtime: Arc<ClientRuntime>,
     pub(crate) clock: Arc<dyn Clock>,
     closed: bool,
 }
 
 impl AdminSession {
     pub(crate) fn from_started(inner: DefaultMQAdminExt, clock: Arc<dyn Clock>) -> Self {
+        let client_runtime = inner.client_runtime();
         Self {
             inner,
+            client_runtime,
             clock,
             closed: false,
         }
@@ -59,6 +129,10 @@ impl AdminSession {
 
     pub fn is_closed(&self) -> bool {
         self.closed
+    }
+
+    pub fn client_runtime(&self) -> Arc<ClientRuntime> {
+        Arc::clone(&self.client_runtime)
     }
 
     pub async fn probe_name_server(&self, name_server: &str) -> AdminResult<()> {
@@ -140,33 +214,36 @@ impl DerefMut for AdminGuard {
     }
 }
 
-impl crate::core::admin::AdminBuilder {
+impl AdminBuilder {
     pub async fn build_and_start(self) -> AdminResult<AdminSession> {
-        let clock = self.configured_clock();
+        let client_runtime = self.client_runtime;
+        let config = self.config;
+        let clock = config.configured_clock();
         let now_millis = clock.now_millis();
-        let admin_group = self
+        let admin_group = config
             .configured_admin_group()
             .map(str::to_owned)
             .unwrap_or_else(|| format!("tools-admin-{now_millis}"));
         let mut admin = DefaultMQAdminExt::with_admin_ext_group_and_timeout(
+            client_runtime.clone(),
             admin_group,
-            Duration::from_millis(self.configured_timeout_millis()),
+            Duration::from_millis(config.configured_timeout_millis()),
         );
-        if let Some(namesrv_addr) = self.configured_namesrv_addr() {
+        if let Some(namesrv_addr) = config.configured_namesrv_addr() {
             admin.set_namesrv_addr(namesrv_addr);
         }
 
-        let instance_name = self
+        let instance_name = config
             .configured_instance_name()
             .map(str::to_owned)
             .unwrap_or_else(|| format!("tools-{now_millis}"));
         let client_config = admin.client_config_mut();
         client_config.set_instance_name(instance_name.into());
-        client_config.set_vip_channel_enabled(self.configured_vip_channel_enabled());
-        if let Some(unit_name) = self.configured_unit_name() {
+        client_config.set_vip_channel_enabled(config.configured_vip_channel_enabled());
+        if let Some(unit_name) = config.configured_unit_name() {
             client_config.set_unit_name(unit_name.into());
         }
-        admin.set_use_tls(self.configured_use_tls());
+        admin.set_use_tls(config.configured_use_tls());
         admin
             .start()
             .await
@@ -174,6 +251,7 @@ impl crate::core::admin::AdminBuilder {
 
         Ok(AdminSession {
             inner: admin,
+            client_runtime,
             clock,
             closed: false,
         })

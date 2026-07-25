@@ -84,10 +84,12 @@ impl CommandExecute for UpdateColdDataFlowCtrGroupConfigSubCommand {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
         let result = BrokerService::update_cold_data_flow_ctr_group_config_by_request_with_credentials(
             self.request()?,
             credentials,
+            client_runtime,
         )
         .await?;
         Self::print_result(&result)

@@ -19,11 +19,12 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
-use crate::runtime::spawn_client_tracked_task;
+use crate::runtime::spawn_client_tracked_task_with_context;
 use crate::runtime::ClientTrackedTaskHandle;
 use parking_lot::Mutex;
 use rocketmq_observability::stats::stats_item_set::StatsItemSet;
 use rocketmq_protocol::protocol::body::consume_status::ConsumeStatus;
+use rocketmq_runtime::ChildServiceContext;
 use serde::Serialize;
 use tokio::sync::Notify;
 use tracing::warn;
@@ -41,6 +42,7 @@ const CONSUMER_STATS_TASK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 /// TPS, consume RT, pull TPS, and pull RT. All `inc_*` methods are
 /// thread-safe and intended to be called on the hot consumption path.
 pub struct ConsumerStatsManager {
+    service_context: ChildServiceContext,
     topic_and_group_consume_ok_tps: StatsItemSet,
     topic_and_group_consume_rt: StatsItemSet,
     topic_and_group_consume_failed_tps: StatsItemSet,
@@ -101,16 +103,11 @@ pub struct ConsumerStatsManagerLifecycleProbe {
     pub shutdown_elapsed_us: u128,
 }
 
-impl Default for ConsumerStatsManager {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl ConsumerStatsManager {
     /// Creates a new `ConsumerStatsManager` with all metric sets initialised.
-    pub fn new() -> Self {
+    pub fn new(service_context: ChildServiceContext) -> Self {
         Self {
+            service_context,
             topic_and_group_consume_ok_tps: StatsItemSet::new(TOPIC_AND_GROUP_CONSUME_OK_TPS.to_string()),
             topic_and_group_consume_rt: StatsItemSet::new(TOPIC_AND_GROUP_CONSUME_RT.to_string()),
             topic_and_group_consume_failed_tps: StatsItemSet::new(TOPIC_AND_GROUP_CONSUME_FAILED_TPS.to_string()),
@@ -149,19 +146,23 @@ impl ConsumerStatsManager {
         ];
         let shutdown_signal = self.shutdown_signal.clone();
         let shutdown_notify = self.shutdown_notify.clone();
-        if let Some(task) = spawn_stats_task("rocketmq-client-consumer-stats-seconds", async move {
-            loop {
-                if shutdown_signal.load(Ordering::Acquire) {
-                    break;
+        if let Some(task) = spawn_stats_task(
+            &self.service_context,
+            "rocketmq-client-consumer-stats-seconds",
+            async move {
+                loop {
+                    if shutdown_signal.load(Ordering::Acquire) {
+                        break;
+                    }
+                    for set in &sets_sec {
+                        set.sampling_in_seconds();
+                    }
+                    if !sleep_or_shutdown(&shutdown_signal, &shutdown_notify, Duration::from_secs(10)).await {
+                        break;
+                    }
                 }
-                for set in &sets_sec {
-                    set.sampling_in_seconds();
-                }
-                if !sleep_or_shutdown(&shutdown_signal, &shutdown_notify, Duration::from_secs(10)).await {
-                    break;
-                }
-            }
-        }) {
+            },
+        ) {
             task_handles.push(task);
         }
 
@@ -175,19 +176,23 @@ impl ConsumerStatsManager {
         ];
         let shutdown_signal = self.shutdown_signal.clone();
         let shutdown_notify = self.shutdown_notify.clone();
-        if let Some(task) = spawn_stats_task("rocketmq-client-consumer-stats-minutes", async move {
-            loop {
-                if shutdown_signal.load(Ordering::Acquire) {
-                    break;
+        if let Some(task) = spawn_stats_task(
+            &self.service_context,
+            "rocketmq-client-consumer-stats-minutes",
+            async move {
+                loop {
+                    if shutdown_signal.load(Ordering::Acquire) {
+                        break;
+                    }
+                    for set in &sets_min {
+                        set.sampling_in_minutes();
+                    }
+                    if !sleep_or_shutdown(&shutdown_signal, &shutdown_notify, Duration::from_secs(10 * 60)).await {
+                        break;
+                    }
                 }
-                for set in &sets_min {
-                    set.sampling_in_minutes();
-                }
-                if !sleep_or_shutdown(&shutdown_signal, &shutdown_notify, Duration::from_secs(10 * 60)).await {
-                    break;
-                }
-            }
-        }) {
+            },
+        ) {
             task_handles.push(task);
         }
 
@@ -201,19 +206,23 @@ impl ConsumerStatsManager {
         ];
         let shutdown_signal = self.shutdown_signal.clone();
         let shutdown_notify = self.shutdown_notify.clone();
-        if let Some(task) = spawn_stats_task("rocketmq-client-consumer-stats-hours", async move {
-            loop {
-                if shutdown_signal.load(Ordering::Acquire) {
-                    break;
+        if let Some(task) = spawn_stats_task(
+            &self.service_context,
+            "rocketmq-client-consumer-stats-hours",
+            async move {
+                loop {
+                    if shutdown_signal.load(Ordering::Acquire) {
+                        break;
+                    }
+                    for set in &sets_hour {
+                        set.sampling_in_hours();
+                    }
+                    if !sleep_or_shutdown(&shutdown_signal, &shutdown_notify, Duration::from_secs(3600)).await {
+                        break;
+                    }
                 }
-                for set in &sets_hour {
-                    set.sampling_in_hours();
-                }
-                if !sleep_or_shutdown(&shutdown_signal, &shutdown_notify, Duration::from_secs(3600)).await {
-                    break;
-                }
-            }
-        }) {
+            },
+        ) {
             task_handles.push(task);
         }
     }
@@ -338,11 +347,15 @@ fn stats_key(topic: &str, group: &str) -> String {
     format!("{topic}@{group}")
 }
 
-fn spawn_stats_task<F>(thread_name: &'static str, task: F) -> Option<ConsumerStatsTask>
+fn spawn_stats_task<F>(
+    service_context: &ChildServiceContext,
+    thread_name: &'static str,
+    task: F,
+) -> Option<ConsumerStatsTask>
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    match spawn_client_tracked_task(thread_name, task) {
+    match spawn_client_tracked_task_with_context(service_context, thread_name, task) {
         Ok(handle) => Some(ConsumerStatsTask { handle }),
         Err(error) => {
             warn!("Failed to spawn {} background task: {}", thread_name, error);
@@ -400,8 +413,10 @@ async fn sleep_or_shutdown(shutdown_signal: &Arc<AtomicBool>, shutdown_notify: &
 }
 
 #[doc(hidden)]
-pub async fn run_consumer_stats_manager_lifecycle_probe() -> ConsumerStatsManagerLifecycleProbe {
-    let manager = ConsumerStatsManager::new();
+pub async fn run_consumer_stats_manager_lifecycle_probe(
+    service_context: ChildServiceContext,
+) -> ConsumerStatsManagerLifecycleProbe {
+    let manager = ConsumerStatsManager::new(service_context);
     manager.start();
     let task_count_before_shutdown = manager.task_count();
 
@@ -433,7 +448,7 @@ mod tests {
     }
 
     fn make_manager() -> ConsumerStatsManager {
-        ConsumerStatsManager::new()
+        ConsumerStatsManager::new(crate::runtime::test_service_context("consumer-stats-manager-test"))
     }
 
     #[test]
@@ -522,10 +537,14 @@ mod tests {
     async fn stats_task_shutdown_aborts_after_timeout() {
         let dropped = Arc::new(AtomicBool::new(false));
         let dropped_in_task = dropped.clone();
-        let task = spawn_stats_task("rocketmq-client-consumer-stats-test", async move {
-            let _drop_flag = DropFlag(dropped_in_task);
-            pending::<()>().await;
-        })
+        let task = spawn_stats_task(
+            &crate::runtime::test_service_context("consumer-stats-task-test"),
+            "rocketmq-client-consumer-stats-test",
+            async move {
+                let _drop_flag = DropFlag(dropped_in_task);
+                pending::<()>().await;
+            },
+        )
         .expect("test task should spawn");
 
         assert!(!task.shutdown_async(Duration::from_millis(20)).await);
@@ -552,7 +571,9 @@ mod tests {
 
     #[tokio::test]
     async fn consumer_stats_manager_lifecycle_probe_reports_clean_shutdown() {
-        let probe = run_consumer_stats_manager_lifecycle_probe().await;
+        let probe =
+            run_consumer_stats_manager_lifecycle_probe(crate::runtime::test_service_context("consumer-stats-probe"))
+                .await;
 
         assert!(probe.healthy, "{probe:?}");
         assert_eq!(probe.task_count_before_shutdown, 3);
@@ -560,7 +581,7 @@ mod tests {
     }
 
     #[test]
-    fn start_without_tokio_runtime_does_not_panic() {
+    fn start_uses_injected_runtime_without_current_tokio_context() {
         let mgr = make_manager();
         mgr.start();
         assert_eq!(mgr.task_handles.lock().len(), 3);
@@ -571,8 +592,8 @@ mod tests {
     }
 
     #[test]
-    fn default_creates_valid_manager() {
-        let mgr = ConsumerStatsManager::default();
+    fn explicit_constructor_creates_valid_manager() {
+        let mgr = make_manager();
         // Should not panic when querying uninitialised key.
         let _ = mgr.consume_status("G", "T");
     }

@@ -68,6 +68,8 @@ use rocketmq_error::RocketMQError;
 use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_model::common::message::message_single::Message;
 
+mod support;
+
 struct CustomOrderKey(i32);
 
 impl JavaHashCode for CustomOrderKey {
@@ -305,6 +307,7 @@ fn crate_root_legacy_java_apis_return_typed_unsupported_errors() {
 
 #[test]
 fn crate_root_exports_modern_client_facades_and_traits() {
+    let client_runtime = support::client_runtime("public-api-client-facades");
     fn assert_mq_producer<T: MQProducer>() {}
     fn assert_mq_consumer<T: MQConsumer>() {}
     fn assert_mq_push_consumer<T: MQPushConsumer>() {}
@@ -316,20 +319,20 @@ fn crate_root_exports_modern_client_facades_and_traits() {
     assert_mq_push_consumer::<DefaultMQPushConsumer>();
     assert_lite_pull_consumer::<DefaultLitePullConsumer>();
 
-    let producer = DefaultMQProducer::builder()
+    let producer = DefaultMQProducer::builder(Arc::clone(&client_runtime))
         .producer_group("public-api-producer")
         .build();
     let producer_impl = producer
         .get_default_mq_producer_impl()
         .expect("the public producer facade should expose its implementation root");
     assert_eq!(Arc::strong_count(producer_impl), 1);
-    let _transaction_producer = TransactionMQProducer::builder()
+    let _transaction_producer = TransactionMQProducer::builder(Arc::clone(&client_runtime))
         .producer_group("public-api-transaction-producer")
         .build();
-    let _push_consumer = DefaultMQPushConsumer::builder()
+    let _push_consumer = DefaultMQPushConsumer::builder(Arc::clone(&client_runtime))
         .consumer_group("public-api-push-consumer")
         .build();
-    let lite_pull_consumer = DefaultLitePullConsumer::builder()
+    let lite_pull_consumer = DefaultLitePullConsumer::builder(client_runtime)
         .consumer_group("public-api-lite-pull-consumer")
         .build()
         .expect("lite pull consumer should build");
@@ -345,6 +348,7 @@ fn crate_root_exports_modern_client_facades_and_traits() {
 
 #[tokio::test]
 async fn crate_root_exports_trace_dispatcher_api_for_custom_trace_wiring() {
+    let client_runtime = support::client_runtime("public-api-trace");
     fn assert_trace_dispatcher<T: TraceDispatcher>() {}
 
     assert_trace_dispatcher::<AsyncTraceDispatcher>();
@@ -353,6 +357,7 @@ async fn crate_root_exports_trace_dispatcher_api_for_custom_trace_wiring() {
     assert_eq!(TraceType::Recall.to_string(), "Recall");
 
     let dispatcher: ArcTraceDispatcher = Arc::new(AsyncTraceDispatcher::new(
+        Arc::clone(&client_runtime),
         "public-api-trace-group",
         TraceDispatcherOperation::Produce,
         20,
@@ -362,7 +367,7 @@ async fn crate_root_exports_trace_dispatcher_api_for_custom_trace_wiring() {
 
     assert_eq!(dispatcher.trace_topic_name(), Some("PUBLIC_TRACE_TOPIC"));
 
-    let mut producer = DefaultMQProducer::builder()
+    let mut producer = DefaultMQProducer::builder(Arc::clone(&client_runtime))
         .producer_group("public-api-trace-producer")
         .trace_dispatcher(dispatcher.clone())
         .build();
@@ -370,13 +375,13 @@ async fn crate_root_exports_trace_dispatcher_api_for_custom_trace_wiring() {
     producer.set_trace_dispatcher(dispatcher.clone());
     assert!(producer.trace_dispatcher().is_some());
 
-    let push_consumer = DefaultMQPushConsumer::builder()
+    let push_consumer = DefaultMQPushConsumer::builder(Arc::clone(&client_runtime))
         .consumer_group("public-api-trace-push-consumer")
         .trace_dispatcher(Some(dispatcher.clone()))
         .build();
     assert!(push_consumer.get_trace_dispatcher().is_some());
 
-    let lite_pull_consumer = DefaultLitePullConsumer::builder()
+    let lite_pull_consumer = DefaultLitePullConsumer::builder(client_runtime)
         .consumer_group("public-api-trace-lite-pull-consumer")
         .trace_dispatcher(dispatcher)
         .build()
@@ -386,6 +391,7 @@ async fn crate_root_exports_trace_dispatcher_api_for_custom_trace_wiring() {
 
 #[test]
 fn crate_root_exports_modern_admin_facades_and_results() {
+    let client_runtime = support::client_runtime("public-api-admin");
     fn assert_mq_admin_ext<T: MQAdminExt>() {}
     fn assert_mq_admin_ext_inner<T: MQAdminExtInner>() {}
     fn assert_as_ref_admin_impl<T: AsRef<DefaultMQAdminExtImpl>>() {}
@@ -395,7 +401,7 @@ fn crate_root_exports_modern_admin_facades_and_results() {
     assert_mq_admin_ext_inner::<MQAdminExtInnerImpl>();
     assert_as_ref_admin_impl::<DefaultMQAdminExt>();
 
-    let admin = DefaultMQAdminExt::new();
+    let admin = DefaultMQAdminExt::new(client_runtime);
     assert!(admin.has_inner());
     assert!(admin.as_ref().has_inner());
 
@@ -412,7 +418,7 @@ fn crate_root_exports_modern_admin_facades_and_results() {
 
 #[tokio::test]
 async fn crate_root_exports_java_style_admin_list_user_alias() {
-    let admin = DefaultMQAdminExt::new();
+    let admin = DefaultMQAdminExt::new(support::client_runtime("public-api-admin-list-user"));
     let error = admin
         .list_user(CheetahString::from("127.0.0.1:10911"), CheetahString::new())
         .await
@@ -447,6 +453,7 @@ fn crate_root_exports_acl_and_nameserver_access_api() {
 
 #[test]
 fn crate_root_exports_consumer_result_status_callback_and_offset_types() {
+    let client_runtime = support::client_runtime("public-api-consumer-types");
     let mut notify_result = NotifyResult::default();
     assert!(!notify_result.is_has_msg());
     assert!(!notify_result.is_polling_full());
@@ -496,7 +503,7 @@ fn crate_root_exports_consumer_result_status_callback_and_offset_types() {
     let topic_listener = RootTopicMessageQueueChangeListener;
     topic_listener.on_changed("TopicA", HashSet::from([queue.clone()]));
 
-    let mut push_consumer = DefaultMQPushConsumer::builder()
+    let mut push_consumer = DefaultMQPushConsumer::builder(client_runtime)
         .consumer_group("public-api-push-hook-consumer")
         .build();
     push_consumer

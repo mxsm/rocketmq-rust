@@ -26,8 +26,14 @@ impl CommandExecute for UpdateControllerConfigSubCommand {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
-        ControllerService::update_controller_config_by_request_with_credentials(self.request()?, credentials).await?;
+        ControllerService::update_controller_config_by_request_with_credentials(
+            self.request()?,
+            credentials,
+            client_runtime.clone(),
+        )
+        .await?;
         println!("updated controller config successfully");
         Ok(())
     }

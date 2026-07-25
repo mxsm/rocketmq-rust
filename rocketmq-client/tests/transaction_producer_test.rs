@@ -23,6 +23,8 @@ use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_single::Message;
 use rocketmq_model::common::message::MessageTrait;
 
+mod support;
+
 struct TestTransactionListener;
 
 impl TransactionListener for TestTransactionListener {
@@ -41,7 +43,7 @@ impl TransactionListener for TestTransactionListener {
 
 #[test]
 fn test_transaction_producer_builder() {
-    let _producer = TransactionMQProducerBuilder::new()
+    let _producer = TransactionMQProducerBuilder::new(support::client_runtime("transaction-builder"))
         .transaction_listener(TestTransactionListener)
         .check_thread_pool_min_size(2)
         .check_thread_pool_max_size(10)
@@ -51,14 +53,14 @@ fn test_transaction_producer_builder() {
 
 #[test]
 fn test_transaction_producer_default_config() {
-    let _producer = TransactionMQProducerBuilder::new()
+    let _producer = TransactionMQProducerBuilder::new(support::client_runtime("transaction-default"))
         .transaction_listener(TestTransactionListener)
         .build();
 }
 
 #[test]
 fn test_transaction_producer_custom_config() {
-    let _producer = TransactionMQProducerBuilder::new()
+    let _producer = TransactionMQProducerBuilder::new(support::client_runtime("transaction-custom"))
         .transaction_listener(TestTransactionListener)
         .check_thread_pool_min_size(5)
         .check_thread_pool_max_size(20)
@@ -68,7 +70,7 @@ fn test_transaction_producer_custom_config() {
 
 #[test]
 fn transaction_producer_runtime_config_accessors_match_java_facade() {
-    let mut producer = TransactionMQProducerBuilder::new()
+    let mut producer = TransactionMQProducerBuilder::new(support::client_runtime("transaction-accessors"))
         .check_thread_pool_min_size(2)
         .check_thread_pool_max_size(8)
         .check_request_hold_max(3000)
@@ -89,7 +91,8 @@ fn transaction_producer_runtime_config_accessors_match_java_facade() {
 
 #[test]
 fn transaction_listener_arc_setter_matches_java_facade_reference() {
-    let mut producer = TransactionMQProducerBuilder::new().build();
+    let mut producer =
+        TransactionMQProducerBuilder::new(support::client_runtime("transaction-listener-setter")).build();
     let listener: ArcTransactionListener = Arc::new(TestTransactionListener);
 
     assert!(producer.transaction_listener().is_none());
@@ -103,21 +106,14 @@ fn transaction_listener_arc_setter_matches_java_facade_reference() {
 }
 
 #[test]
-fn transaction_executor_and_check_listener_facades_match_java_reference() {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("runtime should build");
-    let mut producer = TransactionMQProducerBuilder::new().build();
+fn transaction_check_listener_facade_matches_java_reference() {
+    let mut producer = TransactionMQProducerBuilder::new(support::client_runtime("transaction-executor")).build();
     let listener: ArcTransactionListener = Arc::new(TestTransactionListener);
 
-    assert!(producer.executor_service().is_none());
     assert!(producer.transaction_check_listener().is_none());
 
-    producer.set_executor_service(runtime.handle().clone());
     producer.set_transaction_check_listener_arc(listener.clone());
 
-    assert!(producer.executor_service().is_some());
     let actual = producer
         .transaction_check_listener()
         .expect("transaction check listener should be set");
@@ -126,7 +122,8 @@ fn transaction_executor_and_check_listener_facades_match_java_reference() {
 
 #[tokio::test]
 async fn transaction_send_without_listener_fails_before_start_or_send_like_java() {
-    let mut producer = TransactionMQProducerBuilder::new().build();
+    let mut producer =
+        TransactionMQProducerBuilder::new(support::client_runtime("transaction-send-no-listener")).build();
     let msg = Message::builder()
         .topic("TopicTest")
         .body("transaction-body")

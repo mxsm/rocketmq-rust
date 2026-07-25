@@ -54,13 +54,15 @@ impl CommandExecute for DeleteUserSubCommand {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
         let request = DeleteUserRequest::try_new(
             self.broker_addr.clone(),
             self.cluster_name.clone(),
             self.username.clone(),
         )?;
-        let result = AuthService::delete_user_by_request_with_credentials(request, credentials).await?;
+        let result =
+            AuthService::delete_user_by_request_with_credentials(request, credentials, client_runtime.clone()).await?;
         for broker_addr in result.broker_addrs {
             println!("delete user to {} success.", broker_addr);
         }

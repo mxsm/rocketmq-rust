@@ -26,10 +26,11 @@ use crate::consumer::default_mq_push_consumer::ConsumerConfig;
 use crate::consumer::default_mq_push_consumer::ConsumerTuningProfile;
 use crate::consumer::default_mq_push_consumer::DefaultMQPushConsumer;
 use crate::consumer::message_queue_listener::ArcMessageQueueListener;
+use crate::runtime::ClientRuntime;
 use crate::trace::trace_dispatcher::ArcTraceDispatcher;
 
-#[derive(Default)]
 pub struct DefaultMQPushConsumerBuilder {
+    client_runtime: Arc<ClientRuntime>,
     client_config: ClientConfig,
     consumer_group: Option<CheetahString>,
     message_model: Option<MessageModel>,
@@ -69,8 +70,43 @@ pub struct DefaultMQPushConsumerBuilder {
 
 impl DefaultMQPushConsumerBuilder {
     #[must_use]
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(client_runtime: Arc<ClientRuntime>) -> Self {
+        Self {
+            client_runtime,
+            client_config: ClientConfig::default(),
+            consumer_group: None,
+            message_model: None,
+            consume_from_where: None,
+            consume_timestamp: None,
+            allocate_message_queue_strategy: None,
+            subscription: None,
+            message_queue_listener: None,
+            consume_thread_min: None,
+            consume_thread_max: None,
+            adjust_thread_pool_nums_threshold: None,
+            consume_concurrently_max_span: None,
+            pull_threshold_for_queue: None,
+            pop_threshold_for_queue: None,
+            pull_threshold_size_for_queue: None,
+            pull_threshold_for_topic: None,
+            pull_threshold_size_for_topic: None,
+            pull_interval: None,
+            consume_message_batch_max_size: None,
+            pull_batch_size: None,
+            pull_batch_size_in_bytes: None,
+            post_subscription_when_pull: None,
+            unit_mode: None,
+            max_reconsume_times: None,
+            suspend_current_queue_time_millis: None,
+            consume_timeout: None,
+            pop_invisible_time: None,
+            pop_batch_nums: None,
+            await_termination_millis_when_shutdown: None,
+            trace_dispatcher: None,
+            client_rebalance: None,
+            rpc_hook: None,
+            tuning_profile: None,
+        }
     }
     #[inline]
     pub fn name_server_addr(mut self, name_server_addr: impl Into<CheetahString>) -> Self {
@@ -383,7 +419,7 @@ impl DefaultMQPushConsumerBuilder {
         }
         consumer_config.rpc_hook = self.rpc_hook.clone();
 
-        DefaultMQPushConsumer::new(self.client_config, consumer_config)
+        DefaultMQPushConsumer::new(self.client_runtime, self.client_config, consumer_config)
     }
 }
 
@@ -394,12 +430,13 @@ mod tests {
 
     #[test]
     fn tuning_profile_applies_before_explicit_builder_overrides() {
-        let consumer = DefaultMQPushConsumerBuilder::new()
-            .consumer_group("push_profile_builder_group")
-            .tuning_profile(ConsumerTuningProfile::Throughput)
-            .pull_batch_size(64)
-            .pull_batch_size_in_bytes(768 * 1024)
-            .build();
+        let consumer =
+            DefaultMQPushConsumerBuilder::new(crate::runtime::test_client_runtime("push-consumer-builder-test"))
+                .consumer_group("push_profile_builder_group")
+                .tuning_profile(ConsumerTuningProfile::Throughput)
+                .pull_batch_size(64)
+                .pull_batch_size_in_bytes(768 * 1024)
+                .build();
 
         assert_eq!(consumer.consume_message_batch_max_size(), 16);
         assert_eq!(consumer.pull_batch_size(), 64);

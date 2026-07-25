@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[path = "support/mod.rs"]
+mod support;
+
 use std::fs;
 use std::hint::black_box;
 use std::path::PathBuf;
@@ -26,15 +29,12 @@ use rocketmq_client_rust::run_consumer_stats_manager_lifecycle_probe;
 use rocketmq_client_rust::ConsumerStatsManagerLifecycleProbe;
 
 fn run_lifecycle_probe() -> ConsumerStatsManagerLifecycleProbe {
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
-        .max_blocking_threads(4)
-        .thread_name("rocketmq-client-consumer-stats-bench")
-        .enable_all()
-        .build()
-        .expect("consumer stats manager benchmark runtime should start");
-
-    runtime.block_on(run_consumer_stats_manager_lifecycle_probe())
+    let runtime = support::BenchClientRuntime::new("consumer-stats");
+    let output = runtime.block_on(run_consumer_stats_manager_lifecycle_probe(
+        runtime.child("consumer-stats"),
+    ));
+    runtime.shutdown();
+    output
 }
 
 fn workspace_root() -> PathBuf {

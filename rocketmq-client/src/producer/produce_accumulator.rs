@@ -39,6 +39,7 @@ use rocketmq_model::common::message::message_single::Message;
 use rocketmq_model::common::message::MessageConst;
 use rocketmq_model::common::message::MessageTrait;
 use rocketmq_runtime::common::time_utils::current_millis;
+use rocketmq_runtime::ChildServiceContext;
 use serde::Serialize;
 use tokio::sync::mpsc;
 use tokio::sync::watch;
@@ -47,7 +48,7 @@ use tokio::sync::Mutex;
 use crate::producer::default_mq_producer::DefaultMQProducer;
 use crate::producer::send_callback::ArcSendCallback;
 use crate::producer::send_result::SendResult;
-use crate::runtime::spawn_client_tracked_task;
+use crate::runtime::spawn_client_tracked_task_with_context;
 use crate::runtime::ClientTrackedTaskHandle;
 
 const GUARD_TASK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
@@ -105,7 +106,6 @@ impl BatchGuardMetrics {
     }
 }
 
-#[derive(Default)]
 pub struct ProduceAccumulator {
     total_hold_size: AtomicUsize,
     hold_size: AtomicUsize,
@@ -152,14 +152,23 @@ impl ProduceAccumulator {
         }
     }
 
-    pub fn new(instance_name: &str) -> Self {
+    pub fn new(service_context: ChildServiceContext, instance_name: &str) -> Self {
         Self {
             total_hold_size: AtomicUsize::new(1024 * 1024 * 32),
             hold_size: AtomicUsize::new(1024 * 32),
             hold_ms: AtomicU32::new(10),
-            guard_thread_for_async_send: GuardForAsyncSendService::new(instance_name),
-            guard_thread_for_sync_send: GuardForSyncSendService::new(instance_name),
-            ..Default::default()
+            lifecycle: StdMutex::new(AccumulatorLifecycleState::default()),
+            guard_thread_for_async_send: GuardForAsyncSendService::new(
+                service_context.child("async-batch-guard"),
+                instance_name,
+            ),
+            guard_thread_for_sync_send: GuardForSyncSendService::new(
+                service_context.child("sync-batch-guard"),
+                instance_name,
+            ),
+            currently_hold_size: Arc::new(AtomicU64::new(0)),
+            sync_send_batchs: Arc::new(DashMap::new()),
+            async_send_batchs: Arc::new(DashMap::new()),
         }
     }
 }
@@ -819,8 +828,10 @@ fn build_message_batch(
 }
 
 #[doc(hidden)]
-pub async fn run_produce_accumulator_guard_lifecycle_probe() -> ProduceAccumulatorGuardLifecycleProbe {
-    let accumulator = ProduceAccumulator::new("produce_accumulator_guard_probe");
+pub async fn run_produce_accumulator_guard_lifecycle_probe(
+    service_context: ChildServiceContext,
+) -> ProduceAccumulatorGuardLifecycleProbe {
+    let accumulator = ProduceAccumulator::new(service_context, "produce_accumulator_guard_probe");
     accumulator.start();
 
     let mut task_count_before_shutdown = accumulator.guard_task_count();
@@ -863,9 +874,13 @@ mod tests {
         }
     }
 
+    fn test_context() -> ChildServiceContext {
+        crate::runtime::test_service_context("produce-accumulator-test")
+    }
+
     #[test]
     fn try_add_message_counts_body_size() {
-        let accumulator = ProduceAccumulator::new("test");
+        let accumulator = ProduceAccumulator::new(test_context(), "test");
         let message = Message::builder()
             .topic("test-topic")
             .body_slice(b"hello")
@@ -877,7 +892,7 @@ mod tests {
 
     #[test]
     fn try_add_message_allows_missing_body_without_accounting() {
-        let accumulator = ProduceAccumulator::new("test");
+        let accumulator = ProduceAccumulator::new(test_context(), "test");
         let mut message = Message::builder()
             .topic("test-topic")
             .body_slice(b"hello")
@@ -890,7 +905,7 @@ mod tests {
 
     #[test]
     fn try_add_message_rejects_when_total_hold_size_reaches_limit_like_java() {
-        let accumulator = ProduceAccumulator::new("test");
+        let accumulator = ProduceAccumulator::new(test_context(), "test");
         accumulator.set_total_batch_max_bytes(5).unwrap();
         let message = Message::builder()
             .topic("test-topic")
@@ -904,7 +919,7 @@ mod tests {
 
     #[test]
     fn try_add_message_concurrent_capacity_reservation_does_not_exceed_limit() {
-        let accumulator = ProduceAccumulator::new("test");
+        let accumulator = ProduceAccumulator::new(test_context(), "test");
         accumulator.set_total_batch_max_bytes(64).unwrap();
         let accumulator = Arc::new(accumulator);
         let successes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -938,7 +953,7 @@ mod tests {
 
     #[test]
     fn message_accumulation_ready_to_send_requires_size_over_hold_size_like_java() {
-        let producer = DefaultMQProducer::default();
+        let producer = DefaultMQProducer::unbound();
         let aggregate_key = AggregateKey::new(CheetahString::from("test-topic"), None, true, None);
         let mut accumulation = MessageAccumulation::new(aggregate_key, producer);
         let message = Message::builder()
@@ -954,7 +969,7 @@ mod tests {
 
     #[test]
     fn message_accumulation_add_returns_index_and_flush_decision() {
-        let producer = DefaultMQProducer::default();
+        let producer = DefaultMQProducer::unbound();
         let aggregate_key = AggregateKey::new(CheetahString::from("test-topic"), None, true, None);
         let mut accumulation = MessageAccumulation::new(aggregate_key, producer);
         let first = Message::builder()
@@ -983,7 +998,7 @@ mod tests {
 
     #[test]
     fn message_accumulation_closing_state_is_claimed_once() {
-        let producer = DefaultMQProducer::default();
+        let producer = DefaultMQProducer::unbound();
         let aggregate_key = AggregateKey::new(CheetahString::from("test-topic"), None, true, None);
         let accumulation = MessageAccumulation::new(aggregate_key, producer);
 
@@ -997,7 +1012,7 @@ mod tests {
 
     #[test]
     fn close_pending_batch_does_not_release_batch_already_claimed_for_send() {
-        let producer = DefaultMQProducer::default();
+        let producer = DefaultMQProducer::unbound();
         let aggregate_key = AggregateKey::new(CheetahString::from("test-topic"), None, true, None);
         let mut accumulation = MessageAccumulation::new(aggregate_key, producer);
         let message = Message::builder()
@@ -1021,7 +1036,7 @@ mod tests {
 
     #[test]
     fn message_accumulation_batch_sets_java_accumulator_keys_and_tags() {
-        let producer = DefaultMQProducer::default();
+        let producer = DefaultMQProducer::unbound();
         let aggregate_key = AggregateKey::new(
             CheetahString::from("test-topic"),
             None,
@@ -1056,7 +1071,7 @@ mod tests {
 
     #[test]
     fn batch_config_setters_match_java_validation() {
-        let accumulator = ProduceAccumulator::new("test");
+        let accumulator = ProduceAccumulator::new(test_context(), "test");
 
         accumulator.set_batch_max_delay_ms(1).unwrap();
         accumulator.set_batch_max_bytes(1).unwrap();
@@ -1074,7 +1089,7 @@ mod tests {
 
     #[test]
     fn batch_config_updates_are_visible_through_shared_ownership() {
-        let accumulator = Arc::new(ProduceAccumulator::new("shared-config-test"));
+        let accumulator = Arc::new(ProduceAccumulator::new(test_context(), "shared-config-test"));
         let shared = accumulator.clone();
 
         std::thread::spawn(move || {
@@ -1092,7 +1107,7 @@ mod tests {
 
     #[test]
     fn start_without_tokio_runtime_does_not_spawn_panic() {
-        let accumulator = ProduceAccumulator::new("accumulator-no-runtime-test");
+        let accumulator = ProduceAccumulator::new(test_context(), "accumulator-explicit-runtime-test");
 
         accumulator.start();
         accumulator.start();
@@ -1108,7 +1123,7 @@ mod tests {
 
     #[test]
     fn start_does_not_restart_guards_during_shutdown_transition() {
-        let accumulator = ProduceAccumulator::new("accumulator-stopping-test");
+        let accumulator = ProduceAccumulator::new(test_context(), "accumulator-stopping-test");
         accumulator.lifecycle().stopping = true;
 
         accumulator.start();
@@ -1119,7 +1134,7 @@ mod tests {
 
     #[tokio::test]
     async fn shutdown_async_stops_guard_tasks() {
-        let accumulator = ProduceAccumulator::new("accumulator-async-shutdown-test");
+        let accumulator = ProduceAccumulator::new(test_context(), "accumulator-async-shutdown-test");
 
         accumulator.start();
         assert_eq!(accumulator.guard_thread_for_sync_send.task_count(), 1);
@@ -1134,9 +1149,9 @@ mod tests {
 
     #[tokio::test]
     async fn shutdown_async_releases_pending_async_batch_hold_size_and_callbacks() {
-        let accumulator = ProduceAccumulator::new("accumulator-shutdown-release-test");
+        let accumulator = ProduceAccumulator::new(test_context(), "accumulator-shutdown-release-test");
         let aggregate_key = AggregateKey::new(CheetahString::from("test-topic"), None, true, None);
-        let mut accumulation = MessageAccumulation::new(aggregate_key.clone(), DefaultMQProducer::default());
+        let mut accumulation = MessageAccumulation::new(aggregate_key.clone(), DefaultMQProducer::unbound());
         let callback_invoked = Arc::new(AtomicBool::new(false));
         let callback_invoked_for_callback = callback_invoked.clone();
         let callback: ArcSendCallback = Arc::new(move |_result: Option<&SendResult>, error: Option<&RocketMQError>| {
@@ -1165,13 +1180,13 @@ mod tests {
 
     #[tokio::test]
     async fn sync_guard_notifies_batch_at_deadline() {
-        let accumulator = ProduceAccumulator::new("accumulator-sync-deadline-test");
+        let accumulator = ProduceAccumulator::new(test_context(), "accumulator-sync-deadline-test");
         accumulator.set_batch_max_delay_ms(100).unwrap();
         accumulator.start();
 
         let aggregate_key = AggregateKey::new(CheetahString::from("test-topic"), None, true, None);
         let batch = accumulator
-            .get_or_create_sync_send_batch(aggregate_key, &DefaultMQProducer::default(), 100)
+            .get_or_create_sync_send_batch(aggregate_key, &DefaultMQProducer::unbound(), 100)
             .await;
         let notify = {
             let mut batch_guard = batch.lock().await;
@@ -1196,13 +1211,13 @@ mod tests {
 
     #[tokio::test]
     async fn guard_deadline_queue_lazily_ignores_removed_batch() {
-        let accumulator = ProduceAccumulator::new("accumulator-stale-deadline-test");
+        let accumulator = ProduceAccumulator::new(test_context(), "accumulator-stale-deadline-test");
         accumulator.set_batch_max_delay_ms(30).unwrap();
         accumulator.start();
 
         let aggregate_key = AggregateKey::new(CheetahString::from("test-topic"), None, true, None);
         let batch = accumulator
-            .get_or_create_sync_send_batch(aggregate_key.clone(), &DefaultMQProducer::default(), 30)
+            .get_or_create_sync_send_batch(aggregate_key.clone(), &DefaultMQProducer::unbound(), 30)
             .await;
         {
             let mut batch_guard = batch.lock().await;
@@ -1226,7 +1241,7 @@ mod tests {
 
     #[tokio::test]
     async fn produce_accumulator_guard_lifecycle_probe_reports_clean_shutdown() {
-        let probe = run_produce_accumulator_guard_lifecycle_probe().await;
+        let probe = run_produce_accumulator_guard_lifecycle_probe(test_context()).await;
 
         assert!(probe.healthy, "{probe:?}");
         assert_eq!(probe.task_count_before_shutdown, 2, "{probe:?}");
@@ -1238,10 +1253,15 @@ mod tests {
         let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
         let completed = Arc::new(AtomicBool::new(false));
         let completed_in_task = completed.clone();
-        let task = spawn_guard_task("rocketmq-client-batch-guard-test", shutdown_tx, async move {
-            let _ = shutdown_rx.changed().await;
-            completed_in_task.store(true, Ordering::Release);
-        })
+        let task = spawn_guard_task(
+            &test_context(),
+            "rocketmq-client-batch-guard-test",
+            shutdown_tx,
+            async move {
+                let _ = shutdown_rx.changed().await;
+                completed_in_task.store(true, Ordering::Release);
+            },
+        )
         .expect("test task should spawn");
 
         assert!(task.shutdown_async(Duration::from_secs(1)).await);
@@ -1253,10 +1273,15 @@ mod tests {
         let (shutdown_tx, _shutdown_rx) = watch::channel(false);
         let dropped = Arc::new(AtomicBool::new(false));
         let dropped_in_task = dropped.clone();
-        let task = spawn_guard_task("rocketmq-client-batch-guard-test", shutdown_tx, async move {
-            let _drop_flag = DropFlag(dropped_in_task);
-            pending::<()>().await;
-        })
+        let task = spawn_guard_task(
+            &test_context(),
+            "rocketmq-client-batch-guard-test",
+            shutdown_tx,
+            async move {
+                let _drop_flag = DropFlag(dropped_in_task);
+                pending::<()>().await;
+            },
+        )
         .expect("test task should spawn");
 
         assert!(!task.shutdown_async(Duration::from_millis(20)).await);
@@ -1597,8 +1622,8 @@ impl MessageAccumulation {
     }
 }
 
-#[derive(Default)]
 struct GuardForSyncSendService {
+    service_context: ChildServiceContext,
     service_name: String,
     stopped: Arc<AtomicBool>,
     state: StdMutex<GuardServiceState>,
@@ -1681,11 +1706,16 @@ impl GuardTaskHandle {
     }
 }
 
-fn spawn_guard_task<F>(thread_name: &'static str, shutdown_tx: watch::Sender<bool>, task: F) -> Option<GuardTaskHandle>
+fn spawn_guard_task<F>(
+    service_context: &ChildServiceContext,
+    thread_name: &'static str,
+    shutdown_tx: watch::Sender<bool>,
+    task: F,
+) -> Option<GuardTaskHandle>
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    match spawn_client_tracked_task(thread_name, task) {
+    match spawn_client_tracked_task_with_context(service_context, thread_name, task) {
         Ok(handle) => Some(GuardTaskHandle::Tracked { shutdown_tx, handle }),
         Err(error) => {
             tracing::error!("Failed to spawn {} background task: {}", thread_name, error);
@@ -1857,8 +1887,9 @@ async fn drain_due_async_batches(
 }
 
 impl GuardForSyncSendService {
-    pub fn new(service_name: &str) -> Self {
+    pub fn new(service_context: ChildServiceContext, service_name: &str) -> Self {
         Self {
+            service_context,
             service_name: service_name.to_string(),
             stopped: Arc::new(AtomicBool::new(false)),
             state: StdMutex::new(GuardServiceState::default()),
@@ -1895,32 +1926,37 @@ impl GuardForSyncSendService {
         state.schedule_tx = Some(schedule_tx);
         self.stopped.store(false, Ordering::Release);
 
-        state.task_handle = spawn_guard_task("rocketmq-client-sync-batch-guard", shutdown_tx, async move {
-            tracing::info!("{} service started", service_name);
+        state.task_handle = spawn_guard_task(
+            &self.service_context,
+            "rocketmq-client-sync-batch-guard",
+            shutdown_tx,
+            async move {
+                tracing::info!("{} service started", service_name);
 
-            let mut deadlines = BinaryHeap::new();
-            let mut sequence = 0u64;
+                let mut deadlines = BinaryHeap::new();
+                let mut sequence = 0u64;
 
-            loop {
-                if stopped.load(Ordering::Acquire) {
-                    break;
+                loop {
+                    if stopped.load(Ordering::Acquire) {
+                        break;
+                    }
+
+                    let next_deadline_ms = deadlines.peek().map(|deadline: &GuardDeadline| deadline.deadline_ms);
+                    match wait_guard_deadline_or_schedule(&mut shutdown_rx, &mut schedule_rx, next_deadline_ms).await {
+                        GuardWakeEvent::Schedule(command) => {
+                            push_guard_deadline(&mut deadlines, command, &mut sequence);
+                        }
+                        GuardWakeEvent::Deadline => {
+                            metrics.record_wakeup();
+                            drain_due_sync_batches(&mut deadlines, &batches, hold_ms as u64, &metrics).await;
+                        }
+                        GuardWakeEvent::Shutdown => break,
+                    }
                 }
 
-                let next_deadline_ms = deadlines.peek().map(|deadline: &GuardDeadline| deadline.deadline_ms);
-                match wait_guard_deadline_or_schedule(&mut shutdown_rx, &mut schedule_rx, next_deadline_ms).await {
-                    GuardWakeEvent::Schedule(command) => {
-                        push_guard_deadline(&mut deadlines, command, &mut sequence);
-                    }
-                    GuardWakeEvent::Deadline => {
-                        metrics.record_wakeup();
-                        drain_due_sync_batches(&mut deadlines, &batches, hold_ms as u64, &metrics).await;
-                    }
-                    GuardWakeEvent::Shutdown => break,
-                }
-            }
-
-            tracing::info!("{} service ended", service_name);
-        });
+                tracing::info!("{} service ended", service_name);
+            },
+        );
     }
 
     fn schedule_batch(&self, aggregate_key: AggregateKey, create_time: u64, deadline_ms: u64) {
@@ -1997,8 +2033,8 @@ impl GuardForSyncSendService {
     }
 }
 
-#[derive(Default)]
 struct GuardForAsyncSendService {
+    service_context: ChildServiceContext,
     service_name: String,
     stopped: Arc<AtomicBool>,
     state: StdMutex<GuardServiceState>,
@@ -2006,8 +2042,9 @@ struct GuardForAsyncSendService {
 }
 
 impl GuardForAsyncSendService {
-    pub fn new(service_name: &str) -> Self {
+    pub fn new(service_context: ChildServiceContext, service_name: &str) -> Self {
         Self {
+            service_context,
             service_name: service_name.to_string(),
             stopped: Arc::new(AtomicBool::new(false)),
             state: StdMutex::new(GuardServiceState::default()),
@@ -2044,40 +2081,45 @@ impl GuardForAsyncSendService {
         state.schedule_tx = Some(schedule_tx);
         self.stopped.store(false, Ordering::Release);
 
-        state.task_handle = spawn_guard_task("rocketmq-client-async-batch-guard", shutdown_tx, async move {
-            tracing::info!("{} service started", service_name);
+        state.task_handle = spawn_guard_task(
+            &self.service_context,
+            "rocketmq-client-async-batch-guard",
+            shutdown_tx,
+            async move {
+                tracing::info!("{} service started", service_name);
 
-            let mut deadlines = BinaryHeap::new();
-            let mut sequence = 0u64;
+                let mut deadlines = BinaryHeap::new();
+                let mut sequence = 0u64;
 
-            loop {
-                if stopped.load(Ordering::Acquire) {
-                    break;
+                loop {
+                    if stopped.load(Ordering::Acquire) {
+                        break;
+                    }
+
+                    let next_deadline_ms = deadlines.peek().map(|deadline: &GuardDeadline| deadline.deadline_ms);
+                    match wait_guard_deadline_or_schedule(&mut shutdown_rx, &mut schedule_rx, next_deadline_ms).await {
+                        GuardWakeEvent::Schedule(command) => {
+                            push_guard_deadline(&mut deadlines, command, &mut sequence);
+                        }
+                        GuardWakeEvent::Deadline => {
+                            metrics.record_wakeup();
+                            drain_due_async_batches(
+                                &mut deadlines,
+                                &batches,
+                                &currently_hold_size,
+                                hold_size,
+                                hold_ms as u64,
+                                &metrics,
+                            )
+                            .await;
+                        }
+                        GuardWakeEvent::Shutdown => break,
+                    }
                 }
 
-                let next_deadline_ms = deadlines.peek().map(|deadline: &GuardDeadline| deadline.deadline_ms);
-                match wait_guard_deadline_or_schedule(&mut shutdown_rx, &mut schedule_rx, next_deadline_ms).await {
-                    GuardWakeEvent::Schedule(command) => {
-                        push_guard_deadline(&mut deadlines, command, &mut sequence);
-                    }
-                    GuardWakeEvent::Deadline => {
-                        metrics.record_wakeup();
-                        drain_due_async_batches(
-                            &mut deadlines,
-                            &batches,
-                            &currently_hold_size,
-                            hold_size,
-                            hold_ms as u64,
-                            &metrics,
-                        )
-                        .await;
-                    }
-                    GuardWakeEvent::Shutdown => break,
-                }
-            }
-
-            tracing::info!("{} service ended", service_name);
-        });
+                tracing::info!("{} service ended", service_name);
+            },
+        );
     }
 
     fn schedule_batch(&self, aggregate_key: AggregateKey, create_time: u64, deadline_ms: u64) {

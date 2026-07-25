@@ -1,5 +1,7 @@
 # rocketmq-admin-core
 
+> Runtime 所有权：示例中的 `client_runtime` 是应用持有的 `Arc<ClientRuntime>`，它从 `RuntimeOwner` 的 child scope 创建，并在进程边界显式关闭。
+
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](../../../LICENSE-APACHE)
 
 `rocketmq-admin-core` 是 RocketMQ Rust 展示无关的管理边界。它拥有管理请求/结果类型、校验、
@@ -54,12 +56,12 @@ rocketmq-admin-core = {
 
 ```rust
 use rocketmq_admin_core::core::AdminResult;
-use rocketmq_admin_core::core::admin::AdminBuilder;
+use rocketmq_admin_core::client_adapter::AdminBuilder;
 use rocketmq_admin_core::core::topic::ListTopicsRequest;
 use rocketmq_admin_core::core::topic::TopicAdmin;
 
 async fn list_topics() -> AdminResult<()> {
-    let mut session = AdminBuilder::new()
+    let mut session = AdminBuilder::new(client_runtime.clone())
         .namesrv_addr("127.0.0.1:9876")
         .instance_name("admin-core-example")
         .build_and_start()

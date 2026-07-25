@@ -218,8 +218,9 @@ impl QueueService {
     pub async fn query_consume_queue_by_request_with_credentials(
         request: QueryConsumeQueueRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<QueryConsumeQueueResult> {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials)
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
         let result = Self::query_consume_queue_with_admin(&admin, &request).await;
@@ -262,8 +263,9 @@ impl QueueService {
     pub async fn check_rocksdb_cq_write_progress_by_request_with_credentials(
         request: CheckRocksdbCqWriteProgressRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<CheckRocksdbCqWriteProgressResult> {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials)
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
         let result = Self::check_rocksdb_cq_write_progress_with_admin(&admin, &request).await;
@@ -363,7 +365,9 @@ async fn resolve_topic_master_broker(
 fn admin_builder_with_credentials(
     builder: AdminBuilder,
     credentials: Option<crate::core::security::AdminCredentials>,
+    client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
 ) -> AdminBuilder {
+    let builder = builder.client_runtime(client_runtime);
     match credentials {
         Some(hook) => builder.credentials(hook),
         None => builder,

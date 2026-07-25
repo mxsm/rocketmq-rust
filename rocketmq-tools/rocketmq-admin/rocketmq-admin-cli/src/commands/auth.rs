@@ -133,20 +133,21 @@ impl CommandExecute for AuthCommands {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
         match self {
-            AuthCommands::CopyAcl(value) => value.execute(credentials).await,
-            AuthCommands::CopyUsers(value) => value.execute(credentials).await,
-            AuthCommands::CreateAcl(value) => value.execute(credentials).await,
-            AuthCommands::CreateUser(value) => value.execute(credentials).await,
-            AuthCommands::DeleteAcl(value) => value.execute(credentials).await,
-            AuthCommands::DeleteUser(value) => value.execute(credentials).await,
-            AuthCommands::GetAcl(value) => value.execute(credentials).await,
-            AuthCommands::GetUser(value) => value.execute(credentials).await,
-            AuthCommands::ListAcl(value) => value.execute(credentials).await,
-            AuthCommands::ListUsers(value) => value.execute(credentials).await,
-            AuthCommands::UpdateAcl(value) => value.execute(credentials).await,
-            AuthCommands::UpdateUser(value) => value.execute(credentials).await,
+            AuthCommands::CopyAcl(value) => value.execute(credentials, client_runtime.clone()).await,
+            AuthCommands::CopyUsers(value) => value.execute(credentials, client_runtime.clone()).await,
+            AuthCommands::CreateAcl(value) => value.execute(credentials, client_runtime.clone()).await,
+            AuthCommands::CreateUser(value) => value.execute(credentials, client_runtime.clone()).await,
+            AuthCommands::DeleteAcl(value) => value.execute(credentials, client_runtime.clone()).await,
+            AuthCommands::DeleteUser(value) => value.execute(credentials, client_runtime.clone()).await,
+            AuthCommands::GetAcl(value) => value.execute(credentials, client_runtime.clone()).await,
+            AuthCommands::GetUser(value) => value.execute(credentials, client_runtime.clone()).await,
+            AuthCommands::ListAcl(value) => value.execute(credentials, client_runtime.clone()).await,
+            AuthCommands::ListUsers(value) => value.execute(credentials, client_runtime.clone()).await,
+            AuthCommands::UpdateAcl(value) => value.execute(credentials, client_runtime.clone()).await,
+            AuthCommands::UpdateUser(value) => value.execute(credentials, client_runtime.clone()).await,
         }
     }
 }

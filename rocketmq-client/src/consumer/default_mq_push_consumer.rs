@@ -44,6 +44,7 @@ use crate::consumer::mq_push_consumer::MQPushConsumer;
 use crate::consumer::rebalance_strategy::allocate_message_queue_averagely::AllocateMessageQueueAveragely;
 use crate::consumer::store::offset_store::OffsetStore;
 use crate::hook::consume_message_hook::ConsumeMessageHook;
+use crate::runtime::ClientRuntime;
 use crate::trace::async_trace_dispatcher::AsyncTraceDispatcher;
 use crate::trace::hook::consume_message_trace_hook_impl::ConsumeMessageTraceHookImpl;
 use crate::trace::trace_dispatcher::ArcTraceDispatcher;
@@ -456,6 +457,7 @@ impl Default for ConsumerConfig {
 }
 
 pub struct DefaultMQPushConsumer {
+    client_runtime: Arc<ClientRuntime>,
     client_config: ClientConfig,
     consumer_config: Arc<ArcSwap<ConsumerConfig>>,
     pub(crate) default_mqpush_consumer_impl: Option<Arc<DefaultMQPushConsumerImpl>>,
@@ -613,8 +615,12 @@ impl MQPushConsumer for DefaultMQPushConsumer {
             .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("DefaultMQPushConsumerImpl"))?;
         consumer_impl.start().await?;
 
-        let trace_dispatcher_to_start =
-            Self::prepare_trace_dispatcher(&self.client_config, &self.consumer_config, consumer_impl);
+        let trace_dispatcher_to_start = Self::prepare_trace_dispatcher(
+            &self.client_runtime,
+            &self.client_config,
+            &self.consumer_config,
+            consumer_impl,
+        );
         if let Some(dispatcher) = trace_dispatcher_to_start {
             self.start_trace_dispatcher(dispatcher).await;
         }
@@ -729,8 +735,8 @@ impl MQPushConsumer for DefaultMQPushConsumer {
 }
 
 impl DefaultMQPushConsumer {
-    pub fn builder() -> DefaultMQPushConsumerBuilder {
-        DefaultMQPushConsumerBuilder::default()
+    pub fn builder(client_runtime: Arc<ClientRuntime>) -> DefaultMQPushConsumerBuilder {
+        DefaultMQPushConsumerBuilder::new(client_runtime)
     }
 
     pub async fn start(&mut self) -> rocketmq_error::RocketMQResult<()> {
@@ -859,6 +865,7 @@ impl DefaultMQPushConsumer {
     }
 
     fn prepare_trace_dispatcher(
+        client_runtime: &Arc<ClientRuntime>,
         client_config: &ClientConfig,
         consumer_config: &Arc<ArcSwap<ConsumerConfig>>,
         consumer_impl: &Arc<DefaultMQPushConsumerImpl>,
@@ -873,6 +880,7 @@ impl DefaultMQPushConsumer {
                     .map(|topic| topic.as_str())
                     .unwrap_or_default();
                 let dispatcher = AsyncTraceDispatcher::new(
+                    Arc::clone(client_runtime),
                     consumer_config_snapshot.consumer_group.as_str(),
                     Type::Consume,
                     client_config.trace_msg_batch_num,
@@ -1381,16 +1389,22 @@ impl DefaultMQPushConsumer {
         }
     }
 
-    pub fn new(client_config: ClientConfig, consumer_config: ConsumerConfig) -> DefaultMQPushConsumer {
+    pub fn new(
+        client_runtime: Arc<ClientRuntime>,
+        client_config: ClientConfig,
+        consumer_config: ConsumerConfig,
+    ) -> DefaultMQPushConsumer {
         let rpc_hook = consumer_config.rpc_hook.clone();
         let consumer_config = Arc::new(ArcSwap::from_pointee(consumer_config));
         let default_mqpush_consumer_impl = Arc::new(DefaultMQPushConsumerImpl::new_with_config_store(
+            Arc::clone(&client_runtime),
             client_config.clone(),
             consumer_config.clone(),
             rpc_hook,
         ));
         default_mqpush_consumer_impl.initialize_self_reference();
         DefaultMQPushConsumer {
+            client_runtime,
             client_config,
             consumer_config,
             default_mqpush_consumer_impl: Some(default_mqpush_consumer_impl),
@@ -1415,6 +1429,10 @@ mod tests {
     use std::sync::Mutex as StdMutex;
 
     use super::*;
+
+    fn test_runtime() -> Arc<ClientRuntime> {
+        crate::runtime::test_client_runtime("default-push-consumer-test")
+    }
     use crate::base::access_channel::AccessChannel;
     use crate::consumer::listener::consume_concurrently_context::ConsumeConcurrentlyContext;
     use crate::consumer::listener::consume_concurrently_status::ConsumeConcurrentlyStatus;
@@ -1506,7 +1524,7 @@ mod tests {
         let mut client_config = ClientConfig::default();
         client_config.set_namespace(CheetahString::from_static_str("ns"));
 
-        DefaultMQPushConsumer::builder()
+        DefaultMQPushConsumer::builder(test_runtime())
             .consumer_group("push_namespace_group")
             .client_config(client_config)
             .build()
@@ -1514,7 +1532,7 @@ mod tests {
 
     #[test]
     fn builder_preserves_default_allocate_message_queue_strategy() {
-        let consumer = DefaultMQPushConsumer::builder()
+        let consumer = DefaultMQPushConsumer::builder(test_runtime())
             .consumer_group("builder_default_strategy_group")
             .build();
 
@@ -1528,7 +1546,7 @@ mod tests {
 
     #[tokio::test]
     async fn subscribe_without_impl_returns_not_initialized_error() {
-        let mut consumer = DefaultMQPushConsumer::builder()
+        let mut consumer = DefaultMQPushConsumer::builder(test_runtime())
             .consumer_group("push_missing_impl_group")
             .build();
         consumer.default_mqpush_consumer_impl = None;
@@ -1543,7 +1561,7 @@ mod tests {
 
     #[tokio::test]
     async fn mq_admin_facade_without_impl_returns_not_initialized_error() {
-        let mut consumer = DefaultMQPushConsumer::builder()
+        let mut consumer = DefaultMQPushConsumer::builder(test_runtime())
             .consumer_group("push_missing_admin_impl_group")
             .build();
         consumer.default_mqpush_consumer_impl = None;
@@ -1566,7 +1584,7 @@ mod tests {
 
     #[tokio::test]
     async fn consumer_running_info_without_impl_returns_not_initialized_error() {
-        let mut consumer = DefaultMQPushConsumer::builder()
+        let mut consumer = DefaultMQPushConsumer::builder(test_runtime())
             .consumer_group("push_missing_running_info_impl_group")
             .build();
         consumer.default_mqpush_consumer_impl = None;
@@ -1581,7 +1599,7 @@ mod tests {
 
     #[tokio::test]
     async fn consumer_running_info_facade_returns_impl_snapshot_like_java_admin() {
-        let mut consumer = DefaultMQPushConsumer::builder()
+        let mut consumer = DefaultMQPushConsumer::builder(test_runtime())
             .consumer_group("push_running_info_group")
             .consume_thread_min(7)
             .consume_thread_max(11)
@@ -1622,7 +1640,7 @@ mod tests {
 
     #[test]
     fn register_listener_without_impl_stores_listener_without_panic() {
-        let mut consumer = DefaultMQPushConsumer::builder()
+        let mut consumer = DefaultMQPushConsumer::builder(test_runtime())
             .consumer_group("push_missing_impl_group")
             .build();
         consumer.default_mqpush_consumer_impl = None;
@@ -1634,7 +1652,7 @@ mod tests {
 
     #[test]
     fn push_message_listener_facade_syncs_config_and_impl_like_java() {
-        let mut consumer = DefaultMQPushConsumer::builder()
+        let mut consumer = DefaultMQPushConsumer::builder(test_runtime())
             .consumer_group("push_listener_facade_group")
             .build();
         let listener = Arc::new(MessageListener::new(Some(Arc::new(TestConcurrentListener)), None));
@@ -1671,7 +1689,7 @@ mod tests {
 
     #[test]
     fn push_subscription_facade_preserves_owned_snapshot_identity() {
-        let consumer = DefaultMQPushConsumer::builder()
+        let consumer = DefaultMQPushConsumer::builder(test_runtime())
             .consumer_group("push_subscription_snapshot_group")
             .build();
         let first_snapshot = Arc::new(HashMap::from([(
@@ -1697,7 +1715,7 @@ mod tests {
 
     #[test]
     fn push_use_tls_facade_updates_impl_config_like_java() {
-        let mut consumer = DefaultMQPushConsumer::builder()
+        let mut consumer = DefaultMQPushConsumer::builder(test_runtime())
             .consumer_group("push_tls_facade_group")
             .build();
 
@@ -1716,7 +1734,7 @@ mod tests {
 
     #[test]
     fn push_java_getter_aliases_delegate_to_config() {
-        let mut consumer = DefaultMQPushConsumer::builder()
+        let mut consumer = DefaultMQPushConsumer::builder(test_runtime())
             .consumer_group("push_java_getter_group")
             .build();
         let offset_store = Arc::new(OffsetStore::new_test());
@@ -1764,7 +1782,7 @@ mod tests {
 
     #[tokio::test]
     async fn push_offset_store_facade_updates_impl_like_java_start_source() {
-        let mut consumer = DefaultMQPushConsumer::builder()
+        let mut consumer = DefaultMQPushConsumer::builder(test_runtime())
             .consumer_group("push_offset_store_facade_group")
             .build();
         let offset_store = Arc::new(OffsetStore::new_test());
@@ -1807,7 +1825,7 @@ mod tests {
 
     #[test]
     fn register_consume_message_hook_facade_updates_impl_like_java() {
-        let mut consumer = DefaultMQPushConsumer::builder()
+        let mut consumer = DefaultMQPushConsumer::builder(test_runtime())
             .consumer_group("push_hook_group")
             .build();
 
@@ -1827,7 +1845,7 @@ mod tests {
 
     #[test]
     fn register_consume_message_hook_without_impl_returns_typed_error() {
-        let mut consumer = DefaultMQPushConsumer::builder()
+        let mut consumer = DefaultMQPushConsumer::builder(test_runtime())
             .consumer_group("push_missing_impl_hook_group")
             .build();
         consumer.default_mqpush_consumer_impl = None;
@@ -1841,7 +1859,7 @@ mod tests {
 
     #[test]
     fn push_runtime_config_facade_updates_shared_impl_config_like_java() {
-        let mut consumer = DefaultMQPushConsumer::builder()
+        let mut consumer = DefaultMQPushConsumer::builder(test_runtime())
             .consumer_group("push_runtime_config_group")
             .build();
         let initial_config = consumer.consumer_config_snapshot();
@@ -2034,7 +2052,7 @@ mod tests {
 
     #[test]
     fn push_consumer_apply_tuning_profile_updates_shared_impl_config() {
-        let mut consumer = DefaultMQPushConsumer::builder()
+        let mut consumer = DefaultMQPushConsumer::builder(test_runtime())
             .consumer_group("push_profile_runtime_group")
             .build();
 
@@ -2061,7 +2079,7 @@ mod tests {
 
     #[tokio::test]
     async fn push_pause_state_facade_matches_impl_like_java() {
-        let consumer = DefaultMQPushConsumer::builder()
+        let consumer = DefaultMQPushConsumer::builder(test_runtime())
             .consumer_group("push_pause_state_group")
             .build();
 
@@ -2074,7 +2092,7 @@ mod tests {
 
     #[test]
     fn is_consume_orderly_facade_reflects_impl_state_like_java() {
-        let mut consumer = DefaultMQPushConsumer::builder()
+        let mut consumer = DefaultMQPushConsumer::builder(test_runtime())
             .consumer_group("push_orderly_state_group")
             .build();
 
@@ -2176,7 +2194,7 @@ mod tests {
         client_config.set_namesrv_addr(CheetahString::from_static_str("127.0.0.1:9876"));
         client_config.set_access_channel(AccessChannel::Cloud);
 
-        let mut consumer = DefaultMQPushConsumer::builder()
+        let mut consumer = DefaultMQPushConsumer::builder(test_runtime())
             .consumer_group("push_trace_group")
             .client_config(client_config)
             .trace_dispatcher(Some(trace_dispatcher))
@@ -2188,8 +2206,13 @@ mod tests {
                 .default_mqpush_consumer_impl
                 .as_mut()
                 .expect("push consumer impl should exist");
-            DefaultMQPushConsumer::prepare_trace_dispatcher(&consumer.client_config, &consumer_config, consumer_impl)
-                .expect("custom dispatcher should be prepared")
+            DefaultMQPushConsumer::prepare_trace_dispatcher(
+                &consumer.client_runtime,
+                &consumer.client_config,
+                &consumer_config,
+                consumer_impl,
+            )
+            .expect("custom dispatcher should be prepared")
         };
 
         assert_eq!(

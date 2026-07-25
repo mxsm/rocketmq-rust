@@ -134,20 +134,21 @@ impl CommandExecute for MessageCommands {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
         match self {
-            MessageCommands::CheckMsgSendRT(value) => value.execute(credentials).await,
-            MessageCommands::ConsumeMessage(value) => value.execute(credentials).await,
-            MessageCommands::DecodeMessageId(value) => value.execute(credentials).await,
-            MessageCommands::DumpCompactionLog(value) => value.execute(credentials).await,
-            MessageCommands::PrintMessage(value) => value.execute(credentials).await,
-            MessageCommands::PrintMsgByQueue(value) => value.execute(credentials).await,
-            MessageCommands::QueryMsgById(value) => value.execute(credentials).await,
-            MessageCommands::QueryMsgByKey(value) => value.execute(credentials).await,
-            MessageCommands::QueryMsgByOffset(value) => value.execute(credentials).await,
-            MessageCommands::QueryMsgByUniqueKey(value) => value.execute(credentials).await,
-            MessageCommands::QueryMsgTraceById(value) => value.execute(credentials).await,
-            MessageCommands::SendMessage(value) => value.execute(credentials).await,
+            MessageCommands::CheckMsgSendRT(value) => value.execute(credentials, client_runtime.clone()).await,
+            MessageCommands::ConsumeMessage(value) => value.execute(credentials, client_runtime.clone()).await,
+            MessageCommands::DecodeMessageId(value) => value.execute(credentials, client_runtime.clone()).await,
+            MessageCommands::DumpCompactionLog(value) => value.execute(credentials, client_runtime.clone()).await,
+            MessageCommands::PrintMessage(value) => value.execute(credentials, client_runtime.clone()).await,
+            MessageCommands::PrintMsgByQueue(value) => value.execute(credentials, client_runtime.clone()).await,
+            MessageCommands::QueryMsgById(value) => value.execute(credentials, client_runtime.clone()).await,
+            MessageCommands::QueryMsgByKey(value) => value.execute(credentials, client_runtime.clone()).await,
+            MessageCommands::QueryMsgByOffset(value) => value.execute(credentials, client_runtime.clone()).await,
+            MessageCommands::QueryMsgByUniqueKey(value) => value.execute(credentials, client_runtime.clone()).await,
+            MessageCommands::QueryMsgTraceById(value) => value.execute(credentials, client_runtime.clone()).await,
+            MessageCommands::SendMessage(value) => value.execute(credentials, client_runtime.clone()).await,
         }
     }
 }

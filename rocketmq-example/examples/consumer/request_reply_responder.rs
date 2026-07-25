@@ -38,18 +38,24 @@ pub const TOPIC: &str = "RequestSendTestTopic";
 pub const TAG: &str = "*";
 pub const REPLY_TIMEOUT_MS: u64 = 3000;
 
-#[tokio::main]
-pub async fn main() -> RocketMQResult<()> {
+#[path = "../support/mod.rs"]
+mod support;
+
+pub fn main() -> RocketMQResult<()> {
+    support::run(run)
+}
+
+async fn run(client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>) -> RocketMQResult<()> {
     let telemetry_guard =
         rocketmq_observability::install_global(&rocketmq_observability::TelemetryBootstrapConfig::default())
             .expect("telemetry logging bootstrap should initialize");
-    let mut reply_producer = DefaultMQProducer::builder()
+    let mut reply_producer = DefaultMQProducer::builder(client_runtime.clone())
         .producer_group(PRODUCER_GROUP)
         .name_server_addr(DEFAULT_NAMESRVADDR)
         .build();
     reply_producer.start().await?;
 
-    let mut consumer = DefaultMQPushConsumer::builder()
+    let mut consumer = DefaultMQPushConsumer::builder(client_runtime.clone())
         .consumer_group(CONSUMER_GROUP)
         .name_server_addr(DEFAULT_NAMESRVADDR)
         .message_model(MessageModel::Clustering)

@@ -3,6 +3,8 @@ sidebar_position: 2
 title: 推消费者
 ---
 
+> Runtime 所有权：示例中的 `client_runtime` 是应用持有的 `Arc<ClientRuntime>`，它从 `RuntimeOwner` 的 child scope 创建，并在进程边界显式关闭。
+
 # 推消费者
 
 RocketMQ-Rust 中的推模式由 `DefaultMQPushConsumer` 实现。客户端在后台拉取消息，并将消息批次分发给你注册的监听器。
@@ -16,7 +18,7 @@ use rocketmq_error::RocketMQResult;
 
 #[tokio::main]
 async fn main() -> RocketMQResult<()> {
-    let mut consumer = DefaultMQPushConsumer::builder()
+    let mut consumer = DefaultMQPushConsumer::builder(client_runtime.clone())
         .consumer_group("my_consumer_group")
         .name_server_addr("localhost:9876")
         .consume_thread_min(2)
@@ -116,7 +118,7 @@ consumer
 ## 并发与拉取参数
 
 ```rust
-let mut consumer = DefaultMQPushConsumer::builder()
+let mut consumer = DefaultMQPushConsumer::builder(client_runtime.clone())
     .consumer_group("my_consumer_group")
     .name_server_addr("localhost:9876")
     .consume_thread_min(2)
@@ -133,7 +135,7 @@ let mut consumer = DefaultMQPushConsumer::builder()
 ```rust
 use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
 
-let mut consumer = DefaultMQPushConsumer::builder()
+let mut consumer = DefaultMQPushConsumer::builder(client_runtime.clone())
     .consumer_group("my_consumer_group")
     .name_server_addr("localhost:9876")
     .consume_from_where(ConsumeFromWhere::ConsumeFromLastOffset)

@@ -54,6 +54,7 @@ use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_protocol::protocol::namespace_util::NamespaceUtil;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::common::util_all;
+use rocketmq_runtime::ChildServiceContext;
 use rocketmq_transport::rpc::rpc_request_header::RpcRequestHeader;
 use rocketmq_transport::rpc::topic_request_header::TopicRequestHeader;
 use rocketmq_transport::runtime::RPCHook;
@@ -98,7 +99,9 @@ use crate::hook::consume_message_hook::ConsumeMessageHookArc;
 use crate::hook::filter_message_context::FilterMessageContext;
 use crate::hook::filter_message_hook::FilterMessageHook;
 use crate::implementation::communication_mode::CommunicationMode;
-use crate::implementation::mq_client_manager::MQClientManager;
+use crate::implementation::mq_client_manager::ClientPool;
+use crate::implementation::mq_client_manager::ClientPoolToken;
+use crate::runtime::ClientRuntime;
 
 const PULL_TIME_DELAY_MILLS_WHEN_CACHE_FLOW_CONTROL: u64 = 50;
 pub(crate) const PULL_TIME_DELAY_MILLS_WHEN_BROKER_FLOW_CONTROL: u64 = 20;
@@ -115,6 +118,9 @@ const QUERY_UNIQ_KEY_LOOKBACK_MILLIS: u64 = 3 * 24 * 60 * 60 * 1000;
 const _1MB: u64 = 1024 * 1024;
 
 pub struct DefaultMQPushConsumerImpl {
+    service_context: ChildServiceContext,
+    client_pool: ClientPool,
+    client_pool_token: Mutex<Option<ClientPoolToken>>,
     pub(crate) global_lock: Arc<Mutex<()>>,
     lifecycle_transition: Mutex<()>,
     pub(crate) pull_time_delay_mills_when_exception: u64,
@@ -148,13 +154,18 @@ pub struct DefaultMQPushConsumerImpl {
 
 impl DefaultMQPushConsumerImpl {
     pub fn new(
+        client_runtime: Arc<ClientRuntime>,
         client_config: ClientConfig,
         consumer_config: ConsumerConfig,
         rpc_hook: Option<Arc<dyn RPCHook>>,
     ) -> Self {
+        let service_context = client_runtime.child(format!("push-consumer-{}", consumer_config.consumer_group));
         let consumer_config = Arc::new(ArcSwap::from_pointee(consumer_config));
         let rebalance_consumer_config = (*consumer_config.load_full()).clone();
         let this = Self {
+            service_context,
+            client_pool: client_runtime.pool().clone(),
+            client_pool_token: Mutex::new(None),
             global_lock: Arc::new(Default::default()),
             lifecycle_transition: Mutex::new(()),
             pull_time_delay_mills_when_exception: 3_000,
@@ -187,12 +198,13 @@ impl DefaultMQPushConsumerImpl {
     }
 
     pub(crate) fn new_with_config_store(
+        client_runtime: Arc<ClientRuntime>,
         client_config: ClientConfig,
         consumer_config: Arc<ArcSwap<ConsumerConfig>>,
         rpc_hook: Option<Arc<dyn RPCHook>>,
     ) -> Self {
         let initial_config = (*consumer_config.load_full()).clone();
-        let mut this = Self::new(client_config, initial_config, rpc_hook);
+        let mut this = Self::new(client_runtime, client_config, initial_config, rpc_hook);
         this.consumer_config = consumer_config;
         this
     }
@@ -373,8 +385,11 @@ impl DefaultMQPushConsumerImpl {
                     });
                 }
                 let client_config = self.client_config_snapshot();
-                let client_instance = MQClientManager::get_instance()
-                    .get_or_create_mq_client_instance(client_config.as_ref().clone(), self.rpc_hook.clone());
+                let pooled = self
+                    .client_pool
+                    .get_or_create(client_config.as_ref().clone(), self.rpc_hook.clone())?;
+                let (client_instance, token) = pooled.into_parts();
+                *self.client_pool_token.lock().await = Some(token);
                 self.set_component(&self.client_instance, Some(client_instance.clone()));
                 self.rebalance_impl
                     .set_consumer_group(consumer_config.consumer_group.clone());
@@ -404,6 +419,7 @@ impl DefaultMQPushConsumerImpl {
                 } else {
                     let offset_store = Arc::new(match consumer_config.message_model {
                         MessageModel::Broadcasting => OffsetStore::new_with_local(LocalFileOffsetStore::new(
+                            self.service_context.child("offset-store"),
                             client_instance.clone(),
                             consumer_config.consumer_group.clone(),
                         )),
@@ -431,6 +447,7 @@ impl DefaultMQPushConsumerImpl {
                     if let Some(listener) = message_listener.message_listener_concurrently.clone() {
                         self.set_consume_orderly(false);
                         let consume_message_concurrently_service = Arc::new(ConsumeMessageConcurrentlyService::new(
+                            self.service_context.child("concurrent-consume"),
                             client_config_snapshot.clone(),
                             consumer_config_snapshot.clone(),
                             consumer_config_snapshot.consumer_group.clone(),
@@ -446,6 +463,7 @@ impl DefaultMQPushConsumerImpl {
                         );
                         let consume_message_pop_concurrently_service =
                             Arc::new(ConsumeMessagePopConcurrentlyService::new(
+                                self.service_context.child("pop-concurrent-consume"),
                                 client_config_snapshot.clone(),
                                 consumer_config_snapshot.clone(),
                                 consumer_config_snapshot.consumer_group.clone(),
@@ -463,6 +481,7 @@ impl DefaultMQPushConsumerImpl {
                     } else if let Some(listener) = message_listener.message_listener_orderly.clone() {
                         self.set_consume_orderly(true);
                         let consume_message_orderly_service = Arc::new(ConsumeMessageOrderlyService::new(
+                            self.service_context.child("orderly-consume"),
                             client_config_snapshot.clone(),
                             consumer_config_snapshot.clone(),
                             consumer_config_snapshot.consumer_group.clone(),
@@ -478,6 +497,7 @@ impl DefaultMQPushConsumerImpl {
                         );
 
                         let consume_message_pop_orderly_service = Arc::new(ConsumeMessagePopOrderlyService::new(
+                            self.service_context.child("pop-orderly-consume"),
                             client_config_snapshot,
                             consumer_config_snapshot.clone(),
                             consumer_config_snapshot.consumer_group.clone(),
@@ -513,6 +533,7 @@ impl DefaultMQPushConsumerImpl {
                     )
                     .await;
                 if !register_ok {
+                    self.release_client_pool_lease().await;
                     self.set_service_state(ServiceState::CreateJust);
                     if let Some(consume_message_service) = self.consume_message_service() {
                         consume_message_service
@@ -530,7 +551,13 @@ impl DefaultMQPushConsumerImpl {
                         FAQUrl::suggest_todo(FAQUrl::GROUP_NAME_DUPLICATE_URL)
                     )));
                 }
-                client_instance.start().await?;
+                if let Err(error) = client_instance.start().await {
+                    client_instance
+                        .unregister_consumer(consumer_config.consumer_group.as_str())
+                        .await;
+                    self.release_client_pool_lease().await;
+                    return Err(error);
+                }
                 info!(
                     "the consumer [{}] start OK, message_model={}, isUnitMode={}",
                     consumer_config.consumer_group, consumer_config.message_model, consumer_config.unit_mode
@@ -582,6 +609,13 @@ impl DefaultMQPushConsumerImpl {
         self.shutdown_transition(await_terminate_millis).await;
     }
 
+    async fn release_client_pool_lease(&self) {
+        let token = self.client_pool_token.lock().await.take();
+        if let Some(token) = token {
+            self.client_pool.release(token).await;
+        }
+    }
+
     async fn shutdown_transition(&self, await_terminate_millis: u64) {
         match self.service_state() {
             ServiceState::CreateJust => {
@@ -608,7 +642,7 @@ impl DefaultMQPushConsumerImpl {
                 let consumer_group = self.consumer_config_snapshot().consumer_group.clone();
                 if let Some(client) = self.get_mq_client_factory() {
                     client.unregister_consumer(consumer_group.as_str()).await;
-                    client.shutdown().await;
+                    self.release_client_pool_lease().await;
                 } else {
                     warn!(
                         "consumer [{}] shutdown skipped client cleanup because MQClientInstance is not initialized",
@@ -629,6 +663,7 @@ impl DefaultMQPushConsumerImpl {
                 );
             }
             ServiceState::StartFailed => {
+                self.release_client_pool_lease().await;
                 warn!(
                     "the consumer [{}] start failed, do nothing",
                     self.consumer_config_snapshot().consumer_group
@@ -2291,8 +2326,12 @@ mod tests {
     use crate::consumer::listener::consume_concurrently_status::ConsumeConcurrentlyStatus;
     use crate::consumer::listener::message_listener_concurrently::MessageListenerConcurrently;
 
+    fn test_runtime() -> Arc<ClientRuntime> {
+        crate::runtime::test_client_runtime("default-push-consumer-impl-test")
+    }
+
     fn new_unstarted_impl() -> DefaultMQPushConsumerImpl {
-        DefaultMQPushConsumerImpl::new(ClientConfig::default(), ConsumerConfig::default(), None)
+        DefaultMQPushConsumerImpl::new(test_runtime(), ClientConfig::default(), ConsumerConfig::default(), None)
     }
 
     fn new_running_impl() -> DefaultMQPushConsumerImpl {
@@ -2323,10 +2362,11 @@ mod tests {
             Some(Arc::new(NoopConcurrentListener)),
             None,
         )));
-        DefaultMQPushConsumerImpl::new(ClientConfig::default(), consumer_config, None)
+        DefaultMQPushConsumerImpl::new(test_runtime(), ClientConfig::default(), consumer_config, None)
     }
 
     fn new_startable_push_consumer(
+        client_runtime: Arc<ClientRuntime>,
         client_config: ClientConfig,
         consumer_group: CheetahString,
     ) -> Arc<DefaultMQPushConsumerImpl> {
@@ -2338,7 +2378,12 @@ mod tests {
             Some(Arc::new(NoopConcurrentListener)),
             None,
         )));
-        let consumer = Arc::new(DefaultMQPushConsumerImpl::new(client_config, consumer_config, None));
+        let consumer = Arc::new(DefaultMQPushConsumerImpl::new(
+            client_runtime,
+            client_config,
+            consumer_config,
+            None,
+        ));
         consumer.initialize_self_reference();
         consumer
     }
@@ -2365,6 +2410,7 @@ mod tests {
         let weak_consumer = Arc::downgrade(&consumer);
         let consumer_config = Arc::new(ConsumerConfig::default());
         let service = Arc::new(ConsumeMessageConcurrentlyService::new(
+            crate::runtime::test_service_context("push-consumer-concurrent-service-test"),
             Arc::new(ClientConfig::default()),
             consumer_config.clone(),
             consumer_config.consumer_group.clone(),
@@ -2450,18 +2496,22 @@ mod tests {
             "push-duplicate-instance-{}",
             current_millis()
         )));
-        let client_id = CheetahString::from_string(client_config.build_mq_client_id());
-        let client_instance =
-            MQClientManager::get_instance().get_or_create_mq_client_instance(client_config.clone(), None);
+        let client_runtime = test_runtime();
+        let (client_instance, client_token) = client_runtime
+            .pool()
+            .get_or_create(client_config.clone(), None)
+            .expect("test client lease should be created")
+            .into_parts();
 
-        let existing_consumer = new_startable_push_consumer(client_config.clone(), group.clone());
+        let existing_consumer =
+            new_startable_push_consumer(Arc::clone(&client_runtime), client_config.clone(), group.clone());
         assert!(
             client_instance
                 .register_consumer(&group, MQConsumerInnerImpl::from_push(existing_consumer))
                 .await
         );
 
-        let duplicate_consumer = new_startable_push_consumer(client_config, group.clone());
+        let duplicate_consumer = new_startable_push_consumer(Arc::clone(&client_runtime), client_config, group.clone());
         let result = duplicate_consumer.start().await;
 
         assert!(result
@@ -2474,7 +2524,7 @@ mod tests {
             .is_some_and(|service| service.is_shutdown()));
 
         client_instance.unregister_consumer(group).await;
-        MQClientManager::get_instance().remove_client_factory(&client_id);
+        assert!(client_runtime.pool().release(client_token).await);
     }
 
     #[tokio::test]
@@ -2486,8 +2536,16 @@ mod tests {
             "push-post-start-fail-instance-{}",
             current_millis()
         )));
-        let client_instance = MQClientInstance::new_arc(client_config.clone(), 0, "push-post-start-fail-client", None);
-        let consumer = new_startable_push_consumer(client_config, group.clone());
+        let client_runtime = test_runtime();
+        let client_instance = MQClientInstance::new_arc(
+            client_config.clone(),
+            0,
+            "push-post-start-fail-client",
+            None,
+            client_runtime.child("push-post-start-fail-client"),
+            client_runtime.pool().request_future_holder(),
+        );
+        let consumer = new_startable_push_consumer(client_runtime, client_config, group.clone());
         consumer.set_service_state(ServiceState::Running);
         consumer.set_mq_client_factory(client_instance.clone());
 
@@ -2532,7 +2590,7 @@ mod tests {
             "unexpected post-start error: {error:?}"
         );
         assert_eq!(consumer.service_state(), ServiceState::ShutdownAlready);
-        let replacement = new_startable_push_consumer(ClientConfig::default(), group.clone());
+        let replacement = new_startable_push_consumer(test_runtime(), ClientConfig::default(), group.clone());
         assert!(
             client_instance
                 .register_consumer(&group, MQConsumerInnerImpl::from_push(replacement))
@@ -2701,7 +2759,7 @@ mod tests {
             consumer_group: CheetahString::from_static_str("PushGroup"),
             ..Default::default()
         };
-        let consumer = DefaultMQPushConsumerImpl::new(client_config, consumer_config, None);
+        let consumer = DefaultMQPushConsumerImpl::new(test_runtime(), client_config, consumer_config, None);
         let mut msg = message_ext_for_send_back("ns%TopicA");
 
         let error = consumer
@@ -2746,7 +2804,7 @@ mod tests {
             namespace: Some(CheetahString::from_static_str("ns")),
             ..Default::default()
         };
-        let consumer = DefaultMQPushConsumerImpl::new(client_config, ConsumerConfig::default(), None);
+        let consumer = DefaultMQPushConsumerImpl::new(test_runtime(), client_config, ConsumerConfig::default(), None);
         let topic = CheetahString::from_static_str("ns%TopicA");
         let cached_queues = HashSet::from([
             MessageQueue::from_parts("ns%TopicA", "broker-b", 1),
@@ -2815,11 +2873,14 @@ mod tests {
         consumer
             .rebalance_impl
             .put_subscription_data(topic.clone(), subscription_data);
+        let runtime = test_runtime();
         consumer.set_mq_client_factory(MQClientInstance::new_arc(
             ClientConfig::default(),
             0,
             "push-running-info-status-test",
             None,
+            runtime.child("push-running-info-status-test"),
+            runtime.pool().request_future_holder(),
         ));
 
         let info = consumer.consumer_running_info().await;

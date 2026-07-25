@@ -94,6 +94,7 @@ impl CommandExecute for ClusterSendMsgRTSubCommand {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
         if !self.print_as_tlog {
             println!(
@@ -103,9 +104,12 @@ impl CommandExecute for ClusterSendMsgRTSubCommand {
         }
 
         loop {
-            let result =
-                ClusterService::send_message_rt_by_request_with_credentials(self.request()?, credentials.clone())
-                    .await?;
+            let result = ClusterService::send_message_rt_by_request_with_credentials(
+                self.request()?,
+                credentials.clone(),
+                client_runtime.clone(),
+            )
+            .await?;
             self.print_result(&result);
             tokio::time::sleep(tokio::time::Duration::from_secs(self.interval)).await;
         }

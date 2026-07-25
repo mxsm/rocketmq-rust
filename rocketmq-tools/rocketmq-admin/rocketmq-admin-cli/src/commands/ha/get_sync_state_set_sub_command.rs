@@ -64,19 +64,27 @@ impl CommandExecute for GetSyncStateSetSubCommand {
     async fn execute(
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
         if let Some(interval) = self.interval {
             let flush_second = if interval > 0 { interval } else { 3 };
             loop {
-                let result =
-                    HaService::query_sync_state_set_by_request_with_credentials(self.request()?, credentials.clone())
-                        .await?;
+                let result = HaService::query_sync_state_set_by_request_with_credentials(
+                    self.request()?,
+                    credentials.clone(),
+                    client_runtime.clone(),
+                )
+                .await?;
                 Self::print_result(&result);
                 tokio::time::sleep(tokio::time::Duration::from_secs(flush_second)).await;
             }
         } else {
-            let result =
-                HaService::query_sync_state_set_by_request_with_credentials(self.request()?, credentials).await?;
+            let result = HaService::query_sync_state_set_by_request_with_credentials(
+                self.request()?,
+                credentials,
+                client_runtime.clone(),
+            )
+            .await?;
             Self::print_result(&result);
         }
 

@@ -34,10 +34,18 @@ use rocketmq_client_rust::consumer::consumer_impl::pull_message_service::PullMes
 use rocketmq_client_rust::consumer::consumer_impl::pull_request::PullRequest;
 use rocketmq_client_rust::factory::mq_client_instance::MQClientInstance;
 use rocketmq_model::common::message::message_queue::MessageQueue;
+
+mod support;
+
 /// Creates a mock MQClientInstance for testing
 fn create_mock_client_instance() -> Arc<MQClientInstance> {
     let client_config = ClientConfig::default();
-    MQClientInstance::new_arc(client_config, 0, CheetahString::from_static_str("test_client"), None)
+    support::client_runtime("pull-message-service-test")
+        .pool()
+        .get_or_create(client_config, None)
+        .expect("test client instance should be created")
+        .into_parts()
+        .0
 }
 
 /// Creates a test PullRequest
@@ -296,6 +304,8 @@ async fn test_execute_task_later() {
 #[tokio::test]
 async fn test_delayed_tasks_with_same_deadline_keep_insert_order() {
     let service = PullMessageService::new();
+    let instance = create_mock_client_instance();
+    service.start(instance).await.unwrap();
     let observed = Arc::new(StdMutex::new(Vec::new()));
 
     for index in 0..8 {
