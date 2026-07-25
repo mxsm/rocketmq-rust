@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::future::Future;
 use std::sync::Arc;
 use std::sync::Weak;
 
@@ -26,6 +27,10 @@ use rocketmq_protocol::protocol::header::view_message_request_header::ViewMessag
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::base::query_message_result::QueryMessageResult;
+use rocketmq_store::base::select_result::SelectMappedBufferResult;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreErrorKind;
+use rocketmq_store_api::StoreOperation;
 use rocketmq_transport::error_response;
 use rocketmq_transport::net::channel::Channel;
 use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
@@ -47,6 +52,30 @@ impl<MS: MessageStore> QueryMessageStoreCapability<MS> {
         }
     }
 
+    fn provider(&self) -> Result<Arc<EscapeBridge<MS>>, StoreError> {
+        self.escape_bridge.upgrade().ok_or_else(query_store_unavailable)
+    }
+}
+
+fn query_store_unavailable() -> StoreError {
+    StoreError::new(StoreErrorKind::NotStarted, StoreOperation::Read)
+}
+
+/// Narrow storage operations required by [`QueryMessageProcessor`].
+pub trait QueryMessageStore: Send + Sync {
+    fn query_message(
+        &self,
+        topic: &CheetahString,
+        key: &CheetahString,
+        max_num: i32,
+        begin_timestamp: i64,
+        end_timestamp: i64,
+    ) -> impl Future<Output = Result<Option<QueryMessageResult>, StoreError>> + Send;
+
+    fn select_message_by_offset(&self, offset: i64) -> Result<Option<SelectMappedBufferResult>, StoreError>;
+}
+
+impl<MS: MessageStore> QueryMessageStore for QueryMessageStoreCapability<MS> {
     async fn query_message(
         &self,
         topic: &CheetahString,
@@ -54,22 +83,17 @@ impl<MS: MessageStore> QueryMessageStoreCapability<MS> {
         max_num: i32,
         begin_timestamp: i64,
         end_timestamp: i64,
-    ) -> Result<Option<QueryMessageResult>, MessageStoreUnavailable> {
-        self.escape_bridge
-            .upgrade()
-            .ok_or(MessageStoreUnavailable)?
+    ) -> Result<Option<QueryMessageResult>, StoreError> {
+        self.provider()?
             .query_message_from_store(topic, key, max_num, begin_timestamp, end_timestamp)
             .await
+            .map_err(|MessageStoreUnavailable| query_store_unavailable())
     }
 
-    fn select_message_by_offset(
-        &self,
-        offset: i64,
-    ) -> Result<Option<rocketmq_store::base::select_result::SelectMappedBufferResult>, MessageStoreUnavailable> {
-        self.escape_bridge
-            .upgrade()
-            .ok_or(MessageStoreUnavailable)?
+    fn select_message_by_offset(&self, offset: i64) -> Result<Option<SelectMappedBufferResult>, StoreError> {
+        self.provider()?
             .select_message_from_store(offset)
+            .map_err(|MessageStoreUnavailable| query_store_unavailable())
     }
 }
 
@@ -81,9 +105,9 @@ impl<MS: MessageStore> Clone for QueryMessageStoreCapability<MS> {
     }
 }
 
-pub struct QueryMessageProcessor<MS: MessageStore> {
+pub struct QueryMessageProcessor<S: QueryMessageStore> {
     default_query_max_num: i32,
-    query_store: QueryMessageStoreCapability<MS>,
+    query_store: S,
 }
 
 fn query_index_type(request_header: &QueryMessageRequestHeader, is_unique_key: bool) -> Option<&str> {
@@ -109,9 +133,9 @@ fn unsafe_index_query_remark(query_message_result: &QueryMessageResult) -> Optio
     })
 }
 
-impl<MS> RequestProcessor for QueryMessageProcessor<MS>
+impl<S> RequestProcessor for QueryMessageProcessor<S>
 where
-    MS: MessageStore,
+    S: QueryMessageStore + Clone,
 {
     async fn process_request(
         &mut self,
@@ -141,8 +165,8 @@ where
     }
 }
 
-impl<MS: MessageStore> QueryMessageProcessor<MS> {
-    pub(crate) fn new(default_query_max_num: usize, query_store: QueryMessageStoreCapability<MS>) -> Self {
+impl<S: QueryMessageStore> QueryMessageProcessor<S> {
+    pub fn new(default_query_max_num: usize, query_store: S) -> Self {
         Self {
             default_query_max_num: default_query_max_num as i32,
             query_store,
@@ -150,7 +174,7 @@ impl<MS: MessageStore> QueryMessageProcessor<MS> {
     }
 }
 
-impl<MS: MessageStore> Clone for QueryMessageProcessor<MS> {
+impl<S: QueryMessageStore + Clone> Clone for QueryMessageProcessor<S> {
     fn clone(&self) -> Self {
         Self {
             default_query_max_num: self.default_query_max_num,
@@ -159,9 +183,9 @@ impl<MS: MessageStore> Clone for QueryMessageProcessor<MS> {
     }
 }
 
-impl<MS> QueryMessageProcessor<MS>
+impl<S> QueryMessageProcessor<S>
 where
-    MS: MessageStore,
+    S: QueryMessageStore + Clone,
 {
     pub async fn process_request_shared(
         &self,
@@ -237,7 +261,7 @@ where
                         .set_remark("query message failed, no result returned"),
                 ));
             }
-            Err(MessageStoreUnavailable) => {
+            Err(_) => {
                 return Ok(Some(
                     response
                         .set_code(ResponseCode::SystemError)
@@ -278,7 +302,7 @@ where
 
         let select_mapped_buffer_result = match self.query_store.select_message_by_offset(request_header.offset) {
             Ok(result) => result,
-            Err(MessageStoreUnavailable) => {
+            Err(_) => {
                 return Ok(Some(
                     response
                         .set_code(ResponseCode::SystemError)
@@ -384,13 +408,13 @@ mod tests {
         let topic = CheetahString::from_static_str("TopicA");
         let key = CheetahString::from_static_str("KeyA");
 
-        assert!(matches!(
-            capability.query_message(&topic, &key, 32, 0, i64::MAX).await,
-            Err(MessageStoreUnavailable)
-        ));
-        assert!(matches!(
-            capability.select_message_by_offset(0),
-            Err(MessageStoreUnavailable)
-        ));
+        let Err(query_error) = capability.query_message(&topic, &key, 32, 0, i64::MAX).await else {
+            panic!("closed provider must reject query");
+        };
+        assert_eq!(StoreErrorKind::NotStarted, query_error.kind());
+        let Err(select_error) = capability.select_message_by_offset(0) else {
+            panic!("closed provider must reject select");
+        };
+        assert_eq!(StoreErrorKind::NotStarted, select_error.kind());
     }
 }

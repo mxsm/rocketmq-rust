@@ -25,6 +25,8 @@ pub use lifecycle::BrokerStartupError;
 pub use lifecycle::Configured;
 pub use lifecycle::Initialized;
 pub use lifecycle::Running;
+pub use processor::query_message_processor::QueryMessageProcessor;
+pub use processor::query_message_processor::QueryMessageStore;
 #[doc(hidden)]
 pub use proxy_facade::proxy_adapter_compat;
 pub use proxy_facade::ProxyBrokerFacade;

@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::convert::Infallible;
 use std::sync::Arc;
+
+use rocketmq_store_api::StoreLifecycle;
 
 use crate::config::backend::LocalBackendConfig;
 use crate::message_store::cleanup::CleanupPolicy;
@@ -68,5 +71,27 @@ impl LocalStoreComposition {
 
     pub const fn cleanup(&self) -> CleanupPolicy {
         self.cleanup
+    }
+}
+
+impl StoreLifecycle for LocalStoreComposition {
+    type Error = Infallible;
+
+    async fn load(&mut self) -> Result<bool, Self::Error> {
+        self.lifecycle
+            .transition_to(crate::message_store::lifecycle::LocalStoreState::Initialized);
+        Ok(true)
+    }
+
+    async fn start(&mut self) -> Result<(), Self::Error> {
+        self.lifecycle
+            .transition_to(crate::message_store::lifecycle::LocalStoreState::Started);
+        Ok(())
+    }
+
+    async fn shutdown(&mut self) -> Result<(), Self::Error> {
+        self.lifecycle
+            .transition_to(crate::message_store::lifecycle::LocalStoreState::Shutdown);
+        Ok(())
     }
 }

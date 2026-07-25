@@ -1,0 +1,13 @@
+error[E0308]: mismatched types
+ --> tests/ui/store_context/root_context_is_rejected.rs:6:40
+  |
+6 |     let _ = StoreFactory::open(config, root);
+  |             ------------------         ^^^^ expected `ChildServiceContext`, found `RootServiceContext`
+  |             |
+  |             arguments to this function are incorrect
+  |
+note: associated function defined here
+ --> src/factory.rs
+  |
+  |     pub fn open(
+  |            ^^^^

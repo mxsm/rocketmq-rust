@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Private behavior tests for the legacy store API adapter.
+//! Private behavior tests for canonical store capabilities.
 
 use std::future::ready;
 use std::sync::atomic::AtomicBool;
@@ -35,13 +35,13 @@ use rocketmq_store_api::MessageReader;
 use rocketmq_store_api::ReadCacheState;
 use tempfile::TempDir;
 
-use super::get_result_from_legacy;
-use super::query_result_from_legacy;
-use super::selected_result_from_legacy;
-use super::LegacyMessageStoreReadAdapter;
-use super::LegacyReadCallBoundary;
-use super::LegacyReadRequest;
-use super::LegacyReadResult;
+use super::get_result;
+use super::query_result;
+use super::selected_result;
+use super::MessageReadRequest;
+use super::MessageReadResult;
+use super::MessageStoreReadCapability;
+use super::MessageStoreReadPort;
 use crate::consume_queue::mapped_file_queue::MappedFileQueue;
 use crate::log_file::mapped_file::MappedFile;
 use rocketmq_store_local::mapped_file::kernel::ReferenceResource;
@@ -59,7 +59,7 @@ fn selected(payload: Bytes, start_offset: u64, cache_state: SelectMappedBufferCa
     }
 }
 
-fn legacy_get_result() -> GetMessageResult {
+fn backend_get_result() -> GetMessageResult {
     let mut result = GetMessageResult::new();
     result.set_status(Some(GetMessageStatus::OffsetReset));
     result.set_next_begin_offset(9);
@@ -75,7 +75,7 @@ fn legacy_get_result() -> GetMessageResult {
     result
 }
 
-fn legacy_query_result() -> QueryMessageResult {
+fn backend_query_result() -> QueryMessageResult {
     let mut result = QueryMessageResult {
         index_last_update_timestamp: 123,
         index_last_update_phyoffset: 456,
@@ -102,7 +102,7 @@ struct ReadProbe {
     return_none: AtomicBool,
 }
 
-impl LegacyReadCallBoundary for ReadProbe {
+impl MessageStoreReadPort for ReadProbe {
     fn get_message(
         &self,
         _group: &CheetahString,
@@ -112,7 +112,7 @@ impl LegacyReadCallBoundary for ReadProbe {
         _max_messages: i32,
     ) -> impl std::future::Future<Output = Option<GetMessageResult>> + Send {
         self.normal_get_calls.fetch_add(1, Ordering::SeqCst);
-        ready((!self.return_none.load(Ordering::SeqCst)).then(legacy_get_result))
+        ready((!self.return_none.load(Ordering::SeqCst)).then(backend_get_result))
     }
 
     fn get_message_with_size_limit(
@@ -126,7 +126,7 @@ impl LegacyReadCallBoundary for ReadProbe {
     ) -> impl std::future::Future<Output = Option<GetMessageResult>> + Send {
         self.size_limited_get_calls.fetch_add(1, Ordering::SeqCst);
         self.last_size_limit.store(max_total_size, Ordering::SeqCst);
-        ready((!self.return_none.load(Ordering::SeqCst)).then(legacy_get_result))
+        ready((!self.return_none.load(Ordering::SeqCst)).then(backend_get_result))
     }
 
     fn query_message(
@@ -138,7 +138,7 @@ impl LegacyReadCallBoundary for ReadProbe {
         _end: i64,
     ) -> impl std::future::Future<Output = Option<QueryMessageResult>> + Send {
         self.query_calls.fetch_add(1, Ordering::SeqCst);
-        ready((!self.return_none.load(Ordering::SeqCst)).then(legacy_query_result))
+        ready((!self.return_none.load(Ordering::SeqCst)).then(backend_query_result))
     }
 
     fn select_message(&self, physical_offset: i64, size: Option<i32>) -> Option<SelectMappedBufferResult> {
@@ -158,10 +158,10 @@ impl LegacyReadCallBoundary for ReadProbe {
 #[tokio::test]
 async fn read_dispatches_size_limited_get_and_projects_every_get_field() {
     let probe = ReadProbe::default();
-    let adapter = LegacyMessageStoreReadAdapter::new(&probe);
+    let adapter = MessageStoreReadCapability::new(&probe);
 
     let result = adapter
-        .read(LegacyReadRequest::Get {
+        .read(MessageReadRequest::Get {
             group: CheetahString::from_static_str("group"),
             topic: CheetahString::from_static_str("topic"),
             queue_id: 3,
@@ -176,7 +176,7 @@ async fn read_dispatches_size_limited_get_and_projects_every_get_field() {
     assert_eq!(0, probe.normal_get_calls.load(Ordering::SeqCst));
     assert_eq!(1, probe.size_limited_get_calls.load(Ordering::SeqCst));
     assert_eq!(512, probe.last_size_limit.load(Ordering::SeqCst));
-    let LegacyReadResult::Get(result) = result else {
+    let MessageReadResult::Get(result) = result else {
         panic!("expected get result");
     };
     assert_eq!(Some(GetStatus::OffsetReset), result.status);
@@ -198,10 +198,10 @@ async fn read_dispatches_size_limited_get_and_projects_every_get_field() {
 #[tokio::test]
 async fn read_dispatches_query_and_select_and_preserves_none() {
     let probe = ReadProbe::default();
-    let adapter = LegacyMessageStoreReadAdapter::new(&probe);
+    let adapter = MessageStoreReadCapability::new(&probe);
 
     let query = adapter
-        .read(LegacyReadRequest::Query {
+        .read(MessageReadRequest::Query {
             topic: CheetahString::from_static_str("topic"),
             key: CheetahString::from_static_str("key"),
             max_messages: 8,
@@ -211,7 +211,7 @@ async fn read_dispatches_query_and_select_and_preserves_none() {
         .await
         .expect("query succeeds")
         .expect("query result exists");
-    let LegacyReadResult::Query(query) = query else {
+    let MessageReadResult::Query(query) = query else {
         panic!("expected query result");
     };
     assert_eq!(123, query.index_last_update_timestamp);
@@ -223,14 +223,14 @@ async fn read_dispatches_query_and_select_and_preserves_none() {
     assert_eq!(ReadCacheState::Cold, query.records[0].cache_state());
 
     let selected = adapter
-        .read(LegacyReadRequest::Select {
+        .read(MessageReadRequest::Select {
             physical_offset: 300,
             size: Some(3),
         })
         .await
         .expect("select succeeds")
         .expect("select result exists");
-    let LegacyReadResult::Select(selected) = selected else {
+    let MessageReadResult::Select(selected) = selected else {
         panic!("expected select result");
     };
     assert_eq!(300, selected.start_offset());
@@ -239,7 +239,7 @@ async fn read_dispatches_query_and_select_and_preserves_none() {
 
     probe.return_none.store(true, Ordering::SeqCst);
     let missing = adapter
-        .read(LegacyReadRequest::Get {
+        .read(MessageReadRequest::Get {
             group: CheetahString::from_static_str("group"),
             topic: CheetahString::from_static_str("topic"),
             queue_id: 0,
@@ -252,7 +252,7 @@ async fn read_dispatches_query_and_select_and_preserves_none() {
     assert!(missing.is_none());
 
     let missing_query = adapter
-        .read(LegacyReadRequest::Query {
+        .read(MessageReadRequest::Query {
             topic: CheetahString::from_static_str("topic"),
             key: CheetahString::from_static_str("missing"),
             max_messages: 1,
@@ -264,7 +264,7 @@ async fn read_dispatches_query_and_select_and_preserves_none() {
     assert!(missing_query.is_none());
 
     let missing_select = adapter
-        .read(LegacyReadRequest::Select {
+        .read(MessageReadRequest::Select {
             physical_offset: 301,
             size: None,
         })
@@ -275,12 +275,12 @@ async fn read_dispatches_query_and_select_and_preserves_none() {
 
 #[test]
 fn direct_get_and_query_projection_preserve_fields() {
-    let get = get_result_from_legacy(legacy_get_result());
+    let get = get_result(backend_get_result());
     assert_eq!(Some(GetStatus::OffsetReset), get.status);
     assert_eq!(vec![7], get.queue_offsets);
     assert_eq!(b"payload", get.records[0].data().bytes().as_ref());
 
-    let query = query_result_from_legacy(legacy_query_result());
+    let query = query_result(backend_query_result());
     assert_eq!(123, query.index_last_update_timestamp);
     assert_eq!(456, query.index_last_update_physical_offset);
     assert_eq!(b"query", query.records[0].data().bytes().as_ref());
@@ -315,9 +315,9 @@ fn observed_selected(drops: Arc<AtomicUsize>) -> SelectMappedBufferResult {
 }
 
 #[test]
-fn selected_projection_retains_and_releases_the_legacy_lease() {
+fn selected_projection_retains_and_releases_the_backend_lease() {
     let drops = Arc::new(AtomicUsize::new(0));
-    let selected = selected_result_from_legacy(observed_selected(drops.clone()));
+    let selected = selected_result(observed_selected(drops.clone()));
 
     assert_eq!(b"leased", selected.data().bytes().as_ref());
     assert_eq!(0, drops.load(Ordering::SeqCst));
@@ -326,9 +326,9 @@ fn selected_projection_retains_and_releases_the_legacy_lease() {
 }
 
 #[test]
-fn into_bytes_stays_valid_after_the_legacy_lease_is_released() {
+fn into_bytes_stays_valid_after_the_backend_lease_is_released() {
     let drops = Arc::new(AtomicUsize::new(0));
-    let selected = selected_result_from_legacy(observed_selected(drops.clone()));
+    let selected = selected_result(observed_selected(drops.clone()));
 
     let bytes = selected.into_data().into_bytes();
 
@@ -376,7 +376,7 @@ fn mapped_file_lease_releases_hold_before_shutdown_cleanup() {
         file_offset: 0,
         cache_state: SelectMappedBufferCacheState::Hot,
     };
-    let bytes = selected_result_from_legacy(selected).into_data().into_bytes();
+    let bytes = selected_result(selected).into_data().into_bytes();
 
     assert_eq!(b"mapped", bytes.as_ref());
     assert_eq!(1, ReferenceResource::get_ref_count(mapped_file.as_ref()));

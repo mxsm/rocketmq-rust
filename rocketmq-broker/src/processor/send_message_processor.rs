@@ -68,11 +68,11 @@ use rocketmq_store::base::flush_manager::SyncFlushRuntimeInfo;
 use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
+use rocketmq_store::capability::store_append_receipt;
+use rocketmq_store::capability::StoreAppendReceipt;
+use rocketmq_store::capability::StoreHealthSnapshot;
 use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
 use rocketmq_store::stats::stats_type::StatsType;
-use rocketmq_store::store_api_adapter::legacy_append_receipt;
-use rocketmq_store::store_api_adapter::LegacyAppendReceipt;
-use rocketmq_store::store_api_adapter::LegacyStoreHealthSnapshot;
 use rocketmq_store_api::MessageAppender;
 use rocketmq_store_api::StoreHealth;
 use rocketmq_transport::error_response;
@@ -95,8 +95,6 @@ use crate::send_message_constants::queue_config;
 use crate::send_message_constants::retry_config;
 use crate::topic::manager::topic_queue_mapping_manager::TopicQueueMappingManager;
 use crate::transaction::transactional_message_service::TransactionalMessageService;
-
-type StoreHealthSnapshot = LegacyStoreHealthSnapshot;
 
 pub(crate) mod capability;
 mod message_builder;
@@ -632,7 +630,7 @@ where
                 .store
                 .append_progress()
                 .map_err(|_| message_store_not_initialized())?;
-            legacy_append_receipt(result, max_phy_offset, flushed_where)
+            store_append_receipt(result, max_phy_offset, flushed_where)
         } else {
             let mut store = self.inner.context.store.clone();
             append_message_with_store(&mut store, message_ext)
@@ -767,7 +765,7 @@ where
         &self,
         topic: &str,
         queue_id: i32,
-        append_receipt: &LegacyAppendReceipt,
+        append_receipt: &StoreAppendReceipt,
         begin_time_millis: Instant,
         topic_message_type: &TopicMessageType,
     ) {
@@ -803,7 +801,7 @@ where
     fn set_success_response_header(
         &self,
         response_header: &mut SendMessageResponseHeader,
-        append_receipt: &LegacyAppendReceipt,
+        append_receipt: &StoreAppendReceipt,
         queue_id: i32,
         transaction_id: Option<CheetahString>,
         recall_handle: Option<CheetahString>,
@@ -828,7 +826,7 @@ where
         &self,
         send_message_context: &mut SendMessageContext,
         response_header: &SendMessageResponseHeader,
-        append_receipt: &LegacyAppendReceipt,
+        append_receipt: &StoreAppendReceipt,
         owner: Option<CheetahString>,
         auth_type: Option<CheetahString>,
         owner_parent: Option<CheetahString>,
@@ -867,7 +865,7 @@ where
     fn update_send_context_on_failure(
         &self,
         send_message_context: &mut SendMessageContext,
-        append_receipt: &LegacyAppendReceipt,
+        append_receipt: &StoreAppendReceipt,
         request_body_len: i32,
         owner: Option<CheetahString>,
         auth_type: Option<CheetahString>,
@@ -899,7 +897,7 @@ where
 
     async fn handle_put_message_result(
         &self,
-        append_receipt: LegacyAppendReceipt,
+        append_receipt: StoreAppendReceipt,
         response: &mut RemotingCommand,
         request: &RemotingCommand,
         topic: &str,
@@ -1289,9 +1287,7 @@ fn store_health_reject_remark(policy: &impl SendBackpressurePolicy, snapshot: St
         return Some("store_backpressure reason=store_shutdown".to_string());
     }
     if !snapshot.writable {
-        let error_kind = snapshot
-            .last_error
-            .map_or("unknown", |error| error.compatibility_token());
+        let error_kind = snapshot.last_error.map_or("unknown", |error| error.backend_token());
         return Some(format!(
             "store_backpressure reason=store_not_writeable, lastFlushErrorKind={error_kind}"
         ));
@@ -1858,11 +1854,11 @@ mod tests {
     use rocketmq_store::base::flush_manager::SyncFlushRuntimeInfo;
     use rocketmq_store::base::message_result::PutMessageResult;
     use rocketmq_store::base::message_status_enum::PutMessageStatus;
-    use rocketmq_store::store_api_adapter::legacy_append_receipt;
-    use rocketmq_store::store_api_adapter::LegacyAppendReceipt;
-    use rocketmq_store::store_api_adapter::LegacyFlushBacklog as FlushBacklog;
-    use rocketmq_store::store_api_adapter::LegacyStoreHealthError;
-    use rocketmq_store::store_api_adapter::LegacyStoreHealthSnapshot;
+    use rocketmq_store::capability::store_append_receipt;
+    use rocketmq_store::capability::StoreAppendReceipt;
+    use rocketmq_store::capability::StoreFlushBacklog as FlushBacklog;
+    use rocketmq_store::capability::StoreHealthError;
+    use rocketmq_store::capability::StoreHealthSnapshot;
 
     use crate::mqtrace::send_message_context::SendMessageContext;
     use crate::mqtrace::send_message_hook::SendMessageHook;
@@ -1876,15 +1872,14 @@ mod tests {
     use super::store_health_reject_remark;
     use super::store_health_reject_remark_from;
     use super::sync_flush_backlog_reject_remark;
-    use super::StoreHealthSnapshot;
 
     struct CapabilityStore {
-        health: LegacyStoreHealthSnapshot,
-        receipt: Option<LegacyAppendReceipt>,
+        health: StoreHealthSnapshot,
+        receipt: Option<StoreAppendReceipt>,
     }
 
     impl rocketmq_store_api::MessageAppender<()> for CapabilityStore {
-        type Receipt = LegacyAppendReceipt;
+        type Receipt = StoreAppendReceipt;
         type Error = rocketmq_store_api::StoreError;
 
         fn append_message(&mut self, (): ()) -> impl Future<Output = Result<Self::Receipt, Self::Error>> + Send {
@@ -1899,7 +1894,7 @@ mod tests {
     }
 
     impl rocketmq_store_api::StoreHealth for CapabilityStore {
-        type Snapshot = LegacyStoreHealthSnapshot;
+        type Snapshot = StoreHealthSnapshot;
 
         fn health_snapshot(&self) -> Self::Snapshot {
             self.health.clone()
@@ -2040,9 +2035,9 @@ mod tests {
 
     #[tokio::test]
     async fn append_seam_depends_only_on_message_appender() {
-        let expected = legacy_append_receipt(PutMessageResult::new_default(PutMessageStatus::PutOk), 20, 20);
+        let expected = store_append_receipt(PutMessageResult::new_default(PutMessageStatus::PutOk), 20, 20);
         let mut store = CapabilityStore {
-            health: LegacyStoreHealthSnapshot::default(),
+            health: StoreHealthSnapshot::default(),
             receipt: Some(expected),
         };
 
@@ -2058,12 +2053,12 @@ mod tests {
     #[test]
     fn reject_seam_depends_only_on_store_health() {
         let store = CapabilityStore {
-            health: LegacyStoreHealthSnapshot {
+            health: StoreHealthSnapshot {
                 writable: false,
-                last_error: Some(LegacyStoreHealthError::new(
+                last_error: Some(StoreHealthError::new(
                     rocketmq_store::store_error::StoreErrorKind::Storage,
                 )),
-                ..LegacyStoreHealthSnapshot::default()
+                ..StoreHealthSnapshot::default()
             },
             receipt: None,
         };
@@ -2345,7 +2340,7 @@ mod tests {
         for (kind, token) in cases {
             let snapshot = StoreHealthSnapshot {
                 writable: false,
-                last_error: Some(LegacyStoreHealthError::new(kind)),
+                last_error: Some(StoreHealthError::new(kind)),
                 ..StoreHealthSnapshot::default()
             };
 

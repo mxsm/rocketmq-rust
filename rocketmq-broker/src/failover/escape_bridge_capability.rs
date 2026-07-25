@@ -30,18 +30,18 @@ use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::base::query_message_result::QueryMessageResult;
 use rocketmq_store::base::select_result::SelectMappedBufferResult;
+use rocketmq_store::capability::store_append_receipt;
+use rocketmq_store::capability::MessageStoreHealthCapability;
+use rocketmq_store::capability::StoreAppendReceipt;
+use rocketmq_store::capability::StoreHealthSnapshot;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use rocketmq_store::filter::ArcMessageFilter;
 use rocketmq_store::ha::ha_connection_state_notification_request::HAConnectionStateNotificationRequest;
 use rocketmq_store::ha::ha_service::HAService;
 use rocketmq_store::message_store::OwnedMessageStore;
-use rocketmq_store::store_api_adapter::legacy_append_receipt;
-use rocketmq_store::store_api_adapter::LegacyAppendReceipt;
-use rocketmq_store::store_api_adapter::LegacyMessageStoreHealthAdapter;
-use rocketmq_store::store_api_adapter::LegacyStoreHealthSnapshot;
 use rocketmq_store::store_error::HAError;
 use rocketmq_store::store_error::HAResult;
-use rocketmq_store::store_error::StoreError as LegacyStoreError;
+use rocketmq_store::store_error::StoreError as BackendStoreError;
 use rocketmq_store_api::StoreError;
 use rocketmq_store_api::StoreErrorKind;
 use rocketmq_store_api::StoreHealth;
@@ -237,14 +237,14 @@ impl<MS: MessageStore> EscapeBridgeStoreCapability<MS> {
         Ok(operation(store.as_ref()))
     }
 
-    pub(crate) fn health_snapshot(&self) -> Result<LegacyStoreHealthSnapshot, MessageStoreUnavailable> {
-        self.with_store(|store| LegacyMessageStoreHealthAdapter::new(store).health_snapshot())
+    pub(crate) fn health_snapshot(&self) -> Result<StoreHealthSnapshot, MessageStoreUnavailable> {
+        self.with_store(|store| MessageStoreHealthCapability::new(store).health_snapshot())
     }
 
     pub(crate) async fn append_message(
         &self,
         message: MessageExtBrokerInner,
-    ) -> Result<LegacyAppendReceipt, StoreError> {
+    ) -> Result<StoreAppendReceipt, StoreError> {
         let append = self
             .shared_append()
             .map_err(|_| StoreError::new(StoreErrorKind::NotStarted, StoreOperation::Append))?;
@@ -252,14 +252,14 @@ impl<MS: MessageStore> EscapeBridgeStoreCapability<MS> {
             .put_message(message)
             .await
             .map_err(|_| StoreError::new(StoreErrorKind::NotStarted, StoreOperation::Append))?;
-        Ok(legacy_append_receipt(
+        Ok(store_append_receipt(
             outcome.result,
             outcome.appended_watermark,
             outcome.durable_watermark,
         ))
     }
 
-    pub(crate) async fn append_batch(&self, batch: MessageExtBatch) -> Result<LegacyAppendReceipt, StoreError> {
+    pub(crate) async fn append_batch(&self, batch: MessageExtBatch) -> Result<StoreAppendReceipt, StoreError> {
         let append = self
             .shared_append()
             .map_err(|_| StoreError::new(StoreErrorKind::NotStarted, StoreOperation::Append))?;
@@ -267,7 +267,7 @@ impl<MS: MessageStore> EscapeBridgeStoreCapability<MS> {
             .put_messages(batch)
             .await
             .map_err(|_| StoreError::new(StoreErrorKind::NotStarted, StoreOperation::Append))?;
-        Ok(legacy_append_receipt(
+        Ok(store_append_receipt(
             outcome.result,
             outcome.appended_watermark,
             outcome.durable_watermark,
@@ -412,8 +412,8 @@ impl<MS: MessageStore> EscapeBridgeStoreCapability<MS> {
         Ok(self.shared_append()?.put_message(message).await?.result)
     }
 
-    pub(crate) fn set_commitlog_read_mode(&self, read_ahead_mode: i32) -> Result<(), LegacyStoreError> {
-        let store = self.store().map_err(|_| LegacyStoreError::NotStarted)?;
+    pub(crate) fn set_commitlog_read_mode(&self, read_ahead_mode: i32) -> Result<(), BackendStoreError> {
+        let store = self.store().map_err(|_| BackendStoreError::NotStarted)?;
         store.set_commitlog_read_mode(read_ahead_mode)
     }
 

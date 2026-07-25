@@ -17,28 +17,34 @@ use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::base::message_status_enum::AppendMessageStatus;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
+use rocketmq_store::capability::get_status_to_api;
+use rocketmq_store::capability::put_status_to_append_status;
+use rocketmq_store::capability::store_append_receipt;
+use rocketmq_store::capability::store_error_kind_to_api;
+use rocketmq_store::capability::MessageReadRequest;
+use rocketmq_store::capability::MessageReadResult;
+use rocketmq_store::capability::MessageStoreHealthCapability;
+use rocketmq_store::capability::MessageStoreReadCapability;
+use rocketmq_store::capability::StoreHealthError;
+use rocketmq_store::capability::StoreHealthSnapshot;
 use rocketmq_store::message_store::OwnedMessageStore;
-use rocketmq_store::store_api_adapter::legacy_append_receipt;
-use rocketmq_store::store_api_adapter::legacy_error_kind_to_api;
-use rocketmq_store::store_api_adapter::legacy_get_status_to_api;
-use rocketmq_store::store_api_adapter::legacy_put_status_to_append_status;
-use rocketmq_store::store_api_adapter::LegacyAppendReceipt;
-use rocketmq_store::store_api_adapter::LegacyMessageStoreAdapter;
-use rocketmq_store::store_api_adapter::LegacyMessageStoreReadAdapter;
-use rocketmq_store::store_api_adapter::LegacyReadRequest;
-use rocketmq_store::store_api_adapter::LegacyReadResult;
-use rocketmq_store::store_api_adapter::LegacyStoreHealthError;
-use rocketmq_store::store_api_adapter::LegacyStoreHealthSnapshot;
 use rocketmq_store::store_error::StoreErrorKind;
 use rocketmq_store_api::AppendReceiptError;
 use rocketmq_store_api::AppendStatus;
 use rocketmq_store_api::Durability;
 use rocketmq_store_api::GetStatus;
-use rocketmq_store_api::MessageAppender;
 use rocketmq_store_api::MessageReader;
 use rocketmq_store_api::StoreError;
 use rocketmq_store_api::StoreErrorKind as ApiStoreErrorKind;
 use rocketmq_store_api::StoreHealth;
+use rocketmq_store_api::StoreLifecycle;
+use rocketmq_store_local::config::backend::LocalBackendConfig;
+use rocketmq_store_local::config::backend::LocalCleanupConfig;
+use rocketmq_store_local::config::backend::LocalQueryConfig;
+use rocketmq_store_local::config::backend::LocalRecoveryConfig;
+use rocketmq_store_local::config::backend::LocalReputConfig;
+use rocketmq_store_local::message_store::lifecycle::LocalStoreState;
+use rocketmq_store_local::message_store::LocalStoreComposition;
 
 fn append_result() -> AppendMessageResult {
     AppendMessageResult {
@@ -55,10 +61,10 @@ fn append_result() -> AppendMessageResult {
 }
 
 #[test]
-fn legacy_receipt_preserves_result_and_separate_watermarks() {
-    let legacy = PutMessageResult::new_append_result(PutMessageStatus::FlushDiskTimeout, Some(append_result()));
+fn store_receipt_preserves_result_and_separate_watermarks() {
+    let backend = PutMessageResult::new_append_result(PutMessageStatus::FlushDiskTimeout, Some(append_result()));
 
-    let receipt = legacy_append_receipt(legacy, 80, 48);
+    let receipt = store_append_receipt(backend, 80, 48);
 
     assert_eq!(
         PutMessageStatus::FlushDiskTimeout,
@@ -80,10 +86,10 @@ fn legacy_receipt_preserves_result_and_separate_watermarks() {
 }
 
 #[test]
-fn legacy_receipt_reports_invalid_projection_without_panicking() {
+fn store_receipt_reports_invalid_projection_without_panicking() {
     let mut empty = append_result();
     empty.wrote_bytes = 0;
-    let receipt = legacy_append_receipt(
+    let receipt = store_append_receipt(
         PutMessageResult::new_append_result(PutMessageStatus::PutOk, Some(empty)),
         80,
         48,
@@ -91,7 +97,7 @@ fn legacy_receipt_reports_invalid_projection_without_panicking() {
     assert_eq!(Some(&AppendReceiptError::EmptyRange), receipt.canonical().err());
     assert_eq!(PutMessageStatus::PutOk, receipt.result().put_message_status());
 
-    let remote = legacy_append_receipt(PutMessageResult::new(PutMessageStatus::PutOk, None, true), 80, 48);
+    let remote = store_append_receipt(PutMessageResult::new(PutMessageStatus::PutOk, None, true), 80, 48);
     assert_eq!(
         Some(&AppendReceiptError::AcceptedStatusWithoutRange),
         remote.canonical().err()
@@ -111,10 +117,10 @@ fn rejected_outer_status_ignores_inner_append_shape_for_canonical_projection() {
         for wrote_bytes in [20, 0] {
             let mut diagnostics = append_result();
             diagnostics.wrote_bytes = wrote_bytes;
-            let receipt = legacy_append_receipt(PutMessageResult::new_append_result(status, Some(diagnostics)), 80, 48);
+            let receipt = store_append_receipt(PutMessageResult::new_append_result(status, Some(diagnostics)), 80, 48);
 
             let canonical = receipt.canonical().expect("rejected status projects without a range");
-            assert_eq!(legacy_put_status_to_append_status(status), canonical.status());
+            assert_eq!(put_status_to_append_status(status), canonical.status());
             assert_eq!(None, canonical.appended_range());
             assert!(!canonical.is_accepted());
             assert_eq!(
@@ -122,7 +128,7 @@ fn rejected_outer_status_ignores_inner_append_shape_for_canonical_projection() {
                 receipt
                     .result()
                     .append_message_result()
-                    .expect("legacy diagnostics remain available")
+                    .expect("backend diagnostics remain available")
                     .wrote_bytes
             );
         }
@@ -130,7 +136,7 @@ fn rejected_outer_status_ignores_inner_append_shape_for_canonical_projection() {
 }
 
 #[test]
-fn every_legacy_append_status_maps_exhaustively_without_collapsing() {
+fn every_backend_append_status_maps_exhaustively_without_collapsing() {
     let cases = [
         (PutMessageStatus::PutOk, AppendStatus::PutOk),
         (PutMessageStatus::FlushDiskTimeout, AppendStatus::FlushDiskTimeout),
@@ -171,13 +177,13 @@ fn every_legacy_append_status_maps_exhaustively_without_collapsing() {
         (PutMessageStatus::WheelTimerNotEnable, AppendStatus::ScheduleDisabled),
     ];
 
-    for (legacy, expected) in cases {
-        assert_eq!(expected, legacy_put_status_to_append_status(legacy));
+    for (backend, expected) in cases {
+        assert_eq!(expected, put_status_to_append_status(backend));
     }
 }
 
 #[test]
-fn every_legacy_error_kind_maps_to_a_neutral_kind_exhaustively() {
+fn every_backend_error_kind_maps_to_a_neutral_kind_exhaustively() {
     let cases = [
         (StoreErrorKind::MappedFile, ApiStoreErrorKind::Storage),
         (StoreErrorKind::RocksDb, ApiStoreErrorKind::Storage),
@@ -193,13 +199,13 @@ fn every_legacy_error_kind_maps_to_a_neutral_kind_exhaustively() {
         (StoreErrorKind::MappedFileNotFound, ApiStoreErrorKind::NotFound),
     ];
 
-    for (legacy, expected) in cases {
-        assert_eq!(expected, legacy_error_kind_to_api(legacy));
+    for (backend, expected) in cases {
+        assert_eq!(expected, store_error_kind_to_api(backend));
     }
 }
 
 #[test]
-fn every_legacy_get_status_maps_exhaustively() {
+fn every_backend_get_status_maps_exhaustively() {
     use rocketmq_store::base::message_status_enum::GetMessageStatus;
 
     let cases = [
@@ -215,13 +221,13 @@ fn every_legacy_get_status_maps_exhaustively() {
         (GetMessageStatus::OffsetReset, GetStatus::OffsetReset),
     ];
 
-    for (legacy, expected) in cases {
-        assert_eq!(expected, legacy_get_status_to_api(legacy));
+    for (backend, expected) in cases {
+        assert_eq!(expected, get_status_to_api(backend));
     }
 }
 
 #[test]
-fn every_legacy_health_error_preserves_its_exact_compatibility_token() {
+fn every_backend_health_error_preserves_its_exact_token() {
     let cases = [
         (StoreErrorKind::MappedFile, "mapped_file"),
         (StoreErrorKind::RocksDb, "rocksdb"),
@@ -238,21 +244,21 @@ fn every_legacy_health_error_preserves_its_exact_compatibility_token() {
     ];
 
     for (kind, expected) in cases {
-        assert_eq!(expected, LegacyStoreHealthError::new(kind).compatibility_token());
+        assert_eq!(expected, StoreHealthError::new(kind).backend_token());
     }
 }
 
 #[test]
-fn legacy_health_exposes_a_backend_neutral_canonical_projection() {
-    let legacy = LegacyStoreHealthSnapshot {
+fn store_health_exposes_a_backend_neutral_canonical_projection() {
+    let snapshot = StoreHealthSnapshot {
         writable: false,
-        last_error: Some(LegacyStoreHealthError::new(StoreErrorKind::Ha)),
+        last_error: Some(StoreHealthError::new(StoreErrorKind::Ha)),
         appended_watermark: 80,
         durable_watermark: 48,
-        ..LegacyStoreHealthSnapshot::default()
+        ..StoreHealthSnapshot::default()
     };
 
-    let canonical = legacy.canonical();
+    let canonical = snapshot.canonical();
 
     assert!(!canonical.writable());
     assert_eq!(Some(ApiStoreErrorKind::Unavailable), canonical.last_error());
@@ -260,25 +266,79 @@ fn legacy_health_exposes_a_backend_neutral_canonical_projection() {
     assert_eq!(48, canonical.durable_watermark());
 }
 
-fn assert_adapter_contract<MS>()
+fn assert_capability_contract<MS>()
 where
     MS: MessageStore,
-    for<'a> LegacyMessageStoreAdapter<'a, MS>: MessageAppender<
-            rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner,
-            Receipt = LegacyAppendReceipt,
-            Error = StoreError,
-        > + MessageAppender<
-            rocketmq_model::common::message::message_batch::MessageExtBatch,
-            Receipt = LegacyAppendReceipt,
-            Error = StoreError,
-        > + StoreHealth<Snapshot = LegacyStoreHealthSnapshot>,
-    for<'a> LegacyMessageStoreReadAdapter<'a, MS>:
-        MessageReader<Request = LegacyReadRequest, Output = Option<LegacyReadResult>, Error = StoreError>,
+    for<'a> MessageStoreHealthCapability<'a, MS>: StoreHealth<Snapshot = StoreHealthSnapshot>,
+    for<'a> MessageStoreReadCapability<'a, MS>:
+        MessageReader<Request = MessageReadRequest, Output = Option<MessageReadResult>, Error = StoreError>,
 {
-    assert!(std::mem::size_of::<LegacyMessageStoreAdapter<'_, MS>>() > 0);
+    assert!(std::mem::size_of::<MessageStoreReadCapability<'_, MS>>() > 0);
 }
 
 #[test]
-fn legacy_adapter_compile_fixture_is_monomorphized() {
-    assert_adapter_contract::<OwnedMessageStore>();
+fn canonical_capability_compile_fixture_is_monomorphized() {
+    assert_capability_contract::<OwnedMessageStore>();
+}
+
+#[tokio::test]
+async fn local_backend_conforms_to_the_canonical_lifecycle() {
+    let root = tempfile::tempdir().expect("temporary local-store root");
+    let mut store = LocalStoreComposition::new(LocalBackendConfig {
+        store_path_root_dir: root.path().to_path_buf(),
+        commit_log_paths: vec![root.path().join("commitlog")],
+        store_io_hint_enabled: false,
+        recovery: LocalRecoveryConfig {
+            consume_queue_parallelism: 1,
+            background_index_rebuild_enabled: false,
+        },
+        query: LocalQueryConfig {
+            message_index_enabled: true,
+        },
+        reput: LocalReputConfig {
+            read_uncommitted: false,
+        },
+        cleanup: LocalCleanupConfig {
+            disk_warning_ratio: 0.9,
+            disk_clean_forcibly_ratio: 0.85,
+            disk_max_used_ratio: 0.75,
+            clean_file_forcibly_enabled: true,
+        },
+    });
+
+    assert_eq!(LocalStoreState::Created, store.lifecycle().state());
+    assert!(store.load().await.expect("local store load"));
+    assert_eq!(LocalStoreState::Initialized, store.lifecycle().state());
+    store.start().await.expect("local store start");
+    assert_eq!(LocalStoreState::Started, store.lifecycle().state());
+    store.shutdown().await.expect("local store shutdown");
+    assert_eq!(LocalStoreState::Shutdown, store.lifecycle().state());
+}
+
+#[cfg(feature = "rocksdb_store")]
+#[tokio::test]
+async fn rocksdb_backend_conforms_to_the_canonical_lifecycle() {
+    use rocketmq_runtime::RuntimeContext;
+    use rocketmq_store::base::store_enum::StoreType;
+    use rocketmq_store::config::message_store_config::MessageStoreConfig;
+    use rocketmq_store_rocksdb::message_store::RocksDbDerivedStore;
+    use rocketmq_store_rocksdb::message_store::RocksDbMessageStoreOptions;
+
+    let root = tempfile::tempdir().expect("temporary RocksDB-store root");
+    let mut config = MessageStoreConfig {
+        store_path_root_dir: root.path().to_string_lossy().into_owned().into(),
+        store_type: StoreType::RocksDB,
+        ..MessageStoreConfig::default()
+    };
+    config.use_separate_store_path_for_rocksdb_cq = true;
+
+    let runtime = RuntimeContext::from_current("rocksdb-capability-conformance");
+    let context = runtime.service_context("derived-store");
+    let mut store = RocksDbDerivedStore::open(&config, RocksDbMessageStoreOptions::default(), context)
+        .expect("open RocksDB derived store");
+
+    assert!(store.load().await.expect("RocksDB store load"));
+    store.start().await.expect("RocksDB store start");
+    store.start().await.expect("idempotent RocksDB store start");
+    store.shutdown().await.expect("RocksDB store shutdown");
 }

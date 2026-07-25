@@ -15,18 +15,18 @@
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
 use rocketmq_store::base::get_message_result::GetMessageResult;
-use rocketmq_store::store_api_adapter::get_result_from_legacy;
+use rocketmq_store::capability::get_result;
 use rocketmq_store_api::GetStatus;
 use rocketmq_store_api::ReadOutcome;
 use tracing::error;
 
-/// Decodes a legacy store result into the owned store-api read boundary.
+/// Decodes a backend store result into the owned store-api read boundary.
 ///
-/// The compatibility lease remains local to this adapter and is released after every selected
+/// The backend lease remains local to this capability and is released after every selected
 /// record has been decoded. Consumers only receive owned model messages and canonical store
 /// navigation metadata.
 pub(crate) fn decode_read_outcome(result: GetMessageResult, decompress_body: bool) -> Option<ReadOutcome<MessageExt>> {
-    let canonical = get_result_from_legacy(result);
+    let canonical = get_result(result);
     let Some(status) = canonical.status else {
         error!("store read result did not include a status");
         return None;
