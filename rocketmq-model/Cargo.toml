@@ -47,4 +47,4 @@ thiserror.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 zstd = "0.13"
-md-5 = "0.10"
+md-5 = "0.11"
