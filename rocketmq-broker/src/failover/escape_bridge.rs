@@ -37,12 +37,12 @@ use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::base::query_message_result::QueryMessageResult;
 use rocketmq_store::base::select_result::SelectMappedBufferResult;
+use rocketmq_store::capability::StoreAppendReceipt;
+use rocketmq_store::capability::StoreHealthSnapshot;
 use rocketmq_store::filter::ArcMessageFilter;
 use rocketmq_store::ha::ha_connection_state_notification_request::HAConnectionStateNotificationRequest;
 use rocketmq_store::message_store::OwnedMessageStore;
-use rocketmq_store::store_api_adapter::LegacyAppendReceipt;
-use rocketmq_store::store_api_adapter::LegacyStoreHealthSnapshot;
-use rocketmq_store::store_error::StoreError as LegacyStoreError;
+use rocketmq_store::store_error::StoreError as BackendStoreError;
 use rocketmq_store_api::StoreError;
 use tracing::error;
 use tracing::warn;
@@ -163,20 +163,18 @@ impl<MS: MessageStore> EscapeBridge<MS> {
         self.message_store.with_store(operation)
     }
 
-    pub(crate) fn send_message_store_health_snapshot(
-        &self,
-    ) -> Result<LegacyStoreHealthSnapshot, MessageStoreUnavailable> {
+    pub(crate) fn send_message_store_health_snapshot(&self) -> Result<StoreHealthSnapshot, MessageStoreUnavailable> {
         self.message_store.health_snapshot()
     }
 
     pub(crate) async fn send_append_message(
         &self,
         message: MessageExtBrokerInner,
-    ) -> Result<LegacyAppendReceipt, StoreError> {
+    ) -> Result<StoreAppendReceipt, StoreError> {
         self.message_store.append_message(message).await
     }
 
-    pub(crate) async fn send_append_batch(&self, batch: MessageExtBatch) -> Result<LegacyAppendReceipt, StoreError> {
+    pub(crate) async fn send_append_batch(&self, batch: MessageExtBatch) -> Result<StoreAppendReceipt, StoreError> {
         self.message_store.append_batch(batch).await
     }
 
@@ -240,7 +238,7 @@ impl<MS: MessageStore> EscapeBridge<MS> {
         self.message_store.put_message(message).await
     }
 
-    pub(crate) fn set_commitlog_read_mode(&self, read_ahead_mode: i32) -> Result<(), LegacyStoreError> {
+    pub(crate) fn set_commitlog_read_mode(&self, read_ahead_mode: i32) -> Result<(), BackendStoreError> {
         self.message_store.set_commitlog_read_mode(read_ahead_mode)
     }
 

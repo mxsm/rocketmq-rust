@@ -5013,6 +5013,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "trait-variant",
+ "trybuild",
  "uuid",
  "windows",
  "windows-sys 0.61.2",

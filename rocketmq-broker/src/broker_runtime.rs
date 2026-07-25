@@ -61,11 +61,11 @@ use rocketmq_runtime::TaskGroup;
 use rocketmq_store::base::commit_log_dispatcher::CommitLogDispatcher;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::base::message_store::MessageStoreShutdownReport;
+#[cfg(all(test, feature = "rocksdb_store"))]
 use rocketmq_store::base::store_enum::StoreType;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
-use rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore;
-#[cfg(feature = "rocksdb_store")]
-use rocketmq_store::message_store::rocksdb_message_store::RocksDBMessageStore;
+use rocketmq_store::factory::StoreFactory;
+use rocketmq_store::factory::StoreFactoryConfig;
 use rocketmq_store::message_store::OwnedMessageStore;
 use rocketmq_store::stats::broker_stats::BrokerStats;
 use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
@@ -2499,105 +2499,47 @@ impl BrokerRuntime {
         let broker_config = self.inner.broker_config_arc();
         let store_runtime_config = Arc::new(broker_config.store_runtime_config());
         let message_store_config = self.inner.message_store_config_arc();
-        if message_store_config.store_type == StoreType::LocalFile {
-            info!("Use local file as message store");
-            let Some(service_context) = self.inner.service_context.as_ref() else {
-                error!("LocalFile message store requires an injected broker service context");
-                return false;
-            };
-            let mut local_file_store = match LocalFileMessageStore::try_new(
-                Arc::clone(&message_store_config),
-                Arc::clone(&store_runtime_config),
-                self.inner.topic_config_manager().topic_config_table(),
-                self.inner.broker_stats_manager.clone(),
-                false,
-                service_context.child("broker.store.local-file"),
-            ) {
-                Ok(message_store) => message_store,
-                Err(error) => {
-                    error!("Initialize message store failed: {error}");
-                    return false;
-                }
-            };
-            if let Err(error) = local_file_store.wire_owned_root_dependencies() {
-                error!("Initialize LocalFile message store dependencies failed: {error}");
-                return false;
-            }
-            self.inner.timer_message_store = local_file_store.get_timer_message_store().cloned();
-            let message_store = Arc::new(BrokerMessageStore::local_file(local_file_store));
-            self.inner.broker_stats = Some(Arc::new(BrokerStats::from_manager(
-                self.inner.broker_stats_manager.clone(),
-            )));
-            let put_message_preflight = message_store.put_message_preflight();
-            self.inner.message_store = Some(message_store);
-            let page_cache_busy_timeout_millis = message_store_config.os_page_cache_busy_timeout_mills;
-            self.inner.broker_fast_failure.set_page_cache_busy_checker(move || {
-                put_message_preflight.is_os_page_cache_busy(page_cache_busy_timeout_millis)
-            });
-            if let Some(message_store) = self.inner.message_store_mut() {
-                match message_store.init().await {
-                    Ok(_) => {
-                        info!("Initialize message store success");
-                    }
-                    Err(e) => {
-                        warn!("Initialize message store failed, error: {:?}", e);
-                        flag = false;
-                    }
-                }
-            }
-        } else if message_store_config.store_type == StoreType::RocksDB {
-            #[cfg(feature = "rocksdb_store")]
-            {
-                info!("Use RocksDB as consume queue store with local file commit log");
-                let Some(service_context) = self.inner.service_context.as_ref() else {
-                    error!("RocksDB message store requires an injected broker service context");
-                    return false;
-                };
-                let rocksdb_message_store = match RocksDBMessageStore::try_new(
-                    Arc::clone(&message_store_config),
-                    Arc::clone(&store_runtime_config),
-                    self.inner.topic_config_manager().topic_config_table(),
-                    self.inner.broker_stats_manager.clone(),
-                    false,
-                    service_context.child("broker.store.rocksdb"),
-                ) {
-                    Ok(message_store) => message_store,
-                    Err(error) => {
-                        error!("Initialize RocksDB message store failed: {error}");
-                        return false;
-                    }
-                };
-                self.inner.timer_message_store = rocksdb_message_store.get_timer_message_store().cloned();
-                let message_store = Arc::new(BrokerMessageStore::rocksdb(rocksdb_message_store));
-                self.inner.broker_stats = Some(Arc::new(BrokerStats::from_manager(
-                    self.inner.broker_stats_manager.clone(),
-                )));
-                let put_message_preflight = message_store.put_message_preflight();
-                self.inner.message_store = Some(message_store);
-                let page_cache_busy_timeout_millis = message_store_config.os_page_cache_busy_timeout_mills;
-                self.inner.broker_fast_failure.set_page_cache_busy_checker(move || {
-                    put_message_preflight.is_os_page_cache_busy(page_cache_busy_timeout_millis)
-                });
-                if let Some(message_store) = self.inner.message_store_mut() {
-                    match message_store.init().await {
-                        Ok(_) => {
-                            info!("Initialize RocksDB message store success");
-                        }
-                        Err(e) => {
-                            warn!("Initialize RocksDB message store failed, error: {:?}", e);
-                            flag = false;
-                        }
-                    }
-                }
-            }
-            #[cfg(not(feature = "rocksdb_store"))]
-            {
-                warn!("RocksDB message store requested but rocketmq-broker was built without rocksdb_store feature");
-                return false;
-            }
-        } else {
-            warn!("Unknown store type");
+        let Some(service_context) = self.inner.service_context.as_ref() else {
+            error!("Message store requires an injected broker service context");
             return false;
+        };
+        let factory_config = StoreFactoryConfig::new(
+            Arc::clone(&message_store_config),
+            store_runtime_config,
+            self.inner.topic_config_manager().topic_config_table(),
+            self.inner.broker_stats_manager.clone(),
+            false,
+        );
+        let opened = match StoreFactory::open(factory_config, service_context.child("broker.store")) {
+            Ok(opened) => opened,
+            Err(error) => {
+                error!(backend = ?message_store_config.store_type, %error, "Initialize message store failed");
+                return false;
+            }
+        };
+        info!(backend = ?opened.backend(), "Use configured message store");
+        let (message_store, timer_message_store) = opened.into_parts();
+        self.inner.timer_message_store = timer_message_store;
+        let message_store = Arc::new(message_store);
+        self.inner.broker_stats = Some(Arc::new(BrokerStats::from_manager(
+            self.inner.broker_stats_manager.clone(),
+        )));
+        let put_message_preflight = message_store.put_message_preflight();
+        self.inner.message_store = Some(message_store);
+        let page_cache_busy_timeout_millis = message_store_config.os_page_cache_busy_timeout_mills;
+        self.inner.broker_fast_failure.set_page_cache_busy_checker(move || {
+            put_message_preflight.is_os_page_cache_busy(page_cache_busy_timeout_millis)
+        });
+        if let Some(message_store) = self.inner.message_store_mut() {
+            match message_store.init().await {
+                Ok(_) => {
+                    info!("Initialize message store success");
+                }
+                Err(e) => {
+                    warn!("Initialize message store failed, error: {:?}", e);
+                    flag = false;
+                }
+            }
         }
         let consumer_offset_manager = self.inner.consumer_offset_manager_handle();
         if let Some(slave_synchronize) = self.inner.slave_synchronize() {
@@ -7910,6 +7852,7 @@ accounts:
         let message_store_config = Arc::new(MessageStoreConfig {
             store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
             store_type: StoreType::RocksDB,
+            ha_listen_port: 0,
             ..MessageStoreConfig::default()
         });
         let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
@@ -7956,6 +7899,19 @@ accounts:
             .result()
             .is_ok());
         runtime.reput_message_store_once_for_test().await;
+        wait_until(
+            Duration::from_secs(5),
+            || {
+                runtime
+                    .inner
+                    .message_store()
+                    .expect("message store should be initialized")
+                    .get_max_offset_in_queue(&topic, 0)
+                    == 2
+            },
+            "RocksDB ConsumeQueue to publish both dispatched units",
+        )
+        .await;
         assert_eq!(
             runtime
                 .inner

@@ -48,6 +48,7 @@ use crate::processor::pop_message_processor::PopMessageProcessor;
 use crate::processor::pull_message_processor::PullMessageProcessor;
 use crate::processor::query_assignment_processor::QueryAssignmentProcessor;
 use crate::processor::query_message_processor::QueryMessageProcessor;
+use crate::processor::query_message_processor::QueryMessageStoreCapability;
 use crate::processor::recall_message_processor::RecallMessageProcessor;
 use crate::processor::reply_message_processor::ReplyMessageProcessor;
 use crate::processor::send_message_processor::SendMessageProcessor;
@@ -89,7 +90,7 @@ pub enum BrokerProcessorType<MS: MessageStore, TS> {
     PollingInfo(Arc<PollingInfoProcessor>),
     Reply(Arc<ReplyMessageProcessor<MS, TS>>),
     Recall(Arc<RecallMessageProcessor<MS>>),
-    QueryMessage(Arc<QueryMessageProcessor<MS>>),
+    QueryMessage(Arc<QueryMessageProcessor<QueryMessageStoreCapability<MS>>>),
     ClientManage(Arc<ClientManageProcessor<MS>>),
     ConsumerManage(Arc<ConsumerManageProcessor<MS>>),
     QueryAssignment(Arc<QueryAssignmentProcessor>),

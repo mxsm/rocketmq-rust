@@ -35,10 +35,10 @@ use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_context::Topi
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
 use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::base::message_store::MessageStore;
+use rocketmq_store::capability::StoreAppendReceipt;
+use rocketmq_store::capability::StoreHealthSnapshot;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
-use rocketmq_store::store_api_adapter::LegacyAppendReceipt;
-use rocketmq_store::store_api_adapter::LegacyStoreHealthSnapshot;
 use rocketmq_store_api::MessageAppender;
 use rocketmq_store_api::StoreError;
 use rocketmq_store_api::StoreErrorKind;
@@ -255,7 +255,7 @@ impl<MS: MessageStore> SendMessageStoreCapability<MS> {
         self.provider.upgrade().ok_or(MessageStoreUnavailable)
     }
 
-    pub(crate) fn health_snapshot(&self) -> Result<LegacyStoreHealthSnapshot, MessageStoreUnavailable> {
+    pub(crate) fn health_snapshot(&self) -> Result<StoreHealthSnapshot, MessageStoreUnavailable> {
         self.provider()?.send_message_store_health_snapshot()
     }
 
@@ -284,7 +284,7 @@ fn append_store_unavailable() -> StoreError {
 }
 
 impl<MS: MessageStore> MessageAppender<MessageExtBrokerInner> for SendMessageStoreCapability<MS> {
-    type Receipt = LegacyAppendReceipt;
+    type Receipt = StoreAppendReceipt;
     type Error = StoreError;
 
     async fn append_message(&mut self, message: MessageExtBrokerInner) -> Result<Self::Receipt, Self::Error> {
@@ -296,7 +296,7 @@ impl<MS: MessageStore> MessageAppender<MessageExtBrokerInner> for SendMessageSto
 }
 
 impl<MS: MessageStore> MessageAppender<MessageExtBatch> for SendMessageStoreCapability<MS> {
-    type Receipt = LegacyAppendReceipt;
+    type Receipt = StoreAppendReceipt;
     type Error = StoreError;
 
     async fn append_message(&mut self, message: MessageExtBatch) -> Result<Self::Receipt, Self::Error> {

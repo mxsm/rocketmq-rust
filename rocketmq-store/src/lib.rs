@@ -27,8 +27,10 @@
 #![allow(unused_variables)]
 
 pub mod base;
+pub mod capability;
 pub mod config;
 pub mod consume_queue;
+pub mod factory;
 pub mod filter;
 pub mod ha;
 pub mod hook;
@@ -46,7 +48,6 @@ pub mod rocksdb;
 pub(crate) mod runtime;
 pub mod stats;
 pub mod store;
-pub mod store_api_adapter;
 pub mod store_error;
 pub mod store_path_config_helper;
 #[cfg(feature = "tieredstore")]

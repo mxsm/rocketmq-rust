@@ -20,6 +20,7 @@ use std::time::UNIX_EPOCH;
 use rocketmq_error::RocketMQError;
 use rocketmq_store_api::GetStatus;
 use rocketmq_store_api::StoreError as ApiStoreError;
+use rocketmq_store_api::StoreLifecycle;
 use rocketmq_store_local::commit_log::read::LocalWalPort;
 use thiserror::Error;
 use tracing::warn;
@@ -421,6 +422,25 @@ impl RocksDbDerivedStore {
             .message_rocksdb_storage
             .get_last_offset_py(RocksDbColumnFamily::Default.name())?;
         Ok((offsets, last_timestamp, last_offset))
+    }
+}
+
+impl StoreLifecycle for RocksDbDerivedStore {
+    type Error = RocksDbMessageStoreError;
+
+    async fn load(&mut self) -> Result<bool, Self::Error> {
+        Ok(true)
+    }
+
+    async fn start(&mut self) -> Result<(), Self::Error> {
+        self.start_maintenance();
+        Ok(())
+    }
+
+    async fn shutdown(&mut self) -> Result<(), Self::Error> {
+        self.shutdown_maintenance().await?;
+        self.close();
+        Ok(())
     }
 }
 
