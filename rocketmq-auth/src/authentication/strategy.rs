@@ -24,33 +24,28 @@ pub mod stateful_authentication_strategy;
 pub mod stateless_authentication_strategy;
 
 use rocketmq_error::AuthError;
-use rocketmq_error::RocketMQError;
 
 use crate::authentication::context::default_authentication_context::DefaultAuthenticationContext;
 use crate::authentication::provider::AuthenticationProvider;
-use crate::runtime_bridge::block_on_sync_bridge;
-
 // Re-export the main trait and implementations for convenience
 pub use abstract_authentication_strategy::AbstractAuthenticationStrategy;
 pub use abstract_authentication_strategy::AuthenticationStrategyFactory;
 pub use abstract_authentication_strategy::BaseAuthenticationStrategy;
 pub use allow_all::AllowAllAuthenticationStrategy;
+pub use authentication_strategy::AuthenticationFuture;
 pub use authentication_strategy::AuthenticationStrategy;
 pub use stateful_authentication_strategy::StatefulAuthenticationStrategy;
 pub use stateless_authentication_strategy::StatelessAuthenticationStrategy;
 
-pub(super) fn block_on_authentication_provider<P>(
+pub(super) async fn authenticate_with_provider<P>(
     provider: &P,
     context: &DefaultAuthenticationContext,
 ) -> Result<(), AuthError>
 where
     P: AuthenticationProvider<Context = DefaultAuthenticationContext> + Send + Sync + 'static,
 {
-    let auth_result = block_on_sync_bridge(
-        || provider.authenticate(context),
-        |error| RocketMQError::authentication_failed(format!("failed to create authentication runtime: {error}")),
-        || RocketMQError::authentication_failed("authentication provider thread panicked"),
-    );
-
-    auth_result.map_err(|error| AuthError::AuthenticationFailed(error.to_string()))
+    provider
+        .authenticate(context)
+        .await
+        .map_err(|error| AuthError::AuthenticationFailed(error.to_string()))
 }

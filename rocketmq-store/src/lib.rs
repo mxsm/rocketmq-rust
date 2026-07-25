@@ -83,6 +83,7 @@ pub mod bench_support {
     use futures_util::future::join_all;
     use rocketmq_model::common::config::TopicConfig;
     use rocketmq_runtime::BlockingExecutorSnapshot;
+    use rocketmq_runtime::ChildServiceContext;
     use rocketmq_runtime::ShutdownReport;
     use serde::Serialize;
     use tokio::io::AsyncWrite;
@@ -106,6 +107,8 @@ pub mod bench_support {
     use crate::rocksdb::config::RocksDbConfig;
     #[cfg(feature = "rocksdb_store")]
     use crate::rocksdb::maintenance::RocksDbMaintenanceService;
+    #[cfg(feature = "rocksdb_store")]
+    use crate::rocksdb::runtime::RocksDbRuntimeScope;
     #[cfg(feature = "rocksdb_store")]
     use crate::rocksdb::store::RocksDbStore;
     use crate::timer::timer_message_store::TimerMessageStore;
@@ -923,23 +926,32 @@ pub mod bench_support {
         pub healthy: bool,
     }
 
-    pub async fn run_store_blocking_io_probe(task_count: usize, work_duration: Duration) -> StoreBlockingIoProbe {
+    pub async fn run_store_blocking_io_probe(
+        service_context: ChildServiceContext,
+        task_count: usize,
+        work_duration: Duration,
+    ) -> StoreBlockingIoProbe {
+        let runtime_scope = crate::runtime::StoreRuntimeScope::new(service_context);
         let active = Arc::new(AtomicUsize::new(0));
         let max_active = Arc::new(AtomicUsize::new(0));
         let started_at = Instant::now();
         let runs = (0..task_count)
             .map(|_| {
+                let runtime_scope = runtime_scope.clone();
                 let active = Arc::clone(&active);
                 let max_active = Arc::clone(&max_active);
                 let submitted_at = Instant::now();
-                crate::runtime::spawn_io("store blocking benchmark", move || {
-                    let queue_wait_us = submitted_at.elapsed().as_micros();
-                    let current = active.fetch_add(1, Ordering::SeqCst) + 1;
-                    max_active.fetch_max(current, Ordering::SeqCst);
-                    std::thread::sleep(work_duration);
-                    active.fetch_sub(1, Ordering::SeqCst);
-                    queue_wait_us
-                })
+                async move {
+                    crate::runtime::spawn_io(&runtime_scope, "store blocking benchmark", move || {
+                        let queue_wait_us = submitted_at.elapsed().as_micros();
+                        let current = active.fetch_add(1, Ordering::SeqCst) + 1;
+                        max_active.fetch_max(current, Ordering::SeqCst);
+                        std::thread::sleep(work_duration);
+                        active.fetch_sub(1, Ordering::SeqCst);
+                        queue_wait_us
+                    })
+                    .await
+                }
             })
             .collect::<Vec<_>>();
 
@@ -948,7 +960,7 @@ pub mod bench_support {
             queue_waits.push(result.expect("store blocking benchmark task should complete"));
         }
         let elapsed_us = started_at.elapsed().as_micros();
-        let snapshot = wait_for_store_blocking_idle().await;
+        let snapshot = wait_for_store_blocking_idle(&runtime_scope).await;
         assert_eq!(snapshot.blocking_still_running, 0, "{snapshot:?}");
         assert!(snapshot.tasks.is_empty(), "{snapshot:?}");
 
@@ -971,9 +983,11 @@ pub mod bench_support {
         }
     }
 
-    async fn wait_for_store_blocking_idle() -> BlockingExecutorSnapshot {
+    async fn wait_for_store_blocking_idle(
+        runtime_scope: &crate::runtime::StoreRuntimeScope,
+    ) -> BlockingExecutorSnapshot {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
-        let mut snapshot = crate::runtime::blocking_snapshot().expect("store blocking snapshot should be available");
+        let mut snapshot = crate::runtime::blocking_snapshot(runtime_scope);
 
         while snapshot.blocking_still_running != 0 || !snapshot.tasks.is_empty() {
             if tokio::time::Instant::now() >= deadline {
@@ -981,20 +995,23 @@ pub mod bench_support {
             }
 
             tokio::time::sleep(Duration::from_millis(1)).await;
-            snapshot = crate::runtime::blocking_snapshot().expect("store blocking snapshot should be available");
+            snapshot = crate::runtime::blocking_snapshot(runtime_scope);
         }
 
         snapshot
     }
 
-    pub async fn run_store_kv_compaction_lifecycle_probe() -> StoreKvCompactionLifecycleProbe {
+    pub async fn run_store_kv_compaction_lifecycle_probe(
+        service_context: ChildServiceContext,
+    ) -> StoreKvCompactionLifecycleProbe {
+        let runtime_scope = crate::runtime::StoreRuntimeScope::new(service_context);
         let compaction_store = Arc::new(CompactionStore::new());
         let topic = CheetahString::from_static_str("kv-compaction-lifecycle-topic");
         let key = CheetahString::from_static_str("same-key");
         compaction_store.put_message_with_key(&topic, 0, 0, 1, Some(key.clone()), Bytes::from_static(b"old-message"));
         compaction_store.put_message_with_key(&topic, 0, 1, 1, Some(key), Bytes::from_static(b"latest-message"));
 
-        let mut service = CompactionService::new(compaction_store.clone(), 1);
+        let mut service = CompactionService::new(runtime_scope, compaction_store.clone(), 1);
         let _ = service.load(true, 0).await;
         compaction_store.finish_recovery(0);
         service.start();
@@ -1056,8 +1073,10 @@ pub mod bench_support {
         }
     }
 
-    pub async fn run_store_stats_service_lifecycle_probe() -> StoreStatsServiceLifecycleProbe {
-        let service = Arc::new(StoreStatsService::new(None));
+    pub async fn run_store_stats_service_lifecycle_probe(
+        service_context: ChildServiceContext,
+    ) -> StoreStatsServiceLifecycleProbe {
+        let service = Arc::new(StoreStatsService::new(None, service_context));
         service.start();
 
         let mut snapshots = service.schedule_snapshot();
@@ -1107,7 +1126,9 @@ pub mod bench_support {
         }
     }
 
-    pub async fn run_store_timer_scheduler_lifecycle_probe() -> StoreTimerSchedulerLifecycleProbe {
+    pub async fn run_store_timer_scheduler_lifecycle_probe(
+        service_context: ChildServiceContext,
+    ) -> StoreTimerSchedulerLifecycleProbe {
         let root = tempfile::tempdir().expect("timer scheduler benchmark root should be created");
         let config = Arc::new(MessageStoreConfig {
             store_path_root_dir: CheetahString::from_string(root.path().to_string_lossy().into_owned()),
@@ -1115,7 +1136,10 @@ pub mod bench_support {
             timer_precision_ms: 100,
             ..MessageStoreConfig::default()
         });
-        let timer_store = Arc::new(TimerMessageStore::new_with_message_store_config(config));
+        let timer_store = Arc::new(TimerMessageStore::new_with_message_store_config(
+            config,
+            service_context,
+        ));
 
         assert!(timer_store.load(), "timer store should load for lifecycle probe");
         timer_store.start();
@@ -1164,7 +1188,9 @@ pub mod bench_support {
         }
     }
 
-    pub async fn run_store_local_file_scheduled_lifecycle_probe() -> StoreLocalFileScheduledLifecycleProbe {
+    pub async fn run_store_local_file_scheduled_lifecycle_probe(
+        service_context: ChildServiceContext,
+    ) -> StoreLocalFileScheduledLifecycleProbe {
         let root = tempfile::tempdir().expect("local file store scheduled benchmark root should be created");
         let config = MessageStoreConfig {
             store_path_root_dir: CheetahString::from_string(root.path().to_string_lossy().into_owned()),
@@ -1182,6 +1208,7 @@ pub mod bench_support {
             Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
             None,
             false,
+            service_context,
         );
         store
             .wire_owned_root_dependencies()
@@ -1230,7 +1257,9 @@ pub mod bench_support {
     }
 
     #[cfg(feature = "rocksdb_store")]
-    pub async fn run_store_rocksdb_maintenance_lifecycle_probe() -> StoreRocksDbMaintenanceLifecycleProbe {
+    pub async fn run_store_rocksdb_maintenance_lifecycle_probe(
+        service_context: ChildServiceContext,
+    ) -> StoreRocksDbMaintenanceLifecycleProbe {
         let root = tempfile::tempdir().expect("rocksdb maintenance benchmark root should be created");
         let config = RocksDbConfig {
             enabled: true,
@@ -1240,7 +1269,8 @@ pub mod bench_support {
         };
         let store =
             Arc::new(RocksDbStore::open(config.clone()).expect("rocksdb maintenance benchmark store should open"));
-        let mut service = RocksDbMaintenanceService::new(Arc::clone(&store), config);
+        let runtime_scope = RocksDbRuntimeScope::new(service_context);
+        let mut service = RocksDbMaintenanceService::new(Arc::clone(&store), config, runtime_scope);
         service.start();
 
         let mut snapshots = service.schedule_snapshot();
@@ -1308,98 +1338,139 @@ pub mod bench_support {
 mod bench_support_tests {
     use std::time::Duration;
 
-    use rocketmq_runtime::RuntimeContext;
+    #[test]
+    fn store_runtime_scope_parents_blocking_executor() {
+        let owner = rocketmq_runtime::RuntimeOwner::new(rocketmq_runtime::RuntimeConfig::server_default(
+            "store-runtime-scope-test",
+        ))
+        .expect("store runtime scope test owner should start");
+        let service = owner.root_context().child("store-service");
+        let scope = super::runtime::StoreRuntimeScope::new(service.clone());
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn store_runtime_scope_parents_blocking_executor() {
-        let context = RuntimeContext::from_current("store-runtime-scope-context-test");
-        let service = context.service_context("store-service");
-        let scope = super::runtime::StoreRuntimeScope::new(service.task_group().clone())
-            .expect("store runtime scope should be created from parent task group");
+        owner.block_on(async {
+            let value = scope
+                .spawn_io("store.parented.blocking", || 7usize)
+                .await
+                .expect("parented store blocking task should complete");
+            assert_eq!(value, 7);
+            assert_eq!(scope.blocking_snapshot().blocking_still_running, 0);
+            let child_group = scope.task_group("rocketmq-store.parented.child");
+            assert_eq!(child_group.parent_id(), Some(service.task_group().id()));
 
-        let value = scope
-            .spawn_io("store.parented.blocking", || 7usize)
-            .await
-            .expect("parented store blocking task should complete");
-        assert_eq!(value, 7);
-        assert_eq!(scope.blocking_snapshot().blocking_still_running, 0);
-        let child_group = scope.task_group("rocketmq-store.parented.child");
-        assert_eq!(child_group.parent_id(), Some(service.task_group().id()));
+            let report = service.task_group().shutdown(Duration::from_secs(1)).await;
+            assert!(report.is_healthy(), "{}", report.to_json());
+        });
 
-        let report = service.task_group().shutdown(Duration::from_secs(1)).await;
-        assert!(
-            report
-                .children
-                .iter()
-                .any(|child| child.name == "rocketmq-store.blocking"),
-            "{}",
-            report.to_json()
-        );
+        let report = owner
+            .shutdown_runtime_blocking()
+            .expect("store runtime scope test owner should stop");
         assert!(report.is_healthy(), "{}", report.to_json());
     }
 
     #[cfg(feature = "rocksdb_store")]
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn rocksdb_runtime_scope_parents_blocking_executor() {
-        let context = RuntimeContext::from_current("rocksdb-runtime-scope-context-test");
-        let service = context.service_context("rocksdb-service");
-        let scope = super::rocksdb::runtime::RocksDbRuntimeScope::new(service.task_group().clone())
-            .expect("rocksdb runtime scope should be created from parent task group");
+    #[test]
+    fn rocksdb_runtime_scope_parents_blocking_executor() {
+        let owner = rocketmq_runtime::RuntimeOwner::new(rocketmq_runtime::RuntimeConfig::server_default(
+            "rocksdb-runtime-scope-test",
+        ))
+        .expect("RocksDB runtime scope test owner should start");
+        let service = owner.root_context().child("rocksdb-service");
+        let scope = super::rocksdb::runtime::RocksDbRuntimeScope::new(service.clone());
 
-        let value = scope
-            .spawn_io("rocksdb.parented.blocking", || 11usize)
-            .await
-            .expect("parented rocksdb blocking task should complete");
-        assert_eq!(value, 11);
-        assert_eq!(scope.blocking_snapshot().blocking_still_running, 0);
+        owner.block_on(async {
+            let value = scope
+                .spawn_io("rocksdb.parented.blocking", || 11usize)
+                .await
+                .expect("parented rocksdb blocking task should complete");
+            assert_eq!(value, 11);
+            assert_eq!(scope.blocking_snapshot().blocking_still_running, 0);
 
-        let child_group = scope.task_group("rocksdb.parented.child");
-        assert_eq!(child_group.parent_id(), Some(service.task_group().id()));
+            let child_group = scope.task_group("rocksdb.parented.child");
+            assert_eq!(child_group.parent_id(), Some(service.task_group().id()));
 
-        let report = service.task_group().shutdown(Duration::from_secs(1)).await;
-        assert!(
-            report
-                .children
-                .iter()
-                .any(|child| child.name == "rocketmq-store.rocksdb.blocking"),
-            "{}",
-            report.to_json()
-        );
+            let report = service.task_group().shutdown(Duration::from_secs(1)).await;
+            assert!(report.is_healthy(), "{}", report.to_json());
+        });
+
+        let report = owner
+            .shutdown_runtime_blocking()
+            .expect("RocksDB runtime scope test owner should stop");
+        assert!(report.is_healthy(), "{}", report.to_json());
+    }
+
+    #[test]
+    fn store_blocking_io_probe_reports_no_running_tasks() {
+        let owner = rocketmq_runtime::RuntimeOwner::new(rocketmq_runtime::RuntimeConfig::server_default(
+            "store-blocking-probe",
+        ))
+        .expect("store blocking probe owner should start");
+        let probe = owner.block_on(super::bench_support::run_store_blocking_io_probe(
+            owner.root_context().child("store-service"),
+            4,
+            Duration::from_millis(1),
+        ));
+
+        assert!(probe.healthy, "{probe:?}");
+        assert_eq!(probe.snapshot.blocking_still_running, 0, "{probe:?}");
+        assert!(probe.snapshot.tasks.is_empty(), "{probe:?}");
+
+        let report = owner
+            .shutdown_runtime_blocking()
+            .expect("store blocking probe owner should stop");
+        assert!(report.is_healthy(), "{}", report.to_json());
+    }
+
+    #[test]
+    fn store_blocking_io_probe_waits_for_concurrent_store_tasks() {
+        let owner = rocketmq_runtime::RuntimeOwner::new(rocketmq_runtime::RuntimeConfig::server_default(
+            "store-blocking-concurrency-probe",
+        ))
+        .expect("store blocking concurrency probe owner should start");
+        let service_context = owner.root_context().child("store-service");
+        let probe = owner.block_on(async {
+            let runtime_scope = super::runtime::StoreRuntimeScope::new(service_context.clone());
+            let (running_tx, running_rx) = tokio::sync::oneshot::channel();
+            let in_flight_scope = runtime_scope.clone();
+            let (_, in_flight) = service_context
+                .task_group()
+                .spawn_with_handle(
+                    "flush-consume-queue-test",
+                    rocketmq_runtime::TaskKind::Worker,
+                    async move {
+                        super::runtime::spawn_io(&in_flight_scope, "flush-consume-queue", move || {
+                            let _ = running_tx.send(());
+                            std::thread::sleep(Duration::from_millis(100));
+                        })
+                        .await
+                        .expect("background store blocking task should complete");
+                    },
+                )
+                .expect("background store blocking task should start");
+            running_rx.await.expect("background store blocking task should start");
+
+            let probe =
+                super::bench_support::run_store_blocking_io_probe(service_context.clone(), 1, Duration::from_millis(1))
+                    .await;
+            in_flight.await.expect("background store blocking task should join");
+            probe
+        });
+
+        assert!(probe.healthy, "{probe:?}");
+        assert_eq!(probe.snapshot.blocking_still_running, 0, "{probe:?}");
+        assert!(probe.snapshot.tasks.is_empty(), "{probe:?}");
+
+        let report = owner
+            .shutdown_runtime_blocking()
+            .expect("store blocking concurrency probe owner should stop");
         assert!(report.is_healthy(), "{}", report.to_json());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn store_blocking_io_probe_reports_no_running_tasks() {
-        let probe = super::bench_support::run_store_blocking_io_probe(4, Duration::from_millis(1)).await;
-
-        assert!(probe.healthy, "{probe:?}");
-        assert_eq!(probe.snapshot.blocking_still_running, 0, "{probe:?}");
-        assert!(probe.snapshot.tasks.is_empty(), "{probe:?}");
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn store_blocking_io_probe_waits_for_concurrent_store_tasks() {
-        let (running_tx, running_rx) = tokio::sync::oneshot::channel();
-        let in_flight = tokio::spawn(super::runtime::spawn_io("flush-consume-queue", move || {
-            let _ = running_tx.send(());
-            std::thread::sleep(Duration::from_millis(100));
-        }));
-        running_rx.await.expect("background store blocking task should start");
-
-        let probe = super::bench_support::run_store_blocking_io_probe(1, Duration::from_millis(1)).await;
-        in_flight
-            .await
-            .expect("background store blocking task should join")
-            .expect("background store blocking task should complete");
-
-        assert!(probe.healthy, "{probe:?}");
-        assert_eq!(probe.snapshot.blocking_still_running, 0, "{probe:?}");
-        assert!(probe.snapshot.tasks.is_empty(), "{probe:?}");
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn store_kv_compaction_lifecycle_probe_reports_clean_shutdown() {
-        let probe = super::bench_support::run_store_kv_compaction_lifecycle_probe().await;
+        let probe = super::bench_support::run_store_kv_compaction_lifecycle_probe(
+            super::runtime::test_service_context("store-compaction-probe"),
+        )
+        .await;
 
         assert!(probe.healthy, "{probe:?}");
         assert!(probe.compacted, "{probe:?}");
@@ -1410,7 +1481,10 @@ mod bench_support_tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn store_stats_service_lifecycle_probe_reports_clean_shutdown() {
-        let probe = super::bench_support::run_store_stats_service_lifecycle_probe().await;
+        let probe = super::bench_support::run_store_stats_service_lifecycle_probe(
+            super::runtime::test_service_context("store-stats-probe"),
+        )
+        .await;
 
         assert!(probe.healthy, "{probe:?}");
         assert!(probe.snapshot_count > 0, "{probe:?}");
@@ -1421,7 +1495,10 @@ mod bench_support_tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn store_timer_scheduler_lifecycle_probe_reports_clean_shutdown() {
-        let probe = super::bench_support::run_store_timer_scheduler_lifecycle_probe().await;
+        let probe = super::bench_support::run_store_timer_scheduler_lifecycle_probe(
+            super::runtime::test_service_context("store-timer-probe"),
+        )
+        .await;
 
         assert!(probe.healthy, "{probe:?}");
         assert_eq!(probe.task_count_after_shutdown, 0, "{probe:?}");
@@ -1431,7 +1508,10 @@ mod bench_support_tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn owned_root_wiring_scheduled_lifecycle_probe_reports_clean_shutdown() {
-        let probe = super::bench_support::run_store_local_file_scheduled_lifecycle_probe().await;
+        let probe = super::bench_support::run_store_local_file_scheduled_lifecycle_probe(
+            super::runtime::test_service_context("store-local-file-probe"),
+        )
+        .await;
 
         assert!(probe.healthy, "{probe:?}");
         assert_eq!(probe.task_count_after_shutdown, 0, "{probe:?}");
@@ -1593,7 +1673,10 @@ mod bench_support_tests {
     #[cfg(feature = "rocksdb_store")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn store_rocksdb_maintenance_lifecycle_probe_reports_clean_shutdown() {
-        let probe = super::bench_support::run_store_rocksdb_maintenance_lifecycle_probe().await;
+        let probe = super::bench_support::run_store_rocksdb_maintenance_lifecycle_probe(
+            super::runtime::test_service_context("rocksdb-maintenance"),
+        )
+        .await;
 
         assert!(probe.healthy, "{probe:?}");
         assert_eq!(probe.task_count_after_shutdown, 0, "{probe:?}");

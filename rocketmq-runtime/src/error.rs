@@ -49,6 +49,9 @@ pub enum RuntimeError {
     #[error("blocking queue timeout for {name}")]
     BlockingQueueTimeout { name: Arc<str> },
 
+    #[error("blocking queue is full for {name}; maximum queued tasks: {max_queue_depth}")]
+    BlockingQueueFull { name: Arc<str>, max_queue_depth: usize },
+
     #[error("blocking kind {kind:?} is not supported by BlockingExecutor for {name}; use a dedicated thread")]
     UnsupportedBlockingKind { name: Arc<str>, kind: BlockingKind },
 

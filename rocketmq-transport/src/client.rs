@@ -20,7 +20,7 @@ use std::sync::Arc;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-use rocketmq_runtime::ServiceContext;
+use rocketmq_runtime::ChildServiceContext;
 
 use crate::admission::AdmissionClass;
 use crate::admission::AdmissionController;
@@ -121,7 +121,7 @@ fn server_name_from_address(address: &str) -> String {
 
 /// Canonical low-level request client. Higher-level routing remains outside transport.
 pub struct TransportClient {
-    _service_context: ServiceContext,
+    _service_context: ChildServiceContext,
     admission: Arc<AdmissionController>,
     pending: PendingRequestTable,
     next_opaque: AtomicI32,
@@ -129,7 +129,7 @@ pub struct TransportClient {
 }
 
 impl TransportClient {
-    pub fn new(service_context: ServiceContext, admission: Arc<AdmissionController>) -> Self {
+    pub fn new(service_context: ChildServiceContext, admission: Arc<AdmissionController>) -> Self {
         Self::new_with_security(
             service_context,
             admission,
@@ -138,7 +138,7 @@ impl TransportClient {
     }
 
     pub fn new_with_security(
-        service_context: ServiceContext,
+        service_context: ChildServiceContext,
         admission: Arc<AdmissionController>,
         security: Arc<TransportSecurity>,
     ) -> Self {

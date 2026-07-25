@@ -38,13 +38,12 @@ use rocketmq_error::RocketMQResult;
 use rocketmq_error::UnifiedServiceError;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_runtime::wait_for_signal;
+use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::MetadataDeadline;
 use rocketmq_runtime::MetadataIoActor;
 use rocketmq_runtime::MetadataIoConfig;
-use rocketmq_runtime::RuntimeHandle;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
-use rocketmq_runtime::ServiceContext;
 use rocketmq_runtime::ServiceLifecycle;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::ShutdownReason;
@@ -61,8 +60,8 @@ use rocketmq_transport::remoting_server::rocketmq_tokio_server::RocketMQServer;
 use rocketmq_transport::request_processor::default_request_processor::DefaultRemotingRequestProcessor;
 use rocketmq_transport::runtime::config::client_config::TokioClientConfig;
 use serde::Serialize;
-use tokio::sync::broadcast;
 use tokio::sync::oneshot;
+use tokio::sync::watch;
 use tokio::sync::Notify;
 use tracing::debug;
 use tracing::error;
@@ -289,7 +288,7 @@ pub struct Builder {
     server_config: Option<ServerConfig>,
     controller_config: Option<ControllerConfig>,
     cluster_test_route_lookup: Option<Arc<dyn ClusterTestRouteLookup>>,
-    service_context: Option<ServiceContext>,
+    service_context: ChildServiceContext,
 }
 
 /// Core runtime managing NameServer lifecycle and operations
@@ -298,8 +297,8 @@ pub struct Builder {
 struct NameServerRuntime {
     inner: Arc<NameServerRuntimeInner>,
     scheduled_tasks: Option<ScheduledTaskGroup>,
-    shutdown_tx: Option<broadcast::Sender<()>>,
-    shutdown_rx: Option<broadcast::Receiver<()>>,
+    shutdown_tx: Option<watch::Sender<bool>>,
+    shutdown_rx: Option<watch::Receiver<bool>>,
     server_inner: Option<RocketMQServer<NameServerRequestProcessor>>,
     /// Server task group for graceful shutdown
     server_task_group: Option<TaskGroup>,
@@ -377,7 +376,7 @@ impl NameServerBootstrap {
     {
         info!("Booting RocketMQ NameServer (Rust)...");
 
-        let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
         self.name_server_runtime.shutdown_tx = Some(shutdown_tx.clone());
         self.name_server_runtime.shutdown_rx = Some(shutdown_rx);
         self.name_server_runtime.initialize().await?;
@@ -432,15 +431,26 @@ impl NameServerBootstrap {
 }
 
 #[inline]
-async fn relay_shutdown_signal<F>(shutdown_tx: broadcast::Sender<()>, shutdown_signal: F)
+async fn relay_shutdown_signal<F>(shutdown_tx: watch::Sender<bool>, shutdown_signal: F)
 where
     F: Future<Output = ()>,
 {
     shutdown_signal.await;
     info!("Shutdown signal received, broadcasting to all components...");
     // Broadcast shutdown to all listeners
-    if let Err(e) = shutdown_tx.send(()) {
+    if let Err(e) = shutdown_tx.send(true) {
         error!("Failed to broadcast shutdown signal: {}", e);
+    }
+}
+
+async fn wait_for_shutdown_notification(shutdown_rx: &mut watch::Receiver<bool>) {
+    if *shutdown_rx.borrow() {
+        return;
+    }
+    while shutdown_rx.changed().await.is_ok() {
+        if *shutdown_rx.borrow() {
+            return;
+        }
     }
 }
 
@@ -588,7 +598,7 @@ impl NameServerRuntime {
             return Err(RocketMQError::ConfigInvalidValue {
                 key: "clusterTest",
                 value: namesrv_config.cluster_test.to_string(),
-                reason: "cluster-test route lookup requires an injected ServiceContext owner".to_string(),
+                reason: "cluster-test route lookup requires an injected ChildServiceContext owner".to_string(),
             });
         }
 
@@ -613,7 +623,14 @@ impl NameServerRuntime {
                 .inner
                 .controller_config()
                 .expect("controller config should exist when embedded controller is enabled");
-            let controller_manager = Arc::new(ControllerManager::new((*controller_config).clone()).await?);
+            let controller_context = self
+                .inner
+                .service_context
+                .as_ref()
+                .expect("NameServerRuntime always has an injected ChildServiceContext")
+                .child("namesrv.embedded-controller");
+            let controller_manager =
+                Arc::new(ControllerManager::new((*controller_config).clone(), controller_context).await?);
             let initialized = controller_manager.initialize().await?;
             if !initialized {
                 return Err(namesrv_startup_failed(
@@ -630,10 +647,12 @@ impl NameServerRuntime {
     /// Initialize network server for handling client requests
     fn initialize_network_components(&mut self) {
         let config = self.inner.server_config();
-        let server = match self.inner.service_context.as_ref() {
-            Some(context) => RocketMQServer::new_with_service_context(config, context.child("namesrv.remoting-server")),
-            None => RocketMQServer::new(config),
-        };
+        let context = self
+            .inner
+            .service_context
+            .as_ref()
+            .expect("NameServerRuntime always has an injected ChildServiceContext");
+        let server = RocketMQServer::new_with_service_context(config, context.child("namesrv.remoting-server"));
         self.server_inner = Some(server);
         debug!(
             "Network server initialized on port {}",
@@ -745,7 +764,7 @@ impl NameServerRuntime {
                 debug!("Server task started");
                 let report = server
                     .run_with_shutdown_report(request_processor, channel_event_listener, async move {
-                        let _ = server_shutdown_rx.recv().await;
+                        wait_for_shutdown_notification(&mut server_shutdown_rx).await;
                     })
                     .await;
                 if let Some(report) = report.as_ref() {
@@ -781,7 +800,7 @@ impl NameServerRuntime {
         if let Some(controller_manager) = self.inner.controller_manager() {
             if let Err(error) = controller_manager.start().await {
                 if let Some(shutdown_tx) = self.shutdown_tx.as_ref() {
-                    let _ = shutdown_tx.send(());
+                    let _ = shutdown_tx.send(true);
                 }
                 let _ = self.shutdown().await;
                 return Err(error.into());
@@ -802,21 +821,13 @@ impl NameServerRuntime {
         }
 
         // Wait for shutdown signal
-        let shutdown_report = tokio::select! {
-            result = self.shutdown_rx.as_mut()
-                .expect("Shutdown channel not initialized")
-                .recv() => {
-                match result {
-                    Ok(_) => info!("Shutdown signal received, initiating graceful shutdown..."),
-                    Err(e) => error!("Error receiving shutdown signal: {}", e),
-                }
-                let deadline = lifecycle
-                    .and_then(ServiceLifecycle::shutdown_request)
-                    .map(|request| request.deadline)
-                    .unwrap_or_else(|| ShutdownDeadline::after(Duration::from_secs(30)));
-                self.shutdown_until(deadline).await
-            }
-        };
+        wait_for_shutdown_notification(self.shutdown_rx.as_mut().expect("Shutdown channel not initialized")).await;
+        info!("Shutdown signal received, initiating graceful shutdown...");
+        let deadline = lifecycle
+            .and_then(ServiceLifecycle::shutdown_request)
+            .map(|request| request.deadline)
+            .unwrap_or_else(|| ShutdownDeadline::after(Duration::from_secs(30)));
+        let shutdown_report = self.shutdown_until(deadline).await;
 
         Ok(shutdown_report)
     }
@@ -1074,22 +1085,15 @@ impl Drop for NameServerRuntime {
     }
 }
 
-impl Default for Builder {
-    #[inline]
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl Builder {
     #[inline]
-    pub fn new() -> Self {
+    pub fn new(service_context: ChildServiceContext) -> Self {
         Builder {
             name_server_config: None,
             server_config: None,
             controller_config: None,
             cluster_test_route_lookup: None,
-            service_context: None,
+            service_context,
         }
     }
 
@@ -1126,11 +1130,6 @@ impl Builder {
         self
     }
 
-    pub fn set_service_context(mut self, service_context: ServiceContext) -> Self {
-        self.service_context = Some(service_context);
-        self
-    }
-
     /// Build the NameServerBootstrap with configured settings
     ///
     /// Creates all necessary components and initializes them immediately.
@@ -1153,35 +1152,28 @@ impl Builder {
             name_server_config.scan_not_active_broker_interval
         );
 
-        let service_context = self
-            .service_context
-            .as_ref()
-            .map(|context| context.child("rocketmq-namesrv"));
-        let metadata_io = service_context
-            .as_ref()
-            .map(|context| MetadataIoActor::start(&context.child("namesrv.metadata-io"), MetadataIoConfig::default()));
+        let service_context = self.service_context.child("rocketmq-namesrv");
+        let metadata_io = Some(MetadataIoActor::start(
+            &service_context.child("namesrv.metadata-io"),
+            MetadataIoConfig::default(),
+        ));
         let cluster_test_route_lookup = if name_server_config.cluster_test {
             self.cluster_test_route_lookup.or_else(|| {
-                service_context.as_ref().map(|context| {
-                    Arc::new(TransportClusterTestRouteLookup::new(
-                        &name_server_config.product_env_name,
-                        context.child("namesrv.cluster-test-route-lookup"),
-                    )) as Arc<dyn ClusterTestRouteLookup>
-                })
+                Some(Arc::new(TransportClusterTestRouteLookup::new(
+                    &name_server_config.product_env_name,
+                    service_context.child("namesrv.cluster-test-route-lookup"),
+                )) as Arc<dyn ClusterTestRouteLookup>)
             })
         } else {
             self.cluster_test_route_lookup
         };
 
         // Create remoting client
-        let remoting_client = Arc::new(match service_context.as_ref() {
-            Some(context) => RocketmqDefaultClient::new_with_service_context(
-                Arc::new(tokio_client_config.clone()),
-                DefaultRemotingRequestProcessor,
-                context.child("namesrv.remoting-client"),
-            ),
-            None => RocketmqDefaultClient::new(Arc::new(tokio_client_config.clone()), DefaultRemotingRequestProcessor),
-        });
+        let remoting_client = Arc::new(RocketmqDefaultClient::new_with_service_context(
+            Arc::new(tokio_client_config.clone()),
+            DefaultRemotingRequestProcessor,
+            service_context.child("namesrv.remoting-client"),
+        ));
 
         let unregister_broker_queue_capacity = name_server_config.unregister_broker_queue_capacity as usize;
         let initial_config = Arc::new(NameServerRuntimeConfig {
@@ -1206,7 +1198,7 @@ impl Builder {
                 broker_housekeeping_service: Arc::new(BrokerHousekeepingService::new(runtime_handle)),
                 controller_manager: OnceLock::new(),
                 cluster_test_route_lookup,
-                service_context,
+                service_context: Some(service_context),
                 task_group: OnceLock::new(),
                 in_flight_requests: Arc::new(InFlightRequestTracker::default()),
             }
@@ -1242,7 +1234,7 @@ pub(crate) struct NameServerRuntimeInner {
     broker_housekeeping_service: Arc<BrokerHousekeepingService>,
     controller_manager: OnceLock<Arc<ControllerManager>>,
     cluster_test_route_lookup: Option<Arc<dyn ClusterTestRouteLookup>>,
-    service_context: Option<ServiceContext>,
+    service_context: Option<ChildServiceContext>,
     task_group: OnceLock<TaskGroup>,
     in_flight_requests: Arc<InFlightRequestTracker>,
 }
@@ -1332,20 +1324,11 @@ impl NameServerRuntimeInner {
             return Some(task_group.clone());
         }
 
-        if let Some(service_context) = self.service_context.as_ref() {
-            let _ = self.task_group.set(service_context.task_group().clone());
-            return self.task_group.get().cloned();
-        }
-
-        let handle = match tokio::runtime::Handle::try_current() {
-            Ok(handle) => handle,
-            Err(error) => {
-                warn!("NameServer task group is unavailable outside Tokio runtime: {error}");
-                return None;
-            }
-        };
-        let task_group = TaskGroup::root("rocketmq-namesrv", RuntimeHandle::new(handle));
-        let _ = self.task_group.set(task_group);
+        let service_context = self
+            .service_context
+            .as_ref()
+            .expect("NameServerRuntime always has an injected ChildServiceContext");
+        let _ = self.task_group.set(service_context.task_group().clone());
         self.task_group.get().cloned()
     }
 
@@ -1873,16 +1856,37 @@ mod tests {
     use rocketmq_transport::local::LocalRequestHarness;
     use rocketmq_transport::runtime::processor::RequestProcessor;
     use tokio::net::TcpStream as TokioTcpStream;
-    use tokio::sync::broadcast;
     use tokio::sync::oneshot;
     use tokio::time::sleep;
 
     use super::*;
+
+    fn test_task_group(name: &'static str) -> rocketmq_runtime::TaskGroup {
+        RuntimeContext::from_current(name)
+            .service_context("namesrv-local-harness")
+            .task_group()
+            .clone()
+    }
     use crate::processor::default_request_processor::DefaultRequestProcessor;
     use crate::processor::ClientRequestProcessor;
 
+    fn test_service_context() -> ChildServiceContext {
+        static OWNER: std::sync::OnceLock<rocketmq_runtime::RuntimeOwner> = std::sync::OnceLock::new();
+        OWNER
+            .get_or_init(|| {
+                rocketmq_runtime::RuntimeOwner::new(rocketmq_runtime::RuntimeConfig::server_default(
+                    "namesrv-bootstrap-test",
+                ))
+                .expect("test runtime owner should build")
+            })
+            .root_context()
+            .child("namesrv")
+    }
+
     fn build_bootstrap_with_config(namesrv_config: NamesrvConfig) -> NameServerBootstrap {
-        Builder::new().set_name_server_config(namesrv_config).build()
+        Builder::new(test_service_context())
+            .set_name_server_config(namesrv_config)
+            .build()
     }
 
     fn build_default_bootstrap() -> NameServerBootstrap {
@@ -1945,7 +1949,7 @@ mod tests {
             listen_port: 10000,
             ..ServerConfig::default()
         };
-        let bootstrap = Builder::new()
+        let bootstrap = Builder::new(test_service_context())
             .set_name_server_config(namesrv_config)
             .set_server_config(server_config)
             .build();
@@ -2052,7 +2056,7 @@ mod tests {
     async fn builder_service_context_parents_namesrv_task_group() {
         let context = RuntimeContext::from_current("namesrv-context-runtime-test");
         let service = context.service_context("namesrv-service");
-        let bootstrap = Builder::new().set_service_context(service.clone()).build();
+        let bootstrap = Builder::new(service.clone()).build();
 
         let task_group = bootstrap
             .name_server_runtime
@@ -2072,10 +2076,9 @@ mod tests {
         let context = RuntimeContext::from_current("namesrv-runtime-owner-test");
         let service = context.service_context("namesrv-service");
         let (namesrv_config, _namesrv_root) = isolated_namesrv_config(NamesrvConfig::default());
-        let bootstrap = Builder::new()
+        let bootstrap = Builder::new(service)
             .set_name_server_config(namesrv_config)
             .set_server_config(namesrv_server_config())
-            .set_service_context(service)
             .build();
 
         let report = bootstrap
@@ -2231,7 +2234,9 @@ mod tests {
     #[tokio::test]
     async fn name_server_processor_records_completed_request() {
         let bootstrap = build_default_bootstrap();
-        let harness = LocalRequestHarness::new().await.unwrap();
+        let harness = LocalRequestHarness::new(test_task_group("namesrv-local-harness"))
+            .await
+            .unwrap();
         let mut request = RemotingCommand::create_remoting_command(999_999);
 
         let response = process_with_name_server_processor(&bootstrap, &harness, &mut request).await;
@@ -2363,7 +2368,9 @@ mod tests {
         enable_acting_master: bool,
         topic_config_wrapper: TopicConfigAndMappingSerializeWrapper,
     ) {
-        let harness = LocalRequestHarness::new().await.unwrap();
+        let harness = LocalRequestHarness::new(test_task_group("namesrv-local-harness"))
+            .await
+            .unwrap();
         register_test_broker_with_harness(
             bootstrap,
             cluster_name,
@@ -2383,7 +2390,9 @@ mod tests {
     #[tokio::test]
     async fn aggregate_processor_routes_register_and_route_queries() {
         let bootstrap = build_default_bootstrap();
-        let harness = LocalRequestHarness::new().await.unwrap();
+        let harness = LocalRequestHarness::new(test_task_group("namesrv-local-harness"))
+            .await
+            .unwrap();
         let cluster_name = CheetahString::from_static_str("cluster-a");
         let broker_name = CheetahString::from_static_str("broker-a");
         let broker_addr = CheetahString::from_static_str("10.0.0.10:10911");
@@ -2430,7 +2439,9 @@ mod tests {
     #[tokio::test]
     async fn namesrv_metadata_processors_return_java_compatible_bodies() {
         let bootstrap = build_default_bootstrap();
-        let harness = LocalRequestHarness::new().await.unwrap();
+        let harness = LocalRequestHarness::new(test_task_group("namesrv-local-harness"))
+            .await
+            .unwrap();
         let cluster_name = CheetahString::from_static_str("cluster-a");
         let broker_name = CheetahString::from_static_str("broker-a");
         let broker_addr = CheetahString::from_static_str("10.0.0.10:10911");
@@ -2554,7 +2565,9 @@ mod tests {
     #[tokio::test]
     async fn namesrv_topic_admin_processors_complete_contracts() {
         let bootstrap = build_default_bootstrap();
-        let harness = LocalRequestHarness::new().await.unwrap();
+        let harness = LocalRequestHarness::new(test_task_group("namesrv-local-harness"))
+            .await
+            .unwrap();
         let cluster_name = CheetahString::from_static_str("phase2-cluster");
         let broker_name = CheetahString::from_static_str("phase2-broker");
         let broker_addr = CheetahString::from_static_str("10.0.0.20:10911");
@@ -2797,7 +2810,9 @@ mod tests {
     #[tokio::test]
     async fn register_broker_via_default_processor_populates_route_contract() {
         let bootstrap = build_default_bootstrap();
-        let harness = LocalRequestHarness::new().await.unwrap();
+        let harness = LocalRequestHarness::new(test_task_group("namesrv-local-harness"))
+            .await
+            .unwrap();
         let cluster_name = CheetahString::from_static_str("cluster-a");
         let broker_name = CheetahString::from_static_str("broker-a");
         let broker_addr = CheetahString::from_static_str("10.0.0.10:10911");
@@ -2878,7 +2893,9 @@ mod tests {
     #[tokio::test]
     async fn unregister_broker_via_default_processor_removes_route_contract() {
         let bootstrap = build_default_bootstrap();
-        let harness = LocalRequestHarness::new().await.unwrap();
+        let harness = LocalRequestHarness::new(test_task_group("namesrv-local-harness"))
+            .await
+            .unwrap();
         let cluster_name = CheetahString::from_static_str("cluster-a");
         let broker_name = CheetahString::from_static_str("broker-a");
         let broker_addr = CheetahString::from_static_str("10.0.0.10:10911");
@@ -3193,7 +3210,9 @@ mod tests {
         let broker_addr = CheetahString::from_static_str("10.0.0.1:10911");
         let zone_name = CheetahString::from_static_str("zone-a");
         let topic_name = CheetahString::from_static_str("scan-cleanup-topic");
-        let harness = LocalRequestHarness::new().await.unwrap();
+        let harness = LocalRequestHarness::new(test_task_group("namesrv-local-harness"))
+            .await
+            .unwrap();
 
         start_unregister_service(&bootstrap);
         register_test_broker_with_harness(
@@ -3250,7 +3269,9 @@ mod tests {
         let broker_name = CheetahString::from_static_str("broker-a");
         let broker_addr = CheetahString::from_static_str("10.0.0.1:10911");
         let zone_name = CheetahString::from_static_str("zone-a");
-        let harness = LocalRequestHarness::new().await.unwrap();
+        let harness = LocalRequestHarness::new(test_task_group("namesrv-local-harness"))
+            .await
+            .unwrap();
 
         start_unregister_service(&bootstrap);
         register_test_broker_with_harness(
@@ -3295,7 +3316,9 @@ mod tests {
         let broker_addr = CheetahString::from_static_str("10.0.0.1:10911");
         let zone_name = CheetahString::from_static_str("zone-a");
         let topic_name = CheetahString::from_static_str("socket-disconnect-topic");
-        let harness = LocalRequestHarness::new().await.unwrap();
+        let harness = LocalRequestHarness::new(test_task_group("namesrv-local-harness"))
+            .await
+            .unwrap();
 
         start_unregister_service(&bootstrap);
         register_test_broker_with_harness(
@@ -3355,8 +3378,12 @@ mod tests {
         let slave_addr = CheetahString::from_static_str("10.0.0.2:10911");
         let zone_name = CheetahString::from_static_str("zone-a");
         let topic_name = CheetahString::from_static_str("duplicate-unregister-topic");
-        let master_harness = LocalRequestHarness::new().await.unwrap();
-        let slave_harness = LocalRequestHarness::new().await.unwrap();
+        let master_harness = LocalRequestHarness::new(test_task_group("namesrv-local-harness"))
+            .await
+            .unwrap();
+        let slave_harness = LocalRequestHarness::new(test_task_group("namesrv-local-harness"))
+            .await
+            .unwrap();
 
         register_test_broker_with_harness(
             &bootstrap,
@@ -3460,8 +3487,12 @@ mod tests {
         let surviving_broker_addr = CheetahString::from_static_str("10.0.0.2:10911");
         let zone_name = CheetahString::from_static_str("zone-a");
         let topic_name = CheetahString::from_static_str("channel-destroy-topic");
-        let removed_harness = LocalRequestHarness::new().await.unwrap();
-        let surviving_harness = LocalRequestHarness::new().await.unwrap();
+        let removed_harness = LocalRequestHarness::new(test_task_group("namesrv-local-harness"))
+            .await
+            .unwrap();
+        let surviving_harness = LocalRequestHarness::new(test_task_group("namesrv-local-harness"))
+            .await
+            .unwrap();
 
         start_unregister_service(&bootstrap);
         register_test_broker_with_harness(
@@ -3553,8 +3584,12 @@ mod tests {
         let slave_addr = CheetahString::from_static_str("10.0.0.2:10911");
         let zone_name = CheetahString::from_static_str("zone-a");
         let topic_name = CheetahString::from_static_str("acting-master-cleanup-topic");
-        let master_harness = LocalRequestHarness::new().await.unwrap();
-        let slave_harness = LocalRequestHarness::new().await.unwrap();
+        let master_harness = LocalRequestHarness::new(test_task_group("namesrv-local-harness"))
+            .await
+            .unwrap();
+        let slave_harness = LocalRequestHarness::new(test_task_group("namesrv-local-harness"))
+            .await
+            .unwrap();
 
         start_unregister_service(&bootstrap);
         register_test_broker_with_harness(
@@ -3649,10 +3684,9 @@ mod tests {
             cluster_test: true,
             ..NamesrvConfig::default()
         });
-        let bootstrap = Builder::new()
+        let bootstrap = Builder::new(runtime.service_context("namesrv"))
             .set_name_server_config(namesrv_config)
             .set_server_config(namesrv_server_config())
-            .set_service_context(runtime.service_context("namesrv"))
             .build();
 
         bootstrap
@@ -3673,7 +3707,7 @@ mod tests {
             ..NamesrvConfig::default()
         });
         let (controller_config, _controller_root) = embedded_controller_config();
-        let bootstrap = Builder::new()
+        let bootstrap = Builder::new(test_service_context())
             .set_name_server_config(namesrv_config)
             .set_server_config(namesrv_server_config())
             .set_controller_config(controller_config)
@@ -3688,7 +3722,7 @@ mod tests {
     #[tokio::test]
     async fn boot_shutdown_report_includes_remoting_server_report() {
         let (namesrv_config, _namesrv_root) = isolated_namesrv_config(NamesrvConfig::default());
-        let bootstrap = Builder::new()
+        let bootstrap = Builder::new(test_service_context())
             .set_name_server_config(namesrv_config)
             .set_server_config(namesrv_server_config())
             .build();
@@ -3720,7 +3754,7 @@ mod tests {
         let addr = format!("127.0.0.1:{}", server_config.listen_port);
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
         let (namesrv_config, namesrv_root) = isolated_namesrv_config(NamesrvConfig::default());
-        let bootstrap = Builder::new()
+        let bootstrap = Builder::new(test_service_context())
             .set_name_server_config(namesrv_config)
             .set_server_config(server_config)
             .build();
@@ -3773,7 +3807,7 @@ mod tests {
             enable_controller_in_namesrv: true,
             ..NamesrvConfig::default()
         };
-        let mut bootstrap = Builder::new()
+        let mut bootstrap = Builder::new(test_service_context())
             .set_name_server_config(namesrv_config)
             .set_server_config(server_config)
             .set_controller_config(conflicting_controller)
@@ -3795,13 +3829,13 @@ mod tests {
             ..NamesrvConfig::default()
         });
         let (controller_config, _controller_root) = embedded_controller_config();
-        let mut bootstrap = Builder::new()
+        let mut bootstrap = Builder::new(test_service_context())
             .set_name_server_config(namesrv_config)
             .set_server_config(namesrv_server_config())
             .set_controller_config(controller_config)
             .build();
 
-        let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
         bootstrap.name_server_runtime.shutdown_tx = Some(shutdown_tx.clone());
         bootstrap.name_server_runtime.shutdown_rx = Some(shutdown_rx);
         bootstrap
@@ -3823,7 +3857,7 @@ mod tests {
         wait_until("embedded controller to start", || controller_manager.is_running()).await;
 
         shutdown_tx
-            .send(())
+            .send(true)
             .expect("shutdown broadcast should reach the running runtime");
 
         start_handle
@@ -3837,7 +3871,9 @@ mod tests {
     #[tokio::test]
     async fn unsupported_request_code_returns_request_code_not_supported() {
         let bootstrap = build_default_bootstrap();
-        let harness = LocalRequestHarness::new().await.unwrap();
+        let harness = LocalRequestHarness::new(test_task_group("namesrv-local-harness"))
+            .await
+            .unwrap();
         let processor =
             DefaultRequestProcessor::new(NameServerRuntimeHandle::new(&bootstrap.name_server_runtime.inner));
         let mut request = RemotingCommand::create_remoting_command(RequestCode::SendMessage);
@@ -3869,11 +3905,13 @@ mod tests {
             bind_address: "127.0.0.2".to_string(),
             ..ServerConfig::default()
         };
-        let bootstrap = Builder::new()
+        let bootstrap = Builder::new(test_service_context())
             .set_name_server_config(namesrv_config)
             .set_server_config(server_config)
             .build();
-        let harness = LocalRequestHarness::new().await.unwrap();
+        let harness = LocalRequestHarness::new(test_task_group("namesrv-local-harness"))
+            .await
+            .unwrap();
         let mut request = RemotingCommand::create_remoting_command(RequestCode::GetNamesrvConfig);
 
         let response = process_with_default_processor(&bootstrap, &harness, &mut request).await;
@@ -3919,7 +3957,9 @@ mod tests {
     #[tokio::test]
     async fn update_namesrv_config_updates_aggregate_known_keys_and_ignores_unknown() {
         let bootstrap = build_default_bootstrap();
-        let harness = LocalRequestHarness::new().await.unwrap();
+        let harness = LocalRequestHarness::new(test_task_group("namesrv-local-harness"))
+            .await
+            .unwrap();
         let mut request = RemotingCommand::create_remoting_command(RequestCode::UpdateNamesrvConfig).set_body(
             b"listenPort=19876\nbindAddress=127.0.0.2\nclientWorkerThreads=9\nenableTopicList=false\ntls.server.mode=enforcing\ntls.server.certPath=/certs/server.pem\nunknownKey=42"
                 .as_slice(),
@@ -3974,7 +4014,9 @@ mod tests {
     #[tokio::test]
     async fn update_namesrv_config_rejects_fixed_blacklist_keys() {
         let bootstrap = build_default_bootstrap();
-        let harness = LocalRequestHarness::new().await.unwrap();
+        let harness = LocalRequestHarness::new(test_task_group("namesrv-local-harness"))
+            .await
+            .unwrap();
         let mut request = RemotingCommand::create_remoting_command(RequestCode::UpdateNamesrvConfig)
             .set_body(b"rocketmqHome=/tmp/namesrv".as_slice());
 
@@ -3994,7 +4036,9 @@ mod tests {
     #[tokio::test]
     async fn kvconfig_crud_roundtrip_via_default_processor() {
         let bootstrap = build_default_bootstrap();
-        let harness = LocalRequestHarness::new().await.unwrap();
+        let harness = LocalRequestHarness::new(test_task_group("namesrv-local-harness"))
+            .await
+            .unwrap();
         let namespace = CheetahString::from_static_str("phase5-namespace");
         let key = CheetahString::from_static_str("phase5-key");
         let value = CheetahString::from_static_str("phase5-value");
@@ -4055,12 +4099,11 @@ mod tests {
         let temp = tempfile::tempdir().expect("NameServer metadata test directory should be created");
         let config_path = temp.path().join("kv-config.json");
         let context = RuntimeContext::try_from_current("namesrv-metadata-io-test").unwrap();
-        let bootstrap = Builder::new()
+        let bootstrap = Builder::new(context.service_context("namesrv"))
             .set_name_server_config(NamesrvConfig {
                 kv_config_path: config_path.to_string_lossy().into_owned(),
                 ..NamesrvConfig::default()
             })
-            .set_service_context(context.service_context("namesrv"))
             .build();
         let manager = bootstrap.name_server_runtime.inner.kvconfig_manager();
         manager
@@ -4098,7 +4141,9 @@ mod tests {
             order_message_enable: true,
             ..NamesrvConfig::default()
         });
-        let harness = LocalRequestHarness::new().await.unwrap();
+        let harness = LocalRequestHarness::new(test_task_group("namesrv-local-harness"))
+            .await
+            .unwrap();
         let cluster_name = CheetahString::from_static_str("cluster-a");
         let broker_name = CheetahString::from_static_str("broker-a");
         let primary_broker_addr = CheetahString::from_static_str("10.0.0.10:10911");

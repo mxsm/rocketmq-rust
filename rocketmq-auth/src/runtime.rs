@@ -9,8 +9,10 @@ use cheetah_string::CheetahString;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_runtime::BlockingExecutor;
+use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::MetadataIoActor;
-use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::MetadataIoConfig;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
@@ -116,6 +118,22 @@ impl ProviderRegistry {
             acl_fingerprint: Arc::new(RwLock::new(None)),
             metrics: AuthMetrics::default(),
         })
+    }
+
+    /// Loads persistent authentication and authorization snapshots on the
+    /// caller-provided bounded metadata I/O lane.
+    pub async fn load_with_metadata_io(
+        config: &AuthConfig,
+        metadata_io: MetadataIoActor,
+        blocking: BlockingExecutor,
+    ) -> RocketMQResult<Self> {
+        let config = config.clone();
+        blocking
+            .spawn_io("auth.provider-registry.load", move || {
+                Self::local_with_metadata_io(&config, Some(metadata_io))
+            })
+            .await
+            .map_err(|error| RocketMQError::auth_config_invalid("authMetadataBootstrap", error.to_string()))?
     }
 
     pub fn authentication_metadata_provider(&self) -> Arc<LocalAuthenticationMetadataProvider> {
@@ -257,14 +275,16 @@ fn validate_metadata_provider_name(key: &'static str, configured: &str, supporte
 
 pub struct AuthRuntimeBuilder {
     config: AuthConfig,
+    service_context: ChildServiceContext,
     provider_registry: Option<ProviderRegistry>,
     metadata_io: Option<MetadataIoActor>,
 }
 
 impl AuthRuntimeBuilder {
-    pub fn new(config: AuthConfig) -> Self {
+    pub fn new(config: AuthConfig, service_context: ChildServiceContext) -> Self {
         Self {
             config,
+            service_context,
             provider_registry: None,
             metadata_io: None,
         }
@@ -281,9 +301,24 @@ impl AuthRuntimeBuilder {
     }
 
     pub async fn build(self) -> RocketMQResult<AuthRuntime> {
+        let metadata_io = match self.metadata_io {
+            Some(metadata_io) => metadata_io,
+            None => MetadataIoActor::start(
+                &self.service_context.child("auth.metadata-io"),
+                MetadataIoConfig::default(),
+            )
+            .map_err(|error| RocketMQError::auth_config_invalid("authRuntime", error.to_string()))?,
+        };
         let provider_registry = match self.provider_registry {
             Some(provider_registry) => provider_registry,
-            None => ProviderRegistry::local_with_metadata_io(&self.config, self.metadata_io)?,
+            None => {
+                ProviderRegistry::load_with_metadata_io(
+                    &self.config,
+                    metadata_io,
+                    self.service_context.metadata_io().clone(),
+                )
+                .await?
+            }
         };
 
         seed_initial_users(&provider_registry, &self.config).await?;
@@ -294,9 +329,14 @@ impl AuthRuntimeBuilder {
                 migrated_acl_entries
             );
         }
-        let loaded_acl_entries = load_configured_acl_file(&provider_registry, &self.config, true)
-            .await?
-            .account_count;
+        let loaded_acl_entries = load_configured_acl_file(
+            &provider_registry,
+            &self.config,
+            self.service_context.metadata_io().clone(),
+            true,
+        )
+        .await?
+        .account_count;
         if loaded_acl_entries > 0 {
             info!("Loaded {} ACL account(s) from configured ACL file", loaded_acl_entries);
         }
@@ -319,10 +359,12 @@ impl AuthRuntimeBuilder {
             Arc::new(authorization_provider),
             provider_registry.metrics(),
         );
-        let acl_file_watch_handle = start_acl_file_watcher(&self.config, provider_registry.clone());
+        let acl_file_watch_handle =
+            start_acl_file_watcher(&self.config, provider_registry.clone(), &self.service_context);
 
         Ok(AuthRuntime {
             config: self.config,
+            service_context: self.service_context,
             provider_registry,
             authentication_service,
             authorization_service,
@@ -334,6 +376,7 @@ impl AuthRuntimeBuilder {
 #[derive(Clone)]
 pub struct AuthRuntime {
     config: AuthConfig,
+    service_context: ChildServiceContext,
     provider_registry: ProviderRegistry,
     authentication_service: AuthenticationService,
     authorization_service: AuthorizationService,
@@ -362,9 +405,14 @@ impl AuthRuntime {
     }
 
     pub async fn reload_acl_file(&self) -> RocketMQResult<usize> {
-        Ok(load_configured_acl_file(&self.provider_registry, &self.config, true)
-            .await?
-            .account_count)
+        Ok(load_configured_acl_file(
+            &self.provider_registry,
+            &self.config,
+            self.service_context.metadata_io().clone(),
+            true,
+        )
+        .await?
+        .account_count)
     }
 
     pub fn is_acl_white_remote_address(
@@ -410,10 +458,11 @@ impl AuthRuntime {
     }
 
     pub async fn shutdown_with_report(&self) -> RocketMQResult<Option<ShutdownReport>> {
-        if let Some(handle) = &self.acl_file_watch_handle {
-            return Ok(Some(handle.shutdown_with_report().await?));
-        }
-        Ok(None)
+        let report = self.service_context.task_group().shutdown(Duration::from_secs(5)).await;
+        report
+            .assert_no_task_leak()
+            .map_err(|error| RocketMQError::auth_hot_reload_failed("authRuntime", error))?;
+        Ok(Some(report))
     }
 
     pub fn acl_file_watcher_snapshot(&self) -> Vec<ScheduledTaskSnapshot> {
@@ -589,6 +638,7 @@ struct AclReloadResult {
 async fn load_configured_acl_file(
     provider_registry: &ProviderRegistry,
     config: &AuthConfig,
+    blocking: rocketmq_runtime::BlockingExecutor,
     force: bool,
 ) -> RocketMQResult<AclReloadResult> {
     let acl_file = config.acl_file.as_str().trim();
@@ -602,7 +652,7 @@ async fn load_configured_acl_file(
     let metrics = provider_registry.metrics();
     metrics.record_acl_reload_attempt();
     let result = async {
-        let loader = FileAclConfigLoader::new(acl_file.to_owned());
+        let loader = FileAclConfigLoader::new(acl_file.to_owned(), blocking);
         let (acl_config, fingerprint) = loader.load_with_fingerprint().await?;
         if !force && provider_registry.acl_fingerprint()? == Some(fingerprint) {
             return Ok(AclReloadResult {
@@ -645,7 +695,11 @@ async fn migrate_auth_from_v1_manager(
     apply_acl_config(provider_registry, &acl_config).await
 }
 
-fn start_acl_file_watcher(config: &AuthConfig, provider_registry: ProviderRegistry) -> Option<AclFileWatchHandle> {
+fn start_acl_file_watcher(
+    config: &AuthConfig,
+    provider_registry: ProviderRegistry,
+    service_context: &ChildServiceContext,
+) -> Option<AclFileWatchHandle> {
     let acl_file = config.acl_file.as_str().trim();
     if acl_file.is_empty() || !config.acl_file_watch_enabled {
         return None;
@@ -653,22 +707,18 @@ fn start_acl_file_watcher(config: &AuthConfig, provider_registry: ProviderRegist
 
     let watch_config = config.clone();
     let interval = Duration::from_millis(config.acl_file_watch_interval_millis.max(1));
-    let handle = match tokio::runtime::Handle::try_current() {
-        Ok(handle) => handle,
-        Err(error) => {
-            warn!("ACL file watcher requires a Tokio runtime: {error}");
-            return None;
-        }
-    };
-    let task_group = TaskGroup::root("rocketmq-auth.acl-file-watcher", RuntimeHandle::new(handle));
+    let watcher_context = service_context.child("auth.acl-file-watcher");
+    let task_group = watcher_context.task_group().clone();
     let scheduled_tasks = ScheduledTaskGroup::new(task_group.child("scheduled"));
+    let blocking = service_context.metadata_io().clone();
     if let Err(error) = scheduled_tasks.schedule_fixed_rate_no_overlap(
         ScheduledTaskConfig::fixed_rate_no_overlap("auth.acl-file-watcher.reload", interval),
         move || {
             let provider_registry = provider_registry.clone();
             let watch_config = watch_config.clone();
+            let blocking = blocking.clone();
             async move {
-                match load_configured_acl_file(&provider_registry, &watch_config, false).await {
+                match load_configured_acl_file(&provider_registry, &watch_config, blocking, false).await {
                     Ok(result) if result.changed => {
                         debug!(
                             "Reloaded {} ACL account(s) from configured ACL file",
@@ -1013,6 +1063,19 @@ mod tests {
     use crate::authorization::model::policy::Policy;
     use crate::authorization::model::resource::Resource;
 
+    struct AuthRuntimeBuilder;
+
+    impl AuthRuntimeBuilder {
+        #[allow(
+            clippy::new_ret_no_self,
+            reason = "test facade preserves concise existing builder call sites"
+        )]
+        fn new(config: AuthConfig) -> super::AuthRuntimeBuilder {
+            let runtime = rocketmq_runtime::RuntimeContext::from_current("auth-runtime-test");
+            super::AuthRuntimeBuilder::new(config, runtime.service_context("auth-runtime"))
+        }
+    }
+
     fn send_message_command(topic: &str, access_key: &str, signature: &str) -> RemotingCommand {
         let mut ext_fields = HashMap::new();
         ext_fields.insert(CheetahString::from_static_str("topic"), CheetahString::from(topic));
@@ -1171,7 +1234,13 @@ accounts:
             auth_config_path: CheetahString::from(temp.path().join("auth-store").to_string_lossy().as_ref()),
             ..AuthConfig::default()
         };
-        let registry = ProviderRegistry::local(&auth_config).unwrap();
+        let context = rocketmq_runtime::RuntimeContext::try_from_current("auth-v1-migration-test").unwrap();
+        let metadata_io = MetadataIoActor::start(
+            &context.service_context("auth.v1-migration"),
+            MetadataIoConfig::default(),
+        )
+        .unwrap();
+        let registry = ProviderRegistry::local_with_metadata_io(&auth_config, Some(metadata_io)).unwrap();
         let acl_file = temp.path().join("conf").join("acl").join("legacy.yml");
         fs::create_dir_all(acl_file.parent().unwrap()).unwrap();
         fs::write(

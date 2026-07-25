@@ -149,9 +149,8 @@ pub mod bench_support {
     use std::time::Duration;
     use std::time::Instant;
 
-    use rocketmq_runtime::RuntimeHandle;
+    use rocketmq_runtime::ChildServiceContext;
     use rocketmq_runtime::ShutdownReport;
-    use rocketmq_runtime::TaskGroup;
     use serde::Serialize;
     use tokio::sync::oneshot;
 
@@ -176,10 +175,13 @@ pub mod bench_support {
         pub healthy: bool,
     }
 
-    pub async fn run_proxy_housekeeping_lifecycle_probe(shutdown_delay: Duration) -> ProxyHousekeepingLifecycleProbe {
+    pub async fn run_proxy_housekeeping_lifecycle_probe(
+        shutdown_delay: Duration,
+        service_context: ChildServiceContext,
+    ) -> ProxyHousekeepingLifecycleProbe {
         let service = housekeeping_service();
-        let runtime = tokio::runtime::Handle::current();
-        let task_group = TaskGroup::root("rocketmq-proxy.bench.housekeeping", RuntimeHandle::new(runtime));
+        let task_group = service_context.task_group().child("rocketmq-proxy.bench.housekeeping");
+        let housekeeping_parent = task_group.clone();
         let (started_tx, started_rx) = oneshot::channel();
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         let (report_tx, report_rx) = oneshot::channel();
@@ -189,9 +191,12 @@ pub mod bench_support {
             .spawn_service("proxy.grpc.housekeeping", async move {
                 let _ = started_tx.send(());
                 let run_report = housekeeping
-                    .run_housekeeping_until_with_report(async move {
-                        let _ = shutdown_rx.await;
-                    })
+                    .run_housekeeping_until_with_report(
+                        async move {
+                            let _ = shutdown_rx.await;
+                        },
+                        housekeeping_parent,
+                    )
                     .await;
                 let _ = report_tx.send(run_report);
             })
@@ -264,7 +269,12 @@ mod bench_support_tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn proxy_housekeeping_probe_reports_clean_shutdown() {
-        let probe = super::bench_support::run_proxy_housekeeping_lifecycle_probe(Duration::ZERO).await;
+        let runtime = rocketmq_runtime::RuntimeContext::from_current("proxy-housekeeping-probe-test");
+        let probe = super::bench_support::run_proxy_housekeeping_lifecycle_probe(
+            Duration::ZERO,
+            runtime.service_context("proxy"),
+        )
+        .await;
 
         assert!(probe.healthy, "{probe:?}");
         assert_eq!(probe.task_count_after_shutdown, 0, "{probe:?}");

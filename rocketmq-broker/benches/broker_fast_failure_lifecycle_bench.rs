@@ -24,6 +24,7 @@ use criterion::criterion_main;
 use criterion::Criterion;
 use rocketmq_broker::bench_support::run_broker_fast_failure_lifecycle_probe;
 use rocketmq_broker::bench_support::BrokerFastFailureLifecycleProbe;
+use rocketmq_runtime::RuntimeContext;
 
 fn run_lifecycle_probe() -> BrokerFastFailureLifecycleProbe {
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -34,7 +35,10 @@ fn run_lifecycle_probe() -> BrokerFastFailureLifecycleProbe {
         .build()
         .expect("broker fast failure benchmark runtime should start");
 
-    runtime.block_on(run_broker_fast_failure_lifecycle_probe())
+    runtime.block_on(async {
+        let context = RuntimeContext::from_current("broker-fast-failure-bench");
+        run_broker_fast_failure_lifecycle_probe(context.service_context("broker")).await
+    })
 }
 
 fn workspace_root() -> PathBuf {

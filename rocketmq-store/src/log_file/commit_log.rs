@@ -925,6 +925,7 @@ impl DerefMut for CommitLog {
 
 impl CommitLog {
     pub(crate) fn new(
+        runtime_scope: crate::runtime::StoreRuntimeScope,
         message_store_config: Arc<MessageStoreConfig>,
         store_runtime_state: Arc<StoreRuntimeState>,
         broker_config: Arc<StoreRuntimeConfig>,
@@ -967,6 +968,7 @@ impl CommitLog {
                 topic_config_table,
                 consume_queue_store,
                 flush_manager: DefaultFlushManager::new(
+                    runtime_scope,
                     message_store_config.clone(),
                     mapped_file_flush,
                     store_checkpoint,
@@ -3475,7 +3477,14 @@ mod tests {
         message_store_config.store_path_root_dir = root.to_string_lossy().into_owned().into();
         let message_store_config = Arc::new(message_store_config);
         let topic_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>> = Arc::new(DashMap::new());
-        let mut store = LocalFileMessageStore::new(message_store_config, broker_config, topic_table, None, false);
+        let mut store = LocalFileMessageStore::new(
+            message_store_config,
+            broker_config,
+            topic_table,
+            None,
+            false,
+            crate::runtime::test_service_context("commit-log-store-test"),
+        );
         store
             .wire_owned_root_dependencies()
             .expect("commit-log tests should wire owned Store capabilities");

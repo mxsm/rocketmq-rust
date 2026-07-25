@@ -1,0 +1,5 @@
+error[E0599]: no method named `root_context` found for struct `ChildServiceContext` in the current scope
+ --> tests/ui/service_context/child_cannot_be_promoted.rs:5:11
+  |
+5 |     child.root_context()
+  |           ^^^^^^^^^^^^ method not found in `ChildServiceContext`

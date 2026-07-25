@@ -46,9 +46,8 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::BlockingExecutor;
-use crate::BlockingPoolPolicy;
+use crate::ChildServiceContext;
 use crate::RuntimeError;
-use crate::ServiceContext;
 
 /// An immutable absolute deadline for metadata admission and durability waits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -470,7 +469,7 @@ impl MetadataIoActor {
     /// # Errors
     ///
     /// Returns a typed configuration or runtime lifecycle error.
-    pub fn start(service_context: &ServiceContext, config: MetadataIoConfig) -> Result<Self, MetadataIoError> {
+    pub fn start(service_context: &ChildServiceContext, config: MetadataIoConfig) -> Result<Self, MetadataIoError> {
         Self::start_with_file_system(service_context, config, Arc::new(LocalMetadataFileSystem))
     }
 
@@ -483,7 +482,7 @@ impl MetadataIoActor {
     ///
     /// Returns a typed configuration or runtime lifecycle error.
     pub fn start_with_file_system(
-        service_context: &ServiceContext,
+        service_context: &ChildServiceContext,
         config: MetadataIoConfig,
         file_system: Arc<dyn MetadataFileSystem>,
     ) -> Result<Self, MetadataIoError> {
@@ -492,20 +491,7 @@ impl MetadataIoActor {
             .task_group()
             .try_child("metadata-io")
             .map_err(startup_error)?;
-        let reaper_group = task_group
-            .try_child("metadata-io.blocking-reaper")
-            .map_err(startup_error)?;
-        let blocking = BlockingExecutor::new(
-            BlockingPoolPolicy {
-                name: format!("{}.metadata-io", service_context.name()),
-                max_concurrency: 1,
-                queue_timeout: config.blocking_queue_timeout,
-                task_timeout: config.blocking_task_timeout,
-                warn_after: config.blocking_warn_after,
-            },
-            reaper_group,
-        )
-        .map_err(startup_error)?;
+        let blocking = service_context.metadata_io().clone();
         let (sender, receiver) = mpsc::channel(config.max_pending_operations);
         let inner = Arc::new(ActorInner {
             config,

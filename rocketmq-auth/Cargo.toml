@@ -89,9 +89,5 @@ name    = "auth_hot_path_bench"
 harness = false
 
 [[bench]]
-name    = "auth_sync_bridge_bench"
-harness = false
-
-[[bench]]
 name    = "auth_acl_watcher_lifecycle_bench"
 harness = false

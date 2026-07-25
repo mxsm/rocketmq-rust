@@ -25,8 +25,8 @@ use rocketmq_model::common::mix_all::MASTER_ID;
 use rocketmq_model::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_protocol::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
 use rocketmq_protocol::protocol::DataVersion;
-use rocketmq_runtime::task::service_task::ServiceContext;
 use rocketmq_runtime::task::service_task::ServiceTask;
+use rocketmq_runtime::task::service_task::ServiceTaskContext;
 use rocketmq_runtime::task::ServiceManager;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_store::base::message_store::MessageStore;
@@ -68,7 +68,7 @@ where
         "BrokerPreOnlineService".to_string()
     }
 
-    async fn run(&self, context: &ServiceContext) {
+    async fn run(&self, context: &ServiceTaskContext) {
         while !context.is_stopped() {
             if !self.context.role_state.is_isolated() {
                 info!(

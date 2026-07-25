@@ -203,7 +203,14 @@ fn managed_refs(nodes: &[ManagedNode]) -> Vec<(u64, Arc<RaftNodeManager>)> {
 async fn start_managed_node(config: ControllerConfig, enable_runtime: bool) -> ManagedNode {
     let node_id = config.node_id;
     let addr = config.listen_addr;
-    let node = Arc::new(RaftNodeManager::new(ControllerConfigReader::new(config)).await.unwrap());
+    let node = Arc::new(
+        RaftNodeManager::new(
+            ControllerConfigReader::new(config),
+            test_storage_io("multi-node-persistent"),
+        )
+        .await
+        .unwrap(),
+    );
     let service = GrpcRaftService::new(node.raft());
     let (server_shutdown_tx, server_shutdown_rx) = oneshot::channel();
     let server_handle = tokio::spawn(async move {
@@ -519,7 +526,14 @@ async fn start_node(
         .with_storage_backend(StorageBackendType::Memory)
         .with_raft_peers(peers);
 
-    let node = Arc::new(RaftNodeManager::new(ControllerConfigReader::new(config)).await.unwrap());
+    let node = Arc::new(
+        RaftNodeManager::new(
+            ControllerConfigReader::new(config),
+            test_storage_io("multi-node-cluster"),
+        )
+        .await
+        .unwrap(),
+    );
 
     if !seed_known_peers {
         node.raft().runtime_config().heartbeat(false);
@@ -1275,4 +1289,10 @@ async fn test_persistent_follower_restart_rejoins_and_catches_up() {
     for node in &mut nodes {
         node.shutdown().await;
     }
+}
+fn test_storage_io(name: &'static str) -> rocketmq_runtime::BlockingExecutor {
+    rocketmq_runtime::RuntimeContext::from_current(name)
+        .service_context("controller-test")
+        .storage_io()
+        .clone()
 }

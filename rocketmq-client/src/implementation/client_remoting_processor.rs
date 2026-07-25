@@ -569,6 +569,13 @@ mod tests {
     use crate::consumer::store::read_offset_type::ReadOffsetType;
     use crate::producer::request_response_future::RequestResponseFuture;
 
+    fn test_task_group() -> rocketmq_runtime::TaskGroup {
+        rocketmq_runtime::RuntimeContext::from_current("client-remoting-processor-test")
+            .service_context("local-request-harness")
+            .task_group()
+            .clone()
+    }
+
     #[test]
     fn processor_weak_reference_does_not_keep_client_alive() {
         let client_instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "weak-processor-client", None);
@@ -661,7 +668,7 @@ mod tests {
         let (client_instance, consumer_impl) =
             client_with_push_consumer(group.clone(), "reset-consumer-offset-test").await;
         let mut processor = ClientRemotingProcessor::new(&client_instance);
-        let harness = LocalRequestHarness::new()
+        let harness = LocalRequestHarness::new(test_task_group())
             .await
             .expect("local remoting harness should start");
         let mq = MessageQueue::from_parts(topic.clone(), "broker-a", 0);
@@ -721,7 +728,7 @@ mod tests {
         let group = CheetahString::from_static_str("reset-missing-body-group");
         let (client_instance, _) = client_with_push_consumer(group.clone(), "reset-missing-body-test").await;
         let mut processor = ClientRemotingProcessor::new(&client_instance);
-        let harness = LocalRequestHarness::new()
+        let harness = LocalRequestHarness::new(test_task_group())
             .await
             .expect("local remoting harness should start");
         let mut request = RemotingCommand::create_request_command(
@@ -762,7 +769,7 @@ mod tests {
             .await;
 
         let mut processor = ClientRemotingProcessor::new(&client_instance);
-        let harness = LocalRequestHarness::new()
+        let harness = LocalRequestHarness::new(test_task_group())
             .await
             .expect("local remoting harness should start");
         let mut request = RemotingCommand::create_request_command(
@@ -793,7 +800,7 @@ mod tests {
         let client_instance =
             MQClientInstance::new_arc(ClientConfig::default(), 0, "consumer-status-missing-test", None);
         let mut processor = ClientRemotingProcessor::new(&client_instance);
-        let harness = LocalRequestHarness::new()
+        let harness = LocalRequestHarness::new(test_task_group())
             .await
             .expect("local remoting harness should start");
         let mut request = RemotingCommand::create_request_command(
@@ -824,7 +831,7 @@ mod tests {
         let client_instance =
             MQClientInstance::new_arc(ClientConfig::default(), 0, "consume-direct-malformed-header-test", None);
         let mut processor = ClientRemotingProcessor::new(&client_instance);
-        let harness = LocalRequestHarness::new()
+        let harness = LocalRequestHarness::new(test_task_group())
             .await
             .expect("local remoting harness should start");
         let mut request = RemotingCommand::create_remoting_command(RequestCode::ConsumeMessageDirectly);
@@ -846,7 +853,7 @@ mod tests {
         let client_instance =
             MQClientInstance::new_arc(ClientConfig::default(), 0, "consume-direct-missing-body-test", None);
         let mut processor = ClientRemotingProcessor::new(&client_instance);
-        let harness = LocalRequestHarness::new()
+        let harness = LocalRequestHarness::new(test_task_group())
             .await
             .expect("local remoting harness should start");
         let mut request = RemotingCommand::create_request_command(
@@ -875,7 +882,7 @@ mod tests {
         let client_instance =
             MQClientInstance::new_arc(ClientConfig::default(), 0, "consume-direct-malformed-body-test", None);
         let mut processor = ClientRemotingProcessor::new(&client_instance);
-        let harness = LocalRequestHarness::new()
+        let harness = LocalRequestHarness::new(test_task_group())
             .await
             .expect("local remoting harness should start");
         let mut request = RemotingCommand::create_request_command(
@@ -930,7 +937,7 @@ mod tests {
     async fn push_reply_message_with_malformed_header_returns_system_error() {
         let client_instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "reply-malformed-test", None);
         let mut processor = ClientRemotingProcessor::new(&client_instance);
-        let harness = LocalRequestHarness::new()
+        let harness = LocalRequestHarness::new(test_task_group())
             .await
             .expect("local remoting harness should start");
         let mut request = RemotingCommand::create_remoting_command(RequestCode::PushReplyMessageToClient);
@@ -951,7 +958,7 @@ mod tests {
     async fn push_reply_message_with_compressed_missing_body_returns_system_error() {
         let client_instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "reply-missing-body-test", None);
         let mut processor = ClientRemotingProcessor::new(&client_instance);
-        let harness = LocalRequestHarness::new()
+        let harness = LocalRequestHarness::new(test_task_group())
             .await
             .expect("local remoting harness should start");
         let mut request = RemotingCommand::create_request_command(
@@ -983,7 +990,7 @@ mod tests {
         let client_instance =
             MQClientInstance::new_arc(ClientConfig::default(), 0, "reply-unknown-compression-test", None);
         let mut processor = ClientRemotingProcessor::new(&client_instance);
-        let harness = LocalRequestHarness::new()
+        let harness = LocalRequestHarness::new(test_task_group())
             .await
             .expect("local remoting harness should start");
         let mut request = RemotingCommand::create_request_command(
@@ -1029,7 +1036,7 @@ mod tests {
 
         let client_instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "reply-roundtrip-test", None);
         let mut processor = ClientRemotingProcessor::new(&client_instance);
-        let harness = LocalRequestHarness::new()
+        let harness = LocalRequestHarness::new(test_task_group())
             .await
             .expect("local remoting harness should start");
         let mut request = RemotingCommand::create_request_command(
@@ -1060,7 +1067,7 @@ mod tests {
     async fn notify_unsubscribe_lite_callback_is_explicit_oneway_noop() {
         let client_instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "notify-lite-test", None);
         let mut processor = ClientRemotingProcessor::new(&client_instance);
-        let harness = LocalRequestHarness::new()
+        let harness = LocalRequestHarness::new(test_task_group())
             .await
             .expect("local remoting harness should start");
         let mut request = RemotingCommand::create_remoting_command(RequestCode::NotifyUnsubscribeLite);
@@ -1077,7 +1084,7 @@ mod tests {
     async fn notify_unsubscribe_lite_callback_with_valid_header_is_oneway_noop() {
         let client_instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "notify-lite-valid-test", None);
         let mut processor = ClientRemotingProcessor::new(&client_instance);
-        let harness = LocalRequestHarness::new()
+        let harness = LocalRequestHarness::new(test_task_group())
             .await
             .expect("local remoting harness should start");
         let mut request = RemotingCommand::create_request_command(
@@ -1103,7 +1110,7 @@ mod tests {
     async fn notify_consumer_ids_changed_with_malformed_header_is_oneway_noop() {
         let client_instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "notify-consumer-test", None);
         let mut processor = ClientRemotingProcessor::new(&client_instance);
-        let harness = LocalRequestHarness::new()
+        let harness = LocalRequestHarness::new(test_task_group())
             .await
             .expect("local remoting harness should start");
         let mut request = RemotingCommand::create_remoting_command(RequestCode::NotifyConsumerIdsChanged);
@@ -1123,7 +1130,7 @@ mod tests {
     async fn check_transaction_state_with_malformed_header_is_oneway_noop() {
         let client_instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "tx-malformed-test", None);
         let mut processor = ClientRemotingProcessor::new(&client_instance);
-        let harness = LocalRequestHarness::new()
+        let harness = LocalRequestHarness::new(test_task_group())
             .await
             .expect("local remoting harness should start");
         let mut request = RemotingCommand::create_remoting_command(RequestCode::CheckTransactionState);
@@ -1143,7 +1150,7 @@ mod tests {
     async fn check_transaction_state_with_missing_body_is_oneway_noop() {
         let client_instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "tx-missing-body-test", None);
         let mut processor = ClientRemotingProcessor::new(&client_instance);
-        let harness = LocalRequestHarness::new()
+        let harness = LocalRequestHarness::new(test_task_group())
             .await
             .expect("local remoting harness should start");
         let mut request = RemotingCommand::create_request_command(
@@ -1194,7 +1201,7 @@ mod tests {
         let group = CheetahString::from_static_str("running-info-group");
         let (client_instance, _consumer_impl) = client_with_push_consumer(group.clone(), "running-info-client").await;
         let mut processor = ClientRemotingProcessor::new(&client_instance);
-        let harness = LocalRequestHarness::new()
+        let harness = LocalRequestHarness::new(test_task_group())
             .await
             .expect("local remoting harness should start");
         let mut request = RemotingCommand::create_request_command(
@@ -1234,7 +1241,7 @@ mod tests {
     async fn get_consumer_running_info_missing_group_returns_system_error() {
         let client_instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "running-info-missing-test", None);
         let mut processor = ClientRemotingProcessor::new(&client_instance);
-        let harness = LocalRequestHarness::new()
+        let harness = LocalRequestHarness::new(test_task_group())
             .await
             .expect("local remoting harness should start");
         let mut request = RemotingCommand::create_request_command(

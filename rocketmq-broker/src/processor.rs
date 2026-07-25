@@ -753,10 +753,13 @@ mod tests {
 
     #[tokio::test]
     async fn broker_request_processor_checks_auth_before_dispatch() {
-        let auth_runtime = AuthRuntimeBuilder::new(AuthConfig {
-            authentication_enabled: true,
-            ..AuthConfig::default()
-        })
+        let auth_runtime = AuthRuntimeBuilder::new(
+            AuthConfig {
+                authentication_enabled: true,
+                ..AuthConfig::default()
+            },
+            crate::test_service_context("auth-runtime"),
+        )
         .build()
         .await
         .expect("auth runtime should initialize");
@@ -764,7 +767,7 @@ mod tests {
         processor.set_auth_runtime(Arc::new(auth_runtime));
 
         let mut request = RemotingCommand::create_remoting_command(RequestCode::SendMessage.to_i32()).set_opaque(7);
-        let harness = LocalRequestHarness::new()
+        let harness = LocalRequestHarness::new(crate::test_task_group("local-harness"))
             .await
             .expect("local remoting harness should start");
 

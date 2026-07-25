@@ -19,18 +19,27 @@ use rocketmq_error::RocketMQError;
 
 use crate::store::RocksDbStore;
 
-pub async fn create_checkpoint(store: Arc<RocksDbStore>, target_dir: PathBuf) -> Result<(), RocketMQError> {
-    store.create_checkpoint(target_dir).await
+pub async fn create_checkpoint(
+    store: Arc<RocksDbStore>,
+    runtime_scope: &crate::runtime::RocksDbRuntimeScope,
+    target_dir: PathBuf,
+) -> Result<(), RocketMQError> {
+    store.create_checkpoint(runtime_scope, target_dir).await
 }
 
-pub async fn create_backup(store: Arc<RocksDbStore>, backup_dir: PathBuf) -> Result<(), RocketMQError> {
-    store.create_backup(backup_dir).await
+pub async fn create_backup(
+    store: Arc<RocksDbStore>,
+    runtime_scope: &crate::runtime::RocksDbRuntimeScope,
+    backup_dir: PathBuf,
+) -> Result<(), RocketMQError> {
+    store.create_backup(runtime_scope, backup_dir).await
 }
 
 pub async fn restore_latest_backup(
+    runtime_scope: &crate::runtime::RocksDbRuntimeScope,
     backup_dir: PathBuf,
     db_dir: PathBuf,
     wal_dir: Option<PathBuf>,
 ) -> Result<(), RocketMQError> {
-    RocksDbStore::restore_latest_backup(backup_dir, db_dir, wal_dir).await
+    RocksDbStore::restore_latest_backup(runtime_scope, backup_dir, db_dir, wal_dir).await
 }

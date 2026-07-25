@@ -24,9 +24,8 @@ use crate::config::ControllerConfigReader;
 use crate::config::StorageBackendType;
 use crate::error::Result;
 use crate::storage::create_storage;
-use crate::storage::create_storage_with_task_group;
 use crate::storage::StorageConfig;
-use rocketmq_runtime::TaskGroup;
+use rocketmq_runtime::BlockingExecutor;
 
 use super::log_store::LogStore;
 use super::state_machine::StateMachine;
@@ -50,15 +49,9 @@ impl Store {
         }
     }
 
-    pub async fn open(config: ControllerConfigReader) -> Result<Self> {
+    pub async fn open(config: ControllerConfigReader, storage_io: BlockingExecutor) -> Result<Self> {
         let startup_config = config.snapshot();
-        let backend = create_storage(storage_config(&startup_config)?).await?;
-        Self::open_with_backend(config, backend).await
-    }
-
-    pub async fn open_with_task_group(config: ControllerConfigReader, parent_task_group: TaskGroup) -> Result<Self> {
-        let startup_config = config.snapshot();
-        let backend = create_storage_with_task_group(storage_config(&startup_config)?, parent_task_group).await?;
+        let backend = create_storage(storage_config(&startup_config)?, storage_io).await?;
         Self::open_with_backend(config, backend).await
     }
 

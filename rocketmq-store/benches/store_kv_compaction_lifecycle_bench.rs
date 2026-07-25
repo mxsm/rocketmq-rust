@@ -22,19 +22,25 @@ use std::time::UNIX_EPOCH;
 use criterion::criterion_group;
 use criterion::criterion_main;
 use criterion::Criterion;
+use rocketmq_runtime::RuntimeConfig;
+use rocketmq_runtime::RuntimeOwner;
 use rocketmq_store::bench_support::run_store_kv_compaction_lifecycle_probe;
 use rocketmq_store::bench_support::StoreKvCompactionLifecycleProbe;
 
 fn run_lifecycle_probe() -> StoreKvCompactionLifecycleProbe {
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
-        .max_blocking_threads(4)
-        .thread_name("rocketmq-store-kv-compaction-bench")
-        .enable_all()
-        .build()
-        .expect("store KV compaction benchmark runtime should start");
-
-    runtime.block_on(run_store_kv_compaction_lifecycle_probe())
+    let owner = RuntimeOwner::new(RuntimeConfig {
+        worker_threads: 2,
+        max_blocking_threads: 4,
+        thread_name: "rocketmq-store-kv-compaction-bench".to_string(),
+        ..RuntimeConfig::default()
+    })
+    .expect("store KV compaction benchmark runtime should start");
+    let context = owner.root_context().child("store-kv-compaction-bench");
+    let output = owner.block_on(run_store_kv_compaction_lifecycle_probe(context));
+    owner
+        .shutdown_runtime_blocking()
+        .expect("store KV compaction benchmark runtime should stop");
+    output
 }
 
 fn workspace_root() -> PathBuf {

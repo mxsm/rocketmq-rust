@@ -31,8 +31,9 @@ use rocketmq_error::RocketMQResult;
 use crate::authentication::context::default_authentication_context::DefaultAuthenticationContext;
 use crate::authentication::provider::AuthenticationProvider;
 use crate::authentication::strategy::abstract_authentication_strategy::AbstractAuthenticationStrategy;
+use crate::authentication::strategy::authenticate_with_provider;
 use crate::authentication::strategy::authentication_strategy::AuthenticationStrategy;
-use crate::authentication::strategy::block_on_authentication_provider;
+use crate::authentication::strategy::AuthenticationFuture;
 use crate::authorization::context::authentication_context::AuthenticationContext;
 use crate::config::AuthConfig;
 use crate::AuthMetrics;
@@ -180,7 +181,7 @@ where
     }
 
     /// Perform actual authentication without caching.
-    fn do_authenticate_internal(&self, context: &dyn AuthenticationContext) -> Result<(), AuthError> {
+    async fn do_authenticate_internal(&self, context: &dyn AuthenticationContext) -> Result<(), AuthError> {
         if !self.auth_config.authentication_enabled {
             return Ok(());
         }
@@ -205,7 +206,7 @@ where
             None => return Ok(()),
         };
 
-        block_on_authentication_provider(provider.as_ref(), default_context)
+        authenticate_with_provider(provider.as_ref(), default_context).await
     }
 
     pub fn provider(&self) -> Option<&P> {
@@ -245,46 +246,46 @@ impl<P> AuthenticationStrategy for StatefulAuthenticationStrategy<P>
 where
     P: AuthenticationProvider<Context = DefaultAuthenticationContext> + Send + Sync + 'static,
 {
-    fn authenticate(&self, context: &dyn AuthenticationContext) -> Result<(), AuthError> {
-        let default_context = context
-            .as_any()
-            .downcast_ref::<DefaultAuthenticationContext>()
-            .ok_or_else(|| {
-                AuthError::AuthenticationFailed(
-                    "Stateful authentication requires DefaultAuthenticationContext".to_string(),
-                )
-            })?;
+    fn authenticate<'a>(&'a self, context: &'a dyn AuthenticationContext) -> AuthenticationFuture<'a> {
+        Box::pin(async move {
+            let default_context = context
+                .as_any()
+                .downcast_ref::<DefaultAuthenticationContext>()
+                .ok_or_else(|| {
+                    AuthError::AuthenticationFailed(
+                        "Stateful authentication requires DefaultAuthenticationContext".to_string(),
+                    )
+                })?;
 
-        if default_context.base.channel_id().is_none() {
-            return self.do_authenticate_internal(context);
-        }
+            if default_context.base.channel_id().is_none() {
+                return self.do_authenticate_internal(context).await;
+            }
 
-        let cache_key = self.build_cache_key(default_context)?;
+            let cache_key = self.build_cache_key(default_context)?;
 
-        let result = if let Some(result) = self.auth_cache.get(&cache_key) {
-            self.metrics.record_cache_hit();
-            result
-        } else {
-            self.metrics.record_cache_miss();
-            self.auth_cache
-                .try_get_with(cache_key, || -> Result<AuthCacheEntry, AuthError> {
-                    match self.do_authenticate_internal(context) {
-                        Ok(()) => Ok(AuthCacheEntry::success()),
-                        Err(e) => Ok(AuthCacheEntry::failure(e.to_string())),
-                    }
-                })
-                .map_err(|e| AuthError::AuthenticationFailed(format!("Cache operation failed: {}", e)))?
-        };
-
-        if !result.success {
-            return Err(AuthError::AuthenticationFailed(
+            let result = if let Some(result) = self.auth_cache.get(&cache_key) {
+                self.metrics.record_cache_hit();
                 result
-                    .error_message
-                    .unwrap_or_else(|| "Authentication failed".to_string()),
-            ));
-        }
+            } else {
+                self.metrics.record_cache_miss();
+                let result = match self.do_authenticate_internal(context).await {
+                    Ok(()) => AuthCacheEntry::success(),
+                    Err(error) => AuthCacheEntry::failure(error.to_string()),
+                };
+                self.auth_cache.insert(cache_key, result.clone());
+                result
+            };
 
-        Ok(())
+            if !result.success {
+                return Err(AuthError::AuthenticationFailed(
+                    result
+                        .error_message
+                        .unwrap_or_else(|| "Authentication failed".to_string()),
+                ));
+            }
+
+            Ok(())
+        })
     }
 }
 
@@ -394,8 +395,8 @@ mod tests {
         assert_eq!(key, "8#channel-789");
     }
 
-    #[test]
-    fn test_authentication_disabled() {
+    #[tokio::test]
+    async fn test_authentication_disabled() {
         let config = AuthConfig {
             authentication_enabled: false,
             ..Default::default()
@@ -405,7 +406,7 @@ mod tests {
             StatefulAuthenticationStrategy::new(config, None);
 
         let context = DefaultAuthenticationContext::new();
-        let result = strategy.authenticate(&context);
+        let result = strategy.authenticate(&context).await;
         assert!(result.is_ok());
     }
 
@@ -450,7 +451,7 @@ mod tests {
 
         let context = DefaultAuthenticationContext::new();
 
-        let result = strategy.authenticate(&context);
+        let result = strategy.authenticate(&context).await;
         assert!(result.is_ok());
     }
 
@@ -475,22 +476,22 @@ mod tests {
         context.base.set_channel_id(Some(CheetahString::from("channel-1")));
         context.set_username(CheetahString::from("alice"));
 
-        assert!(strategy.authenticate(&context).is_ok());
+        assert!(strategy.authenticate(&context).await.is_ok());
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
 
         should_succeed.store(false, std::sync::atomic::Ordering::SeqCst);
-        assert!(strategy.authenticate(&context).is_ok());
+        assert!(strategy.authenticate(&context).await.is_ok());
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
 
         acl_generation.fetch_add(1, Ordering::AcqRel);
-        let result = strategy.authenticate(&context);
+        let result = strategy.authenticate(&context).await;
 
         assert!(result.is_err());
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
     }
 
-    #[test]
-    fn authenticates_inside_current_thread_runtime_without_block_in_place_panic() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn authenticates_inside_current_thread_runtime_without_block_in_place_panic() {
         let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let should_succeed = Arc::new(std::sync::atomic::AtomicBool::new(true));
         let provider = Arc::new(CountingAuthenticationProvider {
@@ -509,14 +510,7 @@ mod tests {
             .base
             .set_channel_id(Some(CheetahString::from("channel-current-thread")));
         context.set_username(CheetahString::from("alice"));
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-
-        runtime.block_on(async {
-            assert!(strategy.authenticate(&context).is_ok());
-        });
+        assert!(strategy.authenticate(&context).await.is_ok());
 
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     }

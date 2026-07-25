@@ -59,6 +59,7 @@ use rocketmq_store::rocksdb::message::TimerRocksDbRecord;
 use rocketmq_store::rocksdb::message::TransRocksDbRecord;
 use rocketmq_store::rocksdb::options::RocksDbOptionsFactory;
 use rocketmq_store::rocksdb::options::RocksDbWriteProfile;
+use rocketmq_store::rocksdb::runtime::RocksDbRuntimeScope;
 use rocketmq_store::rocksdb::store::KeyValueStore;
 use rocketmq_store::rocksdb::store::RocksDbStore;
 use rocketmq_store::rocksdb::store::RocksDbStoreState;
@@ -82,12 +83,28 @@ use rocketmq_store::rocksdb::value::TransRocksDbValue;
 use rocketmq_store::timer::timer_message_store::TIMER_TOPIC;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use tempfile::TempDir;
 
 const KB: usize = 1024;
 const MB: usize = 1024 * KB;
 const GB: usize = 1024 * MB;
 const MB_U64: u64 = 1024 * 1024;
+
+fn rocksdb_service_context(name: &'static str) -> rocketmq_runtime::ChildServiceContext {
+    static OWNER: OnceLock<rocketmq_runtime::RuntimeOwner> = OnceLock::new();
+    OWNER
+        .get_or_init(|| {
+            rocketmq_runtime::RuntimeOwner::new(rocketmq_runtime::RuntimeConfig::default())
+                .expect("RocksDB integration-test runtime owner should start")
+        })
+        .root_context()
+        .child(name)
+}
+
+fn rocksdb_runtime_scope(name: &'static str) -> RocksDbRuntimeScope {
+    RocksDbRuntimeScope::new(rocksdb_service_context(name))
+}
 const GB_U64: u64 = 1024 * MB_U64;
 
 #[test]
@@ -396,6 +413,7 @@ fn rocksdb_message_store_try_new_opens_real_rocksdb_consume_queue_backend() {
         Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
         None,
         true,
+        rocksdb_service_context("rocksdb-message-store-open-test"),
     )
     .expect("rocksdb message store should construct");
 
@@ -460,6 +478,7 @@ fn rocksdb_message_store_try_new_rejects_conflicting_consume_queue_path() {
         Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
         None,
         true,
+        rocksdb_service_context("rocksdb-message-store-conflict-test"),
     )
     .expect_err("conflicting consume queue rocksdb path should be rejected");
 
@@ -482,6 +501,7 @@ fn rocksdb_message_store_close_closes_consume_queue_and_message_rocksdb() {
         Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
         None,
         true,
+        rocksdb_service_context("rocksdb-message-store-close-test"),
     )
     .expect("rocksdb message store should construct");
     let message_rocksdb_storage = message_store.message_rocksdb_storage();
@@ -523,6 +543,7 @@ fn rocksdb_message_store_try_new_rejects_non_rocksdb_store_type() {
         Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
         None,
         true,
+        rocksdb_service_context("rocksdb-message-store-type-test"),
     )
     .expect_err("rocksdb message store should reject local file store type");
 
@@ -1919,6 +1940,7 @@ fn rocksdb_store_prefix_and_range_scan_return_bounded_results() {
 async fn rocksdb_store_blocking_prefix_and_range_scan_return_bounded_results() {
     let temp_dir = TempDir::new().expect("temp dir should be created");
     let store = RocksDbStore::open(test_config(&temp_dir)).expect("rocksdb store should open");
+    let runtime_scope = rocksdb_runtime_scope("rocksdb-blocking-scan-test");
 
     for (key, value) in [
         (&b"timer:0001"[..], &b"a"[..]),
@@ -1932,11 +1954,10 @@ async fn rocksdb_store_blocking_prefix_and_range_scan_return_bounded_results() {
     }
 
     let prefix_items = store
-        .prefix_scan_blocking(RocksDbScanOptions::prefix(
-            RocksDbColumnFamily::Default.name(),
-            b"timer:",
-            2,
-        ))
+        .prefix_scan_blocking(
+            &runtime_scope,
+            RocksDbScanOptions::prefix(RocksDbColumnFamily::Default.name(), b"timer:", 2),
+        )
         .await
         .expect("blocking prefix scan should succeed");
     assert_eq!(
@@ -1945,12 +1966,10 @@ async fn rocksdb_store_blocking_prefix_and_range_scan_return_bounded_results() {
     );
 
     let range_items = store
-        .range_scan_blocking(RocksDbRangeScanOptions::new(
-            RocksDbColumnFamily::Default.name(),
-            b"timer:0002",
-            b"timer:0004",
-            10,
-        ))
+        .range_scan_blocking(
+            &runtime_scope,
+            RocksDbRangeScanOptions::new(RocksDbColumnFamily::Default.name(), b"timer:0002", b"timer:0004", 10),
+        )
         .await
         .expect("blocking range scan should succeed");
     assert_eq!(
@@ -2143,12 +2162,14 @@ fn group_commit_config_defaults_match_java_batching_baseline() {
 async fn group_commit_service_drains_requests_and_flushes_on_shutdown() {
     let temp_dir = TempDir::new().expect("temp dir should be created");
     let store = Arc::new(RocksDbStore::open(test_config(&temp_dir)).expect("rocksdb store should open"));
+    let runtime_scope = rocksdb_runtime_scope("rocksdb-group-commit-test");
     let service = RocksDbConsumeQueueGroupCommitService::start(
         Arc::clone(&store),
         RocksDbConsumeQueueGroupCommitConfig {
             queue_capacity: 8,
             batch_size: 2,
         },
+        runtime_scope,
     )
     .expect("group commit service should start");
 
@@ -2221,8 +2242,8 @@ async fn group_commit_service_drains_requests_and_flushes_on_shutdown() {
     );
 }
 
-#[test]
-fn group_commit_service_rejects_invalid_queue_config() {
+#[tokio::test]
+async fn group_commit_service_rejects_invalid_queue_config() {
     let temp_dir = TempDir::new().expect("temp dir should be created");
     let store = Arc::new(RocksDbStore::open(test_config(&temp_dir)).expect("rocksdb store should open"));
 
@@ -2232,6 +2253,7 @@ fn group_commit_service_rejects_invalid_queue_config() {
             queue_capacity: 0,
             batch_size: 256,
         },
+        rocksdb_runtime_scope("rocksdb-invalid-group-commit-test"),
     )
     .is_err());
 }
@@ -2643,6 +2665,7 @@ async fn rocksdb_consume_queue_store_clean_expired_runs_default_cf_manual_compac
     let temp_dir = TempDir::new().expect("temp dir should be created");
     let store = Arc::new(RocksDbStore::open(test_config(&temp_dir)).expect("rocksdb store should open"));
     let cq_store = RocksDbConsumeQueueStore::new(Arc::clone(&store));
+    let runtime_scope = rocksdb_runtime_scope("rocksdb-consume-queue-clean-test");
     cq_store
         .put_message_position(&[
             dispatch_request("TopicA", 3, 0, 100, 10, 1, 1_700_000_000_000),
@@ -2652,7 +2675,7 @@ async fn rocksdb_consume_queue_store_clean_expired_runs_default_cf_manual_compac
     assert_eq!(store.manual_compaction_count(), 0);
 
     cq_store
-        .clean_expired(150)
+        .clean_expired(&runtime_scope, 150)
         .await
         .expect("clean expired should compact default cf");
 
@@ -2676,6 +2699,7 @@ async fn rocksdb_consume_queue_store_clean_expired_runs_default_cf_manual_compac
 async fn rocksdb_store_checkpoint_can_be_opened_as_independent_readable_database() {
     let temp_dir = TempDir::new().expect("temp dir should be created");
     let store = RocksDbStore::open(test_config(&temp_dir)).expect("rocksdb store should open");
+    let runtime_scope = rocksdb_runtime_scope("rocksdb-checkpoint-test");
     store
         .put_cf(
             RocksDbColumnFamily::Default.name(),
@@ -2687,7 +2711,7 @@ async fn rocksdb_store_checkpoint_can_be_opened_as_independent_readable_database
     let checkpoint_dir = temp_dir.path().join("checkpoint");
 
     store
-        .create_checkpoint(checkpoint_dir.clone())
+        .create_checkpoint(&runtime_scope, checkpoint_dir.clone())
         .await
         .expect("checkpoint should be created");
 
@@ -2710,10 +2734,11 @@ async fn rocksdb_store_checkpoint_can_be_opened_as_independent_readable_database
 async fn rocksdb_store_checkpoint_rejects_closed_store() {
     let temp_dir = TempDir::new().expect("temp dir should be created");
     let store = RocksDbStore::open(test_config(&temp_dir)).expect("rocksdb store should open");
+    let runtime_scope = rocksdb_runtime_scope("rocksdb-closed-checkpoint-test");
     store.close();
 
     let error = store
-        .create_checkpoint(temp_dir.path().join("closed-checkpoint"))
+        .create_checkpoint(&runtime_scope, temp_dir.path().join("closed-checkpoint"))
         .await
         .expect_err("closed store checkpoint should fail");
 
@@ -2724,6 +2749,7 @@ async fn rocksdb_store_checkpoint_rejects_closed_store() {
 async fn rocksdb_store_backup_can_restore_latest_backup_as_readable_database() {
     let temp_dir = TempDir::new().expect("temp dir should be created");
     let store = RocksDbStore::open(test_config(&temp_dir)).expect("rocksdb store should open");
+    let runtime_scope = rocksdb_runtime_scope("rocksdb-backup-restore-test");
     store
         .put_cf(RocksDbColumnFamily::Default.name(), b"backup-key", b"backup-value")
         .expect("default cf seed write should succeed");
@@ -2738,12 +2764,12 @@ async fn rocksdb_store_backup_can_restore_latest_backup_as_readable_database() {
     let restore_dir = temp_dir.path().join("restore");
 
     store
-        .create_backup(backup_dir.clone())
+        .create_backup(&runtime_scope, backup_dir.clone())
         .await
         .expect("backup should be created");
     assert_eq!(store.metrics().backup_count, 1);
 
-    RocksDbStore::restore_latest_backup(backup_dir, restore_dir.clone(), None)
+    RocksDbStore::restore_latest_backup(&runtime_scope, backup_dir, restore_dir.clone(), None)
         .await
         .expect("latest backup should restore");
 
@@ -2773,10 +2799,11 @@ async fn rocksdb_store_backup_can_restore_latest_backup_as_readable_database() {
 async fn rocksdb_store_backup_rejects_closed_store() {
     let temp_dir = TempDir::new().expect("temp dir should be created");
     let store = RocksDbStore::open(test_config(&temp_dir)).expect("rocksdb store should open");
+    let runtime_scope = rocksdb_runtime_scope("rocksdb-closed-backup-test");
     store.close();
 
     let error = store
-        .create_backup(temp_dir.path().join("closed-backup"))
+        .create_backup(&runtime_scope, temp_dir.path().join("closed-backup"))
         .await
         .expect_err("closed store backup should fail");
 
@@ -2788,8 +2815,9 @@ async fn rocksdb_store_restore_latest_backup_fails_when_no_backup_exists() {
     let temp_dir = TempDir::new().expect("temp dir should be created");
     let backup_dir = temp_dir.path().join("empty-backup");
     let restore_dir = temp_dir.path().join("restore-empty");
+    let runtime_scope = rocksdb_runtime_scope("rocksdb-empty-backup-restore-test");
 
-    let error = RocksDbStore::restore_latest_backup(backup_dir, restore_dir, None)
+    let error = RocksDbStore::restore_latest_backup(&runtime_scope, backup_dir, restore_dir, None)
         .await
         .expect_err("restore should fail when no backup exists");
 
@@ -2809,6 +2837,7 @@ async fn rocksdb_maintenance_service_run_once_executes_enabled_operations() {
     };
     let checkpoint_root = RocksDbMaintenanceConfig::from_rocksdb_config(&rocksdb_config).checkpoint_root;
     let store = Arc::new(RocksDbStore::open(rocksdb_config.clone()).expect("rocksdb store should open"));
+    let runtime_scope = rocksdb_runtime_scope("rocksdb-maintenance-run-once-test");
     store
         .put_cf(
             RocksDbColumnFamily::Default.name(),
@@ -2816,7 +2845,7 @@ async fn rocksdb_maintenance_service_run_once_executes_enabled_operations() {
             b"maintenance-value",
         )
         .expect("maintenance seed write should succeed");
-    let service = RocksDbMaintenanceService::new(Arc::clone(&store), rocksdb_config);
+    let service = RocksDbMaintenanceService::new(Arc::clone(&store), rocksdb_config, runtime_scope);
 
     service.run_once().await.expect("maintenance run should succeed");
 
@@ -2843,10 +2872,11 @@ async fn rocksdb_maintenance_service_start_and_shutdown_are_graceful() {
         ..test_config(&temp_dir)
     };
     let store = Arc::new(RocksDbStore::open(rocksdb_config.clone()).expect("rocksdb store should open"));
+    let runtime_scope = rocksdb_runtime_scope("rocksdb-maintenance-lifecycle-test");
     store
         .put_cf(RocksDbColumnFamily::Default.name(), b"maintenance-loop-key", b"value")
         .expect("maintenance loop seed write should succeed");
-    let mut service = RocksDbMaintenanceService::new(Arc::clone(&store), rocksdb_config);
+    let mut service = RocksDbMaintenanceService::new(Arc::clone(&store), rocksdb_config, runtime_scope);
 
     service.start();
     assert!(service.is_running());
@@ -2871,6 +2901,7 @@ async fn rocksdb_maintenance_service_start_and_shutdown_are_graceful() {
 async fn rocksdb_store_metrics_count_core_operations_and_errors() {
     let temp_dir = TempDir::new().expect("temp dir should be created");
     let store = RocksDbStore::open(test_config(&temp_dir)).expect("rocksdb store should open");
+    let runtime_scope = rocksdb_runtime_scope("rocksdb-operation-metrics-test");
     assert_eq!(store.metrics(), Default::default());
 
     store
@@ -2899,7 +2930,7 @@ async fn rocksdb_store_metrics_count_core_operations_and_errors() {
         .compact_range_cf(RocksDbColumnFamily::Default.name(), None, None)
         .expect("manual compaction should succeed");
     store
-        .create_checkpoint(temp_dir.path().join("metrics-checkpoint"))
+        .create_checkpoint(&runtime_scope, temp_dir.path().join("metrics-checkpoint"))
         .await
         .expect("checkpoint should succeed");
     let error = store
@@ -2965,8 +2996,15 @@ fn rocksdb_message_store_dispatcher_dual_writes_commitlog_dispatch_to_rocksdb_cq
     });
     let broker_config = Arc::new(StoreRuntimeConfig::default());
     let topic_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>> = Arc::new(DashMap::new());
-    let mut message_store = RocksDBMessageStore::try_new(message_store_config, broker_config, topic_table, None, false)
-        .expect("rocksdb message store should open");
+    let mut message_store = RocksDBMessageStore::try_new(
+        message_store_config,
+        broker_config,
+        topic_table,
+        None,
+        false,
+        rocksdb_service_context("rocksdb-message-store-dispatch-test"),
+    )
+    .expect("rocksdb message store should open");
     let mut request = dispatch_request("TopicA", 3, 7, 1024, 128, 7, 1_700_000_000_000);
     request.keys = CheetahString::from_static_str("KeyA");
     request.uniq_key = Some(CheetahString::from_static_str("UniqA"));
@@ -3050,6 +3088,7 @@ fn rocksdb_message_store_registers_trans_dispatcher_when_enabled() {
         Arc::new(DashMap::new()),
         None,
         false,
+        rocksdb_service_context("rocksdb-message-store-trans-enabled-test"),
     )
     .expect("rocksdb message store should open");
     let trans_service = message_store
@@ -3092,6 +3131,7 @@ fn rocksdb_message_store_keeps_trans_service_disabled_by_default() {
         Arc::new(DashMap::new()),
         None,
         false,
+        rocksdb_service_context("rocksdb-message-store-trans-disabled-test"),
     )
     .expect("rocksdb message store should open");
 
@@ -3114,6 +3154,7 @@ fn rocksdb_message_store_registers_timer_dispatcher_when_enabled() {
         Arc::new(DashMap::new()),
         None,
         false,
+        rocksdb_service_context("rocksdb-message-store-timer-enabled-test"),
     )
     .expect("rocksdb message store should open");
     let timer_service = message_store
@@ -3155,6 +3196,7 @@ fn rocksdb_message_store_keeps_timer_service_disabled_by_default() {
         Arc::new(DashMap::new()),
         None,
         false,
+        rocksdb_service_context("rocksdb-message-store-timer-disabled-test"),
     )
     .expect("rocksdb message store should open");
 
@@ -3172,8 +3214,15 @@ fn rocksdb_message_store_delete_topics_removes_rocksdb_consume_queue_state() {
     });
     let broker_config = Arc::new(StoreRuntimeConfig::default());
     let topic_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>> = Arc::new(DashMap::new());
-    let mut message_store = RocksDBMessageStore::try_new(message_store_config, broker_config, topic_table, None, false)
-        .expect("rocksdb message store should open");
+    let mut message_store = RocksDBMessageStore::try_new(
+        message_store_config,
+        broker_config,
+        topic_table,
+        None,
+        false,
+        rocksdb_service_context("rocksdb-message-store-delete-topics-test"),
+    )
+    .expect("rocksdb message store should open");
     let topic = CheetahString::from_static_str("TopicA");
     let mut request = dispatch_request("TopicA", 3, 7, 1024, 128, 7, 1_700_000_000_000);
     message_store.local_file_store_mut().do_dispatch(&mut request);
@@ -3200,8 +3249,15 @@ fn rocksdb_message_store_truncate_dirty_logic_files_corrects_rocksdb_consume_que
     });
     let broker_config = Arc::new(StoreRuntimeConfig::default());
     let topic_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>> = Arc::new(DashMap::new());
-    let mut message_store = RocksDBMessageStore::try_new(message_store_config, broker_config, topic_table, None, false)
-        .expect("rocksdb message store should open");
+    let mut message_store = RocksDBMessageStore::try_new(
+        message_store_config,
+        broker_config,
+        topic_table,
+        None,
+        false,
+        rocksdb_service_context("rocksdb-message-store-truncate-test"),
+    )
+    .expect("rocksdb message store should open");
     let topic = CheetahString::from_static_str("TopicA");
     let mut first = dispatch_request("TopicA", 3, 0, 100, 10, 1, 1_700_000_000_000);
     let mut dirty = dispatch_request("TopicA", 3, 1, 300, 30, 2, 1_700_000_000_001);
@@ -3233,8 +3289,15 @@ async fn rocksdb_message_store_clean_expired_consumer_queue_triggers_background_
     });
     let broker_config = Arc::new(StoreRuntimeConfig::default());
     let topic_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>> = Arc::new(DashMap::new());
-    let mut message_store = RocksDBMessageStore::try_new(message_store_config, broker_config, topic_table, None, false)
-        .expect("rocksdb message store should open");
+    let mut message_store = RocksDBMessageStore::try_new(
+        message_store_config,
+        broker_config,
+        topic_table,
+        None,
+        false,
+        rocksdb_service_context("rocksdb-message-store-clean-expired-test"),
+    )
+    .expect("rocksdb message store should open");
     let mut request = dispatch_request("TopicA", 3, 0, 100, 10, 1, 1_700_000_000_000);
     message_store.local_file_store_mut().do_dispatch(&mut request);
     let rocksdb_store = message_store.rocksdb_store();

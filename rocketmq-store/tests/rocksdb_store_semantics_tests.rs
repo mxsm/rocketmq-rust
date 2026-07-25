@@ -21,6 +21,7 @@ use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 use bytes::Bytes;
 use cheetah_string::CheetahString;
@@ -41,6 +42,17 @@ use rocketmq_store::message_store::rocksdb_message_store::RocksDBMessageStore;
 use rocketmq_store::message_store::OwnedMessageStore;
 use rocketmq_store::store_error::StoreErrorKind;
 use tempfile::TempDir;
+
+fn rocksdb_service_context(name: &'static str) -> rocketmq_runtime::ChildServiceContext {
+    static OWNER: OnceLock<rocketmq_runtime::RuntimeOwner> = OnceLock::new();
+    OWNER
+        .get_or_init(|| {
+            rocketmq_runtime::RuntimeOwner::new(rocketmq_runtime::RuntimeConfig::default())
+                .expect("RocksDB semantics-test runtime owner should start")
+        })
+        .root_context()
+        .child(name)
+}
 
 fn rocksdb_store_config(temp_dir: &TempDir) -> MessageStoreConfig {
     MessageStoreConfig {
@@ -71,6 +83,7 @@ fn new_owned_test_store(temp_dir: &TempDir) -> RocksDBMessageStore {
         topic_table,
         None,
         false,
+        rocksdb_service_context("rocksdb-semantics-test-store"),
     )
     .expect("create RocksDB message store")
 }
@@ -79,8 +92,15 @@ fn new_owned_test_store_with_config(config: MessageStoreConfig) -> RocksDBMessag
     let broker_config = Arc::new(StoreRuntimeConfig::default());
     let topic_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>> = Arc::new(DashMap::new());
 
-    RocksDBMessageStore::try_new(Arc::new(config), broker_config, topic_table, None, false)
-        .expect("create RocksDB message store")
+    RocksDBMessageStore::try_new(
+        Arc::new(config),
+        broker_config,
+        topic_table,
+        None,
+        false,
+        rocksdb_service_context("rocksdb-semantics-configured-test-store"),
+    )
+    .expect("create RocksDB message store")
 }
 
 fn new_test_store(store: RocksDBMessageStore) -> OwnedMessageStore {

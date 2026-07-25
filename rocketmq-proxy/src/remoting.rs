@@ -75,7 +75,7 @@ pub use rocketmq_proxy_core::remoting::ProxyRemotingBackend;
 use rocketmq_proxy_core::remoting::RemotingIngressDispatcher;
 use rocketmq_proxy_core::remoting::RemotingIngressRoute;
 use rocketmq_proxy_core::remoting::RemotingStatusMapper;
-use rocketmq_runtime::ServiceContext;
+use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_transport::net::channel::Channel;
 use rocketmq_transport::prelude::RemotingDeserializable;
@@ -179,35 +179,9 @@ where
     }
 }
 
-pub async fn serve<P, F>(
-    config: Arc<ProxyConfig>,
-    processor: Arc<P>,
-    sessions: ClientSessionRegistry,
-    auth_runtime: Option<ProxyAuthRuntime>,
-    remoting_backend: Option<Arc<dyn ProxyRemotingBackend>>,
-    shutdown: F,
-) -> ProxyResult<()>
-where
-    P: MessagingProcessor + 'static,
-    F: Future<Output = ()> + Send + 'static,
-{
-    serve_with_optional_service_context(
-        None,
-        config,
-        processor,
-        sessions,
-        auth_runtime,
-        remoting_backend,
-        shutdown,
-        None,
-    )
-    .await
-    .map(|_| ())
-}
-
 #[doc(hidden)]
 pub async fn serve_with_service_context<P, F>(
-    service_context: ServiceContext,
+    service_context: ChildServiceContext,
     config: Arc<ProxyConfig>,
     processor: Arc<P>,
     sessions: ClientSessionRegistry,
@@ -219,8 +193,8 @@ where
     P: MessagingProcessor + 'static,
     F: Future<Output = ()> + Send + 'static,
 {
-    serve_with_optional_service_context(
-        Some(service_context),
+    serve_with_context(
+        service_context,
         config,
         processor,
         sessions,
@@ -228,41 +202,13 @@ where
         remoting_backend,
         shutdown,
         None,
-    )
-    .await
-}
-
-#[doc(hidden)]
-pub async fn serve_with_ready<P, F, R>(
-    config: Arc<ProxyConfig>,
-    processor: Arc<P>,
-    sessions: ClientSessionRegistry,
-    auth_runtime: Option<ProxyAuthRuntime>,
-    remoting_backend: Option<Arc<dyn ProxyRemotingBackend>>,
-    shutdown: F,
-    ready: R,
-) -> ProxyResult<Option<ShutdownReport>>
-where
-    P: MessagingProcessor + 'static,
-    F: Future<Output = ()> + Send + 'static,
-    R: FnOnce() -> ProxyResult<()> + Send + 'static,
-{
-    serve_with_optional_service_context(
-        None,
-        config,
-        processor,
-        sessions,
-        auth_runtime,
-        remoting_backend,
-        shutdown,
-        Some(Box::new(ready)),
     )
     .await
 }
 
 #[doc(hidden)]
 pub async fn serve_with_service_context_and_ready<P, F, R>(
-    service_context: ServiceContext,
+    service_context: ChildServiceContext,
     config: Arc<ProxyConfig>,
     processor: Arc<P>,
     sessions: ClientSessionRegistry,
@@ -276,8 +222,8 @@ where
     F: Future<Output = ()> + Send + 'static,
     R: FnOnce() -> ProxyResult<()> + Send + 'static,
 {
-    serve_with_optional_service_context(
-        Some(service_context),
+    serve_with_context(
+        service_context,
         config,
         processor,
         sessions,
@@ -289,8 +235,8 @@ where
     .await
 }
 
-async fn serve_with_optional_service_context<P, F>(
-    service_context: Option<ServiceContext>,
+async fn serve_with_context<P, F>(
+    service_context: ChildServiceContext,
     config: Arc<ProxyConfig>,
     processor: Arc<P>,
     sessions: ClientSessionRegistry,
@@ -312,23 +258,16 @@ where
     }
     let request_processor =
         ProxyRemotingRequestProcessor::new(config, processor, sessions, auth_runtime, remoting_backend);
-    let report = match service_context {
-        Some(service_context) => {
-            rocketmq_tokio_server::run_with_report_with_service_context(
-                service_context,
-                listener,
-                shutdown,
-                request_processor,
-                None,
-                Vec::new(),
-                None,
-            )
-            .await
-        }
-        None => {
-            rocketmq_tokio_server::run_with_report(listener, shutdown, request_processor, None, Vec::new(), None).await
-        }
-    };
+    let report = rocketmq_tokio_server::run_with_report_with_service_context(
+        service_context,
+        listener,
+        shutdown,
+        request_processor,
+        None,
+        Vec::new(),
+        None,
+    )
+    .await;
     match report.as_ref() {
         Some(report) if !report.is_healthy() => {
             warn!(
@@ -1503,6 +1442,7 @@ mod tests {
     use rocketmq_protocol::protocol::route::route_data_view::BrokerData;
     use rocketmq_protocol::protocol::route::route_data_view::QueueData;
     use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
+    use rocketmq_runtime::RuntimeContext;
     use rocketmq_security_api::Action;
     use rocketmq_transport::local::LocalRequestHarness;
     use rocketmq_transport::prelude::RemotingDeserializable;
@@ -1601,12 +1541,16 @@ mod tests {
     }
 
     async fn test_auth_runtime(authentication_enabled: bool, authorization_enabled: bool) -> ProxyAuthRuntime {
-        ProxyAuthRuntime::from_proxy_config(&ProxyAuthConfig {
-            authentication_enabled,
-            authorization_enabled,
-            auth_config_path: format!("target/proxy-remoting-auth-tests-{}", uuid::Uuid::new_v4()),
-            ..ProxyAuthConfig::default()
-        })
+        let runtime = rocketmq_runtime::RuntimeContext::from_current("proxy-remoting-auth-test");
+        ProxyAuthRuntime::from_proxy_config(
+            &ProxyAuthConfig {
+                authentication_enabled,
+                authorization_enabled,
+                auth_config_path: format!("target/proxy-remoting-auth-tests-{}", uuid::Uuid::new_v4()),
+                ..ProxyAuthConfig::default()
+            },
+            &runtime.service_context("proxy-remoting-auth"),
+        )
         .await
         .expect("auth runtime should initialize")
         .expect("auth runtime should be enabled")
@@ -1955,7 +1899,8 @@ mod tests {
             None,
             None,
         );
-        let harness = LocalRequestHarness::new()
+        let runtime = RuntimeContext::from_current("proxy-local-harness-test");
+        let harness = LocalRequestHarness::new(runtime.service_context("local-harness").task_group().clone())
             .await
             .expect("local remoting harness should start");
         let heartbeat = HeartbeatData {
@@ -2230,7 +2175,8 @@ mod tests {
             ResponseCode::ConsumerNotOnline
         );
 
-        let mut harness = LocalRequestHarness::new()
+        let runtime = RuntimeContext::from_current("proxy-local-harness-test");
+        let mut harness = LocalRequestHarness::new(runtime.service_context("local-harness").task_group().clone())
             .await
             .expect("local remoting harness should start");
         sessions.bind_remoting_channel("client-a", harness.channel());
@@ -2318,7 +2264,8 @@ mod tests {
         heartbeat_request.make_custom_header_to_net();
         let heartbeat_response = dispatcher.dispatch(&test_context(), &heartbeat_request).await;
         assert_eq!(ResponseCode::from(heartbeat_response.code()), ResponseCode::Success);
-        let mut harness = LocalRequestHarness::new()
+        let runtime = RuntimeContext::from_current("proxy-local-harness-test");
+        let mut harness = LocalRequestHarness::new(runtime.service_context("local-harness").task_group().clone())
             .await
             .expect("local remoting harness should start");
         sessions.bind_remoting_channel("client-a", harness.channel());

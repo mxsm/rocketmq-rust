@@ -28,6 +28,7 @@ use std::time::Instant;
 use parking_lot::Mutex;
 use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::BlockingPoolPolicy;
+use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeHandle;
 use rocketmq_runtime::RuntimeOwner;
@@ -35,7 +36,7 @@ use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskControl;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
-use rocketmq_runtime::ServiceContext;
+use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskGroupLifecycleState;
@@ -76,7 +77,7 @@ where
 }
 
 pub(crate) fn spawn_client_task_with_context<F>(
-    context: &ServiceContext,
+    context: &ChildServiceContext,
     task_name: &'static str,
     task: F,
 ) -> io::Result<ClientRuntimeTaskHandle>
@@ -211,7 +212,7 @@ where
 }
 
 pub(crate) fn spawn_client_tracked_task_with_context<F>(
-    context: &ServiceContext,
+    context: &ChildServiceContext,
     task_name: &'static str,
     task: F,
 ) -> io::Result<ClientTrackedTaskHandle>
@@ -309,7 +310,7 @@ where
 }
 
 pub(crate) fn schedule_client_fixed_delay_task_with_context<F, Fut>(
-    context: &ServiceContext,
+    context: &ChildServiceContext,
     task_name: &'static str,
     initial_delay: Duration,
     period: Duration,
@@ -364,7 +365,7 @@ where
 }
 
 pub(crate) fn schedule_client_fixed_delay_controlled_task_with_context<F, Fut>(
-    context: &ServiceContext,
+    context: &ChildServiceContext,
     task_name: &'static str,
     initial_delay: Duration,
     period: Duration,
@@ -410,7 +411,7 @@ fn client_task_group(task_name: &'static str) -> io::Result<(TaskGroup, Option<C
     }
 
     let lease = shared_fallback()?;
-    let group = lease.runtime.owner.context().root_group().child(task_name);
+    let group = lease.runtime.owner.root_context().child(task_name).task_group().clone();
     Ok((group, Some(lease)))
 }
 
@@ -462,7 +463,7 @@ where
 }
 
 pub(crate) async fn spawn_client_blocking_io_with_context<F, R>(
-    context: &ServiceContext,
+    context: &ChildServiceContext,
     task_name: &'static str,
     task: F,
 ) -> io::Result<R>
@@ -471,7 +472,7 @@ where
     R: Send + 'static,
 {
     context
-        .blocking()
+        .metadata_io()
         .spawn_io(task_name, task)
         .await
         .map_err(io::Error::other)
@@ -581,9 +582,17 @@ struct ClientSharedFallbackRuntime {
     generation: usize,
 }
 
-struct ClientSharedFallbackLease {
+pub(crate) struct ClientSharedFallbackLease {
     registry: &'static ClientSharedFallbackRegistry,
     runtime: Arc<ClientSharedFallbackRuntime>,
+}
+
+pub(crate) fn acquire_client_fallback_context(
+    scope: &'static str,
+) -> io::Result<(ChildServiceContext, ClientSharedFallbackLease)> {
+    let lease = shared_fallback_registry().acquire()?;
+    let context = lease.runtime.owner.root_context().child(scope);
+    Ok((context, lease))
 }
 
 #[doc(hidden)]
@@ -862,7 +871,7 @@ impl ClientSharedFallbackLease {
     where
         F: Future<Output = ()> + Send + 'static,
     {
-        let task_group = self.runtime.owner.context().root_group().clone();
+        let task_group = self.runtime.owner.root_context().child(task_name).task_group().clone();
         spawn_client_task_in_group(task_name, task_group, Some(self), task)
     }
 }
@@ -890,19 +899,20 @@ impl Drop for ActiveTaskGuard {
 }
 
 fn shutdown_runtime(runtime: Arc<ClientSharedFallbackRuntime>, timeout: Duration) -> io::Result<ShutdownReport> {
+    let deadline = ShutdownDeadline::after(timeout);
     match Arc::try_unwrap(runtime) {
         Ok(runtime) => runtime
             .owner
-            .shutdown_runtime_blocking_with_timeout(timeout)
+            .shutdown_runtime_blocking_until(deadline)
             .map_err(io::Error::other),
         Err(runtime) => {
-            let report = runtime.owner.block_on(runtime.owner.context().shutdown_tasks(timeout));
+            let report = runtime.owner.block_on(runtime.owner.shutdown_tasks_until(deadline));
             report.log_if_unhealthy();
             match Arc::try_unwrap(runtime) {
                 Ok(runtime) => {
                     runtime
                         .owner
-                        .shutdown_runtime_blocking_with_timeout(timeout)
+                        .shutdown_runtime_blocking_until(deadline)
                         .map_err(io::Error::other)?;
                 }
                 Err(_) => {
@@ -1051,11 +1061,13 @@ mod tests {
         rx.recv_timeout(Duration::from_secs(2))
             .expect("fallback task should start");
 
-        let report = runtime
-            .owner
-            .block_on(runtime.owner.context().shutdown_tasks(Duration::from_millis(20)));
+        let report = runtime.owner.block_on(
+            runtime
+                .owner
+                .shutdown_tasks_until(ShutdownDeadline::after(Duration::from_millis(20))),
+        );
 
-        assert_eq!(report.aborted, 1, "{}", report.to_json());
+        assert_eq!(recursive_aborted(&report), 1, "{}", report.to_json());
         assert_eq!(report.leaked, 0, "{}", report.to_json());
         assert_eq!(registry.snapshot().active_tasks, 0);
         assert_eq!(registry.snapshot().active_leases, 0);
@@ -1083,13 +1095,21 @@ mod tests {
             .expect("explicit shutdown should return a report")
             .expect("fallback runtime should exist");
 
-        assert_eq!(report.aborted, 1, "{}", report.to_json());
+        assert_eq!(recursive_aborted(&report), 1, "{}", report.to_json());
         assert_eq!(report.leaked, 0, "{}", report.to_json());
-        assert_eq!(report.timed_out, 1, "{}", report.to_json());
+        assert_eq!(recursive_timed_out(&report), 1, "{}", report.to_json());
         assert_eq!(registry.snapshot().active_tasks, 0);
         assert_eq!(registry.snapshot().active_leases, 0);
         assert!(!registry.snapshot().runtime_available);
         drop(handle);
+    }
+
+    fn recursive_aborted(report: &ShutdownReport) -> usize {
+        report.aborted + report.children.iter().map(recursive_aborted).sum::<usize>()
+    }
+
+    fn recursive_timed_out(report: &ShutdownReport) -> usize {
+        report.timed_out + report.children.iter().map(recursive_timed_out).sum::<usize>()
     }
 
     #[test]

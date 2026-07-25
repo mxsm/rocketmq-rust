@@ -37,9 +37,9 @@ use tokio::net::TcpStream;
 use tokio::sync::watch;
 
 use crate::wait_for_signal_result;
+use crate::ChildServiceContext;
 use crate::RuntimeError;
 use crate::RuntimeResult;
-use crate::ServiceContext;
 use crate::ShutdownDeadline;
 
 pub const HEALTH_BIND_ADDR_ENV: &str = "ROCKETMQ_HEALTH_BIND_ADDR";
@@ -233,7 +233,7 @@ impl ServiceLifecycle {
     ///
     /// Returns an error when called twice, when the listener cannot bind, or when either
     /// owned service task cannot be registered.
-    pub async fn start(&self, service_context: &ServiceContext) -> RuntimeResult<()> {
+    pub async fn start(&self, service_context: &ChildServiceContext) -> RuntimeResult<()> {
         if self.inner.started.swap(true, Ordering::AcqRel) {
             return Err(RuntimeError::LifecycleOperation {
                 operation: "start_service_lifecycle",

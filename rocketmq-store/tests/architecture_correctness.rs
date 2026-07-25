@@ -25,6 +25,7 @@ use std::process::Command;
 use std::process::Stdio;
 use std::sync::mpsc;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -33,6 +34,9 @@ use dashmap::DashMap;
 use rocketmq_model::common::config::TopicConfig;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_model::common::message::MessageTrait;
+use rocketmq_runtime::ChildServiceContext;
+use rocketmq_runtime::RuntimeConfig;
+use rocketmq_runtime::RuntimeOwner;
 use rocketmq_store::base::message_status_enum::GetMessageStatus;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
@@ -53,6 +57,17 @@ const SYNC_CRASH_MESSAGES: usize = 16;
 const REPLAY_MESSAGES: usize = 32;
 const MESSAGE_SIZE_BYTES: usize = 1024;
 
+fn test_service_context() -> ChildServiceContext {
+    static OWNER: OnceLock<RuntimeOwner> = OnceLock::new();
+    OWNER
+        .get_or_init(|| {
+            RuntimeOwner::new(RuntimeConfig::server_default("architecture-correctness-tests"))
+                .expect("architecture correctness test runtime should start")
+        })
+        .root_context()
+        .child("architecture-correctness-store")
+}
+
 fn new_store(root: &Path, flush_disk_type: FlushDiskType) -> LocalFileMessageStore {
     let config = MessageStoreConfig {
         store_path_root_dir: root.to_string_lossy().to_string().into(),
@@ -69,6 +84,7 @@ fn new_store(root: &Path, flush_disk_type: FlushDiskType) -> LocalFileMessageSto
         Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
         None,
         false,
+        test_service_context(),
     );
     store
         .wire_owned_root_dependencies()

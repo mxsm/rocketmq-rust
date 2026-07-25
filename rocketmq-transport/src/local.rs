@@ -15,6 +15,7 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use rocketmq_runtime::TaskGroup;
 use tokio::net::TcpListener;
 
 use crate::base::pending_request_table::PendingRequestTable;
@@ -31,7 +32,7 @@ pub struct LocalRequestHarness {
 }
 
 impl LocalRequestHarness {
-    pub async fn new() -> rocketmq_error::RocketMQResult<Self> {
+    pub async fn new(parent_task_group: TaskGroup) -> rocketmq_error::RocketMQResult<Self> {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let server_addr = listener.local_addr()?;
 
@@ -49,6 +50,7 @@ impl LocalRequestHarness {
         let channel_inner = Arc::new(ChannelInner::try_new_with_pending_requests(
             Connection::new(server_stream),
             PendingRequestTable::new(),
+            parent_task_group,
         )?);
         let channel = Channel::new(channel_inner, local_address, remote_address);
         let context = Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));

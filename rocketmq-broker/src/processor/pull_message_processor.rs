@@ -1254,7 +1254,11 @@ mod tests {
         drop(server_stream);
 
         let response_table = std::sync::Arc::new(parking_lot::Mutex::new(HashMap::new()));
-        let channel_inner = std::sync::Arc::new(ChannelInner::new(Connection::new(stream), response_table));
+        let channel_inner = std::sync::Arc::new(ChannelInner::new(
+            Connection::new(stream),
+            response_table,
+            crate::test_task_group("channel"),
+        ));
         let channel = Channel::new(channel_inner, local_addr, remote_addr);
         ClientChannelInfo::new(channel, client_id.into(), LanguageCode::JAVA, 1)
     }

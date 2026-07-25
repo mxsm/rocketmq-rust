@@ -47,7 +47,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             .with_heartbeat_interval_ms(300),
     );
 
-    let node = RaftNodeManager::new(config).await?;
+    let runtime = rocketmq_runtime::RuntimeContext::from_current("controller-single-node-example");
+    let node = RaftNodeManager::new(
+        config,
+        runtime.service_context("controller-single-node").storage_io().clone(),
+    )
+    .await?;
 
     let mut nodes = BTreeMap::new();
     nodes.insert(

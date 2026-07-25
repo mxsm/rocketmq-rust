@@ -62,6 +62,7 @@ mod tests {
     #[test]
     fn prepared_and_rollback_transactions_skip_consume_queue_dispatch() {
         let store = ConsumeQueueStore::new(
+            crate::runtime::test_scope("consume-queue-dispatch-test"),
             Arc::new(MessageStoreConfig::default()),
             Arc::new(StoreRuntimeConfig::default()),
         );

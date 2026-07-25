@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::BlockingKind;
+use rocketmq_runtime::BlockingLane;
 use rocketmq_runtime::BlockingPoolPolicy;
 use rocketmq_runtime::DetachedTaskPolicy;
 use rocketmq_runtime::RuntimeConfig;
@@ -102,7 +103,7 @@ fn broker_entrypoint_uses_runtime_owner_and_service_context() {
         "{entrypoint} must preserve the explicit blocking-thread cap"
     );
     assert!(
-        source.contains(".set_service_context(service_context)"),
+        source.contains("Builder::new(service_context)"),
         "{entrypoint} must inject a ServiceContext into the broker bootstrap"
     );
     assert!(
@@ -129,7 +130,7 @@ fn namesrv_entrypoint_uses_runtime_owner_and_service_context() {
         "{entrypoint} must preserve the explicit blocking-thread cap"
     );
     assert!(
-        source.contains(".set_service_context(service_context)"),
+        source.contains("Builder::new(service_context)"),
         "{entrypoint} must inject a ServiceContext into the namesrv bootstrap"
     );
     assert!(
@@ -199,7 +200,7 @@ async fn diagnostics_snapshot_reports_runtime_state() {
         })
         .expect("diagnostics service task should spawn");
     context
-        .blocking()
+        .blocking(BlockingLane::StorageIo)
         .spawn_io("diagnostics-blocking-io", || 42)
         .await
         .expect("diagnostics blocking task should complete");
@@ -223,13 +224,14 @@ async fn diagnostics_snapshot_reports_runtime_state() {
     assert_eq!(service_snapshot.lifecycle_state, TaskGroupLifecycleState::Open);
     assert_eq!(service_snapshot.task_count, 1);
     assert_eq!(service_snapshot.child_count, 1);
-    assert_eq!(context_snapshot.blocking.name, "rocketmq-blocking");
-    assert_eq!(
-        context_snapshot.blocking.max_concurrency,
-        BlockingPoolPolicy::default().max_concurrency
-    );
-    assert_eq!(context_snapshot.blocking.blocking_still_running, 0);
-    assert!(context_snapshot.blocking.tasks.is_empty(), "{context_snapshot:?}");
+    assert_eq!(context_snapshot.blocking_lanes.len(), 3);
+    let storage_lane = context_snapshot
+        .blocking_lanes
+        .iter()
+        .find(|snapshot| snapshot.name.ends_with("storage-io"))
+        .expect("storage I/O lane should be present");
+    assert_eq!(storage_lane.blocking_still_running, 0);
+    assert!(storage_lane.tasks.is_empty(), "{context_snapshot:?}");
 
     let report = context.shutdown_tasks(Duration::from_secs(1)).await;
     assert!(report.is_healthy(), "{}", report.to_json());
@@ -243,7 +245,7 @@ async fn service_context_child_preserves_parent_runtime_and_blocking_executor() 
 
     assert_eq!(child.name(), "child-service");
     assert_eq!(child.task_group().parent_id(), Some(parent.task_group().id()));
-    assert_eq!(child.blocking().snapshot().name, parent.blocking().snapshot().name);
+    assert_eq!(child.storage_io().snapshot().name, parent.storage_io().snapshot().name);
     assert_eq!(
         child.diagnostics_snapshot().runtime_id,
         parent.diagnostics_snapshot().runtime_id
@@ -251,6 +253,42 @@ async fn service_context_child_preserves_parent_runtime_and_blocking_executor() 
 
     let report = context.shutdown_tasks(Duration::from_secs(1)).await;
     assert!(report.is_healthy(), "{}", report.to_json());
+}
+
+#[tokio::test]
+async fn parent_context_shutdown_cancels_and_joins_descendant_tasks() {
+    let context = RuntimeContext::from_current("service-context-cancellation-test");
+    let parent = context.service_context("parent");
+    let child = parent.child("child");
+    let descendant = child.child("descendant");
+    let dropped = Arc::new(AtomicUsize::new(0));
+    let started = Arc::new(Notify::new());
+    let started_task = Arc::clone(&started);
+    let drop_counter = DropCounter(Arc::clone(&dropped));
+    let cancellation = descendant.task_group().cancellation_token();
+
+    descendant
+        .spawn_service("cooperative-descendant", async move {
+            let _drop_counter = drop_counter;
+            started_task.notify_one();
+            cancellation.cancelled().await;
+        })
+        .expect("descendant task should spawn");
+    started.notified().await;
+
+    let report = parent.task_group().shutdown(Duration::from_secs(1)).await;
+
+    assert!(report.is_healthy(), "{}", report.to_json());
+    assert_eq!(dropped.load(Ordering::Acquire), 1);
+    assert_eq!(
+        child.task_group().lifecycle_state(),
+        TaskGroupLifecycleState::ShutdownCompleted
+    );
+    assert_eq!(
+        descendant.task_group().lifecycle_state(),
+        TaskGroupLifecycleState::ShutdownCompleted
+    );
+    assert!(descendant.spawn_service("late-descendant", async {}).is_err());
 }
 
 #[tokio::test]
@@ -853,12 +891,76 @@ async fn blocking_executor_limits_concurrency() {
     assert_eq!(max_active.load(Ordering::Relaxed), 1);
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn blocking_executor_rejects_work_when_bounded_queue_is_full() {
+    let context = RuntimeContext::from_current("blocking-queue-capacity-test");
+    let executor = BlockingExecutor::new(
+        BlockingPoolPolicy {
+            name: "blocking-queue-capacity-test".to_string(),
+            max_concurrency: 1,
+            max_queue_depth: 1,
+            queue_timeout: Duration::from_secs(2),
+            task_timeout: Duration::from_secs(2),
+            ..BlockingPoolPolicy::default()
+        },
+        context.root_group().child("blocking"),
+    )
+    .expect("bounded blocking executor should start");
+    let (started_tx, started_rx) = oneshot::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+
+    let first_executor = executor.clone();
+    let first = tokio::spawn(async move {
+        first_executor
+            .spawn_io("running", move || {
+                let _ = started_tx.send(());
+                let _ = release_rx.recv();
+                1usize
+            })
+            .await
+    });
+    started_rx.await.expect("first blocking task should start");
+
+    let second_executor = executor.clone();
+    let second = tokio::spawn(async move { second_executor.spawn_io("queued", || 2usize).await });
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while executor.snapshot().queued != 1 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("second task should occupy the only queue slot");
+
+    let error = executor
+        .spawn_io("rejected", || 3usize)
+        .await
+        .expect_err("work beyond max_queue_depth must be rejected");
+    assert!(matches!(
+        error,
+        RuntimeError::BlockingQueueFull { max_queue_depth: 1, .. }
+    ));
+
+    release_tx.send(()).expect("running task should be released");
+    assert_eq!(
+        first.await.expect("first task should join").expect("first task result"),
+        1
+    );
+    assert_eq!(
+        second
+            .await
+            .expect("second task should join")
+            .expect("second task result"),
+        2
+    );
+    assert_eq!(executor.snapshot().queued, 0);
+}
+
 #[tokio::test]
 async fn blocking_executor_rejects_long_running_spawn_blocking() {
     let context = RuntimeContext::from_current("blocking-long-running-test");
 
     let error = context
-        .blocking()
+        .blocking(BlockingLane::StorageIo)
         .spawn("legacy-loop", BlockingKind::LongRunning, || ())
         .await
         .expect_err("long-running blocking work must use a dedicated thread");
@@ -870,7 +972,7 @@ async fn blocking_executor_rejects_long_running_spawn_blocking() {
             ..
         }
     ));
-    let snapshot = context.blocking().snapshot();
+    let snapshot = context.blocking(BlockingLane::StorageIo).snapshot();
     assert_eq!(snapshot.blocking_still_running, 0);
     assert!(snapshot.tasks.is_empty(), "{snapshot:?}");
 }
@@ -939,27 +1041,27 @@ async fn blocking_executor_reports_timeout_until_reaper_cleans_late_exit() {
 
 #[test]
 fn runtime_owner_uses_configured_blocking_policy_in_shutdown_report() {
-    let config = RuntimeConfig {
+    let mut config = RuntimeConfig {
         worker_threads: 2,
         max_blocking_threads: 2,
         shutdown_timeout: Duration::from_millis(50),
-        blocking_pool_policy: BlockingPoolPolicy {
-            name: "configured-blocking-test".to_string(),
-            max_concurrency: 1,
-            queue_timeout: Duration::from_secs(1),
-            task_timeout: Duration::from_millis(20),
-            ..BlockingPoolPolicy::default()
-        },
         ..RuntimeConfig::default()
     };
+    config.blocking_lane_policies.storage_io = BlockingPoolPolicy {
+        name: "configured-blocking-test.storage-io".to_string(),
+        max_concurrency: 1,
+        queue_timeout: Duration::from_secs(1),
+        task_timeout: Duration::from_millis(20),
+        ..BlockingPoolPolicy::default()
+    };
     let owner = RuntimeOwner::new(config).expect("runtime owner should start");
-    let context = owner.context().clone();
+    let context = owner.root_context().child("configured-blocking-test");
     let (started_tx, started_rx) = oneshot::channel();
     let (release_tx, release_rx) = std::sync::mpsc::channel();
 
-    let report = owner.block_on(async move {
+    let report = owner.block_on(async {
         let error = context
-            .blocking()
+            .storage_io()
             .spawn_io("context-slow-io", move || {
                 let _ = started_tx.send(());
                 let _ = release_rx.recv();
@@ -970,7 +1072,7 @@ fn runtime_owner_uses_configured_blocking_policy_in_shutdown_report() {
 
         started_rx.await.expect("blocking task should signal that it started");
 
-        let report = context.shutdown_tasks(Duration::from_millis(50)).await;
+        let report = owner.shutdown_tasks().await;
         assert_eq!(report.blocking_still_running, 1, "{}", report.to_json());
         assert!(!report.blocking_tasks.is_empty(), "{}", report.to_json());
         assert!(!report.is_healthy(), "{}", report.to_json());
@@ -980,7 +1082,9 @@ fn runtime_owner_uses_configured_blocking_policy_in_shutdown_report() {
             .expect("blocking task release signal should be accepted");
         tokio::time::timeout(Duration::from_secs(1), async {
             loop {
-                if context.blocking().blocking_still_running() == 0 && context.blocking().snapshot().tasks.is_empty() {
+                if context.storage_io().blocking_still_running() == 0
+                    && context.storage_io().snapshot().tasks.is_empty()
+                {
                     break;
                 }
                 tokio::time::sleep(Duration::from_millis(10)).await;
@@ -1004,11 +1108,11 @@ fn runtime_owner_drop_shutdowns_root_group_when_not_explicitly_closed() {
         ..RuntimeConfig::default()
     };
     let owner = RuntimeOwner::new(config).expect("runtime owner should start");
-    let context = owner.context().clone();
+    let context = owner.root_context().child("owner-drop-test");
 
     owner.block_on(async {
         context
-            .root_group()
+            .task_group()
             .spawn_service("owner-drop-pending-task", async {
                 std::future::pending::<()>().await;
             })
@@ -1019,10 +1123,10 @@ fn runtime_owner_drop_shutdowns_root_group_when_not_explicitly_closed() {
     drop(owner);
 
     assert_eq!(
-        context.root_group().lifecycle_state(),
+        context.task_group().lifecycle_state(),
         TaskGroupLifecycleState::ShutdownCompleted
     );
-    assert!(context.root_group().spawn_service("late-task", async {}).is_err());
+    assert!(context.task_group().spawn_service("late-task", async {}).is_err());
 }
 
 #[test]
@@ -1034,11 +1138,11 @@ fn runtime_owner_shutdown_background_closes_root_group_without_drop_fallback() {
         ..RuntimeConfig::default()
     };
     let owner = RuntimeOwner::new(config).expect("runtime owner should start");
-    let context = owner.context().clone();
+    let context = owner.root_context().child("owner-background-test");
 
     owner.block_on(async {
         context
-            .root_group()
+            .task_group()
             .spawn_service("owner-background-pending-task", async {
                 std::future::pending::<()>().await;
             })
@@ -1048,12 +1152,19 @@ fn runtime_owner_shutdown_background_closes_root_group_without_drop_fallback() {
 
     let report = owner.shutdown_background();
 
-    assert_eq!(report.aborted, 1, "{}", report.to_json());
+    assert!(
+        report
+            .children
+            .iter()
+            .any(|child| { child.name == "owner-background-test" && child.cancelled + child.aborted == 1 }),
+        "{}",
+        report.to_json()
+    );
     assert_eq!(
-        context.root_group().lifecycle_state(),
+        context.task_group().lifecycle_state(),
         TaskGroupLifecycleState::ShutdownCompleted
     );
-    assert!(context.root_group().spawn_service("late-task", async {}).is_err());
+    assert!(context.task_group().spawn_service("late-task", async {}).is_err());
 }
 
 async fn run_limited_blocking_task(

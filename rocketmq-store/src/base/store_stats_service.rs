@@ -21,6 +21,7 @@ use std::time::Duration;
 
 use parking_lot::Mutex;
 use rocketmq_model::common::broker::broker_identity::BrokerIdentity;
+use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
@@ -35,6 +36,7 @@ const FREQUENCY_OF_SAMPLING: u64 = 1000;
 
 /// Store-facing lifecycle adapter around the runtime-neutral local statistics state.
 pub struct StoreStatsService {
+    runtime_scope: crate::runtime::StoreRuntimeScope,
     state: StoreStatsState,
     stopped: AtomicBool,
     shutdown_notify: Notify,
@@ -45,8 +47,9 @@ pub struct StoreStatsService {
 
 impl StoreStatsService {
     #[inline]
-    pub fn new(broker_identity: Option<BrokerIdentity>) -> Self {
+    pub fn new(broker_identity: Option<BrokerIdentity>, service_context: ChildServiceContext) -> Self {
         Self {
+            runtime_scope: crate::runtime::StoreRuntimeScope::new(service_context),
             state: StoreStatsState::new(),
             stopped: AtomicBool::new(true),
             shutdown_notify: Notify::new(),
@@ -65,14 +68,7 @@ impl StoreStatsService {
         self.stopped.store(false, Ordering::Release);
         let service = Arc::clone(self);
         let service_name = service.get_service_name();
-        let worker_group = match crate::runtime::task_group("rocketmq-store.stats") {
-            Ok(worker_group) => worker_group,
-            Err(error) => {
-                self.stopped.store(true, Ordering::Release);
-                warn!("failed to create StoreStatsService task group: {error}");
-                return;
-            }
-        };
+        let worker_group = crate::runtime::task_group(&self.runtime_scope, "rocketmq-store.stats");
         let scheduled_tasks = ScheduledTaskGroup::new(worker_group.child("scheduled"));
         if let Err(error) = scheduled_tasks.schedule_fixed_delay(
             ScheduledTaskConfig::fixed_delay(service_name.clone(), Duration::from_millis(FREQUENCY_OF_SAMPLING)),
@@ -203,7 +199,7 @@ mod tests {
 
     #[test]
     fn exposes_local_stats_state_through_store_adapter() {
-        let stats = StoreStatsService::new(None);
+        let stats = StoreStatsService::new(None, crate::runtime::test_service_context("store-stats-adapter-test"));
         stats.add_single_put_message_topic_times_total("topic-a", 4);
         stats.add_single_put_message_topic_size_total("topic-a", 100);
         assert_eq!(stats.get_put_message_times_total(), 4);
@@ -212,7 +208,10 @@ mod tests {
 
     #[tokio::test]
     async fn start_shutdown_are_idempotent_and_restartable() {
-        let stats = Arc::new(StoreStatsService::new(None));
+        let stats = Arc::new(StoreStatsService::new(
+            None,
+            crate::runtime::test_service_context("store-stats-lifecycle-test"),
+        ));
 
         stats.start();
         stats.start();

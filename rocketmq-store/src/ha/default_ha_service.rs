@@ -358,6 +358,7 @@ impl DefaultHAConnectionContext {
 }
 
 pub struct DefaultHAService {
+    runtime_scope: crate::runtime::StoreRuntimeScope,
     connection_count: Arc<AtomicU32>,
     connections: Arc<Mutex<HashMap<HAConnectionId, GeneralHAConnection>>>,
     connection_context: DefaultHAConnectionContext,
@@ -372,7 +373,7 @@ pub struct DefaultHAService {
 }
 
 impl DefaultHAService {
-    pub(crate) fn new(replica_store: HAReplicaStoreHandle) -> Self {
+    pub(crate) fn new(replica_store: HAReplicaStoreHandle, runtime_scope: crate::runtime::StoreRuntimeScope) -> Self {
         let connection_count = Arc::new(AtomicU32::new(0));
         let connections = Arc::new(Mutex::new(HashMap::new()));
         let wait_notify_object = Arc::new(Notify::new());
@@ -387,6 +388,7 @@ impl DefaultHAService {
             ha_transfer_metrics.clone(),
         );
         DefaultHAService {
+            runtime_scope,
             connection_count,
             connections,
             connection_context,
@@ -432,7 +434,7 @@ impl DefaultHAService {
     }
 
     pub(crate) fn create_default_ha_client(&self) -> Result<DefaultHAClient, HAClientError> {
-        DefaultHAClient::new(self.replica_store.clone())
+        DefaultHAClient::new(self.replica_store.clone(), self.runtime_scope.clone())
     }
 
     pub(crate) fn set_ha_client_reported_broker_id(&self, broker_id: Option<i64>) {
@@ -479,6 +481,7 @@ impl DefaultHAService {
         self.ha_connection_state_notification_service = Some(state_notification_service);
 
         self.accept_socket_service = Some(AcceptSocketService::new(
+            self.runtime_scope.clone(),
             self.replica_store.message_store_config(),
             self.connection_context.clone(),
             is_auto_switch,
@@ -746,6 +749,7 @@ impl HAService for DefaultHAService {
 }
 
 struct AcceptSocketService {
+    runtime_scope: crate::runtime::StoreRuntimeScope,
     socket_address_listen: SocketAddr,
     message_store_config: Arc<MessageStoreConfig>,
     is_auto_switch: bool,
@@ -756,6 +760,7 @@ struct AcceptSocketService {
 
 impl AcceptSocketService {
     pub fn new(
+        runtime_scope: crate::runtime::StoreRuntimeScope,
         message_store_config: Arc<MessageStoreConfig>,
         connection_context: DefaultHAConnectionContext,
         is_auto_switch: bool,
@@ -763,6 +768,7 @@ impl AcceptSocketService {
         let ha_listen_port = message_store_config.ha_listen_port;
         let socket_address_listen = SocketAddr::new(message_store_config.ha_listen_address, ha_listen_port as u16);
         AcceptSocketService {
+            runtime_scope,
             socket_address_listen,
             message_store_config,
             is_auto_switch,
@@ -773,6 +779,7 @@ impl AcceptSocketService {
     }
 
     async fn build_connection(
+        runtime_scope: crate::runtime::StoreRuntimeScope,
         connection_context: DefaultHAConnectionContext,
         message_store_config: Arc<MessageStoreConfig>,
         stream: TcpStream,
@@ -780,7 +787,7 @@ impl AcceptSocketService {
         is_auto_switch: bool,
     ) -> Result<GeneralHAConnection, crate::ha::HAConnectionError> {
         let default_connection =
-            DefaultHAConnection::new(connection_context, stream, message_store_config, addr).await?;
+            DefaultHAConnection::new(runtime_scope, connection_context, stream, message_store_config, addr).await?;
         let general_connection = if is_auto_switch {
             GeneralHAConnection::new_with_auto_switch_ha_connection(AutoSwitchHAConnection::new(default_connection))
         } else {
@@ -804,8 +811,8 @@ impl AcceptSocketService {
         let is_auto_switch = self.is_auto_switch;
         let message_store_config = self.message_store_config.clone();
         let connection_context = self.connection_context.clone();
-        let worker_group = crate::runtime::task_group("rocketmq-store.ha.accept")
-            .map_err(|error| HAError::Service(error.to_string()))?;
+        let runtime_scope = self.runtime_scope.clone();
+        let worker_group = crate::runtime::task_group(&runtime_scope, "rocketmq-store.ha.accept");
         worker_group
             .spawn_service("ha-accept-socket-service", async move {
                 let message_store_config = message_store_config;
@@ -822,6 +829,7 @@ impl AcceptSocketService {
                                 Ok((stream, addr)) => {
                                     info!("HAService receive new connection, {}", addr);
                                     match AcceptSocketService::build_connection(
+                                        runtime_scope.clone(),
                                         connection_context.clone(),
                                         message_store_config.clone(),
                                         stream,
@@ -925,7 +933,10 @@ mod tests {
     }
 
     fn new_default_ha_service(store: &LocalFileMessageStore) -> DefaultHAService {
-        DefaultHAService::new(store.ha_replica_store_handle())
+        DefaultHAService::new(
+            store.ha_replica_store_handle(),
+            crate::runtime::test_scope("default-ha-service-test"),
+        )
     }
 
     fn new_auto_switch_service(root: &Path) -> GeneralHAService {
@@ -1050,6 +1061,7 @@ mod tests {
         let (server_stream, remote_addr, _client) = new_server_stream().await;
 
         let mut connection = AcceptSocketService::build_connection(
+            service.runtime_scope.clone(),
             service.connection_context(),
             service.replica_store().message_store_config(),
             server_stream,
@@ -1078,6 +1090,7 @@ mod tests {
         auto_switch_service.sync_controller_sync_state_set(7, &HashSet::from([7_i64]));
         let (server_stream, remote_addr, _client) = new_server_stream().await;
         let mut connection = AcceptSocketService::build_connection(
+            service.runtime_scope.clone(),
             service.connection_context(),
             service.replica_store().message_store_config(),
             server_stream,
@@ -1108,6 +1121,7 @@ mod tests {
 
         let (server_stream, remote_addr, _client) = new_server_stream().await;
         let mut connection = AcceptSocketService::build_connection(
+            service.runtime_scope.clone(),
             service.connection_context(),
             service.replica_store().message_store_config(),
             server_stream,
@@ -1137,6 +1151,7 @@ mod tests {
 
         let (server_stream, remote_addr, _client) = new_server_stream().await;
         let mut connection = AcceptSocketService::build_connection(
+            service.runtime_scope.clone(),
             service.connection_context(),
             service.replica_store().message_store_config(),
             server_stream,
@@ -1168,6 +1183,7 @@ mod tests {
 
         let (server_stream, remote_addr, _client) = new_server_stream().await;
         let mut connection = AcceptSocketService::build_connection(
+            service.runtime_scope.clone(),
             service.connection_context(),
             service.replica_store().message_store_config(),
             server_stream,
@@ -1196,6 +1212,7 @@ mod tests {
         let service = new_default_ha_service(&store);
         let (server_stream, remote_addr, mut client) = new_server_stream().await;
         let mut connection = AcceptSocketService::build_connection(
+            service.runtime_scope.clone(),
             service.connection_context(),
             service.replica_store().message_store_config(),
             server_stream,

@@ -1068,6 +1068,7 @@ mod tests {
             Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
             None,
             false,
+            crate::runtime::test_service_context("single-consume-queue-test"),
         )
     }
 

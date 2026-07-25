@@ -52,11 +52,11 @@ fn runtime_config() -> RuntimeConfig {
 
 fn run_scheduled_case(mode: ScheduleMode, period: Duration, run_for: Duration) -> ScheduledBenchOutput {
     let owner = RuntimeOwner::new(runtime_config()).expect("runtime owner should start");
-    let context = owner.context().clone();
+    let context = owner.root_context().child("bench.scheduler-root");
     let observed_runs = Arc::new(AtomicUsize::new(0));
 
     owner.block_on(async move {
-        let scheduled = context.service_context("bench.scheduler").scheduled_tasks("scheduled");
+        let scheduled = context.child("bench.scheduler").scheduled_tasks("scheduled");
         match mode {
             ScheduleMode::FixedDelay => {
                 let runs = observed_runs.clone();
@@ -108,7 +108,7 @@ fn run_scheduled_case(mode: ScheduleMode, period: Duration, run_for: Duration) -
             .into_iter()
             .next()
             .expect("scheduled task snapshot should be available");
-        let report = context.shutdown_tasks(Duration::from_secs(5)).await;
+        let report = context.task_group().shutdown(Duration::from_secs(5)).await;
 
         assert_eq!(snapshot.mode, mode);
         assert!(snapshot.runs > 0, "{snapshot:?}");

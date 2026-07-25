@@ -16,7 +16,6 @@ use std::sync::Arc;
 
 use dashmap::DashMap;
 use parking_lot::Mutex;
-use rocketmq_runtime::RuntimeHandle;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::TaskGroup;
@@ -32,19 +31,11 @@ pub struct MomentStatsItemSet {
     stats_item_table: Arc<DashMap<String, MomentStatsItem>>,
     stats_name: String,
     task_group: Arc<Mutex<Option<TaskGroup>>>,
-    parent_task_group: Option<TaskGroup>,
+    parent_task_group: TaskGroup,
 }
 
 impl MomentStatsItemSet {
-    pub fn new(stats_name: String) -> Self {
-        Self::new_with_optional_task_group(stats_name, None)
-    }
-
-    pub fn new_with_task_group(stats_name: String, parent_task_group: TaskGroup) -> Self {
-        Self::new_with_optional_task_group(stats_name, Some(parent_task_group))
-    }
-
-    fn new_with_optional_task_group(stats_name: String, parent_task_group: Option<TaskGroup>) -> Self {
+    pub fn new(stats_name: String, parent_task_group: TaskGroup) -> Self {
         let stats_item_table = Arc::new(DashMap::new());
         let task_group = Arc::new(Mutex::new(None));
         let set = MomentStatsItemSet {
@@ -55,6 +46,10 @@ impl MomentStatsItemSet {
         };
         set.init();
         set
+    }
+
+    pub fn new_with_task_group(stats_name: String, parent_task_group: TaskGroup) -> Self {
+        Self::new(stats_name, parent_task_group)
     }
 
     pub fn get_stats_item_table(&self) -> Arc<DashMap<String, MomentStatsItem>> {
@@ -75,21 +70,7 @@ impl MomentStatsItemSet {
             Duration::from_millis((compute_next_minutes_time_millis() as i64 - current_millis() as i64).unsigned_abs());
 
         let group_name = format!("rocketmq-observability.moment-stats-set.{}", self.stats_name);
-        let task_group = if let Some(parent_task_group) = self.parent_task_group.as_ref() {
-            parent_task_group.child(group_name)
-        } else {
-            let runtime = match tokio::runtime::Handle::try_current() {
-                Ok(handle) => RuntimeHandle::new(handle),
-                Err(error) => {
-                    warn!(
-                        "[{}] failed to initialize MomentStatsItemSet outside Tokio runtime: {}",
-                        self.stats_name, error
-                    );
-                    return;
-                }
-            };
-            TaskGroup::root(group_name, runtime)
-        };
+        let task_group = self.parent_task_group.child(group_name);
         let scheduled_tasks = ScheduledTaskGroup::new(task_group.child("scheduled"));
         let mut config =
             ScheduledTaskConfig::fixed_rate_no_overlap("common.moment-stats-set.print", Duration::from_secs(300));
@@ -153,14 +134,11 @@ impl MomentStatsItemSet {
             return stats_item.clone();
         }
 
-        let new_item = match self.parent_task_group.as_ref() {
-            Some(parent_task_group) => MomentStatsItem::new_with_task_group(
-                self.stats_name.clone(),
-                stats_key.clone(),
-                parent_task_group.clone(),
-            ),
-            None => MomentStatsItem::new(self.stats_name.clone(), stats_key.clone()),
-        };
+        let new_item = MomentStatsItem::new(
+            self.stats_name.clone(),
+            stats_key.clone(),
+            self.parent_task_group.clone(),
+        );
         self.stats_item_table.insert(stats_key, new_item.clone());
         new_item
     }
@@ -196,15 +174,22 @@ mod tests {
 
     use super::*;
 
+    fn test_parent(name: &'static str) -> TaskGroup {
+        RuntimeContext::from_current(name)
+            .service_context("moment-stats-set-service")
+            .task_group()
+            .clone()
+    }
+
     #[tokio::test]
     async fn moment_stats_item_set_initializes_with_empty_table() {
-        let stats_set = MomentStatsItemSet::new("TestName".to_string());
+        let stats_set = MomentStatsItemSet::new("TestName".to_string(), test_parent("moment-stats-set-empty-test"));
         assert!(stats_set.get_stats_item_table().is_empty());
     }
 
     #[tokio::test]
     async fn moment_stats_item_set_returns_correct_stats_name() {
-        let stats_set = MomentStatsItemSet::new("TestName".to_string());
+        let stats_set = MomentStatsItemSet::new("TestName".to_string(), test_parent("moment-stats-set-name-test"));
         assert_eq!(stats_set.get_stats_name(), "TestName");
     }
 
@@ -230,7 +215,7 @@ mod tests {
 
     #[tokio::test]
     async fn moment_stats_item_set_creates_and_returns_stats_item() {
-        let stats_set = MomentStatsItemSet::new("TestName".to_string());
+        let stats_set = MomentStatsItemSet::new("TestName".to_string(), test_parent("moment-stats-set-create-test"));
         let stats_item = stats_set.get_and_create_stats_item("TestKey".to_string());
         assert_eq!(stats_item.get_stats_name(), "TestName");
         assert_eq!(stats_item.get_stats_key(), "TestKey");
@@ -238,7 +223,7 @@ mod tests {
 
     #[tokio::test]
     async fn moment_stats_item_set_sets_and_gets_value() {
-        let stats_set = MomentStatsItemSet::new("TestName".to_string());
+        let stats_set = MomentStatsItemSet::new("TestName".to_string(), test_parent("moment-stats-set-value-test"));
         stats_set.set_value("TestKey", 10);
         let stats_item = stats_set.get_and_create_stats_item("TestKey".to_string());
         assert_eq!(stats_item.get_value().load(std::sync::atomic::Ordering::Relaxed), 10);
@@ -246,7 +231,7 @@ mod tests {
 
     #[tokio::test]
     async fn moment_stats_item_set_deletes_value_by_infix_key() {
-        let stats_set = MomentStatsItemSet::new("TestName".to_string());
+        let stats_set = MomentStatsItemSet::new("TestName".to_string(), test_parent("moment-stats-set-infix-test"));
         stats_set.set_value("_TestKey_", 10);
         stats_set.del_value_by_infix_key("TestKey", "_");
         assert!(stats_set.get_stats_item_table().is_empty());
@@ -254,7 +239,7 @@ mod tests {
 
     #[tokio::test]
     async fn moment_stats_item_set_deletes_value_by_suffix_key() {
-        let stats_set = MomentStatsItemSet::new("TestName".to_string());
+        let stats_set = MomentStatsItemSet::new("TestName".to_string(), test_parent("moment-stats-set-suffix-test"));
         stats_set.set_value("_TestKey", 10);
         stats_set.del_value_by_suffix_key("TestKey", "_");
         assert!(stats_set.get_stats_item_table().is_empty());

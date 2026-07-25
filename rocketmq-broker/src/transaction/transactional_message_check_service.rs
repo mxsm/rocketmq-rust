@@ -17,8 +17,8 @@ use std::time::Duration;
 use std::time::Instant;
 
 use crate::config::broker_config::BrokerConfig;
-use rocketmq_runtime::task::service_task::ServiceContext;
 use rocketmq_runtime::task::service_task::ServiceTask;
+use rocketmq_runtime::task::service_task::ServiceTaskContext;
 use rocketmq_runtime::task::ServiceManager;
 use rocketmq_store::base::message_store::MessageStore;
 use tracing::info;
@@ -43,7 +43,7 @@ impl<MS: MessageStore> ServiceTask for TransactionalMessageCheckServiceInner<MS>
         "TransactionalMessageCheckService".into()
     }
 
-    async fn run(&self, context: &ServiceContext) {
+    async fn run(&self, context: &ServiceTaskContext) {
         info!("Starting transactional check service");
 
         while !context.is_stopped() {

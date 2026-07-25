@@ -36,6 +36,7 @@ use crate::kv::compaction_generation::CompactionRecord;
 use crate::kv::compaction_generation::CurrentPointer;
 use crate::kv::compaction_generation::GenerationMetadata;
 use crate::log_file::mapped_file::MappedFile;
+use crate::runtime::StoreRuntimeScope;
 
 type PayloadResolver = dyn Fn(i64, i32) -> Option<Bytes> + Send + Sync;
 
@@ -79,6 +80,7 @@ struct CompactionState {
 
 pub struct CompactionStore {
     root: Option<PathBuf>,
+    runtime_scope: Option<StoreRuntimeScope>,
     state: RwLock<CompactionState>,
     payload_resolver: RwLock<Option<Arc<PayloadResolver>>>,
     generation_lock: tokio::sync::Mutex<()>,
@@ -91,6 +93,7 @@ impl Default for CompactionStore {
         let current = Arc::new(CompactionGeneration::empty());
         Self {
             root: None,
+            runtime_scope: None,
             state: RwLock::new(CompactionState {
                 current,
                 previous: None,
@@ -115,9 +118,10 @@ impl CompactionStore {
         Self::default()
     }
 
-    pub(crate) fn with_root(root: PathBuf) -> Self {
+    pub(crate) fn with_root(root: PathBuf, runtime_scope: StoreRuntimeScope) -> Self {
         let store = Self {
             root: Some(root),
+            runtime_scope: Some(runtime_scope),
             ..Self::default()
         };
         store.state.write().read_state = CompactionReadState::Recovering {
@@ -139,20 +143,23 @@ impl CompactionStore {
         let Some(root) = self.root.clone() else {
             return Ok(());
         };
+        let runtime_scope = self.runtime_scope()?;
         let _generation_guard = self.generation_lock.lock().await;
-        let Some(pointer) = compaction_generation::read_current(root.clone()).await? else {
-            compaction_generation::cleanup_orphans(root, 0, None).await?;
+        let Some(pointer) = compaction_generation::read_current(runtime_scope, root.clone()).await? else {
+            compaction_generation::cleanup_orphans(runtime_scope, root, 0, None).await?;
             return Ok(());
         };
 
         let (current, previous, effective_pointer) =
-            match compaction_generation::load_generation(root.clone(), pointer.current).await {
+            match compaction_generation::load_generation(runtime_scope, root.clone(), pointer.current).await {
                 Ok(current) => {
                     let previous = match pointer.previous {
-                        Some(generation) => compaction_generation::load_generation(root.clone(), generation)
-                            .await
-                            .ok()
-                            .map(Self::generation_from_loaded),
+                        Some(generation) => {
+                            compaction_generation::load_generation(runtime_scope, root.clone(), generation)
+                                .await
+                                .ok()
+                                .map(Self::generation_from_loaded)
+                        }
                         None => None,
                     };
                     let effective_pointer = CurrentPointer {
@@ -161,7 +168,7 @@ impl CompactionStore {
                         next_generation: pointer.next_generation,
                     };
                     if effective_pointer != pointer {
-                        compaction_generation::write_current(root.clone(), effective_pointer).await?;
+                        compaction_generation::write_current(runtime_scope, root.clone(), effective_pointer).await?;
                     }
                     (Self::generation_from_loaded(current), previous, effective_pointer)
                 }
@@ -169,13 +176,14 @@ impl CompactionStore {
                     let Some(previous_id) = pointer.previous else {
                         return Err(current_error);
                     };
-                    let previous = compaction_generation::load_generation(root.clone(), previous_id).await?;
+                    let previous =
+                        compaction_generation::load_generation(runtime_scope, root.clone(), previous_id).await?;
                     let rollback = CurrentPointer {
                         current: previous_id,
                         previous: None,
                         next_generation: pointer.next_generation,
                     };
-                    compaction_generation::write_current(root.clone(), rollback).await?;
+                    compaction_generation::write_current(runtime_scope, root.clone(), rollback).await?;
                     (Self::generation_from_loaded(previous), None, rollback)
                 }
             };
@@ -196,7 +204,13 @@ impl CompactionStore {
                 required_wal_position: durable_watermark,
             };
         }
-        compaction_generation::cleanup_orphans(root, effective_pointer.current, effective_pointer.previous).await
+        compaction_generation::cleanup_orphans(
+            runtime_scope,
+            root,
+            effective_pointer.current,
+            effective_pointer.previous,
+        )
+        .await
     }
 
     pub(crate) fn begin_recovery(&self, required_wal_position: i64) {
@@ -370,17 +384,25 @@ impl CompactionStore {
 
         self.fail_if(FaultStage::Build)?;
         let (metadata, published_queues) = if let Some(root) = self.root.clone() {
+            let runtime_scope = self.runtime_scope()?;
             let materialized = self.materialize_queues(&merged).await?;
-            let metadata =
-                compaction_generation::write_temporary_generation(root.clone(), generation, materialized).await?;
+            let metadata = compaction_generation::write_temporary_generation(
+                runtime_scope,
+                root.clone(),
+                generation,
+                materialized,
+            )
+            .await?;
             self.fail_if(FaultStage::Sync)?;
-            compaction_generation::sync_temporary_generation(root.clone(), generation).await?;
-            compaction_generation::validate_temporary_generation(root.clone(), generation, metadata).await?;
+            compaction_generation::sync_temporary_generation(runtime_scope, root.clone(), generation).await?;
+            compaction_generation::validate_temporary_generation(runtime_scope, root.clone(), generation, metadata)
+                .await?;
             self.fail_if(FaultStage::Rename)?;
-            compaction_generation::rename_generation(root.clone(), generation).await?;
-            let loaded = compaction_generation::load_generation(root.clone(), generation).await?;
+            compaction_generation::rename_generation(runtime_scope, root.clone(), generation).await?;
+            let loaded = compaction_generation::load_generation(runtime_scope, root.clone(), generation).await?;
             self.fail_if(FaultStage::Current)?;
             compaction_generation::write_current(
+                runtime_scope,
                 root,
                 CurrentPointer {
                     current: generation,
@@ -442,6 +464,7 @@ impl CompactionStore {
         };
         if let Some(root) = self.root.clone() {
             compaction_generation::write_current(
+                self.runtime_scope()?,
                 root,
                 CurrentPointer {
                     current: previous.metadata.generation,
@@ -498,8 +521,9 @@ impl CompactionStore {
                 .collect::<Vec<_>>()
         };
         if let Some(root) = self.root.clone() {
+            let runtime_scope = self.runtime_scope()?;
             for generation in &deletable {
-                compaction_generation::delete_generation(root.clone(), *generation).await?;
+                compaction_generation::delete_generation(runtime_scope, root.clone(), *generation).await?;
             }
         }
         if !deletable.is_empty() {
@@ -663,11 +687,26 @@ impl CompactionStore {
                 let Some(root) = self.root.clone() else {
                     return Ok(None);
                 };
-                compaction_generation::read_generation_payload(root, *generation, *position, *size)
-                    .await
-                    .map(Some)
+                compaction_generation::read_generation_payload(
+                    self.runtime_scope()?,
+                    root,
+                    *generation,
+                    *position,
+                    *size,
+                )
+                .await
+                .map(Some)
             }
         }
+    }
+
+    fn runtime_scope(&self) -> Result<&StoreRuntimeScope, RocketMQError> {
+        self.runtime_scope.as_ref().ok_or_else(|| {
+            RocketMQError::storage_write_failed(
+                self.root_display(),
+                "durable compaction store requires a service runtime scope",
+            )
+        })
     }
 
     pub fn message_count(&self, topic: &CheetahString, queue_id: i32) -> usize {
@@ -858,6 +897,7 @@ fn status_result(
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::path::PathBuf;
     use std::sync::Arc;
 
     use bytes::Bytes;
@@ -869,6 +909,10 @@ mod tests {
     use super::FaultStage;
     use crate::base::message_status_enum::GetMessageStatus;
     use crate::kv::compaction_generation;
+
+    fn durable_store(root: PathBuf) -> CompactionStore {
+        CompactionStore::with_root(root, crate::runtime::test_scope("compaction-store-test"))
+    }
 
     #[tokio::test]
     async fn get_message_returns_java_style_status_for_missing_queue() {
@@ -927,7 +971,7 @@ mod tests {
     #[tokio::test]
     async fn recovering_state_fails_closed_without_raw_commit_log_fallback() {
         let temp = tempfile::tempdir().unwrap();
-        let store = CompactionStore::with_root(temp.path().join("compaction"));
+        let store = durable_store(temp.path().join("compaction"));
         store.begin_recovery(100);
         let topic = CheetahString::from_static_str("topic");
         let group = CheetahString::from_static_str("group");
@@ -961,7 +1005,7 @@ mod tests {
             (20_i64, Bytes::from_static(b"new")),
         ])));
 
-        let store = CompactionStore::with_root(root.clone());
+        let store = durable_store(root.clone());
         install_resolver(&store, payloads.clone());
         store.load().await.unwrap();
         store.finish_recovery(0);
@@ -978,7 +1022,7 @@ mod tests {
             b"corrupt",
         )
         .unwrap();
-        let restarted = CompactionStore::with_root(root);
+        let restarted = durable_store(root);
         install_resolver(&restarted, payloads);
         restarted.load().await.unwrap();
         assert_eq!(restarted.current_generation_id(), 1);
@@ -1012,7 +1056,7 @@ mod tests {
         let group = CheetahString::from_static_str("group");
         let payloads = Arc::new(RwLock::new(HashMap::from([(10_i64, Bytes::from_static(b"live"))])));
 
-        let store = CompactionStore::with_root(root.clone());
+        let store = durable_store(root.clone());
         install_resolver(&store, payloads.clone());
         store.load().await.unwrap();
         store.finish_recovery(0);
@@ -1028,7 +1072,7 @@ mod tests {
         );
         drop(store);
 
-        let restarted = CompactionStore::with_root(root);
+        let restarted = durable_store(root);
         restarted.load().await.unwrap();
         restarted.finish_recovery(14);
         let result = restarted.get_message(&group, &topic, 0, 0, 1, 1024).await.unwrap();
@@ -1050,7 +1094,7 @@ mod tests {
             (20_i64, Bytes::from_static(b"new")),
         ])));
 
-        let store = CompactionStore::with_root(root.clone());
+        let store = durable_store(root.clone());
         install_resolver(&store, payloads.clone());
         store.load().await.unwrap();
         store.finish_recovery(0);
@@ -1063,7 +1107,7 @@ mod tests {
         assert_eq!(store.current_generation_id(), expected_generation);
         drop(store);
 
-        let restarted = CompactionStore::with_root(root);
+        let restarted = durable_store(root);
         install_resolver(&restarted, payloads);
         restarted.load().await.unwrap();
         assert!(matches!(restarted.read_state(), CompactionReadState::Recovering { .. }));
@@ -1087,7 +1131,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("compaction");
         let topic = CheetahString::from_static_str("topic");
-        let store = CompactionStore::with_root(root.clone());
+        let store = durable_store(root.clone());
         install_resolver(
             &store,
             Arc::new(RwLock::new(HashMap::from([

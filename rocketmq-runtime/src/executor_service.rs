@@ -101,7 +101,7 @@ impl TokioExecutorService {
     fn from_config(config: RuntimeConfig) -> RuntimeResult<TokioExecutorService> {
         let inner = RuntimeOwner::new(config)
             .map_err(|error| service_startup_failed("failed to create TokioExecutorService runtime", error))?;
-        let task_group = inner.context().root_group().child("tokio-executor");
+        let task_group = inner.root_context().task_group().child("tokio-executor");
         Ok(TokioExecutorService { inner, task_group })
     }
 }
@@ -134,7 +134,7 @@ impl TokioExecutorService {
     }
 
     pub fn get_handle(&self) -> &Handle {
-        self.inner.context().runtime().inner()
+        self.inner.root_context().runtime().inner()
     }
 
     pub fn block_on<F: Future>(&self, future: F) -> F::Output {
@@ -278,7 +278,7 @@ impl ScheduledExecutorService {
     fn from_config(config: RuntimeConfig) -> RuntimeResult<ScheduledExecutorService> {
         let inner = RuntimeOwner::new(config)
             .map_err(|error| service_startup_failed("failed to create ScheduledExecutorService runtime", error))?;
-        let scheduled_tasks = ScheduledTaskGroup::new(inner.context().root_group().child("scheduled"));
+        let scheduled_tasks = ScheduledTaskGroup::new(inner.root_context().task_group().child("scheduled"));
         Ok(ScheduledExecutorService { inner, scheduled_tasks })
     }
 }
@@ -293,7 +293,9 @@ fn common_runtime_config(
     config.worker_threads = thread_num;
     config.max_blocking_threads = max_blocking_threads;
     config.thread_keep_alive = keep_alive;
-    config.blocking_pool_policy.max_concurrency = max_blocking_threads;
+    config.blocking_lane_policies.storage_io.max_concurrency = max_blocking_threads;
+    config.blocking_lane_policies.metadata_io.max_concurrency = max_blocking_threads;
+    config.blocking_lane_policies.cpu_crypto.max_concurrency = max_blocking_threads;
     config
 }
 

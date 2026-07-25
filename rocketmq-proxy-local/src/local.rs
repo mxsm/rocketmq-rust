@@ -118,7 +118,7 @@ use rocketmq_proxy_core::TransactionService;
 use rocketmq_proxy_core::TransactionSource;
 use rocketmq_proxy_core::UpdateOffsetPlan;
 use rocketmq_proxy_core::UpdateOffsetRequest;
-use rocketmq_runtime::ServiceContext;
+use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ShutdownDeadline;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
@@ -187,25 +187,26 @@ impl LocalBrokerFacadeClient {
         Self::new_with_context(config, None)
     }
 
-    pub fn with_service_context(config: LocalConfig, service_context: &ServiceContext) -> Self {
+    pub fn with_service_context(config: LocalConfig, service_context: &ChildServiceContext) -> Self {
         Self::new_with_context(config, Some(service_context))
     }
 
-    fn new_with_context(config: LocalConfig, service_context: Option<&ServiceContext>) -> Self {
+    fn new_with_context(config: LocalConfig, service_context: Option<&ChildServiceContext>) -> Self {
         let (sender, receiver) = mpsc::channel(LOCAL_COMMAND_CAPACITY);
         let broker_name = config.broker_name.clone();
         let startup_error = if let Some(service_context) = service_context {
             let worker_context = service_context.child("proxy.local.adapter");
+            let broker_context = worker_context.child("embedded-broker-owner");
             let cancellation = worker_context.task_group().cancellation_token();
             worker_context
                 .spawn_service("proxy.local.worker", async move {
-                    run_local_broker_worker(config, receiver, cancellation).await;
+                    run_local_broker_worker(config, receiver, cancellation, broker_context).await;
                 })
                 .err()
                 .map(|error| Arc::<str>::from(format!("failed to spawn proxy local worker: {error}")))
         } else {
             Some(Arc::<str>::from(
-                "proxy local worker requires an injected ServiceContext",
+                "proxy local worker requires an injected ChildServiceContext",
             ))
         };
         Self {
@@ -596,7 +597,7 @@ pub fn local_components_from_config(
 pub fn local_components_from_config_with_service_context(
     config: LocalConfig,
     strategy_name: impl Into<String>,
-    service_context: &ServiceContext,
+    service_context: &ChildServiceContext,
 ) -> (LocalServiceManager, LocalBrokerFacadeClient) {
     local_components(
         LocalBrokerFacadeClient::with_service_context(config, service_context),
@@ -628,8 +629,13 @@ async fn run_local_broker_worker(
     config: LocalConfig,
     mut receiver: mpsc::Receiver<LocalBrokerCommand>,
     cancellation: CancellationToken,
+    service_context: ChildServiceContext,
 ) {
-    let mut facade = ProxyBrokerFacade::new(build_broker_config(&config), build_message_store_config(&config));
+    let mut facade = ProxyBrokerFacade::new(
+        build_broker_config(&config),
+        build_message_store_config(&config),
+        service_context.child("embedded-broker"),
+    );
     let initialization = tokio::select! {
         biased;
         () = cancellation.cancelled() => {
@@ -2094,7 +2100,7 @@ mod tests {
             .await
             .expect_err("unmanaged local adapter must reject work");
 
-        assert!(matches!(error, ProxyError::Transport { message } if message.contains("ServiceContext")));
+        assert!(matches!(error, ProxyError::Transport { message } if message.contains("ChildServiceContext")));
     }
 
     #[test]

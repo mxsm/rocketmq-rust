@@ -108,7 +108,7 @@ use rocketmq_proxy_core::TransactionResolution;
 use rocketmq_proxy_core::TransactionSource;
 use rocketmq_proxy_core::UpdateOffsetPlan;
 use rocketmq_proxy_core::UpdateOffsetRequest;
-use rocketmq_runtime::ServiceContext;
+use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_security_api::OutboundSigner;
 use tokio::sync::mpsc;
@@ -798,7 +798,7 @@ impl RocketmqClusterClient {
     pub fn with_service_context(
         config: ClusterConfig,
         signer: Option<Arc<dyn OutboundSigner>>,
-        service_context: &ServiceContext,
+        service_context: &ChildServiceContext,
     ) -> Self {
         let executor = ClusterTaskExecutor::new(config.clone(), signer, Some(service_context));
         Self {
@@ -1260,7 +1260,7 @@ impl ClusterTaskExecutor {
     fn new(
         config: ClusterConfig,
         signer: Option<Arc<dyn OutboundSigner>>,
-        service_context: Option<&ServiceContext>,
+        service_context: Option<&ChildServiceContext>,
     ) -> Self {
         let rpc_hook = signer.map(rpc_hook_from_outbound_signer);
         Self::new_with_rpc_hook(config, rpc_hook, service_context)
@@ -1269,12 +1269,12 @@ impl ClusterTaskExecutor {
     fn new_with_rpc_hook(
         config: ClusterConfig,
         rpc_hook: Option<Arc<ClientRpcHook>>,
-        service_context: Option<&ServiceContext>,
+        service_context: Option<&ChildServiceContext>,
     ) -> Self {
         let (sender, receiver) = mpsc::channel(CLUSTER_COMMAND_CAPACITY);
         let startup_error = if let Some(service_context) = service_context {
             // Each adapter owns an isolated Client manager domain even when a
-            // caller reuses the same parent ServiceContext for several
+            // caller reuses the same parent ChildServiceContext for several
             // adapters. The child group also makes that ownership visible in
             // the runtime lifecycle tree.
             let worker_context = service_context.child("proxy.cluster.adapter");
@@ -1288,7 +1288,7 @@ impl ClusterTaskExecutor {
                 .map(|error| Arc::<str>::from(format!("failed to spawn proxy cluster worker: {error}")))
         } else {
             Some(Arc::<str>::from(
-                "proxy cluster worker requires an injected ServiceContext",
+                "proxy cluster worker requires an injected ChildServiceContext",
             ))
         };
         Self { sender, startup_error }
@@ -3316,7 +3316,7 @@ mod tests {
             .query_route(&ResourceIdentity::new("", "TopicA"))
             .await
             .expect_err("unmanaged client must reject work");
-        assert!(matches!(error, ProxyError::Transport { message } if message.contains("ServiceContext")));
+        assert!(matches!(error, ProxyError::Transport { message } if message.contains("ChildServiceContext")));
     }
 
     #[test]

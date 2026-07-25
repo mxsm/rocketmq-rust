@@ -12,18 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::OnceLock;
-
 use rocketmq_error::RocketMQError;
 use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::BlockingExecutorSnapshot;
-use rocketmq_runtime::BlockingPoolPolicy;
-use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
+use rocketmq_runtime::TaskId;
 use rocketmq_runtime::TaskKind;
-
-static ROCKSDB_BLOCKING: OnceLock<BlockingExecutor> = OnceLock::new();
 
 #[derive(Debug, Clone)]
 pub struct RocksDbRuntimeScope {
@@ -32,21 +28,11 @@ pub struct RocksDbRuntimeScope {
 }
 
 impl RocksDbRuntimeScope {
-    pub fn new(parent_task_group: TaskGroup) -> Result<Self, RocketMQError> {
-        let blocking_group = parent_task_group.child("rocketmq-store.rocksdb.blocking");
-        let blocking_executor = BlockingExecutor::new(
-            BlockingPoolPolicy {
-                name: "rocketmq-store.rocksdb.blocking".to_string(),
-                ..BlockingPoolPolicy::default()
-            },
-            blocking_group.child("rocketmq-store.rocksdb.blocking-reaper"),
-        )
-        .map_err(|error| RocketMQError::storage_write_failed("rocksdb", format!("blocking executor: {error}")))?;
-
-        Ok(Self {
-            parent_task_group,
-            blocking_executor,
-        })
+    pub fn new(service_context: ChildServiceContext) -> Self {
+        Self {
+            parent_task_group: service_context.task_group().clone(),
+            blocking_executor: service_context.storage_io().clone(),
+        }
     }
 
     pub async fn spawn_io<F, R>(&self, name: &'static str, operation: F) -> Result<R, RocketMQError>
@@ -67,70 +53,48 @@ impl RocksDbRuntimeScope {
     pub fn blocking_snapshot(&self) -> BlockingExecutorSnapshot {
         self.blocking_executor.snapshot()
     }
+
+    pub fn spawn_background_io<F>(&self, name: &'static str, operation: F) -> Result<TaskId, RocketMQError>
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        let executor = self.blocking_executor.clone();
+        let task_group = self.parent_task_group.child(name);
+        task_group
+            .spawn(name, TaskKind::Worker, async move {
+                if let Err(error) = executor.spawn_io(name, operation).await {
+                    tracing::warn!(error = %error, task_name = name, "rocksdb background blocking task failed");
+                }
+            })
+            .map_err(|error| RocketMQError::storage_write_failed("rocksdb", format!("{name}: {error}")))
+    }
 }
 
-pub async fn spawn_io<F, R>(name: &'static str, operation: F) -> Result<R, RocketMQError>
+pub async fn spawn_io<F, R>(scope: &RocksDbRuntimeScope, name: &'static str, operation: F) -> Result<R, RocketMQError>
 where
     F: FnOnce() -> R + Send + 'static,
     R: Send + 'static,
 {
-    blocking_executor()?
-        .spawn_io(name, operation)
-        .await
-        .map_err(|error| RocketMQError::storage_write_failed("rocksdb", format!("{name}: {error}")))
+    scope.spawn_io(name, operation).await
 }
 
-pub fn spawn_detached_io<F>(name: &'static str, operation: F) -> Result<(), RocketMQError>
+pub fn spawn_background_io<F>(
+    scope: &RocksDbRuntimeScope,
+    name: &'static str,
+    operation: F,
+) -> Result<TaskId, RocketMQError>
 where
     F: FnOnce() + Send + 'static,
 {
-    let handle = tokio::runtime::Handle::try_current()
-        .map_err(|error| RocketMQError::storage_write_failed("rocksdb", format!("{name}: {error}")))?;
-    let task_group = TaskGroup::root(name, RuntimeHandle::new(handle));
-    task_group
-        .spawn_detached(name, TaskKind::Worker, async move {
-            if let Err(error) = spawn_io(name, operation).await {
-                tracing::warn!(error = %error, task_name = name, "rocksdb detached blocking task failed");
-            }
-        })
-        .map_err(|error| RocketMQError::storage_write_failed("rocksdb", format!("{name}: {error}")))?;
-    Ok(())
+    scope.spawn_background_io(name, operation)
 }
 
-pub fn task_group(name: &'static str) -> Result<TaskGroup, RocketMQError> {
-    let handle = tokio::runtime::Handle::try_current()
-        .map_err(|error| RocketMQError::storage_write_failed("rocksdb", format!("{name}: {error}")))?;
-    Ok(TaskGroup::root(name, RuntimeHandle::new(handle)))
+pub fn task_group(scope: &RocksDbRuntimeScope, name: &'static str) -> TaskGroup {
+    scope.task_group(name)
 }
 
 pub fn shutdown_report_result(component: &'static str, report: ShutdownReport) -> Result<(), RocketMQError> {
     report
         .assert_no_task_leak()
         .map_err(|error| RocketMQError::storage_write_failed("rocksdb", format!("{component}: {error}")))
-}
-
-fn blocking_executor() -> Result<BlockingExecutor, RocketMQError> {
-    if let Some(executor) = ROCKSDB_BLOCKING.get() {
-        return Ok(executor.clone());
-    }
-
-    let handle = tokio::runtime::Handle::try_current()
-        .map_err(|error| RocketMQError::storage_write_failed("rocksdb", format!("blocking executor: {error}")))?;
-    let group = TaskGroup::root("rocketmq-store.rocksdb.blocking", RuntimeHandle::new(handle));
-    let executor = BlockingExecutor::new(
-        BlockingPoolPolicy {
-            name: "rocketmq-store.rocksdb.blocking".to_string(),
-            ..BlockingPoolPolicy::default()
-        },
-        group.child("rocketmq-store.rocksdb.blocking-reaper"),
-    )
-    .map_err(|error| RocketMQError::storage_write_failed("rocksdb", format!("blocking executor: {error}")))?;
-
-    if ROCKSDB_BLOCKING.set(executor.clone()).is_err() {
-        return Ok(ROCKSDB_BLOCKING
-            .get()
-            .expect("rocksdb blocking executor must be initialized")
-            .clone());
-    }
-    Ok(executor)
 }

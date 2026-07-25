@@ -20,8 +20,8 @@ use std::time::Duration;
 use std::time::Instant;
 
 use rocketmq_model::common::mix_all;
-use rocketmq_runtime::task::service_task::ServiceContext;
 use rocketmq_runtime::task::service_task::ServiceTask;
+use rocketmq_runtime::task::service_task::ServiceTaskContext;
 use rocketmq_runtime::task::ServiceManager;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
@@ -239,7 +239,7 @@ impl ServiceTask for GroupTransferServiceInner {
         "GroupTransferService".to_string()
     }
 
-    async fn run(&self, context: &ServiceContext) {
+    async fn run(&self, context: &ServiceTaskContext) {
         while !context.is_stopped() {
             context.wait_for_running(std::time::Duration::from_millis(10)).await;
             self.on_wait_end().await;
@@ -262,8 +262,10 @@ mod tests {
     fn new_test_ha_service() -> GeneralHAService {
         let temp_root = tempfile::tempdir().expect("create temp root dir");
         let store = new_test_message_store(temp_root.path(), false);
-        let mut service =
-            GeneralHAService::new_with_default_ha_service(DefaultHAService::new(store.ha_replica_store_handle()));
+        let mut service = GeneralHAService::new_with_default_ha_service(DefaultHAService::new(
+            store.ha_replica_store_handle(),
+            crate::runtime::test_scope("group-transfer-ha-service-test"),
+        ));
         service.init().expect("init default ha service");
         service
     }

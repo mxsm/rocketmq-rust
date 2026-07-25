@@ -98,7 +98,10 @@ async fn main() -> Result<()> {
     async fn main() -> Result<()> {{
         let (_cli, config) = parse_command_line()?;
         
-        let controller = Arc::new(ControllerManager::new(config).await?);
+        let runtime = rocketmq_runtime::RuntimeContext::from_current("controller-cli-example");
+        let controller = Arc::new(
+            ControllerManager::new(config, runtime.service_context("controller")).await?
+        );
         controller.initialize().await?;
         controller.start().await?;
         

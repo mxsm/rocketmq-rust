@@ -148,7 +148,11 @@ mod tests {
         let tcp_stream = tokio::net::TcpStream::from_std(std_stream).expect("convert tcp stream");
         let connection = Connection::new(tcp_stream);
         let response_table = std::sync::Arc::new(parking_lot::Mutex::new(HashMap::<i32, ResponseFuture>::new()));
-        let inner = std::sync::Arc::new(ChannelInner::new(connection, response_table));
+        let inner = std::sync::Arc::new(ChannelInner::new(
+            connection,
+            response_table,
+            crate::test_task_group("channel"),
+        ));
         Channel::new(inner, local_addr, local_addr)
     }
 
@@ -179,10 +183,14 @@ mod tests {
         let runtime = new_test_runtime("round-trip").await;
         let broker_config = runtime.broker_config();
         let auth_admin_service = Arc::new(
-            AuthAdminService::new(AuthConfig {
-                auth_config_path: broker_config.auth_config_path.clone(),
-                ..AuthConfig::default()
-            })
+            AuthAdminService::new(
+                AuthConfig {
+                    auth_config_path: broker_config.auth_config_path.clone(),
+                    ..AuthConfig::default()
+                },
+                crate::test_service_context("auth-admin"),
+            )
+            .await
             .expect("create auth admin service"),
         );
 
@@ -287,10 +295,14 @@ mod tests {
         let runtime = new_test_runtime("malformed-body").await;
         let broker_config = runtime.broker_config();
         let auth_admin_service = Arc::new(
-            AuthAdminService::new(AuthConfig {
-                auth_config_path: broker_config.auth_config_path.clone(),
-                ..AuthConfig::default()
-            })
+            AuthAdminService::new(
+                AuthConfig {
+                    auth_config_path: broker_config.auth_config_path.clone(),
+                    ..AuthConfig::default()
+                },
+                crate::test_service_context("auth-admin"),
+            )
+            .await
             .expect("create auth admin service"),
         );
         let mut create_user_handler = CreateUserRequestHandler::new(auth_admin_service.clone());
@@ -400,10 +412,14 @@ mod tests {
         let runtime = new_test_runtime("empty-list").await;
         let broker_config = runtime.broker_config();
         let auth_admin_service = Arc::new(
-            AuthAdminService::new(AuthConfig {
-                auth_config_path: broker_config.auth_config_path.clone(),
-                ..AuthConfig::default()
-            })
+            AuthAdminService::new(
+                AuthConfig {
+                    auth_config_path: broker_config.auth_config_path.clone(),
+                    ..AuthConfig::default()
+                },
+                crate::test_service_context("auth-admin"),
+            )
+            .await
             .expect("create auth admin service"),
         );
         let mut list_users_handler = ListUsersRequestHandler::new(auth_admin_service.clone());
@@ -460,10 +476,14 @@ mod tests {
         let runtime = new_test_runtime("protect-super-user").await;
         let broker_config = runtime.broker_config();
         let auth_admin_service = Arc::new(
-            AuthAdminService::new(AuthConfig {
-                auth_config_path: broker_config.auth_config_path.clone(),
-                ..AuthConfig::default()
-            })
+            AuthAdminService::new(
+                AuthConfig {
+                    auth_config_path: broker_config.auth_config_path.clone(),
+                    ..AuthConfig::default()
+                },
+                crate::test_service_context("auth-admin"),
+            )
+            .await
             .expect("create auth admin service"),
         );
         let mut admin = User::of_with_type("admin", "admin-secret", UserType::Super);
@@ -519,10 +539,14 @@ mod tests {
         let runtime = new_test_runtime("direct-super-check").await;
         let broker_config = runtime.broker_config();
         let auth_admin_service = Arc::new(
-            AuthAdminService::new(AuthConfig {
-                auth_config_path: broker_config.auth_config_path.clone(),
-                ..AuthConfig::default()
-            })
+            AuthAdminService::new(
+                AuthConfig {
+                    auth_config_path: broker_config.auth_config_path.clone(),
+                    ..AuthConfig::default()
+                },
+                crate::test_service_context("auth-admin"),
+            )
+            .await
             .expect("create auth admin service"),
         );
         let mut alice = User::of_with_type("alice", "alice-secret", UserType::Normal);
@@ -607,10 +631,14 @@ mod tests {
         let runtime = new_test_runtime("delete-acl-policy-type").await;
         let broker_config = runtime.broker_config();
         let auth_admin_service = Arc::new(
-            AuthAdminService::new(AuthConfig {
-                auth_config_path: broker_config.auth_config_path.clone(),
-                ..AuthConfig::default()
-            })
+            AuthAdminService::new(
+                AuthConfig {
+                    auth_config_path: broker_config.auth_config_path.clone(),
+                    ..AuthConfig::default()
+                },
+                crate::test_service_context("auth-admin"),
+            )
+            .await
             .expect("create auth admin service"),
         );
         let mut alice = User::of_with_type("alice", "secret", UserType::Normal);

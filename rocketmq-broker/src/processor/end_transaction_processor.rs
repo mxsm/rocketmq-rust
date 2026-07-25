@@ -762,9 +762,10 @@ mod tests {
             timer_max_delay_sec: 88,
             timer_wheel_enable: false,
         };
-        let broker_stats_manager = BrokerStatsManager::new(Arc::new(
-            rocketmq_store::config::store_runtime_config::StoreRuntimeConfig::default(),
-        ));
+        let broker_stats_manager = BrokerStatsManager::new(
+            Arc::new(rocketmq_store::config::store_runtime_config::StoreRuntimeConfig::default()),
+            crate::test_task_group("broker-stats"),
+        );
         let topic = CheetahString::from_static_str("transaction-topic");
 
         let illegal = build_put_message_response(

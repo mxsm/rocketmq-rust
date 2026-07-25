@@ -51,11 +51,10 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::RemotingDeserializable;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
-use rocketmq_runtime::ServiceContext;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskKind;
@@ -399,7 +398,7 @@ pub struct ControllerManager {
     notify_cache: Arc<RwLock<HashMap<NotifyCacheKey, NotifyCacheState>>>,
     pending_notify_state: Arc<RwLock<HashMap<NotifyCacheKey, NotifyCacheState>>>,
     notify_generation: Arc<AtomicU64>,
-    parent_task_group: Option<TaskGroup>,
+    parent_task_group: TaskGroup,
 }
 
 impl ControllerManager {
@@ -418,38 +417,17 @@ impl ControllerManager {
     /// Returns `ControllerError` if:
     /// - Raft controller creation fails
     /// - Configuration is invalid
-    pub async fn new(config: ControllerConfig) -> Result<Self> {
-        Self::new_with_optional_runtime_context(config, None, None).await
-    }
-
-    pub async fn new_with_task_group(config: ControllerConfig, parent_task_group: TaskGroup) -> Result<Self> {
-        Self::new_with_optional_runtime_context(config, None, Some(parent_task_group)).await
-    }
-
-    pub async fn new_with_service_context(config: ControllerConfig, service_context: ServiceContext) -> Result<Self> {
-        Self::new_with_optional_runtime_context(config, Some(service_context), None).await
-    }
-
-    async fn new_with_optional_runtime_context(
-        config: ControllerConfig,
-        service_context: Option<ServiceContext>,
-        parent_task_group: Option<TaskGroup>,
-    ) -> Result<Self> {
+    pub async fn new(config: ControllerConfig, service_context: ChildServiceContext) -> Result<Self> {
         let config = ControllerConfigHandle::new(config);
-        let parent_task_group = service_context
-            .as_ref()
-            .map(|context| context.task_group().clone())
-            .or(parent_task_group);
+        let parent_task_group = service_context.task_group().clone();
 
         info!("Creating controller manager with config: {:?}", config.snapshot());
 
         // Initialize heartbeat manager
-        let heartbeat_manager = Arc::new(match parent_task_group.as_ref() {
-            Some(parent_task_group) => {
-                DefaultBrokerHeartbeatManager::new_with_task_group(config.reader(), parent_task_group.clone())
-            }
-            None => DefaultBrokerHeartbeatManager::new(config.reader()),
-        });
+        let heartbeat_manager = Arc::new(DefaultBrokerHeartbeatManager::new(
+            config.reader(),
+            parent_task_group.clone(),
+        ));
 
         // Initialize RocketMQ runtime for Raft controller
         //let runtime = Arc::new(RocketMQRuntime::new_multi(2, "controller-runtime"));
@@ -457,14 +435,11 @@ impl ControllerManager {
         // Initialize Raft controller for leader election.
         // The controller and request processor must share the same heartbeat manager so that
         // liveness-aware paths observe the broker heartbeats recorded by RPC handlers.
-        let raft_arc = Arc::new(match parent_task_group.as_ref() {
-            Some(parent_task_group) => RaftController::new_open_raft_with_heartbeat_and_task_group(
-                config.reader(),
-                heartbeat_manager.clone(),
-                parent_task_group.clone(),
-            ),
-            None => RaftController::new_open_raft_with_heartbeat(config.reader(), heartbeat_manager.clone()),
-        });
+        let raft_arc = Arc::new(RaftController::new_open_raft_with_heartbeat(
+            config.reader(),
+            heartbeat_manager.clone(),
+            service_context.child("controller.openraft"),
+        ));
 
         // Initialize remoting server for inbound requests
         let listen_port = config.snapshot().listen_addr.port() as u32;
@@ -473,13 +448,10 @@ impl ControllerManager {
             listen_port,
             ..Default::default()
         };
-        let remoting_server = Some(match service_context.as_ref() {
-            Some(service_context) => RocketMQServer::new_with_service_context(
-                Arc::new(server_config),
-                service_context.child("controller.remoting-server"),
-            ),
-            None => RocketMQServer::new(Arc::new(server_config)),
-        });
+        let remoting_server = Some(RocketMQServer::new_with_service_context(
+            Arc::new(server_config),
+            service_context.child("controller.remoting-server"),
+        ));
         info!("Remoting server created on port {}", listen_port);
 
         // Initialize remoting client for outbound RPC
@@ -487,6 +459,7 @@ impl ControllerManager {
         let remoting_client = Arc::new(RocketmqDefaultClient::new(
             Arc::new(client_config),
             DefaultRemotingRequestProcessor,
+            service_context.child("controller.remoting-client"),
         ));
         info!("Remoting client created");
 
@@ -531,14 +504,7 @@ impl ControllerManager {
             return Ok(task_group.clone());
         }
 
-        let task_group = if let Some(parent_task_group) = self.parent_task_group.as_ref() {
-            parent_task_group.child("rocketmq-controller.manager")
-        } else {
-            let handle = tokio::runtime::Handle::try_current().map_err(|error| {
-                ControllerError::runtime_error(format!("No Tokio runtime for controller tasks: {error}"))
-            })?;
-            TaskGroup::root("rocketmq-controller.manager", RuntimeHandle::new(handle))
-        };
+        let task_group = self.parent_task_group.child("rocketmq-controller.manager");
         *guard = Some(task_group.clone());
         Ok(task_group)
     }
@@ -1482,7 +1448,11 @@ mod tests {
         let tcp_stream = tokio::net::TcpStream::from_std(std_stream).expect("convert tcp stream");
         let connection = Connection::new(tcp_stream);
         let response_table = Arc::new(parking_lot::Mutex::new(HashMap::<i32, ResponseFuture>::new()));
-        let inner = Arc::new(ChannelInner::new(connection, response_table));
+        let inner = Arc::new(ChannelInner::new(
+            connection,
+            response_table,
+            test_service_context().child("test-channel").task_group().clone(),
+        ));
         Channel::new(inner, local_addr, local_addr)
     }
 
@@ -1497,11 +1467,17 @@ mod tests {
         addresses
     }
 
+    fn test_service_context() -> ChildServiceContext {
+        rocketmq_runtime::RuntimeContext::from_current("controller-manager-test").service_context("controller-manager")
+    }
+
     #[tokio::test]
     async fn test_manager_lifecycle() {
         let config = ControllerConfig::default().with_node_info(1, "127.0.0.1:9878".parse::<SocketAddr>().unwrap());
 
-        let manager = ControllerManager::new(config).await.expect("Failed to create manager");
+        let manager = ControllerManager::new(config, test_service_context())
+            .await
+            .expect("Failed to create manager");
         let manager_arc = Arc::new(manager);
 
         // Test initialization state (should use non-async is_initialized now)
@@ -1526,7 +1502,11 @@ mod tests {
     #[tokio::test]
     async fn concurrent_initialize_is_serialized_and_manager_handles_do_not_form_a_cycle() {
         let config = ControllerConfig::default().with_node_info(1, reserve_controller_addresses().0);
-        let manager = Arc::new(ControllerManager::new(config).await.expect("create manager"));
+        let manager = Arc::new(
+            ControllerManager::new(config, test_service_context())
+                .await
+                .expect("create manager"),
+        );
 
         let (first, second) = tokio::join!(manager.initialize(), manager.initialize());
         let results = [first.expect("first initialize"), second.expect("second initialize")];
@@ -1554,7 +1534,11 @@ mod tests {
             .with_node_info(1, remoting_addr)
             .with_raft_peers(vec![crate::config::RaftPeer { id: 1, addr: raft_addr }])
             .with_storage_backend(crate::config::StorageBackendType::Memory);
-        let manager = Arc::new(ControllerManager::new(config).await.expect("create manager"));
+        let manager = Arc::new(
+            ControllerManager::new(config, test_service_context())
+                .await
+                .expect("create manager"),
+        );
         manager.initialize().await.expect("initialize manager");
 
         let (first, second) = tokio::join!(manager.start(), manager.start());
@@ -1574,7 +1558,11 @@ mod tests {
             .with_node_info(1, remoting_addr)
             .with_raft_peers(vec![crate::config::RaftPeer { id: 1, addr: raft_addr }])
             .with_storage_backend(crate::config::StorageBackendType::Memory);
-        let manager = Arc::new(ControllerManager::new(config).await.expect("create manager"));
+        let manager = Arc::new(
+            ControllerManager::new(config, test_service_context())
+                .await
+                .expect("create manager"),
+        );
         manager.initialize().await.expect("initialize manager");
         manager.start().await.expect("start manager before simulated failure");
         assert!(manager.is_running());
@@ -1602,7 +1590,9 @@ mod tests {
     async fn test_manager_shutdown() {
         let config = ControllerConfig::default().with_node_info(1, "127.0.0.1:9879".parse::<SocketAddr>().unwrap());
 
-        let manager = ControllerManager::new(config).await.expect("Failed to create manager");
+        let manager = ControllerManager::new(config, test_service_context())
+            .await
+            .expect("Failed to create manager");
         let manager_arc = Arc::new(manager);
 
         // Initialize first
@@ -1619,7 +1609,9 @@ mod tests {
     async fn test_start_without_initialize() {
         let config = ControllerConfig::default().with_node_info(1, "127.0.0.1:9880".parse::<SocketAddr>().unwrap());
 
-        let manager = ControllerManager::new(config).await.expect("Failed to create manager");
+        let manager = ControllerManager::new(config, test_service_context())
+            .await
+            .expect("Failed to create manager");
         let manager_arc = Arc::new(manager);
 
         // Try to start without initializing (should fail)
@@ -1635,7 +1627,9 @@ mod tests {
     async fn test_atomic_state_checks() {
         let config = ControllerConfig::default().with_node_info(1, "127.0.0.1:9881".parse::<SocketAddr>().unwrap());
 
-        let manager = ControllerManager::new(config).await.expect("Failed to create manager");
+        let manager = ControllerManager::new(config, test_service_context())
+            .await
+            .expect("Failed to create manager");
 
         // Test that is_initialized and is_running don't need await
         let _ = manager.is_initialized();
@@ -1652,7 +1646,9 @@ mod tests {
     #[tokio::test]
     async fn test_notify_cache_skips_duplicate_and_stale_role_changes() {
         let config = ControllerConfig::default().with_node_info(1, "127.0.0.1:9882".parse::<SocketAddr>().unwrap());
-        let manager = ControllerManager::new(config).await.expect("Failed to create manager");
+        let manager = ControllerManager::new(config, test_service_context())
+            .await
+            .expect("Failed to create manager");
 
         let key = NotifyCacheKey {
             cluster_name: "test-cluster".to_string(),
@@ -1693,7 +1689,9 @@ mod tests {
     #[tokio::test]
     async fn test_notify_dispatch_replaces_stale_pending_task() {
         let config = ControllerConfig::default().with_node_info(1, "127.0.0.1:9884".parse::<SocketAddr>().unwrap());
-        let manager = ControllerManager::new(config).await.expect("Failed to create manager");
+        let manager = ControllerManager::new(config, test_service_context())
+            .await
+            .expect("Failed to create manager");
 
         let key = NotifyCacheKey {
             cluster_name: "test-cluster".to_string(),
@@ -1728,7 +1726,9 @@ mod tests {
     #[tokio::test]
     async fn test_notify_dispatch_reset_invalidates_old_generation() {
         let config = ControllerConfig::default().with_node_info(1, "127.0.0.1:9885".parse::<SocketAddr>().unwrap());
-        let manager = ControllerManager::new(config).await.expect("Failed to create manager");
+        let manager = ControllerManager::new(config, test_service_context())
+            .await
+            .expect("Failed to create manager");
 
         let key = NotifyCacheKey {
             cluster_name: "test-cluster".to_string(),
@@ -1763,7 +1763,11 @@ mod tests {
             .with_election_timeout_ms(300)
             .with_storage_backend(crate::config::StorageBackendType::Memory);
 
-        let manager = Arc::new(ControllerManager::new(config).await.expect("Failed to create manager"));
+        let manager = Arc::new(
+            ControllerManager::new(config, test_service_context())
+                .await
+                .expect("Failed to create manager"),
+        );
         manager.initialize().await.expect("initialize manager");
         manager.start().await.expect("start manager");
 
@@ -1808,7 +1812,11 @@ mod tests {
             .with_storage_backend(crate::config::StorageBackendType::Memory)
             .with_notify_broker_role_changed(false);
 
-        let manager = Arc::new(ControllerManager::new(config).await.expect("create manager"));
+        let manager = Arc::new(
+            ControllerManager::new(config, test_service_context())
+                .await
+                .expect("create manager"),
+        );
         manager.initialize().await.expect("initialize manager");
         manager.start().await.expect("start manager");
 
@@ -1986,7 +1994,11 @@ mod tests {
             .with_storage_backend(crate::config::StorageBackendType::Memory)
             .with_notify_broker_role_changed(true);
 
-        let manager = Arc::new(ControllerManager::new(config).await.expect("create manager"));
+        let manager = Arc::new(
+            ControllerManager::new(config, test_service_context())
+                .await
+                .expect("create manager"),
+        );
         manager.initialize().await.expect("initialize manager");
         manager.start().await.expect("start manager");
 

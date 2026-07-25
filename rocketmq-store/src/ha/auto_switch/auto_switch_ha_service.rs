@@ -390,7 +390,10 @@ mod tests {
     fn new_default_ha_service(
         store: &crate::message_store::local_file_message_store::LocalFileMessageStore,
     ) -> DefaultHAService {
-        DefaultHAService::new(store.ha_replica_store_handle())
+        DefaultHAService::new(
+            store.ha_replica_store_handle(),
+            crate::runtime::test_scope("auto-switch-ha-service-test"),
+        )
     }
 
     fn new_initialized_auto_switch_service(

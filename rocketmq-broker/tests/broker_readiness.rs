@@ -54,10 +54,9 @@ async fn running_state_is_created_only_with_complete_readiness_evidence() {
         ..MessageStoreConfig::default()
     };
     let runtime_context = RuntimeContext::from_current("broker-readiness-test");
-    let initialized = Builder::new()
+    let initialized = Builder::new(runtime_context.service_context("broker-under-test"))
         .set_broker_config(broker_config)
         .set_message_store_config(message_store_config)
-        .set_service_context(runtime_context.service_context("broker-under-test"))
         .build()
         .initialize()
         .await

@@ -250,8 +250,10 @@ async fn rocksdb_batch_survives_reopen() {
 
     let temp_dir = TempDir::new().expect("temp directory");
     let path = temp_dir.path().join("controller-rocksdb");
+    let runtime = rocketmq_runtime::RuntimeContext::from_current("controller-storage-fault-test");
+    let storage_io = runtime.service_context("controller-storage").storage_io().clone();
     {
-        let backend = create_storage(StorageConfig::RocksDB { path: path.clone() })
+        let backend = create_storage(StorageConfig::RocksDB { path: path.clone() }, storage_io.clone())
             .await
             .expect("open RocksDB");
         backend
@@ -264,7 +266,7 @@ async fn rocksdb_batch_survives_reopen() {
         backend.sync().await.expect("sync WAL");
     }
 
-    let reopened = create_storage(StorageConfig::RocksDB { path })
+    let reopened = create_storage(StorageConfig::RocksDB { path }, storage_io)
         .await
         .expect("reopen RocksDB");
     assert_eq!(

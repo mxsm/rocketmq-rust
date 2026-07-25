@@ -25,6 +25,8 @@ use rocketmq_runtime::common::time_utils::current_millis;
 use tokio::net::tcp::OwnedReadHalf;
 use tokio::net::tcp::OwnedWriteHalf;
 use tokio::net::TcpStream;
+use tokio::sync::mpsc;
+use tokio::sync::watch;
 use tokio::sync::Notify;
 use tokio::sync::RwLock;
 use tokio::time::interval;
@@ -56,12 +58,14 @@ pub const CONTROLLER_REPORT_HEADER_SIZE: usize = 16;
 
 /// Maximum read buffer size (4MB)
 const READ_MAX_BUFFER_SIZE: usize = 1024 * 1024 * 4;
+const HA_ERROR_CHANNEL_CAPACITY: usize = 4;
 
 type HAClientTaskResult<T> = Result<T, HAClientError>;
 
 /// Default HA Client implementation using bytes crate
 pub struct DefaultHAClient {
     inner: Arc<Inner>,
+    runtime_scope: crate::runtime::StoreRuntimeScope,
     /// Service task group
     service_group: Arc<RwLock<Option<rocketmq_runtime::TaskGroup>>>,
 }
@@ -101,17 +105,17 @@ impl Inner {
         let addr = self.master_ha_address.lock().await;
         info!("HAClient close connection with master {:?}", addr.as_ref());
 
-        // Clear streams
-        self.change_current_state(HAConnectionState::Ready).await;
+        // A reconnect closes the current stream and returns to Ready, while a
+        // service shutdown must remain terminal.
+        let mut state = self.current_state.write().await;
+        if *state != HAConnectionState::Shutdown {
+            *state = HAConnectionState::Ready;
+        }
+        drop(state);
 
         // Reset state
         self.last_read_timestamp.store(0, Ordering::SeqCst);
     }
-    async fn close_master_and_wait(&self) {
-        self.close_master().await;
-        sleep(Duration::from_secs(5)).await; // Wait for 5 seconds before retrying
-    }
-
     async fn connect_master(&self) -> Result<Option<TcpStream>, HAClientError> {
         let ha_address_guard = self.master_ha_address.lock().await;
         let addr = ha_address_guard.as_ref();
@@ -146,6 +150,18 @@ impl Inner {
         self.shutdown_notify.notify_waiters();
     }
 
+    async fn wait_reconnect_delay(&self) -> bool {
+        if *self.current_state.read().await == HAConnectionState::Shutdown {
+            return true;
+        }
+        tokio::select! {
+            _ = self.shutdown_notify.notified() => true,
+            _ = sleep(Duration::from_secs(5)) => {
+                *self.current_state.read().await == HAConnectionState::Shutdown
+            },
+        }
+    }
+
     /// Check if it's time to report offset
     fn is_time_to_report_offset(&self) -> bool {
         let now = current_millis();
@@ -169,8 +185,14 @@ impl Inner {
 
 impl DefaultHAClient {
     /// Create a new DefaultHAClient
-    pub(crate) fn new(replica_store: HAReplicaStoreHandle) -> Result<Self, HAClientError> {
-        let flow_monitor = Arc::new(FlowMonitor::new(replica_store.message_store_config()));
+    pub(crate) fn new(
+        replica_store: HAReplicaStoreHandle,
+        runtime_scope: crate::runtime::StoreRuntimeScope,
+    ) -> Result<Self, HAClientError> {
+        let flow_monitor = Arc::new(FlowMonitor::new(
+            replica_store.message_store_config(),
+            runtime_scope.task_group("ha-client-flow-monitor"),
+        ));
 
         let now = current_millis();
 
@@ -187,6 +209,7 @@ impl DefaultHAClient {
                 flow_monitor,
                 shutdown_notify: Arc::new(Notify::new()),
             }),
+            runtime_scope,
             service_group: Arc::new(RwLock::new(None)),
         })
     }
@@ -204,14 +227,14 @@ impl DefaultHAClient {
     /// Close master and wait
     pub async fn close_master_and_wait(&self) {
         self.close_master().await;
-        sleep(Duration::from_secs(5)).await;
+        let _ = self.inner.wait_reconnect_delay().await;
     }
 
     /// Shutdown the HA client
     pub async fn shutdown(self: Arc<Self>) {
-        self.change_current_state(HAConnectionState::Shutdown);
-        self.inner.flow_monitor.shutdown().await;
+        self.inner.change_current_state(HAConnectionState::Shutdown).await;
         self.inner.shutdown_notify.notify_waiters();
+        self.inner.flow_monitor.shutdown().await;
 
         // Wait for service to stop
         let service_group = self.service_group.write().await.take();
@@ -270,13 +293,7 @@ impl HAClient for DefaultHAClient {
             return;
         }
         let client = Arc::clone(&self.inner);
-        let service_group = match crate::runtime::task_group("rocketmq-store.ha.client") {
-            Ok(service_group) => service_group,
-            Err(error) => {
-                warn!("HAClient service not started: {error}");
-                return;
-            }
-        };
+        let service_group = crate::runtime::task_group(&self.runtime_scope, "rocketmq-store.ha.client");
         let service_loop_group = service_group.clone();
         if let Err(error) = service_group.spawn_service("ha-client-service", async move {
             // main loop: connect -> start read/write tasks -> supervise/reconnect
@@ -299,11 +316,12 @@ impl HAClient for DefaultHAClient {
 
                             // channel: reader -> writer report offset; main loop -> writer
                             // heartbeat
-                            let (offset_tx, offset_rx) = tokio::sync::mpsc::unbounded_channel::<i64>();
-                            let (kick_tx, kick_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
+                            let initial_offset = client.current_reported_offset.load(Ordering::Acquire);
+                            let (offset_tx, offset_rx) = watch::channel(initial_offset);
+                            let kick = Arc::new(Notify::new());
 
                             // use reader/writer to send errors back to main loop
-                            let (err_tx, mut err_rx) = tokio::sync::mpsc::unbounded_channel::<HAClientError>();
+                            let (err_tx, mut err_rx) = mpsc::channel::<HAClientError>(HA_ERROR_CHANNEL_CAPACITY);
                             let connection_group = service_loop_group.child("ha-client-connection");
 
                             // reader task: read data from master and dispatch to message store
@@ -331,12 +349,14 @@ impl HAClient for DefaultHAClient {
                                     _ = reader_shutdown.notified() => Ok(()),
                                 };
                                 if let Err(error) = result {
-                                    let _ = reader_err_tx.send(error);
+                                    let _ = reader_err_tx.send(error).await;
                                 }
                             }) {
                                 warn!("HAClient failed to spawn reader task: {error}");
                                 client.change_current_state(HAConnectionState::Ready).await;
-                                sleep(Duration::from_secs(5)).await;
+                                if client.wait_reconnect_delay().await {
+                                    break;
+                                }
                                 continue;
                             }
 
@@ -360,7 +380,7 @@ impl HAClient for DefaultHAClient {
                                 reported_broker_id_ref: client.reported_broker_id.clone(),
                                 cfg,
                                 offset_rx,
-                                kick_rx,
+                                kick: Arc::clone(&kick),
                                 report_offset: BytesMut::with_capacity(CONTROLLER_REPORT_HEADER_SIZE),
                             };
                             let writer_err_tx = err_tx.clone();
@@ -370,7 +390,7 @@ impl HAClient for DefaultHAClient {
                                     _ = writer_shutdown.notified() => Ok(()),
                                 };
                                 if let Err(error) = result {
-                                    let _ = writer_err_tx.send(error);
+                                    let _ = writer_err_tx.send(error).await;
                                 }
                             }) {
                                 warn!("HAClient failed to spawn writer task: {error}");
@@ -382,7 +402,9 @@ impl HAClient for DefaultHAClient {
                                     warn!("HAClient partial connection shutdown reported an error: {shutdown_error}");
                                 }
                                 client.change_current_state(HAConnectionState::Ready).await;
-                                sleep(Duration::from_secs(5)).await;
+                                if client.wait_reconnect_delay().await {
+                                    break;
+                                }
                                 continue;
                             }
                             // main loop for housekeeping and monitoring
@@ -413,7 +435,7 @@ impl HAClient for DefaultHAClient {
                                         }
                                         // Is it time for the heartbeat? (Even if the offset remains unchanged)
                                         if client.is_time_to_report_offset() {
-                                            let _ = kick_tx.send(());
+                                            kick.notify_one();
                                         }
                                     }
                                     // outer shutdown
@@ -435,7 +457,9 @@ impl HAClient for DefaultHAClient {
                             if !exit {
                                 // need to reconnect
                                 client.change_current_state(HAConnectionState::Ready).await;
-                                sleep(Duration::from_secs(5)).await;
+                                if client.wait_reconnect_delay().await {
+                                    break;
+                                }
                                 continue;
                             } else {
                                 // normal shutdown
@@ -447,12 +471,16 @@ impl HAClient for DefaultHAClient {
                                 "HAClient connect to master {:?} failed",
                                 client.ha_master_address().await
                             );
-                            sleep(Duration::from_secs(5)).await;
+                            if client.wait_reconnect_delay().await {
+                                break;
+                            }
                             continue;
                         }
                         Err(e) => {
                             warn!("connect_master error: {e:#}");
-                            sleep(Duration::from_secs(5)).await;
+                            if client.wait_reconnect_delay().await {
+                                break;
+                            }
                             continue;
                         }
                     }
@@ -559,8 +587,8 @@ struct ReaderTask {
     reader: FramedRead<OwnedReadHalf, BytesCodec>,
     buf: BytesMut,
     dispatch_pos: usize,
-    offset_tx: tokio::sync::mpsc::UnboundedSender<i64>,
-    err_tx: tokio::sync::mpsc::UnboundedSender<HAClientError>,
+    offset_tx: watch::Sender<i64>,
+    err_tx: mpsc::Sender<HAClientError>,
     replica_store: HAReplicaStoreHandle,
     flow_monitor: Arc<FlowMonitor>,
     /// Last time slave read data from master
@@ -626,7 +654,7 @@ impl ReaderTask {
 
             if !body.is_empty() {
                 let cur = self.replica_store.get_max_phy_offset();
-                let _ = self.offset_tx.send(cur);
+                self.offset_tx.send_replace(cur);
             }
         }
     }
@@ -673,8 +701,8 @@ struct WriterTask {
     current_reported_offset_ref: Arc<AtomicI64>,
     reported_broker_id_ref: Arc<AtomicI64>,
     cfg: WriterCfg,
-    offset_rx: tokio::sync::mpsc::UnboundedReceiver<i64>,
-    kick_rx: tokio::sync::mpsc::UnboundedReceiver<()>,
+    offset_rx: watch::Receiver<i64>,
+    kick: Arc<Notify>,
     report_offset: BytesMut,
 }
 
@@ -684,13 +712,14 @@ impl WriterTask {
 
         loop {
             tokio::select! {
-                Some(off) = self.offset_rx.recv() => {
+                Ok(()) = self.offset_rx.changed() => {
+                    let off = *self.offset_rx.borrow_and_update();
                     if off > self.current_reported_offset_ref.load(Ordering::Relaxed) {
                         self.current_reported_offset_ref.store(off, Ordering::Relaxed);
                         self.send_offset(off).await?;
                     }
                 }
-                Some(_) = self.kick_rx.recv() => {
+                _ = self.kick.notified() => {
                     let off = self.current_reported_offset_ref.load(Ordering::Relaxed);
                     self.send_offset(off).await?;
                 }
@@ -791,6 +820,7 @@ mod tests {
             topic_table,
             None,
             false,
+            crate::runtime::test_service_context("default-ha-client-store-test"),
         );
         store
             .wire_owned_root_dependencies()
@@ -828,6 +858,54 @@ mod tests {
         assert!(production.contains("buf: BytesMut,"));
         assert!(production.contains("struct WriterTask"));
         assert!(production.contains("report_offset: BytesMut,"));
+    }
+
+    #[tokio::test]
+    async fn reconnect_delay_observes_shutdown_even_when_notification_precedes_wait() {
+        let temp_dir = tempdir().expect("temp dir");
+        let store = new_test_message_store(temp_dir.path());
+        let client = DefaultHAClient::new(
+            store.ha_replica_store_handle(),
+            crate::runtime::test_scope("default-ha-reconnect-notification-test"),
+        )
+        .expect("create default HA client");
+
+        client.inner.change_current_state(HAConnectionState::Shutdown).await;
+        client.inner.shutdown_notify.notify_waiters();
+
+        let shutdown_observed = tokio::time::timeout(Duration::from_millis(100), client.inner.wait_reconnect_delay())
+            .await
+            .expect("shutdown state should bypass reconnect delay");
+        assert!(shutdown_observed);
+    }
+
+    #[tokio::test]
+    async fn shutdown_cancels_and_joins_reconnect_loop() {
+        let temp_dir = tempdir().expect("temp dir");
+        let store = new_test_message_store(temp_dir.path());
+        let client = Arc::new(
+            DefaultHAClient::new(
+                store.ha_replica_store_handle(),
+                crate::runtime::test_scope("default-ha-reconnect-shutdown-test"),
+            )
+            .expect("create default HA client"),
+        );
+
+        HAClient::start(client.as_ref()).await;
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while client.service_group.read().await.is_none() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("HA reconnect loop should start");
+
+        tokio::time::timeout(Duration::from_secs(1), Arc::clone(&client).shutdown())
+            .await
+            .expect("HA shutdown should interrupt reconnect delay and join its task group");
+
+        assert!(client.service_group.read().await.is_none());
+        assert_eq!(client.get_current_state().await, HAConnectionState::Shutdown);
     }
 
     #[test]
@@ -893,8 +971,8 @@ mod tests {
         let (reader_half, _) = server.into_split();
         drop(client);
 
-        let (offset_tx, _offset_rx) = tokio::sync::mpsc::unbounded_channel();
-        let (err_tx, _err_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (offset_tx, _offset_rx) = tokio::sync::watch::channel(0);
+        let (err_tx, _err_rx) = tokio::sync::mpsc::channel(4);
         let mut reader = ReaderTask {
             reader: FramedRead::new(reader_half, BytesCodec::new()),
             buf: BytesMut::from(
@@ -910,7 +988,10 @@ mod tests {
             offset_tx,
             err_tx,
             replica_store: store.ha_replica_store_handle(),
-            flow_monitor: Arc::new(FlowMonitor::new(store.message_store_config())),
+            flow_monitor: Arc::new(FlowMonitor::new(
+                store.message_store_config(),
+                crate::runtime::test_scope("default-ha-reader-flow-test").task_group("flow-monitor"),
+            )),
             last_read_timestamp: Arc::new(AtomicU64::new(0)),
             enable_controller_mode: true,
         };

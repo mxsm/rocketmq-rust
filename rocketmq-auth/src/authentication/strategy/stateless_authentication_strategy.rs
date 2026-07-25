@@ -27,8 +27,9 @@ use rocketmq_error::RocketMQResult;
 use crate::authentication::context::default_authentication_context::DefaultAuthenticationContext;
 use crate::authentication::provider::AuthenticationProvider;
 use crate::authentication::strategy::abstract_authentication_strategy::AbstractAuthenticationStrategy;
+use crate::authentication::strategy::authenticate_with_provider;
 use crate::authentication::strategy::authentication_strategy::AuthenticationStrategy;
-use crate::authentication::strategy::block_on_authentication_provider;
+use crate::authentication::strategy::AuthenticationFuture;
 use crate::authorization::context::authentication_context::AuthenticationContext;
 use crate::config::AuthConfig;
 
@@ -75,7 +76,7 @@ where
     }
 
     /// Perform authentication without caching.
-    fn do_authenticate_internal(&self, context: &dyn AuthenticationContext) -> Result<(), AuthError> {
+    async fn do_authenticate_internal(&self, context: &dyn AuthenticationContext) -> Result<(), AuthError> {
         if !self.auth_config.authentication_enabled {
             return Ok(());
         }
@@ -100,7 +101,7 @@ where
             None => return Ok(()),
         };
 
-        block_on_authentication_provider(provider.as_ref(), default_context)
+        authenticate_with_provider(provider.as_ref(), default_context).await
     }
 
     pub fn provider(&self) -> Option<&P> {
@@ -140,8 +141,8 @@ impl<P> AuthenticationStrategy for StatelessAuthenticationStrategy<P>
 where
     P: AuthenticationProvider<Context = DefaultAuthenticationContext> + Send + Sync + 'static,
 {
-    fn authenticate(&self, context: &dyn AuthenticationContext) -> Result<(), AuthError> {
-        self.do_authenticate_internal(context)
+    fn authenticate<'a>(&'a self, context: &'a dyn AuthenticationContext) -> AuthenticationFuture<'a> {
+        Box::pin(self.do_authenticate_internal(context))
     }
 }
 
@@ -199,8 +200,8 @@ mod tests {
         assert!(strategy.authentication_white_set().is_empty());
     }
 
-    #[test]
-    fn test_authentication_disabled() {
+    #[tokio::test]
+    async fn test_authentication_disabled() {
         let config = AuthConfig {
             authentication_enabled: false,
             ..Default::default()
@@ -210,7 +211,7 @@ mod tests {
             StatelessAuthenticationStrategy::new(config, None);
 
         let context = DefaultAuthenticationContext::new();
-        let result = strategy.authenticate(&context);
+        let result = strategy.authenticate(&context).await;
         assert!(result.is_ok());
     }
 
@@ -244,8 +245,8 @@ mod tests {
         assert!(strategy.authentication_white_set().contains("QUERY_MESSAGE"));
     }
 
-    #[test]
-    fn test_authentication_enabled_without_provider() {
+    #[tokio::test]
+    async fn test_authentication_enabled_without_provider() {
         let config = AuthConfig {
             authentication_enabled: true,
             ..Default::default()
@@ -255,12 +256,12 @@ mod tests {
             StatelessAuthenticationStrategy::new(config, None);
 
         let context = DefaultAuthenticationContext::new();
-        let result = strategy.authenticate(&context);
+        let result = strategy.authenticate(&context).await;
         assert!(result.is_ok());
     }
 
-    #[test]
-    fn test_whitelisted_rpc_code() {
+    #[tokio::test]
+    async fn test_whitelisted_rpc_code() {
         let config = AuthConfig {
             authentication_enabled: true,
             authentication_whitelist: "100,200".into(),
@@ -273,12 +274,12 @@ mod tests {
         let mut context = DefaultAuthenticationContext::new();
         context.base.set_rpc_code(Some(CheetahString::from("100")));
 
-        let result = strategy.authenticate(&context);
+        let result = strategy.authenticate(&context).await;
         assert!(result.is_ok());
     }
 
-    #[test]
-    fn test_no_caching_behavior() {
+    #[tokio::test]
+    async fn test_no_caching_behavior() {
         let config = AuthConfig {
             authentication_enabled: false,
             ..Default::default()
@@ -289,15 +290,15 @@ mod tests {
 
         let context = DefaultAuthenticationContext::new();
 
-        let result1 = strategy.authenticate(&context);
+        let result1 = strategy.authenticate(&context).await;
         assert!(result1.is_ok());
 
-        let result2 = strategy.authenticate(&context);
+        let result2 = strategy.authenticate(&context).await;
         assert!(result2.is_ok());
     }
 
-    #[test]
-    fn authenticates_inside_current_thread_runtime_without_block_in_place_panic() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn authenticates_inside_current_thread_runtime_without_block_in_place_panic() {
         let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let provider = Arc::new(CountingAuthenticationProvider { calls: calls.clone() });
         let strategy = StatelessAuthenticationStrategy::new(
@@ -308,14 +309,7 @@ mod tests {
             Some(provider),
         );
         let context = DefaultAuthenticationContext::new();
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-
-        runtime.block_on(async {
-            assert!(strategy.authenticate(&context).is_ok());
-        });
+        assert!(strategy.authenticate(&context).await.is_ok());
 
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     }

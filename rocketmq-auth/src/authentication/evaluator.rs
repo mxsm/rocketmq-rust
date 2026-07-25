@@ -96,8 +96,8 @@ where
     /// let context = DefaultAuthenticationContext::new();
     /// evaluator.evaluate(&context)?;
     /// ```
-    pub fn evaluate(&self, context: &dyn AuthenticationContext) -> Result<(), AuthError> {
-        self.authentication_strategy.authenticate(context)
+    pub async fn evaluate(&self, context: &dyn AuthenticationContext) -> Result<(), AuthError> {
+        self.authentication_strategy.authenticate(context).await
     }
 
     /// Get a reference to the underlying authentication strategy.
@@ -117,14 +117,19 @@ mod tests {
     }
 
     impl AuthenticationStrategy for TestStrategy {
-        fn authenticate(&self, _context: &dyn AuthenticationContext) -> Result<(), AuthError> {
-            if self.should_succeed {
-                Ok(())
-            } else {
-                Err(AuthError::AuthenticationFailed(
-                    "Test authentication failed".to_string(),
-                ))
-            }
+        fn authenticate<'a>(
+            &'a self,
+            _context: &'a dyn AuthenticationContext,
+        ) -> crate::authentication::strategy::AuthenticationFuture<'a> {
+            Box::pin(async move {
+                if self.should_succeed {
+                    Ok(())
+                } else {
+                    Err(AuthError::AuthenticationFailed(
+                        "Test authentication failed".to_string(),
+                    ))
+                }
+            })
         }
     }
 
@@ -136,23 +141,23 @@ mod tests {
         assert!(std::ptr::eq(&evaluator.authentication_strategy, evaluator.strategy()));
     }
 
-    #[test]
-    fn test_evaluate_success() {
+    #[tokio::test]
+    async fn test_evaluate_success() {
         let strategy = TestStrategy { should_succeed: true };
         let evaluator = AuthenticationEvaluator::new(strategy);
         let context = DefaultAuthenticationContext::new();
 
-        let result = evaluator.evaluate(&context);
+        let result = evaluator.evaluate(&context).await;
         assert!(result.is_ok());
     }
 
-    #[test]
-    fn test_evaluate_failure() {
+    #[tokio::test]
+    async fn test_evaluate_failure() {
         let strategy = TestStrategy { should_succeed: false };
         let evaluator = AuthenticationEvaluator::new(strategy);
         let context = DefaultAuthenticationContext::new();
 
-        let result = evaluator.evaluate(&context);
+        let result = evaluator.evaluate(&context).await;
         assert!(result.is_err());
 
         if let Err(AuthError::AuthenticationFailed(msg)) = result {
@@ -162,13 +167,13 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_evaluate_with_allow_all_strategy() {
+    #[tokio::test]
+    async fn test_evaluate_with_allow_all_strategy() {
         let strategy = AllowAllAuthenticationStrategy;
         let evaluator = AuthenticationEvaluator::new(strategy);
         let context = DefaultAuthenticationContext::new();
 
-        let result = evaluator.evaluate(&context);
+        let result = evaluator.evaluate(&context).await;
         assert!(result.is_ok());
     }
 }

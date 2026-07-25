@@ -153,6 +153,7 @@ impl ConsumeQueueRecoverySummary {
 }
 
 struct Inner {
+    pub(crate) runtime_scope: crate::runtime::StoreRuntimeScope,
     pub(crate) context: RwLock<Option<ConsumeQueueStoreContext>>,
     pub(crate) message_store_config: Arc<MessageStoreConfig>,
     pub(crate) broker_config: Arc<StoreRuntimeConfig>,
@@ -261,7 +262,10 @@ impl ConsumeQueueStore {
         }
     }
 
-    async fn recover_one_consume_queue(consume_queue: ArcConsumeQueue) -> ConsumeQueueRecoveryResult {
+    async fn recover_one_consume_queue(
+        runtime_scope: crate::runtime::StoreRuntimeScope,
+        consume_queue: ArcConsumeQueue,
+    ) -> ConsumeQueueRecoveryResult {
         let (topic, queue_id, cq_type) = {
             let consume_queue = consume_queue.read();
             (
@@ -270,7 +274,7 @@ impl ConsumeQueueStore {
                 consume_queue.get_cq_type(),
             )
         };
-        match crate::runtime::spawn_io("local-file-cq-recover", move || {
+        match crate::runtime::spawn_io(&runtime_scope, "local-file-cq-recover", move || {
             Self::recover_one_consume_queue_blocking(consume_queue)
         })
         .await
@@ -360,6 +364,7 @@ impl ConsumeQueueStore {
         let semaphore = Arc::new(Semaphore::new(parallelism));
         let futures = queues.into_iter().map(|consume_queue| {
             let semaphore = semaphore.clone();
+            let runtime_scope = self.inner.runtime_scope.clone();
             async move {
                 let (topic, queue_id, cq_type) = {
                     let consume_queue = consume_queue.read();
@@ -370,7 +375,7 @@ impl ConsumeQueueStore {
                     )
                 };
                 match semaphore.acquire_owned().await {
-                    Ok(_permit) => Self::recover_one_consume_queue(consume_queue).await,
+                    Ok(_permit) => Self::recover_one_consume_queue(runtime_scope, consume_queue).await,
                     Err(error) => ConsumeQueueRecoveryResult {
                         topic,
                         queue_id,
@@ -555,9 +560,14 @@ impl ConsumeQueueStore {
     }
 
     #[inline]
-    pub fn new(message_store_config: Arc<MessageStoreConfig>, broker_config: Arc<StoreRuntimeConfig>) -> Self {
+    pub(crate) fn new(
+        runtime_scope: crate::runtime::StoreRuntimeScope,
+        message_store_config: Arc<MessageStoreConfig>,
+        broker_config: Arc<StoreRuntimeConfig>,
+    ) -> Self {
         Self {
             inner: ConsumeQueueStoreRoot::new(Arc::new(Inner {
+                runtime_scope,
                 context: RwLock::new(None),
                 message_store_config,
                 broker_config,
@@ -1451,6 +1461,7 @@ mod tests {
         panic_queue_id: Option<i32>,
     ) -> (ConsumeQueueStore, Vec<Arc<TrackingQueueState>>) {
         let store = ConsumeQueueStore::new(
+            crate::runtime::test_scope("consume-queue-recovery-test"),
             Arc::new(MessageStoreConfig::default()),
             Arc::new(StoreRuntimeConfig::default()),
         );
@@ -1589,12 +1600,17 @@ mod tests {
             topic_config_table,
             None,
             false,
+            crate::runtime::test_service_context("consume-queue-load-test"),
         );
 
         let batch_store_path = get_store_path_batch_consume_queue(message_store_config.store_path_root_dir.as_str());
         fs::create_dir_all(Path::new(&batch_store_path).join(topic.as_str()).join("0"))
             .expect("batch consume queue directory");
-        let mut store = ConsumeQueueStore::new(message_store_config, broker_config);
+        let mut store = ConsumeQueueStore::new(
+            crate::runtime::test_scope("consume-queue-load-test"),
+            message_store_config,
+            broker_config,
+        );
         store.set_context(message_store.consume_queue_context());
 
         assert!(!store.load_consume_queues(&batch_store_path, CQType::BatchCQ));
@@ -1623,12 +1639,17 @@ mod tests {
             topic_config_table,
             None,
             false,
+            crate::runtime::test_service_context("consume-queue-rocks-compat-test"),
         );
 
         let simple_store_path = get_store_path_consume_queue(message_store_config.store_path_root_dir.as_str());
         fs::create_dir_all(Path::new(&simple_store_path).join(topic.as_str()).join("0"))
             .expect("simple consume queue directory");
-        let mut store = ConsumeQueueStore::new(message_store_config, broker_config);
+        let mut store = ConsumeQueueStore::new(
+            crate::runtime::test_scope("consume-queue-rocks-compat-test"),
+            message_store_config,
+            broker_config,
+        );
         store.set_context(message_store.consume_queue_context());
 
         assert!(store.load_consume_queues(&simple_store_path, CQType::SimpleCQ));
@@ -1655,8 +1676,13 @@ mod tests {
             topic_config_table,
             None,
             false,
+            crate::runtime::test_service_context("consume-queue-create-type-test"),
         );
-        let store = ConsumeQueueStore::new(message_store_config, broker_config);
+        let store = ConsumeQueueStore::new(
+            crate::runtime::test_scope("consume-queue-create-type-test"),
+            message_store_config,
+            broker_config,
+        );
         store.set_context(message_store.consume_queue_context());
 
         let queue = store.create_consume_queue_by_type(
@@ -1673,7 +1699,11 @@ mod tests {
     fn batch_consume_queue_store_get_returns_full_batch_unit() {
         let message_store_config = Arc::new(MessageStoreConfig::default());
         let broker_config = Arc::new(StoreRuntimeConfig::default());
-        let store = ConsumeQueueStore::new(message_store_config.clone(), broker_config);
+        let store = ConsumeQueueStore::new(
+            crate::runtime::test_scope("consume-queue-batch-get-test"),
+            message_store_config.clone(),
+            broker_config,
+        );
         let root = tempdir().expect("tempdir");
         let store_path = CheetahString::from_string(root.path().join("batch-cq").to_string_lossy().to_string());
         let topic = CheetahString::from_static_str("BatchTopic");
@@ -1708,11 +1738,7 @@ mod tests {
             .or_default()
             .insert(queue_id, ArcConsumeQueue::new(Box::new(batch_queue)));
 
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime");
-        let bytes = runtime.block_on(store.get(&topic, queue_id, 0));
+        let bytes = crate::runtime::test_runtime_owner().block_on(store.get(&topic, queue_id, 0));
 
         assert_eq!(bytes.len(), batch_consume_queue::CQ_STORE_UNIT_SIZE as usize);
         let mut bytes = bytes;

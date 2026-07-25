@@ -33,7 +33,7 @@ use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 #[cfg(feature = "tls")]
 use rocketmq_runtime::BlockingExecutor;
-use rocketmq_runtime::ServiceContext;
+use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ShutdownReport;
 #[cfg(feature = "tls")]
 use rocketmq_runtime::TaskGroup;
@@ -113,7 +113,7 @@ pub struct TlsServerRuntime {
     base_config: StdArc<TlsConfig>,
     reload_task_group: StdArc<Mutex<Option<TaskGroup>>>,
     reload_writer: StdArc<tokio::sync::Mutex<()>>,
-    blocking: Option<BlockingExecutor>,
+    blocking: BlockingExecutor,
 }
 
 #[cfg(not(feature = "tls"))]
@@ -123,20 +123,6 @@ pub struct TlsServerRuntime {
 }
 
 impl TlsServerRuntime {
-    pub fn new(base_config: TlsConfig) -> Self {
-        #[cfg(feature = "tls")]
-        {
-            Self::new_with_reload_task_group(base_config, None, None)
-        }
-
-        #[cfg(not(feature = "tls"))]
-        {
-            Self {
-                mode: base_config.server.mode,
-            }
-        }
-    }
-
     pub fn mode(&self) -> TlsMode {
         self.mode
     }
@@ -154,25 +140,6 @@ impl TlsServerRuntime {
         }
     }
 
-    pub fn new_with_service_context(base_config: TlsConfig, service_context: &ServiceContext) -> Self {
-        #[cfg(feature = "tls")]
-        {
-            Self::new_with_reload_task_group(
-                base_config,
-                Some(service_context.task_group().child("rocketmq-transport.tls")),
-                Some(service_context.blocking().clone()),
-            )
-        }
-
-        #[cfg(not(feature = "tls"))]
-        {
-            let _ = service_context;
-            Self {
-                mode: base_config.server.mode,
-            }
-        }
-    }
-
     /// Initializes the TLS acceptor and reload lifecycle under `service_context`.
     ///
     /// Initial certificate and key loading runs on the context's injected [`BlockingExecutor`],
@@ -187,37 +154,25 @@ impl TlsServerRuntime {
     /// [`BlockingExecutor`]: rocketmq_runtime::BlockingExecutor
     pub async fn initialize_with_service_context(
         base_config: TlsConfig,
-        service_context: &ServiceContext,
+        service_context: &ChildServiceContext,
     ) -> RocketMQResult<Self> {
         #[cfg(feature = "tls")]
         {
             Self::initialize_with_task_group_and_blocking(
                 base_config,
                 service_context.task_group().child("rocketmq-transport.tls"),
-                service_context.blocking().clone(),
+                service_context.metadata_io().clone(),
             )
             .await
         }
 
         #[cfg(not(feature = "tls"))]
         {
-            Ok(Self::new_with_service_context(base_config, service_context))
+            let _ = service_context;
+            Ok(Self {
+                mode: base_config.server.mode,
+            })
         }
-    }
-
-    /// Creates a TLS runtime whose certificate reload task is owned by `task_group`.
-    #[cfg(feature = "tls")]
-    pub fn new_with_task_group(base_config: TlsConfig, task_group: TaskGroup) -> Self {
-        Self::new_with_reload_task_group(base_config, Some(task_group), None)
-    }
-
-    #[cfg(feature = "tls")]
-    pub fn new_with_task_group_and_blocking(
-        base_config: TlsConfig,
-        task_group: TaskGroup,
-        blocking: BlockingExecutor,
-    ) -> Self {
-        Self::new_with_reload_task_group(base_config, Some(task_group), Some(blocking))
     }
 
     #[cfg(feature = "tls")]
@@ -251,48 +206,10 @@ impl TlsServerRuntime {
             base_config: StdArc::new(base_config),
             reload_task_group: StdArc::new(Mutex::new(None)),
             reload_writer: StdArc::new(tokio::sync::Mutex::new(())),
-            blocking: Some(blocking),
+            blocking,
         };
-        runtime.spawn_reload_task(Some(task_group));
+        runtime.spawn_reload_task(task_group);
         Ok(runtime)
-    }
-
-    #[cfg(feature = "tls")]
-    fn new_with_reload_task_group(
-        base_config: TlsConfig,
-        reload_task_group: Option<TaskGroup>,
-        blocking: Option<BlockingExecutor>,
-    ) -> Self {
-        {
-            let effective_config = effective_tls_config(&base_config);
-            let acceptor = StdArc::new(TlsAcceptorSlot::empty());
-            let mode = base_config.server.mode;
-
-            if mode != TlsMode::Disabled {
-                match build_server_acceptor(&effective_config) {
-                    Ok(tls_acceptor) => acceptor.store(Some(StdArc::new(VersionedTlsAcceptor {
-                        generation: 1,
-                        acceptor: tls_acceptor,
-                    }))),
-                    Err(error) => {
-                        warn!("failed to build initial TLS server acceptor: {error}");
-                    }
-                }
-            }
-
-            let runtime = Self {
-                mode,
-                acceptor,
-                base_config: StdArc::new(base_config),
-                reload_task_group: StdArc::new(Mutex::new(None)),
-                reload_writer: StdArc::new(tokio::sync::Mutex::new(())),
-                blocking,
-            };
-            if reload_task_group.is_some() {
-                runtime.spawn_reload_task(reload_task_group);
-            }
-            runtime
-        }
     }
 
     pub async fn negotiate_connection(
@@ -392,16 +309,11 @@ impl TlsServerRuntime {
     /// certificate/key validation, or generation advancement fails.
     #[cfg(feature = "tls")]
     pub async fn reload_now_with_report(&self) -> RocketMQResult<TlsReloadReport> {
-        let Some(blocking) = self.blocking.as_ref() else {
-            return Err(RocketMQError::network_connection_failed(
-                "tls-reload",
-                "TLS reload requires an injected BlockingExecutor",
-            ));
-        };
         let _reload_writer = self.reload_writer.lock().await;
         let base_config = self.base_config.clone();
         let mode = self.mode;
-        let acceptor = blocking
+        let acceptor = self
+            .blocking
             .spawn_io("transport.tls.reload", move || {
                 let effective = effective_tls_config(&base_config);
                 let _snapshot = file_snapshot(&effective.watched_server_paths());
@@ -473,7 +385,7 @@ impl TlsServerRuntime {
     }
 
     #[cfg(feature = "tls")]
-    fn spawn_reload_task(&self, task_group: Option<TaskGroup>) {
+    fn spawn_reload_task(&self, task_group: TaskGroup) {
         if self.mode == TlsMode::Disabled {
             return;
         }
@@ -481,13 +393,7 @@ impl TlsServerRuntime {
         let base_config = self.base_config.clone();
         let acceptor = self.acceptor.clone();
         let reload_writer = self.reload_writer.clone();
-        let Some(blocking) = self.blocking.clone() else {
-            warn!("TLS reload task requires an injected BlockingExecutor");
-            return;
-        };
-        let Some(task_group) = task_group else {
-            return;
-        };
+        let blocking = self.blocking.clone();
         let cancellation_token = task_group.cancellation_token();
         *self.reload_task_group.lock() = Some(task_group.clone());
 
@@ -1027,7 +933,9 @@ mod tests {
             ..Default::default()
         };
 
-        let runtime = TlsServerRuntime::new_with_service_context(config, &service);
+        let runtime = TlsServerRuntime::initialize_with_service_context(config, &service)
+            .await
+            .expect("TLS runtime should initialize");
         let task_group = runtime
             .reload_task_group
             .lock()
@@ -1152,7 +1060,9 @@ mod tests {
             },
             ..Default::default()
         };
-        let runtime = TlsServerRuntime::new_with_service_context(config, &service);
+        let runtime = TlsServerRuntime::initialize_with_service_context(config, &service)
+            .await
+            .expect("TLS runtime should initialize");
         let task_group = runtime
             .reload_task_group
             .lock()
@@ -1185,7 +1095,9 @@ mod tests {
             },
             ..Default::default()
         };
-        let runtime = TlsServerRuntime::new_with_service_context(config, &service);
+        let runtime = TlsServerRuntime::initialize_with_service_context(config, &service)
+            .await
+            .expect("TLS runtime should initialize");
         let task_group = runtime
             .reload_task_group
             .lock()
@@ -1260,11 +1172,14 @@ mod tests {
         let new = TestCertificates::new();
         let context = rocketmq_runtime::RuntimeContext::from_current("tls-rotation-runtime-test");
         let service = context.service_context("tls-rotation-service");
-        let runtime = TlsServerRuntime::new_with_reload_task_group(
-            old.server_tls_config(TlsMode::Enforcing),
-            None,
-            Some(service.blocking().clone()),
-        );
+        let runtime =
+            TlsServerRuntime::initialize_with_service_context(old.server_tls_config(TlsMode::Enforcing), &service)
+                .await
+                .expect("TLS runtime should initialize");
+        runtime
+            .shutdown_gracefully(Duration::from_secs(1))
+            .await
+            .expect("reload task should stop cleanly");
         assert_eq!(runtime.active_generation(), 1);
         assert!(tls_connects_to_runtime(&runtime, old.trusting_client_config()).await);
         assert!(!tls_connects_to_runtime(&runtime, new.trusting_client_config()).await);
@@ -1298,11 +1213,16 @@ mod tests {
         let certificates = TestCertificates::new();
         let context = rocketmq_runtime::RuntimeContext::from_current("tls-concurrent-reload-test");
         let service = context.service_context("tls-concurrent-reload-service");
-        let runtime = TlsServerRuntime::new_with_reload_task_group(
+        let runtime = TlsServerRuntime::initialize_with_service_context(
             certificates.server_tls_config(TlsMode::Enforcing),
-            None,
-            Some(service.blocking().clone()),
-        );
+            &service,
+        )
+        .await
+        .expect("TLS runtime should initialize");
+        runtime
+            .shutdown_gracefully(Duration::from_secs(1))
+            .await
+            .expect("reload task should stop cleanly");
 
         let reloads = (0..8).map(|_| {
             let runtime = runtime.clone();
@@ -1340,7 +1260,11 @@ mod tests {
             },
             ..Default::default()
         };
-        let runtime = TlsServerRuntime::new(server_config);
+        let context = rocketmq_runtime::RuntimeContext::from_current("tls-plaintext-connect-test");
+        let service = context.service_context("tls-server");
+        let runtime = TlsServerRuntime::initialize_with_service_context(server_config, &service)
+            .await
+            .expect("TLS runtime should initialize");
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind listener");
         let addr = listener.local_addr().expect("listener addr");
 
@@ -1381,7 +1305,11 @@ mod tests {
             };
             (server_config, Some(client_config))
         });
-        let runtime = TlsServerRuntime::new(server_config);
+        let context = rocketmq_runtime::RuntimeContext::from_current("tls-connect-test");
+        let service = context.service_context("tls-server");
+        let runtime = TlsServerRuntime::initialize_with_service_context(server_config, &service)
+            .await
+            .expect("TLS runtime should initialize");
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind listener");
         let addr = listener.local_addr().expect("listener addr");
 

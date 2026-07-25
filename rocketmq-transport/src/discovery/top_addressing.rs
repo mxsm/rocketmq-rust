@@ -12,12 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use crate::discovery::name_server_update_callback::NameServerUpdateCallback;
 
 pub trait TopAddressing: Send + Sync + 'static {
-    fn fetch_ns_addr(&self) -> Option<String>;
+    fn fetch_ns_addr(&self) -> Pin<Box<dyn Future<Output = Option<String>> + Send + '_>>;
 
     fn register_change_callback(&self, change_callback: Arc<dyn NameServerUpdateCallback>);
 }

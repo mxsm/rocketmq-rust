@@ -85,10 +85,9 @@ impl NamesrvHarness {
                 ..ServerConfig::default()
             };
             let runtime_context = rocketmq_runtime::RuntimeContext::from_current(format!("namesrv-integration-{port}"));
-            let bootstrap = Builder::new()
+            let bootstrap = Builder::new(runtime_context.service_context("namesrv"))
                 .set_name_server_config(namesrv_config.clone())
                 .set_server_config(server_config)
-                .set_service_context(runtime_context.service_context("namesrv"))
                 .build();
 
             let (shutdown_tx, shutdown_rx) = oneshot::channel();
@@ -103,6 +102,7 @@ impl NamesrvHarness {
             let client = Arc::new(RocketmqDefaultClient::new(
                 Arc::new(TokioClientConfig::default()),
                 DefaultRemotingRequestProcessor,
+                runtime_context.service_context("transport-client"),
             ));
             client.update_name_server_address_list(vec![addr.clone()]).await;
             let weak_client = Arc::downgrade(&client);

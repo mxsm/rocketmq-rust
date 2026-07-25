@@ -140,6 +140,7 @@ impl TimerStoreContext {
 }
 
 pub struct TimerMessageStore {
+    runtime_scope: crate::runtime::StoreRuntimeScope,
     pub curr_read_time_ms: AtomicI64,
     pub curr_queue_offset: AtomicI64,
     pub last_enqueue_but_expired_time: u64,
@@ -227,13 +228,7 @@ impl TimerMessageStore {
             .message_store_config
             .timer_precision_ms
             .max(MIN_SCHEDULER_INTERVAL_MS);
-        let scheduler_group = match crate::runtime::task_group("rocketmq-store.timer.scheduler") {
-            Ok(scheduler_group) => scheduler_group,
-            Err(error) => {
-                error!("TimerMessageStore scheduler not started: {error}");
-                return;
-            }
-        };
+        let scheduler_group = crate::runtime::task_group(&self.runtime_scope, "rocketmq-store.timer.scheduler");
         let scheduler_tasks = ScheduledTaskGroup::new(scheduler_group.child("scheduled"));
         if let Err(error) = scheduler_tasks.schedule_fixed_delay(
             ScheduledTaskConfig::fixed_delay("timer-message-scheduler", Duration::from_millis(interval_ms)),
@@ -362,9 +357,23 @@ impl TimerMessageStore {
     /// [`crate::message_store::local_file_message_store::LocalFileMessageStore::wire_owned_root_dependencies`],
     /// which injects
     /// narrow queue, CommitLog-read, and message-write capabilities.
-    pub fn new_with_message_store_config(message_store_config: Arc<MessageStoreConfig>) -> Self {
+    pub fn new_with_message_store_config(
+        message_store_config: Arc<MessageStoreConfig>,
+        service_context: rocketmq_runtime::ChildServiceContext,
+    ) -> Self {
+        Self::new_with_runtime_scope(
+            message_store_config,
+            crate::runtime::StoreRuntimeScope::new(service_context),
+        )
+    }
+
+    fn new_with_runtime_scope(
+        message_store_config: Arc<MessageStoreConfig>,
+        runtime_scope: crate::runtime::StoreRuntimeScope,
+    ) -> Self {
         let timer_metrics_path = get_timer_metrics_path(message_store_config.store_path_root_dir.as_str());
         Self {
+            runtime_scope,
             curr_read_time_ms: AtomicI64::new(0),
             curr_queue_offset: AtomicI64::new(0),
             last_enqueue_but_expired_time: 0,
@@ -388,14 +397,15 @@ impl TimerMessageStore {
     pub(crate) fn new_with_store_context(
         store_context: TimerStoreContext,
         message_store_config: Arc<MessageStoreConfig>,
+        runtime_scope: crate::runtime::StoreRuntimeScope,
     ) -> Self {
-        let mut store = Self::new_with_message_store_config(message_store_config);
+        let mut store = Self::new_with_runtime_scope(message_store_config, runtime_scope);
         store.store_context = Some(store_context);
         store
     }
 
-    pub fn new_empty() -> Self {
-        Self::new_with_message_store_config(Arc::new(MessageStoreConfig::default()))
+    pub fn new_empty(service_context: rocketmq_runtime::ChildServiceContext) -> Self {
+        Self::new_with_message_store_config(Arc::new(MessageStoreConfig::default()), service_context)
     }
 
     fn find_store_consume_queue(&self, topic: &CheetahString, queue_id: i32) -> Option<ArcConsumeQueue> {
@@ -1383,6 +1393,13 @@ mod tests {
         })
     }
 
+    fn standalone_timer_store(config: Arc<MessageStoreConfig>) -> TimerMessageStore {
+        TimerMessageStore::new_with_message_store_config(
+            config,
+            crate::runtime::test_service_context("timer-message-store-test"),
+        )
+    }
+
     fn config_with_root_and_limits(
         root_dir: &str,
         max_msgs_num_batch: usize,
@@ -1428,7 +1445,7 @@ mod tests {
     fn canonical_config_constructor_preserves_standalone_state() {
         let root = tempfile::tempdir().expect("Timer constructor test root should be created");
         let config = config_with_root(root.path().to_string_lossy().as_ref());
-        let canonical = TimerMessageStore::new_with_message_store_config(Arc::clone(&config));
+        let canonical = standalone_timer_store(Arc::clone(&config));
 
         assert!(canonical.store_context.is_none());
         assert_eq!(
@@ -1441,7 +1458,7 @@ mod tests {
     async fn standalone_config_constructor_fails_closed_without_store_context() {
         let root = tempfile::tempdir().expect("Timer fail-closed test root should be created");
         let config = config_with_root(root.path().to_string_lossy().as_ref());
-        let standalone = TimerMessageStore::new_with_message_store_config(config);
+        let standalone = standalone_timer_store(config);
 
         assert!(standalone
             .find_store_consume_queue(&CheetahString::from_static_str(TIMER_TOPIC), 0)
@@ -1467,7 +1484,14 @@ mod tests {
             Arc::new(TopicConfig::default()),
         );
 
-        let mut store = LocalFileMessageStore::new(Arc::clone(&config), broker_config, topic_config_table, None, false);
+        let mut store = LocalFileMessageStore::new(
+            Arc::clone(&config),
+            broker_config,
+            topic_config_table,
+            None,
+            false,
+            crate::runtime::test_service_context("timer-local-file-store-test"),
+        );
         store
             .wire_owned_root_dependencies()
             .expect("Timer tests should wire owned Store capabilities");
@@ -1532,7 +1556,7 @@ mod tests {
         let root_dir = temp_dir.path().to_string_lossy().to_string();
         let config = config_with_root(root_dir.as_str());
 
-        let timer_message_store = TimerMessageStore::new_with_message_store_config(config.clone());
+        let timer_message_store = standalone_timer_store(config.clone());
         assert!(timer_message_store.load());
         assert!(Path::new(get_timer_check_path(root_dir.as_str()).as_str()).exists());
         assert!(Path::new(get_timer_log_path(root_dir.as_str()).as_str()).exists());
@@ -1546,7 +1570,7 @@ mod tests {
         timer_message_store.sync_last_read_time_ms();
         timer_message_store.shutdown();
 
-        let reloaded_store = TimerMessageStore::new_with_message_store_config(config);
+        let reloaded_store = standalone_timer_store(config);
         assert!(reloaded_store.load());
         assert_eq!(reloaded_store.curr_read_time_ms.load(Ordering::Relaxed), read_time_ms);
         assert_eq!(reloaded_store.curr_queue_offset.load(Ordering::Relaxed), 9);
@@ -1557,7 +1581,7 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let root_dir = temp_dir.path().to_string_lossy().to_string();
         let config = config_with_root(root_dir.as_str());
-        let timer_message_store = Arc::new(TimerMessageStore::new_with_message_store_config(config));
+        let timer_message_store = Arc::new(standalone_timer_store(config));
 
         assert!(timer_message_store.load());
         timer_message_store.start();
@@ -1581,7 +1605,7 @@ mod tests {
         let config = config_with_root(root_dir.as_str());
         let deliver_time_ms = 30_000;
 
-        let timer_message_store = TimerMessageStore::new_with_message_store_config(config.clone());
+        let timer_message_store = standalone_timer_store(config.clone());
         assert!(timer_message_store.load());
 
         let record = TimerLogRecord {
@@ -1598,7 +1622,7 @@ mod tests {
             .unwrap();
         timer_message_store.shutdown();
 
-        let reloaded_store = TimerMessageStore::new_with_message_store_config(config);
+        let reloaded_store = standalone_timer_store(config);
         assert!(reloaded_store.load());
         assert_eq!(
             reloaded_store.read_timer_log(log_offset, TimerLogRecord::SIZE).unwrap(),
@@ -1615,7 +1639,7 @@ mod tests {
         let valid_time_ms = 10_000;
         let invalid_time_ms = 20_000;
 
-        let timer_message_store = TimerMessageStore::new_with_message_store_config(config.clone());
+        let timer_message_store = standalone_timer_store(config.clone());
         assert!(timer_message_store.load());
         let first_record = TimerLogRecord {
             deliver_time_ms: valid_time_ms,
@@ -1667,7 +1691,7 @@ mod tests {
             .unwrap();
         timer_wheel.flush().unwrap();
 
-        let reloaded_store = TimerMessageStore::new_with_message_store_config(config);
+        let reloaded_store = standalone_timer_store(config);
         assert!(reloaded_store.load());
         assert_eq!(
             reloaded_store.timer_log.lock().as_ref().unwrap().len().unwrap(),
@@ -1682,7 +1706,7 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let root_dir = temp_dir.path().to_string_lossy().to_string();
         let config = config_with_root(root_dir.as_str());
-        let timer_message_store = TimerMessageStore::new_with_message_store_config(config);
+        let timer_message_store = standalone_timer_store(config);
         assert!(timer_message_store.load());
         let local_read_time = timer_message_store.curr_read_time_ms.load(Ordering::Relaxed);
 
@@ -1949,7 +1973,7 @@ mod tests {
     fn set_should_running_dequeue_clamps_future_read_cursor_on_resume() {
         let temp_dir = tempdir().unwrap();
         let root_dir = temp_dir.path().to_string_lossy().to_string();
-        let timer_message_store = TimerMessageStore::new_with_message_store_config(config_with_root(root_dir.as_str()));
+        let timer_message_store = standalone_timer_store(config_with_root(root_dir.as_str()));
 
         assert!(timer_message_store.load());
         let now_floor = timer_message_store.floor_time_ms(current_millis() as i64);

@@ -61,7 +61,7 @@ use rocketmq_proxy_core::SubscriptionGroupMetadata;
 use rocketmq_proxy_core::TransactionService;
 use rocketmq_proxy_core::UpdateOffsetPlan;
 use rocketmq_proxy_core::UpdateOffsetRequest;
-use rocketmq_runtime::ServiceContext;
+use rocketmq_runtime::ChildServiceContext;
 use rocketmq_security_api::OutboundSigner;
 
 use crate::cluster::ClusterClient;
@@ -364,7 +364,7 @@ impl ClusterServiceManager {
     pub fn from_cluster_config_with_service_context(
         config: ClusterConfig,
         signer: Option<Arc<dyn OutboundSigner>>,
-        service_context: &ServiceContext,
+        service_context: &ChildServiceContext,
     ) -> Self {
         Self::from_cluster_client(Arc::new(RocketmqClusterClient::with_service_context(
             config,

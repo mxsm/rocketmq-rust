@@ -41,6 +41,28 @@ pub(crate) fn runtime_to_rocketmq_error(
     rocketmq_error::RocketMQError::IO(std::io::Error::other(error))
 }
 
+#[cfg(test)]
+pub(crate) fn test_service_context(name: impl Into<std::sync::Arc<str>>) -> rocketmq_runtime::ChildServiceContext {
+    use std::sync::OnceLock;
+
+    static OWNER: OnceLock<rocketmq_runtime::RuntimeOwner> = OnceLock::new();
+    let name: std::sync::Arc<str> = name.into();
+    OWNER
+        .get_or_init(|| {
+            rocketmq_runtime::RuntimeOwner::new(rocketmq_runtime::RuntimeConfig::server_default(
+                "rocketmq-broker-tests",
+            ))
+            .expect("broker test runtime owner should start")
+        })
+        .root_context()
+        .child(name)
+}
+
+#[cfg(test)]
+pub(crate) fn test_task_group(name: impl Into<std::sync::Arc<str>>) -> rocketmq_runtime::TaskGroup {
+    test_service_context(name).task_group().clone()
+}
+
 // Re-export types needed for benchmarking
 #[doc(hidden)]
 pub mod bench_support {
@@ -55,6 +77,7 @@ pub mod bench_support {
     use cheetah_string::CheetahString;
     use rocketmq_model::common::filter::expression_type::ExpressionType;
     use rocketmq_runtime::schedule::simple_scheduler::ScheduledShutdownReport;
+    use rocketmq_runtime::ChildServiceContext;
     use rocketmq_runtime::RuntimeContext;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
     use rocketmq_store::store_path_config_helper::get_delay_offset_store_path;
@@ -373,10 +396,16 @@ pub mod bench_support {
         }
     }
 
-    pub async fn run_broker_client_housekeeping_lifecycle_probe() -> BrokerClientHousekeepingLifecycleProbe {
+    pub async fn run_broker_client_housekeeping_lifecycle_probe(
+        service_context: ChildServiceContext,
+    ) -> BrokerClientHousekeepingLifecycleProbe {
         let broker_config = Arc::new(BrokerConfig::default());
         let message_store_config = Arc::new(MessageStoreConfig::default());
-        let mut runtime = crate::broker_runtime::BrokerRuntime::new(broker_config, message_store_config);
+        let mut runtime = crate::broker_runtime::BrokerRuntime::new_with_service_context(
+            broker_config,
+            message_store_config,
+            service_context,
+        );
         let inner = runtime.inner_for_test();
         let service = crate::client::client_housekeeping_service::ClientHousekeepingService::new(
             inner.producer_manager().connection_housekeeping(),
@@ -430,13 +459,19 @@ pub mod bench_support {
         }
     }
 
-    pub async fn run_broker_topic_queue_mapping_clean_lifecycle_probe() -> BrokerTopicQueueMappingCleanLifecycleProbe {
+    pub async fn run_broker_topic_queue_mapping_clean_lifecycle_probe(
+        service_context: ChildServiceContext,
+    ) -> BrokerTopicQueueMappingCleanLifecycleProbe {
         let broker_config = Arc::new(BrokerConfig::default());
         let message_store_config = Arc::new(MessageStoreConfig {
             delete_when: "99".to_string(),
             ..MessageStoreConfig::default()
         });
-        let mut runtime = crate::broker_runtime::BrokerRuntime::new(broker_config, message_store_config);
+        let mut runtime = crate::broker_runtime::BrokerRuntime::new_with_service_context(
+            broker_config,
+            message_store_config,
+            service_context,
+        );
         let service = runtime
             .inner_for_test()
             .topic_queue_mapping_clean_service_for_test()
@@ -488,7 +523,9 @@ pub mod bench_support {
         }
     }
 
-    pub async fn run_broker_fast_failure_lifecycle_probe() -> BrokerFastFailureLifecycleProbe {
+    pub async fn run_broker_fast_failure_lifecycle_probe(
+        service_context: ChildServiceContext,
+    ) -> BrokerFastFailureLifecycleProbe {
         let broker_config = Arc::new(BrokerConfig {
             broker_fast_failure_enable: true,
             wait_time_mills_in_send_queue: 0,
@@ -500,7 +537,10 @@ pub mod bench_support {
             wait_time_mills_in_admin_broker_queue: 0,
             ..BrokerConfig::default()
         });
-        let service = crate::latency::broker_fast_failure::BrokerFastFailure::new(broker_config);
+        let service = crate::latency::broker_fast_failure::BrokerFastFailure::new_with_parent_task_group(
+            broker_config,
+            service_context.task_group().clone(),
+        );
         let (_task, response_rx) = service.enqueue(crate::latency::broker_fast_failure::FastFailureQueueKind::Send, 77);
         service.start_with_schedule(Duration::ZERO, Duration::from_millis(1));
 
@@ -644,7 +684,10 @@ pub mod bench_support {
 mod bench_support_tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn broker_client_housekeeping_lifecycle_probe_reports_clean_shutdown() {
-        let probe = super::bench_support::run_broker_client_housekeeping_lifecycle_probe().await;
+        let runtime = rocketmq_runtime::RuntimeContext::from_current("broker-client-housekeeping-probe-test");
+        let probe =
+            super::bench_support::run_broker_client_housekeeping_lifecycle_probe(runtime.service_context("broker"))
+                .await;
 
         assert!(probe.healthy, "{probe:?}");
         assert_eq!(probe.task_count_after_shutdown, 0, "{probe:?}");
@@ -654,7 +697,11 @@ mod bench_support_tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn broker_topic_queue_mapping_clean_lifecycle_probe_reports_clean_shutdown() {
-        let probe = super::bench_support::run_broker_topic_queue_mapping_clean_lifecycle_probe().await;
+        let runtime = rocketmq_runtime::RuntimeContext::from_current("broker-topic-clean-probe-test");
+        let probe = super::bench_support::run_broker_topic_queue_mapping_clean_lifecycle_probe(
+            runtime.service_context("broker"),
+        )
+        .await;
 
         assert!(probe.healthy, "{probe:?}");
         assert_eq!(probe.task_count_after_shutdown, 0, "{probe:?}");
@@ -664,7 +711,9 @@ mod bench_support_tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn broker_fast_failure_lifecycle_probe_reports_clean_shutdown() {
-        let probe = super::bench_support::run_broker_fast_failure_lifecycle_probe().await;
+        let runtime = rocketmq_runtime::RuntimeContext::from_current("broker-fast-failure-probe-test");
+        let probe =
+            super::bench_support::run_broker_fast_failure_lifecycle_probe(runtime.service_context("broker")).await;
 
         assert!(probe.healthy, "{probe:?}");
         assert!(probe.cleaned_response_received, "{probe:?}");

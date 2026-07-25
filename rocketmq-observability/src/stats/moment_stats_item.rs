@@ -18,7 +18,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use parking_lot::Mutex;
-use rocketmq_runtime::RuntimeHandle;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::TaskGroup;
@@ -36,23 +35,11 @@ pub struct MomentStatsItem {
     stats_name: String,
     stats_key: String,
     task_group: Arc<Mutex<Option<TaskGroup>>>,
-    parent_task_group: Option<TaskGroup>,
+    parent_task_group: TaskGroup,
 }
 
 impl MomentStatsItem {
-    pub fn new(stats_name: String, stats_key: String) -> Self {
-        Self::new_with_optional_task_group(stats_name, stats_key, None)
-    }
-
-    pub fn new_with_task_group(stats_name: String, stats_key: String, parent_task_group: TaskGroup) -> Self {
-        Self::new_with_optional_task_group(stats_name, stats_key, Some(parent_task_group))
-    }
-
-    fn new_with_optional_task_group(
-        stats_name: String,
-        stats_key: String,
-        parent_task_group: Option<TaskGroup>,
-    ) -> Self {
+    pub fn new(stats_name: String, stats_key: String, parent_task_group: TaskGroup) -> Self {
         MomentStatsItem {
             value: Arc::new(AtomicI64::new(0)),
             stats_name,
@@ -60,6 +47,10 @@ impl MomentStatsItem {
             task_group: Arc::new(Mutex::new(None)),
             parent_task_group,
         }
+    }
+
+    pub fn new_with_task_group(stats_name: String, stats_key: String, parent_task_group: TaskGroup) -> Self {
+        Self::new(stats_name, stats_key, parent_task_group)
     }
 
     pub fn init(self: Arc<Self>) {
@@ -75,21 +66,7 @@ impl MomentStatsItem {
             "rocketmq-observability.moment-stats.{}.{}",
             self.stats_name, self.stats_key
         );
-        let task_group = if let Some(parent_task_group) = self.parent_task_group.as_ref() {
-            parent_task_group.child(group_name)
-        } else {
-            let runtime = match tokio::runtime::Handle::try_current() {
-                Ok(handle) => RuntimeHandle::new(handle),
-                Err(error) => {
-                    warn!(
-                        "[{}] [{}] failed to initialize MomentStatsItem outside Tokio runtime: {}",
-                        self.stats_name, self.stats_key, error
-                    );
-                    return;
-                }
-            };
-            TaskGroup::root(group_name, runtime)
-        };
+        let task_group = self.parent_task_group.child(group_name);
         let scheduled_tasks = ScheduledTaskGroup::new(task_group.child("scheduled"));
         let self_clone = self.clone();
         let mut config =
@@ -156,21 +133,40 @@ mod tests {
 
     use super::*;
 
+    fn test_parent(name: &'static str) -> TaskGroup {
+        rocketmq_runtime::RuntimeContext::from_current(name)
+            .service_context("moment-stats-service")
+            .task_group()
+            .clone()
+    }
+
     #[tokio::test]
     async fn moment_stats_item_initializes_with_zero_value() {
-        let stats_item = MomentStatsItem::new("TestName".to_string(), "TestKey".to_string());
+        let stats_item = MomentStatsItem::new(
+            "TestName".to_string(),
+            "TestKey".to_string(),
+            test_parent("moment-stats-value-test"),
+        );
         assert_eq!(stats_item.get_value().load(Ordering::Relaxed), 0);
     }
 
     #[tokio::test]
     async fn moment_stats_item_returns_correct_stats_name() {
-        let stats_item = MomentStatsItem::new("TestName".to_string(), "TestKey".to_string());
+        let stats_item = MomentStatsItem::new(
+            "TestName".to_string(),
+            "TestKey".to_string(),
+            test_parent("moment-stats-name-test"),
+        );
         assert_eq!(stats_item.get_stats_name(), "TestName");
     }
 
     #[tokio::test]
     async fn moment_stats_item_returns_correct_stats_key() {
-        let stats_item = MomentStatsItem::new("TestName".to_string(), "TestKey".to_string());
+        let stats_item = MomentStatsItem::new(
+            "TestName".to_string(),
+            "TestKey".to_string(),
+            test_parent("moment-stats-key-test"),
+        );
         assert_eq!(stats_item.get_stats_key(), "TestKey");
     }
 }

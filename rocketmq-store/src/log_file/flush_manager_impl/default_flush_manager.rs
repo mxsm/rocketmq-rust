@@ -18,7 +18,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::TaskGroup;
+use rocketmq_runtime::TaskId;
 use rocketmq_store_local::flush::group_commit::run_group_commit_worker;
 use rocketmq_store_local::flush::group_commit::GroupCommitStatus;
 use rocketmq_store_local::flush::group_commit::GroupCommitWorkerConfig;
@@ -128,6 +130,7 @@ impl DerefMut for DefaultFlushManager {
 
 impl DefaultFlushManager {
     pub(crate) fn new(
+        runtime_scope: crate::runtime::StoreRuntimeScope,
         message_store_config: Arc<MessageStoreConfig>,
         mapped_file_queue: MappedFileQueueFlushHandle,
         store_checkpoint: Arc<StoreCheckpoint>,
@@ -138,11 +141,13 @@ impl DefaultFlushManager {
         let (group_commit_service, flush_real_time_service) = match message_store_config.flush_disk_type {
             FlushDiskType::SyncFlush => (
                 Some(GroupCommitService {
+                    runtime_scope: runtime_scope.clone(),
                     store_checkpoint: store_checkpoint.clone(),
                     notified: Arc::new(Notify::new()),
                     tx_in: None,
                     shutdown_token: CancellationToken::new(),
                     worker_group: None,
+                    worker_task: None,
                     sync_flush_stats: sync_flush_stats.clone(),
                     store_health_recorder: store_health_recorder.clone(),
                     forced_flush_error: None,
@@ -152,11 +157,13 @@ impl DefaultFlushManager {
             FlushDiskType::AsyncFlush => (
                 None,
                 Some(FlushRealTimeService {
+                    runtime_scope: runtime_scope.clone(),
                     message_store_config: message_store_config.clone(),
                     store_checkpoint: store_checkpoint.clone(),
                     notified: Arc::new(Notify::new()),
                     shutdown_token: CancellationToken::new(),
                     worker_group: None,
+                    worker_task: None,
                     store_health_recorder: store_health_recorder.clone(),
                 }),
             ),
@@ -164,6 +171,7 @@ impl DefaultFlushManager {
 
         let commit_real_time_service = if message_store_config.transient_store_pool_enable {
             Some(CommitRealTimeService {
+                runtime_scope,
                 message_store_config: message_store_config.clone(),
                 store_checkpoint,
                 notified: Arc::new(Default::default()),
@@ -178,6 +186,7 @@ impl DefaultFlushManager {
                 },
                 shutdown_token: CancellationToken::new(),
                 worker_group: None,
+                worker_task: None,
             })
         } else {
             None
@@ -387,11 +396,13 @@ impl FlushManager for DefaultFlushManager {
 }
 
 struct GroupCommitService {
+    runtime_scope: crate::runtime::StoreRuntimeScope,
     store_checkpoint: Arc<StoreCheckpoint>,
     notified: Arc<Notify>,
     tx_in: Option<tokio::sync::mpsc::Sender<GroupCommitRequest>>,
     shutdown_token: CancellationToken,
     worker_group: Option<TaskGroup>,
+    worker_task: Option<TaskId>,
     sync_flush_stats: SyncFlushStats,
     store_health_recorder: StoreHealthRecorder,
     forced_flush_error: Option<Arc<StoreError>>,
@@ -428,13 +439,7 @@ impl GroupCommitService {
             return;
         }
 
-        let worker_group = match crate::runtime::task_group("rocketmq-store.commit-log.group-commit") {
-            Ok(worker_group) => worker_group,
-            Err(error) => {
-                warn!("GroupCommitService cannot start because task group creation failed: {error}");
-                return;
-            }
-        };
+        let worker_group = crate::runtime::task_group(&self.runtime_scope, "rocketmq-store.commit-log.group-commit");
         self.shutdown_token = CancellationToken::new();
         let (tx_in, rx_in) = tokio::sync::mpsc::channel::<GroupCommitRequest>(GROUP_COMMIT_CHANNEL_CAPACITY);
         self.tx_in = Some(tx_in);
@@ -444,12 +449,13 @@ impl GroupCommitService {
         let sync_flush_stats = self.sync_flush_stats.clone();
         let store_health_recorder = self.store_health_recorder.clone();
         let forced_flush_error = self.configured_flush_error();
-        if let Err(error) = worker_group.spawn_service("commit-log-group-commit", async move {
+        let runtime_scope = self.runtime_scope.clone();
+        let worker_task = match worker_group.spawn_service("commit-log-group-commit", async move {
             let flush_queue = mapped_file_queue.clone();
             let flushed_queue = mapped_file_queue.clone();
             let timestamp_queue = mapped_file_queue;
             let ports = GroupCommitWorkerPorts::new(
-                move || flush_mapped_file_queue(flush_queue.clone(), 0),
+                move || flush_mapped_file_queue(runtime_scope.clone(), flush_queue.clone(), 0),
                 move || flushed_queue.get_flushed_where(),
                 move || timestamp_queue.get_store_timestamp(),
                 move |timestamp| store_checkpoint.set_physic_msg_timestamp(timestamp),
@@ -467,10 +473,14 @@ impl GroupCommitService {
             )
             .await;
         }) {
-            warn!("GroupCommitService cannot start because task spawn failed: {error}");
-            self.tx_in.take();
-            return;
-        }
+            Ok(task_id) => task_id,
+            Err(error) => {
+                warn!("GroupCommitService cannot start because task spawn failed: {error}");
+                self.tx_in.take();
+                return;
+            }
+        };
+        self.worker_task = Some(worker_task);
         self.worker_group = Some(worker_group);
     }
 
@@ -481,22 +491,24 @@ impl GroupCommitService {
     pub fn shutdown(&mut self) {
         self.shutdown_token.cancel();
         self.tx_in.take();
-        shutdown_worker_now("GroupCommitService", &mut self.worker_group);
+        shutdown_worker_now("GroupCommitService", &mut self.worker_group, &mut self.worker_task);
     }
 
     pub async fn shutdown_gracefully(&mut self) {
         self.shutdown_token.cancel();
         self.tx_in.take();
-        shutdown_worker_gracefully("GroupCommitService", &mut self.worker_group).await;
+        shutdown_worker_gracefully("GroupCommitService", &mut self.worker_group, &mut self.worker_task).await;
     }
 }
 
 struct FlushRealTimeService {
+    runtime_scope: crate::runtime::StoreRuntimeScope,
     message_store_config: Arc<MessageStoreConfig>,
     store_checkpoint: Arc<StoreCheckpoint>,
     notified: Arc<Notify>,
     shutdown_token: CancellationToken,
     worker_group: Option<TaskGroup>,
+    worker_task: Option<TaskId>,
     store_health_recorder: StoreHealthRecorder,
 }
 
@@ -506,13 +518,7 @@ impl FlushRealTimeService {
             return;
         }
 
-        let worker_group = match crate::runtime::task_group("rocketmq-store.commit-log.flush-real-time") {
-            Ok(worker_group) => worker_group,
-            Err(error) => {
-                warn!("FlushRealTimeService cannot start because task group creation failed: {error}");
-                return;
-            }
-        };
+        let worker_group = crate::runtime::task_group(&self.runtime_scope, "rocketmq-store.commit-log.flush-real-time");
         self.shutdown_token = CancellationToken::new();
         let worker_config = FlushRealTimeWorkerConfig::legacy(
             self.message_store_config.flush_commit_log_timed,
@@ -524,9 +530,12 @@ impl FlushRealTimeService {
         let notified = self.notified.clone();
         let shutdown_token = self.shutdown_token.clone();
         let store_health_recorder = self.store_health_recorder.clone();
-        if let Err(error) = worker_group.spawn_service("commit-log-flush-real-time", async move {
+        let runtime_scope = self.runtime_scope.clone();
+        let worker_task = match worker_group.spawn_service("commit-log-flush-real-time", async move {
             let ports = FlushRealTimeWorkerPorts::new(
-                move |least_pages| flush_mapped_file_queue(mapped_file_queue.clone(), least_pages),
+                move |least_pages| {
+                    flush_mapped_file_queue(runtime_scope.clone(), mapped_file_queue.clone(), least_pages)
+                },
                 move |phase, error: Arc<StoreError>| {
                     store_health_recorder.record_flush_failure(error.as_ref());
                     match phase {
@@ -543,9 +552,13 @@ impl FlushRealTimeService {
             );
             run_flush_real_time_worker(notified, shutdown_token, worker_config, ports).await;
         }) {
-            warn!("FlushRealTimeService cannot start because task spawn failed: {error}");
-            return;
-        }
+            Ok(task_id) => task_id,
+            Err(error) => {
+                warn!("FlushRealTimeService cannot start because task spawn failed: {error}");
+                return;
+            }
+        };
+        self.worker_task = Some(worker_task);
         self.worker_group = Some(worker_group);
     }
 
@@ -558,13 +571,13 @@ impl FlushRealTimeService {
     pub fn shutdown(&mut self) {
         self.shutdown_token.cancel();
         self.notified.notify_waiters();
-        shutdown_worker_now("FlushRealTimeService", &mut self.worker_group);
+        shutdown_worker_now("FlushRealTimeService", &mut self.worker_group, &mut self.worker_task);
     }
 
     pub async fn shutdown_gracefully(&mut self) {
         self.shutdown_token.cancel();
         self.notified.notify_waiters();
-        shutdown_worker_gracefully("FlushRealTimeService", &mut self.worker_group).await;
+        shutdown_worker_gracefully("FlushRealTimeService", &mut self.worker_group, &mut self.worker_task).await;
     }
 }
 
@@ -589,12 +602,14 @@ impl FlushWakeup {
 }
 
 struct CommitRealTimeService {
+    runtime_scope: crate::runtime::StoreRuntimeScope,
     message_store_config: Arc<MessageStoreConfig>,
     store_checkpoint: Arc<StoreCheckpoint>,
     notified: Arc<Notify>,
     flush_wakeup: FlushWakeup,
     shutdown_token: CancellationToken,
     worker_group: Option<TaskGroup>,
+    worker_task: Option<TaskId>,
 }
 
 impl CommitRealTimeService {
@@ -607,13 +622,8 @@ impl CommitRealTimeService {
             return;
         }
 
-        let worker_group = match crate::runtime::task_group("rocketmq-store.commit-log.commit-real-time") {
-            Ok(worker_group) => worker_group,
-            Err(error) => {
-                warn!("CommitRealTimeService cannot start because task group creation failed: {error}");
-                return;
-            }
-        };
+        let worker_group =
+            crate::runtime::task_group(&self.runtime_scope, "rocketmq-store.commit-log.commit-real-time");
         self.shutdown_token = CancellationToken::new();
         let worker_config = CommitRealTimeWorkerConfig::legacy(
             self.message_store_config.commit_interval_commit_log,
@@ -624,44 +634,64 @@ impl CommitRealTimeService {
         let notified = self.notified.clone();
         let flush_wakeup = self.flush_wakeup.clone();
         let shutdown_token = self.shutdown_token.clone();
-        if let Err(error) = worker_group.spawn_service("commit-log-commit-real-time", async move {
+        let runtime_scope = self.runtime_scope.clone();
+        let worker_task = match worker_group.spawn_service("commit-log-commit-real-time", async move {
             let ports = CommitRealTimeWorkerPorts::new(
-                move |least_pages| commit_mapped_file_queue(mapped_file_queue.clone(), least_pages),
+                move |least_pages| {
+                    commit_mapped_file_queue(runtime_scope.clone(), mapped_file_queue.clone(), least_pages)
+                },
                 move || flush_wakeup.wakeup(),
                 move |timestamp| store_checkpoint.set_physic_msg_timestamp(timestamp),
                 time::sleep,
             );
             run_commit_real_time_worker(notified, shutdown_token, worker_config, ports).await;
         }) {
-            warn!("CommitRealTimeService cannot start because task spawn failed: {error}");
-            return;
-        }
+            Ok(task_id) => task_id,
+            Err(error) => {
+                warn!("CommitRealTimeService cannot start because task spawn failed: {error}");
+                return;
+            }
+        };
+        self.worker_task = Some(worker_task);
         self.worker_group = Some(worker_group);
     }
 
     pub fn shutdown(&mut self) {
         self.shutdown_token.cancel();
         self.notified.notify_waiters();
-        shutdown_worker_now("CommitRealTimeService", &mut self.worker_group);
+        shutdown_worker_now("CommitRealTimeService", &mut self.worker_group, &mut self.worker_task);
     }
 
     pub async fn shutdown_gracefully(&mut self) {
         self.shutdown_token.cancel();
         self.notified.notify_waiters();
-        shutdown_worker_gracefully("CommitRealTimeService", &mut self.worker_group).await;
+        shutdown_worker_gracefully("CommitRealTimeService", &mut self.worker_group, &mut self.worker_task).await;
     }
 }
 
-fn shutdown_worker_now(service_name: &'static str, worker_group: &mut Option<TaskGroup>) {
+fn shutdown_worker_now(
+    service_name: &'static str,
+    worker_group: &mut Option<TaskGroup>,
+    worker_task: &mut Option<TaskId>,
+) {
+    worker_task.take();
     if let Some(worker_group) = worker_group.take() {
         worker_group.cancel();
         debug!("{service_name} task group cancellation requested without waiting");
     }
 }
 
-async fn shutdown_worker_gracefully(service_name: &'static str, worker_group: &mut Option<TaskGroup>) {
+async fn shutdown_worker_gracefully(
+    service_name: &'static str,
+    worker_group: &mut Option<TaskGroup>,
+    worker_task: &mut Option<TaskId>,
+) {
     if let Some(worker_group) = worker_group.take() {
-        let report = worker_group.shutdown(Duration::from_secs(5)).await;
+        let deadline = ShutdownDeadline::after(Duration::from_secs(5));
+        if let Some(worker_task) = worker_task.take() {
+            let _ = worker_group.wait_task(worker_task, deadline.remaining()).await;
+        }
+        let report = worker_group.shutdown_until(deadline).await;
         if let Err(error) = crate::runtime::shutdown_report_result(service_name, report) {
             warn!("{service_name} task group failed during graceful shutdown: {error}");
         }
@@ -669,10 +699,11 @@ async fn shutdown_worker_gracefully(service_name: &'static str, worker_group: &m
 }
 
 pub(crate) async fn flush_mapped_file_queue(
+    runtime_scope: crate::runtime::StoreRuntimeScope,
     mapped_file_queue: MappedFileQueueFlushHandle,
     flush_least_pages: i32,
 ) -> Result<FlushProgress, Arc<StoreError>> {
-    match crate::runtime::spawn_io("commitlog-flush", move || {
+    match crate::runtime::spawn_io(&runtime_scope, "commitlog-flush", move || {
         mapped_file_queue.try_flush(flush_least_pages)
     })
     .await
@@ -686,10 +717,11 @@ pub(crate) async fn flush_mapped_file_queue(
 }
 
 async fn commit_mapped_file_queue(
+    runtime_scope: crate::runtime::StoreRuntimeScope,
     mapped_file_queue: MappedFileQueueFlushHandle,
     commit_least_pages: i32,
 ) -> Option<CommitWorkerProgress> {
-    match crate::runtime::spawn_io("commitlog-commit", move || {
+    match crate::runtime::spawn_io(&runtime_scope, "commitlog-commit", move || {
         CommitWorkerProgress::new(
             mapped_file_queue.commit(commit_least_pages),
             mapped_file_queue.get_store_timestamp(),
@@ -857,10 +889,11 @@ mod tests {
 
     #[tokio::test]
     async fn flush_and_commit_helpers_run_empty_queue_on_blocking_pool() {
+        let runtime_scope = crate::runtime::test_scope("flush-commit-helper-test");
         let mapped_file_queue = MappedFileQueue::default().flush_handle();
 
         assert!(matches!(
-            flush_mapped_file_queue(mapped_file_queue.clone(), 0).await,
+            flush_mapped_file_queue(runtime_scope.clone(), mapped_file_queue.clone(), 0).await,
             Ok(FlushProgress {
                 appended: 0,
                 durable_before: 0,
@@ -869,7 +902,7 @@ mod tests {
             })
         ));
         assert_eq!(
-            commit_mapped_file_queue(mapped_file_queue, 0).await,
+            commit_mapped_file_queue(runtime_scope, mapped_file_queue, 0).await,
             Some(CommitWorkerProgress::new(true, 0))
         );
     }
@@ -880,6 +913,7 @@ mod tests {
         let store_checkpoint = Arc::new(StoreCheckpoint::new(temp_dir.path().join("checkpoint")).unwrap());
         let mapped_file_queue = MappedFileQueue::default().flush_handle();
         let mut manager = DefaultFlushManager::new(
+            crate::runtime::test_scope("flush-manager-missing-queue-test"),
             Arc::new(MessageStoreConfig::default()),
             mapped_file_queue,
             store_checkpoint,
@@ -895,6 +929,7 @@ mod tests {
         let store_checkpoint = Arc::new(StoreCheckpoint::new(temp_dir.path().join("checkpoint")).unwrap());
         let mapped_file_queue = MappedFileQueue::default().flush_handle();
         let mut manager = DefaultFlushManager::new(
+            crate::runtime::test_scope("sync-flush-manager-test"),
             Arc::new(MessageStoreConfig {
                 flush_disk_type: FlushDiskType::SyncFlush,
                 ..MessageStoreConfig::default()
@@ -926,6 +961,7 @@ mod tests {
         let store_checkpoint = Arc::new(StoreCheckpoint::new(temp_dir.path().join("checkpoint")).unwrap());
         let mapped_file_queue = MappedFileQueue::default().flush_handle();
         let mut manager = DefaultFlushManager::new(
+            crate::runtime::test_scope("async-flush-manager-test"),
             Arc::new(MessageStoreConfig {
                 flush_disk_type: FlushDiskType::AsyncFlush,
                 ..MessageStoreConfig::default()
@@ -948,11 +984,13 @@ mod tests {
         let store_checkpoint = Arc::new(StoreCheckpoint::new(temp_dir.path().join("checkpoint")).unwrap());
         let mapped_file_queue = MappedFileQueue::default().flush_handle();
         let mut service = GroupCommitService {
+            runtime_scope: crate::runtime::test_scope("group-commit-service-test"),
             store_checkpoint,
             notified: Arc::new(Notify::new()),
             tx_in: None,
             shutdown_token: CancellationToken::new(),
             worker_group: None,
+            worker_task: None,
             sync_flush_stats: SyncFlushStats::default(),
             store_health_recorder: health_recorder(),
             forced_flush_error: Some(Arc::new(StoreError::mapped_file(MappedFileError::ReferenceUnavailable))),
@@ -995,6 +1033,7 @@ mod tests {
         let store_checkpoint = Arc::new(StoreCheckpoint::new(temp_dir.path().join("checkpoint")).unwrap());
         let mapped_file_queue = MappedFileQueue::default().flush_handle();
         let mut service = FlushRealTimeService {
+            runtime_scope: crate::runtime::test_scope("flush-real-time-service-test"),
             message_store_config: Arc::new(MessageStoreConfig {
                 flush_interval_commit_log: 60_000,
                 ..MessageStoreConfig::default()
@@ -1003,6 +1042,7 @@ mod tests {
             notified: Arc::new(Notify::new()),
             shutdown_token: CancellationToken::new(),
             worker_group: None,
+            worker_task: None,
             store_health_recorder: health_recorder(),
         };
 

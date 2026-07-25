@@ -121,58 +121,20 @@ impl DefaultTopAddressing {
         }
         None
     }
-
-    /// Fetch nameserver address (blocking version - DEPRECATED)
-    ///
-    /// **DEPRECATED**: Use `fetch_ns_addr_inner_async()` instead.
-    #[deprecated(
-        since = "0.8.0",
-        note = "Use fetch_ns_addr_inner_async() instead for better async performance"
-    )]
-    pub fn fetch_ns_addr_inner(&self, verbose: bool, timeout_millis: u64) -> Option<String> {
-        #[allow(deprecated)]
-        match HttpTinyClient::http_get(&self.build_url(), None, None, "UTF-8", timeout_millis) {
-            Ok(response) => {
-                if response.code == 200 {
-                    if !response.content.is_empty() {
-                        return Some(Self::clear_new_line(&response.content));
-                    } else {
-                        error!("fetch nameserver address is null");
-                    }
-                } else {
-                    error!("fetch nameserver address failed. statusCode={}", response.code);
-                }
-            }
-            Err(e) => {
-                if verbose {
-                    error!("fetch name remoting_server address exception: {}", e);
-                }
-            }
-        }
-
-        if verbose {
-            warn!(
-                "connect to {} failed, maybe the domain name not bind in /etc/hosts",
-                self.build_url()
-            );
-        }
-        None
-    }
 }
 
 impl TopAddressing for DefaultTopAddressing {
-    fn fetch_ns_addr(&self) -> Option<String> {
-        // First try custom implementations
-        for top_addressing in &self.top_addressing_list {
-            if let Some(ns_address) = top_addressing.fetch_ns_addr() {
-                if !ns_address.trim().is_empty() {
-                    return Some(ns_address);
+    fn fetch_ns_addr(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<String>> + Send + '_>> {
+        Box::pin(async move {
+            for top_addressing in &self.top_addressing_list {
+                if let Some(ns_address) = top_addressing.fetch_ns_addr().await {
+                    if !ns_address.trim().is_empty() {
+                        return Some(ns_address);
+                    }
                 }
             }
-        }
-        // Fall back to default implementation
-        #[allow(deprecated)]
-        self.fetch_ns_addr_inner(true, 3000)
+            self.fetch_ns_addr_inner_async(true, 3000).await
+        })
     }
 
     fn register_change_callback(&self, change_callback: Arc<dyn NameServerUpdateCallback>) {

@@ -32,6 +32,7 @@ use rocketmq_controller::config::ControllerConfig;
 use rocketmq_controller::config::RaftPeer;
 use rocketmq_controller::error::Result;
 use rocketmq_controller::manager::ControllerManager;
+use rocketmq_runtime::RuntimeContext;
 use tracing::error;
 use tracing::info;
 
@@ -48,7 +49,8 @@ async fn main() -> Result<()> {
 
     // Create the controller manager
     info!("Creating ControllerManager...");
-    let manager = ControllerManager::new(config).await?;
+    let runtime = RuntimeContext::from_current("controller-manager-basic-example");
+    let manager = ControllerManager::new(config, runtime.service_context("controller")).await?;
 
     // Share the manager through a read-only ownership handle.
     let manager = Arc::new(manager);

@@ -34,6 +34,7 @@ use crate::iterator::RocksDbRangeScanOptions;
 use crate::iterator::RocksDbScanItem;
 use crate::iterator::RocksDbScanOptions;
 use crate::options::RocksDbOptionsFactory;
+use crate::runtime::RocksDbRuntimeScope;
 use crate::snapshot::RocksDbSnapshot;
 use rocketmq_observability::metrics::rocksdb::RocksDbMetrics;
 use rocketmq_observability::metrics::rocksdb::RocksDbMetricsCollector;
@@ -196,11 +197,15 @@ impl RocksDbStore {
 
     pub async fn prefix_scan_blocking(
         &self,
+        runtime_scope: &RocksDbRuntimeScope,
         options: RocksDbScanOptions,
     ) -> Result<Vec<RocksDbScanItem>, RocketMQError> {
         self.ensure_open()?;
         let db = Arc::clone(&self.db);
-        let result = crate::runtime::spawn_io("rocksdb.prefix_scan", move || prefix_scan_on_db(&db, &options)).await?;
+        let result = crate::runtime::spawn_io(runtime_scope, "rocksdb.prefix_scan", move || {
+            prefix_scan_on_db(&db, &options)
+        })
+        .await?;
         self.record_result(&result, RocksDbMetricsCollector::record_scan);
         result
     }
@@ -233,11 +238,15 @@ impl RocksDbStore {
 
     pub async fn range_scan_blocking(
         &self,
+        runtime_scope: &RocksDbRuntimeScope,
         options: RocksDbRangeScanOptions,
     ) -> Result<Vec<RocksDbScanItem>, RocketMQError> {
         self.ensure_open()?;
         let db = Arc::clone(&self.db);
-        let result = crate::runtime::spawn_io("rocksdb.range_scan", move || range_scan_on_db(&db, &options)).await?;
+        let result = crate::runtime::spawn_io(runtime_scope, "rocksdb.range_scan", move || {
+            range_scan_on_db(&db, &options)
+        })
+        .await?;
         self.record_result(&result, RocksDbMetricsCollector::record_scan);
         result
     }
@@ -276,6 +285,7 @@ impl RocksDbStore {
 
     pub async fn compact_range_cf_blocking(
         &self,
+        runtime_scope: &RocksDbRuntimeScope,
         cf: String,
         start: Option<Vec<u8>>,
         end: Option<Vec<u8>>,
@@ -283,7 +293,7 @@ impl RocksDbStore {
         self.ensure_open()?;
         let db = Arc::clone(&self.db);
         let metrics = Arc::clone(&self.metrics);
-        let result = crate::runtime::spawn_io("rocksdb.compact_range", move || {
+        let result = crate::runtime::spawn_io(runtime_scope, "rocksdb.compact_range", move || {
             compact_range_cf_on_db(&db, &cf, start.as_deref(), end.as_deref())?;
             metrics.record_manual_compaction();
             Ok(())
@@ -297,6 +307,7 @@ impl RocksDbStore {
 
     pub fn compact_range_cf_background(
         &self,
+        runtime_scope: &RocksDbRuntimeScope,
         cf: String,
         start: Option<Vec<u8>>,
         end: Option<Vec<u8>>,
@@ -304,7 +315,7 @@ impl RocksDbStore {
         self.ensure_open()?;
         let db = Arc::clone(&self.db);
         let metrics = Arc::clone(&self.metrics);
-        crate::runtime::spawn_detached_io("rocksdb.manual_compaction", move || {
+        crate::runtime::spawn_background_io(runtime_scope, "rocksdb.manual_compaction", move || {
             if let Err(error) = compact_range_cf_on_db(&db, &cf, start.as_deref(), end.as_deref()) {
                 warn!(error = %error, "failed to run RocksDB background compaction");
                 metrics.record_error();
@@ -312,6 +323,7 @@ impl RocksDbStore {
             }
             metrics.record_manual_compaction();
         })
+        .map(|_| ())
     }
 
     pub fn manual_compaction_count(&self) -> u64 {
@@ -380,10 +392,14 @@ impl RocksDbStore {
         result
     }
 
-    pub async fn create_checkpoint(&self, target_dir: PathBuf) -> Result<(), RocketMQError> {
+    pub async fn create_checkpoint(
+        &self,
+        runtime_scope: &RocksDbRuntimeScope,
+        target_dir: PathBuf,
+    ) -> Result<(), RocketMQError> {
         self.ensure_open()?;
         let db = Arc::clone(&self.db);
-        let result = crate::runtime::spawn_io("rocksdb.create_checkpoint", move || {
+        let result = crate::runtime::spawn_io(runtime_scope, "rocksdb.create_checkpoint", move || {
             let checkpoint = ::rocksdb::checkpoint::Checkpoint::new(&db).map_rocksdb(RocksDbErrorKind::Checkpoint)?;
             checkpoint
                 .create_checkpoint(target_dir)
@@ -394,10 +410,14 @@ impl RocksDbStore {
         result
     }
 
-    pub async fn create_backup(&self, backup_dir: PathBuf) -> Result<(), RocketMQError> {
+    pub async fn create_backup(
+        &self,
+        runtime_scope: &RocksDbRuntimeScope,
+        backup_dir: PathBuf,
+    ) -> Result<(), RocketMQError> {
         self.ensure_open()?;
         let db = Arc::clone(&self.db);
-        let result = crate::runtime::spawn_io("rocksdb.create_backup", move || {
+        let result = crate::runtime::spawn_io(runtime_scope, "rocksdb.create_backup", move || {
             create_dir_all_for_rocksdb_operation(&backup_dir, RocksDbErrorKind::Backup)?;
             let env = ::rocksdb::Env::new().map_rocksdb(RocksDbErrorKind::Backup)?;
             let backup_options =
@@ -414,11 +434,12 @@ impl RocksDbStore {
     }
 
     pub async fn restore_latest_backup(
+        runtime_scope: &RocksDbRuntimeScope,
         backup_dir: PathBuf,
         db_dir: PathBuf,
         wal_dir: Option<PathBuf>,
     ) -> Result<(), RocketMQError> {
-        crate::runtime::spawn_io("rocksdb.restore_latest_backup", move || {
+        crate::runtime::spawn_io(runtime_scope, "rocksdb.restore_latest_backup", move || {
             create_dir_all_for_rocksdb_operation(&backup_dir, RocksDbErrorKind::Restore)?;
             create_dir_all_for_rocksdb_operation(&db_dir, RocksDbErrorKind::Restore)?;
             let wal_dir = wal_dir.unwrap_or_else(|| db_dir.clone());

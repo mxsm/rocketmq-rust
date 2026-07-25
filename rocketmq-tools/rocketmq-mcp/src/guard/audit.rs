@@ -248,12 +248,12 @@ impl AuditLog {
     pub fn start(
         &self,
         config: &AuditConfig,
-        service_context: &rocketmq_runtime::ServiceContext,
+        service_context: &rocketmq_runtime::ChildServiceContext,
     ) -> Result<(), GuardError> {
         let sink: Box<dyn AuditSink> = match config.sink.as_str() {
             "file" => Box::new(FileAuditSink {
                 path: PathBuf::from(&config.path),
-                blocking: service_context.blocking().clone(),
+                blocking: service_context.storage_io().clone(),
             }),
             "tracing" => Box::new(TracingAuditSink),
             "memory" => Box::new(MemoryAuditSink),
@@ -417,7 +417,7 @@ impl AuditLog {
     fn start_with_sink(
         &self,
         config: &AuditConfig,
-        service_context: &rocketmq_runtime::ServiceContext,
+        service_context: &rocketmq_runtime::ChildServiceContext,
         sink: Box<dyn AuditSink>,
     ) -> Result<(), GuardError> {
         validate_queue_config(config)?;

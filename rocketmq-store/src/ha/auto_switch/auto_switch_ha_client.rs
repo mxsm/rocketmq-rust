@@ -179,6 +179,7 @@ mod tests {
             topic_table,
             None,
             false,
+            crate::runtime::test_service_context("auto-switch-ha-client-store-test"),
         );
         store
             .wire_owned_root_dependencies()
@@ -191,7 +192,11 @@ mod tests {
         let temp_root =
             std::env::temp_dir().join(format!("rocketmq-rust-auto-switch-client-target-{}", current_millis()));
         let store = new_test_message_store(&temp_root);
-        let delegate = DefaultHAClient::new(store.ha_replica_store_handle()).expect("create default HA client");
+        let delegate = DefaultHAClient::new(
+            store.ha_replica_store_handle(),
+            crate::runtime::test_scope("auto-switch-ha-client-test"),
+        )
+        .expect("create default HA client");
         let client = AutoSwitchHAClient::from_delegate(delegate, Some(9));
 
         assert_eq!(client.reported_broker_id(), Some(9));
@@ -209,7 +214,11 @@ mod tests {
         let temp_root =
             std::env::temp_dir().join(format!("rocketmq-rust-auto-switch-client-clear-{}", current_millis()));
         let store = new_test_message_store(&temp_root);
-        let delegate = DefaultHAClient::new(store.ha_replica_store_handle()).expect("create default HA client");
+        let delegate = DefaultHAClient::new(
+            store.ha_replica_store_handle(),
+            crate::runtime::test_scope("auto-switch-ha-client-clear-test"),
+        )
+        .expect("create default HA client");
         let client = AutoSwitchHAClient::from_delegate(delegate, Some(11));
 
         client.sync_controller_master_target("127.0.0.1:10912").await;

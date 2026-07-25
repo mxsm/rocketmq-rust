@@ -362,7 +362,7 @@ struct FastFailureLifecycle {
 
 struct BrokerFastFailureInner {
     broker_config: Arc<BrokerConfig>,
-    parent_task_group: Option<TaskGroup>,
+    parent_task_group: TaskGroup,
     queues: FastFailureQueues,
     next_task_id: AtomicU64,
     running: AtomicBool,
@@ -378,18 +378,12 @@ pub(crate) struct BrokerFastFailure {
 }
 
 impl BrokerFastFailure {
+    #[cfg(test)]
     pub(crate) fn new(broker_config: Arc<BrokerConfig>) -> Self {
-        Self::new_with_optional_parent_task_group(broker_config, None)
+        Self::new_with_parent_task_group(broker_config, crate::test_task_group("broker-fast-failure"))
     }
 
     pub(crate) fn new_with_parent_task_group(broker_config: Arc<BrokerConfig>, parent_task_group: TaskGroup) -> Self {
-        Self::new_with_optional_parent_task_group(broker_config, Some(parent_task_group))
-    }
-
-    fn new_with_optional_parent_task_group(
-        broker_config: Arc<BrokerConfig>,
-        parent_task_group: Option<TaskGroup>,
-    ) -> Self {
         Self {
             inner: Arc::new(BrokerFastFailureInner {
                 broker_config,
@@ -405,19 +399,8 @@ impl BrokerFastFailure {
         }
     }
 
-    fn task_group_or_current(&self) -> Option<TaskGroup> {
-        if let Some(parent_task_group) = self.inner.parent_task_group.as_ref() {
-            return Some(parent_task_group.child("rocketmq-broker.fast-failure"));
-        }
-
-        let runtime = match tokio::runtime::Handle::try_current() {
-            Ok(handle) => rocketmq_runtime::RuntimeHandle::new(handle),
-            Err(error) => {
-                warn!(?error, "failed to start BrokerFastFailure outside Tokio runtime");
-                return None;
-            }
-        };
-        Some(TaskGroup::root("rocketmq-broker.fast-failure", runtime))
+    fn task_group(&self) -> TaskGroup {
+        self.inner.parent_task_group.child("rocketmq-broker.fast-failure")
     }
 
     pub(crate) fn set_page_cache_busy_checker<F>(&self, checker: F)
@@ -453,10 +436,7 @@ impl BrokerFastFailure {
             return;
         }
 
-        let Some(task_group) = self.task_group_or_current() else {
-            self.inner.running.store(false, Ordering::Release);
-            return;
-        };
+        let task_group = self.task_group();
         let scheduled_tasks = ScheduledTaskGroup::new(task_group.child("scheduled"));
         let this = self.clone();
         let mut config = ScheduledTaskConfig::fixed_delay("broker.fast-failure.scan", scan_interval);

@@ -25,6 +25,7 @@ use criterion::BenchmarkId;
 use criterion::Criterion;
 use rocketmq_proxy::bench_support::run_proxy_housekeeping_lifecycle_probe;
 use rocketmq_proxy::bench_support::ProxyHousekeepingLifecycleProbe;
+use rocketmq_runtime::RuntimeContext;
 
 fn run_housekeeping_probe(shutdown_delay: Duration) -> ProxyHousekeepingLifecycleProbe {
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -35,7 +36,10 @@ fn run_housekeeping_probe(shutdown_delay: Duration) -> ProxyHousekeepingLifecycl
         .build()
         .expect("proxy housekeeping benchmark runtime should start");
 
-    runtime.block_on(run_proxy_housekeeping_lifecycle_probe(shutdown_delay))
+    runtime.block_on(async {
+        let context = RuntimeContext::from_current("proxy-housekeeping-bench");
+        run_proxy_housekeeping_lifecycle_probe(shutdown_delay, context.service_context("proxy")).await
+    })
 }
 
 fn workspace_root() -> PathBuf {

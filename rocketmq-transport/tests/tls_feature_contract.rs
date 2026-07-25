@@ -16,9 +16,13 @@ use rocketmq_transport::config::TlsConfig;
 use rocketmq_transport::config::TlsMode;
 use rocketmq_transport::tls::TlsServerRuntime;
 
-#[test]
-fn tls_runtime_preserves_default_permissive_mode() {
-    let runtime = TlsServerRuntime::new(TlsConfig::default());
+#[tokio::test]
+async fn tls_runtime_preserves_default_permissive_mode() {
+    let context = rocketmq_runtime::RuntimeContext::from_current("tls-feature-contract");
+    let service = context.service_context("tls");
+    let runtime = TlsServerRuntime::initialize_with_service_context(TlsConfig::default(), &service)
+        .await
+        .expect("TLS runtime should initialize");
     assert_eq!(runtime.mode(), TlsMode::Permissive);
     runtime.shutdown();
 }

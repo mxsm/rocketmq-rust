@@ -227,7 +227,15 @@ mod tests {
         let local_address = server_stream.local_addr().unwrap();
         let remote_address = server_stream.peer_addr().unwrap();
         let response_table = Arc::new(parking_lot::Mutex::new(HashMap::<i32, ResponseFuture>::new()));
-        let inner = Arc::new(ChannelInner::new(Connection::new(server_stream), response_table));
+        let parent = rocketmq_runtime::RuntimeContext::from_current("connection-handler-context-test")
+            .service_context("connection-handler-service")
+            .task_group()
+            .clone();
+        let inner = Arc::new(ChannelInner::new(
+            Connection::new(server_stream),
+            response_table,
+            parent,
+        ));
         let channel = Channel::new(inner, local_address, remote_address);
         let context = Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let context_clone = context.clone();

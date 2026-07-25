@@ -18,8 +18,8 @@ use std::time::Duration;
 
 use rocketmq_model::common::broker::broker_role::BrokerRole;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_runtime::task::service_task::ServiceContext;
 use rocketmq_runtime::task::service_task::ServiceTask;
+use rocketmq_runtime::task::service_task::ServiceTaskContext;
 use rocketmq_runtime::task::ServiceManager;
 use tokio::sync::Mutex;
 use tracing::error;
@@ -187,7 +187,7 @@ impl ServiceTask for Inner {
         String::from("HAConnectionStateNotificationService")
     }
 
-    async fn run(&self, context: &ServiceContext) {
+    async fn run(&self, context: &ServiceTaskContext) {
         while !context.is_stopped() {
             context.wait_for_running(Duration::from_secs(1)).await;
             self.do_wait_connection_state().await;

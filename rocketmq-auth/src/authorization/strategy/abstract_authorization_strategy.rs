@@ -20,6 +20,8 @@
 
 use std::any::Any;
 use std::collections::HashSet;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use tracing::debug;
@@ -33,6 +35,7 @@ use crate::config::AuthConfig;
 
 /// Result type for authorization strategy operations.
 pub type StrategyResult<T> = Result<T, AuthorizationError>;
+pub type AuthorizationFuture<'a> = Pin<Box<dyn Future<Output = StrategyResult<()>> + 'a>>;
 
 /// Trait defining the core authorization strategy behavior.
 ///
@@ -57,7 +60,7 @@ pub trait AuthorizationStrategy: Send + Sync {
     /// let context = DefaultAuthorizationContext::of(subject, resource, action, source_ip);
     /// strategy.evaluate(&context)?;
     /// ```
-    fn evaluate(&self, context: &DefaultAuthorizationContext) -> StrategyResult<()>;
+    fn evaluate<'a>(&'a self, context: &'a DefaultAuthorizationContext) -> AuthorizationFuture<'a>;
 }
 
 /// Abstract base implementation for authorization strategies.

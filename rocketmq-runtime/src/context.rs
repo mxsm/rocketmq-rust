@@ -16,84 +16,92 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::blocking::BlockingExecutor;
+use crate::blocking::BlockingLane;
+use crate::blocking::BlockingLanePolicies;
 use crate::blocking::BlockingPoolPolicy;
 use crate::diagnostics::RuntimeDiagnostics;
 use crate::diagnostics::RuntimeDiagnosticsSnapshot;
 use crate::error::RuntimeError;
 use crate::error::RuntimeResult;
 use crate::handle::RuntimeHandle;
-use crate::service_context::ServiceContext;
+use crate::service_context::ChildServiceContext;
+use crate::service_context::RootServiceContext;
+use crate::service_context::ScopeId;
 use crate::shutdown_deadline::ShutdownDeadline;
 use crate::shutdown_report::ShutdownReport;
 use crate::task_group::TaskGroup;
 
+/// Test and migration harness for borrowing an already-running Tokio runtime.
+///
+/// Production composition roots must use [`crate::RuntimeOwner`]. Production
+/// libraries must receive [`ChildServiceContext`] instead of constructing this
+/// harness or discovering the current Tokio runtime.
+#[doc(hidden)]
 #[derive(Debug, Clone)]
 pub struct RuntimeContext {
-    runtime: RuntimeHandle,
-    root_group: TaskGroup,
-    blocking: BlockingExecutor,
-    diagnostics: RuntimeDiagnostics,
+    root: Arc<RootServiceContext>,
 }
 
 impl RuntimeContext {
+    #[doc(hidden)]
     pub fn new(runtime: RuntimeHandle, name: impl Into<Arc<str>>) -> RuntimeResult<Self> {
-        Self::new_with_blocking_policy(runtime, name, BlockingPoolPolicy::default())
+        Self::new_with_blocking_lanes(runtime, name, BlockingLanePolicies::default())
     }
 
+    #[doc(hidden)]
     pub fn new_with_blocking_policy(
         runtime: RuntimeHandle,
         name: impl Into<Arc<str>>,
         blocking_policy: BlockingPoolPolicy,
     ) -> RuntimeResult<Self> {
-        let root_group = TaskGroup::root(name, runtime.clone());
-        let blocking = BlockingExecutor::new(blocking_policy, root_group.child("runtime.blocking-reaper"))?;
-        let diagnostics = RuntimeDiagnostics::new(runtime.clone());
-        Ok(Self {
-            runtime,
-            root_group,
-            blocking,
-            diagnostics,
-        })
+        Self::new_with_blocking_lanes(runtime, name, BlockingLanePolicies::uniform(blocking_policy))
     }
 
+    pub(crate) fn new_with_blocking_lanes(
+        runtime: RuntimeHandle,
+        name: impl Into<Arc<str>>,
+        blocking_policies: BlockingLanePolicies,
+    ) -> RuntimeResult<Self> {
+        let name = name.into();
+        let root_group = TaskGroup::root(name.clone(), runtime.clone());
+        let diagnostics = RuntimeDiagnostics::new(runtime.clone());
+        let root = RootServiceContext::new(name, runtime, root_group, blocking_policies, diagnostics)?;
+        Ok(Self { root: Arc::new(root) })
+    }
+
+    #[doc(hidden)]
     pub fn try_from_current(name: impl Into<Arc<str>>) -> RuntimeResult<Self> {
         let handle = tokio::runtime::Handle::try_current().map_err(|_error| RuntimeError::NoCurrentRuntime)?;
         Self::new(RuntimeHandle::new(handle), name)
     }
 
+    #[doc(hidden)]
     pub fn from_current(name: impl Into<Arc<str>>) -> Self {
-        Self::try_from_current(name).expect("current Tokio runtime must be available")
+        Self::try_from_current(name).expect("current Tokio runtime must be available for test harness")
     }
 
     pub fn runtime(&self) -> &RuntimeHandle {
-        &self.runtime
+        self.root.runtime()
     }
 
     pub fn root_group(&self) -> &TaskGroup {
-        &self.root_group
+        self.root.task_group()
     }
 
-    pub fn blocking(&self) -> &BlockingExecutor {
-        &self.blocking
+    pub fn blocking(&self, lane: BlockingLane) -> &BlockingExecutor {
+        self.root.blocking(lane)
     }
 
     pub fn diagnostics(&self) -> &RuntimeDiagnostics {
-        &self.diagnostics
+        self.root.diagnostics()
     }
 
     pub fn diagnostics_snapshot(&self) -> RuntimeDiagnosticsSnapshot {
-        self.diagnostics.snapshot(&self.root_group, &self.blocking)
+        self.root.diagnostics_snapshot()
     }
 
-    pub fn service_context(&self, name: impl Into<Arc<str>>) -> ServiceContext {
-        let name = name.into();
-        ServiceContext::new(
-            name.clone(),
-            self.runtime.clone(),
-            self.root_group.child(name),
-            self.blocking.clone(),
-            self.diagnostics.clone(),
-        )
+    pub fn service_context(&self, scope: impl Into<ScopeId>) -> ChildServiceContext {
+        self.root.child(scope)
     }
 
     pub async fn shutdown_tasks(&self, timeout: Duration) -> ShutdownReport {
@@ -101,14 +109,18 @@ impl RuntimeContext {
     }
 
     pub async fn shutdown_tasks_until(&self, deadline: ShutdownDeadline) -> ShutdownReport {
-        let mut report = self.root_group.shutdown_until(deadline).await;
-        report.merge_blocking(self.blocking.snapshot());
+        let mut report = self.root.task_group().shutdown_until(deadline).await;
+        for snapshot in self.root.blocking_snapshots() {
+            report.merge_blocking(snapshot);
+        }
         report
     }
 
     pub fn shutdown_tasks_now(&self) -> ShutdownReport {
-        let mut report = self.root_group.shutdown_now();
-        report.merge_blocking(self.blocking.snapshot());
+        let mut report = self.root.task_group().shutdown_now();
+        for snapshot in self.root.blocking_snapshots() {
+            report.merge_blocking(snapshot);
+        }
         report
     }
 }

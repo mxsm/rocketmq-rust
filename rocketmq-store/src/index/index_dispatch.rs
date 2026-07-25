@@ -108,7 +108,15 @@ mod tests {
         });
         let checkpoint = Arc::new(StoreCheckpoint::new(temp_dir.path().join(checkpoint_name)).unwrap());
         let running_flags = Arc::new(RunningFlags::default());
-        (IndexService::new(config.clone(), checkpoint, running_flags), config)
+        (
+            IndexService::new(
+                crate::runtime::test_scope("index-dispatch-test"),
+                config.clone(),
+                checkpoint,
+                running_flags,
+            ),
+            config,
+        )
     }
 
     fn indexable_request() -> DispatchRequest {

@@ -16,6 +16,7 @@
 
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -25,6 +26,9 @@ use rocketmq_model::common::broker::broker_role::BrokerRole;
 use rocketmq_model::common::config::TopicConfig;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_model::common::message::MessageTrait;
+use rocketmq_runtime::ChildServiceContext;
+use rocketmq_runtime::RuntimeConfig;
+use rocketmq_runtime::RuntimeOwner;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::config::flush_disk_type::FlushDiskType;
@@ -32,6 +36,17 @@ use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use rocketmq_store::config::store_runtime_config::StoreRuntimeConfig;
 use rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore;
 use tempfile::TempDir;
+
+fn test_service_context() -> ChildServiceContext {
+    static OWNER: OnceLock<RuntimeOwner> = OnceLock::new();
+    OWNER
+        .get_or_init(|| {
+            RuntimeOwner::new(RuntimeConfig::server_default("ha-semantics-tests"))
+                .expect("HA semantics test runtime should start")
+        })
+        .root_context()
+        .child("ha-semantics-store")
+}
 
 fn new_test_store(message_store_config: MessageStoreConfig) -> LocalFileMessageStore {
     new_test_store_with_broker_config(message_store_config, StoreRuntimeConfig::default())
@@ -50,6 +65,7 @@ fn new_test_store_with_broker_config(
         topic_table,
         None,
         false,
+        test_service_context(),
     );
     store
         .wire_owned_root_dependencies()

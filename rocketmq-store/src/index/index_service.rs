@@ -63,6 +63,7 @@ use crate::base::store_checkpoint::StoreCheckpoint;
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::index::index_file::IndexFile;
 use crate::index::query_offset_result::QueryOffsetResult;
+use crate::runtime::StoreRuntimeScope;
 use crate::store::running_flags::RunningFlags;
 use crate::store_path_config_helper::get_store_path_index;
 
@@ -73,6 +74,7 @@ pub struct IndexService {
 
 #[derive(Clone)]
 pub struct IndexServiceAdapter {
+    runtime_scope: StoreRuntimeScope,
     hash_slot_num: u32,
     index_num: u32,
     store_path: String,
@@ -84,12 +86,14 @@ pub struct IndexServiceAdapter {
 
 impl IndexService {
     pub fn new(
+        runtime_scope: StoreRuntimeScope,
         message_store_config: Arc<MessageStoreConfig>,
         store_checkpoint: Arc<StoreCheckpoint>,
         running_flags: Arc<RunningFlags>,
     ) -> Self {
         Self {
             root: IndexServiceRoot::new(IndexServiceAdapter::new(
+                runtime_scope,
                 message_store_config,
                 store_checkpoint,
                 running_flags,
@@ -114,11 +118,13 @@ impl DerefMut for IndexService {
 
 impl IndexServiceAdapter {
     fn new(
+        runtime_scope: StoreRuntimeScope,
         message_store_config: Arc<MessageStoreConfig>,
         store_checkpoint: Arc<StoreCheckpoint>,
         running_flags: Arc<RunningFlags>,
     ) -> Self {
         Self {
+            runtime_scope,
             hash_slot_num: message_store_config.max_hash_slot_num,
             index_num: message_store_config.max_index_num,
             store_path: get_store_path_index(message_store_config.store_path_root_dir.as_str()),
@@ -475,9 +481,11 @@ impl IndexServiceAdapter {
         if let Some(previous_index_file) = seed.previous_full {
             let index_service = self.clone();
             let fallback_index_file = previous_index_file.clone();
-            if let Err(error) = crate::runtime::spawn_detached_io("index-file-flush", move || {
-                index_service.flush(Some(previous_index_file));
-            }) {
+            if let Err(error) =
+                crate::runtime::spawn_background_io(&self.runtime_scope, "index-file-flush", move || {
+                    index_service.flush(Some(previous_index_file));
+                })
+            {
                 warn!("failed to spawn index file flush task, flushing inline: {error}");
                 self.flush(Some(fallback_index_file));
             }
@@ -566,7 +574,12 @@ mod tests {
         let store_checkpoint = Arc::new(StoreCheckpoint::new(&temp_file).unwrap());
         let running_flags = Arc::new(RunningFlags::default());
 
-        IndexService::new(message_store_config, store_checkpoint, running_flags)
+        IndexService::new(
+            crate::runtime::test_scope("index-service-test"),
+            message_store_config,
+            store_checkpoint,
+            running_flags,
+        )
     }
 
     #[test]
@@ -632,7 +645,12 @@ mod tests {
         let store_checkpoint = Arc::new(StoreCheckpoint::new(&temp_file).unwrap());
         let running_flags = Arc::new(RunningFlags::default());
 
-        let index_service = IndexService::new(message_store_config, store_checkpoint, running_flags);
+        let index_service = IndexService::new(
+            crate::runtime::test_scope("index-tags-test"),
+            message_store_config,
+            store_checkpoint,
+            running_flags,
+        );
 
         // Create dispatch request with tags in properties_map
         let mut properties = HashMap::new();
@@ -837,7 +855,12 @@ mod tests {
         let store_checkpoint = Arc::new(StoreCheckpoint::new(&temp_file).unwrap());
         let running_flags = Arc::new(RunningFlags::default());
 
-        let index_service = IndexService::new(message_store_config, store_checkpoint, running_flags);
+        let index_service = IndexService::new(
+            crate::runtime::test_scope("index-query-type-test"),
+            message_store_config,
+            store_checkpoint,
+            running_flags,
+        );
 
         // Test default query (no type)
         let result1 = index_service.query_offset("TestTopic", "key1", 10, 0, i64::MAX);
@@ -869,7 +892,12 @@ mod tests {
         let store_checkpoint = Arc::new(StoreCheckpoint::new(&temp_file).unwrap());
         let running_flags = Arc::new(RunningFlags::default());
 
-        let index_service = IndexService::new(message_store_config, store_checkpoint, running_flags);
+        let index_service = IndexService::new(
+            crate::runtime::test_scope("index-negative-max-test"),
+            message_store_config,
+            store_checkpoint,
+            running_flags,
+        );
 
         let result = index_service.query_offset("TestTopic", "key1", -1, 0, i64::MAX);
 

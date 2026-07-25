@@ -68,6 +68,7 @@ pub(crate) mod test_support {
             topic_table,
             None,
             false,
+            crate::runtime::test_service_context("ha-message-store-test"),
         );
         store
             .wire_owned_root_dependencies()

@@ -25,22 +25,17 @@ pub mod stateful_authorization_strategy;
 pub mod stateless_authorization_strategy;
 
 use crate::authorization::context::default_authorization_context::DefaultAuthorizationContext;
-use crate::authorization::provider::AuthorizationError;
-use crate::runtime_bridge::block_on_sync_bridge;
 
 pub use abstract_authorization_strategy::AbstractAuthorizationStrategy;
+pub use abstract_authorization_strategy::AuthorizationFuture;
 pub use abstract_authorization_strategy::AuthorizationStrategy;
 pub use abstract_authorization_strategy::StrategyResult;
 pub use stateful_authorization_strategy::StatefulAuthorizationStrategy;
 pub use stateless_authorization_strategy::StatelessAuthorizationStrategy;
 
-pub(super) fn block_on_base_authorization(
+pub(super) async fn evaluate_base_authorization(
     base: &AbstractAuthorizationStrategy,
     context: &DefaultAuthorizationContext,
 ) -> StrategyResult<()> {
-    block_on_sync_bridge(
-        || base.do_evaluate(context),
-        |error| AuthorizationError::ConfigurationError(format!("failed to create authorization runtime: {error}")),
-        || AuthorizationError::ProviderRuntimeFailed("authorization provider thread panicked".to_string()),
-    )
+    base.do_evaluate(context).await
 }

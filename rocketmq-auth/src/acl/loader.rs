@@ -22,6 +22,7 @@ use std::path::PathBuf;
 use cheetah_string::CheetahString;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
+use rocketmq_runtime::BlockingExecutor;
 use tokio::fs;
 
 use crate::acl::validator::validate_acl_config;
@@ -46,21 +47,21 @@ pub struct FileAclConfigStore {
 pub struct AclConfigFingerprint(u64);
 
 impl FileAclConfigLoader {
-    pub fn new(root: impl Into<PathBuf>) -> Self {
+    pub fn new(root: impl Into<PathBuf>, blocking: BlockingExecutor) -> Self {
         Self {
             roots: vec![root.into()],
-            blocking: AuthBlockingExecutor::default(),
+            blocking: AuthBlockingExecutor::new(blocking),
         }
     }
 
-    pub fn from_roots<I, P>(roots: I) -> Self
+    pub fn from_roots<I, P>(roots: I, blocking: BlockingExecutor) -> Self
     where
         I: IntoIterator<Item = P>,
         P: Into<PathBuf>,
     {
         Self {
             roots: roots.into_iter().map(Into::into).collect(),
-            blocking: AuthBlockingExecutor::default(),
+            blocking: AuthBlockingExecutor::new(blocking),
         }
     }
 
@@ -319,9 +320,17 @@ mod tests {
     use std::fs;
 
     use cheetah_string::CheetahString;
+    use rocketmq_runtime::RuntimeContext;
     use tempfile::TempDir;
 
     use super::*;
+
+    fn metadata_blocking() -> BlockingExecutor {
+        RuntimeContext::from_current("auth-acl-loader-test")
+            .service_context("auth-acl-loader")
+            .metadata_io()
+            .clone()
+    }
 
     #[tokio::test]
     async fn discovers_yaml_files_recursively_and_skips_tools_file() {
@@ -334,7 +343,10 @@ mod tests {
         fs::write(nested.join("b.yaml"), "").unwrap();
         fs::write(nested.join("ignored.txt"), "").unwrap();
 
-        let files = FileAclConfigLoader::new(root).discover_files().await.unwrap();
+        let files = FileAclConfigLoader::new(root, metadata_blocking())
+            .discover_files()
+            .await
+            .unwrap();
 
         assert_eq!(files.len(), 2);
         assert!(files.iter().any(|path| path.ends_with("a.yml")));
@@ -373,7 +385,10 @@ accounts:
         )
         .unwrap();
 
-        let config = FileAclConfigLoader::from_roots([second, first]).load().await.unwrap();
+        let config = FileAclConfigLoader::from_roots([second, first], metadata_blocking())
+            .load()
+            .await
+            .unwrap();
 
         let white_addrs = config.global_white_addrs().unwrap();
         assert_eq!(
@@ -394,7 +409,10 @@ accounts:
         let file = temp.path().join("plain_acl.yml");
         fs::write(&file, " \n\t").unwrap();
 
-        let config = FileAclConfigLoader::new(file).load().await.unwrap();
+        let config = FileAclConfigLoader::new(file, metadata_blocking())
+            .load()
+            .await
+            .unwrap();
 
         assert!(config.global_white_addrs().is_none());
         assert!(config.plain_access_configs().is_none());
@@ -414,7 +432,7 @@ accounts:
         )
         .unwrap();
 
-        let loader = FileAclConfigLoader::new(&file);
+        let loader = FileAclConfigLoader::new(&file, metadata_blocking());
         let (_, first_fingerprint) = loader.load_with_fingerprint().await.unwrap();
         let (_, same_fingerprint) = loader.load_with_fingerprint().await.unwrap();
         assert_eq!(first_fingerprint, same_fingerprint);
@@ -446,7 +464,10 @@ accounts:
         )
         .unwrap();
 
-        let error = FileAclConfigLoader::new(file).load().await.unwrap_err();
+        let error = FileAclConfigLoader::new(file, metadata_blocking())
+            .load()
+            .await
+            .unwrap_err();
 
         assert!(error.to_string().contains("secretKey must not be blank"));
         assert!(!error.to_string().contains("secret="));

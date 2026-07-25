@@ -55,6 +55,7 @@ criterion = { version = "0.8.2", features = ["html_reports"] }
 loom = "0.7.2"
 tempfile = "3.27.0"
 tokio = { workspace = true, features = ["test-util"] }
+trybuild = "1.0.116"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = ["Win32_Storage_FileSystem"] }
@@ -62,6 +63,10 @@ windows-sys = { workspace = true, features = ["Win32_Storage_FileSystem"] }
 [[test]]
 name = "task_group_concurrency_model"
 path = "tests/task_group_concurrency_model.rs"
+
+[[test]]
+name = "service_context_scope_compile_fail"
+path = "tests/service_context_scope_compile_fail.rs"
 
 [[bench]]
 name    = "task_group_lifecycle_bench"

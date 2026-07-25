@@ -20,6 +20,7 @@
 
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 use bytes::Bytes;
 use cheetah_string::CheetahString;
@@ -30,6 +31,9 @@ use rocketmq_model::common::message::MessageConst;
 use rocketmq_model::common::message::MessageTrait;
 use rocketmq_protocol::common::message::message_decoder::message_properties_to_string;
 use rocketmq_runtime::common::time_utils::current_millis;
+use rocketmq_runtime::ChildServiceContext;
+use rocketmq_runtime::RuntimeConfig;
+use rocketmq_runtime::RuntimeOwner;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use rocketmq_store::config::store_runtime_config::StoreRuntimeConfig;
@@ -39,6 +43,17 @@ use rocketmq_store::timer::timer_checkpoint::TimerCheckpoint;
 use rocketmq_store::timer::timer_message_store::TIMER_OUT_MS;
 use rocketmq_store::timer::timer_message_store::TIMER_TOPIC;
 use tempfile::TempDir;
+
+fn test_service_context() -> ChildServiceContext {
+    static OWNER: OnceLock<RuntimeOwner> = OnceLock::new();
+    OWNER
+        .get_or_init(|| {
+            RuntimeOwner::new(RuntimeConfig::server_default("timer-recovery-tests"))
+                .expect("timer recovery test runtime should start")
+        })
+        .root_context()
+        .child("timer-recovery-store")
+}
 
 fn timer_store_config(temp_dir: &TempDir) -> MessageStoreConfig {
     MessageStoreConfig {
@@ -68,6 +83,7 @@ fn new_test_store(temp_dir: &TempDir) -> LocalFileMessageStore {
         topic_config_table,
         None,
         false,
+        test_service_context(),
     );
     store
         .wire_owned_root_dependencies()

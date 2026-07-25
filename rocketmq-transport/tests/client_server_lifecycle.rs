@@ -594,7 +594,9 @@ async fn canonical_listener_reports_plaintext_for_permissive_tls_connections() {
     let transport = TransportListener::new(
         listener,
         service.task_group().clone(),
-        TlsServerRuntime::new_with_service_context(Default::default(), &service),
+        TlsServerRuntime::initialize_with_service_context(Default::default(), &service)
+            .await
+            .unwrap(),
         Arc::new(AdmissionController::new(AdmissionLimits::default())),
         Duration::from_secs(1),
     )
@@ -667,7 +669,9 @@ async fn large_decoded_headers_count_toward_admission_in_both_server_paths() {
     let transport = TransportListener::new(
         listener,
         service.task_group().clone(),
-        TlsServerRuntime::new_with_service_context(Default::default(), &service),
+        TlsServerRuntime::initialize_with_service_context(Default::default(), &service)
+            .await
+            .unwrap(),
         admission,
         Duration::from_secs(1),
     );
@@ -710,7 +714,9 @@ async fn canonical_control_response_inherits_request_class_for_writer_reserve() 
     let transport = TransportListener::new(
         listener,
         service.task_group().clone(),
-        TlsServerRuntime::new_with_service_context(Default::default(), &service),
+        TlsServerRuntime::initialize_with_service_context(Default::default(), &service)
+            .await
+            .unwrap(),
         admission,
         Duration::from_secs(1),
     );

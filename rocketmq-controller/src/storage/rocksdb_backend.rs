@@ -17,10 +17,6 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use rocketmq_runtime::BlockingExecutor;
-use rocketmq_runtime::BlockingPoolPolicy;
-use rocketmq_runtime::RuntimeError;
-use rocketmq_runtime::RuntimeHandle;
-use rocketmq_runtime::TaskGroup;
 use rocksdb::Options;
 use rocksdb::WriteBatch;
 use rocksdb::WriteOptions;
@@ -50,15 +46,7 @@ pub struct RocksDBBackend {
 
 impl RocksDBBackend {
     /// Create a new RocksDB backend
-    pub async fn new(path: PathBuf) -> Result<Self> {
-        Self::new_with_optional_parent_task_group(path, None).await
-    }
-
-    pub async fn new_with_parent_task_group(path: PathBuf, parent_task_group: TaskGroup) -> Result<Self> {
-        Self::new_with_optional_parent_task_group(path, Some(parent_task_group)).await
-    }
-
-    async fn new_with_optional_parent_task_group(path: PathBuf, parent_task_group: Option<TaskGroup>) -> Result<Self> {
+    pub async fn new(path: PathBuf, blocking: BlockingExecutor) -> Result<Self> {
         info!("Opening RocksDB at {:?}", path);
 
         // Create directory if it doesn't exist
@@ -84,8 +72,6 @@ impl RocksDBBackend {
         opts.set_write_buffer_size(64 * 1024 * 1024); // 64MB
         opts.set_max_write_buffer_number(3);
         opts.set_min_write_buffer_number_to_merge(2);
-
-        let blocking = Self::new_blocking_executor(parent_task_group)?;
 
         // Open the database
         let db = blocking
@@ -119,26 +105,6 @@ impl RocksDBBackend {
             .spawn_io(name, operation)
             .await
             .map_err(map_blocking_error)?
-    }
-
-    fn new_blocking_executor(parent_task_group: Option<TaskGroup>) -> Result<BlockingExecutor> {
-        let group = if let Some(parent_task_group) = parent_task_group {
-            parent_task_group.child("controller.rocksdb")
-        } else {
-            let runtime = RuntimeHandle::new(
-                tokio::runtime::Handle::try_current()
-                    .map_err(|_error| map_blocking_error(RuntimeError::NoCurrentRuntime))?,
-            );
-            TaskGroup::root("controller.rocksdb", runtime)
-        };
-        BlockingExecutor::new(
-            BlockingPoolPolicy {
-                name: "controller.rocksdb".to_string(),
-                ..BlockingPoolPolicy::default()
-            },
-            group.child("controller.rocksdb.blocking-reaper"),
-        )
-        .map_err(map_blocking_error)
     }
 
     fn durable_write_options() -> WriteOptions {
@@ -387,53 +353,33 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn blocking_executor_without_tokio_runtime_returns_error() {
-        let error = RocksDBBackend::new_blocking_executor(None)
-            .expect_err("RocksDB blocking executor should require an ambient Tokio runtime");
-
-        match error {
-            ControllerError::StorageSource { message, source } => {
-                assert_eq!(message, "RocksDB blocking task failed");
-                assert!(
-                    source
-                        .downcast_ref::<RuntimeError>()
-                        .is_some_and(|error| matches!(error, RuntimeError::NoCurrentRuntime)),
-                    "expected missing Tokio runtime source, got: {source}"
-                );
-            }
-            error => panic!("expected storage error, got: {error}"),
-        }
-    }
-
     #[tokio::test]
-    async fn new_with_parent_task_group_parents_blocking_executor() {
+    async fn new_uses_injected_storage_io_lane() {
         let context = RuntimeContext::from_current("controller-rocksdb-context-test");
         let service = context.service_context("controller-service");
         let temp_dir = TempDir::new().unwrap();
         let db_path = temp_dir.path().join("parented_db");
 
-        let backend = RocksDBBackend::new_with_parent_task_group(db_path, service.task_group().clone())
+        let backend = RocksDBBackend::new(db_path, service.storage_io().clone())
             .await
             .unwrap();
+        assert_eq!(backend.blocking.snapshot().name, service.storage_io().snapshot().name);
         backend.put("parented_key", b"parented_value").await.unwrap();
         drop(backend);
 
-        let report = service.task_group().shutdown(std::time::Duration::from_secs(1)).await;
-        assert!(
-            report.children.iter().any(|child| child.name == "controller.rocksdb"),
-            "{}",
-            report.to_json()
-        );
+        let report = context.shutdown_tasks(std::time::Duration::from_secs(1)).await;
         assert!(report.is_healthy(), "{}", report.to_json());
     }
 
     #[tokio::test]
     async fn test_rocksdb_backend() {
+        let context = RuntimeContext::from_current("controller-rocksdb-test");
         let temp_dir = TempDir::new().unwrap();
         let db_path = temp_dir.path().join("test_db");
 
-        let backend = RocksDBBackend::new(db_path).await.unwrap();
+        let backend = RocksDBBackend::new(db_path, context.service_context("rocksdb").storage_io().clone())
+            .await
+            .unwrap();
 
         // Test put and get
         backend.put("test_key", b"test_value").await.unwrap();

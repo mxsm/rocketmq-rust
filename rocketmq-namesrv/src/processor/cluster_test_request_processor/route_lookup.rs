@@ -29,7 +29,7 @@ use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::header::client_request_header::GetRouteInfoRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
-use rocketmq_runtime::ServiceContext;
+use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_transport::admission::AdmissionController;
@@ -107,7 +107,7 @@ pub(crate) struct TransportClusterTestRouteLookup {
 }
 
 impl TransportClusterTestRouteLookup {
-    pub(crate) fn new(product_env_name: &str, service_context: ServiceContext) -> Self {
+    pub(crate) fn new(product_env_name: &str, service_context: ChildServiceContext) -> Self {
         Self::with_resolver(
             service_context,
             Arc::new(ProductEnvironmentEndpointResolver::new(product_env_name)),
@@ -116,7 +116,7 @@ impl TransportClusterTestRouteLookup {
     }
 
     fn with_resolver(
-        service_context: ServiceContext,
+        service_context: ChildServiceContext,
         resolver: Arc<dyn ClusterTestEndpointResolver>,
         request_timeout: Duration,
     ) -> Self {

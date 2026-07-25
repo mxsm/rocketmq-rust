@@ -31,6 +31,7 @@ use crate::task_group::TaskKind;
 pub struct BlockingPoolPolicy {
     pub name: String,
     pub max_concurrency: usize,
+    pub max_queue_depth: usize,
     pub queue_timeout: Duration,
     pub task_timeout: Duration,
     pub warn_after: Duration,
@@ -43,6 +44,11 @@ impl BlockingPoolPolicy {
                 "blocking max_concurrency must be greater than zero".to_string(),
             ));
         }
+        if self.max_queue_depth == 0 {
+            return Err(RuntimeError::InvalidConfig(
+                "blocking max_queue_depth must be greater than zero".to_string(),
+            ));
+        }
         Ok(())
     }
 }
@@ -52,9 +58,76 @@ impl Default for BlockingPoolPolicy {
         Self {
             name: "rocketmq-blocking".to_string(),
             max_concurrency: 64,
+            max_queue_depth: 256,
             queue_timeout: Duration::from_secs(5),
             task_timeout: Duration::from_secs(30),
             warn_after: Duration::from_secs(1),
+        }
+    }
+}
+
+/// Capacity-isolated blocking work owned by a service root.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum BlockingLane {
+    StorageIo,
+    MetadataIo,
+    CpuCrypto,
+}
+
+#[derive(Debug, Clone)]
+pub struct BlockingLanePolicies {
+    pub storage_io: BlockingPoolPolicy,
+    pub metadata_io: BlockingPoolPolicy,
+    pub cpu_crypto: BlockingPoolPolicy,
+}
+
+impl BlockingLanePolicies {
+    pub fn validate(&self) -> RuntimeResult<()> {
+        self.storage_io.validate()?;
+        self.metadata_io.validate()?;
+        self.cpu_crypto.validate()
+    }
+
+    pub fn uniform(policy: BlockingPoolPolicy) -> Self {
+        let mut storage_io = policy.clone();
+        storage_io.name = format!("{}.storage-io", policy.name);
+        let mut metadata_io = policy.clone();
+        metadata_io.name = format!("{}.metadata-io", policy.name);
+        let mut cpu_crypto = policy;
+        cpu_crypto.name = format!("{}.cpu-crypto", cpu_crypto.name);
+        Self {
+            storage_io,
+            metadata_io,
+            cpu_crypto,
+        }
+    }
+}
+
+impl Default for BlockingLanePolicies {
+    fn default() -> Self {
+        let parallelism = std::thread::available_parallelism()
+            .map(|value| value.get())
+            .unwrap_or(4);
+        Self {
+            storage_io: BlockingPoolPolicy {
+                name: "rocketmq-blocking.storage-io".to_string(),
+                max_concurrency: parallelism.saturating_mul(4).max(4),
+                max_queue_depth: parallelism.saturating_mul(16).max(16),
+                ..BlockingPoolPolicy::default()
+            },
+            metadata_io: BlockingPoolPolicy {
+                name: "rocketmq-blocking.metadata-io".to_string(),
+                max_concurrency: parallelism.saturating_mul(2).max(2),
+                max_queue_depth: parallelism.saturating_mul(8).max(8),
+                ..BlockingPoolPolicy::default()
+            },
+            cpu_crypto: BlockingPoolPolicy {
+                name: "rocketmq-blocking.cpu-crypto".to_string(),
+                max_concurrency: parallelism.max(2),
+                max_queue_depth: parallelism.saturating_mul(4).max(8),
+                ..BlockingPoolPolicy::default()
+            },
         }
     }
 }
@@ -88,6 +161,7 @@ pub enum BlockingTaskState {
 pub struct BlockingExecutor {
     policy: Arc<BlockingPoolPolicy>,
     permits: Arc<Semaphore>,
+    queue_permits: Arc<Semaphore>,
     tasks: Arc<DashMap<BlockingTaskId, BlockingTaskMeta>>,
     reaper_group: TaskGroup,
     next_task_id: Arc<AtomicU64>,
@@ -107,6 +181,7 @@ struct BlockingTaskMeta {
 pub struct BlockingExecutorSnapshot {
     pub name: String,
     pub max_concurrency: usize,
+    pub max_queue_depth: usize,
     pub queued: usize,
     pub running: usize,
     pub timed_out_still_running: usize,
@@ -129,6 +204,7 @@ impl BlockingExecutor {
         policy.validate()?;
         Ok(Self {
             permits: Arc::new(Semaphore::new(policy.max_concurrency)),
+            queue_permits: Arc::new(Semaphore::new(policy.max_queue_depth)),
             policy: Arc::new(policy),
             tasks: Arc::new(DashMap::new()),
             reaper_group,
@@ -158,6 +234,14 @@ impl BlockingExecutor {
             return Err(RuntimeError::UnsupportedBlockingKind { name, kind });
         }
 
+        let queue_permit =
+            self.queue_permits
+                .clone()
+                .try_acquire_owned()
+                .map_err(|_error| RuntimeError::BlockingQueueFull {
+                    name: name.clone(),
+                    max_queue_depth: self.policy.max_queue_depth,
+                })?;
         let task_id = BlockingTaskId(self.next_task_id.fetch_add(1, Ordering::Relaxed));
         self.tasks.insert(
             task_id,
@@ -182,6 +266,7 @@ impl BlockingExecutor {
                 return Err(RuntimeError::BlockingQueueTimeout { name });
             }
         };
+        drop(queue_permit);
 
         if let Some(mut meta) = self.tasks.get_mut(&task_id) {
             meta.state = BlockingTaskState::Running;
@@ -255,6 +340,7 @@ impl BlockingExecutor {
         BlockingExecutorSnapshot {
             name: self.policy.name.clone(),
             max_concurrency: self.policy.max_concurrency,
+            max_queue_depth: self.policy.max_queue_depth,
             queued,
             running,
             timed_out_still_running,

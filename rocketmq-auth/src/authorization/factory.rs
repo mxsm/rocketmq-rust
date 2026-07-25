@@ -186,10 +186,10 @@ impl AuthorizationFactory {
 }
 
 impl AuthorizationStrategy for Box<dyn AuthorizationStrategy> {
-    fn evaluate(
-        &self,
-        context: &crate::authorization::context::default_authorization_context::DefaultAuthorizationContext,
-    ) -> crate::authorization::strategy::StrategyResult<()> {
+    fn evaluate<'a>(
+        &'a self,
+        context: &'a crate::authorization::context::default_authorization_context::DefaultAuthorizationContext,
+    ) -> crate::authorization::strategy::AuthorizationFuture<'a> {
         self.as_ref().evaluate(context)
     }
 }

@@ -24,7 +24,8 @@ use rocketmq_auth::authorization::strategy::stateless_authorization_strategy::St
 use rocketmq_auth::config::AuthConfig;
 use rocketmq_security_api::Action;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create configuration
     let config = AuthConfig::default();
 
@@ -54,14 +55,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     contexts.push(context2);
 
     // Evaluate all contexts
-    match evaluator.evaluate(&contexts) {
+    match evaluator.evaluate(&contexts).await {
         Ok(()) => println!("✓ Authorization successful for all contexts"),
         Err(e) => println!("✗ Authorization failed: {}", e),
     }
 
     // Evaluate empty contexts (should succeed immediately)
     let empty_contexts: Vec<DefaultAuthorizationContext> = vec![];
-    assert!(evaluator.evaluate(&empty_contexts).is_ok());
+    assert!(evaluator.evaluate(&empty_contexts).await.is_ok());
     println!("✓ Empty contexts evaluation succeeded (fast path)");
 
     Ok(())

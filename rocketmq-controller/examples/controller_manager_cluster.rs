@@ -96,7 +96,8 @@ async fn start_cluster() -> Result<Vec<Arc<ControllerManager>>> {
         let config = create_cluster_config(node_id, port, peers.clone())?;
 
         // Create manager
-        let manager = ControllerManager::new(config).await?;
+        let runtime = rocketmq_runtime::RuntimeContext::from_current(format!("controller-manager-cluster-{node_id}"));
+        let manager = ControllerManager::new(config, runtime.service_context("controller")).await?;
 
         // Share the manager through a read-only ownership handle.
         let manager = Arc::new(manager);

@@ -23,6 +23,8 @@ use criterion::criterion_group;
 use criterion::criterion_main;
 use criterion::Criterion;
 use criterion::Throughput;
+use rocketmq_runtime::RuntimeConfig;
+use rocketmq_runtime::RuntimeOwner;
 use rocketmq_store::bench_support::run_ha_bytes_vectored_benchmark_report;
 #[cfg(target_os = "linux")]
 use rocketmq_store::bench_support::run_ha_vectored_sendfile_benchmark_report;
@@ -35,24 +37,34 @@ const BODY_SIZE: usize = 64 * 1024;
 const SENDFILE_BODY_SIZE: usize = 4 * 1024 * 1024;
 
 fn run_report(body_size: usize) -> HaTransferBenchmarkReport {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("HA transfer benchmark runtime should start");
-
-    runtime.block_on(run_ha_bytes_vectored_benchmark_report(body_size))
+    let owner = RuntimeOwner::new(RuntimeConfig {
+        worker_threads: 1,
+        thread_name: "rocketmq-ha-transfer-bench".to_string(),
+        ..RuntimeConfig::default()
+    })
+    .expect("HA transfer benchmark runtime should start");
+    let output = owner.block_on(run_ha_bytes_vectored_benchmark_report(body_size));
+    owner
+        .shutdown_runtime_blocking()
+        .expect("HA transfer benchmark runtime should stop");
+    output
 }
 
 #[cfg(target_os = "linux")]
 fn run_sendfile_report(body_size: usize) -> HaSendfileBenchmarkReport {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("HA sendfile benchmark runtime should start");
-
-    runtime
+    let owner = RuntimeOwner::new(RuntimeConfig {
+        worker_threads: 1,
+        thread_name: "rocketmq-ha-sendfile-bench".to_string(),
+        ..RuntimeConfig::default()
+    })
+    .expect("HA sendfile benchmark runtime should start");
+    let output = owner
         .block_on(run_ha_vectored_sendfile_benchmark_report(body_size))
-        .expect("HA sendfile benchmark report should run on Linux")
+        .expect("HA sendfile benchmark report should run on Linux");
+    owner
+        .shutdown_runtime_blocking()
+        .expect("HA sendfile benchmark runtime should stop");
+    output
 }
 
 fn workspace_root() -> PathBuf {

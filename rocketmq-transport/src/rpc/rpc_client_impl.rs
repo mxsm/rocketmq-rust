@@ -562,6 +562,10 @@ mod tests {
     use crate::runtime::config::client_config::TokioClientConfig;
     use rocketmq_protocol::protocol::header::get_min_offset_request_header::GetMinOffsetRequestHeader;
 
+    fn test_service_context(name: &'static str) -> rocketmq_runtime::ChildServiceContext {
+        rocketmq_runtime::RuntimeContext::from_current(name).service_context("rpc-client-service")
+    }
+
     #[test]
     fn test_error_formatting() {
         let err = RpcClientError::BrokerNotFound {
@@ -582,6 +586,7 @@ mod tests {
         let remoting_client = Arc::new(RocketmqDefaultClient::new(
             Arc::new(TokioClientConfig::default()),
             DefaultRemotingRequestProcessor,
+            test_service_context("rpc-client-error-test"),
         ));
         let rpc_client = RpcClientImpl::new(client_metadata, remoting_client);
         let request = RpcRequest::new(
@@ -610,6 +615,7 @@ mod tests {
         let remoting_client = Arc::new(RocketmqDefaultClient::new(
             Arc::new(TokioClientConfig::default()),
             DefaultRemotingRequestProcessor,
+            test_service_context("rpc-client-callback-test"),
         ));
         let rpc_client = RpcClientImpl::new(client_metadata, remoting_client.clone());
         let request = RpcRequest::new(

@@ -24,6 +24,7 @@ use criterion::criterion_main;
 use criterion::Criterion;
 use rocketmq_auth::bench_support::run_auth_acl_watcher_lifecycle_probe;
 use rocketmq_auth::bench_support::AuthAclWatcherLifecycleProbe;
+use rocketmq_runtime::RuntimeContext;
 
 fn run_lifecycle_probe() -> AuthAclWatcherLifecycleProbe {
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -34,9 +35,12 @@ fn run_lifecycle_probe() -> AuthAclWatcherLifecycleProbe {
         .build()
         .expect("auth ACL watcher benchmark runtime should start");
 
-    runtime
-        .block_on(run_auth_acl_watcher_lifecycle_probe())
-        .expect("auth ACL watcher lifecycle probe should run")
+    runtime.block_on(async {
+        let context = RuntimeContext::from_current("auth-acl-watcher-bench");
+        run_auth_acl_watcher_lifecycle_probe(context.service_context("auth-acl-watcher-probe"))
+            .await
+            .expect("auth ACL watcher lifecycle probe should run")
+    })
 }
 
 fn workspace_root() -> PathBuf {

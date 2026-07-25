@@ -24,17 +24,23 @@ use criterion::criterion_main;
 use criterion::Criterion;
 use rocketmq_controller::bench_support::run_controller_openraft_scan_lifecycle_probe;
 use rocketmq_controller::bench_support::ControllerOpenRaftScanLifecycleProbe;
+use rocketmq_runtime::RuntimeConfig;
+use rocketmq_runtime::RuntimeOwner;
 
 fn run_lifecycle_probe() -> ControllerOpenRaftScanLifecycleProbe {
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
-        .max_blocking_threads(4)
-        .thread_name("rocketmq-controller-openraft-scan-bench")
-        .enable_all()
-        .build()
-        .expect("controller OpenRaft scan benchmark runtime should start");
-
-    runtime.block_on(run_controller_openraft_scan_lifecycle_probe())
+    let owner = RuntimeOwner::new(RuntimeConfig {
+        worker_threads: 2,
+        max_blocking_threads: 4,
+        thread_name: "rocketmq-controller-openraft-scan-bench".to_string(),
+        ..RuntimeConfig::default()
+    })
+    .expect("controller OpenRaft scan benchmark runtime should start");
+    let context = owner.root_context().child("controller-openraft-scan-bench");
+    let output = owner.block_on(run_controller_openraft_scan_lifecycle_probe(context));
+    owner
+        .shutdown_runtime_blocking()
+        .expect("controller OpenRaft scan benchmark runtime should stop");
+    output
 }
 
 fn workspace_root() -> PathBuf {

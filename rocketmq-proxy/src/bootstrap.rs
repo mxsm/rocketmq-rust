@@ -12,20 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use futures::FutureExt;
+use rocketmq_runtime::ChildServiceContext;
+use rocketmq_runtime::ServiceLifecycle;
+use rocketmq_runtime::ShutdownReason;
 use std::future;
 use std::future::Future;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::time::Duration;
-
-use futures::FutureExt;
-use rocketmq_runtime::RuntimeConfig as ManagedRuntimeConfig;
-use rocketmq_runtime::RuntimeContext;
-use rocketmq_runtime::RuntimeOwner;
-use rocketmq_runtime::ServiceContext;
-use rocketmq_runtime::ServiceLifecycle;
-use rocketmq_runtime::ShutdownReason;
 
 use crate::auth::build_cluster_acl_signer;
 use crate::auth::ProxyAuthRuntime;
@@ -38,7 +33,6 @@ use crate::error::ProxyError;
 use crate::error::ProxyResult;
 use crate::grpc::server;
 use crate::grpc::ProxyGrpcService;
-use crate::local::local_components_from_config;
 use crate::local::local_components_from_config_with_service_context;
 use crate::local::LocalRemotingBackend;
 use crate::observability::ProxyHookChain;
@@ -136,7 +130,7 @@ pub struct ProxyRuntimeBuilder {
     hooks: Option<ProxyHookChain>,
     metrics: Option<ProxyMetrics>,
     remoting_backend: Option<Arc<dyn ProxyRemotingBackend>>,
-    service_context: Option<ServiceContext>,
+    service_context: Option<ChildServiceContext>,
 }
 
 impl ProxyRuntimeBuilder {
@@ -170,51 +164,23 @@ impl ProxyRuntimeBuilder {
         self
     }
 
-    pub fn with_service_context(mut self, service_context: ServiceContext) -> Self {
+    pub fn with_service_context(mut self, service_context: ChildServiceContext) -> Self {
         self.service_context = Some(service_context);
         self
     }
 
-    pub fn build(mut self) -> ProxyRuntime<DefaultMessagingProcessor> {
-        let needs_compatibility_runtime = self.service_manager.is_none()
-            && self.service_context.is_none()
-            && matches!(self.config.mode, ProxyMode::Cluster);
-        let mut owned_runtime_context = None;
-        let mut owned_runtime_owner = None;
-
-        if needs_compatibility_runtime {
-            match RuntimeContext::try_from_current("rocketmq-proxy.compat") {
-                Ok(runtime_context) => {
-                    self.service_context = Some(runtime_context.service_context("rocketmq-proxy-runtime"));
-                    owned_runtime_context = Some(runtime_context);
-                }
-                Err(current_runtime_error) => match RuntimeOwner::new(ManagedRuntimeConfig::proxy_default()) {
-                    Ok(runtime_owner) => {
-                        self.service_context = Some(runtime_owner.context().service_context("rocketmq-proxy-runtime"));
-                        owned_runtime_owner = Some(runtime_owner);
-                    }
-                    Err(runtime_owner_error) => {
-                        tracing::warn!(
-                            current_runtime_error = %current_runtime_error,
-                            runtime_owner_error = %runtime_owner_error,
-                            "failed to establish the compatibility runtime for the default Proxy Cluster adapter"
-                        );
-                    }
-                },
-            }
-        }
-
-        let mut runtime = self.build_inner();
-        runtime.owned_runtime_context = owned_runtime_context;
-        runtime.owned_runtime_owner = owned_runtime_owner;
-        runtime
+    pub fn build(self) -> ProxyResult<ProxyRuntime<DefaultMessagingProcessor>> {
+        let service_context = self.service_context.clone().ok_or_else(|| ProxyError::Transport {
+            message: "Proxy runtime requires an injected ChildServiceContext".to_string(),
+        })?;
+        Ok(self.build_inner(service_context))
     }
 
-    fn build_inner(self) -> ProxyRuntime<DefaultMessagingProcessor> {
+    fn build_inner(self, service_context: ChildServiceContext) -> ProxyRuntime<DefaultMessagingProcessor> {
         let local_mode_supported = true;
         let (service_manager, remoting_backend) = match self.service_manager {
             Some(service_manager) => (service_manager, self.remoting_backend),
-            None => default_service_manager_and_backend(&self.config, self.service_context.as_ref()),
+            None => default_service_manager_and_backend(&self.config, &service_context),
         };
         let auth_metadata_service = Some(service_manager.metadata_service());
         let session_registry = self.session_registry.unwrap_or_default();
@@ -229,7 +195,7 @@ impl ProxyRuntimeBuilder {
             self.hooks.unwrap_or_default(),
             self.metrics.unwrap_or_default(),
             remoting_backend,
-            self.service_context,
+            service_context,
         )
     }
 }
@@ -243,9 +209,7 @@ pub struct ProxyRuntime<P = DefaultMessagingProcessor> {
     auth_runtime: Option<ProxyAuthRuntime>,
     auth_metadata_service: Option<Arc<dyn MetadataService>>,
     remoting_backend: Option<Arc<dyn ProxyRemotingBackend>>,
-    service_context: Option<ServiceContext>,
-    owned_runtime_context: Option<RuntimeContext>,
-    owned_runtime_owner: Option<RuntimeOwner>,
+    service_context: ChildServiceContext,
 }
 
 impl ProxyRuntime<DefaultMessagingProcessor> {
@@ -262,8 +226,8 @@ impl ProxyRuntime<DefaultMessagingProcessor> {
         }
     }
 
-    pub fn new(config: ProxyConfig) -> Self {
-        Self::builder(config).build()
+    pub fn new(config: ProxyConfig, service_context: ChildServiceContext) -> ProxyResult<Self> {
+        Self::builder(config).with_service_context(service_context).build()
     }
 }
 
@@ -271,7 +235,12 @@ impl<P> ProxyRuntime<P>
 where
     P: MessagingProcessor + 'static,
 {
-    pub fn from_processor(config: ProxyConfig, processor: Arc<P>, session_registry: ClientSessionRegistry) -> Self {
+    pub fn from_processor_with_context(
+        config: ProxyConfig,
+        processor: Arc<P>,
+        session_registry: ClientSessionRegistry,
+        service_context: ChildServiceContext,
+    ) -> Self {
         Self::from_processor_with_local_mode_support(
             config,
             processor,
@@ -282,7 +251,7 @@ where
             ProxyHookChain::default(),
             ProxyMetrics::default(),
             None,
-            None,
+            service_context,
         )
     }
 
@@ -296,7 +265,7 @@ where
         hooks: ProxyHookChain,
         metrics: ProxyMetrics,
         remoting_backend: Option<Arc<dyn ProxyRemotingBackend>>,
-        service_context: Option<ServiceContext>,
+        service_context: ChildServiceContext,
     ) -> Self {
         #[cfg(feature = "observability")]
         crate::observability::init_observability_metrics(&config);
@@ -317,8 +286,6 @@ where
             auth_metadata_service,
             remoting_backend,
             service_context,
-            owned_runtime_context: None,
-            owned_runtime_owner: None,
         }
     }
 
@@ -375,10 +342,8 @@ where
             auth_metadata_service,
             remoting_backend,
             service_context,
-            owned_runtime_context,
-            owned_runtime_owner,
         } = self;
-        let result = async move {
+        async move {
             if matches!(config.mode, ProxyMode::Local) && !local_mode_supported {
                 return Err(crate::error::ProxyError::not_implemented(
                     "Local mode requires a broker-backed service manager and is not available in the default proxy \
@@ -389,8 +354,12 @@ where
             let auth_runtime = match auth_runtime {
                 Some(auth_runtime) => Some(auth_runtime),
                 None => {
-                    ProxyAuthRuntime::from_proxy_config_with_metadata_service(&config.auth, auth_metadata_service)
-                        .await?
+                    ProxyAuthRuntime::from_proxy_config_with_metadata_service(
+                        &config.auth,
+                        auth_metadata_service,
+                        &service_context.child("rocketmq-proxy.auth"),
+                    )
+                    .await?
                 }
             };
             let auth_runtime_for_shutdown = auth_runtime.clone();
@@ -399,22 +368,15 @@ where
                 .map(|lifecycle| LifecycleReadiness::new(lifecycle, if config.remoting.enabled { 2 } else { 1 }));
             if !config.remoting.enabled {
                 let grpc_ready = readiness;
-                let result = match service_context.as_ref().map(|context| context.task_group().clone()) {
-                    Some(parent_task_group) => server::serve_with_report_with_task_group_and_ready(
-                        config,
-                        grpc_service,
-                        shutdown,
-                        parent_task_group,
-                        move || publish_listener_ready(grpc_ready),
-                    )
-                    .await
-                    .and_then(require_healthy_grpc_shutdown),
-                    None => server::serve_with_ready(config, grpc_service, shutdown, move || {
-                        publish_listener_ready(grpc_ready)
-                    })
-                    .await
-                    .and_then(require_healthy_grpc_shutdown),
-                };
+                let result = server::serve_with_report_with_task_group_and_ready(
+                    config,
+                    grpc_service,
+                    shutdown,
+                    service_context.task_group().clone(),
+                    move || publish_listener_ready(grpc_ready),
+                )
+                .await
+                .and_then(require_healthy_grpc_shutdown);
                 let shutdown_result = match auth_runtime_for_shutdown {
                     Some(auth_runtime) => Some(auth_runtime.shutdown().await),
                     None => None,
@@ -436,56 +398,36 @@ where
             let remoting_shutdown = async move {
                 shared_shutdown.await;
             };
-            let grpc_parent_task_group = service_context.as_ref().map(|context| context.task_group().clone());
-            let remoting_service_context = service_context.map(|context| context.child("rocketmq-proxy.remoting"));
+            let grpc_parent_task_group = service_context.task_group().clone();
+            let remoting_service_context = service_context.child("rocketmq-proxy.remoting");
             let grpc_config = config.clone();
             let remoting_config = config;
             let grpc_ready = readiness.clone();
             let remoting_ready = readiness;
             let grpc_future = async move {
-                match grpc_parent_task_group {
-                    Some(parent_task_group) => server::serve_with_report_with_task_group_and_ready(
-                        grpc_config,
-                        grpc_service,
-                        grpc_shutdown,
-                        parent_task_group,
-                        move || publish_listener_ready(grpc_ready),
-                    )
-                    .await
-                    .and_then(require_healthy_grpc_shutdown),
-                    None => server::serve_with_ready(grpc_config, grpc_service, grpc_shutdown, move || {
-                        publish_listener_ready(grpc_ready)
-                    })
-                    .await
-                    .and_then(require_healthy_grpc_shutdown),
-                }
+                server::serve_with_report_with_task_group_and_ready(
+                    grpc_config,
+                    grpc_service,
+                    grpc_shutdown,
+                    grpc_parent_task_group,
+                    move || publish_listener_ready(grpc_ready),
+                )
+                .await
+                .and_then(require_healthy_grpc_shutdown)
             };
             let remoting_future = async move {
-                match remoting_service_context {
-                    Some(service_context) => remoting::serve_with_service_context_and_ready(
-                        service_context,
-                        remoting_config,
-                        processor,
-                        sessions,
-                        auth_runtime,
-                        remoting_backend,
-                        remoting_shutdown,
-                        move || publish_listener_ready(remoting_ready),
-                    )
-                    .await
-                    .and_then(require_healthy_remoting_shutdown),
-                    None => remoting::serve_with_ready(
-                        remoting_config,
-                        processor,
-                        sessions,
-                        auth_runtime,
-                        remoting_backend,
-                        remoting_shutdown,
-                        move || publish_listener_ready(remoting_ready),
-                    )
-                    .await
-                    .and_then(require_healthy_remoting_shutdown),
-                }
+                remoting::serve_with_service_context_and_ready(
+                    remoting_service_context,
+                    remoting_config,
+                    processor,
+                    sessions,
+                    auth_runtime,
+                    remoting_backend,
+                    remoting_shutdown,
+                    move || publish_listener_ready(remoting_ready),
+                )
+                .await
+                .and_then(require_healthy_remoting_shutdown)
             };
             let listener_result = tokio::try_join!(grpc_future, remoting_future);
             let shutdown_result = match auth_runtime_for_shutdown {
@@ -498,31 +440,13 @@ where
             }
             Ok(())
         }
-        .await;
-
-        shutdown_owned_compatibility_runtime(owned_runtime_context, owned_runtime_owner).await;
-        result
-    }
-}
-
-async fn shutdown_owned_compatibility_runtime(
-    runtime_context: Option<RuntimeContext>,
-    runtime_owner: Option<RuntimeOwner>,
-) {
-    if let Some(runtime_context) = runtime_context {
-        let report = runtime_context.shutdown_tasks(Duration::from_secs(30)).await;
-        report.log_if_unhealthy();
-    }
-    if let Some(runtime_owner) = runtime_owner {
-        let report = runtime_owner.shutdown_tasks().await;
-        report.log_if_unhealthy();
-        runtime_owner.shutdown_background();
+        .await
     }
 }
 
 fn default_service_manager_and_backend(
     config: &ProxyConfig,
-    service_context: Option<&ServiceContext>,
+    service_context: &ChildServiceContext,
 ) -> (Arc<dyn ServiceManager>, Option<Arc<dyn ProxyRemotingBackend>>) {
     match config.mode {
         ProxyMode::Cluster => {
@@ -531,13 +455,12 @@ fn default_service_manager_and_backend(
                 cluster_config.broker_cluster_name = config.auth.cluster_name.clone();
             }
             let signer = build_cluster_acl_signer(config).map(|signer| signer.into_outbound_signer());
-            let client = Arc::new(match service_context {
-                Some(service_context) => {
-                    let cluster_context = service_context.child("rocketmq-proxy.cluster");
-                    RocketmqClusterClient::with_service_context(cluster_config, signer, &cluster_context)
-                }
-                None => RocketmqClusterClient::with_outbound_signer(cluster_config, signer),
-            });
+            let cluster_context = service_context.child("rocketmq-proxy.cluster");
+            let client = Arc::new(RocketmqClusterClient::with_service_context(
+                cluster_config,
+                signer,
+                &cluster_context,
+            ));
             let service_client: Arc<dyn ClusterClient> = client.clone();
             (
                 Arc::new(ClusterServiceManager::from_cluster_client(service_client)),
@@ -545,20 +468,12 @@ fn default_service_manager_and_backend(
             )
         }
         ProxyMode::Local => {
-            let (manager, client) = match service_context {
-                Some(service_context) => {
-                    let local_context = service_context.child("rocketmq-proxy.local");
-                    local_components_from_config_with_service_context(
-                        config.local.clone(),
-                        config.cluster.query_assignment_strategy_name.clone(),
-                        &local_context,
-                    )
-                }
-                None => local_components_from_config(
-                    config.local.clone(),
-                    config.cluster.query_assignment_strategy_name.clone(),
-                ),
-            };
+            let local_context = service_context.child("rocketmq-proxy.local");
+            let (manager, client) = local_components_from_config_with_service_context(
+                config.local.clone(),
+                config.cluster.query_assignment_strategy_name.clone(),
+                &local_context,
+            );
             (Arc::new(manager), Some(Arc::new(LocalRemotingBackend::new(client))))
         }
     }
@@ -569,6 +484,7 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
+    use rocketmq_runtime::RuntimeContext;
     use rocketmq_runtime::ServiceLifecycle;
     use rocketmq_runtime::ServiceLifecycleConfig;
     use rocketmq_runtime::ServiceLifecycleState;
@@ -623,47 +539,42 @@ mod tests {
 
     #[tokio::test]
     async fn default_local_mode_builds_broker_backed_runtime() {
-        let runtime = ProxyRuntimeBuilder::build(ProxyRuntime::builder(ProxyConfig {
-            mode: ProxyMode::Local,
-            ..ProxyConfig::default()
-        }));
+        let runtime_context = RuntimeContext::from_current("proxy-local-runtime-test");
+        let runtime = ProxyRuntimeBuilder::build(
+            ProxyRuntime::builder(ProxyConfig {
+                mode: ProxyMode::Local,
+                ..ProxyConfig::default()
+            })
+            .with_service_context(runtime_context.service_context("proxy-local-runtime")),
+        )
+        .expect("an injected child context should build the Local proxy runtime");
 
         assert!(matches!(runtime.config().mode, ProxyMode::Local));
     }
 
     #[tokio::test]
-    async fn default_cluster_runtime_borrows_and_owns_current_runtime_context() {
-        let runtime = ProxyRuntime::new(ProxyConfig::default());
+    async fn default_cluster_runtime_uses_injected_child_context() {
+        let runtime_context = RuntimeContext::from_current("proxy-cluster-runtime-test");
+        let runtime = ProxyRuntime::new(
+            ProxyConfig::default(),
+            runtime_context.service_context("proxy-cluster-runtime"),
+        )
+        .expect("an injected child context should build the Cluster proxy runtime");
 
-        assert!(runtime.service_context.is_some());
-        assert!(runtime.owned_runtime_context.is_some());
-        assert!(runtime.owned_runtime_owner.is_none());
+        assert_eq!(runtime.service_context.name(), "proxy-cluster-runtime");
 
-        let ProxyRuntime {
-            owned_runtime_context, ..
-        } = runtime;
-        let report = owned_runtime_context
-            .expect("the compatibility RuntimeContext should be retained")
-            .shutdown_tasks(Duration::from_secs(1))
-            .await;
+        drop(runtime);
+        let report = runtime_context.shutdown_tasks(Duration::from_secs(1)).await;
         assert!(report.is_healthy(), "{}", report.to_json());
     }
 
     #[test]
-    fn default_cluster_runtime_owns_runtime_outside_tokio() {
-        let runtime = ProxyRuntime::new(ProxyConfig::default());
+    fn build_rejects_missing_child_context() {
+        let error = ProxyRuntime::builder(ProxyConfig::default())
+            .build()
+            .err()
+            .expect("library constructors must not discover or create a runtime");
 
-        assert!(runtime.service_context.is_some());
-        assert!(runtime.owned_runtime_context.is_none());
-        assert!(runtime.owned_runtime_owner.is_some());
-
-        let ProxyRuntime {
-            owned_runtime_owner, ..
-        } = runtime;
-        let report = owned_runtime_owner
-            .expect("the compatibility RuntimeOwner should be retained")
-            .shutdown_runtime_blocking()
-            .expect("the compatibility runtime should shut down");
-        assert!(report.is_healthy(), "{}", report.to_json());
+        assert!(error.to_string().contains("requires an injected ChildServiceContext"));
     }
 }

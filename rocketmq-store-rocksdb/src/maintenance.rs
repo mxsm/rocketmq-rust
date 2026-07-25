@@ -28,6 +28,7 @@ use tracing::warn;
 
 use crate::column_family::RocksDbColumnFamily;
 use crate::config::RocksDbConfig;
+use crate::runtime::RocksDbRuntimeScope;
 use crate::store::RocksDbStore;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,24 +68,31 @@ pub struct RocksDbMaintenanceService {
     config: RocksDbMaintenanceConfig,
     worker_group: Option<rocketmq_runtime::TaskGroup>,
     scheduled_tasks: Option<ScheduledTaskGroup>,
+    runtime_scope: RocksDbRuntimeScope,
 }
 
 impl RocksDbMaintenanceService {
-    pub fn new(store: Arc<RocksDbStore>, config: RocksDbConfig) -> Self {
+    pub fn new(store: Arc<RocksDbStore>, config: RocksDbConfig, runtime_scope: RocksDbRuntimeScope) -> Self {
         Self {
             store,
             config: RocksDbMaintenanceConfig::from_rocksdb_config(&config),
             worker_group: None,
             scheduled_tasks: None,
+            runtime_scope,
         }
     }
 
-    pub fn with_config(store: Arc<RocksDbStore>, config: RocksDbMaintenanceConfig) -> Self {
+    pub fn with_config(
+        store: Arc<RocksDbStore>,
+        config: RocksDbMaintenanceConfig,
+        runtime_scope: RocksDbRuntimeScope,
+    ) -> Self {
         Self {
             store,
             config,
             worker_group: None,
             scheduled_tasks: None,
+            runtime_scope,
         }
     }
 
@@ -93,13 +101,7 @@ impl RocksDbMaintenanceService {
             return;
         }
 
-        let worker_group = match crate::runtime::task_group("rocksdb.maintenance") {
-            Ok(worker_group) => worker_group,
-            Err(error) => {
-                error!(%error, "failed to create rocksdb maintenance task group");
-                return;
-            }
-        };
+        let worker_group = crate::runtime::task_group(&self.runtime_scope, "rocksdb.maintenance");
         let scheduled_tasks = ScheduledTaskGroup::new(worker_group.child("scheduled"));
 
         self.schedule_enabled_operation(
@@ -174,16 +176,18 @@ impl RocksDbMaintenanceService {
         }
         if self.config.compaction_interval.is_some() {
             self.store
-                .compact_range_cf_blocking(self.config.compaction_cf.clone(), None, None)
+                .compact_range_cf_blocking(&self.runtime_scope, self.config.compaction_cf.clone(), None, None)
                 .await?;
         }
         if self.config.checkpoint_interval.is_some() {
             let checkpoint_dir = next_checkpoint_dir(&self.config.checkpoint_root)?;
-            self.store.create_checkpoint(checkpoint_dir).await?;
+            self.store
+                .create_checkpoint(&self.runtime_scope, checkpoint_dir)
+                .await?;
         }
         if self.config.backup_interval.is_some() {
             if let Some(backup_dir) = self.config.backup_dir.clone() {
-                self.store.create_backup(backup_dir).await?;
+                self.store.create_backup(&self.runtime_scope, backup_dir).await?;
             }
         }
         Ok(())
@@ -200,13 +204,15 @@ impl RocksDbMaintenanceService {
         };
         let store = Arc::clone(&self.store);
         let config = self.config.clone();
+        let runtime_scope = self.runtime_scope.clone();
         let mut task_config = ScheduledTaskConfig::fixed_delay(operation.task_name(), interval);
         task_config.initial_delay = interval;
         if let Err(error) = scheduled_tasks.schedule_fixed_delay(task_config, move || {
             let store = Arc::clone(&store);
             let config = config.clone();
+            let runtime_scope = runtime_scope.clone();
             async move {
-                if let Err(error) = run_operation(&store, &config, operation).await {
+                if let Err(error) = run_operation(&store, &config, &runtime_scope, operation).await {
                     warn!(error = %error, operation = ?operation, "rocksdb maintenance operation failed");
                 }
             }
@@ -238,21 +244,22 @@ impl MaintenanceOperation {
 async fn run_operation(
     store: &RocksDbStore,
     config: &RocksDbMaintenanceConfig,
+    runtime_scope: &RocksDbRuntimeScope,
     operation: MaintenanceOperation,
 ) -> Result<(), RocketMQError> {
     match operation {
         MaintenanceOperation::Flush => store.flush(),
         MaintenanceOperation::CompactDefaultCf => {
             store
-                .compact_range_cf_blocking(config.compaction_cf.clone(), None, None)
+                .compact_range_cf_blocking(runtime_scope, config.compaction_cf.clone(), None, None)
                 .await
         }
         MaintenanceOperation::Checkpoint => {
             let checkpoint_dir = next_checkpoint_dir(&config.checkpoint_root)?;
-            store.create_checkpoint(checkpoint_dir).await
+            store.create_checkpoint(runtime_scope, checkpoint_dir).await
         }
         MaintenanceOperation::Backup => match &config.backup_dir {
-            Some(backup_dir) => store.create_backup(backup_dir.clone()).await,
+            Some(backup_dir) => store.create_backup(runtime_scope, backup_dir.clone()).await,
             None => Ok(()),
         },
     }

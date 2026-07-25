@@ -30,7 +30,6 @@ use cheetah_string::CheetahString;
 use flume::Receiver;
 use flume::Sender;
 use rocketmq_error::RocketMQError;
-use rocketmq_runtime::RuntimeHandle;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
 use tracing::error;
@@ -608,45 +607,26 @@ impl ChannelInner {
     /// - Lock-free operations for most cases
     /// - ~40-60% higher throughput than tokio::mpsc
     /// - Better performance under contention
-    pub fn new(connection: Connection, response_table: LegacyResponseTable) -> Self {
-        Self::try_new(connection, response_table).expect("ChannelInner send task requires a Tokio runtime")
+    pub fn new(connection: Connection, response_table: LegacyResponseTable, parent_task_group: TaskGroup) -> Self {
+        Self::try_new(connection, response_table, parent_task_group)
+            .expect("ChannelInner send task must be registered by its parent task group")
     }
 
     /// Creates a new `ChannelInner` and reports runtime/task startup failures.
     pub fn try_new(
         connection: Connection,
         response_table: LegacyResponseTable,
+        parent_task_group: TaskGroup,
     ) -> rocketmq_error::RocketMQResult<Self> {
-        let runtime = tokio::runtime::Handle::try_current().map_err(|error| {
-            RocketMQError::network_connection_failed(
-                "channel",
-                format!("ChannelInner send task requires a Tokio runtime: {error}"),
-            )
-        })?;
-        let task_group = TaskGroup::root("rocketmq-transport.channel", RuntimeHandle::new(runtime));
-        Self::try_new_with_send_task_group(
-            connection,
-            PendingRequestTable::new(),
-            None,
-            Some(response_table),
-            task_group,
-            true,
-        )
+        Self::try_new_with_task_group(connection, response_table, parent_task_group)
     }
 
     pub fn try_new_with_pending_requests(
         connection: Connection,
         response_table: PendingRequestTable,
+        parent_task_group: TaskGroup,
     ) -> rocketmq_error::RocketMQResult<Self> {
-        let runtime = tokio::runtime::Handle::try_current().map_err(|error| {
-            RocketMQError::network_connection_failed(
-                "channel",
-                format!("ChannelInner send task requires a Tokio runtime: {error}"),
-            )
-        })?;
-        let task_group = TaskGroup::root("rocketmq-transport.channel", RuntimeHandle::new(runtime));
-        let owner = response_table.new_owner();
-        Self::try_new_with_send_task_group(connection, response_table, Some(owner), None, task_group, true)
+        Self::try_new_with_pending_requests_and_task_group(connection, response_table, parent_task_group)
     }
 
     /// Creates a new `ChannelInner` under the provided parent task group.
@@ -1048,30 +1028,11 @@ mod tests {
     use tokio::net::TcpListener;
     use tokio::net::TcpStream;
 
-    #[test]
-    fn try_new_without_tokio_runtime_returns_error() {
-        let runtime = tokio::runtime::Runtime::new().unwrap();
-        let (stream, _client_stream) = runtime.block_on(async {
-            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-            let addr = listener.local_addr().unwrap();
-            let client = TcpStream::connect(addr);
-            let server = listener.accept();
-            let (client_stream, server_stream) = tokio::join!(client, server);
-            (server_stream.unwrap().0, client_stream.unwrap())
-        });
-        drop(runtime);
-
-        let error = match ChannelInner::try_new(
-            Connection::new(stream),
-            Arc::new(parking_lot::Mutex::new(HashMap::<i32, ResponseFuture>::new())),
-        ) {
-            Ok(_) => panic!("try_new should report missing Tokio runtime instead of panicking"),
-            Err(error) => error,
-        };
-
-        assert!(error
-            .to_string()
-            .contains("ChannelInner send task requires a Tokio runtime"));
+    fn test_parent(name: &'static str) -> TaskGroup {
+        rocketmq_runtime::RuntimeContext::from_current(name)
+            .service_context("channel-inner-service")
+            .task_group()
+            .clone()
     }
 
     #[tokio::test]
@@ -1138,8 +1099,12 @@ mod tests {
         let pending_requests = PendingRequestTable::new();
         let (sender, receiver) = tokio::sync::oneshot::channel();
 
-        let channel_inner =
-            ChannelInner::try_new_with_pending_requests(Connection::new(socket), pending_requests.clone()).unwrap();
+        let channel_inner = ChannelInner::try_new_with_pending_requests(
+            Connection::new(socket),
+            pending_requests.clone(),
+            test_parent("channel-close-test"),
+        )
+        .unwrap();
         let guard = pending_requests
             .register_for_owner(
                 channel_inner.pending_request_owner().unwrap(),
@@ -1173,12 +1138,18 @@ mod tests {
         let _second_client = TcpStream::connect(second_addr).await.unwrap();
         let (second_socket, _) = second_listener.accept().await.unwrap();
         let pending_requests = PendingRequestTable::new();
-        let first =
-            ChannelInner::try_new_with_pending_requests(Connection::new(first_socket), pending_requests.clone())
-                .unwrap();
-        let second =
-            ChannelInner::try_new_with_pending_requests(Connection::new(second_socket), pending_requests.clone())
-                .unwrap();
+        let first = ChannelInner::try_new_with_pending_requests(
+            Connection::new(first_socket),
+            pending_requests.clone(),
+            test_parent("channel-first-owner-test"),
+        )
+        .unwrap();
+        let second = ChannelInner::try_new_with_pending_requests(
+            Connection::new(second_socket),
+            pending_requests.clone(),
+            test_parent("channel-second-owner-test"),
+        )
+        .unwrap();
         let (first_sender, first_receiver) = tokio::sync::oneshot::channel();
         let (second_sender, mut second_receiver) = tokio::sync::oneshot::channel();
         let first_guard = pending_requests
@@ -1214,6 +1185,7 @@ mod tests {
             ChannelInner::try_new_with_pending_requests(
                 Connection::new_with_stream(transport),
                 pending_requests.clone(),
+                test_parent("channel-writer-deadline-test"),
             )
             .expect("create channel"),
         );
@@ -1261,6 +1233,7 @@ mod tests {
             ChannelInner::try_new_with_pending_requests(
                 Connection::new_with_stream(transport),
                 PendingRequestTable::new(),
+                test_parent("channel-oneway-deadline-test"),
             )
             .expect("create channel"),
         );

@@ -38,6 +38,13 @@ use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::body::sync_state_set_body::SyncStateSet;
 use rocketmq_runtime::common::time_utils::current_millis;
 
+fn test_storage_io(name: &'static str) -> rocketmq_runtime::BlockingExecutor {
+    rocketmq_runtime::RuntimeContext::from_current(name)
+        .service_context("controller-test")
+        .storage_io()
+        .clone()
+}
+
 fn test_config(port: u16) -> ControllerConfigReader {
     ControllerConfigReader::new(
         ControllerConfig::default()
@@ -93,7 +100,9 @@ async fn apply_committed_broker_id(state_machine: &mut StateMachine) {
 
 #[tokio::test]
 async fn test_snapshot_creation() {
-    let node = RaftNodeManager::new(test_config(39876)).await.unwrap();
+    let node = RaftNodeManager::new(test_config(39876), test_storage_io("snapshot-test"))
+        .await
+        .unwrap();
 
     let mut nodes = BTreeMap::new();
     nodes.insert(
@@ -182,7 +191,9 @@ async fn test_snapshot_install() {
 
 #[tokio::test]
 async fn test_snapshot_install_preserves_master_and_sync_state_set() {
-    let node = RaftNodeManager::new(test_config(61876)).await.unwrap();
+    let node = RaftNodeManager::new(test_config(61876), test_storage_io("snapshot-install-test"))
+        .await
+        .unwrap();
 
     let mut nodes = BTreeMap::new();
     nodes.insert(
