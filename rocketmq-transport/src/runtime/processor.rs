@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::net::channel::Channel;
+use crate::request_ordering::RequestOrdering;
 use crate::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
@@ -31,5 +32,13 @@ pub trait LocalRequestProcessor {
 
     fn reject_request(&self, _code: i32) -> RejectRequestResponse {
         (false, None)
+    }
+
+    /// Declares the per-session execution ordering required by this request.
+    ///
+    /// Requests are concurrent by default. Implementations should return an
+    /// ordered key only when their domain contract requires arrival ordering.
+    fn request_ordering(&self, _request: &RemotingCommand) -> RequestOrdering {
+        RequestOrdering::Concurrent
     }
 }

@@ -144,48 +144,6 @@ fn record_transport_write(bytes: usize) {
     TRANSPORT_ENCODED_BYTES_WRITTEN.fetch_add(bytes as u64, Ordering::Relaxed);
 }
 
-pub(crate) struct SessionConnection {
-    outbound_sink: SplitSink<SessionConnectionFramed, Bytes>,
-    inbound_stream: SplitStream<SessionConnectionFramed>,
-    state_tx: watch::Sender<ConnectionState>,
-    encode_buffer: BytesMut,
-}
-
-impl SessionConnection {
-    pub(crate) async fn receive_command_with_retained_bytes(
-        &mut self,
-    ) -> Option<rocketmq_error::RocketMQResult<(RemotingCommand, usize)>> {
-        self.inbound_stream
-            .next()
-            .await
-            .map(|result| result.map(|decoded| (decoded.command, decoded.retained_frame_bytes)))
-    }
-
-    pub(crate) async fn send_command(&mut self, mut command: RemotingCommand) -> rocketmq_error::RocketMQResult<()> {
-        command.fast_header_encode(&mut self.encode_buffer);
-        if let Some(body) = command.take_body() {
-            self.encode_buffer.put(body);
-        }
-        let len = self.encode_buffer.len();
-        #[cfg(feature = "observability")]
-        rocketmq_observability::metrics::remoting::record_network_bytes(len as u64);
-        let bytes = self.encode_buffer.split_to(len).freeze();
-        let result = self.outbound_sink.send(bytes).await;
-        if result.is_ok() {
-            record_transport_write(len);
-        } else {
-            let _ = self.state_tx.send(ConnectionState::Degraded);
-        }
-        result
-    }
-
-    pub(crate) async fn shutdown(&mut self) -> rocketmq_error::RocketMQResult<()> {
-        let result = self.outbound_sink.close().await;
-        let _ = self.state_tx.send(ConnectionState::Closed);
-        result
-    }
-}
-
 /// Connection health state
 ///
 /// Represents the current health status of a connection.
@@ -453,22 +411,11 @@ impl Connection {
         SplitSink<SessionConnectionFramed, Bytes>,
         SplitStream<SessionConnectionFramed>,
     ) {
-        let session = self.into_session_connection();
-        (session.outbound_sink, session.inbound_stream)
-    }
-
-    pub(crate) fn into_session_connection(self) -> SessionConnection {
         let framed = self
             .outbound_sink
             .reunite(self.inbound_stream)
             .unwrap_or_else(|_| unreachable!("connection split halves always originate from the same framed I/O"));
-        let (outbound_sink, inbound_stream) = framed.map_codec(SessionCodec::from).split();
-        SessionConnection {
-            outbound_sink,
-            inbound_stream,
-            state_tx: self.state_tx,
-            encode_buffer: self.encode_buffer,
-        }
+        framed.map_codec(SessionCodec::from).split()
     }
 
     /// Gets a reference to the inbound stream for receiving messages

@@ -19,6 +19,7 @@ use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -47,8 +48,6 @@ use rocketmq_security_api::ResourceKind;
 
 use crate::admission::AdmissionClass;
 use crate::admission::AdmissionController;
-use crate::admission::AdmissionError;
-use crate::admission::AdmissionPermit;
 use crate::admission::AdmissionResource;
 use crate::admission::AdmissionScope;
 use crate::admission::FullPolicy;
@@ -59,7 +58,10 @@ use crate::connection::ConnectionId;
 use crate::connection::ConnectionState;
 use crate::connection::QueuedWrite;
 use crate::connection::SessionLifecycle;
+use crate::request_ordering::RequestOrdering;
 use crate::security::TransportSecurity;
+use crate::session_executor::SessionDispatchError;
+use crate::session_executor::SessionExecutor;
 use crate::tls::TlsServerRuntime;
 
 const SESSION_WRITER_QUEUE_CAPACITY: usize = 1024;
@@ -70,6 +72,10 @@ pub trait RequestProcessor: Send + Sync + 'static {
         &self,
         request: RemotingCommand,
     ) -> Pin<Box<dyn Future<Output = RocketMQResult<RemotingCommand>> + Send + '_>>;
+
+    fn request_ordering(&self, _request: &RemotingCommand) -> RequestOrdering {
+        RequestOrdering::Concurrent
+    }
 }
 
 #[derive(Clone)]
@@ -84,6 +90,7 @@ pub struct SessionHandle {
     state_tx: tokio::sync::watch::Sender<ConnectionState>,
     state_rx: tokio::sync::watch::Receiver<ConnectionState>,
     task_group: TaskGroup,
+    request_executor_group: TaskGroup,
     response_class: Option<AdmissionClass>,
     lifecycle: Arc<SessionLifecycle>,
     writer_task_id: TaskId,
@@ -119,8 +126,17 @@ impl SessionHandle {
         &self.task_group
     }
 
+    pub(crate) fn request_executor_group(&self) -> &TaskGroup {
+        &self.request_executor_group
+    }
+
     fn with_response_class(mut self, class: AdmissionClass) -> Self {
         self.response_class = Some(class);
+        self
+    }
+
+    pub(crate) fn with_task_group(mut self, task_group: TaskGroup) -> Self {
+        self.task_group = task_group;
         self
     }
 
@@ -211,6 +227,10 @@ impl SessionHandle {
 
 pub trait ConnectionHandler: Send + Sync + 'static {
     fn connected(&self, session: SessionHandle) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>;
+
+    fn request_ordering(&self, _command: &RemotingCommand) -> RequestOrdering {
+        RequestOrdering::Concurrent
+    }
 
     fn command(
         &self,
@@ -374,27 +394,26 @@ async fn run_framed_session<H>(
 {
     let connection_id = connection.connection_id().clone();
     let (mut sink, mut stream) = connection.into_framed_parts();
+    let executor = match SessionExecutor::try_new(&task_group, admission.clone(), scope) {
+        Ok(executor) => executor,
+        Err(_) => return,
+    };
     let (state_tx, state_rx) = tokio::sync::watch::channel(ConnectionState::Healthy);
     let lifecycle = Arc::new(SessionLifecycle::new());
     let (writer, mut writes) = tokio::sync::mpsc::channel(SESSION_WRITER_QUEUE_CAPACITY);
-    let writer_cancellation = task_group.cancellation_token();
     let writer_state = state_tx.clone();
     let writer_group = task_group.clone();
     let writer_task_id = match writer_group.spawn("rocketmq.transport.session.writer", TaskKind::Worker, async move {
-        loop {
-            let next = tokio::select! {
-                () = writer_cancellation.cancelled() => break,
-                next = writes.recv() => next,
-            };
+        while let Some(next) = writes.recv().await {
             match next {
-                Some(QueuedWrite::Data {
+                QueuedWrite::Data {
                     bytes,
                     completion,
                     _permit,
                     deadline,
                     target,
                     progress,
-                }) => {
+                } => {
                     let result = match deadline {
                         Some(deadline) if deadline.is_expired() => {
                             Err(RocketMQError::network_deadline_exceeded_before_send(target))
@@ -420,12 +439,11 @@ async fn run_framed_session<H>(
                         break;
                     }
                 }
-                Some(QueuedWrite::Close { completion }) => {
+                QueuedWrite::Close { completion } => {
                     let result = sink.close().await;
                     let _ = completion.send(result);
                     break;
                 }
-                None => break,
             }
         }
     }) {
@@ -443,6 +461,7 @@ async fn run_framed_session<H>(
         state_tx: state_tx.clone(),
         state_rx,
         task_group: task_group.clone(),
+        request_executor_group: executor.task_group().clone(),
         response_class: None,
         lifecycle,
         writer_task_id,
@@ -482,10 +501,35 @@ async fn run_framed_session<H>(
                 .await;
             continue;
         }
-        let admission_permits = acquire_framed_request(&admission, scope, bytes, class);
-        let _admission_permits = match admission_permits {
-            Ok(permits) => permits,
-            Err(error) if error.policy() == FullPolicy::Reject => {
+        let ordering = handler.request_ordering(&command);
+        let opaque = command.opaque();
+        let request_handler = handler.clone();
+        let request_session = session.clone().with_response_class(class);
+        let rejection_session = session.clone().with_response_class(class);
+        match executor.try_execute(
+            bytes,
+            class,
+            ordering,
+            move |request_group| async move {
+                request_handler
+                    .command(request_session.with_task_group(request_group), command)
+                    .await;
+            },
+            move |_request_group, error| async move {
+                let mut connection = rejection_session.connection();
+                let _ = connection
+                    .send_command(
+                        RemotingCommand::create_response_command_with_code_remark(
+                            ResponseCode::SystemBusy,
+                            error.to_string(),
+                        )
+                        .set_opaque(opaque),
+                    )
+                    .await;
+            },
+        ) {
+            Ok(_) => {}
+            Err(SessionDispatchError::Admission(error)) if error.policy() == FullPolicy::Reject => {
                 let mut connection = session.clone().with_response_class(class).connection();
                 let _ = connection
                     .send_command(
@@ -493,17 +537,18 @@ async fn run_framed_session<H>(
                             ResponseCode::SystemBusy,
                             error.to_string(),
                         )
-                        .set_opaque(command.opaque()),
+                        .set_opaque(opaque),
                     )
                     .await;
                 continue;
             }
-            Err(_) => break,
-        };
-        handler
-            .command(session.clone().with_response_class(class), command)
-            .await;
+            Err(SessionDispatchError::Admission(_)) | Err(SessionDispatchError::Closing(_)) => break,
+        }
     }
+    let request_deadline = task_group
+        .shutdown_deadline()
+        .unwrap_or_else(|| ShutdownDeadline::after(SESSION_RETIREMENT_TIMEOUT));
+    executor.drain_until(request_deadline).await.log_if_unhealthy();
     handler.disconnected(session.clone()).await;
     let (completion, closed) = tokio::sync::oneshot::channel();
     let _ = writer.send(QueuedWrite::Close { completion }).await;
@@ -546,25 +591,6 @@ pub async fn run_connected_session<H>(
     .await;
 }
 
-struct FramedRequestAdmission {
-    _inflight: AdmissionPermit,
-    _processor: AdmissionPermit,
-}
-
-fn acquire_framed_request(
-    admission: &AdmissionController,
-    scope: AdmissionScope,
-    bytes: usize,
-    class: AdmissionClass,
-) -> Result<FramedRequestAdmission, AdmissionError> {
-    let inflight = admission.try_acquire(AdmissionResource::Inflight, scope, bytes, class)?;
-    let processor = admission.try_acquire(AdmissionResource::Processor, scope, bytes, class)?;
-    Ok(FramedRequestAdmission {
-        _inflight: inflight,
-        _processor: processor,
-    })
-}
-
 async fn accept_transport_connection(
     listener: &tokio::net::TcpListener,
 ) -> RocketMQResult<(tokio::net::TcpStream, SocketAddr)> {
@@ -602,13 +628,63 @@ pub struct TransportServer {
     tls: TlsServerRuntime,
     started: AtomicBool,
     next_session: AtomicU64,
+    active_sessions: AtomicUsize,
     security: Arc<TransportSecurity>,
     principal: Option<Principal>,
 }
 
-struct RequestAdmission {
-    _inflight: AdmissionPermit,
-    _processor: AdmissionPermit,
+struct ActiveSessionGuard {
+    server: Arc<TransportServer>,
+}
+
+impl ActiveSessionGuard {
+    fn new(server: Arc<TransportServer>) -> Self {
+        server.active_sessions.fetch_add(1, Ordering::AcqRel);
+        Self { server }
+    }
+}
+
+impl Drop for ActiveSessionGuard {
+    fn drop(&mut self) {
+        self.server.active_sessions.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+struct ProcessorSessionHandler {
+    processor: Arc<dyn RequestProcessor>,
+    request_timeout: Duration,
+    session_group: TaskGroup,
+}
+
+impl ConnectionHandler for ProcessorSessionHandler {
+    fn connected(&self, _session: SessionHandle) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        Box::pin(async {})
+    }
+
+    fn request_ordering(&self, request: &RemotingCommand) -> RequestOrdering {
+        self.processor.request_ordering(request)
+    }
+
+    fn command(
+        &self,
+        session: SessionHandle,
+        request: RemotingCommand,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        let processor = self.processor.clone();
+        let request_timeout = self.request_timeout;
+        let session_group = self.session_group.clone();
+        Box::pin(async move {
+            let response = match tokio::time::timeout(request_timeout, processor.process(request)).await {
+                Ok(Ok(response)) => response,
+                Ok(Err(_)) | Err(_) => {
+                    session_group.cancel();
+                    return;
+                }
+            };
+            let mut connection = session.connection();
+            let _ = connection.send_command(response).await;
+        })
+    }
 }
 
 impl TransportServer {
@@ -650,6 +726,7 @@ impl TransportServer {
             tls,
             started: AtomicBool::new(false),
             next_session: AtomicU64::new(1),
+            active_sessions: AtomicUsize::new(0),
             security,
             principal,
         }))
@@ -694,14 +771,25 @@ impl TransportServer {
                     drop(stream);
                     continue;
                 };
+                let session_lease = match server
+                    .service_context
+                    .task_group()
+                    .try_child_lease("rocketmq.transport.session")
+                {
+                    Ok(lease) => lease,
+                    Err(_) => break,
+                };
+                let session_group = session_lease.group().clone();
                 let session = server.clone();
-                let session_context = server.service_context.clone();
-                let session_task_context = session_context.clone();
-                if session_context
-                    .spawn_service("transport.session", async move {
+                let active_session = ActiveSessionGuard::new(server.clone());
+                let spawn_group = session_group.clone();
+                if spawn_group
+                    .spawn("rocketmq.transport.session", TaskKind::Service, async move {
+                        let _active_session = active_session;
+                        let _session_lease = session_lease;
                         let _connection_permit = connection_permit;
                         session
-                            .run_session(stream, remote_addr, session_id, session_task_context)
+                            .run_session(stream, remote_addr, session_id, session_group)
                             .await;
                     })
                     .is_err()
@@ -718,7 +806,7 @@ impl TransportServer {
         stream: tokio::net::TcpStream,
         remote_addr: SocketAddr,
         session_id: u64,
-        session_context: ChildServiceContext,
+        session_group: TaskGroup,
     ) {
         let scope = AdmissionScope::new(remote_addr.ip()).with_session(session_id);
         let Ok(_handshake_permit) = self.admission.try_acquire(
@@ -730,120 +818,46 @@ impl TransportServer {
             return;
         };
         let handshake_deadline = tokio::time::Instant::now() + self.config.handshake_timeout;
-        let Ok(Some(negotiated)) =
-            tokio::time::timeout_at(handshake_deadline, self.tls.negotiate_connection(stream, remote_addr)).await
-        else {
+        let handshake_cancellation = session_group.cancellation_token();
+        let negotiated = tokio::select! {
+            () = handshake_cancellation.cancelled() => return,
+            negotiated =
+                tokio::time::timeout_at(handshake_deadline, self.tls.negotiate_connection(stream, remote_addr)) =>
+                negotiated,
+        };
+        let Ok(Some(negotiated)) = negotiated else {
             return;
         };
         let (connection, peer_is_tls) = negotiated.into_parts();
-        let mut connection = connection.into_session_connection();
         drop(_handshake_permit);
-
-        loop {
-            let request_deadline = tokio::time::Instant::now() + self.config.request_timeout;
-            let (request, bytes) =
-                match tokio::time::timeout_at(request_deadline, connection.receive_command_with_retained_bytes()).await
-                {
-                    Ok(Some(Ok(request))) => request,
-                    Ok(Some(Err(_))) | Ok(None) | Err(_) => break,
-                };
-            let peer = PeerInfo::new(remote_addr, peer_is_tls);
-            let decision = self.security.authorize(
-                &request,
-                Some(&peer),
-                self.principal.as_ref(),
-                Resource::new(ResourceKind::Other, request.code().to_string()),
-                Action::Manage,
-            );
-            if let Decision::Deny { reason } = decision {
-                let denied = RemotingCommand::create_response_command_with_code_remark(
-                    ResponseCode::NoPermission,
-                    reason.to_string(),
-                )
-                .set_opaque(request.opaque());
-                if tokio::time::timeout_at(request_deadline, connection.send_command(denied))
-                    .await
-                    .ok()
-                    .and_then(Result::ok)
-                    .is_none()
-                {
-                    break;
-                }
-                continue;
-            }
-            let class = AdmissionClass::for_request_code(request.code());
-            let _admission = match self.acquire_request(scope, bytes, class) {
-                Ok(admission) => admission,
-                Err(error) => {
-                    if error.policy() == FullPolicy::CloseSlowConsumer {
-                        break;
-                    }
-                    let rejection = RemotingCommand::create_response_command_with_code_remark(
-                        ResponseCode::SystemBusy,
-                        error.to_string(),
-                    )
-                    .set_opaque(request.opaque());
-                    if tokio::time::timeout_at(request_deadline, connection.send_command(rejection))
-                        .await
-                        .ok()
-                        .and_then(Result::ok)
-                        .is_none()
-                    {
-                        break;
-                    }
-                    continue;
-                }
-            };
-            let (sender, receiver) = tokio::sync::oneshot::channel();
-            let processor = self.processor.clone();
-            let processor_context = session_context.clone();
-            let processor_task = match processor_context.spawn_service("transport.processor", async move {
-                let _ = sender.send(processor.process(request).await);
-            }) {
-                Ok(task_id) => task_id,
-                Err(_) => break,
-            };
-            let response = match tokio::time::timeout_at(request_deadline, receiver).await {
-                Ok(Ok(Ok(response))) => response,
-                Ok(Ok(Err(_))) | Ok(Err(_)) | Err(_) => {
-                    processor_context.task_group().abort_task(processor_task);
-                    break;
-                }
-            };
-            if tokio::time::timeout_at(request_deadline, connection.send_command(response))
-                .await
-                .ok()
-                .and_then(Result::ok)
-                .is_none()
-            {
-                break;
-            }
-        }
-        let _ = connection.shutdown().await;
+        run_framed_session(
+            connection,
+            self.local_addr,
+            remote_addr,
+            session_id,
+            scope,
+            session_group.clone(),
+            self.admission.clone(),
+            self.security.clone(),
+            self.principal.clone(),
+            peer_is_tls,
+            self.config.request_timeout,
+            Arc::new(ProcessorSessionHandler {
+                processor: self.processor.clone(),
+                request_timeout: self.config.request_timeout,
+                session_group,
+            }),
+        )
+        .await;
     }
 
-    fn acquire_request(
-        &self,
-        scope: AdmissionScope,
-        bytes: usize,
-        class: AdmissionClass,
-    ) -> Result<RequestAdmission, AdmissionError> {
-        let inflight = self
-            .admission
-            .try_acquire(AdmissionResource::Inflight, scope, bytes, class)?;
-        let processor = self
-            .admission
-            .try_acquire(AdmissionResource::Processor, scope, bytes, class)?;
-        Ok(RequestAdmission {
-            _inflight: inflight,
-            _processor: processor,
-        })
-    }
-
-    /// Returns the number of currently owned accept, session, and processor tasks.
+    /// Returns the number of top-level tasks and active session owners.
     #[must_use]
     pub fn live_task_count(&self) -> usize {
-        self.service_context.task_group().task_count()
+        self.service_context
+            .task_group()
+            .task_count()
+            .saturating_add(self.active_sessions.load(Ordering::Acquire))
     }
 
     /// Returns the number of child ownership groups retained by the server.
