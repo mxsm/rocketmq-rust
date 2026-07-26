@@ -36,10 +36,10 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use rocketmq_auth::authorization::evaluator::AuthorizationEvaluator;
-//! use rocketmq_auth::authorization::context::default_authorization_context::DefaultAuthorizationContext;
-//! use rocketmq_auth::authorization::strategy::stateless_authorization_strategy::StatelessAuthorizationStrategy;
-//! use rocketmq_auth::config::AuthConfig;
+//! use rocketmq_auth::AuthorizationEvaluator;
+//! use rocketmq_auth::DefaultAuthorizationContext;
+//! use rocketmq_auth::StatelessAuthorizationStrategy;
+//! use rocketmq_auth::AuthConfig;
 //!
 //! let config = AuthConfig::default();
 //! let strategy = StatelessAuthorizationStrategy::new(config, None);
@@ -113,8 +113,8 @@ where
     /// # Examples
     ///
     /// ```rust,ignore
-    /// use rocketmq_auth::authorization::evaluator::AuthorizationEvaluator;
-    /// use rocketmq_auth::authorization::strategy::stateless_authorization_strategy::StatelessAuthorizationStrategy;
+    /// use rocketmq_auth::AuthorizationEvaluator;
+    /// use rocketmq_auth::StatelessAuthorizationStrategy;
     ///
     /// let strategy = StatelessAuthorizationStrategy::new(config, None);
     /// let evaluator = AuthorizationEvaluator::new(strategy);

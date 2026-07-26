@@ -114,7 +114,7 @@ fn test_all_controller_error_variants_convert() {
         ControllerError::NetworkError("network error".to_string()),
         ControllerError::Timeout { timeout_ms: 1000 },
         ControllerError::RuntimeError("runtime error".to_string()),
-        ControllerError::Internal("internal".to_string()),
+        ControllerError::runtime_source("join controller task", io::Error::other("task failed")),
         ControllerError::Shutdown,
     ];
 

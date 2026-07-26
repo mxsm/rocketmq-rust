@@ -92,7 +92,7 @@ impl<P: AuthenticationMetadataProvider> DefaultAuthenticationHandler<P> {
         self.authentication_metadata_provider
             .get_user(username.as_str())
             .await
-            .map_err(|e| AuthError::AuthenticationFailed(format!("Failed to get user: {}", e)))
+            .map_err(|source| AuthError::operation("load authentication user", source))
     }
 
     /// Perform authentication logic.

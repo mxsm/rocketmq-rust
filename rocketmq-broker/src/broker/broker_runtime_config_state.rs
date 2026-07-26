@@ -22,7 +22,7 @@ use crate::config::error::BrokerConfigError;
 use crate::config::transaction::ConfigUpdateTransaction;
 use crate::config::validated::ConfigGeneration;
 use crate::config::validated::ValidatedBrokerConfig;
-use rocketmq_store::config::message_store_config::MessageStoreConfig;
+use rocketmq_store::MessageStoreConfig;
 
 /// An atomically published broker and message-store configuration generation.
 ///
@@ -179,7 +179,7 @@ mod tests {
     use crate::config::validated::ValidatedBrokerConfig;
     use cheetah_string::CheetahString;
     use rocketmq_model::common::broker::broker_role::BrokerRole;
-    use rocketmq_store::config::message_store_config::MessageStoreConfig;
+    use rocketmq_store::MessageStoreConfig;
 
     use super::BrokerRuntimeConfigState;
 

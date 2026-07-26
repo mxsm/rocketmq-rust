@@ -82,8 +82,8 @@ pub mod bench_support {
     use rocketmq_runtime::schedule::simple_scheduler::ScheduledShutdownReport;
     use rocketmq_runtime::ChildServiceContext;
     use rocketmq_runtime::RuntimeContext;
-    use rocketmq_store::config::message_store_config::MessageStoreConfig;
-    use rocketmq_store::store_path_config_helper::get_delay_offset_store_path;
+    use rocketmq_store::get_delay_offset_store_path;
+    use rocketmq_store::MessageStoreConfig;
     use serde::Serialize;
 
     pub use crate::client::client_channel_info::ClientChannelInfo;

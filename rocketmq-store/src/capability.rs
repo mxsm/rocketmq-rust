@@ -30,8 +30,9 @@ use rocketmq_store_api::MessageReader;
 use rocketmq_store_api::QueryResult;
 use rocketmq_store_api::ReadCacheState;
 use rocketmq_store_api::SelectResult;
+use rocketmq_store_api::StoreComponent;
 use rocketmq_store_api::StoreError;
-use rocketmq_store_api::StoreErrorKind as ApiStoreErrorKind;
+use rocketmq_store_api::StoreErrorKind;
 use rocketmq_store_api::StoreHealth;
 use rocketmq_store_api::StoreHealthSnapshot as ApiStoreHealthSnapshot;
 
@@ -43,7 +44,6 @@ use crate::base::message_store::MessageStore;
 use crate::base::query_message_result::QueryMessageResult;
 use crate::base::select_result::SelectMappedBufferCacheState;
 use crate::base::select_result::SelectMappedBufferResult;
-use crate::store_error::StoreErrorKind;
 
 /// Backend append output plus independent append and durable progress.
 #[derive(Clone)]
@@ -130,19 +130,6 @@ pub const fn put_status_to_append_status(status: PutMessageStatus) -> AppendStat
     }
 }
 
-/// Maps exact backend failure vocabulary to closed backend-neutral categories.
-pub const fn store_error_kind_to_api(kind: StoreErrorKind) -> ApiStoreErrorKind {
-    match kind {
-        StoreErrorKind::NotStarted => ApiStoreErrorKind::NotStarted,
-        StoreErrorKind::MessageNotFound | StoreErrorKind::MappedFileNotFound => ApiStoreErrorKind::NotFound,
-        StoreErrorKind::Config => ApiStoreErrorKind::InvalidRequest,
-        StoreErrorKind::Unsupported => ApiStoreErrorKind::Unsupported,
-        StoreErrorKind::MappedFile | StoreErrorKind::RocksDb | StoreErrorKind::Storage => ApiStoreErrorKind::Storage,
-        StoreErrorKind::TieredStore | StoreErrorKind::Ha | StoreErrorKind::DLedger => ApiStoreErrorKind::Unavailable,
-        StoreErrorKind::InvalidState => ApiStoreErrorKind::Internal,
-    }
-}
-
 /// Maps every backend get outcome without changing its semantics.
 pub const fn get_status_to_api(status: GetMessageStatus) -> GetStatus {
     match status {
@@ -163,17 +150,37 @@ pub const fn get_status_to_api(status: GetMessageStatus) -> GetStatus {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StoreHealthError {
     kind: StoreErrorKind,
+    component: StoreComponent,
 }
 
 impl StoreHealthError {
     /// Creates an exact projection from the backend kind.
     pub const fn new(kind: StoreErrorKind) -> Self {
-        Self { kind }
+        Self {
+            kind,
+            component: StoreComponent::Store,
+        }
+    }
+
+    /// Creates a health projection with an exact component token.
+    pub const fn in_component(kind: StoreErrorKind, component: StoreComponent) -> Self {
+        Self { kind, component }
+    }
+
+    /// Creates an exact projection from one canonical store error.
+    pub const fn from_error(error: &crate::base::message_store::StoreHealthError) -> Self {
+        Self {
+            kind: error.kind,
+            component: error.component,
+        }
     }
 
     /// Returns the original low-cardinality backend token.
     pub const fn backend_token(self) -> &'static str {
-        self.kind.as_str()
+        match self.component {
+            StoreComponent::Store | StoreComponent::Configuration => self.kind.as_str(),
+            component => component.as_str(),
+        }
     }
 }
 
@@ -223,7 +230,7 @@ impl StoreHealthSnapshot {
     pub fn canonical(&self) -> ApiStoreHealthSnapshot {
         ApiStoreHealthSnapshot {
             writable: self.writable,
-            last_error: self.last_error.map(|error| store_error_kind_to_api(error.kind)),
+            last_error: self.last_error.map(|error| error.kind),
             page_cache_busy: self.page_cache_busy,
             transient_pool_deficient: self.transient_pool_deficient,
             flush_backlog: ApiFlushBacklog {
@@ -528,10 +535,7 @@ pub fn store_health_snapshot<MS: MessageStore>(store: &MS) -> StoreHealthSnapsho
     let backend = store.health_snapshot();
     StoreHealthSnapshot {
         writable: backend.writeable,
-        last_error: backend
-            .last_flush_error
-            .as_ref()
-            .map(|error| StoreHealthError::new(error.kind)),
+        last_error: backend.last_flush_error.as_ref().map(StoreHealthError::from_error),
         page_cache_busy: backend.os_page_cache_busy,
         transient_pool_deficient: backend.transient_store_pool_deficient,
         flush_backlog: StoreFlushBacklog {

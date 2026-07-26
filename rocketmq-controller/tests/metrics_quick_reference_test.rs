@@ -18,10 +18,13 @@
 mod quick_reference_tests {
     use std::time::Instant;
 
-    use rocketmq_controller::config::ControllerConfig;
-    use rocketmq_controller::config::ControllerConfigReader;
-    use rocketmq_controller::metrics::controller_metrics_manager::ControllerMetricsManager;
-    use rocketmq_controller::metrics::*;
+    use rocketmq_controller::ControllerConfig;
+    use rocketmq_controller::ControllerConfigReader;
+    use rocketmq_controller::ControllerMetricsManager;
+    use rocketmq_controller::DLedgerOperation;
+    use rocketmq_controller::DLedgerOperationStatus;
+    use rocketmq_controller::ElectionResult;
+    use rocketmq_controller::RequestHandleStatus;
 
     #[test]
     fn test_initialization() {

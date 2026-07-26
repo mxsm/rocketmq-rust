@@ -55,7 +55,7 @@ impl GeneralHAServiceReference {
         };
         self.target
             .set(target)
-            .map_err(|_| HAError::Service("General HA service reference already bound".to_string()))
+            .map_err(|_| HAError::invalid_state("General HA service reference already bound"))
     }
 
     pub(crate) fn upgrade(&self) -> Option<GeneralHAService> {
@@ -85,10 +85,10 @@ impl GeneralHAService {
         let reference = GeneralHAServiceReference::new();
         match self {
             GeneralHAService::DefaultHAService(service) => Arc::get_mut(service)
-                .ok_or_else(|| HAError::Service("Default HA root was shared before initialization".to_string()))?
+                .ok_or_else(|| HAError::invalid_state("Default HA root was shared before initialization"))?
                 .init(reference.clone(), None)?,
             GeneralHAService::AutoSwitchHAService(service) => Arc::get_mut(service)
-                .ok_or_else(|| HAError::Service("AutoSwitch HA root was shared before initialization".to_string()))?
+                .ok_or_else(|| HAError::invalid_state("AutoSwitch HA root was shared before initialization"))?
                 .init(reference.clone())?,
         }
         reference.bind(self)

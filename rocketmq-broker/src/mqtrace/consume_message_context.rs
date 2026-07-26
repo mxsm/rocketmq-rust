@@ -16,7 +16,7 @@ use std::collections::HashMap;
 
 use cheetah_string::CheetahString;
 use rocketmq_model::common::config::TopicConfig;
-use rocketmq_store::stats::stats_type::StatsType;
+use rocketmq_store::StatsType;
 
 pub struct ConsumeMessageContext<'a> {
     pub consumer_group: &'a CheetahString,

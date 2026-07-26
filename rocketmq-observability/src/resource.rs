@@ -12,14 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[cfg(any(feature = "otel-metrics", feature = "otel-traces", feature = "otel-logs", test))]
 use crate::config::ObservabilityConfig;
 
+#[cfg(any(feature = "otel-metrics", feature = "otel-traces", feature = "otel-logs", test))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResourceAttribute {
     pub key: String,
     pub value: String,
 }
 
+#[cfg(any(feature = "otel-metrics", feature = "otel-traces", feature = "otel-logs", test))]
 pub fn build_resource_attributes(config: &ObservabilityConfig) -> Vec<ResourceAttribute> {
     let mut attributes = vec![
         ResourceAttribute::new("service.name", &config.service_name),
@@ -50,6 +53,7 @@ pub fn build_resource_attributes(config: &ObservabilityConfig) -> Vec<ResourceAt
     attributes
 }
 
+#[cfg(any(feature = "otel-metrics", feature = "otel-traces", feature = "otel-logs", test))]
 impl ResourceAttribute {
     fn new(key: impl Into<String>, value: impl Into<String>) -> Self {
         Self {

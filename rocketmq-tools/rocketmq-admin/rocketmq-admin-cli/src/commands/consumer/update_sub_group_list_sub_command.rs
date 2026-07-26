@@ -60,12 +60,18 @@ impl UpdateSubGroupListSubCommand {
         let mut group_config_list_bytes = Vec::new();
         File::open(&self.file)
             .await
-            .map_err(|e| RocketMQError::Internal(format!("open file error {}", e)))?
+            .map_err(RocketMQError::IO)?
             .read_to_end(&mut group_config_list_bytes)
             .await?;
 
-        let group_configs = serde_json::from_slice::<Vec<SubscriptionGroupConfig>>(&group_config_list_bytes)
-            .map_err(|e| RocketMQError::Internal(format!("parse json error {}", e)))?;
+        let group_configs =
+            serde_json::from_slice::<Vec<SubscriptionGroupConfig>>(&group_config_list_bytes).map_err(|source| {
+                RocketMQError::Serialization(rocketmq_error::SerializationError::source(
+                    "decode subscription group list",
+                    "JSON",
+                    source,
+                ))
+            })?;
         UpdateSubscriptionGroupListRequest::try_new(self.broker_addr.clone(), self.cluster_name.clone(), group_configs)
     }
 
@@ -85,15 +91,19 @@ impl UpdateSubGroupListSubCommand {
         if result.failures.is_empty() {
             Ok(())
         } else {
-            Err(RocketMQError::Internal(format!(
-                "UpdateSubGroupListSubCommand: Failed to update brokers: {}",
-                result
-                    .failures
-                    .iter()
-                    .map(|failure| failure.broker_addr.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )))
+            Err(RocketMQError::broker_operation_failed(
+                "UPDATE_SUBSCRIPTION_GROUP_LIST",
+                -1,
+                format!(
+                    "UpdateSubGroupListSubCommand: Failed to update brokers: {}",
+                    result
+                        .failures
+                        .iter()
+                        .map(|failure| failure.broker_addr.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            ))
         }
     }
 }

@@ -31,7 +31,7 @@ use rocketmq_model::common::filter::expression_type::ExpressionType;
 use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_store::config::message_store_config::MessageStoreConfig;
+use rocketmq_store::MessageStoreConfig;
 
 use crate::broker_path_config_helper::get_consumer_filter_path;
 use crate::filter::consumer_filter_data::ConsumerFilterData;

@@ -83,8 +83,8 @@ use crate::runtime_bridge::AuthBlockingExecutor;
 /// # Examples
 ///
 /// ```rust,ignore
-/// use rocketmq_auth::authorization::metadata_provider::local::LocalAuthorizationMetadataProvider;
-/// use rocketmq_auth::config::AuthConfig;
+/// use rocketmq_auth::LocalAuthorizationMetadataProvider;
+/// use rocketmq_auth::AuthConfig;
 ///
 /// let config = AuthConfig {
 ///     auth_config_path: "/path/to/config".to_string(),

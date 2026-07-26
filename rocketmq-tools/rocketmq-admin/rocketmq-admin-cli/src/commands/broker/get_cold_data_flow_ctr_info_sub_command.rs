@@ -51,10 +51,11 @@ impl GetColdDataFlowCtrInfoSubCommand {
             return Ok(());
         }
 
-        let mut json_value: Value = serde_json::from_str(section.raw_info.as_str()).map_err(|e| {
-            RocketMQError::Internal(format!(
-                "GetColdDataFlowCtrInfoSubCommand: Failed to parse JSON response from broker {}: {}",
-                section.broker_addr, e
+        let mut json_value: Value = serde_json::from_str(section.raw_info.as_str()).map_err(|source| {
+            RocketMQError::Serialization(rocketmq_error::SerializationError::source(
+                "decode cold-data flow response",
+                "JSON",
+                source,
             ))
         })?;
 
@@ -90,8 +91,12 @@ impl GetColdDataFlowCtrInfoSubCommand {
             }
         }
 
-        let format_str = serde_json::to_string_pretty(&json_value).map_err(|e| {
-            RocketMQError::Internal(format!("GetColdDataFlowCtrInfoSubCommand: Failed to format JSON: {e}"))
+        let format_str = serde_json::to_string_pretty(&json_value).map_err(|source| {
+            RocketMQError::Serialization(rocketmq_error::SerializationError::source(
+                "encode cold-data flow response",
+                "JSON",
+                source,
+            ))
         })?;
         println!("{format_str}");
         Ok(())

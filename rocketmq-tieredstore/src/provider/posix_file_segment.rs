@@ -423,7 +423,8 @@ mod tests {
 
     #[tokio::test]
     async fn write_read_size_and_delete() -> Result<(), RocketMQError> {
-        let temp_dir = tempfile::tempdir().map_err(|err| RocketMQError::Internal(err.to_string()))?;
+        let temp_dir =
+            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
         let provider = PosixProvider::new(temp_dir.path().to_path_buf());
 
         provider
@@ -460,7 +461,8 @@ mod tests {
 
     #[tokio::test]
     async fn create_append_commit_and_recover_segment() -> Result<(), RocketMQError> {
-        let temp_dir = tempfile::tempdir().map_err(|err| RocketMQError::Internal(err.to_string()))?;
+        let temp_dir =
+            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
         let provider = PosixProvider::new(temp_dir.path().to_path_buf());
         let path = "topic/0/commitlog/00000000000000000000".to_owned();
         let segment = provider

@@ -18,12 +18,12 @@ use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use rocketmq_controller::config::ControllerConfig;
-use rocketmq_controller::config::ControllerConfigReader;
-use rocketmq_controller::config::StorageBackendType;
-use rocketmq_controller::openraft::RaftNodeManager;
-use rocketmq_controller::typ::ControllerRequest;
-use rocketmq_controller::typ::Node;
+use rocketmq_controller::ControllerConfig;
+use rocketmq_controller::ControllerConfigReader;
+use rocketmq_controller::ControllerRequest;
+use rocketmq_controller::Node;
+use rocketmq_controller::RaftNodeManager;
+use rocketmq_controller::StorageBackendType;
 
 fn reserve_address() -> SocketAddr {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("reserve loopback address");

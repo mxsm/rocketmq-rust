@@ -22,7 +22,7 @@ mod tests {
     use std::time::SystemTime;
     use std::time::UNIX_EPOCH;
 
-    use rocketmq_store::rocksdb::column_family::RocksDbColumnFamily;
+    use rocketmq_store::RocksDbColumnFamily;
 
     use super::rocksdb_store::pop_rocksdb_path;
     use super::rocksdb_store::PopConsumerRecord;

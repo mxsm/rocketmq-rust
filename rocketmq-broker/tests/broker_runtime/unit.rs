@@ -34,13 +34,13 @@ use bytes::BufMut;
 use bytes::Bytes;
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
-use rocketmq_controller::config::RaftPeer;
-use rocketmq_controller::config::StorageBackendType;
-use rocketmq_controller::controller::broker_heartbeat_manager::BrokerHeartbeatManager;
-use rocketmq_controller::typ::Node;
+use rocketmq_controller::BrokerHeartbeatManager;
 use rocketmq_controller::Controller;
 use rocketmq_controller::ControllerConfig as TestControllerConfig;
 use rocketmq_controller::ControllerManager as TestControllerManager;
+use rocketmq_controller::Node;
+use rocketmq_controller::RaftPeer;
+use rocketmq_controller::StorageBackendType;
 use rocketmq_model::common::attribute::subscription_group_attributes::LITE_BIND_TOPIC_ATTRIBUTE_NAME;
 use rocketmq_model::common::attribute::topic_attributes;
 use rocketmq_model::common::attribute::Attribute;
@@ -122,28 +122,28 @@ use rocketmq_protocol::protocol::RemotingDeserializable;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::RuntimeContext;
-use rocketmq_store::base::message_status_enum::GetMessageStatus;
-use rocketmq_store::base::message_store::MessageStore;
-use rocketmq_store::config::flush_disk_type::FlushDiskType;
-use rocketmq_store::config::message_store_config::MessageStoreConfig;
-use rocketmq_store::ha::ha_service::HAService;
-use rocketmq_store::queue::consume_queue_store::ConsumeQueueStoreTrait;
-use rocketmq_store::timer::timer_checkpoint::TimerCheckpointSnapshot;
-use rocketmq_store::timer::timer_message_store::TimerMessageStore;
-use rocketmq_store::utils::ffi::MADV_NORMAL;
-use rocketmq_transport::base::response_future::ResponseFuture;
-use rocketmq_transport::clients::rocketmq_tokio_client::RocketmqDefaultClient;
-use rocketmq_transport::clients::RemotingClient;
-use rocketmq_transport::config::ServerConfig;
-use rocketmq_transport::connection::Connection;
-use rocketmq_transport::local::LocalRequestHarness;
-use rocketmq_transport::net::channel::Channel;
-use rocketmq_transport::net::channel::ChannelInner;
-use rocketmq_transport::remoting::RemotingService;
-use rocketmq_transport::request_processor::default_request_processor::DefaultRemotingRequestProcessor;
-use rocketmq_transport::runtime::config::client_config::TokioClientConfig;
-use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
-use rocketmq_transport::runtime::processor::RequestProcessor;
+use rocketmq_store::ConsumeQueueStoreTrait;
+use rocketmq_store::FlushDiskType;
+use rocketmq_store::GetMessageStatus;
+use rocketmq_store::HAService;
+use rocketmq_store::MessageStore;
+use rocketmq_store::MessageStoreConfig;
+use rocketmq_store::TimerCheckpointSnapshot;
+use rocketmq_store::TimerMessageStore;
+use rocketmq_store::MADV_NORMAL;
+use rocketmq_transport::Channel;
+use rocketmq_transport::ChannelInner;
+use rocketmq_transport::Connection;
+use rocketmq_transport::ConnectionHandlerContextWrapper;
+use rocketmq_transport::DefaultRemotingRequestProcessor;
+use rocketmq_transport::LocalRequestHarness;
+use rocketmq_transport::RemotingClient;
+use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
+use rocketmq_transport::RemotingService;
+use rocketmq_transport::ResponseFuture;
+use rocketmq_transport::RocketmqDefaultClient;
+use rocketmq_transport::ServerConfig;
+use rocketmq_transport::TokioClientConfig;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
@@ -301,9 +301,9 @@ fn next_controller_test_temp_id() -> u64 {
 #[test]
 fn build_broker_observability_config_maps_otlp_settings() {
     let broker_config = BrokerConfig {
-        metrics_exporter_type: rocketmq_observability::exporter_types::MetricsExporterType::OtlpGrpc,
-        trace_exporter_type: rocketmq_observability::exporter_types::TraceExporterType::OtlpGrpc,
-        log_exporter_type: rocketmq_observability::exporter_types::LogExporterType::OtlpGrpc,
+        metrics_exporter_type: rocketmq_observability::MetricsExporterType::OtlpGrpc,
+        trace_exporter_type: rocketmq_observability::TraceExporterType::OtlpGrpc,
+        log_exporter_type: rocketmq_observability::LogExporterType::OtlpGrpc,
         observability_environment: "prod".into(),
         observability_service_instance_id: "broker-a-0".into(),
         observability_resource_attributes: "zone:az-a,rack:rack-1".into(),
@@ -354,7 +354,7 @@ fn build_broker_observability_config_maps_otlp_settings() {
 fn build_broker_observability_config_maps_logging_bootstrap_defaults() {
     let broker_config = BrokerConfig {
         store_path_root_dir: "target/broker-telemetry-bootstrap".into(),
-        log_exporter_type: rocketmq_observability::exporter_types::LogExporterType::Log,
+        log_exporter_type: rocketmq_observability::LogExporterType::Log,
         ..Default::default()
     };
 
@@ -756,7 +756,8 @@ fn broker_shutdown_timeout_report_preserves_unfinished_components() {
 fn broker_store_shutdown_failure_preserves_typed_cause_and_remains_unfinished() {
     let progress = BrokerShutdownProgress::new();
     let mut report = BrokerBasicServiceShutdownReport::default();
-    let error = rocketmq_store::store_error::StoreError::Storage("injected final flush failure".to_string());
+    let error =
+        rocketmq_store::StoreError::storage(rocketmq_store::StoreOperation::Shutdown, "injected final flush failure");
 
     record_message_store_shutdown_outcome(
         &mut report,
@@ -2608,7 +2609,8 @@ async fn admin_runtime_does_not_retain_message_store_root() {
     assert!(admin.put_message(MessageExtBrokerInner::default()).await.is_err());
     assert!(matches!(
         admin.set_commitlog_read_mode(MADV_NORMAL),
-        Err(crate::broker::broker_admin_runtime::CommitLogReadModeUpdateError::Store(StoreError::NotStarted))
+        Err(crate::broker::broker_admin_runtime::CommitLogReadModeUpdateError::Store(error))
+            if error.kind() == rocketmq_store::StoreErrorKind::NotStarted
     ));
     assert!(admin.delete_topics(Vec::new()).is_err());
 

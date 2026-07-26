@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_store::ha::transfer_engine::TransferEngineKind;
-use rocketmq_store::ha::transfer_engine::TransferStats;
-use rocketmq_store::ha::transfer_metrics::HaTransferMetrics;
-use rocketmq_store::ha::transfer_metrics::TransferFallbackSnapshot;
+use rocketmq_store::HaTransferMetrics;
+use rocketmq_store::TransferEngineKind;
+use rocketmq_store::TransferFallbackSnapshot;
+use rocketmq_store::TransferStats;
 
 #[test]
 fn ha_transfer_metrics_records_transfer_stats_by_engine() {

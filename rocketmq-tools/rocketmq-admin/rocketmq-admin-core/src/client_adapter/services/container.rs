@@ -15,7 +15,7 @@
 //! Broker container admin service models and operations.
 
 use cheetah_string::CheetahString;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
+use rocketmq_client_rust::MQAdminExt;
 use serde::Deserialize;
 use serde::Serialize;
 

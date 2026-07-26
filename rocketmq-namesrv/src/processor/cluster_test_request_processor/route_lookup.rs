@@ -32,11 +32,11 @@ use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::TaskGroup;
-use rocketmq_transport::admission::AdmissionController;
-use rocketmq_transport::admission::AdmissionLimits;
-use rocketmq_transport::client::TransportClient;
-use rocketmq_transport::deadline::RequestDeadline;
-use rocketmq_transport::discovery::default_top_addressing::DefaultTopAddressing;
+use rocketmq_transport::AdmissionController;
+use rocketmq_transport::AdmissionLimits;
+use rocketmq_transport::DefaultTopAddressing;
+use rocketmq_transport::RequestDeadline;
+use rocketmq_transport::TransportClient;
 
 const ROUTE_LOOKUP_TIMEOUT: Duration = Duration::from_secs(3);
 const ROUTE_LOOKUP_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
@@ -294,9 +294,9 @@ mod tests {
     use rocketmq_protocol::protocol::route::route_data_view::QueueData;
     use rocketmq_protocol::protocol::RemotingSerializable;
     use rocketmq_runtime::RuntimeContext;
-    use rocketmq_transport::server::RequestProcessor;
-    use rocketmq_transport::server::TransportServer;
-    use rocketmq_transport::server::TransportServerConfig;
+    use rocketmq_transport::SessionRequestProcessor as RequestProcessor;
+    use rocketmq_transport::TransportServer;
+    use rocketmq_transport::TransportServerConfig;
     use tokio::sync::Notify;
 
     use super::*;

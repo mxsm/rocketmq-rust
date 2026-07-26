@@ -28,11 +28,11 @@ use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
-use rocketmq_client_rust::base::client_config::ClientConfig;
-use rocketmq_client_rust::consumer::consumer_impl::process_queue::ProcessQueue;
-use rocketmq_client_rust::consumer::consumer_impl::pull_message_service::PullMessageService;
-use rocketmq_client_rust::consumer::consumer_impl::pull_request::PullRequest;
-use rocketmq_client_rust::factory::mq_client_instance::MQClientInstance;
+use rocketmq_client_rust::ClientConfig;
+use rocketmq_client_rust::MQClientInstance;
+use rocketmq_client_rust::ProcessQueue;
+use rocketmq_client_rust::PullMessageService;
+use rocketmq_client_rust::PullRequest;
 use rocketmq_model::common::message::message_queue::MessageQueue;
 
 mod support;

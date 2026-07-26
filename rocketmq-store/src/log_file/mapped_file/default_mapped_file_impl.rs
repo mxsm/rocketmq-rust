@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub use super::MmapRegionSlice;
 pub use rocketmq_store_local::mapped_file::LazyMmapStats;
 pub use rocketmq_store_local::mapped_file::OS_PAGE_SIZE;
 

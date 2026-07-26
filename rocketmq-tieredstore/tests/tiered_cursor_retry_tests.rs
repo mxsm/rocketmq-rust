@@ -204,7 +204,8 @@ async fn wait_for_health<P>(
 
 #[tokio::test]
 async fn timeout_ledger_survives_restart_without_payload_and_releases_wal_pin() -> Result<(), RocketMQError> {
-    let temp_dir = tempfile::tempdir().map_err(|error| RocketMQError::Internal(error.to_string()))?;
+    let temp_dir =
+        tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
     let root = temp_dir.path().join("tiered");
     let provider_root = temp_dir.path().join("provider");
     let config = test_config(root.clone());
@@ -234,7 +235,7 @@ async fn timeout_ledger_survives_restart_without_payload_and_releases_wal_pin() 
     assert_eq!(failed_health.minimum_pinned_wal_segment(), Some(32));
     let progress_bytes = tokio::fs::read(root.join("config").join("tieredDispatchProgress.bin"))
         .await
-        .map_err(|error| RocketMQError::Internal(error.to_string()))?;
+        .map_err(|source| RocketMQError::internal("read retry progress", source))?;
     assert!(!progress_bytes.windows(body.len()).any(|window| window == body.as_ref()));
     store.shutdown().await?;
 
@@ -265,7 +266,8 @@ async fn timeout_ledger_survives_restart_without_payload_and_releases_wal_pin() 
 
 #[tokio::test]
 async fn partial_provider_write_resumes_and_duplicate_commit_is_idempotent() -> Result<(), RocketMQError> {
-    let temp_dir = tempfile::tempdir().map_err(|error| RocketMQError::Internal(error.to_string()))?;
+    let temp_dir =
+        tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
     let config = test_config(temp_dir.path().join("tiered"));
     let body = Bytes::from_static(b"partial-write-body");
     let source_record = record(&config, 0, body.len());
@@ -307,7 +309,8 @@ async fn partial_provider_write_resumes_and_duplicate_commit_is_idempotent() -> 
 
 #[tokio::test]
 async fn failed_partition_is_isolated_after_retry_is_durable() -> Result<(), RocketMQError> {
-    let temp_dir = tempfile::tempdir().map_err(|error| RocketMQError::Internal(error.to_string()))?;
+    let temp_dir =
+        tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
     let mut config = test_config(temp_dir.path().join("tiered"));
     config.retry_backoff_initial = Duration::from_secs(10);
     config.retry_backoff_max = Duration::from_secs(10);
@@ -345,7 +348,8 @@ async fn failed_partition_is_isolated_after_retry_is_durable() -> Result<(), Roc
 
 #[tokio::test]
 async fn full_retry_ledger_holds_cursor_and_applies_byte_backpressure() -> Result<(), RocketMQError> {
-    let temp_dir = tempfile::tempdir().map_err(|error| RocketMQError::Internal(error.to_string()))?;
+    let temp_dir =
+        tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
     let mut config = test_config(temp_dir.path().join("tiered"));
     config.max_pending_tasks = 1;
     config.max_pending_bytes = 4;
@@ -396,7 +400,8 @@ async fn full_retry_ledger_holds_cursor_and_applies_byte_backpressure() -> Resul
 
 #[tokio::test]
 async fn retry_source_byte_limit_stops_cursor_before_unrecorded_failure() -> Result<(), RocketMQError> {
-    let temp_dir = tempfile::tempdir().map_err(|error| RocketMQError::Internal(error.to_string()))?;
+    let temp_dir =
+        tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
     let mut config = test_config(temp_dir.path().join("tiered"));
     config.retry_ledger_max_entries = 4;
     config.retry_ledger_max_bytes = 4;
@@ -436,7 +441,8 @@ async fn retry_source_byte_limit_stops_cursor_before_unrecorded_failure() -> Res
 
 #[tokio::test]
 async fn retry_age_limit_fails_readiness_without_losing_durable_entry() -> Result<(), RocketMQError> {
-    let temp_dir = tempfile::tempdir().map_err(|error| RocketMQError::Internal(error.to_string()))?;
+    let temp_dir =
+        tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
     let mut config = test_config(temp_dir.path().join("tiered"));
     config.retry_ledger_max_age = Duration::from_millis(10);
     config.retry_backoff_initial = Duration::from_millis(5);
@@ -465,7 +471,8 @@ async fn retry_age_limit_fails_readiness_without_losing_durable_entry() -> Resul
 
 #[tokio::test]
 async fn corrupted_progress_snapshot_fails_restart_closed() -> Result<(), RocketMQError> {
-    let temp_dir = tempfile::tempdir().map_err(|error| RocketMQError::Internal(error.to_string()))?;
+    let temp_dir =
+        tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
     let root = temp_dir.path().join("tiered");
     let provider_root = temp_dir.path().join("provider");
     let config = test_config(root.clone());
@@ -486,14 +493,14 @@ async fn corrupted_progress_snapshot_fails_restart_closed() -> Result<(), Rocket
     let progress_path = root.join("config").join("tieredDispatchProgress.bin");
     let mut encoded = tokio::fs::read(&progress_path)
         .await
-        .map_err(|error| RocketMQError::Internal(error.to_string()))?;
+        .map_err(|source| RocketMQError::internal("read progress snapshot", source))?;
     let last = encoded
         .last_mut()
-        .ok_or_else(|| RocketMQError::Internal("empty progress snapshot".to_owned()))?;
+        .ok_or_else(|| RocketMQError::invariant_violated("progress snapshot must not be empty"))?;
     *last ^= 0xFF;
     tokio::fs::write(&progress_path, encoded)
         .await
-        .map_err(|error| RocketMQError::Internal(error.to_string()))?;
+        .map_err(|source| RocketMQError::internal("write corrupted progress snapshot", source))?;
 
     let restarted = TieredStore::with_provider(
         config,

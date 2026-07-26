@@ -14,7 +14,7 @@
 
 //! Compatibility exports for Proxy session contracts.
 
-use rocketmq_transport::net::channel::Channel;
+use rocketmq_transport::Channel;
 
 pub use rocketmq_proxy_core::session::build_lite_subscription_sync_request;
 pub use rocketmq_proxy_core::session::ClientSession;

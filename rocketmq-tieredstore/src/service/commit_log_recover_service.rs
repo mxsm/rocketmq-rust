@@ -76,7 +76,8 @@ mod tests {
 
     #[tokio::test]
     async fn recover_corrects_half_committed_segment_metadata_size() -> Result<(), RocketMQError> {
-        let temp_dir = tempfile::tempdir().map_err(|err| RocketMQError::Internal(err.to_string()))?;
+        let temp_dir =
+            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
         let config = Arc::new(TieredStoreConfig {
             store_path_root_dir: temp_dir.path().to_path_buf(),
             backend_provider: "memory".to_owned(),
@@ -139,7 +140,7 @@ mod tests {
         assert_eq!(result.flat_file_count, 1);
         let flat_file = flat_file_store
             .get("TopicA", 0)
-            .ok_or_else(|| RocketMQError::Internal("missing recovered flat file".to_owned()))?;
+            .ok_or_else(|| RocketMQError::invariant_violated("recovery must publish a recovered flat file"))?;
         assert_eq!(
             flat_file.read_message_by_queue_offset(0).await?,
             Some(Bytes::from_static(b"body"))

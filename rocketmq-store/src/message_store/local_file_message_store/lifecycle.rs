@@ -430,22 +430,28 @@ impl LocalFileMessageStore {
         match self.lifecycle_state() {
             LocalStoreState::Initialized => {}
             LocalStoreState::Created => {
-                return Err(StoreError::InvalidState(
+                return Err(StoreError::invalid_state(
+                    StoreOperation::Start,
                     "message store must be initialized before start".to_string(),
                 ));
             }
             LocalStoreState::Started => {
-                return Err(StoreError::InvalidState("message store is already started".to_string()));
+                return Err(StoreError::invalid_state(
+                    StoreOperation::Start,
+                    "message store is already started",
+                ));
             }
             LocalStoreState::Shutdown => {
-                return Err(StoreError::InvalidState(
+                return Err(StoreError::invalid_state(
+                    StoreOperation::Start,
                     "message store is shutdown; call init before start".to_string(),
                 ));
             }
             LocalStoreState::RecoveringConsumeQueue
             | LocalStoreState::RecoveringCommitLog
             | LocalStoreState::RecoveringTopicQueueTable => {
-                return Err(StoreError::InvalidState(
+                return Err(StoreError::invalid_state(
+                    StoreOperation::Start,
                     "message store is recovering; start is not allowed".to_string(),
                 ));
             }
@@ -498,7 +504,7 @@ impl LocalFileMessageStore {
             if let Some(ha_service) = self.ha_service.as_mut() {
                 ha_service.start().await.map_err(|e| {
                     error!("HA service start failed: {:?}", e);
-                    StoreError::Ha(e.to_string())
+                    StoreError::high_availability(StoreOperation::Start, e)
                 })?;
             }
             self.create_temp_file();
@@ -536,14 +542,16 @@ impl LocalFileMessageStore {
             LocalStoreState::Created | LocalStoreState::Shutdown => {}
             LocalStoreState::Initialized => return Ok(()),
             LocalStoreState::Started => {
-                return Err(StoreError::InvalidState(
+                return Err(StoreError::invalid_state(
+                    StoreOperation::Load,
                     "message store cannot be initialized while started".to_string(),
                 ));
             }
             LocalStoreState::RecoveringConsumeQueue
             | LocalStoreState::RecoveringCommitLog
             | LocalStoreState::RecoveringTopicQueueTable => {
-                return Err(StoreError::InvalidState(
+                return Err(StoreError::invalid_state(
+                    StoreOperation::Load,
                     "message store cannot be initialized while recovering".to_string(),
                 ));
             }
@@ -554,7 +562,10 @@ impl LocalFileMessageStore {
         {
             self.ensure_root_dependencies_wired("init")?;
             let pending_ha_service = self.pending_ha_service.take().ok_or_else(|| {
-                StoreError::InvalidState("HA service was not constructed while wiring root dependencies".to_string())
+                StoreError::invalid_state(
+                    StoreOperation::Load,
+                    "HA service was not constructed while wiring root dependencies",
+                )
             })?;
             let mut ha_service = match pending_ha_service {
                 PendingHAService::Default(service) => GeneralHAService::new_with_default_ha_service(*service),
@@ -591,7 +602,11 @@ impl LocalFileMessageStore {
         if self.is_transient_store_pool_enable() {
             match self.transient_store_pool.init() {
                 Ok(_) => {}
-                Err(e) => return Err(StoreError::Storage(e.to_string())),
+                Err(source) => {
+                    return Err(StoreError::new(StoreErrorKind::Storage, StoreOperation::Load)
+                        .in_component(StoreComponent::MappedFile)
+                        .with_source(source));
+                }
             }
         }
         self.shutdown.store(false, Ordering::Release);

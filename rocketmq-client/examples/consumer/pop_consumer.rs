@@ -17,11 +17,11 @@
 #[path = "../support/mod.rs"]
 mod support;
 
-use rocketmq_client_rust::consumer::default_mq_push_consumer::DefaultMQPushConsumer;
-use rocketmq_client_rust::consumer::listener::consume_concurrently_context::ConsumeConcurrentlyContext;
-use rocketmq_client_rust::consumer::listener::consume_concurrently_status::ConsumeConcurrentlyStatus;
-use rocketmq_client_rust::consumer::listener::message_listener_concurrently::MessageListenerConcurrently;
-use rocketmq_client_rust::consumer::mq_push_consumer::MQPushConsumer;
+use rocketmq_client_rust::ConsumeConcurrentlyContext;
+use rocketmq_client_rust::ConsumeConcurrentlyStatus;
+use rocketmq_client_rust::DefaultMQPushConsumer;
+use rocketmq_client_rust::MQPushConsumer;
+use rocketmq_client_rust::MessageListenerConcurrently;
 use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use tracing::info;

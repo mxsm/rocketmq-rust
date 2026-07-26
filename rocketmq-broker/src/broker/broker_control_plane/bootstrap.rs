@@ -23,7 +23,7 @@ use cheetah_string::CheetahString;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_runtime::MetadataDeadline;
-use rocketmq_store::base::message_store::MessageStore;
+use rocketmq_store::MessageStore;
 use tracing::error;
 use tracing::info;
 use tracing::warn;

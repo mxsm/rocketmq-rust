@@ -31,7 +31,7 @@ use rocketmq_protocol::protocol::header::pull_message_response_header::PullMessa
 use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_transport::rpc::rpc_request_header::RpcRequestHeader;
+use rocketmq_transport::RpcRequestHeader;
 
 use crate::out_api::result::BrokerPullResponse;
 

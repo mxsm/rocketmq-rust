@@ -54,6 +54,7 @@ use crate::consume_queue::mapped_file_queue::FlushProgress;
 use crate::consume_queue::mapped_file_queue::MappedFileQueueFlushHandle;
 use crate::log_file::flush_manager_impl::group_commit_request::GroupCommitRequest;
 use crate::store_error::StoreError;
+use crate::store_error::StoreOperation;
 
 pub struct DefaultFlushManager {
     root: FlushManagerRoot<DefaultFlushManagerAdapter>,
@@ -319,7 +320,10 @@ impl DefaultFlushManager {
 
     fn try_flush_before_shutdown(&self) -> Result<FlushProgress, StoreError> {
         let Some(mapped_file_queue) = self.mapped_file_queue.as_ref() else {
-            let error = StoreError::InvalidState(String::from("flush manager mapped file queue is not initialized"));
+            let error = StoreError::invalid_state(
+                StoreOperation::Flush,
+                "flush manager mapped file queue is not initialized",
+            );
             self.store_health_recorder.record_flush_failure(&error);
             return Err(error);
         };
@@ -327,7 +331,7 @@ impl DefaultFlushManager {
             mapped_file_queue.commit(0);
         }
         mapped_file_queue.try_flush(0).map_err(|error| {
-            let error = StoreError::mapped_file(error);
+            let error = StoreError::mapped_file(StoreOperation::Flush, error);
             self.store_health_recorder.record_flush_failure(&error);
             error
         })
@@ -709,10 +713,10 @@ pub(crate) async fn flush_mapped_file_queue(
     .await
     {
         Ok(Ok(result)) => Ok(result),
-        Ok(Err(error)) => Err(Arc::new(StoreError::mapped_file(error))),
-        Err(error) => Err(Arc::new(StoreError::InvalidState(format!(
-            "commitlog flush task failed: {error}"
-        )))),
+        Ok(Err(error)) => Err(Arc::new(StoreError::mapped_file(StoreOperation::Flush, error))),
+        Err(error) => Err(Arc::new(
+            StoreError::invalid_state(StoreOperation::Flush, "commitlog flush task failed").with_source(error),
+        )),
     }
 }
 
@@ -825,7 +829,10 @@ mod tests {
         let store_health_recorder = health_recorder();
         let (first, mut first_response) = GroupCommitRequest::new(64, 5_000);
         let (second, mut second_response) = GroupCommitRequest::new(96, 5_000);
-        let error = Arc::new(StoreError::InvalidState("injected flush failure".to_string()));
+        let error = Arc::new(StoreError::invalid_state(
+            StoreOperation::Flush,
+            "injected flush failure",
+        ));
 
         store_health_recorder.record_flush_failure(error.as_ref());
         complete_group_commit_batch_error(vec![first, second], error.clone(), &sync_flush_stats);
@@ -840,7 +847,7 @@ mod tests {
                 .last_flush_error()
                 .as_ref()
                 .map(|error| error.kind),
-            Some(crate::store_error::StoreErrorKind::InvalidState)
+            Some(crate::store_error::StoreErrorKind::Internal)
         );
     }
 
@@ -993,7 +1000,10 @@ mod tests {
             worker_task: None,
             sync_flush_stats: SyncFlushStats::default(),
             store_health_recorder: health_recorder(),
-            forced_flush_error: Some(Arc::new(StoreError::mapped_file(MappedFileError::ReferenceUnavailable))),
+            forced_flush_error: Some(Arc::new(StoreError::mapped_file(
+                StoreOperation::Flush,
+                MappedFileError::ReferenceUnavailable,
+            ))),
         };
         let store_health_recorder = service.store_health_recorder.clone();
         let forced_error = service.forced_flush_error.as_ref().unwrap().clone();
@@ -1014,7 +1024,7 @@ mod tests {
                 .last_flush_error()
                 .as_ref()
                 .map(|error| error.kind),
-            Some(crate::store_error::StoreErrorKind::MappedFile)
+            Some(crate::store_error::StoreErrorKind::Storage)
         );
 
         let (pending_request, pending_response) = GroupCommitRequest::new(2, 0);

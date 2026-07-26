@@ -24,7 +24,8 @@ use rocketmq_tieredstore::TieredStoreConfig;
 
 #[tokio::main]
 async fn main() -> Result<(), RocketMQError> {
-    let temp_dir = tempfile::tempdir().map_err(|error| RocketMQError::Internal(error.to_string()))?;
+    let temp_dir =
+        tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
     let store = TieredStore::new(TieredStoreConfig {
         storage_level: TieredStorageLevel::Force,
         backend_provider: "memory".to_owned(),

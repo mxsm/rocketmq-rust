@@ -168,7 +168,8 @@ mod tests {
 
     #[tokio::test]
     async fn new_with_task_group_parents_cleanup_tasks() -> Result<(), RocketMQError> {
-        let temp_dir = tempfile::tempdir().map_err(|err| RocketMQError::Internal(err.to_string()))?;
+        let temp_dir =
+            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
         let config = Arc::new(TieredStoreConfig {
             store_path_root_dir: temp_dir.path().to_path_buf(),
             backend_provider: "memory".to_owned(),

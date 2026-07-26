@@ -63,21 +63,21 @@
 #![allow(dead_code)]
 #![allow(clippy::module_inception)]
 
-pub mod cli;
-pub mod config;
-pub mod controller;
+mod cli;
+mod config;
+mod controller;
 pub(crate) mod elect;
-pub mod error;
-pub mod event;
-pub mod heartbeat;
-pub mod helper;
-pub mod manager;
-pub mod metrics;
-pub mod openraft;
-pub mod processor;
-pub mod storage;
-pub mod task;
-pub mod typ;
+mod error;
+mod event;
+mod heartbeat;
+mod helper;
+mod manager;
+mod metrics;
+mod openraft;
+mod processor;
+mod storage;
+mod task;
+mod typ;
 pub mod protobuf {
     tonic::include_proto!("rocketmq_rust_controller");
 
@@ -91,6 +91,9 @@ pub use cli::parse_command_line;
 pub use cli::ControllerCli;
 pub use config::ControllerConfig;
 pub use config::ControllerConfigReader;
+pub use config::RaftPeer;
+pub use config::StorageBackendType;
+pub use controller::broker_heartbeat_manager::BrokerHeartbeatManager;
 pub use controller::open_raft_controller::resolve_controller_raft_bind_addr;
 pub use controller::open_raft_controller::OpenRaftController;
 pub use controller::raft_controller::RaftController;
@@ -99,8 +102,42 @@ pub use controller::MockController;
 pub use elect::policy::DefaultElectPolicy;
 pub use error::ControllerError;
 pub use error::Result;
+pub use event::alter_sync_state_set_event::AlterSyncStateSetEvent;
+pub use event::apply_broker_id_event::ApplyBrokerIdEvent;
+pub use event::clean_broker_data_event::CleanBrokerDataEvent;
+pub use event::elect_master_event::ElectMasterEvent;
+pub use event::event_serializer::Event;
+pub use event::event_serializer::EventSerializer;
+pub use event::event_type::EventType;
+pub use event::update_broker_address_event::UpdateBrokerAddressEvent;
+pub use heartbeat::default_broker_heartbeat_manager::DefaultBrokerHeartbeatManager;
 pub use manager::replicas_info_manager::ReplicasInfoManager;
 pub use manager::ControllerManager;
+pub use metrics::controller_metrics_constant::*;
+pub use metrics::controller_metrics_manager::ControllerMetricsManager;
+pub use openraft::GrpcRaftService;
+pub use openraft::LogStore;
+pub use openraft::RaftNodeManager;
+pub use openraft::StateMachine;
+pub use openraft::Store;
+pub use openraft::SNAPSHOT_MAX_BYTES;
+pub use processor::controller_request_processor::ControllerRequestProcessor;
+pub use storage::create_storage;
+pub use storage::StorageBackend;
+pub use storage::StorageConfig;
+pub use storage::StorageStats;
+pub use typ::BrokerIdentityInfoSnapshot;
+pub use typ::BrokerLiveInfoSnapshot;
+pub use typ::ControllerRequest;
+pub use typ::ControllerResponseHeader;
+pub use typ::EntryPayload;
+pub use typ::LogEntry;
+pub use typ::LogId;
+pub use typ::Node;
+pub use typ::RaftMetrics;
+pub use typ::SnapshotMeta;
+pub use typ::TypeConfig;
+pub use typ::Vote;
 
 /// Controller module version
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

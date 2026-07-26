@@ -751,7 +751,8 @@ mod tests {
 
     #[tokio::test]
     async fn consume_queue_offsets_are_contiguous() -> Result<(), RocketMQError> {
-        let temp_dir = tempfile::tempdir().map_err(|err| RocketMQError::Internal(err.to_string()))?;
+        let temp_dir =
+            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
         let config = test_config(temp_dir.path().to_path_buf());
         let metadata_store = Arc::new(JsonMetadataStore::new(config.clone()));
         let flat_file = TieredFlatFile::new(
@@ -793,7 +794,8 @@ mod tests {
 
     #[tokio::test]
     async fn append_rolls_commit_log_and_consume_queue_segments() -> Result<(), RocketMQError> {
-        let temp_dir = tempfile::tempdir().map_err(|err| RocketMQError::Internal(err.to_string()))?;
+        let temp_dir =
+            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
         let config = test_config(temp_dir.path().to_path_buf());
         let metadata_store = Arc::new(JsonMetadataStore::new(config.clone()));
         let provider = MemoryProvider::default();
@@ -856,7 +858,8 @@ mod tests {
 
     #[tokio::test]
     async fn queue_offset_by_time_respects_lower_and_upper_boundaries() -> Result<(), RocketMQError> {
-        let temp_dir = tempfile::tempdir().map_err(|err| RocketMQError::Internal(err.to_string()))?;
+        let temp_dir =
+            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
         let config = Arc::new(TieredStoreConfig {
             store_path_root_dir: temp_dir.path().to_path_buf(),
             backend_provider: "memory".to_owned(),
@@ -916,7 +919,8 @@ mod tests {
 
     #[tokio::test]
     async fn recovers_segments_from_metadata_and_provider_size() -> Result<(), RocketMQError> {
-        let temp_dir = tempfile::tempdir().map_err(|err| RocketMQError::Internal(err.to_string()))?;
+        let temp_dir =
+            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
         let config = test_config(temp_dir.path().to_path_buf());
         let metadata_store = Arc::new(JsonMetadataStore::new(config.clone()));
         let provider = MemoryProvider::default();
@@ -953,7 +957,8 @@ mod tests {
 
     #[tokio::test]
     async fn cleanup_deletes_expired_sealed_segments() -> Result<(), RocketMQError> {
-        let temp_dir = tempfile::tempdir().map_err(|err| RocketMQError::Internal(err.to_string()))?;
+        let temp_dir =
+            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
         let config = test_config(temp_dir.path().to_path_buf());
         let metadata_store = Arc::new(JsonMetadataStore::new(config.clone()));
         let provider = MemoryProvider::default();
@@ -976,7 +981,8 @@ mod tests {
 
     #[tokio::test]
     async fn cleanup_keeps_expired_commit_log_referenced_by_retained_consume_queue() -> Result<(), RocketMQError> {
-        let temp_dir = tempfile::tempdir().map_err(|err| RocketMQError::Internal(err.to_string()))?;
+        let temp_dir =
+            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
         let config = Arc::new(TieredStoreConfig {
             store_path_root_dir: temp_dir.path().to_path_buf(),
             backend_provider: "memory".to_owned(),
@@ -1022,7 +1028,8 @@ mod tests {
 
     #[tokio::test]
     async fn cleanup_deletes_commit_log_after_referencing_consume_queue_expires() -> Result<(), RocketMQError> {
-        let temp_dir = tempfile::tempdir().map_err(|err| RocketMQError::Internal(err.to_string()))?;
+        let temp_dir =
+            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
         let config = test_config(temp_dir.path().to_path_buf());
         let metadata_store = Arc::new(JsonMetadataStore::new(config.clone()));
         let provider = MemoryProvider::default();
@@ -1056,7 +1063,7 @@ mod tests {
         let queue_metadata = metadata_store
             .get_queue("TopicA", 0)
             .await?
-            .ok_or_else(|| RocketMQError::Internal("missing topic queue metadata".to_owned()))?;
+            .ok_or_else(|| RocketMQError::invariant_violated("flat file must retain topic queue metadata"))?;
         assert_eq!(queue_metadata.min_offset, 2);
         assert_eq!(queue_metadata.max_offset, 3);
         Ok(())

@@ -18,10 +18,10 @@ use std::path::PathBuf;
 
 use cheetah_string::CheetahString;
 use rocketmq_model::common::broker::broker_role::BrokerRole;
-use rocketmq_observability::exporter_types::metrics_exporter_type::MetricsExporterType;
-use rocketmq_observability::exporter_types::trace_exporter_type::TraceExporterType;
-use rocketmq_store::base::store_enum::StoreType;
-use rocketmq_store::config::message_store_config::MessageStoreConfig;
+use rocketmq_observability::MetricsExporterType;
+use rocketmq_observability::TraceExporterType;
+use rocketmq_store::MessageStoreConfig;
+use rocketmq_store::StoreType;
 
 use super::broker_config::BrokerConfig;
 use super::error::BrokerConfigError;

@@ -313,7 +313,8 @@ mod tests {
 
     #[tokio::test]
     async fn persists_and_loads_metadata() -> Result<(), RocketMQError> {
-        let temp_dir = tempfile::tempdir().map_err(|err| RocketMQError::Internal(err.to_string()))?;
+        let temp_dir =
+            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
         let config = Arc::new(TieredStoreConfig {
             store_path_root_dir: temp_dir.path().to_path_buf(),
             ..TieredStoreConfig::default()
@@ -369,11 +370,12 @@ mod tests {
 
     #[tokio::test]
     async fn failed_metadata_replace_does_not_advance_persist_counter() -> Result<(), RocketMQError> {
-        let temp_dir = tempfile::tempdir().map_err(|err| RocketMQError::Internal(err.to_string()))?;
+        let temp_dir =
+            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
         let blocked_root = temp_dir.path().join("not-a-directory");
         tokio::fs::write(&blocked_root, b"blocked")
             .await
-            .map_err(|err| RocketMQError::Internal(err.to_string()))?;
+            .map_err(|source| RocketMQError::internal("open metadata store", source))?;
         let metadata_store = JsonMetadataStore::new(Arc::new(TieredStoreConfig {
             store_path_root_dir: blocked_root,
             ..TieredStoreConfig::default()
@@ -395,7 +397,8 @@ mod tests {
 
     #[tokio::test]
     async fn supports_topic_queue_and_segment_delete_semantics() -> Result<(), RocketMQError> {
-        let temp_dir = tempfile::tempdir().map_err(|err| RocketMQError::Internal(err.to_string()))?;
+        let temp_dir =
+            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
         let config = Arc::new(TieredStoreConfig {
             store_path_root_dir: temp_dir.path().to_path_buf(),
             ..TieredStoreConfig::default()

@@ -26,7 +26,6 @@ pub mod storage;
 
 pub use grpc_server::GrpcRaftService;
 pub use log_store::LogStore;
-pub use network::GrpcNetworkClient;
 pub use network::NetworkFactory;
 pub use node::RaftNodeManager;
 pub use state_machine::StateMachine;

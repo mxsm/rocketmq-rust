@@ -14,8 +14,8 @@
 
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
-use rocketmq_store::base::get_message_result::GetMessageResult;
-use rocketmq_store::capability::get_result;
+use rocketmq_store::get_result;
+use rocketmq_store::GetMessageResult;
 use rocketmq_store_api::GetStatus;
 use rocketmq_store_api::ReadOutcome;
 use tracing::error;

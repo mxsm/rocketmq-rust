@@ -21,8 +21,8 @@
 //! - `send_to_queue_with_callback_timeout`: Send to a specific queue with callback and timeout
 //! - `send_oneway_to_queue`: One-way send to a specific queue
 
-use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
-use rocketmq_client_rust::producer::send_result::SendResult;
+use rocketmq_client_rust::DefaultMQProducer;
+use rocketmq_client_rust::SendResult;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::message::message_queue::MessageQueue;

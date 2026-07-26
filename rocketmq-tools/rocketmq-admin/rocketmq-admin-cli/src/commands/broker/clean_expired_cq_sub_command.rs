@@ -87,10 +87,14 @@ impl CommandExecute for CleanExpiredCQSubCommand {
         print_cleanup_report(&report);
 
         if !report.failures.is_empty() {
-            return Err(RocketMQError::Internal(format!(
-                "CleanExpiredCQSubCommand: cleanup failed on {} broker(s)",
-                report.failures.len()
-            )));
+            return Err(RocketMQError::broker_operation_failed(
+                "CLEAN_EXPIRED_CONSUME_QUEUE",
+                -1,
+                format!(
+                    "CleanExpiredCQSubCommand: cleanup failed on {} broker(s)",
+                    report.failures.len()
+                ),
+            ));
         }
 
         Ok(())

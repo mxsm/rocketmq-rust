@@ -43,7 +43,7 @@ use super::MappedFileResult;
 /// # Examples
 ///
 /// ```rust,ignore
-/// use rocketmq_store::log_file::mapped_file::MappedBuffer;
+/// use rocketmq_store::MappedBuffer;
 ///
 /// let buffer = MappedBuffer::new(mmap, 0, 1024)?;
 ///

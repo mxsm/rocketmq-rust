@@ -99,15 +99,19 @@ impl DeleteSubscriptionGroupSubCommand {
         if result.failures.is_empty() {
             Ok(())
         } else {
-            Err(RocketMQError::Internal(format!(
-                "DeleteSubscriptionGroupSubCommand: Failed to delete from brokers {}",
-                result
-                    .failures
-                    .iter()
-                    .map(|failure| failure.broker_addr.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )))
+            Err(RocketMQError::broker_operation_failed(
+                "DELETE_SUBSCRIPTION_GROUP",
+                -1,
+                format!(
+                    "DeleteSubscriptionGroupSubCommand: Failed to delete from brokers {}",
+                    result
+                        .failures
+                        .iter()
+                        .map(|failure| failure.broker_addr.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            ))
         }
     }
 }

@@ -12,38 +12,61 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod attributes;
-pub mod config;
-pub mod error;
-pub mod exporter;
-pub mod exporter_types;
-pub mod init;
-pub mod legacy_logging;
-pub mod log_filter;
-pub mod logging;
+mod attributes;
+mod config;
+mod error;
+mod exporter;
+mod exporter_types;
+mod init;
+mod log_filter;
+mod logging;
 pub mod logs;
 pub mod metrics;
-pub mod noop;
-pub mod propagation;
-pub mod resource;
-pub mod sampling;
+mod noop;
+mod propagation;
+mod resource;
+mod sampling;
 pub mod semantic;
 pub mod statistics;
 pub mod stats;
 pub mod trace;
 
+pub use attributes::base_attributes;
+pub use attributes::Attribute;
 pub use config::ConsoleLogConfig;
 pub use config::FileLogConfig;
 pub use config::LogFormat;
 pub use config::LogRotation;
 pub use config::LoggingConfig;
+pub use config::LogsExporter;
+pub use config::MetricsExporter;
 pub use config::NonBlockingLogConfig;
 pub use config::ObservabilityConfig;
 pub use config::ReloadConfig;
 pub use config::SubscriberInstallPolicy;
 pub use config::SubscriberInstallStatus;
 pub use config::TelemetryBootstrapConfig;
+pub use config::TraceExporter;
+pub use config::TracesConfig;
 pub use error::ObservabilityError;
+pub use exporter::outage::*;
+#[cfg(feature = "prometheus")]
+pub use exporter::prometheus::init_prometheus_meter_provider;
+#[cfg(feature = "prometheus")]
+pub use exporter::prometheus::init_prometheus_metrics;
+#[cfg(feature = "prometheus")]
+pub use exporter::prometheus::render_prometheus_metrics;
+#[cfg(feature = "prometheus")]
+pub use exporter::prometheus::spawn_prometheus_http_endpoint;
+#[cfg(feature = "prometheus")]
+pub use exporter::prometheus::spawn_prometheus_http_endpoint_with_task_group;
+#[cfg(feature = "prometheus")]
+pub use exporter::prometheus::PrometheusHttpHandle;
+#[cfg(feature = "prometheus")]
+pub use exporter::prometheus::PrometheusMetrics;
+pub use exporter_types::LogExporterType;
+pub use exporter_types::MetricsExporterType;
+pub use exporter_types::TraceExporterType;
 pub use init::init_observability;
 #[cfg(feature = "otel-metrics")]
 pub use init::meter;
@@ -64,6 +87,32 @@ pub use logging::FileLogLayer;
 pub use logging::LoggingGuard;
 pub use logging::TelemetryRuntimeGuard;
 pub use logging::TelemetryShutdownReport;
+#[cfg(feature = "otel-traces")]
+pub use propagation::add_current_span_event;
+#[cfg(feature = "otel-traces")]
+pub use propagation::add_current_span_event_with_status;
+#[cfg(feature = "otel-traces")]
+pub use propagation::extract_context;
+#[cfg(feature = "otel-traces")]
+pub use propagation::inject_current_context;
+#[cfg(feature = "otel-traces")]
+pub use propagation::install_trace_context_propagators;
+#[cfg(feature = "otel-traces")]
+pub use propagation::is_context_propagation_enabled;
+#[cfg(feature = "otel-traces")]
+pub use propagation::set_context_propagation_enabled;
+#[cfg(feature = "otel-traces")]
+pub use propagation::set_current_span_parent_from_properties;
+#[cfg(feature = "otel-traces")]
+pub use propagation::set_span_parent_from_properties;
+#[cfg(feature = "otel-traces")]
+pub use propagation::MessagePropertyExtractor;
+#[cfg(feature = "otel-traces")]
+pub use propagation::MessagePropertyInjector;
+pub use propagation::BAGGAGE;
+pub use propagation::TRACEPARENT;
+pub use propagation::TRACESTATE;
+pub use sampling::SamplingGate;
 
 #[cfg(feature = "prometheus")]
 #[doc(hidden)]

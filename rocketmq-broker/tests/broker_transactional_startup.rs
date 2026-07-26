@@ -21,7 +21,7 @@ use rocketmq_broker::config::validated::ValidatedBrokerConfig;
 use rocketmq_broker::BrokerStartupError;
 use rocketmq_broker::Builder;
 use rocketmq_runtime::RuntimeContext;
-use rocketmq_store::config::message_store_config::MessageStoreConfig;
+use rocketmq_store::MessageStoreConfig;
 
 static BROKER_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 

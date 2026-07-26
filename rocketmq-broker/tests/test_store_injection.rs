@@ -21,8 +21,8 @@ use std::sync::Arc;
 use cheetah_string::CheetahString;
 use rocketmq_broker::QueryMessageProcessor;
 use rocketmq_broker::QueryMessageStore;
-use rocketmq_store::base::query_message_result::QueryMessageResult;
-use rocketmq_store::base::select_result::SelectMappedBufferResult;
+use rocketmq_store::QueryMessageResult;
+use rocketmq_store::SelectMappedBufferResult;
 use rocketmq_store_api::StoreError;
 
 #[derive(Clone, Default)]

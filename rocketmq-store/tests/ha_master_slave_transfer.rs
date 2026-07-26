@@ -21,16 +21,16 @@ use std::task::Poll;
 use bytes::BufMut;
 use bytes::Bytes;
 use bytes::BytesMut;
-use rocketmq_store::ha::transfer_engine::bytes::BytesTransferEngine;
-use rocketmq_store::ha::transfer_engine::vectored::VectoredTransferEngine;
-use rocketmq_store::ha::transfer_engine::TransferEngineKind;
-use rocketmq_store::ha::transfer_engine::TransferStats;
-use rocketmq_store::transfer::batch::TransferBatch;
-use rocketmq_store::transfer::batch::TransferPlan;
-use rocketmq_store::transfer::planner::TransferPlanInput;
-use rocketmq_store::transfer::planner::TransferPlanner;
-use rocketmq_store::transfer::segment::SegmentLease;
-use rocketmq_store::transfer::segment::TransferCacheState;
+use rocketmq_store::BytesTransferEngine;
+use rocketmq_store::SegmentLease;
+use rocketmq_store::TransferBatch;
+use rocketmq_store::TransferCacheState;
+use rocketmq_store::TransferEngineKind;
+use rocketmq_store::TransferPlan;
+use rocketmq_store::TransferPlanInput;
+use rocketmq_store::TransferPlanner;
+use rocketmq_store::TransferStats;
+use rocketmq_store::VectoredTransferEngine;
 use tokio::io::AsyncWrite;
 
 #[tokio::test]

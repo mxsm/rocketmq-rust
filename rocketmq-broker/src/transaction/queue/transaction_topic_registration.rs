@@ -25,7 +25,7 @@ use rocketmq_model::common::constant::PermName;
 use rocketmq_protocol::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
 use rocketmq_protocol::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigSerializeWrapper;
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
-use rocketmq_store::base::message_store::MessageStore;
+use rocketmq_store::MessageStore;
 use tracing::debug;
 use tracing::info;
 

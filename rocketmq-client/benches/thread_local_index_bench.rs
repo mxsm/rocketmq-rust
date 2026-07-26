@@ -19,7 +19,7 @@ use criterion::criterion_group;
 use criterion::criterion_main;
 use criterion::Criterion;
 use rand::RngExt;
-use rocketmq_client_rust::common::thread_local_index::ThreadLocalIndex;
+use rocketmq_client_rust::ThreadLocalIndex;
 
 // ============================================================================
 // Original implementation (before optimization)

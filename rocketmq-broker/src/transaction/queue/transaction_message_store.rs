@@ -18,10 +18,10 @@ use std::sync::Weak;
 use cheetah_string::CheetahString;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
-use rocketmq_store::base::get_message_result::GetMessageResult;
-use rocketmq_store::base::message_result::PutMessageResult;
-use rocketmq_store::base::message_status_enum::PutMessageStatus;
-use rocketmq_store::base::message_store::MessageStore;
+use rocketmq_store::GetMessageResult;
+use rocketmq_store::MessageStore;
+use rocketmq_store::PutMessageResult;
+use rocketmq_store::PutMessageStatus;
 
 use crate::failover::escape_bridge::EscapeBridge;
 
@@ -102,7 +102,7 @@ impl<MS: MessageStore> TransactionMessageStore<MS> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rocketmq_store::message_store::OwnedMessageStore;
+    use rocketmq_store::OwnedMessageStore;
 
     #[tokio::test]
     async fn transaction_store_fails_closed_after_provider_shutdown() {

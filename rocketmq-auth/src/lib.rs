@@ -14,39 +14,85 @@
 
 #![allow(dead_code)]
 
-pub mod acl;
-pub mod authentication;
-pub mod authorization;
-pub mod bootstrap;
-pub mod config;
-pub mod credential_rotation;
-pub mod migration;
-pub mod permission;
-pub mod runtime;
-pub mod secret_provider;
+mod acl;
+mod authentication;
+mod authorization;
+mod bootstrap;
+mod config;
+mod credential_rotation;
+mod migration;
+mod permission;
+mod runtime;
+mod secret_provider;
 /// Runtime-neutral contracts implemented by authentication and authorization providers.
-pub mod security_api {
+mod security_api {
     pub use rocketmq_security_api::*;
 }
 pub(crate) mod runtime_bridge;
 
 // Re-export commonly used authentication types
+pub use authentication::acl_signer::cal_signature;
+pub use authentication::acl_signer::cal_signature_segments;
+pub use authentication::acl_signer::cal_signature_segments_with_algorithm;
+pub use authentication::acl_signer::cal_signature_with_algorithm;
 pub use authentication::acl_signer::SignatureAlgorithm;
+pub use authentication::acl_signer::DEFAULT_CHARSET;
+pub use authentication::builder::AuthenticationContextBuilder;
+pub use authentication::builder::DefaultAuthenticationContextBuilder;
 pub use authentication::context::default_authentication_context::DefaultAuthenticationContext;
+pub use authentication::enums::subject_type::SubjectType;
+pub use authentication::enums::user_status::UserStatus;
+pub use authentication::enums::user_type::UserType;
 pub use authentication::evaluator::AuthenticationEvaluator;
 pub use authentication::factory::AuthenticationFactory;
+pub use authentication::manager::AuthenticationMetadataManager;
+pub use authentication::manager::AuthenticationMetadataManagerImpl;
+pub use authentication::model::subject::Subject;
+pub use authentication::model::user::User;
 pub use authentication::provider::AuthenticationMetadataProvider;
 pub use authentication::provider::AuthenticationProvider;
 pub use authentication::provider::DefaultAuthenticationProvider;
+pub use authentication::provider::LocalAuthenticationMetadataProvider;
 pub use authentication::strategy::AllowAllAuthenticationStrategy;
+pub use authentication::strategy::AuthenticationFuture;
 pub use authentication::strategy::AuthenticationStrategy;
+pub use authentication::strategy::StatefulAuthenticationStrategy;
+pub use authentication::strategy::StatelessAuthenticationStrategy;
+pub use authentication::AclClientRpcHook;
 
 // Re-export commonly used authorization types
+pub use acl::FileAclConfigStore;
+pub use acl::WhiteList;
+pub use authorization::chain::AclAuthorizationHandler;
+pub use authorization::chain::AuthorizationHandler;
+pub use authorization::chain::AuthorizationHandlerChain;
+pub use authorization::context::authentication_context::AuthenticationContext;
 pub use authorization::context::default_authorization_context::DefaultAuthorizationContext;
+pub use authorization::enums::decision::Decision;
+pub use authorization::enums::policy_type::PolicyType;
 pub use authorization::evaluator::AuthorizationEvaluator;
 pub use authorization::factory::AuthorizationFactory;
+pub use authorization::manager::metadata_manager::AuthorizationMetadataManager;
+pub use authorization::manager::AuthorizationMetadataManagerImpl;
+pub use authorization::metadata_provider::AuthorizationMetadataProvider;
+pub use authorization::metadata_provider::LocalAuthorizationMetadataProvider;
+pub use authorization::metadata_provider::MetadataResult;
+pub use authorization::metadata_provider::NoopMetadataProvider;
+pub use authorization::model::acl::Acl;
+pub use authorization::model::environment::Environment;
+pub use authorization::model::policy::Policy;
+pub use authorization::model::policy_entry::PolicyEntry;
+pub use authorization::model::request_context::RequestContext;
+pub use authorization::model::resource::Resource;
+pub use authorization::provider::AuthorizationError;
 pub use authorization::provider::AuthorizationProvider;
+pub use authorization::provider::AuthorizationResult;
+pub use authorization::provider::DefaultAuthorizationProvider;
 pub use authorization::strategy::abstract_authorization_strategy::AuthorizationStrategy;
+pub use authorization::strategy::StatefulAuthorizationStrategy;
+pub use authorization::strategy::StatelessAuthorizationStrategy;
+#[doc(hidden)]
+pub use bench_support::AuthAclWatcherLifecycleProbe;
 pub use bootstrap::BootstrapAdminIdentity;
 pub use bootstrap::BootstrapAdminProvisioner;
 pub use bootstrap::BootstrapAdminProvisioningError;
@@ -57,6 +103,7 @@ pub use bootstrap::BootstrapGrant;
 pub use bootstrap::BootstrapStatus;
 pub use bootstrap::BootstrapTransportContext;
 pub use bootstrap::OneTimeBootstrap;
+pub use config::AuthConfig;
 pub use credential_rotation::BreakGlassReason;
 pub use credential_rotation::BreakGlassStatus;
 pub use credential_rotation::CredentialAuditAction;
@@ -75,6 +122,7 @@ pub use credential_rotation::CredentialVerification;
 pub use credential_rotation::CredentialVerificationSource;
 pub use credential_rotation::RetiringCredentialSnapshot;
 pub use credential_rotation::ValidatedCredential;
+pub use permission::Permission;
 pub use rocketmq_observability::metrics::auth::AuthMetricSample;
 pub use rocketmq_observability::metrics::auth::AuthMetrics;
 pub use rocketmq_observability::metrics::auth::AuthMetricsSnapshot;
@@ -86,6 +134,8 @@ pub use runtime::ProviderRegistry;
 pub use secret_provider::EncryptedFileSecretProvider;
 pub use secret_provider::EnvironmentSecretProvider;
 pub use secret_provider::SecretProviderRegistry;
+pub use security_api::Principal as SecurityPrincipal;
+pub use security_api::Resource as SecurityResource;
 
 #[doc(hidden)]
 pub mod bench_support {

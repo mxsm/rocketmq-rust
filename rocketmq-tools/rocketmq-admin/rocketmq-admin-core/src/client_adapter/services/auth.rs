@@ -15,7 +15,7 @@
 //! Authentication and authorization admin service models and operations.
 
 use cheetah_string::CheetahString;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
+use rocketmq_client_rust::MQAdminExt;
 use rocketmq_error::REDACTED;
 use rocketmq_protocol::protocol::body::acl_info::AclInfo;
 use rocketmq_protocol::protocol::body::acl_info::PolicyEntryInfo;

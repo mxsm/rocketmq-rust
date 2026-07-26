@@ -24,9 +24,9 @@ use rocketmq_runtime::ScheduledTaskSnapshot;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskGroupLifecycleState;
-use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
-use rocketmq_transport::base::channel_event_listener::ChannelEventListener;
-use rocketmq_transport::net::channel::Channel;
+use rocketmq_store::BrokerStatsManager;
+use rocketmq_transport::Channel;
+use rocketmq_transport::ChannelEventListener;
 use tokio::sync::Notify;
 use tracing::debug;
 use tracing::warn;
@@ -220,7 +220,7 @@ mod tests {
 
     use crate::config::broker_config::BrokerConfig;
     use rocketmq_runtime::RuntimeContext;
-    use rocketmq_store::config::message_store_config::MessageStoreConfig;
+    use rocketmq_store::MessageStoreConfig;
 
     use crate::broker_runtime::BrokerRuntime;
 

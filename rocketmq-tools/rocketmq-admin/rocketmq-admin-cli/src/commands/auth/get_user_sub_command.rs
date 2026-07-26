@@ -119,10 +119,14 @@ fn render_get_user_result(
     if result.failed_broker_addrs.is_empty() || !result.users.is_empty() {
         Ok(())
     } else {
-        Err(RocketMQError::Internal(format!(
-            "GetUserSubCommand: Failed to get user for brokers {}",
-            result.failed_broker_addrs.join(", ")
-        )))
+        Err(RocketMQError::broker_operation_failed(
+            "GET_USER",
+            -1,
+            format!(
+                "GetUserSubCommand: Failed to get user for brokers {}",
+                result.failed_broker_addrs.join(", ")
+            ),
+        ))
     }
 }
 

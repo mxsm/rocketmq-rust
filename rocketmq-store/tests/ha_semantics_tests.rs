@@ -29,12 +29,12 @@ use rocketmq_model::common::message::MessageTrait;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
-use rocketmq_store::base::message_status_enum::PutMessageStatus;
-use rocketmq_store::base::message_store::MessageStore;
-use rocketmq_store::config::flush_disk_type::FlushDiskType;
-use rocketmq_store::config::message_store_config::MessageStoreConfig;
-use rocketmq_store::config::store_runtime_config::StoreRuntimeConfig;
-use rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore;
+use rocketmq_store::FlushDiskType;
+use rocketmq_store::LocalFileMessageStore;
+use rocketmq_store::MessageStore;
+use rocketmq_store::MessageStoreConfig;
+use rocketmq_store::PutMessageStatus;
+use rocketmq_store::StoreRuntimeConfig;
 use tempfile::TempDir;
 
 fn test_service_context() -> ChildServiceContext {

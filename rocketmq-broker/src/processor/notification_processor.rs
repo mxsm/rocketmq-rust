@@ -28,10 +28,10 @@ use rocketmq_protocol::protocol::header::notification_request_header::Notificati
 use rocketmq_protocol::protocol::header::notification_response_header::NotificationResponseHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_store::base::message_store::MessageStore;
-use rocketmq_transport::net::channel::Channel;
-use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_transport::runtime::processor::RequestProcessor;
+use rocketmq_store::MessageStore;
+use rocketmq_transport::Channel;
+use rocketmq_transport::ConnectionHandlerContext;
+use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
 use tokio::sync::Mutex as AsyncMutex;
 use tracing::error;
 use tracing::warn;
@@ -512,8 +512,8 @@ mod tests {
 
     use super::*;
     use rocketmq_runtime::RuntimeContext;
-    use rocketmq_store::config::message_store_config::MessageStoreConfig;
-    use rocketmq_store::message_store::OwnedMessageStore;
+    use rocketmq_store::MessageStoreConfig;
+    use rocketmq_store::OwnedMessageStore;
 
     use crate::broker_runtime::BrokerMessageStore;
     use crate::broker_runtime::BrokerRuntime;

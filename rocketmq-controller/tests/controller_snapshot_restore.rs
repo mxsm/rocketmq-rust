@@ -18,16 +18,16 @@ use std::io::Cursor;
 
 use openraft::storage::RaftStateMachine;
 use openraft::RaftSnapshotBuilder;
-use rocketmq_controller::config::ControllerConfig;
-use rocketmq_controller::config::ControllerConfigReader;
-use rocketmq_controller::openraft::StateMachine;
-use rocketmq_controller::openraft::SNAPSHOT_MAX_BYTES;
-use rocketmq_controller::typ::ControllerRequest;
-use rocketmq_controller::typ::EntryPayload;
-use rocketmq_controller::typ::LogEntry;
-use rocketmq_controller::typ::LogId;
-use rocketmq_controller::typ::SnapshotMeta;
-use rocketmq_controller::typ::Vote;
+use rocketmq_controller::ControllerConfig;
+use rocketmq_controller::ControllerConfigReader;
+use rocketmq_controller::ControllerRequest;
+use rocketmq_controller::EntryPayload;
+use rocketmq_controller::LogEntry;
+use rocketmq_controller::LogId;
+use rocketmq_controller::SnapshotMeta;
+use rocketmq_controller::StateMachine;
+use rocketmq_controller::Vote;
+use rocketmq_controller::SNAPSHOT_MAX_BYTES;
 
 fn state_machine() -> StateMachine {
     StateMachine::new(ControllerConfigReader::new(ControllerConfig::test_config()))

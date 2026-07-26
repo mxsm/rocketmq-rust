@@ -29,7 +29,7 @@ use rocketmq_runtime::task::service_task::ServiceTask;
 use rocketmq_runtime::task::service_task::ServiceTaskContext;
 use rocketmq_runtime::task::ServiceManager;
 use rocketmq_runtime::TaskGroup;
-use rocketmq_store::base::message_store::MessageStore;
+use rocketmq_store::MessageStore;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -484,7 +484,7 @@ where
 mod tests {
     use std::sync::Weak;
 
-    use rocketmq_store::message_store::OwnedMessageStore;
+    use rocketmq_store::OwnedMessageStore;
 
     use super::super::BrokerOnlineRoleState;
     use super::super::BrokerPreOnlineStoreCapability;

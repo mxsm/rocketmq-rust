@@ -19,18 +19,18 @@
 
 use std::sync::Arc;
 
-use rocketmq_auth::authentication::enums::subject_type::SubjectType;
-use rocketmq_auth::authentication::model::user::User;
-use rocketmq_auth::authorization::chain::AclAuthorizationHandler;
-use rocketmq_auth::authorization::chain::AuthorizationHandlerChain;
-use rocketmq_auth::authorization::context::default_authorization_context::DefaultAuthorizationContext;
-use rocketmq_auth::authorization::enums::decision::Decision;
-use rocketmq_auth::authorization::metadata_provider::local::LocalAuthorizationMetadataProvider;
-use rocketmq_auth::authorization::metadata_provider::AuthorizationMetadataProvider;
-use rocketmq_auth::authorization::model::acl::Acl;
-use rocketmq_auth::authorization::model::policy::Policy;
-use rocketmq_auth::authorization::model::resource::Resource;
-use rocketmq_auth::config::AuthConfig;
+use rocketmq_auth::Acl;
+use rocketmq_auth::AclAuthorizationHandler;
+use rocketmq_auth::AuthConfig;
+use rocketmq_auth::AuthorizationHandlerChain;
+use rocketmq_auth::AuthorizationMetadataProvider;
+use rocketmq_auth::Decision;
+use rocketmq_auth::DefaultAuthorizationContext;
+use rocketmq_auth::LocalAuthorizationMetadataProvider;
+use rocketmq_auth::Policy;
+use rocketmq_auth::Resource;
+use rocketmq_auth::SubjectType;
+use rocketmq_auth::User;
 use rocketmq_security_api::Action;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;

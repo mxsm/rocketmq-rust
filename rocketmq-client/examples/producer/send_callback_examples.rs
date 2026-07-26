@@ -26,8 +26,8 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use rocketmq_client::producer::default_mq_producer::DefaultMQProducer;
-use rocketmq_client::producer::default_mq_producer::ProducerConfig;
+use rocketmq_client::DefaultMQProducer;
+use rocketmq_client::ProducerConfig;
 use rocketmq_model::common::message::message_single::Message;
 use rocketmq_error::RocketMQResult;
 use tracing::{error, info};

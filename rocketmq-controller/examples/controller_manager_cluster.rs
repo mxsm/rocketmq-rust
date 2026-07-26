@@ -28,11 +28,11 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use rocketmq_controller::config::ControllerConfig;
-use rocketmq_controller::config::RaftPeer;
-use rocketmq_controller::config::StorageBackendType;
-use rocketmq_controller::error::Result;
-use rocketmq_controller::manager::ControllerManager;
+use rocketmq_controller::ControllerConfig;
+use rocketmq_controller::ControllerManager;
+use rocketmq_controller::RaftPeer;
+use rocketmq_controller::Result;
+use rocketmq_controller::StorageBackendType;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -105,7 +105,7 @@ async fn start_cluster() -> Result<Vec<Arc<ControllerManager>>> {
         // Initialize
         if !manager.initialize().await? {
             error!("Failed to initialize node {}", node_id);
-            return Err(rocketmq_controller::error::ControllerError::InitializationFailed);
+            return Err(rocketmq_controller::ControllerError::InitializationFailed);
         }
 
         // Start

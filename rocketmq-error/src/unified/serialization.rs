@@ -14,6 +14,8 @@
 
 //! Serialization and deserialization errors
 
+use std::error::Error as StdError;
+
 use thiserror::Error;
 
 /// Serialization/Deserialization errors
@@ -26,6 +28,15 @@ pub enum SerializationError {
     /// Decoding failed
     #[error("Decoding failed ({format}): {message}")]
     DecodeFailed { format: &'static str, message: String },
+
+    /// Serialization operation failed with a preserved typed source.
+    #[error("{operation} failed ({format})")]
+    Source {
+        operation: &'static str,
+        format: &'static str,
+        #[source]
+        source: Box<dyn StdError + Send + Sync>,
+    },
 
     /// Invalid data format
     #[error("Invalid format: expected {expected}, got {got}")]
@@ -70,6 +81,20 @@ pub enum SerializationError {
 }
 
 impl SerializationError {
+    /// Creates a serialization failure while preserving its typed cause.
+    #[inline]
+    pub fn source(
+        operation: &'static str,
+        format: &'static str,
+        source: impl StdError + Send + Sync + 'static,
+    ) -> Self {
+        Self::Source {
+            operation,
+            format,
+            source: Box::new(source),
+        }
+    }
+
     /// Create an encode failed error
     #[inline]
     pub fn encode_failed(format: &'static str, message: impl Into<String>) -> Self {

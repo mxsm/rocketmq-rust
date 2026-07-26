@@ -47,9 +47,9 @@ use crate::consumer::listener::consume_orderly_status::ConsumeOrderlyStatus;
 /// # Example
 ///
 /// ```rust
-/// use rocketmq_client_rust::consumer::listener::ConsumeOrderlyContext;
-/// use rocketmq_client_rust::consumer::listener::ConsumeOrderlyStatus;
-/// use rocketmq_client_rust::consumer::listener::MessageListenerOrderly;
+/// use rocketmq_client_rust::ConsumeOrderlyContext;
+/// use rocketmq_client_rust::ConsumeOrderlyStatus;
+/// use rocketmq_client_rust::MessageListenerOrderly;
 /// use rocketmq_model::common::message::message_ext::MessageExt;
 ///
 /// // Closures automatically implement MessageListenerOrderly
@@ -152,9 +152,9 @@ where
 /// # Example
 ///
 /// ```rust
-/// use rocketmq_client_rust::consumer::listener::ArcMessageListenerOrderly;
-/// use rocketmq_client_rust::consumer::listener::ConsumeOrderlyStatus;
-/// use rocketmq_client_rust::consumer::listener::MessageListenerOrderly;
+/// use rocketmq_client_rust::ArcMessageListenerOrderly;
+/// use rocketmq_client_rust::ConsumeOrderlyStatus;
+/// use rocketmq_client_rust::MessageListenerOrderly;
 /// use std::sync::Arc;
 ///
 /// struct Consumer {

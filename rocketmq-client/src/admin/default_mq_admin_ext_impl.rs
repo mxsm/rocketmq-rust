@@ -129,8 +129,8 @@ use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_detail::Topic
 use rocketmq_protocol::protocol::subscription::broker_stats_data::BrokerStatsData;
 use rocketmq_protocol::protocol::subscription::group_forbidden::GroupForbidden;
 use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
-use rocketmq_transport::rpc::rpc_request_header::RpcRequestHeader;
-use rocketmq_transport::runtime::RPCHook;
+use rocketmq_transport::RPCHook;
+use rocketmq_transport::RpcRequestHeader;
 use tracing::info;
 use tracing::warn;
 

@@ -18,7 +18,7 @@ use rocketmq_broker::config::broker_config::BrokerConfig;
 use rocketmq_broker::config::validated::ValidatedBrokerConfig;
 use rocketmq_broker::Builder;
 use rocketmq_runtime::RuntimeContext;
-use rocketmq_store::config::message_store_config::MessageStoreConfig;
+use rocketmq_store::MessageStoreConfig;
 
 fn available_listener_pair() -> u16 {
     for _ in 0..100 {

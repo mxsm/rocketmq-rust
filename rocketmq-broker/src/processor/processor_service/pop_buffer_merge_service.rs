@@ -44,12 +44,12 @@ use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::TaskGroup;
-use rocketmq_store::base::message_status_enum::PutMessageStatus;
-use rocketmq_store::base::message_store::MessageStore;
-use rocketmq_store::pop::ack_msg::AckMsg;
-use rocketmq_store::pop::batch_ack_msg::BatchAckMsg;
-use rocketmq_store::pop::pop_check_point::PopCheckPoint;
-use rocketmq_store::pop::AckMessage;
+use rocketmq_store::AckMessage;
+use rocketmq_store::AckMsg;
+use rocketmq_store::BatchAckMsg;
+use rocketmq_store::MessageStore;
+use rocketmq_store::PopCheckPoint;
+use rocketmq_store::PutMessageStatus;
 use tokio::select;
 use tokio::sync::Notify;
 use tracing::error;
@@ -1407,10 +1407,10 @@ mod tests {
 
     use cheetah_string::CheetahString;
     #[cfg(feature = "rocksdb_store")]
-    use rocketmq_store::pop::ack_msg::AckMsg;
+    use rocketmq_store::AckMsg;
     #[cfg(feature = "rocksdb_store")]
-    use rocketmq_store::pop::batch_ack_msg::BatchAckMsg;
-    use rocketmq_store::pop::pop_check_point::PopCheckPoint;
+    use rocketmq_store::BatchAckMsg;
+    use rocketmq_store::PopCheckPoint;
 
     #[cfg(feature = "rocksdb_store")]
     use super::pop_consumer_records_from_ack;

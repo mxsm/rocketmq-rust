@@ -22,7 +22,7 @@ use dashmap::DashMap;
 use parking_lot::RwLock;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ShutdownDeadline;
-use rocketmq_transport::runtime::RPCHook;
+use rocketmq_transport::RPCHook;
 use tracing::info;
 
 use crate::base::client_config::ClientConfig;

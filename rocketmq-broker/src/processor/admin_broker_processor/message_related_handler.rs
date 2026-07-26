@@ -32,13 +32,13 @@ use rocketmq_protocol::protocol::header::search_offset_response_header::SearchOf
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_context::TopicQueueMappingContext;
 use rocketmq_protocol::protocol::RemotingSerializable;
-use rocketmq_store::base::message_status_enum::PutMessageStatus;
-use rocketmq_store::base::message_store::MessageStore;
-use rocketmq_store::filter::MessageFilter;
-use rocketmq_transport::net::channel::Channel;
-use rocketmq_transport::rpc::rpc_client::RpcClient;
-use rocketmq_transport::rpc::rpc_request::RpcRequest;
-use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_store::MessageFilter;
+use rocketmq_store::MessageStore;
+use rocketmq_store::PutMessageStatus;
+use rocketmq_transport::Channel;
+use rocketmq_transport::ConnectionHandlerContext;
+use rocketmq_transport::RpcClient;
+use rocketmq_transport::RpcRequest;
 use serde::Serialize;
 use std::time::Duration;
 
@@ -479,9 +479,7 @@ struct SerializableCqExtUnit<'a> {
     filter_bit_map: Option<&'a [u8]>,
 }
 
-fn serialize_cq_ext_unit(
-    cq_ext_unit: &rocketmq_store::consume_queue::cq_ext_unit::CqExtUnit,
-) -> rocketmq_error::RocketMQResult<String> {
+fn serialize_cq_ext_unit(cq_ext_unit: &rocketmq_store::CqExtUnit) -> rocketmq_error::RocketMQResult<String> {
     serde_json::to_string(&SerializableCqExtUnit {
         size: cq_ext_unit.size(),
         tags_code: cq_ext_unit.tags_code(),
@@ -521,14 +519,14 @@ mod tests {
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
     use rocketmq_protocol::protocol::LanguageCode;
     use rocketmq_protocol::protocol::RemotingDeserializable;
-    use rocketmq_store::base::dispatch_request::DispatchRequest;
-    use rocketmq_store::base::message_store::MessageStore;
-    use rocketmq_store::config::message_store_config::MessageStoreConfig;
-    use rocketmq_transport::base::response_future::ResponseFuture;
-    use rocketmq_transport::connection::Connection;
-    use rocketmq_transport::net::channel::Channel;
-    use rocketmq_transport::net::channel::ChannelInner;
-    use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
+    use rocketmq_store::DispatchRequest;
+    use rocketmq_store::MessageStore;
+    use rocketmq_store::MessageStoreConfig;
+    use rocketmq_transport::Channel;
+    use rocketmq_transport::ChannelInner;
+    use rocketmq_transport::Connection;
+    use rocketmq_transport::ConnectionHandlerContextWrapper;
+    use rocketmq_transport::ResponseFuture;
 
     use super::cq_ext_unit_response_serialize_error;
     use super::MessageRelatedHandler;

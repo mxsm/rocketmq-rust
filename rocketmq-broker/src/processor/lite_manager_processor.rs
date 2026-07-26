@@ -41,14 +41,14 @@ use rocketmq_protocol::protocol::header::get_parent_topic_info_request_header::G
 use rocketmq_protocol::protocol::header::trigger_lite_dispatch_request_header::TriggerLiteDispatchRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::RemotingSerializable;
-use rocketmq_store::base::message_store::MessageStore;
-use rocketmq_store::config::message_store_config::MessageStoreConfig;
-use rocketmq_store::queue::consume_queue_store::ConsumeQueueStoreTrait;
-use rocketmq_store::queue::local_file_consume_queue_store::ConsumeQueueStore;
-use rocketmq_transport::error_response;
-use rocketmq_transport::net::channel::Channel;
-use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_transport::runtime::processor::RequestProcessor;
+use rocketmq_store::ConsumeQueueStore;
+use rocketmq_store::ConsumeQueueStoreTrait;
+use rocketmq_store::MessageStore;
+use rocketmq_store::MessageStoreConfig;
+use rocketmq_transport::request_code_not_supported_with_remark_and_opaque;
+use rocketmq_transport::Channel;
+use rocketmq_transport::ConnectionHandlerContext;
+use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
 use tracing::warn;
 
 use crate::failover::escape_bridge::EscapeBridge;
@@ -279,7 +279,7 @@ impl<MS: MessageStore> LiteManagerProcessor<MS> {
             RequestCode::TriggerLiteDispatch => self.trigger_lite_dispatch(request),
             request_code => {
                 warn!("LiteManagerProcessor received unknown request code: {:?}", request_code);
-                Ok(Some(error_response::request_code_not_supported_with_remark_and_opaque(
+                Ok(Some(request_code_not_supported_with_remark_and_opaque(
                     request.code(),
                     format!("LiteManagerProcessor request code {} not supported", request.code()),
                     request.opaque(),
@@ -868,7 +868,7 @@ mod tests {
 
     use crate::config::broker_config::BrokerConfig;
     use cheetah_string::CheetahString;
-    use rocketmq_store::config::message_store_config::MessageStoreConfig;
+    use rocketmq_store::MessageStoreConfig;
 
     use super::LiteManagerOffsetCapability;
     use super::LiteManagerPolicy;

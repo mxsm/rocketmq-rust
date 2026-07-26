@@ -18,29 +18,29 @@ use std::path::Path;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
-use rocketmq_auth::authentication::builder::default_authentication_context_builder::DefaultAuthenticationContextBuilder;
-use rocketmq_auth::authentication::builder::AuthenticationContextBuilder;
-use rocketmq_auth::authentication::context::default_authentication_context::DefaultAuthenticationContext;
-use rocketmq_auth::authentication::enums::subject_type::SubjectType;
-use rocketmq_auth::authentication::model::subject::Subject;
-use rocketmq_auth::authentication::model::user::User;
-use rocketmq_auth::authentication::provider::AuthenticationMetadataProvider;
-use rocketmq_auth::authentication::provider::AuthenticationProvider;
-#[cfg(feature = "cluster-mode")]
-use rocketmq_auth::authentication::AclClientRpcHook;
-use rocketmq_auth::authorization::context::default_authorization_context::DefaultAuthorizationContext;
-use rocketmq_auth::authorization::metadata_provider::AuthorizationMetadataProvider;
 #[cfg(test)]
-use rocketmq_auth::authorization::model::acl::Acl;
-use rocketmq_auth::authorization::model::resource::Resource;
-use rocketmq_auth::authorization::provider::AuthorizationError;
-use rocketmq_auth::authorization::provider::AuthorizationProvider;
-use rocketmq_auth::authorization::provider::DefaultAuthorizationProvider;
+use rocketmq_auth::Acl;
+#[cfg(feature = "cluster-mode")]
+use rocketmq_auth::AclClientRpcHook;
 use rocketmq_auth::AuthMetricsSnapshot;
 use rocketmq_auth::AuthRuntime;
 use rocketmq_auth::AuthRuntimeBuilder;
+use rocketmq_auth::AuthenticationContextBuilder;
+use rocketmq_auth::AuthenticationMetadataProvider;
+use rocketmq_auth::AuthenticationProvider;
+use rocketmq_auth::AuthorizationError;
+use rocketmq_auth::AuthorizationMetadataProvider;
+use rocketmq_auth::AuthorizationProvider;
+use rocketmq_auth::DefaultAuthenticationContext;
+use rocketmq_auth::DefaultAuthenticationContextBuilder;
 use rocketmq_auth::DefaultAuthenticationProvider;
+use rocketmq_auth::DefaultAuthorizationContext;
+use rocketmq_auth::DefaultAuthorizationProvider;
 use rocketmq_auth::ProviderRegistry;
+use rocketmq_auth::Resource;
+use rocketmq_auth::Subject;
+use rocketmq_auth::SubjectType;
+use rocketmq_auth::User;
 use rocketmq_error::AuthError;
 use rocketmq_error::RocketMQError;
 #[cfg(feature = "cluster-mode")]
@@ -59,9 +59,9 @@ use rocketmq_protocol::protocol::namespace_util::NamespaceUtil;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_security_api::Action;
-use rocketmq_transport::net::channel::Channel;
-use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
+use rocketmq_transport::Channel;
+use rocketmq_transport::ConnectionHandlerContext;
+use rocketmq_transport::ConnectionHandlerContextWrapper;
 use tonic::Request;
 #[cfg(feature = "cluster-mode")]
 use tracing::warn;
@@ -890,12 +890,12 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
 
-    use rocketmq_auth::authentication::acl_signer;
-    use rocketmq_auth::authentication::enums::user_status::UserStatus;
-    use rocketmq_auth::authentication::enums::user_type::UserType;
-    use rocketmq_auth::authorization::enums::decision::Decision;
-    use rocketmq_auth::authorization::model::policy::Policy;
-    use rocketmq_auth::authorization::model::resource::Resource;
+    use rocketmq_auth::cal_signature;
+    use rocketmq_auth::Decision;
+    use rocketmq_auth::Policy;
+    use rocketmq_auth::Resource;
+    use rocketmq_auth::UserStatus;
+    use rocketmq_auth::UserType;
     use rocketmq_protocol::code::request_code::RequestCode;
     use rocketmq_protocol::protocol::header::client_request_header::GetRouteInfoRequestHeader;
 
@@ -933,7 +933,7 @@ mod tests {
     }
 
     fn send_message_command(topic: &str, access_key: &str, secret_key: &str) -> RemotingCommand {
-        let signature = acl_signer::cal_signature(format!("{access_key}{topic}").as_bytes(), secret_key)
+        let signature = cal_signature(format!("{access_key}{topic}").as_bytes(), secret_key)
             .expect("signature should be calculated");
         let mut ext_fields = HashMap::new();
         ext_fields.insert(

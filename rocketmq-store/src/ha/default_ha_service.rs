@@ -125,21 +125,21 @@ impl DefaultHAConnectionContext {
         self.inner
             .group_transfer_service
             .set(Arc::downgrade(service))
-            .map_err(|_| HAError::Service("GroupTransferService already installed".to_string()))
+            .map_err(|_| HAError::invalid_state("GroupTransferService already installed"))
     }
 
     fn install_state_notification_service(&self, service: &Arc<HAConnectionStateNotificationService>) -> HAResult<()> {
         self.inner
             .state_notification_service
             .set(Arc::downgrade(service))
-            .map_err(|_| HAError::Service("HAConnectionStateNotificationService already installed".to_string()))
+            .map_err(|_| HAError::invalid_state("HAConnectionStateNotificationService already installed"))
     }
 
     fn install_auto_switch_replication(&self, replication: Arc<AutoSwitchReplicationState>) -> HAResult<()> {
         self.inner
             .auto_switch_replication
             .set(replication)
-            .map_err(|_| HAError::Service("AutoSwitch replication state already installed".to_string()))
+            .map_err(|_| HAError::invalid_state("AutoSwitch replication state already installed"))
     }
 
     pub(crate) fn get_connection_count(&self) -> &AtomicU32 {
@@ -428,7 +428,7 @@ impl DefaultHAService {
 
         let client = self
             .create_default_ha_client()
-            .map_err(|e| HAError::Service(format!("Failed to create DefaultHAClient: {e}")))?;
+            .map_err(|source| HAError::operation("create default HA client", source))?;
         self.ha_client = Some(GeneralHAClient::new_with_default_ha_client(client));
         Ok(true)
     }
@@ -544,17 +544,17 @@ impl HAService for DefaultHAService {
     async fn start(&self) -> HAResult<()> {
         self.accept_socket_service
             .as_ref()
-            .ok_or_else(|| HAError::Service("AcceptSocketService not initialized".to_string()))?
+            .ok_or_else(|| HAError::invalid_state("AcceptSocketService not initialized"))?
             .start()
             .await?;
         self.group_transfer_service
             .as_ref()
-            .ok_or_else(|| HAError::Service("GroupTransferService not initialized".to_string()))?
+            .ok_or_else(|| HAError::invalid_state("GroupTransferService not initialized"))?
             .start()
             .await?;
         self.ha_connection_state_notification_service
             .as_ref()
-            .ok_or_else(|| HAError::Service("HAConnectionStateNotificationService not initialized".to_string()))?
+            .ok_or_else(|| HAError::invalid_state("HAConnectionStateNotificationService not initialized"))?
             .start()
             .await?;
         if let Some(ref ha_client) = self.ha_client {
@@ -861,7 +861,7 @@ impl AcceptSocketService {
                     }
                 }
             })
-            .map_err(|error| HAError::Service(error.to_string()))?;
+            .map_err(|source| HAError::operation("join HA shutdown task", source))?;
         *worker_group_guard = Some(worker_group);
         Ok(())
     }
@@ -965,7 +965,10 @@ mod tests {
 
         let error = service.start().await.expect_err("start should fail before init");
 
-        assert!(matches!(error, HAError::Service(message) if message.contains("AcceptSocketService")));
+        assert!(matches!(
+            error,
+            HAError::InvalidState(message) if message.contains("AcceptSocketService")
+        ));
         let _ = std::fs::remove_dir_all(temp_root);
     }
 

@@ -164,9 +164,9 @@ impl From<AuthorizationError> for RocketMQError {
 /// # Examples
 ///
 /// ```rust,ignore
-/// use rocketmq_auth::authorization::provider::{AuthorizationProvider, AuthorizationResult};
-/// use rocketmq_auth::authorization::context::default_authorization_context::DefaultAuthorizationContext;
-/// use rocketmq_auth::config::AuthConfig;
+/// use rocketmq_auth::{AuthorizationProvider, AuthorizationResult};
+/// use rocketmq_auth::DefaultAuthorizationContext;
+/// use rocketmq_auth::AuthConfig;
 ///
 /// struct MyAuthProvider;
 ///
@@ -391,7 +391,7 @@ impl AuthorizationProvider for NoopAuthorizationProvider {
 /// # Examples
 ///
 /// ```rust,ignore
-/// use rocketmq_auth::authorization::provider::DefaultAuthorizationProvider;
+/// use rocketmq_auth::DefaultAuthorizationProvider;
 /// use std::sync::Arc;
 ///
 /// let mut provider = DefaultAuthorizationProvider::new();

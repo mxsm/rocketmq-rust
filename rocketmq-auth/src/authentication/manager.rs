@@ -21,5 +21,4 @@ pub mod authentication_metadata_manager;
 pub mod authentication_metadata_manager_impl;
 
 pub use authentication_metadata_manager::AuthenticationMetadataManager;
-pub use authentication_metadata_manager::ManagerResult;
 pub use authentication_metadata_manager_impl::AuthenticationMetadataManagerImpl;

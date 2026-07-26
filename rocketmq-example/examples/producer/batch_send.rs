@@ -25,8 +25,8 @@
 //! - `send_batch_to_queue_with_callback_timeout`: Send multiple messages to a specific queue with
 //!   callback and timeout
 
-use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
-use rocketmq_client_rust::producer::send_result::SendResult;
+use rocketmq_client_rust::DefaultMQProducer;
+use rocketmq_client_rust::SendResult;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::message::message_queue::MessageQueue;

@@ -15,7 +15,7 @@
 use cheetah_string::CheetahString;
 use rocketmq_protocol::protocol::LanguageCode;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_transport::net::channel::Channel;
+use rocketmq_transport::Channel;
 
 #[derive(Clone, Hash, PartialEq)]
 pub struct ClientChannelInfo {

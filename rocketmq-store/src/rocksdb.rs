@@ -31,8 +31,3 @@ pub mod store;
 pub mod timer;
 pub mod transaction;
 pub mod value;
-
-pub use config::RocksDbConfig;
-pub use error::RocksDbErrorKind;
-pub use error::RocksDbResultExt;
-pub use store::RocksDbStore;

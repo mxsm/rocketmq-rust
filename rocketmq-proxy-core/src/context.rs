@@ -17,7 +17,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-use rocketmq_transport::connection_context::ConnectionContext;
+use rocketmq_transport::ConnectionContext;
 use tonic::metadata::MetadataMap;
 use tonic::Request;
 use uuid::Uuid;
@@ -283,7 +283,7 @@ mod tests {
     use std::time::Duration;
 
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-    use rocketmq_transport::connection_context::ConnectionContext;
+    use rocketmq_transport::ConnectionContext;
     use tonic::Request;
 
     use super::parse_grpc_timeout;

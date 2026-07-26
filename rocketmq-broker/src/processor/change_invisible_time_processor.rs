@@ -33,16 +33,16 @@ use rocketmq_protocol::protocol::header::extra_info_util::ExtraInfoUtil;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_store::base::message_result::PutMessageResult;
-use rocketmq_store::base::message_status_enum::PutMessageStatus;
-use rocketmq_store::base::message_store::MessageStore;
-use rocketmq_store::pop::ack_msg::AckMsg;
-use rocketmq_store::pop::pop_check_point::PopCheckPoint;
-use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
-use rocketmq_transport::error_response;
-use rocketmq_transport::net::channel::Channel;
-use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_transport::runtime::processor::RequestProcessor;
+use rocketmq_store::AckMsg;
+use rocketmq_store::BrokerStatsManager;
+use rocketmq_store::MessageStore;
+use rocketmq_store::PopCheckPoint;
+use rocketmq_store::PutMessageResult;
+use rocketmq_store::PutMessageStatus;
+use rocketmq_transport::request_code_not_supported_with_remark_and_opaque;
+use rocketmq_transport::Channel;
+use rocketmq_transport::ConnectionHandlerContext;
+use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -230,7 +230,7 @@ where
                     "ChangeInvisibleTimeProcessor received unknown request code: {:?}",
                     request_code
                 );
-                let response = error_response::request_code_not_supported_with_remark_and_opaque(
+                let response = request_code_not_supported_with_remark_and_opaque(
                     request.code(),
                     format!(
                         "ChangeInvisibleTimeProcessor request code {} not supported",
@@ -581,7 +581,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rocketmq_store::message_store::OwnedMessageStore;
+    use rocketmq_store::OwnedMessageStore;
 
     #[test]
     fn change_invisible_time_policy_captures_only_required_startup_values() {

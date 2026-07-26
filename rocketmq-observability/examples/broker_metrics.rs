@@ -2,8 +2,8 @@
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     use opentelemetry::metrics::MeterProvider;
     use opentelemetry::KeyValue;
-    use rocketmq_observability::config::MetricsExporter;
     use rocketmq_observability::metrics::broker::BrokerMetrics;
+    use rocketmq_observability::MetricsExporter;
     use rocketmq_observability::ObservabilityConfig;
 
     let mut config = ObservabilityConfig {

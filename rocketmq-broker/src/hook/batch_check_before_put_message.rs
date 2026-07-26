@@ -19,8 +19,8 @@ use dashmap::DashMap;
 use rocketmq_model::common::config::TopicConfig;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_model::common::message::MessageTrait;
-use rocketmq_store::base::message_result::PutMessageResult;
-use rocketmq_store::hook::put_message_hook::PutMessageHook;
+use rocketmq_store::PutMessageHook;
+use rocketmq_store::PutMessageResult;
 use tracing::warn;
 
 use crate::util::hook_utils::HookUtils;

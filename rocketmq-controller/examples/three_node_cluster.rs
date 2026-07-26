@@ -18,12 +18,12 @@ use std::collections::BTreeMap;
 use std::collections::HashSet;
 
 use clap::Parser;
-use rocketmq_controller::config::ControllerConfig;
-use rocketmq_controller::config::ControllerConfigReader;
-use rocketmq_controller::config::RaftPeer;
-use rocketmq_controller::openraft::RaftNodeManager;
-use rocketmq_controller::typ::ControllerRequest;
-use rocketmq_controller::typ::Node;
+use rocketmq_controller::ControllerConfig;
+use rocketmq_controller::ControllerConfigReader;
+use rocketmq_controller::ControllerRequest;
+use rocketmq_controller::Node;
+use rocketmq_controller::RaftNodeManager;
+use rocketmq_controller::RaftPeer;
 
 #[derive(Parser, Debug)]
 #[clap(name = "three-node-cluster")]

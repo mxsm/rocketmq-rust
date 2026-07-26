@@ -52,7 +52,7 @@ use tokio::time::timeout;
 /// }
 ///
 /// # async fn example() -> RocketMQResult<()> {
-/// use rocketmq_client_rust::producer::producer_impl::timeout_utils::with_timeout;
+/// use rocketmq_client_rust::with_timeout;
 /// let result: RocketMQResult<String> = with_timeout(Duration::from_secs(1), send_message()).await;
 /// assert!(result.is_ok());
 /// # Ok(())
@@ -133,7 +133,7 @@ where
 /// }
 ///
 /// # async fn example() -> RocketMQResult<()> {
-/// use rocketmq_client_rust::producer::producer_impl::timeout_utils::with_timeout_all;
+/// use rocketmq_client_rust::with_timeout_all;
 /// let futures = vec![send_message(1), send_message(2), send_message(3)];
 /// let results: RocketMQResult<Vec<usize>> =
 ///     with_timeout_all(Duration::from_secs(1), futures).await;

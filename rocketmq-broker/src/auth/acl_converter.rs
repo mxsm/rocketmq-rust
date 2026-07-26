@@ -1,12 +1,12 @@
 use cheetah_string::CheetahString;
-use rocketmq_auth::authentication::enums::subject_type::SubjectType;
-use rocketmq_auth::authorization::enums::decision::Decision;
-use rocketmq_auth::authorization::enums::policy_type::PolicyType;
-use rocketmq_auth::authorization::model::acl::Acl;
-use rocketmq_auth::authorization::model::environment::Environment;
-use rocketmq_auth::authorization::model::policy::Policy;
-use rocketmq_auth::authorization::model::policy_entry::PolicyEntry;
-use rocketmq_auth::authorization::model::resource::Resource;
+use rocketmq_auth::Acl;
+use rocketmq_auth::Decision;
+use rocketmq_auth::Environment;
+use rocketmq_auth::Policy;
+use rocketmq_auth::PolicyEntry;
+use rocketmq_auth::PolicyType;
+use rocketmq_auth::Resource;
+use rocketmq_auth::SubjectType;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_protocol::protocol::body::acl_info::AclInfo;
@@ -175,13 +175,13 @@ fn parse_subject(subject: &str) -> RocketMQResult<(String, SubjectType)> {
 
 #[cfg(test)]
 mod tests {
-    use rocketmq_auth::authentication::enums::subject_type::SubjectType;
-    use rocketmq_auth::authorization::enums::decision::Decision;
-    use rocketmq_auth::authorization::enums::policy_type::PolicyType;
-    use rocketmq_auth::authorization::model::environment::Environment;
-    use rocketmq_auth::authorization::model::policy::Policy;
-    use rocketmq_auth::authorization::model::policy_entry::PolicyEntry;
-    use rocketmq_auth::authorization::model::resource::Resource;
+    use rocketmq_auth::Decision;
+    use rocketmq_auth::Environment;
+    use rocketmq_auth::Policy;
+    use rocketmq_auth::PolicyEntry;
+    use rocketmq_auth::PolicyType;
+    use rocketmq_auth::Resource;
+    use rocketmq_auth::SubjectType;
     use rocketmq_security_api::Action;
 
     use super::*;
@@ -192,7 +192,7 @@ mod tests {
             "alice",
             SubjectType::User,
             Policy::of_entries(
-                rocketmq_auth::authorization::enums::policy_type::PolicyType::Custom,
+                rocketmq_auth::PolicyType::Custom,
                 vec![PolicyEntry::of(
                     Resource::of_topic("topic-a"),
                     vec![Action::Pub, Action::Sub],

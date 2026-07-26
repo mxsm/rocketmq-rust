@@ -106,6 +106,7 @@ use crate::queue::consume_queue_store::ConsumeQueueStoreTrait;
 use crate::queue::local_file_consume_queue_store::ConsumeQueueStore;
 use crate::store::running_flags::RunningFlags;
 use crate::store_error::StoreError;
+use crate::store_error::StoreOperation;
 use crate::transfer::error::TransferError;
 use crate::transfer::error::TransferResult;
 use crate::transfer::segment::SegmentLease;
@@ -824,11 +825,11 @@ impl CommitLogReplicaHandle {
         let mapped_file = self.append.get_last_mapped_file(start_offset as u64, true);
         if mapped_file.is_none() {
             drop(lock);
-            return Err(StoreError::MappedFileNotFound);
+            return Err(StoreError::mapped_file_not_found(StoreOperation::Append));
         }
         let Some(mapped_file) = self.append.get_last_mapped_file(start_offset as u64, true) else {
             drop(lock);
-            return Err(StoreError::MappedFileNotFound);
+            return Err(StoreError::mapped_file_not_found(StoreOperation::Append));
         };
         let appended = mapped_file.append_message_offset_length(data, data_start as usize, data_length as usize);
         drop(lock);
@@ -2892,7 +2893,9 @@ impl CommitLog {
 
     /// Flushes the commit log and reports appended and durable watermarks.
     pub fn try_flush(&self) -> Result<crate::consume_queue::mapped_file_queue::FlushProgress, StoreError> {
-        self.mapped_file_queue.try_flush(0).map_err(StoreError::mapped_file)
+        self.mapped_file_queue
+            .try_flush(0)
+            .map_err(|source| StoreError::mapped_file(StoreOperation::Flush, source))
     }
 
     pub fn get_min_offset(&self) -> i64 {

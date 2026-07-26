@@ -12,10 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#[cfg(not(any(feature = "otel-metrics", feature = "otel-traces", feature = "otel-logs")))]
-#[derive(Debug, Clone, Copy, Default)]
-pub struct StdoutExporter;
-
 #[cfg(any(feature = "otel-metrics", feature = "otel-traces", feature = "otel-logs"))]
 #[derive(Debug, Default)]
 pub struct StdoutExporter {

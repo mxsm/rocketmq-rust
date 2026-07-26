@@ -92,20 +92,22 @@ impl ExportConfigsSubCommand {
 
         result.insert(
             "brokerConfigs".to_string(),
-            serde_json::to_value(&export_result.broker_configs).map_err(|e| {
-                RocketMQError::Internal(format!(
-                    "ExportConfigsSubCommand: Failed to serialize broker configs: {}",
-                    e
+            serde_json::to_value(&export_result.broker_configs).map_err(|source| {
+                RocketMQError::Serialization(rocketmq_error::SerializationError::source(
+                    "encode exported broker configurations",
+                    "JSON",
+                    source,
                 ))
             })?,
         );
         result.insert("clusterScale".to_string(), serde_json::Value::Object(cluster_scale_map));
 
         let path = format!("{}/configs.json", file_path);
-        let json_content = serde_json::to_string_pretty(&result).map_err(|e| {
-            RocketMQError::Internal(format!(
-                "ExportConfigsSubCommand: Failed to serialize export result: {}",
-                e
+        let json_content = serde_json::to_string_pretty(&result).map_err(|source| {
+            RocketMQError::Serialization(rocketmq_error::SerializationError::source(
+                "encode configuration export",
+                "JSON",
+                source,
             ))
         })?;
 

@@ -30,9 +30,9 @@ use rocketmq_store::bench_support::io_uring_flush_benchmark_cases;
 use rocketmq_store::bench_support::IoUringFlushBenchmarkPath;
 use rocketmq_store::bench_support::IoUringFlushBenchmarkWorkload;
 use rocketmq_store::bench_support::IO_URING_FLUSH_BENCHMARK_GROUP;
-use rocketmq_store::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
-use rocketmq_store::log_file::mapped_file::io_uring_impl::probe_io_uring_runtime_capability;
-use rocketmq_store::log_file::mapped_file::MappedFile;
+use rocketmq_store::probe_io_uring_runtime_capability;
+use rocketmq_store::DefaultMappedFile;
+use rocketmq_store::MappedFile;
 use tempfile::TempDir;
 
 fn bench_flush_semantics(c: &mut Criterion) {

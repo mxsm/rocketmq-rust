@@ -22,7 +22,7 @@ use rocketmq_model::common::mix_all;
 use rocketmq_protocol::protocol::header::namesrv::topic_operation_header::TopicRequestHeader;
 use rocketmq_protocol::protocol::header::query_consumer_offset_request_header::QueryConsumerOffsetRequestHeader;
 use rocketmq_protocol::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader;
-use rocketmq_transport::rpc::rpc_request_header::RpcRequestHeader;
+use rocketmq_transport::RpcRequestHeader;
 use tokio::sync::Mutex;
 use tracing::error;
 use tracing::info;

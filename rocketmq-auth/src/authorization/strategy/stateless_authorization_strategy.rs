@@ -59,8 +59,8 @@ use crate::config::AuthConfig;
 /// # Examples
 ///
 /// ```rust,ignore
-/// use rocketmq_auth::authorization::strategy::StatelessAuthorizationStrategy;
-/// use rocketmq_auth::config::AuthConfig;
+/// use rocketmq_auth::StatelessAuthorizationStrategy;
+/// use rocketmq_auth::AuthConfig;
 ///
 /// let config = AuthConfig::default();
 /// let strategy = StatelessAuthorizationStrategy::new(config, None)?;

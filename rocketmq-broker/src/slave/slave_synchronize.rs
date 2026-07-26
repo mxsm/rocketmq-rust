@@ -27,9 +27,9 @@ use rocketmq_runtime::common::file_utils;
 use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::MetadataDeadline;
 use rocketmq_runtime::MetadataIoActor;
-use rocketmq_store::base::message_store::MessageStore;
-use rocketmq_store::config::message_store_config::MessageStoreConfig;
-use rocketmq_store::timer::timer_message_store::TimerMessageStore;
+use rocketmq_store::MessageStore;
+use rocketmq_store::MessageStoreConfig;
+use rocketmq_store::TimerMessageStore;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -680,8 +680,8 @@ mod tests {
 
     use crate::config::broker_config::BrokerConfig;
     use cheetah_string::CheetahString;
-    use rocketmq_store::config::message_store_config::MessageStoreConfig;
-    use rocketmq_store::message_store::OwnedMessageStore;
+    use rocketmq_store::MessageStoreConfig;
+    use rocketmq_store::OwnedMessageStore;
 
     use super::SlaveMasterAddress;
     use super::SlaveMessageRequestModeCapability;

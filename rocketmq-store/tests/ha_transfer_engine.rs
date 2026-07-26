@@ -21,17 +21,17 @@ use std::task::Poll;
 use bytes::BufMut;
 use bytes::Bytes;
 use bytes::BytesMut;
-use rocketmq_store::ha::transfer_engine::bytes::BytesTransferEngine;
-use rocketmq_store::ha::transfer_engine::select_transfer_engine;
-use rocketmq_store::ha::transfer_engine::select_transfer_engine_with_availability;
-use rocketmq_store::ha::transfer_engine::vectored::VectoredTransferEngine;
-use rocketmq_store::ha::transfer_engine::TransferEngineAvailability;
-use rocketmq_store::ha::transfer_engine::TransferEngineKind;
-use rocketmq_store::ha::transfer_engine::TransferEnginePreference;
-use rocketmq_store::transfer::batch::TransferBatch;
-use rocketmq_store::transfer::batch::TransferKind;
-use rocketmq_store::transfer::segment::SegmentLease;
-use rocketmq_store::transfer::segment::TransferCacheState;
+use rocketmq_store::select_transfer_engine;
+use rocketmq_store::select_transfer_engine_with_availability;
+use rocketmq_store::BytesTransferEngine;
+use rocketmq_store::SegmentLease;
+use rocketmq_store::TransferBatch;
+use rocketmq_store::TransferCacheState;
+use rocketmq_store::TransferEngineAvailability;
+use rocketmq_store::TransferEngineKind;
+use rocketmq_store::TransferEnginePreference;
+use rocketmq_store::TransferKind;
+use rocketmq_store::VectoredTransferEngine;
 use tokio::io::AsyncWrite;
 
 #[tokio::test]

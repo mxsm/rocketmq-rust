@@ -29,14 +29,6 @@ pub mod strategy;
 // Re-export commonly used types for convenience
 pub use acl_client_rpc_hook::AclClientRpcHook;
 pub use chain::acl_signer;
-pub use evaluator::AuthenticationEvaluator;
-pub use factory::AuthenticationFactory;
-pub use manager::AuthenticationMetadataManager;
-pub use manager::ManagerResult;
-pub use provider::AuthenticationMetadataProvider;
-pub use provider::AuthenticationProvider;
-pub use provider::DefaultAuthenticationProvider;
-pub use strategy::AuthenticationStrategy;
 
 pub trait AsAny: Any {
     fn as_any_mut(&mut self) -> &mut dyn Any;

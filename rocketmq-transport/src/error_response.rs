@@ -132,7 +132,7 @@ pub fn query_not_found_with_remark_and_opaque(remark: impl Into<String>, opaque:
 /// mapping.
 pub fn internal_error(remark: impl Into<String>) -> RemotingCommand {
     let remark = remark.into();
-    let error = RocketMQError::Internal(remark.clone());
+    let error = RocketMQError::invariant_violated("legacy remoting handler returned an internal response");
     command_from_error_with_remark(&error, remark)
 }
 
@@ -165,8 +165,9 @@ mod tests {
 
     #[test]
     fn command_from_error_uses_public_remark_for_internal_errors() {
-        let response = command_from_error(&RocketMQError::Internal(
-            "password=plain-text; worker failed".to_string(),
+        let response = command_from_error(&RocketMQError::internal(
+            "run remoting worker",
+            std::io::Error::other("password=plain-text; worker failed"),
         ));
 
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::SystemError);

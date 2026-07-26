@@ -18,14 +18,14 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use rocketmq_controller::config::ControllerConfig;
-use rocketmq_controller::config::ControllerConfigReader;
-use rocketmq_controller::config::RaftPeer;
-use rocketmq_controller::config::StorageBackendType;
-use rocketmq_controller::openraft::GrpcRaftService;
-use rocketmq_controller::openraft::RaftNodeManager;
 use rocketmq_controller::protobuf::openraft::open_raft_service_server::OpenRaftServiceServer;
-use rocketmq_controller::typ::Node;
+use rocketmq_controller::ControllerConfig;
+use rocketmq_controller::ControllerConfigReader;
+use rocketmq_controller::GrpcRaftService;
+use rocketmq_controller::Node;
+use rocketmq_controller::RaftNodeManager;
+use rocketmq_controller::RaftPeer;
+use rocketmq_controller::StorageBackendType;
 use tonic::transport::Server;
 
 fn test_storage_io(name: &'static str) -> rocketmq_runtime::BlockingExecutor {

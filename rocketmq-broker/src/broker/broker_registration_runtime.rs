@@ -26,7 +26,7 @@ use rocketmq_protocol::protocol::body::topic_info_wrapper::topic_config_wrapper:
 use rocketmq_protocol::protocol::namesrv::RegisterBrokerResult;
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
 use rocketmq_protocol::protocol::DataVersion;
-use rocketmq_store::base::message_store::MessageStore;
+use rocketmq_store::MessageStore;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;

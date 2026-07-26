@@ -34,7 +34,7 @@ impl BrokerRuntime {
         }
 
         if self.composition.state.observability_guard.is_none() {
-            match rocketmq_observability::logging::install_global(&bootstrap_config) {
+            match rocketmq_observability::install_global(&bootstrap_config) {
                 Ok(guard) => self.composition.state.observability_guard = Some(guard),
                 Err(error) => {
                     warn!("Failed to initialize broker observability: {error}");

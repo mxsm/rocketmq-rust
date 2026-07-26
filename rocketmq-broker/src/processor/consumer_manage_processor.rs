@@ -26,14 +26,14 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_context::TopicQueueMappingContext;
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_utils::TopicQueueMappingUtils;
 use rocketmq_protocol::protocol::RemotingSerializable;
-use rocketmq_store::base::message_store::MessageStore;
-use rocketmq_transport::error_response;
-use rocketmq_transport::net::channel::Channel;
-use rocketmq_transport::rpc::rpc_client::RpcClient;
-use rocketmq_transport::rpc::rpc_client_impl::RpcClientImpl;
-use rocketmq_transport::rpc::rpc_request::RpcRequest;
-use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_transport::runtime::processor::RequestProcessor;
+use rocketmq_store::MessageStore;
+use rocketmq_transport::request_code_not_supported_with_remark_and_opaque;
+use rocketmq_transport::Channel;
+use rocketmq_transport::ConnectionHandlerContext;
+use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
+use rocketmq_transport::RpcClient;
+use rocketmq_transport::RpcClientImpl;
+use rocketmq_transport::RpcRequest;
 use tracing::info;
 use tracing::warn;
 
@@ -86,7 +86,7 @@ where
                     "ConsumerManageProcessor received unknown request code: {:?}",
                     request_code
                 );
-                let response = error_response::request_code_not_supported_with_remark_and_opaque(
+                let response = request_code_not_supported_with_remark_and_opaque(
                     request.code(),
                     format!("ConsumerManageProcessor request code {} not supported", request.code()),
                     request.opaque(),

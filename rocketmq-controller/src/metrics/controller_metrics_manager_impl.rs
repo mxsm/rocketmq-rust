@@ -38,9 +38,6 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::RwLock;
 
-use rocketmq_observability::config::MetricsExporter;
-#[cfg(feature = "metrics")]
-use rocketmq_observability::config::ObservabilityConfig;
 use rocketmq_observability::metrics::noop_instruments::NopLongCounter;
 use rocketmq_observability::metrics::noop_instruments::NopLongHistogram;
 use rocketmq_observability::metrics::owner_instruments::Counter;
@@ -50,6 +47,9 @@ use rocketmq_observability::metrics::owner_instruments::Meter;
 use rocketmq_observability::metrics::owner_instruments::MeterProvider;
 use rocketmq_observability::metrics::owner_instruments::SdkMeterProvider;
 use rocketmq_observability::metrics::owner_instruments::UpDownCounter;
+use rocketmq_observability::MetricsExporter;
+#[cfg(feature = "metrics")]
+use rocketmq_observability::ObservabilityConfig;
 #[cfg(feature = "metrics")]
 use rocketmq_observability::TelemetryGuard;
 use tracing::error;

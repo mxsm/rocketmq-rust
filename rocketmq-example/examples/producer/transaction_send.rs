@@ -22,9 +22,9 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
 use cheetah_string::CheetahString;
-use rocketmq_client_rust::producer::local_transaction_state::LocalTransactionState;
-use rocketmq_client_rust::producer::transaction_listener::TransactionListener;
-use rocketmq_client_rust::producer::transaction_mq_producer::TransactionMQProducer;
+use rocketmq_client_rust::LocalTransactionState;
+use rocketmq_client_rust::TransactionListener;
+use rocketmq_client_rust::TransactionMQProducer;
 use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::message::MessageTrait;
 use rocketmq_model::common::message::message_ext::MessageExt;

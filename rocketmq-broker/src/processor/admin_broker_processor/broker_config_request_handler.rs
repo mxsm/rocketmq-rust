@@ -31,12 +31,12 @@ use rocketmq_protocol::protocol::header::export_rocksdb_config_to_json_request_h
 use rocketmq_protocol::protocol::header::export_rocksdb_config_to_json_request_header::ExportRocksdbConfigType;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::DataVersion;
-use rocketmq_store::base::message_store::MessageStore;
-use rocketmq_store::utils::ffi::MADV_NORMAL;
-use rocketmq_store::utils::ffi::MADV_RANDOM;
-use rocketmq_transport::error_response;
-use rocketmq_transport::net::channel::Channel;
-use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_store::MessageStore;
+use rocketmq_store::MADV_NORMAL;
+use rocketmq_store::MADV_RANDOM;
+use rocketmq_transport::request_code_not_supported_with_remark;
+use rocketmq_transport::Channel;
+use rocketmq_transport::ConnectionHandlerContext;
 use sysinfo::Disks;
 
 use crate::auth::auth_admin_service::AuthAdminService;
@@ -447,7 +447,7 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
         let _ = config_types;
 
         Ok(Some(
-            error_response::request_code_not_supported_with_remark(
+            request_code_not_supported_with_remark(
                 request.code(),
                 "EXPORT_ROCKSDB_CONFIG_TO_JSON requires a real RocksDB config backend; current Rust broker uses \
                  file-backed config managers",
@@ -804,20 +804,20 @@ mod tests {
     #[cfg(feature = "rocksdb_store")]
     use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
     use rocketmq_runtime::common::time_utils::current_millis;
-    use rocketmq_store::base::message_store::MessageStore;
+    use rocketmq_store::MessageStore;
+    use rocketmq_store::MessageStoreConfig;
     #[cfg(feature = "rocksdb_store")]
-    use rocketmq_store::base::store_enum::StoreType;
-    use rocketmq_store::config::message_store_config::MessageStoreConfig;
-    use rocketmq_store::timer::timer_checkpoint::TimerCheckpointSnapshot;
-    use rocketmq_store::timer::timer_message_store::TimerMessageStore;
-    use rocketmq_store::timer::timer_metrics::TimerMetricsSerializeWrapper;
-    use rocketmq_store::utils::ffi::MADV_NORMAL;
-    use rocketmq_store::utils::ffi::MADV_RANDOM;
-    use rocketmq_transport::base::response_future::ResponseFuture;
-    use rocketmq_transport::connection::Connection;
-    use rocketmq_transport::net::channel::Channel;
-    use rocketmq_transport::net::channel::ChannelInner;
-    use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
+    use rocketmq_store::StoreType;
+    use rocketmq_store::TimerCheckpointSnapshot;
+    use rocketmq_store::TimerMessageStore;
+    use rocketmq_store::TimerMetricsSerializeWrapper;
+    use rocketmq_store::MADV_NORMAL;
+    use rocketmq_store::MADV_RANDOM;
+    use rocketmq_transport::Channel;
+    use rocketmq_transport::ChannelInner;
+    use rocketmq_transport::Connection;
+    use rocketmq_transport::ConnectionHandlerContextWrapper;
+    use rocketmq_transport::ResponseFuture;
 
     use crate::broker_runtime::BrokerRuntime;
 

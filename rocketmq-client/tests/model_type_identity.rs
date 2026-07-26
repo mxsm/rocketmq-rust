@@ -12,14 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_client_rust::base::query_result::QueryResult as LegacyQueryResult;
-use rocketmq_client_rust::consumer::allocate_message_queue_strategy::AllocateMessageQueueStrategy as LegacyAllocationStrategy;
-use rocketmq_client_rust::consumer::pull_result::PullOutcome;
-use rocketmq_client_rust::consumer::pull_result::PullResult;
-use rocketmq_client_rust::consumer::pull_status::PullStatus as LegacyPullStatus;
-use rocketmq_client_rust::consumer::rebalance_strategy::allocate_message_queue_averagely::AllocateMessageQueueAveragely as LegacyAverage;
-use rocketmq_client_rust::producer::send_result::SendResult as LegacySendResult;
-use rocketmq_client_rust::producer::send_status::SendStatus as LegacySendStatus;
+use rocketmq_client_rust::AllocateMessageQueueAveragely as LegacyAverage;
+use rocketmq_client_rust::AllocateMessageQueueStrategy as LegacyAllocationStrategy;
+use rocketmq_client_rust::PullOutcome;
+use rocketmq_client_rust::PullResult;
+use rocketmq_client_rust::PullStatus as LegacyPullStatus;
+use rocketmq_client_rust::QueryResult as LegacyQueryResult;
+use rocketmq_client_rust::SendResult as LegacySendResult;
+use rocketmq_client_rust::SendStatus as LegacySendStatus;
 use rocketmq_model::allocation::AllocateMessageQueueAveragely;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::result::PullStatus;

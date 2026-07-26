@@ -26,10 +26,10 @@ use parking_lot::Mutex;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::TaskGroup;
-use rocketmq_store::base::message_store::MessageStore;
-use rocketmq_store::consume_queue::cq_ext_unit::CqExtUnit;
-use rocketmq_transport::net::channel::Channel;
-use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_store::CqExtUnit;
+use rocketmq_store::MessageStore;
+use rocketmq_transport::Channel;
+use rocketmq_transport::ConnectionHandlerContext;
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::sync::Notify;
 use tokio::time::Instant;
@@ -403,7 +403,7 @@ mod tests {
     use std::time::Duration;
 
     use rocketmq_runtime::RuntimeHandle;
-    use rocketmq_store::message_store::OwnedMessageStore;
+    use rocketmq_store::OwnedMessageStore;
 
     use super::*;
 

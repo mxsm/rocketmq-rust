@@ -78,9 +78,9 @@ use rocketmq_protocol::protocol::header::controller::register_broker_to_controll
 use rocketmq_protocol::protocol::header::namesrv::broker_request::BrokerHeartbeatRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::RemotingDeserializable;
-use rocketmq_transport::net::channel::Channel;
-use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_transport::runtime::processor::RequestProcessor;
+use rocketmq_transport::Channel;
+use rocketmq_transport::ConnectionHandlerContext;
+use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
 use tracing::info;
 use tracing::warn;
 /// Timeout for controller operations (in seconds)

@@ -30,7 +30,7 @@ use rocketmq_protocol::protocol::body::consumer_running_info::ConsumerRunningInf
 use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_protocol::protocol::namespace_util::NamespaceUtil;
-use rocketmq_transport::runtime::RPCHook;
+use rocketmq_transport::RPCHook;
 use tokio::sync::OnceCell;
 use tokio::sync::RwLock;
 
@@ -86,7 +86,7 @@ use crate::trace::trace_dispatcher::Type;
 /// ## Basic usage with auto-commit
 ///
 /// ```rust,ignore
-/// use rocketmq_client::consumer::default_lite_pull_consumer::DefaultLitePullConsumer;
+/// use rocketmq_client::DefaultLitePullConsumer;
 ///
 /// let consumer = DefaultLitePullConsumer::builder(client_runtime.clone())
 ///     .consumer_group("my_consumer_group")

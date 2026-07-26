@@ -30,15 +30,15 @@ use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
 use rocketmq_protocol::protocol::header::end_transaction_request_header::EndTransactionRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_store::base::message_result::PutMessageResult;
-use rocketmq_store::base::message_status_enum::PutMessageStatus;
-use rocketmq_store::base::message_store::MessageStore;
-use rocketmq_store::config::message_store_config::MessageStoreConfig;
-use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
-use rocketmq_transport::error_response;
-use rocketmq_transport::net::channel::Channel;
-use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_transport::runtime::processor::RequestProcessor;
+use rocketmq_store::BrokerStatsManager;
+use rocketmq_store::MessageStore;
+use rocketmq_store::MessageStoreConfig;
+use rocketmq_store::PutMessageResult;
+use rocketmq_store::PutMessageStatus;
+use rocketmq_transport::request_code_not_supported_with_remark_and_opaque;
+use rocketmq_transport::Channel;
+use rocketmq_transport::ConnectionHandlerContext;
+use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
@@ -196,7 +196,7 @@ where
                     "EndTransactionProcessor received unknown request code: {:?}",
                     request_code
                 );
-                let response = error_response::request_code_not_supported_with_remark_and_opaque(
+                let response = request_code_not_supported_with_remark_and_opaque(
                     request.code(),
                     format!("request code {} not supported", request.code()),
                     request.opaque(),
@@ -647,7 +647,7 @@ fn end_message_transaction(msg_ext: &mut MessageExt) -> MessageExtBrokerInner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rocketmq_store::message_store::OwnedMessageStore;
+    use rocketmq_store::OwnedMessageStore;
 
     #[test]
     fn end_message_transaction_with_valid_message() {
@@ -763,7 +763,7 @@ mod tests {
             timer_wheel_enable: false,
         };
         let broker_stats_manager = BrokerStatsManager::new(
-            Arc::new(rocketmq_store::config::store_runtime_config::StoreRuntimeConfig::default()),
+            Arc::new(rocketmq_store::StoreRuntimeConfig::default()),
             crate::test_task_group("broker-stats"),
         );
         let topic = CheetahString::from_static_str("transaction-topic");

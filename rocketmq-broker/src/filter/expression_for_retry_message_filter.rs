@@ -15,8 +15,8 @@
 use std::collections::HashMap;
 
 use cheetah_string::CheetahString;
-use rocketmq_store::consume_queue::cq_ext_unit::CqExtUnit;
-use rocketmq_store::filter::MessageFilter;
+use rocketmq_store::CqExtUnit;
+use rocketmq_store::MessageFilter;
 
 pub struct ExpressionForRetryMessageFilter;
 

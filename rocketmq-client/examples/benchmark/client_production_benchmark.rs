@@ -24,12 +24,12 @@ use std::time::Instant;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
-use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
-use rocketmq_client_rust::producer::send_result::SendResult;
-use rocketmq_client_rust::producer::send_status::SendStatus;
 use rocketmq_client_rust::AclClientRPCHook;
 use rocketmq_client_rust::ClientRuntime;
 use rocketmq_client_rust::DefaultLitePullConsumer;
+use rocketmq_client_rust::DefaultMQProducer;
+use rocketmq_client_rust::SendResult;
+use rocketmq_client_rust::SendStatus;
 use rocketmq_client_rust::SessionCredentials;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;

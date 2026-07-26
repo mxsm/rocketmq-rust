@@ -46,7 +46,8 @@ fn dispatcher_startup_failed_uses_service_error_kind() {
 
 #[tokio::test]
 async fn dispatch_writes_commit_log_and_consume_queue_unit() -> Result<(), RocketMQError> {
-    let temp_dir = tempfile::tempdir().map_err(|err| RocketMQError::Internal(err.to_string()))?;
+    let temp_dir =
+        tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
     let config = Arc::new(TieredStoreConfig {
         store_path_root_dir: temp_dir.path().to_path_buf(),
         backend_provider: "memory".to_owned(),
@@ -81,11 +82,11 @@ async fn dispatch_writes_commit_log_and_consume_queue_unit() -> Result<(), Rocke
 
     let flat_file = flat_file_store
         .get("TopicA", 0)
-        .ok_or_else(|| RocketMQError::Internal("missing dispatched flat file".to_owned()))?;
+        .ok_or_else(|| RocketMQError::invariant_violated("dispatch must publish a flat file"))?;
     let cq_unit = flat_file
         .read_consume_queue_unit(3)
         .await?
-        .ok_or_else(|| RocketMQError::Internal("missing dispatched consume queue unit".to_owned()))?;
+        .ok_or_else(|| RocketMQError::invariant_violated("dispatch must publish a consume queue unit"))?;
 
     assert_eq!(cq_unit.commit_log_offset, 0);
     assert_eq!(cq_unit.size, 4);
@@ -99,7 +100,8 @@ async fn dispatch_writes_commit_log_and_consume_queue_unit() -> Result<(), Rocke
 
 #[tokio::test]
 async fn new_with_task_group_parents_dispatcher_task() -> Result<(), RocketMQError> {
-    let temp_dir = tempfile::tempdir().map_err(|err| RocketMQError::Internal(err.to_string()))?;
+    let temp_dir =
+        tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
     let config = Arc::new(TieredStoreConfig {
         store_path_root_dir: temp_dir.path().to_path_buf(),
         backend_provider: "memory".to_owned(),
@@ -138,7 +140,8 @@ async fn new_with_task_group_parents_dispatcher_task() -> Result<(), RocketMQErr
 
 #[tokio::test]
 async fn cancellation_releases_a_sender_waiting_for_byte_capacity() -> Result<(), RocketMQError> {
-    let temp_dir = tempfile::tempdir().map_err(|error| RocketMQError::Internal(error.to_string()))?;
+    let temp_dir =
+        tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
     let config = Arc::new(TieredStoreConfig {
         store_path_root_dir: temp_dir.path().to_path_buf(),
         backend_provider: "memory".to_owned(),
@@ -178,7 +181,7 @@ async fn cancellation_releases_a_sender_waiting_for_byte_capacity() -> Result<()
     shutdown.cancel();
     let error = tokio::time::timeout(Duration::from_secs(1), blocked)
         .await
-        .map_err(|error| RocketMQError::Internal(error.to_string()))?
+        .map_err(|source| RocketMQError::internal("await dispatcher shutdown", source))?
         .expect_err("cancelled sender must return an interruption");
     assert_eq!(error.kind(), ErrorKind::Service);
     assert!(dispatcher.is_shutdown());

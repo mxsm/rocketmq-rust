@@ -26,8 +26,8 @@ use crate::hook::check_forbidden_context::CheckForbiddenContext;
 /// # Examples
 ///
 /// ```ignore
-/// use rocketmq_client::hook::check_forbidden_hook::CheckForbiddenHook;
-/// use rocketmq_client::hook::check_forbidden_context::CheckForbiddenContext;
+/// use rocketmq_client::CheckForbiddenContext;
+/// use rocketmq_client::CheckForbiddenHook;
 /// use rocketmq_error::RocketMQResult;
 ///
 /// struct RegionValidator;

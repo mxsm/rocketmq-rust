@@ -17,7 +17,9 @@
 //! This module provides convenient helper functions to create unified errors
 //! for common remoting scenarios.
 
+use rocketmq_error::ProtocolError;
 use rocketmq_error::RocketMQError;
+use rocketmq_error::SerializationError;
 use rocketmq_error::UnifiedServiceError;
 
 /// Create an I/O error from std::io::Error
@@ -41,7 +43,7 @@ pub fn remote_error(msg: impl Into<String>) -> RocketMQError {
 /// Create a remoting command decoder error
 #[inline]
 pub fn decoder_error(ext_fields_len: usize, header_len: usize) -> RocketMQError {
-    RocketMQError::Protocol(rocketmq_error::unified::ProtocolError::DecodeError {
+    RocketMQError::Protocol(ProtocolError::DecodeError {
         ext_fields_len,
         header_len,
     })
@@ -50,7 +52,7 @@ pub fn decoder_error(ext_fields_len: usize, header_len: usize) -> RocketMQError 
 /// Create a deserialize header error
 #[inline]
 pub fn deserialize_header_error(msg: impl Into<String>) -> RocketMQError {
-    RocketMQError::Serialization(rocketmq_error::unified::SerializationError::DecodeFailed {
+    RocketMQError::Serialization(SerializationError::DecodeFailed {
         format: "header",
         message: msg.into(),
     })
@@ -59,7 +61,7 @@ pub fn deserialize_header_error(msg: impl Into<String>) -> RocketMQError {
 /// Create a decoding error
 #[inline]
 pub fn decoding_error(required: usize, available: usize) -> RocketMQError {
-    RocketMQError::Serialization(rocketmq_error::unified::SerializationError::DecodeFailed {
+    RocketMQError::Serialization(SerializationError::DecodeFailed {
         format: "binary",
         message: format!("required {} bytes, got {}", required, available),
     })
@@ -68,7 +70,7 @@ pub fn decoding_error(required: usize, available: usize) -> RocketMQError {
 /// Create an unsupported serialize type error
 #[inline]
 pub fn unsupported_serialize_type(serialize_type: u8) -> RocketMQError {
-    RocketMQError::Protocol(rocketmq_error::unified::ProtocolError::UnsupportedSerializationType { serialize_type })
+    RocketMQError::Protocol(ProtocolError::UnsupportedSerializationType { serialize_type })
 }
 
 /// Create an illegal argument error
@@ -102,7 +104,7 @@ pub fn abort_process_error(code: i32, msg: impl Into<String>) -> RocketMQError {
 /// Create a remoting command encoder error
 #[inline]
 pub fn encoder_error(msg: impl Into<String>) -> RocketMQError {
-    RocketMQError::Serialization(rocketmq_error::unified::SerializationError::EncodeFailed {
+    RocketMQError::Serialization(SerializationError::EncodeFailed {
         format: "command",
         message: msg.into(),
     })

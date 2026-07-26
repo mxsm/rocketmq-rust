@@ -5,7 +5,7 @@ use std::net::SocketAddr;
 
 use cheetah_string::CheetahString;
 use rocketmq_protocol::protocol::DataVersion;
-use rocketmq_transport::net::channel::ChannelId;
+use rocketmq_transport::ChannelId;
 use serde::Deserialize;
 use serde::Serialize;
 

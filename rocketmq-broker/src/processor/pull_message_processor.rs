@@ -46,19 +46,19 @@ use rocketmq_protocol::protocol::subscription::subscription_group_config::Subscr
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskKind;
-use rocketmq_store::base::get_message_result::GetMessageResult;
-use rocketmq_store::base::message_status_enum::GetMessageStatus;
-use rocketmq_store::base::message_store::MessageStore;
-use rocketmq_store::filter::ArcMessageFilter;
-use rocketmq_store::log_file::MAX_PULL_MSG_SIZE;
-use rocketmq_transport::error_response;
-use rocketmq_transport::net::channel::Channel;
-use rocketmq_transport::rpc::rpc_client::RpcClient;
-use rocketmq_transport::rpc::rpc_client_utils::RpcClientUtils;
-use rocketmq_transport::rpc::rpc_request::RpcRequest;
-use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_transport::runtime::processor::RejectRequestResponse;
-use rocketmq_transport::runtime::processor::RequestProcessor;
+use rocketmq_store::ArcMessageFilter;
+use rocketmq_store::GetMessageResult;
+use rocketmq_store::GetMessageStatus;
+use rocketmq_store::MessageStore;
+use rocketmq_store::MAX_PULL_MSG_SIZE;
+use rocketmq_transport::request_code_not_supported_with_remark_and_opaque;
+use rocketmq_transport::Channel;
+use rocketmq_transport::ConnectionHandlerContext;
+use rocketmq_transport::RejectRequestResponse;
+use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
+use rocketmq_transport::RpcClient;
+use rocketmq_transport::RpcClientUtils;
+use rocketmq_transport::RpcRequest;
 use tokio::sync::Mutex;
 use tracing::error;
 use tracing::info;
@@ -164,7 +164,7 @@ where
             }
             _ => {
                 warn!("PullMessageProcessor received unknown request code: {:?}", request_code);
-                let response = error_response::request_code_not_supported_with_remark_and_opaque(
+                let response = request_code_not_supported_with_remark_and_opaque(
                     request.code(),
                     format!("ClientManageProcessor request code {} not supported", request.code()),
                     request.opaque(),
@@ -1114,12 +1114,12 @@ mod tests {
     use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
     use rocketmq_protocol::protocol::LanguageCode;
     use rocketmq_runtime::TaskGroup;
-    use rocketmq_store::base::message_store::MessageStore;
-    use rocketmq_store::config::message_store_config::MessageStoreConfig;
-    use rocketmq_store::log_file::MAX_PULL_MSG_SIZE;
-    use rocketmq_transport::connection::Connection;
-    use rocketmq_transport::net::channel::Channel;
-    use rocketmq_transport::net::channel::ChannelInner;
+    use rocketmq_store::MessageStore;
+    use rocketmq_store::MessageStoreConfig;
+    use rocketmq_store::MAX_PULL_MSG_SIZE;
+    use rocketmq_transport::Channel;
+    use rocketmq_transport::ChannelInner;
+    use rocketmq_transport::Connection;
 
     use super::consumer_compensation_for_request_source;
     use super::is_broadcast;

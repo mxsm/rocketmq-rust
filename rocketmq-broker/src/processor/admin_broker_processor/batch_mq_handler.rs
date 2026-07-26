@@ -24,9 +24,9 @@ use rocketmq_protocol::protocol::body::unlock_batch_request_body::UnlockBatchReq
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::RemotingDeserializable;
 use rocketmq_protocol::protocol::RemotingSerializable;
-use rocketmq_store::base::message_store::MessageStore;
-use rocketmq_transport::net::channel::Channel;
-use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_store::MessageStore;
+use rocketmq_transport::Channel;
+use rocketmq_transport::ConnectionHandlerContext;
 use tokio::time::timeout;
 use tracing::warn;
 

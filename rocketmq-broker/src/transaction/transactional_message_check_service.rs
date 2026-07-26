@@ -20,7 +20,7 @@ use crate::config::broker_config::BrokerConfig;
 use rocketmq_runtime::task::service_task::ServiceTask;
 use rocketmq_runtime::task::service_task::ServiceTaskContext;
 use rocketmq_runtime::task::ServiceManager;
-use rocketmq_store::base::message_store::MessageStore;
+use rocketmq_store::MessageStore;
 use tracing::info;
 use tracing::warn;
 

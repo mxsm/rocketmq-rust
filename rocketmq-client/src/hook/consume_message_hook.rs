@@ -28,8 +28,8 @@ pub type ConsumeMessageHookArc = Arc<dyn ConsumeMessageHook>;
 /// # Examples
 ///
 /// ```ignore
-/// use rocketmq_client::hook::consume_message_hook::ConsumeMessageHook;
-/// use rocketmq_client::hook::consume_message_context::ConsumeMessageContext;
+/// use rocketmq_client::ConsumeMessageContext;
+/// use rocketmq_client::ConsumeMessageHook;
 ///
 /// struct LoggingHook;
 ///

@@ -20,8 +20,8 @@ use cheetah_string::CheetahString;
 use rocketmq_model::common::filter::expression_type::ExpressionType;
 use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
 use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
-use rocketmq_store::consume_queue::cq_ext_unit::CqExtUnit;
-use rocketmq_store::filter::MessageFilter;
+use rocketmq_store::CqExtUnit;
+use rocketmq_store::MessageFilter;
 
 use crate::filter::consumer_filter_data::ConsumerFilterData;
 use crate::filter::manager::consumer_filter_manager::ConsumerFilterManager;
@@ -182,12 +182,12 @@ mod tests {
     use rocketmq_model::common::message::MessageTrait;
     use rocketmq_protocol::common::message::message_decoder::message_properties_to_string;
     use rocketmq_protocol::protocol::filter::filter_api::FilterAPI;
-    use rocketmq_store::base::message_status_enum::GetMessageStatus;
-    use rocketmq_store::base::message_status_enum::PutMessageStatus;
-    use rocketmq_store::base::message_store::MessageStore;
-    use rocketmq_store::config::message_store_config::MessageStoreConfig;
-    use rocketmq_store::filter::MessageFilter;
-    use rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore;
+    use rocketmq_store::GetMessageStatus;
+    use rocketmq_store::LocalFileMessageStore;
+    use rocketmq_store::MessageFilter;
+    use rocketmq_store::MessageStore;
+    use rocketmq_store::MessageStoreConfig;
+    use rocketmq_store::PutMessageStatus;
 
     fn new_manager() -> ConsumerFilterManager {
         ConsumerFilterManager::new(
@@ -231,7 +231,7 @@ mod tests {
                 timer_wheel_enable: false,
                 ..MessageStoreConfig::default()
             }),
-            Arc::new(rocketmq_store::config::store_runtime_config::StoreRuntimeConfig::default()),
+            Arc::new(rocketmq_store::StoreRuntimeConfig::default()),
             topic_table,
             None,
             false,

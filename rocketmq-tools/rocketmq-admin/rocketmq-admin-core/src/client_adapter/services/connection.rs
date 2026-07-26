@@ -15,7 +15,7 @@
 //! Producer and consumer connection admin service models and operations.
 
 use cheetah_string::CheetahString;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
+use rocketmq_client_rust::MQAdminExt;
 use rocketmq_protocol::protocol::body::consumer_connection::ConsumerConnection;
 use rocketmq_protocol::protocol::body::producer_connection::ProducerConnection;
 use serde::Deserialize;

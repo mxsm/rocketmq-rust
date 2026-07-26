@@ -57,7 +57,7 @@ impl BrokerRuntime {
         self.detach_message_store_provider();
         let result = match self.composition.state.message_store_mut() {
             Some(message_store) => message_store.start().await,
-            None => Err(StoreError::NotStarted),
+            None => Err(StoreError::new(StoreErrorKind::NotStarted, StoreOperation::Start)),
         };
         self.bind_message_store_provider();
         result

@@ -29,12 +29,12 @@ use rocketmq_protocol::protocol::header::pop_lite_message_request_header::PopLit
 use rocketmq_protocol::protocol::header::pop_lite_message_response_header::PopLiteMessageResponseHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_store::base::get_message_result::GetMessageResult;
-use rocketmq_store::base::message_status_enum::GetMessageStatus;
-use rocketmq_store::base::message_store::MessageStore;
-use rocketmq_transport::net::channel::Channel;
-use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_transport::runtime::processor::RequestProcessor;
+use rocketmq_store::GetMessageResult;
+use rocketmq_store::GetMessageStatus;
+use rocketmq_store::MessageStore;
+use rocketmq_transport::Channel;
+use rocketmq_transport::ConnectionHandlerContext;
+use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
 use tokio::sync::Mutex as AsyncMutex;
 
 use crate::failover::escape_bridge::EscapeBridge;
@@ -695,8 +695,8 @@ mod tests {
     use crate::config::broker_config::BrokerConfig;
     use cheetah_string::CheetahString;
     use rocketmq_runtime::RuntimeContext;
-    use rocketmq_store::config::message_store_config::MessageStoreConfig;
-    use rocketmq_store::message_store::OwnedMessageStore;
+    use rocketmq_store::MessageStoreConfig;
+    use rocketmq_store::OwnedMessageStore;
 
     use super::PopLiteMessagePolicy;
     use super::PopLiteMessageProcessor;

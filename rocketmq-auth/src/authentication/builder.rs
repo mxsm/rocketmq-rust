@@ -36,7 +36,7 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 /// # Examples
 ///
 /// ```rust,ignore
-/// use rocketmq_auth::authentication::builder::AuthenticationContextBuilder;
+/// use rocketmq_auth::AuthenticationContextBuilder;
 ///
 /// let builder = DefaultAuthenticationContextBuilder::new();
 /// let context = builder.build_from_remoting(channel_context, &request)?;

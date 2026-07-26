@@ -28,9 +28,6 @@ use rocketmq_error::AuthError;
 use crate::authentication::context::default_authentication_context::DefaultAuthenticationContext;
 use crate::authentication::provider::AuthenticationProvider;
 // Re-export the main trait and implementations for convenience
-pub use abstract_authentication_strategy::AbstractAuthenticationStrategy;
-pub use abstract_authentication_strategy::AuthenticationStrategyFactory;
-pub use abstract_authentication_strategy::BaseAuthenticationStrategy;
 pub use allow_all::AllowAllAuthenticationStrategy;
 pub use authentication_strategy::AuthenticationFuture;
 pub use authentication_strategy::AuthenticationStrategy;
@@ -47,5 +44,5 @@ where
     provider
         .authenticate(context)
         .await
-        .map_err(|error| AuthError::AuthenticationFailed(error.to_string()))
+        .map_err(|source| AuthError::operation("authenticate with provider", source))
 }

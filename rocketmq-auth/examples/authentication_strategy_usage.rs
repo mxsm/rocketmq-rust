@@ -20,10 +20,10 @@
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
-use rocketmq_auth::authentication::context::default_authentication_context::DefaultAuthenticationContext;
-use rocketmq_auth::authentication::strategy::AllowAllAuthenticationStrategy;
-use rocketmq_auth::authentication::strategy::AuthenticationFuture;
-use rocketmq_auth::authentication::strategy::AuthenticationStrategy;
+use rocketmq_auth::AllowAllAuthenticationStrategy;
+use rocketmq_auth::AuthenticationFuture;
+use rocketmq_auth::AuthenticationStrategy;
+use rocketmq_auth::DefaultAuthenticationContext;
 use rocketmq_error::AuthError;
 
 /// Example 1: Using AllowAllAuthenticationStrategy
@@ -83,16 +83,13 @@ impl CustomAuthenticationStrategy {
 }
 
 impl AuthenticationStrategy for CustomAuthenticationStrategy {
-    fn authenticate<'a>(
-        &'a self,
-        context: &'a dyn rocketmq_auth::authorization::context::authentication_context::AuthenticationContext,
-    ) -> AuthenticationFuture<'a> {
+    fn authenticate<'a>(&'a self, context: &'a dyn rocketmq_auth::AuthenticationContext) -> AuthenticationFuture<'a> {
         Box::pin(async move {
             // Downcast to DefaultAuthenticationContext
             let ctx = context
                 .as_any()
                 .downcast_ref::<DefaultAuthenticationContext>()
-                .ok_or_else(|| AuthError::Other("Invalid context type".into()))?;
+                .ok_or_else(|| AuthError::ContextCreationError("Invalid context type".into()))?;
 
             // Check if username is in allowed list
             if let Some(username) = ctx.username() {

@@ -1,7 +1,7 @@
 //! Lite message queue admin service models and operations.
 
 use cheetah_string::CheetahString;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
+use rocketmq_client_rust::MQAdminExt;
 use rocketmq_protocol::protocol::body::get_broker_lite_info_response_body::GetBrokerLiteInfoResponseBody;
 use rocketmq_protocol::protocol::body::get_lite_client_info_response_body::GetLiteClientInfoResponseBody;
 use rocketmq_protocol::protocol::body::get_lite_group_info_response_body::GetLiteGroupInfoResponseBody;

@@ -47,9 +47,9 @@ use rocketmq_protocol::protocol::header::reset_offset_request_header::ResetOffse
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::LanguageCode;
 use rocketmq_protocol::protocol::RemotingSerializable;
-use rocketmq_store::base::message_store::MessageStore;
-use rocketmq_transport::net::channel::Channel;
-use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_store::MessageStore;
+use rocketmq_transport::Channel;
+use rocketmq_transport::ConnectionHandlerContext;
 use tracing::warn;
 
 use crate::broker::broker_admin_runtime::BrokerAdminRuntime;
@@ -1029,13 +1029,13 @@ mod tests {
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
     use rocketmq_protocol::protocol::LanguageCode;
     use rocketmq_protocol::protocol::RemotingDeserializable;
-    use rocketmq_store::base::message_store::MessageStore;
-    use rocketmq_store::config::message_store_config::MessageStoreConfig;
-    use rocketmq_transport::base::response_future::ResponseFuture;
-    use rocketmq_transport::connection::Connection;
-    use rocketmq_transport::net::channel::Channel;
-    use rocketmq_transport::net::channel::ChannelInner;
-    use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
+    use rocketmq_store::MessageStore;
+    use rocketmq_store::MessageStoreConfig;
+    use rocketmq_transport::Channel;
+    use rocketmq_transport::ChannelInner;
+    use rocketmq_transport::Connection;
+    use rocketmq_transport::ConnectionHandlerContextWrapper;
+    use rocketmq_transport::ResponseFuture;
 
     use super::ConsumerRequestHandler;
     use crate::broker_runtime::BrokerRuntime;

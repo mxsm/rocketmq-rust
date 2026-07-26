@@ -44,9 +44,9 @@ use crate::authorization::context::authentication_context::AuthenticationContext
 /// # Examples
 ///
 /// ```rust,ignore
-/// use rocketmq_auth::authentication::strategy::allow_all::AllowAllAuthenticationStrategy;
-/// use rocketmq_auth::authentication::strategy::AuthenticationStrategy;
-/// use rocketmq_auth::authentication::context::DefaultAuthenticationContext;
+/// use rocketmq_auth::AllowAllAuthenticationStrategy;
+/// use rocketmq_auth::AuthenticationStrategy;
+/// use rocketmq_auth::DefaultAuthenticationContext;
 ///
 /// // Create the strategy
 /// let strategy = AllowAllAuthenticationStrategy::new();
@@ -64,7 +64,7 @@ impl AllowAllAuthenticationStrategy {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// use rocketmq_auth::authentication::strategy::allow_all::AllowAllAuthenticationStrategy;
+    /// use rocketmq_auth::AllowAllAuthenticationStrategy;
     ///
     /// let strategy = AllowAllAuthenticationStrategy::new();
     /// ```

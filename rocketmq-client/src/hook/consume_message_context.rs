@@ -32,7 +32,7 @@ use crate::base::access_channel::AccessChannel;
 /// # Examples
 ///
 /// ```ignore
-/// use rocketmq_client::hook::consume_message_context::ConsumeMessageContext;
+/// use rocketmq_client::ConsumeMessageContext;
 /// use cheetah_string::CheetahString;
 ///
 /// let context = ConsumeMessageContext::new(

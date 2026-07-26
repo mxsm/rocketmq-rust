@@ -15,7 +15,5 @@
 pub mod channel_event_listener;
 pub mod connection_net_event;
 pub mod pending_request_table;
-pub mod remoting_fn;
-pub mod request_task;
 pub mod response_future;
 pub mod tokio_event;

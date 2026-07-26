@@ -14,6 +14,8 @@
 
 //! Authentication error types.
 
+use std::error::Error as StdError;
+
 use thiserror::Error;
 
 /// Authentication error types.
@@ -21,7 +23,7 @@ use thiserror::Error;
 /// This enum represents various authentication errors that can occur during
 /// the authentication process, including context building, credential validation,
 /// and signature verification.
-#[derive(Debug, Clone, Error)]
+#[derive(Debug, Error)]
 pub enum AuthError {
     /// Missing DateTime header in gRPC metadata
     #[error("Missing DateTime header: {0}")]
@@ -74,20 +76,22 @@ pub enum AuthError {
     #[error("Invalid user status: {0}")]
     InvalidUserStatus(String),
 
-    /// Generic error with custom message
-    #[error("Authentication error: {0}")]
-    Other(String),
+    /// Authentication operation failed with a preserved typed source.
+    #[error("Authentication operation {operation} failed")]
+    Operation {
+        operation: &'static str,
+        #[source]
+        source: Box<dyn StdError + Send + Sync>,
+    },
 }
 
-impl From<String> for AuthError {
-    fn from(msg: String) -> Self {
-        AuthError::Other(msg)
-    }
-}
-
-impl From<&str> for AuthError {
-    fn from(msg: &str) -> Self {
-        AuthError::Other(msg.to_string())
+impl AuthError {
+    /// Preserves the typed cause of an authentication operation failure.
+    pub fn operation(operation: &'static str, source: impl StdError + Send + Sync + 'static) -> Self {
+        Self::Operation {
+            operation,
+            source: Box::new(source),
+        }
     }
 }
 
@@ -112,33 +116,13 @@ mod tests {
             },
             AuthError::InvalidUserStatus("invalid user status".to_string()),
             AuthError::MissingDateTime("missing date time".to_string()),
-            AuthError::Other("other error".to_string()),
+            AuthError::operation("load user", std::io::Error::other("metadata unavailable")),
             AuthError::UserNotFound("user not found".to_string()),
         ];
 
         for error in errors {
             let _msg = format!("{}", error);
             let _debug = format!("{:?}", error);
-        }
-    }
-
-    #[test]
-    fn test_from_string_creates_other() {
-        let error: AuthError = String::from("custom error").into();
-
-        match error {
-            AuthError::Other(msg) => assert_eq!(msg, "custom error"),
-            _ => panic!("Expected AuthError::Other"),
-        }
-    }
-
-    #[test]
-    fn test_from_str_creates_other() {
-        let error: AuthError = "custom error".into();
-
-        match error {
-            AuthError::Other(msg) => assert_eq!(msg, "custom error"),
-            _ => panic!("Expected AuthError::Other"),
         }
     }
 }

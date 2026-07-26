@@ -61,8 +61,13 @@ impl CommandExecute for ExportMetricsSubCommand {
         )
         .await?;
         let output_path = self.output_path();
-        let json_content = serde_json::to_string_pretty(&result)
-            .map_err(|error| RocketMQError::Internal(format!("ExportMetricsSubCommand: {error}")))?;
+        let json_content = serde_json::to_string_pretty(&result).map_err(|source| {
+            RocketMQError::Serialization(rocketmq_error::SerializationError::source(
+                "encode exported metrics",
+                "JSON",
+                source,
+            ))
+        })?;
         rocketmq_runtime::common::file_utils::string_to_file(&json_content, &output_path)
             .map_err(crate::runtime_to_rocketmq_error)?;
         println!("export {} success", output_path);

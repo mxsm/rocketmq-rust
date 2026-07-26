@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
-use rocketmq_store::pop::pop_check_point::PopCheckPoint;
+use rocketmq_store::PopCheckPoint;
 use tracing::info;
 
 // Type aliases for better readability

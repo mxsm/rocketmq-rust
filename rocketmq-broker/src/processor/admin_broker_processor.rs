@@ -46,11 +46,12 @@ use rocketmq_error::RocketMQError;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-use rocketmq_store::base::message_store::MessageStore;
-use rocketmq_transport::error_response;
-use rocketmq_transport::net::channel::Channel;
-use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_transport::runtime::processor::RequestProcessor;
+use rocketmq_store::MessageStore;
+use rocketmq_transport::apply_error_to_response;
+use rocketmq_transport::request_code_not_supported_with_remark;
+use rocketmq_transport::Channel;
+use rocketmq_transport::ConnectionHandlerContext;
+use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
 use std::sync::Arc;
 use tracing::warn;
 
@@ -665,7 +666,7 @@ fn get_unknown_cmd_response(request_code: RequestCode) -> Option<RemotingCommand
         request_code,
         request_code.to_i32()
     );
-    Some(error_response::request_code_not_supported_with_remark(
+    Some(request_code_not_supported_with_remark(
         request_code.to_i32(),
         format!(" request type {} not supported", request_code.to_i32()),
     ))
@@ -678,10 +679,7 @@ fn get_legacy_acl_cmd_response(request_code: RequestCode, remark: &str) -> Optio
         request_code.to_i32(),
         remark
     );
-    Some(error_response::request_code_not_supported_with_remark(
-        request_code.to_i32(),
-        remark,
-    ))
+    Some(request_code_not_supported_with_remark(request_code.to_i32(), remark))
 }
 
 fn map_auth_admin_error_response(response: RemotingCommand, error: RocketMQError) -> RemotingCommand {
@@ -703,7 +701,7 @@ fn map_auth_admin_error_response(response: RemotingCommand, error: RocketMQError
         other => other.to_string(),
     };
 
-    error_response::apply_error_to_response(response, &error, remark)
+    apply_error_to_response(response, &error, remark)
 }
 
 fn auth_admin_body_decode_error(operation: &'static str, error: RocketMQError) -> RocketMQError {

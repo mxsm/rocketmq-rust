@@ -66,7 +66,7 @@ impl AutoSwitchHAService {
         let client = self
             .delegate
             .create_default_ha_client()
-            .map_err(|error| crate::store_error::HAError::Service(error.to_string()))?;
+            .map_err(|source| crate::store_error::HAError::operation("bind auto-switch HA service", source))?;
         let client = AutoSwitchHAClient::from_delegate(client, None);
         self.delegate
             .set_general_ha_client(GeneralHAClient::new_with_auto_switch_ha_client(client));

@@ -20,8 +20,8 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use rocketmq_auth::authentication::factory::AuthenticationFactory;
-//! use rocketmq_auth::config::AuthConfig;
+//! use rocketmq_auth::AuthenticationFactory;
+//! use rocketmq_auth::AuthConfig;
 //!
 //! let config = AuthConfig::default();
 //!

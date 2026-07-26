@@ -29,7 +29,8 @@ const MESSAGE_STORE_TIMESTAMP_POSITION: usize = 56;
 
 #[tokio::test]
 async fn posix_store_recovers_dispatched_messages_and_index_after_restart() -> Result<(), RocketMQError> {
-    let temp_dir = tempfile::tempdir().map_err(|error| RocketMQError::Internal(error.to_string()))?;
+    let temp_dir =
+        tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
     let config = TieredStoreConfig {
         storage_level: TieredStorageLevel::Force,
         backend_provider: "posix".to_owned(),

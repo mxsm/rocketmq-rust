@@ -16,9 +16,9 @@ use std::collections::HashSet;
 
 use cheetah_string::CheetahString;
 use rocketmq_model::common::lite::get_lite_topic;
-use rocketmq_store::base::message_store::MessageStore;
-use rocketmq_store::queue::consume_queue_store::ConsumeQueueStoreTrait;
-use rocketmq_store::queue::local_file_consume_queue_store::ConsumeQueueStore;
+use rocketmq_store::ConsumeQueueStore;
+use rocketmq_store::ConsumeQueueStoreTrait;
+use rocketmq_store::MessageStore;
 
 use crate::subscription::lite_subscription_registry::LiteSubscriptionRecord;
 

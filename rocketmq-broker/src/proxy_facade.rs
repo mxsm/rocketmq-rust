@@ -28,9 +28,9 @@ use rocketmq_protocol::protocol::route::route_data_view::QueueData;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 use rocketmq_runtime::ChildServiceContext;
-use rocketmq_store::config::message_store_config::MessageStoreConfig;
-use rocketmq_transport::local::LocalRequestHarness;
-use rocketmq_transport::runtime::processor::RequestProcessor;
+use rocketmq_store::MessageStoreConfig;
+use rocketmq_transport::LocalRequestHarness;
+use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
 use tokio::time::timeout;
 
 use crate::broker_runtime::BrokerRuntime;
@@ -96,10 +96,10 @@ pub mod proxy_adapter_compat {
     pub use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
     pub use rocketmq_protocol::protocol::RemotingSerializable;
     pub use rocketmq_runtime::common::time_utils::current_millis;
-    pub use rocketmq_store::config::message_store_config::MessageStoreConfig;
-    pub use rocketmq_transport::prelude::RemotingDeserializable;
-    pub use rocketmq_transport::rpc::rpc_request_header::RpcRequestHeader;
-    pub use rocketmq_transport::rpc::topic_request_header::TopicRequestHeader;
+    pub use rocketmq_store::MessageStoreConfig;
+    pub use rocketmq_transport::RemotingDeserializable;
+    pub use rocketmq_transport::RpcRequestHeader;
+    pub use rocketmq_transport::TopicRequestHeader;
 }
 
 pub struct ProxyBrokerFacade {

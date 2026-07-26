@@ -21,9 +21,9 @@ use std::sync::Arc;
 use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_store::filter::ArcMessageFilter;
-use rocketmq_transport::net::channel::Channel;
-use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_store::ArcMessageFilter;
+use rocketmq_transport::Channel;
+use rocketmq_transport::ConnectionHandlerContext;
 
 pub struct PopRequest {
     remoting_command: RemotingCommand,

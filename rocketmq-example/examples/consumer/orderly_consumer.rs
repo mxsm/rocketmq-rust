@@ -16,11 +16,11 @@
 
 #![recursion_limit = "512"]
 
-use rocketmq_client_rust::consumer::default_mq_push_consumer::DefaultMQPushConsumer;
-use rocketmq_client_rust::consumer::listener::consume_orderly_context::ConsumeOrderlyContext;
-use rocketmq_client_rust::consumer::listener::consume_orderly_status::ConsumeOrderlyStatus;
-use rocketmq_client_rust::consumer::listener::message_listener_orderly::MessageListenerOrderly;
-use rocketmq_client_rust::consumer::mq_push_consumer::MQPushConsumer;
+use rocketmq_client_rust::ConsumeOrderlyContext;
+use rocketmq_client_rust::ConsumeOrderlyStatus;
+use rocketmq_client_rust::DefaultMQPushConsumer;
+use rocketmq_client_rust::MQPushConsumer;
+use rocketmq_client_rust::MessageListenerOrderly;
 use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_model::common::message::MessageTrait;

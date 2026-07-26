@@ -13,9 +13,9 @@
 // limitations under the License.
 
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-use rocketmq_transport::codec::remoting_command_codec::FrameLimits;
-use rocketmq_transport::connection::Connection;
-use rocketmq_transport::connection::ConnectionState;
+use rocketmq_transport::Connection;
+use rocketmq_transport::ConnectionState;
+use rocketmq_transport::FrameLimits;
 
 #[tokio::test]
 async fn loopback_connection_preserves_wire_identity_and_half_close_state() {

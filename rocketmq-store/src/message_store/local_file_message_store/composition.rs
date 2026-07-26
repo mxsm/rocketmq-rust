@@ -61,10 +61,14 @@ impl LocalFileMessageStore {
         let store_checkpoint = Arc::new(
             StoreCheckpoint::new(get_store_checkpoint(message_store_config.store_path_root_dir.as_str())).map_err(
                 |error| {
-                    StoreError::Storage(format!(
-                        "failed to create store checkpoint under {}: {error}",
-                        message_store_config.store_path_root_dir
-                    ))
+                    StoreError::storage(
+                        StoreOperation::Load,
+                        format!(
+                            "failed to create store checkpoint under {}",
+                            message_store_config.store_path_root_dir
+                        ),
+                    )
+                    .with_source(error)
                 },
             )?,
         );
@@ -463,12 +467,14 @@ impl LocalFileMessageStore {
 
     pub(super) fn validate_supported_configuration(&self) -> Result<(), StoreError> {
         if Self::is_dledger_commit_log_enabled_config(self.message_store_config.as_ref()) {
-            return Err(StoreError::DLedger(
+            return Err(StoreError::dledger(
+                StoreOperation::Load,
                 "DLedger commit log is Java-specific and is intentionally unsupported in rocketmq-rust".to_string(),
             ));
         }
         if self.message_store_config.timer_rocksdb_enable && !self.message_store_config.is_enable_rocksdb_store() {
-            return Err(StoreError::Unsupported(
+            return Err(StoreError::unsupported(
+                StoreOperation::Load,
                 "Timer RocksDB backend is not implemented in rocketmq-rust; keep timer_rocksdb_enable=false"
                     .to_string(),
             ));
@@ -476,16 +482,20 @@ impl LocalFileMessageStore {
 
         let enabled_rocksdb_options = Self::enabled_rocksdb_specific_options(self.message_store_config.as_ref());
         if !self.message_store_config.is_enable_rocksdb_store() && !enabled_rocksdb_options.is_empty() {
-            return Err(StoreError::Config(format!(
-                "RocksDB-specific configuration requires store_type=RocksDB: {}",
-                enabled_rocksdb_options.join(", ")
-            )));
+            return Err(StoreError::config(
+                StoreOperation::Load,
+                format!(
+                    "RocksDB-specific configuration requires store_type=RocksDB: {}",
+                    enabled_rocksdb_options.join(", ")
+                ),
+            ));
         }
         if self.message_store_config.effective_linux_memory_lock_mode() == LinuxMemoryLockMode::ActiveFile
             && self.message_store_config.linux_memory_lock_budget_bytes == 0
             && !self.message_store_config.linux_memory_lock_warn_only
         {
-            return Err(StoreError::Config(
+            return Err(StoreError::config(
+                StoreOperation::Load,
                 "linux_memory_lock_mode=active_file requires explicit linux_memory_lock_budget_bytes when \
                  linux_memory_lock_warn_only=false; set linux_memory_lock_budget_bytes or \
                  linux_memory_lock_warn_only=true"
@@ -516,9 +526,12 @@ impl LocalFileMessageStore {
         if self.root_dependencies_wired {
             return Ok(());
         }
-        Err(StoreError::InvalidState(format!(
-            "message store root dependencies are not wired; call wire_owned_root_dependencies before {operation}"
-        )))
+        Err(StoreError::invalid_state(
+            StoreOperation::Start,
+            format!(
+                "message store root dependencies are not wired; call wire_owned_root_dependencies before {operation}"
+            ),
+        ))
     }
 
     pub(super) fn acquire_store_lock(&mut self) -> Result<(), StoreError> {
@@ -529,10 +542,11 @@ impl LocalFileMessageStore {
         let lock_path = PathBuf::from(get_lock_file(self.message_store_config.store_path_root_dir.as_str()));
         if let Some(parent) = lock_path.parent() {
             fs::create_dir_all(parent).map_err(|error| {
-                StoreError::Storage(format!(
-                    "failed to create store lock parent directory {}: {error}",
-                    parent.display()
-                ))
+                StoreError::storage(
+                    StoreOperation::Start,
+                    format!("failed to create store lock parent directory {}", parent.display()),
+                )
+                .with_source(error)
             })?;
         }
 
@@ -543,28 +557,35 @@ impl LocalFileMessageStore {
             .truncate(false)
             .open(&lock_path)
             .map_err(|error| {
-                StoreError::Storage(format!(
-                    "failed to open store lock file {}: {error}",
-                    lock_path.display()
-                ))
+                StoreError::storage(
+                    StoreOperation::Start,
+                    format!("failed to open store lock file {}", lock_path.display()),
+                )
+                .with_source(error)
             })?;
         file.try_lock_exclusive().map_err(|error| {
-            StoreError::Storage(format!(
-                "message store lock file is held by another instance: {} ({error})",
-                lock_path.display()
-            ))
+            StoreError::storage(
+                StoreOperation::Start,
+                format!(
+                    "message store lock file is held by another instance: {}",
+                    lock_path.display()
+                ),
+            )
+            .with_source(error)
         })?;
         file.set_len(0).map_err(|error| {
-            StoreError::Storage(format!(
-                "failed to truncate store lock file {}: {error}",
-                lock_path.display()
-            ))
+            StoreError::storage(
+                StoreOperation::Start,
+                format!("failed to truncate store lock file {}", lock_path.display()),
+            )
+            .with_source(error)
         })?;
         writeln!(file, "pid={}", std::process::id()).map_err(|error| {
-            StoreError::Storage(format!(
-                "failed to write store lock file {}: {error}",
-                lock_path.display()
-            ))
+            StoreError::storage(
+                StoreOperation::Start,
+                format!("failed to write store lock file {}", lock_path.display()),
+            )
+            .with_source(error)
         })?;
 
         self.store_lock_guard = Some(StoreLockGuard { file });

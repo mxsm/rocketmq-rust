@@ -80,7 +80,7 @@ async fn test_phase1_flush_ha_branching() {
 /// Test 5: Verify Phase 2 - Object pool reuse
 #[tokio::test]
 async fn test_phase2_object_pool_reuse() {
-    use rocketmq_store::base::message_encoder_pool::generate_key_with_pool;
+    use rocketmq_store::generate_key_with_pool;
 
     println!("Phase 2 Test: Object pool encoder reuse");
 

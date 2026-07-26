@@ -64,22 +64,22 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_context::TopicQueueMappingContext;
 use rocketmq_runtime::common::time_utils;
 use rocketmq_runtime::common::util_all;
-use rocketmq_store::base::flush_manager::SyncFlushRuntimeInfo;
-use rocketmq_store::base::message_result::PutMessageResult;
-use rocketmq_store::base::message_status_enum::PutMessageStatus;
-use rocketmq_store::base::message_store::MessageStore;
-use rocketmq_store::capability::store_append_receipt;
-use rocketmq_store::capability::StoreAppendReceipt;
-use rocketmq_store::capability::StoreHealthSnapshot;
-use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
-use rocketmq_store::stats::stats_type::StatsType;
+use rocketmq_store::store_append_receipt;
+use rocketmq_store::BrokerStatsManager;
+use rocketmq_store::MessageStore;
+use rocketmq_store::PutMessageResult;
+use rocketmq_store::PutMessageStatus;
+use rocketmq_store::StatsType;
+use rocketmq_store::StoreAppendReceipt;
+use rocketmq_store::StoreHealthSnapshot;
+use rocketmq_store::SyncFlushRuntimeInfo;
 use rocketmq_store_api::MessageAppender;
 use rocketmq_store_api::StoreHealth;
-use rocketmq_transport::error_response;
-use rocketmq_transport::net::channel::Channel;
-use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_transport::runtime::processor::RejectRequestResponse;
-use rocketmq_transport::runtime::processor::RequestProcessor;
+use rocketmq_transport::request_code_not_supported_with_remark_and_opaque;
+use rocketmq_transport::Channel;
+use rocketmq_transport::ConnectionHandlerContext;
+use rocketmq_transport::RejectRequestResponse;
+use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
@@ -225,7 +225,7 @@ where
             | RequestCode::ConsumerSendMsgBack => self.process_request_inner(channel, ctx, request_code, request).await,
             _ => {
                 warn!("SendMessageProcessor received unknown request code: {:?}", request_code);
-                let response = error_response::request_code_not_supported_with_remark_and_opaque(
+                let response = request_code_not_supported_with_remark_and_opaque(
                     request.code(),
                     format!("request code {} not supported", request.code()),
                     request.opaque(),
@@ -260,7 +260,7 @@ where
                 #[cfg(feature = "otel-traces")]
                 {
                     let properties = string_to_message_properties(request_header.properties.as_ref());
-                    rocketmq_observability::propagation::set_current_span_parent_from_properties(&properties);
+                    rocketmq_observability::set_current_span_parent_from_properties(&properties);
                     rocketmq_observability::trace::record_current_message_properties(
                         &properties,
                         request.body().map(|body| body.len()),
@@ -1250,9 +1250,9 @@ fn map_store_api_error(error: rocketmq_store_api::StoreError) -> RocketMQError {
             RocketMQError::broker_operation_failed(operation_name, -1, "append target unavailable")
         }
         (_, StoreErrorKind::NotStarted) => RocketMQError::not_initialized(operation_name),
-        (_, StoreErrorKind::Unavailable) => RocketMQError::Service(
-            rocketmq_error::unified::ServiceError::StartupFailed(operation_name.to_string()),
-        ),
+        (_, StoreErrorKind::Unavailable) => RocketMQError::Service(rocketmq_error::UnifiedServiceError::StartupFailed(
+            operation_name.to_string(),
+        )),
         (_, StoreErrorKind::InvalidRequest) => RocketMQError::illegal_argument(operation_name),
         (_, StoreErrorKind::NotFound) => RocketMQError::query_not_found(operation_name),
         (_, StoreErrorKind::Capacity) => RocketMQError::StorageOutOfSpace {
@@ -1270,7 +1270,9 @@ fn map_store_api_error(error: rocketmq_store_api::StoreError) -> RocketMQError {
         (_, StoreErrorKind::Unsupported) => {
             RocketMQError::broker_operation_failed(operation_name, -1, "unsupported store operation")
         }
-        (_, StoreErrorKind::Internal) => RocketMQError::Internal(operation_name.to_string()),
+        (_, StoreErrorKind::Internal) => {
+            RocketMQError::invariant_violated("store capability returned an internal failure")
+        }
     }
 }
 
@@ -1485,7 +1487,7 @@ where
         };
         #[cfg(feature = "otel-traces")]
         {
-            rocketmq_observability::propagation::set_current_span_parent_from_properties(msg_ext.get_properties());
+            rocketmq_observability::set_current_span_parent_from_properties(msg_ext.get_properties());
             rocketmq_observability::trace::record_current_message_properties(
                 msg_ext.get_properties(),
                 msg_ext.get_body().map(|body| body.len()),
@@ -1601,7 +1603,7 @@ where
                 "RocketMQ CONSUMER RETRY"
             };
             let status = if succeeded { "success" } else { "failure" };
-            rocketmq_observability::propagation::add_current_span_event_with_status(event, status);
+            rocketmq_observability::add_current_span_event_with_status(event, status);
         }
 
         if self.has_consume_message_hook() && request_header.origin_msg_id.is_some_and(|ref id| !id.is_empty()) {
@@ -1851,14 +1853,14 @@ mod tests {
     use rocketmq_protocol::code::response_code::RemotingSysResponseCode;
     use rocketmq_protocol::code::response_code::ResponseCode;
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-    use rocketmq_store::base::flush_manager::SyncFlushRuntimeInfo;
-    use rocketmq_store::base::message_result::PutMessageResult;
-    use rocketmq_store::base::message_status_enum::PutMessageStatus;
-    use rocketmq_store::capability::store_append_receipt;
-    use rocketmq_store::capability::StoreAppendReceipt;
-    use rocketmq_store::capability::StoreFlushBacklog as FlushBacklog;
-    use rocketmq_store::capability::StoreHealthError;
-    use rocketmq_store::capability::StoreHealthSnapshot;
+    use rocketmq_store::store_append_receipt;
+    use rocketmq_store::PutMessageResult;
+    use rocketmq_store::PutMessageStatus;
+    use rocketmq_store::StoreAppendReceipt;
+    use rocketmq_store::StoreFlushBacklog as FlushBacklog;
+    use rocketmq_store::StoreHealthError;
+    use rocketmq_store::StoreHealthSnapshot;
+    use rocketmq_store::SyncFlushRuntimeInfo;
 
     use crate::mqtrace::send_message_context::SendMessageContext;
     use crate::mqtrace::send_message_hook::SendMessageHook;
@@ -2055,9 +2057,7 @@ mod tests {
         let store = CapabilityStore {
             health: StoreHealthSnapshot {
                 writable: false,
-                last_error: Some(StoreHealthError::new(
-                    rocketmq_store::store_error::StoreErrorKind::Storage,
-                )),
+                last_error: Some(StoreHealthError::new(rocketmq_store::StoreErrorKind::Storage)),
                 ..StoreHealthSnapshot::default()
             },
             receipt: None,
@@ -2313,31 +2313,7 @@ mod tests {
 
     #[test]
     fn store_health_reject_remark_reports_typed_flush_failure() {
-        let cases = [
-            (rocketmq_store::store_error::StoreErrorKind::MappedFile, "mapped_file"),
-            (rocketmq_store::store_error::StoreErrorKind::RocksDb, "rocksdb"),
-            (rocketmq_store::store_error::StoreErrorKind::NotStarted, "not_started"),
-            (
-                rocketmq_store::store_error::StoreErrorKind::MessageNotFound,
-                "message_not_found",
-            ),
-            (rocketmq_store::store_error::StoreErrorKind::Config, "config"),
-            (rocketmq_store::store_error::StoreErrorKind::Unsupported, "unsupported"),
-            (
-                rocketmq_store::store_error::StoreErrorKind::InvalidState,
-                "invalid_state",
-            ),
-            (rocketmq_store::store_error::StoreErrorKind::Storage, "storage"),
-            (rocketmq_store::store_error::StoreErrorKind::TieredStore, "tiered_store"),
-            (rocketmq_store::store_error::StoreErrorKind::Ha, "ha"),
-            (rocketmq_store::store_error::StoreErrorKind::DLedger, "dledger"),
-            (
-                rocketmq_store::store_error::StoreErrorKind::MappedFileNotFound,
-                "mapped_file_not_found",
-            ),
-        ];
-
-        for (kind, token) in cases {
+        for &kind in rocketmq_store::StoreErrorKind::ALL {
             let snapshot = StoreHealthSnapshot {
                 writable: false,
                 last_error: Some(StoreHealthError::new(kind)),
@@ -2348,8 +2324,8 @@ mod tests {
                 store_health_reject_remark(&BrokerConfig::default(), snapshot).expect("flush failure should reject");
             assert!(remark.contains("reason=store_not_writeable"));
             assert!(
-                remark.contains(&format!("lastFlushErrorKind={token}")),
-                "legacy kind {kind:?}"
+                remark.contains(&format!("lastFlushErrorKind={}", kind.as_str())),
+                "canonical kind {kind:?}"
             );
             assert!(!remark.contains("backend detail"));
         }

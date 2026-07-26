@@ -33,12 +33,12 @@ use rocketmq_protocol::protocol::body::topic_info_wrapper::topic_config_wrapper:
 use rocketmq_protocol::protocol::header::message_operation_header::TopicRequestHeaderTrait;
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_context::TopicQueueMappingContext;
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
-use rocketmq_store::base::message_result::PutMessageResult;
-use rocketmq_store::base::message_store::MessageStore;
-use rocketmq_store::capability::StoreAppendReceipt;
-use rocketmq_store::capability::StoreHealthSnapshot;
-use rocketmq_store::config::message_store_config::MessageStoreConfig;
-use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
+use rocketmq_store::BrokerStatsManager;
+use rocketmq_store::MessageStore;
+use rocketmq_store::MessageStoreConfig;
+use rocketmq_store::PutMessageResult;
+use rocketmq_store::StoreAppendReceipt;
+use rocketmq_store::StoreHealthSnapshot;
 use rocketmq_store_api::MessageAppender;
 use rocketmq_store_api::StoreError;
 use rocketmq_store_api::StoreErrorKind;
@@ -633,7 +633,7 @@ mod tests {
     use crate::config::broker_config::BrokerConfig;
     use cheetah_string::CheetahString;
     use rocketmq_model::common::broker::broker_role::BrokerRole;
-    use rocketmq_store::config::message_store_config::MessageStoreConfig;
+    use rocketmq_store::MessageStoreConfig;
 
     use super::SendMessagePolicyState;
 

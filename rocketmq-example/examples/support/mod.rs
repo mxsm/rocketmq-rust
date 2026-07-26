@@ -28,7 +28,7 @@ where
     Fut: Future<Output = RocketMQResult<()>>,
 {
     let owner = RuntimeOwner::new(RuntimeConfig::server_default("rocketmq-example"))
-        .map_err(|error| RocketMQError::Internal(format!("failed to create example runtime: {error}")))?;
+        .map_err(|source| RocketMQError::internal("create example runtime", source))?;
     let client_runtime = ClientRuntime::new(owner.root_context().child("client"), ClientRuntimeConfig::default());
 
     let operation_result = owner.block_on(async {
@@ -39,7 +39,7 @@ where
     });
     let shutdown_result = owner
         .shutdown_runtime_blocking()
-        .map_err(|error| RocketMQError::Internal(format!("failed to shut down example runtime: {error}")));
+        .map_err(|source| RocketMQError::internal("shut down example runtime", source));
 
     operation_result.and(shutdown_result.map(|_| ()))
 }

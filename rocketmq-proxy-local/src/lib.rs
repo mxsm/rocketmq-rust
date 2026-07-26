@@ -18,12 +18,13 @@
 
 //! Embedded Broker-backed local adapter for RocketMQ Proxy Core ports.
 
-pub mod config;
-pub mod local;
+mod config;
+mod local;
 mod message;
-pub mod service;
+mod service;
 
 pub use config::LocalConfig;
+pub use local::local_components_from_config_with_service_context;
 pub use local::LocalBrokerFacadeClient;
 pub use local::LocalRemotingBackend;
 pub use service::LocalServiceManager;

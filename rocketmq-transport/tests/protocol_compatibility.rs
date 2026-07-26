@@ -19,7 +19,7 @@ use rocketmq_protocol::code::response_code::RemotingSysResponseCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::header::client_request_header::GetRouteInfoRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-use rocketmq_transport::codec::remoting_command_codec::RemotingCommandCodec;
+use rocketmq_transport::RemotingCommandCodec;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
 

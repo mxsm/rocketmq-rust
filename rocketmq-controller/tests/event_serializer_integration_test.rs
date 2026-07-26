@@ -19,14 +19,14 @@
 
 use std::collections::HashSet;
 
-use rocketmq_controller::event::alter_sync_state_set_event::AlterSyncStateSetEvent;
-use rocketmq_controller::event::apply_broker_id_event::ApplyBrokerIdEvent;
-use rocketmq_controller::event::clean_broker_data_event::CleanBrokerDataEvent;
-use rocketmq_controller::event::elect_master_event::ElectMasterEvent;
-use rocketmq_controller::event::event_serializer::Event;
-use rocketmq_controller::event::event_serializer::EventSerializer;
-use rocketmq_controller::event::event_type::EventType;
-use rocketmq_controller::event::update_broker_address_event::UpdateBrokerAddressEvent;
+use rocketmq_controller::AlterSyncStateSetEvent;
+use rocketmq_controller::ApplyBrokerIdEvent;
+use rocketmq_controller::CleanBrokerDataEvent;
+use rocketmq_controller::ElectMasterEvent;
+use rocketmq_controller::Event;
+use rocketmq_controller::EventSerializer;
+use rocketmq_controller::EventType;
+use rocketmq_controller::UpdateBrokerAddressEvent;
 
 #[test]
 fn test_serialize_deserialize_alter_sync_state_set_event() {

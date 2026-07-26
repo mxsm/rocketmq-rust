@@ -27,6 +27,8 @@ use std::time::Duration;
 use std::time::Instant;
 
 use crate::config::store_runtime_config::StoreRuntimeConfig;
+use crate::store_error::StoreComponent;
+use crate::store_error::StoreErrorKind;
 use bytes::BufMut;
 use bytes::Bytes;
 use bytes::BytesMut;
@@ -273,12 +275,11 @@ async fn init_without_root_dependency_wiring_fails_closed() {
 
     let error = store.init().await.expect_err("unwired Local store must not initialize");
 
-    assert!(matches!(
-        error,
-        StoreError::InvalidState(message)
-            if message
-                == "message store root dependencies are not wired; call wire_owned_root_dependencies before init"
-    ));
+    assert_eq!(error.kind(), StoreErrorKind::Internal);
+    assert_eq!(
+        error.detail(),
+        Some("message store root dependencies are not wired; call wire_owned_root_dependencies before init")
+    );
 }
 
 fn new_owned_wiring_test_store(
@@ -1050,7 +1051,10 @@ async fn init_rejects_dledger_commit_log_configuration() {
     ] {
         let mut store = new_configured_test_store(&temp_dir, message_store_config);
         let error = store.init().await.expect_err("DLedger should be rejected explicitly");
-        assert!(matches!(error, StoreError::DLedger(message) if message.contains("DLedger commit log")));
+        assert_eq!(error.component(), StoreComponent::DLedger);
+        assert!(error
+            .detail()
+            .is_some_and(|detail| detail.contains("DLedger commit log")));
     }
 }
 
@@ -1074,17 +1078,15 @@ async fn init_rejects_rocksdb_specific_flags_without_rocksdb_store_type() {
         .init()
         .await
         .expect_err("local file store should reject rocksdb-only configuration");
-    assert!(matches!(
-        error,
-        StoreError::Config(message)
-        if message.contains("store_type=RocksDB")
-            && message.contains("clean_rocksdb_dirty_cq_interval_min")
-            && message.contains("stat_rocksdb_cq_interval_sec")
-            && message.contains("real_time_persist_rocksdb_config")
-            && message.contains("enable_rocksdb_log")
-            && message.contains("rocksdb_cq_double_write_enable")
-            && message.contains("trans_rocksdb_enable")
-    ));
+    assert_eq!(error.kind(), StoreErrorKind::InvalidRequest);
+    let message = error.detail().expect("configuration detail");
+    assert!(message.contains("store_type=RocksDB"));
+    assert!(message.contains("clean_rocksdb_dirty_cq_interval_min"));
+    assert!(message.contains("stat_rocksdb_cq_interval_sec"));
+    assert!(message.contains("real_time_persist_rocksdb_config"));
+    assert!(message.contains("enable_rocksdb_log"));
+    assert!(message.contains("rocksdb_cq_double_write_enable"));
+    assert!(message.contains("trans_rocksdb_enable"));
 }
 
 #[tokio::test]
@@ -1104,13 +1106,11 @@ async fn init_rejects_strict_active_file_memory_lock_without_explicit_budget() {
         .init()
         .await
         .expect_err("strict active_file memory locking should require explicit budget");
-    assert!(matches!(
-        error,
-        StoreError::Config(message)
-            if message.contains("active_file")
-                && message.contains("linux_memory_lock_budget_bytes")
-                && message.contains("linux_memory_lock_warn_only=true")
-    ));
+    assert_eq!(error.kind(), StoreErrorKind::InvalidRequest);
+    let message = error.detail().expect("configuration detail");
+    assert!(message.contains("active_file"));
+    assert!(message.contains("linux_memory_lock_budget_bytes"));
+    assert!(message.contains("linux_memory_lock_warn_only=true"));
 
     let warn_only_dir = tempdir().unwrap();
     let mut warn_only_store = new_configured_test_store(
@@ -1368,12 +1368,10 @@ async fn init_rejects_timer_rocksdb_backend_until_native_store_exists() {
         .init()
         .await
         .expect_err("timer rocksdb backend is not implemented");
-    assert!(matches!(
-        error,
-        StoreError::Unsupported(message)
-            if message.contains("Timer RocksDB backend")
-                && message.contains("timer_rocksdb_enable=false")
-    ));
+    assert_eq!(error.kind(), StoreErrorKind::Unsupported);
+    let message = error.detail().expect("unsupported detail");
+    assert!(message.contains("Timer RocksDB backend"));
+    assert!(message.contains("timer_rocksdb_enable=false"));
 }
 
 #[tokio::test]
@@ -1596,10 +1594,10 @@ async fn start_requires_init_before_services_begin() {
 
     let error = store.start().await.expect_err("start should require init first");
 
-    assert!(matches!(
-        error,
-        StoreError::InvalidState(message) if message.contains("initialized before start")
-    ));
+    assert_eq!(error.kind(), StoreErrorKind::Internal);
+    assert!(error
+        .detail()
+        .is_some_and(|message| message.contains("initialized before start")));
     assert!(!temp_dir.path().join("lock").exists());
 }
 
@@ -1622,10 +1620,10 @@ async fn start_holds_store_root_lock_until_shutdown() {
         .start()
         .await
         .expect_err("second store should not start while lock is held");
-    assert!(matches!(
-        error,
-        StoreError::Storage(message) if message.contains("lock file is held")
-    ));
+    assert_eq!(error.kind(), StoreErrorKind::Storage);
+    assert!(error
+        .detail()
+        .is_some_and(|message| message.contains("lock file is held")));
 
     first.shutdown().await;
 
@@ -2266,17 +2264,17 @@ async fn start_and_init_are_rejected_while_recovering() {
         .start()
         .await
         .expect_err("start should be rejected during recovery");
-    assert!(matches!(
-        start_error,
-        StoreError::InvalidState(message) if message.contains("recovering")
-    ));
+    assert_eq!(start_error.kind(), StoreErrorKind::Internal);
+    assert!(start_error
+        .detail()
+        .is_some_and(|message| message.contains("recovering")));
 
     store.set_lifecycle_state(LocalStoreState::RecoveringTopicQueueTable);
     let init_error = store.init().await.expect_err("init should be rejected during recovery");
-    assert!(matches!(
-        init_error,
-        StoreError::InvalidState(message) if message.contains("recovering")
-    ));
+    assert_eq!(init_error.kind(), StoreErrorKind::Internal);
+    assert!(init_error
+        .detail()
+        .is_some_and(|message| message.contains("recovering")));
 }
 
 #[test]
@@ -2553,17 +2551,17 @@ fn failed_canonical_flush_marks_store_unwriteable_and_legacy_flush_keeps_waterma
         .try_flush()
         .expect_err("unavailable mapped file must fail canonical flush");
 
-    assert!(matches!(error, StoreError::MappedFile { .. }));
+    assert_eq!(error.component(), StoreComponent::MappedFile);
     let health = store.health_snapshot();
     assert!(!health.writeable);
     assert_eq!(
         health.last_flush_error.as_ref().map(|error| error.kind),
-        Some(crate::store_error::StoreErrorKind::MappedFile)
+        Some(crate::store_error::StoreErrorKind::Storage)
     );
     assert!(health
         .last_flush_error
         .as_ref()
-        .is_some_and(|error| error.detail.contains("Mapped file error")));
+        .is_some_and(|error| error.detail.contains("mapped_file")));
     assert_eq!(store.flush(), durable_before);
     assert_eq!(store.get_flushed_where(), durable_before);
 }
@@ -2589,12 +2587,12 @@ async fn graceful_shutdown_reports_typed_final_flush_failure() {
         .await
         .expect_err("final fsync failure must be exposed to the shutdown caller");
 
-    assert!(matches!(error, StoreError::MappedFile { .. }));
+    assert_eq!(error.component(), StoreComponent::MappedFile);
     let health = store.health_snapshot();
     assert!(!health.writeable);
     assert_eq!(
         health.last_flush_error.as_ref().map(|error| error.kind),
-        Some(crate::store_error::StoreErrorKind::MappedFile)
+        Some(crate::store_error::StoreErrorKind::Storage)
     );
 }
 

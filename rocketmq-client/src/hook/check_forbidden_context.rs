@@ -30,7 +30,7 @@ use crate::producer::send_result::SendResult;
 /// # Examples
 ///
 /// ```ignore
-/// use rocketmq_client::hook::check_forbidden_context::CheckForbiddenContext;
+/// use rocketmq_client::CheckForbiddenContext;
 /// use cheetah_string::CheetahString;
 ///
 /// let mut context = CheckForbiddenContext::default();

@@ -25,21 +25,21 @@ use openraft::storage::RaftLogStorage;
 use openraft::storage::RaftStateMachine;
 use openraft::RaftLogReader;
 use parking_lot::RwLock;
-use rocketmq_controller::config::ControllerConfig;
-use rocketmq_controller::config::ControllerConfigReader;
-use rocketmq_controller::config::StorageBackendType;
-use rocketmq_controller::error::ControllerError;
-use rocketmq_controller::error::Result;
-use rocketmq_controller::openraft::LogStore;
-use rocketmq_controller::openraft::StateMachine;
-use rocketmq_controller::storage::StorageBackend;
-use rocketmq_controller::storage::StorageStats;
-use rocketmq_controller::typ::ControllerRequest;
-use rocketmq_controller::typ::EntryPayload;
-use rocketmq_controller::typ::LogEntry;
-use rocketmq_controller::typ::LogId;
-use rocketmq_controller::typ::TypeConfig;
-use rocketmq_controller::typ::Vote;
+use rocketmq_controller::ControllerConfig;
+use rocketmq_controller::ControllerConfigReader;
+use rocketmq_controller::ControllerError;
+use rocketmq_controller::ControllerRequest;
+use rocketmq_controller::EntryPayload;
+use rocketmq_controller::LogEntry;
+use rocketmq_controller::LogId;
+use rocketmq_controller::LogStore;
+use rocketmq_controller::Result;
+use rocketmq_controller::StateMachine;
+use rocketmq_controller::StorageBackend;
+use rocketmq_controller::StorageBackendType;
+use rocketmq_controller::StorageStats;
+use rocketmq_controller::TypeConfig;
+use rocketmq_controller::Vote;
 
 #[derive(Default)]
 struct FaultInjectingBackend {
@@ -244,8 +244,8 @@ fn production_default_storage_is_rocksdb() {
 #[cfg(feature = "storage-rocksdb")]
 #[tokio::test]
 async fn rocksdb_batch_survives_reopen() {
-    use rocketmq_controller::storage::create_storage;
-    use rocketmq_controller::storage::StorageConfig;
+    use rocketmq_controller::create_storage;
+    use rocketmq_controller::StorageConfig;
     use tempfile::TempDir;
 
     let temp_dir = TempDir::new().expect("temp directory");

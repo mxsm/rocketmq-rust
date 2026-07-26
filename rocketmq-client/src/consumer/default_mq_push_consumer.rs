@@ -26,7 +26,7 @@ use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_protocol::protocol::namespace_util::NamespaceUtil;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::common::util_all;
-use rocketmq_transport::runtime::RPCHook;
+use rocketmq_transport::RPCHook;
 
 use crate::base::client_config::ClientConfig;
 use crate::base::query_result::QueryResult;

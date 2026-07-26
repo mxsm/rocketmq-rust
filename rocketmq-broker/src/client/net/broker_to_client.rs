@@ -30,8 +30,8 @@ use rocketmq_protocol::protocol::header::notify_consumer_ids_changed_request_hea
 use rocketmq_protocol::protocol::header::notify_unsubscribe_lite_request_header::NotifyUnsubscribeLiteRequestHeader;
 use rocketmq_protocol::protocol::header::reset_offset_request_header::ResetOffsetRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-use rocketmq_store::base::message_store::MessageStore;
-use rocketmq_transport::net::channel::Channel;
+use rocketmq_store::MessageStore;
+use rocketmq_transport::Channel;
 use tracing::error;
 use tracing::info;
 use tracing::warn;

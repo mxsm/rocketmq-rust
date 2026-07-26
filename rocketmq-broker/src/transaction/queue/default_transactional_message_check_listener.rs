@@ -25,7 +25,7 @@ use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskGroupChildLease;
 use rocketmq_runtime::TaskKind;
-use rocketmq_transport::rpc::rpc_request_header::RpcRequestHeader;
+use rocketmq_transport::RpcRequestHeader;
 use tracing::error;
 use tracing::warn;
 

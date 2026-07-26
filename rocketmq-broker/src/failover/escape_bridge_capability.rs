@@ -25,23 +25,23 @@ use rocketmq_model::common::broker::broker_role::BrokerRole;
 use rocketmq_model::common::message::message_batch::MessageExtBatch;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
-use rocketmq_store::base::get_message_result::GetMessageResult;
-use rocketmq_store::base::message_result::PutMessageResult;
-use rocketmq_store::base::message_store::MessageStore;
-use rocketmq_store::base::query_message_result::QueryMessageResult;
-use rocketmq_store::base::select_result::SelectMappedBufferResult;
-use rocketmq_store::capability::store_append_receipt;
-use rocketmq_store::capability::MessageStoreHealthCapability;
-use rocketmq_store::capability::StoreAppendReceipt;
-use rocketmq_store::capability::StoreHealthSnapshot;
-use rocketmq_store::config::message_store_config::MessageStoreConfig;
-use rocketmq_store::filter::ArcMessageFilter;
-use rocketmq_store::ha::ha_connection_state_notification_request::HAConnectionStateNotificationRequest;
-use rocketmq_store::ha::ha_service::HAService;
-use rocketmq_store::message_store::OwnedMessageStore;
-use rocketmq_store::store_error::HAError;
-use rocketmq_store::store_error::HAResult;
-use rocketmq_store::store_error::StoreError as BackendStoreError;
+use rocketmq_store::store_append_receipt;
+use rocketmq_store::ArcMessageFilter;
+use rocketmq_store::GetMessageResult;
+use rocketmq_store::HAConnectionStateNotificationRequest;
+use rocketmq_store::HAError;
+use rocketmq_store::HAResult;
+use rocketmq_store::HAService;
+use rocketmq_store::MessageStore;
+use rocketmq_store::MessageStoreConfig;
+use rocketmq_store::MessageStoreHealthCapability;
+use rocketmq_store::OwnedMessageStore;
+use rocketmq_store::PutMessageResult;
+use rocketmq_store::QueryMessageResult;
+use rocketmq_store::SelectMappedBufferResult;
+use rocketmq_store::StoreAppendReceipt;
+use rocketmq_store::StoreError as BackendStoreError;
+use rocketmq_store::StoreHealthSnapshot;
 use rocketmq_store_api::StoreError;
 use rocketmq_store_api::StoreErrorKind;
 use rocketmq_store_api::StoreHealth;
@@ -348,7 +348,7 @@ impl<MS: MessageStore> EscapeBridgeStoreCapability<MS> {
             }
             BrokerReplicaRole::Slave => {
                 let master_address = master_address.ok_or_else(|| {
-                    HAError::Service("controller role change missing master address for store transition".to_owned())
+                    HAError::invalid_state("controller role change missing master address for store transition")
                 })?;
                 let current_master_address = ha_service.get_runtime_info(0).ha_client_runtime_info.master_addr;
                 if previous_store_role == BrokerRole::Slave && current_master_address == master_address.as_str() {
@@ -413,7 +413,9 @@ impl<MS: MessageStore> EscapeBridgeStoreCapability<MS> {
     }
 
     pub(crate) fn set_commitlog_read_mode(&self, read_ahead_mode: i32) -> Result<(), BackendStoreError> {
-        let store = self.store().map_err(|_| BackendStoreError::NotStarted)?;
+        let store = self
+            .store()
+            .map_err(|_| BackendStoreError::new(StoreErrorKind::NotStarted, StoreOperation::Admin))?;
         store.set_commitlog_read_mode(read_ahead_mode)
     }
 
@@ -542,8 +544,8 @@ mod tests {
     use crate::config::broker_config::BrokerConfig;
     use cheetah_string::CheetahString;
     use rocketmq_model::common::broker::broker_role::BrokerRole;
-    use rocketmq_store::config::message_store_config::MessageStoreConfig;
-    use rocketmq_store::message_store::OwnedMessageStore;
+    use rocketmq_store::MessageStoreConfig;
+    use rocketmq_store::OwnedMessageStore;
 
     use super::EscapeBridgePolicyState;
     use super::EscapeBridgeStoreCapability;

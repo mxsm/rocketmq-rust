@@ -19,7 +19,7 @@ use std::sync::atomic::AtomicI32;
 use std::sync::Arc;
 use std::thread::sleep;
 
-use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
+use rocketmq_client_rust::DefaultMQProducer;
 use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::message::message_single::Message;
 use tracing::info;

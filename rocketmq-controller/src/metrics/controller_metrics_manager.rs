@@ -23,7 +23,7 @@ use crate::config::ControllerConfig;
 use crate::config::ControllerConfigReader;
 
 #[cfg(feature = "metrics")]
-use rocketmq_observability::config::MetricsExporter;
+use rocketmq_observability::MetricsExporter;
 #[cfg(feature = "metrics")]
 #[path = "controller_metrics_manager_impl.rs"]
 mod owner_manager;
@@ -47,10 +47,10 @@ pub(crate) fn controller_metrics_config(config: &ControllerConfig) -> Controller
         controller_type: config.controller_type.clone(),
         node_id: config.node_id.to_string(),
         metrics_exporter_type: match config.metrics_exporter_type {
-            rocketmq_observability::exporter_types::MetricsExporterType::Disable => MetricsExporter::Disable,
-            rocketmq_observability::exporter_types::MetricsExporterType::OtlpGrpc => MetricsExporter::OtlpGrpc,
-            rocketmq_observability::exporter_types::MetricsExporterType::Prom => MetricsExporter::Prometheus,
-            rocketmq_observability::exporter_types::MetricsExporterType::Log => MetricsExporter::Log,
+            rocketmq_observability::MetricsExporterType::Disable => MetricsExporter::Disable,
+            rocketmq_observability::MetricsExporterType::OtlpGrpc => MetricsExporter::OtlpGrpc,
+            rocketmq_observability::MetricsExporterType::Prom => MetricsExporter::Prometheus,
+            rocketmq_observability::MetricsExporterType::Log => MetricsExporter::Log,
         },
         metric_logging_exporter_interval_in_mills: config.metric_logging_exporter_interval_in_mills,
         metric_grpc_exporter_interval_in_mills: config.metric_grpc_exporter_interval_in_mills,

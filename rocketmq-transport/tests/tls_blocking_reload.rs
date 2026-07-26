@@ -19,8 +19,8 @@ use std::time::Duration;
 use rocketmq_runtime::BlockingPoolPolicy;
 use rocketmq_runtime::RuntimeContext;
 use rocketmq_runtime::RuntimeHandle;
-use rocketmq_transport::config::TlsConfig;
-use rocketmq_transport::tls::TlsServerRuntime;
+use rocketmq_transport::TlsConfig;
+use rocketmq_transport::TlsServerRuntime;
 
 #[tokio::test]
 async fn reload_filesystem_work_queues_through_the_injected_blocking_executor() {

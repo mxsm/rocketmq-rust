@@ -27,7 +27,7 @@ use parking_lot::Mutex;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskKind;
-use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_transport::ConnectionHandlerContext;
 use tokio::select;
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::sync::Mutex as AsyncMutex;
@@ -43,7 +43,7 @@ use crate::long_polling::pop_request::PopRequest;
 pub(crate) trait LocalPopLiteLongPollingRequestProcessor {
     async fn process_request_when_wakeup(
         &self,
-        channel: rocketmq_transport::net::channel::Channel,
+        channel: rocketmq_transport::Channel,
         ctx: ConnectionHandlerContext,
         request: RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>>;

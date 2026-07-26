@@ -48,23 +48,32 @@ fn rocketmq_error_exposes_public_message_and_redacted_context() {
     assert_eq!(route.public_message(), "Route information was not found");
     assert_eq!(route.context().to_string(), "topic=TopicA");
 
-    let internal = RocketMQError::Internal("password=plain-text".to_string());
+    let internal = RocketMQError::internal("run internal operation", std::io::Error::other("password=plain-text"));
     let context = internal.context();
 
     assert_eq!(internal.public_message(), "Internal error");
-    assert_eq!(context.fields()[0].redaction, RedactionKind::Sensitive);
-    assert_eq!(context.to_string(), "internal_error=<redacted>");
+    assert_eq!(context.fields()[0].key, "operation");
+    assert_eq!(context.fields()[0].redaction, RedactionKind::Public);
+    assert_eq!(context.fields()[1].key, "internal_error");
+    assert_eq!(context.fields()[1].redaction, RedactionKind::Sensitive);
+    assert_eq!(
+        context.to_string(),
+        "operation=run internal operation, internal_error=<redacted>"
+    );
     assert!(!context.to_string().contains("plain-text"));
 }
 
 #[test]
 fn boundary_view_exposes_public_message_and_redacted_context() {
-    let error = RocketMQError::Internal("password=plain-text".to_string());
+    let error = RocketMQError::internal("run internal operation", std::io::Error::other("password=plain-text"));
     let view = error.boundary_view();
 
     assert_eq!(view.code().as_str(), "INTERNAL");
     assert_eq!(view.message(), "Internal error");
-    assert_eq!(view.context().to_string(), "internal_error=<redacted>");
+    assert_eq!(
+        view.context().to_string(),
+        "operation=run internal operation, internal_error=<redacted>"
+    );
     assert!(!view.context().to_string().contains("plain-text"));
     assert!(!view.is_retryable());
 }

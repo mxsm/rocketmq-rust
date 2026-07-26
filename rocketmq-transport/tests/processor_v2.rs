@@ -28,13 +28,13 @@ use std::sync::Arc;
 
 use rocketmq_error::RocketMQResult;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-use rocketmq_transport::net::channel::Channel;
-use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_transport::runtime::processor_v2::CoreProcessor;
-use rocketmq_transport::runtime::processor_v2::CoreProcessorVariant;
-use rocketmq_transport::runtime::processor_v2::PluginProcessorRegistry;
-use rocketmq_transport::runtime::processor_v2::ProcessorDispatcher;
-use rocketmq_transport::runtime::processor_v2::RequestProcessorV2;
+use rocketmq_transport::Channel;
+use rocketmq_transport::ConnectionHandlerContext;
+use rocketmq_transport::CoreProcessor;
+use rocketmq_transport::CoreProcessorVariant;
+use rocketmq_transport::PluginProcessorRegistry;
+use rocketmq_transport::ProcessorDispatcher;
+use rocketmq_transport::RequestProcessorV2;
 
 /// A simple processor that echoes back the request
 struct EchoProcessor;
@@ -293,7 +293,10 @@ fn test_plugin_hot_reload() {
 /// Demonstrates the complete API surface
 ///
 /// ```no_run
-/// use rocketmq_transport::runtime::processor_v2::*;
+/// use rocketmq_transport::CoreProcessor;
+/// use rocketmq_transport::PluginProcessorRegistry;
+/// use rocketmq_transport::ProcessorDispatcher;
+/// use rocketmq_transport::RequestProcessorV2;
 ///
 /// async fn example() {
 ///     // 1. Create processors

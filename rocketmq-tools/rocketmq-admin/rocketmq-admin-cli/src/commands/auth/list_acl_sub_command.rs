@@ -78,10 +78,14 @@ fn render_list_acl_result(result: ListAclResult) -> RocketMQResult<()> {
     if result.failed_broker_addrs.is_empty() {
         Ok(())
     } else {
-        Err(RocketMQError::Internal(format!(
-            "ListAclSubCommand: Failed to list ACLs for brokers {}",
-            result.failed_broker_addrs.join(", ")
-        )))
+        Err(RocketMQError::broker_operation_failed(
+            "LIST_ACL",
+            -1,
+            format!(
+                "ListAclSubCommand: Failed to list ACLs for brokers {}",
+                result.failed_broker_addrs.join(", ")
+            ),
+        ))
     }
 }
 

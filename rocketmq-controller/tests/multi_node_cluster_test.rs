@@ -28,22 +28,22 @@ use std::time::Duration;
 
 use openraft::async_runtime::WatchReceiver;
 use openraft::ServerState;
-use rocketmq_controller::config::ControllerConfig;
-use rocketmq_controller::config::ControllerConfigReader;
-use rocketmq_controller::config::RaftPeer;
-use rocketmq_controller::config::StorageBackendType;
-use rocketmq_controller::openraft::GrpcRaftService;
-use rocketmq_controller::openraft::RaftNodeManager;
 use rocketmq_controller::protobuf::openraft::open_raft_service_server::OpenRaftServiceServer;
 #[cfg(feature = "dev-single")]
-use rocketmq_controller::typ::BrokerIdentityInfoSnapshot;
+use rocketmq_controller::BrokerIdentityInfoSnapshot;
 #[cfg(feature = "dev-single")]
-use rocketmq_controller::typ::BrokerLiveInfoSnapshot;
-use rocketmq_controller::typ::ControllerRequest;
+use rocketmq_controller::BrokerLiveInfoSnapshot;
+use rocketmq_controller::ControllerConfig;
+use rocketmq_controller::ControllerConfigReader;
+use rocketmq_controller::ControllerRequest;
 #[cfg(feature = "dev-single")]
-use rocketmq_controller::typ::ControllerResponseHeader;
-use rocketmq_controller::typ::Node;
-use rocketmq_controller::typ::RaftMetrics;
+use rocketmq_controller::ControllerResponseHeader;
+use rocketmq_controller::GrpcRaftService;
+use rocketmq_controller::Node;
+use rocketmq_controller::RaftMetrics;
+use rocketmq_controller::RaftNodeManager;
+use rocketmq_controller::RaftPeer;
+use rocketmq_controller::StorageBackendType;
 #[cfg(feature = "dev-single")]
 use rocketmq_protocol::code::response_code::ResponseCode;
 #[cfg(feature = "dev-single")]

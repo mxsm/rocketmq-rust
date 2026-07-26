@@ -456,7 +456,8 @@ mod tests {
     }
 
     async fn build_fetcher() -> Result<DefaultTieredMessageFetcher<MemoryProvider>, RocketMQError> {
-        let temp_dir = tempfile::tempdir().map_err(|err| RocketMQError::Internal(err.to_string()))?;
+        let temp_dir =
+            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
         let config = Arc::new(TieredStoreConfig {
             store_path_root_dir: temp_dir.path().to_path_buf(),
             backend_provider: "memory".to_owned(),
@@ -500,7 +501,8 @@ mod tests {
     }
 
     async fn build_timestamp_fetcher() -> Result<DefaultTieredMessageFetcher<MemoryProvider>, RocketMQError> {
-        let temp_dir = tempfile::tempdir().map_err(|err| RocketMQError::Internal(err.to_string()))?;
+        let temp_dir =
+            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
         let config = Arc::new(TieredStoreConfig {
             store_path_root_dir: temp_dir.path().to_path_buf(),
             backend_provider: "memory".to_owned(),
@@ -534,7 +536,8 @@ mod tests {
     }
 
     async fn build_query_fetcher() -> Result<DefaultTieredMessageFetcher<MemoryProvider>, RocketMQError> {
-        let temp_dir = tempfile::tempdir().map_err(|err| RocketMQError::Internal(err.to_string()))?;
+        let temp_dir =
+            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
         let config = Arc::new(TieredStoreConfig {
             store_path_root_dir: temp_dir.path().to_path_buf(),
             backend_provider: "memory".to_owned(),
@@ -612,7 +615,8 @@ mod tests {
 
     #[tokio::test]
     async fn fetch_respects_read_ahead_message_size_after_first_message() -> Result<(), RocketMQError> {
-        let temp_dir = tempfile::tempdir().map_err(|err| RocketMQError::Internal(err.to_string()))?;
+        let temp_dir =
+            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
         let config = Arc::new(TieredStoreConfig {
             store_path_root_dir: temp_dir.path().to_path_buf(),
             backend_provider: "memory".to_owned(),
@@ -652,7 +656,8 @@ mod tests {
 
     #[tokio::test]
     async fn read_ahead_cache_coalesces_cold_pull_and_eliminates_warm_provider_reads() -> Result<(), RocketMQError> {
-        let temp_dir = tempfile::tempdir().map_err(|err| RocketMQError::Internal(err.to_string()))?;
+        let temp_dir =
+            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
         let config = Arc::new(TieredStoreConfig {
             store_path_root_dir: temp_dir.path().to_path_buf(),
             backend_provider: "memory".to_owned(),
@@ -841,7 +846,8 @@ mod tests {
 
     #[tokio::test]
     async fn query_message_recovers_index_and_segments_after_load() -> Result<(), RocketMQError> {
-        let temp_dir = tempfile::tempdir().map_err(|err| RocketMQError::Internal(err.to_string()))?;
+        let temp_dir =
+            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
         let config = Arc::new(TieredStoreConfig {
             store_path_root_dir: temp_dir.path().to_path_buf(),
             backend_provider: "memory".to_owned(),

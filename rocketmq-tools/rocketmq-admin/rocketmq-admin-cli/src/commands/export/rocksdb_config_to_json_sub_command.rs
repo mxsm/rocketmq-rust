@@ -186,8 +186,13 @@ impl RocksDBConfigToJsonSubCommand {
                 entries,
             } if *json_enable => {
                 let json_value = Self::entries_json_value(*config_type, entries)?;
-                let json = serde_json::to_string_pretty(&json_value)
-                    .map_err(|error| RocketMQError::Internal(format!("RocksDBConfigToJsonSubCommand: {error}")))?;
+                let json = serde_json::to_string_pretty(&json_value).map_err(|source| {
+                    RocketMQError::Serialization(rocketmq_error::SerializationError::source(
+                        "encode RocksDB configuration",
+                        "JSON",
+                        source,
+                    ))
+                })?;
                 println!("{json}");
             }
             ExportMetadataInRocksDbResult::Data {

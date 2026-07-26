@@ -47,6 +47,7 @@ use crate::filter::ArcMessageFilter;
 use crate::log_file::commit_log::CommitLog;
 use crate::log_file::commit_log::CommitLogReadHandle;
 use crate::store_error::StoreError;
+use crate::store_error::StoreOperation;
 
 pub type DispatchBodyResolver = dyn Fn(&DispatchRequest) -> Option<Bytes> + Send + Sync;
 
@@ -57,11 +58,7 @@ pub struct TieredStoreDecorator {
 
 impl TieredStoreDecorator {
     pub fn new(config: TieredStoreConfig) -> Result<Self, StoreError> {
-        let store = TieredStore::new(config).map_err(|error| {
-            StoreError::TieredStore(format!(
-                "failed to create tieredstore for local file message store: {error}"
-            ))
-        })?;
+        let store = TieredStore::new(config).map_err(|error| StoreError::tiered_store(StoreOperation::Load, error))?;
         Ok(Self { store: Arc::new(store) })
     }
 
@@ -88,21 +85,21 @@ impl TieredStoreDecorator {
         self.store
             .load()
             .await
-            .map_err(|error| StoreError::TieredStore(format!("failed to load tieredstore: {error}")))
+            .map_err(|error| StoreError::tiered_store(StoreOperation::Load, error))
     }
 
     pub async fn start(&self) -> Result<(), StoreError> {
         self.store
             .start()
             .await
-            .map_err(|error| StoreError::TieredStore(format!("failed to start tieredstore: {error}")))
+            .map_err(|error| StoreError::tiered_store(StoreOperation::Start, error))
     }
 
     pub async fn shutdown(&self) -> Result<(), StoreError> {
         self.store
             .shutdown()
             .await
-            .map_err(|error| StoreError::TieredStore(format!("failed to shutdown tieredstore: {error}")))
+            .map_err(|error| StoreError::tiered_store(StoreOperation::Shutdown, error))
     }
 
     pub fn metrics(&self) -> Arc<TieredStoreMetrics> {
@@ -210,7 +207,7 @@ impl TieredStoreDecorator {
             .get_offset_by_time_with_boundary(topic.to_string(), queue_id, timestamp, boundary_type)
             .await
             .map(|offset| (offset >= 0).then_some(offset))
-            .map_err(|error| StoreError::TieredStore(format!("tieredstore offset by time lookup failed: {error}")))
+            .map_err(|error| StoreError::tiered_store(StoreOperation::QueryOffset, error))
     }
 
     pub async fn message_timestamp(
@@ -223,7 +220,7 @@ impl TieredStoreDecorator {
             .fetcher()
             .get_message_timestamp(topic.to_string(), queue_id, consume_queue_offset)
             .await
-            .map_err(|error| StoreError::TieredStore(format!("tieredstore timestamp lookup failed: {error}")))
+            .map_err(|error| StoreError::tiered_store(StoreOperation::QueryOffset, error))
     }
 
     #[cfg(test)]
@@ -550,7 +547,8 @@ mod tests {
 
     #[tokio::test]
     async fn dispatcher_adapter_writes_commitlog_and_consumequeue_to_tieredstore() -> Result<(), RocketMQError> {
-        let temp_dir = tempfile::tempdir().map_err(|err| RocketMQError::Internal(err.to_string()))?;
+        let temp_dir =
+            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
         let tiered_store = TieredStore::new(TieredStoreConfig {
             storage_level: TieredStorageLevel::Force,
             backend_provider: "memory".to_owned(),

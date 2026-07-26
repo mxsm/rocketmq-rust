@@ -26,12 +26,12 @@ use rocketmq_protocol::protocol::header::message_operation_header::TopicRequestH
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_context::TopicQueueMappingContext;
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_utils::TopicQueueMappingUtils;
-use rocketmq_store::base::message_store::MessageStore;
-use rocketmq_transport::error_response;
-use rocketmq_transport::net::channel::Channel;
-use rocketmq_transport::rpc::rpc_client::RpcClient;
-use rocketmq_transport::rpc::rpc_request::RpcRequest;
-use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_store::MessageStore;
+use rocketmq_transport::request_code_not_supported_with_remark;
+use rocketmq_transport::Channel;
+use rocketmq_transport::ConnectionHandlerContext;
+use rocketmq_transport::RpcClient;
+use rocketmq_transport::RpcRequest;
 use tracing::error;
 
 use crate::broker::broker_admin_runtime::BrokerAdminRuntime;
@@ -338,7 +338,7 @@ impl OffsetRequestHandler {
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let _request_header = request.decode_command_custom_header::<CheckRocksdbCqWriteProgressRequestHeader>()?;
         Ok(Some(
-            error_response::request_code_not_supported_with_remark(
+            request_code_not_supported_with_remark(
                 request.code(),
                 "CHECK_ROCKSDB_CQ_WRITE_PROGRESS requires a real RocksDB consume queue backend; current Rust broker \
                  uses file-backed consume queues",
@@ -477,13 +477,13 @@ mod tests {
     use rocketmq_protocol::protocol::header::get_earliest_msg_storetime_request_header::GetEarliestMsgStoretimeRequestHeader;
     use rocketmq_protocol::protocol::header::get_earliest_msg_storetime_response_header::GetEarliestMsgStoretimeResponseHeader;
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-    use rocketmq_store::base::message_store::MessageStore;
-    use rocketmq_store::config::message_store_config::MessageStoreConfig;
-    use rocketmq_transport::base::response_future::ResponseFuture;
-    use rocketmq_transport::connection::Connection;
-    use rocketmq_transport::net::channel::Channel;
-    use rocketmq_transport::net::channel::ChannelInner;
-    use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
+    use rocketmq_store::MessageStore;
+    use rocketmq_store::MessageStoreConfig;
+    use rocketmq_transport::Channel;
+    use rocketmq_transport::ChannelInner;
+    use rocketmq_transport::Connection;
+    use rocketmq_transport::ConnectionHandlerContextWrapper;
+    use rocketmq_transport::ResponseFuture;
 
     use super::static_topic_offset_broker_name_missing;
     use super::static_topic_offset_mapping_missing;

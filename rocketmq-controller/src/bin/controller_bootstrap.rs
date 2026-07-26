@@ -24,10 +24,10 @@ use anyhow::Context;
 use anyhow::Result;
 use rocketmq_controller::parse_command_line;
 use rocketmq_controller::resolve_controller_raft_bind_addr;
-use rocketmq_controller::typ::Node;
 use rocketmq_controller::ControllerCli;
 use rocketmq_controller::ControllerConfig;
 use rocketmq_controller::ControllerManager;
+use rocketmq_controller::Node;
 use rocketmq_error::ControllerError;
 use rocketmq_model::common::mq_version::CURRENT_VERSION;
 use rocketmq_model::utils::env_utils::EnvUtils;
@@ -77,7 +77,7 @@ const LOGO: &str = r#"
 
 pub fn main() -> Result<()> {
     let owner = RuntimeOwner::new(controller_runtime_config())
-        .map_err(|error| ControllerError::Internal(format!("failed to build controller runtime: {error}")))?;
+        .map_err(|source| ControllerError::runtime_source("build controller runtime", source))?;
     let service_context = owner.root_context().child("rocketmq-controller-runtime");
     let lifecycle = ServiceLifecycle::from_env("rocketmq-controller").map_err(|error| {
         ControllerError::ConfigError(format!("invalid Controller lifecycle configuration: {error}"))
@@ -92,7 +92,7 @@ pub fn main() -> Result<()> {
         .unwrap_or_else(|| lifecycle.request_shutdown(ShutdownReason::Internal));
     let shutdown_result = owner
         .shutdown_runtime_blocking_until(shutdown_request.deadline)
-        .map_err(|error| ControllerError::Internal(format!("failed to shutdown controller runtime: {error}")));
+        .map_err(|source| ControllerError::runtime_source("shutdown controller runtime", source));
 
     match (run_result, shutdown_result) {
         (Err(error), _) => Err(error),
@@ -438,11 +438,7 @@ async fn initialize_cluster_if_configured(controller_manager: &Arc<ControllerMan
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
-    Err(ControllerError::Internal(format!(
-        "controller node {} did not become leader after bootstrap",
-        config.node_id
-    ))
-    .into())
+    Err(ControllerError::Timeout { timeout_ms: 3_000 }.into())
 }
 
 async fn wait_for_cluster_recovery(controller_manager: &Arc<ControllerManager>) -> Result<()> {
@@ -462,11 +458,7 @@ async fn wait_for_cluster_recovery(controller_manager: &Arc<ControllerManager>) 
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
-    Err(ControllerError::Internal(format!(
-        "controller node {} did not recover committed Raft state before the readiness deadline",
-        config.node_id
-    ))
-    .into())
+    Err(ControllerError::Timeout { timeout_ms: 30_000 }.into())
 }
 
 fn auto_initialize_cluster_enabled() -> Result<bool> {

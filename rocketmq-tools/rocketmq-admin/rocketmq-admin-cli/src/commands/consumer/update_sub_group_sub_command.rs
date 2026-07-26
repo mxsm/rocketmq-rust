@@ -142,11 +142,14 @@ impl UpdateSubGroupSubCommand {
         if let Some(ref group_retry_policy) = self.group_retry_policy {
             match serde_json::from_str::<GroupRetryPolicy>(group_retry_policy.as_str()) {
                 Ok(value) => subscription_group_config.set_group_retry_policy(value),
-                Err(e) => {
-                    return Err(RocketMQError::Internal(format!(
-                        "UpdateSubGroupSubCommand: Failed to parse groupRetryPolicy: {}",
-                        e
-                    )));
+                Err(source) => {
+                    return Err(RocketMQError::Serialization(
+                        rocketmq_error::SerializationError::source(
+                            "decode subscription group retry policy",
+                            "JSON",
+                            source,
+                        ),
+                    ));
                 }
             }
         }
@@ -171,10 +174,9 @@ impl UpdateSubGroupSubCommand {
                         .collect::<HashMap<CheetahString, CheetahString>>();
                     subscription_group_config.set_attributes(attributes_modification);
                 }
-                Err(e) => {
-                    return Err(RocketMQError::Internal(format!(
-                        "UpdateSubGroupSubCommand: Failed to parse attributes: {}: {}",
-                        attributes, e
+                Err(reason) => {
+                    return Err(RocketMQError::illegal_argument(format!(
+                        "invalid subscription group attributes {attributes}: {reason}"
                     )));
                 }
             }
@@ -205,15 +207,19 @@ impl UpdateSubGroupSubCommand {
         if result.failures.is_empty() {
             Ok(())
         } else {
-            Err(RocketMQError::Internal(format!(
-                "UpdateSubGroupSubCommand: Failed to create or update subscription group config for brokers {}",
-                result
-                    .failures
-                    .iter()
-                    .map(|failure| failure.broker_addr.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )))
+            Err(RocketMQError::broker_operation_failed(
+                "UPDATE_SUBSCRIPTION_GROUP",
+                -1,
+                format!(
+                    "UpdateSubGroupSubCommand: Failed to create or update subscription group config for brokers {}",
+                    result
+                        .failures
+                        .iter()
+                        .map(|failure| failure.broker_addr.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            ))
         }
     }
 }

@@ -346,7 +346,8 @@ mod tests {
 
     #[tokio::test]
     async fn index_query_deduplicates_keys_and_cleanup_removes_expired_entries() -> Result<(), RocketMQError> {
-        let temp_dir = tempfile::tempdir().map_err(|err| RocketMQError::Internal(err.to_string()))?;
+        let temp_dir =
+            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
         let config = Arc::new(TieredStoreConfig {
             store_path_root_dir: temp_dir.path().to_path_buf(),
             file_reserved_time: Duration::from_millis(10_000),
@@ -388,7 +389,8 @@ mod tests {
 
     #[tokio::test]
     async fn load_restores_persisted_index_entries() -> Result<(), RocketMQError> {
-        let temp_dir = tempfile::tempdir().map_err(|err| RocketMQError::Internal(err.to_string()))?;
+        let temp_dir =
+            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
         let config = Arc::new(TieredStoreConfig {
             store_path_root_dir: temp_dir.path().to_path_buf(),
             backend_provider: "memory".to_owned(),
@@ -418,7 +420,8 @@ mod tests {
 
     #[tokio::test]
     async fn load_restores_index_entries_from_provider_index_file() -> Result<(), RocketMQError> {
-        let temp_dir = tempfile::tempdir().map_err(|err| RocketMQError::Internal(err.to_string()))?;
+        let temp_dir =
+            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
         let config = Arc::new(TieredStoreConfig {
             store_path_root_dir: temp_dir.path().join("metadata-a"),
             backend_provider: "memory".to_owned(),
@@ -452,7 +455,8 @@ mod tests {
 
     #[tokio::test]
     async fn load_recovers_index_file_from_metadata_when_index_file_is_absent() -> Result<(), RocketMQError> {
-        let temp_dir = tempfile::tempdir().map_err(|err| RocketMQError::Internal(err.to_string()))?;
+        let temp_dir =
+            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
         let config = Arc::new(TieredStoreConfig {
             store_path_root_dir: temp_dir.path().to_path_buf(),
             backend_provider: "memory".to_owned(),
@@ -486,7 +490,8 @@ mod tests {
 
     #[tokio::test]
     async fn load_recovers_queue_from_segment_metadata_when_queue_metadata_is_missing() -> Result<(), RocketMQError> {
-        let temp_dir = tempfile::tempdir().map_err(|err| RocketMQError::Internal(err.to_string()))?;
+        let temp_dir =
+            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
         let config = Arc::new(TieredStoreConfig {
             store_path_root_dir: temp_dir.path().to_path_buf(),
             backend_provider: "memory".to_owned(),
@@ -542,7 +547,7 @@ mod tests {
 
         let flat_file = store
             .get("TopicA", 0)
-            .ok_or_else(|| RocketMQError::Internal("missing recovered flat file".to_owned()))?;
+            .ok_or_else(|| RocketMQError::invariant_violated("recovery must publish a flat file"))?;
         assert_eq!(
             flat_file.read_message_by_queue_offset(0).await?,
             Some(Bytes::from_static(b"body"))
@@ -550,7 +555,7 @@ mod tests {
         let queue_metadata = reloaded_metadata_store
             .get_queue("TopicA", 0)
             .await?
-            .ok_or_else(|| RocketMQError::Internal("missing recovered queue metadata".to_owned()))?;
+            .ok_or_else(|| RocketMQError::invariant_violated("recovery must publish queue metadata"))?;
         assert_eq!(queue_metadata.min_offset, 0);
         assert_eq!(queue_metadata.max_offset, 1);
         Ok(())

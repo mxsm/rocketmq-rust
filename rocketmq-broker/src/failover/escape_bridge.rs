@@ -30,19 +30,19 @@ use rocketmq_model::result::PullStatus;
 use rocketmq_model::result::SendResult;
 use rocketmq_model::result::SendStatus;
 use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
-use rocketmq_store::base::get_message_result::GetMessageResult;
-use rocketmq_store::base::message_result::PutMessageResult;
-use rocketmq_store::base::message_status_enum::GetMessageStatus;
-use rocketmq_store::base::message_status_enum::PutMessageStatus;
-use rocketmq_store::base::message_store::MessageStore;
-use rocketmq_store::base::query_message_result::QueryMessageResult;
-use rocketmq_store::base::select_result::SelectMappedBufferResult;
-use rocketmq_store::capability::StoreAppendReceipt;
-use rocketmq_store::capability::StoreHealthSnapshot;
-use rocketmq_store::filter::ArcMessageFilter;
-use rocketmq_store::ha::ha_connection_state_notification_request::HAConnectionStateNotificationRequest;
-use rocketmq_store::message_store::OwnedMessageStore;
-use rocketmq_store::store_error::StoreError as BackendStoreError;
+use rocketmq_store::ArcMessageFilter;
+use rocketmq_store::GetMessageResult;
+use rocketmq_store::GetMessageStatus;
+use rocketmq_store::HAConnectionStateNotificationRequest;
+use rocketmq_store::MessageStore;
+use rocketmq_store::OwnedMessageStore;
+use rocketmq_store::PutMessageResult;
+use rocketmq_store::PutMessageStatus;
+use rocketmq_store::QueryMessageResult;
+use rocketmq_store::SelectMappedBufferResult;
+use rocketmq_store::StoreAppendReceipt;
+use rocketmq_store::StoreError as BackendStoreError;
+use rocketmq_store::StoreHealthSnapshot;
 use rocketmq_store_api::StoreError;
 use tracing::error;
 use tracing::warn;
@@ -739,7 +739,7 @@ fn transform_send_result2put_result(send_result: Option<SendResult>) -> PutMessa
 mod tests {
     use rocketmq_model::result::SendResult;
     use rocketmq_model::result::SendStatus;
-    use rocketmq_store::base::message_status_enum::PutMessageStatus;
+    use rocketmq_store::PutMessageStatus;
 
     use super::transform_send_result2put_result;
 
