@@ -91,7 +91,7 @@ pub async fn connect_with_config(
                 .timeout(connect_tls_stream(stream, &server_name, tls_config))
                 .await
                 .map_err(|_| RocketMQError::network_connection_timeout(address, deadline.budget_millis()))??;
-            Connection::new_with_stream_and_limits(tls_stream, frame_limits)
+            Connection::new_with_tls_stream_and_limits(tls_stream, frame_limits)
         }
         #[cfg(not(feature = "tls"))]
         {

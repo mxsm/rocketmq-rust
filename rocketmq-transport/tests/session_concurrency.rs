@@ -61,7 +61,7 @@ where
     let local_addr: SocketAddr = "127.0.0.1:19101".parse().expect("local address");
     let remote_addr: SocketAddr = "127.0.0.1:19102".parse().expect("remote address");
     let runner = tokio::spawn(run_connected_session(
-        Connection::new_with_stream(transport),
+        Connection::new_with_plaintext_stream(transport),
         local_addr,
         remote_addr,
         service.task_group().clone(),
@@ -71,7 +71,7 @@ where
         Duration::from_secs(30),
         handler,
     ));
-    (runtime, service, Connection::new_with_stream(peer), runner)
+    (runtime, service, Connection::new_with_plaintext_stream(peer), runner)
 }
 
 async fn finish_session(

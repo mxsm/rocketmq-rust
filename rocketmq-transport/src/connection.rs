@@ -15,70 +15,38 @@
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::sync::atomic::AtomicU64;
-use std::sync::atomic::AtomicU8;
 use std::sync::atomic::Ordering;
 
-use bytes::BufMut;
 use bytes::Bytes;
-use bytes::BytesMut;
 use cheetah_string::CheetahString;
-use futures_util::stream::SplitSink;
-use futures_util::stream::SplitStream;
-use futures_util::SinkExt;
 use futures_util::StreamExt;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncWrite;
+use tokio::io::ReadHalf;
+use tokio::io::WriteHalf;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
-use tokio_util::codec::Framed;
+use tokio_util::codec::FramedRead;
 use uuid::Uuid;
 
 use crate::admission::AdmissionClass;
 use crate::admission::AdmissionController;
-use crate::admission::AdmissionPermit;
 use crate::admission::AdmissionResource;
 use crate::admission::AdmissionScope;
-use crate::codec::remoting_command_codec::CompositeCodec;
 use crate::codec::remoting_command_codec::FrameLimits;
-use crate::codec::remoting_command_codec::SessionCodec;
+use crate::codec::remoting_command_codec::RemotingCommandCodec;
+use crate::codec::remoting_command_codec::SessionCommandDecoder;
 use crate::deadline::RequestDeadline;
+use crate::write_strategy::FrameWriteMode;
+use crate::write_strategy::FrameWriter;
+use crate::write_strategy::OutboundPayload;
+use crate::write_strategy::QueuedWrite;
+use crate::write_strategy::QueuedWriteProgress;
+use rocketmq_protocol::protocol::encoded_frame::EncodedFrame;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use std::sync::Arc;
-
-const QUEUED_WRITE_WAITING: u8 = 0;
-const QUEUED_WRITE_STARTED: u8 = 1;
-
-pub(crate) struct QueuedWriteProgress(AtomicU8);
-
-impl QueuedWriteProgress {
-    fn waiting() -> Self {
-        Self(AtomicU8::new(QUEUED_WRITE_WAITING))
-    }
-
-    pub(crate) fn start_write(&self) {
-        self.0.store(QUEUED_WRITE_STARTED, Ordering::Release);
-    }
-
-    fn write_started(&self) -> bool {
-        self.0.load(Ordering::Acquire) == QUEUED_WRITE_STARTED
-    }
-}
-
-pub(crate) enum QueuedWrite {
-    Data {
-        bytes: Bytes,
-        completion: oneshot::Sender<rocketmq_error::RocketMQResult<()>>,
-        _permit: AdmissionPermit,
-        deadline: Option<RequestDeadline>,
-        target: String,
-        progress: Option<Arc<QueuedWriteProgress>>,
-    },
-    Close {
-        completion: oneshot::Sender<rocketmq_error::RocketMQResult<()>>,
-    },
-}
 
 pub(crate) struct SessionLifecycle {
     gate: tokio::sync::RwLock<()>,
@@ -116,8 +84,14 @@ pub trait ConnectionTransport: AsyncRead + AsyncWrite + Send + Unpin {}
 impl<T> ConnectionTransport for T where T: AsyncRead + AsyncWrite + Send + Unpin {}
 
 pub type BoxedConnectionTransport = Box<dyn ConnectionTransport>;
-pub type ConnectionFramed = Framed<BoxedConnectionTransport, CompositeCodec>;
-type SessionConnectionFramed = Framed<BoxedConnectionTransport, SessionCodec>;
+type ConnectionReadHalf = FramedRead<ReadHalf<BoxedConnectionTransport>, RemotingCommandCodec>;
+pub(crate) type SessionConnectionReadHalf = FramedRead<ReadHalf<BoxedConnectionTransport>, SessionCommandDecoder>;
+pub(crate) type ConnectionFrameWriter = FrameWriter<WriteHalf<BoxedConnectionTransport>>;
+
+enum ConnectionWriter {
+    Direct(ConnectionFrameWriter),
+    Queued(QueuedConnection),
+}
 
 static TRANSPORT_ENCODED_BYTES_WRITTEN: AtomicU64 = AtomicU64::new(0);
 
@@ -140,7 +114,7 @@ pub fn transport_io_snapshot() -> TransportIoSnapshot {
     }
 }
 
-fn record_transport_write(bytes: usize) {
+pub(crate) fn record_transport_write(bytes: usize) {
     TRANSPORT_ENCODED_BYTES_WRITTEN.fetch_add(bytes as u64, Ordering::Relaxed);
 }
 
@@ -241,16 +215,11 @@ impl ConnectionStateHandle {
 /// - **Fail-fast**: I/O errors immediately update state and return error
 /// - **Zero polling**: Subscribers notified automatically on state change
 pub struct Connection {
-    // === I/O Transport ===
-    /// Outbound message sink (sends encoded frames to peer)
-    ///
-    /// Handles outbound data flow with automatic framing
-    outbound_sink: SplitSink<ConnectionFramed, Bytes>,
+    /// Inbound command stream. Session response capabilities have no read half.
+    inbound: Option<ConnectionReadHalf>,
 
-    /// Inbound message stream (receives decoded frames from peer)
-    ///
-    /// Handles inbound data flow with automatic frame decoding
-    inbound_stream: SplitStream<ConnectionFramed>,
+    /// Direct socket writer or a capability to the canonical session writer actor.
+    outbound: ConnectionWriter,
 
     // === State Management (Tokio Watch Channel) ===
     /// Broadcast channel for connection state changes
@@ -272,20 +241,12 @@ pub struct Connection {
     /// Used for fast `state()` queries without creating new receivers
     state_rx: watch::Receiver<ConnectionState>,
 
-    // === Buffers ===
-    /// Reusable encoding buffer to avoid repeated allocations
-    ///
-    /// Used for staging `RemotingCommand` serialization before sending.
-    /// Split pattern automatically clears buffer after each send.
-    encode_buffer: BytesMut,
-
     // === Identification ===
     /// Unique identifier for this connection instance
     ///
     /// Generated via UUID, stable across the connection lifetime
     connection_id: ConnectionId,
 
-    queued: Option<QueuedConnection>,
     #[cfg(test)]
     enqueue_gate: Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
 }
@@ -331,44 +292,78 @@ impl Connection {
     /// });
     /// ```
     pub fn new(tcp_stream: TcpStream) -> Connection {
-        Self::new_with_stream(tcp_stream)
+        Self::new_with_plaintext_stream(tcp_stream)
     }
 
     pub fn new_with_limits(tcp_stream: TcpStream, limits: FrameLimits) -> Connection {
-        Self::new_with_stream_and_limits(tcp_stream, limits)
+        Self::new_with_plaintext_stream_and_limits(tcp_stream, limits)
     }
 
-    /// Creates a new `Connection` over any async stream implementing RocketMQ framing.
-    pub fn new_with_stream<S>(stream: S) -> Connection
+    /// Creates a plaintext connection over any compatible async stream.
+    pub fn new_with_plaintext_stream<S>(stream: S) -> Connection
     where
         S: ConnectionTransport + 'static,
     {
-        Self::new_with_stream_and_limits(stream, FrameLimits::default())
+        Self::new_with_plaintext_stream_and_limits(stream, FrameLimits::default())
     }
 
-    pub fn new_with_stream_and_limits<S>(stream: S, limits: FrameLimits) -> Connection
+    /// Creates a bounded plaintext connection over any compatible async stream.
+    pub fn new_with_plaintext_stream_and_limits<S>(stream: S, limits: FrameLimits) -> Connection
     where
         S: ConnectionTransport + 'static,
     {
-        const BUFFER_SIZE: usize = 8 * 1024; // 8 KB
-        let framed = Framed::with_capacity(
-            Box::new(stream) as BoxedConnectionTransport,
-            CompositeCodec::with_limits(limits),
+        Self::new_with_stream_limits_and_write_mode(stream, limits, FrameWriteMode::PlainVectored)
+    }
+
+    /// Creates a connection over a negotiated TLS stream with bounded plaintext aggregation.
+    pub fn new_with_tls_stream<S>(stream: S) -> Connection
+    where
+        S: ConnectionTransport + 'static,
+    {
+        Self::new_with_tls_stream_and_limits(stream, FrameLimits::default())
+    }
+
+    /// Creates a TLS connection using the configured maximum wire frame as its aggregation bound.
+    pub fn new_with_tls_stream_and_limits<S>(stream: S, limits: FrameLimits) -> Connection
+    where
+        S: ConnectionTransport + 'static,
+    {
+        let max_plaintext_frame_bytes = limits.max_frame_bytes.saturating_add(4);
+        Self::new_with_stream_limits_and_write_mode(
+            stream,
+            limits,
+            FrameWriteMode::TlsCoalesced {
+                max_plaintext_frame_bytes,
+            },
+        )
+    }
+
+    fn new_with_stream_limits_and_write_mode<S>(
+        stream: S,
+        limits: FrameLimits,
+        write_mode: FrameWriteMode,
+    ) -> Connection
+    where
+        S: ConnectionTransport + 'static,
+    {
+        let transport = Box::new(stream) as BoxedConnectionTransport;
+        let (read_half, write_half) = tokio::io::split(transport);
+        let inbound = FramedRead::with_capacity(
+            read_half,
+            RemotingCommandCodec::with_limits(limits),
             limits.initial_read_bytes.max(4),
         );
-        let (outbound_sink, inbound_stream) = framed.split();
-
+        let outbound = FrameWriter::new(write_half, write_mode)
+            .unwrap_or_else(|_| unreachable!("connection frame limits always produce a non-zero writer bound"));
         // Initialize watch channel with Healthy state
         let (state_tx, state_rx) = watch::channel(ConnectionState::Healthy);
 
         Self {
-            outbound_sink,
-            inbound_stream,
+            inbound: Some(inbound),
+            outbound: ConnectionWriter::Direct(outbound),
             state_tx,
             state_rx,
-            encode_buffer: BytesMut::with_capacity(BUFFER_SIZE),
             connection_id: CheetahString::from_string(Uuid::new_v4().to_string()),
-            queued: None,
             #[cfg(test)]
             enqueue_gate: None,
         }
@@ -384,20 +379,21 @@ impl Connection {
         response_class: Option<AdmissionClass>,
         lifecycle: Arc<SessionLifecycle>,
     ) -> Self {
-        let (stream, peer) = tokio::io::duplex(1);
-        drop(peer);
-        let mut connection = Self::new_with_stream(stream);
-        connection.state_tx = state_tx;
-        connection.state_rx = state_rx;
-        connection.connection_id = connection_id;
-        connection.queued = Some(QueuedConnection {
-            writer,
-            admission,
-            scope,
-            response_class,
-            lifecycle,
-        });
-        connection
+        Self {
+            inbound: None,
+            outbound: ConnectionWriter::Queued(QueuedConnection {
+                writer,
+                admission,
+                scope,
+                response_class,
+                lifecycle,
+            }),
+            state_tx,
+            state_rx,
+            connection_id,
+            #[cfg(test)]
+            enqueue_gate: None,
+        }
     }
 
     #[cfg(test)]
@@ -405,37 +401,16 @@ impl Connection {
         self.enqueue_gate = Some((checked, resume));
     }
 
-    pub(crate) fn into_framed_parts(
-        self,
-    ) -> (
-        SplitSink<SessionConnectionFramed, Bytes>,
-        SplitStream<SessionConnectionFramed>,
-    ) {
-        let framed = self
-            .outbound_sink
-            .reunite(self.inbound_stream)
-            .unwrap_or_else(|_| unreachable!("connection split halves always originate from the same framed I/O"));
-        framed.map_codec(SessionCodec::from).split()
-    }
-
-    /// Gets a reference to the inbound stream for receiving messages
-    ///
-    /// # Returns
-    ///
-    /// Immutable reference to the inbound message stream
-    #[inline]
-    pub fn inbound_stream(&self) -> &SplitStream<ConnectionFramed> {
-        &self.inbound_stream
-    }
-
-    /// Gets a reference to the outbound sink for sending messages
-    ///
-    /// # Returns
-    ///
-    /// Immutable reference to the outbound message sink
-    #[inline]
-    pub fn outbound_sink(&self) -> &SplitSink<ConnectionFramed, Bytes> {
-        &self.outbound_sink
+    pub(crate) fn into_session_io(self) -> (ConnectionFrameWriter, SessionConnectionReadHalf) {
+        let writer = match self.outbound {
+            ConnectionWriter::Direct(writer) => writer,
+            ConnectionWriter::Queued(_) => unreachable!("session runtime requires an owned transport writer"),
+        };
+        let reader = self
+            .inbound
+            .unwrap_or_else(|| unreachable!("session runtime requires an owned transport reader"))
+            .map_decoder(SessionCommandDecoder::from);
+        (writer, reader)
     }
 
     /// Receives the next `RemotingCommand` from the peer.
@@ -460,24 +435,35 @@ impl Connection {
     /// // Connection closed
     /// ```
     pub async fn receive_command(&mut self) -> Option<rocketmq_error::RocketMQResult<RemotingCommand>> {
-        if self.queued.is_some() {
-            return None;
+        match self.inbound.as_mut() {
+            Some(inbound) => inbound.next().await,
+            None => None,
         }
-        self.inbound_stream.next().await
     }
 
-    async fn send_encoded(
+    fn queued_writer(&self) -> Option<&QueuedConnection> {
+        match &self.outbound {
+            ConnectionWriter::Queued(queued) => Some(queued),
+            ConnectionWriter::Direct(_) => None,
+        }
+    }
+
+    fn response_class(&self) -> Option<AdmissionClass> {
+        self.queued_writer().and_then(|queued| queued.response_class)
+    }
+
+    async fn send_payload(
         &mut self,
-        bytes: Bytes,
+        payload: OutboundPayload,
         class: AdmissionClass,
         deadline: Option<RequestDeadline>,
         target: String,
     ) -> rocketmq_error::RocketMQResult<()> {
-        let encoded_len = bytes.len();
+        let encoded_len = payload.encoded_len();
         if let Some(deadline) = deadline {
             deadline.ensure_before_send(target.clone())?;
         }
-        if let Some(queued) = self.queued.as_ref() {
+        if let Some(queued) = self.queued_writer() {
             let _lifecycle_guard = if let Some(deadline) = deadline {
                 deadline
                     .timeout(queued.lifecycle.begin_send())
@@ -505,7 +491,7 @@ impl Connection {
             }
             let permit = queued
                 .admission
-                .try_acquire(AdmissionResource::Queued, queued.scope, bytes.len(), class)
+                .try_acquire(AdmissionResource::Queued, queued.scope, encoded_len, class)
                 .map_err(|_| rocketmq_error::RocketMQError::network_queue_full(target.clone()))?;
             if let Some(deadline) = deadline {
                 deadline.ensure_before_send(target.clone())?;
@@ -514,14 +500,14 @@ impl Connection {
             let progress = deadline.map(|_| Arc::new(QueuedWriteProgress::waiting()));
             queued
                 .writer
-                .try_send(QueuedWrite::Data {
-                    bytes,
+                .try_send(QueuedWrite::data(
+                    payload,
                     completion,
-                    _permit: permit,
+                    permit,
                     deadline,
-                    target: target.clone(),
-                    progress: progress.clone(),
-                })
+                    target.clone(),
+                    progress.clone(),
+                ))
                 .map_err(|error| match error {
                     tokio::sync::mpsc::error::TrySendError::Full(_) => {
                         rocketmq_error::RocketMQError::network_queue_full(target.clone())
@@ -544,9 +530,6 @@ impl Connection {
             .map_err(|_| {
                 rocketmq_error::RocketMQError::network_connection_failed(target.clone(), "writer completion dropped")
             })?;
-            if outcome.is_ok() {
-                record_transport_write(encoded_len);
-            }
             return outcome;
         }
         if self.state() == ConnectionState::Closed {
@@ -555,12 +538,25 @@ impl Connection {
                 "connection is closed",
             ));
         }
+        let writer = match &mut self.outbound {
+            ConnectionWriter::Direct(writer) => writer,
+            ConnectionWriter::Queued(_) => unreachable!("queued writer returned above"),
+        };
         let send_result = if let Some(deadline) = deadline {
-            deadline.timeout(self.outbound_sink.send(bytes)).await.map_err(|_| {
-                rocketmq_error::RocketMQError::network_write_timeout(target.clone(), deadline.budget_millis())
-            })?
+            match deadline.timeout(payload.write_to(writer)).await {
+                Ok(result) => result,
+                Err(_) => {
+                    let _ = self.state_tx.send(ConnectionState::Degraded);
+                    let _ = writer.shutdown().await;
+                    let _ = self.state_tx.send(ConnectionState::Closed);
+                    return Err(rocketmq_error::RocketMQError::network_write_timeout(
+                        target,
+                        deadline.budget_millis(),
+                    ));
+                }
+            }
         } else {
-            self.outbound_sink.send(bytes).await
+            payload.write_to(writer).await
         };
         match send_result {
             Ok(()) => {
@@ -568,15 +564,21 @@ impl Connection {
                 Ok(())
             }
             Err(error) => {
-                self.mark_degraded();
-                Err(error)
+                let _ = self.state_tx.send(ConnectionState::Degraded);
+                let _ = writer.shutdown().await;
+                let _ = self.state_tx.send(ConnectionState::Closed);
+                Err(rocketmq_error::RocketMQError::network_connection_failed(
+                    target,
+                    error.to_string(),
+                ))
             }
         }
     }
 
     /// Sends a `RemotingCommand` to the peer (consumes command).
     ///
-    /// Encodes the command into the internal buffer, then flushes to the network.
+    /// Encodes the command into immutable prefix/header/body segments, then flushes it to the
+    /// negotiated plaintext or TLS writer.
     /// **Automatically marks connection as Degraded on I/O errors.**
     ///
     /// # Arguments
@@ -600,37 +602,28 @@ impl Connection {
     ///
     /// # Lifecycle
     ///
-    /// 1. Encode command header + body into reusable buffer
-    /// 2. Use zero-copy `split_to()` to extract buffer contents as `Bytes`
-    /// 3. Send extracted bytes via outbound sink
-    /// 4. Buffer is now empty and ready for next command (no clear() needed)
+    /// 1. Encode the prefix and header while preserving the existing body allocation.
+    /// 2. Reserve the exact frame-byte cost before queued staging.
+    /// 3. Transfer the immutable frame to the single writer owner.
     ///
     /// # Performance Optimization
     ///
-    /// - Uses `split_to(len)` instead of `split()` for better performance
-    /// - `split_to()` returns all data and leaves buffer empty, eliminating need for clear()
-    /// - `freeze()` converts BytesMut to Bytes with zero-copy (just refcount increment)
-    pub async fn send_command(&mut self, mut command: RemotingCommand) -> rocketmq_error::RocketMQResult<()> {
-        // Encode command into buffer (buffer might have capacity from previous use)
-        command.fast_header_encode(&mut self.encode_buffer);
-        if let Some(body_inner) = command.take_body() {
-            self.encode_buffer.put(body_inner);
-        }
-
-        // Zero-copy extraction: split_to(len) returns all data, leaves buffer empty
-        // This is more efficient than split() + clear() pattern
-        let len = self.encode_buffer.len();
-        #[cfg(feature = "observability")]
-        rocketmq_observability::metrics::remoting::record_network_bytes(len as u64);
-        let bytes = self.encode_buffer.split_to(len).freeze();
-
+    /// - Plaintext retains three segments through `write_vectored`.
+    /// - TLS uses one writer-owned, bounded coalescing buffer.
+    pub async fn send_command(&mut self, command: RemotingCommand) -> rocketmq_error::RocketMQResult<()> {
         let class = self
-            .queued
-            .as_ref()
-            .and_then(|queued| queued.response_class)
+            .response_class()
             .unwrap_or_else(|| AdmissionClass::for_request_code(command.code()));
-        self.send_encoded(bytes, class, None, "transport-session-writer".to_string())
-            .await
+        let frame = EncodedFrame::from_command(command)?;
+        #[cfg(feature = "observability")]
+        rocketmq_observability::metrics::remoting::record_network_bytes(frame.encoded_len() as u64);
+        self.send_payload(
+            OutboundPayload::Frame(frame),
+            class,
+            None,
+            "transport-session-writer".to_string(),
+        )
+        .await
     }
 
     /// Sends one command under a caller-owned immutable request deadline.
@@ -644,28 +637,22 @@ impl Connection {
     /// Returns a typed queue, before-send, write-timeout, or transport error.
     pub async fn send_command_with_deadline(
         &mut self,
-        mut command: RemotingCommand,
+        command: RemotingCommand,
         deadline: RequestDeadline,
         target: impl Into<String>,
     ) -> rocketmq_error::RocketMQResult<()> {
         let target = target.into();
         deadline.ensure_before_send(target.clone())?;
-        command.fast_header_encode(&mut self.encode_buffer);
-        if let Some(body_inner) = command.take_body() {
-            self.encode_buffer.put(body_inner);
-        }
+        let class = self
+            .response_class()
+            .unwrap_or_else(|| AdmissionClass::for_request_code(command.code()));
+        let frame = EncodedFrame::from_command(command)?;
         deadline.ensure_before_send(target.clone())?;
 
-        let len = self.encode_buffer.len();
         #[cfg(feature = "observability")]
-        rocketmq_observability::metrics::remoting::record_network_bytes(len as u64);
-        let bytes = self.encode_buffer.split_to(len).freeze();
-        let class = self
-            .queued
-            .as_ref()
-            .and_then(|queued| queued.response_class)
-            .unwrap_or_else(|| AdmissionClass::for_request_code(command.code()));
-        self.send_encoded(bytes, class, Some(deadline), target).await
+        rocketmq_observability::metrics::remoting::record_network_bytes(frame.encoded_len() as u64);
+        self.send_payload(OutboundPayload::Frame(frame), class, Some(deadline), target)
+            .await
     }
 
     /// Sends a `RemotingCommand` to the peer (borrows command).
@@ -688,44 +675,29 @@ impl Connection {
     /// This method may consume the command's body (`take_body()`), modifying
     /// the original command.
     pub async fn send_command_ref(&mut self, command: &mut RemotingCommand) -> rocketmq_error::RocketMQResult<()> {
-        // Encode command into buffer
-        command.fast_header_encode(&mut self.encode_buffer);
-        if let Some(body_inner) = command.take_body() {
-            self.encode_buffer.put(body_inner);
-        }
-
-        // Zero-copy extraction using split_to() pattern
-        let len = self.encode_buffer.len();
-        #[cfg(feature = "observability")]
-        rocketmq_observability::metrics::remoting::record_network_bytes(len as u64);
-        let bytes = self.encode_buffer.split_to(len).freeze();
-
         let class = self
-            .queued
-            .as_ref()
-            .and_then(|queued| queued.response_class)
+            .response_class()
             .unwrap_or_else(|| AdmissionClass::for_request_code(command.code()));
-        self.send_encoded(bytes, class, None, "transport-session-writer".to_string())
-            .await
+        let owned = command.clone();
+        let _ = command.take_body();
+        let frame = EncodedFrame::from_command(owned)?;
+        #[cfg(feature = "observability")]
+        rocketmq_observability::metrics::remoting::record_network_bytes(frame.encoded_len() as u64);
+        self.send_payload(
+            OutboundPayload::Frame(frame),
+            class,
+            None,
+            "transport-session-writer".to_string(),
+        )
+        .await
     }
 
-    /// Sends multiple `RemotingCommand`s in a single batch (optimized for throughput).
+    /// Sends multiple `RemotingCommand`s under one ordered writer-queue admission.
     ///
     /// **Automatically marks connection as Degraded on I/O errors.**
     ///
-    /// # Performance Benefits
-    ///
-    /// - **Reduced system calls**: Multiple commands sent in one syscall
-    /// - **Better CPU cache**: Encoding loop stays hot
-    /// - **Lower latency**: No network round-trips between commands
-    ///
-    /// # Benchmarks
-    ///
-    /// ```text
-    /// send_command() x 100:  ~50ms  (100 syscalls)
-    /// send_batch() x 100:    ~15ms  (1 syscall)
-    /// Improvement: 3.3x faster
-    /// ```
+    /// Each command remains an independently delimited immutable frame. This preserves plaintext
+    /// vectored writes and TLS per-frame aggregation while avoiding a second full-batch copy.
     ///
     /// # Arguments
     ///
@@ -742,27 +714,19 @@ impl Connection {
     /// let batch = vec![cmd1, cmd2, cmd3];
     /// connection.send_batch(batch).await?;
     /// ```
-    pub async fn send_batch(&mut self, mut commands: Vec<RemotingCommand>) -> rocketmq_error::RocketMQResult<()> {
+    pub async fn send_batch(&mut self, commands: Vec<RemotingCommand>) -> rocketmq_error::RocketMQResult<()> {
         if commands.is_empty() {
             return Ok(());
         }
-
-        // Encode all commands into a single buffer
-        for command in &mut commands {
-            command.fast_header_encode(&mut self.encode_buffer);
-            if let Some(body_inner) = command.take_body() {
-                self.encode_buffer.put(body_inner);
-            }
-        }
-
-        // Send entire batch as one Bytes chunk
-        let len = self.encode_buffer.len();
+        let frames = commands
+            .into_iter()
+            .map(EncodedFrame::from_command)
+            .collect::<rocketmq_error::RocketMQResult<Vec<_>>>()?;
+        let payload = OutboundPayload::batch(frames)?;
         #[cfg(feature = "observability")]
-        rocketmq_observability::metrics::remoting::record_network_bytes(len as u64);
-        let bytes = self.encode_buffer.split_to(len).freeze();
-
-        self.send_encoded(
-            bytes,
+        rocketmq_observability::metrics::remoting::record_network_bytes(payload.encoded_len() as u64);
+        self.send_payload(
+            payload,
             AdmissionClass::Data,
             None,
             "transport-session-writer".to_string(),
@@ -792,8 +756,8 @@ impl Connection {
     pub async fn send_bytes(&mut self, bytes: Bytes) -> rocketmq_error::RocketMQResult<()> {
         #[cfg(feature = "observability")]
         rocketmq_observability::metrics::remoting::record_network_bytes(bytes.len() as u64);
-        self.send_encoded(
-            bytes,
+        self.send_payload(
+            OutboundPayload::Contiguous(bytes),
             AdmissionClass::Data,
             None,
             "transport-session-writer".to_string(),
@@ -825,9 +789,9 @@ impl Connection {
     pub async fn send_slice(&mut self, slice: &'static [u8]) -> rocketmq_error::RocketMQResult<()> {
         #[cfg(feature = "observability")]
         rocketmq_observability::metrics::remoting::record_network_bytes(slice.len() as u64);
-        let bytes = slice.into();
-        self.send_encoded(
-            bytes,
+        let bytes = Bytes::from_static(slice);
+        self.send_payload(
+            OutboundPayload::Contiguous(bytes),
             AdmissionClass::Control,
             None,
             "transport-session-writer".to_string(),
@@ -949,20 +913,6 @@ impl Connection {
         }
     }
 
-    /// Marks the connection as degraded (internal use).
-    ///
-    /// Called automatically when I/O errors occur. Broadcasts state change
-    /// to all subscribers.
-    ///
-    /// # Note
-    ///
-    /// This is an internal method. Users should rely on automatic state
-    /// management via I/O operation results.
-    #[inline]
-    fn mark_degraded(&self) {
-        let _ = self.state_tx.send(ConnectionState::Degraded);
-    }
-
     /// Marks the connection as closed (internal use).
     ///
     /// Called when connection is explicitly closed. Broadcasts final state.
@@ -985,28 +935,29 @@ impl Connection {
 
     /// Flushes and actively shuts down the socket write half before marking the connection closed.
     pub async fn shutdown(&mut self) -> rocketmq_error::RocketMQResult<()> {
-        if let Some(queued) = self.queued.as_ref() {
-            let (completion, result) = oneshot::channel();
-            queued
-                .writer
-                .send(QueuedWrite::Close { completion })
-                .await
-                .map_err(|_| {
+        let result = match &mut self.outbound {
+            ConnectionWriter::Queued(queued) => {
+                let (completion, result) = oneshot::channel();
+                queued.writer.send(QueuedWrite::close(completion)).await.map_err(|_| {
                     rocketmq_error::RocketMQError::network_connection_failed(
                         "transport-session-writer",
                         "writer queue closed",
                     )
                 })?;
-            let result = result.await.map_err(|_| {
+                result.await.map_err(|_| {
+                    rocketmq_error::RocketMQError::network_connection_failed(
+                        "transport-session-writer",
+                        "writer completion dropped",
+                    )
+                })?
+            }
+            ConnectionWriter::Direct(writer) => writer.shutdown().await.map_err(|error| {
                 rocketmq_error::RocketMQError::network_connection_failed(
-                    "transport-session-writer",
-                    "writer completion dropped",
+                    "transport-connection-writer",
+                    error.to_string(),
                 )
-            })?;
-            self.mark_closed();
-            return result;
-        }
-        let result = self.outbound_sink.close().await;
+            }),
+        };
         self.mark_closed();
         result
     }

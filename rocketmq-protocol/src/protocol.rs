@@ -33,6 +33,7 @@ pub mod bodies;
 pub mod body;
 pub mod broker_sync_info;
 pub mod command_custom_header;
+pub mod encoded_frame;
 pub mod filter;
 pub mod forbidden_type;
 pub mod header;
@@ -56,6 +57,7 @@ pub mod topic;
 pub use command_custom_header::CommandCustomHeader;
 pub use command_custom_header::FromMap;
 pub use data_version_compat as data_version_facade;
+pub use encoded_frame::EncodedFrame;
 pub use remoting_command::RemotingCommand;
 pub use remoting_command_compat as remoting_command_facade;
 

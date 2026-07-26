@@ -494,8 +494,9 @@ impl RemotingCommand {
         let estimated_header_size = self.estimate_json_header_size();
         let body_length = self.body.as_ref().map_or(0, |b| b.len());
 
-        // Reserve space upfront: 4 (total_length) + 4 (serialize_type) + estimated_header + body
-        dst.reserve(8 + estimated_header_size + body_length);
+        // Reserve only prefix + header. The body remains an independent `Bytes` segment for
+        // plaintext vectored writes and is coalesced later only by the TLS writer.
+        dst.reserve(8 + estimated_header_size);
 
         // Encode header using simd-json for better performance when available
         #[cfg(feature = "simd")]
